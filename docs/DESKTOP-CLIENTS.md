@@ -298,9 +298,138 @@ on the host with GTK before blessing a golden image.
 
 ## 5. hyprlock
 
+`userland/compositor/hyprlock` is hyprlock 0.9.6 (`/var/cache/hyprland-build/src/
+hyprlock`) for Ferrix, installed as `/bin/hyprlock`. It reads
+`~/.config/hypr/hyprlock.conf` unchanged, or the file `-c` names, found
+as upstream's `findConfig` finds it (`$XDG_CONFIG_HOME`, `$HOME/.config`,
+`$XDG_CONFIG_DIRS`, `/etc/xdg`). The command line is upstream's: `-c`,
+`-g`/`--grace`, `--immediate-render`, `--no-fade-in`, `--display`, `-v`,
+`-q`, `-V`, `-h`, and the deprecated `--immediate`.
+
+### 5.1 What of the file it carries out
+
+* **Every option `ConfigManager.cpp` declares**, with upstream's default,
+  typed as hyprlang types it (`config.rs`), and the five widget kinds as
+  anonymous special categories, one per block. A line it cannot use is a
+  diagnostic in hyprlang's words, printed under upstream's `Config has
+  errors: … Proceeding ignoring faulty entries`, and the rest applies.
+* **Which widgets a screen gets** is `getOrCreateWidgetsFor`'s rule: an
+  empty `monitor` is every screen; otherwise the connector, or a prefix of
+  the description with or without `desc:`. They are drawn in `zindex`
+  order, the file's order kept among equals (`background` is -1).
+* **Placement** is `posFromHVAlign` in upstream's bottom-up coordinates
+  (`position = 0, 240` is 240 up from the middle), with its rounding rules
+  (`roundingForBox`, `roundingForBorderBox`) and `%` positions and sizes.
+* **Text**: `$TIME`, `$TIME12`, `$USER`, `$DESC`, `$ATTEMPTS[…]`,
+  `$LAYOUT[…]`, `$FAIL`, `$PAMFAIL`, `$PAMPROMPT`, `<br/>`, and
+  `cmd[update:N(:force)]`, which runs through `/bin/sh -c` and shows the
+  output, trimmed as `general:text_trim` says. A text is Pango markup in a
+  Pango font description at a point size (96 dpi), drawn by
+  `userland/compositor/text` to its logical rectangle, which is what upstream's
+  label texture is. The clock is UTC: Ferrix's image has no `TZ` and no
+  `/etc/localtime`, which is when upstream falls back to UTC too.
+* **The input field**: dots of `dots_size`, `dots_spacing`, `dots_center`,
+  `dots_rounding`, or `dots_text_format`; the placeholder, check and fail
+  texts at a quarter of the field's height; the width growing to fit the
+  placeholder; `fade_on_empty` and `fade_timeout`; `outer_color`,
+  `inner_color`, `font_color`, `check_color`, `fail_color`, the Caps Lock
+  and Num Lock colours with their fallbacks; `swap_font_color`.
+* **Keys** through `userland/compositor/xkb` as the compositor's keymap has them, so
+  `input:kb_layout = de` with `nodeadkeys` types German: text is appended,
+  `BackSpace`/`Delete` remove a character and are the only keys that
+  repeat, `Escape`, `Ctrl+U`, `Ctrl+A` and `Ctrl+BackSpace` clear, `Return`
+  or `KP_Enter` submit unless the field is empty and `ignore_empty_input`
+  is set.
+* **Animations**: `animations:enabled`, `bezier`, `animation` on
+  hyprlock's own tree (`global`, `fade`, `fadeIn`, `fadeOut`, `inputField`,
+  `inputFieldColors`, `inputFieldFade`, `inputFieldWidth`,
+  `inputFieldDots`), a speed of N being N tenths of a second, over
+  `userland/compositor/anim`'s curves.
+* **Backgrounds**: `color`, `path` (PNG, JPEG, SVG through
+  `userland/compositor/image`; upstream also reads WebP, JPEG XL and BMP),
+  `path = screenshot` through `zwlr_screencopy_v1`, `blur_size`,
+  `blur_passes`, `noise`, `contrast`, `brightness`, `vibrancy`,
+  `vibrancy_darkness` (the dual-Kawase blur of `blurFB`, `blur.rs`), and
+  `reload_cmd`/`reload_time`, the new picture crossfading in on `fadeIn`.
+  A `reload_cmd` whose program is not there -- the customer's
+  `booru-wallpaper`, a Python script -- prints nothing, and the `color`
+  shows, as upstream shows it.
+* **Shadows** (`shadow_passes`, `shadow_size`, `shadow_color`,
+  `shadow_boost`): the widget blurred on its own and coloured behind it.
+* **The fade**: upstream takes a screenshot of every screen before it locks
+  when a fade is on, and fades from it; so does this.
+* **`onclick`** on a label, shape or image runs detached through
+  `/bin/sh -c`, as upstream's `spawnAsync`, when a button goes down over
+  it.
+
+### 5.2 What `auth { pam { enabled = true } }` means on Ferrix
+
+Ferrix has no PAM. It authenticates through `authd` (`docs/AUTH.md`,
+approved by the customer 2026-09-26, all eleven decisions as recommended),
+a service owning every credential and answering a conversation on
+`/run/ferrix/auth`. hyprlock knows authentication through one interface,
+`auth::Backend`, the one `docs/AUTH.md` §4.4 settles on: `begin()` opens a
+conversation and gives the first prompt, whose text is `$PAMPROMPT` before
+anybody types; `respond(secret)` gives the next prompt or a verdict --
+*accepted*, *failed* with its text (`$PAMFAIL`, `$FAIL`) and
+`retry_after_ms` (the field shows `check_color` until then, in place of
+upstream's PAM delay), or *unavailable* with its text. The widgets, the
+field and the session see nothing else. The typed secret is a `Secret`,
+zeroed when dropped.
+
+* **`/bin/hyprlock`** has `Missing` until `authd`'s client lands
+  (phase 1 slice P1.5, hyprlock's, once `libs/proto/auth-proto` is on
+  main): the conversation cannot begin, and hyprlock **does not take the
+  lock** and says `not locking: no authentication service is running`
+  (§5.4, decision 4: a lock nothing can open would lock the person out).
+  So the customer's `SUPER+L` does nothing visible yet.
+* **`hyprlock-gate`** (with the program, on branch `hyprlock`), a second binary of the crate (`src/bin/gate.rs`),
+  has a test-only backend that accepts the one secret in
+  `/etc/hyprlock/gate.secret`, refusing others after two seconds. Only the
+  gate boot's image carries the binary and the file; when `authd` lands the
+  gate seeds a real store entry and the binary goes (§4.4).
+* hyprlock never reads a credential. `$USER` and `$DESC` are the uid's
+  `/etc/passwd` line (upstream's `getpwuid(getuid())`); hyprix is init, so
+  on a phase-1 desktop that is root, and the lock asks for root's password
+  (decision 3).
+* **`SIGUSR1`** does not unlock: it becomes root's audited
+  `authctl unlock-seat` (decision 11). **`--grace`** is said and not
+  honoured: the grace is hyprix's `misc:lock_grace`, default 0.
+* `auth:pam:enabled = false` with nothing else to unlock: not locking, said.
+  `auth:pam:module` becomes the `authd` service name with `Service`.
+  `auth:fingerprint:enabled` needs a reader `authd` does not have yet:
+  said, and off.
+
+### 5.3 What cannot work, and what it does instead
+
+| line | on Ferrix |
+|---|---|
+| `auth:pam:*` | the `Backend` interface above; `authd` behind it from phase 1 |
+| `SIGUSR1`, `--grace` | not honoured: `authctl unlock-seat` and `misc:lock_grace` (decision 11) |
+| `auth:fingerprint:*` | said, and off: no fprintd, no D-Bus |
+| `hide_input` | said: drawn as plain dots for now |
+| `reload_cmd` naming a program that is not there | runs, fails as the shell says, and the colour shows |
+
 ### Where it stands
 
-(The hyprlock stream's to fill.)
+2026-09-26. **On main:** `userland/compositor/hyprlock`'s library -- the
+configuration model on `compositor/hyprlang` (every option and default of
+`ConfigManager.cpp`), layout, formatting, the field's session, the
+authentication interface with `Missing`, the blur, and every widget drawn
+by `scene::Scene` -- with 34 host tests. The customer's real file reads with
+no diagnostic and no unsupported line
+(`cargo run -p compositor-hyprlock --example probe`); on a screen that is
+not one of their three `desc:` monitors, upstream's rule gives only the
+clock panel, `$TIME` and the date, and their Lenovo gets all 8 widgets.
+
+**On branch `hyprlock`, next:** the program (`/bin/hyprlock` on
+`compositor/toolkit`, text through `compositor/text`), `hyprlock-gate`,
+and the `hyprlock` boot of `test-compositor` (lock, five dots, a wrong
+password in `fail_color` with its text, the right one typed on a German
+keyboard, unlock), which passed pixel for pixel on x86_64 before the
+relayout. It lands when `compositor/text` is on main. After that: the
+`Service` backend over `authd` (`docs/AUTH.md` P1.5), once
+`libs/proto/auth-proto` lands.
 
 ## 6. hypridle
 

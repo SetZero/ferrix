@@ -167,6 +167,17 @@ name = "compositor-hyprlang"
 version = "0.1.0"
 
 [[package]]
+name = "compositor-hyprlock"
+version = "0.1.0"
+dependencies = [
+ "compositor-anim",
+ "compositor-config",
+ "compositor-hyprlang",
+ "libc",
+ "tiny-skia",
+]
+
+[[package]]
 name = "compositor-image"
 version = "0.1.0"
 dependencies = [
