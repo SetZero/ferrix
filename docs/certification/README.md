@@ -23,11 +23,11 @@ that does not exist.
 None of the four can be claimed today. What changed is that the reasons are now
 specific, measured, and mostly documents rather than code.
 
-* [IMPLEMENTATION.md](IMPLEMENTATION.md) — **start here to build**: thirteen work orders, ordered
+* [IMPLEMENTATION.md](IMPLEMENTATION.md) — **start here to build**: fourteen work orders, ordered
 * [TODO.md](TODO.md) — start here to re-audit: what to re-measure, and what not to write
 * [SAFETY-MANUAL.md](SAFETY-MANUAL.md) — the out-of-context argument: assumed requirements, safe state, eleven assumptions of use, element failure analysis
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
-* [FINDINGS.md](FINDINGS.md) — the audit register, 16 open findings and 24 closed
+* [FINDINGS.md](FINDINGS.md) — the audit register, 16 open findings and 25 closed
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
 * [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) — AVA_VAN.4 over the seven threats; six residual vulnerabilities
 * [SPECULATION.md](SPECULATION.md) — the side-channel defences, per architecture, behind one build switch, and what they cost
@@ -72,9 +72,9 @@ boundary.
 
 | | |
 |---|---:|
-| Item product code | 55,327 lines |
-| Uncertified load | 48,086 lines |
-| In-kernel self-tests | 33,509 lines |
+| Item product code | 56,218 lines |
+| Uncertified load | 48,323 lines |
+| In-kernel self-tests | 38,126 lines |
 | Statement coverage, certified item | **82.2%** x86-64, 73.7% AArch64, 70.9% ARMv7-A (Arm before the tool's latest fixes) |
 | Statement coverage, core ring | 80.6% x86-64 |
 | Unreached statements, x86-64 | 1,202 — **196 argued, 249 hardware absent, 757 need a test** |
@@ -82,8 +82,8 @@ boundary.
 | External crates, host-side | 21 |
 | Upward boundary references | **0**, from 94 at the start of the work (29 and 62 before the gate could resolve module paths) |
 | `unsafe` blocks, all documented | 662 |
-| Directly recursive functions in the item | **0**, of 2,033 |
-| Allocations in the item that stop the machine when memory runs out | **0** a program can reach; 73 at bring-up, by design (F-23) |
+| Directly recursive functions in the item | **0**, of 2,075 |
+| Allocations in the item that stop the machine when memory runs out | **0** in its source; 73 at bring-up, by design; 14 in the load `process_create` and `process_start` run, recorded, and the load's callees beyond those (F-23, MEMORY-AND-TIMING.md §1.3) |
 | Job quotas the ST claims (FRU_RSA.1) that are built | **0** of 3: memory, objects and CPU uncharged; only the job tree's depth and descendants are bounded (F-35) |
 | SMEP + SMAP (x86-64) | **on** |
 | PAN (AArch64) | **implemented**; absent from the reference CPU |
@@ -248,10 +248,12 @@ registering with the item, and the rest of the personality moved out of it
 (F-07, F-09, F-33, W-5), which left the boundary with no upward reference by
 the resolving gate's count, from 56; the side-channel defences and KASLR
 behind one build switch (F-31, [SPECULATION.md](SPECULATION.md)); the
-direct map's writable alias of the kernel's text, sealed (F-34); and allocation
-failure made an error the item reports rather than a stop, at every site a
-program can reach, with a gate that counts the rest (F-23,
-[MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) §1).
+direct map's writable alias of the kernel's text, sealed (F-34); allocation
+failure made an error the item reports rather than a stop, at every site in
+its own source, with a gate that counts the rest and now reads the load files
+the item's own calls run (F-23, [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md)
+§1); and user and IOMMU page tables given back only after the shootdown that
+covers them, not before (F-36).
 
 ## 5. What cannot be fixed from here
 

@@ -36,20 +36,25 @@ handler. So the question is the heap's callers. On 2026-09-25 they were
 They are now counted by `scripts/check-fallible-alloc.py`, the "fallible
 allocation" step of `cargo xtask check`. It finds every call to an allocating
 standard-library API in the item's product code: the constructors, `vec!` and
-`format!`, and every method that can grow a collection. It fails on one that
-is not argued at the site. On 2026-09-26 it reads:
+`format!`, and every method that can grow a collection; a `Type::default()`
+of a type whose `Default` allocates, wherever in the kernel that `Default` is
+written; and a derived `Clone` over an owned heap field. It also reads three
+load files as it reads the item, the ones the item's own `process_create` and
+`process_start` run (§1.3). It fails on a site that is not argued. On
+2026-09-26 it reads:
 
 | | Sites |
 |---|---:|
-| Unmarked: an infallible allocation | **0** |
-| `NOALLOC:` — cannot allocate: room reserved just before, or a type that only looks like a collection | 31 |
+| Unmarked in the item: an infallible allocation | **0** |
+| Unmarked in the load files the item runs (`syscall/process.rs`) | 14, recorded as debt |
+| `NOALLOC:` — cannot allocate: room reserved just before, or a type that only looks like a collection | 36 |
 | `FALLIBLE:` — a first-party method named like a standard one, that reports failure | 13 |
 | `FATAL-ALLOC:` — bring-up, fatal by design (§1.3) | 73 |
 
 Everything else in the item allocates through `kernel/src/fallible.rs`, and
 the gate does not flag it. Its ratchet baseline,
-`scripts/fallible-alloc-baseline.json`, is empty, and a new unmarked site
-fails the build.
+`scripts/fallible-alloc-baseline.json`, records `process.rs`'s 14 and nothing
+else: a count may fall and not rise, and a new unmarked site fails the build.
 
 ### 1.2 How failure is reported
 
@@ -163,15 +168,42 @@ refused, and reports **FX-0007** before the boot completes.
 shares the heap. One that fails after boot stops the machine with **FX-0008**.
 That is an application condition, AoU-5, not a property of the item.
 
+**The load the item runs.** That line is clean for the Linux personality,
+which is load from its entry, and not clean for two native calls, which are
+item calls that run load code. `process_create` makes a POSIX process through
+the `Processes::load` hook (`syscall/launch.rs`), and `process_start` makes
+its first thread. F-23 was scoped to the item's source, and on that scope it
+holds. But a refused allocation in that load code stops the kernel on an item
+path, which the scope does not excuse and the claim of "every site a program can
+reach" did not allow for. Found on 2026-09-26: `Signals::default` built the
+signal tables with `vec!`, under every process and thread. It is now fallible,
+checked at stage 7 with a negative control, and the gate reads `signal.rs`,
+`thread.rs` and `process.rs`. What those two calls still reach that cannot
+report failure:
+
+| Where | What |
+|---|---|
+| `syscall/process.rs` | the program name and arguments recorded (`record_exec`), the thread and task lists a start pushes onto -- among the 14 the gate records |
+| `syscall/registry.rs` | the `Arc` the new process is registered in |
+| `syscall/fd.rs` | `standard_streams`, which stops the kernel explicitly (`CONSOLE_DESCRIPTORS`) if the console's descriptors cannot be made |
+| `syscall/load.rs`, `syscall/exec.rs` | the ELF loader's lists |
+
+Each of these is the load's and covered by AoU-5, as it was before; the
+difference is that the list is now written down and the three files the item
+leans on most are gated. Converting the rest is the load-side work §1.5's
+third item declines, done one path at a time as the item comes to depend on
+it.
+
 **What the gate cannot see.** It says so in its docstring:
 
 * It matches methods by name, not type, which is what `NOALLOC:` is for.
 * `.clone()` is not flagged. The item's 18 were audited by hand on 2026-09-26,
   and none allocates. Each is an `Arc`, a `Weak`, an `Option` of one, an
   `Object` (an enum of `Arc`s) or a `FileMapping` (an `Arc` and a flag).
-* It does not see conversions that allocate, or allocation inside a callee.
-  `libs/vma`, `libs/objects`, `libs/sched` and `libs/sync` were converted with
-  the item. The other libraries the item calls allocate nothing on its paths.
+* It does not see conversions that allocate, `write!` into a `String`, or
+  allocation inside a callee. `libs/vma`, `libs/objects`, `libs/sched` and
+  `libs/sync` were converted with the item. The other libraries the item calls
+  allocate nothing on its paths. The load's callees are the table above.
 
 ### 1.4 Against the standards
 
@@ -205,7 +237,9 @@ That is an application condition, AoU-5, not a property of the item.
    with an OS that also hosts a compiler.
 
 **Verdict: F-23 is closed** for what it measured: allocation failure in the
-item is reported, not fatal, and the build says so. The bound it also names is
+item's own source is reported, not fatal, and the build says so. Two item
+calls still run load code whose allocations are fatal (§1.3), which the
+closure did not claim and the first version of this section implied. The bound it also names is
 not claimed, and is exported to the integrator as AoU-5.
 
 ---

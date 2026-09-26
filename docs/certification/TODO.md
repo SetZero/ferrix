@@ -302,7 +302,11 @@ check must stop at *"a device window over the kernel image was mapped"*.
 own allocations. What it does not cover is AoU-5 and V-05.
 
 To re-audit: run `python3 scripts/check-fallible-alloc.py --report`. It must
-say 0 unmarked, and list the `FATAL-ALLOC` sites, which must all be bring-up.
+say 0 unmarked in the item, and no more than the baseline's 14 in the load
+files it reaches (`process.rs`), and list the `FATAL-ALLOC` sites, which must
+all be bring-up. Check that `REACHED` still names what `process_create` and
+`process_start` run (MEMORY-AND-TIMING.md §1.3), and read stage 7's
+`sigpaths` line, which ends with the signal tables refused with no memory.
 Read a sample of the `NOALLOC` sites against the reservation each one cites.
 Re-audit the item's `.clone()` calls, which the gate cannot see
 (MEMORY-AND-TIMING.md §1.3 lists the kinds). Then read the `no-mem` line of a
@@ -310,6 +314,16 @@ boot on each architecture. As a negative control, replace one `fallible::`
 call on a native call's path with the standard one (scratch): the gate must
 fail on it. The boot check carries its own negative control: with the reserve
 refused its filling, a section must fail before it starts.
+
+### 4.4a Page tables and the shootdown — **F-36**
+**Done 2026-09-26** (IMPLEMENTATION.md W-14). Found by the memory coverage
+work and closed the same day.
+
+To re-audit: every `mm::unmap_in` caller passes the `TlbPages` it then
+flushes, every `unmap_io` caller releases its list only after the unit's
+flush succeeded, and every `mm::unmap_unwalked` caller is a tree nothing can
+walk (grep all three). Stage 4 must pass on every architecture at `--smp 2`,
+and the scratch negative control in W-14 must still stop it.
 
 ---
 

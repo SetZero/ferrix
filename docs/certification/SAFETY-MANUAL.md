@@ -118,7 +118,7 @@ shall treat ASR-8 as unmet until they have. (Finding F-24.)
 
 ### AoU-5 — memory is not bounded, and exhaustion outside the element is fatal
 The element allocates dynamically, and reports allocation failure at every
-site a program can reach. A native call answers `NO_MEMORY`, a Linux call
+site in its own source. A native call answers `NO_MEMORY`, a Linux call
 `ENOMEM` (`EAGAIN` from `madvise`), and the element carries on.
 `scripts/check-fallible-alloc.py` fails the build on an allocation that does
 not report failure, and every boot proves the handling by failing allocations
@@ -126,7 +126,9 @@ under the native calls ([MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) §1). Two
 cases still reach the safe state of §3. An allocation failure during bring-up,
 before the first program runs, stops the element with FX-0007. One in the
 uncertified load after boot, whose allocations are not fallible and which
-shares the element's heap, stops it with FX-0008.
+shares the element's heap, stops it with FX-0008 -- including the load code
+two native calls run, `process_create` and `process_start`, to make a
+process and its first thread (MEMORY-AND-TIMING.md §1.3 lists it).
 
 The element bounds neither its own working set nor the heap one program may
 use. The integrator shall provision memory so that exhaustion does not occur
@@ -205,10 +207,10 @@ cause.
 
 | Id | Failure mode | Effect at the element boundary | Detection | Mitigation | Residual |
 |---|---|---|---|---|---|
-| FM-1 | Separation lost: one partition reaches another's memory | ASR-1 violated silently | boot-time sweep; SMEP/SMAP/PAN fault on the wrong access | per-process tables; hardware backstop | ARMv7-A has no backstop (AoU-6) |
+| FM-1 | Separation lost: one partition reaches another's memory | ASR-1 violated silently | boot-time sweep; SMEP/SMAP/PAN fault on the wrong access; stage 4 checks that a page table an unmap empties is freed only by its shootdown (F-36) | per-process tables; hardware backstop; nothing a translation reached -- frame or table -- is given back until every processor that may cache it has flushed | ARMv7-A has no backstop (AoU-6); a walk through a freed table cannot be provoked under emulation, so the table order rests on the check and the rule |
 | FM-2 | A mapping becomes writable and executable | ASR-2 violated | every boot sweeps all mappings and fails | enforced at map time | detection is per boot, not continuous |
 | FM-3 | A capability is honoured that was never granted | ASR-3 violated | 135 refusal assertions | per-process handle tables, unforgeable | none identified |
-| FM-4 | A device writes outside its granted region | ASR-4 violated, arbitrary corruption | IOMMU fault | VT-d / SMMUv3 domains | no IOMMU on ARMv7-A (AoU-6) |
+| FM-4 | A device writes outside its granted region | ASR-4 violated, arbitrary corruption | IOMMU fault | VT-d / SMMUv3 domains; a domain's emptied tables are freed only after the unit's invalidation completes (F-36) | no IOMMU on ARMv7-A (AoU-6) |
 | FM-5 | A frame is reused without being cleared | ASR-5 violated, data disclosure | none at runtime | zeroed on allocation | zeroing is on allocation, not free (V-04) |
 | FM-6 | The element continues in a corrupt state | any ASR may be violated silently | invariant checks | safe state on detection | detection is not exhaustive |
 | FM-7 | A partition exhausts memory | calls that allocate fail with `NO_MEMORY` or `ENOMEM` for every partition; the safe state if the load's allocation fails | allocation failure, reported at every site in the element (gate and boot check) | job limits on depth and descendants; capped queues | no heap quota (V-05); the load's allocations are fatal (AoU-5) |

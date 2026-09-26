@@ -42,18 +42,20 @@ three nested rings. A file in no ring fails the build.
 
 | Ring | Product lines | In-kernel test lines | Carries |
 |---|---:|---:|---|
-| `core` | 46,907 | 9,224 | EAL6+, ASIL D, SIL 3/4, DAL B — *aspirational* |
-| `item` | 8,420 | 248 | EAL5+, DAL C, Class C, SIL 2 — *the present claim* |
-| `load` | 48,086 | 24,037 | nothing |
+| `core` | 47,679 | 12,366 | EAL6+, ASIL D, SIL 3/4, DAL B — *aspirational* |
+| `item` | 8,539 | 1,351 | EAL5+, DAL C, Class C, SIL 2 — *the present claim* |
+| `load` | 48,323 | 24,409 | nothing |
 
-**The certified item is `core` + `item`: 55,327 lines of product code**, against
-48,086 lines of uncertified load. The item is 53.5% of the kernel's product
+**The certified item is `core` + `item`: 56,218 lines of product code**, against
+48,323 lines of uncertified load. The item is 53.8% of the kernel's product
 code. (Measured 2026-09-26, after W-5 moved the Linux dispatcher's routing and
 five of the personality's files out of the `item` ring, see below, and after
 F-23 made the item's allocations fallible. That added 2,711 lines, most of
 them in the `core` ring: `fallible.rs` and `mm/reserve.rs`, which the manifest
 places there, and the conversions. F-10's x86-64 pass added 16 product lines,
-wiring its checks in, and 387 lines of self-test.)
+wiring its checks in, and 387 lines of self-test. Re-measured after F-36,
+whose table list and check added 305 lines to `core`, and F-23's signal-table
+fix, 109 to the load, beside the coverage work's checks.)
 
 ### `core` — the minimal trusted base
 

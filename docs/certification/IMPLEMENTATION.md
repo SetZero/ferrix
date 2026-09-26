@@ -651,6 +651,17 @@ cannot see `.clone()`, conversions, or allocation in a callee; the 18 clones
 were audited by hand, and the libraries on the item's paths were converted
 with it.
 
+**The hole, found and fixed the same day.** `process_create` and
+`process_start` make a POSIX process and its first thread in the load, and
+`Signals::default` there allocated with `vec!`: a refused frame stopped the
+kernel on an item call. The signal tables are now fallible, and the gate
+reads the three load files those calls lean on (`REACHED` in the script),
+finds a `Default` that allocates in any kernel file and flags a call of it,
+and flags a derived `Clone` over an owned heap field. `process.rs` has 14
+sites left, recorded in the baseline; the rest of the load those calls reach
+is MEMORY-AND-TIMING.md §1.3's table. When the item comes to lean on another
+load file, add it to `REACHED`.
+
 **Verify:** `cargo xtask check` (the "fallible allocation" step), and the
 `no-mem` line of any boot, which reads the same on every architecture.
 
@@ -695,10 +706,37 @@ listing `cpu memory pids`.
 
 ---
 
+## W-14 — Page tables go back after their shootdown
+
+**Done 2026-09-26.** Closes F-36, found by the memory coverage work.
+
+A user unmap freed each page table it emptied at once, before the shootdown,
+while another processor could still walk through it from its paging-structure
+or walk caches; IOMMU unmaps did the same before the unit's invalidation.
+`mm::unmap_in` now puts the tables on the shootdown's `TlbPages`
+(`mm/unlinked.rs`, a list linked through the tables themselves, needing no
+memory), and `smp::flush_tlb_pages` gives them back after the last answer.
+An IOMMU caller releases its list after the unit's flush.
+
+**The rule for new code.** A tree some processor or unit may have walked is
+unmapped with `mm::unmap_in` into the `TlbPages` its shootdown will flush, or
+with `unmap_io` into a list released after the unit's flush. `unmap_unwalked`
+is only for a tree nothing ever walked or everything left with a full flush:
+a dropped space, a bring-up tree. A `TlbPages` is not `Copy`: merge with
+`add_all`, which moves the tables.
+
+**Verify:** stage 4's check (`tables_wait_for_their_shootdown`), and its
+negative control: put `unmap_in`'s old callback back (scratch), and stage 4
+must stop at *"an unmap gave back the tables it emptied before its
+shootdown"*.
+
+---
+
 ## Suggested order
 
 **Done:** order zero, W-3, W-2, W-6, W-9, W-4 (with F-08), W-1, W-5 (with
-F-09 and F-33), W-7's measurement and ratchet, W-11, and W-12 (F-23).
+F-09 and F-33), W-7's measurement and ratchet, W-11, W-12 (F-23), and W-14
+(F-36).
 **Remaining:** F-10's tests, by module from COVERAGE-WORKLIST.md → W-8
 (largest), with W-10 in parallel whenever someone can answer step 1. W-13
 (F-35) is independent of all three; its controllers are stage 13's to build.

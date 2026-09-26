@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-16 findings are open and 24 are closed, of 40. F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
+16 findings are open and 25 are closed, of 41. F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -739,6 +739,61 @@ under KVM did not change measurably.
 disclosure of the direct map's base still gives the alias of the image's data,
 which is writable in its own mapping too.
 
+### F-36 — a user page table went back before the shootdown that covered it
+**Found and closed 2026-09-26.** Recorded as a finding although it never stood
+open over a landing after it was seen, so that ASR-1's evidence can say what
+the shootdown order did not cover and when that stopped.
+
+*Was:* **Major.** `user/space.rs` states the order a translation comes down
+in: out of the tables under the space's lock, the set of processors that may
+hold it read, the shootdown sent and every answer waited for, and only then is
+anything the translation reached given back. The leaf frames followed it.
+The page tables did not: `mm::unmap_in` freed each table the moment an unmap
+emptied it, in its unmap callback, which is step one. A processor caches the
+walk as well as the leaf -- x86-64's paging-structure caches and the Arm walk
+caches keep "the table for this 2 MiB is at frame F" -- and clearing the
+parent's descriptor in memory does not reach them; only the invalidation does.
+So between the unmap and the shootdown's last answer, another processor running
+the same space could walk *through a table already back in the allocator*. A
+frame handed out in that window to another thread of the program, as a page
+it could fill with descriptors of its own choosing, would be read by that walk
+as a table, and translate to any physical memory with the user bit set. An
+isolation break in the core, reached by `munmap`, `mprotect`, `mremap`,
+`madvise`, `fork`'s copy-on-write takedown and a VMO taking its pages back. The
+kernel's own unmaps were never affected: `unmap_kernel_all` held its tables
+until after `flush_tlb_everywhere`. IOMMU domains had the same order:
+`unmap_io` freed a table before the unit's invalidation, and VT-d's
+paging-structure caches and the SMMU's walk cache would walk it for a device.
+It was reported by the memory coverage work and confirmed by reading.
+
+*Now:* `mm::unmap_in` takes the shootdown's own `TlbPages` and adds to it the
+range and every table it emptied, unlinked but still allocated
+(`mm/unlinked.rs`), and `smp::flush_tlb_pages` gives the tables back only after
+every processor it reached has answered. The list takes no memory, since an
+unmap cannot report running out (F-23): it is threaded through the emptied
+tables' own first descriptors, and a page-aligned address has its low bits
+clear, which no encoding -- x86-64, VT-d, Arm long or short descriptors, stage
+1 or 2 -- reads as valid. A domain's unpin, and a failed pin's rollback,
+release the tables after the unit's flush has completed, and keep them if it
+never did. A list dropped unreleased keeps its tables for good and counts them.
+Trees no processor can walk -- a dropped address space, and the secondaries'
+bring-up trees, which each core left with a full TLB flush -- still free at
+once, through `mm::unmap_unwalked`. The `mm::prune_in` the memory coverage
+work adds, which gives back the empty tables a failed map leaves, runs only
+as a space is dropped and is right to free at once for the same reason.
+
+*Checked by the build:* stage 4 maps and unmaps a page in a fresh tree and
+requires every table the unmap emptied to be still allocated and not counted
+given back when it returns, and the shootdown to give back exactly those.
+With the old callback put back (scratch), x86-64 `--smp 2` stops at
+*"stage 4 self-check failed: an unmap gave back the tables it emptied before
+its shootdown"*. Stage 6 requires that no unmap's tables were ever kept for
+want of a shootdown. What the build cannot show is a walk landing in the
+window: under TCG QEMU caches no intermediate walk at all, and under KVM the
+window is a few microseconds wide and the freed frame must be reused and
+filled in it. The fix rests on the ordering rule it restores, which the check
+holds.
+
 ### F-21b — the TOE claims no audit and no authentication
 **Moderate.** There is no FAU family at all, and FIA lives in the uncertified
 load ring. Defensible for an isolation kernel and the reason no OS Protection
@@ -851,8 +906,31 @@ standard-library API in the item's product code and fails on one that is not
 argued. `NOALLOC:` says the call cannot allocate: room was reserved, or the
 type only looks like a collection. `FALLIBLE:` names a fallible call the
 pattern cannot tell apart, and `FATAL-ALLOC:` marks a bring-up site. It
-reads 0 unmarked, 31 `NOALLOC`, 13 `FALLIBLE` and 73 `FATAL-ALLOC`. Its
-ratchet baseline, `scripts/fallible-alloc-baseline.json`, is empty. Every boot
+read 0 unmarked, 31 `NOALLOC`, 13 `FALLIBLE` and 73 `FATAL-ALLOC` in the item,
+with an empty ratchet baseline, `scripts/fallible-alloc-baseline.json`.
+
+**The hole, found the same day.** `syscall::signal::Signals::default` built
+its tables with `vec![..; NSIG]`, and so did the `Queue` under every thread.
+A refused frame there stopped the kernel on any `fork` or `clone` -- and on
+`process_create` and `process_start`, item calls that make a POSIX process
+and its first thread through the load. The gate never saw it: `signal.rs` is
+a load file, and the item never names `Signals`; it calls a load hook that
+does. Nor could the negative control, whose injection fails only the fallible
+calls. The tables are now made by constructors that answer `AllocError`, with
+no `Default` or `Clone` that allocates, and stage 7 makes each with every
+allocation failing and requires the error (negative control: the old `vec!`
+put back stops the boot there). The gate now also reads the load files those
+two calls run to make a process and a thread -- `signal.rs`, `thread.rs` and
+`process.rs` -- finds a `Default` that allocates in any kernel file and flags
+a call of it, flags a derived `Clone` over an owned heap field, and knows the
+turbofish and `default`/`make_mut` forms; each in its self-test, and together
+they flag the old `signal.rs` at nine sites. It reads 14 unmarked, all in
+`process.rs` and recorded in the baseline as debt that may only fall: fork's
+copies, the task and thread lists, the program name. What else those calls
+reach in the load, and what still stops the kernel there, is listed in
+[MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) §1.3. F-23 stays closed for what
+it measured, the item's own source; the claim that no allocation a program
+can reach stops the machine was wrong by these, and is narrowed. Every boot
 runs the negative control (`object/alloc_check.rs`, stage 9, FX-0902), which
 fails every *n*th allocation of one process, for six periods, while it drives
 the native ABI. Every call must succeed or answer `NO_MEMORY`, and nothing may
