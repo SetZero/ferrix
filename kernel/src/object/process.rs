@@ -540,7 +540,7 @@ pub(crate) const PID_MAX: u32 = 32_768;
 
 /// Where numbering resumes after wrapping. Linux's `RESERVED_PIDS`: the
 /// numbers below it stay with whatever started at boot.
-const RESERVED: u32 = 300;
+pub(crate) const RESERVED: u32 = 300;
 
 /// The pid Linux gives the first user process, which programs rely on: a shell
 /// running as init reports `$$` as 1, its children see 1 as their parent, and

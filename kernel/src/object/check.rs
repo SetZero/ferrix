@@ -201,6 +201,12 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     check_two_programs_talk_over_a_channel(&mut after)?;
     check_a_program_ended_by_its_fault_is_heard_and_freed(&mut after)?;
     check_a_process_starts_another(&mut after)?;
+    let edges = object::edge_check::run()?;
+    crate::console::println!(
+        "  edges    {edges} object paths no program takes: subtree control, a node's owner, a \
+         packet put back, a registration passed over, a cycle walk meeting one end twice, a \
+         delivery to a line nobody holds"
+    );
 
     Ok(Report {
         messages: counter.messages,
@@ -249,6 +255,7 @@ fn check_a_process_starts_another(counter: &mut Counter) -> Result<(), &'static 
     let side = Side::new()?;
     let spawner = Spawner::new(&side)?;
     check_what_process_create_refuses(&spawner, counter)?;
+    check_process_create_survives_each_failure(&spawner)?;
     check_a_child_finds_its_bootstrap(&spawner, counter)?;
     check_a_killed_child_is_not_started(&spawner, counter)?;
     check_an_unstarted_child_ends_with_its_handles(&spawner, counter)?;
@@ -453,6 +460,42 @@ fn check_what_process_create_refuses(
         "a VMO holding no ELF image was loaded as one",
         counter,
     )
+}
+
+/// `process_create` run once per allocation it makes, the `n`th failing on
+/// the `n`th run alone (`user::alloc_check`): each run makes the child or
+/// answers `NO_MEMORY`, and a child made is closed unstarted, which ends it.
+fn check_process_create_survives_each_failure(spawner: &Spawner<'_>) -> Result<(), &'static str> {
+    let task =
+        crate::sched::current_id().ok_or("the process-creation check runs outside a task")?;
+    for nth in 1..=2000 {
+        // The heap's allocations alone: a process's signal table is still
+        // allocated infallibly (`syscall::signal::Signals::default`), and a
+        // frame refused under it stops the kernel.
+        crate::fallible::inject_once(task, nth, false);
+        let made = spawner.create(spawner.root, spawner.image, len(SPAWN_NAME));
+        let failed = crate::fallible::stop_injecting() > 0;
+        match made {
+            Ok(value) => {
+                let handle = u64::try_from(value).unwrap_or(u64::MAX);
+                let _ = spawner
+                    .side
+                    .call(nr::HANDLE_CLOSE, &[handle])
+                    .map_err(|_| "closing a child made with an allocation failing failed")?;
+            }
+            Err(status::NO_MEMORY) if failed => {}
+            Err(other) => {
+                crate::console::println!("  spawn    run {nth}: status {}", other.0);
+                return Err(
+                    "process_create failed otherwise than for memory, one allocation failing",
+                );
+            }
+        }
+        if !failed {
+            return Ok(());
+        }
+    }
+    Err("process_create made more allocations than its check allows")
 }
 
 /// A child started with a channel end finds the end's value in its first
@@ -1209,6 +1252,16 @@ pub(crate) fn reg(handle: Handle) -> u64 {
     u64::from(handle.0)
 }
 
+/// The channel end `handle` names in `side`.
+fn endpoint(side: &Side, handle: Handle) -> Result<Arc<Endpoint>, &'static str> {
+    side.process
+        .with_handles(|table| match table.get(handle) {
+            Ok((Object::Channel(end), _)) => Some(Arc::clone(end)),
+            _ => None,
+        })
+        .ok_or("a handle did not name a channel end")
+}
+
 /// A length as a register.
 fn len(bytes: &[u8]) -> u64 {
     bytes.len() as u64
@@ -1468,6 +1521,10 @@ fn check_a_full_channel_says_wait(
         }
     }
     counter.refusals += 1;
+    let writer = endpoint(sender, near)?;
+    if writer.peer_has_room() || writer.signals().intersects(Signals::WRITABLE) {
+        return Err("the writer of a full channel was told it could write");
+    }
 
     let drain = [reg(far), INBOX, 0, HANDLES, 0, ACTUAL];
     for _ in 0..queued {
@@ -1475,6 +1532,10 @@ fn check_a_full_channel_says_wait(
             .call(nr::CHANNEL_READ, &drain)
             .map_err(|_| "draining a full channel failed")?;
     }
+    if !writer.peer_has_room() {
+        return Err("the writer of a drained channel was told it had no room");
+    }
+    drop(writer);
     let _ = sender
         .call(nr::CHANNEL_WRITE, &empty)
         .map_err(|_| "a drained channel still refused a write")?;
@@ -2246,6 +2307,14 @@ fn check_a_device_gives_exactly_its_own_memory(counter: &mut Counter) -> Result<
         counter,
     )?;
 
+    stage_spec(&side, aperture.phys(), PAGE_SIZE / 2)?;
+    refused(
+        side.call(nr::IO_MAPPING_CREATE, &[reg(handle), SPEC]),
+        status::INVALID_ARGS,
+        "half a page of a whole-page aperture was mapped, taking the rest with it",
+        counter,
+    )?;
+
     stage_spec(&side, aperture.phys(), aperture.len())?;
     let mapping = side.handle(
         nr::IO_MAPPING_CREATE,
@@ -2319,6 +2388,7 @@ fn check_an_interrupt_is_held_until_acknowledged(
     let handle = device_handle(&side, &node)?;
     let readable = u64::from(Signals::READABLE.0);
 
+    check_interrupt_create_survives_each_failure(&side, handle)?;
     let first = side.handle(
         nr::INTERRUPT_CREATE,
         &[reg(handle), 0],
@@ -3321,5 +3391,69 @@ fn check_a_bound_interrupt_reaches_its_port(
     let _ = side
         .call(nr::HANDLE_CLOSE, &[reg(port)])
         .map_err(|_| "closing an interrupt's port failed")?;
+    check_a_pending_interrupt_is_queued_when_bound(side, interrupt, number, counter)
+}
+
+/// `interrupt_create` run once per allocation it makes, frames included, the
+/// `n`th failing on the `n`th run alone (`user::alloc_check`): each run claims
+/// the line or answers `NO_MEMORY`, and one that answered leaves the line
+/// free for the next.
+fn check_interrupt_create_survives_each_failure(
+    side: &Side,
+    device: Handle,
+) -> Result<(), &'static str> {
+    let task = crate::sched::current_id().ok_or("the interrupt check runs outside a task")?;
+    for nth in 1..=64 {
+        crate::fallible::inject_once(task, nth, true);
+        let made = side.call(nr::INTERRUPT_CREATE, &[reg(device), 0]);
+        let failed = crate::fallible::stop_injecting() > 0;
+        match made {
+            Ok(value) => {
+                let handle = u64::try_from(value).unwrap_or(u64::MAX);
+                let _ = side
+                    .call(nr::HANDLE_CLOSE, &[handle])
+                    .map_err(|_| "closing an interrupt made with an allocation failing failed")?;
+            }
+            Err(status::NO_MEMORY) if failed => {}
+            Err(_) => {
+                return Err(
+                    "interrupt_create failed otherwise than for memory, one allocation failing",
+                );
+            }
+        }
+        if !failed {
+            return Ok(());
+        }
+    }
+    Err("interrupt_create made more allocations than its check allows")
+}
+
+/// An interrupt that fired while its port was gone is pending, and binding
+/// it to a new port queues its packet there at once.
+fn check_a_pending_interrupt_is_queued_when_bound(
+    side: &Side,
+    interrupt: Handle,
+    number: u32,
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    interrupt::on_interrupt(number);
+    let port = side.handle(nr::PORT_CREATE, &[], "port_create failed")?;
+    side.put(KEY, &42_u64.to_ne_bytes())?;
+    let _ = side
+        .call(nr::INTERRUPT_BIND, &[reg(interrupt), reg(port), KEY])
+        .map_err(|_| "binding an interrupt to a second port, the first gone, failed")?;
+    let _ = take_now(side, port)
+        .map_err(|_| "an interrupt pending when it was bound queued no packet")?;
+    let (key, kind, _, _, _) = read_packet(side)?;
+    if key != 42 || kind != PACKET_INTERRUPT {
+        return Err("a pending interrupt's packet did not carry its new key and kind");
+    }
+    counter.packets += 1;
+    let _ = side
+        .call(nr::INTERRUPT_ACK, &[reg(interrupt)])
+        .map_err(|_| "acknowledging a pending interrupt failed")?;
+    let _ = side
+        .call(nr::HANDLE_CLOSE, &[reg(port)])
+        .map_err(|_| "closing an interrupt's second port failed")?;
     Ok(())
 }
