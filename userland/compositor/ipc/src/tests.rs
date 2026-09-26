@@ -612,9 +612,27 @@ fn monitors_and_workspaces_carry_what_a_bar_reads() {
             .and_then(parse::Value::number),
         Some(2.0)
     );
+    // waybar's hyprland/window takes the focused workspace's last window
+    // and its title from here: a fixed "0x0" is a bar with no title.
+    assert_eq!(
+        value.items()[0]
+            .get("lastwindow")
+            .and_then(parse::Value::text),
+        Some("0x1")
+    );
+    assert_eq!(
+        value.items()[0]
+            .get("lastwindowtitle")
+            .and_then(parse::Value::text),
+        Some("one")
+    );
 
     let value = json("j/activeworkspace");
     assert_eq!(value.get("id").and_then(parse::Value::number), Some(1.0));
+    assert_eq!(
+        value.get("lastwindowtitle").and_then(parse::Value::text),
+        Some("one")
+    );
 }
 
 /// What a bar and a script read that is not a window: the bindings, the

@@ -113,7 +113,7 @@ pub fn answer(request: &Request, snapshot: &Snapshot, version: Version) -> Reply
     match request.command.as_str() {
         "version" => text(self_version(flags, version)),
         "monitors" => text(monitors(flags, &snapshot.monitors)),
-        "workspaces" => text(workspaces(flags, &snapshot.workspaces)),
+        "workspaces" => text(workspaces(flags, snapshot)),
         "clients" => text(clients(flags, snapshot)),
         "activewindow" => text(active_window(flags, snapshot)),
         "activeworkspace" => text(active_workspace(flags, snapshot)),
@@ -1176,13 +1176,14 @@ fn monitors(flags: Flags, monitors: &[Monitor]) -> String {
     text
 }
 
-fn workspaces(flags: Flags, workspaces: &[Workspace]) -> String {
+fn workspaces(flags: Flags, snapshot: &Snapshot) -> String {
+    let workspaces = &snapshot.workspaces;
     if flags.format() == Format::Json {
         let mut out = Json::new(pretty(flags));
         out.array();
         for workspace in workspaces {
             out.object();
-            write_workspace(&mut out, workspace);
+            write_workspace(&mut out, workspace, &snapshot.windows);
             out.end('}');
         }
         out.end(']');
@@ -1203,15 +1204,41 @@ fn workspaces(flags: Flags, workspaces: &[Workspace]) -> String {
     text
 }
 
-fn write_workspace(out: &mut Json, workspace: &Workspace) {
+/// The window a workspace last had focused, as Hyprland's
+/// `m_lastFocusedWindow` is: the one of its windows most recently focused.
+///
+/// This compositor keeps no focus history beyond the focused window
+/// (`focusHistoryID` is 0 for it and -1 for the rest), so a workspace has a
+/// last window while it holds the focused one, and none otherwise -- where
+/// Hyprland would name the window it had focused before focus moved away.
+/// waybar's `hyprland/window` reads the focused workspace's, which this
+/// always answers.
+fn last_window<'a>(workspace: &Workspace, windows: &'a [Window]) -> Option<&'a Window> {
+    windows
+        .iter()
+        .filter(|window| window.workspace == workspace.id && window.focus_history >= 0)
+        .min_by_key(|window| window.focus_history)
+}
+
+fn write_workspace(out: &mut Json, workspace: &Workspace, windows: &[Window]) {
     out.number("id", i64::from(workspace.id));
     out.string("name", &workspace.name);
     out.string("monitor", &workspace.monitor);
     out.number("monitorID", 0);
     out.number("windows", i64::from(workspace.windows));
     out.boolean("hasfullscreen", workspace.has_fullscreen);
-    out.string("lastwindow", "0x0");
-    out.string("lastwindowtitle", "");
+    let last = last_window(workspace, windows);
+    out.string(
+        "lastwindow",
+        &last.map_or_else(
+            || "0x0".to_owned(),
+            |window| format!("0x{:x}", window.address),
+        ),
+    );
+    out.string(
+        "lastwindowtitle",
+        last.map_or("", |window| window.title.as_str()),
+    );
     out.boolean("ispersistent", false);
 }
 
@@ -1272,7 +1299,7 @@ fn active_workspace(flags: Flags, snapshot: &Snapshot) -> String {
     if flags.format() == Format::Json {
         let mut out = Json::new(pretty(flags));
         out.object();
-        write_workspace(&mut out, &workspace);
+        write_workspace(&mut out, &workspace, &snapshot.windows);
         out.end('}');
         return finish(out, flags);
     }
