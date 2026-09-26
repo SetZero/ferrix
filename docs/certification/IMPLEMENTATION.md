@@ -831,6 +831,13 @@ above:
   and what it adds to its parent's are kept by atomics and can drift when a
   job turns busy and idle on two processors at once: the drift scales every
   sibling of that job's parent alike, so shares within the parent hold.
+* **A task's state and its job's load change as one step** on its
+  processor: `Task::set_state` masks interrupts across the swap and the
+  join or leave, and `sched::exit` keeps them masked until it has dropped
+  its own reference to the task. A switch acts on the state alone, so one
+  between the two found an exiting task dead and still counted, and never
+  ran it again: its weight stayed in the job's load, and its `Arc` on the
+  freed stack kept the job's slot (FX-0905, fixed 2026-09-26).
 * **Page tables** are charged in `map_in` for user mappings only, through a
   `PhysMem` that tags the table with the running task's slot; their frees,
   F-36's deferred ones included, uncharge in `deallocate_frames` untouched.
