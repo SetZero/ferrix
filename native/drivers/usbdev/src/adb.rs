@@ -84,11 +84,11 @@ impl Bridge {
         self.client.is_some()
     }
 
-    /// What the host sent on adb's OUT endpoint, for adbd.
+    /// What the host sent on adb's OUT endpoint, for adbd. Kept while adbd
+    /// is not yet connected: the host sends its `CNXN` as soon as the
+    /// device is configured, which can be before adbd has found the socket,
+    /// and it does not send it again.
     pub(crate) fn take_from_host(&mut self, bytes: &[u8]) {
-        if self.client.is_none() {
-            return;
-        }
         let room = self
             .outbound
             .get_mut(self.outbound_len..)
@@ -99,7 +99,9 @@ impl Bridge {
         }
         self.outbound_len += count;
         if count < bytes.len() {
-            say(format_args!("usbdev: adbd is not reading; dropping it"));
+            say(format_args!(
+                "usbdev: adbd is not reading what the host sends; starting over"
+            ));
             self.drop_client();
         }
     }
