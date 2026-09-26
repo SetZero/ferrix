@@ -37,7 +37,9 @@ pub(crate) fn run() -> Result<(), &'static str> {
     let inside = unit
         .enter()
         .map_err(|_| "an empty gate could not be entered")?;
-    if unit.enter().is_ok() {
+    // Through the same wait `enter` makes, with a patience of 10 ms, not
+    // the unit's second.
+    if unit.enter_within(10_000_000).is_ok() {
         return Err("a gate was entered twice at once");
     }
     drop(inside);

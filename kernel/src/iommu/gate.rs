@@ -68,7 +68,18 @@ impl Gate {
     ///
     /// Whoever was inside stayed past [`ENTRY_PATIENCE_NANOS`].
     pub(crate) fn enter(&self) -> Result<Entered<'_>, &'static str> {
-        let deadline = timer::now_nanos().saturating_add(ENTRY_PATIENCE_NANOS);
+        self.enter_within(ENTRY_PATIENCE_NANOS)
+    }
+
+    /// [`Gate::enter`], giving up after `patience` nanoseconds rather than
+    /// the unit's: for `iommu/check.rs`, which proves a held gate refuses the
+    /// next entry and has no reason to spend a second of every boot on it.
+    ///
+    /// # Errors
+    ///
+    /// Whoever was inside stayed past `patience`.
+    pub(crate) fn enter_within(&self, patience: u64) -> Result<Entered<'_>, &'static str> {
+        let deadline = timer::now_nanos().saturating_add(patience);
         let take = || {
             self.held
                 .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
