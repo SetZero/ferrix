@@ -29,7 +29,9 @@ the phone's Magisk app and flashed to `init_boot_b` only; `su` works again
 `~/.local/share/ferrix/pixel7/cp3a/` for an undo; automatic system updates
 are off (`ota_disable_automatic_update=1`). The new build's device tree is
 `cp3a/panther-cp3a.dts`: against `panther.dts` it moves only
-`pkvm_guest_firmware`'s reserved region and ABL's own initrd, and every node
+`pkvm_guest_firmware`'s reserved region (`0x8B00_0000` to `0xB500_0000`,
+still `0xD_0000` long; the loader takes reserved memory from the tree at
+every boot, so it follows) and ABL's own initrd, and every node
 Ferrix's loader, kernel and USB driver use is byte-identical.
 
 
