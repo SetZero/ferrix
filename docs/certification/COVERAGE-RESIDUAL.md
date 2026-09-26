@@ -10,7 +10,7 @@ The statements in the certified item that the measured suite did not reach, on e
 | aarch64 | debug | 1852 | 132 | 239 | **1481** |
 | armv7a | debug | 2013 | 205 | 362 | **1446** |
 
-*Argued* is the first two categories below; *hardware absent* is a statement about which machine was measured rather than an argument; *needs a test* is the gap.
+*Argued* is the first three categories below; *hardware absent* is a statement about which machine was measured rather than an argument; *needs a test* is the gap.
 
 ---
 
@@ -22,6 +22,7 @@ The statements in the certified item that the measured suite did not reach, on e
 |---|---:|---:|
 | Unreachable on the measured architecture | 131 | 8% |
 | Reached only when the kernel is stopping | 15 | 1% |
+| Reached only when something has already failed | 0 | 0% |
 | Hardware the measured machine does not have | 259 | 15% |
 | Needs a test | 1320 | 77% |
 
@@ -42,6 +43,12 @@ Justified. The panic report, its catalogue and the backtrace walker run when the
 | 9 | `core` | `panic.rs` |
 | 3 | `core` | `backtrace.rs` |
 | 3 | `core` | `panic/screen.rs` |
+
+### x86_64: Reached only when something has already failed — 0 statements
+
+Justified, line by line. Each of these runs only when hardware misbehaves or an invariant the rest of the kernel keeps has broken: a counter that never advances, a reset that did not reset, a table that lost an entry it was just given. A passing run cannot show one without first breaking what it defends against, and removing it would leave the failure unhandled. Each argument below says what would have to go wrong.
+
+None.
 
 ### x86_64: Hardware the measured machine does not have — 259 statements
 
@@ -99,6 +106,7 @@ Justified. The panic report, its catalogue and the backtrace walker run when the
 |---|---:|---:|
 | Unreachable on the measured architecture | 124 | 7% |
 | Reached only when the kernel is stopping | 8 | 0% |
+| Reached only when something has already failed | 0 | 0% |
 | Hardware the measured machine does not have | 239 | 13% |
 | Needs a test | 1481 | 80% |
 
@@ -120,6 +128,12 @@ Justified. The panic report, its catalogue and the backtrace walker run when the
 | 5 | `core` | `panic.rs` |
 | 2 | `core` | `backtrace.rs` |
 | 1 | `core` | `panic/screen.rs` |
+
+### aarch64: Reached only when something has already failed — 0 statements
+
+Justified, line by line. Each of these runs only when hardware misbehaves or an invariant the rest of the kernel keeps has broken: a counter that never advances, a reset that did not reset, a table that lost an entry it was just given. A passing run cannot show one without first breaking what it defends against, and removing it would leave the failure unhandled. Each argument below says what would have to go wrong.
+
+None.
 
 ### aarch64: Hardware the measured machine does not have — 239 statements
 
@@ -176,6 +190,7 @@ Justified. The panic report, its catalogue and the backtrace walker run when the
 |---|---:|---:|
 | Unreachable on the measured architecture | 144 | 7% |
 | Reached only when the kernel is stopping | 61 | 3% |
+| Reached only when something has already failed | 0 | 0% |
 | Hardware the measured machine does not have | 362 | 18% |
 | Needs a test | 1446 | 72% |
 
@@ -197,6 +212,12 @@ Justified. The panic report, its catalogue and the backtrace walker run when the
 | 53 | `core` | `panic/screen.rs` |
 | 4 | `core` | `backtrace.rs` |
 | 4 | `core` | `panic.rs` |
+
+### armv7a: Reached only when something has already failed — 0 statements
+
+Justified, line by line. Each of these runs only when hardware misbehaves or an invariant the rest of the kernel keeps has broken: a counter that never advances, a reset that did not reset, a table that lost an entry it was just given. A passing run cannot show one without first breaking what it defends against, and removing it would leave the failure unhandled. Each argument below says what would have to go wrong.
+
+None.
 
 ### armv7a: Hardware the measured machine does not have — 362 statements
 
@@ -248,5 +269,5 @@ Justified. The panic report, its catalogue and the backtrace walker run when the
 
 ## What this does not do
 
-It sorts by file, not by statement. A file in *needs-a-test* may hold individual lines that are genuinely unreachable -- a defensive `else` on an invariant the type system already forces -- and a file in a justified category may hold a line that is not. Closing F-10 means walking the fourth category line by line; this says which lines to walk and which not to bother with, which is the part a percentage could not.
+It sorts by file, and by line only where an argument has been written. A file in *needs-a-test* may hold individual lines that are genuinely unreachable -- a defensive `else` on an invariant the type system already forces -- until someone argues them in `coverage-argued-<arch>.json`, and a file in a justified category may hold a line that is not. Closing F-10 means walking the gap line by line; this says which lines to walk and which not to bother with, which is the part a percentage could not.
 

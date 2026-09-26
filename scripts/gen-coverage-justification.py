@@ -33,6 +33,23 @@ The first two are arguments. The third is a configuration statement. Only the
 fourth is a gap, and separating them is the whole point: a single percentage
 cannot be argued with and these four numbers can.
 
+The file lists sort whole files. A statement in a needs-a-test file is moved
+out of the gap by an argument of its own, in `coverage-argued-<arch>.json`:
+
+  {"file": "arch/x86_64/mod.rs", "lines": "1232-1234",
+   "category": "defensive", "match": "for _ in 0..10 {",
+   "why": "what would have to go wrong for this to run, and why it cannot
+           be made to on the measured machine"}
+
+`category` is one of the four above or `defensive` -- reached only when
+hardware or an invariant has already failed, which a passing run cannot
+show. `match` is text the first line must contain, so that an argument
+cannot drift onto another statement when the file changes. Each argued
+line must be in the residual: an argument for a line a test now reaches, or
+one that no longer exists, is stale and `--check` fails, as the boundary
+gate does for its debt register. An architecture without the file has no
+line arguments.
+
 Two documents come out:
 
   COVERAGE-RESIDUAL.md  the four categories on each architecture.
@@ -53,6 +70,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CERT = ROOT / "docs" / "certification"
+KERNEL = ROOT / "kernel" / "src"
 OUTPUT = CERT / "COVERAGE-RESIDUAL.md"
 WORKLIST = CERT / "COVERAGE-WORKLIST.md"
 
@@ -65,6 +83,60 @@ def residual_path(arch: str) -> Path:
 
 def coverage_path(arch: str) -> Path:
     return CERT / f"coverage-{arch}.json"
+
+
+def argued_path(arch: str) -> Path:
+    return CERT / f"coverage-argued-{arch}.json"
+
+
+def parse_lines(text: str) -> list[int]:
+    """`"1232-1234, 1240"` as `[1232, 1233, 1234, 1240]`."""
+    out: list[int] = []
+    for part in text.split(","):
+        part = part.strip()
+        if "-" in part:
+            low, high = part.split("-", 1)
+            out.extend(range(int(low), int(high) + 1))
+        elif part:
+            out.append(int(part))
+    return out
+
+
+def load_arguments(arch: str, residual: dict) -> tuple[dict, list[dict], list[str]]:
+    """The architecture's line arguments: `{(file, line): category}`, the
+    arguments themselves, and every reason one of them is stale or malformed.
+    """
+    path = argued_path(arch)
+    if not path.is_file():
+        return {}, [], []
+    arguments = json.loads(path.read_text(encoding="utf-8"))["arguments"]
+    argued: dict[tuple[str, int], str] = {}
+    problems: list[str] = []
+    for index, argument in enumerate(arguments):
+        where = f"{path.relative_to(ROOT)} #{index} ({argument.get('file')} {argument.get('lines')})"
+        file = argument.get("file", "")
+        category = argument.get("category")
+        if category not in LINE_CATEGORIES:
+            problems.append(f"{where}: category {category!r} is not one of {LINE_CATEGORIES}")
+            continue
+        if not argument.get("why", "").strip():
+            problems.append(f"{where}: no argument given")
+        lines = parse_lines(argument.get("lines", ""))
+        unreached = set(residual["files"].get(file, {}).get("lines", []))
+        stale = [line for line in lines if line not in unreached]
+        if not lines or stale:
+            problems.append(
+                f"{where}: {ranges(stale) or 'no lines'} not in the residual -- "
+                f"reached now, or moved; delete or re-aim the argument"
+            )
+        source = KERNEL / file
+        text = source.read_text(encoding="utf-8").splitlines() if source.is_file() else []
+        first = text[lines[0] - 1] if lines and 0 < lines[0] <= len(text) else ""
+        if argument.get("match", "") not in first or not argument.get("match"):
+            problems.append(f"{where}: line {lines[0] if lines else '?'} does not contain {argument.get('match')!r}")
+        for line in lines:
+            argued[(file, line)] = category
+    return argued, arguments, problems
 
 
 # Files belonging to an architecture other than the measured one, or to a
@@ -138,6 +210,16 @@ HEADINGS = {
         "boot does -- and a passing run that reached the rest would be a "
         "failing run.",
     ),
+    "defensive": (
+        "Reached only when something has already failed",
+        "Justified, line by line. Each of these runs only when hardware "
+        "misbehaves or an invariant the rest of the kernel keeps has broken: "
+        "a counter that never advances, a reset that did not reset, a table "
+        "that lost an entry it was just given. A passing run cannot show one "
+        "without first breaking what it defends against, and removing it "
+        "would leave the failure unhandled. Each argument below says what "
+        "would have to go wrong.",
+    ),
     "absent-hardware": (
         "Hardware the measured machine does not have",
         "**Not a justification, a configuration statement.** Enumeration and "
@@ -155,13 +237,27 @@ HEADINGS = {
     ),
 }
 
-ARGUED = ("other-architecture", "failure-path")
+ARGUED = ("other-architecture", "failure-path", "defensive")
+LINE_CATEGORIES = tuple(HEADINGS)
+
+# {arch: {(file, line): category}}, from `coverage-argued-<arch>.json`;
+# `main` fills it before anything is rendered.
+LINE_ARGUMENTS: dict[str, dict[tuple[str, int], str]] = {}
+# {arch: the arguments as written}, for the line-by-line tables.
+ARGUMENTS: dict[str, list[dict]] = {}
+
+
+def line_category(path: str, line: int, arch: str) -> str:
+    """A line's own argument if it has one, else its file's category."""
+    return LINE_ARGUMENTS.get(arch, {}).get((path, line)) or categorise(path, arch)
 
 
 def buckets_of(residual: dict, arch: str) -> dict[str, dict[str, int]]:
     buckets: dict[str, dict[str, int]] = {name: {} for name in HEADINGS}
     for path, entry in residual["files"].items():
-        buckets[categorise(path, arch)][path] = len(entry["lines"])
+        for line in entry["lines"]:
+            bucket = buckets[line_category(path, line, arch)]
+            bucket[path] = bucket.get(path, 0) + 1
     return buckets
 
 
@@ -190,7 +286,7 @@ def render(residuals: dict[str, dict]) -> str:
         )
     lines += [
         "",
-        "*Argued* is the first two categories below; *hardware absent* is a "
+        "*Argued* is the first three categories below; *hardware absent* is a "
         "statement about which machine was measured rather than an argument; "
         "*needs a test* is the gap.",
         "",
@@ -238,21 +334,50 @@ def render(residuals: dict[str, dict]) -> str:
                 lines.append(f"| {rest} | | *and {len(entries) - 25} more files* |")
             lines.append("")
 
+        lines += render_arguments(arch)
+
     lines += [
         "---",
         "",
         "## What this does not do",
         "",
-        "It sorts by file, not by statement. A file in *needs-a-test* may hold "
-        "individual lines that are genuinely unreachable -- a defensive `else` "
-        "on an invariant the type system already forces -- and a file in a "
-        "justified category may hold a line that is not. Closing F-10 means "
-        "walking the fourth category line by line; this says which lines to "
-        "walk and which not to bother with, which is the part a percentage "
-        "could not.",
+        "It sorts by file, and by line only where an argument has been "
+        "written. A file in *needs-a-test* may hold individual lines that are "
+        "genuinely unreachable -- a defensive `else` on an invariant the type "
+        "system already forces -- until someone argues them in "
+        "`coverage-argued-<arch>.json`, and a file in a justified category may "
+        "hold a line that is not. Closing F-10 means walking the gap line by "
+        "line; this says which lines to walk and which not to bother with, "
+        "which is the part a percentage could not.",
         "",
     ]
     return "\n".join(lines) + "\n"
+
+
+def render_arguments(arch: str) -> list[str]:
+    """The architecture's line arguments, one row each."""
+    arguments = ARGUMENTS.get(arch, [])
+    if not arguments:
+        return []
+    count = sum(len(parse_lines(a["lines"])) for a in arguments)
+    out = [
+        f"### {arch}: argued line by line — {count} statements",
+        "",
+        f"From `coverage-argued-{arch}.json`. Each row is one argument, for "
+        "the lines it names and no others; the category is the one it is "
+        "counted in above.",
+        "",
+        "| File | Lines | Category | Why it is not reached |",
+        "|---|---|---|---|",
+    ]
+    for argument in sorted(arguments, key=lambda a: (a["file"], parse_lines(a["lines"])[0])):
+        why = " ".join(argument["why"].split()).replace("|", "\\|")
+        out.append(
+            f"| `{argument['file']}` | {argument['lines']} | "
+            f"{HEADINGS[argument['category']][0]} | {why} |"
+        )
+    out.append("")
+    return out
 
 
 def module_of(path: str) -> str:
@@ -297,7 +422,11 @@ def render_worklist(residuals: dict[str, dict], coverage: dict[str, dict]) -> st
                 continue
             if categorise(path, arch) != "needs-a-test":
                 continue
-            gap.setdefault(path, {})[arch] = unreached.get(path, {}).get("lines", [])
+            gap.setdefault(path, {})[arch] = [
+                line
+                for line in unreached.get(path, {}).get("lines", [])
+                if line_category(path, line, arch) == "needs-a-test"
+            ]
             rings[path] = entry["ring"]
     gap = {path: arches for path, arches in gap.items() if any(arches.values())}
 
@@ -404,6 +533,20 @@ def main() -> int:
                 )
                 return 1
             into[arch] = json.loads(path.read_text(encoding="utf-8"))
+
+    # Malformed or stale line arguments fail the generator as well as the
+    # check: a document rendered from them would argue lines that are not
+    # the ones it names.
+    problems: list[str] = []
+    for arch in ARCHES:
+        argued, arguments, found = load_arguments(arch, residuals[arch])
+        LINE_ARGUMENTS[arch] = argued
+        ARGUMENTS[arch] = arguments
+        problems += found
+    for problem in problems:
+        print(f"gen-coverage-justification: {problem}", file=sys.stderr)
+    if problems:
+        return 1
 
     outputs = {
         OUTPUT: render(residuals),
