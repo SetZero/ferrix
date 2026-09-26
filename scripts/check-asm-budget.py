@@ -48,14 +48,43 @@ ROOTS = ("kernel", "boot", "bootloaders", "libs", "user", "xtask")
 # The macros that introduce assembly. `asm!` and `naked_asm!` may be reached
 # through a `core::arch::` path, so allow a qualified prefix.
 ASM_MACRO = re.compile(r"(?<![\w:])(?:core::arch::)?(global_asm|naked_asm|asm)\s*!\s*[({\[]")
-# A line inside an assembly macro that carries actual assembly text: a string
-# literal. Operand lines (`in(reg) x,`) and the closing paren do not count.
-ASM_TEXT = re.compile(r'"')
 # Rust comment and attribute lines, excluded from the Rust source count so the
 # ratio is not flattered by this tree's comment density.
 RUST_SKIP = re.compile(r"^\s*(//|/\*|\*|#\[|#!\[)?\s*$|^\s*(//|///|//!)")
 
 STANDALONE_ASM_SUFFIXES = (".s", ".S", ".asm")
+
+
+RAW_STRING = re.compile(r'(?<![\w])(?:br|r)(#*)"')
+
+# A line of a raw string that holds no instruction: blank, or an assembler
+# comment only.
+ASM_COMMENT = re.compile(r"^\s*(//|/\*|\*|#|;|$)")
+
+
+def string_end(source: str, index: int) -> tuple[int, str] | None:
+    """If a string literal starts at `index`, the index just past it and its
+    kind, "raw" or "plain"; otherwise None.
+
+    A raw string, `r"..."` or `r#"..."#`, ends at the first quote followed by
+    as many hashes as it opened with, and a backslash in it escapes nothing.
+    """
+    raw = RAW_STRING.match(source, index)
+    if raw and (index == 0 or not (source[index - 1].isalnum() or source[index - 1] == "_")):
+        closing = '"' + raw.group(1)
+        found = source.find(closing, raw.end())
+        return (len(source) if found < 0 else found + len(closing)), "raw"
+    if source[index] == '"':
+        at = index + 1
+        while at < len(source):
+            if source[at] == "\\":
+                at += 2
+                continue
+            if source[at] == '"':
+                return at + 1, "plain"
+            at += 1
+        return len(source), "plain"
+    return None
 
 
 def balanced(source: str, opening: int) -> int:
@@ -64,19 +93,14 @@ def balanced(source: str, opening: int) -> int:
     open_ch = source[opening]
     close_ch = pairs[open_ch]
     depth = 0
-    in_string = False
     index = opening
     while index < len(source):
+        literal = string_end(source, index)
+        if literal is not None:
+            index = literal[0]
+            continue
         char = source[index]
-        if in_string:
-            if char == "\\":
-                index += 2
-                continue
-            if char == '"':
-                in_string = False
-        elif char == '"':
-            in_string = True
-        elif char == open_ch:
+        if char == open_ch:
             depth += 1
         elif char == close_ch:
             depth -= 1
@@ -87,12 +111,37 @@ def balanced(source: str, opening: int) -> int:
 
 
 def asm_lines(source: str) -> int:
-    """Lines of assembly text inside the assembly macros of one Rust file."""
+    """Lines of assembly text inside the assembly macros of one Rust file.
+
+    A line holding an ordinary string literal counts once, however many
+    literals are on it: operand lines (`in(reg) x,`) and the closing paren do
+    not count. A raw string counts every line of its text that holds an
+    instruction or a directive. It once counted as the one or two lines its
+    quotes were on, which let a `global_asm!(r#"...")` of any length pass for
+    two lines.
+    """
     total = 0
     for match in ASM_MACRO.finditer(source):
         opening = match.end() - 1
-        body = source[opening : balanced(source, opening)]
-        total += sum(1 for line in body.splitlines() if ASM_TEXT.search(line))
+        closing = balanced(source, opening)
+        quoted_lines: set[int] = set()
+        index = opening
+        while index < closing:
+            literal = string_end(source, index)
+            if literal is None:
+                index += 1
+                continue
+            end, kind = literal
+            first = source.count("\n", 0, index)
+            if kind == "raw":
+                text = source[index:end]
+                text = text[text.index('"') + 1 : text.rindex('"')]
+                total += sum(1 for line in text.splitlines() if not ASM_COMMENT.match(line))
+            else:
+                last = source.count("\n", 0, end)
+                quoted_lines.update(range(first, last + 1))
+            index = end
+        total += len(quoted_lines)
     return total
 
 

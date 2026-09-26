@@ -14,12 +14,15 @@
     "'Convenient in assembly' is not a reason. 'Faster in assembly' is not a",
     "reason either -- measure it, then argue it in the entry."
   ],
-  "max_total_lines": 800,
+  "max_total_lines": 1600,
   "//max_total_lines": [
     "The cap that actually binds. Assembly is a fixed cost here: the list below",
     "is meant to be finished once every architecture boots, and a scheduler, a",
-    "filesystem or a driver must add nothing to it. 800 is the full intended",
-    "set with headroom, not a target to grow into."
+    "filesystem or a driver must add nothing to it. 1600 is the full intended",
+    "set with headroom, not a target to grow into. It was 800 until",
+    "2026-09-27, when the count learned to read raw strings: the tree held",
+    "1569 lines, not 733, and had for some time. The cap moved to the truth;",
+    "the assembly did not grow."
   ],
   "max_ratio": 0.06,
   "//max_ratio": [
@@ -31,8 +34,8 @@
   "target_ratio": 0.001,
   "//target_ratio": [
     "The founding claim: 99.9% Rust. Reached by writing the operating system,",
-    "not by shrinking the vector table. At today's ~500 lines of assembly it",
-    "needs the tree to pass roughly half a million lines of Rust, so treat it",
+    "not by shrinking the vector table. At today's ~1600 lines of assembly it",
+    "needs the tree to pass roughly a million and a half lines of Rust, so treat it",
     "as the direction of travel that check-asm-budget.py prints every run."
   ],
   "files": [
@@ -63,8 +66,8 @@
     },
     {
       "file": "kernel/src/arch/aarch64/smp.rs",
-      "max_lines": 30,
-      "reason": "The secondary core entry. PSCI CPU_ON starts a core at a physical address with its MMU off, and everything the kernel runs on is in the upper half: the first instructions have to install MAIR/TCR/TTBR0/TTBR1 and turn the MMU on while executing at an address only an identity map makes meaningful, then branch to a virtual one. The loader's switch again, once per core, and no Rust function can be entered with the MMU off and no stack. PSCI starts a core at the highest non-secure level, which on a machine with EL2 -- TF-A on the Pixel 7 -- is EL2, so the sequence first checks CurrentEL and, at EL2, makes EL1 a plain kernel's level (HCR_EL2, CNTHCTL_EL2, CNTVOFF_EL2, CPTR_EL2, HSTR_EL2, VPIDR/VMPIDR_EL2, ICC_SRE_EL2 where ID_AA64PFR0_EL1 says the GIC has system registers, SCTLR_EL1) and drops to it with an eret, as bootloaders/pixel7/src/entry.rs does for the boot core. That drop is the price of starting cores on real firmware rather than QEMU's, and it is register writes and an eret at a physical address: nothing Rust can say."
+      "max_lines": 58,
+      "reason": "The secondary core entry. PSCI CPU_ON starts a core at a physical address with its MMU off, and everything the kernel runs on is in the upper half: the first instructions have to install MAIR/TCR/TTBR0/TTBR1 and turn the MMU on while executing at an address only an identity map makes meaningful, then branch to a virtual one. The loader's switch again, once per core, and no Rust function can be entered with the MMU off and no stack. PSCI starts a core at the highest non-secure level, which on a machine with EL2 -- TF-A on the Pixel 7 -- is EL2, so the sequence first checks CurrentEL and, at EL2, makes EL1 a plain kernel's level (HCR_EL2, CNTHCTL_EL2, CNTVOFF_EL2, CPTR_EL2, HSTR_EL2, VPIDR/VMPIDR_EL2, ICC_SRE_EL2 where ID_AA64PFR0_EL1 says the GIC has system registers, SCTLR_EL1) and drops to it with an eret, as bootloaders/pixel7/src/entry.rs does for the boot core. That drop is the price of starting cores on real firmware rather than QEMU's, and it is register writes and an eret at a physical address: nothing Rust can say. 58 rather than 30 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 2 its quotes were on. Unlike the other eight raised that day, this file had grown: the sequence was 26 lines until the EL2 drop (14ea5636) added 32 while the short count hid it. The Pixel 7's TF-A starts cores at EL2, so those 32 are what starting its secondaries takes."
     },
     {
       "file": "kernel/src/arch/aarch64/speculation.rs",
@@ -73,13 +76,13 @@
     },
     {
       "file": "kernel/src/arch/aarch64/switch.rs",
-      "max_lines": 30,
-      "reason": "The same, in AAPCS registers: x19-x28, the frame pointer and the link register, saved in pairs. No floating-point state, because the kernel is built softfloat and never touches the SIMD registers."
+      "max_lines": 75,
+      "reason": "The same, in AAPCS registers: x19-x28, the frame pointer and the link register, saved in pairs. No floating-point state, because the kernel is built softfloat and never touches the SIMD registers. 75 rather than 30 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 4 its quotes were on: the file had not grown, the count had been short."
     },
     {
       "file": "kernel/src/arch/aarch64/trap.rs",
-      "max_lines": 90,
-      "reason": "The `VBAR_EL1` vector table and its save/restore path. The architecture defines a table of sixteen entries at fixed 128-byte offsets, and that layout *is* the interface -- a Rust array of function pointers is not what the CPU reads. Each entry is far too small for a register save, so it stashes two registers, records which entry it is, and branches to the common path. Also `brk`, for the boot test. And the way out to EL0 and back (`ferrix_run_user`, `ferrix_leave_user`): dropping privilege is an `eret` into a context that has to be constructed first -- `SP_EL0`, `ELR_EL1`, `SPSR_EL1` and every general register zeroed -- and the stack pointer has to move to a dedicated entry stack after the last Rust frame and before the `eret`, because at EL1 `sp` is `SP_EL1`, the stack every exception from EL0 lands on. No Rust function can do either."
+      "max_lines": 145,
+      "reason": "The `VBAR_EL1` vector table and its save/restore path. The architecture defines a table of sixteen entries at fixed 128-byte offsets, and that layout *is* the interface -- a Rust array of function pointers is not what the CPU reads. Each entry is far too small for a register save, so it stashes two registers, records which entry it is, and branches to the common path. Also `brk`, for the boot test. And the way out to EL0 and back (`ferrix_run_user`, `ferrix_leave_user`): dropping privilege is an `eret` into a context that has to be constructed first -- `SP_EL0`, `ELR_EL1`, `SPSR_EL1` and every general register zeroed -- and the stack pointer has to move to a dedicated entry stack after the last Rust frame and before the `eret`, because at EL1 `sp` is `SP_EL1`, the stack every exception from EL0 lands on. No Rust function can do either. 145 rather than 90 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 5 its quotes were on: the file had not grown, the count had been short."
     },
     {
       "file": "kernel/src/arch/armv7a/cpu.rs",
@@ -98,13 +101,13 @@
     },
     {
       "file": "kernel/src/arch/armv7a/switch.rs",
-      "max_lines": 30,
-      "reason": "The same again, and with one thing particular to this architecture: every exception is taken into a mode with its own banked stack pointer, and the trap path keeps everything on the SVC-mode stack -- so a task's context *is* its SVC stack pointer. A ninth register rides along with r4-r11 and the link register as padding, because nine words would leave the stack four-byte aligned where the ABI requires eight at a call."
+      "max_lines": 67,
+      "reason": "The same again, and with one thing particular to this architecture: every exception is taken into a mode with its own banked stack pointer, and the trap path keeps everything on the SVC-mode stack -- so a task's context *is* its SVC stack pointer. A ninth register rides along with r4-r11 and the link register as padding, because nine words would leave the stack four-byte aligned where the ABI requires eight at a call. 67 rather than 30 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 4 its quotes were on: the file had not grown, the count had been short."
     },
     {
       "file": "kernel/src/arch/armv7a/trap.rs",
-      "max_lines": 90,
-      "reason": "The eight-entry vector table and its save/restore path. The CPU branches to a fixed offset in one of five banked processor modes, with the interrupted registers live and a return address off by a per-exception amount. Each stub corrects the address, stores it and the saved status on the SVC stack with srsdb, and switches to SVC mode with cps, so no other mode ever needs a stack; one common path saves the rest, calls Rust and returns with rfeia. Also bkpt, for the boot test. And the way out to USR mode and back (`ferrix_run_user`, `ferrix_leave_user`): the program's banked stack pointer can only be set from a mode that shares it, the SVC stack pointer has to move to a dedicated entry stack after the last Rust frame and before the privilege drop, and the drop is an `rfeia` of a return address and status built for a program that has never run. No Rust function can do any of it."
+      "max_lines": 130,
+      "reason": "The eight-entry vector table and its save/restore path. The CPU branches to a fixed offset in one of five banked processor modes, with the interrupted registers live and a return address off by a per-exception amount. Each stub corrects the address, stores it and the saved status on the SVC stack with srsdb, and switches to SVC mode with cps, so no other mode ever needs a stack; one common path saves the rest, calls Rust and returns with rfeia. Also bkpt, for the boot test. And the way out to USR mode and back (`ferrix_run_user`, `ferrix_leave_user`): the program's banked stack pointer can only be set from a mode that shares it, the SVC stack pointer has to move to a dedicated entry stack after the last Rust frame and before the privilege drop, and the drop is an `rfeia` of a return address and status built for a program that has never run. No Rust function can do any of it. 130 rather than 90 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 6 its quotes were on: the file had not grown, the count had been short."
     },
     {
       "file": "kernel/src/arch/x86_64/cpu.rs",
@@ -113,8 +116,8 @@
     },
     {
       "file": "kernel/src/arch/x86_64/smp.rs",
-      "max_lines": 40,
-      "reason": "The AP trampoline, and the only 16-bit code in the project. INIT-SIPI-SIPI starts a processor in real mode at the start of a page below 1 MiB, with no stack and nothing but its reset state: there is no 16-bit Rust target, and the sequence that takes it to long mode -- control registers, EFER, a GDT, a far jump into a 64-bit segment -- is defined entirely by what the processor does to its registers along the way."
+      "max_lines": 41,
+      "reason": "The AP trampoline, and the only 16-bit code in the project. INIT-SIPI-SIPI starts a processor in real mode at the start of a page below 1 MiB, with no stack and nothing but its reset state: there is no 16-bit Rust target, and the sequence that takes it to long mode -- control registers, EFER, a GDT, a far jump into a 64-bit segment -- is defined entirely by what the processor does to its registers along the way. 41 rather than 40 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 3 its quotes were on: the file had not grown, the count had been short."
     },
     {
       "file": "kernel/src/arch/x86_64/speculation.rs",
@@ -123,18 +126,18 @@
     },
     {
       "file": "kernel/src/arch/x86_64/switch.rs",
-      "max_lines": 30,
-      "reason": "The context switch. A function that returns onto a different stack from the one it was called on: the callee-saved registers it restores belong to the context it is in the middle of leaving, and the return address it uses is on a stack that is no longer current. Rust has no way to say that. Six pushes, one store, one load, six pops and a return, plus the trampoline a task starts on -- which exists because the first thing a new task runs has nowhere but registers to read its entry point from."
+      "max_lines": 32,
+      "reason": "The context switch. A function that returns onto a different stack from the one it was called on: the callee-saved registers it restores belong to the context it is in the middle of leaving, and the return address it uses is on a stack that is no longer current. Rust has no way to say that. Six pushes, one store, one load, six pops and a return, plus the trampoline a task starts on -- which exists because the first thing a new task runs has nowhere but registers to read its entry point from. 32 rather than 30 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 4 its quotes were on: the file had not grown, the count had been short."
     },
     {
       "file": "kernel/src/arch/x86_64/syscall.rs",
-      "max_lines": 90,
-      "reason": "The `SYSCALL` entry, the way into ring 3, and the way back out. All three are defined by what the machine does around them rather than by what they compute. `SYSCALL` switches no stack, so the kernel's first instruction after it runs on the user's stack with no free register: the sequence that reaches the per-CPU record through `GS` and moves off that stack has to be written before any Rust function could have a frame. `swapgs` is likewise not a value the compiler can hold -- it is a side effect on how the next memory reference resolves. Entering ring 3 is `sysretq`, which takes the address from RCX and the flags from R11 by the instruction's definition and cannot be reached by returning from a function; the register scrubbing beside it is there so nothing of the kernel's survives the privilege change, which means it has to happen after the last Rust code and before the instruction. Leaving ring 3 restores a stack pointer and the callee-saved registers a C call promised to keep, across a boundary a return cannot cross."
+      "max_lines": 118,
+      "reason": "The `SYSCALL` entry, the way into ring 3, and the way back out. All three are defined by what the machine does around them rather than by what they compute. `SYSCALL` switches no stack, so the kernel's first instruction after it runs on the user's stack with no free register: the sequence that reaches the per-CPU record through `GS` and moves off that stack has to be written before any Rust function could have a frame. `swapgs` is likewise not a value the compiler can hold -- it is a side effect on how the next memory reference resolves. Entering ring 3 is `sysretq`, which takes the address from RCX and the flags from R11 by the instruction's definition and cannot be reached by returning from a function; the register scrubbing beside it is there so nothing of the kernel's survives the privilege change, which means it has to happen after the last Rust code and before the instruction. Leaving ring 3 restores a stack pointer and the callee-saved registers a C call promised to keep, across a boundary a return cannot cross. 118 rather than 90 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 2 its quotes were on: the file had not grown, the count had been short."
     },
     {
       "file": "kernel/src/arch/x86_64/trap.rs",
-      "max_lines": 90,
-      "reason": "The 256 interrupt entry stubs and the common save/restore path. The CPU enters a handler with the interrupted registers still live and pushes a frame whose shape depends on the vector -- ten of the 256 push an error code and the rest do not -- so no Rust function can be entered and no Rust signature can describe the frame. The stubs are generated by an assembler `.rept`: the same machine code as 256 Rust-emitted blocks, at a twentieth of the lines. Also `int3`, which is how the boot test proves the path works. And the paranoid entry for the NMI, #DB, #MC and the double fault, which arrive on any instruction -- the SYSCALL trampoline's ring-0 stretches on the program's stack and GS included -- so the saved CS cannot say which way round GS is: it reads GS_BASE with rdmsr and swaps only if that is not the kernel's, clears DR7 so no breakpoint fires on its IST stack and restores it after, counts the stack's occupants, and moves a ring-3 #DB's frame onto the task's kernel stack before the ordinary path. Each is a side effect on how the next instruction runs, before or after any Rust frame."
+      "max_lines": 171,
+      "reason": "The 256 interrupt entry stubs and the common save/restore path. The CPU enters a handler with the interrupted registers still live and pushes a frame whose shape depends on the vector -- ten of the 256 push an error code and the rest do not -- so no Rust function can be entered and no Rust signature can describe the frame. The stubs are generated by an assembler `.rept`: the same machine code as 256 Rust-emitted blocks, at a twentieth of the lines. Also `int3`, which is how the boot test proves the path works. And the paranoid entry for the NMI, #DB, #MC and the double fault, which arrive on any instruction -- the SYSCALL trampoline's ring-0 stretches on the program's stack and GS included -- so the saved CS cannot say which way round GS is: it reads GS_BASE with rdmsr and swaps only if that is not the kernel's, clears DR7 so no breakpoint fires on its IST stack and restores it after, counts the stack's occupants, and moves a ring-3 #DB's frame onto the task's kernel stack before the ordinary path. Each is a side effect on how the next instruction runs, before or after any Rust frame. 171 rather than 90 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 3 its quotes were on: the file had not grown, the count had been short."
     },
     {
       "file": "kernel/src/arch/x86_64/vdso.rs",

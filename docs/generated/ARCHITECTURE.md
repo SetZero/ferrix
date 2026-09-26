@@ -102,7 +102,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1669 elements, 198 relations. Model digest `830e6beb0998c96b`.
+13 files, 16 packages, 1669 elements, 198 relations. Model digest `f354641f399148b2`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -3372,31 +3372,36 @@ flowchart LR
 
 ### The assembly budget
 
-An absolute cap, because assembly here is a fixed cost that a scheduler, a filesystem or a driver must add nothing to. The ratio is a backstop and the target is the direction of travel: reached by writing the operating system, not by shrinking the vector table. 303 lines and about 99.2% Rust when this was written, across fifteen sites; scripts/asm-allowlist.json now names nineteen, the x86-64 SYSCALL entry and the native runtime's three (docs/ASSEMBLY.md, A native program) having joined them.
+An absolute cap, because assembly here is a fixed cost that a scheduler, a filesystem or a driver must add nothing to. The ratio is a backstop and the target is the direction of travel: reached by writing the operating system, not by shrinking the vector table. 303 lines and about 99.2% Rust when this was written, across fifteen sites; scripts/asm-allowlist.json now names twenty-four: the x86-64 SYSCALL entry and the native runtime's three (docs/ASSEMBLY.md, A native program), the Pixel 7's loader entry, the x86-64 vDSO and the three side-channel sequences having joined them. The cap was 800 until 2026-09-27, when the count learned to read raw strings and found 1569 lines, not 733 (docs/ASSEMBLY.md, The budget).
 
 | Site | Line budget |
 | --- | ---: |
 | `boot/src/arch/x86_64.rs` | 30 |
 | `boot/src/arch/aarch64.rs` | 60 |
-| `boot/src/arch/armv7a.rs` | 61 |
+| `boot/src/arch/armv7a.rs` | 63 |
 | `kernel/src/arch/x86_64/cpu.rs` | 100 |
 | `kernel/src/arch/aarch64/cpu.rs` | 100 |
-| `kernel/src/arch/armv7a/cpu.rs` | 100 |
-| `kernel/src/arch/x86_64/trap.rs` | 90 |
-| `kernel/src/arch/aarch64/trap.rs` | 90 |
-| `kernel/src/arch/armv7a/trap.rs` | 90 |
-| `kernel/src/arch/x86_64/smp.rs` | 40 |
-| `kernel/src/arch/aarch64/smp.rs` | 30 |
+| `kernel/src/arch/armv7a/cpu.rs` | 102 |
+| `kernel/src/arch/x86_64/trap.rs` | 171 |
+| `kernel/src/arch/aarch64/trap.rs` | 145 |
+| `kernel/src/arch/armv7a/trap.rs` | 130 |
+| `kernel/src/arch/x86_64/smp.rs` | 41 |
+| `kernel/src/arch/aarch64/smp.rs` | 58 |
 | `kernel/src/arch/armv7a/smp.rs` | 40 |
-| `kernel/src/arch/x86_64/switch.rs` | 30 |
-| `kernel/src/arch/aarch64/switch.rs` | 30 |
-| `kernel/src/arch/armv7a/switch.rs` | 30 |
-| `kernel/src/arch/x86_64/syscall.rs` | 90 |
+| `kernel/src/arch/x86_64/switch.rs` | 32 |
+| `kernel/src/arch/aarch64/switch.rs` | 75 |
+| `kernel/src/arch/armv7a/switch.rs` | 67 |
+| `kernel/src/arch/x86_64/syscall.rs` | 118 |
 | `user/rt/src/arch/x86_64.rs` | 20 |
 | `user/rt/src/arch/aarch64.rs` | 20 |
 | `user/rt/src/arch/armv7a.rs` | 20 |
+| `bootloaders/pixel7/src/entry.rs` | 130 |
+| `kernel/src/arch/x86_64/vdso.rs` | 120 |
+| `kernel/src/arch/x86_64/speculation.rs` | 16 |
+| `kernel/src/arch/aarch64/speculation.rs` | 16 |
+| `kernel/src/arch/armv7a/speculation.rs` | 16 |
 
-Total cap `800` lines; ratio backstop `0.06`, target `0.001`.
+Total cap `1600` lines; ratio backstop `0.06`, target `0.001`.
 
 ### What each layer's tests can reach
 

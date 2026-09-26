@@ -183,32 +183,40 @@ package FerrixAssurance {
              * reached by writing the operating system, not by shrinking the
              * vector table. 303 lines and about 99.2% Rust when this was
              * written, across fifteen sites; scripts/asm-allowlist.json now
-             * names nineteen, the x86-64 SYSCALL entry and the native
-             * runtime's three (docs/ASSEMBLY.md, A native program) having
-             * joined them. */
-        attribute maxTotalLines : Natural = 800;
+             * names twenty-four: the x86-64 SYSCALL entry and the native
+             * runtime's three (docs/ASSEMBLY.md, A native program), the
+             * Pixel 7's loader entry, the x86-64 vDSO and the three
+             * side-channel sequences having joined them. The cap was 800 until 2026-09-27, when the count
+             * learned to read raw strings and found 1569 lines, not 733
+             * (docs/ASSEMBLY.md, The budget). */
+        attribute maxTotalLines : Natural = 1600;
         attribute maxRatio : Real = 0.06;
         attribute targetRatio : Real = 0.001;
-        attribute sites : AssemblySite[19] = (
+        attribute sites : AssemblySite[24] = (
             AssemblySite(file = "boot/src/arch/x86_64.rs", maxLines = 30),
             AssemblySite(file = "boot/src/arch/aarch64.rs", maxLines = 60),
-            AssemblySite(file = "boot/src/arch/armv7a.rs", maxLines = 61),
+            AssemblySite(file = "boot/src/arch/armv7a.rs", maxLines = 63),
             AssemblySite(file = "kernel/src/arch/x86_64/cpu.rs", maxLines = 100),
             AssemblySite(file = "kernel/src/arch/aarch64/cpu.rs", maxLines = 100),
-            AssemblySite(file = "kernel/src/arch/armv7a/cpu.rs", maxLines = 100),
-            AssemblySite(file = "kernel/src/arch/x86_64/trap.rs", maxLines = 90),
-            AssemblySite(file = "kernel/src/arch/aarch64/trap.rs", maxLines = 90),
-            AssemblySite(file = "kernel/src/arch/armv7a/trap.rs", maxLines = 90),
-            AssemblySite(file = "kernel/src/arch/x86_64/smp.rs", maxLines = 40),
-            AssemblySite(file = "kernel/src/arch/aarch64/smp.rs", maxLines = 30),
+            AssemblySite(file = "kernel/src/arch/armv7a/cpu.rs", maxLines = 102),
+            AssemblySite(file = "kernel/src/arch/x86_64/trap.rs", maxLines = 171),
+            AssemblySite(file = "kernel/src/arch/aarch64/trap.rs", maxLines = 145),
+            AssemblySite(file = "kernel/src/arch/armv7a/trap.rs", maxLines = 130),
+            AssemblySite(file = "kernel/src/arch/x86_64/smp.rs", maxLines = 41),
+            AssemblySite(file = "kernel/src/arch/aarch64/smp.rs", maxLines = 58),
             AssemblySite(file = "kernel/src/arch/armv7a/smp.rs", maxLines = 40),
-            AssemblySite(file = "kernel/src/arch/x86_64/switch.rs", maxLines = 30),
-            AssemblySite(file = "kernel/src/arch/aarch64/switch.rs", maxLines = 30),
-            AssemblySite(file = "kernel/src/arch/armv7a/switch.rs", maxLines = 30),
-            AssemblySite(file = "kernel/src/arch/x86_64/syscall.rs", maxLines = 90),
+            AssemblySite(file = "kernel/src/arch/x86_64/switch.rs", maxLines = 32),
+            AssemblySite(file = "kernel/src/arch/aarch64/switch.rs", maxLines = 75),
+            AssemblySite(file = "kernel/src/arch/armv7a/switch.rs", maxLines = 67),
+            AssemblySite(file = "kernel/src/arch/x86_64/syscall.rs", maxLines = 118),
             AssemblySite(file = "user/rt/src/arch/x86_64.rs", maxLines = 20),
             AssemblySite(file = "user/rt/src/arch/aarch64.rs", maxLines = 20),
-            AssemblySite(file = "user/rt/src/arch/armv7a.rs", maxLines = 20)
+            AssemblySite(file = "user/rt/src/arch/armv7a.rs", maxLines = 20),
+            AssemblySite(file = "bootloaders/pixel7/src/entry.rs", maxLines = 130),
+            AssemblySite(file = "kernel/src/arch/x86_64/vdso.rs", maxLines = 120),
+            AssemblySite(file = "kernel/src/arch/x86_64/speculation.rs", maxLines = 16),
+            AssemblySite(file = "kernel/src/arch/aarch64/speculation.rs", maxLines = 16),
+            AssemblySite(file = "kernel/src/arch/armv7a/speculation.rs", maxLines = 16)
         );
         #implemented attribute syscallEntrySites : AssemblySite[1] {
             @stage { number = 6; }

@@ -136,6 +136,16 @@ once every architecture boots: a scheduler, a filesystem or a driver must add
 nothing to it. Raising the cap is a commit whose message explains what the
 machine made unavoidable.
 
+What counts is every line of assembly text: each line holding an ordinary
+string literal in an `asm!`, `naked_asm!` or `global_asm!`, and each line of a
+raw string (`r#"..."#`) that holds an instruction, a label or a directive,
+blank lines and assembler comments aside. Until 2026-09-27 a raw string counted
+as the line or two its quotes were on, so the tree's trap tables, context
+switches and secondary entries passed for 733 lines when they were 1569. The
+cap went from 800 to 1600 and nine budgets to their true counts in the commit
+that fixed the count. Only one of the nine had grown meanwhile, AArch64's
+secondary entry, by the EL2 drop the Pixel 7 needs.
+
 The Rust percentage is reported on every run and is the project's founding
 claim, but read it as a trend rather than a gate. With assembly held flat, the
 share rises as the operating system is written — which is the honest way to get
