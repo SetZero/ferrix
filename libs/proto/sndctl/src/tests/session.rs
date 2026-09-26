@@ -30,7 +30,7 @@ fn qemus_device_publishes_its_playback_stream_and_leaves_out_the_other() {
     assert_eq!(ready.streams[0].format, 2, "S16_LE");
     assert_eq!(ready.streams[0].channels, 2);
     assert_eq!(ready.streams[0].period_bytes, 3840);
-    assert_eq!(ready.streams[0].buffer_bytes, 15360);
+    assert_eq!(ready.streams[0].buffer_bytes, 61440);
 
     // A device whose first stream records publishes its second.
     let mut hello = qemu_hello();

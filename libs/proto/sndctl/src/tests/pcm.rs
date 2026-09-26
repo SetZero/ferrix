@@ -14,11 +14,11 @@ use ferrix_linux_abi::sound::{
     SYNC_PTR_HWSYNC, SwParams,
 };
 
-use crate::pcm::{Drain, Effects, Lie, Poll, Stream, Submit, VERSION_1, boundary};
+use crate::pcm::{Drain, Effects, Lie, MAX_IN_FLIGHT, Poll, Stream, Submit, VERSION_1, boundary};
 use crate::refine::ANY;
 
 const PERIOD: usize = 960;
-const BUFFER: usize = 3840;
+const BUFFER: usize = 15360;
 
 fn any() -> HwParams {
     HwParams {
@@ -225,12 +225,17 @@ fn a_write_starts_at_the_threshold_and_a_partial_period_goes_only_when_idle() {
 fn a_start_threshold_holds_the_stream_until_it_is_met() {
     let mut rig = Rig::new(Width::Bits64);
     rig.sw(software(BUFFER as u64, BUFFER as u64, PERIOD as u64));
-    assert_eq!(rig.write(&counter(1, 3000)), Ok(3000));
+    let most = (BUFFER - 840) as u32;
+    assert_eq!(rig.write(&counter(1, BUFFER - 840)), Ok(BUFFER - 840));
     assert_eq!(rig.stream.state(), STATE_PREPARED);
     assert!(rig.device.is_empty(), "nothing goes before the start");
-    assert_eq!(rig.write(&counter(3001, 840)), Ok(840));
+    assert_eq!(rig.write(&counter(most + 1, 840)), Ok(840));
     assert_eq!(rig.stream.state(), STATE_RUNNING);
-    assert_eq!(rig.device.len(), 4, "four whole periods");
+    assert_eq!(
+        rig.device.len(),
+        MAX_IN_FLIGHT,
+        "as many whole periods as may be in flight"
+    );
     assert_eq!(rig.write(&counter(1, 1)), Ok(0), "the buffer is full");
 }
 
@@ -404,7 +409,7 @@ fn sw_params_writes_back_the_boundary_linux_computes() {
     rig.stream
         .sw_params(&mut params, &mut effects)
         .expect("SW_PARAMS");
-    assert_eq!(params.boundary, 3840 << 19);
+    assert_eq!(params.boundary, boundary(BUFFER as u64, Width::Bits32));
 }
 
 #[test]
@@ -463,8 +468,8 @@ fn a_drain_that_hears_nothing_ends_in_eio() {
     assert_eq!(rig.stream.state(), STATE_DRAINING);
     assert_eq!(
         rig.stream.drain_timeout(),
-        100_000_000,
-        "max(100 ms, 88 ms)"
+        352_000_000,
+        "max(100 ms, 352 ms)"
     );
     assert!(!rig.stream.poll().writable);
     assert_eq!(

@@ -1618,9 +1618,16 @@ fn attach_audio(command: &mut Command, arch: Arch, args: &Args, binary: &Path) {
     let Some(backend) = &chosen else {
         return;
     };
+    // A sound server's stream at the card's own rate, so QEMU's mixing
+    // engine does not resample it, and with 100 ms of the server's buffer
+    // rather than 46: a host busy enough to starve QEMU's main loop for
+    // longer than that was heard as crackle.
     let audiodev = match backend.strip_prefix("wav:") {
         Some(path) => format!("wav,id=snd0,path={path},out.mixing-engine=off"),
-        None => format!("{backend},id=snd0"),
+        None if matches!(backend.as_str(), "pipewire" | "pa") => {
+            format!("{backend},id=snd0,out.frequency=48000,out.latency=100000")
+        }
+        None => format!("{backend},id=snd0,out.frequency=48000"),
     };
     let flags = if arch == Arch::Armv7a {
         "disable-legacy=on"

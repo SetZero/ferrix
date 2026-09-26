@@ -67,23 +67,26 @@ pub struct Config {
 }
 
 /// Version 1's configuration (`docs/AUDIO.md` §3.1): `S16_LE`, two channels,
-/// 48 kHz, four periods of 960 frames. 20 ms a period, a whole number of
-/// microseconds, so that every interval of the refine is closed.
+/// 48 kHz, sixteen periods of 960 frames. 20 ms a period, a whole number of
+/// microseconds, so that every interval of the refine is closed; 320 ms a
+/// buffer, for a loaded guest. With four periods, 80 ms, Chrome playing
+/// `YouTube` on a desktop was heard to glitch with the host at a load of 39.
 pub const VERSION_1: Config = Config {
     rate: 48_000,
     channels: 2,
     format: FORMAT_S16_LE,
     sample_bits: 16,
     period_frames: 960,
-    periods: 4,
+    periods: 16,
 };
 
 /// `INFO_*` a card here reports: interleaved read-write access in blocks,
 /// a pointer that moves in periods, and a drain that needs no silence.
 pub const INFO: u32 = INFO_INTERLEAVED | INFO_BLOCK_TRANSFER | INFO_BATCH | INFO_PERFECT_DRAIN;
 
-/// The most submissions in flight at once: every period, and a partial one
-/// at each end.
+/// The most submissions in flight at once: 160 ms of periods at the device.
+/// The rest of the buffer waits in the core, which submits the next as each
+/// completes, without the program.
 pub const MAX_IN_FLIGHT: usize = 8;
 
 impl Config {

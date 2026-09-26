@@ -131,11 +131,12 @@ pointers.
 
 * **One configuration.** Version 1 publishes S16_LE, two channels, 48 kHz,
   a period of 960 frames (20 ms, a whole number of microseconds, so that
-  every interval in the refine is closed) and four periods: a buffer of
-  3840 frames, 15360 bytes. It publishes this only if the device's
+  every interval in the refine is closed) and sixteen periods: a buffer
+  of 15360 frames, 61440 bytes, 320 ms. It was four periods, 80 ms, until
+  a loaded guest missed them (§8). It publishes this only if the device's
   `PCM_INFO` offers it. QEMU's does (§3.3).
 * **The buffer is the core's.** At `READY` the core allocates one VMO per
-  stream, four pages holding the 15360-byte buffer, and hands it to the
+  stream, fifteen pages holding the 61440-byte buffer, and hands it to the
   driver, which pins it **read-only** into its device's IOMMU domain. This is
   the display's model (`docs/DISPLAY.md`, the card VMO), not the block or net
   ring's, whose data areas are the driver's. The device reads samples
@@ -632,7 +633,8 @@ and AArch64:
 * **L5.** `native/drivers/snd` is the driver process. devmgr starts it for PCI
   0x1059 (`Kind::Sound`), and `sound_control_create` (native call 0x1050)
   gives it its channel. `kernel/src/audio` is the core: a task per card
-  that judges HELLO, allocates the stream's buffer as a four-page VMO,
+  that judges HELLO, allocates the stream's buffer as a VMO (four pages
+  then, fifteen now),
   publishes the card and answers READY with it. The boot line is
   `audio    card0 virtio-snd: playback 48000 Hz, 2 channels, S16_LE, 1
   stream left out`.
@@ -666,6 +668,25 @@ KVM found 6.6 s of it at 439.9 Hz, amplitude 6553 (the page's gain of 0.2),
 with no gap anywhere. `cargo xtask run-compositor --chrome --audio pipewire`
 puts the same card behind the host's PipeWire, and the welcome page's
 button plays the tone aloud.
+
+**Under load (2026-09-26).** The customer played a video in Chrome under
+`run-compositor --everything` on a busy host. The sound glitched, and then
+the `snd` process was gone and Chrome said "Audio renderer error". The
+likeliest reading is the driver's control-request timeout. It polled by
+spinning a fixed count, a few milliseconds, and QEMU answers `PCM_START`,
+`STOP` and `PREPARE` only once its host backend has. A PipeWire stream
+opened or closed on a loaded host takes longer than that, and a request
+that timed out ended the driver. Four changes followed:
+
+* the driver naps 100 µs between looks, on a port of its own, and gives a
+  request five seconds;
+* the buffer is sixteen periods, 320 ms (§3.1);
+* xtask asks QEMU's `pipewire` and `pa` backends for 100 ms of latency, not
+  their 46 ms default, and every backend for 48 kHz, so the host does not
+  resample;
+* the kernel prints `audio    card<N>: underrun <count>` the first three
+  times a stream underruns and every hundredth time after, so a glitch has
+  a line in the log.
 
 Three things are still open:
 

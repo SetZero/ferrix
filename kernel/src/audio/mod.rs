@@ -32,6 +32,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use ferrix_blkring::identity::Location;
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::socket::Width;
+use ferrix_linux_abi::sound::STATE_XRUN;
 use ferrix_native_abi::nr::NativeCall;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
@@ -134,6 +135,8 @@ pub(crate) struct Card {
     pub(crate) changed: Arc<WaitQueue>,
     /// Set when the driver is gone.
     gone: AtomicBool,
+    /// How many times the stream has underrun, for the console.
+    underruns: AtomicU32,
 }
 
 impl core::fmt::Debug for Card {
@@ -156,16 +159,32 @@ impl Card {
     /// says to. See the module comment for why the send is under the lock.
     pub(crate) fn with_stream<R>(&self, step: impl FnOnce(&mut Stream, &mut Effects) -> R) -> R {
         let mut effects = Effects::default();
-        let result = {
+        let (result, underran) = {
             let mut stream = self.stream.lock();
+            let before = stream.state();
             let result = step(&mut stream, &mut effects);
             self.send(&effects);
-            result
+            (result, before != STATE_XRUN && stream.state() == STATE_XRUN)
         };
         if effects.wake {
             self.changed.wake_all();
         }
+        if underran {
+            self.say_underrun();
+        }
         result
+    }
+
+    /// Say that the stream underran: the first few times, then every 100th,
+    /// so a program that underruns all the time does not flood the console.
+    fn say_underrun(&self) {
+        let count = self.underruns.fetch_add(1, Ordering::Relaxed) + 1;
+        if count <= 3 || count.is_multiple_of(100) {
+            crate::console::println!(
+                "  audio    card{}: underrun {count}: the program did not keep the device fed",
+                self.index
+            );
+        }
     }
 
     /// Write the SUBMITs and the HALT `effects` asks for. A driver that went
@@ -392,6 +411,7 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<(Arc<Card>, Session
         opened: AtomicBool::new(false),
         changed: Arc::new(WaitQueue::new()),
         gone: AtomicBool::new(false),
+        underruns: AtomicU32::new(0),
     });
     // Published before READY goes out, as input does: devmgr kills a driver
     // that has not published by the time it reports.

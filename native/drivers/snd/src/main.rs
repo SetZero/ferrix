@@ -70,6 +70,17 @@ const SCRATCH_PAGES: usize = SCRATCH_BYTES.div_ceil(PAGE);
 /// virtio-snd's PCI device id, `0x1040` plus 25.
 const VIRTIO_SND_ID: u16 = 0x1059;
 
+/// How long a wait for a control request's answer sleeps between looks.
+const NAP_NANOS: u64 = 100_000;
+
+/// Looks before a control request is given up on: five seconds of naps.
+/// QEMU answers `PCM_START`, `STOP` and `PREPARE` only once its audio
+/// backend has, and a `PipeWire` stream opened or closed on a loaded host can
+/// take far longer than the spin this replaced, which gave up after a few
+/// milliseconds and took the driver down with it: the likeliest reading of
+/// the driver dying under Chrome playing a video on 2026-09-26.
+const CONTROL_POLLS: u32 = 50_000;
+
 /// Port keys.
 const KEY_INTERRUPT: u64 = 1;
 const KEY_CONTROL: u64 = 2;
@@ -316,6 +327,8 @@ struct Registers {
     notify_off_multiplier: u32,
     msix: bool,
     interrupt: Interrupt<Kernel>,
+    /// A port nothing is bound to, which a nap waits on until its deadline.
+    nap: Port<Kernel>,
 }
 
 impl CommonConfig for Registers {
@@ -376,8 +389,15 @@ impl Transport for Registers {
         }
     }
 
+    /// Sleep a little rather than spin: the device's answer comes from
+    /// QEMU's main loop, which a spinning processor only takes time from.
     fn spin(&mut self) {
-        core::hint::spin_loop();
+        match ferrix_rt::linux::monotonic_nanos() {
+            Ok(now) => {
+                let _ = self.nap.wait(Deadline::At(now.saturating_add(NAP_NANOS)));
+            }
+            Err(_) => core::hint::spin_loop(),
+        }
     }
 }
 
@@ -519,6 +539,7 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
         notify_off_multiplier: start.notify_off_multiplier,
         msix: start.msix_table_size > 0,
         interrupt,
+        nap: port::create(Kernel).map_err(|_| Step::Events)?,
     };
     let control_rings = Pinned::new(&device, QUEUE_PAGES)?;
     let tx_rings = Pinned::new(&device, QUEUE_PAGES)?;
@@ -535,7 +556,10 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
             tx: tx_rings,
             scratch,
         },
-        Options::default(),
+        Options {
+            control_polls: CONTROL_POLLS,
+            ..Options::default()
+        },
     ) {
         Ok(driver) => driver,
         Err(failure) => {

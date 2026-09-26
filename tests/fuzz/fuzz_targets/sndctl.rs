@@ -31,7 +31,7 @@ use ferrix_sndctl::refine::ANY;
 use libfuzzer_sys::fuzz_target;
 
 const PERIOD: u32 = 960;
-const BUFFER: u64 = 3840;
+const BUFFER: u64 = 15360;
 
 fn any() -> HwParams {
     HwParams {

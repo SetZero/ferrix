@@ -64,11 +64,11 @@ fn range(min: u32, max: u32, flags: u32) -> Interval {
 fn version_1_is_the_configuration_the_document_names() {
     let config = VERSION_1;
     assert_eq!(config.frame_bytes(), 4);
-    assert_eq!(config.buffer_frames(), 3840);
+    assert_eq!(config.buffer_frames(), 15360);
     assert_eq!(config.period_bytes(), 3840);
-    assert_eq!(config.buffer_bytes(), 15360);
+    assert_eq!(config.buffer_bytes(), 61440);
     assert_eq!(config.period_time(), 20_000);
-    assert_eq!(config.buffer_time(), 80_000);
+    assert_eq!(config.buffer_time(), 320_000);
     assert!(config.times_are_whole(), "every interval is closed");
 }
 
@@ -78,7 +78,9 @@ fn any_space_comes_back_as_the_one_configuration() {
     refine(&mut params, &VERSION_1.constraints()).expect("the whole space holds it");
     assert_eq!(params.masks[0], only(ACCESS_RW_INTERLEAVED));
     assert_eq!(params.masks[1], only(FORMAT_S16_LE));
-    let expected = [16, 32, 2, 48_000, 20_000, 960, 3840, 4, 80_000, 3840, 15360];
+    let expected = [
+        16, 32, 2, 48_000, 20_000, 960, 3840, 16, 320_000, 15360, 61440,
+    ];
     for (index, want) in expected.into_iter().enumerate() {
         let got = params.intervals[index];
         assert!(is_single(&got), "parameter {} is single", index + 8);
@@ -152,8 +154,8 @@ fn set_near_finds_the_rate_and_the_times_from_either_side() {
 
     // aplay's `buffer_time_near(500000)`: only from below.
     let down = try_refine(narrowed(base, HW_PARAM_BUFFER_TIME, range(0, 500_000, 0)))
-        .expect("80000 is below 500000");
-    assert_eq!(value(&interval(&down, HW_PARAM_BUFFER_TIME)), 80_000);
+        .expect("320000 is below 500000");
+    assert_eq!(value(&interval(&down, HW_PARAM_BUFFER_TIME)), 320_000);
     assert_eq!(
         try_refine(narrowed(
             base,
