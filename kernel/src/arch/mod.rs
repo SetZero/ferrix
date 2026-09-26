@@ -54,8 +54,8 @@ pub(crate) enum StatLayout {
     Stat64,
 }
 
-// Drivers for the Arm peripherals both Arm architectures can have: the GICv2
-// and ARMv7-A's two serial ports.
+// Drivers for the Arm peripherals both Arm architectures can have: the GICv2,
+// the PL011, and the STM32MP1's USART, which is ARMv7-A's.
 #[cfg(any(target_arch = "aarch64", target_arch = "arm"))]
 mod arm_common;
 
