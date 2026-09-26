@@ -26,6 +26,9 @@ ferrix-netwire.workspace = true
 # to strip the card's copy of its programs, and the tests read every archive
 # with the code that will unpack it rather than with a second opinion.
 ferrix-cpio.workspace = true
+# adb's message format, for `test-adb`'s check that a forward reaches the
+# guest: it speaks one CNXN through it with the bytes adbd itself decodes.
+ferrix-adb.workspace = true
 
 [lints]
 workspace = true

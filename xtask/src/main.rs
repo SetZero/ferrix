@@ -55,6 +55,7 @@
     reason = "AUDIT: xtask is a CLI build tool; the terminal is its interface"
 )]
 
+mod adbd;
 mod args;
 mod audio;
 mod badapple;
@@ -175,6 +176,7 @@ COMMANDS:
                   started from a file by ferrix.init=; under busybox, require reboot(2) to commit /data
     test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs and applets
     test-net      Boot with a network device and require busybox to configure it and fetch a file
+    test-adb      Boot adbd with a network, and drive it with this machine's adb: shell, push, pull, forward, reboot
     test-display  Boot userland/compositor/blank as init with a virtio-gpu, and require its colour on every pixel
     test-compositor  Boot userland/compositor/hyprix as init with a virtio-gpu, and require its background on every pixel
     test-video    Boot a wallpaper that moves and require the screen to show its frames in turn
@@ -329,6 +331,7 @@ OPTIONS:
     --ferrousli                          check: also ferrousli's fmt, clippy and tests, debug and release
     --zinc                               check: also zinc's fmt, clippy, tests and pty completion test
     --statd                              build, run, test-boot: carry the stat service at /sbin/ferrix-statd
+    --adbd                               build, run: carry adbd at /bin/adbd, started by nobody (docs/ADB.md)
     --miri                               check: add CI's Miri steps (needs nightly and miri)
     --reset-root                         run, run-compositor: start the btrfs root over from a fresh install
     --tmpfs-root                         run, run-compositor: / in memory instead of on the btrfs root disk
@@ -399,6 +402,7 @@ fn run() -> Result<()> {
         "test-shell" => test_shell(&args),
         "test-vfs" => test_vfs(&args),
         "test-net" => test_net(&args),
+        "test-adb" => adbd::test_adb(&args, program_for),
         "test-display" => display::test_display(&args),
         "run-compositor" => compositor::run_compositor(&args),
         "run-badapple" => badapple::run_badapple(&args),
@@ -698,7 +702,13 @@ fn image_cmdline(args: &Args) -> Option<String> {
 /// programs in `/sbin`, built and checked for `arch` first.
 fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let natives = native::build(arch, args.release)?;
-    let service = if args.statd { statd::file(arch)? } else { None };
+    let mut service: Vec<ports::File> = Vec::new();
+    if args.statd {
+        service.extend(statd::file(arch)?);
+    }
+    if args.adbd {
+        service.extend(adbd::file(arch)?);
+    }
     let Some(program) = optional_program(arch, args)? else {
         let (loader, kernel) = build_halves(arch, args)?;
         let mut links = rustc::default_links(args);
