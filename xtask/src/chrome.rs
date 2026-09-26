@@ -17,15 +17,16 @@
 //! finds its ICU data and its resource packs beside `/proc/self/exe`, and it
 //! starts its own renderer and GPU processes by running that again.
 //!
-//! # `--no-sandbox --no-zygote`
+//! # `--no-sandbox`, and the zygote
 //!
 //! `--no-sandbox` because the sandbox is namespaces and seccomp, which Ferrix
 //! has neither of: `clone` refuses `CLONE_NEW*` rather than pretend
-//! (`docs/CHROME.md` §2.4). `--no-zygote` because the zygote, the process
-//! Chrome forks its children from instead of starting each afresh, reports
-//! that it could not fork on Ferrix, and its children never start; with it
-//! off, the browser starts each child itself, by `/proc/self/exe`, and they
-//! do. Why the zygote's fork fails is the next thing to find.
+//! (`docs/CHROME.md` §2.4). The zygote, the process Chrome forks its
+//! renderers from instead of starting each afresh, runs as it does on Linux
+//! since 2026-09-26. Until then it reported that it could not fork, and the
+//! tests ran with `--no-zygote`: it learns each child's pid from the
+//! credentials the child's first message carries (`SCM_CREDENTIALS`, on a
+//! socket whose reader set `SO_PASSCRED`), and Ferrix passed none.
 //!
 //! # Where Chrome lives
 //!
@@ -70,8 +71,8 @@ const SCRIPT: &str = r#"export PATH=/bin HOME=/tmp
 cd /tmp
 chrome=/data/chrome/chrome-headless-shell
 $chrome --version || exit 3
-$chrome --no-sandbox --no-zygote --dump-dom 'PAGE' || exit 4
-$chrome --no-sandbox --no-zygote --screenshot=/tmp/shot.png --window-size=640,360 'PICTURE' || exit 5
+$chrome --no-sandbox --dump-dom 'PAGE' || exit 4
+$chrome --no-sandbox --screenshot=/tmp/shot.png --window-size=640,360 'PICTURE' || exit 5
 [ -s /tmp/shot.png ] || exit 6
 echo chrome-gate: screenshot written
 exit 16
@@ -115,10 +116,10 @@ const TIMEOUT: u64 = 1800;
 /// which is tmpfs whatever the root is -- on the desktop's persistent btrfs
 /// root too since 2026-09-26, when the kernel began mounting one there; before
 /// that, it was devfs's bare directory there, and Chrome stopped at once.
-/// `--no-sandbox --no-zygote` for the reasons at the top of this file.
+/// `--no-sandbox` for the reason at the top of this file.
 pub(crate) fn window_command(page: &str) -> String {
     format!(
-        "/data/chrome-window/chrome --no-sandbox --no-zygote --ozone-platform=wayland \
+        "/data/chrome-window/chrome --no-sandbox --ozone-platform=wayland \
          --user-data-dir=/dev/shm/chrome --no-first-run --disable-gpu --disable-crash-reporter \
          --disable-breakpad --enable-logging=stderr {page}"
     )

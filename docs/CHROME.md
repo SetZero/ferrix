@@ -41,10 +41,10 @@ what is left:
 | A vDSO | not started (§3); what is left of the ≈ 10 points the three were sized at |
 | libwayland-client, libxkbcommon, fontconfig with freetype and expat, a font | **done** 2026-09-24, built against ferrousli with foot (§3, §6) |
 | foot, a Wayland terminal nobody here wrote, drawing on the compositor on Ferrix | **done** 2026-09-24, x86-64, `cargo xtask test-foot` (§6) |
-| Headless Chrome on Ferrix: `--dump-dom` and `--screenshot`, multi-process, with `--no-sandbox --no-zygote` | **done** 2026-09-24, x86-64, `cargo xtask test-chrome` (§8) |
+| Headless Chrome on Ferrix: `--dump-dom` and `--screenshot`, multi-process, with `--no-sandbox` (and `--no-zygote` until 2026-09-26) | **done** 2026-09-24, x86-64, `cargo xtask test-chrome` (§8) |
 | What running it found missing: `CLOCK_THREAD_CPUTIME_ID` and `CLOCK_PROCESS_CPUTIME_ID`, `clock_getres`, `creat`, and `/proc/<pid>/task`'s link count | **done** 2026-09-24 (§8) |
 | Chrome in a window on the compositor, a Wayland client drawing in software | **done** 2026-09-24, x86-64, `cargo xtask test-chrome-window`, `run-compositor --chrome` (§9) |
-| The zygote's fork, which fails on Ferrix, so Chrome runs with `--no-zygote` | not started (§8) |
+| The zygote, which could not learn its children's pids until `SCM_CREDENTIALS` carried them | **done** 2026-09-26: `test-chrome` (glibc and ferrousli) and `test-chrome-window` run without `--no-zygote` (§8) |
 | Chrome's speed: a futex wait woken every 5 ms, the HPET as the clock under KVM, and `munmap` walking every page of a reservation | **done** 2026-09-26: idle 443% of a processor → 35%, a turning box 1.5 frames a second → 58.6; `cargo xtask bench-chrome` (§9) |
 | Chrome on the desktop's persistent btrfs root | **done** 2026-09-26: `/dev/shm` was not mounted there; `cargo xtask test-chrome-window --btrfs-root` (§9) |
 | Chrome on ferrousli's `libc.so.6` in glibc's place | **done** 2026-09-26, x86-64, headless, `cargo xtask test-chrome --interpreter ferrousli --library ferrousli` (§8); the window build on it is not tried |
@@ -61,7 +61,7 @@ freetype 2.14.1, expat 2.7.3, fontconfig 2.17.1, tllist 1.1.0 and fcft
 3.3.2, and DejaVu Sans Mono 2.37 is the font. **Then** headless Chrome,
 the same day (§8), and a window (§9). **Then**, on 2026-09-26, Chrome on
 ferrousli in glibc's place (§8), and the desktop's persistent btrfs root
-(§9). **Next:** the zygote.
+(§9). **Then**, the same day, Chrome's speed, and its zygote (§8, §9).
 
 **Re-checked on 2026-09-19**, against a tree 37 commits further on. Everything
 in §2, §3 and §4 still holds but the two loose fixes in §6, which are now
@@ -588,10 +588,18 @@ reading where it stopped:
    was two. Done.
 6. `creat`, which the headless shell writes its screenshot with, and
    `clock_getres` were `ENOSYS` on x86-64 and ARMv7-A. Done.
-7. The zygote, which Chrome forks its children from, says it could not
-   fork, and none of its children start. Open. `--no-zygote` makes the
-   browser start each child itself, which works, and is what the test runs
-   with; `--no-sandbox` because Ferrix has no namespaces or seccomp (§2.4).
+7. The zygote, which Chrome forks its children from, said it could not
+   fork, and none of its children started. Done, 2026-09-26: the zygote
+   forks a child, and the child says hello on a socket whose reader set
+   `SO_PASSCRED`. The zygote learns the child's real pid from the
+   `SCM_CREDENTIALS` message the kernel attaches, and Ferrix attached none,
+   so the zygote gave the child up. A unix socket message now carries its
+   sender's pid and ids when its reader asked for them, or when the sender
+   named them. `/proc/<pid>/oom_score_adj`, which the browser sets for
+   each renderer, is kept and reported but acted on by nothing. The tests
+   ran with `--no-zygote` until then, which made the browser `execve` the
+   294 MB program afresh for every child; they no longer do. `--no-sandbox`
+   remains, because Ferrix has no namespaces or seccomp (§2.4).
 
 A trial kernel that let `madvise` answer and raised the read limit, never
 landed, is how the later items were found before the earlier were fixed;
