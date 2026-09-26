@@ -1692,6 +1692,32 @@ pub mod i386 {
     pub const EXIT_GROUP: usize = 252;
     /// Duplicate a file descriptor onto a chosen number, with flags.
     pub const DUP3: usize = 330;
+    /// Create a child process sharing nothing.
+    pub const FORK: usize = 2;
+    /// Send a signal to a process or process group.
+    pub const KILL: usize = 37;
+    /// Wait for a child, with its resource use: a 32-bit `struct rusage`.
+    pub const WAIT4: usize = 114;
+    /// Return from a handler entered without `SA_SIGINFO`, through `sigframe_ia32`.
+    pub const SIGRETURN: usize = 119;
+    /// Create a process or thread, `CLONE_BACKWARDS`' order: `tls` before `child_tid`, and `tls` a `struct user_desc`.
+    pub const CLONE: usize = 120;
+    /// Return from a handler entered with `SA_SIGINFO`, through `rt_sigframe_ia32`.
+    pub const RT_SIGRETURN: usize = 173;
+    /// Examine or change a signal's action: a 32-bit `struct sigaction`.
+    pub const RT_SIGACTION: usize = 174;
+    /// Examine or change the blocked mask.
+    pub const RT_SIGPROCMASK: usize = 175;
+    /// Wait for a signal with a mask in place.
+    pub const RT_SIGSUSPEND: usize = 179;
+    /// Examine or change the alternate signal stack: a 32-bit `stack_t`.
+    pub const SIGALTSTACK: usize = 186;
+    /// Create a child sharing memory until it execs or exits.
+    pub const VFORK: usize = 190;
+    /// Send a signal to one thread.
+    pub const TKILL: usize = 238;
+    /// Send a signal to one thread of a given process.
+    pub const TGKILL: usize = 270;
 }
 
 /// An architecture-neutral system call.
@@ -3427,6 +3453,19 @@ pub fn from_i386(nr: usize) -> Option<Syscall> {
         i386::GET_THREAD_AREA => Syscall::GetThreadArea,
         i386::EXIT_GROUP => Syscall::ExitGroup,
         i386::DUP3 => Syscall::Dup3,
+        i386::FORK => Syscall::Fork,
+        i386::KILL => Syscall::Kill,
+        i386::WAIT4 => Syscall::Wait4,
+        i386::SIGRETURN => Syscall::Sigreturn,
+        i386::CLONE => Syscall::Clone,
+        i386::RT_SIGRETURN => Syscall::RtSigreturn,
+        i386::RT_SIGACTION => Syscall::RtSigaction,
+        i386::RT_SIGPROCMASK => Syscall::RtSigprocmask,
+        i386::RT_SIGSUSPEND => Syscall::RtSigsuspend,
+        i386::SIGALTSTACK => Syscall::Sigaltstack,
+        i386::VFORK => Syscall::Vfork,
+        i386::TKILL => Syscall::Tkill,
+        i386::TGKILL => Syscall::Tgkill,
         _ => return None,
     };
     Some(call)

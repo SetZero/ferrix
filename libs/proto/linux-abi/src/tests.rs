@@ -3299,7 +3299,20 @@ mod virtgpu;
 /// from the wrong table, or onto the wrong call, fails here.
 #[test]
 fn the_i386_numbers_are_the_headers_and_mean_what_arm_means() {
-    let table: [(usize, usize, usize); 18] = [
+    let table: [(usize, usize, usize); 31] = [
+        (i386::FORK, 2, arm::FORK),
+        (i386::KILL, 37, arm::KILL),
+        (i386::WAIT4, 114, arm::WAIT4),
+        (i386::SIGRETURN, 119, arm::SIGRETURN),
+        (i386::CLONE, 120, arm::CLONE),
+        (i386::RT_SIGRETURN, 173, arm::RT_SIGRETURN),
+        (i386::RT_SIGACTION, 174, arm::RT_SIGACTION),
+        (i386::RT_SIGPROCMASK, 175, arm::RT_SIGPROCMASK),
+        (i386::RT_SIGSUSPEND, 179, arm::RT_SIGSUSPEND),
+        (i386::SIGALTSTACK, 186, arm::SIGALTSTACK),
+        (i386::VFORK, 190, arm::VFORK),
+        (i386::TKILL, 238, arm::TKILL),
+        (i386::TGKILL, 270, arm::TGKILL),
         (i386::RESTART_SYSCALL, 0, arm::RESTART_SYSCALL),
         (i386::EXIT, 1, arm::EXIT),
         (i386::READ, 3, arm::READ),
@@ -3494,4 +3507,85 @@ fn a_user_desc_can_only_ever_describe_ring_3_data() {
     // 32-bit, data or expand-down, present: four free bits (read-only,
     // pages, useable, lm), two contents, three shapes of base and limit.
     assert_eq!(accepted, 16 * 2 * 3);
+}
+
+// -- i386 signal frames --------------------------------------------------------
+
+/// Every offset of the i386 frames is the sum of its declaration's fields in
+/// the Linux 7.0 headers (`sigframe.h`, `ia32.h`, `sigcontext.h`, `compat.h`);
+/// these are the totals worked by hand from them.
+#[test]
+fn the_i386_frames_are_linuxs_sizes() {
+    use crate::sigframe32::{
+        FPSTATE_SIZE, FXSAVE_AT, frame, rt_frame, sigcontext, stack, ucontext,
+    };
+    assert_eq!(sigcontext::SIZE, 22 * 4, "sigcontext_32 is 22 words");
+    assert_eq!(stack::SIZE, 12);
+    assert_eq!(
+        (ucontext::MCONTEXT, ucontext::SIGMASK, ucontext::SIZE),
+        (20, 108, 116)
+    );
+    assert_eq!(
+        (
+            rt_frame::INFO,
+            rt_frame::UC,
+            rt_frame::RETCODE,
+            rt_frame::SIZE
+        ),
+        (16, 144, 260, 268)
+    );
+    assert_eq!(
+        FXSAVE_AT,
+        7 * 4 + 8 * 10 + 2 + 2,
+        "the fsave environment, registers, status, magic"
+    );
+    assert_eq!(FPSTATE_SIZE, 624);
+    assert_eq!(
+        (frame::SC, frame::EXTRAMASK, frame::RETCODE, frame::SIZE),
+        (8, 720, 724, 732)
+    );
+}
+
+/// The union moves down four bytes and nothing else changes: a sender's pid
+/// and uid, a child's status, and a fault's address below 4 GiB land where a
+/// 32-bit program's `siginfo_t` has them (union at 12, `si_status` at 20).
+#[test]
+fn a_siginfo_is_read_by_a_32_bit_program_where_it_looks() {
+    use crate::sigframe32::siginfo_from_64;
+    let mut info = [0_u8; 128];
+    info[0..4].copy_from_slice(&17_i32.to_le_bytes()); // SIGCHLD
+    info[8..12].copy_from_slice(&1_i32.to_le_bytes()); // CLD_EXITED
+    info[16..20].copy_from_slice(&4242_i32.to_le_bytes()); // si_pid
+    info[20..24].copy_from_slice(&1000_i32.to_le_bytes()); // si_uid
+    info[24..28].copy_from_slice(&7_i32.to_le_bytes()); // si_status
+    let out = siginfo_from_64(&info);
+    assert_eq!(out[0..12], info[0..12]);
+    assert_eq!(out[12..16], 4242_i32.to_le_bytes());
+    assert_eq!(out[16..20], 1000_i32.to_le_bytes());
+    assert_eq!(out[20..24], 7_i32.to_le_bytes());
+    assert!(out[124..].iter().all(|&byte| byte == 0));
+
+    let mut fault = [0_u8; 128];
+    fault[16..24].copy_from_slice(&0x0804_9000_u64.to_le_bytes());
+    assert_eq!(
+        siginfo_from_64(&fault)[12..16],
+        0x0804_9000_u32.to_le_bytes()
+    );
+}
+
+/// `compat_sigaction`: handler, flags, restorer, then the mask's two words.
+#[test]
+fn a_32_bit_sigaction_round_trips() {
+    use crate::sigframe32::Sigaction32;
+    let action = Sigaction32 {
+        handler: 0x0804_8123,
+        flags: 0x0400_0004, // SA_RESTORER | SA_SIGINFO
+        restorer: 0x0804_8456,
+        mask: 0x8000_0000_0000_0001,
+    };
+    let bytes = action.to_bytes();
+    assert_eq!(bytes[12..16], 1_u32.to_le_bytes());
+    assert_eq!(bytes[16..20], 0x8000_0000_u32.to_le_bytes());
+    assert_eq!(Sigaction32::from_bytes(&bytes), Some(action));
+    assert_eq!(Sigaction32::from_bytes(&bytes[..19]), None);
 }

@@ -45,6 +45,7 @@ pub mod input;
 pub mod layout;
 pub mod netlink;
 pub mod nr;
+pub mod sigframe32;
 pub mod socket;
 pub mod sound;
 pub mod types;
