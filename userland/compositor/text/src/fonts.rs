@@ -309,7 +309,7 @@ impl Fonts {
     /// machine, in this order: `$FERRIX_FONT_DIRS` (colon-separated, the
     /// image's own list), `$XDG_DATA_HOME/fonts` (`~/.local/share/fonts`),
     /// `~/.fonts`, `/usr/share/fonts`, `/usr/local/share/fonts`,
-    /// `/usr/share/ferrix/fonts` (the tree's `fonts/`, where an image
+    /// `/usr/share/ferrix/fonts` (the tree's `assets/fonts/`, where an image
     /// carries it). Missing directories are skipped; subdirectories are
     /// read.
     #[must_use]

@@ -1,6 +1,6 @@
 //! Host tests.
 //!
-//! The faces are the tree's own (`fonts/liberation`, `fonts/inter`), so
+//! The faces are the tree's own (`assets/fonts/liberation`, `assets/fonts/inter`), so
 //! nothing here depends on what the machine has installed. Liberation Sans
 //! is metric-compatible with Arial: at 2048 units to the em its `H` is
 //! 1479 units wide, which a size of 2048 pixels makes 1479 pixels.
@@ -14,7 +14,7 @@ use crate::{
 };
 
 fn tree_fonts() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fonts")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../assets/fonts")
 }
 
 fn fonts() -> Fonts {
