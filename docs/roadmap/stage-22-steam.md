@@ -38,8 +38,10 @@ staged until now.
   `get_thread_area` and `%gs`, with each thread's GDT descriptors and
   segment selectors kept across a switch, and every saved selector checked
   against the descriptor it names before it is loaded; reviewed by the
-  certification consultant. I2b, `fork`, `clone` and the signal frames, is
-  next.
+  certification consultant. **I2b** follows (about 13 points): `fork`,
+  `clone` and both i386 signal frames with their returns, every returned
+  frame checked before any of it is loaded. I3, the compat layouts that
+  let Alpine's i386 busybox run, is next.
 * **glibc's place, taken.** The dynamic linking stage's third part, glibc's
   names, with Steam as its stress test: `ld-linux` and `libc.so.6` requested
   by name, `dlopen` from the client and from every Steam runtime library,
