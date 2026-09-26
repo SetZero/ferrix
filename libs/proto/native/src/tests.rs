@@ -745,6 +745,8 @@ fn device_info_reads_the_kernel_bytes_back_and_quiesce_takes_the_handle() {
         bytes[84..86].copy_from_slice(&0x1AF4_u16.to_ne_bytes());
         bytes[86..88].copy_from_slice(&0x1042_u16.to_ne_bytes());
         bytes[90..92].copy_from_slice(&DEVICE_VIRTIO_PCI.to_ne_bytes());
+        bytes[92..94].copy_from_slice(&0x1AF4_u16.to_ne_bytes());
+        bytes[94..96].copy_from_slice(&0x1100_u16.to_ne_bytes());
         write(raw, raw.args()[1], &bytes);
         0
     });
@@ -761,6 +763,11 @@ fn device_info_reads_the_kernel_bytes_back_and_quiesce_takes_the_handle() {
         "identity"
     );
     assert_eq!(info.virtio, DEVICE_VIRTIO_PCI, "virtio");
+    assert_eq!(
+        (info.subsystem_vendor_id, info.subsystem_id),
+        (0x1AF4, 0x1100),
+        "subsystem, in the last four bytes"
+    );
     assert_eq!(
         info.notify,
         DeviceBlock::default(),

@@ -901,6 +901,8 @@ impl DeviceNode {
             info.device_id = function.device;
             info.class = function.class;
             info.msix_table_size = function.msix_table_size;
+            info.subsystem_vendor_id = function.subsystem_vendor;
+            info.subsystem_id = function.subsystem;
             if let Some(virtio) = function.virtio {
                 info.virtio = DEVICE_VIRTIO_PCI;
                 info.notify_off_multiplier = virtio.notify_multiplier;

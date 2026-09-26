@@ -1000,6 +1000,8 @@ fn start_block(
         pci_device_id: info.device_id,
         location: info.location,
         name: *name.as_bytes(),
+        pci_subsystem_vendor_id: info.subsystem_vendor_id,
+        pci_subsystem_id: info.subsystem_id,
     };
     // Exactly the rights the driver may hold: the kernel handed the device
     // with DEVICE_RIGHTS and the control end with CONTROL_RIGHTS already, and
@@ -1098,6 +1100,8 @@ fn start_display(
         pci_device_id: info.device_id,
         location: info.location,
         name: *program_name,
+        pci_subsystem_vendor_id: info.subsystem_vendor_id,
+        pci_subsystem_id: info.subsystem_id,
     };
     let device = device
         .into_owned()
@@ -1148,6 +1152,8 @@ fn start_input(
         pci_device_id: info.device_id,
         location: info.location,
         name: [b'i', b'n', b'p', b'u', b't', 0, 0, 0],
+        pci_subsystem_vendor_id: info.subsystem_vendor_id,
+        pci_subsystem_id: info.subsystem_id,
     };
     let device = device
         .into_owned()
@@ -1195,6 +1201,8 @@ fn start_sound(
         pci_device_id: info.device_id,
         location: info.location,
         name: [b's', b'n', b'd', 0, 0, 0, 0, 0],
+        pci_subsystem_vendor_id: info.subsystem_vendor_id,
+        pci_subsystem_id: info.subsystem_id,
     };
     let device = device
         .into_owned()
@@ -1253,6 +1261,8 @@ fn start_plain(
         pci_device_id: info.device_id,
         location: info.location,
         name: start_name(program),
+        pci_subsystem_vendor_id: info.subsystem_vendor_id,
+        pci_subsystem_id: info.subsystem_id,
     };
     let device = device
         .into_owned()
