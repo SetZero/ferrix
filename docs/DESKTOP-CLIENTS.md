@@ -189,9 +189,98 @@ programs are carried as `/bin/waybar`, `/bin/fuzzel`, `/bin/hyprlock`,
 
 ## 4. fuzzel
 
+`userland/compositor/fuzzel`, `/bin/fuzzel`: a port of fuzzel 1.12
+(codeberg.org/dnkl/fuzzel, read from a shallow clone in
+`~/.local/share/ferrix/clients-ref/fuzzel`). Each module names the part of
+fuzzel's source it follows: `config` is `config.c`, with every option and its
+default, the file search, line splitting, unquoting, `include`, `--override`,
+the key-binding table with its collision check, and fuzzel's own diagnostic
+for each refused line (the unknown-option line is byte for byte what the
+host's `fuzzel --check-config` prints). `desktop` is `xdg.c` and `path.c`.
+`matching` is `match.c`: `fzf`, `exact` and `fuzzy`, with the ranking.
+`icon` is `icon.c`. `cli` is the whole `getopt_long` table. `keys` is
+`keyboard_key`'s two lookups, untranslated then translated. `exec` is
+`application_execute`. `geometry` and `paint` are `render.c`, drawn with
+tiny-skia and `compositor/text` in place of pixman and fcft. `window` is
+`main.c` and `wayland.c` on `compositor/toolkit`.
+
+The surface is a `zwlr_layer_surface_v1` on `layer=` (`overlay`) under
+fuzzel's namespace, `launcher`. That is what the user's `layerrule = blur
+true, match:namespace launcher` matches. The comment in their `fuzzel.ini`
+says `fuzzel`, which matches nothing, and their `hyprland.conf` says so.
+hyprix gives an interactive layer surface above the windows the keyboard
+while it is mapped (`hyprix/src/deliver.rs`, `Focus::interactive_layer`).
+Binds still fire first.
+
+The image lists `.desktop` entries of the tree's own, for what it carries:
+`data/applications` (the terminal running zinc, the test pattern, busybox's
+`top`), plus Chrome under `--chrome`, with icons in a `hicolor` of their own
+(`xtask/src/fuzzel.rs`).
+
+### What each of the user's lines does on Ferrix
+
+Every line of their `fuzzel.ini` is read and carried out: the font
+(GFS Didot, carried from the host by `xtask/src/dotfiles.rs`), `layer`,
+`anchor`, `width`, `lines`, the paddings, `line-height` (26 points, so
+35-pixel rows at 96 DPI), `letter-spacing`, `icons-enabled`,
+`image-size-ratio` (the selected entry's SVG is drawn large when there is
+room under the list), the quoted two-space `prompt`, the `placeholder`,
+`filter-desktop` (hyprix sets `XDG_CURRENT_DESKTOP=Hyprland`), every colour,
+the border and `[dmenu]`. What differs:
+
+* `terminal=foot`: foot is not in the desktop image, so a `Terminal=true`
+  entry (`top`) fails as fuzzel says a missing program fails:
+  `foot top: failed to execute: No such file or directory (2)`, exit 1.
+* The user opens fuzzel through `/home/sebastian/.local/bin/hypr-launcher`
+  (SUPER+R, and a bare SUPER tap). That script and its GTK scrim are not
+  in the image, so on Ferrix their binds start nothing. `/bin/fuzzel` itself
+  works; the wrapper's `--keyboard-focus=on-demand
+  --no-exit-on-keyboard-focus-loss` is taken.
+* The single-instance lock: hyprix hands its children `WAYLAND_DISPLAY` as a
+  path, so fuzzel's `$XDG_RUNTIME_DIR/fuzzel-$WAYLAND_DISPLAY.lock` cannot be
+  made. It warns and runs, as upstream does.
+* Not done, and said by name when asked for: `gamma-correct-blending` (hyprix
+  has no color-management protocol), a `scaling-filter` other than `box`
+  (PNG icons are scaled bilinearly), `message-mode=expand`, and the
+  clipboard pastes (`clipboard-paste`, `primary-paste`). Not done silently,
+  because they change nothing visible: `render-workers`, `match-workers`
+  and `delayed-filter-*` (matching is synchronous) and xdg-activation
+  tokens.
+* Drawn differently at the pixel level: glyphs are rustybuzz and tiny-skia,
+  not HarfBuzz and FreeType, and the corners are a tiny-skia path. The input
+  line scrolls by whole characters. `qsort`'s order for equal matches is
+  made stable.
+
 ### Where it stands
 
-(The fuzzel stream's to fill.)
+Landed: the pure core, `a29407d6` and `02afa6c8` (2026-09-26): config,
+entries, matching, prompt, exec, keys, icons, cache, dmenu, command line,
+geometry and the launcher state, with 66 host tests, and `examples/probe`,
+which reads the real `~/.config/fuzzel/fuzzel.ini` and `.desktop` files on
+the host. Against nazuna's files it finds 144 entries, 67 shown, and ranks
+Terminal first for `term`.
+
+On branch `fuzzel-window`: the window, the hyprix focus change, the image's
+entries and icons, and `test-compositor --boot fuzzel`. The boot starts
+fuzzel with `data/boot/fuzzel.ini` (the user's settings in Liberation Serif,
+`dpi-aware=no`, `terminal=/bin/term`). It has `/bin/vkbd` type `pat` and
+then Return, and requires three screendumps pixel for pixel: the list with
+its icons and the large icon, the test pattern ranked first and selected,
+and the pattern window fuzzel started, alone. The first two are blessed by
+`tests/boot_frames.rs`. It passed first time on x86_64 (2026-09-26).
+
+Run once against the user's real `fuzzel.ini` and fonts (a local boot, not
+committed): the window came up 530x525 at the centre in GFS Didot, with the
+placeholder, three entries with icons, Terminal selected and its icon large
+underneath. It is the boot's first picture in the other face, 3607 pixels
+apart. Its screendump is kept in `~/.local/share/ferrix/logs/fuzzel/`. It
+took about 30 seconds from start to window with 20 host font files. The
+boot's tree font took about 4. `--print-timing-info` is in the boot now to
+say which stage it is. Suspect the font scan under TCG.
+
+Left: the clipboard pastes (need `wl_data_device` in the toolkit); taking
+the keyboard back from an `on-demand` fuzzel when another window is clicked
+(hyprix); the startup time above; aarch64 boot.
 
 ## 5. hyprlock
 
