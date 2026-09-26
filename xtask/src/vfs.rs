@@ -357,6 +357,14 @@ pub(crate) const APPLETS: &[Command] = &[
             "removed",
         ]),
     },
+    // The scoped OOM kill (stage 13's M1, `docs/CGROUPS.md` §7.1): a program
+    // that fills a buffer twice its cgroup's `memory.max` is ended by
+    // `SIGKILL`, and `memory.events` counts the kill.
+    Command {
+        argv: &["sh", "-c", OOM_SCRIPT],
+        status: 6,
+        expect: Expect::Lines(&["killed by SIGKILL", "oom_kill 1", "removed"]),
+    },
     // `mount -t proc` and `mount -t devtmpfs` go here once mount takes them.
 ];
 
@@ -563,6 +571,29 @@ read after < /tmp/cm/k/memory.current
 rmdir /tmp/cm/k && echo removed
 echo "-memory" > /tmp/cm/cgroup.subtree_control || exit 5
 umount /tmp/cm
+exit 6
+"#;
+
+/// Root mounts cgroup2 and makes `o` with the `memory` controller and
+/// `memory.max` 16M. A shell moves itself into `o` and becomes busybox's
+/// `dd`, which reads 32 MiB of `/dev/zero` into one buffer: the pages of the
+/// buffer are faulted in as the read fills them, and the one past the limit
+/// makes the scoped OOM kill end `dd`, the only process in `o`, as Linux's
+/// would. Required: that the shell saw it end by `SIGKILL` (137), and that
+/// `memory.events` counts one `oom_kill`. Only builtins read what is
+/// checked, as in [`QUOTA_SCRIPT`].
+const OOM_SCRIPT: &str = r#"mkdir -p /tmp/co && mount -t cgroup2 none /tmp/co || exit 1
+echo "+memory" > /tmp/co/cgroup.subtree_control || exit 2
+mkdir /tmp/co/o || exit 3
+echo 16M > /tmp/co/o/memory.max || exit 4
+sh -c 'echo $$ > /tmp/co/o/cgroup.procs || exit 1
+exec /bin/busybox dd if=/dev/zero of=/dev/null bs=32M count=1' 2>/dev/null
+status=$?
+[ $status -eq 137 ] && echo "killed by SIGKILL" || echo "status $status"
+while read key count; do [ "$key" = oom_kill ] && echo "oom_kill $count"; done < /tmp/co/o/memory.events
+rmdir /tmp/co/o && echo removed
+echo "-memory" > /tmp/co/cgroup.subtree_control || exit 5
+umount /tmp/co
 exit 6
 "#;
 

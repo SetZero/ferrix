@@ -292,6 +292,7 @@ const APPLETS_ON_X86_64: &[(usize, &[&str])] = &[
             "removed",
         ],
     ),
+    (22, &["killed by SIGKILL", "oom_kill 1", "removed"]),
 ];
 
 /// A log of the applets alone, numbered after the criterion's commands, each
