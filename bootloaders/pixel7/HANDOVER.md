@@ -298,6 +298,11 @@ them). Check any new one against the phone before you rely on it.
    `--strip-debug`, since its fixups come from `--emit-relocs` sections.
    What is left is moving the kernel here, which needs a randomness source
    ABL's 8 bytes cannot spare, and a run to try it.
+   Since `47934c84` (F-34) this loader also maps the kernel's text and
+   read-only data read-only in the direct map. Run 13 (`$P/run13-sealed/`)
+   passed stage 2's FX-0204 check (`sealed 3536 KiB of text and read-only
+   data, 1768 mappings of it, none writable`) and reached `FERRIX-BOOT-OK`
+   on 8 cores.
 
 ### Done, for the record
 
