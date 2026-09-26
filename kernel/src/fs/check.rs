@@ -762,6 +762,9 @@ fn check_the_calls(process: &Process) -> Result<u64, &'static str> {
     let outcome = check_a_pipe_carries_bytes_and_then_ends(process, page)
         .and_then(|piped| check_a_pipe_refuses_as_linux_does(process, page).map(|()| piped))
         .and_then(|piped| check_fionbio_reaches_pipes_and_sockets(process, page).map(|()| piped))
+        .and_then(|piped| {
+            check_a_pipe_keeps_what_a_bad_buffer_missed(process, page).map(|()| piped)
+        })
         .and_then(|piped| check_a_fifo_is_one_pipe(process, page).map(|fifo| piped + fifo))
         .and_then(|bytes| check_statfs_says_tmp_is_tmpfs(process, page).map(|()| bytes))
         .and_then(|bytes| check_truncate_and_fallocate_grow(process, page).map(|()| bytes))
@@ -1066,6 +1069,78 @@ fn check_fionbio_reaches_pipes_and_sockets(
     answers(fd::sys_close(process, other), 0, "a socket would not close")
 }
 
+/// A read from a pipe into memory the program cannot write is `EFAULT` and
+/// leaves every byte in the pipe, as Linux 7.0 does, measured: `read` and
+/// `readv` into a bad buffer took nothing, and a read after them had all
+/// eight. A `readv` whose first segment is good and second bad keeps what
+/// the second missed. There Linux answers `EFAULT` too, having copied into
+/// the first segment and consumed none of it -- it consumes a pipe by
+/// buffer pages, which merge small writes -- and this answers the four the
+/// first segment took; either way no byte is lost, which is what is checked.
+fn check_a_pipe_keeps_what_a_bad_buffer_missed(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    answers(
+        pipe::sys_pipe2(process, page + AT_FDS, O_NONBLOCK),
+        0,
+        "pipe2 was refused",
+    )?;
+    let (reader, writer) = pair(process, page)?;
+    let len = DATA.len();
+    answers(
+        file::sys_write(process, writer, page + AT_DATA, len as u64),
+        len,
+        "a write into a pipe came back short",
+    )?;
+    refuses(
+        file::sys_read(process, reader, KERNEL_ADDRESS, 8),
+        Errno::EFAULT,
+        "a read from a pipe into a bad buffer was not EFAULT",
+    )?;
+    put_iovecs(process, page, &[KERNEL_ADDRESS, 4, KERNEL_ADDRESS, 4])?;
+    refuses(
+        file::sys_readv(process, reader, page + AT_IOVEC, 2),
+        Errno::EFAULT,
+        "a readv from a pipe into bad buffers was not EFAULT",
+    )?;
+    put_iovecs(process, page, &[page + AT_BACK, 4, KERNEL_ADDRESS, 4])?;
+    let took = file::sys_readv(process, reader, page + AT_IOVEC, 2)
+        .map_err(|_| "a readv from a pipe into a good and a bad segment took nothing")?;
+    let rest = file::sys_read(process, reader, page + AT_BACK + took as u64, 64)
+        .map_err(|_| "a pipe read after EFAULT was refused")?;
+    if took + rest != len || read_back(process, page + AT_BACK, len)? != DATA {
+        return Err("a pipe lost the bytes a read into a bad buffer could not take");
+    }
+    answers(
+        fd::sys_close(process, reader),
+        0,
+        "a pipe's read end would not close",
+    )?;
+    answers(
+        fd::sys_close(process, writer),
+        0,
+        "a pipe's write end would not close",
+    )
+}
+
+/// Write `words` as native words at [`AT_IOVEC`]: the `iovec` array a
+/// `readv` is handed, a base and a length each.
+fn put_iovecs(process: &Process, page: u64, words: &[u64]) -> Result<(), &'static str> {
+    let word = size_of::<usize>();
+    for (index, value) in (0_u64..).zip(words) {
+        let bytes = value.to_le_bytes();
+        let native = bytes.get(..word).ok_or("impossible pointer width")?;
+        uaccess::copy_to_user(
+            process.space(),
+            page + AT_IOVEC + index * word as u64,
+            native,
+        )
+        .map_err(|_| "could not stage an iovec")?;
+    }
+    Ok(())
+}
+
 /// A FIFO under /tmp is one pipe for every opener: a non-blocking writer with
 /// no reader is `ENXIO`, and once a reader is open what one descriptor writes
 /// the other reads.
@@ -1175,18 +1250,7 @@ fn readv_after_write(
         len,
         "a write into a pipe came back short",
     )?;
-    let word = size_of::<usize>();
-    let segments = [page + AT_BACK, 4, page + AT_BACK + 4, 60];
-    for (index, value) in (0_u64..).zip(segments) {
-        let bytes = value.to_le_bytes();
-        let native = bytes.get(..word).ok_or("impossible pointer width")?;
-        uaccess::copy_to_user(
-            process.space(),
-            page + AT_IOVEC + index * word as u64,
-            native,
-        )
-        .map_err(|_| "could not stage an iovec")?;
-    }
+    put_iovecs(process, page, &[page + AT_BACK, 4, page + AT_BACK + 4, 60])?;
     let took = file::sys_readv(process, reader, page + AT_IOVEC, 2)
         .map_err(|_| "readv of a pipe with bytes in it was refused")?;
     let rest = if took < len {

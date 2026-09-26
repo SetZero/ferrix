@@ -175,6 +175,22 @@ impl PipeBuffer {
         ReadOutcome::Read(count)
     }
 
+    /// Put `bytes` back at the front, to be read next: the start of what
+    /// [`PipeBuffer::read`] took and the reader could not be given, because
+    /// the memory it was to be copied to was bad. Linux copies straight from
+    /// the pipe's pages into the reader's and consumes only what arrived, so
+    /// a read into a bad buffer leaves the pipe as it was; this is the same
+    /// done after the fact.
+    ///
+    /// Taken whatever room is left: the bytes were in the pipe a moment ago,
+    /// and a writer that filled the room since has only pushed the pipe past
+    /// its capacity until they are read, as `free` saturates at none.
+    pub fn unread(&mut self, bytes: &[u8]) {
+        for &byte in bytes.iter().rev() {
+            self.data.push_front(byte);
+        }
+    }
+
     /// Queue as much of `data` as the rules allow.
     ///
     /// A write of at most [`PIPE_BUF`] bytes goes in whole or not at all. A

@@ -1136,6 +1136,31 @@ fn a_drained_pipe_is_end_of_file_only_once_no_writer_is_left() {
 }
 
 #[test]
+fn bytes_a_reader_could_not_take_are_read_again_first() {
+    let mut pipe = open_pipe(PIPE_BUF);
+    assert_eq!(pipe.write(b"abcdefgh"), WriteOutcome::Wrote(8));
+    let mut buf = [0_u8; 6];
+    assert_eq!(pipe.read(&mut buf), ReadOutcome::Read(6));
+    // A writer fills the room the read made before the reader finds its
+    // memory took the first two bytes and faulted on the rest.
+    assert_eq!(
+        pipe.write(&vec![b'z'; PIPE_BUF - 2]),
+        WriteOutcome::Wrote(PIPE_BUF - 2)
+    );
+    pipe.unread(&buf[2..]);
+    pipe.unread(b"");
+    // The four come first, ahead of both the two left and the writer's, and
+    // the pipe is over its capacity until they are read, never short a byte.
+    assert_eq!(pipe.len(), PIPE_BUF + 4);
+    assert_eq!(pipe.room(), 0);
+    let mut out = vec![0_u8; 2 * PIPE_BUF];
+    assert_eq!(pipe.read(&mut out), ReadOutcome::Read(PIPE_BUF + 4));
+    assert_eq!(&out[..6], b"cdefgh");
+    assert_eq!(pipe.len(), 0);
+    assert!(out[6..PIPE_BUF + 4].iter().all(|&b| b == b'z'));
+}
+
+#[test]
 fn a_write_with_no_reader_is_broken_and_polls_as_an_error() {
     let mut pipe = open_pipe(PIPE_CAPACITY);
     pipe.close_reader();

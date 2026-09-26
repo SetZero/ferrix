@@ -21,9 +21,13 @@
 //! it will write that half again. A read from a regular file that could not be
 //! copied out to the program moves the offset back over the bytes the program
 //! never got, because Linux copies straight into the program's buffer and so
-//! never advances past a fault. A stream cannot be moved back: a console line
-//! read into a buffer the program cannot receive is lost, which is also what
-//! happens to a terminal's input on Linux.
+//! never advances past a fault. A stream has no offset to move back, so it
+//! is handed the bytes to take back (`Inode::unread_stream`): a pipe puts
+//! them at its front and a DRM card its events, so that, as on Linux, a read
+//! into a bad buffer is `EFAULT` and leaves them all to be read. A stream
+//! that cannot put bytes back loses them: a console line read into a buffer
+//! the program cannot receive is gone, which is also what happens to a
+//! terminal's input on Linux.
 //!
 //! # `iovec` is native words
 //!

@@ -288,6 +288,19 @@ impl Inode for End {
         }
     }
 
+    /// Put back bytes a read took and could not copy out to the reader, as
+    /// Linux leaves them in the pipe: a `read` or `readv` into a bad buffer
+    /// is `EFAULT` and the pipe still holds everything it held. Another
+    /// reader of the same pipe taking bytes between the read and this is
+    /// the one order this cannot keep, where Linux's pipe lock would.
+    fn unread_stream(&self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        self.pipe.buffer.lock().unread(bytes);
+        self.pipe.readable.wake_all();
+    }
+
     /// Queue all of `data`, waiting for room as often as it takes, unless
     /// `nonblock`: then as much as fits now, or `EAGAIN` for none. A write
     /// with no reader left is `EPIPE`, or the count queued before the reader
