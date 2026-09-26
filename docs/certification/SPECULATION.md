@@ -386,11 +386,25 @@ With none of them, or with `nokaslr` on the command line (`CMDLINE.TXT`, or
 `cargo xtask run --gdb`, which adds it so that a debugger's symbols are where
 the kernel runs), everything stays at its fixed address and the log says
 why. A kernel with no fixups — built `off`, or a copy stripped of them — stays
-too. The Pixel 7 loader (`boot/pixel7`) applies a PIE's fixups at the
-link address and says it does not randomise. It has no tested source of
-randomness on the phone, and moving the kernel there has not been tried
-without a device session. `nokaslr` is safe to honour: whoever writes the boot
-volume can replace the kernel.
+too. The Pixel 7 loader (`boot/pixel7`) randomises the same three things
+from the firmware's own generator, TF-A's `SMCCC_TRNG_RND64`, asked through an
+`smc` of its own and never from the eight bytes the bootloader passes, which
+go to the kernel's seed; the source prints as `SMCCC TRNG`. If the call is
+absent or fails there is no fallback to a counter: the loader says the kernel is not
+randomised. On the phone, two boots of one image took two layouts, each
+reaching `FERRIX-BOOT-OK` on all eight cores
+(`~/.local/share/ferrix/pixel7/run17-kaslr/run.log` and
+`run17-kaslr-2/run.log`):
+
+```
+  kaslr    kernel at 0xfffffffff688c000, slide 0x7688c000, 18 bits from SMCCC TRNG
+  kaslr    direct map at 0xffff82c0c0000000, 16 bits; vmap arena top at 0xffffffee2ed10000, 17 bits
+  kaslr    kernel at 0xffffffff8ee25000, slide 0xee25000, 18 bits from SMCCC TRNG
+  kaslr    direct map at 0xffffcdfd00000000, 16 bits; vmap arena top at 0xffffffede3060000, 17 bits
+```
+
+`nokaslr` is safe to honour: whoever writes the boot volume can replace the
+kernel.
 
 **What is printed, and why that is not a leak.** The loader prints, on
 firmware's console:

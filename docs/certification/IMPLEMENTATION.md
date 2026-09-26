@@ -284,7 +284,7 @@ that has no signals pending; if it cannot, the interface is not actually
 inverted.
 
 **Pitfall:** this is on the return-to-user path, so an indirect call costs on
-every trap. Measure it — `docs/ROADMAP.md` tracks boot cost lines and the
+every trap. Measure it — the roadmap (`docs/roadmap/`) tracks boot cost lines and the
 project cares about this. If it shows, an `Option<fn>` checked once beats a
 trait object.
 

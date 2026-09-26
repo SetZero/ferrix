@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-15 findings are open and 27 are closed, of 42. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
+17 findings are open and 28 are closed, of 45. F-38, F-39 and F-40 were found by other work on 2026-09-26 and recorded by the certification review that work now goes through: F-39, a native process any user made running as root, closed with its fix; F-38, a device model writing a dead driver's frames after they were given back, and F-40, a delegated job lifting its own limits, open with their fixes designed and reviewed. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 2 | 5 | 7 | 0 | 1 |
+| Open | 2 | 5 | 9 | 0 | 1 |
 
 Blocking: F-27 and F-28 — independent assessment and a quality management
 system. Both need an organisation; neither is a defect in the code.
@@ -929,6 +929,93 @@ negative controls, scratch, each stop the boot by its own message (W-15).
 Cost under KVM: an open and close 60 ns (1.5%) dearer in the root job and
 136 ns (3.4%) in a limited one; a 64-byte pipe write and read unchanged; a
 tmpfs create, 4 KiB write and unlink 4.0% and 4.8% dearer.
+
+### F-38 — a device can write a dead driver's frames after the kernel gave them back
+**Moderate.** Open. Found 2026-09-26 by the audio work (ferrix-90); owned
+there, with the fix designed and reviewed.
+
+`object/pin.rs` gives a pinned buffer's frames back the moment the pin closes.
+The order it closes in is right for the hardware the claim names: the domain's
+unpin takes the translation out and waits for the unit's invalidation to
+*complete* -- VT-d's invalidation-wait descriptor, the SMMUv3's `TLBI` and
+`CMD_SYNC` -- before the frames go back, so a device can no longer reach them.
+QEMU's device models do not all go through that translation on every access:
+virtio-snd takes a host mapping of a buffer when it pops it from the queue and
+writes a returned buffer's status through that mapping for up to about 160 ms
+after the kernel has unpinned it, and its reset does not stop its streams. So
+under the reference machine a sound driver that dies mid-stream has its
+device write into frames the allocator has already handed on: the x86-64 TCG
+gate's DMA-fault check caught the writes, and a restarted driver on AArch64
+died of `SIGILL` in the frames it was given. On ARMv7-A, whose domains are not
+translated, pinned frames are kept and the hazard does not arise. This bears
+on T.DMA ([VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md)): the
+objective holds on hardware whose devices honour the invalidation and is not
+met for this device model under the emulator the reference configuration
+names.
+
+*Would close it:* the pin quarantine (branch `pin-quarantine`, reviewed
+2026-09-26): a pin closed because its creator died keeps its frames on the
+device's domain instead of freeing them, uncharged from the dead job, until the
+device's core accepts the next driver's `HELLO` -- after that driver has reset
+the device, and virtio-snd has drained its streams, in bring-up. A release on
+that event, never on a timer. A device never driven again keeps its
+quarantine, one dead driver's pages at most. Address translation services
+are never enabled (VT-d `TT=00`, SMMUv3 `EATS=0`), so no device holds a
+translation of its own past the unit's invalidation; that becomes an
+assumption of use with a boot assertion. Checked by `test-audio --boot
+restart` on all three architectures, with the x86-64 DMA-fault check as its
+negative control.
+
+### F-39 — a native process made by any user ran as root
+**Found and closed 2026-09-26** (f84a8d3c, found by the init work, ferrix-15).
+
+*Was:* **Major.** `process_create` loaded its child through `Process::new`,
+which gives a process root's credentials, and nothing replaced them. It asks
+for `MANAGE` on the job the child goes into, and `job_for_cgroup` grants
+`MANAGE` on a cgroup's job to whoever may write that cgroup's `cgroup.procs` --
+which a delegated cgroup's owner may, by design. So a uid-1000 service with
+`Delegate=yes` could make a VMO, create a process in its own cgroup's job and
+have it run as root: a program gaining authority its creator never held, which
+T.FORGE's paths had not considered.
+
+*Now:* the native loader takes the creator, and the child gets a copy of its
+credentials, as a fork child does, set before the process is registered, so
+nothing ever sees it as root. Only devmgr, which the kernel makes for itself,
+has no creator and is root's; a creator of another personality's is refused
+rather than given root.
+
+*Checked by the build:* stage 13's cgroup check (FX-1301,
+`fs/cgroupfs/creator_check.rs`) delegates a cgroup to uid 1000, has a uid-1000
+process take `MANAGE` through `job_for_cgroup` and create a process there, and
+requires the child's ids to equal its creator's and the child, run, to answer
+`getuid` with 1000. Both negative controls -- the old root credentials, and
+the ids comparison skipped to show the `getuid` half alone -- stop the boot,
+and are quoted in the commit.
+
+### F-40 — a delegated job can lift its own limits
+**Moderate.** Open. Found 2026-09-26 by the init work (ferrix-15) while
+checking this review's condition on delegation; owned there, with the fix
+designed and reviewed. Read from the code, not yet shown by a boot.
+
+The native `job_set_limit` asks only for `MANAGE` on the job
+(`syscall/native.rs`). A delegated cgroup's owner gets `MANAGE` on that
+cgroup's own job through `job_for_cgroup`, as F-39 describes, so a
+`Delegate=yes` unit running as uid 1000 under `MemoryMax=16M` can set its own
+job's memory limit to unlimited, and its task limit likewise -- around the
+root-owned `memory.max` and `pids.max` files that are how Linux keeps a
+delegatee from raising its own limits. Every ancestor's limit still binds,
+since a charge walks every ancestor (F-35), so the machine stays bounded by
+whatever the delegating job was given; what fails is `FRU_RSA.1` for the
+delegated job itself, the bound its unit file asked for.
+
+*Would close it:* a job right of its own, `SET_LIMIT`, which `job_set_limit`
+requires instead of `MANAGE`. `job_create` grants it on the child it makes and
+the root and init handles carry it; `job_for_cgroup` grants it only when the
+caller may write that cgroup's limit files; and like every right it can be
+dropped by duplication or transfer and never regained. Checked by a uid-1000
+process with `MANAGE` on its delegated cgroup being refused `job_set_limit`
+and refused writing its own `memory.max`, `pids.max` and `cpu.weight`, with
+`job_set_limit` on `MANAGE` again as the negative control.
 
 ### F-22 — no safety case
 **Closed at the element level 2026-09-25** by
