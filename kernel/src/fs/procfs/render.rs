@@ -710,11 +710,48 @@ impl Memory {
     }
 }
 
-/// Running if it is the process on this processor, and sleeping otherwise:
-/// a process that is not running is waiting for its turn or for something.
-fn state_of(process: &Process) -> State {
-    match process::current() {
-        Some(current) if current.pid() == process.pid() => State::Running,
+/// What the thread numbered `tid` of `process` is doing, as Linux 7.0's
+/// `stat` and `status` report it on the same programs:
+///
+/// * `Z` once the process has ended and is waiting to be reaped, whether it
+///   exited, was killed, or was killed while stopped; and for a leader that
+///   has ended while other threads of its process run.
+/// * `T` while it is stopped by a signal, whatever its threads were doing.
+/// * `D` while the thread waits in `vfork` for its child to let go.
+/// * `R` for a thread that is running or waiting its turn, and `S` for one
+///   waiting for something.
+///
+/// `t` is a tracer's stop, and nothing traces a process here.
+fn state_of(process: &Process, tid: u32) -> State {
+    if process.is_released() {
+        return State::Zombie;
+    }
+    if process.is_stopped() {
+        return State::Stopped;
+    }
+    // The reader is running, whether or not its process lists it: one the
+    // kernel runs for a check lists neither its thread nor its task.
+    let reader = crate::syscall::thread::current_of(process);
+    if reader.is_some_and(|reader| reader.tid() == tid) {
+        return State::Running;
+    }
+    let threads = process.threads();
+    let Some(thread) = threads.iter().find(|thread| thread.tid() == tid) else {
+        return if threads.is_empty() {
+            State::Sleeping
+        } else {
+            State::Zombie
+        };
+    };
+    if thread.in_vfork() {
+        return State::DiskSleep;
+    }
+    let task = process
+        .tasks()
+        .into_iter()
+        .find(|task| crate::syscall::thread::of_task(task).is_some_and(|of| of.tid() == tid));
+    match task {
+        Some(task) if !task.is_blocked() => State::Running,
         _ => State::Sleeping,
     }
 }
@@ -785,7 +822,7 @@ fn status_of(process: &Process, tid: u32) -> Result<Vec<u8>> {
     let status = Status {
         name: &name,
         umask: process.umask(),
-        state: state_of(process),
+        state: state_of(process, tid),
         tgid: process.pid(),
         pid: tid,
         ppid: parent_of(process),
@@ -867,7 +904,7 @@ fn stat_of(process: &Process, tid: u32) -> Result<Vec<u8>> {
     let stat = Stat {
         pid: tid,
         comm: &comm,
-        state: state_of(process),
+        state: state_of(process, tid),
         ppid: parent_of(process),
         pgrp: process.pgid(),
         session,

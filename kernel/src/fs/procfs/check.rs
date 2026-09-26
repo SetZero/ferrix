@@ -23,9 +23,10 @@ use alloc::vec::Vec;
 
 use crate::sync::SpinLock;
 use ferrix_bootinfo::PAGE_SIZE;
-use ferrix_linux_abi::types::AT_FDCWD;
+use ferrix_linux_abi::types::{AT_FDCWD, SIGSTOP};
 use ferrix_procfs::kstat::{self, Parsed};
 use ferrix_procfs::maps;
+use ferrix_procfs::status::State;
 use ferrix_vfs::initramfs::makedev;
 use ferrix_vfs::{Context, Errno, FileType, Namespace, OpenFile, OpenFlags, Whence};
 use ferrix_vma::VmaFlags;
@@ -126,6 +127,22 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     }
     *LAYOUT.lock() = Some(lay_out(&process)?);
     *OUTCOME.lock() = None;
+    let pid = alloc::format!("{}", process.pid()).into_bytes();
+    let ns = fs::namespace();
+    let ctx = ns.context();
+
+    // Stopped before it has run, as a `SIGSTOP` leaves it; nothing is told,
+    // because a process made for a check has no parent.
+    process.enter_stop(SIGSTOP);
+    let stopped = check_state(
+        ns,
+        &ctx,
+        &pid,
+        State::Stopped,
+        "/proc/<pid> does not say T (stopped) for a stopped process",
+    );
+    process.leave_stop();
+    stopped?;
 
     let task = sched::spawn_user(
         "procfs-check",
@@ -142,6 +159,14 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     if process.wait_for_exit(deadline) != Some(REPORTED) {
         return Err("the /proc check's task never reported");
     }
+    // Ended, and nobody has reaped it: a zombie.
+    check_state(
+        ns,
+        &ctx,
+        &pid,
+        State::Zombie,
+        "/proc/<pid> does not say Z (zombie) for a process that has ended",
+    )?;
     let found = OUTCOME
         .lock()
         .take()
@@ -461,6 +486,13 @@ fn check_proc(process: &Arc<Process>, layout: &Layout) -> Found {
         return Err("/proc/self is not a link to the current process's pid");
     }
 
+    check_state(
+        ns,
+        &ctx,
+        &pid,
+        State::Running,
+        "/proc/<pid> does not say R (running) for the process reading it",
+    )?;
     let descriptors = check_descriptors(ns, &ctx, process)?;
     check_threads(ns, &ctx, &pid)?;
     let listed = check_listing(ns, &ctx, &pid)?;
@@ -487,6 +519,31 @@ fn check_proc(process: &Arc<Process>, layout: &Layout) -> Found {
         return Err("/proc/partitions is not empty, with no block device to list");
     }
     Ok((listed, lines, named, values))
+}
+
+/// `/proc/<pid>/stat`'s state letter and `/proc/<pid>/status`'s `State:`
+/// line both say `want`, or `Err(why)`.
+fn check_state(
+    ns: &Namespace,
+    ctx: &Context,
+    pid: &[u8],
+    want: State,
+    why: &'static str,
+) -> Result<(), &'static str> {
+    let directory = [b"/proc/", pid].concat();
+    let stat = read_all(ns, ctx, &[directory.as_slice(), b"/stat"].concat(), 64)?;
+    // The letter follows the name, which is in parentheses and may hold any.
+    let letter = stat
+        .iter()
+        .rposition(|&byte| byte == b')')
+        .and_then(|close| stat.get(close.saturating_add(2)))
+        .map(|&byte| char::from(byte));
+    let status = read_all(ns, ctx, &[directory.as_slice(), b"/status"].concat(), 64)?;
+    let line = [b"State:\t", want.description().as_bytes(), b"\n"].concat();
+    if letter != Some(want.letter()) || !status.windows(line.len()).any(|seen| seen == line) {
+        return Err(why);
+    }
+    Ok(())
 }
 
 /// `/proc/<pid>/task`: the check process's one thread is listed under its

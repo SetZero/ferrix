@@ -53,6 +53,9 @@ pub(crate) struct Thread {
     /// The address `set_tid_address` or `CLONE_CHILD_CLEARTID` registered, to
     /// be zeroed and woken when the thread ends. Zero means none.
     clear_child_tid: AtomicU64,
+    /// Set while it waits in `vfork` for its child to let go of the address
+    /// space, which `/proc` shows as `D`, as Linux does.
+    in_vfork: AtomicBool,
     /// Its own signal state.
     signals: SpinLock<ThreadSignals>,
     /// Registers its task resumes from instead of entering the program: a
@@ -110,6 +113,7 @@ impl Thread {
             gone: AtomicBool::new(false),
             process: Arc::clone(process),
             clear_child_tid: AtomicU64::new(0),
+            in_vfork: AtomicBool::new(false),
             signals: SpinLock::new(signals),
             resume: SpinLock::new(None),
         }
@@ -146,6 +150,16 @@ impl Thread {
     /// it nor chooses it to take a signal.
     pub(crate) fn mark_gone(&self) {
         self.gone.store(true, Ordering::Release);
+    }
+
+    /// Whether it is waiting in `vfork` for its child to let go.
+    pub(crate) fn in_vfork(&self) -> bool {
+        self.in_vfork.load(Ordering::Acquire)
+    }
+
+    /// Record that it has begun (`true`) or ended (`false`) that wait.
+    pub(crate) fn set_in_vfork(&self, waiting: bool) {
+        self.in_vfork.store(waiting, Ordering::Release);
     }
 
     /// The process it runs.

@@ -434,8 +434,9 @@ fn clone_with(
     // The child's one thread, made here so that the address it is to clear
     // when it ends is recorded before it can run. It inherits the calling
     // thread's blocked mask and alternate stack.
-    let thread = match thread::current_of(parent) {
-        Some(caller) => Thread::forked(&child, &caller),
+    let caller = thread::current_of(parent);
+    let thread = match &caller {
+        Some(caller) => Thread::forked(&child, caller),
         None => Thread::leader(&child),
     }
     .and_then(crate::fallible::try_arc)
@@ -491,7 +492,13 @@ fn clone_with(
         return Err(Errno::EAGAIN);
     }
     if flags & CLONE_VFORK != 0 {
+        if let Some(caller) = &caller {
+            caller.set_in_vfork(true);
+        }
         child.wait_vfork_release(parent);
+        if let Some(caller) = &caller {
+            caller.set_in_vfork(false);
+        }
     }
     Ok(pid as usize)
 }

@@ -1086,12 +1086,14 @@ its own and requires /proc/self to name that process, every name a recursive
 listing of /proc reports to lead back to what the listing said, /proc/self/fd to
 name a descriptor's path and say it was deleted once it is gone, and
 /proc/self/maps, read a few bytes at a time while the map changes, to be one
-line per region as it was at open, with the heap and stack named. It also reads
-/proc/stat twice across a short sleep and requires it to parse back with a cpuN
-line per online processor, the cpu line to be their sum, no processor to have
-counted more time than has passed, and no counter to have gone backwards while
-the total advanced. Programs read these files by fixed columns, so a kernel that
-fails here hands them wrong numbers without an error.
+line per region as it was at open, with the heap and stack named.
+/proc/<pid>/stat and status must say T for that process while it is stopped, R
+while it reads them, and Z once it has ended unreaped. It also reads /proc/stat
+twice across a short sleep and requires it to parse back with a cpuN line per
+online processor, the cpu line to be their sum, no processor to have counted
+more time than has passed, and no counter to have gone backwards while the total
+advanced. Programs read these files by fixed columns, so a kernel that fails
+here hands them wrong numbers without an error.
 
 1. A directory's lookup and its listing disagree about a name or an inode
    number, so a recursive listing cannot walk back to what it listed.
@@ -1110,11 +1112,15 @@ fails here hands them wrong numbers without an error.
 7. A run queue's busy or idle count dropped the time since its last charge, or
    charged one interval twice, so /proc/stat's times go backwards or outrun the
    clock.
+8. `render::state_of` reports a process by something other than what it is
+   doing: an ended process not as a zombie, a stopped one not as stopped, or its
+   reader not as running.
 
 See: kernel/src/fs/procfs/check.rs run; kernel/src/fs/procfs.rs;
 kernel/src/fs/devfs.rs; kernel/src/fs/devfs/check.rs; kernel/src/fs/block.rs;
 libs/fs/procfs/src/maps.rs; libs/fs/procfs/src/kstat.rs;
-kernel/src/sched/queue.rs time_spent; docs/ROADMAP.md stage 8.
+kernel/src/fs/procfs/render.rs state_of; kernel/src/sched/queue.rs time_spent;
+docs/ROADMAP.md stage 8.
 
 <a id="fx-0850"></a>
 
