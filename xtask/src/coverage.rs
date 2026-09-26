@@ -274,6 +274,13 @@ const SUITE: &[Gate] = &[
     Gate::new("test-boot", "boot-reset", false)
         .only(Arch::Armv7a)
         .resetting(),
+    // `nosmp` keeps the boot processor alone, the first thing to try on a
+    // machine whose second core is in doubt, and every other boot starts
+    // them all. AArch64 reads it from the loader's command line; ARMv7-A
+    // reads it from U-Boot's `bootargs`, which QEMU's U-Boot leaves empty.
+    Gate::new("test-boot", "boot-nosmp", false)
+        .only(Arch::AArch64)
+        .with_args(&["--kernel-option", "nosmp"]),
     // A PC with neither an HPET nor `RDSEED`: its clock is the TSC measured
     // against the PIT, and its random words come from `RDRAND`. Both are
     // what an older machine takes, and neither runs on the default `q35`.
