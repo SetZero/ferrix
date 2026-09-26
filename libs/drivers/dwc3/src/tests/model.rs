@@ -221,7 +221,7 @@ pub(super) struct Model {
     /// Packets the host has for each OUT endpoint.
     out_packets: [VecDeque<Vec<u8>>; 8],
     /// Each IN endpoint's read in progress on the host, and those done.
-    in_partial: [Vec<u8>; 8],
+    pub(super) in_partial: [Vec<u8>; 8],
     pub(super) in_reads: [Vec<Vec<u8>>; 8],
 }
 

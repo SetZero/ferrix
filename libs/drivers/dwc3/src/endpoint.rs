@@ -206,6 +206,22 @@ impl<R: Registers, D: Dma, C: Clock> Controller<R, D, C> {
         Ok(count)
     }
 
+    /// Whether a bulk transfer on the IN endpoint with `address` that is a
+    /// whole number of packets ends with a zero-length packet, as it does
+    /// unless told otherwise. A class whose host reads exactly the length it
+    /// was told, as adb's does, a header and then a payload, wants none: the
+    /// empty packet would arrive where the host reads the next header. A
+    /// serial port's host reads what comes, and needs the empty packet to
+    /// know a transfer ended. Kept across configurations.
+    pub fn set_zero_length_packets(&mut self, address: u8, on: bool) {
+        let bit = 1 << (address & 0x0F);
+        if on {
+            self.no_zero_packets &= !bit;
+        } else {
+            self.no_zero_packets |= bit;
+        }
+    }
+
     /// How many bytes wait to go on the IN endpoint with `address`.
     #[must_use]
     pub fn pending(&self, address: u8) -> usize {
@@ -265,7 +281,9 @@ impl<R: Registers, D: Dma, C: Clock> Controller<R, D, C> {
         let data = endpoint_buffer(slot) + endpoint.start;
         let buffer = self.address(data)?;
         let packet = usize::from(info.max_packet).max(1);
-        let zero_packet = info.kind == TransferKind::Bulk && length.is_multiple_of(packet);
+        let zero_packet = info.kind == TransferKind::Bulk
+            && length.is_multiple_of(packet)
+            && self.no_zero_packets & (1 << (info.address & 0x0F)) == 0;
         let trbs = endpoint_trbs(slot);
         // Taken back from the controller, which wrote the last ones.
         self.memory.invalidate(trbs, ENDPOINT_TRB_BYTES);

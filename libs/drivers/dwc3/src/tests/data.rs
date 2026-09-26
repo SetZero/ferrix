@@ -100,6 +100,34 @@ fn a_write_into_an_empty_ring_is_one_transfer() {
 }
 
 #[test]
+fn an_endpoint_told_so_ends_whole_packets_without_a_zero_length_packet() {
+    // adb's host reads a payload of exactly the length its header gave,
+    // and an empty packet after it would land where it reads the next
+    // header (run adbusb3's pull).
+    let mut rig = enumerated(true);
+    rig.controller.set_zero_length_packets(DATA_IN, false);
+    assert_eq!(rig.controller.write(DATA_IN, &counting(1024)), Ok(1024));
+    rig.pump();
+    // The model's host reads as a serial port's does, until a short packet,
+    // so with no empty packet sent its read is still open, holding both.
+    assert!(reads(&rig, IN).is_empty(), "no empty packet ended the read");
+    assert_eq!(
+        rig.model.borrow().in_partial[IN].len(),
+        1024,
+        "both packets"
+    );
+    rig.controller.set_zero_length_packets(DATA_IN, true);
+    assert_eq!(rig.controller.write(DATA_IN, &counting(512)), Ok(512));
+    rig.pump();
+    assert_eq!(
+        reads(&rig, IN).iter().map(Vec::len).collect::<Vec<_>>(),
+        [1536],
+        "back on, the next whole packet ends with an empty one"
+    );
+    rig.assert_clean();
+}
+
+#[test]
 fn bytes_from_the_host() {
     let mut rig = enumerated(true);
     rig.model.borrow_mut().host_write(OUT, b"ls -l\n", 512);

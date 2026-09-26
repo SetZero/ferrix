@@ -466,7 +466,7 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
         idle: port::create(Kernel).map_err(|_| Step::Events)?,
     };
 
-    let usb = match Controller::start(Parts {
+    let mut usb = match Controller::start(Parts {
         registers,
         memory,
         clock,
@@ -477,6 +477,11 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
         }
         Err((error, parts)) => return Err(refused(error, parts)),
     };
+    // adb's host reads a payload of exactly the length its header said, and
+    // an empty packet after one of whole packets would arrive where it reads
+    // the next header (run adbusb3's pull broke on it). The serial port keeps
+    // them: its host reads what comes, and an empty packet ends a transfer.
+    usb.set_zero_length_packets(ferrix_dwc3::usb_device::acm::ADB_IN, false);
     say(format_args!("usbdev: DWC3 running, waiting for a host"));
     let log = open_log(&device, &port);
     let mut driver = Driver {

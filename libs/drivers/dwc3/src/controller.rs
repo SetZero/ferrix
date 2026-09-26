@@ -130,6 +130,9 @@ pub struct Controller<R, D, C> {
     speed: Option<Speed>,
     pub(crate) ep0: Ep0,
     pub(crate) endpoints: [Endpoint; MAX_ENDPOINTS],
+    /// The IN endpoints, by address, whose transfers of whole packets end
+    /// without a zero-length packet: a bit per endpoint number.
+    pub(crate) no_zero_packets: u16,
 }
 
 impl<R: Registers, D: Dma, C: Clock> Controller<R, D, C> {
@@ -157,6 +160,7 @@ impl<R: Registers, D: Dma, C: Clock> Controller<R, D, C> {
             speed: None,
             ep0: Ep0::new(),
             endpoints: [Endpoint::new(); MAX_ENDPOINTS],
+            no_zero_packets: 0,
         };
         match controller.bring_up() {
             Ok(()) => Ok(controller),
