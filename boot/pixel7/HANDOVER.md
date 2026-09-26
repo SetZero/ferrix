@@ -8,6 +8,21 @@ you touch the phone.
 
 ## State at a glance
 
+**2026-09-27, 00:30 (ferrix-9c): the phone updated itself.** Android's
+automatic system update installed CP3A.260905.009 into slot `b` and made
+it active; the first reboot after that (a Ferrix run's reset) booted it
+(`sys.boot.reason` `reboot,ota`, `ro.boot.slot_suffix` `_b`). Slot `b`'s
+`init_boot` is not Magisk-patched, so there is no root: `su` is gone,
+and with it the `ramoops` reads after a native boot, the monitor's root
+shell and graphs, and the launcher's crosvm VM. Nothing of Ferrix's wrote
+storage (it has no storage driver on the phone). Re-rooting is a flash
+and the owner's; `panther.dts` and `vendor_boot.img` here are from the
+old build (CP2A.260705.006), and the product owner has suspended phone
+boots until the new build's device tree is compared with it for every
+address the USB work uses. Turn off "Automatic system updates" in
+developer options to keep it from happening mid-work again.
+
+
 **Update, 2026-09-27 (ferrix-0a): `main` boots the phone on all eight
 cores to `FERRIX-BOOT-OK`, seeded from TF-A's TRNG, with the kernel, the
 direct map and the vmap arena moved by KASLR, and the boot console drawn in
