@@ -271,6 +271,14 @@ pub(crate) fn read_sctlr() -> u64 {
 // `0xd500419f` and `#0` is `0xd500409f` -- the same two words Linux emits for
 // `SET_PSTATE_PAN`.
 
+/// `SCTLR_EL1.SPAN`: set, an exception entry leaves `PSTATE.PAN` alone.
+const SCTLR_SPAN: u64 = 1 << 23;
+/// `SCTLR_EL1.UCT`: user mode may read `CTR_EL0`.
+const SCTLR_UCT: u64 = 1 << 15;
+/// `SCTLR_EL1.UCI`: user mode may run `DC CVAU`, `DC CIVAC`, `DC CVAC` and
+/// `IC IVAU`.
+const SCTLR_UCI: u64 = 1 << 26;
+
 /// Whether this processor has `PAN`, so that the two words above are legal.
 static PAN_ON: AtomicBool = AtomicBool::new(false);
 
@@ -291,7 +299,17 @@ static PAN_ON: AtomicBool = AtomicBool::new(false);
 ///   would be off for exactly the code that handles a program's system calls.
 ///   Clearing SPAN is the whole point and is easy to miss.
 ///
-/// Returns whether the processor had the feature.
+/// The same write lets user mode maintain its own caches, as Linux does:
+/// `SCTLR_EL1.UCT` lets it read `CTR_EL0`, the cache line sizes, and `UCI`
+/// lets it run `DC CVAU` and `IC IVAU` on its own pages. A JIT needs both --
+/// V8 writes code, cleans it to the point of unification and invalidates the
+/// instruction cache over it, reading the line size first -- and without
+/// them each traps as an undefined instruction, so Chromium on AArch64 would
+/// die at its first compiled function. The operations only ever act on an
+/// address the program can reach, and change no mapping. A secondary copies
+/// the boot processor's `SCTLR_EL1` (`smp`), so every processor has them.
+///
+/// Returns whether the processor had PAN.
 pub(crate) fn enable_user_access_protection() -> bool {
     let mmfr1: u64;
     // SAFETY: reading `ID_AA64MMFR1_EL1` has no side effects.
@@ -299,15 +317,23 @@ pub(crate) fn enable_user_access_protection() -> bool {
         asm!("mrs {}, id_aa64mmfr1_el1", out(reg) mmfr1, options(nomem, nostack, preserves_flags));
     }
     // PAN is bits 23:20; zero means the feature is absent.
-    if (mmfr1 >> 20) & 0xF == 0 {
-        return false;
-    }
+    let pan = (mmfr1 >> 20) & 0xF != 0;
 
-    let sctlr = read_sctlr();
-    // SAFETY: clearing `SPAN` (bit 23) only changes whether an exception entry
-    // sets `PSTATE.PAN`; it alters no mapping and no cache or MMU setting.
+    let user_caches = read_sctlr() | SCTLR_UCT | SCTLR_UCI;
+    let sctlr = if pan {
+        user_caches & !SCTLR_SPAN
+    } else {
+        user_caches
+    };
+    // SAFETY: clearing `SPAN` only changes whether an exception entry sets
+    // `PSTATE.PAN`, and `UCT` and `UCI` only whether user mode may read the
+    // cache type and maintain its own lines; none alters a mapping or a
+    // cache or MMU setting of the kernel's.
     unsafe {
-        asm!("msr sctlr_el1, {}", "isb", in(reg) sctlr & !(1 << 23), options(nostack, preserves_flags));
+        asm!("msr sctlr_el1, {}", "isb", in(reg) sctlr, options(nostack, preserves_flags));
+    }
+    if !pan {
+        return false;
     }
     // SAFETY: `PAN` was just reported present by `ID_AA64MMFR1_EL1`, and
     // setting it only forbids EL1 access to EL0-accessible pages -- which
