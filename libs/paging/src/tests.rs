@@ -29,6 +29,8 @@ struct Memory {
     cells: BTreeMap<u64, u64>,
     next_frame: u64,
     frames: Vec<PhysAddr>,
+    /// Descriptors read, for the tests that bound what a walk costs.
+    reads: core::cell::Cell<u64>,
 }
 
 impl Memory {
@@ -39,6 +41,7 @@ impl Memory {
             // "frame 0" should fail a test rather than work by accident.
             next_frame: 0x10_0000,
             frames: Vec::new(),
+            reads: core::cell::Cell::new(0),
         }
     }
 
@@ -62,6 +65,7 @@ impl Memory {
 unsafe impl PhysMem for Memory {
     fn read(&self, at: PhysAddr) -> u64 {
         assert_eq!(at.0 % 8, 0, "descriptor reads must be eight-byte aligned");
+        self.reads.set(self.reads.get() + 1);
         self.cells.get(&at.0).copied().unwrap_or(0)
     }
 
@@ -467,6 +471,7 @@ fn walk_properties<E: Encoding>() {
     empty_range_is_a_noop::<E>();
     unmapping_reports_what_it_removed::<E>();
     unmapping_walks_through_a_hole::<E>();
+    unmapping_steps_over_a_hole_whole::<E>();
     unmapping_refuses_to_cut_a_block::<E>();
     protecting_keeps_the_frame_and_changes_the_permissions::<E>();
     protecting_a_hole_is_an_error::<E>();
@@ -568,6 +573,36 @@ fn unmapping_walks_through_a_hole<E: Encoding>() {
         .unwrap();
     assert_eq!(removed, 1);
     assert_eq!(pages, 1);
+}
+
+/// Unmapping a gigabyte with one page in it at the far end finds that page
+/// without a walk from the root for every page of the hole before it -- a
+/// quarter of a million walks, which was what a program handing back a
+/// reservation it barely touched cost.
+fn unmapping_steps_over_a_hole_whole<E: Encoding>() {
+    const GIB: u64 = 1 << 30;
+    let (mut memory, mapper) = Memory::with_root::<E>();
+    let at = high::<E>(0);
+    let last = VirtAddr(at.0 + GIB - PAGE_SIZE);
+    mapper
+        .map_range(
+            &mut memory,
+            last,
+            PhysAddr(0x20_0000),
+            PAGE_SIZE,
+            MapFlags::KERNEL_DATA,
+        )
+        .unwrap();
+    memory.reads.set(0);
+    let removed = mapper.unmap_range(&mut memory, at, GIB, |_| {}).unwrap();
+    assert_eq!(removed, 1, "{}: the page at the end was missed", E::NAME);
+    assert_eq!(mapper.translate(&memory, last), None);
+    assert!(
+        memory.reads.get() < 16 * 1024,
+        "{}: {} descriptors read to unmap one page",
+        E::NAME,
+        memory.reads.get()
+    );
 }
 
 /// Unmapping half a block is refused rather than rounded.

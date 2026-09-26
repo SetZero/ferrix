@@ -690,11 +690,20 @@ impl<E: Encoding> Mapper<E> {
             let at = virt.checked_add(done).ok_or(MapError::RangeOverflow)?;
             let mut path = Path::default();
             match self.find_leaf(memory, at, Some(&mut path))? {
-                // Nothing mapped: step a page and carry on. Unmapping a hole
-                // is not an error — freeing a `vmap` allocation walks straight
-                // across the guard page inside its own span.
-                None => done += PAGE_SIZE,
-                Some((slot, entry, level)) => {
+                // Nothing mapped: carry on past the hole. Unmapping one is not
+                // an error — freeing a `vmap` allocation walks straight across
+                // the guard page inside its own span. And the walk stopped at
+                // an absent descriptor, so nothing is mapped anywhere in that
+                // descriptor's span: the hole is stepped over whole. A page
+                // at a time, a program handing back a reservation of
+                // gigabytes it never touched -- a browser's allocator does it
+                // all day -- cost a walk from the root per page of it.
+                Found::Hole(level) => {
+                    let span = level.span();
+                    let next = (at.0 | (span - 1)).checked_add(1);
+                    done = next.map_or(len, |next| (next - virt.0).min(len));
+                }
+                Found::Leaf(slot, entry, level) => {
                     let span = level.span();
                     if !at.is_aligned_to(span) || len - done < span {
                         return Err(MapError::BlockInTheWay(at));
@@ -758,9 +767,9 @@ impl<E: Encoding> Mapper<E> {
         let mut done = 0u64;
         while done < len {
             let at = virt.checked_add(done).ok_or(MapError::RangeOverflow)?;
-            let (slot, entry, level) = self
-                .find_leaf(memory, at, None)?
-                .ok_or(MapError::AlreadyMapped(at))?;
+            let Found::Leaf(slot, entry, level) = self.find_leaf(memory, at, None)? else {
+                return Err(MapError::AlreadyMapped(at));
+            };
             let span = level.span();
             if !at.is_aligned_to(span) || len - done < span {
                 return Err(MapError::BlockInTheWay(at));
@@ -797,7 +806,8 @@ impl<E: Encoding> Mapper<E> {
         }
     }
 
-    /// The descriptor slot, value and level of whatever maps `virt`.
+    /// The descriptor slot, value and level of whatever maps `virt`, or the
+    /// level of the absent descriptor that says nothing does.
     ///
     /// When `path` is given it is filled with the intermediate tables the walk
     /// descended through, which is what [`Mapper::prune`] needs: a table knows
@@ -808,7 +818,7 @@ impl<E: Encoding> Mapper<E> {
         memory: &impl PhysMem,
         virt: VirtAddr,
         mut path: Option<&mut Path>,
-    ) -> Result<Option<(PhysAddr, u64, Level)>, MapError> {
+    ) -> Result<Found, MapError> {
         let mut table = self.root;
         let mut level = E::ROOT_LEVEL;
 
@@ -817,10 +827,10 @@ impl<E: Encoding> Mapper<E> {
             let slot = descriptor_address(table, index);
             let entry = memory.read(slot);
             if !E::is_present(entry) {
-                return Ok(None);
+                return Ok(Found::Hole(level));
             }
             if E::is_leaf(entry, level) {
-                return Ok(Some((slot, entry, level)));
+                return Ok(Found::Leaf(slot, entry, level));
             }
             if let Some(path) = path.as_deref_mut() {
                 path.push(Step {
@@ -851,6 +861,15 @@ impl<E: Encoding> Mapper<E> {
             level = level.next()?;
         }
     }
+}
+
+/// What [`Mapper::find_leaf`] found at an address.
+enum Found {
+    /// The descriptor slot, value and level of the leaf that maps it.
+    Leaf(PhysAddr, u64, Level),
+    /// Nothing: the walk met an absent descriptor at this level, so nothing
+    /// is mapped anywhere in that level's span around the address.
+    Hole(Level),
 }
 
 /// A frame the tree has stopped referring to.
