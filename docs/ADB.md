@@ -1,8 +1,9 @@
 # adb for Ferrix: handover
 
-**Status, 2026-09-26: not started.** This is the brief for whoever builds it:
-why adb, what it has to do, what Ferrix already has for it, and the order to
-build it in. `docs/PIXEL7-USB-HANDOVER.md` is the USB stack it goes on top of;
+**Status, 2026-09-26 (ferrix-9c): step 1, adbd over TCP, is built and
+gated (§6); steps 2 and 3 follow.** The rest is the brief as it was
+written: why adb, what it has to do, what Ferrix already has for it, and the
+order to build it in. `docs/PIXEL7-USB-HANDOVER.md` is the USB stack it goes on top of;
 read its §8 first, and `boot/pixel7/HANDOVER.md` before touching the phone.
 
 ## 1. Why adb, and what done looks like
@@ -133,6 +134,17 @@ Each step lands on its own, gated, and says where it stands here.
   when the serial port's host sends `ferrix-usbdev: reboot`. It is
   unauthenticated too, for anyone with a USB cable to the phone. It reboots
   and does nothing else. It goes when adb's `reboot:` replaces it.
+* **Opt-in, because of the first point.** adbd is in an image only when it
+  is built with `--adbd`, and nothing starts it there: running it is always
+  something somebody asked for (the product owner's condition,
+  2026-09-26). Under QEMU its port is reachable only through a `--forward`
+  on the host's loopback.
+* **Keys, when they come.** adbd keeps its own list of allowed public keys,
+  as `sshdt` keeps `authorized_keys`, and checks the RSA token itself. The
+  auth design's owner (ferrix-d5, `docs/AUTH.md` §4) settled that authd
+  stores no adb keys and verifies no signatures; from authd's phase 3,
+  adbd reports each verdict to it (service `adbd`, the target uid) for
+  throttling and the audit log.
 * **Forwarding reaches inside.** `tcp:` opens connections from inside Ferrix
   to whatever listens there, so it answers to the same authentication.
 
@@ -140,3 +152,36 @@ Not in the first cut: authentication, `adb install`, `logcat`, `adb root`
 and `remount`, and `reboot bootloader`. On this phone that last one is a
 secure-firmware call plus a persistent write Ferrix must never make:
 `docs/BACKLOG.md` has the row.
+
+## 6. Where it stands
+
+### Step 1, adbd over TCP (2026-09-26)
+
+* `libs/proto/adb` (`ferrix-adb`): the 24-byte messages, the banner, and the
+  first sync protocol's requests and replies, with tests on the host. The
+  constants match `protocol.txt`, and the host's `adb` 37 is the proof.
+* `userland/adbd`: a static musl program, built as `statd` is. `shell:` runs
+  a command under `/bin/sh -c`, or an interactive shell on a pty. `sync:`
+  does `STAT`, `LIST`, `SEND` and `RECV`. `reboot:` restarts the machine,
+  or ends adbd under `--test`. `tcp:PORT` is a stream to a port inside. No
+  features are offered, so the host uses `shell:` v1: `adb shell` does not
+  pass back the command's exit status.
+* `cargo xtask build --adbd` puts it at `/bin/adbd`, which nothing starts.
+  Run it by hand or from a unit: `adbd [--port N]`, 5555 by default.
+* `cargo xtask test-adb --init <busybox with {arch}>` is the gate. The
+  kernel brings up `eth0` by DHCP and runs `adbd --test`. This machine's
+  `adb` then connects through a `--forward` on the loopback and runs
+  `shell echo`, a 300 000-byte `push` and `pull` compared byte for byte,
+  `ls /bin`, a `forward` that speaks `CNXN` to adbd through itself, and
+  `reboot`. It passed on x86_64, aarch64 and armv7a on 2026-09-26. Without
+  `adb` on the machine it is skipped, and says so. `cargo xtask check`
+  holds adbd's formatting and clippy, and `ferrix-adb`'s tests.
+* By hand: `cargo xtask run --arch x86_64 --init <busybox> --adbd --forward
+  5555:5555`, then `udhcpc -i eth0` and `adbd &` in the guest, then
+  `adb connect 127.0.0.1:5555` on the host.
+
+### Next
+
+Step 3, the USB transport, needs the product owner's OK for the new DWC3
+endpoint registers before any phone boot (§4). Step 4 is the host's udev
+rule. Authentication follows §5.
