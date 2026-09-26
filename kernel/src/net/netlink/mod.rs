@@ -229,12 +229,18 @@ impl NetlinkSocket {
             }
         }
         let port = self.port();
+        // Changing addresses and routes takes `CAP_NET_ADMIN` on Linux, which
+        // is root here, as `ifreq`'s setters take it; the kernel's own checks
+        // send with no process and may.
+        let privileged = crate::syscall::process::current()
+            .is_none_or(|process| process.with_credentials(|held| held.privileged()));
         let mut buffer = Vec::new();
         buffer
             .try_reserve_exact(MAX_REPLY)
             .map_err(|_| Errno::ENOMEM)?;
         buffer.resize(MAX_REPLY, 0);
-        let written = net::core().with(|stack, _| route::answer(stack, port, data, &mut buffer));
+        let written = net::core()
+            .with(|stack, _| route::answer(stack, port, data, &mut buffer, privileged));
         buffer.truncate(written);
         self.queue(&buffer)?;
         // The queue is this socket's, not the stack's, so the wake the net

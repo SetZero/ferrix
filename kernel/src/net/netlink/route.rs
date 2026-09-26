@@ -84,11 +84,20 @@ impl<'a> Attrs<'a> {
 /// Answer every request in `request`, writing the replies into `out`.
 ///
 /// Called with the stack locked. Answers how many bytes of `out` were written.
-pub(super) fn answer(stack: &mut Stack, port: u32, request: &[u8], out: &mut [u8]) -> usize {
+/// A request that changes something is refused `EPERM` unless `privileged`:
+/// the address and route tables are the machine's, not a program's, and
+/// grow with every address and route added.
+pub(super) fn answer(
+    stack: &mut Stack,
+    port: u32,
+    request: &[u8],
+    out: &mut [u8],
+    privileged: bool,
+) -> usize {
     let mut writer = Writer::new(out);
     for message in Messages::new(request) {
         match message {
-            Ok(message) => one(stack, port, &message, &mut writer),
+            Ok(message) => one(stack, port, &message, &mut writer, privileged),
             Err(_) => {
                 // A length that cannot be read leaves no header to echo, so
                 // the error names the request it answers as far as it can.
@@ -106,7 +115,13 @@ fn einval() -> i32 {
 }
 
 /// Answer one request.
-fn one(stack: &mut Stack, port: u32, message: &Message<'_>, writer: &mut Writer<'_>) {
+fn one(
+    stack: &mut Stack,
+    port: u32,
+    message: &Message<'_>,
+    writer: &mut Writer<'_>,
+    privileged: bool,
+) {
     let header = message.header;
     let acknowledge = header.flags & NLM_F_ACK != 0;
     // Netlink's own numbers -- NOOP, ERROR, DONE -- are not requests to a
@@ -127,6 +142,10 @@ fn one(stack: &mut Stack, port: u32, message: &Message<'_>, writer: &mut Writer<
         } else if acknowledge {
             let _ = writer.error(header, 0, port);
         }
+        return;
+    }
+    if changes(header.kind) && !privileged {
+        let _ = writer.error(header, i32::from(Errno::EPERM.0), port);
         return;
     }
     let outcome = match header.kind {
