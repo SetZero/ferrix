@@ -98,7 +98,7 @@ use crate::arch;
 use crate::fallible;
 use crate::mm;
 use crate::smp::{self, CpuMask, TlbPages};
-use crate::user::vmo::{Kept, Own, Retired, Sharing, Vmo, VmoError};
+use crate::user::vmo::{Kept, Own, Retired, ShadowCopies, Sharing, Vmo, VmoError};
 
 /// The lowest address a program may map anything at: 64 KiB, the
 /// `vm.mmap_min_addr` Linux distributions ship.
@@ -1392,12 +1392,15 @@ impl AddressSpace {
                 Backing::File { .. } | Backing::Device { .. } => None,
             };
             if let Some((id, offset, shadow)) = owned {
-                freeing.push(Freeing {
-                    id,
-                    first: offset / PAGE_SIZE,
-                    pages: unmapping.range.bytes() / PAGE_SIZE,
-                    shadow,
-                });
+                note(
+                    freeing,
+                    Freeing {
+                        id,
+                        first: offset / PAGE_SIZE,
+                        pages: unmapping.range.bytes() / PAGE_SIZE,
+                        shadow,
+                    },
+                );
             }
         }
     }
@@ -1416,84 +1419,99 @@ impl AddressSpace {
     /// they are given back after it, through [`Vmo::retire`], which skips this
     /// space — its translations are down and its shootdown has returned — and
     /// so, with no other holder, has nobody to ask and no shootdown to send.
-    fn give_back(&self, freeing: Vec<Freeing>) {
-        let mut retiring: Vec<(Arc<Vmo>, Retired)> = Vec::new();
+    fn give_back(&self, mut freeing: Vec<Freeing>) {
+        // What each sole range's object gave up, in the order of `freeing`:
+        // taken out under the lock, or -- with no memory to list the pages --
+        // decommitted after it.
+        let mut retiring: Vec<(Arc<Vmo>, Option<Retired>, Freeing)> = Vec::new();
         // Files no region maps any more, dropped once the lock is gone: the
         // last reference to an open file may be the last to its inode.
-        let mut unkept: Vec<Arc<dyn Any + Send + Sync>> = Vec::new();
-        {
+        let unkept = {
             let mut inner = self.inner.lock();
             // Decided for every range before a reference is taken for any of
             // them, because taking one moves the count the decision reads.
-            let sole: Vec<Freeing> = freeing
-                .into_iter()
-                .filter(|range| owner(&inner, range).is_some_and(|vmo| Arc::strong_count(vmo) == 1))
-                .collect();
-            retiring.extend(sole.into_iter().filter_map(|range| {
-                let vmo = owner(&inner, &range)?;
-                let retired = vmo.take_range(range.first, range.pages);
-                (!retired.is_empty()).then(|| (Arc::clone(vmo), retired))
-            }));
-
-            // An object nothing maps any more leaves the table, detached from
-            // this space, and is dropped here, which releases every page it
-            // committed. Split borrows: the predicate reads the map while the
-            // objects are being written.
-            let me: *const AddressSpace = self;
-            let Inner {
-                map,
-                objects,
-                native,
-                files,
-                shadows,
-                ..
-            } = &mut *inner;
-            // A mapping that may write its file stops counting as its id
-            // leaves, under this lock, while its object is still in hand.
-            for (&id, mapping) in files.iter() {
-                if mapping.may_write
-                    && !still_named(map, id)
-                    && let Some(vmo) = objects.get(&id)
-                {
-                    vmo.lower_shared_may_write();
+            freeing.retain(|range| {
+                owner(&inner, range).is_some_and(|vmo| Arc::strong_count(vmo) == 1)
+            });
+            if fallible::try_reserve(&mut retiring, freeing.len()).is_err() {
+                // Not even room to say which: the pages stay with their
+                // objects until those go, as `note` leaves them.
+                let _ = RANGES_KEPT.fetch_add(freeing.len() as u64, Ordering::Relaxed);
+                freeing.clear();
+            }
+            for range in freeing {
+                if let Some(vmo) = owner(&inner, &range) {
+                    let taken = vmo.take_range(range.first, range.pages).ok();
+                    // NOALLOC: room for every range was had above.
+                    retiring.push((Arc::clone(vmo), taken, range));
                 }
             }
-            objects.retain(|&id, vmo| {
-                let named = still_named(map, id);
-                if !named {
-                    vmo.detach(me, id);
-                }
-                named
-            });
-            native.retain(|id| objects.contains_key(id));
-            shadows.retain(|&id, shadow| {
-                let named = still_named(map, id);
-                if !named {
-                    shadow.detach(me, id);
-                }
-                named
-            });
-            let gone: Vec<u64> = files
-                .keys()
-                .copied()
-                .filter(|&id| !still_named(map, id))
-                .collect();
-            unkept.extend(
-                gone.iter()
-                    .filter_map(|id| files.remove(id))
-                    .map(|mapping| mapping.file),
-            );
-        }
+            self.drop_unnamed(&mut inner)
+        };
         drop(unkept);
-        for (vmo, retired) in retiring {
-            vmo.retire(
-                retired,
-                Some(Own {
-                    space: self,
-                    shootdown: None,
-                }),
-            );
+        for (vmo, taken, range) in retiring {
+            match taken {
+                Some(retired) => vmo.retire(
+                    retired,
+                    Some(Own {
+                        space: self,
+                        shootdown: None,
+                    }),
+                ),
+                None => {
+                    let _ = vmo.decommit_range(range.first, range.pages);
+                }
+            }
         }
+    }
+
+    /// Take every object, shadow and file mapping no region names any more
+    /// out of the tables, detached from this space. The objects and shadows
+    /// are dropped here, which releases every page they committed; the files
+    /// come back, for the caller to drop once the lock is gone.
+    fn drop_unnamed(&self, inner: &mut Inner) -> Vec<Arc<dyn Any + Send + Sync>> {
+        // Split borrows: the predicate reads the map while the objects are
+        // being written.
+        let me: *const AddressSpace = self;
+        let Inner {
+            map,
+            objects,
+            native,
+            files,
+            shadows,
+            ..
+        } = inner;
+        // Room to hand the files back first. Without it a file mapping no
+        // region names stays in the table, with its object and its shadow and
+        // its may-write count, all as they were: that keeps a file open a
+        // little longer and is otherwise harmless, and the next unmap, or the
+        // space going, takes them (finding F-23).
+        let gone = files.keys().filter(|&&id| !still_named(map, id)).count();
+        let Ok(mut unkept) = fallible::try_with_capacity(gone) else {
+            let kept = |id: u64| still_named(map, id) || files.contains_key(&id);
+            drop_objects(me, objects, shadows, native, kept);
+            return Vec::new();
+        };
+        // A mapping that may write its file stops counting as its id leaves,
+        // under this lock, while its object is still in hand.
+        for (&id, mapping) in files.iter() {
+            if mapping.may_write
+                && !still_named(map, id)
+                && let Some(vmo) = objects.get(&id)
+            {
+                vmo.lower_shared_may_write();
+            }
+        }
+        drop_objects(me, objects, shadows, native, |id| still_named(map, id));
+        files.retain(|&id, mapping| {
+            let named = still_named(map, id);
+            if !named {
+                // NOALLOC: room for every file gone was had above.
+                unkept.push(Arc::clone(&mapping.file));
+            }
+            named
+        });
+        unkept
     }
 
     /// Take down every translation this space has of pages `first..first +
@@ -1544,24 +1562,21 @@ impl AddressSpace {
         runs: &[(u64, u64)],
         flush: &mut TlbPages,
         cut: Option<&Vmo>,
-    ) -> Option<(CpuSet, ShadowCopies)> {
+    ) -> Option<(CpuSet, Option<ShadowCopies>)> {
         let inner = self.inner.lock();
         let found = self.forget_in(&inner, object, runs, flush);
         // Under this lock, then the shadow's pages lock: the order the module
         // gives.
-        let copies: ShadowCopies = match (inner.objects.get(&object), inner.shadows.get(&object)) {
+        let copies = match (inner.objects.get(&object), inner.shadows.get(&object)) {
             (Some(file), Some(shadow))
                 if cut.is_some_and(|from| core::ptr::eq(Arc::as_ptr(file), from)) =>
             {
-                runs.iter()
-                    .map(|&(first, count)| (Arc::clone(shadow), shadow.take_range(first, count)))
-                    .filter(|(_, taken)| !taken.is_empty())
-                    .collect()
+                cut_shadow(shadow, runs)
             }
-            _ => Vec::new(),
+            _ => None,
         };
         let pending = self.flushes.pending.load(Ordering::SeqCst) > 0;
-        if !found && !pending && copies.is_empty() {
+        if !found && !pending && copies.is_none() {
             return None;
         }
         if pending {
@@ -1660,9 +1675,23 @@ impl Flushes {
     }
 }
 
-/// What a cut took out of a private mapping's shadow, for
-/// [`AddressSpace::forget_runs`]'s caller to release after its shootdown.
-pub(crate) type ShadowCopies = Vec<(Arc<Vmo>, Retired)>;
+/// What a cut over `runs` takes out of a private mapping's `shadow`: every
+/// page from the first run's start, since a cut runs to the end of the
+/// object. `None` if the shadow has nothing there.
+fn cut_shadow(shadow: &Arc<Vmo>, runs: &[(u64, u64)]) -> Option<ShadowCopies> {
+    let first = runs.iter().map(|&(first, _)| first).min()?;
+    let taken = match shadow.take_range(first, u64::MAX - first) {
+        Ok(taken) if taken.is_empty() => return None,
+        Ok(taken) => Some(taken),
+        // No memory to list them: decommitted after the shootdown instead.
+        Err(_) => None,
+    };
+    Some(ShadowCopies {
+        shadow: Arc::clone(shadow),
+        taken,
+        first,
+    })
+}
 
 /// What a file mapping's id keeps beside its object.
 #[derive(Clone, Debug)]
@@ -1712,6 +1741,46 @@ struct Freeing {
     /// Whether they come out of the id's shadow, for a private file mapping,
     /// rather than out of its object.
     shadow: bool,
+}
+
+/// Take every object and shadow that `kept` does not keep out of the tables,
+/// detached from the space at `me`, and drop them, which releases every page
+/// they committed.
+fn drop_objects(
+    me: *const AddressSpace,
+    objects: &mut BTreeMap<u64, Arc<Vmo>>,
+    shadows: &mut BTreeMap<u64, Arc<Vmo>>,
+    native: &mut BTreeSet<u64>,
+    kept: impl Fn(u64) -> bool,
+) {
+    objects.retain(|&id, vmo| {
+        let named = kept(id);
+        if !named {
+            vmo.detach(me, id);
+        }
+        named
+    });
+    native.retain(|id| objects.contains_key(id));
+    shadows.retain(|&id, shadow| {
+        let named = kept(id);
+        if !named {
+            shadow.detach(me, id);
+        }
+        named
+    });
+}
+
+/// Ranges whose pages an unmap could not note for giving back, for want of
+/// memory (finding F-23). Their pages stay committed in an object no region
+/// shows them through -- `mremap` gives a private region a new object rather
+/// than regrow the old one over them -- until the object goes.
+static RANGES_KEPT: AtomicU64 = AtomicU64::new(0);
+
+/// Note `range` for [`AddressSpace::give_back`], or count it kept.
+fn note(freeing: &mut Vec<Freeing>, range: Freeing) {
+    if fallible::try_push(freeing, range).is_err() {
+        let _ = RANGES_KEPT.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// Where [`AddressSpace::map_file`] puts a mapping.
@@ -1960,8 +2029,9 @@ impl AddressSpace {
     ///
     /// A shared region keeps its object, grown to cover it, and gives back the
     /// tail a shrink cut off. A private region takes `fresh`, attached under a
-    /// new id. On a failure the moved frames go back into `vmo`: they never
-    /// changed, so the old translations to them were never wrong.
+    /// new id, and the moved frames leave `vmo`. On a failure `fresh` forgets
+    /// them instead: `vmo` never stopped naming them, so the old translations
+    /// to them were never wrong.
     fn remap_backing(
         &self,
         inner: &mut Inner,
@@ -1979,7 +2049,7 @@ impl AddressSpace {
         } = resize;
         match (cleared, fresh) {
             (Err(why), Some((fresh_id, fresh, _moved))) => {
-                fresh.return_pages(vmo, first / PAGE_SIZE);
+                fresh.disown_pages();
                 self.drop_fresh(inner, fresh_id);
                 (Err(why), None)
             }
@@ -1987,24 +2057,31 @@ impl AddressSpace {
             (Ok(()), None) => {
                 vmo.grow_to((first + new_len) / PAGE_SIZE);
                 if new_len < old_len {
-                    freeing.push(Freeing {
-                        id,
-                        first: (first + new_len) / PAGE_SIZE,
-                        pages: (old_len - new_len) / PAGE_SIZE,
-                        shadow: false,
-                    });
+                    note(
+                        freeing,
+                        Freeing {
+                            id,
+                            first: (first + new_len) / PAGE_SIZE,
+                            pages: (old_len - new_len) / PAGE_SIZE,
+                            shadow: false,
+                        },
+                    );
                 }
                 (Ok(Backing::Anonymous { id, offset: first }), None)
             }
             (Ok(()), Some((fresh_id, _fresh, retired))) => {
+                vmo.release_moved(&retired);
                 // Whatever did not move -- the tail a shrink cut off -- is
                 // still the old object's, and goes back with the rest.
-                freeing.push(Freeing {
-                    id,
-                    first: first / PAGE_SIZE,
-                    pages: old_len / PAGE_SIZE,
-                    shadow: false,
-                });
+                note(
+                    freeing,
+                    Freeing {
+                        id,
+                        first: first / PAGE_SIZE,
+                        pages: old_len / PAGE_SIZE,
+                        shadow: false,
+                    },
+                );
                 let backing = Backing::Anonymous {
                     id: fresh_id,
                     offset: 0,
@@ -2771,6 +2848,9 @@ pub(crate) enum Declined {
     /// What the mapping maps cannot have a hole punched in it here:
     /// `EOPNOTSUPP`, which is what `fallocate` answers for the same hole.
     Unsupported,
+    /// No memory to note what the advice takes, before it took anything:
+    /// `EAGAIN`, once every part before it has been advised (finding F-23).
+    NoMemory,
 }
 
 /// What [`AddressSpace::advise_region`] gathers under the lock, to finish
@@ -2782,6 +2862,63 @@ struct Advised {
     retiring: Vec<(Arc<Vmo>, Retired)>,
     /// Holes to punch: an object, its first page and how many.
     punching: Vec<(Arc<Vmo>, u64, u64)>,
+}
+
+impl Advised {
+    /// Room for one more of each, had before anything is taken down.
+    fn make_room(&mut self) -> Result<(), Declined> {
+        fallible::try_reserve(&mut self.retiring, 1)
+            .and_then(|()| fallible::try_reserve(&mut self.punching, 1))
+            .map_err(|_| Declined::NoMemory)
+    }
+
+    /// Take `count` pages from `first` out of `object`, once there is room to
+    /// note them: what comes out, if anything does.
+    fn take(
+        &mut self,
+        object: &Arc<Vmo>,
+        first: u64,
+        count: u64,
+    ) -> Result<Option<(Arc<Vmo>, Retired)>, Declined> {
+        self.make_room()?;
+        let retired = object
+            .take_range(first, count)
+            .map_err(|_| Declined::NoMemory)?;
+        Ok((!retired.is_empty()).then(|| (Arc::clone(object), retired)))
+    }
+}
+
+/// The object `MADV_REMOVE` may punch a hole in, for a region naming `id`,
+/// or why not.
+///
+/// Linux's order: no file behind the mapping is `EINVAL` -- private anonymous
+/// memory, and here a VMO `vmo_map` put here, whose pages are its handle's --
+/// and a mapping that may not write what it maps is `EACCES`.
+fn removable(
+    inner: &Inner,
+    id: u64,
+    file: bool,
+    shared: bool,
+    native: bool,
+) -> Result<&Arc<Vmo>, Declined> {
+    if !file && (!shared || native) {
+        return Err(Declined::Invalid);
+    }
+    if !shared {
+        return Err(Declined::Denied);
+    }
+    if file {
+        let may_write = inner
+            .files
+            .get(&id)
+            .is_some_and(|mapping| mapping.may_write);
+        return Err(if may_write {
+            Declined::Unsupported
+        } else {
+            Declined::Denied
+        });
+    }
+    inner.objects.get(&id).ok_or(Declined::Invalid)
 }
 
 impl AddressSpace {
@@ -2934,28 +3071,9 @@ impl AddressSpace {
 
         let owner = match advice {
             Advice::Remove => {
-                // Linux's order: no file behind the mapping is `EINVAL` --
-                // private anonymous memory, and here a VMO `vmo_map` put
-                // here, whose pages are its handle's -- and a mapping that
-                // may not write what it maps is `EACCES`.
-                if !file && (!shared || native) {
-                    return Err(Declined::Invalid);
-                }
-                if !shared {
-                    return Err(Declined::Denied);
-                }
-                if file {
-                    let may_write = inner
-                        .files
-                        .get(&id)
-                        .is_some_and(|mapping| mapping.may_write);
-                    return Err(if may_write {
-                        Declined::Unsupported
-                    } else {
-                        Declined::Denied
-                    });
-                }
-                let object = inner.objects.get(&id).ok_or(Declined::Invalid)?;
+                let object = removable(inner, id, file, shared, native)?;
+                advised.make_room()?;
+                // NOALLOC: `make_room` just made room for it.
                 advised.punching.push((Arc::clone(object), first, count));
                 return Ok(());
             }
@@ -2967,13 +3085,17 @@ impl AddressSpace {
             _ => inner.objects.get(&id),
         };
 
+        // What goes, taken out before the translations come down, and only
+        // once there is room to note it: a refusal here has changed nothing.
+        let taken = match owner {
+            Some(object) => advised.take(object, first, count)?,
+            None => None,
+        };
         let _ = mm::unmap_in(self.root * PAGE_SIZE, start, stop - start);
         advised.pages.add_range(start, stop - start);
-        if let Some(object) = owner {
-            let retired = object.take_range(first, count);
-            if !retired.is_empty() {
-                advised.retiring.push((Arc::clone(object), retired));
-            }
+        if let Some(taken) = taken {
+            // NOALLOC: `make_room` made room for it above.
+            advised.retiring.push(taken);
         }
         Ok(())
     }

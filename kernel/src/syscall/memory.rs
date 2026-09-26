@@ -454,6 +454,7 @@ pub(crate) fn sys_madvise(
             Declined::Invalid => Errno::EINVAL,
             Declined::Denied => Errno::EACCES,
             Declined::Unsupported => Errno::EOPNOTSUPP,
+            Declined::NoMemory => Errno::EAGAIN,
         })
 }
 

@@ -1096,8 +1096,9 @@ fn check_allocation_failure() {
     };
     println!(
         "  no-mem   {} native calls with {} allocations failed under them: {} answered \
-         NO_MEMORY, the rest succeeded, nothing leaked; {} allocations served from a reserve",
-        report.calls, report.injected, report.refused, report.drawn,
+         NO_MEMORY, the rest succeeded, nothing leaked; {} allocations served from a reserve; \
+         {} pages decommitted with none",
+        report.calls, report.injected, report.refused, report.drawn, report.torn_down,
     );
 }
 

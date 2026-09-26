@@ -24,9 +24,18 @@
 //!   must have been refused for memory, and at least one allowed through;
 //!   the machine must still be here; and afterwards, with nothing failing, a
 //!   round must succeed whole and the rounds must have leaked no frame.
+//! * **Taking pages away needs no memory.** A decommit cannot refuse, so with
+//!   every fallible allocation failing it must still give every page back:
+//!   more pages than one chunk from the stack holds, from an object a
+//!   process maps, so that phase two asks the space with no list to keep it
+//!   in -- and no translation to a page it gave back may be left.
 
 use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
+
+use ferrix_bootinfo::PAGE_SIZE;
+use ferrix_vma::VmaFlags;
 
 use ferrix_linux_abi::errno::Errno;
 use ferrix_native_abi::handle::Handle;
@@ -40,6 +49,8 @@ use crate::mm;
 use crate::object::check::{SCRATCH, Side, reg};
 use crate::object::job::Job;
 use crate::object::{self, Object};
+use crate::user::space::Access;
+use crate::user::vmo::Vmo;
 
 /// Where each call's user memory is, in the side's scratch region.
 const PAIR: u64 = SCRATCH + 0x400;
@@ -70,6 +81,11 @@ const ROUNDS: usize = 12;
 /// Bytes in the message a round writes.
 const MESSAGE: u64 = 16;
 
+/// Pages in the object the teardown part maps. Every other one is committed:
+/// more than two of `Vmo`'s stack chunks, in more runs than phase two is
+/// told about one by one.
+const TORN_PAGES: u64 = 160;
+
 /// What the check did, for the boot line.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct Report {
@@ -81,6 +97,8 @@ pub(crate) struct Report {
     pub(crate) injected: u64,
     /// Allocations served from a reserve while the heap refused.
     pub(crate) drawn: u64,
+    /// Pages a decommit gave back with every allocation failing.
+    pub(crate) torn_down: usize,
 }
 
 /// Run both parts.
@@ -88,6 +106,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let drawn = check_a_section_completes_on_the_reserve()?;
     let mut report = check_the_native_calls_survive()?;
     report.drawn = drawn;
+    report.torn_down = check_a_teardown_needs_no_memory()?;
     if object::abandoned() != 0 {
         return Err("an object was given up rather than disposed of");
     }
@@ -140,6 +159,68 @@ fn check_a_section_completes_on_the_reserve() -> Result<u64, &'static str> {
         return Err("a section whose reserve could not be filled went ahead");
     }
     Ok(drawn)
+}
+
+/// Every other page of a mapped object, committed through faults and given
+/// back by a decommit with every fallible allocation failing: all of them
+/// back, none still translated, no frame kept. How many pages went.
+fn check_a_teardown_needs_no_memory() -> Result<usize, &'static str> {
+    let side = Side::new()?;
+    let vmo = Vmo::new_anonymous(TORN_PAGES).map_err(|_| "no memory for the teardown's VMO")?;
+    let space = side.process.space();
+    let at = space
+        .map_object(
+            None,
+            TORN_PAGES * PAGE_SIZE,
+            Arc::clone(&vmo),
+            0,
+            VmaFlags::READ_WRITE,
+        )
+        .map_err(|_| "could not map the teardown's VMO")?;
+    let touch = || -> Result<(), &'static str> {
+        for index in (0..TORN_PAGES).step_by(2) {
+            space
+                .fault(at + index * PAGE_SIZE, Access::WRITE)
+                .map_err(|_| "could not fault in a page of the teardown's VMO")?;
+        }
+        Ok(())
+    };
+    // Once before the window, for the tables the faults need, which stay.
+    touch()?;
+    let _ = vmo.decommit_range(0, TORN_PAGES);
+    crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
+    let window = mm::FrameWindow::open();
+    touch()?;
+
+    let task = crate::sched::current_id().ok_or("the allocation check runs outside a task")?;
+    fallible::inject(task, 1);
+    let given = vmo.decommit_range(0, TORN_PAGES);
+    let failed = fallible::stop_injecting();
+
+    let still_mapped = (0..TORN_PAGES).step_by(2).any(|index| {
+        space
+            .with_present_page(at + index * PAGE_SIZE, Access::READ, |_| ())
+            .is_ok_and(|present| present.is_some())
+    });
+    if failed == 0 {
+        return Err("the decommit met no failing allocation");
+    }
+    if given != (TORN_PAGES / 2) as usize || vmo.committed() != 0 {
+        return Err("a decommit with no memory did not give every page back");
+    }
+    if still_mapped {
+        return Err("a decommit with no memory left a page translated");
+    }
+    crate::sched::wait_until_reaper_quiet(crate::sched::REAPER_PATIENCE_NANOS)?;
+    if window.kept() != 0 {
+        window.report("teardown with no memory");
+        return Err("a decommit with no memory kept frames");
+    }
+    space
+        .unmap(at, TORN_PAGES * PAGE_SIZE)
+        .map_err(|_| "could not unmap the teardown's VMO")?;
+    side.close_everything();
+    Ok(given)
 }
 
 /// The handles one round has made and not yet closed.

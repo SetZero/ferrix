@@ -38,7 +38,9 @@
 //!
 //! 1. **Under the pages lock**, the frames come out of the list into a
 //!    [`Retired`]. A held page is skipped here, before anything is taken, so
-//!    it is never in what the next phase invalidates.
+//!    it is never in what the next phase invalidates. The [`Retired`]'s room
+//!    is had before the first frame comes out, so that running out of memory
+//!    refuses the change rather than losing a frame (finding F-23).
 //! 2. **With no VMO lock held**, every space in the list is asked to
 //!    [`AddressSpace::forget_pages`]: it takes its translations of those pages
 //!    down under its own lock and says which processors may still have them
@@ -49,6 +51,12 @@
 //! A frame released before phase two ends is a frame some processor can
 //! still write through, and the allocator hands it to somebody else: two
 //! owners of one page, and the symptom turns up in whichever writes second.
+//!
+//! None of the three needs memory once phase one has its room. Phase two
+//! lists the spaces to ask; with no memory for the list it asks them one at a
+//! time, each with a shootdown of its own. And [`Vmo::decommit_range`], which
+//! cannot refuse, takes [`CHUNK`] pages at a time from the stack when there
+//! is no memory for the whole list.
 //!
 //! # Lock order
 //!
@@ -118,6 +126,16 @@ pub(crate) enum Kept {
     /// The page is held in place for a device.
     Held,
     /// There was no memory to record the change (finding F-23).
+    NoMemory,
+}
+
+/// Why [`Vmo::adopt_pages`] moved nothing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Unmoved {
+    /// A page of the range is held in place.
+    Held(HeldPage),
+    /// There was no memory to list the pages or name them in the new object
+    /// (finding F-23).
     NoMemory,
 }
 
@@ -219,23 +237,43 @@ struct Pages {
 /// Given to [`Vmo::retire`], by the object that made it, to finish. Dropped
 /// without that, its frames are never released: a leak, and deliberately not
 /// the other failure, a frame freed under a live translation.
+///
+/// A list rather than a map, with its room had before the first frame is
+/// taken out ([`Retired::with_room`]): a frame out of an object's list and
+/// not yet in this one would be lost, so recording one never allocates
+/// (finding F-23).
 #[derive(Debug)]
 #[must_use = "the frames stay out of the allocator, and mapped, until the retirement is finished"]
 pub(crate) struct Retired {
-    /// Page index to the frame that held it.
-    frames: BTreeMap<u64, Frame>,
+    /// Each page index taken, with the frame that held it, lowest index
+    /// first.
+    frames: Vec<(u64, Frame)>,
     /// Whether the frames are released once invalidated. Not for a move, whose
     /// frames live on in another object.
     release: bool,
 }
 
 impl Retired {
-    /// Nothing retired.
-    fn nothing() -> Retired {
-        Retired {
-            frames: BTreeMap::new(),
+    /// Nothing retired yet, with room for `pages` frames.
+    fn with_room(pages: usize) -> Result<Retired, AllocError> {
+        Ok(Retired {
+            frames: crate::fallible::try_with_capacity(pages)?,
             release: true,
-        }
+        })
+    }
+
+    /// Whether another frame can be recorded without allocating.
+    fn has_room(&self) -> bool {
+        self.frames.len() < self.frames.capacity()
+    }
+
+    /// Record page `index`'s frame, taken out of its object, which must be
+    /// above every index recorded so far. The caller made sure of the room
+    /// with [`Retired::has_room`] before it took the frame out.
+    fn record(&mut self, index: u64, frame: Frame) {
+        // NOALLOC: every caller checks `has_room` before it takes the frame
+        // out of its object's list.
+        self.frames.push((index, frame));
     }
 
     /// Whether nothing was taken out.
@@ -245,21 +283,50 @@ impl Retired {
 
     /// The frame page `index` held, if it was taken out.
     pub(crate) fn frame(&self, index: u64) -> Option<Frame> {
-        self.frames.get(&index).copied()
-    }
-
-    /// The pages taken, as runs of `(first, count)`, lowest first.
-    fn runs(&self) -> Vec<(u64, u64)> {
-        let mut runs: Vec<(u64, u64)> = Vec::new();
-        for &index in self.frames.keys() {
-            match runs.last_mut() {
-                Some((first, count)) if first.saturating_add(*count) == index => *count += 1,
-                _ => runs.push((index, 1)),
-            }
-        }
-        runs
+        let at = self
+            .frames
+            .binary_search_by_key(&index, |&(index, _)| index)
+            .ok()?;
+        self.frames.get(at).map(|&(_, frame)| frame)
     }
 }
+
+/// Runs of pages phase two is told about at most, per retirement: past this,
+/// the last run is stretched over the rest.
+const RUNS: usize = 32;
+
+/// The pages `frames` names, lowest first, as runs of `(first, count)` in
+/// `out`; how many runs were written.
+///
+/// With more runs than `out` holds, the last one is stretched to cover the
+/// rest, gaps and all. That asks phase two to forget pages the retirement did
+/// not take, which is safe -- a translation forgotten is faulted back in --
+/// and needs no memory.
+fn runs_of(frames: &[(u64, Frame)], out: &mut [(u64, u64)]) -> usize {
+    let mut used: usize = 0;
+    let room = out.len();
+    for &(index, _) in frames {
+        let full = used == room;
+        let last = used.checked_sub(1).and_then(|at| out.get_mut(at));
+        match last {
+            Some((first, count)) if first.saturating_add(*count) == index || full => {
+                *count = index.saturating_add(1).saturating_sub(*first);
+            }
+            _ => {
+                if let Some(slot) = out.get_mut(used) {
+                    *slot = (index, 1);
+                    used += 1;
+                }
+            }
+        }
+    }
+    used
+}
+
+/// Frames a retirement that could not have its list takes out of an object
+/// at a time, from the stack: [`Vmo::decommit_range`] when memory has run
+/// out.
+const CHUNK: usize = 32;
 
 /// The address space phase one ran under the lock of, which phase two must
 /// therefore not visit.
@@ -731,36 +798,42 @@ impl Vmo {
         data: &[u8],
     ) -> Result<(), VmoError> {
         self.check_span(index, offset, data.len())?;
-        // Room for the displaced original, entered before the lock so that
-        // it is held until the original is recorded below: once out of the
-        // list it must not be lost (finding F-23). The copy inside allocates
-        // only when the page had no frame, and then nothing is displaced, so
-        // one section covers both.
-        let held = crate::fallible::reserve().map_err(|_| VmoError::OutOfMemory)?;
-        let displaced = {
+        // A page some other holder shares is copied, and its original
+        // displaced into a list that must have room before the original
+        // leaves this one (finding F-23). The room is had only when a copy
+        // is due, which is rare: the lock is let go for it and the page
+        // looked at again.
+        let mut room = None;
+        let retired = loop {
             let mut pages = self.pages.lock();
-            let (frame, displaced) = match pages.frames.get(&index).copied() {
+            let (frame, retired) = match pages.frames.get(&index).copied() {
                 Some(frame)
                     if mm::frame_references(frame) <= 1 || pages.held.contains_key(&index) =>
                 {
                     (frame, None)
                 }
-                Some(_) | None => pages.exclusive(index)?,
+                Some(_) => {
+                    let Some(mut retired) = room.take() else {
+                        drop(pages);
+                        room = Some(Retired::with_room(1).map_err(|_| VmoError::OutOfMemory)?);
+                        continue;
+                    };
+                    let (frame, shared) = pages.exclusive(index)?;
+                    if let Some(shared) = shared {
+                        retired.record(index, shared);
+                    }
+                    (frame, Some(retired))
+                }
+                None => (pages.exclusive(index)?.0, None),
             };
             let at = mm::direct_map(frame * PAGE_SIZE) as usize + offset;
             // SAFETY: the frame is this object's alone (copied above if it was
             // not) and held under its lock; `check_span` kept the write inside
             // the page; the direct map is writable for all of RAM.
             unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), at as *mut u8, data.len()) };
-            displaced
+            break retired;
         };
-        let mut retired = Retired::nothing();
-        if let Some(shared) = displaced {
-            let _ = crate::fallible::insert_held(&held, &mut retired.frames, index, shared);
-        }
-        // The section ends before the retirement, which waits.
-        drop(held);
-        if !retired.is_empty() {
+        if let Some(retired) = retired.filter(|retired| !retired.is_empty()) {
             self.retire(retired, None);
         }
         Ok(())
@@ -809,17 +882,17 @@ impl Vmo {
     /// [`Kept`], with `frame` still the caller's and the page unchanged: the
     /// page is held, or there is no memory to record the change in.
     pub(crate) fn take_page(&self, index: u64, frame: Frame) -> Result<Retired, Kept> {
+        let mut retired = Retired::with_room(1).map_err(|_| Kept::NoMemory)?;
         let mut pages = self.pages.lock();
         if pages.held.contains_key(&index) {
             return Err(Kept::Held);
         }
-        // One section covers both inserts, because at most one of them
-        // allocates: the first only when the page had no frame, and then
-        // there is nothing for the second to do.
-        let held = crate::fallible::reserve().map_err(|_| Kept::NoMemory)?;
-        let mut retired = Retired::nothing();
-        if let Some(old) = crate::fallible::insert_held(&held, &mut pages.frames, index, frame) {
-            let _ = crate::fallible::insert_held(&held, &mut retired.frames, index, old);
+        match pages.frames.get_mut(&index) {
+            Some(slot) => retired.record(index, core::mem::replace(slot, frame)),
+            None => {
+                let _ = crate::fallible::insert(&mut pages.frames, index, frame)
+                    .map_err(|_| Kept::NoMemory)?;
+            }
         }
         Ok(retired)
     }
@@ -840,9 +913,33 @@ impl Vmo {
     ///
     /// Must not be called holding a spin lock.
     pub(crate) fn decommit_range(&self, first: u64, pages: u64) -> usize {
-        let retired = self.take_range(first, pages);
-        let given = retired.frames.len();
-        self.retire(retired, None);
+        match self.take_range(first, pages) {
+            Ok(retired) => {
+                let given = retired.frames.len();
+                self.retire(retired, None);
+                given
+            }
+            Err(AllocError) => self.decommit_in_chunks(first, first.saturating_add(pages)),
+        }
+    }
+
+    /// [`Vmo::decommit_range`] over `first..end` with no memory for the list
+    /// of what it takes: [`CHUNK`] pages at a time, each chunk through all
+    /// three phases before the next is taken. Slower -- a shootdown a chunk
+    /// -- and the same in the end.
+    fn decommit_in_chunks(&self, first: u64, end: u64) -> usize {
+        let mut given = 0;
+        let mut from = Some(first);
+        while let Some(start) = from {
+            let mut chunk = [(0, 0); CHUNK];
+            let (taken, next) = self.pages.lock().take_into(start, end, &mut chunk);
+            let frames = chunk.get(..taken).unwrap_or(&[]);
+            given += frames.len();
+            let mut runs = [(0, 0); RUNS];
+            let count = runs_of(frames, &mut runs);
+            self.retire_runs(frames, true, runs.get(..count).unwrap_or(&[]), None, false);
+            from = next;
+        }
         given
     }
 
@@ -858,24 +955,29 @@ impl Vmo {
     /// `first..first + pages` that is not held out of the list.
     ///
     /// May be called holding an address space's lock, and nothing else.
-    pub(crate) fn take_range(&self, first: u64, pages: u64) -> Retired {
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`] when there is no memory to list what would be taken;
+    /// nothing is. The list's room is had first, so that a frame once out of
+    /// the object is never lost (finding F-23).
+    pub(crate) fn take_range(&self, first: u64, pages: u64) -> Result<Retired, AllocError> {
         let end = first.saturating_add(pages);
         let mut state = self.pages.lock();
-        // Held pages first, before anything is taken: a held page is never
-        // among what the invalidation is told about.
-        let taking: Vec<u64> = state
+        // Held pages are skipped before anything is taken: a held page is
+        // never among what the invalidation is told about.
+        let count = state
             .frames
             .range(first..end)
-            .map(|(&index, _)| index)
-            .filter(|index| !state.held.contains_key(index))
-            .collect();
-        let mut retired = Retired::nothing();
-        for index in taking {
-            if let Some(frame) = state.frames.remove(&index) {
-                let _ = retired.frames.insert(index, frame);
-            }
-        }
-        retired
+            .filter(|&(index, _)| !state.held.contains_key(index))
+            .count();
+        let mut frames = crate::fallible::try_filled((0, 0), count)?;
+        let (taken, _) = state.take_into(first, end, &mut frames);
+        frames.truncate(taken);
+        Ok(Retired {
+            frames,
+            release: true,
+        })
     }
 
     /// Give back every page from `first` to the end, and report how many held
@@ -885,25 +987,14 @@ impl Vmo {
     /// of the object, because a file's object is sized for the largest file
     /// the filesystem allows -- hundreds of millions of pages -- and a loop
     /// over indices would visit every one of them to find the handful that are
-    /// committed. Splitting the sparse list visits only those. A held page
-    /// stays, and is not counted.
+    /// committed. A walk of the sparse list from `first` visits only those. A
+    /// held page stays, and is not counted.
     ///
     /// Must not be called holding a spin lock. An object nobody maps — every
     /// file's today — costs no more than the split: phase two has nobody to
     /// ask.
     pub(crate) fn decommit_from(&self, first: u64) -> usize {
-        let retired = {
-            let mut pages = self.pages.lock();
-            let mut taken = pages.frames.split_off(&first);
-            pages.keep_held(&mut taken);
-            Retired {
-                frames: taken,
-                release: true,
-            }
-        };
-        let given = retired.frames.len();
-        self.retire(retired, None);
-        given
+        self.decommit_range(first, u64::MAX - first)
     }
 
     /// Phases two and three: have every address space that maps this object
@@ -920,8 +1011,16 @@ impl Vmo {
     /// Phase two takes every mapping space's lock in turn, and the shootdown
     /// waits for other processors.
     pub(crate) fn retire(&self, retired: Retired, own: Option<Own<'_>>) {
-        let runs = retired.runs();
-        self.retire_runs(retired, &runs, own, false);
+        let mut runs = [(0, 0); RUNS];
+        let count = runs_of(&retired.frames, &mut runs);
+        let Retired { frames, release } = retired;
+        self.retire_runs(
+            &frames,
+            release,
+            runs.get(..count).unwrap_or(&[]),
+            own,
+            false,
+        );
     }
 
     /// Take down every mapping of this object's pages from page `first` on,
@@ -949,59 +1048,37 @@ impl Vmo {
     /// Must not be called holding a spin lock.
     pub(crate) fn cut_mappings(&self, first: u64) {
         let runs = [(first, u64::MAX - first)];
-        self.retire_runs(Retired::nothing(), &runs, None, true);
+        self.retire_runs(&[], false, &runs, None, true);
     }
 
-    /// [`Vmo::retire`] over `runs`, which cover at least the pages `retired`
-    /// took out; with `cut`, as [`Vmo::cut_mappings`].
-    fn retire_runs(&self, retired: Retired, runs: &[(u64, u64)], own: Option<Own<'_>>, cut: bool) {
-        let mut cpus = CpuSet::empty();
-        let mut pages = TlbPages::new();
+    /// [`Vmo::retire`] of `frames` over `runs`, which cover at least the
+    /// pages `frames` names; the frames are released after if `release`. With
+    /// `cut`, as [`Vmo::cut_mappings`].
+    fn retire_runs(
+        &self,
+        frames: &[(u64, Frame)],
+        release: bool,
+        runs: &[(u64, u64)],
+        own: Option<Own<'_>>,
+        cut: bool,
+    ) {
         let except = own.as_ref().map(|own| own.space);
-        if let Some((own_cpus, own_pages)) = own.as_ref().and_then(|own| own.shootdown.as_ref()) {
-            smp::add_cpus(&mut cpus, own_cpus);
-            pages.add_all(own_pages);
-        }
-
-        let Retired { frames, release } = retired;
-        let mut forgotten: Vec<Arc<AddressSpace>> = Vec::new();
-        let mut copies: Vec<(Arc<Vmo>, Retired)> = Vec::new();
-        if !runs.is_empty() {
-            let from = cut.then_some(self);
-            for (space, object) in self.mapped_by(except) {
-                if let Some((theirs, taken)) = space.forget_runs(object, runs, &mut pages, from) {
-                    smp::add_cpus(&mut cpus, &theirs);
-                    copies.extend(taken);
-                    forgotten.push(space);
+        let from = cut.then_some(self);
+        if runs.is_empty() {
+            own_shootdown(own);
+        } else {
+            match self.mapped_by(except) {
+                Ok(visits) => forget_together(visits, runs, own, from),
+                // No memory for the list of spaces to ask: ask them one at a
+                // time instead, each with a shootdown of its own.
+                Err(AllocError) => {
+                    own_shootdown(own);
+                    self.forget_one_at_a_time(except, runs, from);
                 }
             }
         }
-
-        smp::flush_tlb_pages(&cpus, &pages);
-
-        for space in &forgotten {
-            space.flushed();
-        }
-        if let Some(own) = own
-            && own.shootdown.is_some()
-        {
-            own.space.flushed();
-        }
-        // Dropped with no lock held: the last reference to a space that exited
-        // meanwhile may be one of these, and dropping it detaches it from this
-        // object's list.
-        drop(forgotten);
-
         if release {
-            for frame in frames.into_values() {
-                let _ = mm::release_frame(frame);
-            }
-        }
-        // What a cut took out of private mappings' shadows. Their translations
-        // were among the addresses the shootdown above reached, so after it
-        // nothing reaches them.
-        for (_shadow, copy) in copies {
-            for frame in copy.frames.into_values() {
+            for &(_, frame) in frames {
                 let _ = mm::release_frame(frame);
             }
         }
@@ -1012,16 +1089,184 @@ impl Vmo {
     ///
     /// The list is copied and its lock let go before any space is visited, and
     /// the references come back to be dropped by the caller with no lock held.
-    fn mapped_by(&self, except: Option<&AddressSpace>) -> Vec<(Arc<AddressSpace>, u64)> {
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`] when there is no memory for the list.
+    fn mapped_by(&self, except: Option<&AddressSpace>) -> Result<Vec<Visit>, AllocError> {
         let mut mappers = self.mappers.lock();
         mappers.retain(|mapper| mapper.space.strong_count() > 0);
+        let mut visits = crate::fallible::try_with_capacity(mappers.len())?;
+        let found = mappers
+            .iter()
+            .filter(|mapper| {
+                except.is_none_or(|space| !core::ptr::eq(mapper.space.as_ptr(), space))
+            })
+            .filter_map(|mapper| Some((mapper.space.upgrade()?, mapper.object)));
+        for (space, object) in found {
+            // NOALLOC: room for every mapper was had above.
+            visits.push(Visit {
+                space,
+                object,
+                forgotten: false,
+                copies: None,
+            });
+        }
+        Ok(visits)
+    }
+
+    /// Phase two without a list: visit each space that maps this object, but
+    /// `except`, one at a time, and run each one's shootdown before the next.
+    ///
+    /// The mapper list may change between visits, since its lock is let go
+    /// for each, so the walk goes in order of a key that does not move -- the
+    /// space's address and the id -- and each step takes the least key past
+    /// the last one visited. A mapper there all along is visited exactly once;
+    /// one attached meanwhile cannot reach the frames, which were out of the
+    /// object before it came.
+    fn forget_one_at_a_time(
+        &self,
+        except: Option<&AddressSpace>,
+        runs: &[(u64, u64)],
+        from: Option<&Vmo>,
+    ) {
+        let mut after = None;
+        while let Some((space, object)) = self.next_mapper(except, after) {
+            after = Some((Arc::as_ptr(&space).addr(), object));
+            let mut pages = TlbPages::new();
+            if let Some((cpus, copies)) = space.forget_runs(object, runs, &mut pages, from) {
+                smp::flush_tlb_pages(&cpus, &pages);
+                space.flushed();
+                if let Some(copies) = copies {
+                    copies.finish();
+                }
+            }
+        }
+    }
+
+    /// The live mapper, but `except`, with the least key past `after`: see
+    /// [`Vmo::forget_one_at_a_time`].
+    fn next_mapper(
+        &self,
+        except: Option<&AddressSpace>,
+        after: Option<(usize, u64)>,
+    ) -> Option<(Arc<AddressSpace>, u64)> {
+        let mappers = self.mappers.lock();
         mappers
             .iter()
             .filter(|mapper| {
                 except.is_none_or(|space| !core::ptr::eq(mapper.space.as_ptr(), space))
             })
-            .filter_map(|mapper| Some((mapper.space.upgrade()?, mapper.object)))
-            .collect()
+            .map(|mapper| ((mapper.space.as_ptr().addr(), mapper.object), mapper))
+            .filter(|&(key, _)| after.is_none_or(|after| key > after))
+            .filter(|(_, mapper)| mapper.space.strong_count() > 0)
+            .min_by_key(|&(key, _)| key)
+            .and_then(|(_, mapper)| Some((mapper.space.upgrade()?, mapper.object)))
+    }
+}
+
+/// One address space phase two asks, and what came of asking.
+struct Visit {
+    /// The space.
+    space: Arc<AddressSpace>,
+    /// The id it maps the object by.
+    object: u64,
+    /// Whether it took translations down, so that its shootdown is counted
+    /// pending until [`AddressSpace::flushed`].
+    forgotten: bool,
+    /// What a cut took out of its shadow, to be released after the
+    /// shootdown.
+    copies: Option<ShadowCopies>,
+}
+
+/// Phase two with the list: ask every space in `visits`, then one shootdown
+/// for all of them and `own`'s, then release what cuts took.
+fn forget_together(
+    mut visits: Vec<Visit>,
+    runs: &[(u64, u64)],
+    own: Option<Own<'_>>,
+    from: Option<&Vmo>,
+) {
+    let mut cpus = CpuSet::empty();
+    let mut pages = TlbPages::new();
+    if let Some((own_cpus, own_pages)) = own.as_ref().and_then(|own| own.shootdown.as_ref()) {
+        smp::add_cpus(&mut cpus, own_cpus);
+        pages.add_all(own_pages);
+    }
+    for visit in &mut visits {
+        if let Some((theirs, copies)) =
+            visit
+                .space
+                .forget_runs(visit.object, runs, &mut pages, from)
+        {
+            smp::add_cpus(&mut cpus, &theirs);
+            visit.forgotten = true;
+            visit.copies = copies;
+        }
+    }
+
+    smp::flush_tlb_pages(&cpus, &pages);
+
+    for visit in &visits {
+        if visit.forgotten {
+            visit.space.flushed();
+        }
+    }
+    if let Some(own) = own
+        && own.shootdown.is_some()
+    {
+        own.space.flushed();
+    }
+    // What a cut took out of private mappings' shadows. Their translations
+    // were among the addresses the shootdown above reached, so after it
+    // nothing reaches them. The spaces are dropped here with no lock held:
+    // the last reference to a space that exited meanwhile may be one of
+    // these, and dropping it detaches it from this object's list.
+    for visit in visits {
+        if let Some(copies) = visit.copies {
+            copies.finish();
+        }
+    }
+}
+
+/// Run `own`'s shootdown, if it still has one to run, on its own.
+fn own_shootdown(own: Option<Own<'_>>) {
+    if let Some(own) = own
+        && let Some((cpus, pages)) = own.shootdown.as_ref()
+    {
+        smp::flush_tlb_pages(cpus, pages);
+        own.space.flushed();
+    }
+}
+
+/// What a cut took out of a private mapping's shadow, for
+/// [`AddressSpace::forget_runs`]'s caller to give back after its shootdown.
+#[derive(Debug)]
+pub(crate) struct ShadowCopies {
+    /// The shadow.
+    pub(crate) shadow: Arc<Vmo>,
+    /// Its pages from `first` on, taken out -- or `None` if there was no
+    /// memory to list them, and they are decommitted after instead.
+    pub(crate) taken: Option<Retired>,
+    /// The first page the cut takes.
+    pub(crate) first: u64,
+}
+
+impl ShadowCopies {
+    /// Give the copies back, once no processor can reach them.
+    fn finish(self) {
+        match self.taken {
+            Some(taken) => {
+                for (_, frame) in taken.frames {
+                    let _ = mm::release_frame(frame);
+                }
+            }
+            // Through all three phases of the shadow's own: its one mapper
+            // took its translations down already, so this only releases.
+            None => {
+                let _ = self.shadow.decommit_from(self.first);
+            }
+        }
     }
 }
 
@@ -1060,7 +1305,7 @@ impl Vmo {
     ///
     /// # Errors
     ///
-    /// [`HeldPage`], moving nothing, if any page of the range is held. A
+    /// [`Unmoved::Held`], moving nothing, if any page of the range is held. A
     /// device reaches a held page at its frame, and a mapping moved to a new
     /// object would fault in a different frame at the same place: the program
     /// and the device would silently stop sharing the page. Leaving the held
@@ -1071,23 +1316,31 @@ impl Vmo {
         from: &Vmo,
         first: u64,
         count: u64,
-    ) -> Result<Retired, HeldPage> {
+    ) -> Result<Retired, Unmoved> {
         let count = count.min(self.len_pages());
         let end = first.saturating_add(count);
         let moved = {
-            let mut source = from.pages.lock();
+            let source = from.pages.lock();
             if let Some((&index, _)) = source.held.range(first..end).next() {
-                return Err(HeldPage { index });
+                return Err(Unmoved::Held(HeldPage { index }));
             }
-            let mut moved = source.frames.split_off(&first);
-            let mut beyond = moved.split_off(&end);
-            source.frames.append(&mut beyond);
+            let listed = source.frames.range(first..end).count();
+            let mut moved =
+                crate::fallible::try_filled((0, 0), listed).map_err(|_| Unmoved::NoMemory)?;
+            for (slot, (&index, &frame)) in moved.iter_mut().zip(source.frames.range(first..end)) {
+                *slot = (index, frame);
+            }
             moved
         };
-        {
-            let mut pages = self.pages.lock();
-            for (&index, &frame) in &moved {
-                let _ = pages.frames.insert(index - first, frame);
+        // Named here as well as in `from` until `release_moved`: nothing but
+        // the caller, under its space's lock, can reach either object's list
+        // meanwhile, and this one is emptied again if the move goes no
+        // further.
+        let mut pages = self.pages.lock();
+        for &(index, frame) in &moved {
+            if crate::fallible::insert(&mut pages.frames, index - first, frame).is_err() {
+                pages.frames.clear();
+                return Err(Unmoved::NoMemory);
             }
         }
         Ok(Retired {
@@ -1096,18 +1349,22 @@ impl Vmo {
         })
     }
 
-    /// Undo [`Vmo::adopt_pages`]: move every page of this object back into
-    /// `to`, at `first` onwards.
-    ///
-    /// For an `mremap` that fails after it has moved the pages: the frames
-    /// never changed, so the translations to them were never wrong, and the
-    /// [`Retired`] the move handed out is dropped rather than retired.
-    pub(crate) fn return_pages(&self, to: &Vmo, first: u64) {
-        let moved = core::mem::take(&mut self.pages.lock().frames);
-        let mut pages = to.pages.lock();
-        for (index, frame) in moved {
-            let _ = pages.frames.insert(first.saturating_add(index), frame);
+    /// Finish [`Vmo::adopt_pages`] on the object the pages came from: take
+    /// them out of its list, now that the new object names them. Allocates
+    /// nothing.
+    pub(crate) fn release_moved(&self, moved: &Retired) {
+        let mut pages = self.pages.lock();
+        for (index, _) in &moved.frames {
+            let _ = pages.frames.remove(index);
         }
+    }
+
+    /// Undo [`Vmo::adopt_pages`] on the object the pages went to, for an
+    /// `mremap` that fails after it: forget them, without releasing them,
+    /// since the object they came from still names every one.
+    pub(crate) fn disown_pages(&self) {
+        let named = core::mem::take(&mut self.pages.lock().frames);
+        drop(named);
     }
 
     /// Hold `pages` pages from `first` in place, for a device to be given
@@ -1152,7 +1409,8 @@ impl Vmo {
             .try_reserve_exact(count)
             .map_err(|_| VmoError::OutOfMemory)?;
 
-        let mut displaced = Retired::nothing();
+        // Room for every original a copy could displace, before any is.
+        let mut displaced = Retired::with_room(count).map_err(|_| VmoError::OutOfMemory)?;
         let outcome = {
             let mut state = self.pages.lock();
             if (first..end).any(|index| state.held.get(&index) == Some(&u32::MAX)) {
@@ -1193,12 +1451,14 @@ impl Pages {
         {
             return Ok(frame);
         }
-        // Room for the displaced original first, so that once it is out of
-        // the list it cannot be lost (finding F-23).
-        let held = crate::fallible::reserve().map_err(|_| VmoError::OutOfMemory)?;
+        // The displaced original needs room in the list before it leaves this
+        // one (finding F-23); `hold` made room for every page.
+        if !displaced.has_room() {
+            return Err(VmoError::OutOfMemory);
+        }
         let (frame, shared) = self.exclusive(index)?;
         if let Some(shared) = shared {
-            let _ = crate::fallible::insert_held(&held, &mut displaced.frames, index, shared);
+            displaced.record(index, shared);
         }
         Ok(frame)
     }
@@ -1251,19 +1511,37 @@ impl Pages {
         }
     }
 
-    /// Put back into this list every page of `taken` that is held.
-    fn keep_held(&mut self, taken: &mut BTreeMap<u64, Frame>) {
-        let held: Vec<u64> = self
-            .held
-            .keys()
-            .copied()
-            .filter(|index| taken.contains_key(index))
-            .collect();
-        for index in held {
-            if let Some(frame) = taken.remove(&index) {
-                let _ = self.frames.insert(index, frame);
+    /// Take the committed pages of `first..end` that are not held out of
+    /// this list, lowest first, into `out` until it is full: how many were
+    /// taken, and the page to go on from if any are left. Allocates nothing:
+    /// a map's `remove` never does.
+    fn take_into(
+        &mut self,
+        first: u64,
+        end: u64,
+        out: &mut [(u64, Frame)],
+    ) -> (usize, Option<u64>) {
+        let mut taken = 0;
+        let mut from = first;
+        while from < end {
+            let Some(index) = self
+                .frames
+                .range(from..end)
+                .map(|(&index, _)| index)
+                .find(|index| !self.held.contains_key(index))
+            else {
+                return (taken, None);
+            };
+            let Some(slot) = out.get_mut(taken) else {
+                return (taken, Some(index));
+            };
+            if let Some(frame) = self.frames.remove(&index) {
+                *slot = (index, frame);
+                taken += 1;
             }
+            from = index.saturating_add(1);
         }
+        (taken, None)
     }
 }
 

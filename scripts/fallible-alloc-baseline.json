@@ -8,8 +8,5 @@
     "when a new file appears, or when one has fallen without",
     "being re-recorded. The target is an empty map."
   ],
-  "files": {
-    "user/space.rs": 10,
-    "user/vmo.rs": 14
-  }
+  "files": {}
 }
