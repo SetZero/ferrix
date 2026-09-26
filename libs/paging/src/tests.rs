@@ -976,6 +976,116 @@ fn running_out_of_frames_is_reported_rather_than_ignored() {
     );
 }
 
+/// A map that runs out of frames part-way leaves empty tables behind, and a
+/// prune over the range gives exactly those back, deepest first, leaving
+/// what is mapped beside them alone.
+fn pruning_gives_back_what_a_failed_map_left<E: Encoding>() {
+    /// A memory that refuses tables once `left` reaches zero.
+    #[derive(Debug, Default)]
+    struct Rationed {
+        inner: Memory,
+        left: usize,
+    }
+
+    // SAFETY: a map, as `Memory` is; nothing here is a real address.
+    unsafe impl PhysMem for Rationed {
+        fn read(&self, at: PhysAddr) -> u64 {
+            self.inner.read(at)
+        }
+        fn write(&mut self, at: PhysAddr, value: u64) {
+            self.inner.write(at, value);
+        }
+        fn allocate_table(&mut self) -> Option<PhysAddr> {
+            self.left = self.left.checked_sub(1)?;
+            self.inner.allocate_table()
+        }
+    }
+
+    let (inner, mapper) = Memory::with_root::<E>();
+    let below = levels::<E>() - 1;
+    let mut memory = Rationed { inner, left: below };
+    let kept = high::<E>(0x7000_0000);
+    mapper
+        .map_range(
+            &mut memory,
+            kept,
+            PhysAddr(0x20_0000),
+            PAGE_SIZE,
+            MapFlags::KERNEL_DATA,
+        )
+        .unwrap();
+
+    // A second page in another slot of the root, so that it needs a table of
+    // its own at every level below it, with one fewer to make them from.
+    let far = VirtAddr(kept.0 ^ (1 << (E::VIRT_BITS - 2)));
+    memory.left = below.saturating_sub(1);
+    assert_eq!(
+        mapper.map_range(
+            &mut memory,
+            far,
+            PhysAddr(0x30_0000),
+            PAGE_SIZE,
+            MapFlags::KERNEL_DATA
+        ),
+        Err(MapError::OutOfMemory),
+        "{}",
+        E::NAME
+    );
+    let made: Vec<PhysAddr> = memory
+        .inner
+        .frames
+        .iter()
+        .rev()
+        .take(below - 1)
+        .copied()
+        .collect();
+
+    let mut given = Vec::new();
+    mapper
+        .prune_range(
+            &mut memory,
+            VirtAddr(upper::<E>()),
+            1 << (E::VIRT_BITS - 1),
+            |freed| given.push(freed),
+        )
+        .unwrap();
+    let tables: Vec<PhysAddr> = given
+        .iter()
+        .map(|freed| match freed {
+            Released::Table { phys } => *phys,
+            Released::Page { .. } => panic!("{}: a prune released a page", E::NAME),
+        })
+        .collect();
+    assert_eq!(
+        tables,
+        made,
+        "{}: the failed map's tables, deepest first",
+        E::NAME
+    );
+    assert_eq!(
+        mapper.translate(&memory, kept),
+        Some(PhysAddr(0x20_0000)),
+        "{}",
+        E::NAME
+    );
+    assert_eq!(mapper.translate(&memory, far), None, "{}", E::NAME);
+}
+
+#[test]
+fn pruning_gives_back_what_a_failed_map_left_on_x86_64() {
+    pruning_gives_back_what_a_failed_map_left::<X86_64>();
+}
+
+#[test]
+fn pruning_gives_back_what_a_failed_map_left_on_aarch64() {
+    pruning_gives_back_what_a_failed_map_left::<AArch64>();
+}
+
+#[test]
+fn pruning_gives_back_what_a_failed_map_left_on_armv7a() {
+    pruning_gives_back_what_a_failed_map_left::<Armv7a>();
+}
+
 // ---------------------------------------------------------------------------
 // x86-64 descriptor bits
 // ---------------------------------------------------------------------------

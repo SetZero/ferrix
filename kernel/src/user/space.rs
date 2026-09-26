@@ -3214,6 +3214,12 @@ impl Drop for AddressSpace {
         inner.files.clear();
         inner.shadows.clear();
 
+        // Tables a fault that ran out of memory made above the page it could
+        // not map, which hold nothing and so were in no region's unmapping.
+        // Kept while the space lived, for the next fault there; given back
+        // now nothing can walk them.
+        mm::prune_in(self.root * PAGE_SIZE, 0, USER_VIRT_END);
+
         // The root itself. On x86-64 its upper half names the kernel's own
         // tables, which are emphatically not this space's to free -- but
         // `unmap_in` only ever walked the ranges above, all of which are in

@@ -746,6 +746,24 @@ pub(crate) fn unmap_in(root: u64, virt: u64, len: u64) -> Result<(), ferrix_pagi
     Ok(())
 }
 
+/// Give back every table under `root` in the `len` bytes at `virt` that maps
+/// nothing: what a [`map_in`] that ran out of memory part-way made above the
+/// page it could not map, which no [`unmap_in`] prunes, since only a page's
+/// removal does (`ferrix_paging::Mapper::prune_range`).
+///
+/// For a tree no processor can walk any more -- one being torn down -- which
+/// is when such a table may go: a processor that walked through one while it
+/// was linked may still hold the walk in its caches.
+pub(crate) fn prune_in(root: u64, virt: u64, len: u64) {
+    let mapper: Mapper<crate::arch::PageEncoding> = Mapper::new(PhysAddr(root));
+    let _ = mapper.prune_range(&mut KernelPhysMem, VirtAddr(virt), len, |freed| {
+        if let Released::Table { phys } = freed {
+            count(Route::UserTables, 1);
+            deallocate_frames(phys.0 / PAGE_SIZE, 0);
+        }
+    });
+}
+
 /// Map the 4 KiB page `phys` at I/O address `iova` in the IOMMU tree rooted at
 /// `root`, whose descriptors `E` encodes.
 ///

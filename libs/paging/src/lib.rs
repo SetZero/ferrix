@@ -722,6 +722,49 @@ impl<E: Encoding> Mapper<E> {
         Ok(removed)
     }
 
+    /// Unlink every table in the `len` bytes at `virt` that maps nothing, and
+    /// report each through `released` as [`Mapper::unmap_range`] reports a
+    /// table it emptied: deepest first, the root never.
+    ///
+    /// A table empties only when a leaf under it is removed, which is when
+    /// [`Mapper::unmap_range`] prunes it. A [`Mapper::map_range`] that ran out
+    /// of memory part-way leaves the tables it made above the leaf it could
+    /// not install, holding nothing, and no removal will ever prune them.
+    /// They are harmless while the tree lives -- the next mapping there reuses
+    /// them -- and this is how whoever tears the tree down finds them.
+    /// Nothing mapped is touched.
+    ///
+    /// # Errors
+    ///
+    /// [`MapError::Misaligned`] for an address or length that is not page
+    /// aligned.
+    pub fn prune_range(
+        &self,
+        memory: &mut impl PhysMem,
+        virt: VirtAddr,
+        len: u64,
+        mut released: impl FnMut(Released),
+    ) -> Result<(), MapError> {
+        if !virt.is_aligned_to(PAGE_SIZE) || !len.is_multiple_of(PAGE_SIZE) {
+            return Err(MapError::Misaligned);
+        }
+        let mut done = 0u64;
+        while done < len {
+            let at = virt.checked_add(done).ok_or(MapError::RangeOverflow)?;
+            let mut path = Path::default();
+            let span = match self.find_leaf(memory, at, Some(&mut path))? {
+                Found::Hole(level) => {
+                    self.prune(memory, &path, &mut released);
+                    level.span()
+                }
+                Found::Leaf(_, _, level) => level.span(),
+            };
+            let next = (at.0 | (span - 1)).checked_add(1);
+            done = next.map_or(len, |next| (next - virt.0).min(len));
+        }
+        Ok(())
+    }
+
     /// Free every table on `path` that the leaf's removal has just emptied.
     ///
     /// Walks from the leaf's own table upwards and stops at the first table
