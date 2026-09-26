@@ -332,12 +332,12 @@ follow, as `docs/BACKLOG.md` decided.
 | G4 | done, 2026-09-24 | 410aef15 |
 | G5 | done, 2026-09-24 | "Wait for a cgroup to empty through a native job handle" |
 | P1 | done, 2026-09-26, with the certification's F-35 | "Charge each job for its tasks, memory, objects and processor share"; "Show the job quotas as cgroup2's cpu, memory and pids controllers" |
-| M1 | charging, `memory.max`, `memory.current` and `memory.events` done, 2026-09-26; kernel memory in `memory.current` and `memory.stat`'s `kernel` line the same day, with the certification's F-37; the scoped OOM kill and `memory.stat`'s other keys not | the same two; "Charge the kernel heap a job drives through the Linux personality (F-37)" |
+| M1 | charging, `memory.max`, `memory.current` and `memory.events` done, 2026-09-26; kernel memory in `memory.current` and `memory.stat`'s `kernel` line the same day, with the certification's F-37; the scoped OOM kill the same day; `memory.stat`'s other keys not | the same two; "Charge the kernel heap a job drives through the Linux personality (F-37)"; "Kill inside the cgroup whose memory.max a program's fault finds full" |
 | S1 | done differently, 2026-09-26: a weight per job applied to each task's, not a group entity | the same two |
 | M2, F1, S2, B1 | not started | |
 
-What is left of the controllers is M1's scoped OOM kill and the rest of
-`memory.stat`, M2's reclaim, F1, S2 and B1. Init's L5 writes `TasksMax=` and `MemoryMax=`
+What is left of the controllers is the rest of `memory.stat`, M2's
+reclaim, F1, S2 and B1. Init's L5 writes `TasksMax=` and `MemoryMax=`
 to `pids.max` and `memory.max`, which exist since 2026-09-26.
 
 **P1, M1's charging and S1, as built (2026-09-26).** The certification's
@@ -378,6 +378,40 @@ cgroup's lookups left in the cache stay charged to it until evicted, where
 Linux would reclaim them under pressure -- M2's to fix. `test-vfs` command
 21 fills `/tmp` from a shell 256 KiB under its `memory.max` and reads the
 three files.
+
+**M1's scoped OOM kill, as built (2026-09-26).** `kernel/src/object/oom.rs`.
+A charge a system call makes for an object past `memory.max` is still
+refused `ENOMEM`. A page of a program's own memory -- its fault, or one a
+system call faults in for it, as `read` into a fresh buffer does -- whose
+charge is refused at a cgroup's `memory.max` asks for a kill in that
+cgroup (the nearest one at or above the faulting task's that is full):
+`memory.events`' `oom` counts there and in every cgroup above it, the
+process in it or beneath it with the most resident pages is ended as
+`SIGKILL` (never one outside it, never pid 1), `oom_kill` counts in the
+victim's cgroup and every one above, and each cgroup counted wakes its
+`memory.events`, an `EventsFile` like `cgroup.events` that polls `POLLPRI`
+and `POLLERR` (`EPOLLPRI` in epoll, the exception set in `select`) until
+it is read again from its start. The fault is retried; the victim, when it
+is the faulting process, leaves on its way back to user mode instead, so a
+parent's `wait4` sees it signalled by 9 (status 137 from a shell). A
+victim's memory is freed when it is reaped, not at exit as on Linux, so a
+victim that has let go of everything else has its address space emptied
+by the next fault needing the room, as Linux's OOM reaper does, and a
+fault finding a victim still ending retries a millisecond later. With
+nothing killable left, or no limit full (the machine out of frames), the
+fault fails as before -- `SIGSEGV`, not §6's `SIGBUS`, or `EFAULT` for a
+system call's page. Not built: `memory.oom.group`, `memory.events.local`,
+`oom_score_adj` in the choice, and a wake for `max` alone (a charge is
+refused under locks; its count moves, but a sleeping poller is woken only
+by an OOM). Its checks: the `cgroups` boot line runs a program writing
+8 MiB in a cgroup with `memory.max` 1M beside a sibling holding 2 MiB,
+and requires `SIGKILL`, the sibling alive, `oom_kill 1` there and in the
+parent and nothing in the sibling, and an `EPOLLPRI` wake; `test-vfs`
+command 22 has busybox `dd` read 32 MiB under a 16M limit and requires
+status 137 and `oom_kill 1`. Negative controls: no kill (the program ends
+by `SIGSEGV`), the victim chosen outside the cgroup (the sibling is
+killed), and `memory.events` polling the wrong queue (the wait ended by
+its recheck) each fail by the check's own message.
 
 **G3, as built (3 points).** §4 says what it is. The `cgroups` boot check
 (`kernel/src/fs/cgroupfs/events_check.rs`) gives a cgroup two members, reads
@@ -453,8 +487,9 @@ there.
 * **M1, `memory` charging** (13 points), after P1: §6, and §8's warning
   about the seven allocation sites. Charging, `memory.max`,
   `memory.current` and `memory.events` done 2026-09-26, and kernel
-  memory with `memory.stat`'s `kernel` line the same day (F-37); the
-  scoped OOM kill and `memory.stat`'s other keys are what is left of it.
+  memory with `memory.stat`'s `kernel` line the same day (F-37), and the
+  scoped OOM kill the same day; `memory.stat`'s other keys are what is
+  left of it.
 
 **How a landing was gated today, and what to keep.** The customer's rule
 since 2026-09-23: `cargo xtask check` plus only the rows the change
