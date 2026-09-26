@@ -21,10 +21,9 @@ pub(crate) const RAMOOPS_CONSOLE_SIZE: u64 = 0x20_0000;
 /// until the run ends and the record can be read, the screen is all there is
 /// to look at.
 ///
-/// `nosmp` until the kernel's secondary entry is seen to start at EL2 here:
-/// TF-A's PSCI starts a core at the highest non-secure level, which here is
-/// EL2, where QEMU starts one at EL1.
-pub(crate) const CMDLINE: &str = "console=ramoops,0xfd3ff000,0x200000 ferrix.fbcon nosmp";
+/// No `nosmp`: all eight cores start, at EL2 through TF-A's PSCI, and the
+/// kernel's secondary entry drops each to EL1.
+pub(crate) const CMDLINE: &str = "console=ramoops,0xfd3ff000,0x200000 ferrix.fbcon";
 
 /// The two watchdogs, `watchdog_cl0@10060000` and `watchdog_cl1@10070000`,
 /// each with a 30 second timeout in the device tree.
