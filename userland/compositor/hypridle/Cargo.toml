@@ -23,12 +23,7 @@ name = "compositor_hypridle"
 path = "src/lib.rs"
 
 [dependencies]
-# Declarations only, as in `socket` and `hyprix`: `poll` is not in std, and
-# an idle daemon that woke on a timer to look would never be idle itself.
-libc = "0.2.189"
-compositor-protocol = { path = "../protocol" }
-compositor-socket = { path = "../socket" }
-compositor-wire = { path = "../wire" }
+compositor-toolkit = { path = "../toolkit" }
 
 [lints]
 workspace = true

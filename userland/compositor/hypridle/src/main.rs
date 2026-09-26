@@ -126,35 +126,13 @@ fn run() -> i32 {
         log.say(Level::Warn, &note);
     }
 
-    let Some(socket) = wayland_socket() else {
-        log.say(
-            Level::Crit,
-            "Couldn't connect to a wayland compositor (WAYLAND_DISPLAY is not set)",
-        );
-        return 1;
-    };
     let mut idle = Idle::new(loaded.general, loaded.rules);
-    let mut runner = Runner::new(log);
-    match client::run(&socket, &mut idle, &mut runner) {
+    let mut runner = Runner { log };
+    match client::run(&mut idle, &mut runner) {
         Ok(()) => 0,
         Err(error) => {
             log.say(Level::Crit, &error);
             1
         }
     }
-}
-
-/// Where the compositor is, as `wl_display_connect(NULL)` finds it:
-/// `WAYLAND_DISPLAY`, `wayland-0` when that is unset, under
-/// `XDG_RUNTIME_DIR` unless it is a path; and, as Ferrix's compositor falls
-/// back to when started with no session manager, `/tmp` when that is unset.
-fn wayland_socket() -> Option<PathBuf> {
-    let display = std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-0".to_owned());
-    if display.contains('/') {
-        return Some(PathBuf::from(display));
-    }
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"));
-    Some(runtime.join(display))
 }
