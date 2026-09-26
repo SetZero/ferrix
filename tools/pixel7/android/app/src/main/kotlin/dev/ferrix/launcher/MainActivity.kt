@@ -174,6 +174,7 @@ private fun guestCommand(apk: String, uid: Int, token: String, size: IntSize): S
     val (w, h) = size.width to size.height
     return "cd $VM_DIR && I=ferrix.Image && { [ ! -f desktop.Image ] || I=desktop.Image; } && " +
         "[ -f \$I ] || { echo 'FERRIX-VM no image in $VM_DIR'; exit 3; }; echo FERRIX-VM-IMAGE \$I; " +
+        "$CROSVM stop $SOCKET >/dev/null 2>&1; " +
         "rm -f $SOCKET $TOUCH $KEYBOARD $MOUSE; echo FERRIX-VM-PID $$; " +
         "T=$(pm path com.android.virtualization.terminal | sed -n 's/^package://p' | head -n 1); " +
         "CLASSPATH=$apk:\$T app_process /system/bin ${Bridge::class.java.name} $$ $token $uid " +
@@ -922,6 +923,7 @@ internal class GuestShell {
         if (inBlock == monitor) {
             SCALE.find(line)?.let { found ->
                 found.groupValues[1].toDoubleOrNull()?.takeIf { it.isFinite() && it > 0 }?.let {
+                    Log.i("FerrixVm", "hyprctl says $monitor is at scale $it")
                     scale.value = it
                     inBlock = null
                 }
@@ -952,6 +954,7 @@ internal class GuestShell {
         // compositor that is not listening.
         var known: Double? = null
         while (known == null) {
+            Log.i("FerrixVm", "asking the guest's shell for $monitor's scale")
             say("hyprctl monitors\n")
             known = withTimeoutOrNull(3000) { scale.first { it != null } }
         }
@@ -971,8 +974,8 @@ internal class GuestShell {
 
     private companion object {
         val MONITOR = Regex("""hyprix: \d+ monitors? \[\S+ (\S+) \d+x\d+""")
-        val BLOCK = Regex("""^Monitor (\S+) \(ID \d+\):""")
-        val SCALE = Regex("""^\s*scale: ([0-9.]+)""")
+        val BLOCK = Regex("""Monitor (\S+) \(ID \d+\):""")
+        val SCALE = Regex("""\bscale: ([0-9.]+)""")
     }
 }
 

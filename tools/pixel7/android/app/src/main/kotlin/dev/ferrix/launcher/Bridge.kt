@@ -111,7 +111,19 @@ object Bridge {
         deliver(token, display, input)
     }
 
-    /** A function asking virtualizationservice for crosvm's display service. */
+    /**
+     * A function asking virtualizationservice for crosvm's display service,
+     * after forgetting whichever one it held.
+     *
+     * virtualizationservice keeps the last display service set, and a crosvm
+     * sets its own only once its GPU is made, after the input sockets are
+     * connected. A crosvm still running from an earlier run -- one whose app
+     * was reinstalled under it -- answers pings, so waiting for "a live one"
+     * handed the app that VM's screen while its keys went to the new VM, and
+     * nothing typed ever showed (2026-09-26). Cleared here, before the
+     * sockets exist and so before crosvm starts, the one waited for is this
+     * run's.
+     */
     private fun displayServiceGetter(): () -> IBinder? {
         val manager = Class.forName("android.os.ServiceManager")
         val binder = manager.getMethod("waitForService", String::class.java)
@@ -120,6 +132,7 @@ object Bridge {
             "android.system.virtualizationservice_internal.IVirtualizationServiceInternal\$Stub",
         )
         val service = stub.getMethod("asInterface", IBinder::class.java).invoke(null, binder)
+        service.javaClass.getMethod("clearDisplayService").invoke(service)
         val wait = service.javaClass.getMethod("waitDisplayService")
         return { wait.invoke(service) as IBinder? }
     }
