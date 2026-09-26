@@ -1,0 +1,15 @@
+# devmgr, which pid 1 asks the kernel to start under ferrix.devmgr=init
+# (docs/INIT.md §7.3, L12). The kernel loads /sbin/devmgr and hands it its
+# devices itself; init gets a handle to the process, and runs it as a unit:
+# its status, its log, and a restart if it dies. Started before anything
+# else, and before / is on the root disk its drivers serve; nothing wants it
+# on a boot where the kernel starts devmgr.
+[Unit]
+Description=The device manager, started by the kernel on pid 1's word
+DefaultDependencies=no
+
+[Service]
+Type=simple
+ExecStart=/sbin/devmgr
+Slice=drivers.slice
+Restart=always

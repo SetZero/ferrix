@@ -111,6 +111,8 @@ pub const DEVICE_CLOCK: usize = 0x104F;
 pub const SOUND_CONTROL_CREATE: usize = 0x1050;
 /// [`NativeCall::LogControlCreate`].
 pub const LOG_CONTROL_CREATE: usize = 0x1051;
+/// [`NativeCall::DevmgrStart`].
+pub const DEVMGR_START: usize = 0x1052;
 /// The largest name [`NativeCall::ProcessCreate`] takes, in bytes.
 pub const PROCESS_NAME_MAX: usize = 32;
 
@@ -341,10 +343,22 @@ pub enum NativeCall {
     /// `ACCESS_DENIED` for any other; one reader at a time, `ALREADY_BOUND`
     /// while another holds it, and the claim ends when the channel closes.
     LogControlCreate,
+    /// `(starter, job)` → handle. Ask the kernel to start `devmgr` in `job`
+    /// (`docs/INIT.md` §7.3, L12): the kernel loads `/sbin/devmgr` itself,
+    /// writes its DEVICES messages, and makes and starts it in `job` with
+    /// that channel as its bootstrap, keeping the other end. The caller gets
+    /// a handle to the process, with [`crate::rights::Rights::PROCESS`], which
+    /// reaches nothing inside it; the channel never passes through the
+    /// caller. `starter` is the one-shot capability the kernel gives pid 1
+    /// on its bootstrap channel when the command line says
+    /// `ferrix.devmgr=init` (needs `MANAGE`); `job` needs `MANAGE`.
+    /// `ALREADY_BOUND` while a `devmgr` it started lives; `BAD_STATE` after
+    /// one ended, until every driver it started has ended too.
+    DevmgrStart,
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 44] = [
+pub const ALL: [NativeCall; 45] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -389,6 +403,7 @@ pub const ALL: [NativeCall; 44] = [
     NativeCall::DeviceClock,
     NativeCall::SoundControlCreate,
     NativeCall::LogControlCreate,
+    NativeCall::DevmgrStart,
 ];
 
 /// Whether `number` is in the native range at all.
@@ -448,6 +463,7 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         DEVICE_CLOCK => NativeCall::DeviceClock,
         SOUND_CONTROL_CREATE => NativeCall::SoundControlCreate,
         LOG_CONTROL_CREATE => NativeCall::LogControlCreate,
+        DEVMGR_START => NativeCall::DevmgrStart,
         _ => return None,
     };
     Some(call)
@@ -501,5 +517,6 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::DeviceClock => DEVICE_CLOCK,
         NativeCall::SoundControlCreate => SOUND_CONTROL_CREATE,
         NativeCall::LogControlCreate => LOG_CONTROL_CREATE,
+        NativeCall::DevmgrStart => DEVMGR_START,
     }
 }

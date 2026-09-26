@@ -523,8 +523,9 @@ package FerrixRoadmap {
              * directory with native services (L8), and the images booting
              * it with the compositor as its service (L10). Verified by
              * initSession. devmgr on the restart policy (L11) the same day;
-             * the customer counts the init done there. Next: L12, init
-             * starting devmgr; L13 parked until stage 13's namespaces.
+             * the customer counts the init done there. L12, pid 1 starting
+             * devmgr through a kernel starter, on 2026-09-27; L13 parked
+             * until stage 13's namespaces.
              *
              * Next: authentication (docs/AUTH.md, approved by the customer
              * on 2026-09-26): authd, passwords checked by Argon2id, passwd,

@@ -31,7 +31,11 @@ by construction.
 ## 2. Kernel → devmgr: the bootstrap channel
 
 The kernel creates a channel, keeps one end, and starts `/sbin/devmgr` with
-the other as its bootstrap handle (`Handle(1)`, which `ferrix-rt`'s
+the other as its bootstrap handle -- at bring-up, or, under
+`ferrix.devmgr=init`, when pid 1 asks with its starter (`devmgr_start`,
+`docs/INIT.md` §7.3), in the job pid 1 names, which then holds the drivers'
+jobs too; either way the channel goes between the kernel and `devmgr` alone,
+and this section is the same -- (`Handle(1)`, which `ferrix-rt`'s
 `Bootstrap` adopts; `docs/BLOCK-RING.md` §6.4 says the same of a driver's).
 Before starting it the kernel has written one message on its end:
 

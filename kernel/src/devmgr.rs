@@ -21,25 +21,27 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::convert::Infallible;
-use core::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 
 use ferrix_blkring::Location;
 use ferrix_blkring::control::DEVICE_RIGHTS;
-use ferrix_bootinfo::PAGE_SIZE;
+use ferrix_bootinfo::{BootView, PAGE_SIZE, option_in};
 use ferrix_devmgr_proto::{
     ANSWER_BUSY, ANSWER_DONE, ANSWER_FAILED, ANSWER_NO_DEVICE, BUS_PCI, BUS_PLATFORM,
     DEVICES_MAX_BYTES, Devices, Message, NAME_BYTES, SHORT_BYTES,
 };
 use ferrix_linux_abi::errno::Errno;
+use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
+use ferrix_native_abi::status;
 use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES};
 use ferrix_sync::Once;
 
 use crate::fallible::{self, AllocError};
 use crate::object::channel::{Endpoint, ReadError};
 use crate::object::job::{self, Job};
-use crate::object::process::Process;
+use crate::object::process::{Exit, Host, Process, ProcessRef};
 use crate::object::{Object, Transfer};
 use crate::sched::WaitQueue;
 use crate::sync::SpinLock;
@@ -389,32 +391,93 @@ pub(crate) struct Report {
 /// What did not happen, as a sentence: `devmgr` could not be started, or
 /// said nothing in time, or something other than REPORT.
 pub(crate) fn start() -> Result<Option<Report>, &'static str> {
+    let Some(files) = read_files()? else {
+        return Ok(None);
+    };
+    let drivers = files.names.len();
+    let (kernel_end, devmgr_end) =
+        Endpoint::pair().map_err(|_| "no memory for devmgr's channel")?;
+    let devices = write_devices(&kernel_end, files.images, drivers_job()?)?;
+    let process = load(&files.image)?;
+    start_program(&process, devmgr_end, &kernel_end)?;
+
+    let (started, failed) = report(&kernel_end)?;
+    if sched::spawn("devmgr listener", listen, 0, ferrix_sched::NICE_0_WEIGHT).is_err() {
+        return Err("no task to hear devmgr on");
+    }
+    Ok(Some(Report {
+        devices,
+        drivers,
+        started,
+        failed,
+    }))
+}
+
+/// What `devmgr` is started with: its own program, and every driver the
+/// manifest names, by name and in a VMO of its own.
+struct Files {
+    /// `/sbin/devmgr`.
+    image: Vec<u8>,
+    /// The manifest's names, in its order.
+    names: Vec<[u8; NAME_BYTES]>,
+    /// Each named driver's image, in the same order.
+    images: Vec<Arc<Vmo>>,
+}
+
+/// Read `devmgr`, the manifest and every driver it names through the
+/// registered reader, and note the names for sysfs. `Ok(None)` without
+/// `/sbin/devmgr`.
+fn read_files() -> Result<Option<Files>, &'static str> {
     let read = READ_FILE.get().copied().unwrap_or(no_files);
     let Ok(image) = read(PROGRAM) else {
         return Ok(None);
     };
-    let names = manifest(read);
-    // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
-    BINDINGS.lock().names.clone_from(&names);
-    let mut images = Vec::new();
+    let names = manifest(read)?;
+    {
+        let mut bindings = BINDINGS.lock();
+        bindings.names.clear();
+        fallible::try_extend_from_slice(&mut bindings.names, &names)
+            .map_err(|_| "no memory for the drivers' names")?;
+    }
+    let mut images = fallible::try_with_capacity(names.len())
+        .map_err(|_| "no memory for the drivers' images")?;
     for name in &names {
-        // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
-        let mut path = DRIVERS.to_vec();
-        // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
+        let mut path = fallible::try_with_capacity(DRIVERS.len() + 1 + NAME_BYTES)
+            .map_err(|_| "no memory for a driver's path")?;
+        // NOALLOC: the room for all three was had just above.
+        path.extend_from_slice(DRIVERS);
+        // NOALLOC: the room for all three was had just above.
         path.push(b'/');
-        // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
+        // NOALLOC: the room for all three was had just above.
         path.extend_from_slice(name_bytes(name));
         let bytes = read(&path).map_err(|_| "a driver the manifest names is not in the image")?;
-        // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
-        images.push(vmo_of(&bytes)?);
+        let _ = fallible::push_within(&mut images, vmo_of(&bytes)?);
     }
+    Ok(Some(Files {
+        image,
+        names,
+        images,
+    }))
+}
+
+/// Write the DEVICES messages on `kernel_end`: `job` for the drivers, every
+/// device node twice, and `images` by the names [`read_files`] noted.
+/// Answers how many device nodes went.
+fn write_devices(
+    kernel_end: &Endpoint,
+    images: Vec<Arc<Vmo>>,
+    job: Arc<Job>,
+) -> Result<usize, &'static str> {
+    let names = {
+        let bindings = BINDINGS.lock();
+        fallible::try_to_vec(&bindings.names).map_err(|_| "no memory for the drivers' names")?
+    };
     let nodes = device::devices();
-    let (kernel_end, devmgr_end) =
-        Endpoint::pair().map_err(|_| "no memory for devmgr's channel")?;
     // As many DEVICES messages as the handles need: the first with the job
     // and the images, the rest with devices only. ARMv7-A publishes 36
     // device nodes, and a message carries 64 handles.
     let mut images = Some(images);
+    let mut job = Some(job);
     let mut index = 0;
     let mut first = true;
     while first || index < nodes.len() {
@@ -431,54 +494,54 @@ pub(crate) fn start() -> Result<Option<Report>, &'static str> {
         let len = message
             .encode(&mut bytes)
             .ok_or("more drivers than one DEVICES message names")?;
-        // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
-        let mut transfers: Vec<Transfer> = Vec::with_capacity(message.handles());
-        if first {
-            // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
-            transfers.push((Object::Job(drivers_job()?), Rights::JOB));
+        let mut transfers: Vec<Transfer> = fallible::try_with_capacity(message.handles())
+            .map_err(|_| "no memory for a DEVICES message's handles")?;
+        if let Some(job) = job.take() {
+            let _ = fallible::push_within(&mut transfers, (Object::Job(job), Rights::JOB));
         }
         for node in nodes.iter().skip(index).take(take) {
-            // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
-            transfers.push((Object::Device(Arc::clone(node)), DEVICE_RIGHTS));
-            // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
-            transfers.push((Object::Device(Arc::clone(node)), KEPT_DEVICE_RIGHTS));
+            let _ = fallible::push_within(
+                &mut transfers,
+                (Object::Device(Arc::clone(node)), DEVICE_RIGHTS),
+            );
+            let _ = fallible::push_within(
+                &mut transfers,
+                (Object::Device(Arc::clone(node)), KEPT_DEVICE_RIGHTS),
+            );
         }
         if let Some(images) = images.take() {
             for vmo in images {
-                // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
-                transfers.push((
-                    Object::Vmo(vmo),
-                    Rights(Rights::READ.0 | Rights::TRANSFER.0),
-                ));
+                let _ = fallible::push_within(
+                    &mut transfers,
+                    (
+                        Object::Vmo(vmo),
+                        Rights(Rights::READ.0 | Rights::TRANSFER.0),
+                    ),
+                );
             }
         }
         let handles = transfers.len();
+        let body = fallible::try_to_vec(bytes.get(..len).unwrap_or(&[]))
+            .map_err(|_| "no memory for a DEVICES message")?;
         kernel_end
-            // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
-            .write(bytes.get(..len).unwrap_or(&[]).to_vec(), handles, || {
-                Ok::<Vec<Transfer>, Infallible>(transfers)
-            })
+            .write(body, handles, || Ok::<Vec<Transfer>, Infallible>(transfers))
             .map_err(|_| "DEVICES could not be written to devmgr's channel")?;
         index += take;
         first = false;
     }
-
-    start_program(&image, devmgr_end, &kernel_end)?;
-
-    let (started, failed) = report(&kernel_end)?;
-    if sched::spawn("devmgr listener", listen, 0, ferrix_sched::NICE_0_WEIGHT).is_err() {
-        return Err("no task to hear devmgr on");
-    }
-    Ok(Some(Report {
-        devices: nodes.len(),
-        drivers: names.len(),
-        started,
-        failed,
-    }))
+    Ok(nodes.len())
 }
 
-/// Load devmgr's `image` into a process of its own, put `devmgr_end` in its
-/// table as its bootstrap handle, and start it with the handle's value.
+/// Load `devmgr`'s `image` into a process of its own, not started. It runs
+/// as root whoever asked (`native::LoadNative` with no creator): it is the
+/// kernel's, however it was asked for.
+fn load(image: &[u8]) -> Result<Arc<dyn Host>, &'static str> {
+    let processes = native::processes().ok_or("nothing is registered to start devmgr with")?;
+    (processes.load)(None, image, NAME).map_err(|_| "/sbin/devmgr does not load")
+}
+
+/// Put `devmgr_end` in `process`'s table as its bootstrap handle, and start
+/// it with the handle's value.
 ///
 /// Through what the personality registered ([`native::Processes`]): the ELF
 /// loader and the process it loads into are above the item. The kernel's end
@@ -486,12 +549,11 @@ pub(crate) fn start() -> Result<Option<Report>, &'static str> {
 /// made, and before it runs. The task runs for the life of the machine;
 /// nothing here joins it.
 fn start_program(
-    image: &[u8],
+    process: &Arc<dyn Host>,
     devmgr_end: Arc<Endpoint>,
     kernel_end: &Arc<Endpoint>,
 ) -> Result<(), &'static str> {
     let processes = native::processes().ok_or("nothing is registered to start devmgr with")?;
-    let process = (processes.load)(None, image, NAME).map_err(|_| "/sbin/devmgr does not load")?;
     let bootstrap = process
         .core()
         // FALLIBLE: the handle table's insert hands the object back.
@@ -501,10 +563,295 @@ fn start_program(
         *CHANNEL.lock() = Some(Arc::clone(kernel_end));
         Ok(u64::from(bootstrap.0))
     };
-    (processes.start)(&process, &mut publish).map_err(|why| match why {
+    (processes.start)(process, &mut publish).map_err(|why| match why {
         StartRefused::Claimed => "devmgr could not be claimed to start",
         StartRefused::NoTask | StartRefused::Argument(_) => "devmgr could not be started",
     })
+}
+
+/// The command-line option that has pid 1 start `devmgr` (`docs/INIT.md`
+/// §7.3, L12): `init`. Without it, or with `kernel`, the kernel starts it at
+/// bring-up, as [`start`] does -- the certified configuration
+/// (`docs/certification/ITEM.md` §5).
+const OPTION: &str = "ferrix.devmgr";
+
+/// Whether the command line said `ferrix.devmgr=init`.
+static BY_INIT: AtomicBool = AtomicBool::new(false);
+
+/// Read [`OPTION`], once, early.
+pub(crate) fn read_option(view: &BootView<'_>) {
+    let tree = crate::fdt::open(view).ok();
+    let value = view.option(OPTION).or_else(|| {
+        tree.as_ref()
+            .and_then(|tree| option_in(tree.bootargs()?, OPTION))
+    });
+    match value {
+        None | Some("kernel") => {}
+        Some("init") => {
+            BY_INIT.store(true, Ordering::Relaxed);
+            crate::console::println!(
+                "  devmgr   {OPTION}=init: pid 1 starts devmgr, and / waits for its disk"
+            );
+        }
+        Some(other) => crate::console::println!(
+            "  devmgr   {OPTION}={other} is not understood; the kernel starts devmgr"
+        ),
+    }
+}
+
+/// Whether pid 1 starts `devmgr` on this boot.
+pub(crate) fn by_init() -> bool {
+    BY_INIT.load(Ordering::Relaxed)
+}
+
+/// Make the drivers' job, `drivers.slice`, at bring-up as [`start`] does,
+/// for the `devmgr` pid 1 starts: init runs `devmgr.service` in it, and
+/// takes it, as on the kernel path, for a cgroup the kernel made.
+///
+/// # Errors
+///
+/// When there was no memory for it.
+pub(crate) fn make_drivers_job() -> Result<(), &'static str> {
+    let job = drivers_job()?;
+    *DRIVERS_KEPT.lock() = Some(job);
+    Ok(())
+}
+
+/// `drivers.slice` under `ferrix.devmgr=init`, held for the life of the
+/// machine: a job's parent holds it only weakly, and on the kernel path it is
+/// `devmgr` that holds it.
+static DRIVERS_KEPT: SpinLock<Option<Arc<Job>>> = SpinLock::new(None);
+
+/// Whether the one starter there is has been given out.
+static STARTER_GIVEN: AtomicBool = AtomicBool::new(false);
+
+/// The starter, for pid 1's bootstrap channel: once, and only under
+/// `ferrix.devmgr=init`. `None` otherwise.
+pub(crate) fn starter() -> Option<Object> {
+    if !by_init() || STARTER_GIVEN.swap(true, Ordering::AcqRel) {
+        return None;
+    }
+    Some(Object::Starter)
+}
+
+/// The `devmgr` a starter started, and the job it was started in.
+struct Running {
+    /// How it ended, once it has.
+    exit: Arc<Exit>,
+    /// Its job, which holds its drivers' jobs.
+    job: Arc<Job>,
+}
+
+/// The last `devmgr` [`devmgr_start`] started.
+static RUNNING: SpinLock<Option<Running>> = SpinLock::new(None);
+
+/// Whether the `devmgr` a starter started has reported, and the queue
+/// woken when it does, or when it could not.
+static REPORTED: AtomicBool = AtomicBool::new(false);
+static REPORTED_QUEUE: WaitQueue = WaitQueue::new();
+
+/// What a started `devmgr` was handed, for its REPORT line: device nodes and
+/// drivers.
+static HANDED: SpinLock<(usize, usize)> = SpinLock::new((0, 0));
+
+/// Wait until the `devmgr` pid 1 started has reported, or `deadline` passes.
+/// Whether it reported.
+pub(crate) fn wait_reported(deadline: u64) -> bool {
+    REPORTED_QUEUE.wait_until_deadline(|| REPORTED.load(Ordering::Acquire), deadline)
+}
+
+/// `devmgr_start(starter, job)`: start `devmgr` in `job` for the holder of
+/// the starter, and answer a handle to the process (`docs/INIT.md` §7.3).
+/// Every start is checked as it is made ([`handed_only_to_devmgr`]).
+///
+/// The kernel does all of it: reads `devmgr` and the drivers, writes DEVICES
+/// on a channel whose other end becomes `devmgr`'s bootstrap handle, makes
+/// the process in `job` and starts it. The caller gets
+/// [`Rights::PROCESS`] on the process, which starts, waits and reads how it
+/// ended and reaches nothing inside it: no call reads or writes its memory
+/// or takes its handles, and `process_start` on it is `BAD_STATE`, since it
+/// has started. `ALREADY_BOUND` while a `devmgr` it started lives;
+/// `BAD_STATE` after, until every process in that `devmgr`'s job has ended,
+/// and then every device is quiesced before the next one is handed them.
+pub(crate) fn devmgr_start(caller: &dyn Host, registers: &[u64; 6]) -> Result<usize, Errno> {
+    let [starter, job, ..] = *registers;
+    let core = caller.core();
+    let job = starter_and_job(core, starter, job)?;
+    may_start_again()?;
+    let started = start_in(job)?;
+    let handle = native::insert_new(core, Object::Process(started.created), Rights::PROCESS)?;
+    if let Err(problem) = handed_only_to_devmgr(caller, &started.process, &started.end, handle) {
+        crate::panic::fatal!(
+            crate::panic::catalog::DEVMGR_BY_INIT,
+            "devmgr started by pid 1 self-check failed: {problem}"
+        );
+    }
+    Ok(handle)
+}
+
+/// The job `devmgr_start` names, when the caller holds the starter with
+/// `MANAGE` and the job with `MANAGE`.
+fn starter_and_job(core: &Process, starter: u64, job: u64) -> Result<Arc<Job>, Errno> {
+    core.with_handles(|table| {
+        match table.get(Handle::from_register(starter)) {
+            Ok((Object::Starter, rights)) if rights.contains(Rights::MANAGE) => {}
+            Ok((Object::Starter, _)) => return Err(status::ACCESS_DENIED),
+            Ok(_) => return Err(status::WRONG_TYPE),
+            Err(_) => return Err(status::BAD_HANDLE),
+        }
+        match table.get(Handle::from_register(job)) {
+            Ok((Object::Job(job), rights)) if rights.contains(Rights::MANAGE) => {
+                Ok(Arc::clone(job))
+            }
+            Ok((Object::Job(_), _)) => Err(status::ACCESS_DENIED),
+            Ok(_) => Err(status::WRONG_TYPE),
+            Err(_) => Err(status::BAD_HANDLE),
+        }
+    })
+}
+
+/// A `devmgr` [`start_in`] started.
+struct Started {
+    /// The process.
+    process: Arc<dyn Host>,
+    /// What the caller's handle to it is made from.
+    created: ProcessRef,
+    /// Its end of the DEVICES channel, for the check.
+    end: Arc<Endpoint>,
+}
+
+/// Read `devmgr` and its drivers, write DEVICES, make `devmgr` in `job` and
+/// start it, and start the task that hears it.
+fn start_in(job: Arc<Job>) -> Result<Started, Errno> {
+    let files = read_files()
+        .map_err(|_| status::NO_MEMORY)?
+        .ok_or(status::BAD_STATE)?;
+    let drivers = files.names.len();
+    let (kernel_end, devmgr_end) = Endpoint::pair().map_err(|_| status::NO_MEMORY)?;
+    let devices = write_devices(&kernel_end, files.images, Arc::clone(&job))
+        .map_err(|_| status::NO_MEMORY)?;
+    let process = load(&files.image).map_err(|_| status::BAD_STATE)?;
+    let kill = |process: &Arc<dyn Host>| process.kill(job::KILLED_STATUS);
+    if process.core().move_new_to(&job).is_err() {
+        kill(&process);
+        return Err(status::BAD_STATE);
+    }
+    let exit = process.core().exit_record();
+    let Ok(created) = ProcessRef::created(Arc::clone(&process)) else {
+        kill(&process);
+        return Err(status::NO_MEMORY);
+    };
+    let end = Arc::clone(&devmgr_end);
+    start_program(&process, devmgr_end, &kernel_end).map_err(|_| status::BAD_STATE)?;
+    *HANDED.lock() = (devices, drivers);
+    REPORTED.store(false, Ordering::Release);
+    let replaced = RUNNING.lock().replace(Running { exit, job });
+    drop(replaced);
+    let heard = sched::spawn(
+        "devmgr listener",
+        report_then_listen,
+        0,
+        ferrix_sched::NICE_0_WEIGHT,
+    );
+    if heard.is_err() {
+        crate::console::println!("  devmgr   no task to hear devmgr on");
+    }
+    Ok(Started {
+        process,
+        created,
+        end,
+    })
+}
+
+/// The check `devmgr_start` makes of every start, as the caller: the
+/// channel's `devmgr` end is in `devmgr`'s table and in no handle of the
+/// caller's, `process_start` on the handle the caller got is `BAD_STATE` and
+/// leaves that so, and a second start while it lives is `ALREADY_BOUND`.
+fn handed_only_to_devmgr(
+    caller: &dyn Host,
+    process: &Arc<dyn Host>,
+    end: &Arc<Endpoint>,
+    handle: usize,
+) -> Result<(), &'static str> {
+    let holds = |host: &dyn Host| {
+        host.core().with_handles(|table| {
+            table.handles().any(|(handle, _)| {
+                matches!(table.get(handle), Ok((Object::Channel(held), _)) if Arc::ptr_eq(held, end))
+            })
+        })
+    };
+    if !holds(&**process) {
+        return Err("devmgr does not hold its end of the DEVICES channel");
+    }
+    if holds(caller) {
+        return Err("the caller holds devmgr's end of the DEVICES channel");
+    }
+    let args = crate::trap::SyscallArgs {
+        abi: crate::trap::Abi::Native,
+        number: ferrix_native_abi::nr::PROCESS_START,
+        args: [handle as u64, 0, 0, 0, 0, 0],
+    };
+    if native::dispatch(&args, Some(caller)) != Err(status::BAD_STATE) {
+        return Err("process_start on the handle to a started devmgr was not BAD_STATE");
+    }
+    if holds(caller) {
+        return Err("a call on the process handle gave the caller devmgr's channel");
+    }
+    if may_start_again() != Err(status::ALREADY_BOUND) {
+        return Err("a second devmgr_start while devmgr lives was not ALREADY_BOUND");
+    }
+    if !STARTS_CHECKED.swap(true, Ordering::Relaxed) {
+        crate::console::println!(
+            "  devmgr   pid 1 got only a process handle: devmgr holds its DEVICES end and pid 1 \
+             none, process_start on it BAD_STATE, a second start ALREADY_BOUND"
+        );
+    }
+    Ok(())
+}
+
+/// Whether [`handed_only_to_devmgr`] has said its line.
+static STARTS_CHECKED: AtomicBool = AtomicBool::new(false);
+
+/// Refuse a second `devmgr` while the first lives, or before its drivers
+/// have all ended; and before a new one, quiesce every device, as `devmgr`
+/// quiesces a device whose driver died -- it cannot, having died itself.
+fn may_start_again() -> Result<(), Errno> {
+    {
+        let running = RUNNING.lock();
+        let Some(running) = running.as_ref() else {
+            return Ok(());
+        };
+        if !running.exit.is_closed() {
+            return Err(status::ALREADY_BOUND);
+        }
+        if !running.job.signals().intersects(Signals::EMPTY) {
+            return Err(status::BAD_STATE);
+        }
+    }
+    for node in device::devices() {
+        native::quiesce(node).map_err(|_| status::BAD_STATE)?;
+    }
+    Ok(())
+}
+
+/// The listener of a `devmgr` pid 1 started: its REPORT, said as the
+/// kernel's own start says it, then the checks that the channel went only to
+/// it, then every DIED and RESTARTED after.
+fn report_then_listen(_: usize) {
+    let Some(channel) = CHANNEL.lock().clone() else {
+        return;
+    };
+    let (devices, drivers) = *HANDED.lock();
+    match report(&channel) {
+        Ok((started, failed)) => crate::console::println!(
+            "  devmgr   started by pid 1: {devices} devices, {drivers} drivers, {started} started, \
+             {failed} failed"
+        ),
+        Err(why) => crate::console::println!("  devmgr   started by pid 1, and then: {why}"),
+    }
+    REPORTED.store(true, Ordering::Release);
+    REPORTED_QUEUE.wake_all();
+    listen(0);
 }
 
 /// The process that last mapped each device's registers or took its interrupt,
@@ -513,8 +860,7 @@ fn start_program(
 /// work never came. The record outlives the process, and the latest such
 /// process replaces it: a boot check's own processes use a device before
 /// devmgr's driver does.
-static DRIVER_ENDINGS: SpinLock<Vec<(Location, Arc<crate::object::process::Exit>)>> =
-    SpinLock::new(Vec::new());
+static DRIVER_ENDINGS: SpinLock<Vec<(Location, Arc<Exit>)>> = SpinLock::new(Vec::new());
 
 /// Note that `driver` mapped `node`'s registers or took its interrupt: it is
 /// that device's driver now. Cheap when it is already noted, which every call
@@ -607,21 +953,22 @@ fn drivers_job() -> Result<Arc<Job>, &'static str> {
 
 /// The manifest's names, each NUL-padded to a driver name; an image without
 /// one lists no drivers.
-fn manifest(read: ReadFile) -> Vec<[u8; NAME_BYTES]> {
+fn manifest(read: ReadFile) -> Result<Vec<[u8; NAME_BYTES]>, &'static str> {
     let Ok(text) = read(MANIFEST) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    text.split(|&byte| byte == b'\n')
+    let mut names = Vec::new();
+    for line in text
+        .split(|&byte| byte == b'\n')
         .filter(|line| !line.is_empty() && line.len() <= NAME_BYTES)
-        .map(|line| {
-            let mut name = [0; NAME_BYTES];
-            for (slot, byte) in name.iter_mut().zip(line) {
-                *slot = *byte;
-            }
-            name
-        })
-        // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
-        .collect()
+    {
+        let mut name = [0; NAME_BYTES];
+        for (slot, byte) in name.iter_mut().zip(line) {
+            *slot = *byte;
+        }
+        fallible::try_push(&mut names, name).map_err(|_| "no memory for the manifest")?;
+    }
+    Ok(names)
 }
 
 /// A name without its padding.
@@ -709,9 +1056,18 @@ fn listen(_: usize) {
                 );
             }
             Err(_) => {
-                forget_devmgr();
+                // A `devmgr` pid 1 started again has a channel of its own by
+                // now; what this one knew is forgotten only if it is still
+                // the one there is.
+                let current = CHANNEL
+                    .lock()
+                    .as_ref()
+                    .is_some_and(|now| Arc::ptr_eq(now, &channel));
+                if current {
+                    forget_devmgr();
+                }
                 crate::console::println!(
-                    "  devmgr   devmgr is gone; no driver will be started again"
+                    "  devmgr   devmgr is gone; no driver will be started again until it is"
                 );
                 return;
             }

@@ -54,9 +54,9 @@
       "lines": 44,
       "recursive": false
     },
-    "devmgr.rs::start": {
-      "complexity": 22,
-      "lines": 63,
+    "devmgr.rs::write_devices": {
+      "complexity": 17,
+      "lines": 54,
       "recursive": false
     },
     "main.rs::check_filesystems": {
@@ -125,8 +125,8 @@
       "recursive": false
     },
     "syscall/native.rs::dispatch": {
-      "complexity": 33,
-      "lines": 88,
+      "complexity": 34,
+      "lines": 89,
       "recursive": false
     },
     "syscall/native.rs::vmo_pin": {

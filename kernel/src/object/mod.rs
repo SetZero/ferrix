@@ -77,6 +77,15 @@ pub(crate) enum Object {
     Process(process::ProcessRef),
     /// An event queue.
     Port(Arc<port::Port>),
+    /// The capability to ask the kernel to start `devmgr`
+    /// (`docs/INIT.md` §7.3, L12): a token with nothing in it. What it
+    /// permits is decided where `devmgr_start` is answered -- the kernel
+    /// loads `devmgr`, writes its DEVICES messages and starts it in the job
+    /// the holder names, and hands back a process handle -- so the device
+    /// nodes and the images travel between the kernel and `devmgr` alone.
+    /// The one there is goes into pid 1's table with `MANAGE` and no other
+    /// right: it is neither duplicated nor sent, and goes when pid 1 goes.
+    Starter,
 }
 
 /// A queue nothing is woken on, for objects whose signals never change.
@@ -100,7 +109,8 @@ impl Object {
             | Object::IoMapping(_)
             | Object::Pin(_)
             | Object::Process(_)
-            | Object::Port(_) => Signals::NONE,
+            | Object::Port(_)
+            | Object::Starter => Signals::NONE,
         }
     }
 
@@ -117,7 +127,11 @@ impl Object {
             Object::Process(process) => process.exit().exited(),
             // Woken from the interrupt handler itself; see `interrupt`.
             Object::Interrupt(interrupt) => interrupt.waiters(),
-            Object::Vmo(_) | Object::Device(_) | Object::IoMapping(_) | Object::Pin(_) => &QUIET,
+            Object::Vmo(_)
+            | Object::Device(_)
+            | Object::IoMapping(_)
+            | Object::Pin(_)
+            | Object::Starter => &QUIET,
         }
     }
 }
@@ -285,7 +299,8 @@ impl Object {
             | Object::Interrupt(_)
             | Object::IoMapping(_)
             | Object::Pin(_)
-            | Object::Port(_) => true,
+            | Object::Port(_)
+            | Object::Starter => true,
             Object::Channel(_) | Object::Job(_) | Object::Process(_) => false,
         }
     }

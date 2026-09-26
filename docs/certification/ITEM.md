@@ -270,6 +270,7 @@ A certificate attaches to a configuration, not to a repository.
 | Unstable features | none in `kernel/` or `boot/uefi/` |
 | Cargo features | 7 in the workspace, **0** in `kernel/` or `boot/uefi/` |
 | Build settings | **one**, `cargo xtask --mitigations on\|off`; the reference is `on`, the default |
+| Boot options that change the item's work | **one**, `ferrix.devmgr=kernel\|init`; the reference is `kernel`, the default |
 | Kernel link (`on`) | a static PIE on x86-64 (PIC code model, every x86-64 crate) and AArch64 (static code model, `-pie -z notext`); on ARMv7-A a fixed-address link that keeps its relocations (`--emit-relocs`). The loader moves it each boot (KASLR). `off`: the static fixed-address image |
 | External crates | 21, listed in [SOUP.md](SOUP.md) |
 | Assembly | 500 lines across 22 allow-listed sites outside the Pixel 7 loader, ~99.76% Rust (`check-asm-budget.py`) |
@@ -288,6 +289,25 @@ who have decided they need none. It is not a Cargo feature, and the claims
 here are made of `on` alone (SAFETY-MANUAL AoU-8). `cargo xtask check` builds
 the kernel in both settings on all three architectures so that `off` cannot
 stop compiling unnoticed, and the running kernel says which it is.
+
+The boot option is who starts `devmgr` (`docs/INIT.md` §7.3, landing L12).
+Under `kernel`, the reference, the kernel starts it at bring-up, runs the
+disk checks of stages 10 to 12 through its drivers, and switches `/` to the
+root disk before pid 1 exists. Under `init`, which the images that boot
+`/sbin/init` use, the kernel gives pid 1 a one-shot starter (`Object::Starter`,
+`MANAGE` alone, so it can never leave pid 1's table) and starts `devmgr`
+itself when pid 1 asks with `devmgr_start`, in the job pid 1 names: the
+DEVICES channel, which carries every device's authority, goes between the
+kernel and `devmgr` alone, and pid 1 gets a process handle that reaches
+nothing inside it. The disk checks of stages 10 to 12 are not run on those
+boots, and `/` is switched after `devmgr` has reported; the switch then
+**re-roots pid 1**: its root and working directory become the volume's in
+the step that publishes the new root, under pid 1's own filesystem lock.
+That is the one process the kernel changes the root of from outside, once,
+and only under this option (`fs::root_disk`). Every start is checked as it
+is made (FX-1009), and so is the re-root (FX-1202). No claim is made of
+`init` (SAFETY-MANUAL AoU-8, AoU-13); the boots that carry the evidence keep
+`kernel`.
 
 ---
 

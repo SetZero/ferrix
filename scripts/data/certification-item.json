@@ -50,6 +50,21 @@
     "mitigations_settings": [
       "on",
       "off"
+    ],
+    "devmgr": "kernel",
+    "devmgr_settings": [
+      "kernel",
+      "init"
+    ],
+    "devmgr_why": [
+      "One boot option changes what the item does: `ferrix.devmgr=kernel|init`",
+      "(docs/INIT.md 7.3, L12). `kernel`, the default and the reference, has the",
+      "kernel start devmgr at bring-up, run the disk checks of stages 10 to 12",
+      "through its drivers, and switch / before pid 1. `init` has pid 1 start",
+      "devmgr through a one-shot starter, skips those checks, switches / after",
+      "devmgr has reported, and re-roots pid 1 with the switch. It exists, the",
+      "images that boot /sbin/init use it, and no claim is made of it",
+      "(ITEM.md 5, SAFETY-MANUAL AoU-8 and AoU-13)."
     ]
   },
   "test_file_patterns": [

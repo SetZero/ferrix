@@ -76,7 +76,9 @@ use core::fmt;
 
 use ferrix_bootinfo::{BootView, option_in};
 use ferrix_linux_abi::errno::Errno;
-use ferrix_native_abi::bootstrap::init_hello;
+use ferrix_native_abi::bootstrap::{
+    DEVMGR_STARTER_MAGIC, ROOT_IN_MEMORY, ROOT_MAGIC, ROOT_SWITCHED, after_hello, init_hello,
+};
 use ferrix_native_abi::rights::Rights;
 use ferrix_sync::Once;
 
@@ -203,11 +205,53 @@ fn next_bootstrap() -> Option<Transfer> {
         println!("  init     no memory for a bootstrap channel; starting the program without one");
         return None;
     };
+    // Under `ferrix.devmgr=init`, the first program -- pid 1 -- is also given
+    // devmgr's starter, after the hello, with MANAGE alone (`docs/INIT.md`
+    // §7.3). Given once: a later program of a command list gets none.
+    if let Some(starter) = crate::devmgr::starter() {
+        let written = fallible::try_to_vec(&after_hello(DEVMGR_STARTER_MAGIC, 1))
+            .and_then(|message| Ok((message, fallible::try_with_capacity(1)?)))
+            .map_err(|_| ())
+            .and_then(|(message, mut transfers): (Vec<u8>, Vec<Transfer>)| {
+                let _ = fallible::push_within(&mut transfers, (starter, Rights::MANAGE));
+                kernel_end
+                    .write(message, 1, || Ok::<Vec<Transfer>, Infallible>(transfers))
+                    .map_err(|_| ())
+            });
+        if written.is_err() {
+            println!("  init     devmgr's starter could not be written; nothing will start devmgr");
+        }
+    }
     let last = CHANNEL.lock().replace(kernel_end);
     // Through `dispose`, with the lock let go: what the last program sent the
     // kernel and nobody read may carry handles.
     crate::object::dispose(last.map(Object::Channel));
     Some((Object::Channel(program_end), Rights::CHANNEL))
+}
+
+/// Tell pid 1 where `/` is, on its bootstrap channel: the root volume, with
+/// pid 1 moved onto it, or still the tmpfs (`ferrix.devmgr=init`, L12). Said
+/// once, by `fs::root_disk`, once it knows.
+pub(crate) fn notify_root(switched: bool) {
+    let value = if switched {
+        ROOT_SWITCHED
+    } else {
+        ROOT_IN_MEMORY
+    };
+    let Some(kernel_end) = CHANNEL.lock().clone() else {
+        println!("  init     pid 1 has no bootstrap channel to be told where / is on");
+        return;
+    };
+    let written = fallible::try_to_vec(&after_hello(ROOT_MAGIC, value))
+        .map_err(|_| ())
+        .and_then(|message| {
+            kernel_end
+                .write(message, 0, || Ok::<Vec<Transfer>, Infallible>(Vec::new()))
+                .map_err(|_| ())
+        });
+    if written.is_err() {
+        println!("  init     pid 1 could not be told where / is");
+    }
 }
 
 /// The command-line option naming the file pid 1 is started from.

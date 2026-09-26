@@ -1005,6 +1005,7 @@ fn every_call_in_the_native_table_has_a_wrapper() {
     let _ = Process::from_owned(handle()).status();
     let _ = pending::give_bootstrap(&sys, 2, handle());
     let _ = pending::take_bootstrap(&sys);
+    let _ = pending::start_devmgr(&handle(), &job);
     let _ = port.descriptor(true);
     let _ = interrupt.bind(&port, 0);
     let _ = interrupt.ack();

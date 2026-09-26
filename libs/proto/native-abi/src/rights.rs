@@ -103,6 +103,12 @@ impl Rights {
     /// [`Rights::WAIT`] to hear that it has ended, directly or through a port,
     /// and [`Rights::MANAGE`] for the calls that act on it, which come with
     /// native process creation.
+    ///
+    /// None of those calls reaches inside the process: no call reads or
+    /// writes its memory, takes or copies its handles, or gives it anything
+    /// once it has started (`process_start` is `BAD_STATE` then). So a handle
+    /// to a process the kernel started with authority of its own -- `devmgr`
+    /// under `ferrix.devmgr=init` -- hands its holder none of that authority.
     pub const PROCESS: Rights =
         Rights(Rights::DUPLICATE.0 | Rights::TRANSFER.0 | Rights::WAIT.0 | Rights::MANAGE.0);
 

@@ -418,10 +418,15 @@ pub(crate) fn carried(arch: Arch) -> Result<Vec<File>> {
     Ok(files)
 }
 
-/// The command line an image that boots init carries (§8.1).
+/// The command line an image that boots init carries (§8.1): init as pid
+/// 1, and `devmgr` started by it (§7.3, L12), which is outside the certified
+/// configuration and the reason those images skip the kernel's disk checks.
 pub(crate) fn command_line() -> String {
-    format!("{}\n", qemu::init_option(PATH))
+    format!("{} {DEVMGR_OPTION}\n", qemu::init_option(PATH))
 }
+
+/// The kernel option that has pid 1 start `devmgr`.
+const DEVMGR_OPTION: &str = "ferrix.devmgr=init";
 
 /// A word of `ExecStart=`, quoted as systemd reads one.
 fn exec_word(word: &str) -> String {
@@ -588,7 +593,7 @@ fn test_arch(arch: Arch, args: &Args, checker: &Checker) -> Result<()> {
     let kernel = cargo::build_kernel(arch, args.release)?;
     let natives = native::build(arch, args.release)?;
     let archive = initramfs::build(None, &natives, None, &files)?;
-    let options = format!("{}\n", qemu::init_option(PATH));
+    let options = command_line();
     let image = fat::write_image_with(arch, &loader, &kernel, &archive, Some(&options))?;
 
     let volume = btrfs_disk::blank_copy(VOLUME)?;
@@ -740,6 +745,7 @@ fn session(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
     sockets(at, failures)?;
     resources(at, failures)?;
     directory(at, failures)?;
+    devmgr_by_init(at, failures)?;
     power_off(at, failures)
 }
 
@@ -819,6 +825,65 @@ fn directory(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
                  every {name} role: {other:?}"
             )),
         }
+    }
+    Ok(())
+}
+
+/// `devmgr` started by pid 1 (L12, §7.3), under `ferrix.devmgr=init`: the
+/// kernel gave init the starter and init only a process handle back; `/`
+/// moved onto the fresh root disk with pid 1 once `devmgr` had reported;
+/// `devmgr.service` is active, and a `svc restart` of it has the kernel start
+/// a second `devmgr` once the first and its drivers have gone.
+fn devmgr_by_init(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
+    let all = everything(at);
+    for (line, what) in [
+        (
+            "init     the kernel greeted init, version 1, and gave it devmgr's starter",
+            "init was not given devmgr's starter",
+        ),
+        (
+            "devmgr   pid 1 got only a process handle",
+            "the kernel did not check that pid 1 got only a process handle to devmgr",
+        ),
+        (
+            "devmgr   started by pid 1:",
+            "the devmgr pid 1 started did not report",
+        ),
+        (
+            "root     pid 1 moved onto the volume with the switch",
+            "pid 1 was not moved onto the root volume",
+        ),
+        (
+            "init     / is the root volume now",
+            "init was not told / is the root volume",
+        ),
+    ] {
+        if !has(&all, line) {
+            failures.push(what.into());
+        }
+    }
+    match ask(at, "svc status devmgr.service\n", "Active: ")? {
+        Some(line) if line.contains("Active: active") => {}
+        other => failures.push(format!("devmgr.service is not active: {other:?}")),
+    }
+    let started = |lines: &[String]| {
+        lines
+            .iter()
+            .filter(|line| line.contains("devmgr   started by pid 1:"))
+            .count()
+    };
+    let before = started(at.after());
+    at.type_in(b"svc restart devmgr.service\n")?;
+    let deadline = Instant::now() + PATIENCE;
+    let _ = at.read_more(deadline, |lines| started(lines) > before)?;
+    if started(at.after()) <= before {
+        failures.push("svc restart devmgr.service did not start a second devmgr".into());
+    }
+    match ask(at, "svc status devmgr.service\n", "Active: ")? {
+        Some(line) if line.contains("Active: active") => {}
+        other => failures.push(format!(
+            "devmgr.service is not active after its restart: {other:?}"
+        )),
     }
     Ok(())
 }

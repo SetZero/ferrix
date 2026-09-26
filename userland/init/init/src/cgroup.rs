@@ -96,6 +96,20 @@ impl Groups {
         Ok(groups)
     }
 
+    /// Mount cgroup2 at [`MOUNT`] again, where `/` is now: after the root
+    /// switch moved init onto the root volume (`docs/INIT.md` §7.3). The
+    /// tree is the kernel's one, so every cgroup made is there already.
+    pub(crate) fn remount(&self) -> io::Result<()> {
+        fs::create_dir_all(&self.root)?;
+        let source = c"cgroup2";
+        let target = CString::new(MOUNT).map_err(io::Error::other)?;
+        match sys::mount(source, &target, source, 0, None) {
+            Ok(()) => Ok(()),
+            Err(error) if error.raw_os_error() == Some(libc::EBUSY) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Enable in `dir`'s `cgroup.subtree_control` every controller its
     /// `cgroup.controllers` offers.
     fn enable_controllers(&self, dir: &Path, log: &mut dyn FnMut(String)) {
@@ -314,6 +328,35 @@ impl Groups {
             .lines()
             .filter_map(|line| line.trim().parse().ok())
             .collect()
+    }
+
+    /// Every process in `unit`'s cgroup and in every cgroup beneath it: whom
+    /// `KillMode=control-group` signals, as systemd does -- a delegated
+    /// unit's own sub-cgroups, and the jobs `devmgr` makes for its drivers,
+    /// are the unit's too.
+    pub(crate) fn procs_beneath(&self, unit: UnitId) -> Vec<u32> {
+        let Some(group) = self.groups.get(&unit) else {
+            return Vec::new();
+        };
+        let mut found = Vec::new();
+        let mut dirs = vec![self.root.join(group.path.as_str())];
+        while let Some(dir) = dirs.pop() {
+            found.extend(
+                fs::read_to_string(dir.join("cgroup.procs"))
+                    .unwrap_or_default()
+                    .lines()
+                    .filter_map(|line| line.trim().parse::<u32>().ok()),
+            );
+            if let Ok(entries) = fs::read_dir(&dir) {
+                dirs.extend(
+                    entries
+                        .flatten()
+                        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+                        .map(|entry| entry.path()),
+                );
+            }
+        }
+        found
     }
 
     /// Move `pids` into `unit`'s cgroup, returning what could not be moved.

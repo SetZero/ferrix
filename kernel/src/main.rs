@@ -1330,8 +1330,24 @@ fn check_block_ring() {
     // (and starts them itself where `devmgr` did not) and mounts what comes
     // next, and the net core is started: bring-up, whatever `checks` says.
     // Each disk check below says it skipped on a machine without its disk.
-    let started_by_devmgr = check_devmgr();
-    check_driver(started_by_devmgr);
+    if devmgr::by_init() {
+        // L12 (`docs/INIT.md` §7.3): pid 1 starts devmgr, so its drivers,
+        // the disk checks of stages 10 to 12 that read through them, and
+        // `/`'s switch to the root disk all come after init starts. That
+        // configuration is outside the certified one, whose boots keep the
+        // checks (`docs/certification/ITEM.md` §5).
+        println!(
+            "  devmgr   left to pid 1: the disk checks of stages 10 to 12 are the kernel path's, \
+             and / switches once devmgr has reported"
+        );
+        if let Err(why) = devmgr::make_drivers_job() {
+            println!("  devmgr   drivers.slice could not be made: {why}");
+        }
+        fs::root_disk::switch_after_devmgr();
+    } else {
+        let started_by_devmgr = check_devmgr();
+        check_driver(started_by_devmgr);
+    }
     // The net core follows the same chain rather than a line of its own in
     // `kmain`, for the reason the block ring's two do: it needs everything
     // they need -- a root filesystem for sockfs, and the scheduler for the
@@ -2431,6 +2447,7 @@ fn report_clocks_and_power(view: &BootView<'_>, clocks: &irq::Report) {
     fs::btrfs_powerfail::init(view);
     fs::root_disk::init(view);
     init::read_option(view);
+    devmgr::read_option(view);
     fs::procfs::remember_command_line(view.cmdline());
 }
 

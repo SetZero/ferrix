@@ -166,7 +166,15 @@ struct Init {
     /// Bootstrap channels, native services and the directory (§6), unless
     /// the kernel has no native calls to make them with.
     directory: Option<Directory>,
+    /// Under `ferrix.devmgr=init` (§7.3, L12): whether the boot waits for
+    /// the kernel to say where `/` is, having started only `devmgr.service`.
+    awaiting_root: bool,
 }
+
+/// The unit that runs `devmgr` when pid 1 starts it (§7.3), and the program
+/// its `ExecStart=` names, which the kernel loads itself.
+const DEVMGR_UNIT: &str = "devmgr.service";
+const DEVMGR_PROGRAM: &str = "/sbin/devmgr";
 
 /// What a control connection is waiting for from the manager.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -278,7 +286,21 @@ impl Init {
                 None
             }
         };
+        // Under `ferrix.devmgr=init`: devmgr.service alone, until the kernel
+        // has switched `/` and said so; then the units again, from the
+        // volume, and the boot (§7.3, L12).
+        let awaiting_root = directory.as_ref().is_some_and(Directory::has_starter);
+        let first = if awaiting_root {
+            say("starting devmgr.service, and the rest once / is known");
+            Event::Request {
+                client: SIGNALLED,
+                request: Request::start(DEVMGR_UNIT),
+            }
+        } else {
+            Event::Boot
+        };
         Ok(Init {
+            awaiting_root,
             directory,
             manager,
             epoll,
@@ -286,7 +308,7 @@ impl Init {
             groups,
             reports: BTreeMap::new(),
             mounts: BTreeMap::new(),
-            queue: VecDeque::from([Event::Boot]),
+            queue: VecDeque::from([first]),
             terminal,
             source,
             control,
@@ -484,7 +506,7 @@ impl Init {
                 let signal = libc::c_int::from(signal.0);
                 let pids = match whom {
                     Whom::Process(pid) => vec![pid.0],
-                    Whom::Group => self.groups.procs(unit),
+                    Whom::Group => self.groups.procs_beneath(unit),
                 };
                 for pid in pids {
                     let _ = sys::kill(pid, signal);
@@ -596,6 +618,12 @@ impl Init {
                 .connection
                 .and_then(|token| self.sockets.connection(token)),
         };
+        if spec.command.path == DEVMGR_PROGRAM
+            && spec.role == Role::Main
+            && self.directory.as_ref().is_some_and(Directory::has_starter)
+        {
+            return self.spawn_devmgr(unit, spec);
+        }
         if spec.service_type == ServiceType::Native && spec.role == Role::Main {
             return self.spawn_native(unit, spec);
         }
@@ -759,6 +787,72 @@ impl Init {
         });
     }
 
+    /// What init set up on the tmpfs before the switch, set up again where
+    /// `/` is now: `/run`, cgroup2 at its place, and the control socket.
+    /// The cgroups themselves are the kernel's one tree, and stay.
+    fn settle_on_new_root(&mut self) {
+        mount_run();
+        if let Err(error) = self.groups.remount() {
+            say(&format!("cgroup2 at {}: {error}", cgroup::MOUNT));
+        }
+        if let Some(old) = self.control.take() {
+            sys::unwatch(self.epoll.as_fd(), old.fd());
+        }
+        match Control::listen() {
+            Ok(control) => {
+                if let Err(error) = sys::watch(
+                    self.epoll.as_fd(),
+                    control.fd(),
+                    libc::EPOLLIN as u32,
+                    token::LISTEN,
+                ) {
+                    say(&format!("watching the control socket failed: {error}"));
+                }
+                self.control = Some(control);
+            }
+            Err(error) => say(&format!(
+                "the control socket {} could not be made again: {error}",
+                ferrix_svc_proto::control::SOCKET
+            )),
+        }
+    }
+
+    /// Start `devmgr.service`'s process by asking the kernel, with the
+    /// starter, in the job behind its cgroup (§7.3, L12): the kernel loads
+    /// `devmgr` and hands it its devices; init gets only a handle to the
+    /// process, and watches it as a native service's.
+    fn spawn_devmgr(&mut self, unit: UnitId, spec: &ferrix_svc::event::SpawnSpec) {
+        let name = self.display(unit);
+        let fail = |init: &mut Init, why: String| {
+            say(&format!("{name}: {why}"));
+            init.queue.push_back(Event::SpawnFailed {
+                unit,
+                error: ferrix_svc::event::Errno(libc::EINVAL),
+            });
+        };
+        let Some(cgroup) = self.groups.dir(&spec.group) else {
+            return fail(self, format!("its cgroup {} was never made", spec.group));
+        };
+        let Some(directory) = self.directory.as_mut() else {
+            return;
+        };
+        let key = match directory.start_devmgr(unit, cgroup) {
+            Ok(key) => key,
+            Err(why) => return fail(self, why),
+        };
+        self.groups.filled(&spec.group);
+        let Some(pid) = self.groups.procs(unit).into_iter().next() else {
+            return fail(self, "started, and not in its cgroup".to_owned());
+        };
+        if let Some(directory) = self.directory.as_mut() {
+            directory.found_pid(key, pid);
+        }
+        self.queue.push_back(Event::Spawned {
+            unit,
+            pid: Pid(pid),
+        });
+    }
+
     /// The port has packets: native services' ends and their channels'
     /// messages.
     fn drain_port(&mut self) {
@@ -766,10 +860,29 @@ impl Init {
             return;
         };
         let (events, lines) = directory.drain();
+        let root = directory.take_root();
         for line in lines {
             say(&line);
         }
         self.queue.extend(events);
+        if let Some(switched) = root {
+            self.rooted(switched);
+        }
+    }
+
+    /// The kernel said where `/` is (§7.3, L12). On the volume, the units are
+    /// read again from it, since pid 1 now is; then the boot goes on.
+    fn rooted(&mut self, switched: bool) {
+        if switched {
+            say("/ is the root volume now, and init with it; reading the units again");
+            self.settle_on_new_root();
+            self.reload_units();
+        } else {
+            say("/ stays in memory");
+        }
+        if std::mem::take(&mut self.awaiting_root) {
+            self.queue.push_back(Event::Boot);
+        }
     }
 
     /// The names a unit's file says it `Offers=`.

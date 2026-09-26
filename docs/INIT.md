@@ -640,7 +640,51 @@ stays the same; init writes it instead of the kernel. `devmgr.builtin`
 becomes `devmgr.service`, as in §7.2. `DEVMGR.md` §5's rule, that no driver
 may fault on the disk it serves, still holds, because init starts `devmgr`
 from the initramfs before any mount it depends on. This is landing L12,
-marked *later*, and it is the rehearsal that proves the backend table true.
+and it is the rehearsal that proves the backend table true.
+
+**As built (L12, 2026-09-27), after the certification review.** Two things
+differ from the sketch above, both for the item's sake. The DEVICES channel
+carries every device's authority, and through it DMA, so it never passes
+through init: init is given a *starter* instead, and the kernel does the
+rest. And the images that boot init opt in, so the certified configuration
+keeps the kernel's path.
+
+* `ferrix.devmgr=init` on the command line, which the images that boot
+  `/sbin/init` carry (`run`, the desktop, `test-init`, `test-compositor`,
+  `test-jobs`). Without it, or with `kernel`, the kernel starts `devmgr` at
+  bring-up as before; that is the reference configuration
+  (`docs/certification/ITEM.md` §5), and the boots that carry the evidence
+  keep it.
+* The kernel writes a second message on pid 1's K2 channel after the hello:
+  `FXDS`, carrying `Object::Starter` with `MANAGE` alone -- no `TRANSFER`,
+  no `DUPLICATE`, so it can never leave pid 1's table.
+* `devmgr.service` (`Type=simple`, `ExecStart=/sbin/devmgr`,
+  `Slice=drivers.slice`, `Restart=always`, `DefaultDependencies=no`) is the
+  only unit init starts before it knows where `/` is. Its spawn is
+  `devmgr_start(starter, job)` (0x1052) with the job behind the unit's
+  cgroup: the kernel loads `/sbin/devmgr`, writes DEVICES with that job for
+  the drivers, makes and starts the process in it, and answers a handle to
+  it with `PROCESS` rights, which reach nothing inside it. The channel's end
+  goes into `devmgr`'s table and nowhere else, and every start checks that
+  as the caller, with `process_start` on the handle `BAD_STATE` and a second
+  start while it lives `ALREADY_BOUND` (FX-1009). A start after one died is
+  `BAD_STATE` until every process in its job has ended; then the kernel
+  quiesces every device before handing them on. So `svc restart
+  devmgr.service` works, as does a restart by its policy.
+* The stage 10 to 12 boot checks that read through `devmgr`'s drivers are
+  not run on those boots (`SAFETY-MANUAL.md` AoU-13).
+* `/` is switched once `devmgr` has reported, by a kernel task
+  (`fs::root_disk::switch_after_devmgr`), which then mounts the data disk and
+  writes `FXRT` on K2: switched or not. The switch **re-roots pid 1**: its
+  root and working directory become the volume's in the step that publishes
+  the new root, under pid 1's filesystem lock (FX-1202 checks that, and that
+  a fork of it sees the volume). Init then mounts `/run` and cgroup2 again,
+  binds its control socket again, reads its units from the volume, and boots
+  `default.target`. What init opened before keeps the root it was opened
+  under, as after a `chroot`.
+* With it, init's `KillMode=control-group` signals every process in the
+  unit's cgroup and beneath it, as systemd does, not only its own
+  `cgroup.procs`: `devmgr`'s drivers are in jobs beneath its unit's.
 
 ## 8. Boot and shutdown
 
@@ -825,11 +869,11 @@ cgroup half is what §0 asks for first.
 | L9 | `.socket` units. **Done 2026-09-26** (§16), sshd aside | L4 | `test-init`: sshd activated on connect | 5 |
 | L10 | Move the images over: `cargo xtask run` and `run-compositor` boot init with `multi-user.target` / `graphical.target`; hyprix stops being pid 1 and makes a scope per client. **Done 2026-09-26** (§16) | L5, L6 | `test-compositor` under init | 6 |
 | L11 | `devmgr` shares the restart policy. **Done 2026-09-26** by ferrix-55b: the policy is its own no-alloc crate, `libs/init/restart`, with systemd's fixed-window start limit, and devmgr reads each death's status through K6 | L2 | `test-restart` | 2 |
-| L12 | *later*: the kernel starts init alone and init starts `devmgr` (§7.3) | L8 | `test-boot` on all three architectures | 8 |
+| L12 | The kernel starts init alone and init starts `devmgr` (§7.3). **Done 2026-09-27**, re-sized from 8 to 12 for the starter, the re-root and the certification record | L8 | `test-init --arch all` with a root disk, the whole image row | 12 |
 | L13 | *after the rest of stage 13*: `PrivateTmp=`, `ProtectSystem=`, `PrivateNetwork=`, `SystemCallFilter=`, `NoNewPrivileges=` | L4, stage 13 | `test-init` stage six | 8 |
 
 The kernel items of §11 are counted inside the landings that carry them.
-L1 to L10 add up to 67 points, and L11 to L13 to 18 more. L1 to L4 are what
+L1 to L10 add up to 67 points, and L11 to L13 to 22 more (L12 re-sized from 8 to 12). L1 to L4 are what
 the roadmap calls "a working init". L5 is what makes it a resource manager.
 L8 is what makes it one a microkernel could keep.
 
@@ -902,17 +946,17 @@ the system people will actually use.
 | L8 | done, 2026-09-26: the kernel half (K2, K3, K4, K6), then init's | "Let a parent hand its child a bootstrap handle across execve" and the five after it; "Route the directory's OPENs, and start Type=native services" |
 | L10 | done, 2026-09-26 | "Boot the images through init, and the compositor as its service" |
 | L11 | done, 2026-09-26, by ferrix-55b with T0 | "Give the restart policy a crate of its own that allocates nothing"; "Restart drivers by the service manager's policy, and report how they died" |
-| L12 | not started; next (the customer, 2026-09-26) | |
+| L12 | done, 2026-09-27, as built in §7.3 | "Let pid 1 start devmgr, through a starter the kernel gives it" |
 | L13 | parked until stage 13's namespaces and seccomp exist (the customer, 2026-09-26) | |
 
-All of L1 to L11's 69 points are spent. L11 put `devmgr` on the restart
+All of L1 to L12's 81 points are spent. L11 put `devmgr` on the restart
 policy, which moved into `libs/init/restart` because `devmgr` has no
 allocator; its start limit became systemd's fixed window. The customer
-counts the init done at L11 (2026-09-26). L12, init starting `devmgr` (the
-microkernel step), is next, `docs/AUTH.md`'s P0b being done; then `sshd` with
-`LISTEN_FDS`, so L9's gate runs real socket activation in place of `nc`.
-L13, the sandboxing keys, is parked until stage 13's namespaces and seccomp
-exist.
+counts the init done at L11 (2026-09-26). L12 (2026-09-27) has pid 1 start
+`devmgr` through a starter under `ferrix.devmgr=init`, which every image
+that boots init now sets. Next is `sshd` with `LISTEN_FDS`, so L9's gate
+runs real socket activation in place of `nc`. L13, the sandboxing keys, is
+parked until stage 13's namespaces and seccomp exist.
 
 **L1, as built (5 points).** `libs/init/svc` is on `main`: `no_std` with
 `alloc`, `forbid(unsafe_code)`, 52 host tests, a Miri step in CI and in
@@ -1475,8 +1519,8 @@ it to use. Linux services' own OFFERs are kept but no gate offers one yet.
 * **`test-jobs`** types its session at the getty's shell, and ends it with
   `exit`, after which init must give the console a new session.
 
-**What the next session does first.** L12, init starting `devmgr` (§7.3),
-then `sshd` with `LISTEN_FDS` for L9's gate. L13 waits for stage 13's
+**What the next session does first.** `sshd` with `LISTEN_FDS` for L9's
+gate. L13 waits for stage 13's
 namespaces and seccomp. `docs/AUTH.md`'s P0 to P0c are done: a native
 process runs as its maker, a native service as its `User=`, and a
 delegated cgroup's limits stay its delegator's.

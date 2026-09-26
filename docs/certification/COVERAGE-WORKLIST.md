@@ -47,7 +47,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `syscall/native.rs` | `item` | 24 | 19 | 20 | 16 | 804, 1262, 1274-1276, 1278, 1286-1287, 1290-1291, 1496-1497, 1501-1503, 1505 |
+| `syscall/native.rs` | `item` | 24 | 19 | 20 | 16 | 805, 1263, 1275-1277, 1279, 1287-1288, 1291-1292, 1497-1498, 1502-1504, 1506 |
 | `syscall/program.rs` | `item` | 3 | 4 | 2 | 1 | 89 |
 
 ---
@@ -76,7 +76,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | `object/oom.rs` | `core` | 5 | 6 | 5 | 5 | 169, 201, 205, 208, 213 |
 | `object/process.rs` | `core` | 5 | 5 | 4 | 3 | 128, 191-192 |
 | `object/channel.rs` | `core` | 4 | 4 | 4 | 4 | 311-313, 318 |
-| `object/mod.rs` | `core` | 2 | 2 | 2 | 2 | 248, 252 |
+| `object/mod.rs` | `core` | 2 | 2 | 2 | 2 | 262, 266 |
 | `object/port.rs` | `core` | 0 | 0 | 2 | 0 | - |
 | `object/pin.rs` | `core` | 0 | 1 | 0 | 0 | - |
 | `object/quota.rs` | `core` | 1 | 1 | 1 | 1 | 623 |
@@ -147,7 +147,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `main.rs` | `item` | 3 | 3 | 3 | 2 | 323, 1586 |
+| `main.rs` | `item` | 3 | 3 | 3 | 2 | 323, 1602 |
 
 ---
 
@@ -164,7 +164,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `init.rs` | `item` | 2 | 2 | 2 | 2 | 243, 363 |
+| `init.rs` | `item` | 2 | 2 | 2 | 2 | 287, 407 |
 
 ---
 

@@ -297,3 +297,18 @@ fn a_port_descriptor_sits_in_the_port_block() {
         assert_eq!(nr::decode(number), None, "{number:#x} was assigned");
     }
 }
+
+#[test]
+fn the_messages_after_the_hello_read_back() {
+    use crate::bootstrap::{
+        DEVMGR_STARTER_MAGIC, ROOT_MAGIC, ROOT_SWITCHED, after_hello, read_after_hello,
+    };
+    let starter = after_hello(DEVMGR_STARTER_MAGIC, 1);
+    assert_eq!(&starter[..4], b"FXDS");
+    assert_eq!(read_after_hello(&starter), Some((DEVMGR_STARTER_MAGIC, 1)));
+    let root = after_hello(ROOT_MAGIC, ROOT_SWITCHED);
+    assert_eq!(root[4..], 1_u32.to_le_bytes());
+    assert_eq!(read_after_hello(&root), Some((ROOT_MAGIC, ROOT_SWITCHED)));
+    assert_eq!(read_after_hello(&root[..7]), None, "short");
+    assert_eq!(read_after_hello(&[0; 9]), None, "long");
+}

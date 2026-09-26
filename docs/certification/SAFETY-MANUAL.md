@@ -161,8 +161,9 @@ needing either shall provide it above the element. (Finding F-21b.)
 
 ### AoU-8 — the configuration is the one in §1
 The claims hold for the reference configuration and no other. Changing the
-toolchain, enabling a Cargo feature, building with `--mitigations off`, or
-moving a file between rings changes what is claimed. The boundary gate makes
+toolchain, enabling a Cargo feature, building with `--mitigations off`,
+booting with `ferrix.devmgr=init` (AoU-13), or moving a file between rings
+changes what is claimed. The boundary gate makes
 the last of these visible, and the boot log says which build it is — *"speculation
 defences off: built with --mitigations off"* — so the third is visible on the
 running system; the first two are the integrator's to control.
@@ -232,6 +233,17 @@ device in a loop, and shall treat `QUARANTINE_FULL` as a device that has
 failed. (Finding F-38.)
 
 ---
+
+### AoU-13 — the disk checks of stages 10 to 12 run only when the kernel starts devmgr
+Under `ferrix.devmgr=init` pid 1 starts `devmgr` (`docs/INIT.md` §7.3), so
+the kernel has no driver to read a disk through before pid 1 runs, and the
+boot checks of stages 10 to 12 that do -- `devmgr`'s own REPORT at bring-up,
+the block driver, btrfs read and btrfs write -- are not run; the kernel says
+so on the console (*"left to pid 1: the disk checks of stages 10 to 12 are
+the kernel path's"*). The evidence for those stages comes from boots with the
+reference setting, `ferrix.devmgr=kernel`. The integrator shall use the
+reference setting, or accept that a boot with `init` does not prove those
+stages itself.
 
 ## 5. Element failure analysis
 

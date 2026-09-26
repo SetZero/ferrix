@@ -141,12 +141,22 @@ each driver died through K6.
 **The init is done: L1 to L11 (the customer, 2026-09-26).** The stage stays
 in progress until authentication's phase 1 lands.
 
-**Still to do for the init,** in the customer's order: **L12** next -- the
-kernel starts only init, and init starts
-`devmgr` (about 8 points). Then `sshd` with `LISTEN_FDS` (the sshdt port,
-x86-64 only), so L9's gate runs real `sshd` socket activation where it runs
-`nc` today. **L13**, the sandboxing keys, is parked until stage 13's
-namespaces and seccomp exist.
+**Done -- L12, pid 1 starts `devmgr` (2026-09-27, 12 points).** Every image
+that boots init sets `ferrix.devmgr=init`: the kernel gives pid 1 a one-shot
+starter, and init runs `devmgr.service` by asking the kernel to start
+`devmgr` in its cgroup's job, getting back only a handle to the process --
+the device authority never passes through init. `/` switches to the root
+disk once `devmgr` has reported, moving pid 1 with it, and init then boots
+`default.target` from the volume. `test-init` runs it with a root disk on
+all three architectures, including `svc restart devmgr.service`. Those
+boots skip the kernel's disk checks of stages 10 to 12, which is why the
+option is outside the certified configuration; the default boots keep them
+(`docs/certification/ITEM.md` §5).
+
+**Still to do for the init,** in the customer's order: `sshd` with
+`LISTEN_FDS` (the sshdt port, x86-64 only), so L9's gate runs real `sshd`
+socket activation where it runs `nc` today. **L13**, the sandboxing keys,
+is parked until stage 13's namespaces and seccomp exist.
 
 **Designed (2026-09-23): `docs/INIT.md`.** `/sbin/init` is pid 1 and a
 service manager in one program. Its units are in systemd's syntax, with

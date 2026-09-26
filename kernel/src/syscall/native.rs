@@ -406,6 +406,7 @@ pub(crate) fn dispatch(args: &SyscallArgs, caller: Option<&dyn Host>) -> Result<
         | NativeCall::JobForCgroup
         | NativeCall::ProcessGive
         | NativeCall::PortFd => served(call, caller, &a),
+        NativeCall::DevmgrStart => crate::devmgr::devmgr_start(caller, &a),
         NativeCall::ProcessBootstrap => process_bootstrap(process),
         NativeCall::ProcessStatus => process_status(process, handle(a[0]), a[1]),
         NativeCall::DeviceInfo => device_info(process, handle(a[0]), a[1]),
@@ -1702,11 +1703,28 @@ fn info_bytes(info: &DeviceInfo) -> [u8; DEVICE_INFO_BYTES] {
 /// the driver is gone but its ring has not ended within the patience.
 fn device_quiesce(process: &Process, device: Handle) -> Result<usize, Errno> {
     let node = device_in(process, device, Rights::MANAGE)?;
+    quiesce_while(&node, &|| process.is_terminated())?;
+    Ok(0)
+}
+
+/// Quiesce `node` as `device_quiesce` does, for the kernel itself: before a
+/// `devmgr` pid 1 starts again is handed the devices its dead predecessor's
+/// drivers served (`crate::devmgr`).
+///
+/// # Errors
+///
+/// `BAD_STATE` while a driver still serves the device, `TIMED_OUT` when its
+/// core has not let go in time, `BAD_STATE` when its DMA cannot be turned off.
+pub(crate) fn quiesce(node: &Arc<DeviceNode>) -> Result<(), Errno> {
+    quiesce_while(node, &|| false)
+}
+
+/// The body of [`device_quiesce`], given when to give up waiting.
+fn quiesce_while(node: &Arc<DeviceNode>, cancelled: &dyn Fn() -> bool) -> Result<(), Errno> {
     // A dead driver's ring, card or renderer may not have noticed the death
     // yet: wait for each, as long as the driver's end of its channel is
     // closed. A driver started again is refused its channel until they let
     // go (`crate::claim`).
-    let cancelled = || process.is_terminated();
     let still_served = |why| match why {
         // A driver still holds its end: refused for good.
         StillServed::ByADriver => status::BAD_STATE,
@@ -1715,13 +1733,13 @@ fn device_quiesce(process: &Process, device: Handle) -> Result<usize, Errno> {
         StillServed::Waiting => status::TIMED_OUT,
     };
     for server in SERVERS.iter() {
-        (server.wait_until_unserved)(&node, &cancelled).map_err(still_served)?;
+        (server.wait_until_unserved)(node, cancelled).map_err(still_served)?;
     }
     node.disable_dma().map_err(|_| status::BAD_STATE)?;
     for release in SERVERS.iter().filter_map(|server| server.release) {
-        release(&node);
+        release(node);
     }
-    Ok(0)
+    Ok(())
 }
 
 /// `device_clock`.
@@ -2093,7 +2111,8 @@ fn observe(target: &Object, observer: Observer) -> Option<Result<(), PortError>>
         | Object::Device(_)
         | Object::Interrupt(_)
         | Object::IoMapping(_)
-        | Object::Pin(_) => None,
+        | Object::Pin(_)
+        | Object::Starter => None,
     }
 }
 

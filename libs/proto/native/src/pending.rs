@@ -127,6 +127,32 @@ impl<S: Syscall> Process<S> {
     }
 }
 
+/// `devmgr_start`: ask the kernel to start `devmgr` in `job`, with the
+/// starter the kernel gave pid 1 (`docs/INIT.md` §7.3, L12). The kernel
+/// loads it and hands it its devices itself; what comes back is a handle to
+/// the process, to wait on and read how it ended.
+///
+/// # Errors
+///
+/// [`Error::AlreadyBound`] while a `devmgr` it started lives,
+/// [`Error::BadState`] after one ended and before its drivers have,
+/// [`Error::AccessDenied`] or [`Error::WrongType`] for a handle that is not
+/// the starter or a job it may manage.
+pub fn start_devmgr<S: Syscall>(
+    starter: &OwnedHandle<S>,
+    job: &Job<S>,
+) -> Result<Process<S>, Error> {
+    let value = Call::new(nr::DEVMGR_START)
+        .value(register(starter.raw()))
+        .value(register(job.handle()))
+        .make(job.syscall());
+    let handle = decode_handle(value)?;
+    Ok(Process::from_owned(OwnedHandle::from_raw(
+        job.syscall(),
+        handle,
+    )))
+}
+
 /// `process_give`: move `bootstrap` into the bootstrap slot of the caller's
 /// child `pid`, which has not yet completed an `execve`. The handle leaves
 /// this process only if the call succeeds.

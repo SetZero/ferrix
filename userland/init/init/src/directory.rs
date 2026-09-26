@@ -35,7 +35,9 @@ use ferrix_native::port::{self, Port};
 use ferrix_native::{
     Deadline, Error, Handle, Object, OwnedHandle, Requested, Rights, Signals, vmo,
 };
-use ferrix_native_abi::bootstrap::init_hello_version;
+use ferrix_native_abi::bootstrap::{
+    DEVMGR_STARTER_MAGIC, ROOT_MAGIC, ROOT_SWITCHED, init_hello_version, read_after_hello,
+};
 use ferrix_native_abi::directory::{Kind, MAX_MESSAGE, Message};
 use ferrix_native_abi::types::{PACKET_SIGNAL, PROCESS_EXITED, PROCESS_KILLED};
 use ferrix_svc::event::{Event, Exit, Name, Pid, Token, UnitId};
@@ -63,12 +65,15 @@ struct End {
 /// The directory's state.
 #[derive(Debug)]
 pub(crate) struct Directory {
-    /// Pid 1's own channel, held for later versions' handles.
-    #[expect(
-        dead_code,
-        reason = "held open, not read: version 1 sends nothing after its hello"
-    )]
+    /// Pid 1's own channel: the hello, then under `ferrix.devmgr=init`
+    /// devmgr's starter and, later, where `/` is (§7.3, L12).
     own: Option<Channel<Native>>,
+    /// The starter the kernel gave pid 1, with which it asks the kernel to
+    /// start `devmgr`.
+    starter: Option<OwnedHandle<Native>>,
+    /// What the kernel said about `/`, until the caller takes it: whether
+    /// it is the root volume now.
+    root: Option<bool>,
     port: Port<Native>,
     /// What each port key stands for.
     watched: BTreeMap<u64, Watched>,
@@ -80,6 +85,10 @@ pub(crate) struct Directory {
     ends: BTreeMap<u64, End>,
     next: u64,
 }
+
+/// The port key pid 1's own channel is watched under; the others count up
+/// from 1.
+const OWN: u64 = u64::MAX;
 
 /// A spawn's native half, for the caller to finish.
 #[derive(Debug)]
@@ -114,19 +123,87 @@ impl Directory {
         };
         let port = port::create(Native)?;
         let fd = port.descriptor(true)?;
-        Ok((
-            Directory {
-                own,
-                port,
-                watched: BTreeMap::new(),
-                channel_of: BTreeMap::new(),
-                offers: BTreeMap::new(),
-                ends: BTreeMap::new(),
-                next: 1,
-            },
-            fd,
-            said,
-        ))
+        let mut directory = Directory {
+            own,
+            starter: None,
+            root: None,
+            port,
+            watched: BTreeMap::new(),
+            channel_of: BTreeMap::new(),
+            offers: BTreeMap::new(),
+            ends: BTreeMap::new(),
+            next: 1,
+        };
+        directory.read_own();
+        if let Some(own) = &directory.own {
+            let _ = own.wait_async(&directory.port, Signals::READABLE, OWN);
+        }
+        let said = match directory.starter {
+            Some(_) => format!("{said}, and gave it devmgr's starter"),
+            None => said,
+        };
+        Ok((directory, fd, said))
+    }
+
+    /// Read what waits on pid 1's own channel after the hello: devmgr's
+    /// starter, and where `/` is.
+    fn read_own(&mut self) {
+        let Some(own) = &self.own else {
+            return;
+        };
+        loop {
+            let mut bytes = [0_u8; 16];
+            let mut handles = [Handle(0); 1];
+            let Ok(got) = own.read(&mut bytes, &mut handles) else {
+                return;
+            };
+            let said = read_after_hello(bytes.get(..got.bytes).unwrap_or_default());
+            let handle = (got.handles == 1).then(|| OwnedHandle::from_raw(Native, handles[0]));
+            match (said, handle) {
+                (Some((DEVMGR_STARTER_MAGIC, _)), Some(starter)) => self.starter = Some(starter),
+                (Some((ROOT_MAGIC, value)), None) => self.root = Some(value == ROOT_SWITCHED),
+                _ => {}
+            }
+        }
+    }
+
+    /// Whether the kernel gave pid 1 devmgr's starter.
+    pub(crate) fn has_starter(&self) -> bool {
+        self.starter.is_some()
+    }
+
+    /// What the kernel said about `/` since the last call: `Some(true)` when
+    /// it is the root volume now, with pid 1 on it.
+    pub(crate) fn take_root(&mut self) -> Option<bool> {
+        self.root.take()
+    }
+
+    /// Ask the kernel to start `devmgr` in the job behind `cgroup`, with the
+    /// starter, and watch the process it answers as a native service's.
+    pub(crate) fn start_devmgr(
+        &mut self,
+        unit: UnitId,
+        cgroup: BorrowedFd<'_>,
+    ) -> Result<u64, String> {
+        use std::os::fd::AsRawFd as _;
+        let starter = self
+            .starter
+            .as_ref()
+            .ok_or_else(|| "no starter from the kernel: it starts devmgr itself".to_owned())?;
+        let job: Job<Native> = job::for_cgroup(
+            Native,
+            cgroup.as_raw_fd(),
+            Requested::Exactly(Rights::MANAGE),
+        )
+        .map_err(|error| format!("job_for_cgroup: {error:?}"))?;
+        let process = pending::start_devmgr(starter, &job)
+            .map_err(|error| format!("devmgr_start: {error:?}"))?;
+        let key = self.key();
+        process
+            .notify_on_exit(&self.port, key)
+            .map_err(|error| format!("waiting for its end: {error:?}"))?;
+        let _ = self.watched.insert(key, Watched::Process(unit, 0, process));
+        Ok(key)
     }
 
     fn key(&mut self) -> u64 {
@@ -195,6 +272,13 @@ impl Directory {
         let mut lines = Vec::new();
         while let Ok(packet) = self.port.wait(Deadline::At(0)) {
             if packet.kind != PACKET_SIGNAL {
+                continue;
+            }
+            if packet.key == OWN {
+                self.read_own();
+                if let Some(own) = &self.own {
+                    let _ = own.wait_async(&self.port, Signals::READABLE, OWN);
+                }
                 continue;
             }
             match self.watched.remove(&packet.key) {

@@ -1971,16 +1971,19 @@ fn attach_data_image(command: &mut Command, arch: Arch, args: &Args) {
 
 /// Attach the root disk as the fifth virtio device, so it is `vdd` and the
 /// kernel puts `/` on it — for the commands someone sits at, `run` and
-/// `run-compositor`, unless `--tmpfs-root` says otherwise, and never for a
-/// test, whose boot must not depend on what an earlier one left.
+/// `run-compositor`, unless `--tmpfs-root` says otherwise; and, made fresh
+/// each time so the boot depends on nothing an earlier one left, for
+/// `test-init`, whose pid 1 the switch moves onto it (`docs/INIT.md` §7.3),
+/// and `test-chrome-window` and `test-restart` under `--btrfs-root`.
 fn attach_root_disk(command: &mut Command, arch: Arch, args: &Args) -> Result<()> {
     // A test's root is made fresh for it, so its boot still depends on
     // nothing an earlier one left.
-    let test = args.btrfs_root
+    let test = (args.btrfs_root
         && matches!(
             args.command.as_deref(),
             Some("test-chrome-window" | "test-restart")
-        );
+        ))
+        || args.command.as_deref() == Some("test-init");
     if !test && !matches!(args.command.as_deref(), Some("run" | "run-compositor")) {
         return Ok(());
     }

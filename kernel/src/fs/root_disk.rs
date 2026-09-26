@@ -41,6 +41,21 @@
 //! A root that will not mount or install is said, and the boot carries on
 //! with the tmpfs: the disk holds somebody's files, and a machine that
 //! refused to start over them would help nobody reach them.
+//!
+//! # When pid 1 starts `devmgr`
+//!
+//! Under `ferrix.devmgr=init` (`docs/INIT.md` §7.3, L12) the disk's driver
+//! does not exist until pid 1 has started `devmgr`, so pid 1 starts on the
+//! tmpfs and the switch comes after it: [`switch_after_devmgr`] waits for
+//! `devmgr`'s REPORT, switches, mounts the data disk, and tells pid 1 where
+//! `/` is (`init::notify_root`). Pid 1 is moved onto the volume by the
+//! switch itself: its root and working directory become the volume's in the
+//! step that publishes [`process_context`], under pid 1's own filesystem
+//! lock, which every thread sharing its context shares and every fork of it
+//! takes. This is the one process the kernel re-roots, once. What pid 1 has
+//! open keeps the root it was opened under, as after a `chroot`, and pid 1
+//! starts nothing but `devmgr` before it is told, so nothing it made is left
+//! behind on the tmpfs.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -192,7 +207,22 @@ fn switch_to(rdev: u64) -> Result<Installed, &'static str> {
     let installed = install(&inside)?;
     mount_kernel_filesystems(&inside)?;
     volume.sync().map_err(|_| "could not commit the system")?;
-    let _ = ROOT.call_once(|| (volume, root));
+    {
+        // Pid 1, when it was started before the switch, moves with it: its
+        // filesystem lock held across the publication, so a fork of it
+        // copies either the old root before or the new one after.
+        let pid1 = if crate::devmgr::by_init() {
+            crate::syscall::registry::find(1)
+        } else {
+            None
+        };
+        let mut moved = pid1.as_ref().map(|pid1| pid1.fs_context().lock());
+        let _ = ROOT.call_once(|| (volume, root.clone()));
+        if let Some(context) = moved.as_mut() {
+            context.root = root.clone();
+            context.cwd = root;
+        }
+    }
     let _ = ROOT_RDEV.call_once(|| rdev);
     if sched::spawn(
         "root commit",
@@ -319,4 +349,68 @@ pub(crate) fn sync() -> Result<(), Errno> {
         Some((volume, _)) => volume.sync(),
         None => Ok(()),
     }
+}
+
+/// How long [`switch_after_devmgr`] waits for the `devmgr` pid 1 starts to
+/// report: pid 1 has to be loaded and started first, then `devmgr` has to
+/// start every driver, under TCG.
+const DEVMGR_PATIENCE_NANOS: u64 = 60_000_000_000;
+
+/// Under `ferrix.devmgr=init`: a task that waits for `devmgr`'s REPORT,
+/// then does what bring-up does without the option -- the switch and the
+/// data disk -- checks that pid 1 moved, and tells pid 1 where `/` is.
+pub(crate) fn switch_after_devmgr() {
+    if sched::spawn("root switch", after_devmgr, 0, ferrix_sched::NICE_0_WEIGHT).is_err() {
+        println!("  root     no task to switch / on: it stays in memory");
+        crate::init::notify_root(false);
+    }
+}
+
+/// The task [`switch_after_devmgr`] starts.
+fn after_devmgr(_: usize) {
+    let deadline = crate::timer::now_nanos().saturating_add(DEVMGR_PATIENCE_NANOS);
+    if !crate::devmgr::wait_reported(deadline) {
+        println!("  root     devmgr did not report in time: / stays in memory");
+        crate::init::notify_root(false);
+        return;
+    }
+    switch();
+    fs::data_disk::mount();
+    let switched = ROOT.get().is_some();
+    if switched && let Err(problem) = check_pid1_moved() {
+        crate::panic::fatal!(
+            crate::panic::catalog::ROOT_PID1,
+            "the root switch's self-check failed: {problem}"
+        );
+    }
+    crate::init::notify_root(switched);
+}
+
+/// Pid 1's root and working directory are the volume's, and a fork of it
+/// sees the volume as `/`.
+fn check_pid1_moved() -> Result<(), &'static str> {
+    let (_, volume_root) = ROOT.get().ok_or("the switch published no root")?;
+    let pid1 = crate::syscall::registry::find(1).ok_or("there is no pid 1 to have moved")?;
+    let (root, cwd) = {
+        let context = pid1.fs_context().lock();
+        (context.root.clone(), context.cwd.clone())
+    };
+    if !root.same(volume_root) {
+        return Err("pid 1's root is not the volume after the switch");
+    }
+    if !cwd.same(volume_root) {
+        return Err("pid 1's working directory is not the volume after the switch");
+    }
+    let child = crate::syscall::process::fork_for_check(&pid1)
+        .map_err(|_| "no memory to fork pid 1 for the check")?;
+    let seen = child.fs_context().lock().root.clone();
+    crate::syscall::process::kill(&child, crate::object::job::KILLED_STATUS);
+    if !seen.same(volume_root) {
+        return Err("a fork of pid 1 does not see the volume as /");
+    }
+    println!(
+        "  root     pid 1 moved onto the volume with the switch: its root and working directory \
+         are the volume's, and a fork of it sees the volume as /"
+    );
+    Ok(())
 }

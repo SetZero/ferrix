@@ -1381,6 +1381,50 @@ pub(crate) static NETLINK: Explanation = Explanation {
           docs/ROADMAP.md",
 };
 
+/// For `devmgr::devmgr_start`, when a start pid 1 asked for does not leave
+/// the DEVICES channel with `devmgr` alone.
+pub(crate) static DEVMGR_BY_INIT: Explanation = Explanation {
+    code: "FX-1009",
+    title: "a devmgr pid 1 started did not keep device authority to itself",
+    meaning: "Under ferrix.devmgr=init (docs/INIT.md §7.3, L12) pid 1 asks the kernel to start \
+              devmgr with the starter it was given, and gets back a handle to the process. The \
+              kernel makes the DEVICES channel -- MANAGE on every device node, and through them \
+              DMA -- and puts one end in devmgr's table and keeps the other. Every start checks, \
+              as the caller: devmgr holds its end, the caller holds no handle to it, \
+              process_start on the caller's handle to the started devmgr is BAD_STATE and gives \
+              it nothing, and a second devmgr_start while devmgr lives is ALREADY_BOUND.",
+    causes: &[
+        "`devmgr_start` in kernel/src/devmgr.rs put the channel's end in the caller's table, \
+         or `start_program` did not put it in devmgr's.",
+        "A call on a process handle reaches into the process: `process_start` in \
+         kernel/src/syscall/native.rs started or gave something to a process already started.",
+        "`may_start_again` did not see the devmgr it started as living: its exit record was \
+         not kept, or was closed early.",
+    ],
+    see: "kernel/src/devmgr.rs; kernel/src/object/mod.rs; kernel/src/syscall/native.rs; \
+          docs/INIT.md §7.3; docs/certification/ITEM.md §5",
+};
+
+/// For `fs::root_disk`'s switch under `ferrix.devmgr=init`, when pid 1 did
+/// not move onto the volume with it.
+pub(crate) static ROOT_PID1: Explanation = Explanation {
+    code: "FX-1202",
+    title: "pid 1 did not move onto the root volume with the switch",
+    meaning: "Under ferrix.devmgr=init pid 1 starts on the tmpfs, since the root disk's driver \
+              comes from the devmgr it starts. When devmgr has reported, the kernel switches / \
+              to the btrfs root volume and, in the same step, moves pid 1's root and working \
+              directory onto it, under pid 1's filesystem lock. After the switch pid 1's root \
+              and working directory must be the volume's, and a fork of pid 1 must see the \
+              volume as /.",
+    causes: &[
+        "`switch_to` in kernel/src/fs/root_disk.rs published the root without moving pid 1, \
+         or moved another process.",
+        "A fork does not copy its parent's root (`Process::forked` in \
+         kernel/src/syscall/process.rs).",
+    ],
+    see: "kernel/src/fs/root_disk.rs; docs/INIT.md §7.3; docs/certification/ITEM.md",
+};
+
 /// For `check_devmgr` in `main.rs`, when `devmgr::start` fails.
 pub(crate) static STAGE10_DEVMGR: Explanation = Explanation {
     code: "FX-1006",
@@ -2410,11 +2454,13 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE10_DEVMGR,
     &STAGE10_DMA_FAULT,
     &LOG_CONTROL,
+    &DEVMGR_BY_INIT,
     &STAGE11_MOUNT,
     &NET_CORE,
     &NET_RING,
     &NETLINK,
     &STAGE12_WRITE,
+    &ROOT_PID1,
     &STAGE13_CGROUPFS,
     &INIT_EXITED,
     &INIT_CALLS,

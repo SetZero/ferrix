@@ -84,11 +84,13 @@ Causes are listed most likely first.
 | [FX-1006](#fx-1006) | devmgr could not be started, or did not report |
 | [FX-1007](#fx-1007) | an IOMMU faulted DMA that no check provoked |
 | [FX-1008](#fx-1008) | the log core did not serve the kernel log to a driver |
+| [FX-1009](#fx-1009) | a devmgr pid 1 started did not keep device authority to itself |
 | [FX-1101](#fx-1101) | the btrfs disk did not mount and read back as the host wrote it |
 | [FX-1150](#fx-1150) | the net core did not carry a packet round its own loopback |
 | [FX-1151](#fx-1151) | the net ring did not carry a frame between the kernel and a driver |
 | [FX-1152](#fx-1152) | AF_NETLINK did not answer the requests `ip` makes |
 | [FX-1201](#fx-1201) | a btrfs volume Ferrix wrote did not read back as it was written |
+| [FX-1202](#fx-1202) | pid 1 did not move onto the root volume with the switch |
 | [FX-1301](#fx-1301) | cgroupfs did not show the job tree as cgroup v2 |
 | [FX-1501](#fx-1501) | init exited, and ferrix.onexit=panic asked for a panic |
 | [FX-1502](#fx-1502) | a kernel call init needs did not do what docs/INIT.md §11 says |
@@ -1938,6 +1940,29 @@ driver after it went.
 
 See: kernel/src/logctl/check.rs; kernel/src/logctl/mod.rs; libs/proto/logctl.
 
+<a id="fx-1009"></a>
+
+## FX-1009 — a devmgr pid 1 started did not keep device authority to itself
+
+Under ferrix.devmgr=init (docs/INIT.md §7.3, L12) pid 1 asks the kernel to start
+devmgr with the starter it was given, and gets back a handle to the process. The
+kernel makes the DEVICES channel -- MANAGE on every device node, and through
+them DMA -- and puts one end in devmgr's table and keeps the other. Every start
+checks, as the caller: devmgr holds its end, the caller holds no handle to it,
+process_start on the caller's handle to the started devmgr is BAD_STATE and
+gives it nothing, and a second devmgr_start while devmgr lives is ALREADY_BOUND.
+
+1. `devmgr_start` in kernel/src/devmgr.rs put the channel's end in the caller's
+   table, or `start_program` did not put it in devmgr's.
+2. A call on a process handle reaches into the process: `process_start` in
+   kernel/src/syscall/native.rs started or gave something to a process already
+   started.
+3. `may_start_again` did not see the devmgr it started as living: its exit
+   record was not kept, or was closed early.
+
+See: kernel/src/devmgr.rs; kernel/src/object/mod.rs;
+kernel/src/syscall/native.rs; docs/INIT.md §7.3; docs/certification/ITEM.md §5.
+
 <a id="fx-1101"></a>
 
 ## FX-1101 — the btrfs disk did not mount and read back as the host wrote it
@@ -2094,6 +2119,24 @@ body was made durable is checked against that trailer.
 See: kernel/src/fs/btrfs_write_check.rs; kernel/src/fs/btrfs_powerfail.rs;
 kernel/src/fs/btrfs.rs; libs/fs/btrfs-vfs rw; libs/fs/btrfs-write;
 xtask/src/btrfs_disk.rs; xtask/src/powerfail.rs; docs/ROADMAP.md stage 12.
+
+<a id="fx-1202"></a>
+
+## FX-1202 — pid 1 did not move onto the root volume with the switch
+
+Under ferrix.devmgr=init pid 1 starts on the tmpfs, since the root disk's driver
+comes from the devmgr it starts. When devmgr has reported, the kernel switches /
+to the btrfs root volume and, in the same step, moves pid 1's root and working
+directory onto it, under pid 1's filesystem lock. After the switch pid 1's root
+and working directory must be the volume's, and a fork of pid 1 must see the
+volume as /.
+
+1. `switch_to` in kernel/src/fs/root_disk.rs published the root without moving
+   pid 1, or moved another process.
+2. A fork does not copy its parent's root (`Process::forked` in
+   kernel/src/syscall/process.rs).
+
+See: kernel/src/fs/root_disk.rs; docs/INIT.md §7.3; docs/certification/ITEM.md.
 
 <a id="fx-1301"></a>
 
