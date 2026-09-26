@@ -519,9 +519,12 @@ fn test_vfs(args: &Args) -> Result<()> {
     })?;
     let mut failed = Vec::new();
     for arch in args.arches()? {
-        // Per architecture, because only the one that carries uutils runs the
-        // commands that need it.
-        let commands = vfs::encode(&vfs::commands(arch))?;
+        // Per image, because the commands are what its `/bin` runs: uutils'
+        // `cat` and the rest, and the uutils rows, where it carries uutils,
+        // and busybox's where it does not.
+        let utilities = uutils::carried(arch)?;
+        let carried = vfs::Utilities::carried(&utilities);
+        let commands = vfs::encode(&vfs::commands(carried))?;
         let program = program_for(init, arch)?;
         let loader = cargo::build_loader(arch, args.release)?;
         let list = paths::build_dir(arch).join("init-commands");
@@ -531,7 +534,6 @@ fn test_vfs(args: &Args) -> Result<()> {
         // zinc too: the permissions commands run a set-user-id copy of it,
         // which is the one program in the image that shows an effective id.
         let shell = zinc::build(arch)?;
-        let utilities = uutils::carried(arch)?;
         let initramfs = initramfs::build_with_utilities(
             Some(&program),
             &natives,
@@ -540,7 +542,7 @@ fn test_vfs(args: &Args) -> Result<()> {
             &ports::installed(arch)?,
         )?;
         let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
-        if let Err(error) = qemu::test_vfs(arch, &image, &kernel, args) {
+        if let Err(error) = qemu::test_vfs(arch, carried, &image, &kernel, args) {
             eprintln!("\n  {error}");
             failed.push(arch.name());
         }

@@ -289,36 +289,9 @@ pub(crate) const APPLETS: &[Command] = &[
     // withhold, owns what it makes, and cannot delete another's file from
     // the sticky `/tmp`; root is refused none of it.
     Command {
-        argv: &["sh", "-c", PERMISSIONS_SCRIPT],
+        argv: PERMISSIONS,
         status: 9,
-        expect: Expect::Shaped(&[
-            "uid=1000(ferrix) gid=1000(ferrix)*",
-            "cat: /tmp/dac-private: Permission denied",
-            "owned by 1000 1000",
-            // The errno differs from the one busybox reported here, not only
-            // the wording: the kernel refuses this with `EPERM`, because
-            // `/tmp` is sticky and the file is not this user's, and busybox
-            // said so. uutils says "Permission denied". What the row is for
-            // holds either way -- the removal was refused -- and the errno
-            // the kernel returns is checked where it is decided, in
-            // `kernel/src/fs`.
-            "rm: cannot remove '/tmp/dac-private': Permission denied",
-            // Two of uutils' messages name no file, and read as a Rust error
-            // rather than a C one. Recorded as they are rather than tidied
-            // with a `*`, so that the day they improve, this says so.
-            "chmod: Operation not permitted (os error 1)",
-            "ls: cannot open directory '/tmp/dac-closed': Permission denied",
-            "*permission denied: /tmp/dac-noexec",
-            "proc self owned by 1000 1000",
-            "listed its own descriptors",
-            "Uid:*1000*1000*1000*1000",
-            "set-user-id gives uid 1000 euid 0",
-            "hostname: failed to set hostname: Permission denied",
-            "*kill 1 failed: operation not permitted",
-            "mknod: Operation not permitted (os error 1)",
-            "login shell *zsh in /home/ferrix as 1000",
-            "root still reads: secret",
-        ]),
+        expect: PERMISSIONS_UNDER_UUTILS,
     },
     // Delegation (stage 13, `docs/CGROUPS.md` §3.1): a cgroup subtree
     // `chown`ed to the user `ferrix`, who moves its own shell within it and
@@ -396,6 +369,62 @@ su - ferrix -c 'echo "login shell $0 in $PWD as $EUID"'
 echo "root still reads: $(cat /tmp/dac-private)"
 exit 9
 "#;
+
+/// [`PERMISSIONS_SCRIPT`], as the kernel starts it.
+const PERMISSIONS: &[&str] = &["sh", "-c", PERMISSIONS_SCRIPT];
+
+/// What [`PERMISSIONS_SCRIPT`] prints where `/bin` names uutils' utilities:
+/// `cat`, `rm`, `chmod`, `ls`, `hostname` and `mknod` are uutils/coreutils'.
+const PERMISSIONS_UNDER_UUTILS: Expect = Expect::Shaped(&[
+    "uid=1000(ferrix) gid=1000(ferrix)*",
+    "cat: /tmp/dac-private: Permission denied",
+    "owned by 1000 1000",
+    // The errno differs from the one busybox reports here, not only the
+    // wording: the kernel refuses this with `EPERM`, because `/tmp` is sticky
+    // and the file is not this user's, and busybox says so. uutils says
+    // "Permission denied". What the row is for holds either way -- the removal
+    // was refused -- and the errno the kernel returns is checked where it is
+    // decided, in `kernel/src/fs`.
+    "rm: cannot remove '/tmp/dac-private': Permission denied",
+    // Two of uutils' messages name no file, and read as a Rust error rather
+    // than a C one. Recorded as they are rather than tidied with a `*`, so
+    // that the day they improve, this says so.
+    "chmod: Operation not permitted (os error 1)",
+    "ls: cannot open directory '/tmp/dac-closed': Permission denied",
+    "*permission denied: /tmp/dac-noexec",
+    "proc self owned by 1000 1000",
+    "listed its own descriptors",
+    "Uid:*1000*1000*1000*1000",
+    "set-user-id gives uid 1000 euid 0",
+    "hostname: failed to set hostname: Permission denied",
+    "*kill 1 failed: operation not permitted",
+    "mknod: Operation not permitted (os error 1)",
+    "login shell *zsh in /home/ferrix as 1000",
+    "root still reads: secret",
+]);
+
+/// What [`PERMISSIONS_SCRIPT`] prints where `/bin` names busybox's utilities,
+/// which is an image that carries no uutils/coreutils: the refusals are the
+/// same ones, in busybox's words, which name the file every time and give
+/// `rm` of another's file in the sticky `/tmp` the `EPERM` the kernel returns.
+const PERMISSIONS_UNDER_BUSYBOX: Expect = Expect::Shaped(&[
+    "uid=1000(ferrix) gid=1000(ferrix)*",
+    "cat: can't open '/tmp/dac-private': Permission denied",
+    "owned by 1000 1000",
+    "rm: can't remove '/tmp/dac-private': Operation not permitted",
+    "chmod: /tmp/dac-private: Operation not permitted",
+    "ls: can't open '/tmp/dac-closed': Permission denied",
+    "*permission denied: /tmp/dac-noexec",
+    "proc self owned by 1000 1000",
+    "listed its own descriptors",
+    "Uid:*1000*1000*1000*1000",
+    "set-user-id gives uid 1000 euid 0",
+    "hostname: sethostname: Operation not permitted",
+    "*kill 1 failed: operation not permitted",
+    "mknod: /tmp/dac-null: Operation not permitted",
+    "login shell *zsh in /home/ferrix as 1000",
+    "root still reads: secret",
+]);
 
 /// Root mounts cgroup2, makes `deleg` and `other`, and hands `deleg` to uid
 /// 1000 as Linux's delegation does: `chown` of the directory and of the
@@ -947,26 +976,71 @@ pub(crate) const UTILITIES: &[Command] = &[
     },
 ];
 
-/// The commands the kernel is built to run on `arch`, in order: the
-/// criterion's three, the applets, which shell `/bin/sh` is, and uutils where
-/// the image carries it.
+/// Whose utilities an image's `/bin` names, which decides what the commands
+/// that run `cat`, `rm` and the rest print.
 ///
-/// Only x86-64 carries uutils, because ferrousli is built for x86-64 only, so
-/// only x86-64 runs the rows that need it. Every architecture runs everything
-/// that came before.
-pub(crate) fn commands(arch: crate::paths::Arch) -> Vec<Command> {
-    let mut all = [COMMANDS, APPLETS, SHELL].concat();
-    if carries_utilities(arch) {
-        all.extend_from_slice(UTILITIES);
-    }
-    all
+/// Keyed on the image rather than on the architecture: uutils/coreutils owns
+/// those names in an image that carries it, and busybox owns them in one that
+/// does not (`initramfs::build_with_shell`), whatever the architecture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Utilities {
+    /// uutils/coreutils and the rest of its family, with busybox for the
+    /// names they do not provide; the image runs [`UTILITIES`] too.
+    Uutils,
+    /// busybox alone.
+    Busybox,
 }
 
-/// Whether an image for `arch` carries uutils, and so whether [`UTILITIES`]
-/// runs. One place, so the kernel's command list and the judging cannot
-/// disagree about how many commands there are.
-pub(crate) fn carries_utilities(arch: crate::paths::Arch) -> bool {
-    arch == crate::paths::Arch::X86_64
+impl Utilities {
+    /// Whose utilities an image carrying `carried`, as `uutils::carried`
+    /// gives them, names in `/bin`.
+    pub(crate) fn carried(carried: &[(&str, Vec<u8>)]) -> Self {
+        if carried.iter().any(|(name, _)| *name == "coreutils") {
+            Self::Uutils
+        } else {
+            Self::Busybox
+        }
+    }
+}
+
+/// [`APPLETS`], with the permissions row's expectation in the words of the
+/// utilities the image carries. [`APPLETS`] itself holds uutils' words, what
+/// an `x86_64` image prints.
+pub(crate) fn applets(utilities: Utilities) -> Vec<Command> {
+    APPLETS
+        .iter()
+        .map(|command| match utilities {
+            Utilities::Busybox if command.argv == PERMISSIONS => Command {
+                expect: PERMISSIONS_UNDER_BUSYBOX,
+                ..*command
+            },
+            _ => *command,
+        })
+        .collect()
+}
+
+/// The uutils family's rows, for an image that carries it, and none for one
+/// that does not.
+pub(crate) fn utilities(utilities: Utilities) -> &'static [Command] {
+    match utilities {
+        Utilities::Uutils => UTILITIES,
+        Utilities::Busybox => &[],
+    }
+}
+
+/// The commands the kernel is built to run in an image carrying `utilities`,
+/// in order: the criterion's three, the applets, which shell `/bin/sh` is, and
+/// uutils where the image carries it.
+///
+/// Only an `x86_64` image carries uutils, because ferrousli is built for
+/// `x86_64` only, so only there do the rows that need it run. Every image runs
+/// everything that came before.
+pub(crate) fn commands(utilities: Utilities) -> Vec<Command> {
+    let mut all = COMMANDS.to_vec();
+    all.extend(applets(utilities));
+    all.extend_from_slice(SHELL);
+    all.extend_from_slice(self::utilities(utilities));
+    all
 }
 
 #[cfg(test)]

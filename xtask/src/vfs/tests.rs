@@ -540,3 +540,94 @@ fn an_unreadable_program_is_the_whole_report() {
         owned(&["init     /bin/busybox could not be read: errno 2"])
     );
 }
+
+/// What the permissions row printed on `aarch64`, whose image carries busybox
+/// and no uutils, from `cargo xtask test-vfs --arch aarch64`.
+const PERMISSIONS_ON_AARCH64: &[&str] = &[
+    "uid=1000(ferrix) gid=1000(ferrix) groups=1000(ferrix)",
+    "cat: can't open '/tmp/dac-private': Permission denied",
+    "owned by 1000 1000",
+    "rm: can't remove '/tmp/dac-private': Operation not permitted",
+    "chmod: /tmp/dac-private: Operation not permitted",
+    "ls: can't open '/tmp/dac-closed': Permission denied",
+    "zsh:7: permission denied: /tmp/dac-noexec",
+    "proc self owned by 1000 1000",
+    "listed its own descriptors",
+    "Uid:\t1000\t1000\t1000\t1000",
+    "set-user-id gives uid 1000 euid 0",
+    "hostname: sethostname: Operation not permitted",
+    "zsh:kill:13: kill 1 failed: operation not permitted",
+    "mknod: /tmp/dac-null: Operation not permitted",
+    "login shell -zsh in /home/ferrix as 1000",
+    "root still reads: secret",
+];
+
+/// The applets' outputs with the permissions row's replaced by `permissions`.
+fn with_permissions<'a>(permissions: &'a [&'a str]) -> Vec<(usize, &'a [&'a str])> {
+    APPLETS_ON_X86_64
+        .iter()
+        .map(|&(index, output)| {
+            if APPLETS[index - COMMANDS.len()].argv == PERMISSIONS {
+                (index, permissions)
+            } else {
+                (index, output)
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn the_permissions_row_is_judged_in_the_words_of_the_utilities_the_image_carries() {
+    let busybox = with_permissions(PERMISSIONS_ON_AARCH64);
+    let uutils = APPLETS_ON_X86_64.to_vec();
+    assert_eq!(
+        judge(
+            &applets(Utilities::Busybox),
+            COMMANDS.len(),
+            &applets_log(&busybox)
+        )
+        .unwrap()
+        .len(),
+        APPLETS.len()
+    );
+    assert_eq!(
+        judge(
+            &applets(Utilities::Uutils),
+            COMMANDS.len(),
+            &applets_log(&uutils)
+        )
+        .unwrap()
+        .len(),
+        APPLETS.len()
+    );
+    // Each image's words fail the other's expectation: the check is not a
+    // loose one that either would pass.
+    let failed = judge(
+        &applets(Utilities::Uutils),
+        COMMANDS.len(),
+        &applets_log(&busybox),
+    )
+    .unwrap_err();
+    assert_eq!(failed.len(), 1);
+    assert!(failed[0].starts_with("command 17 (sh -c)"), "{failed:?}");
+    let failed = judge(
+        &applets(Utilities::Busybox),
+        COMMANDS.len(),
+        &applets_log(&uutils),
+    )
+    .unwrap_err();
+    assert_eq!(failed.len(), 1);
+    assert!(failed[0].starts_with("command 17 (sh -c)"), "{failed:?}");
+}
+
+#[test]
+fn an_image_carries_uutils_when_it_carries_coreutils() {
+    let coreutils = [("coreutils", Vec::new()), ("find", Vec::new())];
+    assert_eq!(Utilities::carried(&coreutils), Utilities::Uutils);
+    assert_eq!(Utilities::carried(&coreutils[1..]), Utilities::Busybox);
+    assert_eq!(Utilities::carried(&[]), Utilities::Busybox);
+    let uutils = commands(Utilities::Uutils);
+    let busybox = commands(Utilities::Busybox);
+    assert_eq!(uutils.len(), busybox.len() + UTILITIES.len());
+    assert_eq!(busybox.len(), COMMANDS.len() + APPLETS.len() + SHELL.len());
+}

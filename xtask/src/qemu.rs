@@ -393,19 +393,21 @@ pub(crate) fn test_shell(arch: Arch, image: &Path, kernel: &Path, args: &Args) -
     Ok(())
 }
 
-/// Boot an image whose kernel runs `vfs::COMMANDS`, and judge each command by
-/// its status and its output.
+/// Boot an image whose kernel runs `vfs::commands(carried)`, and judge each
+/// command by its status and its output.
 ///
 /// As with [`test_shell`], only what follows the boot marker counts.
-pub(crate) fn test_vfs(arch: Arch, image: &Path, kernel: &Path, args: &Args) -> Result<()> {
+pub(crate) fn test_vfs(
+    arch: Arch,
+    carried: crate::vfs::Utilities,
+    image: &Path,
+    kernel: &Path,
+    args: &Args,
+) -> Result<()> {
     let commands = crate::vfs::COMMANDS;
-    let applets = crate::vfs::APPLETS;
+    let applets = &crate::vfs::applets(carried)[..];
     let shell = crate::vfs::SHELL;
-    let utilities: &[crate::vfs::Command] = if crate::vfs::carries_utilities(arch) {
-        crate::vfs::UTILITIES
-    } else {
-        &[]
-    };
+    let utilities = crate::vfs::utilities(carried);
     println!(
         "  {arch}: running {} programs, {} applets, {} shell and {} uutils commands \
          under QEMU (timeout {}s)",
@@ -463,6 +465,11 @@ pub(crate) fn test_vfs(arch: Arch, image: &Path, kernel: &Path, args: &Args) -> 
     ];
     let mut failures = Vec::new();
     for (group, first, what, all_passed) in groups {
+        // A group the image does not run, uutils' in an image without it,
+        // passes nothing and says nothing.
+        if group.is_empty() {
+            continue;
+        }
         match (crate::vfs::judge(group, first, after_boot), &ending) {
             (Ok(passed), None) => {
                 for line in passed {
