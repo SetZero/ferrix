@@ -403,7 +403,7 @@ fn resolve_user_fault(fault: &PageFault) -> Result<(), Option<crate::user::space
         write: fault.write,
         execute: fault.execute,
     };
-    space.fault(fault.address, access).map_err(Some)
+    crate::object::oom::user_fault(&space, fault.address, access).map_err(Some)
 }
 
 fn handle_page_fault(frame: &mut arch::TrapFrame, fault: PageFault) {

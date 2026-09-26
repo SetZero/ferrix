@@ -331,6 +331,25 @@ pub(crate) fn charge(index: u32, resource: Resource, amount: u64) -> Result<(), 
     Ok(())
 }
 
+/// The nearest slot from `index` up that a charge of `amount` of `resource`
+/// would take past its limit, if any: after a refused charge, the job whose
+/// limit refused it, for the scoped OOM kill (`object::oom`). Read, not
+/// charged, so a slot under its limit again by now is not named.
+pub(crate) fn at_limit(index: u32, resource: Resource, amount: u64) -> Option<u32> {
+    let mut at = index;
+    while let Some(slot) = slot(at) {
+        let (Some(used), Some(limit)) = (slot.used(resource), slot.limit(resource)) else {
+            return None;
+        };
+        let then = used.load(Ordering::Acquire).checked_add(amount);
+        if then.is_none_or(|then| then > limit.load(Ordering::Acquire)) {
+            return Some(at);
+        }
+        at = slot.parent.load(Ordering::Acquire);
+    }
+    None
+}
+
 /// Charge `amount` of `resource` to `index` and every slot above it whatever
 /// the limits say: a process moved into a job brings its tasks, as Linux's
 /// `pids_can_attach` does.

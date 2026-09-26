@@ -345,7 +345,7 @@ pub(crate) fn fault_in_for_write(
     let end = at.checked_add(len).ok_or(UserError::Overflow)?;
     let mut page = at;
     while page < end {
-        space.fault(user_address(page)?, Access::WRITE)?;
+        crate::object::oom::fault(space, user_address(page)?, Access::WRITE)?;
         page = (page - page % PAGE_SIZE).saturating_add(PAGE_SIZE);
     }
     Ok(())

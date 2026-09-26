@@ -107,11 +107,13 @@ pub fn memory_stat(out: &mut Vec<u8>, kernel: u64) {
 }
 
 /// Append `memory.events`, in the order Linux prints it: how many charges
-/// `memory.max` refused under `max`, and the rest, which Ferrix never counts
-/// (no `memory.low`, no `memory.high`, no OOM kill), as zeros.
-pub fn memory_events(out: &mut Vec<u8>, max: u64) {
+/// `memory.max` refused under `max`, how many faults found it full under
+/// `oom`, and how many processes the scoped OOM kill ended under
+/// `oom_kill`; the rest, which Ferrix never counts (no `memory.low`, no
+/// `memory.high`, no `memory.oom.group`), as zeros.
+pub fn memory_events(out: &mut Vec<u8>, max: u64, oom: u64, oom_kill: u64) {
     let _ = write!(
         Out(out),
-        "low 0\nhigh 0\nmax {max}\noom 0\noom_kill 0\noom_group_kill 0\n"
+        "low 0\nhigh 0\nmax {max}\noom {oom}\noom_kill {oom_kill}\noom_group_kill 0\n"
     );
 }

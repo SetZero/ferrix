@@ -1287,7 +1287,9 @@ impl AddressSpace {
                     return Ok(answer);
                 }
             }
-            self.fault(address, access)?;
+            // As the program's own fault would be, a page past its cgroup's
+            // `memory.max` included (`object::oom`).
+            crate::object::oom::fault(self, address, access)?;
         }
     }
 

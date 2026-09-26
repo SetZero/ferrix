@@ -28,6 +28,7 @@ pub(crate) mod format_check;
 pub(crate) mod interrupt;
 pub(crate) mod io_mapping;
 pub(crate) mod job;
+pub(crate) mod oom;
 pub(crate) mod pin;
 pub(crate) mod port;
 pub(crate) mod process;

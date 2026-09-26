@@ -61,6 +61,7 @@ use crate::object::Object;
 use crate::object::job::{self, Job, JobError, NodeAttributes};
 use crate::object::process::Host;
 use crate::object::quota::{self, Resource};
+use crate::sched::WaitQueue;
 use crate::sync::SpinLock;
 use crate::syscall::fd;
 use crate::syscall::native;
@@ -605,13 +606,15 @@ impl Inode for Interface {
     }
 
     /// The contents as they are now, and a writer for a file that takes
-    /// writes. `cgroup.events` is the exception: it is rendered when read,
-    /// and polled, so an open of it is an [`EventsFile`].
+    /// writes. `cgroup.events` and `memory.events` are the exceptions: they
+    /// are rendered when read, and polled, so an open of one is an
+    /// [`EventsFile`].
     fn open(&self) -> Result<Option<Arc<dyn Inode>>> {
         let metadata = self.metadata();
-        if self.file.kind == Kind::Events {
+        if matches!(self.file.kind, Kind::Events | Kind::MemoryEvents) {
             return Ok(Some(Arc::new(EventsFile {
                 job: Arc::clone(&self.job),
+                kind: self.file.kind,
                 metadata,
                 rendered: SpinLock::new(Rendered::default()),
             })));
@@ -633,12 +636,13 @@ impl Inode for Interface {
     }
 }
 
-/// One open of a `cgroup.events` (`docs/CGROUPS.md` §4): what it says,
-/// rendered afresh by every read from its start, and `POLLPRI` from a change
-/// until it is read that way again.
+/// One open of a `cgroup.events` or a `memory.events` (`docs/CGROUPS.md`
+/// §4): what it says, rendered afresh by every read from its start, and
+/// `POLLPRI` from a change until it is read that way again.
 ///
 /// That is kernfs's `kernfs_generic_poll`. The job's event queue is woken at
-/// every flip of populated, and its wake count is the change counter: a read
+/// every flip of populated -- its memory event queue at every OOM and OOM
+/// kill counted in it -- and its wake count is the change counter: a read
 /// from the start records the count it rendered at, and the file reports
 /// priority (with `POLLERR`, as Linux does) while the count has moved since.
 /// An open file not yet read reports it too, as on Linux, where the open
@@ -647,6 +651,8 @@ impl Inode for Interface {
 struct EventsFile {
     /// The job it reports on.
     job: Arc<Job>,
+    /// Which of the two files.
+    kind: Kind,
     /// What `stat` reports, less the size, which is the last rendering's.
     metadata: Metadata,
     /// The last rendering.
@@ -664,9 +670,18 @@ struct Rendered {
 }
 
 impl EventsFile {
+    /// The queue woken at every change of what it says.
+    fn queue(&self) -> &Arc<WaitQueue> {
+        if self.kind == Kind::MemoryEvents {
+            self.job.memory_events()
+        } else {
+            self.job.events()
+        }
+    }
+
     /// Whether the job has changed since the last rendering.
     fn changed(&self) -> bool {
-        self.rendered.lock().seen != Some(self.job.events().wakes())
+        self.rendered.lock().seen != Some(self.queue().wakes())
     }
 }
 
@@ -689,8 +704,8 @@ impl Inode for EventsFile {
         if offset == 0 {
             // The count before the text: a flip in between leaves the count
             // ahead of what was rendered, and the file still reporting.
-            let seen = self.job.events().wakes();
-            let bytes = contents(&self.job, Kind::Events);
+            let seen = self.queue().wakes();
+            let bytes = contents(&self.job, self.kind);
             *self.rendered.lock() = Rendered {
                 bytes,
                 seen: Some(seen),
@@ -723,12 +738,13 @@ impl Inode for EventsFile {
     }
 
     fn poll_changes(&self) -> Option<u64> {
-        Some(self.job.events().wakes())
+        Some(self.queue().wakes())
     }
 
-    /// The job's event queue, which every flip wakes.
+    /// The job's event queue, which every flip wakes, or its memory event
+    /// queue, which every OOM and OOM kill counted in it wakes.
     fn poll_queues(&self, visit: &mut dyn FnMut(ferrix_vfs::WakeSource)) -> bool {
-        visit(fs::wake::shared(self.job.events()));
+        visit(fs::wake::shared(self.queue()));
         true
     }
 }
@@ -762,7 +778,15 @@ fn contents(job: &Arc<Job>, kind: Kind) -> Vec<u8> {
             let limit = usage(job, Resource::Memory).limit;
             render::max(&mut out, (limit != quota::UNLIMITED).then_some(limit));
         }
-        Kind::MemoryEvents => render::memory_events(&mut out, usage(job, Resource::Memory).refused),
+        Kind::MemoryEvents => {
+            let (oom, oom_kill) = job.oom_counts();
+            render::memory_events(
+                &mut out,
+                usage(job, Resource::Memory).refused,
+                oom,
+                oom_kill,
+            );
+        }
         Kind::MemoryStat => render::memory_stat(&mut out, usage(job, Resource::Kernel).used),
         Kind::PidsCurrent => render::number(&mut out, usage(job, Resource::Tasks).used),
         Kind::PidsMax => {

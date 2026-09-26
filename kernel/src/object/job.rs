@@ -161,6 +161,15 @@ pub(crate) struct Job {
     /// Woken whenever it becomes populated or empty. Shared, so that a
     /// `poll` of its `cgroup.events` can hold it for as long as it sleeps.
     events: Arc<WaitQueue>,
+    /// Woken whenever its `memory.events` counts an OOM or an OOM kill, in
+    /// it or beneath it (`object::oom`); shared as `events` is.
+    memory_events: Arc<WaitQueue>,
+    /// `memory.events`' `oom`: how many times a fault in it or beneath it
+    /// found a memory limit here or beneath it full, and asked for a kill.
+    ooms: AtomicU64,
+    /// `memory.events`' `oom_kill`: how many processes in it or beneath it
+    /// the scoped OOM kill ended.
+    oom_kills: AtomicU64,
     /// The owner, group and mode `chown` and `chmod` gave its cgroupfs
     /// directory and files, by each node's slot there. cgroupfs's, kept here
     /// because a directory there is a view made afresh at every lookup, and
@@ -366,6 +375,9 @@ impl Job {
             state: SpinLock::new(Members::default()),
             waiters: WaitQueue::new(),
             events: fallible::try_arc(WaitQueue::new())?,
+            memory_events: fallible::try_arc(WaitQueue::new())?,
+            ooms: AtomicU64::new(0),
+            oom_kills: AtomicU64::new(0),
             nodes: SpinLock::new(Vec::new()),
             quota,
             charge: Charge::none(Resource::Objects),
@@ -711,6 +723,34 @@ impl Job {
     /// The queue woken whenever it becomes populated or empty.
     pub(crate) fn events(&self) -> &Arc<WaitQueue> {
         &self.events
+    }
+
+    /// The queue woken whenever its `memory.events` counts change.
+    pub(crate) fn memory_events(&self) -> &Arc<WaitQueue> {
+        &self.memory_events
+    }
+
+    /// `memory.events`' `oom` and `oom_kill`, its own and every job's
+    /// beneath it, as cgroup v2 counts them.
+    pub(crate) fn oom_counts(&self) -> (u64, u64) {
+        (
+            self.ooms.load(Ordering::Acquire),
+            self.oom_kills.load(Ordering::Acquire),
+        )
+    }
+
+    /// Count an OOM (`killed` false) or an OOM kill in this job, and in
+    /// every job above it, as Linux's `memcg_memory_event` counts up the
+    /// tree, and wake whatever polls their `memory.events`. Atomics and
+    /// wakes only: the caller holds no lock.
+    pub(crate) fn count_oom(&self, killed: bool) {
+        let mut at = Some(self);
+        while let Some(job) = at {
+            let count = if killed { &job.oom_kills } else { &job.ooms };
+            let _ = count.fetch_add(1, Ordering::AcqRel);
+            job.memory_events.wake_all();
+            at = job.parent.as_deref();
+        }
     }
 
     /// Whether `job` is this job or beneath it.
