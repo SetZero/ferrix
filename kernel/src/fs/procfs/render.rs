@@ -204,7 +204,7 @@ fn mounts_from(ns: &Namespace, root: &Location) -> Result<Vec<u8>> {
 /// `/proc/stat` adds up to.
 pub(super) fn uptime(_: &Kernel) -> Result<Vec<u8>> {
     let nanos = time::now_nanos();
-    let idle = online_times()
+    let idle = online_times()?
         .iter()
         .fold(0_u64, |sum, (_, time)| sum.saturating_add(time.idle_ns));
     let mut out = Vec::new();
@@ -225,9 +225,10 @@ pub(super) fn uptime(_: &Kernel) -> Result<Vec<u8>> {
 ///
 /// With no topology there is one processor, the boot processor, which is
 /// what [`online_cpus`] says too.
-fn online_times() -> Vec<(u32, sched::CpuTime)> {
+fn online_times() -> Result<Vec<(u32, sched::CpuTime)>> {
     let topology = smp::topology();
-    sched::cpu_times()
+    let times = sched::cpu_times().map_err(|_| Errno::ENOMEM)?;
+    Ok(times
         .into_iter()
         .enumerate()
         .filter(|(logical, _)| {
@@ -239,7 +240,7 @@ fn online_times() -> Vec<(u32, sched::CpuTime)> {
             })
         })
         .map(|(logical, time)| (u32::try_from(logical).unwrap_or(u32::MAX), time))
-        .collect()
+        .collect())
 }
 
 /// `/proc/stat`.
@@ -276,7 +277,7 @@ fn online_times() -> Vec<(u32, sched::CpuTime)> {
 /// * **`softirq`**: zeros, as there are no softirqs.
 pub(super) fn kstat(_: &Kernel) -> Result<Vec<u8>> {
     let tick = NANOS / CLOCK_TICKS;
-    let times = online_times();
+    let times = online_times()?;
     let (mut busy, mut idle) = (0_u64, 0_u64);
     let mut cpus = Vec::with_capacity(times.len());
     for (logical, time) in &times {
@@ -289,7 +290,7 @@ pub(super) fn kstat(_: &Kernel) -> Result<Vec<u8>> {
     }
     // Every queue, not only the online processors': a queue whose processor
     // never joined has made no switch and holds no task.
-    let all = sched::cpu_times();
+    let all = sched::cpu_times().map_err(|_| Errno::ENOMEM)?;
     let switches = all
         .iter()
         .fold(0_u64, |sum, time| sum.saturating_add(time.switches));

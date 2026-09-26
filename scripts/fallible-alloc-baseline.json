@@ -9,10 +9,6 @@
     "being re-recorded. The target is an empty map."
   ],
   "files": {
-    "sched/mod.rs": 28,
-    "sched/queue.rs": 2,
-    "sched/task.rs": 1,
-    "sched/wait.rs": 3,
     "user/space.rs": 32,
     "user/vmo.rs": 31
   }

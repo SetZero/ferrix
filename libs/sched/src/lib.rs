@@ -53,11 +53,12 @@
 //! queued.
 //!
 //! ```
-//! use ferrix_sched::{Config, EntityState, NICE_0_WEIGHT, RunQueue};
+//! use ferrix_sched::{Config, EntityState, NICE_0_WEIGHT, RunQueue, Slot};
 //!
 //! let mut queue: RunQueue<&str> = RunQueue::new(Config { slice_ns: 3_000_000 }).unwrap();
-//! queue.enqueue(1, "one", EntityState::new(NICE_0_WEIGHT)).unwrap();
-//! queue.enqueue(2, "two", EntityState::new(NICE_0_WEIGHT)).unwrap();
+//! let state = EntityState::new(NICE_0_WEIGHT);
+//! queue.enqueue(1, "one", state, Slot::new().unwrap()).unwrap();
+//! queue.enqueue(2, "two", state, Slot::new().unwrap()).unwrap();
 //!
 //! // Equal weights, equal deadlines: the lower identifier runs first...
 //! assert_eq!(queue.pick_next(), Some(&"one"));
@@ -73,13 +74,13 @@ extern crate alloc;
 
 mod balance;
 mod domain;
+mod timeline;
 mod tree;
 
 #[cfg(test)]
 mod tests;
 
-use alloc::collections::BTreeMap;
-use alloc::vec::Vec;
+use alloc::boxed::Box;
 use core::fmt;
 
 pub use balance::{
@@ -87,7 +88,9 @@ pub use balance::{
     imbalance, place, quietest, slice_for,
 };
 pub use domain::{Class, CpuSet, Domain, MAX_CPUS, Mode, check_partition};
-use tree::{Key, Tree, before};
+pub use timeline::Timeline;
+pub use tree::Slot;
+use tree::{Key, Node, Tree, before};
 
 /// The weight of a task at nice 0, and the unit every other weight is
 /// measured in: an entity of this weight advances its virtual runtime at
@@ -203,11 +206,14 @@ impl EntityState {
 /// An entity the queue would not take, handed back with the reason.
 ///
 /// The payload comes back rather than being dropped: in the kernel it is the
-/// last reference to a task, and losing it would lose the task.
+/// last reference to a task, and losing it would lose the task. So does the
+/// slot it came in.
 #[derive(Debug)]
 pub struct Refused<T> {
     /// What the caller tried to queue.
     pub payload: T,
+    /// The slot it came in.
+    pub slot: Slot<T>,
     /// Why it was refused.
     pub reason: SchedError,
 }
@@ -226,8 +232,9 @@ pub(crate) struct Entity<T> {
     pub(crate) deadline: u64,
     /// Real nanoseconds it has run for.
     pub(crate) sum_exec: u64,
-    /// The caller's data.
-    pub(crate) payload: T,
+    /// The caller's data: always there while the entity is on a queue, and
+    /// taken out as it leaves, so that the slot it came in goes back empty.
+    pub(crate) payload: Option<T>,
 }
 
 impl<T> Entity<T> {
@@ -269,11 +276,9 @@ pub struct RunQueue<T> {
     config: Config,
     /// Queued entities, in deadline order.
     tree: Tree<T>,
-    /// Each queued entity's deadline, by identifier: how an entity is found in
-    /// the tree when all the caller has is its name.
-    deadlines: BTreeMap<u64, u64>,
-    /// The running entity, if any. Counted in `sum` and `load`; not in `tree`.
-    curr: Option<Entity<T>>,
+    /// The running entity, in its node, if any. Counted in `sum` and `load`;
+    /// not in `tree`.
+    curr: Option<Box<Node<T>>>,
     /// The base virtual runtimes are measured from.
     zero: u64,
     /// The weighted sum of every entity's virtual runtime less `zero`.
@@ -308,7 +313,6 @@ impl<T> RunQueue<T> {
         Ok(RunQueue {
             config,
             tree: Tree::new(),
-            deadlines: BTreeMap::new(),
             curr: None,
             zero: 0,
             sum: 0,
@@ -379,8 +383,12 @@ impl<T> RunQueue<T> {
 
     /// Whether `id` is on the queue, running or waiting.
     #[must_use]
+    ///
+    /// A walk of the queue: the tree is ordered by deadline, not by name, and
+    /// an index by name would be one more thing to allocate as entities come
+    /// and go.
     pub fn contains(&self, id: u64) -> bool {
-        self.deadlines.contains_key(&id) || self.curr.as_ref().is_some_and(|curr| curr.id == id)
+        self.curr.as_ref().is_some_and(|curr| curr.entity.id == id) || self.tree.find(id).is_some()
     }
 
     /// The queue's virtual time: the weight-average of every entity's virtual
@@ -468,20 +476,31 @@ impl<T> RunQueue<T> {
     /// the old makes the lag it has once it is counted exactly the lag it
     /// brought.
     ///
+    /// It arrives in `slot`, which the queue keeps while the entity is on it
+    /// and hands back as it leaves: nothing here allocates.
+    ///
     /// # Errors
     ///
     /// [`SchedError::ZeroWeight`] or [`SchedError::Duplicate`], with the
-    /// payload handed back.
-    pub fn enqueue(&mut self, id: u64, payload: T, state: EntityState) -> Result<(), Refused<T>> {
+    /// payload and the slot handed back.
+    pub fn enqueue(
+        &mut self,
+        id: u64,
+        payload: T,
+        state: EntityState,
+        slot: Slot<T>,
+    ) -> Result<(), Refused<T>> {
         if state.weight == 0 {
             return Err(Refused {
                 payload,
+                slot,
                 reason: SchedError::ZeroWeight,
             });
         }
         if self.contains(id) {
             return Err(Refused {
                 payload,
+                slot,
                 reason: SchedError::Duplicate(id),
             });
         }
@@ -491,15 +510,16 @@ impl<T> RunQueue<T> {
         let deadline = vruntime.wrapping_add(self.vslice(state.weight));
         self.add_load(vruntime, state.weight);
 
-        let _ = self.deadlines.insert(id, deadline);
-        self.tree.insert(Entity {
+        let Slot(mut node) = slot;
+        node.entity = Entity {
             id,
             weight: state.weight,
             vruntime,
             deadline,
             sum_exec: state.sum_exec,
-            payload,
-        });
+            payload: Some(payload),
+        };
+        self.tree.insert(node);
         self.normalize();
         Ok(())
     }
@@ -523,10 +543,9 @@ impl<T> RunQueue<T> {
     pub fn pick_next(&mut self) -> Option<&T> {
         self.put_curr_back();
         let key = self.choose()?;
-        let entity = self.tree.remove(key)?;
-        let _ = self.deadlines.remove(&entity.id);
-        let chosen = self.curr.insert(entity);
-        Some(&chosen.payload)
+        let node = self.tree.remove(key)?;
+        let chosen = self.curr.insert(node);
+        chosen.entity.payload.as_ref()
     }
 
     /// The eligible entity with the earliest deadline.
@@ -545,9 +564,8 @@ impl<T> RunQueue<T> {
 
     /// Return the running entity to the tree, still counted.
     fn put_curr_back(&mut self) {
-        if let Some(entity) = self.curr.take() {
-            let _ = self.deadlines.insert(entity.id, entity.deadline);
-            self.tree.insert(entity);
+        if let Some(node) = self.curr.take() {
+            self.tree.insert(node);
         }
     }
 
@@ -560,7 +578,7 @@ impl<T> RunQueue<T> {
     /// request. That is the overrun the fairness bound has to allow for.
     pub fn update_curr(&mut self, delta_ns: u64) -> bool {
         let slice_ns = self.config.slice_ns;
-        let Some(curr) = self.curr.as_mut() else {
+        let Some(curr) = self.curr.as_mut().map(|node| &mut node.entity) else {
             return false;
         };
         let delta = to_virtual(delta_ns, curr.weight);
@@ -584,7 +602,7 @@ impl<T> RunQueue<T> {
     /// eligible with a nearer deadline goes first.
     pub fn yield_curr(&mut self) {
         let slice_ns = self.config.slice_ns;
-        if let Some(curr) = self.curr.as_mut() {
+        if let Some(curr) = self.curr.as_mut().map(|node| &mut node.entity) {
             curr.deadline = curr
                 .deadline
                 .wrapping_add(to_virtual(slice_ns, curr.weight));
@@ -599,7 +617,7 @@ impl<T> RunQueue<T> {
     /// rather than waiting out whatever slice is in progress.
     #[must_use]
     pub fn should_preempt(&self) -> bool {
-        let Some(curr) = self.curr.as_ref() else {
+        let Some(curr) = self.curr.as_ref().map(|node| &node.entity) else {
             return !self.tree.is_empty();
         };
         let Some(best) = self.tree.pick(|vruntime| self.is_eligible(vruntime)) else {
@@ -612,7 +630,7 @@ impl<T> RunQueue<T> {
     /// timer should be armed for. Zero if it is already spent.
     #[must_use]
     pub fn remaining_ns(&self) -> Option<u64> {
-        let curr = self.curr.as_ref()?;
+        let curr = &self.curr.as_ref()?.entity;
         let left = curr.deadline.wrapping_sub(curr.vruntime) as i64;
         Some(if left <= 0 {
             0
@@ -640,24 +658,17 @@ impl<T> RunQueue<T> {
     pub fn level(&mut self) {
         let avg = self.avg_vruntime();
         let slice_ns = self.config.slice_ns;
-        let mut keys = Vec::with_capacity(self.tree.len());
-        self.tree.for_each(|entity| keys.push(entity.key()));
-        let mut entities = Vec::with_capacity(keys.len());
-        for key in keys {
-            if let Some(entity) = self.tree.remove(key) {
-                entities.push(entity);
-            }
-        }
-        self.deadlines.clear();
-        if let Some(curr) = self.curr.as_mut() {
+        if let Some(curr) = self.curr.as_mut().map(|node| &mut node.entity) {
             curr.vruntime = avg;
             curr.deadline = avg.wrapping_add(to_virtual(slice_ns, curr.weight));
         }
-        for mut entity in entities {
-            entity.vruntime = avg;
-            entity.deadline = avg.wrapping_add(to_virtual(slice_ns, entity.weight));
-            let _ = self.deadlines.insert(entity.id, entity.deadline);
-            self.tree.insert(entity);
+        // Moved node by node from the old tree to a fresh one, every key
+        // changing on the way: no list of them, so nothing is allocated.
+        let mut old = core::mem::replace(&mut self.tree, Tree::new());
+        while let Some(mut node) = old.pop_first() {
+            node.entity.vruntime = avg;
+            node.entity.deadline = avg.wrapping_add(to_virtual(slice_ns, node.entity.weight));
+            self.tree.insert(node);
         }
         // Everything sits at the average, so the weighted sum about it is
         // nothing, and the base may as well be the average itself.
@@ -667,22 +678,26 @@ impl<T> RunQueue<T> {
 
     /// Take the running entity off the queue — it is blocking, exiting or
     /// moving — and hand back what it needs to come back with.
-    pub fn remove_curr(&mut self) -> Option<(u64, T, EntityState)> {
-        let entity = self.curr.take()?;
-        Some(self.detach(entity))
+    ///
+    /// The slot it came in comes back with it.
+    pub fn remove_curr(&mut self) -> Option<(u64, T, EntityState, Slot<T>)> {
+        let node = self.curr.take()?;
+        self.detach(node)
     }
 
-    /// Take entity `id` off the queue, running or waiting.
-    pub fn remove(&mut self, id: u64) -> Option<(T, EntityState)> {
-        if self.curr.as_ref().is_some_and(|curr| curr.id == id) {
+    /// Take entity `id` off the queue, running or waiting, with its slot.
+    ///
+    /// A waiting entity is found by a walk: see [`RunQueue::contains`].
+    pub fn remove(&mut self, id: u64) -> Option<(T, EntityState, Slot<T>)> {
+        if self.curr.as_ref().is_some_and(|curr| curr.entity.id == id) {
             return self
                 .remove_curr()
-                .map(|(_, payload, state)| (payload, state));
+                .map(|(_, payload, state, slot)| (payload, state, slot));
         }
-        let deadline = self.deadlines.remove(&id)?;
-        let entity = self.tree.remove(Key { deadline, id })?;
-        let (_, payload, state) = self.detach(entity);
-        Some((payload, state))
+        let key = self.tree.find(id)?;
+        let node = self.tree.remove(key)?;
+        let (_, payload, state, slot) = self.detach(node)?;
+        Some((payload, state, slot))
     }
 
     /// Give entity `id` the weight `weight`, running or waiting, and say
@@ -703,11 +718,16 @@ impl<T> RunQueue<T> {
         if weight == 0 {
             return Err(SchedError::ZeroWeight);
         }
-        if let Some(curr) = self.curr.as_ref().filter(|curr| curr.id == id) {
+        if let Some(curr) = self
+            .curr
+            .as_ref()
+            .map(|node| &node.entity)
+            .filter(|curr| curr.id == id)
+        {
             let (vruntime, was) = (curr.vruntime, curr.weight);
             if was != weight {
                 let (at, deadline) = self.reweigh(vruntime, was, weight);
-                if let Some(curr) = self.curr.as_mut() {
+                if let Some(curr) = self.curr.as_mut().map(|node| &mut node.entity) {
                     curr.weight = weight;
                     curr.vruntime = at;
                     curr.deadline = deadline;
@@ -718,20 +738,21 @@ impl<T> RunQueue<T> {
         }
         // Out of the tree and back into it, because the deadline it is keyed
         // by is one of the things the new weight changes.
-        let Some(deadline) = self.deadlines.remove(&id) else {
+        let Some(key) = self.tree.find(id) else {
             return Ok(false);
         };
-        let Some(mut entity) = self.tree.remove(Key { deadline, id }) else {
+        let Some(mut node) = self.tree.remove(key) else {
             return Ok(false);
         };
+        let entity = &mut node.entity;
         if entity.weight != weight {
             let (at, deadline) = self.reweigh(entity.vruntime, entity.weight, weight);
+            let entity = &mut node.entity;
             entity.weight = weight;
             entity.vruntime = at;
             entity.deadline = deadline;
         }
-        let _ = self.deadlines.insert(id, entity.deadline);
-        self.tree.insert(entity);
+        self.tree.insert(node);
         self.normalize();
         Ok(true)
     }
@@ -765,48 +786,60 @@ impl<T> RunQueue<T> {
     ///
     /// The lag is taken while the entity is still counted, because it is a
     /// statement about the queue it is leaving.
-    fn detach(&mut self, entity: Entity<T>) -> (u64, T, EntityState) {
+    ///
+    /// `None` only for a node with no payload, which a queue never holds.
+    fn detach(&mut self, mut node: Box<Node<T>>) -> Option<(u64, T, EntityState, Slot<T>)> {
+        let entity = &node.entity;
         let limit = self.lag_limit(entity.weight);
         let vlag = self.lag_at(entity.vruntime).clamp(-limit, limit);
-        self.sub_load(entity.vruntime, entity.weight);
+        let (id, weight, vruntime, sum_exec) =
+            (entity.id, entity.weight, entity.vruntime, entity.sum_exec);
+        self.sub_load(vruntime, weight);
         self.normalize();
-        (
-            entity.id,
-            entity.payload,
+        let payload = node.entity.payload.take()?;
+        Some((
+            id,
+            payload,
             EntityState {
-                weight: entity.weight,
+                weight,
                 vlag,
-                sum_exec: entity.sum_exec,
+                sum_exec,
             },
-        )
+            Slot(node),
+        ))
     }
 
     /// The running entity's data.
     #[must_use]
     pub fn current(&self) -> Option<&T> {
-        self.curr.as_ref().map(|curr| &curr.payload)
+        self.curr.as_ref()?.entity.payload.as_ref()
     }
 
     /// The running entity's data, mutably.
     pub fn current_mut(&mut self) -> Option<&mut T> {
-        self.curr.as_mut().map(|curr| &mut curr.payload)
+        self.curr.as_mut()?.entity.payload.as_mut()
     }
 
     /// The running entity's identifier.
     #[must_use]
     pub fn current_id(&self) -> Option<u64> {
-        self.curr.as_ref().map(|curr| curr.id)
+        self.curr.as_ref().map(|curr| curr.entity.id)
     }
 
     /// Entity `id`, running or waiting.
     #[must_use]
     pub fn get(&self, id: u64) -> Option<EntityView<'_, T>> {
-        if let Some(curr) = self.curr.as_ref().filter(|curr| curr.id == id) {
-            return Some(self.view(curr, true));
+        if let Some(curr) = self
+            .curr
+            .as_ref()
+            .map(|node| &node.entity)
+            .filter(|curr| curr.id == id)
+        {
+            return self.view(curr, true);
         }
-        let deadline = *self.deadlines.get(&id)?;
-        let entity = self.tree.get(Key { deadline, id })?;
-        Some(self.view(entity, false))
+        let key = self.tree.find(id)?;
+        let entity = self.tree.get(key)?;
+        self.view(entity, false)
     }
 
     /// Entity `id`'s lag, in virtual nanoseconds.
@@ -818,10 +851,18 @@ impl<T> RunQueue<T> {
     /// Visit every entity: the running one first, then the queued ones in
     /// deadline order.
     pub fn for_each(&self, mut visit: impl FnMut(EntityView<'_, T>)) {
-        if let Some(curr) = self.curr.as_ref() {
-            visit(self.view(curr, true));
+        if let Some(view) = self
+            .curr
+            .as_ref()
+            .and_then(|node| self.view(&node.entity, true))
+        {
+            visit(view);
         }
-        self.tree.for_each(|entity| visit(self.view(entity, false)));
+        self.tree.for_each(|entity| {
+            if let Some(view) = self.view(entity, false) {
+                visit(view);
+            }
+        });
     }
 
     /// The queued entity with the latest deadline whose data satisfies
@@ -833,13 +874,14 @@ impl<T> RunQueue<T> {
     #[must_use]
     pub fn latest_where(&self, movable: impl Fn(&T) -> bool) -> Option<u64> {
         self.tree
-            .last_where(|entity| movable(&entity.payload))
+            .last_where(|entity| entity.payload.as_ref().is_some_and(&movable))
             .map(|key| key.id)
     }
 
-    /// An entity as the caller sees it.
-    fn view<'a>(&self, entity: &'a Entity<T>, running: bool) -> EntityView<'a, T> {
-        EntityView {
+    /// An entity as the caller sees it: `None` for a node with no payload,
+    /// which a queue never holds.
+    fn view<'a>(&self, entity: &'a Entity<T>, running: bool) -> Option<EntityView<'a, T>> {
+        Some(EntityView {
             id: entity.id,
             weight: entity.weight,
             vruntime: entity.vruntime,
@@ -847,15 +889,15 @@ impl<T> RunQueue<T> {
             sum_exec: entity.sum_exec,
             lag: self.lag_at(entity.vruntime),
             running,
-            payload: &entity.payload,
-        }
+            payload: entity.payload.as_ref()?,
+        })
     }
 
     /// Check every claim the queue's bookkeeping rests on.
     ///
-    /// The tree is ordered, balanced and its minima are current; the index of
-    /// deadlines names exactly the entities in it; the running entity is in
-    /// neither; and the weighted sum and the load, recomputed from scratch,
+    /// The tree is ordered, balanced and its minima are current; every entity
+    /// on the queue carries its payload; the running entity is not also in
+    /// the tree; and the weighted sum and the load, recomputed from scratch,
     /// are the ones the queue has been maintaining by increments. The last is
     /// the one that matters most — a sum that has drifted makes every
     /// eligibility decision subtly wrong, and nothing else would say so.
@@ -865,23 +907,25 @@ impl<T> RunQueue<T> {
     /// The first claim that does not hold, as a sentence.
     pub fn check_invariants(&self) -> Result<(), &'static str> {
         let counted = self.tree.check()?;
-        if counted != self.deadlines.len() || counted != self.tree.len() {
-            return Err("the tree and its index of deadlines disagree about what is queued");
+        if counted != self.tree.len() {
+            return Err("the tree's count of what is queued is wrong");
         }
-        for (id, deadline) in &self.deadlines {
-            if self
-                .tree
-                .get(Key {
-                    deadline: *deadline,
-                    id: *id,
-                })
-                .is_none()
-            {
-                return Err("an indexed deadline names nothing in the tree");
+        let mut missing = 0;
+        self.tree.for_each(|entity| {
+            if entity.payload.is_none() {
+                missing += 1;
             }
+        });
+        if missing != 0
+            || self
+                .curr
+                .as_ref()
+                .is_some_and(|curr| curr.entity.payload.is_none())
+        {
+            return Err("an entity on the queue has lost its payload");
         }
         if let Some(curr) = self.curr.as_ref()
-            && self.deadlines.contains_key(&curr.id)
+            && self.tree.find(curr.entity.id).is_some()
         {
             return Err("the running entity is also queued");
         }

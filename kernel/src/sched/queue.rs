@@ -25,10 +25,9 @@
 //! else happens — which is what "tickless" means and why the timer facade's
 //! one-shot is the primitive stage 3 left behind.
 
-use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 
-use ferrix_sched::{Config, CpuLoad, EntityState, Load, RunQueue, slice_for};
+use ferrix_sched::{Config, CpuLoad, EntityState, Load, RunQueue, Timeline, slice_for};
 
 use super::task::{BLOCKED, RUNNABLE, Task, TaskId};
 
@@ -147,8 +146,9 @@ pub(crate) struct CpuQueue {
     /// What was running before the last switch, for the incoming context to
     /// finish with.
     pub(crate) previous: Option<Arc<Task>>,
-    /// Tasks asleep on this CPU, by the instant they wake.
-    pub(crate) sleepers: BTreeMap<(u64, TaskId), Arc<Task>>,
+    /// Tasks asleep on this CPU, by the instant they wake, each in its own
+    /// sleep slot: filing and waking allocate nothing.
+    sleepers: Timeline<Arc<Task>>,
     /// How busy this processor has been, decaying.
     ///
     /// "Busy" means running something that is not the idle task. It is
@@ -179,7 +179,7 @@ impl CpuQueue {
             current: None,
             idle: None,
             previous: None,
-            sleepers: BTreeMap::new(),
+            sleepers: Timeline::new(),
             load: Load::new(),
             load_updated: 0,
             exec_start: 0,
@@ -346,11 +346,8 @@ impl CpuQueue {
 
     /// Wake every task whose sleep has ended.
     pub(crate) fn wake_sleepers(&mut self, now: u64) {
-        while let Some((key, task)) = self.sleepers.pop_first() {
-            if key.0 > now {
-                let _ = self.sleepers.insert(key, task);
-                return;
-            }
+        while let Some((_, task, slot)) = self.sleepers.pop_due(now) {
+            task.return_sleep_slot(slot);
             // Only a task still blocked is woken. One already woken some other
             // way is running or queued, and one that has exited must never run
             // again; for either, the entry is stale and is dropped.
@@ -358,8 +355,23 @@ impl CpuQueue {
                 continue;
             }
             task.set_state(RUNNABLE);
+            // NOALLOC: `CpuQueue::insert` queues the task in its own run slot.
             self.insert(&task);
         }
+    }
+
+    /// File `task`, which is blocking, to wake at `at`. Answers whether it
+    /// could be: a task whose sleep slot a sleeper set elsewhere still holds
+    /// -- one filed there, woken early, and not taken out because it had
+    /// moved -- cannot be filed twice, and the caller keeps it runnable, so
+    /// that its sleep returns early and asks again.
+    pub(crate) fn file_sleeper(&mut self, at: u64, task: &Arc<Task>) -> bool {
+        let Some(slot) = task.take_sleep_slot() else {
+            return false;
+        };
+        // NOALLOC: a `Timeline` files the task in the slot it is given.
+        self.sleepers.insert(at, task.id, Arc::clone(task), slot);
+        true
     }
 
     /// Put a runnable task into the fair class, carrying its lag.
@@ -374,17 +386,27 @@ impl CpuQueue {
     /// run 118 ms uncharged, ran its whole loop before the checker was eligible
     /// to start the second, and the two "ran one after the other". The clamp in
     /// `placement_lag` cannot see this, because the lag is made after placement.
+    ///
+    /// In the task's own run slot, which it lends the queue until it leaves:
+    /// nothing here allocates, and this is reached from interrupt handlers
+    /// (finding F-23). A task without its slot is already queued somewhere,
+    /// which the callers' `is_queued` checks rule out; it is left alone.
     pub(crate) fn insert(&mut self, task: &Arc<Task>) {
+        let Some(slot) = task.take_run_slot() else {
+            super::note_missing_slot();
+            return;
+        };
         if self.current.is_some() {
             self.account(crate::timer::now_nanos());
         }
-        if let Err(refused) = self
-            .fair
-            .enqueue(task.id, Arc::clone(task), task.entity_state())
+        if let Err(refused) =
+            self.fair
+                .enqueue(task.id, Arc::clone(task), task.entity_state(), slot)
         {
             // The only refusals are a duplicate identifier and a zero weight,
             // neither of which this kernel can produce; dropping the clone is
             // what keeps the task alive in the table regardless.
+            task.return_run_slot(refused.slot);
             drop(refused.payload);
             return;
         }
@@ -414,7 +436,8 @@ impl CpuQueue {
     /// Take the running task out of the fair class, keeping what it needs to
     /// come back with.
     pub(crate) fn detach_current(&mut self) {
-        if let Some((_, task, state)) = self.fair.remove_curr() {
+        if let Some((_, task, state, slot)) = self.fair.remove_curr() {
+            task.return_run_slot(slot);
             task.store_entity_state(state);
             task.set_queued(false);
         }
@@ -490,7 +513,7 @@ impl CpuQueue {
 
     /// Arm the timer for the next decision this CPU has to make.
     pub(crate) fn arm_timer(&self, now: u64) {
-        let sleeper = self.sleepers.keys().next().map(|(at, _)| *at);
+        let sleeper = self.sleepers.first_due();
         // A slice only ends in a decision if something is waiting for it. One
         // task alone on a CPU is left to run: interrupting it would change
         // nothing, and this is where tickless comes from.
@@ -528,7 +551,8 @@ impl CpuQueue {
         if self.current.is_some() {
             self.account(crate::timer::now_nanos());
         }
-        let (task, state) = self.fair.remove(id)?;
+        let (task, state, slot) = self.fair.remove(id)?;
+        task.return_run_slot(slot);
         task.set_queued(false);
         self.rescale_slice();
         Some((task, state))
@@ -572,9 +596,11 @@ impl CpuQueue {
     /// the task's own copy of that was consumed when it was filed. Sleeper sets
     /// are short.
     pub(crate) fn remove_sleeper(&mut self, id: TaskId) -> bool {
-        let before = self.sleepers.len();
-        self.sleepers.retain(|(_, sleeping), _| *sleeping != id);
-        self.sleepers.len() != before
+        let Some((task, slot)) = self.sleepers.remove(id) else {
+            return false;
+        };
+        task.return_sleep_slot(slot);
+        true
     }
 
     /// Tasks waiting to run: everything on the queue but the running one.

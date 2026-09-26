@@ -20,10 +20,12 @@ use core::cell::UnsafeCell;
 use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
-use ferrix_sched::{CpuSet, EntityState};
+use ferrix_sched::{CpuSet, EntityState, Slot};
 
 use crate::arch;
+use crate::fallible::{self, AllocError};
 use crate::object::process::Host;
+use crate::sync::SpinLock;
 use crate::user::space::AddressSpace;
 use crate::vmap::Stack;
 
@@ -123,6 +125,23 @@ pub(crate) struct Task {
     preemptions: AtomicU64,
     /// Which CPUs it has run on, one bit each.
     cpus_run_on: AtomicU64,
+    /// The node a run queue holds it in, while no run queue does.
+    ///
+    /// Lent to a queue as the task is queued and handed back as it leaves,
+    /// so that queueing, which a wake-up does from an interrupt handler,
+    /// allocates nothing (finding F-23). Allocated with the task.
+    run_slot: SpinLock<Option<TaskSlot>>,
+    /// The node a processor's sleeper set, or the reaper's list, holds it
+    /// in, while neither does. As `run_slot`, for sleeping and for dying.
+    sleep_slot: SpinLock<Option<TaskSlot>>,
+}
+
+/// The node a queue, a sleeper set or the reaper holds a task in.
+pub(crate) type TaskSlot = Slot<Arc<Task>>;
+
+/// The two slots a task needs, allocated together.
+fn slots() -> Result<(TaskSlot, TaskSlot), AllocError> {
+    Ok((Slot::new()?, Slot::new()?))
 }
 
 // SAFETY: every field but `stack_pointer` and `user` is an atomic or
@@ -177,7 +196,12 @@ pub(crate) struct NewTask {
 
 impl Task {
     /// A task that will start at `entry` on a stack of its own.
-    pub(crate) fn new(new: NewTask) -> Task {
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`] when there is no memory for its slots or its user
+    /// registers.
+    pub(crate) fn new(new: NewTask) -> Result<Task, AllocError> {
         let NewTask {
             id,
             name,
@@ -192,12 +216,14 @@ impl Task {
             thread,
             user_state,
         } = new;
-        let user = thread.as_ref().map(|_| {
-            Box::new(UnsafeCell::new(
+        let user = match thread.as_ref() {
+            Some(_) => Some(fallible::try_box(UnsafeCell::new(
                 user_state.unwrap_or_else(arch::UserState::new),
-            ))
-        });
-        Task {
+            ))?),
+            None => None,
+        };
+        let (run_slot, sleep_slot) = slots()?;
+        Ok(Task {
             id,
             name,
             entry: Some((entry, argument)),
@@ -220,14 +246,26 @@ impl Task {
             switches: AtomicU64::new(0),
             preemptions: AtomicU64::new(0),
             cpus_run_on: AtomicU64::new(0),
-        }
+            run_slot: SpinLock::new(Some(run_slot)),
+            sleep_slot: SpinLock::new(Some(sleep_slot)),
+        })
     }
 
     /// A task for a context that is already running: the boot task, and each
     /// CPU's idle task. Its stack is whoever started it, and its saved stack
     /// pointer is filled in the first time it is switched away from.
-    pub(crate) fn adopt(id: TaskId, name: &'static str, weight: u32, cpu: usize) -> Task {
-        Task {
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`] when there is no memory for its slots.
+    pub(crate) fn adopt(
+        id: TaskId,
+        name: &'static str,
+        weight: u32,
+        cpu: usize,
+    ) -> Result<Task, AllocError> {
+        let (run_slot, sleep_slot) = slots()?;
+        Ok(Task {
             id,
             name,
             entry: None,
@@ -256,7 +294,31 @@ impl Task {
             switches: AtomicU64::new(0),
             preemptions: AtomicU64::new(0),
             cpus_run_on: AtomicU64::new(0),
-        }
+            run_slot: SpinLock::new(Some(run_slot)),
+            sleep_slot: SpinLock::new(Some(sleep_slot)),
+        })
+    }
+
+    /// Take the slot a run queue holds this task in, to queue it with.
+    /// `None` if a queue already holds it.
+    pub(crate) fn take_run_slot(&self) -> Option<TaskSlot> {
+        self.run_slot.lock().take()
+    }
+
+    /// Have back the slot a run queue held this task in.
+    pub(crate) fn return_run_slot(&self, slot: TaskSlot) {
+        *self.run_slot.lock() = Some(slot);
+    }
+
+    /// Take the slot a sleeper set or the reaper holds this task in. `None`
+    /// if one already holds it.
+    pub(crate) fn take_sleep_slot(&self) -> Option<TaskSlot> {
+        self.sleep_slot.lock().take()
+    }
+
+    /// Have back the slot a sleeper set or the reaper held this task in.
+    pub(crate) fn return_sleep_slot(&self, slot: TaskSlot) {
+        *self.sleep_slot.lock() = Some(slot);
     }
 
     /// What it runs, if it has not started yet.

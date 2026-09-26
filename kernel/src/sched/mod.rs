@@ -52,6 +52,7 @@ use ferrix_sched::{Balance, CpuSet, Domain, Mode, NICE_0_WEIGHT, Placement, chec
 use ferrix_sync::{IrqControl, IrqSpinLock, Once, SpinLock};
 
 use crate::arch;
+use crate::fallible;
 use crate::smp::Topology;
 use queue::CpuQueue;
 use task::{DEAD, RUNNABLE};
@@ -324,7 +325,9 @@ static RUNNING: Once<Vec<AtomicU64>> = Once::new();
 
 /// Make the per-processor words [`NEXT_BALANCE`] and [`RUNNING`].
 fn per_cpu_words(online: usize) {
+    // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
     let _ = NEXT_BALANCE.call_once(|| (0..online).map(|_| AtomicU64::new(0)).collect());
+    // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
     let _ = RUNNING.call_once(|| (0..online).map(|_| AtomicU64::new(0)).collect());
 }
 
@@ -400,7 +403,74 @@ fn set_idle(cpu: Option<usize>, idle: bool) {
 /// on, and the context that switched away from it is holding a run queue lock
 /// while `vmap::free_stack` needs to invalidate other processors' translations
 /// and wait for them.
-static ZOMBIES: IrqSpinLock<Vec<Arc<Task>>, arch::Irq> = IrqSpinLock::new(Vec::new());
+///
+/// Each held in its own run slot, which a task that has left its run queue
+/// for good no longer needs: filing a zombie happens as the scheduler
+/// switches away from it, where nothing may allocate (finding F-23).
+static ZOMBIES: IrqSpinLock<Zombies, arch::Irq> = IrqSpinLock::new(Zombies::new());
+
+/// The dead tasks in [`ZOMBIES`], oldest first.
+#[derive(Debug)]
+struct Zombies {
+    /// The tasks, keyed by the order they died in.
+    list: ferrix_sched::Timeline<Arc<Task>>,
+    /// The next one's place in that order.
+    next: u64,
+}
+
+impl Zombies {
+    /// None.
+    const fn new() -> Zombies {
+        Zombies {
+            list: ferrix_sched::Timeline::new(),
+            next: 0,
+        }
+    }
+
+    /// How many are waiting.
+    fn len(&self) -> usize {
+        self.list.len()
+    }
+
+    /// Whether none are.
+    fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
+
+    /// File `task`, in its run slot. A task still holding a run queue's slot
+    /// cannot be filed, and is counted as lost instead: its stack is never
+    /// freed, which is a leak and not a fault. `DEAD_STILL_QUEUED` counts
+    /// the same condition, and a check requires it to be zero.
+    fn push(&mut self, task: Arc<Task>) {
+        let Some(slot) = task.take_run_slot() else {
+            let _ = ZOMBIES_LOST.fetch_add(1, Ordering::Relaxed);
+            return;
+        };
+        let at = self.next;
+        self.next = self.next.wrapping_add(1);
+        // NOALLOC: a `Timeline` files the task in the slot it is given.
+        self.list.insert(at, task.id, task, slot);
+    }
+
+    /// Take the oldest out.
+    fn pop(&mut self) -> Option<Arc<Task>> {
+        let (_, task, slot) = self.list.pop_due(u64::MAX)?;
+        task.return_run_slot(slot);
+        Some(task)
+    }
+}
+
+/// Dead tasks [`Zombies::push`] could not file.
+static ZOMBIES_LOST: AtomicU64 = AtomicU64::new(0);
+
+/// Queueings refused because the task had no run slot to be queued in: see
+/// `CpuQueue::insert`. Zero on a correct kernel.
+static MISSING_SLOTS: AtomicU64 = AtomicU64::new(0);
+
+/// Count a queueing refused for want of a run slot.
+pub(super) fn note_missing_slot() {
+    let _ = MISSING_SLOTS.fetch_add(1, Ordering::Relaxed);
+}
 
 /// How many stacks one pass of the idle loop's reaper frees.
 ///
@@ -533,23 +603,31 @@ pub(crate) fn init(topology: &'static Topology) -> Result<(), &'static str> {
         .map_err(|_| "the scheduling domains do not cover every processor exactly once")?;
     let _ = DOMAIN.call_once(|| domain);
 
+    // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
     let mut queues = Vec::with_capacity(online);
     for _ in 0..online {
+        // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
         queues.push(SpinLock::new(CpuQueue::new()?));
     }
     let _ = QUEUES.call_once(|| queues);
+    // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
     let _ = NEED_RESCHED.call_once(|| (0..online).map(|_| AtomicBool::new(false)).collect());
+    // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
     let _ = REAPING.call_once(|| (0..online).map(|_| AtomicBool::new(false)).collect());
+    // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
     let _ = PREEMPT_OFF.call_once(|| (0..online).map(|_| AtomicU32::new(0)).collect());
+    // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
     let _ = LOCKS_HELD.call_once(|| (0..online).map(|_| AtomicU32::new(0)).collect());
     let _ = PREEMPT_SITE.call_once(|| {
         (0..online)
             .map(|_| core::sync::atomic::AtomicPtr::new(core::ptr::null_mut()))
+            // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
             .collect()
     });
     let _ = LOCK_SITE.call_once(|| {
         (0..online)
             .map(|_| core::sync::atomic::AtomicPtr::new(core::ptr::null_mut()))
+            // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
             .collect()
     });
     per_cpu_words(online);
@@ -621,7 +699,9 @@ fn joined(cpu: usize) {
 /// Make the context that called [`init`] the boot processor's first task, and
 /// give that processor an idle task to fall back to.
 fn adopt_boot_task() -> Result<(), &'static str> {
-    let boot = Arc::new(Task::adopt(next_id(), "kmain", NICE_0_WEIGHT, 0));
+    let boot = Task::adopt(next_id(), "kmain", NICE_0_WEIGHT, 0)
+        .and_then(fallible::try_arc)
+        .map_err(|_| "no memory for the boot task")?;
     let idle = new_idle_task(0)?;
     let lock = queue_of(0).ok_or("the boot processor has no run queue")?;
 
@@ -629,6 +709,7 @@ fn adopt_boot_task() -> Result<(), &'static str> {
     {
         let mut queue = lock.lock();
         queue.idle = Some(idle);
+        // NOALLOC: `CpuQueue::insert` queues the task in its own run slot.
         queue.insert(&boot);
         // Make it the running entity rather than one waiting to run: it is
         // already on the processor.
@@ -648,7 +729,7 @@ fn new_idle_task(cpu: usize) -> Result<Arc<Task>, &'static str> {
     // SAFETY: the stack was allocated a moment ago, is mapped and writable,
     // and nothing else refers to it.
     let stack_pointer = unsafe { arch::prepare_stack(stack.top, task_start, 0) };
-    Ok(Arc::new(Task::new(task::NewTask {
+    let task = Task::new(task::NewTask {
         id: next_id(),
         name: "idle",
         entry: |_| idle_loop(),
@@ -662,14 +743,29 @@ fn new_idle_task(cpu: usize) -> Result<Arc<Task>, &'static str> {
         address_space: None,
         thread: None,
         user_state: None,
-    })))
+    })
+    .and_then(fallible::try_arc);
+    task.map_err(|_| {
+        // SAFETY: allocated above and never run on.
+        let _ = unsafe { crate::vmap::free_stack(stack) };
+        "no memory for an idle task"
+    })
 }
 
 /// Where a secondary processor joins the scheduler: its bring-up context
 /// becomes its idle task, and it never returns.
 pub(crate) fn enter_idle() -> ! {
     let Some(cpu) = this_cpu() else { arch::halt() };
-    let idle = Arc::new(Task::adopt(next_id(), "idle", NICE_0_WEIGHT, cpu));
+    // FATAL-ALLOC: boot only: a secondary processor adopts its idle context
+    // once, as it comes up.
+    let idle = Arc::new(
+        Task::adopt(next_id(), "idle", NICE_0_WEIGHT, cpu).unwrap_or_else(|_| {
+            crate::panic::fatal!(
+                crate::panic::catalog::BOOT_OUT_OF_MEMORY,
+                "no memory for processor {cpu}'s idle task"
+            )
+        }),
+    );
 
     if let Some(lock) = queue_of(cpu) {
         let saved = <arch::Irq as IrqControl>::disable();
@@ -1082,7 +1178,7 @@ fn make_task(
     // SAFETY: the stack was allocated a moment ago, is mapped and writable,
     // and nothing else refers to it.
     let stack_pointer = unsafe { arch::prepare_stack(stack.top, task_start, 0) };
-    Ok(Arc::new(Task::new(task::NewTask {
+    let task = Task::new(task::NewTask {
         id: next_id(),
         name,
         entry,
@@ -1095,7 +1191,13 @@ fn make_task(
         address_space,
         thread,
         user_state,
-    })))
+    })
+    .and_then(fallible::try_arc);
+    task.map_err(|_| {
+        // SAFETY: allocated above and never run on.
+        let _ = unsafe { crate::vmap::free_stack(stack) };
+        "no memory for a new task"
+    })
 }
 
 /// Put a task made for `cpu` on `lock`, that processor's queue, and see that
@@ -1104,6 +1206,7 @@ fn enqueue(task: &Arc<Task>, cpu: usize, lock: &'static SpinLock<CpuQueue>) {
     let saved = <arch::Irq as IrqControl>::disable();
     let (preempt, stealable) = {
         let mut queue = lock.lock();
+        // NOALLOC: `CpuQueue::insert` queues the task in its own run slot.
         queue.insert(task);
         // Three reasons to make the target reschedule, and the third is the
         // one that cost a day. Either something better than what it is
@@ -1184,6 +1287,7 @@ extern "C" fn task_start(_argument: usize) -> ! {
     // it. An entry that never returns -- a program entering user mode, which
     // ends through `exit_group` or a kill -- would otherwise keep it on this
     // frame for good, and with it the task, its process and its address space.
+    // NOALLOC: `Task::entry` reads a field.
     let entry = current().and_then(|task| task.entry());
     if let Some((entry, argument)) = entry {
         entry(argument);
@@ -1320,6 +1424,7 @@ pub(crate) fn wake(task: &Arc<Task>) {
         let _ = task.take_sleep_deadline();
         task.set_state(RUNNABLE);
         if !task.is_queued() {
+            // NOALLOC: `CpuQueue::insert` queues the task in its own run slot.
             queue.insert(task);
         }
         // As `spawn_on`, and for the same three reasons: something better has
@@ -1620,10 +1725,13 @@ fn choose_next(
         // in the sleeper set is a dead task the timer makes runnable.
         if let Some(at) = previous.take_sleep_deadline()
             && !previous.is_dead()
+            && !queue.file_sleeper(at, previous)
         {
-            let _ = queue
-                .sleepers
-                .insert((at, previous.id), Arc::clone(previous));
+            // No sleep slot to file it in: it runs on, and its sleep returns
+            // early and asks again. See `CpuQueue::file_sleeper`.
+            previous.set_state(RUNNABLE);
+            // NOALLOC: `CpuQueue::insert` queues the task in its own run slot.
+            queue.insert(previous);
         }
     }
 
@@ -1795,6 +1903,7 @@ fn finish_switch() {
     if let Some(previous) = previous
         && dead
     {
+        // NOALLOC: `Zombies::push` files the task in its run slot.
         ZOMBIES.lock().push(previous);
     }
 }
@@ -1995,6 +2104,7 @@ fn steal_from(me: usize, victim: usize) -> bool {
             Some((task, state)) => {
                 task.store_entity_state(state);
                 task.set_cpu(me);
+                // NOALLOC: `CpuQueue::insert` queues the task in its own run slot.
                 mine_queue.insert(&task);
                 theirs_queue.stats.stolen_out += 1;
                 mine_queue.stats.stolen_in += 1;
@@ -2075,32 +2185,9 @@ fn reap_batch(whatever_is_there: bool) -> bool {
     // processors to answer an interrupt, and they may be waiting for this
     // lock to file a zombie of their own, with interrupts masked in turn — so
     // the lock is released before any of that, at the end of this statement.
-    let mut taken: Vec<Arc<Task>> = Vec::with_capacity(REAP_BATCH);
-    {
-        let mut zombies = ZOMBIES.lock();
-        while taken.len() < REAP_BATCH {
-            match zombies.pop() {
-                Some(task) => taken.push(task),
-                None => break,
-            }
-        }
-    }
-    let reaped = if taken.is_empty() {
-        false
-    } else {
-        let stacks: Vec<crate::vmap::Stack> =
-            taken.iter().filter_map(|task| task.stack()).collect();
-        // SAFETY: as in `reap`: every one of them is dead, on no queue, and
-        // switched away from, so nothing is running on any of these stacks.
-        let _ = unsafe { crate::vmap::free_stacks(&stacks) };
-        let count = taken.len();
-        // Inside the window as well: dropping the last reference to a task
-        // gives back its address space and its process, and those are no
-        // better held across a switch than the stacks were.
-        drop(taken);
-        note_reaped(count);
-        true
-    };
+    let count = reap_up_to(REAP_BATCH);
+    note_reaped(count);
+    let reaped = count != 0;
     set_reaping(cpu, false);
     preempt_enable();
     reaped
@@ -2111,17 +2198,70 @@ fn reap_batch(whatever_is_there: bool) -> bool {
 /// For a task that can afford to be switched out part-way, which the idle
 /// task cannot: it uses [`reap_batch`].
 pub(crate) fn reap() -> usize {
-    let dead = core::mem::take(&mut *ZOMBIES.lock());
-    let count = dead.len();
-    let stacks: Vec<crate::vmap::Stack> = dead.iter().filter_map(|task| task.stack()).collect();
+    let waiting = ZOMBIES.lock().len();
+    let count = reap_up_to(waiting);
+    note_reaped(count);
+    count
+}
+
+/// Take up to `most` dead tasks off [`ZOMBIES`], free their stacks, and let
+/// go of them; answer how many.
+///
+/// Their stacks go under one shootdown, which is what the lists here are
+/// for: freeing a thousand one at a time interrupted every other processor a
+/// thousand times. With no memory for the lists, one at a time is what it
+/// does -- slower, and needing none (finding F-23).
+fn reap_up_to(most: usize) -> usize {
+    // Room made before the lock is taken, not under it: the list's lock masks
+    // interrupts, and a growing `Vec` under it is the heap's lock taken
+    // inside this one for no reason. Freeing the stacks below waits for other
+    // processors to answer an interrupt, and they may be waiting for this
+    // lock to file a zombie of their own, with interrupts masked in turn — so
+    // the lock is released before any of that.
+    let (Ok(mut taken), Ok(mut stacks)) = (
+        fallible::try_with_capacity::<Arc<Task>>(most),
+        fallible::try_with_capacity::<crate::vmap::Stack>(most),
+    ) else {
+        return reap_one_at_a_time(most);
+    };
+    {
+        let mut zombies = ZOMBIES.lock();
+        while taken.len() < most {
+            let Some(task) = zombies.pop() else { break };
+            if let Some(stack) = task.stack() {
+                let _ = fallible::push_within(&mut stacks, stack);
+            }
+            let _ = fallible::push_within(&mut taken, task);
+        }
+    }
+    if taken.is_empty() {
+        return 0;
+    }
     // SAFETY: every task is dead and on no queue, and the processor that
     // switched away from it has finished doing so — which is what put it
-    // here. Nothing is running on any of these stacks. All of them under
-    // one shootdown: freeing a thousand one at a time interrupted every
-    // other processor a thousand times.
+    // here. Nothing is running on any of these stacks.
     let _ = unsafe { crate::vmap::free_stacks(&stacks) };
-    drop(dead);
-    note_reaped(count);
+    let count = taken.len();
+    // Dropping the last reference to a task gives back its address space and
+    // its process, which are no better held across a switch than the stacks.
+    drop(taken);
+    count
+}
+
+/// [`reap_up_to`] with no memory for its lists.
+fn reap_one_at_a_time(most: usize) -> usize {
+    let mut count = 0;
+    while count < most {
+        let Some(task) = ZOMBIES.lock().pop() else {
+            break;
+        };
+        if let Some(stack) = task.stack() {
+            // SAFETY: as in `reap_up_to`.
+            let _ = unsafe { crate::vmap::free_stack(stack) };
+        }
+        drop(task);
+        count += 1;
+    }
     count
 }
 
@@ -2317,8 +2457,15 @@ pub(crate) fn print_picks(cpu: usize) {
     let Some(lock) = queue_of(cpu) else {
         return;
     };
+    // Room before the lock, as `cpu_times` makes it; with none, nothing is
+    // printed.
+    let Ok(mut picks) = fallible::try_with_capacity::<queue::Pick>(queue::TRACE_PICKS) else {
+        return;
+    };
     let saved = <arch::Irq as IrqControl>::disable();
-    let picks: Vec<queue::Pick> = lock.lock().picks().copied().collect();
+    for pick in lock.lock().picks() {
+        let _ = fallible::push_within(&mut picks, *pick);
+    }
     <arch::Irq as IrqControl>::restore(saved);
     for pick in picks {
         crate::console::println!(
@@ -2399,26 +2546,33 @@ pub(crate) struct CpuTime {
 /// Every processor's [`CpuTime`], by logical number, each read up to the
 /// moment its lock was taken and without charging any task for it: a reader
 /// of `/proc/stat` changes nothing the scheduler decides with.
-pub(crate) fn cpu_times() -> Vec<CpuTime> {
+///
+/// # Errors
+///
+/// [`fallible::AllocError`] when there is no memory for the list.
+pub(crate) fn cpu_times() -> Result<Vec<CpuTime>, fallible::AllocError> {
     let Some(queues) = QUEUES.get() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     // Room for every queue before any lock is taken, so nothing under one
     // allocates.
-    let mut times = Vec::with_capacity(queues.len());
+    let mut times = fallible::try_with_capacity(queues.len())?;
     let saved = <arch::Irq as IrqControl>::disable();
     for lock in queues {
         let queue = lock.lock();
         let (busy_ns, idle_ns) = queue.time_spent(crate::timer::now_nanos());
-        times.push(CpuTime {
-            busy_ns,
-            idle_ns,
-            switches: queue.stats.switches,
-            runnable: queue.len(),
-        });
+        let _ = fallible::push_within(
+            &mut times,
+            CpuTime {
+                busy_ns,
+                idle_ns,
+                switches: queue.stats.switches,
+                runnable: queue.len(),
+            },
+        );
     }
     <arch::Irq as IrqControl>::restore(saved);
-    times
+    Ok(times)
 }
 
 /// Tasks made since boot, the boot task and every processor's idle task

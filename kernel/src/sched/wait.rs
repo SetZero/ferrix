@@ -23,6 +23,7 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use ferrix_sync::IrqSpinLock;
 
 use crate::arch;
+use crate::fallible;
 
 use super::task::{BLOCKED, RUNNABLE, Task};
 
@@ -175,8 +176,12 @@ impl WaitQueue {
             // set last, once the deadline and the waiter entry both exist.
             // Set first, a switch between the lines lost the task: blocked,
             // no deadline to wake it, on no list a waker reads.
+            //
+            // With no memory to list it, it is not listed, and sleeps to the
+            // slice's end instead of until a wake: the condition is looked at
+            // then as it would be anyway (finding F-23).
             task.set_sleep_deadline(wake_at);
-            self.waiters.lock().push(Arc::clone(&task));
+            let _ = fallible::try_push(&mut self.waiters.lock(), Arc::clone(&task));
             task.set_state(BLOCKED);
 
             // The last look, now that both a waker and the timer could find
@@ -233,7 +238,9 @@ impl WaitQueue {
         deadline: u64,
         recheck: u64,
     ) -> bool {
-        let mut drained: Vec<bool> = alloc::vec![false; queues.len()];
+        // Which queues' wakes ended the last sleep, for the counts: without
+        // memory for it, none are counted, and nothing else changes.
+        let mut drained: Vec<bool> = fallible::try_filled(false, queues.len()).unwrap_or_default();
         loop {
             if ready() {
                 count_wakes(queues, &drained);
@@ -249,8 +256,11 @@ impl WaitQueue {
             let slice = crate::timer::now_nanos().saturating_add(recheck);
             let wake_at = if slice < deadline { slice } else { deadline };
             task.set_sleep_deadline(wake_at);
+            // Not listed on a queue there is no memory to list it on, as in
+            // `wait_until_deadline`: that queue's wake is missed and the
+            // recheck finds what it would have said.
             for queue in queues {
-                queue.waiters.lock().push(Arc::clone(&task));
+                let _ = fallible::try_push(&mut queue.waiters.lock(), Arc::clone(&task));
             }
             task.set_state(BLOCKED);
             if ready() {
@@ -266,8 +276,11 @@ impl WaitQueue {
             }
             super::block();
             let _ = task.take_sleep_deadline();
-            for (queue, was) in queues.iter().zip(drained.iter_mut()) {
-                *was = !queue.unqueue(task.id);
+            for (index, queue) in queues.iter().enumerate() {
+                let was = !queue.unqueue(task.id);
+                if let Some(slot) = drained.get_mut(index) {
+                    *slot = was;
+                }
             }
         }
     }

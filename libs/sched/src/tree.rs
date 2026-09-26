@@ -27,6 +27,15 @@
 //! a vector, so that no lookup here can fail. The crate forbids `unsafe` and
 //! the workspace forbids indexing, and an arena would have turned every
 //! rotation into a chain of `Option`s to save one allocation per node.
+//!
+//! # Nodes are lent, not allocated
+//!
+//! A queue is changed on every scheduling decision and every wake-up, some of
+//! them from interrupt handlers, and none of those can be told that memory ran
+//! out (the kernel's finding F-23). So the tree never allocates: each entity
+//! arrives in a [`Slot`] its owner allocated when it could still fail -- a
+//! kernel task, as it is made -- and leaves in the same slot. A node taken out
+//! of the tree to become the running entity, and put back, is the same node.
 
 use alloc::boxed::Box;
 use core::cmp::Ordering;
@@ -72,11 +81,45 @@ impl Key {
 /// A subtree, or nothing.
 type Link<T> = Option<Box<Node<T>>>;
 
+/// The memory one entity occupies on a queue, lent by whoever owns the
+/// entity and handed back when it leaves.
+///
+/// Allocated with [`Slot::new`], which is where running out of memory is
+/// reported; nothing afterwards allocates. A slot holds no payload while it
+/// is not on a queue.
+#[derive(Debug)]
+pub struct Slot<T>(pub(crate) Box<Node<T>>);
+
+impl<T> Slot<T> {
+    /// A fresh slot.
+    ///
+    /// # Errors
+    ///
+    /// [`ferrix_fallible::AllocError`] when there is no memory for one.
+    pub fn new() -> Result<Slot<T>, ferrix_fallible::AllocError> {
+        ferrix_fallible::try_box(Node {
+            entity: Entity {
+                id: 0,
+                weight: 0,
+                vruntime: 0,
+                deadline: 0,
+                sum_exec: 0,
+                payload: None,
+            },
+            left: None,
+            right: None,
+            height: 1,
+            min_vruntime: 0,
+        })
+        .map(Slot)
+    }
+}
+
 /// One queued entity, and the facts about the subtree below it.
 #[derive(Debug)]
-struct Node<T> {
+pub(crate) struct Node<T> {
     /// The entity.
-    entity: Entity<T>,
+    pub(crate) entity: Entity<T>,
     /// Everything with an earlier key.
     left: Link<T>,
     /// Everything with a later one.
@@ -88,18 +131,6 @@ struct Node<T> {
 }
 
 impl<T> Node<T> {
-    /// A node with no children.
-    fn leaf(entity: Entity<T>) -> Box<Node<T>> {
-        let min_vruntime = entity.vruntime;
-        Box::new(Node {
-            entity,
-            left: None,
-            right: None,
-            height: 1,
-            min_vruntime,
-        })
-    }
-
     /// Where this node sorts.
     const fn key(&self) -> Key {
         self.entity.key()
@@ -171,15 +202,19 @@ fn rebalance<T>(mut node: Box<Node<T>>) -> Box<Node<T>> {
     node
 }
 
-/// Insert `entity` into the subtree `link`, returning the new subtree.
-fn insert<T>(link: Link<T>, entity: Entity<T>) -> Box<Node<T>> {
+/// Insert the detached node `new` into the subtree `link`, returning the new
+/// subtree.
+fn insert<T>(link: Link<T>, mut new: Box<Node<T>>) -> Box<Node<T>> {
     let Some(mut node) = link else {
-        return Node::leaf(entity);
+        new.left = None;
+        new.right = None;
+        new.update();
+        return new;
     };
-    if entity.key().order(node.key()) == Ordering::Less {
-        node.left = Some(insert(node.left.take(), entity));
+    if new.key().order(node.key()) == Ordering::Less {
+        node.left = Some(insert(node.left.take(), new));
     } else {
-        node.right = Some(insert(node.right.take(), entity));
+        node.right = Some(insert(node.right.take(), new));
     }
     rebalance(node)
 }
@@ -201,12 +236,13 @@ fn remove_min<T>(mut node: Box<Node<T>>) -> (Link<T>, Box<Node<T>>) {
 }
 
 /// Remove the entity with `key` from the subtree `link`, returning the new
-/// subtree and the entity, if it was there.
+/// subtree and the entity's node, detached, if it was there.
 ///
 /// A node with two children is replaced by its successor *node*, relinked,
 /// rather than by a copy of the successor's entity: the entities never move,
-/// which is what lets a caller hold a key across other operations.
-fn remove<T>(link: Link<T>, key: Key) -> (Link<T>, Option<Entity<T>>) {
+/// which is what lets a caller hold a key across other operations, and what
+/// lets every entity keep the node it arrived in.
+fn remove<T>(link: Link<T>, key: Key) -> (Link<T>, Option<Box<Node<T>>>) {
     let Some(mut node) = link else {
         return (None, None);
     };
@@ -232,8 +268,7 @@ fn remove<T>(link: Link<T>, key: Key) -> (Link<T>, Option<Entity<T>>) {
                     Some(rebalance(successor))
                 }
             };
-            let Node { entity, .. } = *node;
-            (rest, Some(entity))
+            (rest, Some(node))
         }
     }
 }
@@ -245,6 +280,16 @@ fn walk<T, F: FnMut(&Entity<T>)>(link: &Link<T>, visit: &mut F) {
         visit(&node.entity);
         walk(&node.right, visit);
     }
+}
+
+/// The key of the entity named `id` in the subtree `link`: a walk of the
+/// whole subtree, since the tree is ordered by deadline and not by name.
+fn find<T>(link: &Link<T>, id: u64) -> Option<Key> {
+    let node = link.as_ref()?;
+    if node.entity.id == id {
+        return Some(node.key());
+    }
+    find(&node.left, id).or_else(|| find(&node.right, id))
 }
 
 /// The latest key in the subtree `link` whose entity satisfies `wanted`.
@@ -320,21 +365,34 @@ impl<T> Tree<T> {
         self.len == 0
     }
 
-    /// Add an entity. Its key must not already be in the tree, which the run
-    /// queue's index of identifiers guarantees.
-    pub(crate) fn insert(&mut self, entity: Entity<T>) {
-        self.root = Some(insert(self.root.take(), entity));
+    /// Add the entity in `node`, which is detached. Its key must not already
+    /// be in the tree, which the run queue's refusal of a second entity with
+    /// the same name guarantees. Allocates nothing.
+    pub(crate) fn insert(&mut self, node: Box<Node<T>>) {
+        self.root = Some(insert(self.root.take(), node));
         self.len += 1;
     }
 
-    /// Take out the entity with `key`.
-    pub(crate) fn remove(&mut self, key: Key) -> Option<Entity<T>> {
+    /// Take out the entity with `key`, in its node.
+    pub(crate) fn remove(&mut self, key: Key) -> Option<Box<Node<T>>> {
         let (root, found) = remove(self.root.take(), key);
         self.root = root;
         if found.is_some() {
             self.len -= 1;
         }
         found
+    }
+
+    /// Take out the entity with the earliest key, in its node.
+    pub(crate) fn pop_first(&mut self) -> Option<Box<Node<T>>> {
+        let key = self.first()?.key();
+        self.remove(key)
+    }
+
+    /// The key of the entity named `id`: a walk, for the rare callers that
+    /// know only the name.
+    pub(crate) fn find(&self, id: u64) -> Option<Key> {
+        find(&self.root, id)
     }
 
     /// The entity with `key`.

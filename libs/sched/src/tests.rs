@@ -21,6 +21,11 @@ use super::*;
 /// Three milliseconds, the slice the kernel uses.
 const SLICE: u64 = 3_000_000;
 
+/// A slot for one entity.
+fn slot<T>() -> Slot<T> {
+    Slot::new().unwrap()
+}
+
 fn queue() -> RunQueue<u64> {
     RunQueue::new(Config { slice_ns: SLICE }).unwrap()
 }
@@ -105,7 +110,9 @@ fn an_empty_queue_picks_nothing() {
 #[test]
 fn a_zero_weight_is_refused_and_the_payload_handed_back() {
     let mut queue = queue();
-    let refused = queue.enqueue(1, 77, EntityState::new(0)).unwrap_err();
+    let refused = queue
+        .enqueue(1, 77, EntityState::new(0), slot())
+        .unwrap_err();
     assert_eq!(refused.reason, SchedError::ZeroWeight, "why");
     assert_eq!(refused.payload, 77, "the payload comes back");
     assert!(queue.is_empty(), "nothing was queued");
@@ -114,12 +121,16 @@ fn a_zero_weight_is_refused_and_the_payload_handed_back() {
 #[test]
 fn an_identifier_is_refused_twice_whether_queued_or_running() {
     let mut queue = queue();
-    queue.enqueue(1, 1, EntityState::new(1024)).unwrap();
-    let queued = queue.enqueue(1, 2, EntityState::new(1024)).unwrap_err();
+    queue.enqueue(1, 1, EntityState::new(1024), slot()).unwrap();
+    let queued = queue
+        .enqueue(1, 2, EntityState::new(1024), slot())
+        .unwrap_err();
     assert_eq!(queued.reason, SchedError::Duplicate(1), "while queued");
 
     assert_eq!(queue.pick_next(), Some(&1), "now running");
-    let running = queue.enqueue(1, 3, EntityState::new(1024)).unwrap_err();
+    let running = queue
+        .enqueue(1, 3, EntityState::new(1024), slot())
+        .unwrap_err();
     assert_eq!(running.reason, SchedError::Duplicate(1), "while running");
     check(&queue);
 }
@@ -127,7 +138,9 @@ fn an_identifier_is_refused_twice_whether_queued_or_running() {
 #[test]
 fn the_only_entity_runs_and_keeps_running() {
     let mut queue = queue();
-    queue.enqueue(7, 70, EntityState::new(1024)).unwrap();
+    queue
+        .enqueue(7, 70, EntityState::new(1024), slot())
+        .unwrap();
     for _ in 0..10 {
         assert_eq!(queue.pick_next(), Some(&70), "the only candidate");
         let _ = queue.update_curr(SLICE);
@@ -140,7 +153,9 @@ fn the_only_entity_runs_and_keeps_running() {
 fn equal_entities_take_turns_a_slice_at_a_time() {
     let mut queue = queue();
     for id in 1..=3 {
-        queue.enqueue(id, id, EntityState::new(1024)).unwrap();
+        queue
+            .enqueue(id, id, EntityState::new(1024), slot())
+            .unwrap();
     }
     let mut order = Vec::new();
     for _ in 0..9 {
@@ -154,7 +169,7 @@ fn equal_entities_take_turns_a_slice_at_a_time() {
 #[test]
 fn running_charges_virtual_time_in_inverse_proportion_to_weight() {
     let mut queue = queue();
-    queue.enqueue(1, 1, EntityState::new(2048)).unwrap();
+    queue.enqueue(1, 1, EntityState::new(2048), slot()).unwrap();
     let _ = queue.pick_next();
     let before = queue.get(1).unwrap().vruntime;
     let _ = queue.update_curr(1_000_000);
@@ -170,7 +185,7 @@ fn running_charges_virtual_time_in_inverse_proportion_to_weight() {
 #[test]
 fn a_spent_slice_asks_for_a_new_deadline_from_where_the_entity_is() {
     let mut queue = queue();
-    queue.enqueue(1, 1, EntityState::new(1024)).unwrap();
+    queue.enqueue(1, 1, EntityState::new(1024), slot()).unwrap();
     let _ = queue.pick_next();
     assert!(!queue.update_curr(SLICE - 1), "one nanosecond short");
     assert!(queue.update_curr(1_000), "and past it");
@@ -191,7 +206,9 @@ fn the_remaining_slice_is_real_time_whatever_the_weight() {
         // nanoseconds at nice -20, against a three-millisecond slice.
         let tolerance = u64::from(weight) / u64::from(NICE_0_WEIGHT) + 1;
         let mut queue = queue();
-        queue.enqueue(1, 1, EntityState::new(weight)).unwrap();
+        queue
+            .enqueue(1, 1, EntityState::new(weight), slot())
+            .unwrap();
         let _ = queue.pick_next();
         let remaining = queue.remaining_ns().unwrap();
         assert!(
@@ -210,7 +227,7 @@ fn the_remaining_slice_is_real_time_whatever_the_weight() {
 #[test]
 fn an_earlier_deadline_that_is_not_eligible_waits() {
     let mut queue = queue();
-    queue.enqueue(1, 1, EntityState::new(1024)).unwrap();
+    queue.enqueue(1, 1, EntityState::new(1024), slot()).unwrap();
     // A heavy entity arriving a little ahead of its share. Its slice is a
     // sliver in virtual time — a heavy entity reaches the same real slice in
     // far less of it — so its deadline lands before the light entity's even
@@ -224,7 +241,7 @@ fn an_earlier_deadline_that_is_not_eligible_waits() {
         vlag: -2_000,
         sum_exec: 0,
     };
-    queue.enqueue(2, 2, ahead).unwrap();
+    queue.enqueue(2, 2, ahead, slot()).unwrap();
     check(&queue);
 
     let light = queue.get(1).unwrap();
@@ -240,10 +257,10 @@ fn an_earlier_deadline_that_is_not_eligible_waits() {
 #[test]
 fn a_new_entity_arrives_owed_nothing() {
     let mut queue = queue();
-    queue.enqueue(1, 1, EntityState::new(1024)).unwrap();
+    queue.enqueue(1, 1, EntityState::new(1024), slot()).unwrap();
     let _ = queue.pick_next();
     let _ = queue.update_curr(10 * SLICE);
-    queue.enqueue(2, 2, EntityState::new(3121)).unwrap();
+    queue.enqueue(2, 2, EntityState::new(3121), slot()).unwrap();
     let lag = queue.lag(2).unwrap();
     assert!(lag.abs() <= 1, "a newcomer has lag {lag}");
     check(&queue);
@@ -258,6 +275,7 @@ fn lag_survives_leaving_and_coming_back() {
                 id,
                 id,
                 EntityState::new(weight_of_nice(id as i32 - 2).unwrap()),
+                slot(),
             )
             .unwrap();
     }
@@ -271,11 +289,11 @@ fn lag_survives_leaving_and_coming_back() {
     let sleeper = (1..=4).find(|id| *id != running).unwrap();
     let lag_before = queue.lag(sleeper).unwrap();
 
-    let (payload, state) = queue.remove(sleeper).unwrap();
+    let (payload, state, _) = queue.remove(sleeper).unwrap();
     assert_eq!(state.vlag, lag_before, "it leaves with the lag it had");
     check(&queue);
 
-    queue.enqueue(sleeper, payload, state).unwrap();
+    queue.enqueue(sleeper, payload, state, slot()).unwrap();
     let lag_after = queue.lag(sleeper).unwrap();
     assert!(
         lag_after.abs_diff(lag_before) <= 2,
@@ -287,13 +305,13 @@ fn lag_survives_leaving_and_coming_back() {
 #[test]
 fn lag_carried_back_is_clamped_to_two_slices() {
     let mut queue = queue();
-    queue.enqueue(1, 1, EntityState::new(1024)).unwrap();
+    queue.enqueue(1, 1, EntityState::new(1024), slot()).unwrap();
     let owed = EntityState {
         weight: 1024,
         vlag: i64::MAX / 2,
         sum_exec: 0,
     };
-    queue.enqueue(2, 2, owed).unwrap();
+    queue.enqueue(2, 2, owed, slot()).unwrap();
     let lag = queue.lag(2).unwrap();
     assert!(
         lag.abs_diff(2 * SLICE as i64) <= 2,
@@ -307,7 +325,9 @@ fn virtual_time_is_the_weighted_average_of_runtimes() {
     let mut queue = queue();
     for id in 0..20 {
         let weight = weight_of_nice(rng.below(40) as i32 - 20).unwrap();
-        queue.enqueue(id, id, EntityState::new(weight)).unwrap();
+        queue
+            .enqueue(id, id, EntityState::new(weight), slot())
+            .unwrap();
         let _ = queue.pick_next();
         let _ = queue.update_curr(rng.below(SLICE));
     }
@@ -328,8 +348,8 @@ fn virtual_time_is_the_weighted_average_of_runtimes() {
 #[test]
 fn yielding_lets_the_next_deadline_go_first() {
     let mut queue = queue();
-    queue.enqueue(1, 1, EntityState::new(1024)).unwrap();
-    queue.enqueue(2, 2, EntityState::new(1024)).unwrap();
+    queue.enqueue(1, 1, EntityState::new(1024), slot()).unwrap();
+    queue.enqueue(2, 2, EntityState::new(1024), slot()).unwrap();
     assert_eq!(queue.pick_next(), Some(&1), "one first");
     let _ = queue.update_curr(SLICE / 10);
     queue.yield_curr();
@@ -343,7 +363,7 @@ fn yielding_lets_the_next_deadline_go_first() {
 #[test]
 fn a_wakeup_with_an_earlier_eligible_deadline_preempts() {
     let mut queue = queue();
-    queue.enqueue(1, 1, EntityState::new(1024)).unwrap();
+    queue.enqueue(1, 1, EntityState::new(1024), slot()).unwrap();
     let _ = queue.pick_next();
     let _ = queue.update_curr(SLICE / 2);
     assert!(!queue.should_preempt(), "nothing to preempt for");
@@ -355,7 +375,7 @@ fn a_wakeup_with_an_earlier_eligible_deadline_preempts() {
         vlag: 1_000_000,
         sum_exec: 0,
     };
-    queue.enqueue(2, 2, owed).unwrap();
+    queue.enqueue(2, 2, owed, slot()).unwrap();
     assert!(queue.should_preempt(), "it is owed, and due sooner");
     assert_eq!(queue.pick_next(), Some(&2), "and runs");
 }
@@ -363,14 +383,14 @@ fn a_wakeup_with_an_earlier_eligible_deadline_preempts() {
 #[test]
 fn a_wakeup_that_is_ahead_does_not_preempt() {
     let mut queue = queue();
-    queue.enqueue(1, 1, EntityState::new(1024)).unwrap();
+    queue.enqueue(1, 1, EntityState::new(1024), slot()).unwrap();
     let _ = queue.pick_next();
     let ahead = EntityState {
         weight: 1024,
         vlag: -1_000_000,
         sum_exec: 0,
     };
-    queue.enqueue(2, 2, ahead).unwrap();
+    queue.enqueue(2, 2, ahead, slot()).unwrap();
     assert!(!queue.should_preempt(), "it has had more than its share");
 }
 
@@ -378,7 +398,9 @@ fn a_wakeup_that_is_ahead_does_not_preempt() {
 fn the_steal_candidate_is_the_latest_deadline_that_may_move() {
     let mut queue = queue();
     for id in 1..=5 {
-        queue.enqueue(id, id, EntityState::new(1024)).unwrap();
+        queue
+            .enqueue(id, id, EntityState::new(1024), slot())
+            .unwrap();
         let _ = queue.pick_next();
         let _ = queue.update_curr(SLICE / 7);
     }
@@ -407,11 +429,15 @@ fn the_steal_candidate_is_the_latest_deadline_that_may_move() {
 #[test]
 fn removing_the_running_entity_by_name_works_like_remove_curr() {
     let mut queue = queue();
-    queue.enqueue(1, 10, EntityState::new(1024)).unwrap();
-    queue.enqueue(2, 20, EntityState::new(1024)).unwrap();
+    queue
+        .enqueue(1, 10, EntityState::new(1024), slot())
+        .unwrap();
+    queue
+        .enqueue(2, 20, EntityState::new(1024), slot())
+        .unwrap();
     let _ = queue.pick_next();
     let running = queue.current_id().unwrap();
-    let (payload, _) = queue.remove(running).unwrap();
+    let (payload, _, _) = queue.remove(running).unwrap();
     assert_eq!(payload, running * 10, "the running entity's payload");
     assert_eq!(queue.current(), None, "nothing running now");
     assert_eq!(queue.len(), 1, "one left");
@@ -423,7 +449,7 @@ fn levelling_forgives_every_lag_and_keeps_the_average() {
     let mut queue = queue();
     for id in 1..=3 {
         queue
-            .enqueue(id, id, EntityState::new(NICE_0_WEIGHT))
+            .enqueue(id, id, EntityState::new(NICE_0_WEIGHT), slot())
             .unwrap();
     }
     // Run one entity well past everybody: it is far ahead, the others owed.
@@ -450,7 +476,7 @@ fn levelling_forgives_every_lag_and_keeps_the_average() {
     );
     assert_eq!(queue.len(), 3, "nothing was lost");
     // And the queue still schedules: three picks visit three entities.
-    let mut seen = alloc::vec::Vec::new();
+    let mut seen = Vec::new();
     for _ in 0..3 {
         seen.push(*queue.pick_next().unwrap());
         let _ = queue.update_curr(SLICE);
@@ -462,8 +488,8 @@ fn levelling_forgives_every_lag_and_keeps_the_average() {
 #[test]
 fn virtual_time_that_wraps_still_orders() {
     let mut queue = queue();
-    queue.enqueue(1, 1, EntityState::new(1024)).unwrap();
-    queue.enqueue(2, 2, EntityState::new(1024)).unwrap();
+    queue.enqueue(1, 1, EntityState::new(1024), slot()).unwrap();
+    queue.enqueue(2, 2, EntityState::new(1024), slot()).unwrap();
     // Each quarter of the range is well under the half the comparison needs,
     // and eight of them wrap the counter twice.
     let quarter = u64::MAX / 4;
@@ -489,8 +515,8 @@ fn virtual_time_that_wraps_still_orders() {
 /// not negative.
 impl RunQueue<u64> {
     /// Every entity's lag, running one first.
-    fn for_each_lag(&self) -> alloc::vec::Vec<i64> {
-        let mut lags = alloc::vec::Vec::new();
+    fn for_each_lag(&self) -> Vec<i64> {
+        let mut lags = Vec::new();
         self.for_each(|view| lags.push(view.lag));
         lags
     }
@@ -528,21 +554,21 @@ fn random_operations_keep_every_invariant_and_pick_what_brute_force_picks() {
             0 | 1 if queue.len() < 64 => {
                 let weight = weight_of_nice(rng.below(40) as i32 - 20).unwrap();
                 queue
-                    .enqueue(next_id, next_id, EntityState::new(weight))
+                    .enqueue(next_id, next_id, EntityState::new(weight), slot())
                     .unwrap();
                 next_id += 1;
             }
             2 if !away.is_empty() => {
                 let (id, state) = away.swap_remove(rng.below(away.len() as u64) as usize);
-                queue.enqueue(id, id, state).unwrap();
+                queue.enqueue(id, id, state, slot()).unwrap();
             }
             3 if queue.queued() > 0 => {
                 let target = queue.latest_where(|_| true).unwrap();
-                let (_, state) = queue.remove(target).unwrap();
+                let (_, state, _) = queue.remove(target).unwrap();
                 away.push((target, state));
             }
             4 => {
-                if let Some((id, _, state)) = queue.remove_curr() {
+                if let Some((id, _, state, _)) = queue.remove_curr() {
                     away.push((id, state));
                 }
             }
@@ -585,7 +611,7 @@ fn worst_real_lag(weights: &[u32], lateness: u64, decisions: u32, seed: u64) -> 
     let mut queue = queue();
     for (id, weight) in weights.iter().enumerate() {
         queue
-            .enqueue(id as u64, id as u64, EntityState::new(*weight))
+            .enqueue(id as u64, id as u64, EntityState::new(*weight), slot())
             .unwrap();
     }
     let total_weight: u128 = weights.iter().map(|weight| u128::from(*weight)).sum();
@@ -668,7 +694,7 @@ fn shares_come_out_in_proportion_to_weight() {
     let mut queue = queue();
     for (id, weight) in weights.iter().enumerate() {
         queue
-            .enqueue(id as u64, id as u64, EntityState::new(*weight))
+            .enqueue(id as u64, id as u64, EntityState::new(*weight), slot())
             .unwrap();
     }
     for _ in 0..30_000 {
@@ -710,7 +736,9 @@ fn a_reweighed_entity_takes_the_share_its_new_weight_asks_for() {
     // `pick_next` leaves no entity running between decisions.
     let mut queue = queue();
     for id in 0..3u64 {
-        queue.enqueue(id, id, EntityState::new(1024)).unwrap();
+        queue
+            .enqueue(id, id, EntityState::new(1024), slot())
+            .unwrap();
     }
     let before = run_for(&mut queue, 3_000, 3);
     assert_eq!(queue.set_weight(2, 4096), Ok(true));
@@ -741,7 +769,9 @@ fn a_reweighed_running_entity_keeps_what_it_is_owed() {
     // queue's own invariants are what say the sums followed.
     let mut queue = queue();
     for id in 0..3u64 {
-        queue.enqueue(id, id, EntityState::new(1024)).unwrap();
+        queue
+            .enqueue(id, id, EntityState::new(1024), slot())
+            .unwrap();
     }
     let _ = queue.pick_next();
     let running = queue.current_id().unwrap();
@@ -773,7 +803,9 @@ fn reweighing_the_same_weight_does_not_extend_a_turn() {
     // that must not be a way to ask for a fresh slice each time.
     let mut queue = queue();
     for id in 0..2u64 {
-        queue.enqueue(id, id, EntityState::new(1024)).unwrap();
+        queue
+            .enqueue(id, id, EntityState::new(1024), slot())
+            .unwrap();
     }
     let _ = queue.pick_next();
     let running = queue.current_id().unwrap();
@@ -793,7 +825,7 @@ fn reweighing_the_same_weight_does_not_extend_a_turn() {
 #[test]
 fn a_weight_is_refused_for_nobody_and_for_zero() {
     let mut queue = queue();
-    queue.enqueue(1, 1, EntityState::new(1024)).unwrap();
+    queue.enqueue(1, 1, EntityState::new(1024), slot()).unwrap();
     assert_eq!(queue.set_weight(7, 1024), Ok(false), "seven is not there");
     assert_eq!(queue.set_weight(1, 0), Err(SchedError::ZeroWeight));
     assert_eq!(queue.get(1).unwrap().weight, 1024, "the refusal changed it");
