@@ -314,9 +314,11 @@ function onSample(s) {
 
   // The helper's native boot: its phase while it runs, and its record once
   // Android is back.
-  if (helper && helper.phase !== "idle") {
+  // While Ferrix's USB port is up the console and the boot card are its;
+  // the helper's phase is in its pill.
+  if (helper && helper.phase !== "idle" && !usbPort) {
     const away = helper.phase.startsWith("Ferrix")
-      ? " The phone is off USB while Ferrix runs, so the stages and Ferrix's stats arrive with its record when Android is back."
+      ? " Its log streams here once Ferrix's USB port is up; without the port, the stages and stats arrive with its record when Android is back."
       : "";
     showResult("busy", `Native boot: ${helper.phase}…${away}`);
     if (!consoleLines.length) document.querySelectorAll(".stage").forEach((el) => el.classList.add("pending"));
@@ -379,6 +381,8 @@ function drawTimeline() {
 // --------------------------------------------------------- boot and console
 
 const consoleLines = [];
+// Ferrix's USB serial port while it is up, from the usb-state events.
+let usbPort = null;
 
 function setSource(text) { $("source").textContent = text; }
 
@@ -640,6 +644,7 @@ listen("vm-line", (event) => {
 // sends, from the phone itself.
 listen("usb-state", (event) => {
   const { port, seconds } = event.payload;
+  usbPort = port || null;
   $("boot-android").disabled = !port;
   if (port) {
     clearConsole();
