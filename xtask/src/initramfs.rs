@@ -391,6 +391,17 @@ bound|renew)
 esac
 ";
 
+/// `/etc/fstab`: the two btrfs volumes the kernel mounts itself, when their
+/// disks are there. The device is written as `/proc/mounts` writes it; a
+/// reader that finds a mount point here that is not mounted skips it.
+const FSTAB: &[u8] = b"\
+# Written by cargo xtask. Ferrix mounts these itself, from the kernel's
+# command line, and nothing mounts from this file: it says what they are.
+# <device> <mount point> <type> <options> <dump> <pass>
+btrfs / btrfs rw 0 0
+btrfs /data btrfs rw 0 0
+";
+
 /// `/etc/profile`, which the kernel's interactive shell reads through `ENV`.
 ///
 /// Configures `eth0` by DHCP, as a distribution's network setup would: busybox's
@@ -548,6 +559,13 @@ fn build_with_shell(
         // forwarder, which is where slirp puts one too, so a guest configured
         // by DHCP and a guest configured by hand agree.
         archive.file("etc/resolv.conf", 0o644, b"nameserver 10.0.2.3\n")?;
+        // What is mounted, for the programs that read it. Ferrix mounts `/`
+        // and `/data` itself, from the command line (`kernel/src/fs/root_disk.rs`,
+        // `data_disk.rs`), and nothing here mounts from this file. But every
+        // Linux has one, and btop reads its list of disks from it by default:
+        // with none, its memory panel's collection failed every time on the
+        // file's missing timestamp, and the disks box stayed empty.
+        archive.file("etc/fstab", 0o644, FSTAB)?;
         // What the interactive shell runs first, through `ENV`: `eth0` by
         // DHCP, when there is one and nothing has configured it, with the
         // script `udhcpc` runs as the lease comes. `test-net` runs `udhcpc`
