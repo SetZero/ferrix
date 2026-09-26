@@ -261,7 +261,8 @@ pub(crate) static STAGE2_ALLOCATORS: Explanation = Explanation {
               `BTreeMap` put in it, give everything back, and keep at most one slab page per \
               size class. The vmap arena must hand out distinct, zeroed, guard-paged ranges, \
               change their permissions in the page tables, map device windows at the right \
-              offset within the page, and free all of it without leaking a frame, and a \
+              offset within the page and refuse one over the kernel's own image, and free all \
+              of it without leaking a frame, and a \
               kernel stack must be aligned, writable at both ends and guarded at both ends. \
               A broken property here would otherwise show up as corruption in whichever \
               subsystem first relied on it.",
@@ -273,6 +274,9 @@ pub(crate) static STAGE2_ALLOCATORS: Explanation = Explanation {
          count or the heap's balance does not return to where it started.",
         "A change to the page table code left a mapping behind on unmap, or made a \
          permission change the descriptors do not show.",
+        "`vmap::map_device` mapped a range touching the kernel image (`a device window over \
+         the kernel image was mapped`): the refusal `mm::overlaps_image` makes is gone, or \
+         memory bring-up did not record where the image is.",
     ],
     see: "kernel/src/main.rs memory_check; libs/frame; libs/heap; libs/paging; \
           kernel/src/vmap.rs; docs/ROADMAP.md stage 2",

@@ -154,6 +154,8 @@ pub(crate) fn init(view: &BootView<'_>) -> Result<Stats, MemoryError> {
     PHYSMAP.store(view.raw().physmap_base, Ordering::Relaxed);
     PHYSMAP_PHYS.store(view.raw().physmap_phys, Ordering::Relaxed);
     ROOT_TABLE.store(view.raw().root_table_phys, Ordering::Relaxed);
+    IMAGE_PHYS.store(view.raw().kernel_phys, Ordering::Relaxed);
+    IMAGE_LEN.store(view.raw().kernel_len, Ordering::Relaxed);
 
     // No higher than the direct map reaches: a frame the kernel cannot address
     // is not a frame it can hand out. Only a 32-bit machine with more RAM than
@@ -1051,12 +1053,52 @@ fn sealed_span(view: &BootView<'_>) -> (u64, u64) {
     (view.raw().kernel_phys, data.saturating_sub(start))
 }
 
-/// The physical address of the image's first byte of data: RAM the kernel
-/// owns and may map writable elsewhere, which its text and read-only data are
-/// not.
-pub(crate) fn image_data_phys(view: &BootView<'_>) -> u64 {
-    let (low, bytes) = sealed_span(view);
-    low.saturating_add(bytes)
+/// Where the kernel image is physically, all of it -- text, read-only data,
+/// data and `.bss` -- as its first byte and a length, learned from the
+/// hand-off in [`init`]. Zero bytes until then.
+static IMAGE_PHYS: AtomicU64 = AtomicU64::new(0);
+static IMAGE_LEN: AtomicU64 = AtomicU64::new(0);
+
+/// Whether `len` bytes of physical address space at `phys` touch the kernel's
+/// own image.
+///
+/// What every interface that maps a physical address a caller names asks
+/// before it maps anything: [`crate::vmap::map_device`], a user space's
+/// device and window mappings, and early boot's device windows. The image's
+/// text and read-only data have no writable mapping anywhere
+/// ([`check_sealed_image`]), and a device window is writable, so a window over
+/// them would undo the seal; its data and `.bss` are RAM the kernel uses
+/// through cacheable mappings, which a device window would alias uncached. No
+/// device's registers are in the image, so nothing is lost by refusing all of
+/// it. A zero length is taken as one byte, so an empty range at the image is
+/// refused too.
+pub(crate) fn overlaps_image(phys: u64, len: u64) -> bool {
+    image_span_overlaps(
+        IMAGE_PHYS.load(Ordering::Relaxed),
+        IMAGE_LEN.load(Ordering::Relaxed),
+        phys,
+        len,
+    )
+}
+
+/// Whether `len` bytes at `phys` touch the `image_len` bytes at `image_phys`,
+/// for a caller that has the hand-off in hand but runs before [`init`].
+pub(crate) const fn image_span_overlaps(
+    image_phys: u64,
+    image_len: u64,
+    phys: u64,
+    len: u64,
+) -> bool {
+    let end = phys.saturating_add(if len == 0 { 1 } else { len });
+    image_len > 0 && phys < image_phys.saturating_add(image_len) && image_phys < end
+}
+
+/// The kernel image's physical span, for the boot check that tries to map it.
+pub(crate) fn image_span() -> (u64, u64) {
+    (
+        IMAGE_PHYS.load(Ordering::Relaxed),
+        IMAGE_LEN.load(Ordering::Relaxed),
+    )
 }
 
 /// What the sealed-image sweep found.

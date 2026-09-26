@@ -131,7 +131,8 @@ memory, and it corrected this ST's own claim to the contrary.
 for AArch64. The reference `cortex-a72` is ARMv8.0 and lacks PAN, and ARMv7-A
 cannot have it at all, so V-01 still stands on Arm (AoU-6). And F-34: the
 direct map aliased the kernel's text writable, which the W^X sweep could not
-see. The alias is read only now, and every boot sweeps for it.
+see. The alias is read only now, every boot sweeps for it, and no interface
+that maps a caller's physical address will map the image.
 
 *Missing:* Design evidence at module granularity for `ADV_TDS.3`; the SysML model
 describes Ferrix, not the TOE (F-15). The TSF no longer names the load ring anywhere

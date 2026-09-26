@@ -55,6 +55,9 @@ pub(crate) enum EarlyError {
         reason = "only an architecture that looks its console up can fail to find one"
     )]
     NoConsole,
+    /// A device window was asked for over the kernel's own image, at this
+    /// physical address: see [`crate::mm::overlaps_image`].
+    KernelImage(u64),
 }
 
 /// Physical memory as the kernel sees it during early boot.
@@ -68,6 +71,9 @@ pub(crate) struct EarlyMemory {
     /// together are what turns a `.bss` address into a physical frame number.
     kernel_virt: u64,
     kernel_phys: u64,
+    /// Bytes of the kernel image, from `kernel_phys`: what no device window
+    /// may map.
+    kernel_len: u64,
     /// Physical address of the root page table the loader installed.
     root: PhysAddr,
     /// Frames handed out of [`POOL`] so far.
@@ -83,6 +89,7 @@ impl EarlyMemory {
             physmap_phys: info.physmap_phys,
             kernel_virt: info.kernel_virt,
             kernel_phys: info.kernel_phys,
+            kernel_len: info.kernel_len,
             root: PhysAddr(info.root_table_phys),
             used: 0,
         }
@@ -123,7 +130,16 @@ impl EarlyMemory {
     /// Device memory rather than normal memory: an `MMIO` register reached
     /// through a cacheable mapping can be merged, reordered or simply not
     /// written, and the symptom is a console that prints nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`EarlyError::KernelImage`] for a range that touches the kernel's own
+    /// image, which no device window may map ([`crate::mm::overlaps_image`]);
+    /// [`EarlyError::MapFailed`] for what the mapper refuses.
     pub(crate) fn map_device(&mut self, virt: u64, phys: u64, len: u64) -> Result<(), EarlyError> {
+        if crate::mm::image_span_overlaps(self.kernel_phys, self.kernel_len, phys, len) {
+            return Err(EarlyError::KernelImage(phys));
+        }
         let mapper: Mapper<PageEncoding> = Mapper::new(self.root);
         mapper
             .map_range(

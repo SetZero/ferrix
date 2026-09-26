@@ -100,6 +100,9 @@ pub(crate) enum VmapError {
     MapFailed(ferrix_paging::MapError),
     /// [`free`] was given an address the arena never handed out.
     NotAllocated(u64),
+    /// [`map_device`] was asked for a window over the kernel's own image,
+    /// at this physical address ([`mm::overlaps_image`]).
+    KernelImage(u64),
 }
 
 impl core::fmt::Display for VmapError {
@@ -113,6 +116,9 @@ impl core::fmt::Display for VmapError {
             VmapError::OutOfMemory => f.write_str("no frame available"),
             VmapError::MapFailed(error) => write!(f, "the mapping was refused: {error}"),
             VmapError::NotAllocated(at) => write!(f, "{at:#x} was not allocated by vmap"),
+            VmapError::KernelImage(at) => {
+                write!(f, "{at:#x} is the kernel's own image, not a device")
+            }
         }
     }
 }
@@ -434,10 +440,20 @@ pub(crate) fn free(base: u64) -> Result<(), VmapError> {
 /// The offset within the page is preserved, so a register block that does not
 /// begin on a page boundary still reads correctly — the usual case for an I/O
 /// APIC or a GIC redistributor.
+///
+/// # Errors
+///
+/// [`VmapError::KernelImage`] for a range that touches the kernel's own
+/// image, whose text and read-only data have no writable mapping anywhere
+/// (`mm::check_sealed_image`) and which holds no device's registers; and
+/// whatever [`reserve`] or the mapper refuses.
 pub(crate) fn map_device(phys: u64, len: u64) -> Result<u64, VmapError> {
     let offset = phys % PAGE_SIZE;
     let base = phys - offset;
     let span = (len + offset).next_multiple_of(PAGE_SIZE);
+    if mm::overlaps_image(base, span) {
+        return Err(VmapError::KernelImage(phys));
+    }
 
     let mapping = reserve(span, VmaFlags::READ_WRITE, Kind::Device { phys: base })?;
     if let Err(error) = map_reserved(mapping, base, span) {

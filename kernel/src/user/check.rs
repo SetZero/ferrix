@@ -26,7 +26,7 @@ use ferrix_vma::VmaFlags;
 use crate::arch;
 use crate::mm;
 use crate::sync::SpinLock;
-use crate::user::space::{Access, AddressSpace, SpaceError};
+use crate::user::space::{Access, AddressSpace, FilePlace, SpaceError};
 use crate::user::vmo::{Vmo, VmoError};
 
 /// What the checks measured, for the boot log.
@@ -80,6 +80,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
 
     check_an_empty_space_maps_nothing()?;
     check_a_region_outside_the_user_half_is_refused()?;
+    check_the_kernel_image_is_no_device_memory()?;
     check_a_fault_outside_every_region_is_a_segfault()?;
     check_a_write_to_a_read_only_region_is_refused()?;
     check_a_read_of_an_inaccessible_region_is_refused()?;
@@ -421,6 +422,41 @@ fn check_a_region_outside_the_user_half_is_refused() -> Result<(), &'static str>
     }
     if space.region_count() != 0 {
         return Err("a refused mapping was inserted anyway");
+    }
+    Ok(())
+}
+
+/// A device or window mapping of the kernel's own image is refused, whatever
+/// the caller holds, and inserts nothing.
+///
+/// Both take a physical address from their caller: `io_mapping_map` an
+/// aperture's, `mmap` of a GPU blob a window's. Neither can name the image
+/// today, since no aperture overlaps the memory map, and a window is a BAR;
+/// this is the refusal that holds if either ever does. The image's text has
+/// no writable mapping anywhere (`mm::check_sealed_image`), and these map
+/// read-write.
+fn check_the_kernel_image_is_no_device_memory() -> Result<(), &'static str> {
+    let (image, _) = mm::image_span();
+    let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
+
+    match space.map_device(None, PAGE_SIZE, image, VmaFlags::READ_WRITE) {
+        Err(SpaceError::Refused(_)) => {}
+        _ => return Err("a user device mapping of the kernel's image was not refused"),
+    }
+    let keeper: Arc<dyn core::any::Any + Send + Sync> = Arc::new(());
+    match space.map_window(
+        FilePlace::Anywhere(None),
+        2 * PAGE_SIZE,
+        image.saturating_sub(PAGE_SIZE),
+        VmaFlags::READ,
+        true,
+        keeper,
+    ) {
+        Err(SpaceError::Refused(_)) => {}
+        _ => return Err("a user window over the kernel's image was not refused"),
+    }
+    if space.region_count() != 0 {
+        return Err("a refused mapping of the kernel's image was inserted anyway");
     }
     Ok(())
 }

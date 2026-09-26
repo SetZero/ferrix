@@ -662,8 +662,19 @@ writable in the image anyway, never executable in either, and the kernel's
 early page tables are in `.bss` and are written through the direct map. No
 kernel code writes its own text or read-only data. There are no alternatives,
 static keys or text pokes, and the KASLR fixups are applied by the loaders
-before the switch. The stage 2 device-window checks opened a writable device
-window over the image's first page, and they now use its first page of data.
+before the switch.
+
+A caller could still have mapped the text writable, since `vmap::map_device`
+mapped any physical address it was given, and the stage 2 device-window
+checks did exactly that over the image's first page. Every interface that maps
+a physical address its caller names now refuses a range touching any part of
+the image, before anything is mapped (`mm::overlaps_image`):
+`vmap::map_device` with `VmapError::KernelImage`, early boot's device windows
+with `EarlyError::KernelImage`, and a user space's device and GPU-window
+mappings (`AddressSpace::map_device`, `map_window`) with `SpaceError::Refused`,
+whatever aperture or window the caller holds. The whole image, not only its
+text: its data is RAM the kernel uses cacheably, and no device has registers
+in it. The device-window checks now use a frame they allocate.
 
 *Checked by the build:* after the W^X sweep, every boot walks the kernel's
 tables for every mapping of the text's and read-only data's frames. It fails
@@ -673,6 +684,15 @@ none writable"* on x86-64). A loader with the cut but without the seal was
 refused by name. A write of one byte of text through `mm::direct_map` faults
 on all three architectures with FX-9001 (*"page fault at … (kernel write,
 protection)"*). Both results are quoted in the commit that added the sweep.
+Each boot also asks for the refused windows and requires the refusal: stage 1
+an early window over the text, stage 2 `vmap::map_device` over the text's
+first bytes, a range running into the image from below, a page in its middle
+and its last byte, and stage 6 a user device mapping and a GPU window over it.
+With each refusal removed in turn (scratch), x86-64 stops at *"stage 1
+self-check failed: an early device window over the kernel's text was
+mapped"*, *"stage 2 self-check failed: a device window over the kernel image
+was mapped"* and *"stage 6 self-check failed: a user device mapping of the
+kernel's image was not refused"*.
 The cost is 1022 more 4 KiB leaves on each architecture: the image sits on a
 page boundary, so each edge of the span breaks one 2 MiB block. Boot time
 under KVM did not change measurably.

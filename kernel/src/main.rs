@@ -162,9 +162,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // are all check are gated here, in the order they run; the steps that do
     // both gate their own checks inside.
     if checks::run() {
-        // The image's data, not its text: the device-window checks map it
-        // writable, and the text has no writable mapping anywhere.
-        check_allocators_and_traps(&stats, mm::image_data_phys(view));
+        check_allocators_and_traps(&stats);
     }
 
     // Everything above is synchronous: traps the kernel caused deliberately.
@@ -283,8 +281,8 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
 }
 
 /// Stage 2's allocators and stage 3's synchronous traps: all check.
-fn check_allocators_and_traps(stats: &mm::Stats, aperture: u64) {
-    if let Err(problem) = memory_check(stats, aperture) {
+fn check_allocators_and_traps(stats: &mm::Stats) {
+    if let Err(problem) = memory_check(stats) {
         fatal!(
             catalog::STAGE2_ALLOCATORS,
             "stage 2 self-check failed: {problem}"
@@ -2372,7 +2370,7 @@ fn report_memory(stats: &mm::Stats) {
 /// Every one of these is an invariant a later subsystem will assume without
 /// checking, because by then there will be no way to check it: a scheduler that
 /// gets a `Vec` back with the wrong contents has no idea the heap is at fault.
-fn memory_check(stats: &mm::Stats, aperture: u64) -> Result<(), &'static str> {
+fn memory_check(stats: &mm::Stats) -> Result<(), &'static str> {
     if stats.managed_frames == 0 {
         return Err("the frame allocator was given nothing");
     }
@@ -2402,7 +2400,14 @@ fn memory_check(stats: &mm::Stats, aperture: u64) -> Result<(), &'static str> {
         return Err("the heap kept more slab pages than one per size class");
     }
 
-    check_vmap(aperture)?;
+    // The device-window checks' aperture: a frame of RAM this check owns,
+    // which no device is and nothing else maps writable. Not the image, which
+    // `vmap::map_device` refuses.
+    let frame = mm::allocate_frames(0).ok_or("no frame for the device-window checks")?;
+    let checked = check_vmap(frame * PAGE_SIZE);
+    mm::deallocate_frames(frame, 0);
+    checked?;
+    check_no_device_window_over_the_image()?;
     check_stacks()?;
     Ok(())
 }
@@ -2575,11 +2580,12 @@ fn check_stacks() -> Result<(), &'static str> {
 /// A device window lands where it was asked to, offset and all, and can be
 /// taken back.
 ///
-/// The aperture used is the kernel's own data, which is real RAM rather than
-/// registers, and writable anyway, where its text has no writable mapping
-/// anywhere (`mm::check_sealed_image`) — nothing is read or written through the window, only translated,
-/// because reading RAM through an uncached device mapping while the same bytes
-/// sit in a cache is exactly the aliasing the architecture does not define.
+/// The aperture used is a frame of RAM the caller allocated for it, rather
+/// than registers — nothing is read or written through the window, only
+/// translated, because reading RAM through an uncached device mapping while
+/// the same bytes sit in a cache is exactly the aliasing the architecture does
+/// not define. It used to be the kernel's own image, which `vmap::map_device`
+/// now refuses ([`check_no_device_window_over_the_image`]).
 /// What is under test is the *address arithmetic*, which is where the bugs
 /// are: an I/O APIC's registers start at an offset within their page, and a
 /// window that rounded that away would work perfectly for the GIC and silently
@@ -2609,6 +2615,46 @@ fn check_device_windows(aperture: u64) -> Result<(), &'static str> {
     }
     if mm::free_frames() != free_before {
         return Err("a device window gave the aperture's frames to the buddy allocator");
+    }
+    Ok(())
+}
+
+/// A device window over any part of the kernel's image is refused, before
+/// anything is mapped: its first bytes of text, a range that starts below it
+/// and runs into it, its last byte, which is `.bss`, and a page in between.
+///
+/// The image's text and read-only data have no writable mapping anywhere
+/// (`mm::check_sealed_image`), and a device window is writable, so one over
+/// them would write the code the image mapping runs. This is what used to
+/// allow it: `vmap::map_device` mapped any physical address it was given.
+/// Nothing is mapped, so nothing is read or written.
+fn check_no_device_window_over_the_image() -> Result<(), &'static str> {
+    let (image, len) = mm::image_span();
+    if len == 0 {
+        return Err("memory bring-up did not record where the kernel image is");
+    }
+    let windows_before = vmap::usage().allocations;
+    let last = image + len - 1;
+    let probes = [
+        (image, 0x100),
+        (image.saturating_sub(PAGE_SIZE), 2 * PAGE_SIZE),
+        (last, 1),
+        (image + len / 2, PAGE_SIZE),
+    ];
+    for (phys, bytes) in probes {
+        match vmap::map_device(phys, bytes) {
+            Err(vmap::VmapError::KernelImage(at)) if at == phys => {}
+            Err(_) => {
+                return Err("a device window over the kernel image failed for the wrong reason");
+            }
+            Ok(at) => {
+                let _ = vmap::unmap_device(at);
+                return Err("a device window over the kernel image was mapped");
+            }
+        }
+    }
+    if vmap::usage().allocations != windows_before {
+        return Err("a refused device window over the kernel image kept its address space");
     }
     Ok(())
 }
@@ -3065,6 +3111,24 @@ fn check_early_mapper(view: &BootView<'_>, memory: &mut EarlyMemory) -> Result<(
         Some(phys) if phys == info.kernel_phys => {}
         Some(_) => return Err("walking the page tables disagrees with the loader"),
         None => return Err("the kernel image is not mapped in its own page tables"),
+    }
+
+    // No device window over the image itself: its text has no writable
+    // mapping anywhere, and a device window is writable. Refused before the
+    // mapper runs, so the on-demand window, stage 3's and unused until then,
+    // stays empty.
+    let text = info.kernel_phys;
+    match memory.map_device(vmap::DEMAND_WINDOW, text, PAGE_SIZE) {
+        Err(early::EarlyError::KernelImage(at)) if at == text => {}
+        Err(_) => {
+            return Err(
+                "an early device window over the kernel's text failed for the wrong reason",
+            );
+        }
+        Ok(()) => return Err("an early device window over the kernel's text was mapped"),
+    }
+    if memory.translate(vmap::DEMAND_WINDOW).is_some() {
+        return Err("a refused early device window left a mapping behind");
     }
 
     // A device window the kernel has a real use for, when firmware left one:

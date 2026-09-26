@@ -1994,11 +1994,15 @@ impl AddressSpace {
     /// register window.
     ///
     /// Whether `physical..physical + len` is memory this space may have at
-    /// all is not decided here: the caller holds an `Aperture` that says so.
+    /// all is decided by the caller, which holds an `Aperture` that says so.
+    /// The one range refused here whatever the caller holds is the kernel's
+    /// own image ([`mm::overlaps_image`]), whose text has no writable mapping
+    /// anywhere.
     ///
     /// # Errors
     ///
-    /// [`SpaceError::Refused`] if `flags` asks for execute;
+    /// [`SpaceError::Refused`] if `flags` asks for execute, or the range
+    /// touches the kernel's image;
     /// [`SpaceError::BadRange`] for a length or physical address that is not
     /// whole pages, or a range overlapping a mapping;
     /// [`SpaceError::NotUserRange`] outside the user half; and
@@ -2010,7 +2014,7 @@ impl AddressSpace {
         physical: u64,
         flags: VmaFlags,
     ) -> Result<u64, SpaceError> {
-        if flags.execute {
+        if flags.execute || mm::overlaps_image(physical, len) {
             return Err(SpaceError::Refused(at.unwrap_or(0)));
         }
         if len == 0 || !len.is_multiple_of(PAGE_SIZE) || !physical.is_multiple_of(PAGE_SIZE) {
@@ -2074,7 +2078,7 @@ impl AddressSpace {
         cached: bool,
         keeper: Arc<dyn Any + Send + Sync>,
     ) -> Result<u64, SpaceError> {
-        if flags.execute {
+        if flags.execute || mm::overlaps_image(physical, len) {
             return Err(SpaceError::Refused(0));
         }
         if len == 0 || !len.is_multiple_of(PAGE_SIZE) || !physical.is_multiple_of(PAGE_SIZE) {

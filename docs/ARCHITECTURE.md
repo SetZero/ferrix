@@ -183,7 +183,10 @@ image's own text and read-only data, which it aliases read only: a writable
 alias of the text would change the code the image mapping runs without ever
 being writable and executable itself. Both loaders cut the direct map around
 that span, and every boot walks each mapping of its frames and requires none
-to be writable.
+to be writable. No new mapping of the image can be made from outside `mm`
+either: every interface that maps a physical address its caller names -- a
+kernel device window, early boot's, a user space's device or GPU window --
+refuses a range touching any part of the image (`mm::overlaps_image`).
 
 These are regions, not addresses. Built `--mitigations on`, the default, the
 loader puts the kernel image, the direct map and the top of the vmap arena

@@ -296,7 +296,9 @@ counts every mapping of the frames holding the image's text and read-only
 data. That is more than the image's own pages, because the direct map's alias
 is among them, and the line says none is writable. Then reproduce the negative
 control the commit quotes: a scratch write of one byte of text through
-`mm::direct_map` must fault with FX-9001 on each architecture.
+`mm::direct_map` must fault with FX-9001 on each architecture. And remove
+`mm::overlaps_image`'s refusal from `vmap::map_device` (scratch): stage 2's
+check must stop at *"a device window over the kernel image was mapped"*.
 
 ---
 

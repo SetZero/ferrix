@@ -583,7 +583,9 @@ each of the rest.
    step 1: the direct map aliased the image's text and read-only data
    writable, which W^X could not see. Both loaders now map that span read
    only, and every boot sweeps each mapping of its frames (`sealed` line,
-   FX-0204).
+   FX-0204). Every interface that maps a physical address a caller names
+   refuses a range touching the image (`mm::overlaps_image`), checked each
+   boot at stages 1, 2 and 6.
 
 ---
 
