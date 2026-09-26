@@ -779,6 +779,35 @@ fn binds_to_stops_a_unit_whose_binding_goes_away() {
 }
 
 #[test]
+fn binds_to_stops_a_remaining_oneshot_whatever_its_kill_mode() {
+    for mode in ["control-group", "process"] {
+        let forker = alloc::format!(
+            "[Unit]\nBindsTo=anchor.service\nAfter=anchor.service\n\
+             [Service]\nType=oneshot\nRemainAfterExit=yes\nKillMode={mode}\n\
+             ExecStart=/bin/forker\n"
+        );
+        let mut rig = Rig::new(&[
+            ("anchor.service", "[Service]\nExecStart=/bin/anchor\n"),
+            ("forker.service", forker.as_str()),
+        ]);
+        let _ = rig.request(Request::start("forker.service"));
+        let (anchor, _) = rig.spawned("anchor.service");
+        let (forker, _) = rig.spawned("forker.service");
+        // The main process exits, leaving a grandchild in the cgroup.
+        let _ = rig.exit(forker, 0);
+        assert_eq!(rig.state("forker.service"), ActiveState::Active, "{mode}");
+        let _ = rig.killed(anchor, Signal::TERM);
+        let _ = rig.emptied("anchor.service");
+        let stopping = rig.state("forker.service");
+        if mode == "control-group" {
+            assert_eq!(stopping, ActiveState::Deactivating, "{mode}");
+            let _ = rig.emptied("forker.service");
+        }
+        assert_eq!(rig.state("forker.service"), ActiveState::Inactive, "{mode}");
+    }
+}
+
+#[test]
 fn the_directory_routes_an_open_and_starts_its_provider() {
     let mut rig = Rig::new(&[
         (
@@ -906,6 +935,40 @@ fn status_reports_every_unit() {
     let missing = rig.request(Request::Status(Some(String::from("nope.service"))));
     let replies = Rig::replies(&missing);
     assert!(matches!(replies.as_slice(), [Reply::Status(list)] if list[0].load == "not-found"));
+}
+
+#[test]
+fn a_units_warnings_are_logged_as_it_loads() {
+    let mut rig = Rig::new(&[
+        (
+            "a.service",
+            "[Service]\nExecStart=/bin/a\nNoSuchKey=1\nEnvironment=\"PS1=%# \"\n",
+        ),
+        ("multi-user.target.wants/a.service", "->a.service"),
+    ]);
+    let lines = Rig::lines(&rig.boot());
+    let warned: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.starts_with("/lib/ferrix/units/a.service:"))
+        .collect();
+    assert_eq!(warned.len(), 2, "{lines:?}");
+    assert!(
+        warned
+            .iter()
+            .any(|line| line.contains(":3: Unknown key name 'NoSuchKey'")),
+        "{lines:?}"
+    );
+    assert!(
+        warned
+            .iter()
+            .any(|line| line.contains(":4: ") && line.contains("'%#'")),
+        "{lines:?}"
+    );
+    let again = Rig::lines(&rig.request(Request::start("a.service")));
+    assert!(
+        !again.iter().any(|line| line.contains("NoSuchKey")),
+        "a unit's warnings are said once, when it loads: {again:?}"
+    );
 }
 
 #[test]

@@ -68,6 +68,23 @@ impl Manager {
             return Some(unit);
         }
         let unit = UnitId(u32::try_from(self.units.len()).ok()?);
+        // What systemd logs as it loads a unit: a key it does not know, a
+        // value that does not parse, a specifier it refuses. The unit loads
+        // without them, so without a line nobody learns they were dropped.
+        let warned: Vec<String> = loaded.as_ref().map_or_else(
+            |_| Vec::new(),
+            |loaded| {
+                loaded
+                    .warnings
+                    .list()
+                    .iter()
+                    .map(|warning| alloc::format!("{warning}"))
+                    .collect()
+            },
+        );
+        for line in warned {
+            self.log(Some(unit), line);
+        }
         let slot = Slot::new(canonical.clone(), loaded);
         self.units.push(slot);
         let _ = self.names.insert(String::from(canonical.as_str()), unit);
