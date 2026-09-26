@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "9bc0088a63420a6ba4f426a154da1973ee1a08f37a25da0474bee68cd5ffbc93",
+  "digest": "abe1458f1cd190932812bb8c431550b1ac3a70fd539278f90ed1a7b36951a063",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -59,7 +59,7 @@
     "packages": 16,
     "elements": 1687,
     "maturity": {
-      "implemented": 270,
+      "implemented": 271,
       "inProgress": 11,
       "writtenAhead": 3,
       "planned": 37
@@ -5146,7 +5146,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::logctl",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/logctl\"",
+                  "value": "\"libs/proto/logctl\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1232
@@ -24125,7 +24125,7 @@
           "id": "FerrixStructure::Workspace::logctl",
           "label": "logctl",
           "kind": "box",
-          "sublabel": "libs/logctl",
+          "sublabel": "libs/proto/logctl",
           "maturity": "implemented"
         },
         {

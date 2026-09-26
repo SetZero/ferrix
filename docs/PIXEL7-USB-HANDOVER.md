@@ -177,7 +177,7 @@ Each phase ends with something run on the phone and written down here.
    `device.log_control()` (`LOG_CONTROL_CREATE`, 0x1051) on its
    `TREE_GS201_DWC3` node gives a channel, READ `{ max }` is answered with
    DATA `{ lost, bytes }` of up to `MAX_DATA` (4072) bytes from the oldest
-   byte still kept (`libs/logctl`), one reader at a time, and the claim ends
+   byte still kept (`libs/proto/logctl`), one reader at a time, and the claim ends
    when the channel closes. `syslog(2)` reads the same log, privileged.
 5. **The monitor.** `tools/pixel7/monitor` reads `/dev/ttyACM*` while the
    phone is in Ferrix and feeds the same parser it uses for a guest

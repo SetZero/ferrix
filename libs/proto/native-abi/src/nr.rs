@@ -335,7 +335,7 @@ pub enum NativeCall {
     /// (`docs/AUDIO.md` §3.2). One per device.
     SoundControlCreate,
     /// `(device)` → handle. Make a control channel on which the device's
-    /// driver reads the kernel log (`libs/logctl`), and answer the driver's
+    /// driver reads the kernel log (`libs/proto/logctl`), and answer the driver's
     /// end of it. Needs `MANAGE` on a device whose binding may stream the log
     /// off the machine -- the Pixel 7's USB device controller -- and
     /// `ACCESS_DENIED` for any other; one reader at a time, `ALREADY_BOUND`

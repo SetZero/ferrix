@@ -102,11 +102,11 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1683 elements, 201 relations. Model digest `9bc0088a63420a6b`.
+13 files, 16 packages, 1687 elements, 201 relations. Model digest `abe1458f1cd19093`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
-| `#implemented` | 270 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
+| `#implemented` | 271 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
 | `#inProgress` | 11 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 3 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
 | `#planned` | 37 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
@@ -2649,6 +2649,7 @@ docs/ARCHITECTURE.md §9. libs/ is host-testable by design and is the only code 
 | `libs/proto/displayctl` | `#implemented` | 17 | `forbid` | 12 | The control protocol between the kernel's display core and a ring-3 display driver, written ahead of both for the compositor's first iteration (docs/DISPLAY.md). |
 | `libs/proto/inputctl` | `#implemented` | 17 | `forbid` | 25 | The control protocol between the kernel's input core and a ring-3 input driver, and evdev's per-open queues, written ahead of both for the input iteration (docs/INPUT.md). |
 | `libs/proto/sndctl` | `#implemented` | — | `forbid` | 30 | The control protocol between the kernel's audio core and a ring-3 sound driver, and a PCM stream's state as ALSA keeps it, written ahead of both for the audio iteration (docs/AUDIO.md L3). |
+| `libs/proto/logctl` | `#implemented` | — | `forbid` | 12 | The log control protocol: how a ring-3 driver reads the kernel log over a control channel, for the Pixel 7's USB serial port (docs/PIXEL7-USB-HANDOVER.md phase 4). |
 | `libs/platform/pci` | `#implemented` | 10 | `forbid` | 47 | PCI configuration space over a ConfigSpace the caller implements: ECAM geometry, headers, BAR decoding and sizing, both capability lists with a visited set, MSI-X, the bus walk without recursion or allocation, and virtio's PCI transport. |
 | `libs/proto/native-abi` | `#implemented` | 9 | `forbid` | 14 | The native ABI's numbers, handle values, rights, signals, errno names and repr(C) layouts. |
 | `libs/kernel/objects` | `#implemented` | 9 | `forbid` | 24 | The handle table and the channel message queue, generic over what a handle names. |
@@ -2708,7 +2709,7 @@ flowchart LR
   n28_FerrixStructure_Workspace_displayctl["displayctl<br>libs/proto/displayctl"]
   n29_FerrixStructure_Workspace_inputctl["inputctl<br>libs/proto/inputctl"]
   n30_FerrixStructure_Workspace_sndctl["sndctl<br>libs/proto/sndctl"]
-  n31_FerrixStructure_Workspace_logctl["logctl<br>libs/logctl"]
+  n31_FerrixStructure_Workspace_logctl["logctl<br>libs/proto/logctl"]
   n32_FerrixStructure_Workspace_pci["pci<br>libs/platform/pci"]
   n33_FerrixStructure_Workspace_nativeAbi["nativeAbi<br>libs/proto/native-abi"]
   n34_FerrixStructure_Workspace_objects["objects<br>libs/kernel/objects"]

@@ -1229,7 +1229,7 @@ package FerrixStructure {
                  * across a period or during a halt, and to refuse every lie. */
         }
         #implemented part logctl : LibraryCrate {
-            attribute :>> path = "libs/logctl";
+            attribute :>> path = "libs/proto/logctl";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 12;
             doc /* The log control protocol: how a ring-3 driver reads the

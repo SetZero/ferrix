@@ -11,7 +11,7 @@
 //! that starts late still gets the boot, as far back as the log goes.
 //!
 //! [`message`] is the bytes: three messages, little-endian, decoded strictly,
-//! in `libs/inputctl`'s shape. [`session`] is the kernel's half of the
+//! in `libs/proto/inputctl`'s shape. [`session`] is the kernel's half of the
 //! conversation: one READ outstanding at a time, answered once there is at
 //! least a byte, and what was lost since the last answer carried to the next.
 //!

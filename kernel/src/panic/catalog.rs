@@ -661,7 +661,7 @@ pub(crate) static LOG_CONTROL: Explanation = Explanation {
     code: "FX-1008",
     title: "the log core did not serve the kernel log to a driver",
     meaning: "A driver whose device may carry the kernel log off the machine -- the Pixel 7's \
-              USB serial port -- reads it over a log control channel (`libs/logctl`). The check \
+              USB serial port -- reads it over a log control channel (`libs/proto/logctl`). The check \
               claims the log as `log_control_create` does and plays the driver: a READ must be \
               answered with DATA holding the log's oldest bytes, the next READ with the bytes \
               after them, a second reader must be refused while the first holds the log, a \
@@ -677,7 +677,7 @@ pub(crate) static LOG_CONTROL: Explanation = Explanation {
         "The claim is not let go when the task ends, so `CLAIMED` stays set and every later \
          `log_control_create` answers `ALREADY_BOUND`.",
     ],
-    see: "kernel/src/logctl/check.rs; kernel/src/logctl/mod.rs; libs/logctl",
+    see: "kernel/src/logctl/check.rs; kernel/src/logctl/mod.rs; libs/proto/logctl",
 };
 
 /// For `kmain` in `main.rs`, when `console::log_check::run` fails.

@@ -1919,14 +1919,14 @@ docs/certification/VULNERABILITY-ANALYSIS.md T.DMA.
 ## FX-1008 — the log core did not serve the kernel log to a driver
 
 A driver whose device may carry the kernel log off the machine -- the Pixel 7's
-USB serial port -- reads it over a log control channel (`libs/logctl`). The
-check claims the log as `log_control_create` does and plays the driver: a READ
-must be answered with DATA holding the log's oldest bytes, the next READ with
-the bytes after them, a second reader must be refused while the first holds the
-log, a driver that sends DATA must be refused and its claim ended, and a claim
-must end when its channel closes. A failure means the driver on the phone would
-get nothing, get the log out of order, or keep the log from the next driver
-after it went.
+USB serial port -- reads it over a log control channel (`libs/proto/logctl`).
+The check claims the log as `log_control_create` does and plays the driver: a
+READ must be answered with DATA holding the log's oldest bytes, the next READ
+with the bytes after them, a second reader must be refused while the first holds
+the log, a driver that sends DATA must be refused and its claim ended, and a
+claim must end when its channel closes. A failure means the driver on the phone
+would get nothing, get the log out of order, or keep the log from the next
+driver after it went.
 
 1. The log core's task does not answer: it waits for the console to wake it,
    which the console never does, instead of looking again every
@@ -1936,7 +1936,7 @@ after it went.
 3. The claim is not let go when the task ends, so `CLAIMED` stays set and every
    later `log_control_create` answers `ALREADY_BOUND`.
 
-See: kernel/src/logctl/check.rs; kernel/src/logctl/mod.rs; libs/logctl.
+See: kernel/src/logctl/check.rs; kernel/src/logctl/mod.rs; libs/proto/logctl.
 
 <a id="fx-1101"></a>
 
