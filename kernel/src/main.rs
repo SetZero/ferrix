@@ -1534,6 +1534,22 @@ fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>, reserved: &d
     );
 }
 
+/// Say how many processors came up, and then what the machine is exposed to:
+/// every processor has decided and recorded its side-channel defences by now,
+/// so that can be said for all of it -- which, on a machine of mixed cores,
+/// the boot processor alone cannot. In that order, so that the kinds of core
+/// the exposure lines count follow the count of processors.
+fn report_processors(cpus: &smp::Topology) {
+    println!(
+        "  cpus     {} described by firmware, {} online, booted on {} {:#x}",
+        cpus.count(),
+        cpus.online(),
+        cpus.id_name(),
+        cpus.boot_id(),
+    );
+    arch::report_speculation();
+}
+
 /// Stage 4: find every processor, start them, and require them to work
 /// together.
 ///
@@ -1565,13 +1581,7 @@ fn bring_up_processors(view: &BootView<'_>) -> &'static smp::Topology {
             "not every processor firmware described came online"
         );
     }
-    println!(
-        "  cpus     {} described by firmware, {} online, booted on {} {:#x}",
-        cpus.count(),
-        cpus.online(),
-        cpus.id_name(),
-        cpus.boot_id(),
-    );
+    report_processors(cpus);
     if !checks::run() {
         return cpus;
     }

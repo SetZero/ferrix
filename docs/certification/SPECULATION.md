@@ -211,7 +211,10 @@ the four Cortex-A72s and booted.
 
 **The exposure is said once every processor has started**, a line per kind of
 core — the same part, told the same by firmware, having applied the same —
-with how many there are. The boot processor alone could not say it: a Pixel 7's
+with how many there are, just after the `cpus N described by firmware, N
+online` line whose processors it sorts into kinds (before 2026-09-26 it came
+just before that line; nothing parses the order: no `xtask` or `scripts/`
+check reads either line). The boot processor alone could not say it: a Pixel 7's
 A55 is on neither Arm's Spectre v2 nor its Spectre-BHB list, and its X1s need
 the loop. The reference CPU, QEMU's `cortex-a72`, has neither `CSV2` nor
 `SSBS`, is not on the Spectre v2 list, and QEMU's firmware offers neither
@@ -230,6 +233,26 @@ with the ID registers overridden (a scratch edit, not committed) as a Pixel 7
   cpu      speculation exposure: 1 x Cortex-A55: Spectre v2 not affected (Arm lists this core as unaffected); Spectre-BHB not affected (not on Arm's list); store bypass not affected; Meltdown not affected
   cpu      speculation exposure: 3 x Cortex-X1: Spectre v2 not affected (CSV2); Spectre-BHB covered (32 branches); store bypass covered; Meltdown not affected
 ```
+
+On the phone itself, f70b2516 was confirmed by session ferrix-0a's hardware
+run on a Pixel 7 started on all eight cores (`~/.local/share/ferrix/pixel7/run11-v2/run.log`,
+built from f70b2516 exactly, `commit.txt` there and an empty `tree.diff`): four
+Cortex-A55s, two A78s and two X1s, each kind reported for itself, the big cores
+with the loop, and the boot check reading every processor's defences back:
+
+```
+  cpu      speculation defences: clamped indices, SSBD
+  cpu      speculation exposure: 4 x Cortex-A55: Spectre v2 not affected (Arm lists this core as unaffected); Spectre-BHB not affected (not on Arm's list); store bypass covered; Meltdown not affected
+  cpu      speculation exposure: 2 x Cortex-A78: Spectre v2 not affected (CSV2); Spectre-BHB covered (32 branches); store bypass covered; Meltdown not affected
+  cpu      speculation exposure: 2 x Cortex-X1: Spectre v2 not affected (CSV2); Spectre-BHB covered (32 branches); store bypass covered; Meltdown not affected
+  cpus     8 described by firmware, 8 online, booted on MPIDR 0x0
+  ...
+  cpu      speculation defences read back on 8 processors, 0 switch barriers
+  cpu      4 processors applied other than the boot processor's clamped indices, SSBD
+```
+
+(Since 2026-09-26 the three exposure lines follow the `cpus` line, their
+content unchanged.)
 
 That is honest for real Cortex-A72 silicon without TF-A's workarounds, and it
 is what AoU-11 turns into an obligation: real hardware must run firmware that

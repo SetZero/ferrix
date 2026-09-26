@@ -308,11 +308,6 @@ pub(crate) fn start_secondaries(view: &BootView<'_>) -> Result<(), &'static str>
     // freeing it under that core would turn a missing processor into a
     // corrupted one.
     starter.finish()?;
-
-    // Every processor has decided and recorded its side-channel defences, so
-    // what the machine is exposed to can be said for all of it -- which, on a
-    // machine of mixed cores, the boot processor alone cannot.
-    arch::report_speculation();
     Ok(())
 }
 

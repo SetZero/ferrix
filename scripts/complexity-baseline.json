@@ -59,11 +59,6 @@
       "lines": 71,
       "recursive": false
     },
-    "main.rs::bring_up_processors": {
-      "complexity": 9,
-      "lines": 64,
-      "recursive": false
-    },
     "main.rs::check_filesystems": {
       "complexity": 13,
       "lines": 88,
