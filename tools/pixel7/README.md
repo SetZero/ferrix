@@ -96,10 +96,13 @@ and gives each function the INTx line its `interrupt-map` names. The guest
 powers off at the end of its run, and crosvm exits.
 
 **The desktop.** When `desktop.Image` is beside `ferrix.Image`, the app boots
-it instead: a loader wrapping `cargo xtask flash --arch aarch64 --release
---compositor --size 1080x2400 --wallpaper none --stage <dir>`'s kernel and
-initramfs, whose init is the compositor. Delete it to go back to the console
-image.
+it instead: the loader wrapping a kernel and initramfs whose init is the
+compositor. `tools/pixel7/build-desktop.sh <dir> [scale] [--push]` builds it
+(`cargo xtask flash --compositor --size 1080x2400 --scale 2 --layout us
+--wallpaper none`, then the loader) and with `--push` copies it to the phone.
+The scale is 2 unless given, since 1080x2400 at 1 is text a few millimetres
+high, and the keymap US, which the app's key codes are. Delete
+`desktop.Image` to go back to the console image.
 
 Starting a VM opens it full screen: one bar, with the run's state and a menu
 to pause or resume it, stop it, run it again, or go back, and the console

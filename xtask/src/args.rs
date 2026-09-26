@@ -286,6 +286,9 @@ pub(crate) struct Args {
     /// `--size <W>x<H>`: the screen `run-compositor` gives the guest and
     /// `wallpapers` cuts pictures for, 1920x1080 for both when not given.
     pub(crate) size: Option<(u32, u32)>,
+    /// `--scale <N>`: the compositor's scale for the screen, 1 when not
+    /// given: a phone's 1080x2400 at 1 is text a few millimetres high.
+    pub(crate) scale: Option<String>,
     /// `--fps <N>`: how many frames a second of a video `wallpapers` keeps.
     ///
     /// A wallpaper that moves is its frames, so this is a size as much as a
@@ -476,6 +479,7 @@ impl Args {
                 "--from" => args.from = Some(value(&mut items, "--from")?),
                 "--plan" => args.plan = Some(value(&mut items, "--plan")?),
                 "--size" => args.size = Some(dimensions(&value(&mut items, "--size")?, "--size")?),
+                "--scale" => args.scale = Some(scale(&value(&mut items, "--scale")?)?),
                 "--video-size" => {
                     let raw = value(&mut items, "--video-size")?;
                     args.video_size = Some(dimensions(&raw, "--video-size")?);
@@ -589,12 +593,38 @@ fn dimensions(raw: &str, key: &str) -> Result<(u32, u32)> {
         .ok_or_else(|| Error::new(format!("{key} wants <width>x<height>, got `{raw}`")))
 }
 
+/// A monitor scale as `hyprland.conf` writes it: a number above 0 and at
+/// most 8, kept as it was typed so `2` stays `2` in the `monitor =` line.
+fn scale(raw: &str) -> Result<String> {
+    raw.parse::<f64>()
+        .ok()
+        .filter(|scale| *scale > 0.0 && *scale <= 8.0)
+        .map(|_| raw.to_owned())
+        .ok_or_else(|| {
+            Error::new(format!(
+                "--scale wants a number above 0 and at most 8, got `{raw}`"
+            ))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn parse(line: &[&str]) -> Result<Args> {
         Args::parse(line.iter().map(|item| (*item).to_owned()))
+    }
+
+    #[test]
+    fn a_scale_is_a_positive_number_kept_as_typed() {
+        let args = parse(&["run-compositor", "--scale", "2.5"]).expect("parsed");
+        assert_eq!(args.scale.as_deref(), Some("2.5"));
+        for bad in ["0", "-1", "nine", "9"] {
+            assert!(
+                parse(&["run-compositor", "--scale", bad]).is_err(),
+                "{bad} refused"
+            );
+        }
     }
 
     #[test]
