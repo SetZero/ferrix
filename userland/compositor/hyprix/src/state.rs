@@ -972,6 +972,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         }
 
         let mut pending = Vec::new();
+        let forced_before = forced;
         for reply in asked {
             let mut around = crate::act::Around {
                 slots: &mut slots,
@@ -1007,6 +1008,19 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &mut around,
             ) {
                 changed = true;
+            }
+        }
+        // `forceidle` changed how long the seat has been idle after the
+        // notifications above were told. Tell them again now: the wait
+        // below has no idle timer while the idle is forced, so without this
+        // they would hear of it only when something else woke the loop --
+        // hypridle's listeners fired seconds late, at the next keypress.
+        if forced != forced_before {
+            let idle = u64::try_from(forced.unwrap_or_else(|| last_input.elapsed()).as_millis())
+                .unwrap_or(u64::MAX);
+            let inhibited = slots.iter().any(|slot| slot.client().inhibits_idle());
+            for slot in &mut slots {
+                let _said = slot.client_mut().idle_tick(idle, inhibited);
             }
         }
         if !pending.is_empty() {
