@@ -1,4 +1,5 @@
-//! A console record in the phone's `ramoops` region.
+//! A console record in the phone's `ramoops` region, or in a guest of crosvm,
+//! its 16550.
 //!
 //! This loader has no serial port it can reach -- the phone's UART is behind a
 //! debug accessory on the USB-C port -- and until it knows where the screen is,
@@ -18,7 +19,11 @@
 use core::ptr;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::board::{RAMOOPS_CONSOLE, RAMOOPS_CONSOLE_SIZE};
+use crate::board::{self, GUEST_UART, RAMOOPS_CONSOLE, RAMOOPS_CONSOLE_SIZE};
+
+/// The 16550's line status register, and its bit for "room to send".
+const UART_LSR: u64 = 5;
+const LSR_THR_EMPTY: u8 = 1 << 5;
 
 /// `PERSISTENT_RAM_SIG`, "DBGC".
 const SIGNATURE: u32 = 0x4347_4244;
@@ -43,16 +48,39 @@ fn header_word(offset: u64, value: u32) {
     }
 }
 
-/// Start an empty record, replacing whatever the zone held.
+/// Start an empty record, replacing whatever the zone held. A guest has no
+/// zone: its bytes go straight out of the UART.
 pub(crate) fn start() {
+    if board::is_guest() {
+        return;
+    }
     LENGTH.store(0, Ordering::Relaxed);
     header_word(0, SIGNATURE);
     header_word(4, 0);
     header_word(8, 0);
 }
 
+/// Send one byte out of a guest's 16550, waiting a bounded time for room.
+fn uart_byte(value: u8) {
+    for _ in 0..100_000 {
+        // SAFETY: the 16550 crosvm puts at `GUEST_UART`, which is MMIO, and
+        // reached as Device memory with the MMU off; a byte register.
+        if unsafe { ptr::read_volatile((GUEST_UART + UART_LSR) as *const u8) } & LSR_THR_EMPTY != 0
+        {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    // SAFETY: as above, its transmit holding register.
+    unsafe { ptr::write_volatile(GUEST_UART as *mut u8, value) };
+}
+
 /// Append one byte, dropping it once the zone is full.
 pub(crate) fn byte(value: u8) {
+    if board::is_guest() {
+        uart_byte(value);
+        return;
+    }
     let length = LENGTH.load(Ordering::Relaxed);
     if length >= CAPACITY {
         return;

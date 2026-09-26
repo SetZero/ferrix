@@ -25,6 +25,30 @@ pub(crate) const RAMOOPS_CONSOLE_SIZE: u64 = 0x20_0000;
 /// kernel's secondary entry drops each to EL1.
 pub(crate) const CMDLINE: &str = "console=ramoops,0xfd3ff000,0x200000 ferrix.fbcon";
 
+/// The 16550 a guest of the phone's own crosvm gets as its console, which
+/// the kernel is told to use in place of `ramoops`: see [`GUEST_CMDLINE`].
+pub(crate) const GUEST_UART: u64 = 0x3f8;
+
+/// The kernel command line in a guest of crosvm, on the Pixel's own KVM.
+/// There is no screen, so no `ferrix.fbcon`, and no `ramoops` region either:
+/// the console is crosvm's 16550, which crosvm connects to its own output.
+pub(crate) const GUEST_CMDLINE: &str = "console=uart8250,mmio,0x3f8";
+
+/// Whether the loader runs as a guest of crosvm rather than on the phone.
+static GUEST: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Record that the loader runs as a guest; see [`is_guest`].
+pub(crate) fn set_guest() {
+    GUEST.store(true, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the loader runs as a guest of crosvm. Decided once, first thing:
+/// ABL enters the loader at EL2, and crosvm at EL1 with a device tree whose
+/// `stdout-path` is its 16550.
+pub(crate) fn is_guest() -> bool {
+    GUEST.load(core::sync::atomic::Ordering::Relaxed)
+}
+
 /// The two watchdogs, `watchdog_cl0@10060000` and `watchdog_cl1@10070000`,
 /// each with a 30 second timeout in the device tree.
 pub(crate) const WATCHDOGS: [u64; 2] = [0x1006_0000, 0x1007_0000];

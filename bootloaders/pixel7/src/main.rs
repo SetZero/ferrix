@@ -30,7 +30,7 @@ use core::ptr;
 use ferrix_bootinfo::{Framebuffer, MemKind};
 use ferrix_fdt::Fdt;
 
-use board::{CMDLINE, WATCHDOGS, WTCNT, WTCON};
+use board::{CMDLINE, GUEST_CMDLINE, WATCHDOGS, WTCNT, WTCON};
 use log::say;
 use memory::Memory;
 
@@ -48,6 +48,9 @@ unsafe extern "C" {
 /// anything else: record what was handed over, in case what comes next hangs.
 extern "C" fn early(device_tree: u64, current_el: u64, loaded_at: u64) {
     let level = (current_el >> 2) & 0b11;
+    if level == 1 && is_crosvm(device_tree) {
+        board::set_guest();
+    }
     log::start();
     say!("ferrix-pixel7 loader {}", env!("CARGO_PKG_VERSION"));
     say!("  entered at EL{level}, loaded at {loaded_at:#x}, device tree at {device_tree:#x}");
@@ -65,13 +68,42 @@ extern "C" fn main(device_tree: u64) -> ! {
         "  now at EL{}, counter at {frequency} Hz",
         entry::current_el()
     );
-    report_watchdogs();
-    display::report();
-    let framebuffer = display::take_over();
+    let framebuffer = if board::is_guest() {
+        say!("  a guest of crosvm: no watchdogs, no screen, console on its 16550");
+        None
+    } else {
+        report_watchdogs();
+        display::report();
+        display::take_over()
+    };
     if let Err(why) = start(device_tree, framebuffer.unwrap_or(Framebuffer::NONE)) {
         say!("FERRIX-PANIC loader: {why}");
     }
+    // In a guest no watchdog ends the run: whoever started crosvm stops it.
     entry::wait_for_watchdog()
+}
+
+/// Whether the device tree at `device_tree` is crosvm's: its `stdout-path`
+/// an `ns16550a` at [`board::GUEST_UART`], which is where the log goes from
+/// here on.
+fn is_crosvm(device_tree: u64) -> bool {
+    let Ok(blob) = device_tree_blob(device_tree) else {
+        return false;
+    };
+    let Ok(tree) = Fdt::parse(blob) else {
+        return false;
+    };
+    let Some(path) = tree.stdout_path() else {
+        return false;
+    };
+    let path = path.split(':').next().unwrap_or(path);
+    tree.find_node(path).is_some_and(|node| {
+        node.is_compatible("ns16550a")
+            && node
+                .reg()
+                .next()
+                .is_some_and(|region| region.address == board::GUEST_UART)
+    })
 }
 
 /// Everything between the hand-over and the kernel, as one fallible step.
@@ -86,12 +118,15 @@ fn start(device_tree: u64, framebuffer: Framebuffer) -> Result<(), &'static str>
     // for the kernel.
     memory.mark(device_tree, blob.len() as u64, MemKind::Loader)?;
     // ABL's framebuffer, which the display keeps fetching: not RAM for the
-    // kernel to hand out, or the screen shows whatever it put there.
-    memory.mark(
-        display::FRAMEBUFFER,
-        display::FRAMEBUFFER_BYTES,
-        MemKind::Framebuffer,
-    )?;
+    // kernel to hand out, or the screen shows whatever it put there. A guest
+    // has no screen, and nothing at that address.
+    if !board::is_guest() {
+        memory.mark(
+            display::FRAMEBUFFER,
+            display::FRAMEBUFFER_BYTES,
+            MemKind::Framebuffer,
+        )?;
+    }
     say!(
         "  device tree {} bytes, model {:?}",
         blob.len(),
@@ -112,7 +147,11 @@ fn start(device_tree: u64, framebuffer: Framebuffer) -> Result<(), &'static str>
         &mut memory,
         load::Carried {
             device_tree: blob,
-            cmdline: CMDLINE,
+            cmdline: if board::is_guest() {
+                GUEST_CMDLINE
+            } else {
+                CMDLINE
+            },
             loader,
             framebuffer,
             seed,
