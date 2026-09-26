@@ -423,11 +423,10 @@ read below EL1 or PL1.
 75,087 on ARMv7-A, in the loader, before the kernel runs. In memory, the
 x86-64 and AArch64 relocation tables stay loaded: 210 and 183 KiB of read-only
 data nothing reads after boot. On AArch64 and ARMv7-A the code is the same code:
-both settings build for the static model. On x86-64 the PIC model makes `.text`
-0.9% larger than `off`'s static model (3,739,332 bytes against 3,707,252,
-debug profile, which includes the side-channel defences' own instructions).
-Its addresses are `rip`-relative where the static model's were 32-bit
-absolutes, which costs no instructions. §8 has the timings.
+both settings build for the static model. On x86-64 the PIC model costs
+nothing measurable in the release profile, which is the reference, and 3 to
+10% on stage 7's cost lines in the debug profile, where cross-crate calls go
+through the GOT. §8 has the figures, and why.
 
 ### 6.2 KPTI
 
@@ -518,6 +517,34 @@ The boot's own cost lines, three boots each, did not move beyond their noise:
 stage 7's `handlers` 103 → 104 ms, `procs` 13 → 13, `fork` 177 → 178, `execve`
 37 → 38 (medians), and time to `FERRIX-BOOT-OK` varied more between boots of
 one setting than between settings.
+
+**KASLR's cost** (§6.1), measured on the same host on 2026-09-26, after main
+had given the KVM guest an invariant TSC, which lowered every figure below
+from the ones above. `on` with KASLR is compared with an `on` kernel linked
+static and fixed, a build made for the measurement and not committed. Each
+figure is the median of three alternating `test-boot --accel kvm` boots,
+stage 7's cost lines in ms:
+
+| Profile | Build | `handlers` | `fork` | `signals` | `execve` | to `FERRIX-BOOT-OK` |
+|---|---|---:|---:|---:|---:|---:|
+| release (the reference) | `on`, static, fixed | 96 | 165 | 66 | 34 | 4.60 s |
+| release (the reference) | `on`, PIE, moved | 96 | 168 | 66 | 34 | 4.63 s |
+| debug | `off` | 97 | 167 | 67 | 35 | 4.67 s |
+| debug | `on`, static, fixed (one boot) | 97 | 166 | 67 | 35 | 4.72 s |
+| debug | `on`, PIE, moved | 100 | 176 | 73 | 38 | 4.87 s |
+
+In the reference profile KASLR costs nothing these can see. The release
+profile links with fat LTO, so every crate is one module and a call from one
+to another is internal: 3,142 calls go through the GOT against 3,152 in the
+static build. The debug profile has no LTO, and there the PIC model costs
+3 to 10%. rustc's `x86_64-unknown-none` emits a call into another crate as
+`call *sym@GOTPCREL(%rip)` with `R_X86_64_GOTPCREL`, not the `GOTPCRELX` lld
+could relax into a direct call. So 24,227 calls stay indirect against 3,102.
+`-Z relax-elf-relocations` and `-Z plt` would fix that and are nightly-only.
+`off` is therefore the static fixed link. It is faster in the profile people
+debug in, it equals the other in the reference, and it is the kernel the
+tree built before KASLR. The rows also show that the side-channel defences no
+longer move these cost lines at all.
 
 **Timing, and FX-1004.** Stage 10's block-ring check failed three times with
 FX-1004 *"quiescing the instant a driver died was refused: its channel was
