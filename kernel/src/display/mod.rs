@@ -1093,10 +1093,24 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
         timings: hello.timings,
     });
 
+    // Announced and listed before devmgr is told. devmgr answers a bind
+    // asked through sysfs once it hears the card was published, and the
+    // writer then expects the boot line and `/dev/dri/card0`, as Linux's bind
+    // returns once the driver's probe has registered the device. Told first,
+    // devmgr's answer could overtake this thread: test-sysfs under the
+    // coverage plugin saw "bind ... done" with no card0 announced.
+    //
+    // Listed under the card's own lock, held until READY has gone: every
+    // message a client's call sends the driver is written under that lock,
+    // so none can reach the driver before READY does.
+    announce(&card, &hello);
+    let mut state = card.state.lock();
+    CARDS.lock().push(Arc::clone(&card));
+
     // Published before READY goes out, as the rings do: devmgr kills a driver
     // that has not published by the time it reports. A READY that cannot be
-    // written is not taken back: the channel failing means the driver is
-    // gone, and devmgr hears of its death and quiesces the device.
+    // written means the driver is gone, and devmgr hears of its death and
+    // quiesces the device; the card listed above goes with it.
     if let Some(location) = start.location {
         crate::devmgr::published(location);
     }
@@ -1116,15 +1130,19 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
         .write(ready, 2, || Ok::<Vec<Transfer>, Infallible>(handed))
         .is_err()
     {
+        state.gone = true;
+        drop(state);
+        card.changed.wake_all();
+        CARDS.lock().retain(|held| !Arc::ptr_eq(held, &card));
         NUMBERS.give_back(index);
+        crate::console::println!("  display  card{index} is gone");
         return Err(Refusal::Malformed);
     }
+    drop(state);
 
     // The driver owns what is on the screen now, and the boot console, if it
     // was drawing on the firmware's framebuffer, stops.
     crate::console::screen::stop();
-    CARDS.lock().push(Arc::clone(&card));
-    announce(&card, &hello);
     Ok(card)
 }
 
