@@ -136,6 +136,13 @@ name = "compositor-fan"
 version = "0.1.0"
 
 [[package]]
+name = "compositor-fuzzel"
+version = "0.1.0"
+dependencies = [
+ "compositor-xkb",
+]
+
+[[package]]
 name = "compositor-ipc"
 version = "0.1.0"
 dependencies = [
