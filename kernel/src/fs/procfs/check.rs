@@ -130,7 +130,10 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let task = sched::spawn_user(
         "procfs-check",
         in_the_process,
-        Arc::new(crate::syscall::thread::Thread::leader(&process)),
+        Arc::new(
+            crate::syscall::thread::Thread::leader(&process)
+                .map_err(|_| "no memory for a check's thread")?,
+        ),
         None,
         None,
     )

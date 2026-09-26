@@ -162,6 +162,10 @@ fn boxed_slices_and_strs_are_exact_and_allocated_once() {
     assert_eq!(&*slice.unwrap(), &[1, 2, 3]);
     assert_eq!(log, vec![(12, 4)]);
 
+    let (filled, log) = record(|| try_boxed_filled(7u16, 5));
+    assert_eq!(&*filled.unwrap(), &[7, 7, 7, 7, 7]);
+    assert_eq!(log, vec![(10, 2)]);
+
     let (text, log) = record(|| try_boxed_str("ferrix"));
     assert_eq!(&*text.unwrap(), "ferrix");
     assert_eq!(log, vec![(6, 1)]);
@@ -170,6 +174,8 @@ fn boxed_slices_and_strs_are_exact_and_allocated_once() {
     assert_eq!(try_boxed_slice(&[1u8]), Err(AllocError));
     refuse_in(0);
     assert_eq!(try_boxed_str("x"), Err(AllocError));
+    refuse_in(0);
+    assert_eq!(try_boxed_filled(0u8, 3), Err(AllocError));
     refuse_none();
 }
 
@@ -317,6 +323,7 @@ fn an_armed_injector_fails_every_constructor_without_allocating() {
         [
             try_box(1u8).err(),
             try_boxed_slice(&[1u8]).err(),
+            try_boxed_filled(1u8, 1).err(),
             try_boxed_str("x").err(),
             try_push(&mut vec, 1).err(),
             try_reserve(&mut vec, 1).err(),

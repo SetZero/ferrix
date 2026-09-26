@@ -474,9 +474,10 @@ fn check_process_create_survives_each_failure(spawner: &Spawner<'_>) -> Result<(
     let task =
         crate::sched::current_id().ok_or("the process-creation check runs outside a task")?;
     for nth in 1..=2000 {
-        // The heap's allocations alone: a process's signal table is still
-        // allocated infallibly (`syscall::signal::Signals::default`), and a
-        // frame refused under it stops the kernel.
+        // The heap's allocations alone: the load code `process_create` runs
+        // still allocates infallibly in places (MEMORY-AND-TIMING.md §1.3 --
+        // the signal tables no longer), and a frame refused under one of
+        // those stops the kernel.
         crate::fallible::inject_once(task, nth, false);
         let made = spawner.create(spawner.root, spawner.image, len(SPAWN_NAME));
         let failed = crate::fallible::stop_injecting() > 0;

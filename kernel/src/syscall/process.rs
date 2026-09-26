@@ -50,7 +50,7 @@ use alloc::vec::Vec;
 use core::any::Any;
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
-use crate::fallible::AllocError;
+use crate::fallible::{self, AllocError};
 use crate::sync::SpinLock;
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_linux_abi::errno::Errno;
@@ -225,12 +225,42 @@ pub(crate) struct Startup {
 }
 
 /// The parts of a process the lock protects.
-#[derive(Debug, Default, Clone)]
+///
+/// No `Default` or `Clone`: its signal tables are allocated, and a process
+/// is made on paths that answer `ENOMEM` and `NO_MEMORY` (finding F-23).
+#[derive(Debug)]
 struct State {
     /// The heap, once something has asked for one.
     heap: Option<Heap>,
     /// Dispositions, the blocked mask and the alternate stack.
     signals: Signals,
+}
+
+impl State {
+    /// A new process's: no heap, every signal at its default.
+    fn new() -> Result<State, AllocError> {
+        Ok(State {
+            heap: None,
+            signals: Signals::new()?,
+        })
+    }
+
+    /// Everything it holds, leaving it holding nothing and allocating
+    /// nothing: what `mem::take` did when a `Default` could be had for free.
+    fn take(&mut self) -> State {
+        State {
+            heap: self.heap.take(),
+            signals: core::mem::replace(&mut self.signals, Signals::released()),
+        }
+    }
+
+    /// A fork child's: the parent's heap and dispositions, nothing pending.
+    fn for_fork(&self) -> Result<State, AllocError> {
+        Ok(State {
+            heap: self.heap,
+            signals: self.signals.for_fork()?,
+        })
+    }
 }
 
 /// What a process was started as.
@@ -301,9 +331,9 @@ impl Process {
             umask: AtomicU32::new(DEFAULT_UMASK),
             oom_score_adj: AtomicI32::new(0),
             identity: SpinLock::new(Identity::default()),
-            files: Arc::new(SpinLock::new(fd::standard_streams())),
-            fs: Arc::new(SpinLock::new(fs::root_disk::process_context())),
-            state: SpinLock::new(State::default()),
+            files: fallible::try_arc(SpinLock::new(fd::standard_streams()))?,
+            fs: fallible::try_arc(SpinLock::new(fs::root_disk::process_context()))?,
+            state: SpinLock::new(State::new()?),
             heap_lock: SleepLock::new((), &crate::sync::SchedParker),
             startup: SpinLock::new(None),
             start_claimed: AtomicBool::new(false),
@@ -328,7 +358,7 @@ impl Process {
             execed: AtomicBool::new(false),
             vfork_done: WaitQueue::new(),
             signalled: WaitQueue::new(),
-            signal_arrived: Arc::new(WaitQueue::new()),
+            signal_arrived: fallible::try_arc(WaitQueue::new())?,
             stopped: AtomicU32::new(0),
             stop_report: AtomicU32::new(0),
             continue_report: AtomicBool::new(false),
@@ -382,16 +412,14 @@ impl Process {
         child.files = if share_files {
             Arc::clone(&parent.files)
         } else {
-            Arc::new(SpinLock::new(parent.files.lock().clone()))
+            fallible::try_arc(SpinLock::new(parent.files.lock().clone()))?
         };
         child.fs = if share_fs {
             Arc::clone(&parent.fs)
         } else {
-            Arc::new(SpinLock::new(parent.fs.lock().clone()))
+            fallible::try_arc(SpinLock::new(parent.fs.lock().clone()))?
         };
-        let mut state = parent.state.lock().clone();
-        state.signals.reset_for_fork();
-        child.state = SpinLock::new(state);
+        child.state = SpinLock::new(parent.state.lock().for_fork()?);
         child.startup = SpinLock::new(parent.startup());
         child.parent = SpinLock::new(Arc::downgrade(parent));
         child.pgid = AtomicU32::new(parent.pgid());
@@ -903,7 +931,7 @@ impl Process {
         }
         // The heap record and the signal tables go now. Taken under the lock
         // and dropped after it.
-        let state = core::mem::take(&mut *self.state.lock());
+        let state = self.state.lock().take();
         drop(state);
         // The handles too, and outside every lock: an object's drop can free
         // memory and drain other objects, which is `object::dispose`'s job,
@@ -1566,9 +1594,10 @@ pub(crate) fn start_on(
     cpu: Option<usize>,
 ) -> Result<Arc<Task>, &'static str> {
     let claim = claim_start(process)?;
-    Ok(claim
-        .prepare_thread(Arc::new(Thread::leader(process)), cpu, None)?
-        .launch())
+    let thread = Thread::leader(process)
+        .and_then(fallible::try_arc)
+        .map_err(|_| "no memory for the process's first thread")?;
+    Ok(claim.prepare_thread(thread, cpu, None)?.launch())
 }
 
 /// The right to start a process, held by one starter at a time.
@@ -1655,7 +1684,9 @@ impl StartClaim {
         if self.process.startup().is_none() {
             return Err("the process has no program loaded");
         }
-        let thread = Arc::new(Thread::leader(&self.process));
+        let thread = Thread::leader(&self.process)
+            .and_then(fallible::try_arc)
+            .map_err(|_| "no memory for the process's first thread")?;
         self.prepare_thread(thread, cpu, None)
     }
 

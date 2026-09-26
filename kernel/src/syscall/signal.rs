@@ -42,7 +42,6 @@
 //!   why the size sits at the second word on both widths.
 
 use alloc::boxed::Box;
-use alloc::vec;
 
 use ferrix_bootinfo::Arch;
 use ferrix_linux_abi::errno::Errno;
@@ -55,6 +54,7 @@ use ferrix_linux_abi::types::{
 };
 
 use crate::arch;
+use crate::fallible::{self, AllocError};
 use crate::signal_frame::StackRecord;
 use crate::syscall::deliver;
 use crate::syscall::process::Process;
@@ -345,7 +345,12 @@ pub(crate) struct Taken {
 /// `Process::new`, `registry::register` and `Arc::new` -- each a copy on a
 /// sixteen-kibibyte kernel stack. That was the x86-64 boot's double fault in
 /// `Process::new`, and the AArch64 boot's hang at the same check.
-#[derive(Debug, Clone)]
+///
+/// Made with [`Queue::new`], which reports running out of memory, and never
+/// cloned: a process or thread is made on paths that answer `ENOMEM` or
+/// `NO_MEMORY`, and a `Default` or `Clone` that allocated would stop the
+/// machine there instead (finding F-23).
+#[derive(Debug)]
 struct Queue {
     /// Bit `n - 1` for signal `n`.
     pending: u64,
@@ -353,16 +358,19 @@ struct Queue {
     origins: Box<[Origin]>,
 }
 
-impl Default for Queue {
-    fn default() -> Self {
-        Queue {
-            pending: 0,
-            origins: vec![Origin::Kernel; NSIG as usize].into_boxed_slice(),
-        }
-    }
-}
-
 impl Queue {
+    /// Nothing pending.
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`] when there is no memory for the origins.
+    fn new() -> Result<Queue, AllocError> {
+        Ok(Queue {
+            pending: 0,
+            origins: fallible::try_boxed_filled(Origin::Kernel, NSIG as usize)?,
+        })
+    }
+
     /// Record `signal` as pending, keeping the first sender's origin.
     fn add(&mut self, signal: u32, origin: Origin) {
         if self.pending & bit(signal) == 0
@@ -372,12 +380,6 @@ impl Queue {
             *slot = origin;
         }
         self.pending |= bit(signal);
-    }
-
-    /// Forget every pending signal and who sent it.
-    fn clear(&mut self) {
-        self.pending = 0;
-        self.origins.fill(Origin::Kernel);
     }
 
     /// The signal Linux's `next_signal` would take from this set among `ready`:
@@ -409,8 +411,10 @@ impl Queue {
 /// sent to it as a whole, and `ITIMER_REAL`.
 ///
 /// The disposition table is on the heap rather than inline, for the reason
-/// [`Queue`]'s origins are.
-#[derive(Debug, Clone)]
+/// [`Queue`]'s origins are -- and so, like a [`Queue`], it is made with
+/// [`Signals::new`] or [`Signals::for_fork`], which report running out of
+/// memory, and has no `Default` or `Clone` that would not.
+#[derive(Debug)]
 pub(crate) struct Signals {
     /// Signal `n` is at index `n - 1`. Always 64 entries.
     actions: Box<[Disposition]>,
@@ -421,6 +425,51 @@ pub(crate) struct Signals {
 }
 
 impl Signals {
+    /// Every signal at its default, nothing pending, no alarm: a process the
+    /// kernel starts.
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`] when there is no memory for the tables.
+    pub(crate) fn new() -> Result<Signals, AllocError> {
+        Ok(Signals {
+            actions: fallible::try_boxed_filled(Disposition::default(), NSIG as usize)?,
+            shared: Queue::new()?,
+            alarm: Alarm::default(),
+        })
+    }
+
+    /// What a process that has ended is left holding once its tables are
+    /// taken: none, and so every signal reads as at its default, as a fresh
+    /// table would. Allocates nothing -- an empty boxed slice is a dangling
+    /// pointer -- so a release that runs as the process ends cannot fail.
+    pub(crate) fn released() -> Signals {
+        Signals {
+            // NOALLOC: an empty boxed slice, which is a dangling pointer.
+            actions: Box::default(),
+            shared: Queue {
+                pending: 0,
+                // NOALLOC: as above.
+                origins: Box::default(),
+            },
+            alarm: Alarm::default(),
+        }
+    }
+
+    /// A fork child's: the same dispositions, and nothing pending and no
+    /// alarm, since neither is inherited.
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`] when there is no memory for the tables.
+    pub(crate) fn for_fork(&self) -> Result<Signals, AllocError> {
+        Ok(Signals {
+            actions: fallible::try_boxed_slice(&self.actions)?,
+            shared: Queue::new()?,
+            alarm: Alarm::default(),
+        })
+    }
+
     /// Whether a child that ends is released without being waited for:
     /// `SIGCHLD` ignored, or its handler installed with `SA_NOCLDWAIT`. What a
     /// daemon that never calls `wait` relies on to leave no zombies.
@@ -451,13 +500,6 @@ impl Signals {
                 action.handler = SIG_IGN;
             }
         }
-    }
-
-    /// What a `fork` child starts without: its parent's pending signals and
-    /// interval timer, which were its parent's.
-    pub(crate) fn reset_for_fork(&mut self) {
-        self.shared.clear();
-        self.alarm = Alarm::default();
     }
 
     /// Install a disposition directly, for the boot self-checks: they drive the
@@ -551,19 +593,11 @@ impl Signals {
     }
 }
 
-impl Default for Signals {
-    fn default() -> Self {
-        Signals {
-            actions: vec![Disposition::default(); NSIG as usize].into_boxed_slice(),
-            shared: Queue::default(),
-            alarm: Alarm::default(),
-        }
-    }
-}
-
 /// One thread's signal state: its blocked mask, its alternate stack, the
 /// signals sent to it alone, and what it is in the middle of.
-#[derive(Debug, Clone, Default)]
+///
+/// Made with [`ThreadSignals::new`], for the reason [`Queue`] is.
+#[derive(Debug)]
 pub(crate) struct ThreadSignals {
     /// The blocked mask, bit `n - 1` for signal `n`.
     blocked: u64,
@@ -582,6 +616,24 @@ pub(crate) struct ThreadSignals {
 }
 
 impl ThreadSignals {
+    /// A thread's that takes `inherited` from the thread that made it, with
+    /// nothing pending and nothing in progress; [`Inherited::NONE`] for a
+    /// process's first thread, which blocks nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`] when there is no memory for its pending set.
+    pub(crate) fn new(inherited: Inherited) -> Result<ThreadSignals, AllocError> {
+        Ok(ThreadSignals {
+            blocked: inherited.blocked,
+            alt: inherited.alt,
+            private: Queue::new()?,
+            saved_mask: None,
+            restart: None,
+            restart_block: None,
+        })
+    }
+
     /// Replace the blocked mask with `mask`, returning the mask it replaced:
     /// what `ppoll` and `pselect6` wait under, and put back afterwards.
     /// `SIGKILL` and `SIGSTOP` are never blocked, whatever `mask` says.
@@ -763,6 +815,16 @@ pub(crate) struct Inherited {
 }
 
 impl Inherited {
+    /// Nothing: no mask and no alternate stack.
+    pub(crate) const NONE: Inherited = Inherited {
+        blocked: 0,
+        alt: AltStack {
+            sp: 0,
+            size: 0,
+            autodisarm: false,
+        },
+    };
+
     /// The same without the alternate stack: what a `CLONE_THREAD` child
     /// inherits, since its stack is not the one the alternate stack was set
     /// up beside.
@@ -774,16 +836,6 @@ impl Inherited {
                 size: 0,
                 autodisarm: false,
             },
-        }
-    }
-}
-
-impl From<Inherited> for ThreadSignals {
-    fn from(inherited: Inherited) -> Self {
-        ThreadSignals {
-            blocked: inherited.blocked,
-            alt: inherited.alt,
-            ..ThreadSignals::default()
         }
     }
 }

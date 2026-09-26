@@ -167,6 +167,19 @@ pub fn try_boxed_slice<T: Clone>(items: &[T]) -> Result<Box<[T]>, AllocError> {
     exact_boxed_slice(vec)
 }
 
+/// A `Box<[T]>` of `len` clones of `value`, allocated exactly once:
+/// `vec![value; len].into_boxed_slice()`, which is two allocations that
+/// cannot fail, as one that can.
+///
+/// # Errors
+///
+/// As [`try_boxed_slice`].
+pub fn try_boxed_filled<T: Clone>(value: T, len: usize) -> Result<Box<[T]>, AllocError> {
+    let mut vec = try_with_capacity_exact(len)?;
+    vec.resize(len, value);
+    exact_boxed_slice(vec)
+}
+
 /// A `Box<str>` holding a copy of `text`, allocated exactly once.
 ///
 /// # Errors

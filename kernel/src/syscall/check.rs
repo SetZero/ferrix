@@ -561,7 +561,10 @@ fn sweep_in_a_process() -> Result<Swept, &'static str> {
 
     let process = process::new_for_check().map_err(|_| "could not make a process for the sweep")?;
     SWEEP_PID.store(process.pid(), Ordering::Release);
-    let thread = Arc::new(crate::syscall::thread::Thread::leader(&process));
+    let thread = Arc::new(
+        crate::syscall::thread::Thread::leader(&process)
+            .map_err(|_| "no memory for a check's thread")?,
+    );
     let task = crate::sched::spawn_user("sweep", sweep, thread, None, None)
         .map_err(|_| "could not start the sweep's task")?;
 
@@ -1421,7 +1424,8 @@ fn check_set_tid_address_answers_with_a_thread_id(
     process: &Arc<Process>,
 ) -> Result<(), &'static str> {
     let at = map_rw(process, PAGE_SIZE)?;
-    let thread = crate::syscall::thread::Thread::leader(process);
+    let thread = crate::syscall::thread::Thread::leader(process)
+        .map_err(|_| "no memory for a check's thread")?;
     let tid = thread.set_clear_child_tid(at);
     if tid == 0 {
         return Err("set_tid_address reported thread zero");
@@ -1608,7 +1612,7 @@ fn check_a_signal_disposition_reads_back_as_it_was_set(
 fn check_thread(process: &Process) -> Result<crate::syscall::thread::Thread, &'static str> {
     let process = crate::syscall::registry::find(process.pid())
         .ok_or("a check's process was not findable by its pid")?;
-    Ok(crate::syscall::thread::Thread::leader(&process))
+    crate::syscall::thread::Thread::leader(&process).map_err(|_| "no memory for a check's thread")
 }
 
 /// `rt_sigprocmask` applies `how`, never blocks SIGKILL, and leaves `oldset`
@@ -5940,13 +5944,47 @@ fn check_untested_signal_paths() -> Result<(), &'static str> {
     check_a_signal_is_judged_against_its_takers_mask()?;
     check_signals_are_decided_across_threads()?;
     crate::syscall::deliver::check_restart_decisions()?;
+    check_signal_state_reports_running_out()?;
     println!(
         "  sigpaths SIGCHLD reached a handler and wait4 still reaped; a stop and continue were \
          reported; an alarm raised SIGALRM; SA_ONSTACK chose the alternate stack; a blocked \
          fault was forced; a thread took its own signal before its process's; a signal was \
          judged against its taker's mask, a fork child's included; SA_RESTART restarts, poll \
-         and a flagless handler do not"
+         and a flagless handler do not; signal state with no memory is refused, not fatal"
     );
+    Ok(())
+}
+
+/// A process's and a thread's signal state report running out of memory
+/// rather than stop the machine (finding F-23): with every fallible
+/// allocation of this task failing, a new process's tables, a fork child's
+/// and a first thread's each come back as an error, and without the failing
+/// each is made.
+///
+/// They were `vec!` behind a `Default` and a `Clone`, which no injection
+/// reaches: with the old `Signals::default` put back (scratch), the first
+/// test here fails, since the tables are made with every allocation failing.
+/// On a real refusal that `vec!` reached the allocation error handler, on
+/// every `fork`, `clone`, `process_create` and `process_start`.
+fn check_signal_state_reports_running_out() -> Result<(), &'static str> {
+    use crate::syscall::thread::Thread;
+
+    let process = process::new_for_check().map_err(|_| "could not make a process")?;
+    let task = crate::sched::current_id().ok_or("the signal checks run outside a task")?;
+    crate::fallible::inject(task, 1);
+    let fresh = signal::Signals::new().is_err();
+    let forked = process.with_signals(|signals| signals.for_fork().is_err());
+    let thread = Thread::leader(&process).is_err();
+    let failed = crate::fallible::stop_injecting();
+    if !fresh || !forked || !thread || failed < 3 {
+        return Err("signal state was made with every allocation failing");
+    }
+    let made = signal::Signals::new().is_ok()
+        && process.with_signals(|signals| signals.for_fork().is_ok())
+        && Thread::leader(&process).is_ok();
+    if !made {
+        return Err("signal state was refused with memory to spare");
+    }
     Ok(())
 }
 
@@ -5975,6 +6013,7 @@ fn check_a_childs_end_reaches_a_sigchld_handler_and_still_reaps() -> Result<(), 
     let child_pid = child.pid();
     process::kill(&child, 0);
     let taken = crate::syscall::thread::Thread::leader(&parent)
+        .map_err(|_| "no memory for a check's thread")?
         .with_signals(signal::take_next)
         .ok_or("a child's end did not reach a parent that handles SIGCHLD")?;
     if taken.signal != SIGCHLD || taken.action.handler != CHECK_HANDLER {
@@ -6080,7 +6119,8 @@ fn check_sa_onstack_puts_the_handler_on_the_alternate_stack() -> Result<(), &'st
     let alt_sp = 0x2000_0000_u64;
     let alt_size = 0x4000_u64;
     let program_sp = 0x7000_0000_u64;
-    let thread = crate::syscall::thread::Thread::leader(&process);
+    let thread = crate::syscall::thread::Thread::leader(&process)
+        .map_err(|_| "no memory for a check's thread")?;
     thread.with_own_signals(|signals| signals.arm_alt_stack_for_check(alt_sp, alt_size));
 
     let on_alt = thread.with_own_signals(|signals| signals.frame_base(SA_ONSTACK, program_sp));
@@ -6115,7 +6155,8 @@ fn check_a_fault_forces_its_signal_past_a_block() -> Result<(), &'static str> {
 
     let caught = process::new_for_check().map_err(|_| "could not make a process")?;
     caught.with_signals(|signals| signals.install_action(SIGSEGV, CHECK_HANDLER, SA_ONSTACK));
-    let caught_thread = crate::syscall::thread::Thread::leader(&caught);
+    let caught_thread = crate::syscall::thread::Thread::leader(&caught)
+        .map_err(|_| "no memory for a check's thread")?;
     let posted =
         caught_thread.with_signals(|shared, own| signal::force(shared, own, SIGSEGV, fault));
     if posted != Posted::Pending {
@@ -6129,7 +6170,8 @@ fn check_a_fault_forces_its_signal_past_a_block() -> Result<(), &'static str> {
     }
 
     let dies = process::new_for_check().map_err(|_| "could not make a process")?;
-    let dies_thread = crate::syscall::thread::Thread::leader(&dies);
+    let dies_thread = crate::syscall::thread::Thread::leader(&dies)
+        .map_err(|_| "no memory for a check's thread")?;
     signal::change_blocked(&dies_thread, |shared, own| {
         shared.install_action(SIGSEGV, CHECK_HANDLER, SA_ONSTACK);
         let _ = own.replace_blocked(signal::bit(SIGSEGV));
@@ -6153,15 +6195,17 @@ fn check_a_threads_own_signal_goes_before_its_processs() -> Result<(), &'static 
     use ferrix_linux_abi::types::{SIGINT, SIGUSR2};
 
     let process = process::new_for_check().map_err(|_| "could not make a process")?;
-    let (sent, forced, first, second) = Thread::leader(&process).with_signals(|shared, own| {
-        shared.install_action(SIGINT, CHECK_HANDLER, 0);
-        shared.install_action(SIGUSR2, CHECK_HANDLER, 0);
-        let sent = shared.post(own.blocked(), own.blocked(), SIGINT, Origin::Kernel);
-        let forced = signal::force(shared, own, SIGUSR2, Origin::Kernel);
-        let first = signal::take_next(shared, own).map(|taken| taken.signal);
-        let second = signal::take_next(shared, own).map(|taken| taken.signal);
-        (sent, forced, first, second)
-    });
+    let (sent, forced, first, second) = Thread::leader(&process)
+        .map_err(|_| "no memory for a check's thread")?
+        .with_signals(|shared, own| {
+            shared.install_action(SIGINT, CHECK_HANDLER, 0);
+            shared.install_action(SIGUSR2, CHECK_HANDLER, 0);
+            let sent = shared.post(own.blocked(), own.blocked(), SIGINT, Origin::Kernel);
+            let forced = signal::force(shared, own, SIGUSR2, Origin::Kernel);
+            let first = signal::take_next(shared, own).map(|taken| taken.signal);
+            let second = signal::take_next(shared, own).map(|taken| taken.signal);
+            (sent, forced, first, second)
+        });
     if sent != Posted::Pending || forced != Posted::Pending {
         return Err("a handled signal was not left pending for a thread or its process");
     }
@@ -6170,13 +6214,15 @@ fn check_a_threads_own_signal_goes_before_its_processs() -> Result<(), &'static 
     }
 
     let control = process::new_for_check().map_err(|_| "could not make a process")?;
-    let first = Thread::leader(&control).with_signals(|shared, own| {
-        shared.install_action(SIGINT, CHECK_HANDLER, 0);
-        shared.install_action(SIGUSR2, CHECK_HANDLER, 0);
-        let _ = shared.post(own.blocked(), own.blocked(), SIGUSR2, Origin::Kernel);
-        let _ = shared.post(own.blocked(), own.blocked(), SIGINT, Origin::Kernel);
-        signal::take_next(shared, own).map(|taken| taken.signal)
-    });
+    let first = Thread::leader(&control)
+        .map_err(|_| "no memory for a check's thread")?
+        .with_signals(|shared, own| {
+            shared.install_action(SIGINT, CHECK_HANDLER, 0);
+            shared.install_action(SIGUSR2, CHECK_HANDLER, 0);
+            let _ = shared.post(own.blocked(), own.blocked(), SIGUSR2, Origin::Kernel);
+            let _ = shared.post(own.blocked(), own.blocked(), SIGINT, Origin::Kernel);
+            signal::take_next(shared, own).map(|taken| taken.signal)
+        });
     if first != Some(SIGINT) {
         return Err("of two signals sent to a process, the lower-numbered was not taken first");
     }
@@ -6195,7 +6241,8 @@ fn check_a_signal_is_judged_against_its_takers_mask() -> Result<(), &'static str
     use ferrix_linux_abi::types::SIGTERM;
 
     let parent = process::new_for_check().map_err(|_| "could not make a process")?;
-    let parent_thread = Arc::new(Thread::leader(&parent));
+    let parent_thread =
+        Arc::new(Thread::leader(&parent).map_err(|_| "no memory for a check's thread")?);
     parent.add_thread(&parent_thread);
     signal::change_blocked(&parent_thread, |_, own| {
         let _ = own.replace_blocked(signal::bit(SIGTERM));
@@ -6209,14 +6256,17 @@ fn check_a_signal_is_judged_against_its_takers_mask() -> Result<(), &'static str
     let child = Arc::new(
         Process::forked(&parent, space, false, false).map_err(|_| "no memory for a fork")?,
     );
-    let child_thread = Arc::new(Thread::forked(&child, &parent_thread));
+    let child_thread = Arc::new(
+        Thread::forked(&child, &parent_thread).map_err(|_| "no memory for a check's thread")?,
+    );
     child.add_thread(&child_thread);
     if child.post_signal(SIGTERM, Origin::Kernel) != Posted::Pending {
         return Err("a fork child was judged without the mask its thread inherited");
     }
 
     let control = process::new_for_check().map_err(|_| "could not make a process")?;
-    let unblocked = Arc::new(Thread::leader(&control));
+    let unblocked =
+        Arc::new(Thread::leader(&control).map_err(|_| "no memory for a check's thread")?);
     control.add_thread(&unblocked);
     if control.post_signal(SIGTERM, Origin::Kernel) != Posted::Fatal {
         return Err("a SIGTERM nothing blocks was not judged fatal");
@@ -6239,11 +6289,13 @@ fn check_signals_are_decided_across_threads() -> Result<(), &'static str> {
     use ferrix_linux_abi::types::{SIGCONT, SIGTERM, SIGTSTP, SIGUSR1};
 
     let process = process::new_for_check().map_err(|_| "could not make a process")?;
-    let first = Arc::new(Thread::leader(&process));
+    let first = Arc::new(Thread::leader(&process).map_err(|_| "no memory for a check's thread")?);
     process.add_thread(&first);
     let tid = crate::syscall::registry::allocate_thread(&process)
         .ok_or("no thread id for the check of signals across threads")?;
-    let second = Arc::new(Thread::sibling(&process, tid, &first));
+    let second = Arc::new(
+        Thread::sibling(&process, tid, &first).map_err(|_| "no memory for a check's thread")?,
+    );
     process.add_thread(&second);
     let block = |thread: &Thread, signals: u64| {
         signal::change_blocked(thread, |_, own| {
@@ -6341,11 +6393,13 @@ fn check_a_signal_blocked_after_it_was_sent_is_handed_on() -> Result<(), &'stati
     use ferrix_linux_abi::types::{SIG_BLOCK, SIGUSR1, SIGUSR2};
 
     let process = process::new_for_check().map_err(|_| "could not make a process")?;
-    let first = Arc::new(Thread::leader(&process));
+    let first = Arc::new(Thread::leader(&process).map_err(|_| "no memory for a check's thread")?);
     process.add_thread(&first);
     let tid = crate::syscall::registry::allocate_thread(&process)
         .ok_or("no thread id for the hand-off check")?;
-    let second = Arc::new(Thread::sibling(&process, tid, &first));
+    let second = Arc::new(
+        Thread::sibling(&process, tid, &first).map_err(|_| "no memory for a check's thread")?,
+    );
     process.add_thread(&second);
     process.with_signals(|signals| {
         signals.install_action(SIGUSR1, HANDOFF_HANDLER, 0);

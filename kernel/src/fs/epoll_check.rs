@@ -602,7 +602,8 @@ fn check_wait_refusals(
     // timespec whose nanoseconds are out of range.
     let leader = registry::find(process.pid())
         .map(|found| thread::Thread::leader(&found))
-        .ok_or("the check's process was not findable by its pid")?;
+        .ok_or("the check's process was not findable by its pid")?
+        .map_err(|_| "no memory for a check's thread")?;
     let events = page + AT_EVENTS;
     refused(
         calls::sys_epoll_pwait(&leader, [set as u64, events, 1, 0, page + AT_BYTE, 4]),

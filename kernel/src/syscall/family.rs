@@ -444,10 +444,12 @@ fn clone_with(
     // The child's one thread, made here so that the address it is to clear
     // when it ends is recorded before it can run. It inherits the calling
     // thread's blocked mask and alternate stack.
-    let thread = Arc::new(match thread::current_of(parent) {
+    let thread = match thread::current_of(parent) {
         Some(caller) => Thread::forked(&child, &caller),
         None => Thread::leader(&child),
-    });
+    }
+    .and_then(crate::fallible::try_arc)
+    .map_err(|_| Errno::ENOMEM)?;
     if flags & CLONE_CHILD_CLEARTID != 0 {
         let _ = thread.set_clear_child_tid(child_tid);
     }
@@ -539,7 +541,13 @@ fn clone_thread(
     }
     let caller = thread::current_of(parent).ok_or(Errno::ESRCH)?;
     let tid = registry::allocate_thread(parent).ok_or(Errno::EAGAIN)?;
-    let thread = Arc::new(Thread::sibling(parent, tid, &caller));
+    let thread = Thread::sibling(parent, tid, &caller).map_err(|_| {
+        // Never a thread, so nothing gives its id back but this.
+        registry::release_thread(tid, parent);
+        Errno::ENOMEM
+    })?;
+    // A thread made and not shared gives its id back as it is dropped.
+    let thread = crate::fallible::try_arc(thread).map_err(|_| Errno::ENOMEM)?;
 
     // Ignored if they fail, as for a process; see `clone_with`.
     let id = tid.to_le_bytes();

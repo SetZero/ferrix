@@ -430,7 +430,7 @@ fn fork_and_exec_self() -> Result<i32, &'static str> {
     let task = crate::sched::spawn_user(
         "exec-self",
         exec_self,
-        Arc::new(Thread::leader(&child)),
+        Arc::new(Thread::leader(&child).map_err(|_| "no memory for a check's thread")?),
         None,
         None,
     )

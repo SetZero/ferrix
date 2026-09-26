@@ -30,11 +30,12 @@ use alloc::sync::Arc;
 use core::any::Any;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
+use crate::fallible::AllocError;
 use crate::object::process::{self as pids, Host};
 use crate::sched::{self, Task, UserThread};
 use crate::sync::SpinLock;
 use crate::syscall::process::Process;
-use crate::syscall::signal::{self, Signals, ThreadSignals};
+use crate::syscall::signal::{self, Inherited, Signals, ThreadSignals};
 
 /// One line of execution through a process.
 #[derive(Debug)]
@@ -61,28 +62,45 @@ pub(crate) struct Thread {
 
 impl Thread {
     /// The first thread of `process`, numbered by its pid, blocking nothing.
-    pub(crate) fn leader(process: &Arc<Process>) -> Thread {
-        Thread::with(process, ThreadSignals::default())
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`] when there is no memory for its signal state; this and
+    /// the two below are on paths that answer `ENOMEM` or `NO_MEMORY`.
+    pub(crate) fn leader(process: &Arc<Process>) -> Result<Thread, AllocError> {
+        Ok(Thread::with(process, ThreadSignals::new(Inherited::NONE)?))
     }
 
     /// The first thread of a fork child `process`, made by `parent`: it
     /// inherits the parent's blocked mask and alternate stack, and nothing the
     /// parent was sent or was in the middle of.
-    pub(crate) fn forked(process: &Arc<Process>, parent: &Thread) -> Thread {
+    ///
+    /// # Errors
+    ///
+    /// As [`Thread::leader`].
+    pub(crate) fn forked(process: &Arc<Process>, parent: &Thread) -> Result<Thread, AllocError> {
         let inherited = parent.with_own_signals(|signals| signals.inherited());
-        Thread::with(process, ThreadSignals::from(inherited))
+        Ok(Thread::with(process, ThreadSignals::new(inherited)?))
     }
 
     /// A thread of `process` other than its first, numbered `tid`, made by
     /// `caller`: with the caller's blocked mask, no alternate stack and nothing
     /// pending, as Linux's `copy_process` makes a `CLONE_THREAD` child.
-    pub(crate) fn sibling(process: &Arc<Process>, tid: u32, caller: &Thread) -> Thread {
+    ///
+    /// # Errors
+    ///
+    /// As [`Thread::leader`]. `tid` is then still the caller's to give back.
+    pub(crate) fn sibling(
+        process: &Arc<Process>,
+        tid: u32,
+        caller: &Thread,
+    ) -> Result<Thread, AllocError> {
         let inherited = caller
             .with_own_signals(|signals| signals.inherited())
             .without_alt_stack();
-        let mut thread = Thread::with(process, ThreadSignals::from(inherited));
+        let mut thread = Thread::with(process, ThreadSignals::new(inherited)?);
         *thread.tid.get_mut() = tid;
-        thread
+        Ok(thread)
     }
 
     /// The first thread of `process`, numbered by its pid, with `signals`.
