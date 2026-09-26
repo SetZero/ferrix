@@ -155,6 +155,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-hypridle"
+version = "0.1.0"
+dependencies = [
+ "compositor-protocol",
+ "compositor-socket",
+ "compositor-wire",
+ "libc",
+]
+
+[[package]]
 name = "compositor-hyprlang"
 version = "0.1.0"
 
