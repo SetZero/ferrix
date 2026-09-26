@@ -73,5 +73,24 @@ Debian's busybox. The sysroot on btrfs is stage 12's write path and the
 exit. Neither is compiling anything larger than `hello.rs`: Cargo, a crate
 graph and a build of Ferrix itself are stage 20's.
 
+
+**Done — `rustc` on ferrousli, 2026-09-26.** `cargo xtask test-rustc
+--interpreter ferrousli --library ferrousli` runs the same volume with
+ferrousli's loader and `libc.so.6` in glibc's place, so that every program
+of the compile -- `rustc`, `cargo`, the gcc driver, `collect2`, `rust-lld`
+and the program they make -- runs on ferrousli, and passes on Ferrix under
+KVM. What it found, each fixed with a test that fails without it: in the
+loader, `$ORIGIN` in `DT_RUNPATH`, program headers past a file's first page
+(BOLT's `librustc_driver`), constructors run dependencies first, and a
+program's copy of a versioned variable -- gcc's `__environ` -- being the
+one the library uses, without which `collect2` never saw `COMPILER_PATH`;
+in the library, glibc's `pthread_mutex_t` layout, which LLVM's static
+recursive mutexes need, `libc.so.6` starting from its own constructor so
+that another library's may use threads, and about twenty glibc names from
+`__newlocale` to `makecontext` (`docs/roadmap/dynamic-linking.md`).
+The gate's `hello.c`, compiled by gcc's `cc1` and linked by GNU `ld`,
+passes on ferrousli too, once the loader stopped calling itself an
+executable to linkers. Outside the stage's points.
+
 ---
 

@@ -331,5 +331,22 @@ that to `AT_HWCAP`. The string and thread suites pass under QEMU at
 (Ferrix's QEMU machine), `cortex-a53` (no LSE) and `max`. Outside the
 stage's points.
 
+
+**Done — `rustc`'s libraries on the loader, 2026-09-26.** Running the
+rustc volume on ferrousli (`docs/roadmap/stage-16-rustc.md`) took four
+changes to the loader, each with a test in `userland/ferrousli/ld/tests/link.rs`
+that fails with it taken out: `$ORIGIN` and `${ORIGIN}` in a run path,
+from `/proc/self/exe` for the program and the path found for a library, and
+not for an `AT_SECURE` program; a program header table read from `e_phoff`
+when it is not in the first page; constructors in dependency order,
+depth first over `DT_NEEDED`, as glibc's `_dl_sort_maps` orders them, where
+they had run in the reverse of load order; and a definition whose version
+index names a version the object needs -- a program's copy of a library's
+variable -- answering a reference to that version, as glibc numbers both
+kinds in one table. The last one had kept every glibc program's `environ`
+null on ferrousli. Beside them, `libc.so.6` lays out `pthread_mutex_t` as
+glibc does and prepares the process from its own constructor. Outside the
+stage's points.
+
 ---
 
