@@ -224,6 +224,34 @@ still write through a dead driver's DMA mappings into frames freed for
 someone else until the kernel's pin quarantine lands (`docs/BACKLOG.md`).
 The serial port (`vport`) has no core to wait for.
 
+**Where it stands (2026-09-26).** The last step is ferrix-90's, after its pin
+quarantine lands. `Kind::Net`, `Kind::Input` and `Kind::Block` join
+`restarted()`. Each core calls `object::pin::quarantine_release(node)` where
+it accepts the new driver's HELLO: after that driver's bring-up reset, not at
+`control_create`. Each kind gets a `test-restart` row (x86-64 only, since
+`kill` comes from uutils). A disk's row runs on the x86-64 btrfs root:
+kill the driver, read and write a file after it comes back, and run
+`btrfs check` on the image afterwards. The sentence above about a dead disk
+changes with it.
+
+Three things are already in place for that step:
+
+* A net interface is parked, not removed. The new driver's HELLO must carry
+  the same name and hardware address, or the parked interface is replaced
+  and loses its addresses.
+* Input numbers are lowest-free, and a USB host's node takes up to eight
+  claims at once (`claim_up_to`). A core whose channel carries DMA memory
+  must stay at one claim per device (`docs/certification/ITEM.md`).
+* `SERVERS` in `syscall/native.rs` holds eight quiesce servers and six are
+  registered: block, net, display, render, input and sound. Another core with
+  a claim is a seventh.
+
+Before a kind joins, check whether its device's reset leaves in-flight
+buffers queued. QEMU's snd does, and its driver drains before HELLO; check
+virtio-net's receive queue. `Port`, `Engine` and `Gadget` stay open. `devmgr`
+itself stays fatal until the kernel can offer a new `devmgr` the devices
+again (`docs/INIT.md` L12).
+
 It began as a bug. With no restart, `kill -9` of the `gpu` driver under the
 desktop took the card away for good, the compositor ended on `ENODEV`, and
 the compositor was init, so the machine powered off.
