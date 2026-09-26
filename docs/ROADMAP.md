@@ -3,8 +3,8 @@
 # Ferrix — roadmap
 
 The roadmap now lives in [`docs/roadmap/`](roadmap/README.md), one file a
-stage. Its overview -- the rules, *Where it stands*, the status table, the
-burndown and the index of stages -- is
+stage. Its overview -- where it stands in short, the forecast, and the
+index of stages -- is
 [`docs/roadmap/README.md`](roadmap/README.md), and
 `scripts/gen/build-roadmap-book.sh` builds the whole of it into a website.
 Edit the stage's file, not this one; each heading below is kept so that

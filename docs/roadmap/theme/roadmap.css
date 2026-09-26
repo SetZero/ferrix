@@ -11,3 +11,33 @@ table {
 table td {
     vertical-align: top;
 }
+
+/* The sidebar: every title starts with its status mark (✓ ◐ ○ ·, from
+   scripts/gen/split-roadmap.py). Hang the mark in a gutter of its own, one
+   width for every mark, so the titles start in one column and a title that
+   wraps continues under its text rather than under the mark. */
+.sidebar .chapter li.chapter-item > .chapter-link-wrapper > a {
+    display: block;
+    padding-left: 1.4em;
+}
+.sidebar .chapter li.chapter-item > .chapter-link-wrapper > a::first-letter {
+    float: left;
+    width: 1.4em;
+    margin-left: -1.4em;
+    text-align: center;
+    /* One symbol font for all four marks, so none falls back to a smaller one. */
+    font-family: "DejaVu Sans", "Segoe UI Symbol", "Noto Sans Symbols 2", "Apple Symbols", sans-serif;
+}
+/* The Overview and the pages after the separator have no mark; leave their
+   first letter where it is. */
+.sidebar .chapter li.chapter-item:first-child > .chapter-link-wrapper > a,
+.sidebar .chapter li.spacer ~ li.chapter-item > .chapter-link-wrapper > a {
+    padding-left: 0;
+}
+.sidebar .chapter li.chapter-item:first-child > .chapter-link-wrapper > a::first-letter,
+.sidebar .chapter li.spacer ~ li.chapter-item > .chapter-link-wrapper > a::first-letter {
+    font-family: inherit;
+    float: none;
+    margin-left: 0;
+    width: auto;
+}

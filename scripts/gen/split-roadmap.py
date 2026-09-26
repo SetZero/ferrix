@@ -68,7 +68,15 @@ INDEX_BEGIN = (
 INDEX_END = "<!-- End of the generated stage index. -->"
 
 # Hand-written pages in docs/roadmap/ that SUMMARY.md lists after the stages.
-SUFFIX_PAGES = [("How to edit the roadmap", "HOW-TO-EDIT.md")]
+SUFFIX_PAGES = [
+    ("Where it stands, in full", "where-it-stands.md"),
+    ("Status, estimates and forecast", "status.md"),
+    ("How this roadmap works", "about.md"),
+    ("How to edit the roadmap", "HOW-TO-EDIT.md"),
+]
+# The status table the stage marks are read from: status.md once the overview
+# was shortened (2026-09-26), README.md before that.
+STATUS_PAGE = "status.md"
 
 # Markdown files whose links to docs/ROADMAP.md are rewritten: these top-level
 # files and every *.md under these directories.
@@ -77,7 +85,12 @@ LINK_DIRS = ("docs", "userland", "native", "libs", "boot", "tools", "tests")
 LINK_EXCLUDE = ("docs/roadmap/", "docs/generated/")
 
 DONE, PROGRESS, NOT_STARTED, PLANNED = "done", "in progress", "not started", "planned"
-MARK = {DONE: "✅", PROGRESS: "🟡", NOT_STARTED: "⚪", PLANNED: "⚪"}
+# Plain text glyphs, not emoji: they take the text colour, keep one width, and
+# go before the title, so the sidebar's titles start in one column.
+MARK = {DONE: "✓", PROGRESS: "◐", NOT_STARTED: "○", PLANNED: "○"}
+# A section with no status (the two that are not stages) still starts with a
+# mark, so the sidebar's CSS can hang every first character in one gutter.
+NO_MARK = "◦"
 STATUS_LABEL = {s: f"{MARK[s]} {s}" for s in (DONE, PROGRESS, NOT_STARTED, PLANNED)}
 
 STOPWORDS = {"a", "an", "the", "and", "of", "its", "their"}
@@ -451,7 +464,7 @@ def overview_text(road: Roadmap) -> str:
 
 
 def status_rows(overview: str) -> list[tuple[str, str]]:
-    """(what, current state) of each row of the overview's status table."""
+    """(what, current state) of each row of a status table (status.md's, or the overview's before it had one)."""
     rows = []
     in_table = False
     for line in overview.splitlines():
@@ -523,7 +536,7 @@ def status_of(heading: str, rows: list[tuple[str, str]]) -> str | None:
 
 def display_title(heading: str, status: str | None) -> str:
     name, _, _ = title_parts(heading)
-    return name + (f" {MARK[status]}" if status else "")
+    return f"{MARK[status] if status else NO_MARK} {name}"
 
 
 def summary_md(entries: list[tuple[str, str, str | None]], suffix: list[tuple[str, str]]) -> str:
@@ -572,8 +585,8 @@ def stub_md(h1: str, entries: list[tuple[str, str, str | None]]) -> str:
         h1.rstrip("\n"),
         "",
         "The roadmap now lives in [`docs/roadmap/`](roadmap/README.md), one file a",
-        "stage. Its overview -- the rules, *Where it stands*, the status table, the",
-        "burndown and the index of stages -- is",
+        "stage. Its overview -- where it stands in short, the forecast, and the",
+        "index of stages -- is",
         "[`docs/roadmap/README.md`](roadmap/README.md), and",
         "`scripts/gen/build-roadmap-book.sh` builds the whole of it into a website.",
         "Edit the stage's file, not this one; each heading below is kept so that",
@@ -590,9 +603,14 @@ def strip_index(readme: str) -> str:
     return readme if i < 0 else readme[:i]
 
 
-def generated_parts(overview: str, sections: list[tuple[str, str]], suffix_present: list[str]):
+def generated_parts(
+    overview: str,
+    sections: list[tuple[str, str]],
+    suffix_present: list[str],
+    status_text: str | None = None,
+):
     """SUMMARY.md, README.md and the stub, from the overview and (heading, file)s."""
-    rows = status_rows(overview)
+    rows = status_rows(status_text if status_text is not None else overview)
     entries = [(h, f, status_of(h, rows)) for h, f in sections]
     suffix = [(t, f) for t, f in SUFFIX_PAGES if f in suffix_present]
     h1 = next((ln for ln in overview.splitlines() if ln.startswith("# ")), "# Roadmap")
@@ -723,7 +741,8 @@ def index_outputs(root: Path) -> dict[str, str]:
     out = root / OUTDIR
     readme = read(out / "README.md")
     present = [f for _, f in SUFFIX_PAGES if (out / f).exists()]
-    summary, readme_new, stub = generated_parts(readme, tree_sections(out), present)
+    status_text = read(out / STATUS_PAGE) if (out / STATUS_PAGE).exists() else None
+    summary, readme_new, stub = generated_parts(readme, tree_sections(out), present, status_text)
     return {f"{OUTDIR}/SUMMARY.md": summary, f"{OUTDIR}/README.md": readme_new, ROADMAP: stub}
 
 

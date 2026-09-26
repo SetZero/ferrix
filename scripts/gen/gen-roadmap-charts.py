@@ -5,7 +5,7 @@
 
 writes docs/img/burndown.svg and docs/img/gantt.svg. It uses the standard
 library only, so it runs wherever the other gen-* scripts do. The numbers
-are the ones docs/roadmap/README.md's status table and docs/BACKLOG.md's
+are the ones docs/roadmap/status.md's status table and docs/BACKLOG.md's
 *Velocity* give; change them here when those change, and rerun.
 """
 

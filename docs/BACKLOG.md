@@ -9,7 +9,7 @@ them is a decision the third one reverts.
 The customer is the product owner and decides scope and priority; the fleet
 coordinator keeps the landing order. A session that lands a piece of this
 file updates its row in the same landing, the way it updates the stage's
-file under `docs/roadmap/` (and the overview's status table when a row
+file under `docs/roadmap/` (and `status.md`'s status table when a row
 changes). When a row is done it is deleted, not struck through;
 the roadmap records what landed, and this file's own history
 (`git log -p -- docs/BACKLOG.md`) keeps the investigations and the wind-down

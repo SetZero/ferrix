@@ -8,7 +8,10 @@ one `#` heading.
 
 | File | What it is | Edited by |
 |---|---|---|
-| `README.md` | The overview: the rules, *Where it stands*, the status table, the burndown and the Gantt chart, and at the end the index of stages | hand, except the stage index at its end |
+| `README.md` | The overview: a short list of where things stand, the forecast in two lines, links to the details, and at the end the index of stages. Keep it short; detail goes in the pages below | hand, except the stage index at its end |
+| `where-it-stands.md` | Where it stands, in full: one paragraph a stage | hand |
+| `status.md` | The status table, velocity, burndown and Gantt; the stage marks are read from its status table | hand |
+| `about.md` | The two rules that order the stages, and how sizes are given | hand |
 | `stage-NN-<name>.md` | One numbered stage | hand |
 | `<name>.md` | One unnumbered section: `armv7a.md`, `networking.md`, `dynamic-linking.md`, `sysfs.md`, `chrome.md`, `written-ahead.md`, `continuously.md` | hand |
 | `SUMMARY.md` | The website's table of contents, in the roadmap's order | the order by hand, the titles by `index` |
@@ -18,7 +21,8 @@ one `#` heading.
 ## Editing a stage
 
 Edit the stage's file. When a row of the status table changes too, edit
-that row in `README.md`. The rule about shared files still holds
+that row in `status.md`, and when a stage changes state, its line in
+`README.md`'s short list and its paragraph in `where-it-stands.md`. The rule about shared files still holds
 (`docs/CONVENTIONS.md`, *Splitting one piece of work*, rule 4): change your
 own lines and don't reflow a neighbour's.
 

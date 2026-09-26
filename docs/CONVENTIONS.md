@@ -93,7 +93,7 @@ rule below comes from something seen there.
    depends on. Otherwise the gate still applies, and saying so in the report
    is enough.
 4. **Keep shared-doc edits to your own lines.** Every agent edits the
-   roadmap -- the stage's file under `docs/roadmap/`, and the overview's
+   roadmap -- the stage's file under `docs/roadmap/`, and `status.md`'s
    status table when a row changes -- `BACKLOG.md` and the design doc, so
    every rebase conflicts there. Edit your own row, paragraph or "where it stands" entry, and never
    reflow a neighbour's. On a conflict, take `main`'s side and add your lines
