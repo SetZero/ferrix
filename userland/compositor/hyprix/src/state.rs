@@ -47,6 +47,10 @@ pub struct Slot {
     /// Layer surfaces it owns, in the order it made them: wlroots places
     /// them in that order, so a bar that started first gets the edge.
     layers: Vec<ObjectId>,
+    /// Where each of its layer surfaces was last placed, in the space all
+    /// screens share: what a popup a layer surface took with `get_popup`
+    /// (a bar's tooltip) is placed against.
+    layer_rects: BTreeMap<ObjectId, Rect>,
     /// What each of its windows was called when it mapped: the class and
     /// then the title. A client may rename a window afterwards, and
     /// `initialclass:` and `initialtitle:` are what it was called first.
@@ -77,6 +81,7 @@ impl Slot {
             retired: std::collections::BTreeSet::new(),
             windows: Vec::new(),
             layers: Vec::new(),
+            layer_rects: BTreeMap::new(),
             firsts: BTreeMap::new(),
             pid: 0,
             gone: false,
@@ -619,6 +624,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                         retired: std::collections::BTreeSet::new(),
                         windows: Vec::new(),
                         layers: Vec::new(),
+                        layer_rects: BTreeMap::new(),
                         firsts: BTreeMap::new(),
                         gone: false,
                     }),
@@ -5267,8 +5273,7 @@ pub(crate) fn placed_popups(
             let Some(at) = popup.placed else {
                 continue;
             };
-            let Some(parent) = parent_rect(slot.client(), popup.parent, state, sources, index)
-            else {
+            let Some(parent) = popup_parent_rect(slot, popup, state, sources, index) else {
                 continue;
             };
             out.push(crate::frame::Placed {
@@ -5312,9 +5317,9 @@ fn place_popup(
     let Some(held) = slot.client().popup(popup).cloned() else {
         return false;
     };
-    // Where the parent is on the screen: a window, or another popup hanging
-    // off one.
-    let Some(parent) = parent_rect(slot.client(), held.parent, state, sources, index) else {
+    // Where the parent is on the screen: a window, a layer surface, or
+    // another popup hanging off one.
+    let Some(parent) = popup_parent_rect(slot, &held, state, sources, index) else {
         return false;
     };
     // The screen it is on, which is what it must be kept inside.
@@ -5356,18 +5361,35 @@ fn place_popup(
     true
 }
 
+/// Where a popup's parent is on the screen: the layer surface that took it
+/// with `get_popup` -- a bar, for its tooltip -- or else its `xdg_surface`.
+fn popup_parent_rect(
+    slot: &Slot,
+    popup: &compositor_server::Popup,
+    state: &State,
+    sources: &BTreeMap<WindowId, Source>,
+    index: usize,
+) -> Option<Rect> {
+    if let Some(layer) = popup.layer_parent {
+        return slot.layer_rects.get(&layer).copied();
+    }
+    parent_rect(slot, popup.parent, state, sources, index)
+}
+
 /// Where a popup's parent is on the screen.
 ///
 /// A popup hangs off an `xdg_surface`, which is either a window's or another
 /// popup's: a submenu is a popup on a popup, and its coordinates are its
-/// parent's, which are in turn its parent's.
+/// parent's, which are in turn its parent's -- down to a window or to the
+/// layer surface a bar's popup hangs off.
 fn parent_rect(
-    client: &Client,
+    slot: &Slot,
     parent: ObjectId,
     state: &State,
     sources: &BTreeMap<WindowId, Source>,
     index: usize,
 ) -> Option<Rect> {
+    let client = slot.client();
     // A window: the rectangle the tiling gave it.
     let surface = client.xdg_surface(parent).map(|xdg| xdg.surface)?;
     if let Some((window, _)) = sources
@@ -5387,7 +5409,7 @@ fn parent_rect(
         .find(|(_, popup)| popup.xdg_surface == parent)?;
     let _ = id;
     let at = held.placed?;
-    let grandparent = parent_rect(client, held.parent, state, sources, index)?;
+    let grandparent = popup_parent_rect(slot, held, state, sources, index)?;
     Some(Rect::new(
         grandparent.x.saturating_add(i64::from(at.0)),
         grandparent.y.saturating_add(i64::from(at.1)),
@@ -5710,8 +5732,12 @@ fn place_layers(
     }
 
     let mut drawn = Vec::with_capacity(placed.len());
+    for slot in slots.iter_mut() {
+        slot.layer_rects.clear();
+    }
     for (index, id, surface, above, rules, rect) in placed {
         if let Some(slot) = slots.get_mut(index) {
+            let _ = slot.layer_rects.insert(id, rect);
             let width = u32::try_from(rect.width).unwrap_or(0);
             let height = u32::try_from(rect.height).unwrap_or(0);
             let already = slot

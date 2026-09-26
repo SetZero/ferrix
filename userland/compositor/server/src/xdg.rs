@@ -145,7 +145,14 @@ pub struct Popup {
     /// The `xdg_surface` it was made from.
     pub xdg_surface: ObjectId,
     /// The `xdg_surface` it hangs off: a window's, or another popup's.
+    /// Null for a popup made with no parent, whose parent is then the
+    /// layer surface in [`Popup::layer_parent`].
     pub parent: ObjectId,
+    /// The `zwlr_layer_surface_v1` that took it with `get_popup`: a bar's
+    /// tooltip or menu. `None` for a popup on an `xdg_surface`, and for a
+    /// parentless one not yet given to a layer surface, which is not placed
+    /// until it is.
+    pub layer_parent: Option<ObjectId>,
     /// The numbers it was placed with.
     pub positioner: Positioner,
     /// Where the compositor put it, in the parent's surface-local

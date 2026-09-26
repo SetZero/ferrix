@@ -2769,15 +2769,53 @@ impl Client {
                 }
                 return;
             }
-            // `get_popup` and `set_exclusive_edge` are read and recorded
-            // nowhere: a popup on a layer surface needs popups, which land
-            // with `xdg_popup`, and the exclusive edge only matters for a
-            // surface anchored to more than one edge with a zone, which
+            zwlr_layer_surface_v1::request::GET_POPUP => {
+                self.layer_popup(sender, args.first().and_then(Arg::as_object));
+                return;
+            }
+            // `set_exclusive_edge` is recorded nowhere: it only matters for
+            // a surface anchored to more than one edge with a zone, which
             // `place` does not reserve for anyway.
             _ => return,
         }
         self.events.push(Event::LayerSurfaceChanged {
             layer_surface: sender,
+        });
+    }
+
+    /// `zwlr_layer_surface_v1.get_popup`: the layer surface `sender` takes
+    /// a popup made with a null parent, which is then placed against it.
+    ///
+    /// The protocol says the popup must have been made with a null parent
+    /// and not yet committed; one that already hangs off an `xdg_surface`
+    /// is refused as `xdg_wm_base.invalid_popup_parent`, which is the error
+    /// wlroots gives it.
+    fn layer_popup(&mut self, sender: ObjectId, popup: Option<ObjectId>) {
+        let Some(popup) = popup.filter(|popup| self.popups.contains_key(popup)) else {
+            self.fail(Fatal::WrongInterface {
+                object: popup.unwrap_or(ObjectId::NULL),
+                wanted: "xdg_popup",
+            });
+            return;
+        };
+        let Some(held) = self.popups.get_mut(&popup) else {
+            return;
+        };
+        if !held.parent.is_null() || held.layer_parent.is_some() {
+            let object = held.xdg_surface;
+            self.fail(Fatal::Interface {
+                object,
+                code: xdg_wm_base::error::INVALID_POPUP_PARENT,
+                text: "that popup already has a parent".to_owned(),
+            });
+            return;
+        }
+        held.layer_parent = Some(sender);
+        let surface = held.surface;
+        self.events.push(Event::PopupCreated {
+            popup,
+            surface,
+            parent: ObjectId::NULL,
         });
     }
 
@@ -4257,10 +4295,11 @@ impl Client {
                 let Some(id) = args.first().and_then(Arg::as_object) else {
                     return;
                 };
-                // The parent is nullable in the protocol -- an
-                // `xdg_positioner` with a parent set by another extension
-                // may carry it -- and this compositor has no such extension,
-                // so a null parent is a popup with nothing to hang off.
+                // The parent is nullable in the protocol: another extension
+                // gives such a popup its parent, and the one this compositor
+                // has is `zwlr_layer_surface_v1.get_popup`, which is how a
+                // bar's tooltips and menus are made. Such a popup is kept
+                // and placed once a layer surface takes it.
                 let (parent, positioner) = (
                     args.get(1).and_then(Arg::as_object),
                     args.get(2).and_then(Arg::as_object),
@@ -4277,15 +4316,8 @@ impl Client {
                     return;
                 }
                 let surface = xdg.surface;
-                let Some(parent) = parent.filter(|parent| !parent.is_null()) else {
-                    self.fail(Fatal::Interface {
-                        object: sender,
-                        code: xdg_wm_base::error::INVALID_POPUP_PARENT,
-                        text: "a popup with no parent".to_owned(),
-                    });
-                    return;
-                };
-                if !self.xdg_surfaces.contains_key(&parent) {
+                let parent = parent.unwrap_or(ObjectId::NULL);
+                if !parent.is_null() && !self.xdg_surfaces.contains_key(&parent) {
                     self.fail(Fatal::WrongInterface {
                         object: parent,
                         wanted: "xdg_surface",
@@ -4322,11 +4354,17 @@ impl Client {
                         surface,
                         xdg_surface: sender,
                         parent,
+                        layer_parent: None,
                         positioner: held,
                         placed: None,
                         grabbed: false,
                     },
                 );
+                // A parentless popup waits for the layer surface that will
+                // take it; the compositor places it then.
+                if parent.is_null() {
+                    return;
+                }
                 self.events.push(Event::PopupCreated {
                     popup: id,
                     surface,

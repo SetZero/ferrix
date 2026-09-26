@@ -348,7 +348,6 @@ fn timers_children_and_signals_come_back_as_events() {
 }
 
 #[test]
-#[ignore = "hyprix refuses a popup whose parent comes from zwlr_layer_surface_v1.get_popup (docs/BACKLOG.md)"]
 fn a_tooltip_hangs_under_the_bar_it_belongs_to() {
     let (answer, frame) = with_compositor("popup", 3000, |socket| {
         let mut client = Client::connect_to(socket).map_err(|error| error.to_string())?;
@@ -380,6 +379,10 @@ fn a_tooltip_hangs_under_the_bar_it_belongs_to() {
             }
             false
         });
+        // Kept connected until the compositor ends, so its last frame is
+        // one drawn with the bar and its tooltip still there: a client that
+        // has gone takes its surfaces with it.
+        let _ = until(&mut client, Duration::from_secs(5), |_, _| false);
         Ok::<_, String>(placed)
     });
     let placed = answer.expect("the client worked");

@@ -2489,6 +2489,91 @@ fn get_layer_surface(id: u32, surface: u32, layer: u32, namespace: &str) -> Vec<
     )
 }
 
+/// A bar's tooltip is an `xdg_popup` made with no parent and handed to the
+/// bar's layer surface with `zwlr_layer_surface_v1.get_popup`, which is how
+/// GTK's layer-shell, and so waybar, makes every tooltip and menu. Refusing
+/// the null parent was a protocol error the moment a pointer rested on a
+/// module.
+#[test]
+fn a_bars_tooltip_is_a_popup_its_layer_surface_takes() {
+    use compositor_protocol::layer_shell::zwlr_layer_surface_v1 as layer;
+
+    let mut client = layer_client();
+    let mut bytes = get_layer_surface(13, 3, 2, "waybar");
+    bytes.extend(create_surface(20));
+    bytes.extend(request(
+        6,
+        xdg_shell::xdg_wm_base::request::GET_XDG_SURFACE,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(21)), Arg::Object(ObjectId(20))],
+    ));
+    bytes.extend(request(
+        6,
+        xdg_shell::xdg_wm_base::request::CREATE_POSITIONER,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(22))],
+    ));
+    bytes.extend(request(
+        22,
+        xdg_shell::xdg_positioner::request::SET_SIZE,
+        &[ArgType::Int, ArgType::Int],
+        &[Arg::Int(100), Arg::Int(30)],
+    ));
+    bytes.extend(request(
+        22,
+        xdg_shell::xdg_positioner::request::SET_ANCHOR_RECT,
+        &[ArgType::Int, ArgType::Int, ArgType::Int, ArgType::Int],
+        &[Arg::Int(100), Arg::Int(0), Arg::Int(50), Arg::Int(40)],
+    ));
+    bytes.extend(request(
+        21,
+        xdg_shell::xdg_surface::request::GET_POPUP,
+        &[
+            ArgType::NewId,
+            ArgType::Object { nullable: true },
+            ArgType::Object { nullable: false },
+        ],
+        &[
+            Arg::NewId(ObjectId(23)),
+            Arg::Object(ObjectId(0)),
+            Arg::Object(ObjectId(22)),
+        ],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None, "a null parent is not an error");
+    let _ = client.take_events();
+    assert_eq!(
+        client.popup(ObjectId(23)).map(|popup| popup.layer_parent),
+        Some(None),
+        "kept, and not placed before a layer surface takes it"
+    );
+
+    let take = request(
+        13,
+        layer::request::GET_POPUP,
+        &[ArgType::Object { nullable: false }],
+        &[Arg::Object(ObjectId(23))],
+    );
+    assert_eq!(client.read(&take, &[]), take.len());
+    assert_eq!(client.fatal(), None);
+    assert_eq!(
+        client
+            .popup(ObjectId(23))
+            .and_then(|popup| popup.layer_parent),
+        Some(ObjectId(13))
+    );
+    assert!(
+        client.take_events().iter().any(
+            |event| matches!(event, Event::PopupCreated { popup, .. } if *popup == ObjectId(23))
+        ),
+        "the compositor is told to place it now"
+    );
+
+    // A second parent is refused, as wlroots refuses it.
+    assert_eq!(client.read(&take, &[]), take.len());
+    assert!(client.fatal().is_some());
+}
+
 #[test]
 fn a_bar_says_what_it_is_and_is_told_what_size_to_be() {
     use compositor_protocol::layer_shell::zwlr_layer_surface_v1 as layer;
