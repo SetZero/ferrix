@@ -551,13 +551,44 @@ pub fn probe() -> String {
     let three_d = node.param(virtgpu::PARAM_3D_FEATURES).unwrap_or(0);
     let capsets = node.param(virtgpu::PARAM_SUPPORTED_CAPSET_IDS).unwrap_or(0);
     format!(
-        "{MARKER} renderD128 {driver} 3d {three_d} capsets 0x{capsets:x} {} {} {} {} {}",
+        "{MARKER} renderD128 {driver} 3d {three_d} capsets 0x{capsets:x} {} {} {} {} {} {}",
         object(&node),
         caps(&node, capsets),
         moved(&node),
         drew(&node),
         blob(capsets),
+        read(&node),
     )
+}
+
+/// What a read of the node said with no event queued: `read EAGAIN`, or
+/// `read none <what it did>`.
+///
+/// Linux's `drm_read` answers a render node as it answers a card, waiting
+/// for an event and `EAGAIN` under `O_NONBLOCK` -- measured on a 7.0 host,
+/// on amdgpu's and nvidia's render nodes -- and a render node never has an
+/// event unless `POLL_RINGS_MASK` asked for them. So this reads once with
+/// `O_NONBLOCK` set, which a wait would otherwise hang, and puts the flags
+/// back.
+fn read(node: &Render) -> String {
+    // SAFETY: the descriptor is the node's own and open; F_GETFL takes no
+    // argument.
+    let flags = unsafe { libc::fcntl(node.fd, libc::F_GETFL) };
+    // SAFETY: as above, with the flags it answered and one more.
+    if flags < 0 || unsafe { libc::fcntl(node.fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return format!("read none fcntl: {}", reason(&io::Error::last_os_error()));
+    }
+    let mut buffer = [0u8; 4096];
+    // SAFETY: `buffer` is live and as long as the count says.
+    let got = unsafe { libc::read(node.fd, buffer.as_mut_ptr().cast(), buffer.len()) };
+    let answer = io::Error::last_os_error();
+    // SAFETY: as above, putting back the flags the node had.
+    let _ = unsafe { libc::fcntl(node.fd, libc::F_SETFL, flags) };
+    match (got, answer.raw_os_error()) {
+        (-1, Some(libc::EAGAIN)) => "read EAGAIN".to_owned(),
+        (-1, _) => format!("read none {}", reason(&answer)),
+        (got, _) => format!("read none {got} bytes"),
+    }
 }
 
 /// What making a Venus blob said: `blob <n> bytes`, the bytes of a pattern

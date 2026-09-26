@@ -448,6 +448,14 @@ fn judge_render(arch: Arch, gl: bool, venus: bool, lines: &[String]) -> Result<(
                     "{arch}: the GPU drew `{picture}`, not `{DREW}`: `{render}`"
                 )));
             }
+            // And a read with nothing queued is Linux's `drm_read`:
+            // `EAGAIN` under `O_NONBLOCK`, on a render node as on a card.
+            if render_did(render, "read") != Some("EAGAIN") {
+                return Err(Error::new(format!(
+                    "{arch}: a non-blocking read of the render node was not EAGAIN: `{render}`"
+                )));
+            }
+            println!("  {arch}: the render node: read EAGAIN");
             // With Venus on the card, a blob of host memory made in a
             // Venus context and mapped through the device's window: every
             // byte written there reads back (`docs/GPU.md` §6.1).

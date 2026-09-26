@@ -81,11 +81,11 @@ use ferrix_linux_abi::virtgpu::{
 };
 use ferrix_renderctl::message::{Direction, MAX_RINGS, NO_RING, Region, Status, Transfer, flags};
 use ferrix_renderctl::session::RequestError;
-use ferrix_vfs::{Inode, Metadata, Result as VfsResult};
+use ferrix_vfs::{Inode, Metadata, Readiness, Result as VfsResult};
 
 use super::{COMMAND_BYTES, Placed, RenderError, Renderer};
 use crate::sync::SpinLock;
-use crate::syscall::process::Process;
+use crate::syscall::process::{self, Process};
 use crate::syscall::uaccess;
 use crate::user::vmo::Vmo;
 
@@ -365,10 +365,53 @@ impl Inode for RenderFile {
         false
     }
 
-    /// A render node carries no byte stream: everything it does is an
-    /// ioctl, and Linux answers a read of one with `EINVAL`.
-    fn read_at(&self, _offset: u64, _buf: &mut [u8]) -> VfsResult<usize> {
-        Err(Errno::EINVAL)
+    fn read_at(&self, _offset: u64, buf: &mut [u8]) -> VfsResult<usize> {
+        self.read_stream(buf, false)
+    }
+
+    /// A read waits for an event, as a card's does, and a render node here
+    /// never has one: `POLL_RINGS_MASK`, which would ask for fence events, is
+    /// taken only as none (`context_init`). So it is `EAGAIN` under
+    /// `O_NONBLOCK`, and otherwise a wait that only a signal ends, with a
+    /// restart code. Linux's `drm_read` is the same code on both kinds of
+    /// node: measured on a 7.0 host, `renderD128` (amdgpu) and `renderD129`
+    /// (nvidia), with no event queued, answer `read` of 4096, of 8 and of 0,
+    /// and `pread` of 8, with `EAGAIN` under `O_NONBLOCK`, and a blocking
+    /// `read` of 4096 or of 0 waits until a signal and is `EINTR` from a
+    /// handler without `SA_RESTART`. This used to answer `EINVAL`, taking a
+    /// render node for one with no read at all.
+    fn read_stream(&self, _buf: &mut [u8], nonblock: bool) -> VfsResult<usize> {
+        if nonblock {
+            return Err(Errno::EAGAIN);
+        }
+        let Some(caller) = process::current() else {
+            return Err(Errno::EAGAIN);
+        };
+        let _ = caller
+            .signalled()
+            .wait_until_deadline(|| caller.signal_pending(), u64::MAX);
+        Err(Errno::ERESTARTSYS)
+    }
+
+    /// Never ready, since no event ever comes: `poll` of a render node for
+    /// `POLLIN | POLLOUT` answers nothing on the same host, where
+    /// [`Readiness::ALWAYS`], the default, would send an event loop round
+    /// reads that never have anything.
+    fn poll(&self) -> Readiness {
+        Readiness::default()
+    }
+
+    /// Nothing ever changes, so `epoll` may watch it, as Linux's `drm_poll`
+    /// lets it, and never hears from it.
+    fn poll_changes(&self) -> Option<u64> {
+        Some(0)
+    }
+
+    /// No queue to wake, and none needed: nothing [`Inode::poll`] reports
+    /// ever changes, so a wait over it is ended by its other descriptors,
+    /// its timeout or a signal.
+    fn poll_queues(&self, _visit: &mut dyn FnMut(ferrix_vfs::WakeSource)) -> bool {
+        true
     }
 
     /// The backing of the object a `VIRTGPU_MAP` offset names: its VMO, or
