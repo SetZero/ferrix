@@ -465,6 +465,9 @@ pub(crate) fn desktop_files(
          \n\
          [Service]\n\
          ExecStart={}\n\
+         # Root's home, which the kernel gave hyprix as pid 1 and a unit with\n\
+         # no User= is not given; the clients find ~/.config through it.\n\
+         Environment=HOME=/\n\
          Restart=on-failure\n\
          StandardOutput=console\n\
          StandardError=console\n",
