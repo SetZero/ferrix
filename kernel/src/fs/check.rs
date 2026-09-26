@@ -1156,6 +1156,7 @@ fn check_a_stream_read_takes_all_there_is(
     .map_err(|_| "no memory for the stream fill check")?;
     let region = u64::try_from(region).map_err(|_| "mmap returned an impossible address")?;
     let outcome = fill_from_a_pipe(process, page, region)
+        .and_then(|()| fill_from_a_socket(process, page, region))
         .and_then(|()| fill_from_zero(process, page, region));
     let _ = memory::sys_munmap(process, region, FILL + PAGE_SIZE);
     outcome
@@ -1205,6 +1206,59 @@ fn fill_from_a_pipe(process: &Process, page: u64, region: u64) -> Result<(), &'s
         0,
         "a pipe's write end would not close",
     )
+}
+
+/// A connected pair of Unix stream sockets, `socketpair`'s two descriptors.
+fn stream_socket_pair(process: &Process, page: u64) -> Result<(i32, i32), &'static str> {
+    const AF_UNIX: u64 = 1;
+    const SOCK_STREAM: u64 = 1;
+    answers(
+        by_number(
+            process,
+            Syscall::Socketpair,
+            [AF_UNIX, SOCK_STREAM, 0, page + AT_FDS, 0, 0],
+        ),
+        0,
+        "socketpair was refused",
+    )?;
+    pair(process, page)
+}
+
+/// The Unix stream socket part of [`check_a_stream_read_takes_all_there_is`]:
+/// a socket reads on through what is queued as a pipe does, measured on a
+/// 7.0 host -- `readv` of six bytes into two segments of four is 6, and
+/// `read` of 65536 from writes of 4096, 4096 and 100 is 8292. Blocking, with
+/// the peer open, so a read that waited for more would hang the boot here.
+fn fill_from_a_socket(process: &Process, page: u64, region: u64) -> Result<(), &'static str> {
+    let (one, other) = stream_socket_pair(process, page)?;
+    answers(
+        file::sys_write(process, one, page + AT_DATA, 6),
+        6,
+        "a write into a socket came back short",
+    )?;
+    put_iovecs(process, page, &[page + AT_BACK, 4, page + AT_BACK + 4, 4])?;
+    answers(
+        file::sys_readv(process, other, page + AT_IOVEC, 2),
+        6,
+        "readv of a socket holding six bytes into two segments of four did not take all six",
+    )?;
+    if read_back(process, page + AT_BACK, 6)? != DATA.get(..6).unwrap_or_default() {
+        return Err("readv of a socket gave back different bytes than were written");
+    }
+    for piece in [PAGE_SIZE, PAGE_SIZE, 100] {
+        answers(
+            file::sys_write(process, one, region, piece),
+            usize::try_from(piece).unwrap_or(0),
+            "a write into a socket came back short",
+        )?;
+    }
+    answers(
+        file::sys_read(process, other, region, FILL),
+        usize::try_from(2 * PAGE_SIZE + 100).unwrap_or(0),
+        "a read of a socket holding more than a page stopped at the first page",
+    )?;
+    answers(fd::sys_close(process, one), 0, "a socket would not close")?;
+    answers(fd::sys_close(process, other), 0, "a socket would not close")
 }
 
 /// The /dev/zero half of [`check_a_stream_read_takes_all_there_is`]. Its

@@ -123,6 +123,11 @@ pub struct SocketBuffer<A> {
     charged: usize,
     writer_closed: bool,
     reader_closed: bool,
+    /// After a stream read that took ancillary data: how many bytes of the
+    /// segment it came with that read left, which [`SocketBuffer::read_on`]
+    /// may still take before it must stop. `None` after a read that took
+    /// none.
+    boundary: Option<usize>,
 }
 
 impl<A> SocketBuffer<A> {
@@ -142,6 +147,7 @@ impl<A> SocketBuffer<A> {
             charged: 0,
             writer_closed: false,
             reader_closed: false,
+            boundary: None,
         }
     }
 
@@ -357,12 +363,17 @@ impl<A> SocketBuffer<A> {
                 ancillary = segment.ancillary.take();
             }
             copied += count;
-            if segment.bytes.is_empty() {
+            let left = segment.bytes.len();
+            if left == 0 {
                 let _ = self.segments.pop_front();
             }
             if carries {
+                self.boundary = Some(left);
                 break;
             }
+        }
+        if ancillary.is_none() {
+            self.boundary = None;
         }
         self.queued = self.queued.saturating_sub(copied);
         self.charged = self.charged.saturating_sub(copied);
@@ -371,6 +382,53 @@ impl<A> SocketBuffer<A> {
             full: copied,
             ancillary,
         }
+    }
+
+    /// Go on with a stream read that has already taken bytes, as one Linux
+    /// read goes on through a socket's buffers: what is queued, up to the
+    /// ancillary boundaries one [`SocketBuffer::read`] into a larger buffer
+    /// would have stopped at, and never anything a read must wait for.
+    /// Answers how many bytes it took, zero where the read ends -- nothing
+    /// queued, a boundary, or a buffer of records, which one read never
+    /// runs on through.
+    ///
+    /// The boundaries are the read's: it never starts on a segment that
+    /// carries ancillary data, and after a read that took some it takes only
+    /// the rest of the segment that brought it and then stops, as Linux's
+    /// `unix_stream_read_generic` stops after the buffer that brought
+    /// descriptors. So a read of 65536 bytes from a socket holding 8000
+    /// bytes sent with a descriptor and then 100 more takes the 8000, as
+    /// Linux's did on a 7.0 host, however many pieces the caller reads it in.
+    ///
+    /// Only the last read's boundary is remembered, so a second reader
+    /// taking bytes between a read and this one can move where it stops;
+    /// two readers of one stream interleave its bytes anyway.
+    pub fn read_on(&mut self, out: &mut [u8]) -> usize {
+        if self.kind != Kind::Stream {
+            return 0;
+        }
+        let limit = self.boundary.map_or(out.len(), |left| left.min(out.len()));
+        let mut copied = 0;
+        while let Some(segment) = self.segments.front_mut() {
+            if copied == limit || segment.ancillary.is_some() {
+                break;
+            }
+            let space = out.get_mut(copied..limit).unwrap_or_default();
+            let count = space.len().min(segment.bytes.len());
+            for (slot, byte) in space.iter_mut().zip(segment.bytes.drain(..count)) {
+                *slot = byte;
+            }
+            copied += count;
+            if segment.bytes.is_empty() {
+                let _ = self.segments.pop_front();
+            }
+        }
+        if let Some(left) = self.boundary.as_mut() {
+            *left = left.saturating_sub(copied);
+        }
+        self.queued = self.queued.saturating_sub(copied);
+        self.charged = self.charged.saturating_sub(copied);
+        copied
     }
 
     fn peek_record(&self, out: &mut [u8]) -> ReadOutcome<A> {
@@ -435,6 +493,7 @@ impl<A> SocketBuffer<A> {
     pub fn drain(&mut self) -> Vec<A> {
         self.queued = 0;
         self.charged = 0;
+        self.boundary = None;
         self.segments
             .drain(..)
             .filter_map(|segment| segment.ancillary)

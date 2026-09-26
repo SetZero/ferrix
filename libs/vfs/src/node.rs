@@ -385,14 +385,28 @@ pub trait Inode: Send + Sync + fmt::Debug {
     ///
     /// The system call layer reads through a buffer of a page. After a piece
     /// that took something it reads on only from a stream that says yes, and
-    /// then with `nonblock` set ([`crate::OpenFile::read_more`]), so a reader
-    /// that already has bytes is never made to wait for more.
+    /// then through [`Inode::read_on`] ([`crate::OpenFile::read_more`]),
+    /// which never waits, so a reader that already has bytes is never made
+    /// to wait for more.
     ///
     /// The default, no, is right for a stream whose one read is one record
     /// or one line -- an eventfd's counter, a terminal's line, a datagram --
     /// where reading on would take the next, which one Linux read never does.
     fn fills_reads(&self) -> bool {
         false
+    }
+
+    /// The next piece of a read that has already taken bytes, from a stream
+    /// that [fills reads](Inode::fills_reads): what it has now, never
+    /// waiting, and `Ok(0)` or `EAGAIN` where the read ends.
+    ///
+    /// The default is [`Inode::read_stream`] with `nonblock` set, which is
+    /// right for a stream with no boundaries inside it, a pipe or a memory
+    /// device. A stream whose one read stops at a boundary a second read
+    /// would cross -- a Unix stream socket's ancillary data -- answers here
+    /// what the read it goes on with would still have taken.
+    fn read_on(&self, buf: &mut [u8]) -> Result<usize> {
+        self.read_stream(buf, true)
     }
 
     /// Take back `bytes`, the start of what the last [`Inode::read_stream`]

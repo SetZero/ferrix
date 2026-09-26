@@ -1491,6 +1491,28 @@ impl Inode for Socket {
         self.recv(buf, 0, nonblock).map(|received| received.bytes)
     }
 
+    /// A stream socket's read takes all that is queued, as Linux's
+    /// `unix_stream_read_generic` goes on through the socket's buffers:
+    /// measured on a 7.0 host, `readv` of a socketpair holding six bytes
+    /// into two segments of four is 6, and `read` of 65536 from one holding
+    /// writes of 4096, 4096 and 100 bytes is 8292. A sequenced-packet or
+    /// datagram socket reads one record, and does not.
+    fn fills_reads(&self) -> bool {
+        self.kind == SocketType::Stream
+    }
+
+    /// The rest of a stream read, up to the ancillary boundaries one read
+    /// into the whole buffer would have stopped at
+    /// ([`SocketBuffer::read_on`]). It never takes ancillary data, so
+    /// nothing is dropped here, and never waits.
+    fn read_on(&self, buf: &mut [u8]) -> ferrix_vfs::Result<usize> {
+        let taken = self.receive.buffer.lock().read_on(buf);
+        if taken > 0 {
+            self.receive.writable.wake_all();
+        }
+        Ok(taken)
+    }
+
     fn write_stream(&self, data: &[u8], nonblock: bool) -> ferrix_vfs::Result<usize> {
         self.send(data, 0, nonblock)
     }

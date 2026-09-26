@@ -348,7 +348,7 @@ impl OpenFile {
         if !self.io.is_stream() || !self.io.fills_reads() {
             return Ok(0);
         }
-        match self.io.read_stream(buf, true) {
+        match self.io.read_on(buf) {
             Err(Errno::EAGAIN) => Ok(0),
             other => other,
         }
