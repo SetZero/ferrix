@@ -1506,12 +1506,19 @@ fn attach_display(command: &mut Command, arch: Arch, args: &Args, binary: &Path)
             } else {
                 ""
             };
+            // `ioeventfd=on`, which QEMU's virtio-gpu devices alone default
+            // off: without it the driver's doorbell is an exit to QEMU that
+            // handles the queue -- and on the 3D card runs the frame's GL --
+            // before the guest's processor comes back, which billed a
+            // compositor's frames to the driver as a fifth of a processor.
+            // With it the doorbell is an eventfd, and QEMU takes the queue up
+            // in its own loop.
             let _ = command.args([
                 "-device",
                 // 1024x768 is what every judged boot's pictures are of;
                 // `run-compositor` says another.
                 &format!(
-                    "{card},id={id}{slot},{flags}{venus},xres={wide},yres={tall}",
+                    "{card},id={id}{slot},{flags}{venus},ioeventfd=on,xres={wide},yres={tall}",
                     card = gl_card,
                     id = crate::display::device_id(index),
                     wide = args.size.map_or(1024, |size| size.0),
