@@ -27,8 +27,8 @@ use ferrix_paging::{MapError, MapFlags};
 use ferrix_pci::Address;
 use ferrix_sync::IrqSpinLock;
 
-use super::Fault;
 use super::gate::{self, Gate};
+use super::{Cause, Fault};
 use crate::mmio::Mmio;
 use crate::{arch, mm, timer, vmap};
 
@@ -254,6 +254,7 @@ impl Unit {
             stream,
             page: low & !0xFFF,
             write: flags & FRCD_READ == 0,
+            cause: Cause::Access,
         })
     }
 

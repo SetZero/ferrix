@@ -1623,20 +1623,16 @@ fn bring_up_processors(view: &BootView<'_>) -> &'static smp::Topology {
 fn check_dma_faults() {
     let audit = iommu::audit_faults();
     println!(
-        "  iommu    {} DMA faults recorded that no check provoked, across {} translating units; \
-         {} late faults from the out-of-domain probe",
-        audit.stray, audit.units, audit.provoked,
+        "  iommu    {} DMA faults recorded that no check provoked, {} of them unit events other \
+         than a refused access, across {} translating units; {} late faults from the \
+         out-of-domain probe",
+        audit.stray, audit.stray_events, audit.units, audit.provoked,
     );
     if audit.stray == 0 {
         return;
     }
     if let Some(fault) = audit.first {
-        println!(
-            "  iommu    the first read here: stream {:#x}, page {:#x}, {}",
-            fault.stream,
-            fault.page,
-            if fault.write { "a write" } else { "a read" },
-        );
+        println!("  iommu    the first read here: {fault}");
     }
     fatal!(
         catalog::STAGE10_DMA_FAULT,

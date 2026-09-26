@@ -14,8 +14,9 @@
 //!   `AArch64` tables — `libs/paging`'s [`ArmStage2`] — and faults recorded;
 //! * **the command queue**, for `CFGI_STE`, `TLBI_S12_VMALL` and `SYNC`,
 //!   polled rather than signalled;
-//! * **the event queue**, enabled so a translation fault is recorded, and read
-//!   when the kernel asks.
+//! * **the event queue**, enabled so a fault is recorded, and read when the
+//!   kernel asks: every event in it, of whatever type
+//!   ([`Unit::take_fault`]).
 //!
 //! # Every domain maps the MSI doorbell
 //!
@@ -31,8 +32,8 @@ use ferrix_paging::stage2::ArmStage2;
 use ferrix_paging::{MapError, MapFlags};
 use ferrix_sync::IrqSpinLock;
 
-use super::Fault;
 use super::gate::{self, Gate};
+use super::{Cause, Fault};
 use crate::mmio::Mmio;
 use crate::{arch, mm, timer, vmap};
 
@@ -109,8 +110,34 @@ const COMMAND_BYTES: u64 = 16;
 const EVENT_BITS: u32 = 7;
 /// Bytes of one event record.
 const EVENT_BYTES: u64 = 32;
-/// Event type: a translation fault.
-const EVENT_F_TRANSLATION: u64 = 0x10;
+/// Event type: a translation fault, the first of the four that refuse an
+/// access at an address.
+const EVENT_F_TRANSLATION: u8 = 0x10;
+/// Event type: a permission fault, the last of those four, after an address
+/// size fault (0x11) and an access flag fault (0x12).
+const EVENT_F_PERMISSION: u8 = 0x13;
+/// Every event type the architecture defines, by the name the specification
+/// gives it (Arm IHI 0070, "Event records").
+const EVENT_NAMES: [(u8, &str); 18] = [
+    (0x01, "F_UUT"),
+    (0x02, "C_BAD_STREAMID"),
+    (0x03, "F_STE_FETCH"),
+    (0x04, "C_BAD_STE"),
+    (0x05, "F_BAD_ATS_TREQ"),
+    (0x06, "F_STREAM_DISABLED"),
+    (0x07, "F_TRANSL_FORBIDDEN"),
+    (0x08, "C_BAD_SUBSTREAMID"),
+    (0x09, "F_CD_FETCH"),
+    (0x0A, "C_BAD_CD"),
+    (0x0B, "F_WALK_EABT"),
+    (0x10, "F_TRANSLATION"),
+    (0x11, "F_ADDR_SIZE"),
+    (0x12, "F_ACCESS"),
+    (0x13, "F_PERMISSION"),
+    (0x20, "F_TLB_CONFLICT"),
+    (0x21, "F_CFG_CONFLICT"),
+    (0x24, "E_PAGE_REQUEST"),
+];
 /// Event record word 3: the access was a read.
 const EVENT_READ: u64 = 1 << 3;
 
@@ -280,32 +307,42 @@ impl Unit {
         self.control(CMDQEN | EVENTQEN | SMMUEN, "it never started translating")
     }
 
-    /// The next translation fault in the event queue, consuming every event up
-    /// to it, or `None` when the queue holds none.
+    /// The next event in the queue, consumed, or `None` when the queue holds
+    /// none.
+    ///
+    /// Every event comes back, whatever its type. A translation, address
+    /// size, access flag or permission fault is a refused access at the
+    /// address the record gives, [`Cause::Access`], as a VT-d fault record
+    /// is; any other type is [`Cause::Event`], which names the stream but no
+    /// access. This used to consume those unread, passing over every event
+    /// but a translation fault, so a stream past the table or a stream table
+    /// entry the unit refused would have gone unseen.
     pub(crate) fn take_fault(&self) -> Option<Fault> {
         let index = (1_u32 << (EVENT_BITS + 1)) - 1;
-        loop {
-            let produced = self.registers.read32(EVENTQ_PROD) & index;
-            let consumed = self.registers.read32(EVENTQ_CONS) & index;
-            if produced == consumed {
-                return None;
-            }
-            let slot = consumed & ((1 << EVENT_BITS) - 1);
-            let at = self.events + u64::from(slot) * EVENT_BYTES;
-            // Words 0 and 1: the type and the stream. Words 2 and 3: the
-            // access. Words 4 and 5: the input address.
-            let first = read_entry(at);
-            let access = read_entry(at + 8);
-            let address = read_entry(at + 16);
-            self.registers.write32(EVENTQ_CONS, (consumed + 1) & index);
-            if first & 0xFF == EVENT_F_TRANSLATION {
-                return Some(Fault {
-                    stream: (first >> 32) as u32,
-                    page: address & !0xFFF,
-                    write: (access >> 32) & EVENT_READ == 0,
-                });
-            }
+        let produced = self.registers.read32(EVENTQ_PROD) & index;
+        let consumed = self.registers.read32(EVENTQ_CONS) & index;
+        if produced == consumed {
+            return None;
         }
+        let slot = consumed & ((1 << EVENT_BITS) - 1);
+        let at = self.events + u64::from(slot) * EVENT_BYTES;
+        // Words 0 and 1: the type and the stream. Words 2 and 3: the
+        // access. Words 4 and 5: the input address.
+        let first = read_entry(at);
+        let access = read_entry(at + 8);
+        let address = read_entry(at + 16);
+        self.registers.write32(EVENTQ_CONS, (consumed + 1) & index);
+        let kind = (first & 0xFF) as u8;
+        Some(Fault {
+            stream: (first >> 32) as u32,
+            page: address & !0xFFF,
+            write: (access >> 32) & EVENT_READ == 0,
+            cause: if (EVENT_F_TRANSLATION..=EVENT_F_PERMISSION).contains(&kind) {
+                Cause::Access
+            } else {
+                Cause::Event(kind)
+            },
+        })
     }
 
     /// Give `stream` a domain of its own: an empty stage-2 tree with the MSI
@@ -506,6 +543,14 @@ fn write_entry(at: u64, value: u64) {
     // SAFETY: as `read_entry`: a whole, aligned eight bytes in memory only
     // this unit's code writes.
     unsafe { core::ptr::write_volatile(mm::direct_map(at) as *mut u64, value) };
+}
+
+/// The specification's name for event type `kind`, or `"reserved"`.
+pub(crate) fn event_name(kind: u8) -> &'static str {
+    EVENT_NAMES
+        .iter()
+        .find(|&&(number, _)| number == kind)
+        .map_or("reserved", |&(_, name)| name)
 }
 
 /// Read a 64-bit register as two 32-bit halves, low first.

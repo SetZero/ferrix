@@ -1597,10 +1597,16 @@ DMA it was not given, and a unit whose faults nobody reads would hide it.
    a unit in caching mode still answers from a stale not-present entry.
 4. The probe's fault arrived at a stream or page other than the ones it
    registered, which is what FX-1001 once was: a fault record read out of order.
+5. An SMMUv3 recorded an event other than a refused access, which no check
+   provokes and the audit line counts apart: C_BAD_STREAMID for a device whose
+   stream is past the 256 entries of the table, C_BAD_STE or F_WALK_EABT for
+   tables the kernel wrote that the unit would not use. The `first read here`
+   line names the event.
 
 See: kernel/src/iommu.rs audit_faults; kernel/src/pci/virtio.rs
 probe_out_of_domain; kernel/src/iommu/vtd.rs Unit::take_fault;
-xtask/src/dma_faults.rs; docs/certification/VULNERABILITY-ANALYSIS.md T.DMA.
+kernel/src/iommu/smmuv3.rs Unit::take_fault; xtask/src/dma_faults.rs;
+docs/certification/VULNERABILITY-ANALYSIS.md T.DMA.
 
 <a id="fx-1101"></a>
 

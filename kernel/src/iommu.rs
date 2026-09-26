@@ -358,6 +358,58 @@ pub(crate) struct Fault {
     pub(crate) page: u64,
     /// Whether the access was a write.
     pub(crate) write: bool,
+    /// What the unit recorded it as.
+    pub(crate) cause: Cause,
+}
+
+/// What a unit recorded a fault as.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Cause {
+    /// A device's access refused at an address its domain does not map or
+    /// does not allow: every VT-d fault record, and an `SMMUv3` translation,
+    /// address size, access flag or permission fault. The only kind a check
+    /// provokes.
+    Access,
+    /// An `SMMUv3` event of any other type, by its number: a stream past the
+    /// table, a stream table entry the unit would not use, a table walk that
+    /// aborted, a transaction the unit does not support. It names a stream,
+    /// and no check provokes one: each is a device's DMA stopped for a reason
+    /// other than its address, or tables the kernel wrote that the unit
+    /// refused, and either is worse than a refused address.
+    Event(u8),
+}
+
+impl Fault {
+    /// A refused write by `stream` to `page`: what a check that provokes one
+    /// requires its unit to record.
+    pub(crate) fn write_to(stream: u32, page: u64) -> Self {
+        Fault {
+            stream,
+            page,
+            write: true,
+            cause: Cause::Access,
+        }
+    }
+}
+
+impl core::fmt::Display for Fault {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.cause {
+            Cause::Access => write!(
+                f,
+                "stream {:#x}, page {:#x}, {}",
+                self.stream,
+                self.page,
+                if self.write { "a write" } else { "a read" }
+            ),
+            Cause::Event(kind) => write!(
+                f,
+                "stream {:#x}, SMMUv3 event {kind:#x} ({})",
+                self.stream,
+                smmuv3::event_name(kind)
+            ),
+        }
+    }
 }
 
 /// Why a domain refused to pin or unpin.
@@ -947,6 +999,10 @@ static PROVOKED: SpinLock<Vec<(u32, u64)>> = SpinLock::new(Vec::new());
 /// taken and then dropped unseen.
 static STRAY: AtomicU64 = AtomicU64::new(0);
 
+/// Of [`STRAY`], the ones that were [`Cause::Event`]: an `SMMUv3` event other
+/// than a refused access.
+static STRAY_EVENTS: AtomicU64 = AtomicU64::new(0);
+
 /// Record that `stream`'s device is about to be made to write `page`, which its
 /// domain does not map, so the fault the unit records for it is not stray.
 ///
@@ -959,12 +1015,14 @@ fn record_provoked(stream: u32, page: u64) {
     );
 }
 
-/// Whether a check provoked `fault`.
+/// Whether a check provoked `fault`: a refused access, by the stream and to
+/// the page it registered.
 fn provoked(fault: Fault) -> bool {
-    PROVOKED
-        .lock()
-        .iter()
-        .any(|&(stream, page)| fault.stream == stream && fault.page == page)
+    fault.cause == Cause::Access
+        && PROVOKED
+            .lock()
+            .iter()
+            .any(|&(stream, page)| fault.stream == stream && fault.page == page)
 }
 
 /// Count `fault` as stray unless a check provoked it, however late it
@@ -973,6 +1031,9 @@ fn count_if_stray(fault: Fault) -> bool {
     let stray = !provoked(fault);
     if stray {
         let _ = STRAY.fetch_add(1, Ordering::Relaxed);
+        if fault.cause != Cause::Access {
+            let _ = STRAY_EVENTS.fetch_add(1, Ordering::Relaxed);
+        }
     }
     stray
 }
@@ -987,6 +1048,9 @@ pub(crate) struct FaultAudit {
     pub(crate) provoked: u64,
     /// Faults nothing provoked, since translation was turned on.
     pub(crate) stray: u64,
+    /// Of those, `SMMUv3` events other than a refused access
+    /// ([`Cause::Event`]).
+    pub(crate) stray_events: u64,
     /// The first stray fault the audit itself read, if it read one.
     pub(crate) first: Option<Fault>,
 }
@@ -999,6 +1063,10 @@ pub(crate) struct FaultAudit {
 /// goes unseen. VT-d's fault event interrupt is left masked, so this is where
 /// the record is read: last in boot, after every driver the boot starts has
 /// run. Bounded per unit, as [`Domain::clear_faults`] is.
+///
+/// An `SMMUv3` event of any type counts, not only a translation fault: no
+/// check provokes the others, and each one is a device's DMA stopped or a
+/// stream table the unit refused, which the boot must not pass over.
 pub(crate) fn audit_faults() -> FaultAudit {
     let mut audit = FaultAudit::default();
     if let Some(programmed) = PROGRAMMED.get() {
@@ -1010,6 +1078,7 @@ pub(crate) fn audit_faults() -> FaultAudit {
         }
     }
     audit.stray = STRAY.load(Ordering::Relaxed);
+    audit.stray_events = STRAY_EVENTS.load(Ordering::Relaxed);
     audit
 }
 

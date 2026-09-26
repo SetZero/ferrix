@@ -734,7 +734,7 @@ fn probe_out_of_domain(
     let mut completed = None;
     loop {
         if let Some(fault) = domain.take_fault() {
-            if fault.stream != stream || fault.page != PROBE_PAGE || !fault.write {
+            if fault != iommu::Fault::write_to(stream, PROBE_PAGE) {
                 // This fired as FX-1001 -- the probe's own page at stream 0x0
                 // -- once in a few boots under KVM on a loaded host, because
                 // the unit's record was read out of order and the stream came
@@ -743,13 +743,8 @@ fn probe_out_of_domain(
                 // said what the record held, and it is how a recurrence would
                 // be read rather than deduced again.
                 crate::console::println!(
-                    "  pci      the unit's record holds stream {:#x}, page {:#x}, {}; the probe \
-                     is stream {:#x}, page {:#x}, a write",
-                    fault.stream,
-                    fault.page,
-                    if fault.write { "a write" } else { "a read" },
-                    stream,
-                    PROBE_PAGE,
+                    "  pci      the unit's record holds {fault}; the probe is stream {stream:#x}, \
+                     page {PROBE_PAGE:#x}, a write"
                 );
                 return Ok(Err("the unit recorded a fault other than the probe's"));
             }
