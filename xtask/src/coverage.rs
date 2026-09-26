@@ -281,6 +281,19 @@ const SUITE: &[Gate] = &[
     Gate::new("test-boot", "boot-nosmp", false)
         .only(Arch::AArch64)
         .with_args(&["--kernel-option", "nosmp"]),
+    // ARMv7-A on one processor, as the suite's `--smp 2` never is: the
+    // coherency report for a machine with nothing to be coherent with.
+    Gate::new("test-boot", "boot-single", false)
+        .only(Arch::Armv7a)
+        .with_args(&["--smp", "1"]),
+    // ARMv7-A with 3 GiB, so firmware loads the loader and the kernel above
+    // the split between the halves of the address space, as the DK1's DDR
+    // at 3 GiB always is: the loader's alias of itself in the kernel's tree
+    // and the secondaries' entry mapped there too are taken down, which
+    // below the split never exist.
+    Gate::new("test-boot", "boot-highmem", false)
+        .only(Arch::Armv7a)
+        .with_args(&["--memory", "3072"]),
     // A PC with neither an HPET nor `RDSEED`: its clock is the TSC measured
     // against the PIT, and its random words come from `RDRAND`. Both are
     // what an older machine takes, and neither runs on the default `q35`.
