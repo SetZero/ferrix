@@ -110,6 +110,13 @@ pub(crate) fn metadata() -> Metadata {
     }
 }
 
+/// Whether `file` is one of these objects: an eventfd, a timerfd, a
+/// signalfd, an epoll, a sync file or an exported GPU buffer, none of which
+/// Linux can splice from.
+pub(crate) fn holds(file: &OpenFile) -> bool {
+    file.location().mount.filesystem().name() == anon_fs().name()
+}
+
 /// An open file on `inode`, read and write, named `name` for `/proc/self/fd`.
 ///
 /// # Errors

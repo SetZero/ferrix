@@ -18,9 +18,14 @@
 //! [`SENDFILE_CHUNK`]: `read` and `write` through a bounce buffer, with no copy
 //! to the program in between. A short write to the output puts the input's
 //! position back over what the output did not take, where the input has a
-//! position. A pipe has none, so from a pipe the bytes a short write left
-//! behind are lost where Linux's splice would have left them queued; it is
-//! read once per call, so that one short write is all that can lose.
+//! position.
+//!
+//! An input with no position has nowhere to put them back, and Linux does not
+//! take one: its `splice_direct_to_actor` requires an input that can seek, "as
+//! we don't want to randomly drop data for eg socket -> socket splicing". So
+//! into anything but a pipe, `sendfile` from a pipe, a socket, a terminal or an
+//! anonymous object is `EINVAL`, and into a pipe, where Linux splices without
+//! that rule, from a pipe or an anonymous object, which have no `splice_read`.
 //!
 //! ARMv7-A numbers only `sendfile64`, whose offset is a 64-bit `loff_t` like
 //! the 64-bit architectures' `off_t`, so every offset read here is eight bytes.
@@ -150,9 +155,9 @@ pub(crate) fn sys_sendfile(
 ///
 /// `EBADF` for an input not open for reading or an output not open for
 /// writing, as `sendfile(2)` documents; `ESPIPE` for an offset on an input
-/// with no position; `EINVAL` for a negative offset, and for the two
-/// combinations a copy cannot honour: a directory as input, and an output
-/// under `O_APPEND`, which Linux's splice refuses.
+/// with no position; `EINVAL` for a negative offset, for a directory as input,
+/// an output under `O_APPEND`, which Linux's splice refuses, and an input
+/// Linux does not send from ([`refuses_input`]).
 fn transfer(
     process: &Process,
     out_fd: i32,
@@ -174,12 +179,42 @@ fn transfer(
     if !output.writable() {
         return Err(Errno::EBADF);
     }
-    if output.status().append || input.kind() == FileType::Directory {
+    if output.status().append
+        || input.kind() == FileType::Directory
+        || refuses_input(&input, &output, count)
+    {
         return Err(Errno::EINVAL);
     }
     let count = usize::try_from(count.min(MAX_RW_COUNT)).unwrap_or(SENDFILE_CHUNK);
     let sent = copy(&input, &output, position.as_mut(), count)?;
     Ok((sent, position))
+}
+
+/// Whether Linux's `sendfile` refuses to read `input` for `output`.
+///
+/// Into anything but a pipe, Linux's `do_splice_direct` takes only an input
+/// that can seek, and so refuses every stream but the memory devices, whose
+/// position never moves. Into a pipe it splices from anything with a
+/// `splice_read`, which a socket and a terminal have and a pipe and an
+/// anonymous object -- an eventfd, a timerfd, a signalfd, an epoll, a sync
+/// file -- do not; there a count of zero is answered before the input is
+/// looked at. Measured on a 7.0 host, a pipe holding five bytes is `EINVAL`
+/// into a file, a socket and a pipe, and still holds five; a Unix socket of
+/// each type and a pseudoterminal's either end are `EINVAL` into a file or a
+/// socket and send into a pipe; an eventfd, a timerfd, a signalfd, an epoll
+/// and an inotify are `EINVAL` into all three, and 0 into a pipe for a count
+/// of zero; `/dev/zero`, `/dev/urandom` and `/dev/full` send into all three.
+/// Ferrix used to copy from all of them, and to lose what a short write left
+/// of a pipe's bytes.
+///
+/// Not matched: `/dev/null`, which Linux refuses into a pipe and for a count
+/// above zero into anything, having no `splice_read`, is sent from here as the
+/// empty stream it reads as.
+fn refuses_input(input: &OpenFile, output: &OpenFile, count: u64) -> bool {
+    if !fs::pipe::is_pipe(output) {
+        return !input.takes_offsets();
+    }
+    count > 0 && (fs::pipe::is_pipe(input) || (input.is_stream() && fs::anon::holds(input)))
 }
 
 /// Move up to `count` bytes, a chunk at a time, stopping at end of file, at a

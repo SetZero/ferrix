@@ -1628,7 +1628,138 @@ fn check_sendfile_copies_a_file(process: &Process, page: u64) -> Result<u64, &'s
         17_990,
         "sendfile's copy is not as long as what it sent",
     )?;
+    check_sendfile_takes_the_inputs_linux_does(process, page)?;
     Ok(17_990)
+}
+
+/// `sendfile` reads only what Linux's does, measured on a 7.0 host: from a
+/// pipe it is `EINVAL` into a file, a socket and a pipe, and the pipe keeps
+/// its bytes, though a count of zero into a pipe is 0; from a socket it is
+/// `EINVAL` into a file and sends into a pipe; from an eventfd it is `EINVAL`
+/// into both; and from `/dev/zero` it sends into a file.
+fn check_sendfile_takes_the_inputs_linux_does(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    answers(
+        pipe::sys_pipe2(process, page + AT_FDS, O_NONBLOCK),
+        0,
+        "pipe2 for sendfile was refused",
+    )?;
+    let (reader, writer) = pair(process, page)?;
+    answers(
+        pipe::sys_pipe2(process, page + AT_FDS, O_NONBLOCK),
+        0,
+        "a second pipe for sendfile was refused",
+    )?;
+    let (reader2, writer2) = pair(process, page)?;
+    let (one, other) = stream_socket_pair(process, page)?;
+    let copy = descriptor(
+        fd::sys_openat(process, AT_FDCWD, page + AT_COPY, O_WRONLY, 0),
+        "the file to send into would not open",
+    )?;
+    let events = descriptor(
+        crate::syscall::eventfd::sys_eventfd2(process, 1, 0),
+        "an eventfd for sendfile was refused",
+    )?;
+    // The devtmpfs `AT_DEV_ZERO` names is mounted later: the root's own,
+    // staged where the reads below land afterwards.
+    uaccess::copy_to_user(process.space(), page + AT_BACK, b"/dev/zero\0")
+        .map_err(|_| "could not stage /dev/zero's name")?;
+    let zero = descriptor(
+        fd::sys_openat(process, AT_FDCWD, page + AT_BACK, O_RDONLY, 0),
+        "/dev/zero would not open for sendfile",
+    )?;
+
+    sendfile_from_a_pipe(process, page, [reader, writer, writer2, one, copy])?;
+    answers(
+        file::sys_write(process, other, page + AT_DATA, 2),
+        2,
+        "a write into a socket came back short",
+    )?;
+    refuses(
+        pipe::sys_sendfile(process, copy, one, 0, 2),
+        Errno::EINVAL,
+        "sendfile from a socket into a file was not EINVAL",
+    )?;
+    answers(
+        pipe::sys_sendfile(process, writer2, one, 0, 2),
+        2,
+        "sendfile from a socket into a pipe did not send",
+    )?;
+    answers(
+        file::sys_read(process, reader2, page + AT_BACK, 64),
+        2,
+        "sendfile from a socket into a pipe did not queue what it sent",
+    )?;
+
+    for (out, what) in [
+        (copy, "sendfile from an eventfd into a file was not EINVAL"),
+        (
+            writer2,
+            "sendfile from an eventfd into a pipe was not EINVAL",
+        ),
+    ] {
+        refuses(
+            pipe::sys_sendfile(process, out, events, 0, 8),
+            Errno::EINVAL,
+            what,
+        )?;
+    }
+    answers(
+        pipe::sys_sendfile(process, copy, zero, 0, 5),
+        5,
+        "sendfile from /dev/zero into a file did not send",
+    )?;
+
+    for fd in [
+        reader, writer, reader2, writer2, one, other, copy, events, zero,
+    ] {
+        answers(
+            fd::sys_close(process, fd),
+            0,
+            "a descriptor the sendfile check used would not close",
+        )?;
+    }
+    Ok(())
+}
+
+/// The pipe part of [`check_sendfile_takes_the_inputs_linux_does`]: six bytes
+/// in the pipe `fds` begins with, refused into the file, the socket and the
+/// second pipe, and still all there afterwards.
+fn sendfile_from_a_pipe(process: &Process, page: u64, fds: [i32; 5]) -> Result<(), &'static str> {
+    let [reader, writer, writer2, one, copy] = fds;
+    answers(
+        file::sys_write(process, writer, page + AT_DATA, 6),
+        6,
+        "a write into a pipe came back short",
+    )?;
+    for (out, what) in [
+        (copy, "sendfile from a pipe into a file was not EINVAL"),
+        (one, "sendfile from a pipe into a socket was not EINVAL"),
+        (writer2, "sendfile from a pipe into a pipe was not EINVAL"),
+    ] {
+        refuses(
+            pipe::sys_sendfile(process, out, reader, 0, 6),
+            Errno::EINVAL,
+            what,
+        )?;
+    }
+    answers(
+        pipe::sys_sendfile(process, writer2, reader, 0, 0),
+        0,
+        "sendfile of nothing from a pipe into a pipe was not 0",
+    )?;
+    answers(
+        file::sys_read(process, reader, page + AT_BACK, 64),
+        6,
+        "a refused sendfile took bytes out of the pipe",
+    )?;
+    if read_back(process, page + AT_BACK, 6)? != DATA.get(..6).unwrap_or_default() {
+        return Err("a refused sendfile changed what the pipe held");
+    }
+
+    Ok(())
 }
 
 /// The descriptors the `splice` checks work with.
