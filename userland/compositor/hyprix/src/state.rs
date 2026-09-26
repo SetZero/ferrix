@@ -525,8 +525,22 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     // `None` is the first non-blocking sweep. Every following pass receives
     // exactly the descriptors `poll` woke for; a timer wake is `Some([])`.
     let mut ready: Option<Vec<i32>> = None;
+    // What ends among the programs started here -- and, as pid 1, among
+    // everybody's orphans -- is reaped on every pass, and its end wakes one.
+    let children = match crate::children::Children::watch() {
+        Ok(children) => Some(children),
+        Err(error) => {
+            report(&format!(
+                "hyprix: SIGCHLD not caught ({error}); children are reaped only when the loop wakes"
+            ));
+            None
+        }
+    };
 
     loop {
+        if let Some(children) = children.as_ref() {
+            let _ = children.reap();
+        }
         if quit {
             break;
         }
@@ -1745,6 +1759,11 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // A card's descriptor: readable when its driver dies, so a screen
         // nothing is redrawn on still finds out.
         fds.extend(screens.iter().filter_map(|screen| screen.backend.raw_fd()));
+        fds.extend(
+            children
+                .as_ref()
+                .and_then(crate::children::Children::raw_fd),
+        );
         // A client whose socket was full has bytes waiting for it; the loop
         // wakes when it can take them, not only when it next asks something.
         let writable: Vec<i32> = slots
@@ -6202,6 +6221,9 @@ pub(crate) fn start(
         .spawn()
         .map(|child| child.id())
         .map_err(|error| error.to_string())?;
+    // Not waited for here: the loop reaps it once it ends
+    // (`crate::children`), or it would stay a zombie.
+    crate::children::started(pid);
     crate::scope::group(program, pid);
     Ok(pid)
 }

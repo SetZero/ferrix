@@ -23,6 +23,7 @@
 pub mod act;
 pub mod animate;
 pub mod backend;
+pub(crate) mod children;
 pub mod clipboard;
 pub mod command;
 pub mod control;
