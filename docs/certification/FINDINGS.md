@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-16 findings are open and 29 are closed, of 45. F-38, F-39 and F-40 were found by other work on 2026-09-26 and recorded by the certification review that work now goes through: F-39, a native process any user made running as root, and F-38, a device model writing a dead driver's frames after they were given back, closed with their fixes; F-40, a delegated job lifting its own limits, open with its fix designed and reviewed. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
+15 findings are open and 30 are closed, of 45. F-38, F-39 and F-40 were found by other work on 2026-09-26 and recorded by the certification review that work now goes through, and all three closed the same day with their fixes: F-39, a native process any user made running as root; F-38, a device model writing a dead driver's frames after they were given back; and F-40, a delegated job lifting its own limits, closed by a job right of its own for setting limits. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 2 | 5 | 8 | 0 | 1 |
+| Open | 2 | 5 | 7 | 0 | 1 |
 
 Blocking: F-27 and F-28 — independent assessment and a quality management
 system. Both need an organisation; neither is a defect in the code.
@@ -1016,11 +1016,11 @@ the ids comparison skipped to show the `getuid` half alone -- stop the boot,
 and are quoted in the commit.
 
 ### F-40 — a delegated job can lift its own limits
-**Moderate.** Open. Found 2026-09-26 by the init work (ferrix-15) while
-checking this review's condition on delegation; owned there, with the fix
-designed and reviewed. Read from the code, not yet shown by a boot.
+**Found and closed 2026-09-26.** Found by the init work (ferrix-15) while
+checking this review's condition on delegation, read from the code, and
+closed there with the fix this review designed with it.
 
-The native `job_set_limit` asks only for `MANAGE` on the job
+*Was:* **Moderate.** The native `job_set_limit` asks only for `MANAGE` on the job
 (`syscall/native.rs`). A delegated cgroup's owner gets `MANAGE` on that
 cgroup's own job through `job_for_cgroup`, as F-39 describes, so a
 `Delegate=yes` unit running as uid 1000 under `MemoryMax=16M` can set its own
@@ -1031,14 +1031,30 @@ since a charge walks every ancestor (F-35), so the machine stays bounded by
 whatever the delegating job was given; what fails is `FRU_RSA.1` for the
 delegated job itself, the bound its unit file asked for.
 
-*Would close it:* a job right of its own, `SET_LIMIT`, which `job_set_limit`
-requires instead of `MANAGE`. `job_create` grants it on the child it makes and
-the root and init handles carry it; `job_for_cgroup` grants it only when the
-caller may write that cgroup's limit files; and like every right it can be
-dropped by duplication or transfer and never regained. Checked by a uid-1000
-process with `MANAGE` on its delegated cgroup being refused `job_set_limit`
-and refused writing its own `memory.max`, `pids.max` and `cpu.weight`, with
-`job_set_limit` on `MANAGE` again as the negative control.
+*Now:* a job right of its own, `SET_LIMIT` (`1 << 7` in
+`libs/proto/native-abi`), which `job_set_limit` requires instead of `MANAGE`
+(`syscall/native.rs`). `Rights::JOB` carries it, so a job `job_create` makes
+and the handles root and init hold have it. `job_for_cgroup` grants it only
+with `MANAGE`, and only when the caller may also write the cgroup's
+`memory.max`, `pids.max` and `cpu.weight` (`fs/cgroupfs.rs`,
+`limit_metadata`), which a delegation by `chown` leaves root's. Like every
+right it is dropped by duplication or transfer and never regained. A child's
+limit may be set above its parent's as a number and binds nothing beyond it,
+the charge walking every ancestor (F-35); `docs/CGROUPS.md` §5 says so.
+
+*Checked by the build:* stage 13's `limits` check (`fs/cgroupfs/limits_check.rs`)
+delegates `/check-l` to uid 1000 under a 16 MiB `memory.max` and has the
+delegatee refused nine ways: `job_for_cgroup` asked for `SET_LIMIT`,
+`job_set_limit` on its own job for memory, tasks and processor weight, a
+duplicate asked for `SET_LIMIT` and `job_set_limit` through a plain
+duplicate, each `ACCESS_DENIED`; and opening its own `memory.max`,
+`pids.max` and `cpu.weight` for writing, each `EACCES`. `memory.max` still
+reads 16 MiB, and a limit on a job the delegatee made itself is accepted.
+Two negative controls (scratch, x86-64): `job_set_limit` on `MANAGE` again
+stops the boot at *"a delegatee raised its own cgroup's memory limit with
+job_set_limit"*, and `job_for_cgroup` granting `SET_LIMIT` to any writer of
+`cgroup.procs` at *"job_for_cgroup gave SET_LIMIT to a delegatee that may not
+write the limit files"*.
 
 ### F-22 — no safety case
 **Closed at the element level 2026-09-25** by

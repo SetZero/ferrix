@@ -260,6 +260,23 @@ to that directory's `cgroup.procs` allows: `MANAGE` and `WAIT` for write,
 one way only. There is no call that names a job's path from a handle,
 because a handle is a capability and a path is not.
 
+**A delegated cgroup's own limits stay its delegator's.** `job_set_limit`
+asks for `SET_LIMIT` (`1 << 7`), not `MANAGE`, and `job_for_cgroup` grants
+it only with `MANAGE` and only to a caller who may also write that cgroup's
+`memory.max`, `pids.max` and `cpu.weight`. A `chown` delegation hands over
+the directory, `cgroup.procs`, `cgroup.threads` and
+`cgroup.subtree_control`, never those files, so the delegatee may fill,
+empty and kill its cgroup and may not lift its own `MemoryMax=` or
+`TasksMax=`, as on Linux. Until 2026-09-26 `MANAGE` was enough, and a
+`Delegate=yes` service could raise its own limits to unlimited through the
+native call. Like every right, `SET_LIMIT` is only ever dropped: a duplicate
+or a transfer cannot regain it. A job made with `job_create` carries it, so
+the delegatee limits what it makes. **A child's limit is a number, not a
+guarantee**: it may be set above its parent's, and binds nothing beyond it,
+because every job's use is charged to each of its ancestors
+(`object::quota`) and the tightest limit on the way up refuses first. The
+check is `kernel/src/fs/cgroupfs/limits_check.rs`, the `limits` boot line.
+
 ## 6. Where each thing is charged
 
 The controllers need to know, at a choke point, which job pays. The survey

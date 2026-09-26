@@ -288,7 +288,7 @@ fn replace_gives_up_the_original_only_when_it_succeeds() {
         sys.take(),
         [
             made(nr::HANDLE_REPLACE, &[0x20, SAME_RIGHTS as usize]),
-            made(nr::HANDLE_REPLACE, &[0x21, 0x7F]),
+            made(nr::HANDLE_REPLACE, &[0x21, Rights::ALL.0 as usize]),
             made(nr::HANDLE_CLOSE, &[0x21]),
         ]
     );

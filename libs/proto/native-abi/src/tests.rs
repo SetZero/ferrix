@@ -150,7 +150,11 @@ fn a_rights_request_with_an_unknown_bit_is_refused() {
         Some(Requested::Exactly(Rights::ALL)),
         "every defined right"
     );
-    assert_eq!(Requested::from_register(0x80), None, "bit 7 is not a right");
+    assert_eq!(
+        Requested::from_register(0x100),
+        None,
+        "bit 8 is not a right"
+    );
     assert_eq!(
         Requested::from_register(u64::from(SAME_RIGHTS | 1)),
         None,

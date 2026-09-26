@@ -1241,9 +1241,11 @@ fn limited(resource: u64) -> Result<Limited, Errno> {
     }
 }
 
-/// `job_set_limit`.
+/// `job_set_limit`: on a handle with [`Rights::SET_LIMIT`], not only
+/// [`Rights::MANAGE`], so a delegated cgroup's own limits stay its
+/// delegator's (`docs/CGROUPS.md` §5).
 fn job_set_limit(process: &Process, job: Handle, resource: u64, at: u64) -> Result<usize, Errno> {
-    let job = job_in(process, job, Rights::MANAGE)?;
+    let job = job_in(process, job, Rights::SET_LIMIT)?;
     let limit = read_u64(process, at)?;
     let set = match limited(resource)? {
         Limited::Quota(Resource::Memory) => job.set_limit(

@@ -1178,8 +1178,19 @@ pub(crate) static STAGE13_CGROUPFS: Explanation = Explanation {
               cgroup.procs were chowned to it, must be able to make a native process there with \
               process_create, and that process must have every id its creator has before it \
               starts, and started, exit with 232, the low byte of what getuid answered it; a \
-              child made as root would exit 0.",
+              child made as root would exit 0. docs/CGROUPS.md §5: a cgroup /check-l \
+              delegated to uid 1000 by chown, under a 16 MiB memory.max root set, must give \
+              its delegatee MANAGE without SET_LIMIT through job_for_cgroup; refuse with \
+              ACCESS_DENIED a request for SET_LIMIT, job_set_limit for memory, tasks and \
+              processor weight, a duplicate asking for SET_LIMIT, and job_set_limit through a \
+              plain duplicate; refuse EACCES on opening its own memory.max, pids.max and \
+              cpu.weight for writing; still read 16 MiB; and accept a limit on a job the \
+              delegatee made with job_create.",
     causes: &[
+        "`job_set_limit` in kernel/src/syscall/native.rs asks for MANAGE rather than \
+         SET_LIMIT, or `job_for_cgroup` in kernel/src/fs/cgroupfs.rs grants SET_LIMIT without \
+         judging the limit files' write permission (`limit_metadata`), so whoever may fill a \
+         delegated cgroup may also lift its limits.",
         "`load_native` in kernel/src/syscall/launch.rs did not take the creator's \
          credentials, or `process_create` in kernel/src/syscall/native.rs did not pass the \
          caller as the creator, so a native process started as root \

@@ -37,9 +37,18 @@ impl Rights {
     /// The object may be controlled: a job killed, an interrupt bound or
     /// acknowledged.
     pub const MANAGE: Rights = Rights(1 << 6);
+    /// A job's own limits may be set: its memory, its tasks and its processor
+    /// weight (`job_set_limit`).
+    ///
+    /// Apart from [`Rights::MANAGE`] because the two are held by different
+    /// people. Whoever is delegated a cgroup may kill and fill its job, but
+    /// its limits are its delegator's, as on Linux, where the delegatee owns
+    /// `cgroup.procs` and root still owns `memory.max`. A job made with
+    /// `job_create` carries it, so a limit can be set on what one makes.
+    pub const SET_LIMIT: Rights = Rights(1 << 7);
 
     /// Every defined right.
-    pub const ALL: Rights = Rights(0x7F);
+    pub const ALL: Rights = Rights(0xFF);
 
     /// What a new channel endpoint carries.
     pub const CHANNEL: Rights = Rights(
@@ -56,8 +65,13 @@ impl Rights {
         Rights::DUPLICATE.0 | Rights::TRANSFER.0 | Rights::READ.0 | Rights::WRITE.0 | Rights::MAP.0,
     );
     /// What a new job carries.
-    pub const JOB: Rights =
-        Rights(Rights::DUPLICATE.0 | Rights::TRANSFER.0 | Rights::WAIT.0 | Rights::MANAGE.0);
+    pub const JOB: Rights = Rights(
+        Rights::DUPLICATE.0
+            | Rights::TRANSFER.0
+            | Rights::WAIT.0
+            | Rights::MANAGE.0
+            | Rights::SET_LIMIT.0,
+    );
     /// What a new interrupt carries.
     ///
     /// No [`Rights::DUPLICATE`]. An interrupt is acknowledged by whoever

@@ -2134,38 +2134,49 @@ job because the cgroup and its cgroup.procs were chowned to it, must be able to
 make a native process there with process_create, and that process must have
 every id its creator has before it starts, and started, exit with 232, the low
 byte of what getuid answered it; a child made as root would exit 0.
+docs/CGROUPS.md §5: a cgroup /check-l delegated to uid 1000 by chown, under a 16
+MiB memory.max root set, must give its delegatee MANAGE without SET_LIMIT
+through job_for_cgroup; refuse with ACCESS_DENIED a request for SET_LIMIT,
+job_set_limit for memory, tasks and processor weight, a duplicate asking for
+SET_LIMIT, and job_set_limit through a plain duplicate; refuse EACCES on opening
+its own memory.max, pids.max and cpu.weight for writing; still read 16 MiB; and
+accept a limit on a job the delegatee made with job_create.
 
-1. `load_native` in kernel/src/syscall/launch.rs did not take the creator's
+1. `job_set_limit` in kernel/src/syscall/native.rs asks for MANAGE rather than
+   SET_LIMIT, or `job_for_cgroup` in kernel/src/fs/cgroupfs.rs grants SET_LIMIT
+   without judging the limit files' write permission (`limit_metadata`), so
+   whoever may fill a delegated cgroup may also lift its limits.
+2. `load_native` in kernel/src/syscall/launch.rs did not take the creator's
    credentials, or `process_create` in kernel/src/syscall/native.rs did not pass
    the caller as the creator, so a native process started as root
    (`Credentials::root()`, what `Process::new` gives) whoever made it.
-2. `forked_into` in kernel/src/syscall/process.rs or
+3. `forked_into` in kernel/src/syscall/process.rs or
    `clone_with`/`cgroup_target` in kernel/src/syscall/family.rs put the child in
    its parent's job, or `cgroupfs::clone_target` did not recognise a cgroupfs
    directory.
-3. `attach_permissions` in kernel/src/fs/cgroupfs.rs did not find the common
+4. `attach_permissions` in kernel/src/fs/cgroupfs.rs did not find the common
    ancestor, or judged the move as someone other than the file's opener; or
    `set_node`/`node` lost an owner, so a lookup reports root's.
-4. `Job::remove_named_child` did not mark the job removed, or `count_in_checked`
+5. `Job::remove_named_child` did not mark the job removed, or `count_in_checked`
    and `new_named_child` did not look.
-5. `EventsFile` in kernel/src/fs/cgroupfs.rs does not name the job's `events`
+6. `EventsFile` in kernel/src/fs/cgroupfs.rs does not name the job's `events`
    queue in `poll_queues`, or does not compare the queue's wake count with the
    one it last rendered at; or `job::notify` did not wake the queue at the flip.
-6. `poll::revents`, `poll::select_sets` or epoll's `bits` lost
+7. `poll::revents`, `poll::select_sets` or epoll's `bits` lost
    `Readiness::priority`.
-7. `Job::new_named_child`, `remove_named_child` or `children` in
+8. `Job::new_named_child`, `remove_named_child` or `children` in
    kernel/src/object/job.rs lost a named child, or `room_for_a_child` reads the
    limits wrongly.
-8. `Process::move_to` did not move the process, or its job's counts, so
+9. `Process::move_to` did not move the process, or its job's counts, so
    cgroup.procs or cgroup.events disagree with where the process is.
-9. `Job::kill_members` did not find the member through the registry, or sealed
-   the job.
-10. `job::notify` did not fire the job's EMPTY registrations at the flip,
+10. `Job::kill_members` did not find the member through the registry, or sealed
+    the job.
+11. `job::notify` did not fire the job's EMPTY registrations at the flip,
     `Job::observe` did not fire one on an empty job at once, or `Job::signals`
     does not report EMPTY; or `job_for_cgroup` in kernel/src/syscall/native.rs
     judged the rights by someone other than the caller, or
     `cgroupfs::directory_job` did not recognise a cgroup directory.
-11. A write's text is parsed differently from Linux's: libs/fs/cgroupfs, whose
+12. A write's text is parsed differently from Linux's: libs/fs/cgroupfs, whose
     host tests pin each parse.
 
 See: kernel/src/fs/cgroupfs.rs; kernel/src/object/job.rs; libs/fs/cgroupfs;

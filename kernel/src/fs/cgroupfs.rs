@@ -72,6 +72,7 @@ mod controllers_check;
 mod creator_check;
 mod delegation_check;
 mod events_check;
+mod limits_check;
 mod native_check;
 mod oom_check;
 
@@ -259,6 +260,28 @@ fn procs_metadata(job: &Job, shared: &Shared) -> Metadata {
     node_metadata(job, shared, procs_slot(), FileType::Regular, 0o644)
 }
 
+/// The files whose write permission decides who may set `job`'s own limits,
+/// the ones native `job_set_limit` reaches: whether its controller is
+/// enabled or not, each has its owner and mode, which a delegation by
+/// `chown` leaves root's.
+const LIMIT_FILES: [Kind; 3] = [Kind::MemoryMax, Kind::PidsMax, Kind::CpuWeight];
+
+/// The metadata of each of `job`'s [`LIMIT_FILES`].
+fn limit_metadata(job: &Job, shared: &Shared) -> impl Iterator<Item = Metadata> {
+    files::FILES
+        .iter()
+        .filter(|file| LIMIT_FILES.contains(&file.kind))
+        .map(|file| {
+            node_metadata(
+                job,
+                shared,
+                1 + file_slot(file),
+                FileType::Regular,
+                u32::from(file.mode()),
+            )
+        })
+}
+
 /// Whether `who` may move a process from `from` to `to`, as Linux's
 /// `cgroup_attach_permissions` decides for cgroup v2: write access to the
 /// `cgroup.procs` of the nearest job containing both, and a destination the
@@ -314,12 +337,17 @@ pub(crate) fn clone_target(file: &OpenFile, parent: &Process, from: &Arc<Job>) -
 /// (`docs/CGROUPS.md` §5). `None` for a file that is not a cgroup directory,
 /// a file inside one included, as [`clone_target`] refuses it.
 pub(crate) fn directory_job(file: &OpenFile) -> Option<(Arc<Job>, Metadata)> {
-    let directory = Arc::clone(file.inode())
-        .into_any()
-        .downcast::<Directory>()
-        .ok()?;
+    let directory = directory_of(file)?;
     let procs = procs_metadata(&directory.job, &directory.shared);
     Some((Arc::clone(&directory.job), procs))
+}
+
+/// The cgroupfs directory `file` is open on.
+fn directory_of(file: &OpenFile) -> Option<Arc<Directory>> {
+    Arc::clone(file.inode())
+        .into_any()
+        .downcast::<Directory>()
+        .ok()
 }
 
 /// Answer native `job_for_cgroup` from here: the native ABI is the item's,
@@ -337,7 +365,10 @@ pub(crate) fn install() -> core::result::Result<(), Full> {
 /// the rights the caller's access to its `cgroup.procs` allows
 /// (`docs/CGROUPS.md` §5): `WAIT` to read it, `MANAGE` as well to write it,
 /// and `DUPLICATE` and `TRANSFER` with either, so a service manager can hand
-/// the handle on. It is judged as the caller, whoever opened the descriptor,
+/// the handle on. `SET_LIMIT` only with `MANAGE`, and only to whoever may
+/// also write every one of its [`LIMIT_FILES`]: a user a cgroup was
+/// delegated to by `chown` may fill and kill it, and not raise its own
+/// limits. It is judged as the caller, whoever opened the descriptor,
 /// since what is made is a new capability and not a use of the open file.
 ///
 /// One way only: nothing names a cgroup's path from a job handle, because a
@@ -347,15 +378,24 @@ fn job_for_cgroup(caller: &dyn Host, registers: &[u64; 6]) -> Result<usize> {
     let process = process::of_host(caller).ok_or(status::BAD_HANDLE)?;
     let requested = Requested::from_register(rights).ok_or(status::INVALID_ARGS)?;
     let file = fd::file(process, fd::arg(dirfd)).map_err(|_| status::BAD_HANDLE)?;
-    let (job, procs) = directory_job(&file).ok_or(status::WRONG_TYPE)?;
+    let directory = directory_of(&file).ok_or(status::WRONG_TYPE)?;
     drop(file);
+    let job = Arc::clone(&directory.job);
     if job.is_removed() {
         return Err(status::BAD_STATE);
     }
+    let procs = procs_metadata(&job, &directory.shared);
     let who = access_of(process);
     let passed = Rights::DUPLICATE | Rights::TRANSFER;
     let allowed = if who.permitted(&procs, MAY_WRITE) {
-        passed | Rights::WAIT | Rights::MANAGE
+        let limits = limit_metadata(&job, &directory.shared)
+            .all(|metadata| who.permitted(&metadata, MAY_WRITE));
+        let managed = passed | Rights::WAIT | Rights::MANAGE;
+        if limits {
+            managed | Rights::SET_LIMIT
+        } else {
+            managed
+        }
     } else if who.permitted(&procs, MAY_READ) {
         passed | Rights::WAIT
     } else {
@@ -934,6 +974,9 @@ pub(crate) struct Report {
     /// exited with: the low byte of what `getuid` answered it
     /// (`docs/AUTH.md` §7, P0).
     pub(crate) created_as: u32,
+    /// A delegatee's attempts on its own cgroup's limits, natively and
+    /// through the files, refused.
+    pub(crate) limits_refused: u32,
 }
 
 /// Where [`check`] mounts its cgroupfs: under `/tmp`, and gone afterwards.
@@ -1088,6 +1131,7 @@ pub(crate) fn check() -> Checked<Report> {
     harness.report.controlled = controllers_check::run(&mut harness, &process)?;
     harness.report.oom_killed = oom_check::run(&mut harness)?;
     harness.report.created_as = creator_check::run(&mut harness)?;
+    harness.report.limits_refused = limits_check::run(&mut harness)?;
 
     let root = ns
         .resolve(&harness.ctx, None, CHECK_AT, true)

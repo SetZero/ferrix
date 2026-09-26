@@ -669,6 +669,11 @@ fn check_cgroupfs() {
          ids and exited with getuid's answer, {} (uid 1000's low byte; root's would be 0)",
         checked.created_as,
     );
+    println!(
+        "  limits   a cgroup delegated to uid 1000 left its limits to root: {} attempts on them \
+         refused, natively and through its files, and a job it made itself limited",
+        checked.limits_refused,
+    );
 }
 
 /// sysfs (`docs/SYSFS.md`): the device tree mounted and walked through the
