@@ -17,6 +17,7 @@ xtask/       the host build driver (`cargo xtask …`)
 scripts/     quality gates, generators and fetchers, grouped by role
 tools/       host-side applications for particular hardware
 docs/        design documents, the roadmap, the SysML model, certification
+website/     the public website, deployed to GitHub Pages
 ```
 
 The root `Cargo.toml` is one workspace: `boot/`, `kernel/`, `libs/`,
@@ -130,10 +131,11 @@ exercise the system from outside any one crate.
 | Path | What |
 |---|---|
 | `scripts/check/` | The quality gates `cargo xtask check` and CI run: layering, assembly budget, unsafe and panic audits, the certification item boundary, complexity, commit authors. `rustlex.py` is their shared Rust lexer. |
-| `scripts/gen/` | Generators and their `--check` modes: the architecture document (with its `sysml/` reader), the panic catalogue, fonts, Wayland protocol tables, XKB tables, SOUP, coverage justification, fuzz corpus seeds. |
+| `scripts/gen/` | Generators and their `--check` modes: brand images and release notes, the architecture document (with its `sysml/` reader), the panic catalogue, fonts, Wayland protocol tables, XKB tables, SOUP, coverage justification, fuzz corpus seeds. |
 | `scripts/fetch/` | Fetch pinned downloads: the rustc sysroot, busybox, Chrome, Bad Apple!!. |
 | `scripts/test/` | Test drivers run by hand: the self-host matrix, the host `btrfs check` oracle. |
 | `scripts/data/` | The allow-lists, baselines and registers the checks read. |
+| `scripts/marketing/` | One-off GitHub repository settings, run by the owner (`github-setup.sh`). |
 
 ## `tools/`
 

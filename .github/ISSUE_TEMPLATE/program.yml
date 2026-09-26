@@ -1,0 +1,17 @@
+name: A Linux program that should run
+description: Ask for a program, or report one that runs differently than on Linux
+labels: [linux-abi]
+body:
+  - type: input
+    id: program
+    attributes:
+      label: Program and version
+      placeholder: ripgrep 15.1, static musl build
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: What it does on Ferrix
+      description: Output, or the unimplemented system call the kernel logs.
+      render: text

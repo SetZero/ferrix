@@ -5,6 +5,11 @@ owner before tagging as `docs/BACKLOG.md`'s *Milestones* rule says. The notes
 here are the tag's, kept short: what a person can try, and what is known not
 to work yet. Newest first.
 
+Pushing a tag publishes its section here, verbatim, as a GitHub Release
+(`.github/workflows/release.yml`); a tag with no section fails there. The
+release cadence, naming and the shape of the notes are in
+[docs/marketing/PLAYBOOK.md](marketing/PLAYBOOK.md) §3.
+
 ## stage-11.1-network-display-and-threads — 2026-09-16, features at a89aeb25
 
 Two days of the fleet landing on `main` directly: a network that works, a

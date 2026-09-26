@@ -1,0 +1,42 @@
+name: Something broke
+description: Ferrix did not boot, a program failed, or a gate went red
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: The command you ran
+      placeholder: cargo xtask run --arch x86_64 --net
+    validations:
+      required: true
+  - type: dropdown
+    id: arch
+    attributes:
+      label: Guest architecture
+      options: [x86_64, aarch64, armv7a, all]
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Host (OS, QEMU version, accelerator)
+      placeholder: Ubuntu 26.04, QEMU 10.2.1, kvm
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or tag
+      placeholder: output of `git rev-parse --short HEAD`
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Serial log
+      description: The last hundred lines are usually enough. The line with `FERRIX-BOOT-OK` or the panic matters most.
+      render: text

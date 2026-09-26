@@ -1,3 +1,30 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/banner-dark.png">
+    <img src="docs/brand/banner-light.png" alt="Ferrix: a Rust operating system that runs rustc and builds itself" width="100%">
+  </picture>
+</p>
+
+<p align="center">
+  <a href="https://github.com/SetZero/ferrix/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/SetZero/ferrix/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/licence-MIT-blue"></a>
+  <a href="docs/ASSEMBLY.md"><img alt="99.79% Rust" src="https://img.shields.io/badge/kernel-99.79%25%20Rust-f26b1d"></a>
+  <img alt="x86-64, AArch64, ARMv7-A" src="https://img.shields.io/badge/arch-x86--64%20%7C%20AArch64%20%7C%20ARMv7--A-555">
+  <a href="https://setzero.github.io/ferrix/"><img alt="Website" src="https://img.shields.io/badge/web-setzero.github.io%2Fferrix-111418"></a>
+</p>
+
+<p align="center">
+  <b><a href="https://setzero.github.io/ferrix/">Website</a></b> ·
+  <b><a href="#getting-started">Boot it</a></b> ·
+  <b><a href="docs/roadmap/README.md">Roadmap</a></b> ·
+  <b><a href="docs/RELEASES.md">Releases</a></b> ·
+  <b><a href="#how-it-is-built">How it is built</a></b>
+</p>
+
+<p align="center">
+  <img src="docs/brand/screenshots/desktop-hero.png" alt="The Ferrix desktop: the hyprix Wayland compositor tiling a zinc terminal, btop and Chrome" width="100%">
+</p>
+
 # Ferrix
 
 An operating system written in Rust for x86-64, AArch64 and ARMv7-A, whose
@@ -31,6 +58,21 @@ volume and boots it:
    93.49 |   image /data/src/build/x86_64/ferrix.img (63 KiB loader, 75510 KiB kernel, 10666 KiB initramfs)
   x86_64: Ferrix built its own image, and it booted
 ```
+
+## How it is built
+
+Ferrix is written by a fleet of AI agents: many Claude sessions working at
+once, each in its own git worktree. A human product owner decides scope and
+priorities. A coordinator session orders the landings on `main`, and a
+certification consultant reviews every change to the kernel core. The first
+public commit is dated 2026-09-11. `rustc` ran on Ferrix on 2026-09-22, and
+Ferrix built its own image the day after.
+
+Nothing about the process is hidden. A change lands only when its gate
+passes, and every gate boots the whole system. The rules the fleet works by,
+and the incidents behind each one, are in [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
+The [roadmap](docs/roadmap/README.md) and [backlog](docs/BACKLOG.md) show
+what each session owns and what is left.
 
 ## What exists today
 

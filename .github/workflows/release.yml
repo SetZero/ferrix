@@ -1,0 +1,37 @@
+name: Release
+
+# A pushed release tag becomes a GitHub Release, which is what reaches the
+# people watching the repository ("Custom -> Releases") and puts a release on
+# the repository's front page. The notes are the tag's section of
+# docs/RELEASES.md, so write that section before pushing the tag; the job
+# fails rather than publish a release with no notes.
+
+on:
+  push:
+    tags: ["v*", "stage-*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: An existing tag to publish a release for
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          python3 scripts/gen/release-notes.py "$TAG" > "$RUNNER_TEMP/notes.md"
+          title=$(python3 scripts/gen/release-notes.py --title "$TAG")
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$title" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create "$TAG" --verify-tag --title "$title" --notes-file "$RUNNER_TEMP/notes.md"
+          fi

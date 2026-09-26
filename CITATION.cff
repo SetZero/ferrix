@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: If you refer to Ferrix in a paper or a talk, please cite it as below.
+title: "Ferrix: a Rust operating system that runs rustc and builds itself"
+type: software
+authors:
+  - name: Sebastian Dauenhauer
+repository-code: https://github.com/SetZero/ferrix
+url: https://setzero.github.io/ferrix/
+license: MIT
+keywords: [operating system, Rust, kernel, Linux ABI, btrfs, Wayland, AI agents]
