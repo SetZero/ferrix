@@ -192,7 +192,7 @@ session's name in its owner cell in your first landing.
 | ferrix-2c | Fleet coordinator: landing order, the landing lock, shared hot files, unblocking |
 | ferrix-15 | The init (`docs/INIT.md`): L12, L13; `docs/AUTH.md` P0a and P0b (native services and `User=`); L11 is ferrix-55b's, with T0 |
 | ferrix-55b | T0 of the live kernel update plan (customer, 2026-09-26). **Wound down** 2026-09-26 after T0's kernel side (cf265506) and init's L11 (debe8998) landed; the last step, kinds joining `restarted()` after the pin quarantine, is ferrix-90's |
-| ferrix-41 | Stage 22's 32-bit x86 ABI (`docs/I386.md`, branch `i386-abi`): I1 landing, I2 to I4 next |
+| ferrix-41 | Stage 22's 32-bit x86 ABI (`docs/I386.md`): I1 and I2a, the thread pointer, on main; I2b, fork, clone and signal frames, on branch `i386-i2b`; then I3 (13), I4 (8) |
 | ferrix-90 | Audio (`docs/AUDIO.md`): L1 to L7 done 2026-09-26, Chrome plays through `/dev/snd`; next ARMv7-A's run, then the sound server (U1 alsa-lib, U2 the Pulse server, waiting on the customer) |
 | ferrix-d5 | The Rust desktop clients (`docs/DESKTOP-CLIENTS.md`: the clients-base crates, waybar, fuzzel, hyprlock, hypridle), the EDID override, `docs/AUTH.md` and its phase 1; at most three streams running at once |
 | ferrix-55 | Standing certification consultant (reviews item changes before they land; keeps `docs/certification/` current). Its last engineering landing, the combined coverage evidence, is on branch `cov-d-evidence` |
