@@ -1,0 +1,523 @@
+# Audio: `/dev/snd` over a ring-3 virtio-snd driver
+
+Version 1, a draft for the product owner (ferrix-32), written on 2026-09-26
+at the customer's request. The customer moved audio forward the same day
+(§6, decision 1); the rest of §6 is still the owner's. It has the shape of `docs/INPUT.md` on purpose: a core in the
+kernel, a ring-3 driver started by devmgr, the Linux ABI (ALSA) with its
+subset taken from a UAPI probe, and QEMU's far end as the test's witness.
+
+## 1. What this is, and what it is not
+
+Ferrix has no audio at all. `docs/ROADMAP.md` stage 22 names three parts for
+Steam: a `virtio-snd` driver in ring 3, an audio core with a `/dev/snd`
+shaped enough for a client library, and a server speaking the PulseAudio or
+PipeWire protocol, 30 points as a first guess. `docs/CHROME.md` §3 notes the
+same gap for the browser. This document specifies the first two, which are
+the part the kernel owns, and says what the third needs from them:
+
+* **what clients call**, read from alsa-lib, PipeWire, SDL3 and Chromium
+  sources rather than assumed (§2);
+* **the audio core** in the kernel, which owns each playback stream, its
+  buffer and its pointers (§3.1);
+* **the control protocol** between the core and the ring-3 driver, in a
+  host-tested crate `libs/sndctl` (§3.2);
+* **the driver** and what QEMU's virtio-snd does that the spec does not say
+  (§3.3);
+* **the ALSA subset** `/dev/snd/controlC0` and `/dev/snd/pcmC0D0p` answer
+  (§3.4);
+* **the test**: QEMU's `wav` backend records what the guest played, and
+  xtask compares it with what the program wrote (§4).
+
+It is not capture, a mixer or volume control, more than one sample format,
+mapped (`MMAP`) access, or a sound server; §7 says when each comes. It is not
+hardware other than virtio-snd: the DK1's audio interface and codec and the
+Pixel 7's are §7 too.
+
+**Exit of the audio iteration:** on x86-64 and AArch64, with a virtio-snd
+device whose far end is QEMU's `wav` backend, a user program finds
+`/dev/snd/pcmC0D0p`, configures it through ALSA's `HW_PARAMS`, writes a
+second of a known sample sequence with `WRITEI_FRAMES`, drains it, and
+closes it. `cargo xtask test-audio` requires every frame the program wrote
+to be in QEMU's WAV file, in order, with none missing, repeated or changed.
+`cargo xtask run --audio` gives a person the same device with a backend they
+can hear.
+
+## 2. Prerequisites: what clients call
+
+The sources read, on 2026-09-26: alsa-lib 1.2.16.1 (`src/pcm/pcm_hw.c`,
+`src/control/control_hw.c`, `src/pcm/pcm_mmap.c`), alsa-utils `aplay.c`,
+PipeWire 1.6.9 (`spa/plugins/alsa/alsa-pcm.c`, `alsa-udev.c`), SDL3's ALSA
+backend, Chromium's `media/audio/alsa`, and Linux's `sound/core/pcm_native.c`.
+Every number below came from compiling `/usr/include/sound/asound.h`
+(linux-libc-dev 7.0.0-29.29) at both widths; L1 (§5) commits that probe.
+
+### 2.1 What alsa-lib's `hw` plugin does
+
+For `aplay -D hw:0,0`, alsa-lib:
+
+1. Loads `/usr/share/alsa/alsa.conf`. Even `hw:0,0` is defined there, so
+   without the file nothing opens.
+2. Opens `/dev/snd/controlC0` and asks `CTL_CARD_INFO`, then reopens it and
+   asks `CTL_PVERSION` (major and minor must be 2.0) and
+   `CTL_PCM_PREFER_SUBDEVICE` (−1). Any failure here fails the open.
+3. Opens `/dev/snd/pcmC0D0p` with `O_RDWR | O_NONBLOCK | O_CLOEXEC`, asks
+   `PCM_INFO` and `PCM_PVERSION`, and sends `PCM_USER_PVERSION` and
+   `PCM_TTSTAMP` (monotonic). All four are fatal on failure.
+4. **Tries to map the status and control pages, and falls back.** When
+   either `mmap` fails, alsa-lib keeps that half in its own memory and asks
+   `PCM_SYNC_PTR` after every operation instead. Linux itself allows the
+   mapping only on x86, PowerPC and Alpha (`pcm_native.c`), so on every Arm
+   Linux machine alsa-lib already runs the `SYNC_PTR` path. Ferrix refuses
+   the mapping on all three architectures and implements `SYNC_PTR`.
+5. Clears `O_NONBLOCK`, then configures: twenty or more `PCM_HW_REFINE`s as
+   `snd_pcm_hw_params_any` and each `set_*` narrow the space, then
+   `PCM_HW_PARAMS`, a default `PCM_SW_PARAMS`, and `PCM_PREPARE`.
+6. Plays with `PCM_WRITEI_FRAMES`. On `EPIPE` (an underrun) it asks
+   `PCM_STATUS_EXT` and prepares again.
+7. At the end, `PCM_DRAIN`, which must *start* a prepared stream that holds
+   frames: a short file never reaches the start threshold. Then `PCM_DROP`,
+   `PCM_HW_FREE` and `close`.
+
+For the `hw` plugin alsa-lib solves no constraints of its own: every `set_*`
+is a `HW_REFINE` round trip, and `set_*_near` tries a minimum, then a
+maximum, and restores the saved space on `EINVAL`. So **one fixed
+configuration is enough** if the core intersects exactly. It must treat
+`openmin`, `openmax` and `integer` as Linux does, fill `cmask` with the
+parameters it changed, and answer `EINVAL` for an empty intersection.
+
+### 2.2 What real clients add
+
+* **The `default` device** is `plug` over `hw` unless
+  `/usr/share/alsa/cards/<driver>.conf` exists for the card's driver
+  string. The core names its driver `Ferrix`, which has no such file, so
+  `default` converts any rate, format and channel count to the card's one
+  configuration, and emulates mapped access over a read-write card
+  (`mmap_emul`, built by default). dmix, which needs mapped access and
+  System V IPC, is never chosen.
+* **PipeWire** asks for mapped access first and falls back to read-write
+  when `set_access` fails (`alsa-pcm.c`, about lines 2316–2333;
+  `api.alsa.disable-mmap` forces it). It uses `snd_pcm_status`, `start`,
+  `delay`, `rewind` and `forward`. It uses pause only when `INFO_PAUSE` is
+  set. It finds cards through libudev, which Ferrix does not have, so it is
+  given the card as a static node (`api.alsa.path = "hw:0,0"`).
+* **SDL3** and **Chromium** open `default` with read-write interleaved access
+  only, and use `writei`, `avail`, `delay` and `start`. SDL also calls
+  `reset`, and enumerates with `CTL_PCM_NEXT_DEVICE` and `CTL_PCM_INFO`.
+* **A mixer user** (amixer, PipeWire's profile code) lists elements with
+  `CTL_ELEM_LIST` and subscribes with `CTL_SUBSCRIBE_EVENTS`. A failed
+  subscription fails the whole load. An empty element list is fine.
+
+### 2.3 What a sound server needs from the kernel
+
+This is for iteration 2, not this one, and most of it is already there:
+`memfd_create` with seals, `MAP_SHARED` of a memfd, `eventfd`, `timerfd`,
+`signalfd`, `epoll`, futexes, `clock_nanosleep`, `SCM_RIGHTS`,
+`SCM_CREDENTIALS`, `SO_PEERCRED` and `SO_PASSCRED` all exist. What does not:
+`sched_setscheduler` accepts only `SCHED_OTHER` (`kernel/src/syscall/limits.rs`,
+the policy check), and `RLIMIT_RTPRIO` is stored but enforces nothing. A
+server asks for `SCHED_FIFO` and runs without it when refused, so the gap is
+latency under load rather than a failure. Stage 14 (real-time domains) is
+where it closes.
+
+## 3. The design
+
+### 3.1 Who owns the stream: the core, with a buffer it allocates
+
+**The audio core** (`kernel/src/audio`) has one task per card, as the input
+core has one per device. It holds what the driver said the device offers,
+and for each playback stream it publishes: the state, the buffer, and the
+pointers.
+
+* **One configuration.** Version 1 publishes S16_LE, two channels, 48 kHz,
+  a period of 960 frames (20 ms, a whole number of microseconds, so that
+  every interval in the refine is closed) and four periods: a buffer of
+  3840 frames, 15360 bytes. It publishes this only if the device's
+  `PCM_INFO` offers it. QEMU's does (§3.3).
+* **The buffer is the core's.** At `READY` the core allocates one VMO per
+  stream, four pages holding the 15360-byte buffer, and hands it to the
+  driver, which pins it **read-only** into its device's IOMMU domain. This is
+  the display's model (`docs/DISPLAY.md`, the card VMO), not the block or net
+  ring's, whose data areas are the driver's. The device reads samples
+  straight from the core's pages, and the driver never touches a sample and
+  cannot change one.
+* **One opener.** A second open of `pcmC0D0p` answers `EBUSY`, as Linux's
+  answer for a card with one substream. Mixing streams from several programs
+  is the sound server's job, as it is on Linux without dmix.
+* **Pointers are ALSA's.** `appl_ptr` counts frames the program wrote,
+  `hw_ptr` frames the device finished, both modulo `boundary`. `boundary`
+  starts at the buffer size and doubles while `boundary × 2 ≤ LONG_MAX −
+  buffer_size`, where `LONG_MAX` is 2³¹−1 on ARMv7-A: the same arithmetic
+  alsa-lib does on its side, so `SW_PARAMS` returns it. `avail` for playback
+  is `hw_ptr + buffer_size − appl_ptr`.
+* **A write copies, and not under a lock.** `WRITEI_FRAMES` copies from the
+  program into the VMO between `appl_ptr` and `hw_ptr + buffer_size`, a
+  region nothing else reads, and only then advances `appl_ptr` under the
+  stream's lock. The input core learned that a copy from a program's memory
+  may fault, and a fault may not be taken with preemption disabled
+  (`docs/INPUT.md` §5, the fourth finding).
+* **Submission.** The core tells the driver about a range of the buffer once
+  it holds samples. It submits each period as it fills. At `START` and
+  `DRAIN` it also submits the partial period up to `appl_ptr`, and the next
+  submission continues from where that one ended. A completion advances
+  `hw_ptr` by exactly the frames it carried. So `hw_ptr` moves in periods
+  while playing, and the card says so with `INFO_BATCH`.
+* **Start.** A write that brings the queued frames to `start_threshold`
+  starts the stream, as does `PCM_START` or `PCM_DRAIN` from `PREPARED`.
+* **Underrun.** When a completion leaves `avail ≥ stop_threshold` while
+  `RUNNING`, the stream enters `XRUN`. The core halts it, and every
+  following write answers `EPIPE` until `PREPARE`. The device is never left
+  holding stale periods: the core only ever submits frames the program has
+  written since the last prepare.
+* **Drain.** `INFO_PERFECT_DRAIN` is set, so alsa-lib asks for no silence
+  fill. The core submits what is left and waits, or answers `EAGAIN` to a
+  non-blocking descriptor, until every submission has completed, then
+  returns the stream to `SETUP`. The silence fields of `SW_PARAMS` are
+  stored and not acted on, a written deviation (§6).
+* **Timestamps.** Each completion is stamped from the monotonic clock, which
+  `STATUS_EXT` and `SYNC_PTR` report as `tstamp`. `trigger_tstamp` is the
+  moment of the start or stop. `audio_tstamp` is zero, as for a Linux driver
+  without a link clock.
+
+The state machine, the refine, the pointer and boundary arithmetic, the
+submission rule and the underrun rule are pure logic. They go in
+`libs/sndctl` beside the protocol (`sndctl::pcm`), host-tested and fuzzed, so
+the kernel's part is glue.
+
+### 3.2 The driver protocol: a control channel, `libs/sndctl`
+
+Messages are small and come at most once a period per stream, fifty a second
+at version 1's configuration. As for input, there is no data ring: one
+control `Channel` per card, with `libs/inputctl`'s message shape. Each
+message is fixed-size and little-endian, starts with a type and a length,
+has reserved bytes that must be zero, and is validated in the order its
+fields are read. Handles travel alongside.
+
+**Bring-up follows input.** devmgr's table gets `(0x1AF4, [0x1059],
+b"snd", Kind::Sound)`; 0x1059 is virtio's modern PCI id for device 25,
+`VIRTIO_ID_SOUND`. `start_sound` asks the kernel for the control channel
+with a new native call, `SOUND_CONTROL_CREATE` (0x1050, the next free number
+after `DEVICE_CLOCK`), sends `START` with blk's layout to `/lib/drivers/snd`,
+and waits for `PUBLISHED`. devmgr does not restart it, as it does not
+restart an input driver.
+
+| Type | Direction | Body | Handles |
+|---|---|---|---|
+| `HELLO` | driver → core | version; location; the device's stream count; for each stream (at most 10, QEMU's limit), its direction, format and rate bitmaps and channel range from `PCM_INFO` | driver port (`WRITE \| TRANSFER`) |
+| `READY` | core → driver | the card's index; for each stream the core publishes, its id and version 1's configuration | core port (`WRITE`); one buffer VMO per published stream (`READ \| MAP`) |
+| `REFUSED` | core → driver | reason | — |
+| `SUBMIT` | core → driver | stream; sequence number; offset and length in bytes within the buffer VMO | — |
+| `ELAPSED` | driver → core | stream; sequence number; the device's status and `latency_bytes` | — |
+| `HALT` | core → driver | stream | — |
+| `HALTED` | driver → core | stream; how many submissions came back unplayed | — |
+| `STOP` / `STOPPED` | as blk | | |
+
+`READY` carries the configuration so that the driver does not repeat the
+refine: it sends `PCM_SET_PARAMS` and `PCM_PREPARE` for each published
+stream, pins each VMO, and only then sets `DRIVER_OK`. `HALT` means stop the
+stream and hand back everything posted. The driver answers once the device
+has returned every buffer, and the stream is prepared again for the next
+`START`. `STOP` and `STOPPED` keep blk's meaning, the whole session, which is
+why the stream's pair is named differently.
+
+**What the core never trusts:** a `HELLO` stream count over 10 or a bitmap
+bit beyond its enum; an `ELAPSED` for a stream not published, out of
+sequence order, or for a submission not outstanding; a `HALTED` count that
+does not match what was outstanding. Any of these gets `REFUSED`, then
+quiesce, the same as an input driver that lies. The device's word is checked
+by the driver first (§3.3).
+
+**A driver that goes away** takes the card with it. Each open stream enters
+`DISCONNECTED`. Every ioctl then answers `ENODEV`, and `poll` reports
+`POLLERR | POLLHUP`, as a Linux client sees an unplugged USB card. The nodes
+leave `/dev/snd`, and the card's index is not given out again this boot.
+
+### 3.3 The driver, and what QEMU's device does
+
+**The driver** (`user/snd`, logic in `libs/virtio-snd` over
+`libs/virtio-blk`'s traits, as `libs/virtio-input` does) negotiates
+`VIRTIO_F_VERSION_1`, reads the configuration (jacks, streams, channel maps),
+asks `PCM_INFO` for every stream, and sends `HELLO`. On `READY` it prepares,
+pins and sets `DRIVER_OK` (§3.2). For each `SUBMIT` it posts one chain on the
+transmit queue: the 4-byte `virtio_snd_pcm_xfer` from its own memory, the
+submitted range as one or two device-readable descriptors (a 3840-byte
+period crosses at most one page boundary of the VMO), and the 8-byte
+`virtio_snd_pcm_status` for the device to write. Each used chain becomes an
+`ELAPSED`. The control and event queues get one interrupt vector and the
+transmit queue another. The receive queue is not set up in version 1.
+
+The protocol is `libs/virtio::snd`, beside `::input` and `::console`: the
+configuration, the request and response layouts, and a trust section, with
+hostile-device tests. The driver checks that a used chain's length is the
+status's 8 bytes, that the status is `VIRTIO_SND_S_OK`, and that a control
+response has the length its request expects.
+
+**QEMU 9.2.4's device** (`hw/audio/virtio-snd.c`, read 2026-09-26) differs
+from what the spec lets a driver expect in five ways, each of which the
+driver has to live with:
+
+* **Two streams by default, one each way** (`VIRTIO_SOUND_STREAM_DEFAULT`,
+  line 30). Stream `i` is output when `i < streams/2 + streams%2` (the
+  `prepare` function), so stream 0 plays and stream 1 records. The core
+  publishes only the output. The boot line says the input was left out, as
+  the input core's line names what it did not publish.
+* **Every stream is already configured and prepared at realize**, with
+  S16, two channels, 48 kHz, an 8192-byte buffer and 2048-byte periods
+  (lines 1075–1080). `PCM_INFO` before any `SET_PARAMS` therefore answers.
+  Its `channels_max` is the channel count *currently set*, not what the
+  backend could take (the `stream->info.channels_max = as.nchannels`
+  assignment in `prepare`). A driver that believed it would offer one
+  channel after a mono configuration.
+* **The event queue is not implemented** (`virtio_snd_handle_event`, line
+  802: "event queue is unimplemented"). No `PCM_PERIOD_ELAPSED` and no
+  `PCM_XRUN` event ever arrives. Completions on the transmit queue are the
+  only clock, which is why §3.1 builds everything on them.
+* **A buffer comes back only when the backend has consumed all of it**
+  (`virtio_snd_pcm_out_cb`, lines 1144–1190), and the backend consumes at
+  the audio rate against `QEMU_CLOCK_VIRTUAL` (`audio_rate_peek_bytes`,
+  `audio/audio.c`). So completions do pace playback. With nothing posted,
+  the backend is given nothing.
+* **`latency_bytes` is the buffer's own size** (`return_tx_buffer`, line
+  1121), not a latency. The core does not add it to `DELAY`.
+
+Formats offered are S8, U8, S16, U16, S32, U32 and FLOAT, and rates from
+5512 to 384000 Hz (lines 40–61). Version 1 uses one of each.
+
+### 3.4 The ALSA subset
+
+`/dev/snd/controlC0` and `/dev/snd/pcmC0D0p` are character devices of major
+116, Linux's static ALSA major (`CONFIG_SND_MAJOR`, which is not in the UAPI
+headers), with minors from Linux's static layout: control 0 and the first
+playback device 16. alsa-lib never checks either number. This machine's
+Ubuntu kernel uses dynamic minors (its `controlC0` is `116:18`), which shows
+nothing depends on them. Both nodes are `0660` and root's, as `card0` is.
+
+`sys_ioctl` gets one more branch beside the console's, `card<N>`'s,
+`renderD<N>`'s and `eventN`'s, by the per-open object as theirs are. The numbers below are x86-64's and AArch64's, which are the same
+for every request. ARMv7-A's differ where a structure holds a `long`,
+`snd_pcm_uframes_t` or a pointer, and L1 pins both widths.
+
+**The control node** answers `CTL_PVERSION` (2.0.9, `SNDRV_CTL_VERSION`),
+`CTL_CARD_INFO` (driver `Ferrix`, name and long name from the device),
+`CTL_PCM_PREFER_SUBDEVICE` (stored), `CTL_PCM_NEXT_DEVICE`, `CTL_PCM_INFO`
+(`ENOENT` for the capture direction), `CTL_ELEM_LIST` with no elements, and
+`CTL_SUBSCRIBE_EVENTS`, after which `poll` never fires because there are no
+events. `CTL_ELEM_INFO`, `ELEM_READ`, `ELEM_WRITE` and `TLV_READ` answer
+`ENOENT`, which is what alsa-lib's channel-map queries and PipeWire's pitch
+probe expect for an element that does not exist. Hardware-dependent, rawmidi
+and UMP device enumeration answer "none" (−1).
+
+**The playback node:**
+
+| Request | Number (64-bit) | Answer |
+|---|---|---|
+| `PVERSION` | `0x80044100` | 2.0.18 (`SNDRV_PCM_VERSION`) |
+| `INFO` | `0x81204101` | card 0, device 0, one subdevice, playback |
+| `TSTAMP`, `TTSTAMP` | `0x40044102`, `0x40044103` | stored; `TTSTAMP` chooses the clock of `tstamp` |
+| `USER_PVERSION` | `0x40044104` | stored |
+| `HW_REFINE`, `HW_PARAMS` | `0xc2604110`, `0xc2604111` | §2.1's intersection with the one configuration; `info` = `INTERLEAVED \| BLOCK_TRANSFER \| BATCH \| PERFECT_DRAIN`, `msbits` 16, `rate_num`/`rate_den` 48000/1, `fifo_size` 0 |
+| `HW_FREE` | `0x00004112` | back to `OPEN` |
+| `SW_PARAMS` | `0xc0884113` | thresholds and `avail_min` stored; `boundary` computed (§3.1) |
+| `STATUS_EXT` | `0xc0984124` | state, pointers, `avail`, `delay`, timestamps |
+| `DELAY` | `0x80084121` | `appl_ptr − hw_ptr` |
+| `SYNC_PTR` | `0xc0884123` | the status half out; `appl_ptr` and `avail_min` in unless the flags say otherwise; the same number at both widths |
+| `PREPARE`, `RESET`, `START`, `DROP`, `DRAIN` | `0x00004140`–`0x00004144` | §3.1 |
+| `XRUN` | `0x00004148` | forces `XRUN` |
+| `REWIND`, `FORWARD` | `0x40084146`, `0x40084149` | 0 frames moved |
+| `WRITEI_FRAMES` | `0x40184150` | §3.1; `EAGAIN` when non-blocking and full, `EPIPE` in `XRUN`, `EBADFD` before `PREPARE` |
+
+**Refused:** `mmap` at every offset (`ENXIO`), including the status and
+control pages; `PAUSE` and `RESUME` (`ENOSYS`, Linux's answer for a card
+without `INFO_PAUSE` and `INFO_RESUME`); `LINK` and `UNLINK`, since there is
+one stream, which PipeWire tolerates because it links only follower devices;
+`CHANNEL_INFO`, which only mapped access uses. The legacy `STATUS` and the
+time32 forms of `SYNC_PTR`, `STATUS` and `STATUS_EXT` are not implemented.
+L6 takes each refusal's errno from `pcm_native.c`, not from this list.
+
+**Never `ENOTTY` for `STATUS`, `STATUS_EXT` or `SYNC_PTR`.** musl's `ioctl`
+retries exactly these three (with the timer's and rawmidi's status) under
+their time32 numbers when the kernel answers `ENOTTY`
+(`src/misc/ioctl.c`, `compat_map`). So an `ENOTTY` would come back as a
+second request with the time32 layout. The legacy `STATUS` answers `EINVAL`
+instead. Every other request the node does not know answers `ENOTTY`, as
+Linux's does.
+
+**`poll`** reports `POLLOUT | POLLWRNORM` when the stream is `PREPARED` or
+`RUNNING` and `avail ≥ avail_min`, and `POLLOUT | POLLERR` in `XRUN`,
+`SETUP`, `OPEN` or `DISCONNECTED`. A draining stream reports nothing until
+the drain ends, as Linux does.
+
+### 3.5 Discovery and configuration without udev
+
+alsa-lib finds cards only by opening `controlC0` to `controlC31` and asking
+`CARD_INFO`. It reads nothing from `/proc/asound` or `/sys`. So the nodes
+existing is discovery. Two files must be on the image for any client:
+`/usr/share/alsa/alsa.conf` and the `pcm/` and `ctl/` files it includes,
+from the same alsa-lib version as the library that reads them. Iteration 2
+adds them with the library.
+
+`/sys/class/sound/card0`, `controlC0` and `pcmC0D0p` are published with
+`dev`, `uevent` and `pcm_class` (`generic`), following `docs/SYSFS.md`'s
+classes, because PipeWire's udev path reads `pcm_class` and a future udev
+replacement will look there. No client in this iteration needs them.
+
+## 4. QEMU and xtask
+
+* **The device.** `-device virtio-sound-pci,audiodev=snd0,disable-legacy=on,iommu_platform=on`
+  on x86-64 and AArch64, only under `test-audio` and `run --audio`, so no
+  existing gate changes. On ARMv7-A the same without `iommu_platform=on`, for
+  the U-Boot reason `docs/INPUT.md` §4 records.
+* **The backend for the test** is `-audiodev
+  wav,id=snd0,path=<log dir>/audio.wav,out.mixing-engine=off`. With the
+  mixing engine off, QEMU neither resamples nor applies volume, and opens the
+  backend with the stream's own settings (`audio_template.h`,
+  `audio_pcm_hw_add_`). So the file should hold exactly the frames the device
+  consumed. That is read from source, not yet seen, and L7's first run
+  confirms it. If it does not hold, the check falls back to a tolerance,
+  which §6 asks the owner to accept or refuse. QEMU writes the WAV header's
+  lengths when the voice closes (`wav_fini_out`), so xtask ends QEMU with
+  QMP `quit` and, if the header still says zero, reads the data from byte 44
+  to the end.
+* **The program.** `tone`, a Linux program built as init the way
+  `compositor/evecho` is, over a new `ferrix-linux-abi::sound`. It opens
+  `controlC0`, prints `CARD_INFO`'s driver and name, opens `pcmC0D0p`, and
+  refines to version 1's configuration exactly as alsa-lib would, including
+  one `set_*_near` round of `EINVAL`s. It prints `tone: ready`, then writes
+  48000 frames of a **counter**: frame `n` holds `n + 1` in the left channel
+  and its complement in the right, as S16_LE, so no frame is silence and a
+  lost, repeated or swapped period has a position. It writes in blocks of
+  700 frames, which is not a divisor of the period, so partial periods are
+  exercised. It then drains, prints `STATUS_EXT`'s state and pointers,
+  closes, and prints `tone: done`.
+* **`test-audio`.** It boots the program with the device and waits for the
+  card line, `ready` and `done`, then ends QEMU. It requires the WAV's data,
+  with leading and trailing zero frames trimmed, to be exactly frames 1 to
+  48000 of the counter. On a mismatch it reports the first frame where the
+  two part, as expected against actual. If the program prints `tone:
+  failed`, the test stops at once and reports it.
+* **The negative control.** `tone` built with `negative-control` prints
+  `tone: negative control` first, and writes period 10 of the sequence
+  twice, skipping period 11. The check must see that marker line, then fail
+  at exactly frame 10 × 960 + 1, and on nothing else.
+* **`run --audio`** adds the device with a backend a person can hear:
+  `pipewire` or `pa` on a Linux host, `dsound` on Windows. The QEMU on this
+  machine's `PATH`, `/usr/local/bin`'s 9.2.4, lists only `none`, `dbus`,
+  `oss`, `spice` and `wav`, although the build tree it came from
+  (`~/Documents/qemu/qemu/build`) is configured with `pa` and `pipewire`.
+  `/usr/bin`'s 10.2.1 has both, for x86-64 only. §6 asks the customer which
+  to use.
+
+## 5. Landings and points
+
+Each is a small landing on main, gated on nazuna. The first four touch no
+kernel code. **L1 comes first:** every later landing takes its numbers from
+it.
+
+| # | Landing | Kernel? | Points |
+|---|---|---|---|
+| L1 | `libs/linux-abi::sound`: §3.4's requests, the protocol versions, the parameter, access, format and state enums, the `INFO_*` bits, the mmap offsets, and the layouts of `snd_interval`, `snd_mask`, `hw_params`, `sw_params`, `status`, `mmap_status`, `mmap_control`, `sync_ptr`, `xferi`, `ctl_card_info`, `pcm_info` and `ctl_elem_list`, at both widths with time64 on ARMv7-A. From a committed probe (`probe/sound.c`, `sound.sh`, `sound-64.txt`, `sound-32.txt`) compiled against `/usr/include/sound/asound.h`, as `input.sh` does, pinned by `src/tests/sound.rs` | no | 2 |
+| L2 | `libs/virtio::snd`: configuration, control requests and responses, the transfer header and status, hostile-device tests, checked against QEMU 9.2.4, fuzzed | no | 2 |
+| L3 | `libs/sndctl`: §3.2's messages and validation, and `pcm`: the state machine, the refine with open ends and the integer flag, pointers and `boundary` at both widths, submission, start, underrun and drain, `SYNC_PTR`'s flags, `poll`'s answer. Host-tested against a table of alsa-lib's `set_*_near` sequences, fuzzed | no | 5 |
+| L4 | `libs/virtio-snd`: driver logic over `libs/virtio-blk`'s traits (bring-up, `PCM_INFO` into `HELLO`, prepare, one chain per `SUBMIT`, completions into `ELAPSED`, `HALT`), tested against a simulated device with QEMU's five behaviours (§3.3) | no | 3 |
+| L5 | `user/snd`, devmgr's table entry and `start_sound`, `SOUND_CONTROL_CREATE`, the core's per-card task and buffer VMOs; exit: the boot line names the card, its published stream and what it left out | yes | 4 |
+| L6 | devfs `/dev/snd/controlC0` and `pcmC0D0p`: per-open objects, the ioctl branch and §3.4's subset, `WRITEI_FRAMES`, `poll`, `EBUSY` for a second opener, `DISCONNECTED`; `/sys/class/sound` | yes | 5 |
+| L7 | `tone` and `ferrix-linux-abi::sound`'s use in it; `xtask test-audio` with the `wav` backend and its negative control; `run --audio` | no | 3 |
+|  | **The audio iteration** |  | **24** |
+
+**Iteration 2, the user space, is not in these 24**:
+
+| # | Landing | Points |
+|---|---|---|
+| U1 | alsa-lib 1.2.16.1 built on ferrousli (static first, shared when a client wants it), `alsa.conf` and its includes on the image, alsa-utils' `aplay` and `speaker-test`; `test-audio` gains a boot that plays through `default`, which is `plug:hw` | 3 |
+| U2 | A sound server: PipeWire with pipewire-pulse on ferrousli, or a Rust server speaking the PulseAudio native protocol (§6, decision 5) | unsized |
+| U3 | SDL, Chromium and a game through it, and whatever they find missing | found by running |
+
+The roadmap prices all three parts at 30. This breakdown puts the first two
+at 27 and leaves 3 for the server, which is not credible: PipeWire alone is
+a daemon, a session manager and a protocol server. The product owner
+re-baselines once U2's first attempt has sized it.
+
+## 6. Decisions and open questions
+
+**For the product owner (ferrix-32):**
+
+1. **Priority. Decided by the customer, 2026-09-26: audio is current
+   work, not stage 22's.** It was written into stage 22 (Steam), which has
+   not started, and none of this iteration depends on the rest of that
+   stage. The browser (`docs/CHROME.md` §3) and the desktop want it sooner.
+   Where it sits in the roadmap's numbering, and how it is ordered against
+   the other open streams, is the owner's.
+2. **A kernel core with `/dev/snd`**, rather than a driver with no kernel
+   subsystem that binds a Unix socket itself (devmgr's `Kind::Port`, as
+   vport does for the clipboard). The socket design is less kernel code, but
+   every client then needs the server's protocol from day one, and ALSA
+   clients reach it only through alsa-lib's PipeWire plugin. The core gives
+   first sound with no port at all (`tone`), a deterministic gate, and the
+   same place a Linux sound server sits on. Proposed: the core.
+3. **One configuration in version 1** (§3.1), with `plug` converting for
+   every client that asks for something else. More rates and period sizes
+   need the refine to carry ranges and Linux's rules between them. That
+   work is a later row, not a blocker.
+4. **Written deviations:** one opener per stream (`EBUSY`), no status and
+   control page mapping on x86-64 either, although Linux maps them there,
+   `REWIND` and `FORWARD` moving nothing, and `SW_PARAMS`' silence fields
+   stored but not acted on. Each is a behaviour alsa-lib handles on some
+   Linux machine today.
+5. **The server (U2):** PipeWire ported, or a Rust server. PipeWire is what
+   Steam's runtime and every current distribution expect, and it is a large
+   C port with a session manager (WirePlumber) and optional D-Bus. A Rust
+   server needs to speak only the PulseAudio native protocol, which SDL,
+   Chromium and Steam all speak, and none of the rest. `compositor/README.md`'s
+   no-C rule is the compositor's, not the clients' (`docs/CHROME.md` §3), so
+   either is allowed. Not needed until U2.
+6. **The test's strictness.** Exact frames if §4's reading of QEMU holds.
+   If the first run shows QEMU changing samples with the mixing engine off,
+   accept a tolerance of ±1 per sample, or treat it as a finding against
+   QEMU and keep the exact check?
+7. **Owner.** No session owns audio in `docs/BACKLOG.md`.
+
+**For the customer:**
+
+* **Which QEMU `run --audio` uses** (§4). Either reinstall the local 9.2.4
+  with its `pa` and `pipewire` backends, which its build is already
+  configured for, or use `/usr/bin`'s 10.2.1, which has them but is x86-64
+  only. The test itself needs neither: `wav` is in both.
+
+**For others:**
+
+* **ferrousli (32-bit):** musl's `alltypes.h` defines `__USE_TIME_BITS64`,
+  so alsa-lib built against it uses the time64 layouts and mmap offsets
+  (`0x82000000` and `0x83000000` for status and control). L1's 32-bit probe
+  records that view. The core refuses those mappings as it refuses the
+  64-bit ones.
+* **The kernel reader of L6:** a `hw_params` is 608 bytes (604 on ARMv7-A)
+  and a `status` 152. The input core overflowed its task's stack with a
+  1680-byte message (`docs/INPUT.md` §5), so the ioctl branch decodes these
+  onto the heap.
+
+## 7. Not in version 1
+
+* **Capture** (`pcmC0D0c`): the receive queue, the reverse copy, and
+  `READI_FRAMES`. QEMU's second stream is already an input. About 3 points
+  on top of this iteration, since the state machine is shared.
+* **Controls and volume.** QEMU 9.2.4 offers no control elements: it never
+  offers `VIRTIO_SND_F_CTLS` and leaves the configuration's `controls` at
+  zero. So there is nothing to publish. Volume is
+  the server's, as with PipeWire's software volume.
+* **Mapped access** (`MMAP_INTERLEAVED`): the buffer VMO mapped into the
+  program, and the status and control pages. PipeWire prefers it and works
+  without it.
+* **Pause, several streams, several cards, hotplug.** Each is a backlog row
+  once a client asks.
+* **The DK1** (STM32MP157D): its SAI audio interface and the codec on its
+  I²C bus, a DMA engine driver, and the device-tree binding. A driver that
+  speaks `libs/sndctl` to the same core would be all that is new above the
+  hardware. P3, unsized.
+* **The Pixel 7:** out of scope. Its audio path is a DSP behind firmware,
+  and the phone is tested with no writes to its devices
+  (`bootloaders/pixel7/HANDOVER.md`).
+
+## 8. Where it stands
+
+Nothing has landed. This document is the design, with §2's calls read from
+source and §3.3's device read from QEMU 9.2.4's, and none of it run yet. The
+first landing is L1, which needs no decision from §6 other than 7.

@@ -324,8 +324,9 @@ nobody has it yet.
   glibc's place taken by ferrousli under the Steam runtime (13 priced, the
   rest unsized), bubblewrap's needs on top of stage 13 (13), a root on btrfs
   (stage 12), XWayland (40 as a first guess), sound -- `virtio-snd`, an
-  audio core, a PulseAudio or PipeWire server (30) -- and Vulkan through
-  Venus on a KVM host (8 over Path A, plus the driver question). Over 300
+  audio core, a PulseAudio or PipeWire server (30; the customer moved audio
+  forward to current work on 2026-09-26, and `docs/AUDIO.md` is its design)
+  -- and Vulkan through Venus on a KVM host (8 over Path A, plus the driver question). Over 300
   points; the roadmap's stage 22 is the list.
 * Huge pages; frame share and release are order 0 by design.
 * A panic report as a QR code: a port of Linux's `drm_panic_qr` as

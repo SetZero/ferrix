@@ -7245,7 +7245,10 @@ staged until now.
   an audio core with a `/dev/snd` shaped enough for a client library, and a
   server speaking the PulseAudio or PipeWire protocol over a Unix socket,
   which is what Steam and every game link against. 30 points as a first
-  guess.
+  guess. `docs/AUDIO.md` is the design of the first two parts (drafted
+  2026-09-26; the customer moved it forward to current work the same
+  day): 24 points for the driver, the core and a gate on QEMU's `wav`
+  backend, with the server unsized.
 * **The GPU, with Vulkan.** Path A gives OpenGL, which the client and a
   native game can use. Proton draws with Vulkan through DXVK, and Vulkan
   under virtio-gpu is Venus, which needs a Linux host with KVM: on the
