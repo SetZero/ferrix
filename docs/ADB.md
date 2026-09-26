@@ -1,10 +1,10 @@
 # adb for Ferrix: handover
 
-**Status, 2026-09-26 (ferrix-9c): step 1, adbd over TCP, is built and
-gated (§6); steps 2 and 3 follow.** The rest is the brief as it was
-written: why adb, what it has to do, what Ferrix already has for it, and the
-order to build it in. `docs/PIXEL7-USB-HANDOVER.md` is the USB stack it goes on top of;
-read its §8 first, and `boot/pixel7/HANDOVER.md` before touching the phone.
+**Status, 2026-09-27 (ferrix-9c): done.** adb works over TCP (QEMU,
+gated) and over the Pixel 7's USB port (run `adbusb4`): `adb devices`,
+`adb shell`, `push`, `pull`, `ls`, `forward` and `reboot`. §6 is where it
+stands. The rest is the brief as it was written: why adb, what it has to
+do, what Ferrix already has for it, and the order to build it in.
 
 ## 1. Why adb, and what done looks like
 
@@ -180,8 +180,58 @@ secure-firmware call plus a persistent write Ferrix must never make:
   5555:5555`, then `udhcpc -i eth0` and `adbd &` in the guest, then
   `adb connect 127.0.0.1:5555` on the host.
 
+### Step 3, adb over the Pixel's USB port (2026-09-27)
+
+* The device has a third interface beside the serial port's two: adb's
+  (`ff/42/01`, bulk OUT `0x03`, bulk IN `0x83`), always present; with no
+  adbd behind it the host lists it offline. `libs/drivers/dwc3` has room
+  for six endpoints and a nine-page DMA area.
+* `usbdev` bridges the two endpoints to `/tmp/adbd-usb`
+  (`native/drivers/usbdev/src/adb.rs`), `vport`'s shape. It sends each
+  message's header and payload as transfers of their own, and adbd over
+  USB offers payloads of at most 4096 bytes, one endpoint ring.
+* `adbd --usb` serves that socket; run as pid 1
+  (`ferrix.init=/bin/adbd`), it serves USB and TCP and reaps orphans.
+* The host: `SUBSYSTEM=="usb", ATTR{idVendor}=="1209",
+  ATTR{idProduct}=="0001", TAG+="uaccess"` in
+  `/etc/udev/rules.d/70-ferrix-console.rules`, installed by the owner.
+* On the phone: build with `--adbd --init <aarch64 busybox>` (a shell for
+  `adb shell`) and `FERRIX_PIXEL7_CMDLINE_EXTRA="ferrix.init=/bin/adbd"`,
+  RAM-boot it, and `adb -s ferrix-pixel7 …`. `adb reboot`, or the serial
+  port's reboot line, brings Android back.
+
+Four phone runs found three things only the phone could:
+
+1. **The host's first `CNXN` was lost** (`adbusb1`, `adbusb2`: listed
+   offline until the adb server restarted). The host sends it as soon as
+   the device is configured, before adbd has found the socket, and never
+   again. The bridge now keeps what the host sends until adbd connects.
+2. **`push` broke the connection** (`adbusb2`). The IN ring carried a
+   write past its end as two transfers, and adb's host, reading a part at
+   a time, took the first for all of it. An empty ring now starts at its
+   beginning (a test fails without it: `[3000, 1096, 904]`).
+3. **`pull` broke it** (`adbusb3`). A 4096-byte payload is whole packets,
+   and the library ended it with a zero-length packet, which adb's host
+   read as the next header. adb's IN endpoint now sends none
+   (`set_zero_length_packets`); the serial port keeps them.
+
+Run `adbusb4` (image `a766ccc5`): `adb devices` listed it a second after
+enumeration, `adb shell` answered `Ferrix aarch64`, a 1 MB push and pull
+came back byte for byte, the interactive shell and `ls` worked, and
+`adb reboot` had Android back 40 s later. Every register write in the
+record was on the product owner's list.
+
+**Nothing typed in that shell outlives a reset** (the product owner's
+condition for an unauthenticated root shell on the phone): Ferrix on the
+Pixel has no driver for UFS or any persistent storage. The tree has no
+UFS, MMC or SDHCI driver, the only binding the phone's tree matches is the
+DWC3's (every run's record: one device node, one driver, and "no
+virtio-blk function on this machine"), and `/` is the initramfs in RAM.
+If a storage driver ever comes to the phone, the shell needs
+authentication (§5) first.
+
 ### Next
 
-Step 3, the USB transport, needs the product owner's OK for the new DWC3
-endpoint registers before any phone boot (§4). Step 4 is the host's udev
-rule. Authentication follows §5.
+Authentication (§5): adbd's own key list and the RSA token, verdicts to
+authd from its phase 3. `shell,v2` for exit statuses. Starting adbd from
+init rather than as pid 1, beside the stat service.
