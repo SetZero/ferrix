@@ -26,9 +26,9 @@ use ferrix_linux_abi::nr::Syscall as Call;
 use ferrix_linux_abi::socket::{
     AF_MAX, AF_UNIX, CmsgHdr, MSG_CTRUNC, MSG_NOSIGNAL, MSG_OOB, MSG_PEEK, MSG_TRUNC, MSG_WAITALL,
     MsgHdr, SCM_CREDENTIALS, SCM_MAX_FD, SCM_RIGHTS, SHUT_RD, SHUT_WR, SIOCINQ, SIOCOUTQ,
-    SO_ACCEPTCONN, SO_DOMAIN, SO_ERROR, SO_PEERCRED, SO_PROTOCOL, SO_RCVBUF, SO_RCVTIMEO_OLD,
-    SO_TYPE, SOCK_DGRAM, SOCK_NONBLOCK, SOCK_RAW, SOCK_RDM, SOCK_SEQPACKET, SOCK_STREAM,
-    SOCKET_BUFFER_MIN, SOL_SOCKET, Ucred, Width, cmsg_len, cmsg_space,
+    SO_ACCEPTCONN, SO_DOMAIN, SO_ERROR, SO_PASSCRED, SO_PEERCRED, SO_PROTOCOL, SO_RCVBUF,
+    SO_RCVTIMEO_OLD, SO_TYPE, SOCK_DGRAM, SOCK_NONBLOCK, SOCK_RAW, SOCK_RDM, SOCK_SEQPACKET,
+    SOCK_STREAM, SOCKET_BUFFER_MIN, SOL_SOCKET, Ucred, Width, cmsg_len, cmsg_space,
 };
 use ferrix_linux_abi::types::{
     AT_FDCWD, F_DUPFD, F_DUPFD_CLOEXEC, F_GETFD, F_GETFL, F_SETFD, F_SETFL, FD_CLOEXEC,
@@ -9104,8 +9104,91 @@ fn message_answers(
         return Err("a message did not scatter into the buffers it was given");
     }
     check_descriptors_travel_with_a_message(process, page, (one, other))?;
+    check_credentials_travel_with_a_message(process, page, (one, other))?;
     check_a_cycle_in_flight_is_collected(process, page)?;
     check_a_cycle_a_descriptor_reaches_is_kept(process, page)
+}
+
+/// The sender's credentials travel with a message (`SCM_CREDENTIALS`) to a
+/// socket that asked for them with `SO_PASSCRED`, which is how Chrome's
+/// zygote learns the pid of a child it forked.
+///
+/// Sent plainly, the byte must arrive with one `SCM_CREDENTIALS` message
+/// naming the sender's pid and effective ids; sent with the sender's own
+/// credentials named, the same; and once the receiver lets `SO_PASSCRED` go,
+/// a byte arrives with no control message at all.
+fn check_credentials_travel_with_a_message(
+    process: &Process,
+    page: u64,
+    (one, other): (i32, i32),
+) -> Result<(), &'static str> {
+    let own = crate::fs::socket::credentials_of(process);
+    let asked = |on: i32| set_socket_option(process, page, other, SO_PASSCRED, &on.to_le_bytes());
+    answers(asked(1), 0, "SO_PASSCRED could not be set")?;
+    answers(
+        socket_send(process, page, one, b"c", 0),
+        1,
+        "a plain send to a socket asking for credentials failed",
+    )?;
+    let capacity = cmsg_space(Ucred::SIZE, width());
+    if received_credentials(process, page, other, capacity)? != Some(own) {
+        return Err("a plain send did not arrive with its sender's credentials");
+    }
+    answers(
+        message_with_control(process, page, one, SCM_CREDENTIALS, &own.to_bytes(), None),
+        1,
+        "a message naming its sender's own credentials was not sent",
+    )?;
+    if received_credentials(process, page, other, capacity)? != Some(own) {
+        return Err("named credentials did not arrive as they were named");
+    }
+    answers(asked(0), 0, "SO_PASSCRED could not be cleared")?;
+    answers(
+        socket_send(process, page, one, b"c", 0),
+        1,
+        "a send after SO_PASSCRED was cleared failed",
+    )?;
+    if received_credentials(process, page, other, capacity)?.is_some() {
+        return Err("credentials arrived at a socket that no longer asked for them");
+    }
+    Ok(())
+}
+
+/// Receive one byte from `fd` with `capacity` bytes of control buffer, and
+/// the credentials its one control message carries, if it carried one.
+fn received_credentials(
+    process: &Process,
+    page: u64,
+    fd: i32,
+    capacity: usize,
+) -> Result<Option<Ucred>, &'static str> {
+    let (count, flags, control_len, control) = receive_with_control(process, page, fd, capacity)?;
+    if count != 1 || flags & MSG_CTRUNC != 0 {
+        return Err("a receive with room for credentials did not take its byte whole");
+    }
+    if control_len == 0 {
+        return Ok(None);
+    }
+    let header = CmsgHdr::decode(&control, width()).ok_or("could not read a control message")?;
+    if header.level != SOL_SOCKET
+        || header.kind != SCM_CREDENTIALS
+        || header.len != cmsg_len(Ucred::SIZE, width()) as u64
+    {
+        return Err("the control message a receive wrote was not SCM_CREDENTIALS");
+    }
+    let body = CmsgHdr::size(width());
+    let field = |at: usize| {
+        control
+            .get(body + at..body + at + 4)
+            .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+            .map(u32::from_le_bytes)
+            .ok_or("an SCM_CREDENTIALS message was cut short")
+    };
+    Ok(Some(Ucred {
+        pid: field(0)?.cast_signed(),
+        uid: field(4)?,
+        gid: field(8)?,
+    }))
 }
 
 /// Write a `msghdr` naming the `count` buffers at `iov` and nothing else.
@@ -9140,8 +9223,8 @@ const DESCRIPTOR_NOT_INSTALLED: &str =
 /// control buffer, the file must be closed on the way -- the pipe now sees its
 /// hangup -- and the message flagged `MSG_CTRUNC`. Then the refusals: a
 /// descriptor that is not open is `EBADF`, more than `SCM_MAX_FD` is `EINVAL`,
-/// credentials are `EOPNOTSUPP` until they land, and a control message shorter
-/// than its own header is `EINVAL`, as `CMSG_OK` failing is on Linux.
+/// and a control message shorter than its own header is `EINVAL`, as
+/// `CMSG_OK` failing is on Linux.
 fn check_descriptors_travel_with_a_message(
     process: &Process,
     page: u64,
@@ -9356,11 +9439,6 @@ fn what_passing_descriptors_refuses(
         message_with_control(process, page, one, SCM_RIGHTS, &rights(&too_many), None),
         Errno::EINVAL,
         "a message with more than SCM_MAX_FD descriptors was not EINVAL",
-    )?;
-    refuses(
-        message_with_control(process, page, one, SCM_CREDENTIALS, &[0; 12], None),
-        Errno::EOPNOTSUPP,
-        "a message carrying credentials was not EOPNOTSUPP",
     )?;
     refuses(
         message_with_control(process, page, one, SCM_RIGHTS, &[], Some(4)),

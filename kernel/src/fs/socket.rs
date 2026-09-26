@@ -13,9 +13,23 @@
 //! other: stream, sequenced-packet and datagram, read and written through
 //! `read`, `write`, `send*` and `recv*`, shut down a direction at a time,
 //! polled, and asked their queue lengths and options; named, listened on,
-//! connected to and accepted from; and descriptors passed with a message
-//! (`SCM_RIGHTS`). Credentials passed with one (`SCM_CREDENTIALS`,
-//! `SO_PASSCRED`) come next.
+//! connected to and accepted from; descriptors passed with a message
+//! (`SCM_RIGHTS`); and the sender's credentials (`SCM_CREDENTIALS`), which a
+//! message carries when its receiver asked for them with `SO_PASSCRED` or its
+//! sender named them.
+//!
+//! # Credentials travel when asked for
+//!
+//! Linux stamps every message with its sender's pid and ids, and a receiver
+//! that set `SO_PASSCRED` is handed them. Here a message is stamped only when
+//! the socket it goes to has `SO_PASSCRED` set as it is sent, or its sender
+//! passed an `SCM_CREDENTIALS` message: the stamp is ancillary data, and on a
+//! stream ancillary data ends a read, so stamping everything would cut every
+//! stream read at every write. A message sent before its receiver asked
+//! arrives with pid 0 and the overflow ids. Chrome's zygote is what needs it:
+//! a child it forks says hello on a socket whose reader set `SO_PASSCRED`,
+//! and the pid that hello carries is the only way the zygote learns the
+//! child's.
 //!
 //! # A passed descriptor is an open file in a queue
 //!
@@ -142,6 +156,9 @@ pub(crate) struct Passed {
     files: Vec<Arc<OpenFile>>,
     /// How many of them are `AF_UNIX` sockets, counted in [`IN_FLIGHT`].
     sockets: usize,
+    /// Who sent the message, when it carries that: see the module
+    /// documentation.
+    credentials: Option<Ucred>,
 }
 
 impl Passed {
@@ -152,12 +169,27 @@ impl Passed {
             let _ = IN_FLIGHT.fetch_add(sockets, Ordering::AcqRel);
             moved_in_flight();
         }
-        Passed { files, sockets }
+        Passed {
+            files,
+            sockets,
+            credentials: None,
+        }
+    }
+
+    /// The same, carrying `credentials` as its sender's.
+    pub(crate) fn with_credentials(mut self, credentials: Ucred) -> Passed {
+        self.credentials = Some(credentials);
+        self
     }
 
     /// The files, in the order they were sent.
     pub(crate) fn files(&self) -> &[Arc<OpenFile>] {
         &self.files
+    }
+
+    /// Who sent the message, if it says.
+    pub(crate) fn credentials(&self) -> Option<Ucred> {
+        self.credentials
     }
 
     /// Whether any of them is an `AF_UNIX` socket.
@@ -258,6 +290,9 @@ struct Channel {
     /// or went. See the module documentation for why the buffer's own state
     /// is not enough.
     refused: AtomicBool,
+    /// Whether the socket reading this direction set `SO_PASSCRED`, which
+    /// its senders look at to stamp what they send.
+    wants_credentials: AtomicBool,
 }
 
 impl fmt::Debug for Channel {
@@ -276,6 +311,7 @@ impl Channel {
             readable: Arc::new(WaitQueue::new()),
             writable: Arc::new(WaitQueue::new()),
             refused: AtomicBool::new(false),
+            wants_credentials: AtomicBool::new(false),
         })
     }
 
@@ -380,9 +416,20 @@ pub(crate) struct Received {
     pub(crate) full: usize,
 }
 
+/// Who sent a message a receive took, as its `SCM_CREDENTIALS` says it:
+/// the stamp it carries, or for one sent unstamped pid 0 and the overflow
+/// ids, which is what Linux reports for a sender it cannot name.
+pub(crate) fn sender_of(passed: Option<&Passed>) -> Ucred {
+    passed.and_then(Passed::credentials).unwrap_or(Ucred {
+        pid: 0,
+        uid: OVERFLOW_ID,
+        gid: OVERFLOW_ID,
+    })
+}
+
 /// The credentials `SO_PEERCRED` reports for a socket `process` made:
 /// its pid and effective ids, as Linux's `init_peercred` takes them.
-fn credentials_of(process: &Process) -> Ucred {
+pub(crate) fn credentials_of(process: &Process) -> Ucred {
     let (uid, gid) = process
         .with_credentials(|credentials| (credentials.user.effective, credentials.group.effective));
     Ucred {
@@ -483,6 +530,12 @@ impl Socket {
         listed.push(Arc::downgrade(&socket));
         drop(listed);
         socket
+    }
+
+    /// Whether `SO_PASSCRED` is set: a receive hands back an
+    /// `SCM_CREDENTIALS` message with every message it takes.
+    pub(crate) fn passes_credentials(&self) -> bool {
+        self.options.lock().pass_credentials
     }
 
     /// Its type.
@@ -791,8 +844,54 @@ impl Socket {
         nonblock: bool,
         passed: Option<Passed>,
     ) -> Result<usize, Errno> {
+        let sender = || process::current().map(|process| credentials_of(&process));
+        self.send_stamped(data, flags, nonblock, passed, sender)
+    }
+
+    /// [`Socket::send_passing`] on behalf of `sender`, whose credentials a
+    /// reader that asked for them is given: what the system calls use,
+    /// since the caller is the process they name, whatever task runs them.
+    ///
+    /// # Errors
+    ///
+    /// As [`Socket::send`].
+    pub(crate) fn send_from(
+        &self,
+        sender: &Process,
+        data: &[u8],
+        flags: u32,
+        nonblock: bool,
+        passed: Option<Passed>,
+    ) -> Result<usize, Errno> {
+        self.send_stamped(data, flags, nonblock, passed, || {
+            Some(credentials_of(sender))
+        })
+    }
+
+    /// The send itself, stamped with what `sender` answers when the reader
+    /// asked for credentials and the message does not already name them.
+    fn send_stamped(
+        &self,
+        data: &[u8],
+        flags: u32,
+        nonblock: bool,
+        passed: Option<Passed>,
+        sender: impl FnOnce() -> Option<Ucred>,
+    ) -> Result<usize, Errno> {
         let mut passed = passed;
         let peer = self.send.lock().clone().ok_or(Errno::ENOTCONN)?;
+        if peer.wants_credentials.load(Ordering::Acquire)
+            && passed
+                .as_ref()
+                .is_none_or(|passed| passed.credentials.is_none())
+            && let Some(stamp) = sender()
+        {
+            passed = Some(
+                passed
+                    .unwrap_or_else(|| Passed::new(Vec::new()))
+                    .with_credentials(stamp),
+            );
+        }
         let options = *self.options.lock();
         if options.shut_write {
             return Err(match self.kind {
@@ -1247,7 +1346,11 @@ impl Socket {
                 self.receive.buffer.lock().set_capacity(bytes);
                 self.receive.writable.wake_all();
             }
-            SO_PASSCRED => self.options.lock().pass_credentials = int()? != 0,
+            SO_PASSCRED => {
+                let on = int()? != 0;
+                self.options.lock().pass_credentials = on;
+                self.receive.wants_credentials.store(on, Ordering::Release);
+            }
             SO_RCVTIMEO_OLD => self.options.lock().receive_timeout = read_timeval(value, width)?,
             SO_SNDTIMEO_OLD => self.options.lock().send_timeout = read_timeval(value, width)?,
             SO_RCVTIMEO_NEW => {
