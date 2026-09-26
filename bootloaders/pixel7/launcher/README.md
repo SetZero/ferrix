@@ -1,7 +1,12 @@
 # Boot Ferrix from the phone
 
-An Android app with one button that reboots the Pixel 7 into Ferrix, and the
-helper on the PC that does the booting.
+An Android app with two ways to run Ferrix on the Pixel 7, and the helper on
+the PC that the first one needs:
+
+* **Boot Ferrix** reboots the phone into Ferrix, through the PC.
+* **Run in a VM** runs Ferrix beside Android, as a guest of the phone's own
+  KVM through Android's crosvm. No PC and no reboot are needed, and it takes
+  about 6 seconds to `FERRIX-BOOT-OK`.
 
 The phone cannot start Ferrix by itself. Its kernel has no `kexec`, and
 nothing may be flashed (`../HANDOVER.md`, "Never write anything that survives
@@ -51,3 +56,21 @@ SDK's JDK. The app is `dev.ferrix.launcher`, labelled "Boot Ferrix".
 
 Any app on the phone with the internet permission could reach the helper's
 port while the cable is in, and all it could do is what the button does.
+
+## The VM
+
+The app runs, through `su` (Magisk asks once):
+
+```sh
+cd /data/local/tmp/ferrix-vm && /apex/com.android.virt/bin/crosvm run \
+    --disable-sandbox -m 4096 --cpus 8 --serial type=stdout,num=1 ferrix.Image
+```
+
+`ferrix.Image` is the raw loader `Image` from the helper's run directory, the
+same loader and kernel `fastboot boot` gets, which the helper pushes whenever
+the phone's copy differs. It needs to have been built with guest support
+(`a8801ad8` or later). The loader finds it is a guest, entered at EL1 with
+crosvm's 16550 as `stdout-path`, and sends its log and the kernel's there.
+crosvm's machine has 2 to 8 vCPUs, GICv3, PSCI through `hvc`, and RAM at
+`0x8000_0000`, with no screen and no virtio devices yet. The guest powers off
+at the end of its run, and crosvm exits.

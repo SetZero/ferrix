@@ -363,11 +363,22 @@ over `adb reverse`, to run the `fastboot boot` cycle. The owner pressed it on
 74 s later, with the record in `$P/launcher-20260926-144950/`. It needs the
 cable, and writes nothing to the phone.
 
-**Without the PC**, the kernel-module route below stays stopped: a safety
-classifier stopped it again on 2026-09-26, when the owner chose it. The
-route being looked at instead is Ferrix as a guest under Android's own
-virtualization framework (AVF): the phone has `/dev/kvm`, crosvm and `vm`,
-and reports non-protected VMs supported.
+**Without the PC, as a VM** (`a8801ad8`, `a84d61e1`). The app's "Run in a
+VM" card runs Ferrix as a guest of the phone's own KVM, through AVF's
+`crosvm`, started with `su`. The loader recognises crosvm (EL1 entry, and
+an `ns16550a` at `0x3f8` as `stdout-path`) and sends both logs to that
+16550, which the kernel drives as `console=uart8250,mmio,0x3f8`. With 8
+vCPUs and 4 GiB, it reached `FERRIX-BOOT-OK stages 1-12` in 6 s, seeded
+from crosvm's `rng-seed` and KVM's `TRNG_RND64`. Stage 5's costs came
+within a few percent of native. The owner ran it from the app. What the
+guest lacks: KASLR, since the loader asks the TRNG only by `smc` and
+`entry.rs` has no assembly room for an `hvc`; a screen; virtio devices,
+behind crosvm's `pci-host-cam-generic`, which Ferrix does not read; and
+console input.
+
+**Without the PC, natively**, the kernel-module route below stays stopped:
+a safety classifier stopped it again on 2026-09-26, when the owner chose
+it.
 
 ### The kernel-module route (stopped)
 
