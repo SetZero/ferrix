@@ -319,9 +319,9 @@ impl Any {
     }
 
     /// Start listening.
-    fn listen(&self, backlog: i32) -> Result<(), Errno> {
+    fn listen(&self, process: &Process, backlog: i32) -> Result<(), Errno> {
         match self {
-            Any::Unix(socket) => socket.listen(backlog),
+            Any::Unix(socket) => socket.listen(backlog, fs::socket::credentials_of(process)),
             Any::Netlink(_) | Any::Packet(_) => Err(Errno::EOPNOTSUPP),
             Any::Inet(socket) => socket.listen(backlog),
         }
@@ -332,7 +332,12 @@ impl Any {
         match self {
             Any::Unix(socket) => {
                 let address = unix_address(raw)?;
-                socket.connect(&crate::syscall::path::context(process), &address, nonblock)
+                socket.connect(
+                    &crate::syscall::path::context(process),
+                    &address,
+                    nonblock,
+                    fs::socket::credentials_of(process),
+                )
             }
             Any::Netlink(_) | Any::Packet(_) => Err(Errno::EOPNOTSUPP),
             Any::Inet(socket) => socket.connect(raw, nonblock),
@@ -716,7 +721,7 @@ fn sys_bind(process: &Process, descriptor: i32, address: u64, length: u64) -> Re
 /// `listen`.
 fn sys_listen(process: &Process, descriptor: i32, backlog: i32) -> Result<usize, Errno> {
     let (_file, socket) = socket_of(process, descriptor)?;
-    socket.listen(backlog)?;
+    socket.listen(process, backlog)?;
     Ok(0)
 }
 

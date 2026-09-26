@@ -83,7 +83,7 @@ Each fact below was read from the tree at `1a8bea54`.
 | `nosuid` | Accepted as a mount flag and not enforced: "there is nothing yet for any of them to switch off". | `kernel/src/syscall/fsctl.rs:91-93` |
 | File permissions | Enforced, from `libs/fs/vfs`'s `access` functions, against the filesystem ids. | `docs/ROADMAP.md:1424-1440` |
 | Kernel-made processes | Every process the kernel starts is root's. That includes a **native process made with `process_create`, whoever made it**: the loader builds it with `Process::new`, which starts from `Credentials::root()`, and `process_create` uses its caller only for the job and image handles. | `kernel/src/syscall/exec.rs:181-195`; `kernel/src/syscall/process.rs:308-314`, `:369-371`; `kernel/src/syscall/native.rs:1290-1325` |
-| Peer identity, Linux | `SO_PEERCRED` answers pid and **effective** uid and gid. They are the ids of whoever *made* the connecting socket, taken when it was made, not at `connect` as on Linux. `SCM_CREDENTIALS` is stamped only when asked for, and root may name any ids in it. | `kernel/src/fs/socket.rs:21-31`, `:394-400`, `:475-485`, `:773-779`, `:1724`; `kernel/src/syscall/sockets.rs:1053-1056` |
+| Peer identity, Linux | `SO_PEERCRED` answers pid and **effective** uid and gid. When this was written they were the ids of whoever *made* the connecting socket; since K-E they are the connector's at `connect` and the listener's at `listen`, as on Linux (§8.3, E-01). `SCM_CREDENTIALS` is stamped only when asked for, and root may name any ids in it. | `kernel/src/fs/socket.rs` (`listen`, `connect_stream`); `kernel/src/syscall/sockets.rs:1053-1056` |
 | Peer identity, native | A channel carries bytes and handles, and nothing about who wrote them. The directory's CONNECT carries the client *unit's* name, which init fills in. | `libs/proto/native-abi/src/rights.rs:1-9`; `docs/INIT.md:1395-1405` |
 | Jobs from paths | `job_for_cgroup` gives `MANAGE` to a caller who may write that cgroup's `cgroup.procs`, and delegation chowns that file to a user. | `libs/proto/native-abi/src/nr.rs:201-211`; `docs/CGROUPS.md` §3.1, §5 |
 | `/proc/<pid>` | Owned by the process's effective ids, always. `PR_SET_DUMPABLE` is recorded and changes nothing. `fd` entries are plain symbolic links, not Linux's magic links. | `kernel/src/fs/procfs.rs:797-808`, `:327-331`, `:980`; `kernel/src/syscall/attributes.rs:88-89`, `:308-314` |
@@ -276,16 +276,15 @@ evidence. The rules:
 * **Only a root peer or `auth` itself** may set another account's
   credential, reset a throttle, or read another account's status.
 
-The Ferrix difference in §1 matters here. The peer's ids are the ones its
-*socket was made with*, not the ones it had at `connect`
-(`kernel/src/fs/socket.rs:773-779`). A program that makes the socket as
-root, drops to uid 1000 and then connects is still root to `authd`. So is a
-uid-1000 program that was handed a socket a root process made. Both need
-root's help first, so neither gives an attacker anything it could not do
-with root. But the rule above is written so that being root lets a peer
-*ask*, and never lets it *skip* a check: a root peer still types the
-password. The kernel should take the ids at `connect`, as Linux does.
-That is filed as slice K-E, which is small and not needed first.
+Until K-E, Ferrix gave a connection's peer the ids its *socket was made
+with*, not the ones it had at `connect`. A program that made a socket as
+root and then dropped to uid 1000 before connecting was still root to
+`authd`. Since K-E (§8.3, E-01, closed) the kernel takes them as Linux
+does. The accepted end names who called `connect`, as they were at that
+call. The connecting end names who called `listen`, as they were then.
+Handing the descriptor on changes neither. The rule above was written for
+the old semantics, too: being root lets a peer *ask* and never lets it
+*skip* a check, since a root peer still types the password.
 
 **Over a native channel: the unit.** A channel says nothing about its
 writer, so a native client gets no uid. What it gets is better for a
@@ -887,7 +886,7 @@ phase 1. hyprlock does not change when phase 2 moves the session to
 | P3.4 | Privilege prompts: `ferrix.auth.ask`, an agent in the session (§4.5), and the first user, a non-root `svc stop` | auth, init | 6 |
 | P3.5 | Accounts: `useradd`/`userdel`, with `/etc/passwd` generated from `/lib/ferrix/sysusers` plus the store's accounts. The archive stops carrying `/etc/passwd` (§5.2 says why it must). | auth | 4 |
 | P3.6 | A graphical greeter on hyprlock's widgets | desktop clients | 8 |
-| P3.7 | K-E: `SO_PEERCRED` taken at `connect`, as Linux does | kernel | 1 |
+| P3.7 | K-E: `SO_PEERCRED` taken at `connect` and `listen`, as Linux does. **Moved into phase 1 and done** (§8.3) | auth | 3 |
 | P3.8 | K-D: `mlock` accepted as a no-op within `RLIMIT_MEMLOCK` (`docs/BACKLOG.md`) | kernel | 1 |
 | — | FIDO2 over USB HID (needs a hidraw path from `native/drivers/usbhid`), fingerprint (needs a reader), a trusted path, several seats | | unsized |
 
@@ -952,21 +951,23 @@ gains, in the words it already uses:
 Listed here and in `docs/certification/VULNERABILITY-ANALYSIS.md`'s
 "What this analysis does not cover", until each is fixed:
 
-* **E-01, `SO_PEERCRED` names who made a socket, not who connected it**
-  (§1, §3.4). A root-made socket used by a process that dropped to another
-  uid reads as root. That gains a question, not an answer, since root never
-  skips a password. K-E fixes it: the kernel takes the ids at `connect` and
-  at `listen`, as Linux does. It is about 3 points: a listener records its
-  credentials when it listens (`Socket::listen`, `kernel/src/fs/socket.rs`
-  near 651); `connect_stream` (near 755-802) gives the server's end the
-  connecting process's current ids, where it now uses `self.credentials`,
-  and the client's end the listener's listen-time ids, where it now uses
-  `target.credentials`. The caller in `kernel/src/syscall/sockets.rs`
-  (near 331-335) passes the process in, and a boot check beside the
-  existing `SO_PEERCRED` one (`kernel/src/syscall/check.rs` near 9084)
-  changes a socket's ids between making it and connecting it. Its negative
-  control is the old creation-time ids. The review asked for it in phase 1,
-  as its own kernel slice before `authd` lands and after ferrix-55's OK.
+* **E-01, `SO_PEERCRED` named who made a socket, not who connected it.
+  Closed by K-E.** A root-made socket used by a process that had dropped to
+  another uid read as root. The kernel now takes the ids as Linux's
+  `unix_listen` and `unix_stream_connect` do: each `listen` records the
+  caller's effective ids and pid (`Socket::listen`), and `connect_stream`
+  gives the accepted end the connecting process's ids at the call and the
+  connecting end the listener's. A connection to a socket with no
+  listen-time ids is refused (`ECONNREFUSED`), so the creation-time ids can
+  never come back silently. A socket pair keeps its creator's, as on Linux. The boot check `check_peer_credentials_are_the_callers`
+  (`kernel/src/syscall/check.rs`) makes both sockets as root, listens as uid
+  4242, connects as uid 1000, then, as uid 2000, sends the accepted
+  descriptor over a pair with `SCM_RIGHTS` and closes the original. It
+  requires the descriptor that arrived to name 1000, and the connecting end
+  4242. Its negative control, the
+  creation-time ids put back, names root and fails that line.
+  ferrix-55 agreed the design (advisory: `fs/socket.rs` is in the load
+  ring).
 
 ---
 
@@ -1032,6 +1033,7 @@ it was put to the customer.
 | P1.3 `authd`, P1.4 `passwd` and `authctl` | written on branch `auth-authd` (`userland/auth/`), with host tests over a root of their own and one over a real socket |
 | P1.6 `cargo xtask test-auth` | written on branch `auth-authd` (`xtask/src/auth.rs`), with `--sabotage NAME` for the four negative controls; not yet booted |
 | P1.5 hyprlock's backend | the hyprlock stream's, after `authd` lands |
+| K-E `SO_PEERCRED` at `connect` and `listen` | on `main` with its boot check (E-01, closed) |
 | P1.7 the Security Target's OE.AUTH | with the last landing of phase 1 |
 
 **One rule found while building it**, and now written into §3.5: after any

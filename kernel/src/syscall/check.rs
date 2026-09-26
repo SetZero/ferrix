@@ -8312,7 +8312,8 @@ fn check_unix_sockets(process: &Process, page: u64) -> Result<(), &'static str> 
         .and_then(|()| check_a_stream_read_runs_into_descriptors(process, page))
         .and_then(|()| check_a_name_carries_a_connection(process, page))
         .and_then(|()| check_a_path_carries_a_connection(process, page))
-        .and_then(|()| check_what_a_name_refuses(process, page))?;
+        .and_then(|()| check_what_a_name_refuses(process, page))
+        .and_then(|()| check_peer_credentials_are_the_callers(process, page))?;
     println!(
         "  unix     a stream pair carried bytes across two writes and a peek left them; \
          records kept their boundaries and MSG_TRUNC their lengths; shutdown ended one \
@@ -8323,6 +8324,135 @@ fn check_unix_sockets(process: &Process, page: u64) -> Result<(), &'static str> 
          flight was collected at its last close, and one a descriptor reached was kept"
     );
     Ok(())
+}
+
+/// `SO_PEERCRED` names who connected and who listened, each as they were
+/// at that call, not who made the sockets (`docs/AUTH.md` §8.3, E-01, and
+/// K-E): what `authd` decides who is asking by.
+///
+/// One process plays every part by changing its effective ids between the
+/// calls, as a program that drops privilege does: the listener is made as
+/// root and listens as uid 4242; the client is made as root and connects as
+/// uid 1000; then the process becomes uid 2000, standing for another process
+/// the connected descriptor was handed to. The accepted end must still name
+/// uid 1000, and the connecting end uid 4242. Its negative control is the
+/// creation-time ids put back in `connect_stream`, which name root on both
+/// ends and fail the first line. The process is root again when it returns,
+/// whatever it returns.
+fn check_peer_credentials_are_the_callers(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    let root = process.with_credentials(|ids| ids.clone());
+    let outcome = peer_credentials_are_the_callers(process, page);
+    process.with_credentials(|ids| *ids = root);
+    outcome?;
+    println!(
+        "  unix     SO_PEERCRED named the uid that connected and the uid that listened, as each \
+         was at its call, not root that made both sockets, and kept naming them when the \
+         descriptor's holder changed uid"
+    );
+    Ok(())
+}
+
+/// The name [`check_peer_credentials_are_the_callers`] binds.
+const PEERCRED_NAME: &[u8] = b"\0ferrix-peercred-check";
+
+/// Become `uid` and `gid` as the effective ids, as `setresuid` would.
+fn act_as(process: &Process, uid: u32, gid: u32) {
+    process.with_credentials(|ids| {
+        ids.user.effective = uid;
+        ids.user.filesystem = uid;
+        ids.group.effective = gid;
+        ids.group.filesystem = gid;
+    });
+}
+
+/// Send `fd` over a new pair with `SCM_RIGHTS`, close it, and answer the
+/// descriptor the receive installed for the same file.
+fn pass_on(process: &Process, page: u64, fd: i32) -> Result<i32, &'static str> {
+    let pair = socket_pair(process, page, SOCK_SEQPACKET)?;
+    let moved = (|| {
+        answers(
+            message_with_control(process, page, pair.0, SCM_RIGHTS, &rights(&[fd]), None),
+            1,
+            "the credentials check could not send its connection with SCM_RIGHTS",
+        )?;
+        let _ = fd::sys_close(process, fd);
+        let capacity = cmsg_space(4, width());
+        let (_count, _flags, _len, control) =
+            receive_with_control(process, page, pair.1, capacity)?;
+        let data = control
+            .get(CmsgHdr::size(width())..CmsgHdr::size(width()) + 4)
+            .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+            .ok_or("the credentials check's connection did not arrive with SCM_RIGHTS")?;
+        Ok(i32::from_le_bytes(data))
+    })();
+    close_socket_pair(process, pair);
+    moved
+}
+
+/// `SO_PEERCRED` on `fd`.
+fn peer_of(process: &Process, page: u64, fd: i32) -> Result<Ucred, &'static str> {
+    let bytes = socket_option(process, page, fd, SO_PEERCRED, Ucred::SIZE)
+        .map_err(|_| "SO_PEERCRED was refused on a connection")?;
+    Ucred::from_bytes(&bytes).ok_or("SO_PEERCRED was too short")
+}
+
+/// [`check_peer_credentials_are_the_callers`]'s steps, as root on entry.
+fn peer_credentials_are_the_callers(process: &Process, page: u64) -> Result<(), &'static str> {
+    let server = unix_socket(process, SOCK_STREAM)?;
+    let client = unix_socket(process, SOCK_STREAM)?;
+    let (at, len) = put_unix_address(process, page + ADDRESS, PEERCRED_NAME)?;
+    let steps = (|| {
+        if socket_call(process, Call::Bind, &[as_arg(server), at, len, 0, 0, 0]) != Ok(0) {
+            return Err("the credentials check's listener would not take its name");
+        }
+        act_as(process, 4242, 4343);
+        if socket_call(process, Call::Listen, &[as_arg(server), 1, 0, 0, 0, 0]) != Ok(0) {
+            return Err("the credentials check's listener would not listen");
+        }
+        act_as(process, 1000, 1001);
+        if socket_call(process, Call::Connect, &[as_arg(client), at, len, 0, 0, 0]) != Ok(0) {
+            return Err("the credentials check's client would not connect");
+        }
+        act_as(process, 0, 0);
+        let taken = socket_call(process, Call::Accept, &[as_arg(server), 0, 0, 0, 0, 0])
+            .map_err(|_| "the credentials check's connection was not there to accept")?;
+        let accepted = i32::try_from(taken).map_err(|_| "accept gave no descriptor")?;
+        // The descriptor is handed on, by `SCM_RIGHTS`, to a holder that is
+        // someone else again, and the original closed: what is asked below
+        // is asked through the descriptor that arrived.
+        act_as(process, 2000, 2001);
+        let accepted = match pass_on(process, page, accepted) {
+            Ok(arrived) => arrived,
+            Err(why) => {
+                let _ = fd::sys_close(process, accepted);
+                return Err(why);
+            }
+        };
+        let judged = (|| {
+            let pid = i32::try_from(process.pid()).unwrap_or(-1);
+            let connector = peer_of(process, page, accepted)?;
+            if (connector.uid, connector.gid) != (1000, 1001) || connector.pid != pid {
+                return Err(
+                    "SO_PEERCRED on the accepted end did not name who connected, as they were when they connected",
+                );
+            }
+            let listener = peer_of(process, page, client)?;
+            if (listener.uid, listener.gid) != (4242, 4343) || listener.pid != pid {
+                return Err(
+                    "SO_PEERCRED on the connecting end did not name who listened, as they were when they listened",
+                );
+            }
+            Ok(())
+        })();
+        let _ = fd::sys_close(process, accepted);
+        judged
+    })();
+    let _ = fd::sys_close(process, client);
+    let _ = fd::sys_close(process, server);
+    steps
 }
 
 /// Where a name check builds a `sockaddr_un`, as an offset in its page.

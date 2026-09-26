@@ -391,12 +391,17 @@ pub(crate) struct Socket {
     /// has a peer.
     send: SpinLock<Option<Arc<Channel>>>,
     options: SpinLock<Options>,
-    /// Whoever made this socket, which is what its peer's `SO_PEERCRED`
-    /// reports.
+    /// Whoever made this socket: what the other end of a pair reports.
     credentials: Ucred,
-    /// What `SO_PEERCRED` reports: for a pair, whoever made it; for a
-    /// connection, whoever made the other end. A socket with no peer has
-    /// none, and answers the overflow ids.
+    /// Who called `listen` on it, as they were at that call: what a
+    /// connection to it reports as its peer, as Linux's `unix_listen` has
+    /// `init_peercred`. `None` until it listens.
+    listen_credentials: SpinLock<Option<Ucred>>,
+    /// What `SO_PEERCRED` reports: for a pair, whoever made it; for the
+    /// connecting end of a connection, who called `listen` on the listener;
+    /// for the accepted end, who called `connect`, each as they were at that
+    /// call, as Linux takes them (`docs/AUTH.md` §8.3, E-01). A socket with
+    /// no peer has none, and answers the overflow ids.
     peer_credentials: SpinLock<Option<Ucred>>,
     /// The name `bind` gave it. Set once: Linux's `unix_bind` refuses a
     /// second one.
@@ -554,6 +559,7 @@ impl Socket {
                 shut_write: false,
             }),
             credentials,
+            listen_credentials: SpinLock::new(None),
             peer_credentials: SpinLock::new(peer_credentials),
             bound: SpinLock::new(None),
             peer_name: SpinLock::new(None),
@@ -647,14 +653,17 @@ impl Socket {
     ///
     /// `EOPNOTSUPP` for a datagram socket, which has no connections, and
     /// `EINVAL` for one that is not bound or is already connected -- Linux's
-    /// `unix_listen` refuses both.
-    pub(crate) fn listen(&self, backlog: i32) -> Result<(), Errno> {
+    /// `unix_listen` refuses both. `caller` is who is calling, as they are
+    /// now: what a connection to it will report.
+    pub(crate) fn listen(&self, backlog: i32, caller: Ucred) -> Result<(), Errno> {
         if self.kind == SocketType::Datagram {
             return Err(Errno::EOPNOTSUPP);
         }
         if self.bound.lock().is_none() || self.send.lock().is_some() {
             return Err(Errno::EINVAL);
         }
+        // Every `listen` takes the caller's ids afresh, as Linux's does.
+        *self.listen_credentials.lock() = Some(caller);
         let asked = usize::try_from(backlog.max(0)).unwrap_or(0);
         // `n + 1`, because Linux's queue-full test is a strict `>` against
         // the backlog, so `listen(0)` still takes one connection.
@@ -711,6 +720,7 @@ impl Socket {
         ctx: &Context,
         address: &UnixAddress<'_>,
         nonblock: bool,
+        caller: Ucred,
     ) -> Result<(), Errno> {
         let target = match *address {
             UnixAddress::Unnamed => return Err(Errno::EINVAL),
@@ -729,7 +739,7 @@ impl Socket {
         if self.kind == SocketType::Datagram {
             return self.connect_datagram(&target, peer_name);
         }
-        self.connect_stream(&target, peer_name, nonblock)
+        self.connect_stream(&target, peer_name, nonblock, caller)
     }
 
     /// A datagram `connect`, which only chooses where sends go. Linux lets
@@ -757,6 +767,7 @@ impl Socket {
         target: &Arc<Socket>,
         peer_name: Option<Name>,
         nonblock: bool,
+        caller: Ucred,
     ) -> Result<(), Errno> {
         if self.send.lock().is_some() {
             return Err(Errno::EISCONN);
@@ -765,18 +776,25 @@ impl Socket {
             return Err(Errno::EINVAL);
         }
         let mine = self.bound.lock().clone();
+        // Who listened, as they were when they did: what this end will name as
+        // its peer. A socket takes connections only once `listen` has recorded
+        // them, so a target without them is refused rather than named by the
+        // ids it was made with (ferrix-55's review of K-E).
+        let listened = (*target.listen_credentials.lock()).ok_or(Errno::ECONNREFUSED)?;
         let deadline = deadline(self.options.lock().send_timeout);
         loop {
             // Made before the lock is taken and wired after it is dropped: the
             // far end is created with no send channel, so dropping it if there
             // is no room closes nothing of this socket's.
             let far = Channel::new(self.kind)?;
+            // The accepted end names who is connecting, as they are now; the
+            // connecting end names who listened, as they were then.
             let server = Socket::new(
                 self.kind,
                 None,
                 Arc::clone(&far),
                 target.credentials,
-                Some(self.credentials),
+                Some(caller),
                 (target.metadata.uid, target.metadata.gid),
             )?;
             let queued = {
@@ -799,7 +817,7 @@ impl Socket {
                 *server.peer_name.lock() = mine;
                 *self.send.lock() = Some(far);
                 *self.peer_name.lock() = peer_name;
-                *self.peer_credentials.lock() = Some(target.credentials);
+                *self.peer_credentials.lock() = Some(listened);
                 target.arrivals.wake_all();
                 return Ok(());
             }
