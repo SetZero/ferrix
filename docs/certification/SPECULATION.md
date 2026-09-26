@@ -193,6 +193,22 @@ if it lacks `SSBS` — and keeps its own switch barrier bit, which
 the list, never pays for a firmware call it does not need; one that needs it
 always makes it, whichever core the machine booted on.
 
+**Workaround 2 has a third answer.** About `ARCH_WORKAROUND_2`, firmware may
+also answer `NOT_REQUIRED` (-2): the mitigation is always on for this core, or
+the core needs none, and there is nothing to call. KVM gives that answer both
+for a host that keeps the mitigation on for its guest and for an unaffected one
+(`KVM_REG_ARM_SMCCC_ARCH_WORKAROUND_2_NOT_REQUIRED`, *"always active on this
+vCPU or it is not needed"*), and Linux's `spectre_v4_get_cpu_fw_mitigation_state`
+takes it, as it takes `1`, for not vulnerable. Until 2026-09-26 it was read as
+*not supported*, so such a core was reported "store bypass NOT covered"; it is
+now reported *"covered by firmware: ARCH_WORKAROUND_2 answers NOT_REQUIRED,
+always on for this core or not needed"*, and nothing is called. About
+workaround 1, Linux gives -2 no meaning and counts the core vulnerable, and so
+does the kernel. No machine here answers it: QEMU's firmware answers no
+`SMCCC_ARCH_FEATURES`, and the Pixel 7's cores all have `SSBS` and so never
+ask. A scratch edit that made QEMU's firmware answer -2 printed that line for
+the four Cortex-A72s and booted.
+
 **The exposure is said once every processor has started**, a line per kind of
 core — the same part, told the same by firmware, having applied the same —
 with how many there are. The boot processor alone could not say it: a Pixel 7's

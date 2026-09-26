@@ -217,6 +217,14 @@ enum Answer {
     Required,
     /// Implemented, and this core does not need it: 1.
     NotRequired,
+    /// `NOT_REQUIRED`, -2: about workaround 2, that the mitigation is always
+    /// on for this core or the core needs none, so there is nothing to call.
+    /// KVM answers it both for a host that keeps the mitigation on for its
+    /// guest and for one that is unaffected. Linux's
+    /// `spectre_v4_get_cpu_fw_mitigation_state` takes it, as it takes 1, for
+    /// not vulnerable. About workaround 1 Linux gives it no meaning and
+    /// counts the core vulnerable, and so does this.
+    AlwaysOn,
 }
 
 impl Answer {
@@ -225,6 +233,7 @@ impl Answer {
         match status {
             0 => Answer::Required,
             1 => Answer::NotRequired,
+            -2 => Answer::AlwaysOn,
             _ => Answer::NotSupported,
         }
     }
@@ -235,6 +244,7 @@ impl Answer {
             Answer::NotSupported => 0,
             Answer::Required => 1,
             Answer::NotRequired => 2,
+            Answer::AlwaysOn => 3,
         }
     }
 
@@ -243,6 +253,7 @@ impl Answer {
         match bits & 0b11 {
             1 => Answer::Required,
             2 => Answer::NotRequired,
+            3 => Answer::AlwaysOn,
             _ => Answer::NotSupported,
         }
     }
@@ -539,6 +550,9 @@ impl Exposure {
             "covered"
         } else if firmware.workaround_2 == Answer::NotRequired || core.in_order() {
             "not affected"
+        } else if firmware.workaround_2 == Answer::AlwaysOn {
+            "covered by firmware: ARCH_WORKAROUND_2 answers NOT_REQUIRED, always on for this \
+             core or not needed"
         } else {
             "NOT covered: no SSBS, and firmware offers no ARCH_WORKAROUND_2 (AoU-11)"
         }
