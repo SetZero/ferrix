@@ -31,7 +31,10 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use ferrix_blkring::identity::Location;
 use ferrix_bootinfo::PAGE_SIZE;
+use ferrix_linux_abi::errno::Errno;
+use ferrix_native_abi::nr::NativeCall;
 use ferrix_native_abi::signals::Signals;
+use ferrix_native_abi::status;
 use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, PACKET_SIGNAL};
 use ferrix_net::iface::{IFF_BROADCAST, IFF_MULTICAST, IFF_UP, Interface as NetInterface};
 use ferrix_netring::control::{HELLO_RIGHTS, MAX_MESSAGE, READY_RIGHTS};
@@ -39,13 +42,16 @@ use ferrix_netring::kernel::{Completed, KernelSide, SubmitError};
 use ferrix_netring::{Hello, Message, Op, Refusal, RingMemory, Status, Wait};
 
 use crate::device::DeviceNode;
+use crate::hooks::Full;
 use crate::mm;
 use crate::net;
 use crate::object::channel::{ChannelMessage, Endpoint, ReadError};
 use crate::object::port::{Observer, Port};
+use crate::object::process::Host;
 use crate::object::{Object, Transfer};
 use crate::sched::{self, Task};
 use crate::sync::SpinLock;
+use crate::syscall::native;
 use crate::timer;
 use crate::user::vmo::{Held, Vmo};
 
@@ -124,6 +130,41 @@ static TASKS: SpinLock<Vec<(usize, Arc<Task>)>> = SpinLock::new(Vec::new());
 
 /// The next ring's number.
 static NEXT_RING: AtomicUsize = AtomicUsize::new(1);
+
+/// Answer `net_ring_create` with this ring.
+///
+/// Called once from `main.rs`'s `register_load`: the native ABI is the item's
+/// and names no subsystem above it, so this registers into it.
+///
+/// # Errors
+///
+/// [`Full`] when the item has no room for the registration.
+pub(crate) fn install() -> Result<(), Full> {
+    native::serve(NativeCall::NetRingCreate, control_create)
+}
+
+/// `net_ring_create`.
+///
+/// The same shape as `block_ring_create` and for the same reason: a ring is
+/// made for a device the caller holds with `MANAGE`, and the driver's end of
+/// its control channel comes back as a handle. The device handle and its `MANAGE` right are the item's to
+/// check (`native::control_channel`).
+fn control_create(caller: &dyn Host, registers: &[u64; 6]) -> Result<usize, Errno> {
+    let device = registers.first().copied().unwrap_or(0);
+    native::control_channel(
+        caller,
+        device,
+        ferrix_netring::control::CONTROL_RIGHTS,
+        |node| {
+            create(node)
+                .map(|(_, driver_end)| driver_end)
+                .map_err(|why| match why {
+                    CreateError::InUse => status::ALREADY_BOUND,
+                    CreateError::NoMemory => status::NO_MEMORY,
+                })
+        },
+    )
+}
 
 /// Make a ring for `node` and start its task; answer the driver's end of its
 /// control channel.

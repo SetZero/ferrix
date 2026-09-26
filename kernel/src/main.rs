@@ -2056,7 +2056,14 @@ fn report_clock_and_random(info: &BootInfo) {
 /// which is not something to find out by losing them.
 fn register_load(view: &BootView<'_>) {
     syscall::launch::install();
-    if let Err(hooks::Full) = fs::install().and_then(|()| stm32mp1::install(view)) {
+    let registered = fs::install()
+        .and_then(|()| stm32mp1::install(view))
+        .and_then(|()| block_ring::install())
+        .and_then(|()| net_ring::install())
+        .and_then(|()| display::install())
+        .and_then(|()| render::install())
+        .and_then(|()| input::install());
+    if let Err(hooks::Full) = registered {
         fatal!(
             catalog::LOAD_REGISTRATION,
             "a registration list is full: the load ring registers more than the item expects"
@@ -2074,6 +2081,8 @@ fn register_load(view: &BootView<'_>) {
         Some("no board support registered a device binding")
     } else if !power::has_boot_mode() {
         Some("no board support registered where reboot's word goes")
+    } else if syscall::native::processes().is_none() {
+        Some("nothing registered to make and start a native process")
     } else {
         None
     };
@@ -2083,8 +2092,22 @@ fn register_load(view: &BootView<'_>) {
             "a registration is missing: {missing}"
         );
     }
+    // The native calls the item leaves to the load ring: a `match` held every
+    // one of them to an answer at compile time until they were registered
+    // instead, so every boot holds them to one here.
+    if let Some(call) = syscall::native::unserved() {
+        fatal!(
+            catalog::LOAD_REGISTRATION,
+            "a registration is missing: nothing answers the native call {call:?}"
+        );
+    }
     println!(
         "  hooks    {flushes} commits before power-off, {boards} board bindings, init's launcher, devmgr's reader and the boot mode registered"
+    );
+    println!(
+        "  hooks    {} native calls answered above the item, {} subsystems a quiesce waits out, native processes made by the personality",
+        syscall::native::served_count(),
+        syscall::native::server_count()
     );
 }
 

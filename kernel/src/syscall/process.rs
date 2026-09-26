@@ -47,6 +47,7 @@
 
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
+use core::any::Any;
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
 use crate::sync::SpinLock;
@@ -1489,6 +1490,15 @@ impl Host for Process {
     fn wait_interrupted(&self) -> bool {
         self.signal_pending()
     }
+}
+
+/// This personality's process behind `host`, if it is one.
+///
+/// What a handler registered with the item gets its own type back with: the
+/// item hands it the caller as a [`Host`], which names nothing of POSIX.
+pub(crate) fn of_host(host: &dyn Host) -> Option<&Process> {
+    let any: &dyn Any = host;
+    any.downcast_ref()
 }
 
 /// The process the running task belongs to.

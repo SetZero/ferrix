@@ -35,8 +35,11 @@ use ferrix_displayctl::message::{
     MAX_SCANOUTS, Message, Ready, Rect, Refusal, ScanoutMode, Status, Timing, Timings,
 };
 use ferrix_displayctl::session::{Event, RequestError, Session};
+use ferrix_linux_abi::errno::Errno;
+use ferrix_native_abi::nr::NativeCall;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
+use ferrix_native_abi::status;
 use ferrix_native_abi::types::CHANNEL_MAX_HANDLES;
 
 use ferrix_native_abi::types::DEVICE_NOT_PCI;
@@ -44,12 +47,15 @@ use ferrix_native_abi::types::DEVICE_NOT_PCI;
 use crate::claim::StillServed;
 use crate::claim::{Claims, Numbers};
 use crate::device::{self, DeviceNode, DmaShape};
+use crate::hooks::Full;
 use crate::object::channel::{ChannelMessage, Endpoint, ReadError};
 use crate::object::port::Port;
+use crate::object::process::Host;
 use crate::object::{Object, Transfer};
 use crate::sched;
 use crate::sched::WaitQueue;
 use crate::sync::SpinLock;
+use crate::syscall::native;
 use crate::timer;
 use crate::user::vmo::Vmo;
 
@@ -868,6 +874,45 @@ pub(crate) fn card(index: u32) -> Option<Arc<Card>> {
         .iter()
         .find(|card| card.index == index)
         .map(Arc::clone)
+}
+
+/// What a quiesce waits out for the display.
+static SERVER: native::Server = native::Server {
+    wait_until_unserved,
+    release: None,
+};
+
+/// Answer `display_control_create` with the display, and have a quiesce wait it out.
+///
+/// Called once from `main.rs`'s `register_load`: the native ABI is the item's
+/// and names no subsystem above it, so this registers into it.
+///
+/// # Errors
+///
+/// [`Full`] when the item has no room for the registration.
+pub(crate) fn install() -> Result<(), Full> {
+    native::serve(NativeCall::DisplayControlCreate, control_create)?;
+    native::register_server(&SERVER)
+}
+
+/// `display_control_create`.
+///
+/// The same shape as the rings': made for a device the caller holds with
+/// `MANAGE`, the driver's end of the control channel coming back as a handle. The device handle and its `MANAGE` right are the item's to
+/// check (`native::control_channel`).
+fn control_create(caller: &dyn Host, registers: &[u64; 6]) -> Result<usize, Errno> {
+    let device = registers.first().copied().unwrap_or(0);
+    native::control_channel(
+        caller,
+        device,
+        ferrix_blkring::control::CONTROL_RIGHTS,
+        |node| {
+            create(node).map_err(|why| match why {
+                CreateError::InUse => status::ALREADY_BOUND,
+                CreateError::NoMemory => status::NO_MEMORY,
+            })
+        },
+    )
 }
 
 /// Make the control channel for `node` and start its task; answer the

@@ -42,15 +42,23 @@ use ferrix_cgroupfs::files::{self, Kind};
 use ferrix_cgroupfs::write::{self, Target};
 use ferrix_cgroupfs::{Refusal, name, render};
 use ferrix_linux_abi::errno::Errno;
-use ferrix_vfs::access::{Access, MAY_WRITE};
+use ferrix_native_abi::nr::NativeCall;
+use ferrix_native_abi::rights::{Requested, Rights};
+use ferrix_native_abi::status;
+use ferrix_vfs::access::{Access, MAY_READ, MAY_WRITE};
 use ferrix_vfs::{
     DirEntry, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, NewNode, OpenFile, Readiness,
     SetAttributes, StatFs, Timespec,
 };
 
 use crate::fs::{self, procfs};
+use crate::hooks::Full;
+use crate::object::Object;
 use crate::object::job::{self, Job, JobError, NodeAttributes};
+use crate::object::process::Host;
 use crate::sync::SpinLock;
+use crate::syscall::fd;
+use crate::syscall::native;
 use crate::syscall::process::{self, Process};
 use crate::syscall::registry;
 
@@ -297,6 +305,49 @@ pub(crate) fn directory_job(file: &OpenFile) -> Option<(Arc<Job>, Metadata)> {
         .ok()?;
     let procs = procs_metadata(&directory.job, &directory.shared);
     Some((Arc::clone(&directory.job), procs))
+}
+
+/// Answer native `job_for_cgroup` from here: the native ABI is the item's,
+/// and names no filesystem, so cgroupfs registers into it. Called once from
+/// `fs::install`.
+///
+/// # Errors
+///
+/// [`Full`] when the item has no room for the registration.
+pub(crate) fn install() -> core::result::Result<(), Full> {
+    native::serve(NativeCall::JobForCgroup, job_for_cgroup)
+}
+
+/// `job_for_cgroup`: a handle to the job behind a cgroupfs directory, with
+/// the rights the caller's access to its `cgroup.procs` allows
+/// (`docs/CGROUPS.md` §5): `WAIT` to read it, `MANAGE` as well to write it,
+/// and `DUPLICATE` and `TRANSFER` with either, so a service manager can hand
+/// the handle on. It is judged as the caller, whoever opened the descriptor,
+/// since what is made is a new capability and not a use of the open file.
+///
+/// One way only: nothing names a cgroup's path from a job handle, because a
+/// handle is a capability and a path is not.
+fn job_for_cgroup(caller: &dyn Host, registers: &[u64; 6]) -> Result<usize> {
+    let [dirfd, rights, ..] = *registers;
+    let process = process::of_host(caller).ok_or(status::BAD_HANDLE)?;
+    let requested = Requested::from_register(rights).ok_or(status::INVALID_ARGS)?;
+    let file = fd::file(process, fd::arg(dirfd)).map_err(|_| status::BAD_HANDLE)?;
+    let (job, procs) = directory_job(&file).ok_or(status::WRONG_TYPE)?;
+    drop(file);
+    if job.is_removed() {
+        return Err(status::BAD_STATE);
+    }
+    let who = access_of(process);
+    let passed = Rights::DUPLICATE | Rights::TRANSFER;
+    let allowed = if who.permitted(&procs, MAY_WRITE) {
+        passed | Rights::WAIT | Rights::MANAGE
+    } else if who.permitted(&procs, MAY_READ) {
+        passed | Rights::WAIT
+    } else {
+        return Err(status::ACCESS_DENIED);
+    };
+    let granted = requested.resolve(allowed).ok_or(status::ACCESS_DENIED)?;
+    native::insert_new(caller.core(), Object::Job(job), granted)
 }
 
 /// A job's directory.

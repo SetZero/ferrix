@@ -97,7 +97,8 @@ static DATA_FLUSH: Flush = Flush {
 
 /// Register what the certified item reaches the filesystem through, which it
 /// does without naming it: the commits power makes before the machine stops,
-/// `/` first, and how `devmgr` reads its program and drivers.
+/// `/` first, how `devmgr` reads its program and drivers, and the native
+/// call that finds a job by its cgroupfs directory.
 ///
 /// Called once from `main.rs`, before anything is mounted to commit and
 /// before `devmgr` is started. A disk that is never mounted commits nothing,
@@ -105,12 +106,13 @@ static DATA_FLUSH: Flush = Flush {
 ///
 /// # Errors
 ///
-/// [`Full`] when power's list of flushes is.
+/// [`Full`] when power's list of flushes is, or the native call already has
+/// a handler.
 pub(crate) fn install() -> Result<(), Full> {
     crate::power::register_flush(&ROOT_FLUSH)?;
     crate::power::register_flush(&DATA_FLUSH)?;
     crate::devmgr::register_reader(read_from_root);
-    Ok(())
+    cgroupfs::install()
 }
 
 /// Read the file at `path` in the root the initramfs was unpacked into.

@@ -113,8 +113,7 @@ pub(crate) fn dispatch(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Out
     // two ABIs never have to agree about a number, and `arch::decode_syscall`
     // never sees one of Ferrix's own. See `native`.
     if ferrix_native_abi::nr::is_native(args.number) {
-        let process = process::current();
-        return Outcome::Return(errno::encode(native::dispatch(args, process.as_deref())));
+        return native_call(args);
     }
     let Some(call) = arch::decode_syscall(args.number) else {
         unanswered(None, args.number);
@@ -199,6 +198,20 @@ pub(crate) fn dispatch(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Out
         thread.with_own_signals(|signals| signals.mark_restart(args.number as u64, args.args[0]));
     }
     Outcome::Return(errno::encode(answer))
+}
+
+/// Answer a native call for the running task.
+///
+/// The caller as the core holds it: the task's thread, and the process that
+/// thread runs in, which is all the native ABI asks of it. No personality's
+/// type is named to find it.
+fn native_call(args: &SyscallArgs) -> Outcome {
+    let task = sched::current();
+    let caller = task
+        .as_deref()
+        .and_then(sched::Task::thread)
+        .map(|thread| thread.process());
+    Outcome::Return(errno::encode(native::dispatch(args, caller)))
 }
 
 /// How many more calls answered `ENOSYS` may be reported. See

@@ -420,10 +420,9 @@ impl ProcessRef {
         }
     }
 
-    /// A handle to `process`, made and not yet started, which holds it until a
+    /// A handle to `host`, made and not yet started, which holds it until a
     /// start takes it over or the last such handle is closed.
-    pub(crate) fn created<H: Host>(process: &Arc<H>) -> ProcessRef {
-        let host: Arc<dyn Host> = Arc::clone(process) as Arc<dyn Host>;
+    pub(crate) fn created(host: Arc<dyn Host>) -> ProcessRef {
         ProcessRef {
             exit: Arc::clone(&host.core().exit),
             control: Some(Arc::new(Control {
@@ -456,6 +455,12 @@ impl Control {
     /// process that has gone answers `None` here, not a panic.
     pub(crate) fn process<T: Host>(&self) -> Option<Arc<T>> {
         downcast(self.process.upgrade()?)
+    }
+
+    /// The process, if it still exists, as the core holds it: what a start
+    /// through the native ABI hands the personality back.
+    pub(crate) fn host(&self) -> Option<Arc<dyn Host>> {
+        self.process.upgrade()
     }
 
     /// Let go of the reference that kept it before it started, now that its

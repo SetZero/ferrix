@@ -37,17 +37,23 @@ use ferrix_inputctl::message::{
 };
 use ferrix_inputctl::queue::{Clock, Clocks, Queue, Stamped};
 use ferrix_inputctl::session::{OpenId, Received, Session};
+use ferrix_linux_abi::errno::Errno;
+use ferrix_native_abi::nr::NativeCall;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
+use ferrix_native_abi::status;
 use ferrix_native_abi::types::{CHANNEL_MAX_HANDLES, DEVICE_NOT_PCI};
 
 use crate::device::DeviceNode;
+use crate::hooks::Full;
 use crate::object::channel::{ChannelMessage, Endpoint, ReadError};
 use crate::object::port::Port;
+use crate::object::process::Host;
 use crate::object::{Object, Transfer};
 use crate::sched;
 use crate::sched::WaitQueue;
 use crate::sync::SpinLock;
+use crate::syscall::native;
 use crate::timer;
 
 pub(crate) mod evdev;
@@ -218,6 +224,38 @@ pub(crate) fn device_indices() -> Vec<u32> {
     let mut indices: Vec<u32> = DEVICES.lock().iter().map(|device| device.index).collect();
     indices.sort_unstable();
     indices
+}
+
+/// Answer `input_control_create` with input.
+///
+/// Called once from `main.rs`'s `register_load`: the native ABI is the item's
+/// and names no subsystem above it, so this registers into it.
+///
+/// # Errors
+///
+/// [`Full`] when the item has no room for the registration.
+pub(crate) fn install() -> Result<(), Full> {
+    native::serve(NativeCall::InputControlCreate, control_create)
+}
+
+/// `input_control_create`.
+///
+/// As the display's: the device's own channel, one per device, and the
+/// driver's end of it back. The device handle and its `MANAGE` right are the item's to
+/// check (`native::control_channel`).
+fn control_create(caller: &dyn Host, registers: &[u64; 6]) -> Result<usize, Errno> {
+    let device = registers.first().copied().unwrap_or(0);
+    native::control_channel(
+        caller,
+        device,
+        ferrix_blkring::control::CONTROL_RIGHTS,
+        |node| {
+            create(node).map_err(|why| match why {
+                CreateError::InUse => status::ALREADY_BOUND,
+                CreateError::NoMemory => status::NO_MEMORY,
+            })
+        },
+    )
 }
 
 /// Make a control channel for `node` and start its task.

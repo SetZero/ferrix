@@ -262,76 +262,6 @@
     ],
     "entries": [
       {
-        "file": "syscall/native.rs",
-        "references": "syscall::process",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-07"
-      },
-      {
-        "file": "syscall/native.rs",
-        "references": "block_ring",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-07"
-      },
-      {
-        "file": "syscall/native.rs",
-        "references": "display",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-07"
-      },
-      {
-        "file": "syscall/native.rs",
-        "references": "fs::cgroupfs",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-07"
-      },
-      {
-        "file": "syscall/native.rs",
-        "references": "input",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-07"
-      },
-      {
-        "file": "syscall/native.rs",
-        "references": "net_ring",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-07"
-      },
-      {
-        "file": "syscall/native.rs",
-        "references": "render",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-07"
-      },
-      {
-        "file": "syscall/native.rs",
-        "references": "syscall::exec",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-07"
-      },
-      {
-        "file": "syscall/native.rs",
-        "references": "syscall::fd",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-07"
-      },
-      {
-        "file": "syscall/native.rs",
-        "references": "syscall::load",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-07"
-      },
-      {
         "file": "syscall/limits.rs",
         "references": "syscall::process",
         "from_ring": "item",
@@ -477,20 +407,6 @@
         "from_ring": "core",
         "to_ring": "load",
         "finding": "F-33"
-      },
-      {
-        "file": "devmgr.rs",
-        "references": "syscall::exec",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-07"
-      },
-      {
-        "file": "devmgr.rs",
-        "references": "syscall::process",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-07"
       },
       {
         "file": "syscall/mod.rs",
@@ -650,6 +566,7 @@
     ],
     "file": "main.rs",
     "load_modules": [
+      "block_ring",
       "block_ring::check",
       "block_ring::driver_check",
       "display",
@@ -670,10 +587,13 @@
       "fs::signalfd_check",
       "fs::sysfs::check",
       "fs::timerfd_check",
+      "input",
       "net",
       "net::check",
       "net::netlink::check",
+      "net_ring",
       "net_ring::check",
+      "render",
       "stm32mp1",
       "syscall::check",
       "syscall::check::paths",

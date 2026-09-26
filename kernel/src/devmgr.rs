@@ -38,10 +38,11 @@ use ferrix_sync::Once;
 
 use crate::object::channel::{Endpoint, ReadError};
 use crate::object::job::{self, Job};
+use crate::object::process::Process;
 use crate::object::{Object, Transfer};
 use crate::sched::WaitQueue;
 use crate::sync::SpinLock;
-use crate::syscall::{exec, process};
+use crate::syscall::native::{self, StartRefused};
 use crate::user::vmo::Vmo;
 use crate::{device, sched, timer};
 
@@ -413,17 +414,7 @@ pub(crate) fn start() -> Result<Option<Report>, &'static str> {
         first = false;
     }
 
-    let process = exec::load_native(&image, NAME).map_err(|_| "/sbin/devmgr does not load")?;
-    let bootstrap = process
-        .with_handles(|table| table.insert(Object::Channel(devmgr_end), Rights::CHANNEL))
-        .map_err(|_| "no room for devmgr's bootstrap handle")?;
-    let claim =
-        process::claim_start(&process).map_err(|_| "devmgr could not be claimed to start")?;
-    *CHANNEL.lock() = Some(Arc::clone(&kernel_end));
-    // The task runs for the life of the machine; nothing here joins it.
-    let _task = claim
-        .start(None, u64::from(bootstrap.0))
-        .map_err(|_| "devmgr could not be started")?;
+    start_program(&image, devmgr_end, &kernel_end)?;
 
     let (started, failed) = report(&kernel_end)?;
     if sched::spawn("devmgr listener", listen, 0, ferrix_sched::NICE_0_WEIGHT).is_err() {
@@ -435,6 +426,35 @@ pub(crate) fn start() -> Result<Option<Report>, &'static str> {
         started,
         failed,
     }))
+}
+
+/// Load devmgr's `image` into a process of its own, put `devmgr_end` in its
+/// table as its bootstrap handle, and start it with the handle's value.
+///
+/// Through what the personality registered ([`native::Processes`]): the ELF
+/// loader and the process it loads into are above the item. The kernel's end
+/// of the channel is published once devmgr's start is claimed and its task
+/// made, and before it runs. The task runs for the life of the machine;
+/// nothing here joins it.
+fn start_program(
+    image: &[u8],
+    devmgr_end: Arc<Endpoint>,
+    kernel_end: &Arc<Endpoint>,
+) -> Result<(), &'static str> {
+    let processes = native::processes().ok_or("nothing is registered to start devmgr with")?;
+    let process = (processes.load)(image, NAME).map_err(|_| "/sbin/devmgr does not load")?;
+    let bootstrap = process
+        .core()
+        .with_handles(|table| table.insert(Object::Channel(devmgr_end), Rights::CHANNEL))
+        .map_err(|_| "no room for devmgr's bootstrap handle")?;
+    let mut publish = || {
+        *CHANNEL.lock() = Some(Arc::clone(kernel_end));
+        Ok(u64::from(bootstrap.0))
+    };
+    (processes.start)(&process, &mut publish).map_err(|why| match why {
+        StartRefused::Claimed => "devmgr could not be claimed to start",
+        StartRefused::NoTask | StartRefused::Argument(_) => "devmgr could not be started",
+    })
 }
 
 /// The process that last mapped each device's registers or took its interrupt,
@@ -449,7 +469,7 @@ static DRIVER_ENDINGS: SpinLock<Vec<(Location, Arc<crate::object::process::Exit>
 /// Note that `driver` mapped `node`'s registers or took its interrupt: it is
 /// that device's driver now. Cheap when it is already noted, which every call
 /// after its first is.
-pub(crate) fn note_driver(node: &device::DeviceNode, driver: &process::Process) {
+pub(crate) fn note_driver(node: &device::DeviceNode, driver: &Process) {
     let Some(location) = location_of(node) else {
         return;
     };

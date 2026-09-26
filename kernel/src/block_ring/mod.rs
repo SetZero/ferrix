@@ -46,8 +46,10 @@ use ferrix_blkring::{
 };
 use ferrix_block::{Config, Limits, Op, Queue, Request, Token};
 use ferrix_bootinfo::PAGE_SIZE;
+use ferrix_native_abi::nr::NativeCall;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
+use ferrix_native_abi::status;
 use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, PACKET_SIGNAL};
 use ferrix_vfs::Errno;
 
@@ -63,6 +65,9 @@ use crate::{mm, sched, timer};
 use crate::claim::StillServed;
 use crate::fs::block::BlockDevice;
 use crate::fs::devfs::{BlockRefused, BlockRegistration, Origin, register_block_from};
+use crate::hooks::Full;
+use crate::object::process::Host;
+use crate::syscall::native;
 
 pub(crate) mod check;
 pub(crate) mod driver_check;
@@ -311,6 +316,42 @@ pub(crate) fn release_claim(node: &Arc<DeviceNode>) {
     CLAIMS
         .lock()
         .retain(|claim| !Arc::ptr_eq(&claim.device, node));
+}
+
+/// What a quiesce waits out for the block ring, and lets go of after.
+static SERVER: native::Server = native::Server {
+    wait_until_unserved,
+    release: Some(release_claim),
+};
+
+/// Answer `block_ring_create` with this ring, and have a quiesce wait it out.
+///
+/// Called once from `main.rs`'s `register_load`: the native ABI is the item's
+/// and names no subsystem above it, so the ring registers into it.
+///
+/// # Errors
+///
+/// [`Full`] when the item has no room for either registration.
+pub(crate) fn install() -> Result<(), Full> {
+    native::serve(NativeCall::BlockRingCreate, control_create)?;
+    native::register_server(&SERVER)
+}
+
+/// `block_ring_create`.
+///
+/// `ALREADY_BOUND` for a device that has a ring, live or ended: nothing yet
+/// says its device was reset. `INVALID_ARGS` for a device that is not a PCI
+/// function, since HELLO names the disk by its PCI location. The device handle
+/// and its `MANAGE` right are the item's to check (`native::control_channel`).
+fn control_create(caller: &dyn Host, registers: &[u64; 6]) -> Result<usize, Errno> {
+    let device = registers.first().copied().unwrap_or(0);
+    native::control_channel(caller, device, CONTROL_RIGHTS, |node| {
+        create(node).map_err(|why| match why {
+            CreateError::InUse => status::ALREADY_BOUND,
+            CreateError::NotPci => status::INVALID_ARGS,
+            CreateError::NoMemory => status::NO_MEMORY,
+        })
+    })
 }
 
 /// The PCI location HELLO must name for `node`, if it is a PCI function:

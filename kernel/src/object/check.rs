@@ -1142,7 +1142,7 @@ impl Side {
             number,
             args: registers,
         };
-        native::dispatch(&args, Some(&self.process))
+        native::dispatch(&args, Some(&*self.process))
     }
 
     /// Make a call that returns a handle.
@@ -1607,7 +1607,7 @@ fn write_after_a_delay(_: usize) {
             number: nr::CHANNEL_WRITE,
             args: [reg(end), 0, 0, 0, 0, 0],
         };
-        let _ = native::dispatch(&args, Some(&process));
+        let _ = native::dispatch(&args, Some(&*process));
     }
 }
 

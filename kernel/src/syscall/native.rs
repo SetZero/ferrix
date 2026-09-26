@@ -2,9 +2,10 @@
 //!
 //! Stage 9 of `docs/ROADMAP.md`. [`super::dispatch`] sends every number in
 //! `0x1000..=0x1FFF` here before it asks any Linux table, so the two ABIs
-//! never have to agree about a number. Each handler takes `&Process`, for the
-//! reason [`super::process`] gives: the boot self-check drives them against
-//! processes it built, long before a program can make a native call.
+//! never have to agree about a number. Each handler takes the core's
+//! [`Process`], for the reason `syscall::process` gives: the boot self-check
+//! drives them against processes it built, long before a program can make a
+//! native call.
 //!
 //! # What is decided where
 //!
@@ -12,6 +13,24 @@
 //! `libs/native-abi`. What an object does is [`crate::object`]. This file does
 //! what only a system call layer can: turn registers and user pointers into
 //! those calls, and their failures into the status a program sees.
+//!
+//! # What is answered above the item
+//!
+//! Most calls act on the core's objects and are answered here, by a `match`
+//! the compiler holds exhaustive. Five make a device's control channel for a
+//! subsystem in the load ring -- the block and network rings, the display, the
+//! renderer and input -- and one, `job_for_cgroup`, reads a cgroupfs
+//! directory. Those are answered by whatever registered for them with
+//! [`serve`], from `main.rs`'s `register_load`, and the boot stops (FX-0006)
+//! if any of them has nothing registered ([`unserved`]): the exhaustiveness
+//! the `match` gave them at compile time is kept, at boot, on every boot.
+//!
+//! Two more things come from above. A native process is made and started by
+//! the personality whose process it is ([`Processes`]), and a quiesce waits
+//! out every subsystem that serves a device through a channel ([`Server`]).
+//! So this file names no module above the item, and the native ABI can be
+//! read without the load ring behind it (`docs/certification/FINDINGS.md`,
+//! F-07).
 //!
 //! # Objects are dropped outside the handle lock
 //!
@@ -45,26 +64,22 @@ use ferrix_native_abi::types::{
 use ferrix_objects::message::Message;
 use ferrix_objects::reach::Reach;
 use ferrix_objects::table::TableError;
-use ferrix_vfs::access::{MAY_READ, MAY_WRITE};
+use ferrix_sync::Once;
 use ferrix_vma::VmaFlags;
 
 use crate::arch;
-use crate::block_ring;
+use crate::claim::StillServed;
 use crate::device::DeviceNode;
-use crate::net_ring;
+use crate::hooks::{Full, Hooks};
 use crate::object::channel::{self, ChannelMessage, Endpoint, ReadError, WriteFailure};
 use crate::object::interrupt::{Interrupt, InterruptError};
 use crate::object::io_mapping::{IoMapping, IoMappingError};
 use crate::object::job::{self, Job};
 use crate::object::port::{Observer, Port};
-use crate::object::process::ProcessRef;
+use crate::object::process::{Host, Process, ProcessRef};
 use crate::object::{self, HandleTable, Object};
-use crate::syscall::SyscallArgs;
-use crate::syscall::exec;
-use crate::syscall::fd;
-use crate::syscall::load::LoadError;
-use crate::syscall::process::{self, Process};
 use crate::syscall::uaccess::{self, UserError};
+use crate::trap::SyscallArgs;
 use crate::user::space::SpaceError;
 use crate::user::vmo::{Vmo, VmoError};
 
@@ -98,16 +113,211 @@ fn decode(number: usize) -> Option<NativeCall> {
     nr::decode(nr::FIRST + offset)
 }
 
-/// Answer one native system call.
+/// A native call answered above the item, by what registered for it with
+/// [`serve`].
+///
+/// Handed the caller as the personality's process, not the core's half of
+/// it, so that a handler which needs more -- `job_for_cgroup` reads the
+/// caller's descriptors and credentials -- can have its own type back
+/// ([`object::process::downcast`]).
+pub(crate) type Handler = fn(&dyn Host, &[u64; 6]) -> Result<usize, Errno>;
+
+/// One call the item leaves to the load ring, and what answers it.
+struct Served {
+    /// The call.
+    call: NativeCall,
+    /// Its handler, once registered.
+    handler: Once<Handler>,
+}
+
+impl Served {
+    /// `call`, answered by nothing yet.
+    const fn new(call: NativeCall) -> Served {
+        Served {
+            call,
+            handler: Once::new(),
+        }
+    }
+}
+
+/// The calls answered above the item, each registered once at bring-up.
+///
+/// A short list searched by call rather than an array indexed by number: the
+/// search is over a decoded [`NativeCall`], never over a number a program
+/// chose, so no bound here can be mispredicted into memory past it; and each
+/// of these calls makes a channel for a driver, not the path a driver's work
+/// takes. A `Once` per call, as [`crate::hooks`] keeps them: written at
+/// bring-up, read without a lock.
+static SERVED: [Served; 6] = [
+    Served::new(NativeCall::BlockRingCreate),
+    Served::new(NativeCall::NetRingCreate),
+    Served::new(NativeCall::DisplayControlCreate),
+    Served::new(NativeCall::RenderControlCreate),
+    Served::new(NativeCall::InputControlCreate),
+    Served::new(NativeCall::JobForCgroup),
+];
+
+/// Answer `call` with `handler`. Called from `main.rs`'s `register_load`, by
+/// the subsystem the call is about.
 ///
 /// # Errors
 ///
-/// `ENOSYS` for a gap in the range or a call not built yet; `ESRCH` with no
-/// process, as the Linux half answers; otherwise the call's own status.
-pub(crate) fn dispatch(args: &SyscallArgs, process: Option<&Process>) -> Result<usize, Errno> {
+/// [`Full`] when `call` is not one this table leaves to the load ring, or
+/// already has a handler: either way the load registers more than the item
+/// expects, and the boot says so.
+pub(crate) fn serve(call: NativeCall, handler: Handler) -> Result<(), Full> {
+    let served = SERVED
+        .iter()
+        .find(|served| served.call == call)
+        .ok_or(Full)?;
+    let mut taken = false;
+    let _ = served.handler.call_once(|| {
+        taken = true;
+        handler
+    });
+    if taken { Ok(()) } else { Err(Full) }
+}
+
+/// The first call left to the load ring that nothing answers: what the boot
+/// checks is `None` before it goes on, so that a call the `match` in
+/// [`dispatch`] no longer answers itself cannot go unanswered unseen.
+pub(crate) fn unserved() -> Option<NativeCall> {
+    SERVED
+        .iter()
+        .find(|served| served.handler.get().is_none())
+        .map(|served| served.call)
+}
+
+/// How many calls the load ring answers, for the boot's report.
+pub(crate) fn served_count() -> usize {
+    SERVED
+        .iter()
+        .filter(|served| served.handler.get().is_some())
+        .count()
+}
+
+/// Answer `call` through the table.
+fn served(call: NativeCall, caller: &dyn Host, a: &[u64; 6]) -> Result<usize, Errno> {
+    let handler = SERVED
+        .iter()
+        .find(|served| served.call == call)
+        .and_then(|served| served.handler.get())
+        .ok_or(Errno::ENOSYS)?;
+    handler(caller, a)
+}
+
+/// How a native process is made and started: what `process_create`,
+/// `process_start` and `devmgr`'s own start need of the personality whose
+/// process it is.
+///
+/// A native process is loaded from an ELF image into a process of the Linux
+/// personality's -- it has descriptors and a thread like any other -- and
+/// that loader and that process are above the item. So the item states what
+/// it needs and the personality registers it, as it lends `init` its
+/// `Launcher`.
+pub(crate) struct Processes {
+    /// A new process with the ELF `image` loaded, named `name`, made and not
+    /// started. Refused with the native status the caller hears.
+    pub(crate) load: LoadNative,
+    /// Claim the process's start and make its first task; then ask the
+    /// argument for the value its first argument register starts with, and
+    /// run it. A refused argument gives the start back with nothing run.
+    pub(crate) start: StartNative,
+    /// Whether the calling thread of `caller` is to leave a wait rather than
+    /// sleep on: its process is ending, or another of its threads is
+    /// replacing the program.
+    pub(crate) must_leave: fn(caller: &dyn Host) -> bool,
+}
+
+/// [`Processes::load`]: an image and a name, and the process made from them.
+pub(crate) type LoadNative = fn(image: &[u8], name: &[u8]) -> Result<Arc<dyn Host>, Errno>;
+
+/// What gives a starting process its first argument, or refuses to.
+pub(crate) type Argument<'a> = &'a mut dyn FnMut() -> Result<u64, Errno>;
+
+/// [`Processes::start`].
+pub(crate) type StartNative =
+    fn(process: &Arc<dyn Host>, argument: Argument<'_>) -> Result<(), StartRefused>;
+
+/// Why [`Processes::start`] did not start a process.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum StartRefused {
+    /// It has no program loaded, has already ended, or was already started.
+    Claimed,
+    /// No task could be made for it.
+    NoTask,
+    /// The argument could not be given; its status.
+    Argument(Errno),
+}
+
+/// The registered [`Processes`].
+static PROCESSES: Once<&'static Processes> = Once::new();
+
+/// Make and start native processes with `processes`. The first registration
+/// stands.
+pub(crate) fn register_processes(processes: &'static Processes) {
+    let _ = PROCESSES.call_once(|| processes);
+}
+
+/// The registered [`Processes`], if one is: what `devmgr` starts with.
+pub(crate) fn processes() -> Option<&'static Processes> {
+    PROCESSES.get().copied()
+}
+
+/// Whether the calling thread of `caller` is to leave its wait: as the
+/// personality says, or, with none registered, once its process has ended.
+fn must_leave(caller: &dyn Host) -> bool {
+    match processes() {
+        Some(processes) => (processes.must_leave)(caller),
+        None => caller.core().is_terminated(),
+    }
+}
+
+/// A subsystem that serves devices through a control channel, as a quiesce
+/// sees it.
+pub(crate) struct Server {
+    /// Wait, bounded, until nothing of it serves `node` any more, or until
+    /// `cancelled`; refused while a live driver still does.
+    pub(crate) wait_until_unserved: WaitUnserved,
+    /// Let go of a claim it keeps on `node` past its driver's end, once the
+    /// device reaches nothing: the block ring's, which a driver started again
+    /// would otherwise be refused by.
+    pub(crate) release: Option<fn(node: &Arc<DeviceNode>)>,
+}
+
+/// [`Server::wait_until_unserved`].
+pub(crate) type WaitUnserved =
+    fn(node: &Arc<DeviceNode>, cancelled: &dyn Fn() -> bool) -> Result<(), StillServed>;
+
+/// What a quiesce waits out, in the order it was registered.
+static SERVERS: Hooks<Server, 4> = Hooks::new();
+
+/// Have a quiesce wait out `server`.
+///
+/// # Errors
+///
+/// [`Full`] past four, which is more subsystems serving devices than the item
+/// expects.
+pub(crate) fn register_server(server: &'static Server) -> Result<(), Full> {
+    SERVERS.register(server)
+}
+
+/// How many subsystems a quiesce waits out, for the boot's report.
+pub(crate) fn server_count() -> usize {
+    SERVERS.len()
+}
+
+/// Answer one native system call for `caller`, the calling thread's process.
+///
+/// # Errors
+///
+/// `ENOSYS` for a gap in the range, a call not built yet, or one left to the
+/// load ring that nothing answers; `ESRCH` with no process, as the Linux half
+/// answers; otherwise the call's own status.
+pub(crate) fn dispatch(args: &SyscallArgs, caller: Option<&dyn Host>) -> Result<usize, Errno> {
     let call = decode(args.number).ok_or(Errno::ENOSYS)?;
-    let process = process.ok_or(Errno::ESRCH)?;
-    let a = args.args;
+    let caller = caller.ok_or(Errno::ESRCH)?;
+    let (process, a) = (caller.core(), args.args);
     match call {
         NativeCall::HandleClose => handle_close(process, handle(a[0])),
         NativeCall::HandleDuplicate => handle_duplicate(process, handle(a[0]), a[1]),
@@ -158,10 +368,9 @@ pub(crate) fn dispatch(args: &SyscallArgs, process: Option<&Process>) -> Result<
             a[3],
         ),
         NativeCall::VmoGetSize => vmo_get_size(process, handle(a[0]), a[1]),
-        NativeCall::ObjectWaitOne => object_wait_one(process, handle(a[0]), a[1], a[2], a[3]),
+        NativeCall::ObjectWaitOne => object_wait_one(caller, handle(a[0]), a[1], a[2], a[3]),
         NativeCall::JobCreate => job_create(process, handle(a[0])),
         NativeCall::JobKill => job_kill(process, handle(a[0])),
-        NativeCall::JobForCgroup => job_for_cgroup(process, a[0], a[1]),
         NativeCall::ProcessCreate => process_create(
             process,
             handle(a[0]),
@@ -176,11 +385,12 @@ pub(crate) fn dispatch(args: &SyscallArgs, process: Option<&Process>) -> Result<
         NativeCall::InterruptAck => interrupt_ack(process, handle(a[0])),
         NativeCall::InterruptBind => interrupt_bind(process, handle(a[0]), handle(a[1]), a[2]),
         NativeCall::IoMappingCreate => io_mapping_create(process, handle(a[0]), a[1]),
-        NativeCall::BlockRingCreate => block_ring_create(process, handle(a[0])),
-        NativeCall::NetRingCreate => net_ring_create(process, handle(a[0])),
-        NativeCall::DisplayControlCreate => display_control_create(process, handle(a[0])),
-        NativeCall::RenderControlCreate => render_control_create(process, handle(a[0])),
-        NativeCall::InputControlCreate => input_control_create(process, handle(a[0])),
+        NativeCall::BlockRingCreate
+        | NativeCall::NetRingCreate
+        | NativeCall::DisplayControlCreate
+        | NativeCall::RenderControlCreate
+        | NativeCall::InputControlCreate
+        | NativeCall::JobForCgroup => served(call, caller, &a),
         NativeCall::DeviceInfo => device_info(process, handle(a[0]), a[1]),
         NativeCall::DeviceQuiesce => device_quiesce(process, handle(a[0])),
         NativeCall::DeviceClock => device_clock(process, handle(a[0]), a[1], a[2]),
@@ -189,7 +399,7 @@ pub(crate) fn dispatch(args: &SyscallArgs, process: Option<&Process>) -> Result<
         NativeCall::VmoPinAddresses => vmo_pin_addresses(process, handle(a[0]), a[1], a[2]),
         NativeCall::PortCreate => insert_new(process, Object::Port(Port::new()), Rights::PORT),
         NativeCall::PortQueue => port_queue(process, handle(a[0]), a[1]),
-        NativeCall::PortWait => port_wait(process, handle(a[0]), a[1], a[2]),
+        NativeCall::PortWait => port_wait(caller, handle(a[0]), a[1], a[2]),
         NativeCall::ObjectWaitAsync => {
             object_wait_async(process, handle(a[0]), handle(a[1]), a[2], a[3])
         }
@@ -786,7 +996,11 @@ fn vmo_get_size(process: &Process, vmo: Handle, out: u64) -> Result<usize, Errno
 }
 
 /// Open a handle to a new object, or free the object if there is no room.
-fn insert_new(process: &Process, object: Object, rights: Rights) -> Result<usize, Errno> {
+pub(crate) fn insert_new(
+    process: &Process,
+    object: Object,
+    rights: Rights,
+) -> Result<usize, Errno> {
     match process.with_handles(|table| table.insert(object, rights)) {
         Ok(handle) => Ok(returned(handle)),
         Err(object) => {
@@ -808,12 +1022,13 @@ fn insert_new(process: &Process, object: Object, rights: Rights) -> Result<usize
 /// then answers `EINTR`, which no program sees — its task ends on the way back
 /// to user mode.
 fn object_wait_one(
-    process: &Process,
+    caller: &dyn Host,
     handle: Handle,
     signals: u64,
     deadline_at: u64,
     observed_at: u64,
 ) -> Result<usize, Errno> {
+    let process = caller.core();
     let wanted = Signals::from_register(signals).ok_or(status::INVALID_ARGS)?;
     let object = process.with_handles(|table| {
         let (object, rights) = table.get(handle).map_err(table_error)?;
@@ -829,7 +1044,7 @@ fn object_wait_one(
     };
 
     let satisfied = object.waiters().wait_until_deadline(
-        || object.signals().intersects(wanted) || process.caller_must_leave(),
+        || object.signals().intersects(wanted) || must_leave(caller),
         deadline,
     );
     let observed = object.signals();
@@ -839,7 +1054,7 @@ fn object_wait_one(
         uaccess::copy_to_user(process.space(), observed_at, &observed.0.to_ne_bytes())
             .map_err(fault)?;
     }
-    if process.caller_must_leave() {
+    if must_leave(caller) {
         return Err(Errno::EINTR);
     }
     if satisfied {
@@ -881,36 +1096,6 @@ fn job_kill(process: &Process, job: Handle) -> Result<usize, Errno> {
     Ok(0)
 }
 
-/// `job_for_cgroup`: a handle to the job behind a cgroupfs directory, with
-/// the rights the caller's access to its `cgroup.procs` allows
-/// (`docs/CGROUPS.md` §5): `WAIT` to read it, `MANAGE` as well to write it,
-/// and `DUPLICATE` and `TRANSFER` with either, so a service manager can hand
-/// the handle on. It is judged as the caller, whoever opened the descriptor,
-/// since what is made is a new capability and not a use of the open file.
-///
-/// One way only: nothing names a cgroup's path from a job handle, because a
-/// handle is a capability and a path is not.
-fn job_for_cgroup(process: &Process, dirfd: u64, rights: u64) -> Result<usize, Errno> {
-    let requested = Requested::from_register(rights).ok_or(status::INVALID_ARGS)?;
-    let file = fd::file(process, fd::arg(dirfd)).map_err(|_| status::BAD_HANDLE)?;
-    let (job, procs) = crate::fs::cgroupfs::directory_job(&file).ok_or(status::WRONG_TYPE)?;
-    drop(file);
-    if job.is_removed() {
-        return Err(status::BAD_STATE);
-    }
-    let who = crate::fs::cgroupfs::access_of(process);
-    let passed = Rights::DUPLICATE | Rights::TRANSFER;
-    let allowed = if who.permitted(&procs, MAY_WRITE) {
-        passed | Rights::WAIT | Rights::MANAGE
-    } else if who.permitted(&procs, MAY_READ) {
-        passed | Rights::WAIT
-    } else {
-        return Err(status::ACCESS_DENIED);
-    };
-    let granted = requested.resolve(allowed).ok_or(status::ACCESS_DENIED)?;
-    insert_new(process, Object::Job(job), granted)
-}
-
 /// The largest ELF image `process_create` reads out of a VMO: sixteen
 /// mebibytes, copied into the kernel's own memory before it is loaded.
 const MAX_IMAGE_BYTES: u64 = 16 << 20;
@@ -934,18 +1119,19 @@ fn process_create(
         .filter(|&count| count <= nr::PROCESS_NAME_MAX)
         .ok_or(status::INVALID_ARGS)?;
     let name = copy_in(process, name.at, name_len)?;
+    let processes = processes().ok_or(Errno::ENOSYS)?;
     let image = image_bytes(&vmo)?;
-    let child = exec::load_native(&image, &name).map_err(load_status)?;
+    let child = (processes.load)(&image, &name)?;
     drop(image);
-    if job.adopt(&child).is_err() {
+    if job.adopt(child.core()).is_err() {
         // A killed job takes nothing new. What was made is ended here, in the
         // caller's task, where a kill may run.
-        process::kill(&child, job::KILLED_STATUS);
+        child.kill(job::KILLED_STATUS);
         return Err(status::BAD_STATE);
     }
     insert_new(
         process,
-        Object::Process(ProcessRef::created(&child)),
+        Object::Process(ProcessRef::created(child)),
         Rights::PROCESS,
     )
 }
@@ -966,21 +1152,6 @@ fn image_bytes(vmo: &Vmo) -> Result<Vec<u8>, Errno> {
         vmo.read_page(index as u64, 0, page).map_err(vmo_error)?;
     }
     Ok(bytes)
-}
-
-/// The status a failed native load travels as: a fault in the image is the
-/// caller's mistake, running out of memory is not.
-fn load_status(error: exec::ExecError) -> Errno {
-    match error {
-        exec::ExecError::Load(LoadError::Space(SpaceError::OutOfMemory) | LoadError::Copy(_))
-        | exec::ExecError::Space(_)
-        | exec::ExecError::Startup
-        | exec::ExecError::Start(_) => status::NO_MEMORY,
-        // A native process is loaded from bytes and never from a path, so it
-        // brings no linker and this cannot arise; it is the caller's image
-        // that would be at fault if it did.
-        exec::ExecError::Load(_) | exec::ExecError::Linker(_) => status::INVALID_ARGS,
-    }
 }
 
 /// `process_start`.
@@ -1012,16 +1183,19 @@ fn process_start(process: &Process, target: Handle, bootstrap: Handle) -> Result
         }
         child.control().map(Arc::clone).ok_or(status::BAD_STATE)
     })?;
-    let child = control.process().ok_or(status::BAD_STATE)?;
-    let claim = process::claim_start(&child).map_err(|_| status::BAD_STATE)?;
-    let prepared = claim.prepare(None).map_err(|_| status::NO_MEMORY)?;
-    let placed = if bootstrap == Handle::default() {
-        None
-    } else {
-        Some(move_handle(process, &child, bootstrap)?)
+    let child = control.host().ok_or(status::BAD_STATE)?;
+    let processes = processes().ok_or(status::BAD_STATE)?;
+    let mut place = || {
+        if bootstrap == Handle::default() {
+            return Ok(0);
+        }
+        move_handle(process, child.core(), bootstrap).map(|placed| u64::from(placed.0))
     };
-    let argument = placed.map_or(0, |handle| u64::from(handle.0));
-    let _task = prepared.start(argument);
+    (processes.start)(&child, &mut place).map_err(|why| match why {
+        StartRefused::Claimed => status::BAD_STATE,
+        StartRefused::NoTask => status::NO_MEMORY,
+        StartRefused::Argument(status) => status,
+    })?;
     control.started();
     Ok(0)
 }
@@ -1138,93 +1312,29 @@ fn io_mapping_create(process: &Process, device: Handle, spec: u64) -> Result<usi
     insert_new(process, Object::IoMapping(mapping), Rights::IO_MAPPING)
 }
 
-/// `block_ring_create`.
+/// Make a device's control channel for a subsystem above the item: the
+/// shape `block_ring_create`, `net_ring_create`, `display_control_create`,
+/// `render_control_create` and `input_control_create` share, lent to the
+/// handlers their subsystems register ([`serve`]).
 ///
-/// The device handle needs `MANAGE`, as everything that gives a driver the
-/// device does. `ALREADY_BOUND` for a device that has a ring, live or ended:
-/// nothing yet says its device was reset. `INVALID_ARGS` for a device that is
-/// not a PCI function, since HELLO names the disk by its PCI location.
-fn block_ring_create(process: &Process, device: Handle) -> Result<usize, Errno> {
-    let node = device_in(process, device, Rights::MANAGE)?;
-    let driver_end = block_ring::create(&node).map_err(|why| match why {
-        block_ring::CreateError::InUse => status::ALREADY_BOUND,
-        block_ring::CreateError::NotPci => status::INVALID_ARGS,
-        block_ring::CreateError::NoMemory => status::NO_MEMORY,
-    })?;
-    insert_new(
-        process,
-        Object::Channel(driver_end),
-        block_ring::CONTROL_RIGHTS,
-    )
-}
-
-/// `net_ring_create`.
+/// The device handle in the first register needs `MANAGE`, as everything
+/// that gives a driver the device does; the rights and the capability are
+/// decided here, in the item, and only the channel is the subsystem's to
+/// make. The driver's end comes back as a handle with `rights`.
 ///
-/// The same shape as `block_ring_create` and for the same reason: a ring is
-/// made for a device the caller holds with `MANAGE`, and the driver's end of
-/// its control channel comes back as a handle.
-fn net_ring_create(process: &Process, device: Handle) -> Result<usize, Errno> {
-    let node = device_in(process, device, Rights::MANAGE)?;
-    let (_, driver_end) = net_ring::create(&node).map_err(|why| match why {
-        net_ring::CreateError::InUse => status::ALREADY_BOUND,
-        net_ring::CreateError::NoMemory => status::NO_MEMORY,
-    })?;
-    insert_new(
-        process,
-        Object::Channel(driver_end),
-        ferrix_netring::control::CONTROL_RIGHTS,
-    )
-}
-
-/// `display_control_create`.
+/// # Errors
 ///
-/// The same shape as the rings': made for a device the caller holds with
-/// `MANAGE`, the driver's end of the control channel coming back as a handle.
-fn display_control_create(process: &Process, device: Handle) -> Result<usize, Errno> {
-    let node = device_in(process, device, Rights::MANAGE)?;
-    let driver_end = crate::display::create(&node).map_err(|why| match why {
-        crate::display::CreateError::InUse => status::ALREADY_BOUND,
-        crate::display::CreateError::NoMemory => status::NO_MEMORY,
-    })?;
-    insert_new(
-        process,
-        Object::Channel(driver_end),
-        ferrix_blkring::control::CONTROL_RIGHTS,
-    )
-}
-
-/// `render_control_create`.
-///
-/// As the display's, for the other of a card's two conversations: the
-/// device's own channel, one per device, and the driver's end of it back.
-fn render_control_create(process: &Process, device: Handle) -> Result<usize, Errno> {
-    let node = device_in(process, device, Rights::MANAGE)?;
-    let driver_end = crate::render::create(&node).map_err(|why| match why {
-        crate::render::CreateError::InUse => status::ALREADY_BOUND,
-        crate::render::CreateError::NoMemory => status::NO_MEMORY,
-    })?;
-    insert_new(
-        process,
-        Object::Channel(driver_end),
-        ferrix_blkring::control::CONTROL_RIGHTS,
-    )
-}
-
-/// `input_control_create`.
-///
-/// As the display's: the device's own channel, one per device, and the
-/// driver's end of it back.
-fn input_control_create(process: &Process, device: Handle) -> Result<usize, Errno> {
-    let node = device_in(process, device, Rights::MANAGE)?;
-    let driver_end = crate::input::create(&node).map_err(|why| match why {
-        crate::input::CreateError::InUse => status::ALREADY_BOUND,
-        crate::input::CreateError::NoMemory => status::NO_MEMORY,
-    })?;
-    insert_new(
-        process,
-        Object::Channel(driver_end),
-        ferrix_blkring::control::CONTROL_RIGHTS,
-    )
+/// As the handle lookup, or `create`'s status, or `NO_HANDLES`.
+pub(crate) fn control_channel(
+    caller: &dyn Host,
+    device: u64,
+    rights: Rights,
+    create: impl FnOnce(&Arc<DeviceNode>) -> Result<Arc<Endpoint>, Errno>,
+) -> Result<usize, Errno> {
+    let process = caller.core();
+    let node = device_in(process, handle(device), Rights::MANAGE)?;
+    let driver_end = create(&node)?;
+    insert_new(process, Object::Channel(driver_end), rights)
 }
 
 /// `device_info`.
@@ -1268,8 +1378,10 @@ fn info_bytes(info: &DeviceInfo) -> [u8; DEVICE_INFO_BYTES] {
 
 /// `device_quiesce`.
 ///
-/// The driver is gone and the device must reach nothing: bus mastering off,
-/// then the block ring's claim on the device released for the next driver.
+/// The driver is gone and the device must reach nothing: every subsystem
+/// that serves devices through a channel waited out ([`Server`]), bus
+/// mastering off, then any claim a subsystem keeps past its driver released
+/// for the next one -- the block ring's.
 /// `BAD_STATE` while a driver still serves the device through a ring, or if
 /// the device's configuration space could not be reached; `TIMED_OUT` when
 /// the driver is gone but its ring has not ended within the patience.
@@ -1280,18 +1392,20 @@ fn device_quiesce(process: &Process, device: Handle) -> Result<usize, Errno> {
     // closed. A driver started again is refused its channel until they let
     // go (`crate::claim`).
     let cancelled = || process.is_terminated();
-    let served = |why| match why {
+    let still_served = |why| match why {
         // A driver still holds its end: refused for good.
-        crate::claim::StillServed::ByADriver => status::BAD_STATE,
+        StillServed::ByADriver => status::BAD_STATE,
         // The driver is gone but the core has not let go in time: worth
         // asking again, and devmgr does.
-        crate::claim::StillServed::Waiting => status::TIMED_OUT,
+        StillServed::Waiting => status::TIMED_OUT,
     };
-    block_ring::wait_until_unserved(&node, &cancelled).map_err(served)?;
-    crate::display::wait_until_unserved(&node, &cancelled).map_err(served)?;
-    crate::render::wait_until_unserved(&node, &cancelled).map_err(served)?;
+    for server in SERVERS.iter() {
+        (server.wait_until_unserved)(&node, &cancelled).map_err(still_served)?;
+    }
     node.disable_dma().map_err(|_| status::BAD_STATE)?;
-    block_ring::release_claim(&node);
+    for release in SERVERS.iter().filter_map(|server| server.release) {
+        release(&node);
+    }
     Ok(0)
 }
 
@@ -1529,11 +1643,12 @@ fn port_queue(process: &Process, port: Handle, packet: u64) -> Result<usize, Err
 /// caller is killed, or another of its process's threads replaces the program,
 /// for the reason `object_wait_one` gives.
 fn port_wait(
-    process: &Process,
+    caller: &dyn Host,
     port: Handle,
     deadline_at: u64,
     packet_at: u64,
 ) -> Result<usize, Errno> {
+    let process = caller.core();
     let port = port_in(process, port, Rights::READ)?;
     let deadline = if deadline_at == 0 {
         u64::MAX
@@ -1543,8 +1658,8 @@ fn port_wait(
     let packet = loop {
         let _ = port
             .waiters()
-            .wait_until_deadline(|| !port.is_empty() || process.caller_must_leave(), deadline);
-        if process.caller_must_leave() {
+            .wait_until_deadline(|| !port.is_empty() || must_leave(caller), deadline);
+        if must_leave(caller) {
             return Err(Errno::EINTR);
         }
         // Another waiter on the same port may have taken the packet that

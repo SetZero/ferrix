@@ -51,8 +51,11 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use ferrix_blkring::identity::Location;
 use ferrix_bootinfo::PAGE_SIZE;
+use ferrix_linux_abi::errno::Errno;
+use ferrix_native_abi::nr::NativeCall;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
+use ferrix_native_abi::status;
 use ferrix_native_abi::types::CHANNEL_MAX_HANDLES;
 use ferrix_renderctl::message::{
     BACKING_RIGHTS, Direction, MAX_BYTES, MakeBlob, Message, NO_WINDOW, Ready, Refusal, Status,
@@ -63,12 +66,15 @@ use ferrix_renderctl::session::{Event, RequestError, Session};
 use crate::claim::StillServed;
 use crate::claim::{Claims, Numbers};
 use crate::device::DeviceNode;
+use crate::hooks::Full;
 use crate::object::channel::{ChannelMessage, Endpoint, ReadError};
 use crate::object::port::Port;
+use crate::object::process::Host;
 use crate::object::{Object, Transfer};
 use crate::sched;
 use crate::sched::WaitQueue;
 use crate::sync::SpinLock;
+use crate::syscall::native;
 use crate::timer;
 use crate::user::vmo::Vmo;
 
@@ -491,6 +497,45 @@ static NUMBERS: Numbers = Numbers::new(128);
 static STARTING: SpinLock<Vec<Start>> = SpinLock::new(Vec::new());
 static CLAIMS: Claims = Claims::new();
 static RENDERERS: SpinLock<Vec<Arc<Renderer>>> = SpinLock::new(Vec::new());
+
+/// What a quiesce waits out for the renderer.
+static SERVER: native::Server = native::Server {
+    wait_until_unserved,
+    release: None,
+};
+
+/// Answer `render_control_create` with the renderer, and have a quiesce wait it out.
+///
+/// Called once from `main.rs`'s `register_load`: the native ABI is the item's
+/// and names no subsystem above it, so this registers into it.
+///
+/// # Errors
+///
+/// [`Full`] when the item has no room for the registration.
+pub(crate) fn install() -> Result<(), Full> {
+    native::serve(NativeCall::RenderControlCreate, control_create)?;
+    native::register_server(&SERVER)
+}
+
+/// `render_control_create`.
+///
+/// As the display's, for the other of a card's two conversations: the
+/// device's own channel, one per device, and the driver's end of it back. The device handle and its `MANAGE` right are the item's to
+/// check (`native::control_channel`).
+fn control_create(caller: &dyn Host, registers: &[u64; 6]) -> Result<usize, Errno> {
+    let device = registers.first().copied().unwrap_or(0);
+    native::control_channel(
+        caller,
+        device,
+        ferrix_blkring::control::CONTROL_RIGHTS,
+        |node| {
+            create(node).map_err(|why| match why {
+                CreateError::InUse => status::ALREADY_BOUND,
+                CreateError::NoMemory => status::NO_MEMORY,
+            })
+        },
+    )
+}
 
 /// Make the control channel for `node` and start its task; answer the
 /// driver's end.

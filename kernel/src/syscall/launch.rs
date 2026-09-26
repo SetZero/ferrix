@@ -1,20 +1,31 @@
-//! How the Linux personality starts pid 1 from the root filesystem, lent to
-//! `init` as an [`init::Launcher`](crate::init::Launcher).
+//! How the Linux personality starts programs for the certified item: pid 1
+//! from the root filesystem, lent to `init` as an
+//! [`init::Launcher`](crate::init::Launcher), and a native process from an
+//! image, lent to the native ABI and `devmgr` as
+//! [`native::Processes`](crate::syscall::native::Processes).
 //!
 //! `init` is part of the certified item and decides which program runs;
 //! opening that program in `/`, following its `#!` line, reading the dynamic
 //! linker it names and starting it as a Linux process are all above the item
 //! (`docs/certification/ITEM.md`), so they are here, and `main.rs` registers
-//! them with [`install`] at bring-up.
+//! them with [`install`] at bring-up. A native process is the same: the item
+//! decides who may make one and in which job, and the ELF loader and the
+//! process it loads into are this personality's.
 
 use alloc::format;
+use alloc::sync::Arc;
 
 use ferrix_linux_abi::errno::Errno;
+use ferrix_native_abi::status;
 
 use crate::fs;
 use crate::init::{Failure, Image, Launcher, Opened, Start};
-use crate::syscall::exec;
-use crate::syscall::load::Source;
+use crate::object::process::{self as core_process, Host};
+use crate::syscall::exec::{self, ExecError};
+use crate::syscall::load::{LoadError, Source};
+use crate::syscall::native::{Argument, Processes, StartRefused};
+use crate::syscall::process::{self, Process};
+use crate::user::space::SpaceError;
 
 /// What `init` is lent.
 static LAUNCHER: Launcher = Launcher {
@@ -23,12 +34,70 @@ static LAUNCHER: Launcher = Launcher {
     start,
 };
 
-/// Lend `init` this personality's way of starting a program.
+/// What the native ABI and `devmgr` are lent.
+static PROCESSES: Processes = Processes {
+    load: load_native,
+    start: start_native,
+    must_leave,
+};
+
+/// Lend `init` this personality's way of starting a program, and the native
+/// ABI its way of making and starting a process.
 ///
 /// Called once from `main.rs`, before the boot marker; `init::run` is the
-/// only caller and runs after it.
+/// only caller of the first and runs after it, and nothing makes a native
+/// process before `devmgr` is started.
 pub(crate) fn install() {
     crate::init::register_launcher(&LAUNCHER);
+    crate::syscall::native::register_processes(&PROCESSES);
+}
+
+/// A native process with `image` loaded, named `name`, made and not started.
+fn load_native(image: &[u8], name: &[u8]) -> Result<Arc<dyn Host>, Errno> {
+    let process: Arc<dyn Host> = exec::load_native(image, name).map_err(load_status)?;
+    Ok(process)
+}
+
+/// The status a failed native load travels as: a fault in the image is the
+/// caller's mistake, running out of memory is not.
+fn load_status(error: ExecError) -> Errno {
+    match error {
+        ExecError::Load(LoadError::Space(SpaceError::OutOfMemory) | LoadError::Copy(_))
+        | ExecError::Space(_)
+        | ExecError::Startup
+        | ExecError::Start(_) => status::NO_MEMORY,
+        // A native process is loaded from bytes and never from a path, so it
+        // brings no linker and this cannot arise; it is the caller's image
+        // that would be at fault if it did.
+        ExecError::Load(_) | ExecError::Linker(_) => status::INVALID_ARGS,
+    }
+}
+
+/// Start `host`, which [`load_native`] made: claim it, make its first task,
+/// then take the argument and run it.
+///
+/// In that order so that a race is harmless and a failure clean, which
+/// `process_start` relies on: a second start is refused by the claim before
+/// anything moved, and everything that can fail about the task has failed
+/// before `argument` moves a handle into the process. A refused argument
+/// drops the prepared start, which frees the task and gives the start back.
+fn start_native(host: &Arc<dyn Host>, argument: Argument<'_>) -> Result<(), StartRefused> {
+    let process =
+        core_process::downcast::<Process>(Arc::clone(host)).ok_or(StartRefused::Claimed)?;
+    let claim = process::claim_start(&process).map_err(|_| StartRefused::Claimed)?;
+    let prepared = claim.prepare(None).map_err(|_| StartRefused::NoTask)?;
+    let argument = argument().map_err(StartRefused::Argument)?;
+    let _task = prepared.start(argument);
+    Ok(())
+}
+
+/// Whether the calling thread of `caller` is to leave a native wait: its
+/// process is ending, or another of its threads is replacing the program.
+fn must_leave(caller: &dyn Host) -> bool {
+    match process::of_host(caller) {
+        Some(process) => process.caller_must_leave(),
+        None => caller.core().is_terminated(),
+    }
 }
 
 /// Open the program at `path` in the context a new process starts in: the
@@ -50,15 +119,15 @@ fn start(start: &Start<'_>) -> Result<i32, Failure> {
         Image::File(program) => Source::File(program),
     };
     run(start, image).map_err(|problem| match problem {
-        exec::ExecError::Linker(errno) => Failure::Linker(errno),
+        ExecError::Linker(errno) => Failure::Linker(errno),
         other => Failure::Exec(format!("{other:?}")),
     })
 }
 
 /// [`start`], in the personality's own terms.
-fn run(start: &Start<'_>, image: Source<'_>) -> Result<i32, exec::ExecError> {
+fn run(start: &Start<'_>, image: Source<'_>) -> Result<i32, ExecError> {
     let context = fs::root_disk::process_context();
-    let linker = exec::linker_for(&context, image).map_err(exec::ExecError::Linker)?;
+    let linker = exec::linker_for(&context, image).map_err(ExecError::Linker)?;
     let executable = exec::Executable {
         image,
         exe: start.exe,
