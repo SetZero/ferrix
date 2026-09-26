@@ -1,0 +1,13 @@
+[package]
+name = "ferrix-svc-proto"
+description = "The init's wire formats: svc's control records and a service's readiness lines, as docs/INIT.md §5.3 and §10 fix them"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

@@ -45,6 +45,7 @@ ferrix-netlink = { path = "../libs/netlink" }
 ferrix-cgroupfs = { path = "../libs/cgroupfs" }
 ferrix-sysfs = { path = "../libs/sysfs" }
 ferrix-svc = { path = "../libs/svc" }
+ferrix-svc-proto = { path = "../libs/svc-proto" }
 compositor-config = { path = "../compositor/config" }
 compositor-wire = { path = "../compositor/wire" }
 
@@ -204,6 +205,13 @@ bench = false
 [[bin]]
 name = "svc_manager"
 path = "fuzz_targets/svc_manager.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "svc_proto"
+path = "fuzz_targets/svc_proto.rs"
 test = false
 doc = false
 bench = false

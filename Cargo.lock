@@ -436,6 +436,10 @@ name = "ferrix-svc"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-svc-proto"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-sync"
 version = "0.1.0"
 
