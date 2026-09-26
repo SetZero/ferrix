@@ -117,7 +117,12 @@ pub(crate) fn apply_this_cpu() {
 
 /// Issue the switch barrier, where the plan has one. Answers whether it did.
 pub(crate) fn switch_barrier(_cpu: usize) -> bool {
-    match BARRIER.load(Ordering::Relaxed) {
+    issue(BARRIER.load(Ordering::Relaxed))
+}
+
+/// Issue `barrier`. Answers whether there was one to issue.
+fn issue(barrier: u8) -> bool {
+    match barrier {
         BARRIER_BPIALL => {
             // SAFETY: `BPIALL` invalidates the branch predictor, which only
             // costs time; the `isb` makes it take effect before the next
@@ -143,12 +148,31 @@ pub(crate) fn switch_barrier(_cpu: usize) -> bool {
 /// of them, from the boot processor's `MIDR`, and printed the exposure then.
 pub(crate) fn report_once_started() {}
 
-/// Nothing more to check on this architecture.
+/// What the boot check adds on this architecture: the barrier each part of
+/// the table gets, for the cores the machine does not have, and the one
+/// barrier no ARMv7-A core `virt` takes plans -- `BPIALL`, the Cortex-A9's --
+/// issued once. It is an ARMv7-A instruction every core executes, and on
+/// one whose predictor needs no invalidating it only costs time.
 ///
 /// # Errors
 ///
-/// None.
+/// A part given another barrier, or a barrier that was not issued.
 pub(crate) fn check() -> Result<(), &'static str> {
+    let parts = [
+        (Part::Unaffected, BARRIER_NONE),
+        (Part::Bpiall, BARRIER_BPIALL),
+        (Part::CortexA8, BARRIER_BPIALL),
+        (Part::CortexA15, BARRIER_ICIALLU),
+    ];
+    if parts
+        .iter()
+        .any(|&(part, barrier)| core::hint::black_box(part).barrier().0 != barrier)
+    {
+        return Err("a core was not given the switch barrier Arm lists for it");
+    }
+    if !issue(core::hint::black_box(BARRIER_BPIALL)) || issue(core::hint::black_box(BARRIER_NONE)) {
+        return Err("a switch barrier was not issued as asked");
+    }
     Ok(())
 }
 
