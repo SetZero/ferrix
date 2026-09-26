@@ -1,0 +1,62 @@
+# Media on Ferrix: a video player and the pieces a game's sound needs.
+#
+# A workspace of its own, as the compositor and zinc are: Linux user programs
+# built with std, speaking only the Linux ABI, cross-built for the initramfs
+# (xtask/src/badapple.rs). The pure crates -- the video format and the
+# resampler -- build and are tested on any host; the one that holds a device
+# (`pcm`) builds only for Linux.
+[workspace]
+resolver = "3"
+members = ["badapple", "bav", "pcm", "resample"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Matches Ferrix's rust-toolchain.toml, which rustup finds from here.
+rust-version = "1.97"
+license = "MIT"
+publish = false
+
+# The compositor's discipline: a panic in the player ends init, and with it the
+# machine, so the ways of reaching one are denied.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "deny"
+missing_debug_implementations = "deny"
+unused_results = "deny"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+multiple_unsafe_ops_per_block = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+allow_attributes_without_reason = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+uninlined_format_args = "warn"
+semicolon_if_nothing_returned = "warn"
+doc_markdown = "warn"
+
+[profile.dev]
+overflow-checks = true
+# The player keeps time with the sound card; unoptimised, decoding a second of
+# AAC takes longer than a second and the gate would test the machine.
+opt-level = 2
+
+[profile.release]
+overflow-checks = true

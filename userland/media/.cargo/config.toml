@@ -1,0 +1,27 @@
+# A static program for Ferrix's initramfs, linkable from any host: the musl
+# targets carry their own C runtime and `libc.a`, so rust-lld is the whole
+# toolchain and Windows needs no Linux C compiler.
+# `relocation-model=static` links a fixed-address executable rather than a
+# static PIE, the shape busybox has and every kernel's ELF loader takes.
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["-C", "link-self-contained=yes", "-C", "target-feature=+crt-static", "-C", "relocation-model=static"]
+
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["-C", "link-self-contained=yes", "-C", "target-feature=+crt-static", "-C", "relocation-model=static"]
+
+# ARMv7-A takes the same flags. Hard float rather than the soft-float target
+# the ARM loader and zinc are built for: the root config gives that one the
+# loader's linker script, which cargo would merge into these flags, and a
+# player mixes and resamples its sound in floating point.
+#
+# And for the Cortex-A7, which is the one ARMv7-A core Ferrix runs on: the
+# DK1's, and the one QEMU is given (`xtask/src/qemu.rs`). The target's own
+# baseline has no NEON and sixteen double registers, so every loop over
+# pixels was scalar; this core has NEON, thirty-two registers (which the
+# kernel saves for a program on a core that has them) and hardware divide,
+# and the compiler schedules for its pipeline.
+[target.armv7-unknown-linux-musleabihf]
+linker = "rust-lld"
+rustflags = ["-C", "link-self-contained=yes", "-C", "target-feature=+crt-static", "-C", "relocation-model=static", "-C", "target-cpu=cortex-a7"]

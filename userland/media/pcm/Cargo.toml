@@ -1,0 +1,21 @@
+[package]
+name = "media-pcm"
+description = "Playback through /dev/snd as alsa-lib's hw plugin drives it: the card's one format, blocking writes, and the position a player keeps time by"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "media_pcm"
+path = "src/lib.rs"
+
+[dependencies]
+# Declarations only: open and ioctl are the C library std already links.
+libc = "0.2.189"
+# The ALSA numbers and layouts, checked against the UAPI header.
+ferrix-linux-abi = { path = "../../../libs/proto/linux-abi" }
+
+[lints]
+workspace = true

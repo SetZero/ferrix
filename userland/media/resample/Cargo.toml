@@ -1,0 +1,15 @@
+[package]
+name = "media-resample"
+description = "Sample-rate conversion by a rational factor: 44.1 kHz music and 11 kHz game sounds to the card's 48 kHz"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "media_resample"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

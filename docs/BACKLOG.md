@@ -187,7 +187,7 @@ session's name in its owner cell in your first landing.
 | ferrix-9c | The Pixel 7's USB CDC-ACM device driver (`docs/PIXEL7-USB-HANDOVER.md`): the phone showed up as `/dev/ttyACM0` on nazuna on 2026-09-26. **Winding down** once `usbdev` with the kernel log channel has landed |
 | ferrix-d4 | The Pixel 7's GUI: the customer chose option A on 2026-09-26, a desktop in the launcher app's crosvm VM (≈ 17) |
 | ferrix-8e | This file's cleanup (landed 6b942df1); two_clients' GPU-frame flake. **Winding down** after that |
-| ferrix-b0 | Bad Apple!! with sound and Doom written in Rust, both on Ferrix (the customer's order, 2026-09-26) |
+| ferrix-b0 | Bad Apple!! with sound (`docs/MEDIA.md`, the customer's order of 2026-09-26): landing, then **stopping**; Doom is in the backlog, unowned |
 | open | The Pixel 7 bring-up (`boot/pixel7`, statd, `tools/pixel7`; was ferrix-0a); Chrome's extensions bubble and `test-chrome-window`'s context-menu step (was ferrix-a8); every row below owned by an `os-*` session before 2026-09-26 |
 
 ---
@@ -334,6 +334,12 @@ log path and commit; a new sighting is added to its row the day it is seen.
   stage 13 (13), XWayland (40 as a first guess), sound (current work,
   `docs/AUDIO.md`), and Vulkan through Venus on a KVM host (landed for
   vkgears). Over 300 points; the roadmap's stage 22 is the list.
+* Bad Apple!! and Doom, beside stage 22 (games with sound; the customer's
+  order of 2026-09-26, ferrix-b0, `docs/MEDIA.md`). Bad Apple!! with sound
+  and `test-badapple`: not estimated before it started, ≈ 8 spent, landed.
+  **Doom in Rust is in the backlog** (the customer, 2026-09-26: stop after
+  Bad Apple): D1 to D4, estimated 21, not started and unowned.
+  `docs/MEDIA.md` §3 has the plan and what reading room4doom found.
 * Huge pages; frame share and release are order 0 by design.
 * A panic report as a QR code: a port of Linux's `drm_panic_qr` as
   `libs/kernel/qr` (ferrix-qr), so a panic screen can carry the whole report. WIP
@@ -491,6 +497,11 @@ otherwise; one a later decision replaced is deleted, and the history keeps it.
   account with no password. Phase 1 locks the desktop with root's
   password until phase 2 moves the desktop off root.
 
+* **2026-09-26 (customer)** **Doom is room4doom, fetched at build time,**
+  never committed. It is labelled MIT but calls itself a transliteration of
+  id's GPL-2.0 C source, so Ferrix treats it as GPL: cargo fetches it as a
+  git dependency pinned to one revision, the way Chrome is fetched, and the
+  repository holds only Ferrix's MIT backend for it (`docs/MEDIA.md` §1).
 * **2026-09-26 (customer)** The fleet has a coordinator, ferrix-2c, which
   keeps the landing order under the landing lock (standing rules above); the
   customer stays product owner for scope. No new scope starts without the

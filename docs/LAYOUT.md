@@ -90,6 +90,7 @@ directory:
 | `userland/init/` | `/sbin/init`, getty and the unit files. |
 | `userland/zinc/` | The zsh-compatible shell. |
 | `userland/statd/` | The stat service. |
+| `userland/media/` | Bad Apple!!: its video format and the host's converter, a resampler, playback through `/dev/snd`, and the player (`docs/MEDIA.md`). |
 | `userland/ferrousli/` | The C library written in Rust, its dynamic linker, and the ports built against it (`tools/ports/`). |
 
 ## `tests/`
@@ -115,7 +116,7 @@ exercise the system from outside any one crate.
 |---|---|
 | `scripts/check/` | The quality gates `cargo xtask check` and CI run: layering, assembly budget, unsafe and panic audits, the certification item boundary, complexity, commit authors. `rustlex.py` is their shared Rust lexer. |
 | `scripts/gen/` | Generators and their `--check` modes: the architecture document (with its `sysml/` reader), the panic catalogue, fonts, Wayland protocol tables, XKB tables, SOUP, coverage justification, fuzz corpus seeds. |
-| `scripts/fetch/` | Fetch pinned downloads: the rustc sysroot, busybox, Chrome. |
+| `scripts/fetch/` | Fetch pinned downloads: the rustc sysroot, busybox, Chrome, Bad Apple!!. |
 | `scripts/test/` | Test drivers run by hand: the self-host matrix, the host `btrfs check` oracle. |
 | `scripts/data/` | The allow-lists, baselines and registers the checks read. |
 

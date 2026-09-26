@@ -57,6 +57,7 @@
 
 mod args;
 mod audio;
+mod badapple;
 mod btrfs_check;
 mod btrfs_disk;
 mod builds;
@@ -162,6 +163,7 @@ COMMANDS:
     build         Compile the loader and kernel and write a bootable image
     run           Boot the image under QEMU, attached to the terminal
     run-compositor  Boot userland/compositor/hyprix as init with a virtio-gpu, on a screen this host can show
+    run-badapple  Boot userland/media/badapple as init: all of Bad Apple!! in a window, heard on this host's sound server (scripts/fetch/fetch-badapple.sh first)
     remote-desktop  Send this tree to another machine, boot the desktop there and watch it here over VNC
     wallpapers    Convert pictures for run-compositor's desktop and keep them on this machine
     test-btrfs    Boot, write a tree on the blank btrfs disk, and require host btrfs check to find nothing
@@ -178,6 +180,7 @@ COMMANDS:
     test-video    Boot a wallpaper that moves and require the screen to show its frames in turn
     test-input    Boot userland/compositor/evecho as init with virtio-input, send a key and a touch over QMP, and require them back
     test-audio    Boot userland/compositor/tone as init with virtio-snd, play a second of a counter, and require every frame back from QEMU's wav file
+    test-badapple Boot userland/media/badapple as init, play 30 s of Bad Apple!!, and require the held frame on the screen, the song in QEMU's wav file, and the two in step
     test-seat     Boot the compositor with a client, type into it over QMP, and require the key and the keybind to land
     test-pty      Boot userland/compositor/term as init, run a program on a pseudoterminal, and require its output back
     test-foot     Boot the compositor with foot, the ported Wayland terminal, and require its font and its text on screen
@@ -398,6 +401,7 @@ fn run() -> Result<()> {
         "test-net" => test_net(&args),
         "test-display" => display::test_display(&args),
         "run-compositor" => compositor::run_compositor(&args),
+        "run-badapple" => badapple::run_badapple(&args),
         "remote-desktop" => remote::remote_desktop(&args),
         "wallpapers" => wallpaper::import(&args),
         "test-compositor" => compositor::test_compositor(&args),
@@ -406,6 +410,7 @@ fn run() -> Result<()> {
         "test-vkgears" => compositor::test_vkgears(&args),
         "test-input" => input::test_input(&args),
         "test-audio" => audio::test_audio(&args),
+        "test-badapple" => badapple::test_badapple(&args),
         "test-seat" => seat::test_seat(&args),
         "test-pty" => pty::test_pty(&args),
         "test-jobs" => jobs::test_jobs(&args),

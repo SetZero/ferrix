@@ -167,6 +167,7 @@ pub(crate) fn run(args: &Args) -> Result<()> {
 
     compositor(&root)?;
     init(&root)?;
+    media(&root)?;
 
     if args.ferrousli {
         ferrousli(&root)?;
@@ -511,6 +512,40 @@ fn init(root: &std::path::Path) -> Result<()> {
     })?;
     step("init: tests", || {
         cargo::run(in_init(&["test"]), "cargo test (init)")
+    })
+}
+
+/// The media workspace's gates: `userland/media/` is a workspace of its own,
+/// as the init is. On by default, since they are seconds: the video format,
+/// the resampler and the player's arithmetic are tested on the host.
+fn media(root: &std::path::Path) -> Result<()> {
+    let dir = root.join("userland/media");
+    let in_media = |arguments: &[&str]| {
+        if cfg!(windows) {
+            return crate::wsl::cargo(&dir, arguments);
+        }
+        let mut command = Command::new(cargo_binary());
+        let _ = command.current_dir(&dir).args(arguments);
+        command
+    };
+    if cfg!(windows) {
+        step("media: WSL", || {
+            crate::wsl::require_toolchain(
+                "the player is a Linux program, with Linux's system calls",
+            )
+        })?;
+    }
+    step("media: formatting", || {
+        cargo::run(in_media(&["fmt", "--check"]), "cargo fmt (media)")
+    })?;
+    step("media: clippy", || {
+        cargo::run(
+            in_media(&["clippy", "--all-targets", "--", "-D", "warnings"]),
+            "cargo clippy (media)",
+        )
+    })?;
+    step("media: tests", || {
+        cargo::run(in_media(&["test"]), "cargo test (media)")
     })
 }
 

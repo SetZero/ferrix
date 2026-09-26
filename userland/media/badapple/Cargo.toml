@@ -1,0 +1,34 @@
+[package]
+name = "media-badapple"
+description = "Bad Apple!! on Ferrix: the shadow-art video on the screen, its song through /dev/snd, kept in step by the sound card's clock"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "badapple"
+path = "src/main.rs"
+
+# Show every frame's shades inverted, so `xtask test-badapple` can show that
+# its picture check reads the screen rather than the program's shape.
+[features]
+negative-control = []
+
+[dependencies]
+media-bav = { path = "../bav" }
+media-pcm = { path = "../pcm" }
+media-resample = { path = "../resample" }
+# The song is decoded here, from the original's own AAC track, in Rust:
+# MP4 demuxing and AAC-LC only. MPL-2.0, used unmodified.
+symphonia = { version = "0.5.5", default-features = false, features = ["aac", "isomp4"] }
+libc = "0.2.189"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The screen: /dev/dri/card0's dumb buffers, as the compositor's `blank`
+# shows them. Linux-only code, so only a Linux build pulls it in.
+compositor-drm = { path = "../../compositor/drm" }
+
+[lints]
+workspace = true
