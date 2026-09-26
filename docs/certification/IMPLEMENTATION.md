@@ -600,10 +600,54 @@ each of the rest.
 
 ---
 
+## W-12 — Fallible allocation in the item
+
+**Done 2026-09-26.** F-23 is closed. Every allocation in the item's product
+code reports failure, except 73 at bring-up that are fatal by design. The
+design is [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) §1, and what follows is
+what to know before changing code under it.
+
+**The rule the gate enforces.** `scripts/check-fallible-alloc.py` fails
+`cargo xtask check` on any call to an allocating standard-library API in the
+item that is not argued at the site. So in the item:
+
+* `Box::new`, `Vec::push`, `collect`, `format!`, `to_vec` and the rest go
+  through `crate::fallible` (`try_box`, `try_push`, `try_collect`,
+  `try_format`, `try_to_vec`, …), re-exported from `libs/fallible`.
+* `Arc::new` is `fallible::try_arc`, `Arc::new_cyclic` is `try_arc_cyclic`,
+  and a map or set insert is `fallible::insert` or `insert_into_set`. When the
+  value must not be lost if the insert is refused, enter the section first
+  with `fallible::reserve()` and use `insert_held` inside it. A section masks
+  interrupts: hold it across nothing that waits.
+* A push into room reserved fallibly just before says so, with `NOALLOC:` on
+  the line or in the comment block above. A first-party method named like a
+  standard one (the handle table's `insert`, the map's `reserve`) gets
+  `FALLIBLE:`. `FATAL-ALLOC:` is for bring-up only.
+* On a path that cannot fail -- a drop, a decommit, a close -- get the room
+  before the first change. If there is no room, keep what you hold and count
+  it; do not allocate.
+
+**Failure injection.** `fallible::inject(task, period)` fails every
+`period`th fallible allocation of one task until `stop_injecting()`. It is
+what `object/alloc_check.rs` drives, and the quickest way to test a new path.
+Room already reserved is never failed by it.
+
+**What is left, and where it is filed.** No bound on the heap and no heap
+quota (V-05). The load's allocations are infallible (AoU-5): converting a
+load module the same way is mechanical, but it is outside the item. The gate
+cannot see `.clone()`, conversions, or allocation in a callee; the 18 clones
+were audited by hand, and the libraries on the item's paths were converted
+with it.
+
+**Verify:** `cargo xtask check` (the "fallible allocation" step), and the
+`no-mem` line of any boot, which reads the same on every architecture.
+
+---
+
 ## Suggested order
 
 **Done:** order zero, W-3, W-2, W-6, W-9, W-4 (with F-08), W-1, W-5 (with
-F-09 and F-33), W-7's measurement and ratchet, and W-11.
+F-09 and F-33), W-7's measurement and ratchet, W-11, and W-12 (F-23).
 **Remaining:** F-10's tests, by module from COVERAGE-WORKLIST.md → W-8
 (largest), with W-10 in parallel whenever someone can answer step 1.
 

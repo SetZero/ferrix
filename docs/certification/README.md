@@ -27,7 +27,7 @@ specific, measured, and mostly documents rather than code.
 * [TODO.md](TODO.md) — start here to re-audit: what to re-measure, and what not to write
 * [SAFETY-MANUAL.md](SAFETY-MANUAL.md) — the out-of-context argument: assumed requirements, safe state, eleven assumptions of use, element failure analysis
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
-* [FINDINGS.md](FINDINGS.md) — the audit register, 16 open findings and 23 closed
+* [FINDINGS.md](FINDINGS.md) — the audit register, 15 open findings and 24 closed
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
 * [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) — AVA_VAN.4 over the seven threats; six residual vulnerabilities
 * [SPECULATION.md](SPECULATION.md) — the side-channel defences, per architecture, behind one build switch, and what they cost
@@ -72,9 +72,9 @@ boundary.
 
 | | |
 |---|---:|
-| Item product code | 51,525 lines |
-| Uncertified load | 47,528 lines |
-| In-kernel self-tests | 31,785 lines |
+| Item product code | 55,311 lines |
+| Uncertified load | 48,086 lines |
+| In-kernel self-tests | 33,122 lines |
 | Statement coverage, certified item | **74.7%** x86-64, 73.7% AArch64, 70.9% ARMv7-A |
 | Statement coverage, core ring | 72.1% x86-64 |
 | Unreached statements, x86-64 | 1,725 — **146 argued, 1,320 need a test** |
@@ -82,7 +82,8 @@ boundary.
 | External crates, host-side | 21 |
 | Upward boundary references | **0**, from 94 at the start of the work (29 and 62 before the gate could resolve module paths) |
 | `unsafe` blocks, all documented | 662 |
-| Directly recursive functions in the item | **0**, of 1,877 |
+| Directly recursive functions in the item | **0**, of 2,033 |
+| Allocations in the item that stop the machine when memory runs out | **0** a program can reach; 73 at bring-up, by design (F-23) |
 | SMEP + SMAP (x86-64) | **on** |
 | PAN (AArch64) | **implemented**; absent from the reference CPU |
 | Side-channel defences | **on** by default, per processor; one switch, `--mitigations off`, takes them out |
@@ -195,7 +196,7 @@ retrofitted.
 *In place:* most of the Annex A technique table. Strongly typed language (HR) —
 Rust. Defensive programming (HR) — the panic audit plus a lint table denying
 `unwrap`, `expect`, `panic`, indexing and slicing in production code. Static
-analysis (HR) — clippy at ten configurations, Miri over 13 crates, 30 fuzz
+analysis (HR) — clippy at ten configurations, Miri over 15 crates, 30 fuzz
 targets with committed corpora. Structured methodology (HR) — the SysML model.
 Role independence is permissive at SIL 2, where roles may be combined with
 justification, so F-27 is survivable here as it is not elsewhere.
@@ -206,8 +207,10 @@ complexity and recursion gate (F-25, closed).
 
 *Missing:* independent assessment, which EN 50716 permits to be less
 independent at SIL 2 than above but not absent (F-27). Dynamic memory remains
-pervasive and is now an exported application condition rather than an
-unexamined gap (F-23, AoU-5).
+pervasive, and Annex A still discourages it. Its failure is now reported at
+every site in the item, where it used to stop the machine (F-23, closed). What
+is left is an exported application condition: no bound, and a load whose
+allocation failure is fatal (AoU-5).
 
 ## 4. What would actually move the needle
 
@@ -235,8 +238,11 @@ nothing above the core; the native ABI's subsystems and the Linux dispatcher
 registering with the item, and the rest of the personality moved out of it
 (F-07, F-09, F-33, W-5), which left the boundary with no upward reference by
 the resolving gate's count, from 56; the side-channel defences and KASLR
-behind one build switch (F-31, [SPECULATION.md](SPECULATION.md)); and the
-direct map's writable alias of the kernel's text, sealed (F-34).
+behind one build switch (F-31, [SPECULATION.md](SPECULATION.md)); the
+direct map's writable alias of the kernel's text, sealed (F-34); and allocation
+failure made an error the item reports rather than a stop, at every site a
+program can reach, with a gate that counts the rest (F-23,
+[MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) §1).
 
 ## 5. What cannot be fixed from here
 

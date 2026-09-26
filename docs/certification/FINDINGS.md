@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-16 findings are open and 23 are closed, of 39. F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
+15 findings are open and 24 are closed, of 39. F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 2 | 6 | 7 | 0 | 1 |
+| Open | 2 | 5 | 7 | 0 | 1 |
 
 Blocking: F-27 and F-28 — independent assessment and a quality management
 system. Both need an organisation; neither is a defect in the code.
@@ -293,8 +293,9 @@ agent outside the TSF, and its quota is the job's, in the core. The credential
 checks in `limits.rs` and `system.rs` are the personality's policy over
 identities the ST claims nothing about. What that does mean, and did before, is
 that load code runs in ring 0 and shares the kernel heap: `futex.rs`'s waiter
-allocations are among the program-driveable sites F-23 lists, wherever the file
-sits.
+allocations are program-driveable, and since F-23 closed for the item they are
+among the load's allocations that still stop the machine when the heap refuses
+them (FX-0008, AoU-5).
 
 *Cost.* Each system call now pays one indirect call, through the core's
 `Once`, where it paid none. The first shape held the personality in a second
@@ -733,8 +734,9 @@ obligation it creates), §4 (eleven assumptions of use) and §5 (the failure
 analysis).
 
 The generic application conditions EN 50716 asks for are AoU-1 to AoU-11, and
-several of them exist *because* a finding is open — no WCET (F-24), fatal
-allocation failure (F-23), reduced claims on ARMv7-A (F-32, V-03), no audit
+several of them exist *because* a finding is open — no WCET (F-24), no bound
+on memory and a load whose allocation failure is fatal (AoU-5, F-23 closed for
+the item itself), reduced claims on ARMv7-A (F-32, V-03), no audit
 (F-21b), processors the side-channel defences do not cover (F-31). Those stop being embarrassments and become stated conditions the
 integrator designs around, which is what an application condition is for.
 
@@ -742,28 +744,97 @@ What remains is assessment by somebody independent, which is F-27 and not
 this.
 
 ### F-23 — dynamic memory allocation throughout, with no bounded-allocation argument
-**Major, analysed 2026-09-25** in
-[MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) §1. Not closed: the analysis
-concludes the property does not hold, and recording that as a closure would be
-the failure this register exists to avoid.
+**Closed 2026-09-26** for what it measured: allocation failure in the item is
+reported, not fatal. The bound it also names is not claimed, and is exported
+as AoU-5. [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) §1 has the design.
 
-Now measured rather than impressionistic. **225 allocation sites across 40
-files** in the item's product code, over four allocators. And the part that is
-worse than "unbounded": `KernelAllocator::alloc` returns null on failure and
-**there is no `#[alloc_error_handler]` in the tree**, so a failing `Box::new`
-reaches Rust's default handler and aborts. Allocation failure in the certified
-item is fatal, not recoverable, at all 225 sites — even though `libs/heap`
-itself reports `OutOfMemory` properly and the `GlobalAlloc` adapter above it
-throws that distinction away.
+*Was:* **Major.** 225 allocation sites across 40 files in the item's product
+code, and every one fatal. `KernelAllocator::alloc` returns null on failure,
+and there is no `#[alloc_error_handler]` in the tree, so a `Box::new`, `Arc::new`,
+`Vec::push` or map insert that met an empty heap reached Rust's default
+handler and aborted. `libs/heap` reported `OutOfMemory` properly, and the
+`GlobalAlloc` adapter above it threw the distinction away. The obvious fix is
+unavailable: `#[alloc_error_handler]`, `Box::try_new`, `Arc::try_new` and
+`BTreeMap::try_insert` are unstable, verified against the pinned 1.97.1, and
+`kernel/` uses no unstable features. Only `Vec::try_reserve` is stable.
 
-And the obvious fix is unavailable. `#[alloc_error_handler]` is an unstable
-library feature (rust-lang #51540), verified against the pinned 1.97.1, and
-`kernel/` uses no unstable features by policy. `Box::try_new` and
-`Arc::try_new` are unstable for the same reason; only `Vec::try_reserve` is
-stable, and it covers growth rather than the `Box` and `Arc` allocations that
-dominate the 225 sites. Making failure recoverable therefore means hand-rolled
-fallible construction site by site — and a Ferrocene toolchain (F-17) would not
-change that.
+The count also missed the worst of it. The scheduler allocated a tree node on
+every enqueue, and so allocated from interrupt context and with the run queue
+locked: a wake-up from an interrupt handler could stop the machine.
+
+*Now:* fallible construction built from stable parts, used at every site.
+
+* `libs/fallible` makes `Box`, `Vec`, `VecDeque` and `String` fallible:
+  `try_box` allocates through the global allocator and builds the box with
+  `Box::from_raw`, which `Box`'s documentation makes part of its contract,
+  and the rest reserve with `try_reserve` before they grow. Host-tested
+  against a recording allocator, and run under Miri in CI.
+* `Arc` and the ordered maps allocate inside `alloc` with layouts it does not
+  publish, and cannot be made fallible. They run in a *reserved section*
+  (`kernel/src/mm/reserve.rs`), which first fills this processor's reserve to
+  16 objects of every size class and fails there, before anything starts. A
+  heap refusal inside the section is then served from the reserve. The depth
+  argument is in the module: one `Arc` is one allocation of a layout
+  `ferrix_fallible` computes and tests, and a map insert is at most height + 2
+  nodes, which the host tests measure against the pinned standard library.
+* Every site in the item uses one or the other, and returns `NO_MEMORY` from a
+  native call, `ENOMEM` from a Linux one, `EAGAIN` from `madvise`, or a
+  refused step at bring-up. Each task lends the scheduler its own queue nodes,
+  so queueing, picking and waking allocate nothing
+  (`libs/sched/tests/no_allocation.rs`).
+  Taking pages out of an object needs no memory once its list has room. A
+  decommit that cannot be refused falls back to 32 pages at a time from the
+  stack, and asks the spaces that map the object one at a time when there is
+  no memory to list them.
+* Bring-up's allocations are fatal by design. 73 sites, all before the first
+  program runs or when a processor comes up, are marked `FATAL-ALLOC:`, and
+  an allocation failure before the boot completes names itself: FX-0007. One
+  after it can only be the load's, whose allocations stay infallible, and it
+  is FX-0008.
+
+*Checked by the build:* `scripts/check-fallible-alloc.py`, the "fallible
+allocation" step of `cargo xtask check`, finds every call to an allocating
+standard-library API in the item's product code and fails on one that is not
+argued. `NOALLOC:` says the call cannot allocate: room was reserved, or the
+type only looks like a collection. `FALLIBLE:` names a fallible call the
+pattern cannot tell apart, and `FATAL-ALLOC:` marks a bring-up site. It
+reads 0 unmarked, 31 `NOALLOC`, 13 `FALLIBLE` and 73 `FATAL-ALLOC`. Its
+ratchet baseline, `scripts/fallible-alloc-baseline.json`, is empty. Every boot
+runs the negative control (`object/alloc_check.rs`, stage 9, FX-0902), which
+fails every *n*th allocation of one process, for six periods, while it drives
+the native ABI. Every call must succeed or answer `NO_MEMORY`, and nothing may
+leak. A section must complete on the reserve alone with the heap refusing. A
+decommit of a mapped object must give back every page with every allocation
+failing. It reads *"486 native calls with 162 allocations failed under them:
+150 answered NO_MEMORY, the rest succeeded, nothing leaked; 35 allocations
+served from a reserve; 80 pages decommitted with none"*, the same on all three
+architectures.
+
+*What it does not claim.* No bound on what the item allocates: a program
+still drives the kernel heap, and V-05 stands for the paths with no quota. No
+recovery for the load: its allocations still stop the machine (AoU-5).
+
+The gate's docstring lists what it cannot see, and each was checked by other
+means:
+
+* **Allocation inside a library the item calls.** `libs/vma`, `libs/objects`,
+  `libs/sched` and `libs/sync` were converted with the item. The other
+  libraries allocate nothing on the item's paths, except behind the load's
+  interfaces, where the allocation is the load's.
+* **`.clone()` of a collection.** The item's 18 clones were audited by hand,
+  and none allocates.
+* **Conversions that allocate.**
+
+Where memory ran out on a path that cannot report it, the item keeps what it
+held rather than allocate. Each such path is counted: `RANGES_KEPT`,
+`SPANS_KEPT`, `LOST_TO_UNMAPS`, `ZOMBIES_LOST`, `MISSING_SLOTS`, `ABANDONED`,
+`UNRECORDED`.
+
+*Cost.* The system call path is unchanged within the host's noise. Under KVM,
+busybox `dd` copies a million bytes one at a time, nine times a boot, with
+boots alternating between the base and the branch, 54 runs each. The base
+took 1.675 s at minimum and 1.723 s at the median; the branch took 1.684 s
+and 1.716 s. The item grew by 2,711 lines of product code.
 
 ### F-24 — no worst-case execution time analysis
 **Moderate, scoped 2026-09-25** in

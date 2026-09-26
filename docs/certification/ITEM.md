@@ -42,14 +42,17 @@ three nested rings. A file in no ring fails the build.
 
 | Ring | Product lines | In-kernel test lines | Carries |
 |---|---:|---:|---|
-| `core` | 43,523 | 8,213 | EAL6+, ASIL D, SIL 3/4, DAL B — *aspirational* |
-| `item` | 8,002 | 248 | EAL5+, DAL C, Class C, SIL 2 — *the present claim* |
-| `load` | 47,528 | 23,324 | nothing |
+| `core` | 46,891 | 8,837 | EAL6+, ASIL D, SIL 3/4, DAL B — *aspirational* |
+| `item` | 8,420 | 248 | EAL5+, DAL C, Class C, SIL 2 — *the present claim* |
+| `load` | 48,086 | 24,037 | nothing |
 
-**The certified item is `core` + `item`: 51,525 lines of product code**, against
-47,528 lines of uncertified load. The item is 52.0% of the kernel's product
+**The certified item is `core` + `item`: 55,311 lines of product code**, against
+48,086 lines of uncertified load. The item is 53.5% of the kernel's product
 code. (Measured 2026-09-26, after W-5 moved the Linux dispatcher's routing and
-five of the personality's files out of the `item` ring: see below.)
+five of the personality's files out of the `item` ring, see below, and after
+F-23 made the item's allocations fallible. That added 2,711 lines, most of
+them in the `core` ring: `fallible.rs` and `mm/reserve.rs`, which the manifest
+places there, and the conversions.)
 
 ### `core` — the minimal trusted base
 
@@ -147,7 +150,7 @@ drivers' kernel halves; STM32MP1 board support.
 
 This is not a list of code that matters less — it is most of what makes Ferrix
 useful. It is excluded because a defect in it is bounded by the item's own
-enforcement, and because a claim over 99,053 lines is one nobody can afford to
+enforcement, and because a claim over 103,397 lines is one nobody can afford to
 substantiate.
 
 ---
@@ -168,8 +171,9 @@ free, precisely because the cost of discovering the right boundary later is
 every document written against the wrong one.
 
 The same nesting is what makes the ratings honestly *ordered*. `core` at
-43,523 lines is in the size range where EAL6-grade work has actually been done
-(INTEGRITY-178B, ~10k SLOC, is the benchmark and is still four times smaller).
+46,891 lines is in the size range where EAL6-grade work has actually been done
+(INTEGRITY-178B, ~10k SLOC, is the benchmark and is still nearly five times
+smaller).
 It is not there yet. Saying which ring carries which target keeps that gap
 visible instead of letting "Ferrix is certified" absorb it.
 

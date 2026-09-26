@@ -4,10 +4,13 @@ The two determinism arguments the safety standards ask for, against the item in
 [ITEM.md](ITEM.md): what the item allocates and what happens when it cannot,
 and what it promises about time.
 
-Both analyses conclude that the property is **not** achieved. That is the point
-of writing them: findings F-23 and F-24 were vague statements that something
-was missing, and this replaces them with measured statements of exactly what is
-missing and what it would cost.
+Both analyses began by concluding that the property is **not** achieved. That
+was the point of writing them: findings F-23 and F-24 were vague statements
+that something was missing, and this replaced them with measured statements of
+exactly what was missing and what it would cost. Since 2026-09-26 the first
+half holds for the item: allocation failure is reported rather than fatal, and
+a gate keeps it so (§1). What is still not claimed is a bound on memory, and
+the second half, time, is unchanged.
 
 ---
 
@@ -15,11 +18,7 @@ missing and what it would cost.
 
 ### 1.1 What the item allocates
 
-Measured over the `core` and `item` rings, product code only: **225 allocation
-sites across 40 files**. The heaviest are `devmgr.rs` and `object/job.rs` at 19
-each, `user/space.rs` at 19, `user/vmo.rs` at 15, `device.rs` at 13.
-
-The item carries four allocators beneath those sites:
+The item carries four allocators:
 
 | Allocator | Role |
 |---|---|
@@ -28,69 +27,186 @@ The item carries four allocators beneath those sites:
 | `vmap` arena | kernel virtual address space for device windows and stacks |
 | Demand paging / CoW (`user/vmo.rs`) | a program's pages, on first touch |
 
-### 1.2 What happens when allocation fails
+The frame allocator, the arena and demand paging always reported failure, as
+`Option` or an error. The heap did too, and `GlobalAlloc` turned that into a
+null pointer that every ordinary container sent to the allocation error
+handler. So the question is the heap's callers. On 2026-09-25 they were
+**225 sites across 40 files**, measured by hand, and every one was fatal.
 
-This is the part that matters and it is worse than "unbounded".
+They are now counted by `scripts/check-fallible-alloc.py`, the "fallible
+allocation" step of `cargo xtask check`. It finds every call to an allocating
+standard-library API in the item's product code: the constructors, `vec!` and
+`format!`, and every method that can grow a collection. It fails on one that
+is not argued at the site. On 2026-09-26 it reads:
 
-`KernelAllocator::alloc` returns a null pointer on failure, which is what
-`GlobalAlloc` requires. **There is no `#[alloc_error_handler]` in the tree.**
-So a failing `Box::new` or `Vec::push` reaches Rust's default handler, and in a
-`no_std` binary that aborts — a kernel panic.
+| | Sites |
+|---|---:|
+| Unmarked: an infallible allocation | **0** |
+| `NOALLOC:` — cannot allocate: room reserved just before, or a type that only looks like a collection | 31 |
+| `FALLIBLE:` — a first-party method named like a standard one, that reports failure | 13 |
+| `FATAL-ALLOC:` — bring-up, fatal by design (§1.3) | 73 |
 
-Allocation failure in the certified item is therefore **fatal, not
-recoverable**, at 225 sites. The heap's own API is fallible (`HeapError::
-OutOfMemory`, and `libs/heap` returns it properly), but the `GlobalAlloc`
-adapter above it discards that distinction for every ordinary Rust container.
+Everything else in the item allocates through `kernel/src/fallible.rs`, and
+the gate does not flag it. Its ratchet baseline,
+`scripts/fallible-alloc-baseline.json`, is empty, and a new unmarked site
+fails the build.
 
-### 1.3 Against the standards
+### 1.2 How failure is reported
+
+The obvious fix is unavailable. `#[alloc_error_handler]` is an unstable
+library feature (rust-lang #51540), and so are `Box::try_new`, `Arc::try_new`
+and `BTreeMap::try_insert`, verified against the pinned 1.97.1. `kernel/` and
+`boot/` use no unstable features by policy, and `TOOLS.md` leans on that.
+Only `Vec::try_reserve` is stable. So fallible construction is built from
+stable parts, in two kinds:
+
+* **What can be made fallible directly.** `libs/fallible` (`ferrix-fallible`)
+  gives `Box`, `Vec`, `VecDeque` and `String` fallible constructors.
+  `try_box` allocates `Layout::new::<T>()` through the global allocator and
+  makes the box with `Box::from_raw`: `Box`'s documentation makes that
+  conversion part of its contract. `try_boxed_slice` and `try_boxed_str`
+  allocate exactly once. The collection helpers reserve with `try_reserve`
+  before they grow. Room already there is not an allocation, so it is never
+  failed, even under injection. The crate is host-tested against a recording
+  and refusing global allocator, and run under Miri in CI.
+* **What cannot.** `Arc::new`, `Arc::new_cyclic` and a map insert allocate
+  inside `alloc`, with layouts it does not publish. They run in a *reserved
+  section* (`kernel/src/mm/reserve.rs`). Entering the section masks this
+  processor's interrupts, then fills its reserve to 16 objects of every heap
+  size class, plus one block for an `Arc` too large for a class. It fails
+  with `AllocError` if the heap cannot supply them, and that failure is the
+  one the caller reports. Inside the section, an allocation the heap refuses
+  is served from the reserve. So the operation either never starts, or it
+  runs to the end on memory set aside for it. The depth argument: an `Arc` is
+  one allocation of `arc_layout::<T>()`, and a B-tree insert is at most height
+  + 2 nodes of at most `btree_node_bound`. The host tests measure both against
+  the pinned standard library, and `fallible.rs` checks each map's node size
+  against the largest class at compile time. A tree of height 14 has more
+  than 10^11 entries. Soundness does not rest on the bound: a reserve block is
+  handed out only for a request of its own class, so a wrong bound would let
+  the allocation fail as it did before (a stop, FX-0008), and would corrupt
+  nothing.
+
+Each caller turns `AllocError` into the answer its interface has:
+`NO_MEMORY` from a native call, `ENOMEM` from a Linux one (`mmap`, `mremap`,
+`fork`, a page fault that must copy), `EAGAIN` from `madvise`, and a refused
+step at bring-up. Where a change has several steps, each takes its room
+before the first changes anything, or undoes what went before. Mapping an
+object inserts into the table, attaches, and places the region, and takes all
+three back when the last one fails. `fork` copies every table fallibly before
+it marks the parent's pages copy-on-write. A child it then cannot finish is
+let go, and the parent keeps the marks, which only make it copy what it
+writes. `mremap` reserves room in the map for both removals and the region's
+return before it takes anything out.
+
+Three paths were rebuilt so that they need no memory at all:
+
+* **The scheduler.** It used to allocate a tree node on every enqueue, and so
+  allocated with the run queue locked and from interrupt context. Every task
+  now lends the run queue and the sleepers' timeline a node of its own, made
+  when the task is made. `libs/sched/tests/no_allocation.rs` counts the
+  allocations of a queue and a timeline at work under a counting global
+  allocator, and requires none.
+* **Taking pages out of an object** (munmap, madvise, truncation, mremap,
+  copy-on-write). The frames go into a list whose room is had before the
+  first frame leaves the object, so a frame is never out of one list and not
+  in the other. A decommit that cannot be refused, and so cannot fail, falls
+  back to 32 pages at a time on the stack. With no memory to list the spaces
+  that map the object, it asks them one at a time, in the order of a key that
+  does not move, each with a shootdown of its own.
+* **Closing an object.** A drop that would recurse is queued. When the queue
+  cannot grow, the object is dropped in place, at most four deep, and only
+  past that is it given up and counted.
+
+Where a path cannot report failure and cannot avoid allocating, it keeps what
+it held rather than allocate: an unmap that cannot note a range leaves its
+pages with an object that no region shows them through. Each such path is
+counted, and every counter stays zero while memory lasts: `RANGES_KEPT`,
+`SPANS_KEPT`, `LOST_TO_UNMAPS`, `ZOMBIES_LOST`, `MISSING_SLOTS`, `ABANDONED`
+and `UNRECORDED`.
+
+**The negative control.** Every boot runs `object/alloc_check.rs` at stage 9
+(FX-0902). With the heap made to refuse every allocation inside a section, an
+`Arc`, a large `Arc` and 200 map inserts must complete on the reserve alone.
+With the reserve refused its filling, they must fail before they start. Then
+one process drives rounds of native calls that allocate, while every *n*th
+allocation of its task fails, for six prime periods. Every call must succeed
+or answer `NO_MEMORY`, and no port may lose a promised packet. A clean round
+must then succeed, and no frame may have leaked. Last, a decommit of 80 pages
+of a mapped object must give every page back with every allocation failing,
+through both fallbacks above, and leave no translation. It reads the same on
+all three architectures: *"486 native calls with 162 allocations failed under
+them: 150 answered NO_MEMORY, the rest succeeded, nothing leaked; 35
+allocations served from a reserve; 80 pages decommitted with none"*.
+
+### 1.3 What stays fatal
+
+**Bring-up**, by design. 73 sites run before the first program or while a
+processor comes up, where there is nothing to return an error to. Each is
+marked `FATAL-ALLOC:` and listed by the gate's `--report`:
+
+| File | Sites | What |
+|---|---:|---|
+| `device.rs` | 17 | the device registry, from the firmware's tables |
+| `devmgr.rs` | 12 | the device manager's start: driver list and arguments |
+| `sched/mod.rs` | 11 | per-processor run queues and idle tasks |
+| `iommu.rs` | 10 | translation units and their domains |
+| `pci.rs` | 9 | bus enumeration |
+| `smp.rs`, `arch/*/smp.rs` | 12 | per-processor data and secondary start-up |
+| `init.rs`, `vmap.rs` | 2 | the first program's arguments; the arena |
+
+A failure there stops the machine, and the panic handler names it. It knows
+std's *"memory allocation of N bytes failed"* message, when the heap has
+refused, and reports **FX-0007** before the boot completes.
+
+**The load.** The uncertified load's allocations are still infallible, and it
+shares the heap. One that fails after boot stops the machine with **FX-0008**.
+That is an application condition, AoU-5, not a property of the item.
+
+**What the gate cannot see.** It says so in its docstring:
+
+* It matches methods by name, not type, which is what `NOALLOC:` is for.
+* `.clone()` is not flagged. The item's 18 were audited by hand on 2026-09-26,
+  and none allocates. Each is an `Arc`, a `Weak`, an `Option` of one, an
+  `Object` (an enum of `Arc`s) or a `FileMapping` (an `Arc` and a flag).
+* It does not see conversions that allocate, or allocation inside a callee.
+  `libs/vma`, `libs/objects`, `libs/sched` and `libs/sync` were converted with
+  the item. The other libraries the item calls allocate nothing on its paths.
+
+### 1.4 Against the standards
 
 * **EN 50716 Annex A** discourages dynamic memory at SIL 2 and above. The item
-  uses it pervasively and on paths that a program can drive.
+  still uses it, on paths a program can drive. What changed is the failure
+  mode: exhaustion is now an error the caller sees. It was a stop of the
+  machine.
 * **DO-178C** requires an argument that allocation cannot fail in a way that
-  defeats a safety requirement — covering exhaustion, fragmentation and
-  timing. None of the three has been analysed.
-* **IEC 62304 §5.5** wants the failure behaviour of each unit stated. Here it
-  is uniform and it is "panic", which is at least simple to state.
+  defeats a safety requirement: exhaustion, fragmentation and timing.
+  Exhaustion is now argued: it is reported, at every site, and checked by the
+  build and on every boot. Fragmentation and the time an allocation takes are
+  not analysed.
+* **IEC 62304 §5.5** wants each unit's failure behaviour stated. It is now
+  per interface, and it is an error return, except at bring-up.
 
-### 1.4 What would close it
+### 1.5 What is not claimed
 
-**First, a constraint that rules out the obvious answer.** The usual fix is an
-`#[alloc_error_handler]` that reports the failure properly instead of aborting
-generically. **It is not available.** The attribute is an unstable library
-feature (rust-lang issue #51540), verified against this tree's pinned 1.97.1,
-and `kernel/` and `boot/` use no unstable features by policy — a policy that
-`docs/certification/TOOLS.md` leans on, since it is part of why the toolchain
-story is as clean as it is.
+1. **A bound.** Nothing bounds what the item allocates. Measuring the
+   pre-user-mode working set would give bring-up a bound. The paths a program
+   drives would still be unbounded.
+2. **A quota on the heap.** Nothing limits the heap one program may use. A
+   job's limits are on its depth and its descendants, a channel's queue and a
+   port's registrations are capped, and a handle table only by the width of
+   its index. A program that drives an allocation in a loop now meets
+   `ENOMEM` and the machine keeps running. It still denies the heap to
+   everything else: V-05 in
+   [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md).
+3. **The load.** Converting the load ring the same way would take AoU-5's
+   second half away. It is outside the item and not attempted.
+4. **Preallocation.** What a SIL 4 or DAL A item would do, and incompatible
+   with an OS that also hosts a compiler.
 
-`Box::try_new` and `Arc::try_new` are unstable for the same reason. What *is*
-stable is `Vec::try_reserve`, which covers growth but not the `Box` and `Arc`
-allocations that dominate the 225 sites.
-
-So the item cannot make allocation failure recoverable without either adopting
-a nightly feature — which would cost more assurance than it buys — or
-hand-rolling fallible construction at each site. That is worth knowing before
-anybody plans this work, and it interacts with F-17: a Ferrocene toolchain
-would not change it either.
-
-In increasing order of cost, and none of it done:
-
-1. **Bound the pre-user-mode item.** Everything the item allocates before the
-   first program runs is a fixed, measurable set. Measuring it would let the
-   item claim a bounded working set for its own bring-up even while the paths
-   a program drives stay unbounded.
-2. **Make the driveable paths fallible.** The sites a program can reach in a
-   loop — `object/job.rs`, `object/channel.rs`, `user/space.rs`, and
-   `syscall/futex.rs`, which W-5 moved to the load ring but which allocates
-   from the same heap — are the ones that matter for T.EXHAUST (V-05 in
-   [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md)). On stable this
-   means hand-rolled fallible construction, not a global handler. Plus a
-   quota. It is a large change.
-3. **Preallocate.** What a SIL 4 or DAL A item would do, and incompatible with
-   an OS that also hosts a compiler.
-
-**Verdict: F-23 stands.** It is now a measured finding rather than an
-impression: 225 sites, four allocators, failure is fatal, no handler possible
-on stable, no bound.
+**Verdict: F-23 is closed** for what it measured: allocation failure in the
+item is reported, not fatal, and the build says so. The bound it also names is
+not claimed, and is exported to the integrator as AoU-5.
 
 ---
 
@@ -166,9 +282,13 @@ would have to be made is named.
 
 ---
 
-## 3. Why neither finding is closed
+## 3. Why F-24 is not closed, and F-23 is
 
 A document that says "the property does not hold" is not a closed finding, and
 recording it as one would be the exact failure this directory exists to avoid.
-Both entries in [FINDINGS.md](FINDINGS.md) are restated against this analysis
-rather than struck out.
+F-24 is restated against this analysis rather than struck out.
+
+F-23 closed on 2026-09-26 because what it described stopped being true, and a
+gate and a boot check say so: no allocation in the item's product code is
+fatal except at bring-up. What it did not describe, a bound, stays unclaimed,
+and says so in §1.5.

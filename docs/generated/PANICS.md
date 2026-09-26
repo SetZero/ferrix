@@ -257,10 +257,11 @@ The kernel's allocator reports an empty heap by returning null. A caller in the
 certified item turns that into an error it returns (`ENOMEM`, `NO_MEMORY`) or,
 while the kernel is still coming up, a stop with its own code (FX-0007). An
 ordinary `Box`, `Vec` or map cannot: the standard library calls its allocation
-error handler instead, which panics, and this is that panic. It is reached from
-code that has not been converted to report failure -- the uncertified load, and
-the item's sites `scripts/check-fallible-alloc.py` still lists or marks
-`FATAL-ALLOC` -- when memory really has run out.
+error handler instead, which panics, and this is that panic. After the boot it
+is reached only from code that has not been converted to report failure -- the
+uncertified load, whose allocations share the heap -- when memory really has run
+out. The item has none: `scripts/check-fallible-alloc.py` counts every
+allocating call in it and fails the build on one that does not report failure.
 
 1. Memory ran out, and the allocation that found it so was one of the infallible
    ones: the trace names it.
@@ -1488,15 +1489,19 @@ the reserve their section filled when the heap refuses inside it, and must fail
 before they start when the reserve cannot be filled. Then one process drives
 rounds of native calls that allocate while every `n`th fallible allocation of
 its task fails: each call must succeed or answer `NO_MEMORY`, some must do each,
-no frame may leak, and a round with nothing failing must succeed whole. A kernel
-failing this has an allocation failure that corrupts state, leaks, or is
-reported as something it is not.
+no frame may leak, and a round with nothing failing must succeed whole. Last, a
+decommit of a mapped object with every allocation failing must give back every
+page and leave no translation to one. A kernel failing this has an allocation
+failure that corrupts state, leaks, or is reported as something it is not.
 
 1. A caller of `crate::fallible` turned an `AllocError` into a status other than
    `NO_MEMORY`, or dropped it and carried on with state half changed.
 2. An error path freed nothing it had taken, so the frame window saw a leak.
 3. The reserve in `mm/reserve.rs` was not drawn on when the heap refused inside
    a section, or a section went ahead with its reserve unfilled.
+4. Taking pages out of an object needed memory it could not get, and kept a
+   page, lost one, or left a space still translating it (`user/vmo.rs`'s chunked
+   and one-at-a-time fallbacks).
 
 See: kernel/src/object/alloc_check.rs; kernel/src/fallible.rs;
 kernel/src/mm/reserve.rs; docs/certification/MEMORY-AND-TIMING.md.
