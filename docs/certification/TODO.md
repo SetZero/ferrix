@@ -48,9 +48,10 @@ python3 scripts/check-item-boundary.py --report
 
 ## 1. Boundary — the cheapest real wins
 
-The debt register in `scripts/certification-item.json` holds 56 upward
-references, down from 94 when the audit began. It may shrink freely; it may not grow. After each fix, delete the
-entries it retires — the gate fails on stale entries, so it will tell you which.
+The debt register in `scripts/certification-item.json` is empty: no upward
+references, down from 94 when the audit began (W-5, 2026-09-26). It may not
+grow. A change that needs a new upward reference has to add an entry against a
+finding, which is a diff somebody argues for; the gate fails otherwise.
 
 Until 2026-09-26 the gate reported 29 and 62: it saw only the literal text
 `crate::a::b`. **When re-auditing, check the gate before trusting its count.**
@@ -74,9 +75,11 @@ quietly undo this:
 * **`Host` stays small.** Five methods today. Each new one is a question the
   core asks the personality; one that is really a POSIX question (the fd
   table, credentials) belongs in the personality, not on the trait.
-* **The six item-ring references to `syscall::process` are F-09's and F-07's
-  now.** They are to POSIX state. Do not count them as F-01 regressing, and
-  do not let them be "fixed" by adding POSIX methods to `Host`.
+* **The six item-ring references to `syscall::process` went to F-09 and F-07,
+  and are gone with them (W-5).** They were to POSIX state, and were not
+  "fixed" by adding POSIX methods to `Host`: the files that wanted the state
+  are in the load ring, and what the native ABI asks of the personality is
+  the item's own interface (`native::Processes`), not the core's. Keep it so.
 
 ### 1.2 Invert the `StatLayout` dependency — **F-03, 3 references**
 **Done 2026-09-25.**
@@ -109,11 +112,36 @@ most trusted path in the system, and while it stands the core cannot be built
 or analysed without the personality present.
 
 ### 1.5 A registration table for the native dispatcher — **F-07, 12 references**
-`syscall/native.rs` names ten load-ring modules, and `devmgr.rs` names
-`syscall::exec` and `syscall::process` for the process it starts. Subsystems should register
-handlers in a table the dispatcher walks. One of the ten, `syscall::process`,
-was F-01's until W-1; it is process creation through the Linux loader, which
-a table entry can own like any other subsystem.
+**Done 2026-09-26** (IMPLEMENTATION.md W-5). The six calls about a subsystem
+above the item are a table the subsystems register handlers into; native
+processes are made through a `Processes` the personality lends; a quiesce
+waits out registered `Server`s. `native.rs` and `devmgr.rs` name nothing above
+the item.
+
+*To re-audit:*
+
+* **The boot check runs.** The `match` no longer holds the six table calls to
+  an answer at compile time; `main.rs` does, at boot (FX-0006), and prints
+  *"6 native calls answered above the item"*. A seventh call moved to the table
+  without being added to `native::SERVED` answers `ENOSYS` rather than failing
+  the boot -- look for it in the `match`'s one table arm.
+* **The rights stay in the item.** A table handler for a device control
+  channel goes through `native::control_channel`, which checks the device
+  handle's `MANAGE` and mints the driver's handle. A handler that looks up a
+  handle itself has moved a capability decision into the load ring.
+
+### 1.5a The Linux personality in the item ring — **F-09, 39 references**
+**Done 2026-09-26** (W-5). The trap entries reach the dispatcher through a
+`SyscallEntry` the core holds; the Linux dispatcher's routing is
+`syscall/linux.rs`, the item's `Personality`, composed by `main.rs`; and `futex`,
+`limits`, `memory`, `system` and `thread` moved to the load ring, each argued
+in ITEM.md §2.
+
+*To re-audit:* the Spectre clamp is in `arch::decode_syscall`, which the item's
+`dispatch_with` calls before it hands the call on -- a personality reached some
+other way would have to clamp for itself. And the five files moved without a
+code change, so a later change that has the item call one of them again shows
+up as a new upward reference, which is the gate doing its job.
 
 ### 1.6 Bring-up and power — **F-08, 6 references**
 **Done 2026-09-26.** Power commits registered `Flush`es, init starts pid 1
@@ -128,11 +156,9 @@ composition root's, listed under `composition_root` in the manifest (ITEM.md
 and check each new entry is composition rather than item logic.
 
 ### 1.7 The paranoid entry's boot check — **F-33, 5 references**
-`arch/x86_64/paranoid.rs` builds, loads and starts a Linux program to prove a
-breakpoint in the system call window fires. Move the check to
-`arch/x86_64/paranoid_check.rs`, which the manifest counts as verification,
-or start the program through an interface the core defines. Small, and the
-only file in the core that names the load ring.
+**Done 2026-09-26** (W-5). The check is `arch/x86_64/paranoid/check.rs`, a
+child of the entry's module that the manifest counts as verification. The
+core's product code names nothing above it.
 
 ---
 

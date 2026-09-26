@@ -79,8 +79,9 @@ In increasing order of cost, and none of it done:
    item claim a bounded working set for its own bring-up even while the paths
    a program drives stay unbounded.
 2. **Make the driveable paths fallible.** The sites a program can reach in a
-   loop — `object/job.rs`, `object/channel.rs`, `user/space.rs`,
-   `syscall/futex.rs` — are the ones that matter for T.EXHAUST (V-05 in
+   loop — `object/job.rs`, `object/channel.rs`, `user/space.rs`, and
+   `syscall/futex.rs`, which W-5 moved to the load ring but which allocates
+   from the same heap — are the ones that matter for T.EXHAUST (V-05 in
    [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md)). On stable this
    means hand-rolled fallible construction, not a global handler. Plus a
    quota. It is a large change.

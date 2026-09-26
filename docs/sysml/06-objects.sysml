@@ -217,14 +217,24 @@ package FerrixObjects {
             doc /* The assembly trampoline; then Rust. Stage 6's, and it fills
                  * a SyscallArgs from the trap frame and applies the Outcome
                  * that comes back, so no register convention reaches the
-                 * dispatch layer and no ABI knowledge reaches the vector. */
+                 * dispatch layer and no ABI knowledge reaches the vector.
+                 * Both types are the core's (kernel/src/trap.rs), and the
+                 * trap path calls trap::system_call, which answers through
+                 * the SyscallEntry main.rs registered: the core names no
+                 * dispatcher above it (F-09). */
         }
         #implemented action dispatch {
-            doc /* One function. Returns Outcome::Return for a value, or
-                 * Outcome::Enter for the calls that resume on a frame which
-                 * was constructed rather than returned into -- execve, and a
-                 * clone child. Self-checked in the boot test on all three
-                 * architectures. */
+            doc /* One function, the certified item's (syscall/mod.rs): the
+                 * native range to the native ABI, and a Linux number decoded
+                 * by arch::decode_syscall, clamp first, then handed to the
+                 * Personality the Linux personality implements
+                 * (syscall/linux.rs, in the load ring), which routes it
+                 * through its modules; main.rs composes the two at compile
+                 * time, so a call pays one indirect call, the core's. Returns Outcome::Return for a value,
+                 * or Outcome::Enter for the calls that resume on a frame
+                 * which was constructed rather than returned into -- execve,
+                 * and a clone child. Self-checked in the boot test on all
+                 * three architectures. */
         }
         #planned action seccompCheck {
             @stage { number = 13; }
@@ -277,7 +287,18 @@ package FerrixObjects {
              * info and quiesce, and the calls that make a block or net ring
              * and a display, input or render control channel. Left: an EXECUTE
              * right on a VMO handle, sub-page apertures, and the process
-             * calls beyond create and start, 0x1032..=0x1037 held for them. */
+             * calls beyond create and start, 0x1032..=0x1037 held for them.
+             *
+             * The item answers every call on the core's objects in a match
+             * the compiler holds exhaustive. The six about a subsystem above
+             * it -- the five control-channel creates and job_for_cgroup --
+             * are a table the subsystems register handlers into from
+             * main.rs's register_load, and the boot stops (FX-0006) if one
+             * has none. A native process is made and started through the
+             * Processes the Linux personality lends (syscall/launch.rs),
+             * which devmgr starts through too, and a quiesce waits out the
+             * Servers the rings and cards register. native.rs names nothing
+             * above the item (F-07). */
         attribute firstNumber : String = "0x1000";
         action handleClose;
         action handleDuplicate;

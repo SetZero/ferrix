@@ -141,6 +141,10 @@ dispatcher does. It was not moved here because `syscall/mod.rs` names it by a
 module-relative path the gate cannot see, and a move that hides an edge is not
 a fix.
 
+W-5 took that step (2026-09-26), with a gate that sees module-relative paths:
+the Linux dispatcher's routing went above the item first, and then the five
+files, with no edge left behind.
+
 ### The trap
 
 The obvious reading of F-01 is "move `Process` to `kernel/src/object/
@@ -324,27 +328,83 @@ finding of its own.
 
 ## W-5 — A registration table for the native dispatcher
 
-**Closes:** F-07 (12 references: 10 in `syscall/native.rs`, 2 in `devmgr.rs`).
-**Size:** medium.
+**Done 2026-09-26.** F-07, F-09 and F-33 closed: 56 references, and the debt
+register is empty. The order was written for F-07's 12; the resolving gate
+sized it at 56, and the same pattern answered most of them.
 
-`syscall/native.rs:98` is a `match call { … }` naming ten load-ring modules.
-Replace with a table subsystems register handlers into, so the item's exported
-interface can be analysed without the whole load ring. `devmgr.rs` names
-`syscall::exec` and `syscall::process` to create the native process it starts
-(`exec::load_native`, as `native.rs`'s process creation does), so whatever
-owns process creation in the table can serve it too.
+**Closes:** F-07 (12 references), F-09 (39), F-33 (5). **Size:** medium.
 
-The count is the resolving gate's (2026-09-26). The one before it saw neither
-`devmgr.rs`'s nested `use` group nor any bare-name path; re-run
-`python3 scripts/check-item-boundary.py --report` before starting and after
-each step, since it now reports what a file names by any route.
+### The design as built
 
-**Pitfall:** the current `match` is exhaustive over the call enum, so the
-compiler catches an unhandled call. A table loses that. Keep the guarantee: a
-boot-time check that every call number has a registered handler, in
-`syscall/check.rs` where the rest of the native ABI's self-tests live. Losing a
-compile-time guarantee for a runtime one is only acceptable if the runtime one
-actually runs, and here it runs on every boot.
+Six commits, each green, then the documents.
+
+1. **The core's syscall entry.** `SyscallArgs` and `Outcome` moved into
+   `trap.rs`; the three architectures call `trap::system_call`, which
+   answers through a `SyscallEntry` in a `Once` that `main.rs` points at
+   `syscall::dispatch`, beside the personality's `ReturnPath`. Retires F-09's
+   three `arch` entries.
+2. **The native table.** `native.rs` answers the calls on the core's objects
+   in its exhaustive `match`, as before. The six about a subsystem above the
+   item go to a table of `Handler`s the subsystems register with
+   `native::serve` -- the rings, the display, the renderer and input through
+   an `install` each, cgroupfs through `fs::install` -- and the device handle,
+   its right and the driver's handle stay in the item
+   (`native::control_channel`). Process creation and start, for the ABI and
+   for `devmgr`, go through `native::Processes`, which `syscall/launch.rs`
+   lends; a quiesce waits out registered `Server`s. Retires F-07's 12.
+3. **The Linux dispatcher above the item.** `syscall/mod.rs` keeps the way in,
+   the native range and the decode with its clamp, and hands the decoded call
+   to a `Personality` -- a trait it defines -- that `syscall/linux.rs`
+   implements. Retires 21 of F-09. First held in a pointer; then, measured,
+   composed by `main.rs` at compile time (`dispatch_with::<Linux>`) so it
+   costs no second indirect call.
+4. **Five files to `load`**, by the manifest alone: `futex`, `limits`,
+   `memory`, `system`, `thread`, each argued in ITEM.md §2. Retires 15 of F-09.
+5. **The paranoid check to a verification file**, `arch/x86_64/paranoid/
+   check.rs`. Retires F-33's 5.
+
+`main.rs` gains five composition-root edges (`block_ring`, `net_ring`,
+`render`, `input`, `syscall::linux`), each a registration call, and its
+registration check covers the new interfaces.
+
+### The exhaustiveness the `match` gave
+
+This order's pitfall, and it is kept rather than traded: the calls the item
+answers are still in an exhaustive `match`, so an unanswered one does not
+compile. Only the six the table holds are checked at boot instead, on every
+boot, before anything can make a native call (FX-0006). The check is in
+`main.rs`'s `register_load`, with the other registrations, rather than in
+`syscall/check.rs`: that file is load-ring verification, and the check is the
+item holding the load to its registrations.
+
+### Cost
+
+Dispatch is the hottest path, so nothing on it locks or allocates. Every
+call pays one indirect call through the core's `Once`; a native call to the
+table a short search by decoded call besides. Measured under KVM on a Zen 5
+host with busybox `dd bs=1` copying a million bytes from `/dev/zero` to
+`/dev/null` -- two million `read`/`write` calls -- nine times a boot, six boots
+alternating with the series' base:
+
+| | min | median | mean |
+|---|---:|---:|---:|
+| base | 1.074 s | 1.185 s | 1.279 s |
+| personality behind a second pointer | 1.112 s | 1.244 s | 1.274 s |
+| base | 1.081 s | 1.242 s | 1.324 s |
+| personality composed at compile time | 1.100 s | 1.257 s | 1.330 s |
+
+The second pointer cost a median +5.0%, so it went; what is left is +1.2%
+(minimum +1.8%), inside the noise of a host running other sessions at a load
+of about 20. Not committed: the benchmark is a line added to `test-vfs`'s
+command list for the run.
+
+### Verify
+
+`python3 scripts/check-item-boundary.py --report` shows no upward reference and
+an empty register. The full boot gate row, `test-threads`, `test-jobs`,
+`test-net` and `test-boot --mitigations off`: every native call devmgr and its
+drivers make, every Linux call busybox makes, and the paranoid check's
+breakpoints, go through the new paths.
 
 ---
 
@@ -518,9 +578,9 @@ each of the rest.
 
 ## Suggested order
 
-**Done:** order zero, W-3, W-2, W-6, W-9, W-4 (with F-08), W-1, most of W-7,
-and W-11's side-channel half.
-**Remaining:** W-5 → W-7's last gates → W-8 (largest), with W-10 in parallel
+**Done:** order zero, W-3, W-2, W-6, W-9, W-4 (with F-08), W-1, W-5 (with
+F-09 and F-33), most of W-7, and W-11's side-channel half.
+**Remaining:** W-7's last gates → W-8 (largest), with W-10 in parallel
 whenever someone can answer step 1.
 
 W-1 landed as a split rather than a move, and took the boundary from 36
@@ -529,9 +589,9 @@ six Linux-personality syscall files in the item ring that name the POSIX
 process for its state. Since the gate learned to resolve module paths
 (2026-09-26) the register reads 56, not 29 -- F-09 at 39, 21 of them the Linux
 dispatcher's; F-07 at 12; and a new F-33, 5, a core boot check that is small
-to move -- and W-5 should be sized against those numbers. W-5 reads
-better now that process creation is the one thing the native dispatcher
-still needs the personality for.
+to move. W-5 took all 56 (2026-09-26): the boundary has no upward reference
+left, and what the item holds of the personality is one function pointer to
+its dispatcher and one `Processes` to make a native process with.
 
 ## Not on this list
 

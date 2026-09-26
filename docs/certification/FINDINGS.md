@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-20 findings are open and 18 are closed, of 38. F-10 advanced from 71.4% to 81.9%, and F-31's side-channel half was built (2026-09-26). No finding here is closed by argument:
+17 findings are open and 21 are closed, of 38. F-10 advanced from 71.4% to 81.9%, F-31's side-channel half was built, and F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 2 | 7 | 10 | 0 | 1 |
+| Open | 2 | 6 | 8 | 0 | 1 |
 
 Blocking: F-27 and F-28 — independent assessment and a quality management
 system. Both need an organisation; neither is a defect in the code.
@@ -29,11 +29,12 @@ of use, which is how every general-purpose certified kernel handles them.
 
 ## A. Boundary integrity
 
-Measured by `scripts/check-item-boundary.py`; **56 upward references in 12
-files**, from 94 in 28 when the audit began. These are recorded in
-`scripts/certification-item.json` as a debt register that may shrink freely and
-may not grow. `main.rs`'s 32 edges into the load are recorded beside it, not in
-it: they are the composition root's ([ITEM.md](ITEM.md) §2).
+Measured by `scripts/check-item-boundary.py`; **no upward references**, from
+94 in 28 files when the audit began. The debt register in
+`scripts/certification-item.json` is empty since W-5 closed F-07, F-09 and F-33
+(2026-09-26), and stays, empty, so that a new upward reference has to be argued
+into it against a finding. `main.rs`'s 37 edges into the load are recorded
+beside it, not in it: they are the composition root's ([ITEM.md](ITEM.md) §2).
 
 **Every count this section gave before 2026-09-26 was a lower bound** -- the
 29, and the 62 the audit started from. The gate matched the text
@@ -182,22 +183,45 @@ POSIX. Inner-ring only, so no present rating moved; it is the ratchet's path
 to an EAL6+/ASIL D `core`, and `object/` and `sched/` now name nothing above it.
 
 ### F-07 — the native ABI dispatcher fans out across the load ring
-**Major.** 12 references: 10 from `syscall/native.rs` into `block_ring`,
-`net_ring`, `fs::cgroupfs`, `display`, `render`, `input` and four personality
-syscall modules, and 2 from `devmgr.rs` into `syscall::exec` and
-`syscall::process`, for the native process creation `devmgr` is started with
-and the `Process` type. The last two were always there; the gate could not see
-a nested `use` group until 2026-09-26. `stm32mp1`, once one of them, was F-04's and went with it. The fourth
-personality module, `syscall::process`, was filed under F-01 until W-1: what
-the dispatcher still wants of it is process creation through the Linux loader
-and the POSIX wait check, which is this finding's fan-out, not the core
-concept.
+**Closed 2026-09-26** by W-5. All 12 references are gone: 10 from
+`syscall/native.rs` into `block_ring`, `net_ring`, `fs::cgroupfs`, `display`,
+`render`, `input` and the personality's `exec`, `load`, `fd` and `process`,
+and 2 from `devmgr.rs` into `syscall::exec` and `syscall::process`.
 
-Expected of a dispatcher and still a dependency: the item's exported interface
-cannot be analysed without the whole of the load ring it dispatches into.
+The item defines three interfaces and the load registers into them from
+`main.rs`'s `register_load`, as F-04 and F-08 did:
 
-*Closes when:* subsystems register handlers in a table the dispatcher walks,
-rather than the dispatcher naming each subsystem.
+* **A table of handlers** for the six calls that are about a subsystem above
+  the item -- `block_ring_create`, `net_ring_create`,
+  `display_control_create`, `render_control_create`,
+  `input_control_create` and `job_for_cgroup` -- keyed by call and
+  registered by the subsystem (`native::serve`). The device handle, its
+  `MANAGE` right and the driver's handle stay in the item
+  (`native::control_channel`); only the channel is the subsystem's to make.
+* **`native::Processes`**, which the Linux personality lends from
+  `syscall/launch.rs` beside init's `Launcher`: load an image into a new
+  process, and claim, prepare and start it with an argument taken between
+  the prepare and the run. `process_create`, `process_start` and `devmgr`'s
+  own start all use it; the job, the rights and the handle move stay in the
+  item.
+* **`native::Server`s**, which a quiesce waits out and releases in the order
+  registered: the block ring, the display and the renderer.
+
+The dispatcher finds its caller through the scheduler's `UserThread` and hands
+handlers the core's `Process`, and the table's the caller as a `Host`.
+
+*The guarantee the `match` gave.* It was exhaustive, so an unanswered call did
+not compile. It still is, for every call the item answers. The six it leaves
+to the table are checked at boot instead, on every boot: `main.rs` stops with
+FX-0006 if any has no handler, and says what it found (*"6 native calls
+answered above the item, 3 subsystems a quiesce waits out"*). The table is
+searched by the decoded call, never indexed by a program's number, so F-31's
+clamp in `decode` is still the only bound a misprediction could cross.
+
+*Verified by:* no `F-07` entry in the manifest, and nothing from `native.rs`
+or `devmgr.rs` above the item in `--report`; the full boot gate row, in which
+devmgr starts its drivers through `Processes` and the block ring's check
+drives the table, and `test-net`, which makes a net ring through it.
 
 ### F-08 — bring-up and power name the filesystem
 **Closed 2026-09-26.** All six entries are gone, from `init.rs`, `power.rs`
@@ -234,57 +258,71 @@ register ([ITEM.md](ITEM.md) §2). None of it was F-08's: `init.rs` and
 `power.rs` name nothing in the load by any route.
 
 ### F-09 — item-ring syscalls reach personality modules
-**Moderate.** 39 references: 15 from `syscall/{futex,limits,memory,system,
-thread}.rs` into `syscall::{process,time,poll,fd,attributes,credentials,
-signal}` and `render::node`, 21 from the Linux dispatcher `syscall/mod.rs` into
-personality modules, and 3 from the `arch` trap entries into `syscall`.
+**Closed 2026-09-26** by W-5. All 39 references are gone: 3 from the `arch`
+trap entries into `syscall`, 21 from the Linux dispatcher `syscall/mod.rs`,
+and 15 from `syscall/{futex,limits,memory,system,thread}.rs` into the
+personality's state. Each part took a different answer, because each was a
+different question.
 
-**Twenty of the 39 were measured for the first time on 2026-09-26.**
-`syscall/mod.rs` declares its personality modules with `mod` and calls them by
-their bare names -- `exec::sys_execveat`, `poll::sys_poll`, `epoll::`,
-`sockets::dispatch`, `kill::dispatch` -- which the gate could not resolve, so it
-reported one reference (`syscall::process`, through a `use`) where there are 21.
-Nothing was added to the file; the dispatcher always named the whole
-personality, and the question below was always this big for it.
+* **The trap entries** now call `crate::trap::system_call`, which answers
+  through a `SyscallEntry` the core holds in a `Once` and `main.rs` registers
+  (`syscall::dispatch`), beside the `ReturnPath` the personality registers
+  for the way back. `SyscallArgs` and `Outcome`, the trap path's own contract,
+  moved into `trap.rs`. With nothing registered a call is `ENOSYS`.
+* **The Linux dispatcher** is split where the item's job ends. `syscall/mod.rs`
+  keeps the way in, the native range, and the Linux number decoded by
+  `arch::decode_syscall` with F-31's clamp in front of the table; it hands the
+  decoded call to a `Personality`, a trait the item defines, which
+  `syscall/linux.rs` -- the routing through the personality's modules, in the
+  load ring -- implements. `main.rs` composes the two at compile time,
+  registering `dispatch_with::<Linux>` as the core's entry.
+* **The five files** were each asked this entry's question -- does the state it
+  wants belong in the core, or is the file the personality's -- and each is
+  the personality's: `futex(2)`, the rlimits and `sched_*` calls, `mmap`'s
+  argument decoding onto the core's `AddressSpace`, `uname`/`sethostname`/
+  `reboot(2)`'s checks over POSIX credentials, and the POSIX thread. Nothing
+  in the core or the item calls them once the Linux dispatcher is above the
+  item, so they moved to `load` in the manifest with no code change and no new
+  edge. [ITEM.md](ITEM.md) §2 argues the move file by file.
 
-This used to read "the consequence of F-01 mostly". W-1 answered that part --
-the core process exists, and `futex.rs` needs nothing POSIX any more -- and
-what is left is plainer. These are Linux-personality syscalls sitting in the
-item ring: `brk`, rlimits, `sethostname`'s privilege check, the dispatcher,
-the POSIX thread. Five of the 19 it counted before 2026-09-26 are the references to `syscall::process`
-that W-1 refiled here from F-01, because each is to POSIX state rather than to
-the core concept; the count went up by relabelling, not by new coupling. The
-fourteen this entry had before are all still here.
+*What the item gave up.* The item ring's product code went from 10,578 lines
+to 8,002; the five files were 2,330 of it, and the Linux dispatcher's routing
+most of the rest. None is
+code the Security Target's claims rest on: it names the personality a threat
+agent outside the TSF, and its quota is the job's, in the core. The credential
+checks in `limits.rs` and `system.rs` are the personality's policy over
+identities the ST claims nothing about. What that does mean, and did before, is
+that load code runs in ring 0 and shares the kernel heap: `futex.rs`'s waiter
+allocations are among the program-driveable sites F-23 lists, wherever the file
+sits.
 
-*Closes when:* each file either stops needing POSIX state or is judged to be
-the personality's and leaves the item. `syscall/thread.rs` is the first
-candidate: after W-1 only the Linux dispatcher needs it. `syscall/mod.rs` is
-the largest: 21 of the 39 are its, and a Linux dispatcher that names most of
-the personality's modules is the personality's entry point rather than the
-item's.
+*Cost.* Each system call now pays one indirect call, through the core's
+`Once`, where it paid none. The first shape held the personality in a second
+pointer, and that showed: two million `read`/`write` calls under KVM (busybox
+`dd bs=1`, 54 runs each, alternating boots) took a median 1.244 s against
+1.185 s, +5.0%. Composed at compile time instead, 1.257 s against 1.242 s,
++1.2% (minimum +1.8%), which is inside this host's noise; the commit
+"Compose the Linux personality with the dispatcher at compile time" has the
+table. No lock and no allocation were added to the path.
+
+*Verified by:* no `F-09` entry in the manifest, and nothing from `arch/` or
+the item above its ring in `--report`; the full boot gate row, `test-threads`,
+`test-jobs`, `test-net`, and `test-boot --mitigations off`.
 
 ### F-33 — a core self-check loads a Linux program
-**Moderate**, found 2026-09-26. 5 references from `arch/x86_64/paranoid.rs`, in
-the core, into `syscall::exec`, `syscall::image`, `syscall::load`,
-`syscall::process` and `fs`.
+**Closed 2026-09-26** by W-5. All 5 references are gone: `arch/x86_64/
+paranoid.rs` no longer names `syscall::exec`, `syscall::image`, `syscall::load`,
+`syscall::process` or `fs`.
 
-`paranoid.rs` is the x86-64 NMI and `#DB` entry, and it carries its own boot
-check: `run_with_window_breakpoints` builds an ELF with `syscall::image`,
-loads it through the Linux loader, and starts it with `syscall::process::
-start_on`, to prove a breakpoint in the system call window fires and returns.
-The check is sound; where it sits is not. It is product code by the
-manifest's rules -- the file matches no test pattern -- so the core, which may
-name nothing above it, names the Linux personality and the filesystem's
-`SetIds`.
-
-The old gate never reported it. All five references sit after a message
-continued with `\`-newline, where the string pattern had lost its pairing and
-was reading code as literal text.
-
-*Closes when:* the check moves to a verification file (an
-`arch/x86_64/paranoid_check.rs` matches `*_check.rs`, so the manifest counts it
-as the test it is), or starts its program through an interface the core
-defines, as init does with its `Launcher`.
+The x86-64 NMI and `#DB` entry's boot check -- which builds an ELF, loads it
+with the Linux loader and starts it, to prove a breakpoint in the `SYSCALL`
+trampoline fires and returns with the kernel's `GS` -- moved whole into
+`arch/x86_64/paranoid/check.rs`. That is the first of the two ways this entry
+said it could close: the file matches the manifest's `check.rs` test pattern,
+so it is counted as the verification it is, and reaching the load ring for a
+fixture is what a check may do. It is a child of the entry's module, so it
+reads the entry's counters without the entry exporting them. The entry keeps
+only `debug_hook`, which its own handler runs. The boot's lines are unchanged.
 
 ---
 

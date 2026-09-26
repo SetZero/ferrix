@@ -102,7 +102,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1655 elements, 198 relations. Model digest `5ee39de2ed1545b7`.
+13 files, 16 packages, 1655 elements, 198 relations. Model digest `26b2e1fb2e3e7a0f`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -1970,7 +1970,7 @@ kernel/src/syscall, reached through arch::decode_syscall, which is the only plac
 | --- | --- | --- | --- | --- |
 | `groups` | attribute | `SyscallGroup` |  |  |
 | `syscallEntry` | action |  | `#implemented` | The assembly trampoline; then Rust. |
-| `dispatch` | action |  | `#implemented` | One function. |
+| `dispatch` | action |  | `#implemented` | One function, the certified item's (syscall/mod.rs): the native range to the native ABI, and a Linux number decoded by arch::decode_syscall, clamp first, then handed to the Personality the Linux personality implements (syscall/linux.rs, in the load ring),… |
 | `seccompCheck` | action |  | `#planned` | The filter runs on entry, before dispatch. |
 
 #### Signals
@@ -1997,6 +1997,8 @@ Pipes, ttys and job control: what an interactive shell needs. Pipes and FIFOs ar
 Syscall numbers from 0x1000. Handle-table operations, channel send/receive with handle passing, port wait, interrupt bind, VMO create/map, job create/kill. What devmgr and drivers speak; a process may use both ABIs.
 
 kernel/src/syscall/native.rs, branched to before any Linux table is asked, with the numbers in libs/native-abi/src/nr.rs and typed wrappers in libs/native. Beyond that first list: waits on one object or asynchronously through a port, VMO pins for a device's DMA, process create and start, device info and quiesce, and the calls that make a block or net ring and a display, input or render control channel. Left: an EXECUTE right on a VMO handle, sub-page apertures, and the process calls beyond create and start, 0x1032..=0x1037 held for them.
+
+The item answers every call on the core's objects in a match the compiler holds exhaustive. The six about a subsystem above it -- the five control-channel creates and job_for_cgroup -- are a table the subsystems register handlers into from main.rs's register_load, and the boot stops (FX-0006) if one has none. A native process is made and started through the Processes the Linux personality lends (syscall/launch.rs), which devmgr starts through too, and a quiesce waits out the Servers the rings and cards register. native.rs names nothing above the item (F-07).
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |

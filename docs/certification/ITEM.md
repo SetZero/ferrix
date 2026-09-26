@@ -42,13 +42,14 @@ three nested rings. A file in no ring fails the build.
 
 | Ring | Product lines | In-kernel test lines | Carries |
 |---|---:|---:|---|
-| `core` | 40,704 | 7,808 | EAL6+, ASIL D, SIL 3/4, DAL B — *aspirational* |
-| `item` | 10,455 | 248 | EAL5+, DAL C, Class C, SIL 2 — *the present claim* |
-| `load` | 44,272 | 23,080 | nothing |
+| `core` | 43,523 | 8,213 | EAL6+, ASIL D, SIL 3/4, DAL B — *aspirational* |
+| `item` | 8,002 | 248 | EAL5+, DAL C, Class C, SIL 2 — *the present claim* |
+| `load` | 47,528 | 23,324 | nothing |
 
-**The certified item is `core` + `item`: 51,159 lines of product code**, against
-44,272 lines of uncertified load. The item is 53.6% of the kernel's product
-code.
+**The certified item is `core` + `item`: 51,525 lines of product code**, against
+47,528 lines of uncertified load. The item is 52.0% of the kernel's product
+code. (Measured 2026-09-26, after W-5 moved the Linux dispatcher's routing and
+five of the personality's files out of the `item` ring: see below.)
 
 ### `core` — the minimal trusted base
 
@@ -63,38 +64,67 @@ here may depend on a filesystem, a network stack or a device driver, and
 
 ### `item` — the core, plus what brings it up and dispatches into it
 
-Bring-up (`main.rs`, `init.rs`), the native ABI dispatcher and the handful of
-syscalls that belong to the item rather than to the Linux personality
-(`native`, `uaccess`, `memory`, `thread`, `program`, `limits`, `system`,
-`futex`), PCI enumeration, `devmgr`, the entropy source and power. The pid
+Bring-up (`main.rs`, `init.rs`), the system call dispatcher's way in
+(`syscall/mod.rs`: the native range, and a Linux number decoded with its
+Spectre clamp), the native ABI (`native`), the program file init starts
+(`program`), PCI enumeration, `devmgr`, the entropy source and power. The pid
 table was the item's `syscall/registry.rs` until W-1 moved it into the core
 (`object/process.rs`); what that file keeps is the Linux personality's typed
 lookup, and it is in `load` with the rest of the personality.
+
+**What left the item ring on 2026-09-26, and why (W-5).** Until then this list
+also held `memory`, `thread`, `limits`, `system` and `futex`, as "syscalls
+that belong to the item rather than to the Linux personality", and the item
+ring held the Linux dispatcher's routing. The resolving gate showed each of
+them reaching into the personality for its state (F-09), and asked whether
+the state belonged in the core or the file in the personality. Each is the
+personality's:
+
+| File | What it is | Why it is not the item's |
+|---|---|---|
+| `syscall/linux.rs` (was the body of `syscall/mod.rs`) | the Linux dispatcher's routing: `exit`, `clone`, `execve`, then every table | it names 21 of the personality's modules; the item keeps the decode and hands the call on through a `Personality` trait it defines, which `main.rs` composes with it |
+| `syscall/memory.rs` | `mmap`, `munmap`, `mprotect`, `mremap`, `msync`, `madvise`, `brk` | argument decoding, by its own account, onto the core's `AddressSpace`, which is where a mapping is refused or made |
+| `syscall/futex.rs` | `futex(2)` | Linux's operations and timeouts; the native ABI waits on objects and ports, never a futex |
+| `syscall/limits.rs` | `getrlimit`, `setrlimit`, `prlimit64`, `sched_*` | the POSIX process's limits and credentials; the quota the ST claims (FRU_RSA.1) is the job's, in the core |
+| `syscall/system.rs` | `uname`, `sysinfo`, `sethostname`, `syslog`, `reboot` | checks over POSIX credentials, which the ST claims nothing about; `power`, which `reboot` reaches, stays |
+| `syscall/thread.rs` | the POSIX thread | since W-1 the scheduler holds a `UserThread`; only the Linux dispatcher needed this |
+
+Nothing the item's claims rest on moved: the Security Target names the Linux
+personality a threat agent outside the TSF (§3.2), every call these files make
+into the core is checked there, and the Spectre clamp stayed in the item, in
+front of the table. What the move does change is honest scope: the item
+ring's product code went from 10,578 lines to 8,002, and the coverage and
+traceability evidence scoped to it has to be read against the new boundary.
+Nothing in the core or the item names the five files, so the move needed no
+code change and left no edge.
 
 The native ABI is here rather than in `core` because it is the interface the
 item *exports*, and an interface is evaluated with the thing that exports it.
 
 Where the item has to act on the load -- power commits a filesystem before the
 machine stops, init starts a program from one, `devmgr` reads its drivers
-from one, device enumeration asks board support what it prepared -- the item
-defines the interface and the load registers into it
-(`kernel/src/hooks.rs`). `main.rs` is the crate root: it declares every
+from one, device enumeration asks board support what it prepared, the native
+ABI makes a ring's control channel or a native process, a Linux call is
+answered -- the item defines the interface and the load registers into it
+(`kernel/src/hooks.rs`, `syscall::native::serve`), or implements a trait the
+item defines and `main.rs` composes the two (`syscall::Personality`). `main.rs` is the crate root: it declares every
 module, and its `register_load` is the one place the load is told to
 register, in bring-up order, with a boot check that it did.
 
 **`main.rs` is in the item, and it is the composition root.** The manifest
 puts it in the `item` ring as bring-up, and nothing about that is changed
 here. But it is also where the load is put together with the item. Since
-2026-09-26 the gate reads its calls into the load -- 32 modules -- and
+2026-09-26 the gate reads its calls into the load -- 37 modules -- and
 records them under `composition_root` in the manifest rather than in the
-debt register: ratcheted the same way, filed against no finding. Of the 32,
+debt register: ratcheted the same way, filed against no finding. Of the 37,
 20 are the load's own boot self-checks (`fs::check`, `net::check`,
-`syscall::check` and seventeen more verification files), and 12 are product
-modules: registration (`syscall::launch`, `stm32mp1`, `fs`), the load's
-subsystems brought up in order (`fs::root_disk`, `fs::data_disk`, `net`,
-`syscall::deliver`, `syscall::time`, `display`), and the pieces `main.rs`'s
-own boot checks drive a program through (`syscall::image`, `syscall::exec`,
-`fs::cgroupfs`).
+`syscall::check` and seventeen more verification files), and 17 are product
+modules: registration (`syscall::launch`, `syscall::linux`,
+`syscall::deliver`, `stm32mp1`, `fs`, and since W-5 `block_ring`,
+`net_ring`, `render` and `input`), the load's subsystems brought up in order
+(`fs::root_disk`, `fs::data_disk`, `net`, `syscall::time`, `display`), and
+the pieces `main.rs`'s own boot checks drive a program through
+(`syscall::image`, `syscall::exec`, `fs::cgroupfs`).
 
 That is a judgement an assessor has to accept, and it is only as good as the
 claim that those edges carry composition and no item logic. It is plausible
@@ -106,7 +136,7 @@ them, and the boot checks that drive the load in verification files.
 A `mod` declaration is not counted as an edge anywhere. A parent declaring
 its child says where the child sits in the module tree, not that the parent's
 code runs it: `main.rs` declares 10 load-ring modules and `syscall/mod.rs`
-declares 30. What either file's *code* then does with them is resolved and
+declares 36. What either file's *code* then does with them is resolved and
 counted like any other reference.
 
 ### `load` — everything it runs and does not vouch for
@@ -117,7 +147,7 @@ drivers' kernel halves; STM32MP1 board support.
 
 This is not a list of code that matters less — it is most of what makes Ferrix
 useful. It is excluded because a defect in it is bounded by the item's own
-enforcement, and because a claim over 95,431 lines is one nobody can afford to
+enforcement, and because a claim over 99,053 lines is one nobody can afford to
 substantiate.
 
 ---
@@ -138,7 +168,7 @@ free, precisely because the cost of discovering the right boundary later is
 every document written against the wrong one.
 
 The same nesting is what makes the ratings honestly *ordered*. `core` at
-40,704 lines is in the size range where EAL6-grade work has actually been done
+43,523 lines is in the size range where EAL6-grade work has actually been done
 (INTEGRITY-178B, ~10k SLOC, is the benchmark and is still four times smaller).
 It is not there yet. Saying which ring carries which target keeps that gap
 visible instead of letting "Ferrix is certified" absorb it.
@@ -148,10 +178,11 @@ visible instead of letting "Ferrix is certified" absorb it.
 ## 4. What the measurement found
 
 The boundary above is a claim about dependencies, so the gate measures it.
-Today the item contains **56 upward references in 12 files** — places where a
-ring names something in a ring above it — plus the composition root's 32
-(§2). They are recorded in the manifest against finding ids and analysed in
-[FINDINGS.md](FINDINGS.md).
+Today the item contains **no upward references** -- no place where a ring
+names something in a ring above it -- beside the composition root's 37 (§2).
+When the audit began it had 94, in 28 files, by today's measure; each was
+recorded in the manifest against a finding id and analysed in
+[FINDINGS.md](FINDINGS.md), and each finding closed when the build said so.
 
 **The counts this section gave before 2026-09-26 — 29, and 62 when the audit
 began — were lower bounds.** The gate matched only the literal text
@@ -160,40 +191,39 @@ began — were lower bounds.** The gate matched only the literal text
 for a literal. It now resolves names as the compiler does
 (`scripts/check-item-boundary.py`, whose docstring says how, and what it still
 cannot see: an edge that is a type flowing through a value rather than a name
-written in the file). Re-measured, today's tree has 56 where 29 were
-reported, and the audit's starting tree has 94 where 62 were.
+written in the file). Re-measured the same day, the tree had 56 where 29 were
+reported, and the audit's starting tree 94 where 62 were.
 
-They are not a reason to move the boundary. They are the reason the boundary is
-worth having: each one is a specific, addressable piece of coupling that was
-invisible while the architecture was described in prose. Thirty-eight have
-been paid down since the audit began, by today's measure — F-02, F-02a, F-03,
-F-04, F-05 and F-08, and F-01 and F-06 by splitting the process (W-1) — and
-of the three that remain, two are structural rather than incidental:
+They were not a reason to move the boundary. They were the reason the boundary
+is worth having: each was a specific, addressable piece of coupling that was
+invisible while the architecture was described in prose. They were paid down
+by F-02, F-02a, F-03, F-04, F-05 and F-08; by F-01 and F-06, splitting the
+process (W-1); and last by F-07, F-09 and F-33 (W-5):
 
-* **F-07** — `syscall/native.rs`, the native ABI dispatcher, names ten
-  modules in the load ring, and `devmgr.rs` two more for the process it
-  starts. Expected of a dispatcher, and still a dependency.
-* **F-09** — Linux-personality syscalls sitting in the item ring: `brk`,
-  rlimits, the Linux dispatcher, the POSIX thread. The Linux dispatcher,
-  `syscall/mod.rs`, accounts for 21 of its 39 references. Since W-1 split the
-  core process out of the POSIX one (`kernel/src/object/process.rs`), what
-  these files want from the personality is its state, not the process
-  concept, and the open question for each is whether the item should hold it
-  at all.
-* **F-33** — the x86-64 paranoid entry's boot check, in the core, loads and
-  starts a Linux program. Incidental: it is verification code in a product
+* **F-07** — the native ABI named ten load-ring modules, and `devmgr` two. The
+  six calls about a subsystem above the item are a table the subsystems
+  register into, a native process is made through what the personality lends,
+  and every boot checks the table is full.
+* **F-09** — the Linux personality in the item ring. The trap entries reach the
+  dispatcher through the core; the Linux dispatcher's routing is the load's,
+  behind one registered pointer; and five personality files moved to the load
+  ring, argued in §2. The item ring shrank by 2,576 lines for it.
+* **F-33** — the x86-64 paranoid entry's boot check moved to a verification
   file.
 
 `object/` and `sched/` name nothing above the core since W-1: a task holds a
 `sched::UserThread` and the core holds a process whole only as an
-`object::process::Host`, a trait the personality implements.
+`object::process::Host`, a trait the personality implements. `trap.rs` — the
+most trusted file in the kernel — names nothing above the core, which it did in
+three places when the audit began, and since W-5 neither do the architectures'
+system call entries.
 
-`trap.rs` — the most trusted file in the kernel — now names nothing above the
-core, which it did in three places when the audit began.
-
-The gate's debt register may shrink without ceremony and may not grow without a
-diff somebody argues for. Stale entries fail too, so a fixed breach cannot
-leave a permanent exemption behind.
+The gate's debt register is empty and stays in the manifest: a new upward
+reference fails the build until somebody adds it against a finding, which is a
+diff somebody has to argue for. What the gate cannot see is still what its
+docstring says -- a load-ring value reaching the item through a type rather
+than a name -- and the composition root, which is exempt by file and argued in
+§2 rather than checked.
 
 ---
 

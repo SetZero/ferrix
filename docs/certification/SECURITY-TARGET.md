@@ -28,7 +28,7 @@ running as unprivileged user processes.
 
 ### 1.2 Physical and logical scope
 
-The TOE is the `core` and `item` rings of [ITEM.md](ITEM.md): **49,431 lines of
+The TOE is the `core` and `item` rings of [ITEM.md](ITEM.md): **51,525 lines of
 Rust**, built for x86-64, AArch64 and ARMv7-A from the reference configuration.
 It comprises the memory manager (buddy allocator, VMOs, address spaces, page
 tables), the scheduler, the capability object system (handles, channels, ports,
@@ -37,8 +37,9 @@ IOMMU drivers (VT-d, SMMUv3), SMP bring-up and TLB shootdown, firmware table
 parsing, device enumeration, and the panic path.
 
 **Outside the TOE**, running on it without being trusted by it: the VFS, btrfs,
-procfs, sysfs and tmpfs; the TCP/IP stack; the Linux system-call personality;
-the ring-3 device drivers; and all user software. 44,330 lines of kernel code
+procfs, sysfs and tmpfs; the TCP/IP stack; the Linux system-call personality,
+from its dispatcher to its `mmap`, `futex`, rlimits and POSIX threads; the
+ring-3 device drivers; and all user software. 47,528 lines of kernel code
 are in this category and the boundary is enforced at build time by
 `scripts/check-item-boundary.py`.
 
@@ -265,7 +266,7 @@ than one, since they are the threats the TOE exists to address.
 | O.FAILSAFE | FPT_FLS.1 |
 
 ### 8.3 Why EAL5 is the right claim
-§2.2. The three arguments that carry it: the TOE is 49,431 lines and 100%
+§2.2. The three arguments that carry it: the TOE is 51,525 lines and 100%
 first-party source, so `ADV_IMP.1` is satisfiable; the reference configuration
 has zero Cargo features and one two-valued build switch, `--mitigations`, of
 which only `on` is evaluated, so the configuration space is enumerated in a
@@ -324,14 +325,22 @@ not partition a cache, so two processes sharing one can time each other
 (V-06). An evaluator at `AVA_VAN.4` would accept the first two as argued and
 press on the third for any deployment where processes share a cache.
 
-### 9.6 The TSF is not free of upward dependencies
-56 references reach from the TOE into the uncertified load ring (F-07, F-09
-and F-33), down from 94 by the same measure. (The 29 and 62 given here before
-2026-09-26 were lower bounds; the gate could not resolve module-relative paths
-or nested `use` groups. FINDINGS.md §A.) The trap return path no longer reaches the load ring
-(F-02, F-02a), board support, bring-up and power register with the item rather
-than being named by it (F-04, F-08), and the core no longer names the Linux
-personality's process or thread (F-01, F-06);
-the architecture trap entries still name the item ring's syscall dispatcher. An evaluator would reasonably ask whether
-the TSF boundary is real, and the honest answer today is that it is enforced
-and not yet clean.
+### 9.6 The TSF's independence of the load is checked by name, not by type
+No reference reaches by name from the TOE into the uncertified load ring, down
+from 94 when the audit began (F-07, F-09 and F-33 closed 2026-09-26; the 29 and
+62 given here before that day were lower bounds, FINDINGS.md §A). The trap
+entry and return paths reach the personality only through what it registers
+(F-02, F-02a, F-09); board support, bring-up, power, the native ABI's
+subsystems and native process creation register with the TOE rather than
+being named by it (F-04, F-07, F-08); the core no longer names the Linux
+personality's process or thread (F-01, F-06).
+
+What an evaluator would still press on is what the gate cannot see. It reads
+names, so a load-ring value reaching the TOE through a trait object or a
+function pointer -- which is exactly how every registration above works -- is
+not an edge to it; the interfaces are the TOE's types, but what runs behind
+them is not the TOE's code. The crate root, `main.rs`, composes the load with
+the TOE and is exempt by file, with 37 edges argued in ITEM.md §2 rather than
+checked. And the load ring runs in ring 0, in the same address space and heap:
+the boundary is one of dependency and assurance, not of protection, which is
+why A.ADMIN and the SAFETY-MANUAL's assumptions of use carry the rest.
