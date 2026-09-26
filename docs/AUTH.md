@@ -301,7 +301,8 @@ connections guess no faster than one:
 
 * Each failed attempt costs a fixed `FailDelaySec=` (2 s, pam_unix's) before
   FAILED is sent. hyprlock already waits for it, and will use
-  `retry_after_ms` instead of its own fixed delay.
+  `retry_after_ms` instead of its own fixed delay. Until that FAILED has gone
+  out, no attempt on the account is looked at, from any connection.
 * From the fourth consecutive failure, the next attempt is refused before it
   is checked until `2^(n-3)` seconds have passed, capped at 300 s. INFO says
   so in words ("wait 16 s"), and hyprlock shows it as `$PAMFAIL`, as it
@@ -981,3 +982,29 @@ it was put to the customer.
 11. **The unlock override.** *Recommended:* hyprlock's `SIGUSR1` becomes
     root's audited `authctl unlock-seat`, and `--grace` is capped by
     hyprix's `misc:lock_grace`, default 0 (§3.7).
+
+---
+
+## 10. Where it stands (2026-09-26)
+
+| Slice | State |
+|---|---|
+| P0 | on `main` as `f84a8d3c` (ferrix-15): a native process runs as the process that made it, checked in every `test-init` boot |
+| P0a, P0b | ferrix-15's, after its L10 and with L11 |
+| P1.1 `libs/crypto/argon2` | on `main` with this section: RFC 9106's vector and five RustCrypto ones, Miri in CI, the `argon2_phc` fuzz target, the timings of §5.1 |
+| P1.2 `libs/proto/auth-proto` | on `main` with this section: the records of §3.3, `Secret`, the `auth_proto` fuzz target |
+| P1.3 `authd`, P1.4 `passwd` and `authctl` | written on branch `auth-authd` (`userland/auth/`), with host tests over a root of their own and one over a real socket |
+| P1.6 `cargo xtask test-auth` | written on branch `auth-authd` (`xtask/src/auth.rs`), with `--sabotage NAME` for the four negative controls; not yet booted |
+| P1.5 hyprlock's backend | the hyprlock stream's, after `authd` lands |
+| P1.7 the Security Target's OE.AUTH | with the last landing of phase 1 |
+
+**One rule found while building it**, and now written into §3.5: after any
+failure, no attempt on that account is looked at, from any connection,
+until its FAILED has gone out. A guesser with a hundred connections gets
+one guess per delay, like one with a single connection.
+
+**Left for the desktop.** `authd` reaches an image with init through
+`auth.socket`. The desktop's image, where hyprix is still pid 1, needs
+`exec-once = /sbin/authd` and the `auth` account in its `/etc/passwd`. That
+is to be agreed with hyprlock's P1.5 landing, so that `test-compositor`'s
+boots do not grow a userland build before a lock screen uses it.
