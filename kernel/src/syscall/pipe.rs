@@ -320,10 +320,15 @@ fn partial(done: usize, errno: Errno) -> Result<usize, Errno> {
 /// `O_APPEND`, a directory as input, and an input Linux cannot splice from
 /// ([`splices_out`]) are `EINVAL`.
 ///
-/// `SPLICE_F_NONBLOCK` makes the pipe side not wait, and so does
-/// `O_NONBLOCK` on the other descriptor, as Linux's `do_splice` has it; the
-/// pipe's own `O_NONBLOCK` counts only between two pipes. The other hints
-/// are taken and ignored, as `SPLICE_F_MOVE` has been on Linux since 2.6.21.
+/// `SPLICE_F_NONBLOCK` makes the pipe side not wait, and so does the pipe's
+/// own `O_NONBLOCK`; between two pipes, either one's. The other descriptor's
+/// `O_NONBLOCK` governs only its own side: a socket read without data, or a
+/// write to a full socket. `SPLICE_F_NONBLOCK` and the pipe's flag also stop
+/// a socket read from waiting, but never a socket write. Measured on a Linux
+/// 7.0 host over the whole matrix -- socket, file and pipe into a pipe, a
+/// pipe into each, each flag and each end's `O_NONBLOCK` -- and matched
+/// cell for cell. The other hints are taken and ignored, as `SPLICE_F_MOVE`
+/// has been on Linux since 2.6.21.
 pub(crate) fn sys_splice(
     process: &Process,
     in_fd: i32,
@@ -366,7 +371,7 @@ pub(crate) fn sys_splice(
             if output.status().append {
                 return Err(Errno::EINVAL);
             }
-            let nonblock = nonblock || output.status().nonblock;
+            let nonblock = nonblock || input.status().nonblock;
             let moved = out_of_a_pipe(&input, &output, at.as_mut(), len, nonblock)?;
             write_offset(process, out_offset_at, at)?;
             Ok(moved)
@@ -376,7 +381,7 @@ pub(crate) fn sys_splice(
             if input.kind() == FileType::Directory || !splices_out(&input) {
                 return Err(Errno::EINVAL);
             }
-            let nonblock = nonblock || input.status().nonblock;
+            let nonblock = nonblock || output.status().nonblock;
             let moved = into_a_pipe(&input, &output, at.as_mut(), len, nonblock)?;
             write_offset(process, in_offset_at, at)?;
             Ok(moved)

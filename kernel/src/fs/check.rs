@@ -1905,6 +1905,7 @@ fn check_splice_moves_bytes(process: &Process, page: u64) -> Result<u64, &'stati
         source,
     };
     let moved = check_splice_through_pipes(process, page, fds)?;
+    check_splice_waits_as_the_pipe_says(process, page, fds)?;
     check_splice_refuses(process, page, fds)?;
     for fd in [source, null, reader, writer, reader2, writer2] {
         answers(
@@ -1983,6 +1984,47 @@ fn check_splice_through_pipes(
         return Err("splice moved different bytes than the file holds");
     }
     Ok(len as u64 + 10)
+}
+
+/// With no flag, whether `splice` waits on a pipe is the pipe's own
+/// `O_NONBLOCK`, and never the other descriptor's -- measured on a Linux 7.0
+/// host, where a blocking descriptor on the other end changes nothing. Both
+/// pipes here are `O_NONBLOCK`; `/dev/null` and the file are not. Out of an
+/// empty pipe is `EAGAIN`, and so is into a full one; before, both waited,
+/// for bytes and for room nothing would ever bring.
+fn check_splice_waits_as_the_pipe_says(
+    process: &Process,
+    page: u64,
+    fds: Spliced,
+) -> Result<(), &'static str> {
+    refuses(
+        pipe::sys_splice(process, fds.reader, 0, fds.null, 0, 1 << 16, 0),
+        Errno::EAGAIN,
+        "splice from an empty O_NONBLOCK pipe with no flag did not answer EAGAIN",
+    )?;
+    let mut full = false;
+    for _ in 0..1024 {
+        if file::sys_write(process, fds.writer2, page, PAGE_SIZE) == Err(Errno::EAGAIN) {
+            full = true;
+            break;
+        }
+    }
+    if !full {
+        return Err("an O_NONBLOCK pipe never filled");
+    }
+    refuses(
+        pipe::sys_splice(process, fds.source, 0, fds.writer2, 0, 5, 0),
+        Errno::EAGAIN,
+        "splice into a full O_NONBLOCK pipe with no flag did not answer EAGAIN",
+    )?;
+    for _ in 0..1024 {
+        match pipe::sys_splice(process, fds.reader2, 0, fds.null, 0, 1 << 16, 0) {
+            Ok(_) => {}
+            Err(Errno::EAGAIN) => return Ok(()),
+            Err(_) => break,
+        }
+    }
+    Err("a full O_NONBLOCK pipe would not drain into /dev/null")
 }
 
 /// What `splice` refuses, as Linux does: nothing to move is 0 before anything
