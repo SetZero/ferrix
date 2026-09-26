@@ -153,6 +153,9 @@ struct Gate {
     arm_cpu: Option<&'static str>,
     /// `--reset`: end in a reset, not a power-off.
     reset: bool,
+    /// Anything else the boot's environment needs: `FERRIX_X86_MACHINE`
+    /// and `FERRIX_X86_CPU` for a different PC.
+    env: &'static [(&'static str, &'static str)],
 }
 
 impl Gate {
@@ -166,6 +169,7 @@ impl Gate {
             arm_machine: None,
             arm_cpu: None,
             reset: false,
+            env: &[],
         }
     }
 
@@ -199,6 +203,11 @@ impl Gate {
             reset: true,
             ..self
         }
+    }
+
+    /// The same gate, with `env` in its environment.
+    const fn with_env(self, env: &'static [(&'static str, &'static str)]) -> Gate {
+        Gate { env, ..self }
     }
 }
 
@@ -256,6 +265,23 @@ const SUITE: &[Gate] = &[
         .resetting(),
     Gate::new("test-boot", "boot-reset", false)
         .only(Arch::Armv7a)
+        .resetting(),
+    // A PC with neither an HPET nor `RDSEED`: its clock is the TSC measured
+    // against the PIT, and its random words come from `RDRAND`. Both are
+    // what an older machine takes, and neither runs on the default `q35`.
+    Gate::new("test-boot", "boot-legacy", false)
+        .only(Arch::X86_64)
+        .with_env(&[
+            ("FERRIX_X86_MACHINE", "hpet=off"),
+            (
+                "FERRIX_X86_CPU",
+                "qemu64,+pdpe1gb,+smep,+smap,+umip,+rdrand",
+            ),
+        ]),
+    // `ferrix.onexit=reset`: the reset through the FADT's register, which
+    // every other gate's power-off never takes.
+    Gate::new("test-boot", "boot-reset", false)
+        .only(Arch::X86_64)
         .resetting(),
     Gate::new("test-shell", "shell", true),
     Gate::new("test-vfs", "vfs", true).only(Arch::X86_64),
@@ -389,6 +415,7 @@ fn run_gate(
     if let Some(cpu) = gate.arm_cpu {
         let _ = command.env("FERRIX_ARM_CPU", cpu);
     }
+    let _ = command.envs(gate.env.iter().copied());
     if args.release {
         let _ = command.arg("--release");
     }

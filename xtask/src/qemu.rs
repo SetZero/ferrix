@@ -1298,13 +1298,31 @@ fn accelerator_arguments(accelerator: &str, kernel: Option<&Path>) -> Result<Vec
 /// UMIP under both, which TCG emulates: without it a program's `SIDT` reads
 /// the address of the IDT inside the kernel image, and KASLR is undone by one
 /// instruction (`SPECULATION.md` §6).
+///
+/// `FERRIX_X86_CPU` replaces the model, as `FERRIX_ARM_CPU` does on Arm: the
+/// coverage suite boots a processor with `RDRAND` and no `RDSEED` that way,
+/// which is the only one that takes `cpu::hardware_random`'s other
+/// instruction.
 fn x86_cpu(accelerator: &str) -> String {
+    if let Ok(model) = std::env::var("FERRIX_X86_CPU") {
+        return model;
+    }
     let base = "qemu64,+pdpe1gb,+smep,+smap,+umip,+rdrand,+rdseed";
     if accelerator == "tcg" {
         return base.to_owned();
     }
     let clock = if accelerator == "kvm" { ",+invtsc" } else { "" };
     format!("{base},+spec-ctrl,+stibp,+ssbd,+arch-capabilities,+auto-ibrs{clock}")
+}
+
+/// The PC QEMU emulates: `q35`, with `FERRIX_X86_MACHINE` added as
+/// `FERRIX_ARM_MACHINE` is added to `virt` -- `hpet=off` for a PC without an
+/// HPET, whose clock is then the TSC measured against the PIT.
+fn x86_machine() -> String {
+    match std::env::var("FERRIX_X86_MACHINE") {
+        Ok(extra) => format!("q35,{extra}"),
+        Err(_) => "q35".to_owned(),
+    }
 }
 
 /// Which CPU model the `virt` machine emulates for an Arm architecture.
@@ -1396,7 +1414,7 @@ fn qemu_command(
         Arch::X86_64 => {
             let _ = command.args([
                 "-machine",
-                "q35",
+                &x86_machine(),
                 // SMEP and SMAP are the two features the kernel relies on to
                 // keep ring 0 out of user pages, so emulate a CPU that has them.
                 // RDRAND and RDSEED too, which the kernel seeds its random
