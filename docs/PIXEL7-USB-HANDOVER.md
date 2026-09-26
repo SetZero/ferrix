@@ -156,11 +156,11 @@ Each phase ends with something run on the phone and written down here.
    non-coherent `DmaShape`. Only the shared parts go in the kernel, and only
    if phase 1 says they need touching. The power domain and PMU writes wait
    for the owner.
-3. **The driver.** A host-testable library, say `libs/dwc3`: event buffer,
+3. **The driver.** A host-testable library, say `libs/drivers/dwc3`: event buffer,
    TRB rings, event decoding, and endpoint 0's control state machine, tested
    against a register model as `libs/drivers/usb-host` is. Device descriptors and the
-   CDC-ACM class go in `libs/usb-device`. The ring-3 program, say
-   `user/usbdev`, goes in `devmgr`'s table. Run at high speed (USB 2.0) first:
+   CDC-ACM class go in `libs/drivers/usb-device`. The ring-3 program, say
+   `native/drivers/usbdev`, goes in `devmgr`'s table. Run at high speed (USB 2.0) first:
    `DCFG` can hold the core there, which keeps the combo SuperSpeed PHY out of
    the first bring-up. The endpoints are endpoint 0, one bulk IN and one bulk
    OUT for ACM data, and an interrupt IN for ACM notifications.
@@ -208,7 +208,7 @@ with the log kept.
 
 ### What the phone said (phase 1, run `usb-survey2`, 2026-09-26 18:24)
 
-One RAM boot of the loader's survey (`bootloaders/pixel7/src/usb.rs`),
+One RAM boot of the loader's survey (`boot/pixel7/src/usb.rs`),
 approved by the PO with the S2MPU struck from the list (a security block:
 it is not read at all). Back in Android after 77 s, `FERRIX-BOOT-OK`. The
 record is `~/.local/share/ferrix/pixel7/usb-survey2/run.log`.
@@ -262,8 +262,8 @@ one vector. devmgr started nothing, since `usbdev` was not yet built in.
   log-control channel only the DWC3's node may open (`LOG_CONTROL_CREATE`),
   and by `syslog(2)`, now privileged for every action. Being written on
   `pixel7-usb-log`.
-* Phase 3's libraries (`libs/usb-device`, `libs/dwc3`) are being written on
-  `pixel7-usb-libs`; `user/usbdev` follows.
+* Phase 3's libraries (`libs/drivers/usb-device`, `libs/drivers/dwc3`) are being written on
+  `pixel7-usb-libs`; `native/drivers/usbdev` follows.
 
 ### Still open
 

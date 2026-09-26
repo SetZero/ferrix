@@ -19,7 +19,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::runs;
 
-/// The identity `libs/usb-device` gives Ferrix's port.
+/// The identity `libs/drivers/usb-device` gives Ferrix's port.
 const VENDOR: &str = "1209";
 const PRODUCT: &str = "0001";
 const PRODUCT_NAME: &str = "Ferrix console";
