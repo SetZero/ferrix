@@ -333,7 +333,7 @@ impl Matcher {
             if fields.has(Fields::GENERIC) {
                 simple(&mut generic, app.generic_name.as_deref());
             }
-            if fields.has(Fields::EXEC) && app.exec.is_some() {
+            if fields.has(Fields::EXEC) && !app.wexec.is_empty() {
                 simple(&mut exec, Some(&app.wexec));
             }
             if fields.has(Fields::COMMENT) {

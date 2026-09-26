@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Test Pattern
+GenericName=Test Pattern
+Comment=The compositor's gradient test client in a window
+Exec=/bin/pattern gradient launched
+Icon=ferrix-pattern
+Terminal=false
+Keywords=gradient;test;
+Categories=Development;

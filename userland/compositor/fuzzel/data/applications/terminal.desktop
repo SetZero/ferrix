@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Terminal
+GenericName=Terminal Emulator
+Comment=A shell on a pseudoterminal: zinc
+Exec=/bin/term /bin/zinc
+Icon=ferrix-terminal
+Terminal=false
+Keywords=shell;prompt;command;zinc;zsh;
+Categories=System;TerminalEmulator;
+StartupWMClass=rocks.magical.term
