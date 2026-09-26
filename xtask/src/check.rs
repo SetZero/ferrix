@@ -168,6 +168,7 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     compositor(&root)?;
     init(&root)?;
     media(&root)?;
+    adbd(&root)?;
 
     if args.ferrousli {
         ferrousli(&root)?;
@@ -512,6 +513,36 @@ fn init(root: &std::path::Path) -> Result<()> {
     })?;
     step("init: tests", || {
         cargo::run(in_init(&["test"]), "cargo test (init)")
+    })
+}
+
+/// adbd's gates: `userland/adbd/` is a workspace of its own, as the media
+/// programs are. Its protocol is `libs/proto/adb`, which the main workspace's
+/// tests cover; what is left to check here is its formatting and clippy,
+/// seconds. `test-adb` is the gate that runs it (`docs/ADB.md`).
+fn adbd(root: &std::path::Path) -> Result<()> {
+    let dir = root.join("userland/adbd");
+    let in_adbd = |arguments: &[&str]| {
+        if cfg!(windows) {
+            return crate::wsl::cargo(&dir, arguments);
+        }
+        let mut command = Command::new(cargo_binary());
+        let _ = command.current_dir(&dir).args(arguments);
+        command
+    };
+    if cfg!(windows) {
+        step("adbd: WSL", || {
+            crate::wsl::require_toolchain("adbd is a Linux program, with Linux's system calls")
+        })?;
+    }
+    step("adbd: formatting", || {
+        cargo::run(in_adbd(&["fmt", "--check"]), "cargo fmt (adbd)")
+    })?;
+    step("adbd: clippy", || {
+        cargo::run(
+            in_adbd(&["clippy", "--all-targets", "--", "-D", "warnings"]),
+            "cargo clippy (adbd)",
+        )
     })
 }
 
