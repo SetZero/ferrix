@@ -202,6 +202,9 @@ what is left, ordered by what blocks what.
 | Item | Owner | Stage |
 |---|---|---|
 | The rest of the init, which is what is left of stage 15. L1 to L9 are in (2026-09-26): `/sbin/init` over `libs/init/svc` with a cgroup per service, `/bin/svc` over `/run/ferrix/control`, readiness, socket activation, resource limits over stage 13's scoped OOM kill, and `Type=native` services; `cargo xtask test-init` types all of it at the prompt on all three architectures (`docs/INIT.md` §15, §16). Left: **L10** (6: `cargo xtask run` and the desktop boot init; hyprix stops being pid 1 and makes a scope per client; `test-jobs` moves onto a getty), then L11 to L13, which wait on the customer's §14. L9's gate as designed names sshd, which needs a `LISTEN_FDS` patch to the sshdt port (x86-64 only); activation is shown with `nc` instead | ferrix-15 | 15 |
+| Authentication, phase 1 (`docs/AUTH.md` §7, 27 points): `libs/crypto/argon2` (Argon2id and BLAKE2b against RFC 9106's vectors, timed on each architecture; 5), `libs/proto/auth-proto` (the conversation's records and `Secret`; 3), `authd` (the store on the root volume, policy per service, the throttle, the audit log; 8), `passwd` and `authctl` (3), image seeds and `cargo xtask test-auth --arch all` with a negative control per refusal (5), the Security Target's OE.AUTH and the documents (1). P1.5, hyprlock's backend over it (2), is the hyprlock stream's | auth (ferrix-d5) | 15 |
+| Authentication, phase 2 (`docs/AUTH.md` §7, 31 points besides init's L10): procfs honouring `PR_SET_DUMPABLE` (2) and freed socket, pipe and tty buffers zeroed (1); `login` on the getty with the first password on a local console (5); `sessiond`, seat0's owner, handing hyprix its devices and starting it as the user (10); hyprix unlocking only on `authd`'s grant, and a new locker taking over a dead lock (6); `su` with the wheel rule (3); gates that play the compromised client (4) | auth, with init and the compositor | 15 |
+| Authentication, phase 3 (`docs/AUTH.md` §7, about 32 points sized): the PAM shim in ferrousli (5), TOTP (3), ssh passwords through `authd` (4), privilege prompts (6), accounts with a generated `/etc/passwd` (4), a graphical greeter (8), `SO_PEERCRED` taken at `connect` (1), `mlock` as a no-op (1); FIDO2 and fingerprint unsized | open | after 15 |
 | Threads, the one piece left after the exit of 2026-09-16: credentials are kept per process, a written deviation from Linux, and that is safe under musl's and glibc's `set*id` broadcast only while setting an id to a current one is permitted in every form. Owed: a static musl program of two threads calling `setuid(1000)` as root that survives | open | 7 |
 | A two-last-threads exit check that provably races: spin-meet on two processors, with its negative control -- the old last-thread decision put back -- failing by name. Today's check passes that control too, so it shows only that such a process ends with its first thread's status (from stage 9's review of threads commit 4). 1 point | open | 7 |
 | End-to-end user programs for what the `sigpaths` check proves at the kernel's decision: a `SIGSEGV` caught on the alternate stack, and a read interrupted by a handler and restarted under `SA_RESTART` (`SA_RESTART` and the driven signal paths have landed) | open | 7; `rustc` needs `SIGSEGV` on the alternate stack |
@@ -455,6 +458,15 @@ The roadmap's *Burndown* lists that scope.
 
 Dated, newest first. A decision here is final until the customer says
 otherwise; one a later decision replaced is deleted, and the history keeps it.
+
+* **2026-09-26 (customer)** **Authentication is a ring-3 service,
+  `authd`, as `docs/AUTH.md` proposes, with all eleven of its decisions as
+  recommended.** Among them: Argon2id written in the tree, root locked and
+  `wheel` members becoming root with their own password, a throttle and no
+  permanent lockout, programs that read `/etc/shadow` refused and PAM
+  programs given a shim later, and a lock screen that will not lock an
+  account with no password. Phase 1 locks the desktop with root's
+  password until phase 2 moves the desktop off root.
 
 * **2026-09-26 (customer)** The fleet has a coordinator, ferrix-2c, which
   keeps the landing order under the landing lock (standing rules above); the
