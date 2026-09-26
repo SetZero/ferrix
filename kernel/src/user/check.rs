@@ -90,6 +90,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
 
     check_a_shared_region_survives_fork_as_one_object()?;
     let copied = check_fork_shares_pages_and_a_write_copies_one()?;
+    check_a_page_made_writable_after_fork_is_copied()?;
     let swapped = check_two_tasks_keep_their_own_address_spaces()?;
     let refused = crate::user::edge_check::run()?;
     crate::console::println!(
@@ -1122,6 +1123,59 @@ fn check_fork_shares_pages_and_a_write_copies_one() -> Result<u64, &'static str>
     drop(child);
     expect_frames(before, "fork and copy-on-write leaked frames")?;
     Ok(1)
+}
+
+/// A private page read-only at a fork, made writable afterwards with
+/// `mprotect`, is copied by the side that writes it; the other keeps its own.
+///
+/// Fork marks only the regions writable at the fork copy-on-write, and shares
+/// the frames of the rest, since neither side can write them. `mprotect` is
+/// what changes that, so it has to mark the region too: until 2026-09-27 it
+/// did not, and a child that made such a page writable wrote into the frame
+/// its parent still read. Chromium on AArch64 met it as glibc's stack guard,
+/// kept in ld.so's RELRO page there, changing under the parent.
+fn check_a_page_made_writable_after_fork_is_copied() -> Result<(), &'static str> {
+    let before = quiet_frames()?;
+    let base = 0x6100_0000;
+
+    let parent = AddressSpace::new().map_err(|_| "could not make an address space")?;
+    let _ = parent
+        .map_anonymous(base, PAGE_SIZE, VmaFlags::READ_WRITE)
+        .map_err(|_| "mapping failed")?;
+    parent
+        .fault(base, Access::WRITE)
+        .map_err(|_| "a fault in a mapped region was not resolved")?;
+    let shared =
+        mm::translate_in(parent.root_table(), base).ok_or("a faulted page does not map")?;
+    poke(shared, PARENT_MARK);
+    parent
+        .protect(base, PAGE_SIZE, VmaFlags::READ)
+        .map_err(|_| "mprotect of a private page to read-only was refused")?;
+
+    let child = parent.fork().map_err(|_| "fork failed")?;
+    child
+        .protect(base, PAGE_SIZE, VmaFlags::READ_WRITE)
+        .map_err(|_| "mprotect of a private page back to writable was refused")?;
+    child
+        .fault(base, Access::READ)
+        .map_err(|_| "a read of a page made writable again was not resolved")?;
+    fault_and_write_installed(&child, base, CHILD_MARK)?;
+
+    let copy = mm::translate_in(child.root_table(), base).ok_or("the child's page does not map")?;
+    if copy == shared || peek(shared) != PARENT_MARK {
+        return Err(
+            "a write to a page a fork left read-only and mprotect made writable reached the \
+             other process's page",
+        );
+    }
+    if peek(copy) != CHILD_MARK {
+        return Err("a write to a page mprotect made writable did not reach the writer's copy");
+    }
+
+    drop(child);
+    drop(parent);
+    expect_frames(before, "a page made writable after fork leaked frames")?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
