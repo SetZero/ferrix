@@ -1,7 +1,7 @@
 //! `cargo xtask test-display`: iteration 1 of the compositor, a blank screen
 //! on Ferrix, judged pixel by pixel.
 //!
-//! `docs/DISPLAY.md` §3. The compositor's first program, `compositor/blank`,
+//! `docs/DISPLAY.md` §3. The compositor's first program, `userland/compositor/blank`,
 //! is built static for the architecture and booted as init with a virtio-gpu
 //! device on the bus. It sets the connector's preferred mode and fills a dumb
 //! buffer with one colour, then prints [`MARKER`]. At that line this module
@@ -33,12 +33,12 @@ use crate::args::Args;
 use crate::paths::{self, Arch};
 use crate::{Error, Result};
 
-/// What `--init` names `compositor/blank` by, built for the architecture
+/// What `--init` names `userland/compositor/blank` by, built for the architecture
 /// first, so `run --display --init blank` shows its screen in a window.
 pub(crate) const INIT_NAME: &str = "blank";
 
 /// What the program prints once the colour is on the screen. The same string
-/// as `compositor/blank/src/card.rs`'s `MARKER`.
+/// as `userland/compositor/blank/src/card.rs`'s `MARKER`.
 pub(crate) const MARKER: &str = "compositor: scanout";
 
 /// What the program prints when it could not.
@@ -78,7 +78,7 @@ pub(crate) fn target(arch: Arch) -> Option<&'static str> {
     }
 }
 
-/// Build `compositor/blank` for `arch`, with the negative control or without,
+/// Build `userland/compositor/blank` for `arch`, with the negative control or without,
 /// and return where the program is.
 pub(crate) fn build_blank(arch: Arch, negative: bool) -> Result<PathBuf> {
     let target = target(arch).ok_or_else(|| {
@@ -88,11 +88,11 @@ pub(crate) fn build_blank(arch: Arch, negative: bool) -> Result<PathBuf> {
     })?;
     let flavour = if negative { "negative" } else { "plain" };
     let target_dir = paths::target_dir().join("compositor").join(flavour);
-    println!("  building compositor/blank ({flavour}) for {target}");
+    println!("  building userland/compositor/blank ({flavour}) for {target}");
     let program = target_dir.join(target).join("release").join("blank");
     let mut build = crate::builds::Build::cargo(
-        format!("cargo build (compositor/blank, {flavour}) --target {target}"),
-        paths::workspace_root().join("compositor"),
+        format!("cargo build (userland/compositor/blank, {flavour}) --target {target}"),
+        paths::workspace_root().join("userland/compositor"),
     )
     .args([
         "build",
@@ -327,11 +327,11 @@ pub(crate) fn mismatches(
 }
 
 /// The three pixels the render probe reads back after drawing: see
-/// `compositor/drm`'s `drew`.
+/// `userland/compositor/drm`'s `drew`.
 const DREW: &str = "0xff0000 0x00ff00 0xff0000";
 
 /// How many bytes of the Venus blob the render probe writes and must read
-/// back through its mapping: a page, `compositor/drm`'s `PROBE_BYTES`.
+/// back through its mapping: a page, `userland/compositor/drm`'s `PROBE_BYTES`.
 const BLOB: &str = "4096";
 
 /// What the program prints about the render node, before its own marker.

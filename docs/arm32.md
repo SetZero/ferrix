@@ -33,7 +33,7 @@ saying so first, because each one was the thing most likely not to:
 * **No assembly at boot.** Firmware still calls a Rust `efi_main`; the only
   loader assembly is still the page-table switch. What changes is the parenthesis
   "with the CPU already in 64-bit mode".
-* **One loader.** `boot/` gains a third `arch` file and no second program.
+* **One loader.** `boot/uefi/` gains a third `arch` file and no second program.
   U-Boot implements enough of UEFI to run it, and so does the board's U-Boot.
 * **One facade.** `kernel/src/arch/mod.rs` gains a third `cfg` branch and the
   same twenty-four symbols. Generic code does not learn the word `arm`.
@@ -49,7 +49,7 @@ Five claims break and are replaced rather than patched:
 * "48-bit addresses, four-level paging" becomes a *geometry* the paging crate
   is parameterised over, with the encoding unchanged.
 * "ACPI (x86-64) and device tree (AArch64)" becomes "and device tree only, on
-  ARMv7-A": `libs/fdt` gets its first consumer, at stage 1 rather than 10.
+  ARMv7-A": `libs/platform/fdt` gets its first consumer, at stage 1 rather than 10.
 * "115 lines of assembly" grows by roughly 130, inside the 800-line cap, each
   line argued in `docs/ASSEMBLY.md`.
 
@@ -63,7 +63,7 @@ The alternative was a direct `-kernel` boot: QEMU jumps to the kernel with the
 MMU off and a device tree in `r2`. It is faster to bring up and it was rejected,
 because it costs exactly the things the project is organised around — bootstrap
 assembly that builds page tables before Rust can run, a second boot path that
-bypasses `boot/`, and a kernel that has to be told about its memory by a
+bypasses `boot/uefi/`, and a kernel that has to be told about its memory by a
 different mechanism on one architecture. The STM32MP157's own firmware is
 U-Boot, which has had `bootefi` for years; the UEFI path is not a QEMU
 convenience, it is what the board does.
@@ -133,7 +133,7 @@ section protections; it is only an ELF dynamic linker that would object.
 
 ### 3. The 32-bit address space
 
-A 4 GiB space cannot hold any of the constants in `libs/bootinfo`, and the
+A 4 GiB space cannot hold any of the constants in `libs/proto/bootinfo`, and the
 sentence "one layout is one set of bugs instead of two" has to become "one
 layout per address width, and the differences are these". The split is 2/2 —
 `TTBCR.T1SZ = 1` puts the top 2 GiB under `TTBR1`, the bottom 2 GiB under
@@ -196,11 +196,11 @@ unprivileged one. `MAIR0`/`MAIR1` are the two halves of the `MAIR_EL1` value
 the loader and kernel already agree on.
 
 What differs is the walk: three levels, not four, with the first lookup at what
-`libs/paging` calls `Level::GIGABYTE`, over a 32-bit input address. So the
+`libs/kernel/paging` calls `Level::GIGABYTE`, over a 32-bit input address. So the
 crate grows a *geometry*, not a second mapper: `Encoding` gains `ROOT_LEVEL`
 and `VIRT_BITS` with the current values as defaults, the canonical-address
 check moves from `VirtAddr` onto the encoding, and `Mapper` starts every walk
-at `E::ROOT_LEVEL`. `libs/paging/src/armv7a.rs` is then a thin sibling of
+at `E::ROOT_LEVEL`. `libs/kernel/paging/src/armv7a.rs` is then a thin sibling of
 `aarch64.rs`, and every existing test that is generic over `E: Encoding` runs
 a third time.
 
@@ -220,7 +220,7 @@ it asks there. `SEPARATE_IDENTITY_TABLE` is true.
 ### 5. The machine is described by a device tree, and the tree is copied
 
 There is no ACPI on a Cortex-A7. The GIC, the timer's interrupt and the console
-come from the device tree, and `libs/fdt` — 49 tests, no consumer — becomes
+come from the device tree, and `libs/platform/fdt` — 49 tests, no consumer — becomes
 reachable from the kernel two stages earlier than the roadmap's table says.
 
 Where the tree lives matters more than where it came from. U-Boot copies it
@@ -233,9 +233,9 @@ the system. So the loader copies the blob into an allocation of its own — a ne
 copy. AArch64 gets the same treatment for the tree EDK2 offers it, so the field
 means one thing. `kernel/src/fdt.rs` is the generic counterpart of `acpi.rs`:
 it borrows the copy through the direct map with the same bounds discipline and
-hands `libs/fdt` a slice.
+hands `libs/platform/fdt` a slice.
 
-`libs/fdt` needs four small additions, each with tests: `arm,armv7-timer`
+`libs/platform/fdt` needs four small additions, each with tests: `arm,armv7-timer`
 beside `arm,armv8-timer`; `arm,cortex-a7-gic` and `arm,gic-400` beside
 `arm,cortex-a15-gic` (QEMU says `a15` for every 32-bit `virt`; the STM32MP1 says
 `a7`); a decoder for the timer node's `interrupts` triples that returns the
@@ -275,8 +275,8 @@ exception model has banked registers and processor modes, and the argument in
 ### 7. Names
 
 `armv7a`, everywhere a name is needed: `--arch armv7a`, `build/armv7a/`,
-`Arch::Armv7a`, `kernel/src/arch/armv7a/`, `boot/src/arch/armv7a.rs`,
-`libs/paging/src/armv7a.rs`, the CI matrix, and `armv7a` in the boot log's
+`Arch::Armv7a`, `kernel/src/arch/armv7a/`, `boot/uefi/src/arch/armv7a.rs`,
+`libs/kernel/paging/src/armv7a.rs`, the CI matrix, and `armv7a` in the boot log's
 first line. `arm` on its own means too many things, and `arm32` names a width
 rather than an architecture. Accepted spellings for `--arch` are `armv7a`,
 `armv7`, `arm32` and `armhf`; `--arch all` means all three, and `--arch both`
@@ -295,18 +295,18 @@ something the host tests prove. Sizes are in the roadmap's units.
 Everything here is a pure function of bytes, lands under `libs/`, and passes
 `cargo xtask check --fast` before any freestanding code depends on it.
 
-**`libs/elf` — ELF32.** `Elf::parse` reads `EI_CLASS` and decodes either
+**`libs/platform/elf` — ELF32.** `Elf::parse` reads `EI_CLASS` and decodes either
 header; `EHDR`/`PHDR` sizes and field offsets become per-class; `Segment` and
 `Header` keep their `u64` fields. `EM_ARM = 40` and `R_ARM_RELATIVE = 23` are
 added. Relocations grow the `REL` form (`DT_REL`/`DT_RELSZ`/`DT_RELENT`, 8-byte
 entries, addend in place): `Relocation` carries an `Addend` that is either
 explicit or in-place, and the one caller that applies relocations handles both.
 `ElfError::NotElf64` becomes `UnsupportedClass(u8)`. Tests build ELF32 images
-by hand as the ELF64 ones are built today; `scripts/seed-fuzz-corpus.py` gains
+by hand as the ELF64 ones are built today; `scripts/gen/seed-fuzz-corpus.py` gains
 an ELF32 shape for each ELF64 shape it already writes, and the `elf_parse`
 target replays them.
 
-**`libs/paging` — geometry.** `Encoding::ROOT_LEVEL` and `Encoding::VIRT_BITS`
+**`libs/kernel/paging` — geometry.** `Encoding::ROOT_LEVEL` and `Encoding::VIRT_BITS`
 with defaults; `is_canonical` and `canonical()` become functions of
 `VIRT_BITS`; `Mapper::map_one`, `translate`, `find_leaf`, `mapping_level` and
 `for_each_leaf` start at `E::ROOT_LEVEL`; `Path` keeps three steps (a
@@ -316,7 +316,7 @@ from `aarch64::MAIR_EL1`. Every `fn foo<E: Encoding>()` test gains an
 `_on_armv7a` instantiation; new tests pin the root level, the 32-bit
 canonical rule, the address mask and the `XN`/`PXN` round trip.
 
-**`libs/bootinfo` — version 2.** `Arch::Armv7a = 2` with `elf_machine() = 40`.
+**`libs/proto/bootinfo` — version 2.** `Arch::Armv7a = 2` with `elf_machine() = 40`.
 The 32-bit layout constants under `#[cfg(target_pointer_width = "32")]`
 (the layering script explicitly allows width conditionals anywhere), the
 64-bit ones under `"64"`, with the same names on both. `KERNEL_HALF_BASE`,
@@ -325,11 +325,11 @@ The 32-bit layout constants under `#[cfg(target_pointer_width = "32")]`
 `validate` additionally requires `physmap_phys` to be 2 MiB aligned and
 `physmap_len` to fit the direct-map region. Tests updated and extended.
 
-**`libs/fdt` — the four additions** from decision 5, each with a synthesised
+**`libs/platform/fdt` — the four additions** from decision 5, each with a synthesised
 tree in the tests.
 
 **Exit:** `cargo xtask check --fast` passes; the host test count and the fuzz
-corpus have grown; nothing under `kernel/` or `boot/` has changed yet.
+corpus have grown; nothing under `kernel/` or `boot/uefi/` has changed yet.
 
 ### Phase B — the build path and the loader  ·  *week*
 
@@ -339,9 +339,9 @@ gains `[target.armv7a-none-eabi]` with the kernel recipe (linker script,
 `--defsym`, `-zmax-page-size=4096`, `relocation-model=static`) and
 `[target.armv7-unknown-linux-musleabi]` with the loader recipe
 (`linker = "rust-lld"`, `linker-flavor=ld.lld`, `link-self-contained=no`,
-`-pie`, `-znotext`, `--no-dynamic-linker`, `-Tboot/linker/armv7a.ld`). The two
+`-pie`, `-znotext`, `--no-dynamic-linker`, `-Tboot/uefi/linker/armv7a.ld`). The two
 64-bit kernel blocks gain their `--defsym` and `kernel/linker/kernel.ld` drops
-its literal base. `boot/linker/armv7a.ld` is new: `ENTRY(efi_main)`, sections
+its literal base. `boot/uefi/linker/armv7a.ld` is new: `ENTRY(efi_main)`, sections
 from `0x1000`, `.dynamic` and `.rel.dyn` kept, `.ARM.exidx*` discarded.
 
 **`xtask`.** `Arch::Armv7a` and its seven methods; `Arch::ALL` replaces the
@@ -359,7 +359,7 @@ next to QEMU, overridable by `FERRIX_UBOOT`. `qemu.rs` adds the
 `-machine virt -cpu cortex-a7 -bios …` arm and skips the variable store for a
 `-bios` firmware. `fat.rs` needs nothing: `BOOTARM.EFI` is 8.3.
 
-**`boot/`.** `boot/src/arch/armv7a.rs`: `ARCH`, `ELF_MACHINE`, a new
+**`boot/uefi/`.** `boot/uefi/src/arch/armv7a.rs`: `ARCH`, `ELF_MACHINE`, a new
 `ELF_CLASS` (added to all three and checked by `load::parse_kernel`),
 `prepare_cpu` (refuse anything but SVC mode — U-Boot under `virtualization=on`
 hands off in HYP — and refuse a CPU whose `ID_MMFR0.VMSA` says no LPAE),
@@ -444,13 +444,13 @@ other two.
 
 | Gate | Change |
 |---|---|
-| `scripts/asm-allowlist.json` | Three entries: `boot/src/arch/armv7a.rs` (60), `kernel/src/arch/armv7a/cpu.rs` (100), `kernel/src/arch/armv7a/trap.rs` (90); the `max_total_lines` comment says "all three" |
-| `scripts/check-crate-layering.sh` | Rule 3's pattern becomes `arch::(x86_64\|aarch64\|armv7a)::`; the comments say three |
+| `scripts/data/asm-allowlist.json` | Three entries: `boot/uefi/src/arch/armv7a.rs` (60), `kernel/src/arch/armv7a/cpu.rs` (100), `kernel/src/arch/armv7a/trap.rs` (90); the `max_total_lines` comment says "all three" |
+| `scripts/check/check-crate-layering.sh` | Rule 3's pattern becomes `arch::(x86_64\|aarch64\|armv7a)::`; the comments say three |
 | `xtask/src/check.rs` | Already loops `Arch::ALL` after Phase B: six freestanding clippy passes |
 | `.github/workflows/ci.yml` | The three `targets:` lists gain both triples; `build` and `boot` matrices gain `armv7a`; two clippy steps; `u-boot-qemu` in the apt line |
 | `docs/ASSEMBLY.md` | A `### ARMv7-A` table: the vector table and `srs`/`rfe` path, the `cp15` primitives, the loader switch. "Boot: none" reworded — 64-bit mode is no longer the reason there is no bootstrap assembly; UEFI is |
 | `docs/ARCHITECTURE.md` | §4 gains the 32-bit layout block and the geometry sentence; §7 names the device tree on ARMv7-A; §9 names three architectures; §10 loses "in 64-bit mode" |
-| `docs/ROADMAP.md` | *Where it stands* says three; a block before stage 4 records this work with its exit criterion met; stage 1's "either architecture" and the `libs/fdt` row change; the measured figures |
+| `docs/ROADMAP.md` | *Where it stands* says three; a block before stage 4 records this work with its exit criterion met; stage 1's "either architecture" and the `libs/platform/fdt` row change; the measured figures |
 | `docs/RELIABILITY.md`, `README.md` | "both" becomes "every"; the sample boot output gains its third `boot ok` line; the target count; `qemu-system-arm` and `u-boot-qemu` in the prerequisites; the assembly figure regenerated from `check-asm-budget.py --json` (it is already stale: 115 lines, 99.55%) |
 | `docs/BOOT-LOG.md` | A section for U-Boot's lines, written from the first real log in the file's evidence-first idiom — not before |
 
@@ -498,7 +498,7 @@ it. `docs/BOOT-LOG.md` has U-Boot's lines.
    which keeps the kernel's "the map describes the loader's own allocations"
    check meaningful.
 3. **The configuration table carries the QEMU device tree**, and its
-   `/chosen/stdout-path`, GIC and timer nodes are what `libs/fdt` expects.
+   `/chosen/stdout-path`, GIC and timer nodes are what `libs/platform/fdt` expects.
    Fallback for a missing `stdout-path`: the first `arm,pl011` node.
 4. **`ExitBootServices` may turn the MMU off** — U-Boot's ARM32 GRUB
    workaround does, on some boards. The switch sequence handles both states,
@@ -570,5 +570,5 @@ it. `docs/BOOT-LOG.md` has U-Boot's lines.
 * Every `unsafe` block with a `SAFETY:` claim and one operation; every
   exemption `#[expect(..., reason = "AUDIT: …")]`; every new allow-list entry in
   the same commit as its assembly, with the argument in the entry.
-* Nothing under `kernel/` or `boot/` names `armv7a` outside `arch/`; the
+* Nothing under `kernel/` or `boot/uefi/` names `armv7a` outside `arch/`; the
   layering script is updated in the same commit that would otherwise trip it.

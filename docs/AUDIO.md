@@ -21,7 +21,7 @@ the part the kernel owns, and says what the third needs from them:
 * **the audio core** in the kernel, which owns each playback stream, its
   buffer and its pointers (§3.1);
 * **the control protocol** between the core and the ring-3 driver, in a
-  host-tested crate `libs/sndctl` (§3.2);
+  host-tested crate `libs/proto/sndctl` (§3.2);
 * **the driver** and what QEMU's virtio-snd does that the spec does not say
   (§3.3);
 * **the ALSA subset** `/dev/snd/controlC0` and `/dev/snd/pcmC0D0p` answer
@@ -185,14 +185,14 @@ pointers.
 
 The state machine, the refine, the pointer and boundary arithmetic, the
 submission rule and the underrun rule are pure logic. They go in
-`libs/sndctl` beside the protocol (`sndctl::pcm`), host-tested and fuzzed, so
+`libs/proto/sndctl` beside the protocol (`sndctl::pcm`), host-tested and fuzzed, so
 the kernel's part is glue.
 
-### 3.2 The driver protocol: a control channel, `libs/sndctl`
+### 3.2 The driver protocol: a control channel, `libs/proto/sndctl`
 
 Messages are small and come at most once a period per stream, fifty a second
 at version 1's configuration. As for input, there is no data ring: one
-control `Channel` per card, with `libs/inputctl`'s message shape. Each
+control `Channel` per card, with `libs/proto/inputctl`'s message shape. Each
 message is fixed-size and little-endian, starts with a type and a length,
 has reserved bytes that must be zero, and is validated in the order its
 fields are read. Handles travel alongside.
@@ -239,8 +239,8 @@ leave `/dev/snd`, and the card's index is not given out again this boot.
 
 ### 3.3 The driver, and what QEMU's device does
 
-**The driver** (`user/snd`, logic in `libs/virtio-snd` over
-`libs/virtio-blk`'s traits, as `libs/virtio-input` does) negotiates
+**The driver** (`native/drivers/snd`, logic in `libs/drivers/virtio-snd` over
+`libs/drivers/virtio-blk`'s traits, as `libs/drivers/virtio-input` does) negotiates
 `VIRTIO_F_VERSION_1`, reads the configuration (jacks, streams, channel maps),
 asks `PCM_INFO` for every stream, and sends `HELLO`. On `READY` it prepares,
 pins and sets `DRIVER_OK` (§3.2). For each `SUBMIT` it posts one chain on the
@@ -251,7 +251,7 @@ period crosses at most one page boundary of the VMO), and the 8-byte
 `ELAPSED`. The control and event queues get one interrupt vector and the
 transmit queue another. The receive queue is not set up in version 1.
 
-The protocol is `libs/virtio::snd`, beside `::input` and `::console`: the
+The protocol is `libs/drivers/virtio::snd`, beside `::input` and `::console`: the
 configuration, the request and response layouts, and a trust section, with
 hostile-device tests. The driver checks that a used chain's length is the
 status's 8 bytes, that the status is `VIRTIO_SND_S_OK`, and that a control
@@ -384,7 +384,7 @@ replacement will look there. No client in this iteration needs them.
   QMP `quit` and, if the header still says zero, reads the data from byte 44
   to the end.
 * **The program.** `tone`, a Linux program built as init the way
-  `compositor/evecho` is, over a new `ferrix-linux-abi::sound`. It opens
+  `userland/compositor/evecho` is, over a new `ferrix-linux-abi::sound`. It opens
   `controlC0`, prints `CARD_INFO`'s driver and name, opens `pcmC0D0p`, and
   refines to version 1's configuration exactly as alsa-lib would, including
   one `set_*_near` round of `EINVAL`s. It prints `tone: ready`, then writes
@@ -420,11 +420,11 @@ it.
 
 | # | Landing | Kernel? | Points |
 |---|---|---|---|
-| L1 | `libs/linux-abi::sound`: §3.4's requests, the protocol versions, the parameter, access, format and state enums, the `INFO_*` bits, the mmap offsets, and the layouts of `snd_interval`, `snd_mask`, `hw_params`, `sw_params`, `status`, `mmap_status`, `mmap_control`, `sync_ptr`, `xferi`, `ctl_card_info`, `pcm_info` and `ctl_elem_list`, at both widths with time64 on ARMv7-A. From a committed probe (`probe/sound.c`, `sound.sh`, `sound-64.txt`, `sound-32.txt`) compiled against `/usr/include/sound/asound.h`, as `input.sh` does, pinned by `src/tests/sound.rs` | no | 2 |
-| L2 | `libs/virtio::snd`: configuration, control requests and responses, the transfer header and status, hostile-device tests, checked against QEMU 9.2.4, fuzzed | no | 2 |
-| L3 | `libs/sndctl`: §3.2's messages and validation, and `pcm`: the state machine, the refine with open ends and the integer flag, pointers and `boundary` at both widths, submission, start, underrun and drain, `SYNC_PTR`'s flags, `poll`'s answer. Host-tested against a table of alsa-lib's `set_*_near` sequences, fuzzed | no | 5 |
-| L4 | `libs/virtio-snd`: driver logic over `libs/virtio-blk`'s traits (bring-up, `PCM_INFO` into `HELLO`, prepare, one chain per `SUBMIT`, completions into `ELAPSED`, `HALT`), tested against a simulated device with QEMU's five behaviours (§3.3) | no | 3 |
-| L5 | `user/snd`, devmgr's table entry and `start_sound`, `SOUND_CONTROL_CREATE`, the core's per-card task and buffer VMOs; exit: the boot line names the card, its published stream and what it left out | yes | 4 |
+| L1 | `libs/proto/linux-abi::sound`: §3.4's requests, the protocol versions, the parameter, access, format and state enums, the `INFO_*` bits, the mmap offsets, and the layouts of `snd_interval`, `snd_mask`, `hw_params`, `sw_params`, `status`, `mmap_status`, `mmap_control`, `sync_ptr`, `xferi`, `ctl_card_info`, `pcm_info` and `ctl_elem_list`, at both widths with time64 on ARMv7-A. From a committed probe (`probe/sound.c`, `sound.sh`, `sound-64.txt`, `sound-32.txt`) compiled against `/usr/include/sound/asound.h`, as `input.sh` does, pinned by `src/tests/sound.rs` | no | 2 |
+| L2 | `libs/drivers/virtio::snd`: configuration, control requests and responses, the transfer header and status, hostile-device tests, checked against QEMU 9.2.4, fuzzed | no | 2 |
+| L3 | `libs/proto/sndctl`: §3.2's messages and validation, and `pcm`: the state machine, the refine with open ends and the integer flag, pointers and `boundary` at both widths, submission, start, underrun and drain, `SYNC_PTR`'s flags, `poll`'s answer. Host-tested against a table of alsa-lib's `set_*_near` sequences, fuzzed | no | 5 |
+| L4 | `libs/drivers/virtio-snd`: driver logic over `libs/drivers/virtio-blk`'s traits (bring-up, `PCM_INFO` into `HELLO`, prepare, one chain per `SUBMIT`, completions into `ELAPSED`, `HALT`), tested against a simulated device with QEMU's five behaviours (§3.3) | no | 3 |
+| L5 | `native/drivers/snd`, devmgr's table entry and `start_sound`, `SOUND_CONTROL_CREATE`, the core's per-card task and buffer VMOs; exit: the boot line names the card, its published stream and what it left out | yes | 4 |
 | L6 | devfs `/dev/snd/controlC0` and `pcmC0D0p`: per-open objects, the ioctl branch and §3.4's subset, `WRITEI_FRAMES`, `poll`, `EBUSY` for a second opener, `DISCONNECTED`; `/sys/class/sound` | yes | 5 |
 | L7 | `tone` and `ferrix-linux-abi::sound`'s use in it; `xtask test-audio` with the `wav` backend and its negative control; `run --audio` | no | 3 |
 |  | **The audio iteration** |  | **24** |
@@ -473,7 +473,7 @@ re-baselines once U2's first attempt has sized it.
    Steam's runtime and every current distribution expect, and it is a large
    C port with a session manager (WirePlumber) and optional D-Bus. A Rust
    server needs to speak only the PulseAudio native protocol, which SDL,
-   Chromium and Steam all speak, and none of the rest. `compositor/README.md`'s
+   Chromium and Steam all speak, and none of the rest. `userland/compositor/README.md`'s
    no-C rule is the compositor's, not the clients' (`docs/CHROME.md` §3), so
    either is allowed. Not needed until U2.
 
@@ -544,15 +544,15 @@ re-baselines once U2's first attempt has sized it.
   once a client asks.
 * **The DK1** (STM32MP157D): its SAI audio interface and the codec on its
   I²C bus, a DMA engine driver, and the device-tree binding. A driver that
-  speaks `libs/sndctl` to the same core would be all that is new above the
+  speaks `libs/proto/sndctl` to the same core would be all that is new above the
   hardware. P3, unsized.
 * **The Pixel 7:** out of scope. Its audio path is a DSP behind firmware,
   and the phone is tested with no writes to its devices
-  (`bootloaders/pixel7/HANDOVER.md`).
+  (`boot/pixel7/HANDOVER.md`).
 
 ## 8. Where it stands
 
-L1 is done (2026-09-26): `libs/linux-abi::sound` holds every PCM and
+L1 is done (2026-09-26): `libs/proto/linux-abi::sound` holds every PCM and
 control request the header defines, the constants §3.4 uses and the layouts
 of the structures it answers. It is pinned line by line to a committed probe
 (`probe/sound.c`, `sound.sh`, `sound-64.txt`, `sound-32.txt`, from
@@ -563,7 +563,7 @@ offsets. It added one thing this document had not said: on ARMv7-A
 `appl_ptr`, where 64-bit has it at 80. The crate gained `wide_layout!` for
 structures with a layout per width.
 
-L2 is done (2026-09-26): `libs/virtio::snd` is the device protocol. It
+L2 is done (2026-09-26): `libs/drivers/virtio::snd` is the device protocol. It
 covers the queues, the configuration block bounded to QEMU's ten streams,
 the `PCM_INFO`, `SET_PARAMS` and four stream commands, the transfer header
 and status, and the events. §3.3's five quirks are written into its module
@@ -574,7 +574,7 @@ range, and a transmit completion that wrote anything but its status. The
 `virtio_snd` fuzz target ran 223,434,735 inputs in five minutes on nazuna
 without a failure.
 
-L3 is done (2026-09-26): `libs/sndctl` is the protocol and the stream.
+L3 is done (2026-09-26): `libs/proto/sndctl` is the protocol and the stream.
 `message` is §3.2's messages, decoded strictly. `session` judges HELLO and
 routes the driver's reports. `pcm` is the stream as Linux keeps it,
 function by function from `sound/core/pcm_native.c` and `pcm_lib.c`: the
@@ -600,7 +600,7 @@ refine answers alsa-lib's `any`, `set_*` and `set_*_near` calls. The
 mixing requests, completions and lies, without breaking a property.
 `ferrix-linux-abi` gained `EBADFD` and `ESTRPIPE`.
 
-L4 is done (2026-09-26): `libs/virtio-snd` is the driver's logic over a
+L4 is done (2026-09-26): `libs/drivers/virtio-snd` is the driver's logic over a
 transport, its own scratch memory and the core's buffer. §3.3 decided most
 of it. Writing it settled three things the design had not:
 
@@ -629,7 +629,7 @@ L5, L6 and L7 are done (2026-09-26), in one landing since none is
 testable without the others. They met the audio iteration's exit on x86-64
 and AArch64:
 
-* **L5.** `user/snd` is the driver process. devmgr starts it for PCI
+* **L5.** `native/drivers/snd` is the driver process. devmgr starts it for PCI
   0x1059 (`Kind::Sound`), and `sound_control_create` (native call 0x1050)
   gives it its channel. `kernel/src/audio` is the core: a task per card
   that judges HELLO, allocates the stream's buffer as a four-page VMO,
@@ -645,7 +645,7 @@ and AArch64:
   in sequence order whether a program's write or a completion made them.
   `/sys/class/sound` is not published: no client of this iteration reads
   it.
-* **L7.** `compositor/tone` and `cargo xtask test-audio`. A second of the
+* **L7.** `userland/compositor/tone` and `cargo xtask test-audio`. A second of the
   counter, written through the ALSA ioctls in 700-frame blocks, was found
   in QEMU's WAV file frame for frame, on x86-64 and on AArch64. It took
   1.1 s of guest time, the device's own pace. The negative control failed

@@ -1,4 +1,4 @@
-//! The render core: the kernel's half of `libs/renderctl`, and what will
+//! The render core: the kernel's half of `libs/proto/renderctl`, and what will
 //! sit under `/dev/dri/renderD<N>`.
 //!
 //! `docs/GPU.md` §3.3 is the specification and the reason this is a core of
@@ -13,7 +13,7 @@
 //!
 //! The shape is `crate::display`'s, because the problems are the same: one
 //! control channel per device made by a native call, a task per device, a
-//! HELLO within its patience or the driver is refused, and `libs/renderctl`'s
+//! HELLO within its patience or the driver is refused, and `libs/proto/renderctl`'s
 //! [`Session`] judging every reply so that a driver which answers a question
 //! nobody asked is caught before the kernel acts on it.
 //!
@@ -88,7 +88,7 @@ pub(crate) mod node;
 /// many in flight without being memory a guest notices.
 pub(crate) const WORK_BYTES: u64 = 1024 * 1024;
 
-/// How many words an object's description is: the ten `user/gpu` reads back
+/// How many words an object's description is: the ten `native/drivers/gpu` reads back
 /// -- target, format, bind, width, height, depth, array size, last level,
 /// samples and flags, which is a virtio-gpu resource's whole shape.
 ///

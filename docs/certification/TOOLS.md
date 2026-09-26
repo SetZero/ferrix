@@ -25,7 +25,7 @@ qualification package, which is findings F-17, F-18 and F-19.
 
 **T3 and unqualified — finding F-17.** Good practice is in place and is not
 qualification evidence: the channel is pinned exactly rather than floating,
-`kernel/` and `boot/` use no `#![feature]`, and the assembly budget keeps 303
+`kernel/` and `boot/uefi/` use no `#![feature]`, and the assembly budget keeps 303
 lines across 19 sites outside the compiler's remit where hand analysis is
 cheap.
 
@@ -117,7 +117,7 @@ The 21 external crates in `Cargo.lock` are tools by this register's definition,
 since none is in the item — see [SOUP.md](SOUP.md) §2 for the list with
 versions and licences. They build, test and package; `syn`, `quote` and
 `proc-macro2` are T3 by the strict reading, since a procedural macro emits
-code, though none is used in `kernel/` or `boot/`.
+code, though none is used in `kernel/` or `boot/uefi/`.
 
 All are watched by `cargo deny check` with an empty `advisories.ignore` list
 and `yanked = "deny"`.

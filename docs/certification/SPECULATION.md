@@ -30,7 +30,7 @@ machine whose owner has decided it runs nothing that distrusts anything else.
 
 `off` builds with `--cfg ferrix_mitigations_off`, and that one `cfg` is the
 whole of the configuration space. It is not a Cargo feature, deliberately: the
-reference configuration's claim of zero Cargo features in `kernel/` and `boot/`
+reference configuration's claim of zero Cargo features in `kernel/` and `boot/uefi/`
 stands, and a `cfg` that only `xtask` sets, with two values and one of them the
 default, is a configuration an evaluator can enumerate in a sentence.
 
@@ -41,7 +41,7 @@ default, is a configuration an evaluator can enumerate in a sentence.
 | `xtask/src/check.rs` | `cargo xtask check` runs clippy over the kernel for all three architectures in both settings, so code only one setting compiles cannot rot in the other. |
 | `Cargo.toml` | declares the `cfg` to `unexpected_cfgs`, so a misspelt one is a warning. |
 | `kernel/src/arch/speculation.rs` | `HARDENED`, the one constant every defence tests. |
-| `libs/sync/src/nospec.rs` | the libraries' clamp, the identity when the `cfg` is set. |
+| `libs/kernel/sync/src/nospec.rs` | the libraries' clamp, the identity when the `cfg` is set. |
 
 **What `off` removes:** every clamp (they become the identity after the
 ordinary bounds check), every write to a speculation control, every switch
@@ -74,8 +74,8 @@ mispredicted path reads slot zero.
 |---|---|---|
 | `arch/*/mod.rs` `decode_syscall` | Linux system call number, into a `match` the compiler makes a jump table of | `arch::nospec_index`, to the table's end (`ferrix_linux_abi::nr::X86_64_END` and kin; a host test holds each end to its table) |
 | `syscall/native.rs` `decode` | native call number | the same, to the native range |
-| `libs/objects/src/table.rs` | handle slot, in `get`, `remove`, `replace` | `ferrix_sync::nospec::bounded` |
-| `libs/vfs/src/fd.rs` | descriptor slot | the same |
+| `libs/kernel/objects/src/table.rs` | handle slot, in `get`, `remove`, `replace` | `ferrix_sync::nospec::bounded` |
+| `libs/fs/vfs/src/fd.rs` | descriptor slot | the same |
 | `syscall/uaccess.rs` `user_address` | a user address, before the software table walk that follows it into the direct map | `arch::nospec_below`, to the top of the user half |
 
 The kernel's clamp is a line of assembly per architecture
@@ -299,7 +299,7 @@ the ELF anyone can read. KASLR puts the kernel somewhere new each boot, so the
 exploit needs a second bug first, one that discloses where. It does not stop
 the first bug; it makes one bug not enough.
 
-**What moves, and how far.** The loader (`boot/src/kaslr.rs`) moves three
+**What moves, and how far.** The loader (`boot/uefi/src/kaslr.rs`) moves three
 regions, each from its own random word, so that learning one gives away one:
 
 | Region | Step | Candidates (512 MiB of RAM) | Bits, x86-64 / AArch64 | Bits, ARMv7-A |
@@ -386,7 +386,7 @@ With none of them, or with `nokaslr` on the command line (`CMDLINE.TXT`, or
 `cargo xtask run --gdb`, which adds it so that a debugger's symbols are where
 the kernel runs), everything stays at its fixed address and the log says
 why. A kernel with no fixups — built `off`, or a copy stripped of them — stays
-too. The Pixel 7 loader (`bootloaders/pixel7`) applies a PIE's fixups at the
+too. The Pixel 7 loader (`boot/pixel7`) applies a PIE's fixups at the
 link address and says it does not randomise. It has no tested source of
 randomness on the phone, and moving the kernel there has not been tried
 without a device session. `nokaslr` is safe to honour: whoever writes the boot
@@ -401,7 +401,7 @@ firmware's console:
 ```
 
 and a panic prints `kaslr     slide 0x…` before its backtrace, which is how
-`xtask`'s symboliser and `scripts/coverage-report.py` take run-time addresses
+`xtask`'s symboliser and `scripts/gen/coverage-report.py` take run-time addresses
 back to link-time ones. The attacker in [SECURITY-TARGET.md](SECURITY-TARGET.md)
 is a program. The console is not something a program reads back. The
 kernel keeps no log (`sys_syslog` returns nothing, `/proc` exposes no kernel

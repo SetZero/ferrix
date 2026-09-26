@@ -2,7 +2,7 @@
  * Ferrix — SysML v2 model, part 6: kernel objects and the two ABIs.
  *
  * docs/ARCHITECTURE.md §2 and §3. The constants for the Linux half are in
- * libs/linux-abi and for the native half in libs/native-abi. The objects a
+ * libs/proto/linux-abi and for the native half in libs/proto/native-abi. The objects a
  * handle can name exist in kernel/src/object, the core half of a process
  * among them; the POSIX half and threads in kernel/src/syscall. No handle
  * names an address space or a thread yet.
@@ -153,7 +153,7 @@ package FerrixObjects {
              * page tables (at allocation, to the running task's job; at every
              * free), the native objects they make (a token in each), and the
              * kernel heap the Linux personality and its libraries hold for
-             * them (a libs/kmem token in each object, charged as memory in
+             * them (a libs/kernel/kmem token in each object, charged as memory in
              * bytes against the same limit, as cgroup v2 folds kmem into
              * memory.max; certification finding F-37, work order W-15). The
              * processor is a weight, not a limit: each task runs at its own
@@ -181,7 +181,7 @@ package FerrixObjects {
     }
 
     part def FdTable {
-        doc /* File descriptors and their sharing rules, stage 8: libs/vfs's
+        doc /* File descriptors and their sharing rules, stage 8: libs/fs/vfs's
              * descriptor table behind an Arc, shared where CLONE_FILES asks,
              * with close-on-exec belonging to the number. */
     }
@@ -234,7 +234,7 @@ package FerrixObjects {
     #implemented part def LinuxSyscallLayer {
         @stage { number = 7; }
         doc /* The entry path on every architecture, the dispatch table, and
-             * the ~150-call surface rustc needs. libs/linux-abi holds the
+             * the ~150-call surface rustc needs. libs/proto/linux-abi holds the
              * numbers for x86-64, AArch64 and the ARM EABI table, the errnos,
              * and the repr(C) layouts (statx, dirent64, sigaction, ...).
              *
@@ -316,8 +316,8 @@ package FerrixObjects {
              * a process may use both ABIs.
              *
              * kernel/src/syscall/native.rs, branched to before any Linux
-             * table is asked, with the numbers in libs/native-abi/src/nr.rs
-             * and typed wrappers in libs/native. Beyond that first list:
+             * table is asked, with the numbers in libs/proto/native-abi/src/nr.rs
+             * and typed wrappers in libs/proto/native. Beyond that first list:
              * waits on one object or asynchronously through a port, VMO
              * pins for a device's DMA, a job's quota set and read, process
              * create and start, device

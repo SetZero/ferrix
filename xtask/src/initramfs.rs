@@ -271,7 +271,7 @@ pub(crate) struct Binary {
     pub(crate) links: &'static [&'static str],
 }
 
-/// The family, as `ferrousli/tools/uutils/` builds it.
+/// The family, as `userland/ferrousli/tools/uutils/` builds it.
 ///
 /// Three projects and six programs. coreutils and diffutils are multicall
 /// binaries, which pick their utility from `argv[0]`; findutils builds one

@@ -3,8 +3,8 @@
 //! the shell.
 //!
 //! The kernel mounts one data disk, at `/data`, and the two downloads that
-//! want it are two volumes: the one `scripts/fetch-rustc-sysroot.sh` makes
-//! and the one `scripts/fetch-chrome.sh` makes. So `--chrome` had to take
+//! want it are two volumes: the one `scripts/fetch/fetch-rustc-sysroot.sh` makes
+//! and the one `scripts/fetch/fetch-chrome.sh` makes. So `--chrome` had to take
 //! the rustc volume's place, and a desktop with Chrome had no compiler.
 //!
 //! Both scripts keep the tree they packed beside their image, and both
@@ -43,7 +43,7 @@ pub(crate) fn volume() -> Result<PathBuf> {
         .filter(|tree| tree.is_dir())
         .ok_or_else(|| {
             Error::new(format!(
-                "no tree beside {}: scripts/fetch-chrome.sh keeps one there",
+                "no tree beside {}: scripts/fetch/fetch-chrome.sh keeps one there",
                 chrome_image.display()
             ))
         })?;

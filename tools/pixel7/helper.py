@@ -17,7 +17,7 @@ seen without it.
                    vendor_boot.img, fastboot boot the image, wait for Android,
                    and save the ramoops record the run left
     POST /boot?stats=N
-                   the same, with Ferrix's stat service (`statd/`) as pid 1
+                   the same, with Ferrix's stat service (`userland/statd/`) as pid 1
                    for N seconds: a copy of the image whose boot image header
                    carries `ferrix.init=/sbin/ferrix-statd
                    ferrix.statd.seconds=N`, which ABL puts in the device
@@ -50,7 +50,7 @@ PORT = 47707
 SERIAL = "28171FDH2001RC"
 RUNS = pathlib.Path.home() / ".local/share/ferrix/pixel7"
 HERE = pathlib.Path(__file__).resolve().parent
-MKBOOTIMG = HERE.parent.parent / "bootloaders" / "pixel7" / "mkbootimg.py"
+MKBOOTIMG = HERE.parent.parent / "boot" / "pixel7" / "mkbootimg.py"
 AVBTOOL = RUNS / "avbtool.py"
 VM_DIR = "/data/local/tmp/ferrix-vm"
 VM_IMAGE = f"{VM_DIR}/ferrix.Image"

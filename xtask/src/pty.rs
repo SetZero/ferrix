@@ -3,7 +3,7 @@
 //!
 //! `docs/ROADMAP.md` stage 18's exit asks for a terminal, and a terminal is a
 //! program holding one end of a pseudoterminal with another program on the
-//! other. This is the pair without the window: `compositor/term --headless`
+//! other. This is the pair without the window: `userland/compositor/term --headless`
 //! opens `/dev/ptmx`, asks it which pair it is, unlocks it, opens
 //! `/dev/pts/<n>`, forks, gives the child the slave for its session and its
 //! three descriptors, and runs it. What the child writes comes back through
@@ -44,11 +44,11 @@ fn build(arch: Arch, package: &str, binary: &str) -> Result<PathBuf> {
         ))
     })?;
     let target_dir = paths::target_dir().join("compositor").join("term");
-    println!("  building compositor/{binary} for {target}");
+    println!("  building userland/compositor/{binary} for {target}");
     let program = target_dir.join(target).join("release").join(binary);
     crate::builds::Build::cargo(
-        format!("cargo build (compositor/{binary}) --target {target}"),
-        paths::workspace_root().join("compositor"),
+        format!("cargo build (userland/compositor/{binary}) --target {target}"),
+        paths::workspace_root().join("userland/compositor"),
     )
     .args(["build", "--release", "-p", package, "--target", target])
     .env("CARGO_TARGET_DIR", &target_dir)

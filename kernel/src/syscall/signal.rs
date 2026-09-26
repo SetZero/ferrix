@@ -30,7 +30,7 @@
 //!
 //! Both structures are built from native words, so they are narrower on
 //! ARMv7-A, and they are read and written as native words here for the reason
-//! `writev` gives: `libs/linux-abi`'s `Sigaction` and `Stack` are the 64-bit
+//! `writev` gives: `libs/proto/linux-abi`'s `Sigaction` and `Stack` are the 64-bit
 //! layouts, and using them for a 32-bit program would read its fields at twice
 //! the stride.
 //!
@@ -70,7 +70,7 @@ use crate::syscall::{epoll, poll, uaccess};
 pub(crate) const SIGSET_SIZE: u64 = 8;
 
 /// `SS_AUTODISARM`: clear the alternate stack when a handler is entered on
-/// it. Not in `libs/linux-abi`; it is a flag *bit* on top of the mode, and the
+/// it. Not in `libs/proto/linux-abi`; it is a flag *bit* on top of the mode, and the
 /// mode check has to take it off before comparing.
 const SS_AUTODISARM: i32 = i32::MIN;
 

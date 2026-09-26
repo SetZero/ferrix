@@ -6,7 +6,7 @@
 //! numbers against `asound.h`, virtio-snd against QEMU's source, the stream
 //! against Linux's rules, the driver against a device doing what QEMU's does
 //! -- and each is a part alone. This is the whole path at once, and nothing
-//! in it is simulated: `compositor/tone` writes frames through the ALSA
+//! in it is simulated: `userland/compositor/tone` writes frames through the ALSA
 //! ioctls, the kernel's audio core copies them into its buffer and submits
 //! them, the ring-3 driver posts them to a real `virtio-sound-pci`, and
 //! QEMU's `wav` backend, with its mixing engine off so it neither resamples
@@ -41,7 +41,7 @@ const PERIOD: u32 = 960;
 /// How long to wait for the second to play and drain, in an emulated guest.
 const PATIENCE: Duration = Duration::from_secs(60);
 
-/// Build `compositor/tone` for `arch`, with the negative control or without.
+/// Build `userland/compositor/tone` for `arch`, with the negative control or without.
 fn build_tone(arch: Arch, negative: bool) -> Result<PathBuf> {
     let target = crate::display::target(arch)
         .ok_or_else(|| Error::new(format!("{arch} has no user-space target for tone")))?;
@@ -49,11 +49,11 @@ fn build_tone(arch: Arch, negative: bool) -> Result<PathBuf> {
     let target_dir = paths::target_dir()
         .join("compositor")
         .join(format!("tone-{flavour}"));
-    println!("  building compositor/tone ({flavour}) for {target}");
+    println!("  building userland/compositor/tone ({flavour}) for {target}");
     let program = target_dir.join(target).join("release").join("tone");
     let mut build = crate::builds::Build::cargo(
-        format!("cargo build (compositor/tone, {flavour}) --target {target}"),
-        paths::workspace_root().join("compositor"),
+        format!("cargo build (userland/compositor/tone, {flavour}) --target {target}"),
+        paths::workspace_root().join("userland/compositor"),
     )
     .args([
         "build",

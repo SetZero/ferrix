@@ -45,7 +45,7 @@ struct Program {
     memsz: u32,
 }
 
-/// An ELF32 static PIE shaped like the one `boot/linker/armv7a.ld` produces.
+/// An ELF32 static PIE shaped like the one `boot/uefi/linker/armv7a.ld` produces.
 ///
 /// Every segment sits at the same file offset as its address, so a test can
 /// patch the file by address and the arithmetic stays out of the way.

@@ -21,7 +21,7 @@
 //! FERRIX-PANIC loader: the kernel has a malformed segment
 //! ```
 //!
-//! which is `libs/elf`'s `validate_segments` doing its job on an image that
+//! which is `libs/platform/elf`'s `validate_segments` doing its job on an image that
 //! should never have been produced. `__bss_start`, `__bss_end` and
 //! `__kernel_end` resolve into that phantom section too, so anything trusting
 //! them would have been wrong in a quieter way.
@@ -46,7 +46,7 @@ use std::path::{Path, PathBuf};
 
 /// Where the kernel is linked, by word width.
 ///
-/// The same number as `KERNEL_VIRT_BASE` in `libs/bootinfo` for that width,
+/// The same number as `KERNEL_VIRT_BASE` in `libs/proto/bootinfo` for that width,
 /// and the loader refuses to start a kernel linked anywhere else. Keyed on the
 /// width rather than on the architecture because that is what decides it: the
 /// 64-bit pair share the top 2 GiB of a 48-bit space, and ARMv7-A takes the

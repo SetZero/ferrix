@@ -146,7 +146,7 @@ pub(crate) fn hardware_id() -> u64 {
 // PSCI, called from EL1 on a machine without EL2, starts it at EL1; TF-A on
 // the Pixel 7 starts it at EL2, where the kernel's registers mean nothing. So
 // a core that arrives at EL2 first makes EL1 what the Pixel 7 loader made it
-// for the boot core (`bootloaders/pixel7/src/entry.rs`) -- no traps, the
+// for the boot core (`boot/pixel7/src/entry.rs`) -- no traps, the
 // counter and physical timer reachable, the GIC's system registers allowed
 // where the CPU has them, the MMU and caches off -- and drops to it. `x0`
 // survives the drop untouched.

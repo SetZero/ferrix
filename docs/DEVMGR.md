@@ -6,8 +6,8 @@ stage 11. `docs/ARCHITECTURE.md` §7 is the architecture; this is the protocol
 between the kernel and `devmgr`, and between `devmgr` and the drivers it
 starts. The kernel's half of it — `device_info`, `device_quiesce`, bus
 mastering at the first pin, START — is on develop; `devmgr` the program, on
-`ferrix-rt`, is `user/devmgr`, started by `kernel/src/devmgr.rs`; the
-messages are `libs/devmgr-proto`.
+`ferrix-rt`, is `native/devmgr`, started by `kernel/src/devmgr.rs`; the
+messages are `libs/proto/devmgr-proto`.
 
 ## 1. What devmgr is, and what it is not
 
@@ -206,7 +206,7 @@ said on the console, and the device stays quiesced: what a mounted
 filesystem should do with a disk that went and came back is its own
 decision. The net, input and serial cores do not yet wait for a dead
 driver's claim in the quiesce, so a driver started again would be refused
-its channel; each can be added to `restarted` in `user/devmgr` once its core
+its channel; each can be added to `restarted` in `native/devmgr` once its core
 does.
 
 It began as a bug. With no restart, `kill -9` of the `gpu` driver under the

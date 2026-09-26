@@ -1,6 +1,6 @@
 //! Turning an ELF image into a running program.
 //!
-//! The three pieces that already exist — the loader, `libs/ustack`, and the
+//! The three pieces that already exist — the loader, `libs/kernel/ustack`, and the
 //! architecture's way into ring 3 — meet here, and they meet in exactly one
 //! place on purpose. The first process and `execve` need the same two numbers
 //! by different routes, and the way those two routes drift apart is by each
@@ -103,7 +103,7 @@ fn stack_top() -> u64 {
     (USER_VIRT_END - PAGE_SIZE) & !(ferrix_ustack::STACK_ALIGN - 1)
 }
 
-/// This build's pointer width, as `libs/ustack` wants it told.
+/// This build's pointer width, as `libs/kernel/ustack` wants it told.
 ///
 /// From the width rather than from a `cfg`, because that is what the question
 /// actually is, and because generic kernel code naming an architecture is what
@@ -327,7 +327,7 @@ fn populate(
     process.set_heap_base(loaded.end);
 
     // Build the startup image in kernel memory, then copy it in. It cannot be
-    // built in place: `libs/ustack` needs a `&mut [u8]` and the only way to
+    // built in place: `libs/kernel/ustack` needs a `&mut [u8]` and the only way to
     // reach user memory is through the copy layer, one page at a time.
     let mut scratch = vec![0_u8; STARTUP_BYTES];
     let base = top - STARTUP_BYTES as u64;

@@ -1,4 +1,4 @@
-//! The btrfs test disk: the `none` fixture image `scripts/gen-btrfs-fixtures.py`
+//! The btrfs test disk: the `none` fixture image `scripts/gen/gen-btrfs-fixtures.py`
 //! made with real `mkfs.btrfs`, unpacked into a raw image every QEMU machine
 //! carries as a second `virtio-blk-pci` device, for stage 11's exit: the
 //! kernel mounts it through the ring-3 driver and reads its tree back against
@@ -28,15 +28,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::paths;
 use crate::{Error, Result};
 
-/// The packed fixture, as `libs/btrfs`'s tests read it.
-const PACKED: &[u8] = include_bytes!("../../libs/btrfs/testdata/none.img.packed");
+/// The packed fixture, as `libs/fs/btrfs`'s tests read it.
+const PACKED: &[u8] = include_bytes!("../../libs/fs/btrfs/testdata/none.img.packed");
 
 /// The blank fixture: an empty volume with `mkfs.btrfs`'s default profiles
 /// and features, which stage 12's check writes on.
-const BLANK: &[u8] = include_bytes!("../../libs/btrfs/testdata/blank.img.packed");
+const BLANK: &[u8] = include_bytes!("../../libs/fs/btrfs/testdata/blank.img.packed");
 
 /// The same empty volume at [`ROOT_SIZE`]: the root disk starts from it.
-const ROOT: &[u8] = include_bytes!("../../libs/btrfs/testdata/root.img.packed");
+const ROOT: &[u8] = include_bytes!("../../libs/fs/btrfs/testdata/root.img.packed");
 
 /// How big the root disk is: the system is tens of megabytes, and btrfs
 /// keeps two copies of its metadata.
@@ -168,7 +168,7 @@ pub(crate) fn blank_path() -> PathBuf {
 /// The writable image, in one line, for a command that attaches it.
 pub(crate) fn describe_blank() -> String {
     format!(
-        "a fresh empty volume from libs/btrfs/testdata/blank.img.packed, {} non-zero blocks of \
+        "a fresh empty volume from libs/fs/btrfs/testdata/blank.img.packed, {} non-zero blocks of \
          {BLOCK} bytes in a {} MiB image made by mkfs.btrfs with its default profiles",
         BLANK.len() / RECORD,
         IMAGE_SIZE / (1024 * 1024),
@@ -179,7 +179,7 @@ pub(crate) fn describe_blank() -> String {
 /// disk.
 pub(crate) fn describe() -> String {
     format!(
-        "the none fixture from libs/btrfs/testdata, {} non-zero blocks of {BLOCK} bytes in a \
+        "the none fixture from libs/fs/btrfs/testdata, {} non-zero blocks of {BLOCK} bytes in a \
          {} MiB image made by mkfs.btrfs",
         PACKED.len() / RECORD,
         IMAGE_SIZE / (1024 * 1024),

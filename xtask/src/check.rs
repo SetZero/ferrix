@@ -21,7 +21,7 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     // all. They are files until `core.hooksPath` points at them, and a clone
     // where nobody ran that line refuses nothing.
     step("commit hooks", || {
-        python_with("scripts/check-commit-authors.py", &["--hooks"])
+        python_with("scripts/check/check-commit-authors.py", &["--hooks"])
     })?;
 
     step("formatting", || {
@@ -32,29 +32,35 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         cargo::run(command, "cargo fmt --check")
     })?;
 
-    step("line endings", || python("scripts/check-line-endings.py"))?;
+    step("line endings", || {
+        python("scripts/check/check-line-endings.py")
+    })?;
 
     step("assembly allow-list", || {
-        python("scripts/check-asm-budget.py")
+        python("scripts/check/check-asm-budget.py")
     })?;
 
     // The seam §7 is built on: the kernel enumerates devices and drives none.
     // A convenient register access in the wrong file is how that claim decays,
     // and it decays silently, so it is asserted here rather than reviewed for.
     step("device-access allow-list", || {
-        python("scripts/check-device-access.py")
+        python("scripts/check/check-device-access.py")
     })?;
 
-    step("unsafe audit", || python("scripts/check-unsafe-audit.py"))?;
-    step("panic audit", || python("scripts/check-panic-audit.py"))?;
+    step("unsafe audit", || {
+        python("scripts/check/check-unsafe-audit.py")
+    })?;
+    step("panic audit", || {
+        python("scripts/check/check-panic-audit.py")
+    })?;
 
     // The boundary four assurance ratings attach to. Every artifact in
-    // docs/certification is scoped to `scripts/certification-item.json`, so a
+    // docs/certification is scoped to `scripts/data/certification-item.json`, so a
     // kernel file that drifts into the trusted core -- or an unclassified new
     // one that nobody decided about -- silently changes what those ratings
     // claim. docs/certification/ITEM.md.
     step("certification item boundary", || {
-        python("scripts/check-item-boundary.py")
+        python("scripts/check/check-item-boundary.py")
     })?;
 
     // A coding standard with metrics, which EN 50716 requires and the other
@@ -62,7 +68,7 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     // may be, how long, and whether it calls itself. A ratchet over a recorded
     // baseline, like the item boundary above it.
     step("complexity budget", || {
-        python("scripts/check-complexity.py")
+        python("scripts/check/check-complexity.py")
     })?;
 
     // Allocation failure is an error the certified item reports, never a
@@ -71,7 +77,7 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     // or is argued at the site; a ratchet over a recorded baseline, like the
     // two above. docs/certification/MEMORY-AND-TIMING.md.
     step("fallible allocation", || {
-        python("scripts/check-fallible-alloc.py")
+        python("scripts/check/check-fallible-alloc.py")
     })?;
 
     // The safety manual is an out-of-context argument an integrator designs
@@ -79,14 +85,14 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     // than no manual. Every claim names its evidence, and this fails when a
     // citation stops resolving. docs/certification/SAFETY-MANUAL.md.
     step("safety requirements", || {
-        python("scripts/check-safety-requirements.py")
+        python("scripts/check/check-safety-requirements.py")
     })?;
 
     // The uncovered statements, sorted into what is argued and what is a gap.
     // Regenerated from the residual the coverage run writes, so the two cannot
     // disagree. docs/certification/COVERAGE-RESIDUAL.md.
     step("coverage residual", || {
-        python_with("scripts/gen-coverage-justification.py", &["--check"])
+        python_with("scripts/gen/gen-coverage-justification.py", &["--check"])
     })?;
 
     // The item links no external crate on any architecture, which is what lets
@@ -94,7 +100,7 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     // anomaly-list evaluation per dependency. That is a property worth
     // re-establishing rather than remembering. docs/certification/SOUP.md.
     step("SOUP register", || {
-        python_with("scripts/gen-soup.py", &["--check"])
+        python_with("scripts/gen/gen-soup.py", &["--check"])
     })?;
 
     // The architecture document is generated from `docs/sysml/` and committed.
@@ -102,8 +108,8 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     // document is exactly where nobody would notice; this is the cheapest
     // possible place to say so.
     step("architecture document", || {
-        python("scripts/sysml/tests.py")?;
-        python_with("scripts/gen-arch-doc.py", &["--check"])
+        python("scripts/gen/sysml/tests.py")?;
+        python_with("scripts/gen/gen-arch-doc.py", &["--check"])
     })?;
 
     // The compositor's interface tables are generated from the protocol XML
@@ -111,7 +117,7 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     // a client's message with the wrong signature, which is the kind of bug
     // that shows up as one misdrawn window an hour later.
     step("wayland protocol tables", || {
-        python_with("scripts/gen-wayland-protocol.py", &["--check"])
+        python_with("scripts/gen/gen-wayland-protocol.py", &["--check"])
     })?;
 
     // The keymap the compositor hands every client, and the modifier bits
@@ -119,39 +125,41 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     // probe. A keymap edited by hand is a keyboard that types the wrong
     // letters, and the client is the only thing that would notice.
     step("xkb keymap and tables", || {
-        python_with("scripts/gen-xkb-tables.py", &["--check"])
+        python_with("scripts/gen/gen-xkb-tables.py", &["--check"])
     })?;
 
     // The panic screen's font is generated from the BDF committed beside it,
     // and a hand edit to either would otherwise drift silently.
-    step("font", || python_with("scripts/gen-font.py", &["--check"]))?;
+    step("font", || {
+        python_with("scripts/gen/gen-font.py", &["--check"])
+    })?;
 
     // The terminal's font is rasterised from the TrueType faces committed
     // beside it, by a rasteriser in the repository rather than by whatever
     // FreeType the machine has: that is what makes "byte-identical" a demand
     // this gate can make of every checkout.
     step("terminal font", || {
-        python_with("scripts/gen-term-font.py", &["--check"])
+        python_with("scripts/gen/gen-term-font.py", &["--check"])
     })?;
 
     // The explanations a panic prints are rendered into a document, which
     // goes stale the moment an entry changes without it.
     step("panic catalog", || {
-        python_with("scripts/gen-panic-catalog.py", &["--check"])
+        python_with("scripts/gen/gen-panic-catalog.py", &["--check"])
     })?;
 
     step("crate layering", || {
         let mut command = Command::new("bash");
         let _ = command
             .current_dir(&root)
-            .arg("scripts/check-crate-layering.sh");
-        cargo::run(command, "scripts/check-crate-layering.sh")
+            .arg("scripts/check/check-crate-layering.sh");
+        cargo::run(command, "scripts/check/check-crate-layering.sh")
     })?;
 
     // The runtime and the native programs are freestanding like the kernel:
     // a `_start`, a panic handler, a linker script. The host can build none of
     // them, so they are linted per target below, and what of them can be
-    // tested lives in `libs/native`.
+    // tested lives in `libs/proto/native`.
     step("clippy (host)", host_clippy)?;
     step("tests", host_test)?;
     step("doc tests", host_doctest)?;
@@ -242,7 +250,7 @@ fn cross_target_clippy() -> Result<()> {
 /// gives: the tests start Linux executables. The generated-ABI check reads
 /// headers in the tree and runs natively.
 fn ferrousli(root: &std::path::Path) -> Result<()> {
-    let dir = root.join("ferrousli");
+    let dir = root.join("userland/ferrousli");
     let in_ferrousli = |arguments: &[&str]| {
         if cfg!(windows) {
             return crate::wsl::cargo(&dir, arguments);
@@ -258,7 +266,7 @@ fn ferrousli(root: &std::path::Path) -> Result<()> {
     }
 
     step("ferrousli: generated ABI", || {
-        python_with("ferrousli/tools/gen-abi.py", &["--check"])
+        python_with("userland/ferrousli/tools/gen-abi.py", &["--check"])
     })?;
     step("ferrousli: formatting", || {
         cargo::run(in_ferrousli(&["fmt", "--check"]), "cargo fmt (ferrousli)")
@@ -281,7 +289,7 @@ fn ferrousli(root: &std::path::Path) -> Result<()> {
     })?;
     // The library on AArch64 and ARMv7-A, whose code the host's build never
     // compiles. Clippy needs only their rustup targets; the tests there need
-    // a cross compiler and QEMU's user mode, which `ferrousli/README.md` says
+    // a cross compiler and QEMU's user mode, which `userland/ferrousli/README.md` says
     // how to run.
     for target in ["aarch64-unknown-linux-gnu", "armv7-unknown-linux-gnueabihf"] {
         step(&format!("ferrousli: clippy ({target})"), || {
@@ -352,7 +360,7 @@ fn ferrousli(root: &std::path::Path) -> Result<()> {
 /// The tests start Linux executables and the pty needs a Linux kernel, so on
 /// Windows those steps run in WSL, as ferrousli's do.
 fn zinc(root: &std::path::Path) -> Result<()> {
-    let dir = root.join("zinc");
+    let dir = root.join("userland/zinc");
     const TARGET: &str = "x86_64-unknown-linux-musl";
     let native = |arguments: &[&str]| {
         let mut command = Command::new(cargo_binary());
@@ -406,7 +414,7 @@ fn zinc(root: &std::path::Path) -> Result<()> {
                 .args(["-c", script, "bash", TARGET]);
             command
         };
-        cargo::run(command, "zinc/tests/pty_completion.py")
+        cargo::run(command, "userland/zinc/tests/pty_completion.py")
     })?;
     step("zinc: job control on a pty", || {
         let script = "cargo build --release --target \"$1\" && \
@@ -421,18 +429,18 @@ fn zinc(root: &std::path::Path) -> Result<()> {
                 .args(["-c", script, "bash", TARGET]);
             command
         };
-        cargo::run(command, "zinc/tests/pty_jobs.py")
+        cargo::run(command, "userland/zinc/tests/pty_jobs.py")
     })
 }
 
 /// The compositor's gates.
 ///
-/// `compositor/` is a workspace of its own, like ferrousli, so the steps
+/// `userland/compositor/` is a workspace of its own, like ferrousli, so the steps
 /// above never reach it. They are on by default, because they are seconds
 /// rather than minutes.
 ///
 /// They also go through WSL on Windows now, which the comment here used to
-/// say would happen "when a crate needs a Linux host". `compositor/virgl` is
+/// say would happen "when a crate needs a Linux host". `userland/compositor/virgl` is
 /// that crate: `device.rs` holds an `OwnedFd` for a render node and
 /// `vtest.rs` speaks virglrenderer's protocol over a `UnixStream`, neither of
 /// which `std` has on Windows, and `drm`, `render` and `hyprix` all build on
@@ -446,7 +454,7 @@ fn zinc(root: &std::path::Path) -> Result<()> {
 /// worth linting and the half a Windows developer is most likely to be
 /// changing.
 fn compositor(root: &std::path::Path) -> Result<()> {
-    let dir = root.join("compositor");
+    let dir = root.join("userland/compositor");
     let in_compositor = |arguments: &[&str]| {
         if cfg!(windows) {
             return crate::wsl::cargo(&dir, arguments);
@@ -474,11 +482,11 @@ fn compositor(root: &std::path::Path) -> Result<()> {
     })
 }
 
-/// The init's gates: `init/` is a workspace of its own, as the compositor
+/// The init's gates: `userland/init/` is a workspace of its own, as the compositor
 /// is, so the host steps above never reach it. On by default, since they are
-/// seconds. The manager it runs is `libs/svc`, which the host steps do reach.
+/// seconds. The manager it runs is `libs/init/svc`, which the host steps do reach.
 fn init(root: &std::path::Path) -> Result<()> {
-    let dir = root.join("init");
+    let dir = root.join("userland/init");
     let in_init = |arguments: &[&str]| {
         if cfg!(windows) {
             return crate::wsl::cargo(&dir, arguments);
@@ -508,7 +516,7 @@ fn init(root: &std::path::Path) -> Result<()> {
 
 /// `cargo xtask model-doc` -- regenerate the document the gate above checks.
 pub(crate) fn model_doc() -> Result<()> {
-    python_with("scripts/gen-arch-doc.py", &[])
+    python_with("scripts/gen/gen-arch-doc.py", &[])
 }
 
 // The host half of the gate, one function per CI step. `cargo xtask check`

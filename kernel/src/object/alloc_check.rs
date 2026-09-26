@@ -4,7 +4,7 @@
 //! The certified item allocates through `crate::fallible`, which reports a
 //! failure as an error its caller turns into `NO_MEMORY` or `ENOMEM`. That is
 //! a claim about every caller, and a gate that reads the source
-//! (`scripts/check-fallible-alloc.py`) can say only that the calls are the
+//! (`scripts/check/check-fallible-alloc.py`) can say only that the calls are the
 //! fallible ones, not that a failure is handled well where it lands. This
 //! runs the failure. Two parts:
 //!

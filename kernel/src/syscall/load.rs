@@ -1,6 +1,6 @@
 //! Turning an ELF image into an address space a program can run in.
 //!
-//! `libs/elf` already parses, validates and is fuzzed; what it deliberately
+//! `libs/platform/elf` already parses, validates and is fuzzed; what it deliberately
 //! does not do is touch memory. This is the half that does: it takes a parsed
 //! image and a fresh [`AddressSpace`] and leaves behind the mappings, the
 //! entry point, and the three numbers the auxiliary vector needs to tell the
@@ -182,7 +182,7 @@ pub(crate) struct Loaded {
 /// Why an image could not be loaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LoadError {
-    /// `libs/elf` refused it.
+    /// `libs/platform/elf` refused it.
     Malformed(ElfError),
     /// Built for another architecture.
     WrongMachine(u16),
@@ -291,7 +291,7 @@ fn check_is_a_linker(linker: &Elf<'_>) -> Result<(), LoadError> {
 ///
 /// [`LoadError::BadInterpreter`] for an image that asks for a linker and does
 /// not say which, [`LoadError::Read`] for a name that could not be read, and
-/// whatever `libs/elf` refuses about the image.
+/// whatever `libs/platform/elf` refuses about the image.
 pub(crate) fn interpreter_of(image: Source<'_>) -> Result<Option<Vec<u8>>, LoadError> {
     let elf = Elf::parse(image.head()).map_err(LoadError::Malformed)?;
     let Some(segment) = elf.segments().find(|segment| segment.kind == PT_INTERP) else {

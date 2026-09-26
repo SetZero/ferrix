@@ -1,6 +1,6 @@
 //! The net core: one [`Stack`] behind one lock, and the task that drives it.
 //!
-//! `libs/net` is the whole of the logic and holds no lock, no clock and no
+//! `libs/network/net` is the whole of the logic and holds no lock, no clock and no
 //! device. This module is the three things it lacks.
 //!
 //! # One lock, and nothing sleeps inside it
@@ -24,7 +24,7 @@
 //!
 //! # The clock is milliseconds
 //!
-//! `libs/net` and `libs/nettcp` count in milliseconds, because a
+//! `libs/network/net` and `libs/network/nettcp` count in milliseconds, because a
 //! retransmission timeout is a hundred of them and a nanosecond counter of
 //! them overflows a `u32` in four seconds. The kernel counts in nanoseconds.
 //! The conversion is [`now`], and it is the only place the two meet.

@@ -1409,7 +1409,7 @@ fn check_net_ring() {
 ///
 /// Here, straight after the net core's own check, because it is the same
 /// subsystem reached through a different family: a socket, a buffer of
-/// requests, and the tables `libs/net` holds. Nothing about it touches a
+/// requests, and the tables `libs/network/net` holds. Nothing about it touches a
 /// device either.
 ///
 /// Halts rather than returning, as every other stage's check does.

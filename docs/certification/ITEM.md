@@ -6,8 +6,8 @@ and most consequential decision in the whole exercise — because each artifact
 here is written against it. The Security Target's TOE, the hazard analysis's
 safety item, the traceability matrix and the coverage obligation all mean the
 same thing, and that thing is defined in
-[`scripts/certification-item.json`](../../scripts/certification-item.json) and
-enforced by `scripts/check-item-boundary.py`.
+[`scripts/data/certification-item.json`](../../scripts/data/certification-item.json) and
+enforced by `scripts/check/check-item-boundary.py`.
 
 A boundary that lives only in a document is a boundary that has already moved.
 
@@ -67,7 +67,7 @@ load before it, the vDSO and the other work since F-35 included. F-37 added
 and the charges on a VMO's mappers -- 30 to `item`, the boot's `kmem` line
 and the quota line's heap, and 447 to the load, the charge at each of its
 sites; and 445 lines of self-test. The charging in the libraries the load
-calls, `libs/kmem` among them, is outside the kernel and not counted here.)
+calls, `libs/kernel/kmem` among them, is outside the kernel and not counted here.)
 
 ### `core` — the minimal trusted base
 
@@ -209,7 +209,7 @@ began — were lower bounds.** The gate matched only the literal text
 `crate::a::b`, so it missed nested `use` groups, paths through a name bound by
 `use` or declared by `mod`, and every path in code its string pattern had taken
 for a literal. It now resolves names as the compiler does
-(`scripts/check-item-boundary.py`, whose docstring says how, and what it still
+(`scripts/check/check-item-boundary.py`, whose docstring says how, and what it still
 cannot see: an edge that is a type flowing through a value rather than a name
 written in the file). Re-measured the same day, the tree had 56 where 29 were
 reported, and the audit's starting tree 94 where 62 were.
@@ -256,8 +256,8 @@ A certificate attaches to a configuration, not to a repository.
 | Architectures | x86-64, AArch64, ARMv7-A |
 | Profile | release |
 | Toolchain | rustc 1.97.1, pinned exactly in `rust-toolchain.toml` |
-| Unstable features | none in `kernel/` or `boot/` |
-| Cargo features | 7 in the workspace, **0** in `kernel/` or `boot/` |
+| Unstable features | none in `kernel/` or `boot/uefi/` |
+| Cargo features | 7 in the workspace, **0** in `kernel/` or `boot/uefi/` |
 | Build settings | **one**, `cargo xtask --mitigations on\|off`; the reference is `on`, the default |
 | Kernel link (`on`) | a static PIE on x86-64 (PIC code model, every x86-64 crate) and AArch64 (static code model, `-pie -z notext`); on ARMv7-A a fixed-address link that keeps its relocations (`--emit-relocs`). The loader moves it each boot (KASLR). `off`: the static fixed-address image |
 | External crates | 21, listed in [SOUP.md](SOUP.md) |

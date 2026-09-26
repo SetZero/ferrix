@@ -10,7 +10,7 @@ Cargo workspace and the gates.
 | `helper.py` | The helper on the PC that the app's Boot button and the monitor ask to boot the phone |
 | `monitor/` | The desktop monitor, "Pixel 7 · Ferrix": Tauri 2, a Cargo workspace of its own (`monitor/README.md`) |
 
-The loader these boot, and the phone's state, are in `bootloaders/pixel7`
+The loader these boot, and the phone's state, are in `boot/pixel7`
 (`HANDOVER.md` there).
 
 ## The app and the helper
@@ -24,7 +24,7 @@ the PC that the first one needs:
   about 6 seconds to `FERRIX-BOOT-OK`.
 
 The phone cannot start Ferrix by itself. Its kernel has no `kexec`, and
-nothing may be flashed (`bootloaders/pixel7/HANDOVER.md`, "Never write anything that survives
+nothing may be flashed (`boot/pixel7/HANDOVER.md`, "Never write anything that survives
 a reset"). What starts Ferrix is `fastboot boot` from a PC, so the button asks
 the PC. The phone has to be plugged into it, and nothing on the phone is
 changed: Ferrix runs from RAM, and its watchdog brings Android back about 75

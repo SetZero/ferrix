@@ -29,9 +29,9 @@ of use, which is how every general-purpose certified kernel handles them.
 
 ## A. Boundary integrity
 
-Measured by `scripts/check-item-boundary.py`; **no upward references**, from
+Measured by `scripts/check/check-item-boundary.py`; **no upward references**, from
 94 in 28 files when the audit began. The debt register in
-`scripts/certification-item.json` is empty since W-5 closed F-07, F-09 and F-33
+`scripts/data/certification-item.json` is empty since W-5 closed F-07, F-09 and F-33
 (2026-09-26), and stays, empty, so that a new upward reference has to be argued
 into it against a finding. `main.rs`'s 38 edges into the load are recorded
 beside it, not in it: they are the composition root's ([ITEM.md](ITEM.md) §2).
@@ -90,7 +90,7 @@ POSIX thread's signals, the Linux loader -- which is not the core-concept
 defect this finding described. They are refiled where the register already
 describes them: five under F-09 and `syscall/native.rs`'s under F-07.
 
-*Verified by:* no `F-01` entry in `scripts/certification-item.json`, and
+*Verified by:* no `F-01` entry in `scripts/data/certification-item.json`, and
 nothing under `object/` or `sched/` naming `syscall::` in `check-item-
 boundary.py --report`; the full boot gate row, `test-threads` and `test-jobs`.
 
@@ -449,7 +449,7 @@ test can be written against and an assessor can check.
 
 ### F-17 — the compiler is unqualified
 **Major.** `rustc 1.97.1`, pinned exactly, no unstable features in `kernel/` or
-`boot/` — good practice, and not qualification evidence.
+`boot/uefi/` — good practice, and not qualification evidence.
 
 Ferrocene is the concrete route: a qualified Rust toolchain with evidence
 packages for IEC 62304 Class C, IEC 61508 SIL 4 and ISO 26262 ASIL D. Adopting
@@ -692,7 +692,7 @@ executable writable. It was found by the KASLR work (F-31). KASLR moves the
 direct map but not the image's physical placement, so a disclosure of the
 direct map's base was enough to find the alias.
 
-*Now:* both loaders (`boot/` and the Pixel 7 loader) cut each direct-map run
+*Now:* both loaders (`boot/uefi/` and the Pixel 7 loader) cut each direct-map run
 around the physical span of the image's non-writable segments
 (`ferrix_bootinfo::read_only_span` and `split_run`, host-tested) and map that
 span `KERNEL_RODATA`. `.data` and `.bss` stay writable in the alias: they are
@@ -868,7 +868,7 @@ allocations, which share the heap, stop the machine when it is gone (V-05).
 *Now:* the job's memory counter is in bytes, and the kernel heap its
 programs hold is charged to it beside their frames, against the one limit
 -- as cgroup v2 folds `kmem` into `memory.max`. A charge is a token from
-`libs/kmem` made where the allocation is, to the job of the task whose call
+`libs/kernel/kmem` made where the allocation is, to the job of the task whose call
 made it, and kept inside what it pays for, so every path that frees the
 object frees the charge. A job at its limit is refused the object with
 `ENOMEM` before anything changes. An audit of every allocation in the load
@@ -955,7 +955,7 @@ as AoU-5. [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) §1 has the design.
 code, and every one fatal. `KernelAllocator::alloc` returns null on failure,
 and there is no `#[alloc_error_handler]` in the tree, so a `Box::new`, `Arc::new`,
 `Vec::push` or map insert that met an empty heap reached Rust's default
-handler and aborted. `libs/heap` reported `OutOfMemory` properly, and the
+handler and aborted. `libs/kernel/heap` reported `OutOfMemory` properly, and the
 `GlobalAlloc` adapter above it threw the distinction away. The obvious fix is
 unavailable: `#[alloc_error_handler]`, `Box::try_new`, `Arc::try_new` and
 `BTreeMap::try_insert` are unstable, verified against the pinned 1.97.1, and
@@ -967,7 +967,7 @@ locked: a wake-up from an interrupt handler could stop the machine.
 
 *Now:* fallible construction built from stable parts, used at every site.
 
-* `libs/fallible` makes `Box`, `Vec`, `VecDeque` and `String` fallible:
+* `libs/kernel/fallible` makes `Box`, `Vec`, `VecDeque` and `String` fallible:
   `try_box` allocates through the global allocator and builds the box with
   `Box::from_raw`, which `Box`'s documentation makes part of its contract,
   and the rest reserve with `try_reserve` before they grow. Host-tested
@@ -984,7 +984,7 @@ locked: a wake-up from an interrupt handler could stop the machine.
   native call, `ENOMEM` from a Linux one, `EAGAIN` from `madvise`, or a
   refused step at bring-up. Each task lends the scheduler its own queue nodes,
   so queueing, picking and waking allocate nothing
-  (`libs/sched/tests/no_allocation.rs`).
+  (`libs/kernel/sched/tests/no_allocation.rs`).
   Taking pages out of an object needs no memory once its list has room. A
   decommit that cannot be refused falls back to 32 pages at a time from the
   stack, and asks the spaces that map the object one at a time when there is
@@ -995,14 +995,14 @@ locked: a wake-up from an interrupt handler could stop the machine.
   after it can only be the load's, whose allocations stay infallible, and it
   is FX-0008.
 
-*Checked by the build:* `scripts/check-fallible-alloc.py`, the "fallible
+*Checked by the build:* `scripts/check/check-fallible-alloc.py`, the "fallible
 allocation" step of `cargo xtask check`, finds every call to an allocating
 standard-library API in the item's product code and fails on one that is not
 argued. `NOALLOC:` says the call cannot allocate: room was reserved, or the
 type only looks like a collection. `FALLIBLE:` names a fallible call the
 pattern cannot tell apart, and `FATAL-ALLOC:` marks a bring-up site. It
 read 0 unmarked, 31 `NOALLOC`, 13 `FALLIBLE` and 73 `FATAL-ALLOC` in the item,
-with an empty ratchet baseline, `scripts/fallible-alloc-baseline.json`.
+with an empty ratchet baseline, `scripts/data/fallible-alloc-baseline.json`.
 
 **The hole, found the same day.** `syscall::signal::Signals::default` built
 its tables with `vec![..; NSIG]`, and so did the `Queue` under every thread.
@@ -1045,8 +1045,8 @@ recovery for the load: its allocations still stop the machine (AoU-5).
 The gate's docstring lists what it cannot see, and each was checked by other
 means:
 
-* **Allocation inside a library the item calls.** `libs/vma`, `libs/objects`,
-  `libs/sched` and `libs/sync` were converted with the item. The other
+* **Allocation inside a library the item calls.** `libs/kernel/vma`, `libs/kernel/objects`,
+  `libs/kernel/sched` and `libs/kernel/sync` were converted with the item. The other
   libraries allocate nothing on the item's paths, except behind the load's
   interfaces, where the allocation is the load's.
 * **`.clone()` of a collection.** The item's 18 clones were audited by hand,
@@ -1081,8 +1081,8 @@ including btrfs and a TCP stack is not a project; over the 38,989-line `core`
 ring, with no recursion anywhere, it is at least conceivable.
 
 ### F-25 — no complexity, unit-size or recursion limits
-**Closed 2026-09-25** by `scripts/check-complexity.py`, a ratchet over
-`scripts/complexity-baseline.json` in the shape the item-boundary gate uses:
+**Closed 2026-09-25** by `scripts/check/check-complexity.py`, a ratchet over
+`scripts/data/complexity-baseline.json` in the shape the item-boundary gate uses:
 47 of the item's 1,887 functions sit above a floor, and the gate fails when one
 gets worse, when a new one appears, or when a stale entry is left behind.
 
@@ -1106,7 +1106,7 @@ of the item's functions, 17%, were not measured at all** -- 73 of `sched/mod.rs`
 functions and 71 of `main.rs`'s 76 among them. `main.rs::say_booted` scored
 102 lines because it had swallowed everything up to the next string that
 happened to pair; it has seven. The gate now reads source through
-`scripts/rustlex.py`, a lexer shared with the item-boundary gate that knows
+`scripts/check/rustlex.py`, a lexer shared with the item-boundary gate that knows
 nested comments, raw, byte and C strings, continuations, and a char literal
 from a lifetime, and every run starts with its self-test. Re-measured, the
 baseline went from 34 entries to 47: twelve functions that were always over a
@@ -1166,10 +1166,10 @@ provisions offer Linux is unavailable to a kernel this young.
 ## Closed
 
 ### F-00 — the kernel had no structural coverage measurement
-**Closed 2026-09-25** by `scripts/coverage-report.py` and the
+**Closed 2026-09-25** by `scripts/gen/coverage-report.py` and the
 `FERRIX_QEMU_PLUGIN` hook. Superseded by F-10 to F-13, which are about the
 *level* of coverage rather than its absence.
 
 ### F-0A — the certified item's SOUP was unenumerated
-**Closed 2026-09-25** by `scripts/gen-soup.py`, which measured it as empty and
+**Closed 2026-09-25** by `scripts/gen/gen-soup.py`, which measured it as empty and
 now fails the build if that stops being true.

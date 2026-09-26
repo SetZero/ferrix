@@ -31,7 +31,7 @@ USB with adb authorised, and nothing else: no Claude, no terminal.
   * **Battery**: draw and voltage.
   * **crosvm**: processor use and resident memory while a guest runs.
 * **Ferrix's own stats**, on the graphs' second tab, from `ferrix-statd`
-  (`statd/`), Ferrix's stat service:
+  (`userland/statd/`), Ferrix's stat service:
   * **CPU**: load, overall and per processor.
   * **Memory**: used and cached.
   * **Rates**: interrupts and context switches a second.

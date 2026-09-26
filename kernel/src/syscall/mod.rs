@@ -23,10 +23,10 @@
 //! # Three number tables, one dispatch
 //!
 //! x86-64, AArch64 and ARMv7-A each number their calls differently, and
-//! `libs/linux-abi` folds all three onto one [`Syscall`]. Which table applies
+//! `libs/proto/linux-abi` folds all three onto one [`Syscall`]. Which table applies
 //! is the one architecture-dependent fact here, so it is asked of the facade
 //! ([`arch::decode_syscall`]) rather than decided with a `cfg` — generic kernel
-//! code naming an architecture is what `scripts/check-crate-layering.sh`
+//! code naming an architecture is what `scripts/check/check-crate-layering.sh`
 //! exists to stop.
 //!
 //! # What is decided here, and what above
@@ -40,7 +40,7 @@
 //! none of its modules.
 //!
 //! The `mod` declarations below are where the personality's modules sit in
-//! the tree, not calls into them: `scripts/check-item-boundary.py` counts
+//! the tree, not calls into them: `scripts/check/check-item-boundary.py` counts
 //! them apart, as containment.
 
 pub(crate) mod attributes;

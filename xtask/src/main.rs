@@ -160,7 +160,7 @@ USAGE:
 COMMANDS:
     build         Compile the loader and kernel and write a bootable image
     run           Boot the image under QEMU, attached to the terminal
-    run-compositor  Boot compositor/hyprix as init with a virtio-gpu, on a screen this host can show
+    run-compositor  Boot userland/compositor/hyprix as init with a virtio-gpu, on a screen this host can show
     remote-desktop  Send this tree to another machine, boot the desktop there and watch it here over VNC
     wallpapers    Convert pictures for run-compositor's desktop and keep them on this machine
     test-btrfs    Boot, write a tree on the blank btrfs disk, and require host btrfs check to find nothing
@@ -172,13 +172,13 @@ COMMANDS:
                   started from a file by ferrix.init=; under busybox, require reboot(2) to commit /data
     test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs and applets
     test-net      Boot with a network device and require busybox to configure it and fetch a file
-    test-display  Boot compositor/blank as init with a virtio-gpu, and require its colour on every pixel
-    test-compositor  Boot compositor/hyprix as init with a virtio-gpu, and require its background on every pixel
+    test-display  Boot userland/compositor/blank as init with a virtio-gpu, and require its colour on every pixel
+    test-compositor  Boot userland/compositor/hyprix as init with a virtio-gpu, and require its background on every pixel
     test-video    Boot a wallpaper that moves and require the screen to show its frames in turn
-    test-input    Boot compositor/evecho as init with virtio-input, send a key and a touch over QMP, and require them back
-    test-audio    Boot compositor/tone as init with virtio-snd, play a second of a counter, and require every frame back from QEMU's wav file
+    test-input    Boot userland/compositor/evecho as init with virtio-input, send a key and a touch over QMP, and require them back
+    test-audio    Boot userland/compositor/tone as init with virtio-snd, play a second of a counter, and require every frame back from QEMU's wav file
     test-seat     Boot the compositor with a client, type into it over QMP, and require the key and the keybind to land
-    test-pty      Boot compositor/term as init, run a program on a pseudoterminal, and require its output back
+    test-pty      Boot userland/compositor/term as init, run a program on a pseudoterminal, and require its output back
     test-foot     Boot the compositor with foot, the ported Wayland terminal, and require its font and its text on screen
     test-vkgears  Boot the compositor with vkgears and the Venus card, and require it drew frames on the host's GPU (Linux hosts)
     test-jobs     Boot an interactive shell on the console, type a session with jobs at it, and require the answers
@@ -187,8 +187,8 @@ COMMANDS:
     test-restart  Boot a shell beside a virtio-gpu, kill -9 the gpu driver twice, and require it started again each time
     test-sysfs    Boot a shell beside a card, input devices and a network adapter, read sysfs, and unbind and bind the card through it
     test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count
-    test-rustc    Attach the rustc volume scripts/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
-    test-chrome   Attach the volume scripts/fetch-chrome.sh makes, and require headless Chrome to run a page's script and draw it
+    test-rustc    Attach the rustc volume scripts/fetch/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
+    test-chrome   Attach the volume scripts/fetch/fetch-chrome.sh makes, and require headless Chrome to run a page's script and draw it
     test-chrome-window  The same volume, and require Chrome in a window on the compositor, its page on the screen
     test-chrome-audio   The same window on a page playing 440 Hz, and require the tone in QEMU's wav file of the virtio-snd card
     bench-chrome  Chrome in a window, left alone, scrolled and pointed at: processor time, frames and memory per phase
@@ -234,7 +234,7 @@ OPTIONS:
                                          run-compositor has one unless --no-net
     --no-net                             run-compositor: no network device and no gateway
     --chrome                             run-compositor: Chrome on the desktop, from the volume
-                                         scripts/fetch-chrome.sh makes; SUPER+B opens another
+                                         scripts/fetch/fetch-chrome.sh makes; SUPER+B opens another
     --everything                         run-compositor: all of it at once -- --gl, --release,
                                          --clipboard, --chrome, and rustc and cargo in the shell,
                                          from one volume made of the rustc and Chrome ones

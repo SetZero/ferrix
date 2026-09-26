@@ -507,7 +507,7 @@ pub(crate) fn write_image_with(
 
 /// [`write_image_with`], and the image's own options in `FERRIX/DEFAULTS.TXT`
 /// when there are any: the file `flash` writes beside a card owner's
-/// `CMDLINE.TXT`, which the loader appends after it (`boot/src/main.rs`).
+/// `CMDLINE.TXT`, which the loader appends after it (`boot/uefi/src/main.rs`).
 pub(crate) fn write_image_carrying(
     arch: Arch,
     loader: &Path,

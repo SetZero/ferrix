@@ -3,7 +3,7 @@
 Version 1. Written by ferrix-61 (stage 11, formerly ferrix-4d), the ring's first
 consumer; reviewed and approved with changes by ferrix-d9 (stage 10, formerly
 ferrix-8b), who owns the ring, `devmgr` and the driver; identity and naming
-decided by the product owner, ferrix-32. `libs/blkring` (`ferrix-blkring`)
+decided by the product owner, ferrix-32. `libs/proto/blkring` (`ferrix-blkring`)
 implements it, host-tested, under Miri and fuzzed. `kernel/src/block_ring`
 is the kernel glue; the driver process is not built yet.
 
@@ -24,7 +24,7 @@ This document specifies that ring for block devices:
   main today.
 
 It is **not** the virtio protocol. The driver speaks virtio-blk to the device
-(`libs/virtio::blk`); this is what the kernel speaks to the driver. The shapes
+(`libs/drivers/virtio::blk`); this is what the kernel speaks to the driver. The shapes
 are deliberately similar so one request here becomes one virtio request.
 
 ### Constraints (from ferrix-d9, formerly ferrix-8b)
@@ -40,12 +40,12 @@ are deliberately similar so one request here becomes one virtio request.
 
 ### Consumer side, for orientation
 
-In the kernel, `libs/block::Queue` sits in front of the ring:
+In the kernel, `libs/fs/block::Queue` sits in front of the ring:
 `Queue::dispatch(now)` yields a merged command → the kernel copies write data
 into the data VMO and publishes one submission entry → the driver completes it →
 the kernel copies read data out and calls `Queue::complete(token, status)`,
 which fans the result back to every request merged into it. The ring's `id` is
-the queue's dispatch `Token` value. `libs/block` holds no buffers, so the data
+the queue's dispatch `Token` value. `libs/fs/block` holds no buffers, so the data
 VMO allocation (§3.3) belongs to the ring glue, not the queue.
 
 ## 2. Objects and handles
@@ -421,13 +421,13 @@ rights shown, checked as HELLO's are (`Start::validate`). The driver carries
 
 ## 7. Mapping to what exists
 
-* `libs/block` → one submission per `Dispatch`; `Token::raw()` is the `id`;
+* `libs/fs/block` → one submission per `Dispatch`; `Token::raw()` is the `id`;
   the queue's `Completion` is built from the ring's status.
-* `libs/virtio::blk` and `libs/virtio-blk` (in progress) → the driver turns one
+* `libs/drivers/virtio::blk` and `libs/drivers/virtio-blk` (in progress) → the driver turns one
   submission into one virtio-blk request chain whose data descriptors are the
   region's pages, split at page boundaries, by device address from the pin
   query.
-* `libs/btrfs-vfs` → reads through a `Device` handle over `libs/block`.
+* `libs/fs/btrfs-vfs` → reads through a `Device` handle over `libs/fs/block`.
 
 ## 8. Implementation: `ferrix-blkring`
 
@@ -435,7 +435,7 @@ A `libs/` crate — no_std, forbid(unsafe) — with:
 
 * the layouts, with offset tests;
 * `KernelSide` and `DriverSide` over a `RingMemory` trait (as
-  `libs/virtio::QueueMemory` does). Each keeps its own indices privately,
+  `libs/drivers/virtio::QueueMemory` does). Each keeps its own indices privately,
   writes only its own fields, and validates every read of the other's;
 * the want-bell protocol as methods that return "ring the bell now" rather
   than doing I/O, so the kernel and the driver glue choose how to ring, and

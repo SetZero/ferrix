@@ -4,7 +4,7 @@
 //! VERIFICATION.md` §3).
 //!
 //! The measurement is QEMU's `drcov` TCG plugin, named by
-//! `FERRIX_QEMU_PLUGIN`, and `scripts/coverage-report.py`, which reads the
+//! `FERRIX_QEMU_PLUGIN`, and `scripts/gen/coverage-report.py`, which reads the
 //! trace against the kernel's DWARF line table. Two things about a suite of
 //! gates make that harder than one boot:
 //!
@@ -523,11 +523,11 @@ fn report(arch: Arch, directory: &Path) -> Result<()> {
     ];
     arguments.extend(traces.iter().map(|trace| trace.display().to_string()));
     println!(
-        "\n  coverage: {arch}: python3 scripts/coverage-report.py {}",
+        "\n  coverage: {arch}: python3 scripts/gen/coverage-report.py {}",
         arguments.join(" ")
     );
     let borrowed: Vec<&str> = arguments.iter().map(String::as_str).collect();
-    crate::check::python_with("scripts/coverage-report.py", &borrowed)
+    crate::check::python_with("scripts/gen/coverage-report.py", &borrowed)
 }
 
 #[cfg(test)]

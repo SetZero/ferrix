@@ -11,7 +11,7 @@ package FerrixMemory {
     private import FerrixLifecycle::*;
 
     // -----------------------------------------------------------------------
-    // Physical frames (libs/frame, kernel/src/mm.rs)
+    // Physical frames (libs/kernel/frame, kernel/src/mm.rs)
     // -----------------------------------------------------------------------
 
     enum def FrameState { Reserved; Free; FreeTail; Allocated; }
@@ -86,7 +86,7 @@ package FerrixMemory {
     part def PerCpuFrameCache;
 
     // -----------------------------------------------------------------------
-    // The kernel heap (libs/heap)
+    // The kernel heap (libs/kernel/heap)
     // -----------------------------------------------------------------------
 
     interface def HeapBacking {
@@ -125,7 +125,7 @@ package FerrixMemory {
     part def ObjectSlab;
 
     // -----------------------------------------------------------------------
-    // Page tables (libs/paging)
+    // Page tables (libs/kernel/paging)
     // -----------------------------------------------------------------------
 
     attribute def MapFlags {
@@ -204,7 +204,7 @@ package FerrixMemory {
         @stage { number = 2; }
         doc /* "Give me a range of addresses and let me decide later what goes
              * behind it": device windows, non-contiguous buffers, guard-paged
-             * stacks. The arena is a libs/vma AddressSpace over the vmap area
+             * stacks. The arena is a libs/kernel/vma AddressSpace over the vmap area
              * past the reserved windows, because a kernel arena and a process
              * address space are the same problem. Allocation identity lives in
              * a second map beside it, because the arena merges adjacent equal
@@ -231,7 +231,7 @@ package FerrixMemory {
     }
 
     // -----------------------------------------------------------------------
-    // Virtual memory areas (libs/vma)
+    // Virtual memory areas (libs/kernel/vma)
     // -----------------------------------------------------------------------
 
     enum def BackingKind { Anonymous; File; Device; }
@@ -337,7 +337,7 @@ package FerrixMemory {
 
     #implemented part def ProcessAddressSpace {
         @stage { number = 6; }
-        doc /* kernel/src/user/space.rs: a root frame, a libs/vma AddressSpace,
+        doc /* kernel/src/user/space.rs: a root frame, a libs/kernel/vma AddressSpace,
              * and a map from id to VMO. Each Vma names a VMO, an offset, a
              * protection and a share mode. VMOs are shared through Arc, so
              * this references them and never owns them. The kernel half is
@@ -415,7 +415,7 @@ package FerrixMemory {
         }
         #implemented action mprotect {
             @stage { number = 7; }
-            doc /* libs/vma's protect, with splitting and merging; PROT_NONE
+            doc /* libs/kernel/vma's protect, with splitting and merging; PROT_NONE
                  * is kept as no access rather than widened to readable. */
         }
         #implemented action brk { @stage { number = 7; } }
@@ -529,7 +529,7 @@ package FerrixMemory {
 
     #implemented part def UserElfLoader {
         @stage { number = 6; }
-        doc /* kernel/src/syscall/load.rs over libs/elf. Each PT_LOAD is mapped
+        doc /* kernel/src/syscall/load.rs over libs/platform/elf. Each PT_LOAD is mapped
              * as anonymous memory and its bytes copied in through the user copy
              * layer, with permissions computed per page so two segments sharing
              * a page get their union, and a union that is writable and

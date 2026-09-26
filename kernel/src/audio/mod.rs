@@ -1,7 +1,7 @@
 //! The audio core: sound cards served by ring-3 drivers, and the streams
 //! programs play through them.
 //!
-//! `docs/AUDIO.md` §3 is the design. A driver (`user/snd`, started by devmgr)
+//! `docs/AUDIO.md` §3 is the design. A driver (`native/drivers/snd`, started by devmgr)
 //! asks for a control channel with `sound_control_create`; the core's task for
 //! the card waits for its HELLO, judges it with `ferrix_sndctl::session`,
 //! allocates the published stream's buffer, publishes `/dev/snd/controlC<N>`

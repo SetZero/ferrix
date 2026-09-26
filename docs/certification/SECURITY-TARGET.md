@@ -10,7 +10,7 @@ would not survive one.
 | | |
 |---|---|
 | ST title | Ferrix Kernel Core Security Target |
-| TOE | Ferrix certified item, as defined by `scripts/certification-item.json` |
+| TOE | Ferrix certified item, as defined by `scripts/data/certification-item.json` |
 | TOE version | `48d58fb0`, reference configuration in the manifest |
 | CC version | 3.1 Revision 5 |
 | Assurance level | EAL5+ (ALC_FLR.2) |
@@ -41,9 +41,9 @@ procfs, sysfs and tmpfs; the TCP/IP stack; the Linux system-call personality,
 from its dispatcher to its `mmap`, `futex`, rlimits and POSIX threads; the
 ring-3 device drivers; and all user software. 47,528 lines of kernel code
 are in this category and the boundary is enforced at build time by
-`scripts/check-item-boundary.py`.
+`scripts/check/check-item-boundary.py`.
 
-The **loader** (`boot/`, 3,503 lines) is in the reference configuration but
+The **loader** (`boot/uefi/`, 3,503 lines) is in the reference configuration but
 outside the TOE; it is covered by A.FIRMWARE in §3.3.
 
 ### 1.3 TOE security functionality, in brief
@@ -257,11 +257,11 @@ How the TOE meets each objective, with the evidence that exists today.
 | O.ISOLATE | Per-process page tables built by `kernel/src/user/space.rs`; higher-half kernel mapping; TLB shootdown on SMP. Against speculative reads, the defences in `kernel/src/arch/speculation.rs` and each architecture's `speculation.rs`: program-chosen indices clamped at the system call boundary, the processor's speculation controls, a predictor barrier at each switch of address space. | `user/check.rs`, `user/rmap_check.rs`; `arch/speculation_check.rs`, every boot: *"speculation defences read back on 4 processors"* |
 | O.WXN | Enforced at map time; `WXN`/`NX` set on all three architectures. The direct map's alias of the kernel's text and read-only data is mapped read only by both loaders (F-34), so no mapping of the text's frames is writable, not only none of the text's own. | Every boot sweeps all mappings: *"w^x 3485 mappings swept, 917 executable, none writable"*, then every mapping of the text's frames: *"sealed 4416 KiB of text and read-only data, 1697 mappings of it, none writable"* (x86-64, 2026-09-26). A write of text through the direct map faults on all three architectures (FX-9001) |
 | O.CAPABILITY | `kernel/src/object/`: handle tables, rights masks, transfer only over channels. | `object/check.rs`, 3,318 lines; *"18 refusals as specified"* |
-| O.DMA | `kernel/src/iommu/{vtd,smmuv3}.rs`; a driver receives an `IoMapping` and a domain. | `iommu/gate.rs`; `scripts/check-device-access.py` holds the seam at build time |
+| O.DMA | `kernel/src/iommu/{vtd,smmuv3}.rs`; a driver receives an `IoMapping` and a domain. | `iommu/gate.rs`; `scripts/check/check-device-access.py` holds the seam at build time |
 | O.SCRUB | `mm::zero_frame` on every frame handed to a VMO. | `kernel/src/mm.rs:1140`, called from `user/vmo.rs` at three sites |
-| O.QUOTA | A quota slot per job in `kernel/src/object/quota.rs`, charged hierarchically at every task, frame and native object a job's programs make and uncharged wherever each goes (the frame record keeps its slot); the kernel heap the Linux personality holds for its programs charged as memory, in bytes, by a `libs/kmem` token kept in each object (F-37); a per-job weight applied to each task's in `sched`. Set by `job_set_limit` or cgroupfs. What is bounded otherwise is in §9.7. | `object/quota_check.rs`, every boot: *"a fork loop refused at its job's 8 tasks; faults refused at 47 pages (3 of them page tables, beside 512 bytes of its regions' heap) while a sibling job faulted in 48; objects refused at 5; one task alone in its job kept 50.0% of a processor against eight in another; every counter back to zero and every quota slot given back"*; `fs/kmem_check.rs`, every boot: *"at a 32 KiB memory limit a job made 34 files, 14 pipes, 5 socket pairs, 70 descriptors in flight, 128 epoll registrations, 31 eventfds, 255 regions of one mapping and 454 record locks, and was refused one more of each -- ENOMEM, ENOLCK for a lock -- while a sibling made one; every byte of heap charged came back"* (x86-64, 2026-09-26); eight negative controls (W-13, W-15) |
+| O.QUOTA | A quota slot per job in `kernel/src/object/quota.rs`, charged hierarchically at every task, frame and native object a job's programs make and uncharged wherever each goes (the frame record keeps its slot); the kernel heap the Linux personality holds for its programs charged as memory, in bytes, by a `libs/kernel/kmem` token kept in each object (F-37); a per-job weight applied to each task's in `sched`. Set by `job_set_limit` or cgroupfs. What is bounded otherwise is in §9.7. | `object/quota_check.rs`, every boot: *"a fork loop refused at its job's 8 tasks; faults refused at 47 pages (3 of them page tables, beside 512 bytes of its regions' heap) while a sibling job faulted in 48; objects refused at 5; one task alone in its job kept 50.0% of a processor against eight in another; every counter back to zero and every quota slot given back"*; `fs/kmem_check.rs`, every boot: *"at a 32 KiB memory limit a job made 34 files, 14 pipes, 5 socket pairs, 70 descriptors in flight, 128 epoll registrations, 31 eventfds, 255 regions of one mapping and 454 record locks, and was refused one more of each -- ENOMEM, ENOLCK for a lock -- while a sibling made one; every byte of heap charged came back"* (x86-64, 2026-09-26); eight negative controls (W-13, W-15) |
 | O.VALIDATE | `kernel/src/syscall/uaccess.rs`, backed on x86-64 by SMEP and SMAP since 2026-09-25, and on AArch64 by PAN where the CPU has it. The reference `cortex-a72` does not, and ARMv7-A cannot (V-01). | `syscall/check.rs`, 9,537 lines, 427 refusal assertions; the boot reports *SMEP on, SMAP on* |
-| O.FAILSAFE | `kernel/src/panic.rs` with a catalogue of explanations. | `scripts/check-panic-audit.py`; `gen-panic-catalog.py --check` |
+| O.FAILSAFE | `kernel/src/panic.rs` with a catalogue of explanations. | `scripts/check/check-panic-audit.py`; `gen-panic-catalog.py --check` |
 
 ---
 

@@ -2,7 +2,7 @@
 //!
 //! The kernel enumerates buses and does not drive devices
 //! (`docs/ARCHITECTURE.md` §7). This is the enumeration: where firmware said
-//! configuration space is, a [`ConfigSpace`] over it, and the walk `libs/pci`
+//! configuration space is, a [`ConfigSpace`] over it, and the walk `libs/platform/pci`
 //! already proves on the host, run over real devices.
 //!
 //! # Where configuration space is
@@ -221,7 +221,7 @@ impl Space {
     /// its width, or on a bus that could not be mapped.
     ///
     /// The alignment is refused rather than served because a volatile read of
-    /// a misaligned `u16` or `u32` is undefined behaviour; `libs/pci` never
+    /// a misaligned `u16` or `u32` is undefined behaviour; `libs/platform/pci` never
     /// asks for one, so a refusal reads as all ones and nothing else changes.
     fn register(&self, function: Address, offset: u16, width: u16) -> Option<(Mmio, u64)> {
         if !offset.is_multiple_of(width) {
@@ -330,7 +330,7 @@ pub(crate) enum Failure {
         /// The bus.
         bus: u8,
     },
-    /// `libs/pci` refused what a function presented.
+    /// `libs/platform/pci` refused what a function presented.
     Refused(PciError),
     /// A virtio queue said something impossible about a request in flight.
     Queue(ferrix_virtio::QueueError),

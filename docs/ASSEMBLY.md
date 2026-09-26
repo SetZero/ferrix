@@ -1,8 +1,8 @@
 # Assembly
 
 This OS is written in Rust. This document is the complete argument for every
-place it is not, and `scripts/check-asm-budget.py` fails the build on any
-assembly site that is not listed in `scripts/asm-allowlist.json`.
+place it is not, and `scripts/check/check-asm-budget.py` fails the build on any
+assembly site that is not listed in `scripts/data/asm-allowlist.json`.
 
 ## The test for admission
 
@@ -47,10 +47,10 @@ admitted the block on 2026-09-13 on exactly those conditions.
 
 ### The one loader without UEFI: the Pixel 7
 
-`bootloaders/pixel7/` is the exception, because the phone offers no UEFI. Its
+`boot/pixel7/` is the exception, because the phone offers no UEFI. Its
 signed bootloader, ABL, boots an Android boot image under the Linux arm64 boot
 protocol: it jumps to the image's first byte **at EL2, with the MMU off and no
-stack**, the device tree's address in `x0`. What UEFI does for `boot/`, that
+stack**, the device tree's address in `x0`. What UEFI does for `boot/uefi/`, that
 loader has to do itself before any Rust runs, and each piece is defined by the
 machine or by ABL rather than by choice:
 
@@ -62,18 +62,18 @@ machine or by ABL rather than by choice:
   the level it is written for;
 * a `VBAR_EL1` table, sixteen entries at fixed 128-byte offsets, so a fault in
   the loader is reported rather than hung on;
-* and at the other end the switch into the kernel, which is `boot/`'s less the
+* and at the other end the switch into the kernel, which is `boot/uefi/`'s less the
   half that turns the MMU off, since it never came on; with it `dc ivac`,
   because everything the loader writes goes to RAM with the caches off, and a
   line ABL left cached must be discarded rather than cleaned over it.
 
-All of it is in one file, `bootloaders/pixel7/src/entry.rs`, allow-listed with
+All of it is in one file, `boot/pixel7/src/entry.rs`, allow-listed with
 a budget of 130 lines.
 
 ## The list
 
 Each entry names why Rust cannot express it. Entries are added to
-`scripts/asm-allowlist.json` in the same commit as the code.
+`scripts/data/asm-allowlist.json` in the same commit as the code.
 
 ### Every architecture
 
@@ -116,8 +116,8 @@ enters in SVC mode unless the machine was built with virtualisation.
 
 ### A native program, on every architecture
 
-`user/rt`, the runtime a native program links, has one file per architecture
-under `user/rt/src/arch/`, and each holds the same three things.
+`native/rt`, the runtime a native program links, has one file per architecture
+under `native/rt/src/arch/`, and each holds the same three things.
 
 | Site | Why |
 |---|---|

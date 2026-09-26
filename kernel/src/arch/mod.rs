@@ -3,7 +3,7 @@
 //! Generic kernel code reaches the CPU only through this module — never by
 //! naming `x86_64`, `aarch64` or `armv7a` — and `#[cfg(target_arch)]` appears
 //! nowhere else in the tree. Both rules are enforced by
-//! `scripts/check-crate-layering.sh`, because a facade maintained by convention
+//! `scripts/check/check-crate-layering.sh`, because a facade maintained by convention
 //! is a facade for about six weeks.
 
 #[cfg(target_arch = "aarch64")]
@@ -41,7 +41,7 @@ use x86_64::speculation as machine_speculation;
 /// try it the other way round, which is how it was: the facade named
 /// `crate::syscall::stat::StatLayout`, and the trusted core therefore depended
 /// on the Linux personality for a constant. Data here, behaviour there, and
-/// the dependency points the way `scripts/check-item-boundary.py` requires.
+/// the dependency points the way `scripts/check/check-item-boundary.py` requires.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StatLayout {
     /// x86-64's own, from `arch/x86/include/uapi/asm/stat.h`: 144 bytes. It

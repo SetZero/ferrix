@@ -6,7 +6,7 @@
 //! [`init::bootstrap_channel`], and given as `exec::run_init` gives it. Given
 //! so to a process of the check's own, `process_bootstrap` must answer a
 //! channel end on which exactly one message waits: the kernel's hello,
-//! [`INIT_HELLO_BYTES`] bytes with no handle, which `libs/native-abi`
+//! [`INIT_HELLO_BYTES`] bytes with no handle, which `libs/proto/native-abi`
 //! recognises as version 1, with the kernel's end still open. Given so to a
 //! loaded program, the program must take it by number and close it, and the
 //! kernel's end must hear the close.

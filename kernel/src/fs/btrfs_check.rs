@@ -2,13 +2,13 @@
 //! ring-3 driver serves, mounted through the kernel's own mount path and
 //! read back against what the host wrote.
 //!
-//! `xtask` attaches the `none` fixture from `libs/btrfs/testdata` as the
+//! `xtask` attaches the `none` fixture from `libs/fs/btrfs/testdata` as the
 //! second virtio-blk disk, and the driver check starts a driver for every
 //! virtio-blk function, so by the time this runs the fixture is `vdb` in the
 //! registry. The check mounts it read-only at `/mnt` exactly as `mount -t
 //! btrfs -o ro /dev/vdb /mnt` would, then walks the fixture's manifest: every
 //! file read whole through the VFS, its size and CRC-32C compared with the
-//! manifest's, which `scripts/gen-btrfs-fixtures.py` computed from the bytes
+//! manifest's, which `scripts/gen/gen-btrfs-fixtures.py` computed from the bytes
 //! it gave `mkfs.btrfs`; every directory found to be one; every link's target
 //! read and compared the same way. The mount is left in place, so a program
 //! in the initramfs can read the tree too, which `test-vfs` does.
@@ -28,7 +28,7 @@ use crate::block_ring::VIRTIO_BLK_MAJOR;
 use crate::fs;
 
 /// The fixture's manifest: `kind hex(path) size crc32c` per line.
-const MANIFEST: &str = include_str!("../../../libs/btrfs/testdata/manifest.txt");
+const MANIFEST: &str = include_str!("../../../libs/fs/btrfs/testdata/manifest.txt");
 
 /// Where the disk is mounted.
 const MOUNT_POINT: &[u8] = b"/mnt";

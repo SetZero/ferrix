@@ -33,11 +33,11 @@ still has to happen. It happens at the integrator, and this item's certificate
 | Not in scope | VFS, btrfs, network stack, Linux personality, ring-3 drivers — 44,215 lines of uncertified load |
 | Reference configuration | x86-64, AArch64, ARMv7-A; release profile; rustc 1.97.1; zero Cargo features; built `--mitigations on`, the default |
 
-The boundary is enforced on every build by `scripts/check-item-boundary.py`, so
+The boundary is enforced on every build by `scripts/check/check-item-boundary.py`, so
 what this manual describes and what ships cannot drift apart silently. The
 manual's own claims are held the same way: every requirement and failure mode
-below names its evidence in `scripts/safety-requirements.json`, and
-`scripts/check-safety-requirements.py` fails the build when a citation stops
+below names its evidence in `scripts/data/safety-requirements.json`, and
+`scripts/check/check-safety-requirements.py` fails the build when a citation stops
 resolving or when the manual and the register disagree about which ids exist.
 It caught a wrong citation the first time it ran.
 
@@ -120,7 +120,7 @@ shall treat ASR-8 as unmet until they have. (Finding F-24.)
 The element allocates dynamically, and reports allocation failure at every
 site in its own source. A native call answers `NO_MEMORY`, a Linux call
 `ENOMEM` (`EAGAIN` from `madvise`), and the element carries on.
-`scripts/check-fallible-alloc.py` fails the build on an allocation that does
+`scripts/check/check-fallible-alloc.py` fails the build on an allocation that does
 not report failure, and every boot proves the handling by failing allocations
 under the native calls ([MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) §1). Two
 cases still reach the safe state of §3. An allocation failure during bring-up,

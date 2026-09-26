@@ -1,0 +1,299 @@
+[package]
+name = "ferrix-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace, so `cargo fuzz` can pick its own profile and its
+# sanitizer-instrumented build does not disturb the main target directory.
+# `scripts/check/check-crate-layering.sh` knows to skip a manifest that declares one.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ferrix-acpi = { path = "../../libs/platform/acpi" }
+ferrix-cpio = { path = "../../libs/fs/cpio" }
+ferrix-elf = { path = "../../libs/platform/elf" }
+ferrix-fdt = { path = "../../libs/platform/fdt" }
+ferrix-frame = { path = "../../libs/kernel/frame" }
+ferrix-ustack = { path = "../../libs/kernel/ustack" }
+ferrix-linux-abi = { path = "../../libs/proto/linux-abi" }
+ferrix-native-abi = { path = "../../libs/proto/native-abi" }
+ferrix-objects = { path = "../../libs/kernel/objects" }
+ferrix-sync = { path = "../../libs/kernel/sync" }
+ferrix-vfs = { path = "../../libs/fs/vfs" }
+ferrix-pci = { path = "../../libs/platform/pci" }
+ferrix-btrfs = { path = "../../libs/fs/btrfs" }
+ferrix-block = { path = "../../libs/fs/block", features = ["model"] }
+ferrix-blkring = { path = "../../libs/proto/blkring" }
+ferrix-virtio = { path = "../../libs/drivers/virtio" }
+ferrix-displayctl = { path = "../../libs/proto/displayctl" }
+ferrix-renderctl = { path = "../../libs/proto/renderctl" }
+ferrix-inputctl = { path = "../../libs/proto/inputctl" }
+ferrix-sndctl = { path = "../../libs/proto/sndctl" }
+ferrix-virtio-blk = { path = "../../libs/drivers/virtio-blk" }
+ferrix-virtio-net = { path = "../../libs/drivers/virtio-net" }
+ferrix-virtio-gpu = { path = "../../libs/drivers/virtio-gpu" }
+ferrix-virtio-input = { path = "../../libs/drivers/virtio-input" }
+ferrix-netwire = { path = "../../libs/network/netwire" }
+ferrix-nettcp = { path = "../../libs/network/nettcp" }
+ferrix-net = { path = "../../libs/network/net" }
+ferrix-netlink = { path = "../../libs/network/netlink" }
+ferrix-cgroupfs = { path = "../../libs/fs/cgroupfs" }
+ferrix-sysfs = { path = "../../libs/fs/sysfs" }
+ferrix-svc = { path = "../../libs/init/svc" }
+ferrix-svc-proto = { path = "../../libs/init/svc-proto" }
+compositor-config = { path = "../../userland/compositor/config" }
+compositor-wire = { path = "../../userland/compositor/wire" }
+
+[[bin]]
+name = "elf_parse"
+path = "fuzz_targets/elf_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "frame_alloc"
+path = "fuzz_targets/frame_alloc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ustack_build"
+path = "fuzz_targets/ustack_build.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "handle_table"
+path = "fuzz_targets/handle_table.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vfs_ops"
+path = "fuzz_targets/vfs_ops.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pci_walk"
+path = "fuzz_targets/pci_walk.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "btrfs_read"
+path = "fuzz_targets/btrfs_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "block_queue"
+path = "fuzz_targets/block_queue.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "blkring"
+path = "fuzz_targets/blkring.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "virtio_blk"
+path = "fuzz_targets/virtio_blk.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "virtio_net"
+path = "fuzz_targets/virtio_net.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cpio_parse"
+path = "fuzz_targets/cpio_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fdt_parse"
+path = "fuzz_targets/fdt_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "acpi_tables"
+path = "fuzz_targets/acpi_tables.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "linux_abi"
+path = "fuzz_targets/linux_abi.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "netwire_parse"
+path = "fuzz_targets/netwire_parse.rs"
+test = false
+doc = false
+bench = false
+[[bin]]
+name = "nettcp_state"
+path = "fuzz_targets/nettcp_state.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "net_input"
+path = "fuzz_targets/net_input.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "netlink_walk"
+path = "fuzz_targets/netlink_walk.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cgroupfs_write"
+path = "fuzz_targets/cgroupfs_write.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sysfs_names"
+path = "fuzz_targets/sysfs_names.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "svc_unit"
+path = "fuzz_targets/svc_unit.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "svc_manager"
+path = "fuzz_targets/svc_manager.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "svc_proto"
+path = "fuzz_targets/svc_proto.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hyprconf_parse"
+path = "fuzz_targets/hyprconf_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "virtio_gpu"
+path = "fuzz_targets/virtio_gpu.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "virtio_input"
+path = "fuzz_targets/virtio_input.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "virtio_snd"
+path = "fuzz_targets/virtio_snd.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "displayctl"
+path = "fuzz_targets/displayctl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "renderctl"
+path = "fuzz_targets/renderctl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "inputctl"
+path = "fuzz_targets/inputctl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sndctl"
+path = "fuzz_targets/sndctl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "virtio_gpu_pipeline"
+path = "fuzz_targets/virtio_gpu_pipeline.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "virtio_input_driver"
+path = "fuzz_targets/virtio_input_driver.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "wayland_wire"
+path = "fuzz_targets/wayland_wire.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = true
+# The fuzzer's whole job is to find these, so they must not be compiled out.
+overflow-checks = true

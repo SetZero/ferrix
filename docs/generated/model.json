@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "7bee251bfc60918330f299571405d99596c7a5c829dd9fd60b36a1c2ec24105e",
+  "digest": "69929052f6c2accafbb778a6509ecc54a03f6db544c19ba039d125b904e6122d",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -28,7 +28,7 @@
     },
     {
       "path": "docs/sysml/06-objects.sysml",
-      "synopsis": "Ferrix — SysML v2 model, part 6: kernel objects and the two ABIs.\n\ndocs/ARCHITECTURE.md §2 and §3. The constants for the Linux half are in libs/linux-abi and for the native half in libs/native-abi. The objects a handle can name exist in kernel/src/object, the core half of a process among them; the POSIX half and threads in kernel/src/syscall. No handle names an address space or a thread yet."
+      "synopsis": "Ferrix — SysML v2 model, part 6: kernel objects and the two ABIs.\n\ndocs/ARCHITECTURE.md §2 and §3. The constants for the Linux half are in libs/proto/linux-abi and for the native half in libs/proto/native-abi. The objects a handle can name exist in kernel/src/object, the core half of a process among them; the POSIX half and threads in kernel/src/syscall. No handle names an address space or a thread yet."
     },
     {
       "path": "docs/sysml/07-isolation.sysml",
@@ -459,7 +459,7 @@
               "kind": "requirement",
               "shortName": "P.6",
               "type": "DesignRule",
-              "doc": "Generic code never names an architecture and #[cfg(target_arch)] appears nowhere outside arch/. Enforced by scripts/check-crate-layering.sh, because a facade maintained by convention is a facade for about six weeks.",
+              "doc": "Generic code never names an architecture and #[cfg(target_arch)] appears nowhere outside arch/. Enforced by scripts/check/check-crate-layering.sh, because a facade maintained by convention is a facade for about six weeks.",
               "source": {
                 "file": "docs/sysml/01-requirements.sysml",
                 "line": 125
@@ -471,7 +471,7 @@
               "kind": "requirement",
               "shortName": "P.7",
               "type": "DesignRule",
-              "doc": "No assembly at boot on any architecture. What exists is confined to constructs the machine defines before a Rust function could run, listed in scripts/asm-allowlist.json with an argument each, under an absolute line cap.",
+              "doc": "No assembly at boot on any architecture. What exists is confined to constructs the machine defines before a Rust function could run, listed in scripts/data/asm-allowlist.json with an argument each, under an absolute line cap.",
               "source": {
                 "file": "docs/sysml/01-requirements.sysml",
                 "line": 132
@@ -638,7 +638,7 @@
               "kind": "requirement",
               "shortName": "N.3",
               "type": "Principles::DesignRule",
-              "doc": "libs/acpi reads the fixed tables only. There is no AML interpreter and there will be none.",
+              "doc": "libs/platform/acpi reads the fixed tables only. There is no AML interpreter and there will be none.",
               "source": {
                 "file": "docs/sysml/01-requirements.sysml",
                 "line": 218
@@ -940,7 +940,7 @@
           "qualifiedName": "FerrixStructure::BootHandoffPort",
           "kind": "port",
           "definition": true,
-          "doc": "The loader and the kernel are two programs linked for different targets that meet at exactly one struct, declared once in libs/bootinfo. A mismatch is a type error rather than a triple fault.",
+          "doc": "The loader and the kernel are two programs linked for different targets that meet at exactly one struct, declared once in libs/proto/bootinfo. A mismatch is a type error rather than a triple fault.",
           "source": {
             "file": "docs/sysml/02-structure.sysml",
             "line": 92
@@ -1022,7 +1022,7 @@
           "qualifiedName": "FerrixStructure::LinuxSyscallPort",
           "kind": "port",
           "definition": true,
-          "doc": "Syscall numbers 0.., each architecture's table as Linux defines it (the EABI table on ARMv7-A). A compatibility obligation: no opinions live here. libs/linux-abi holds the numbers, errnos and repr(C) layouts.",
+          "doc": "Syscall numbers 0.., each architecture's table as Linux defines it (the EABI table on ARMv7-A). A compatibility obligation: no opinions live here. libs/proto/linux-abi holds the numbers, errnos and repr(C) layouts.",
           "source": {
             "file": "docs/sysml/02-structure.sysml",
             "line": 110
@@ -1227,7 +1227,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 1,
-          "doc": "boot/: the UEFI loader. Reads the kernel from the volume it was booted from, copies it to its link address, builds the address space, takes the memory map, leaves boot services, installs the new tables and jumps. Only the last step is assembly, because the return address of a Rust call would be in the address space just replaced. One program for three architectures: boot/src/arch has one file per machine and no second loader.",
+          "doc": "boot/uefi/: the UEFI loader. Reads the kernel from the volume it was booted from, copies it to its link address, builds the address space, takes the memory map, leaves boot services, installs the new tables and jumps. Only the last step is assembly, because the return address of a Rust call would be in the address space just replaced. One program for three architectures: boot/uefi/src/arch has one file per machine and no second loader.",
           "source": {
             "file": "docs/sysml/02-structure.sysml",
             "line": 174
@@ -1291,7 +1291,7 @@
               "qualifiedName": "FerrixStructure::Loader::uefi",
               "kind": "part",
               "type": "UefiBindings",
-              "doc": "boot/src/uefi: the handful of protocols and tables used — simple file system, loaded image, graphics output, and the ACPI and device-tree configuration tables. Hand-written, no crates.io dependency.",
+              "doc": "boot/uefi/src/uefi: the handful of protocols and tables used — simple file system, loaded image, graphics output, and the ACPI and device-tree configuration tables. Hand-written, no crates.io dependency.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 191
@@ -1302,7 +1302,7 @@
               "qualifiedName": "FerrixStructure::Loader::services",
               "kind": "part",
               "type": "Services",
-              "doc": "boot/src/services.rs: allocation, memory map, and the one call after which firmware is gone: ExitBootServices.",
+              "doc": "boot/uefi/src/services.rs: allocation, memory map, and the one call after which firmware is gone: ExitBootServices.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 197
@@ -1313,7 +1313,7 @@
               "qualifiedName": "FerrixStructure::Loader::load",
               "kind": "part",
               "type": "ImageLoading",
-              "doc": "boot/src/load.rs: ELF parse via libs/elf, placement, page tables via libs/paging, the identity plan for the switch.",
+              "doc": "boot/uefi/src/load.rs: ELF parse via libs/platform/elf, placement, page tables via libs/kernel/paging, the identity plan for the switch.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 201
@@ -1857,7 +1857,7 @@
               "qualifiedName": "FerrixStructure::Initramfs::devmgr",
               "kind": "part",
               "type": "UserBinary",
-              "doc": "/sbin/devmgr, a native program on user/rt.",
+              "doc": "/sbin/devmgr, a native program on native/rt.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 316
@@ -1881,7 +1881,7 @@
               "qualifiedName": "FerrixStructure::Initramfs::virtioBlk",
               "kind": "part",
               "type": "UserBinary",
-              "doc": "/lib/drivers/blk, a native program on user/rt.",
+              "doc": "/lib/drivers/blk, a native program on native/rt.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 320
@@ -1905,7 +1905,7 @@
               "qualifiedName": "FerrixStructure::Initramfs::virtioGpu",
               "kind": "part",
               "type": "UserBinary",
-              "doc": "/lib/drivers/gpu, a native program on user/rt.",
+              "doc": "/lib/drivers/gpu, a native program on native/rt.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 324
@@ -1929,7 +1929,7 @@
               "qualifiedName": "FerrixStructure::Initramfs::virtioNet",
               "kind": "part",
               "type": "UserBinary",
-              "doc": "/lib/drivers/net, a native program on user/rt.",
+              "doc": "/lib/drivers/net, a native program on native/rt.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 328
@@ -1953,7 +1953,7 @@
               "qualifiedName": "FerrixStructure::Initramfs::virtioInput",
               "kind": "part",
               "type": "UserBinary",
-              "doc": "/lib/drivers/input, a native program on user/rt.",
+              "doc": "/lib/drivers/input, a native program on native/rt.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 332
@@ -1977,7 +1977,7 @@
               "qualifiedName": "FerrixStructure::Initramfs::vport",
               "kind": "part",
               "type": "UserBinary",
-              "doc": "/lib/drivers/vport, the virtio-serial port driver, a native program on user/rt.",
+              "doc": "/lib/drivers/vport, the virtio-serial port driver, a native program on native/rt.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 336
@@ -2001,7 +2001,7 @@
               "qualifiedName": "FerrixStructure::Initramfs::virtioSndDriver",
               "kind": "part",
               "type": "UserBinary",
-              "doc": "/lib/drivers/snd, the virtio-snd driver (docs/AUDIO.md), a native program on user/rt over libs/virtio-snd.",
+              "doc": "/lib/drivers/snd, the virtio-snd driver (docs/AUDIO.md), a native program on native/rt over libs/drivers/virtio-snd.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 341
@@ -2063,7 +2063,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 6,
-          "doc": "A running Linux binary -- static musl, a static PIE, or dynamically linked through the interpreter its PT_INTERP names -- as a Process (see FerrixObjects) speaking the Linux ABI, and optionally the native one. devmgr and the drivers are native programs on user/rt, which make the few Linux calls they need as well.",
+          "doc": "A running Linux binary -- static musl, a static PIE, or dynamically linked through the interpreter its PT_INTERP names -- as a Process (see FerrixObjects) speaking the Linux ABI, and optionally the native one. devmgr and the drivers are native programs on native/rt, which make the few Linux calls they need as well.",
           "source": {
             "file": "docs/sysml/02-structure.sysml",
             "line": 357
@@ -2121,7 +2121,7 @@
               "type": "UserProcess",
               "maturity": "inProgress",
               "stage": 15,
-              "doc": "/sbin/init (init/, docs/INIT.md), since 2026-09-26: pid 1 around libs/svc's manager. It mounts /run and cgroup2, runs each service in a cgroup of its own from clone3, reaps, restarts, gives the console a getty and a shell with a session of its own, and powers off. /bin/svc drives it over /run/ferrix/control; it waits for notify readiness, starts services on a socket's first connection, and applies MemoryMax=, TasksMax= and OOMPolicy= over the scoped OOM kill. It gives services bootstrap channels, starts native ones in their cgroup's job, and routes the directory's OPENs. Only cargo xtask test-init boots it; the images still start their program as pid 1 until L10.",
+              "doc": "/sbin/init (userland/init/, docs/INIT.md), since 2026-09-26: pid 1 around libs/init/svc's manager. It mounts /run and cgroup2, runs each service in a cgroup of its own from clone3, reaps, restarts, gives the console a getty and a shell with a session of its own, and powers off. /bin/svc drives it over /run/ferrix/control; it waits for notify readiness, starts services on a socket's first connection, and applies MemoryMax=, TasksMax= and OOMPolicy= over the scoped OOM kill. It gives services bootstrap channels, starts native ones in their cgroup's job, and routes the directory's OPENs. Only cargo xtask test-init boots it; the images still start their program as pid 1 until L10.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 377
@@ -2227,7 +2227,7 @@
               "qualifiedName": "FerrixStructure::ArchFacade::encoding",
               "kind": "part",
               "type": "PageTableEncoding",
-              "doc": "PageEncoding: which libs/paging Encoding this machine's descriptors use.",
+              "doc": "PageEncoding: which libs/kernel/paging Encoding this machine's descriptors use.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 430
@@ -3611,7 +3611,7 @@
           "name": "Workspace",
           "qualifiedName": "FerrixStructure::Workspace",
           "kind": "package",
-          "doc": "docs/ARCHITECTURE.md §9. libs/ is host-testable by design and is the only code cargo test, Miri and the fuzzers can reach; boot/ and kernel/ are reached by the QEMU boot test; xtask/ by cargo test. user/ holds the native programs the initramfs carries -- devmgr, the drivers and the runtime they link -- built for the kernel's targets and kept out of the host gates. scripts/check-crate-layering.sh keeps the arrows below pointing the right way.",
+          "doc": "docs/ARCHITECTURE.md §9. libs/ is host-testable by design and is the only code cargo test, Miri and the fuzzers can reach; boot/uefi/ and kernel/ are reached by the QEMU boot test; xtask/ by cargo test. native/ holds the native programs the initramfs carries -- devmgr, the drivers and the runtime they link -- built for the kernel's targets and kept out of the host gates. scripts/check/check-crate-layering.sh keeps the arrows below pointing the right way.",
           "source": {
             "file": "docs/sysml/02-structure.sysml",
             "line": 802
@@ -3789,7 +3789,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::bootinfo",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/bootinfo\"",
+                  "value": "\"libs/proto/bootinfo\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 835
@@ -3825,7 +3825,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::elf",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/elf\"",
+                  "value": "\"libs/platform/elf\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 841
@@ -3860,7 +3860,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::frameCrate",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/frame\"",
+                  "value": "\"libs/kernel/frame\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 847
@@ -3896,7 +3896,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::heap",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/heap\"",
+                  "value": "\"libs/kernel/heap\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 851
@@ -3931,7 +3931,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::paging",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/paging\"",
+                  "value": "\"libs/kernel/paging\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 857
@@ -3967,7 +3967,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::acpi",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/acpi\"",
+                  "value": "\"libs/platform/acpi\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 863
@@ -4014,7 +4014,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::fdt",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/fdt\"",
+                  "value": "\"libs/platform/fdt\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 873
@@ -4061,7 +4061,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::sync",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/sync\"",
+                  "value": "\"libs/kernel/sync\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 882
@@ -4108,7 +4108,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::crng",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/crng\"",
+                  "value": "\"libs/kernel/crng\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 893
@@ -4156,7 +4156,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::sched",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/sched\"",
+                  "value": "\"libs/kernel/sched\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 902
@@ -4203,7 +4203,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::vma",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/vma\"",
+                  "value": "\"libs/kernel/vma\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 911
@@ -4251,7 +4251,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::linuxAbi",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/linux-abi\"",
+                  "value": "\"libs/proto/linux-abi\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 921
@@ -4299,7 +4299,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::ustack",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/ustack\"",
+                  "value": "\"libs/kernel/ustack\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 938
@@ -4336,7 +4336,7 @@
               "type": "LibraryCrate",
               "maturity": "implemented",
               "stage": 8,
-              "doc": "The newc reader the initramfs is unpacked with, reached through libs/vfs. The cpio_parse fuzz target writes every archive it walks to a trailer back out and requires it to read back identical.",
+              "doc": "The newc reader the initramfs is unpacked with, reached through libs/fs/vfs. The cpio_parse fuzz target writes every archive it walks to a trailer back out and requires it to read back identical.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 949
@@ -4347,7 +4347,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::cpio",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/cpio\"",
+                  "value": "\"libs/fs/cpio\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 950
@@ -4395,7 +4395,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::vfs",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/vfs\"",
+                  "value": "\"libs/fs/vfs\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 960
@@ -4443,7 +4443,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::procfs",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/procfs\"",
+                  "value": "\"libs/fs/procfs\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 972
@@ -4490,7 +4490,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::sysfs",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/sysfs\"",
+                  "value": "\"libs/fs/sysfs\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 983
@@ -4538,7 +4538,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::virtio",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/virtio\"",
+                  "value": "\"libs/drivers/virtio\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 994
@@ -4585,7 +4585,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::netwire",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/netwire\"",
+                  "value": "\"libs/network/netwire\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1005
@@ -4632,7 +4632,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::nettcp",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/nettcp\"",
+                  "value": "\"libs/network/nettcp\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1019
@@ -4679,7 +4679,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::netCore",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/net\"",
+                  "value": "\"libs/network/net\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1037
@@ -4726,7 +4726,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::netServe",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/netserve\"",
+                  "value": "\"libs/drivers/netserve\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1055
@@ -4773,7 +4773,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::netRing",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/netring\"",
+                  "value": "\"libs/proto/netring\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1072
@@ -4820,7 +4820,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::netlink",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/netlink\"",
+                  "value": "\"libs/network/netlink\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1086
@@ -4846,7 +4846,7 @@
               "type": "LibraryCrate",
               "maturity": "implemented",
               "stage": 10,
-              "doc": "The virtio-net driver logic, written ahead of the network device it drives from user/net: bring-up in the order the status protocol fixes, a receive queue the driver fills and refills because an empty one drops every frame in silence, a transmit queue whose buffers stay the caller's until the device says it has read them, and a drain that acknowledges the interrupt before it starts. It negotiates no checksum, segmentation or merge-buffer feature, so a frame is one buffer and every header is the twelve bytes VERSION_1 makes it. It holds no handle: a transport, pinned pages and a header area go in, and frames go each way. The virtio_net fuzz target drives it from a device whose every register, used entry and header byte a stranger chose, and requires every accepted frame to be answered exactly once.",
+              "doc": "The virtio-net driver logic, written ahead of the network device it drives from native/drivers/net: bring-up in the order the status protocol fixes, a receive queue the driver fills and refills because an empty one drops every frame in silence, a transmit queue whose buffers stay the caller's until the device says it has read them, and a drain that acknowledges the interrupt before it starts. It negotiates no checksum, segmentation or merge-buffer feature, so a frame is one buffer and every header is the twelve bytes VERSION_1 makes it. It holds no handle: a transport, pinned pages and a header area go in, and frames go each way. The virtio_net fuzz target drives it from a device whose every register, used entry and header byte a stranger chose, and requires every accepted frame to be answered exactly once.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1102
@@ -4857,7 +4857,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::virtioNet",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/virtio-net\"",
+                  "value": "\"libs/drivers/virtio-net\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1103
@@ -4883,7 +4883,7 @@
               "type": "LibraryCrate",
               "maturity": "implemented",
               "stage": 17,
-              "doc": "The virtio-gpu 2D driver logic, written ahead of the driver process for the compositor's first iteration and driven from user/gpu since: bring-up with the control queue alone, one command at a time, every response checked, and the pipeline from the display core's requests to device commands. A failed step is undone as far as is safe, and pages the device may still hold are never unpinned. Its tests drive a frame to a fake device's screen; the virtio_gpu_pipeline fuzz target requires one reply per request and no unpin without a pin. Since stage 19 it takes the features 3D needs when asked.",
+              "doc": "The virtio-gpu 2D driver logic, written ahead of the driver process for the compositor's first iteration and driven from native/drivers/gpu since: bring-up with the control queue alone, one command at a time, every response checked, and the pipeline from the display core's requests to device commands. A failed step is undone as far as is safe, and pages the device may still hold are never unpinned. Its tests drive a frame to a fake device's screen; the virtio_gpu_pipeline fuzz target requires one reply per request and no unpin without a pin. Since stage 19 it takes the features 3D needs when asked.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1121
@@ -4894,7 +4894,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::virtioGpu",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/virtio-gpu\"",
+                  "value": "\"libs/drivers/virtio-gpu\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1122
@@ -4930,7 +4930,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::virtioSnd",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/virtio-snd\"",
+                  "value": "\"libs/drivers/virtio-snd\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1138
@@ -4956,7 +4956,7 @@
               "type": "LibraryCrate",
               "maturity": "implemented",
               "stage": 17,
-              "doc": "The virtio-input driver logic, written ahead of the driver process for the input iteration (docs/INPUT.md) and driven from user/input since: bring-up that stops at FEATURES_OK so no event is discarded before the core has judged the device, the device's description read as a HELLO, the event queue kept full because QEMU drops a whole report for want of one buffer, and the events the device wrote batched into the EVENTS messages the core reads. It forwards only what the core would publish and drops the rest; it ends a report the core would refuse for length and counts the cut; and memory the device may still write into is never handed back. The virtio_input_driver fuzz target plays a device and the glue against a real session, and requires the core never to refuse a message the batch made and no event to be lost or reordered.",
+              "doc": "The virtio-input driver logic, written ahead of the driver process for the input iteration (docs/INPUT.md) and driven from native/drivers/input since: bring-up that stops at FEATURES_OK so no event is discarded before the core has judged the device, the device's description read as a HELLO, the event queue kept full because QEMU drops a whole report for want of one buffer, and the events the device wrote batched into the EVENTS messages the core reads. It forwards only what the core would publish and drops the rest; it ends a report the core would refuse for length and counts the cut; and memory the device may still write into is never handed back. The virtio_input_driver fuzz target plays a device and the glue against a real session, and requires the core never to refuse a message the batch made and no event to be lost or reordered.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1152
@@ -4967,7 +4967,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::virtioInput",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/virtio-input\"",
+                  "value": "\"libs/drivers/virtio-input\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1153
@@ -5004,7 +5004,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::displayctl",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/displayctl\"",
+                  "value": "\"libs/proto/displayctl\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1173
@@ -5052,7 +5052,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::inputctl",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/inputctl\"",
+                  "value": "\"libs/proto/inputctl\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1190
@@ -5099,7 +5099,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::sndctl",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/sndctl\"",
+                  "value": "\"libs/proto/sndctl\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1212
@@ -5147,7 +5147,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::pci",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/pci\"",
+                  "value": "\"libs/platform/pci\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1232
@@ -5195,7 +5195,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::nativeAbi",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/native-abi\"",
+                  "value": "\"libs/proto/native-abi\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1245
@@ -5243,7 +5243,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::objects",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/objects\"",
+                  "value": "\"libs/kernel/objects\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1255
@@ -5291,7 +5291,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::btrfs",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/btrfs\"",
+                  "value": "\"libs/fs/btrfs\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1266
@@ -5339,7 +5339,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::btrfsWrite",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/btrfs-write\"",
+                  "value": "\"libs/fs/btrfs-write\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1278
@@ -5376,7 +5376,7 @@
               "type": "LibraryCrate",
               "maturity": "implemented",
               "stage": 11,
-              "doc": "btrfs mounted into the VFS: FileSystem and Inode over the read path, read-only and holding no lock across I/O, and a writable mount over libs/btrfs-write behind one sleeping lock, whose writes become extents at the commit.",
+              "doc": "btrfs mounted into the VFS: FileSystem and Inode over the read path, read-only and holding no lock across I/O, and a writable mount over libs/fs/btrfs-write behind one sleeping lock, whose writes become extents at the commit.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1291
@@ -5387,7 +5387,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::btrfsVfs",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/btrfs-vfs\"",
+                  "value": "\"libs/fs/btrfs-vfs\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1292
@@ -5435,7 +5435,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::blockQueue",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/block\"",
+                  "value": "\"libs/fs/block\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1302
@@ -5483,7 +5483,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::blkRing",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/blkring\"",
+                  "value": "\"libs/proto/blkring\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1312
@@ -5520,7 +5520,7 @@
               "type": "LibraryCrate",
               "maturity": "implemented",
               "stage": 10,
-              "doc": "A ring-3 block driver's serve loop between the block ring and a virtio-blk device, written against a trait so it runs on the host with a fake device; user/blk adds only the handles.",
+              "doc": "A ring-3 block driver's serve loop between the block ring and a virtio-blk device, written against a trait so it runs on the host with a fake device; native/drivers/blk adds only the handles.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1324
@@ -5531,7 +5531,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::blkServe",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/blkserve\"",
+                  "value": "\"libs/drivers/blkserve\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1325
@@ -5568,7 +5568,7 @@
               "type": "LibraryCrate",
               "maturity": "implemented",
               "stage": 10,
-              "doc": "The virtio-blk driver logic over a transport and DMA memory it is handed: bring-up to DRIVER_OK, read, write and flush, each completion counted once even from a hostile device, and memory handed back only after the device's reset. Driven from user/blk; fuzzed by virtio_blk.",
+              "doc": "The virtio-blk driver logic over a transport and DMA memory it is handed: bring-up to DRIVER_OK, read, write and flush, each completion counted once even from a hostile device, and memory handed back only after the device's reset. Driven from native/drivers/blk; fuzzed by virtio_blk.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1334
@@ -5579,7 +5579,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::virtioBlk",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/virtio-blk\"",
+                  "value": "\"libs/drivers/virtio-blk\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1335
@@ -5616,7 +5616,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::devmgrProto",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/devmgr-proto\"",
+                  "value": "\"libs/proto/devmgr-proto\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1345
@@ -5652,7 +5652,7 @@
               "kind": "part",
               "type": "LibraryCrate",
               "maturity": "implemented",
-              "doc": "Typed, safe wrappers over every native system call, with owned handles, written against a raw call trait: user/rt implements it with the trap instruction, and the tests with a recorder that plays the kernel's part.",
+              "doc": "Typed, safe wrappers over every native system call, with owned handles, written against a raw call trait: native/rt implements it with the trap instruction, and the tests with a recorder that plays the kernel's part.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1354
@@ -5663,7 +5663,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::nativeCrate",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/native\"",
+                  "value": "\"libs/proto/native\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1355
@@ -5711,7 +5711,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::renderctl",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/renderctl\"",
+                  "value": "\"libs/proto/renderctl\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1364
@@ -5748,7 +5748,7 @@
               "type": "LibraryCrate",
               "maturity": "implemented",
               "stage": 19,
-              "doc": "The STM32MP157's Vivante GC400T as logic over registers and command memory (docs/GPU.md §6.3): the registers and the command stream from the etnaviv project's MIT-licensed register database, the identity, reset and initialisation in the order Linux's etnaviv driver uses them, and a WAIT/LINK ring. Linked by user/gc400, which devmgr starts on the board, where it ran on 2026-09-24; no QEMU machine has the core, so no gate drives it.",
+              "doc": "The STM32MP157's Vivante GC400T as logic over registers and command memory (docs/GPU.md §6.3): the registers and the command stream from the etnaviv project's MIT-licensed register database, the identity, reset and initialisation in the order Linux's etnaviv driver uses them, and a WAIT/LINK ring. Linked by native/drivers/gc400, which devmgr starts on the board, where it ran on 2026-09-24; no QEMU machine has the core, so no gate drives it.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1375
@@ -5759,7 +5759,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::gc400",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/gc400\"",
+                  "value": "\"libs/drivers/gc400\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1376
@@ -5795,7 +5795,7 @@
               "kind": "part",
               "type": "LibraryCrate",
               "maturity": "implemented",
-              "doc": "Text and filled rectangles on a linear framebuffer, with an embedded Spleen 8x16 font, clipped rather than refused and allocating nothing: what the panic screen (kernel/src/panic/screen.rs) draws with, and compositor/term as well.",
+              "doc": "Text and filled rectangles on a linear framebuffer, with an embedded Spleen 8x16 font, clipped rather than refused and allocating nothing: what the panic screen (kernel/src/panic/screen.rs) draws with, and userland/compositor/term as well.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1389
@@ -5806,7 +5806,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::fbtext",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/fbtext\"",
+                  "value": "\"libs/kernel/fbtext\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1390
@@ -5853,7 +5853,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::qr",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/qr\"",
+                  "value": "\"libs/kernel/qr\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1400
@@ -5900,7 +5900,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::vdagent",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/vdagent\"",
+                  "value": "\"libs/drivers/vdagent\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1407
@@ -5936,7 +5936,7 @@
               "kind": "part",
               "type": "LibraryCrate",
               "maturity": "writtenAhead",
-              "doc": "The virtio-console driver: bring-up, the control conversation until a named port is open, and that port's bytes (docs/CLIPBOARD.md §3). Linked by user/vport, which devmgr starts when --clipboard puts the device on the bus; no gate drives it yet.",
+              "doc": "The virtio-console driver: bring-up, the control conversation until a named port is open, and that port's bytes (docs/CLIPBOARD.md §3). Linked by native/drivers/vport, which devmgr starts when --clipboard puts the device on the bus; no gate drives it yet.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1415
@@ -5947,7 +5947,7 @@
                   "qualifiedName": "FerrixStructure::Workspace::virtioConsole",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/virtio-console\"",
+                  "value": "\"libs/drivers/virtio-console\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1416
@@ -6966,7 +6966,7 @@
           "qualifiedName": "FerrixBoot::VirtualLayout",
           "kind": "part",
           "definition": true,
-          "doc": "libs/bootinfo::Layout. Both instances are checked for overlap at compile time on every build, whichever one the build uses.",
+          "doc": "libs/proto/bootinfo::Layout. Both instances are checked for overlap at compile time on every build, whichever one the build uses.",
           "source": {
             "file": "docs/sysml/03-boot.sysml",
             "line": 133
@@ -7346,7 +7346,7 @@
               "modifiers": [
                 "then"
               ],
-              "doc": "Read /FERRIX/KERNEL.ELF from the volume the loader came from, parse it with libs/elf, copy the segments to their link address. Malformed segments are refused here rather than discovered by the MMU. /FERRIX/INITRD.IMG, when the volume has one, is read into memory of its own kind, Initrd, which nothing reclaims; absent is not an error.",
+              "doc": "Read /FERRIX/KERNEL.ELF from the volume the loader came from, parse it with libs/platform/elf, copy the segments to their link address. Malformed segments are refused here rather than discovered by the MMU. /FERRIX/INITRD.IMG, when the volume has one, is read into memory of its own kind, Initrd, which nothing reclaims; absent is not an error.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
                 "line": 194
@@ -7372,7 +7372,7 @@
               "modifiers": [
                 "then"
               ],
-              "doc": "libs/paging Mapper: the image at its link address, the direct map from the lowest RAM address, and an identity plan for the loader's own code so the instruction after the switch is fetchable. The loader also maps itself where the kernel can reach it, so the kernel can drop the map rather than abandon a table.",
+              "doc": "libs/kernel/paging Mapper: the image at its link address, the direct map from the lowest RAM address, and an identity plan for the loader's own code so the instruction after the switch is fetchable. The loader also maps itself where the kernel can reach it, so the kernel can drop the map rather than abandon a table.",
               "source": {
                 "file": "docs/sysml/03-boot.sysml",
                 "line": 206
@@ -10178,7 +10178,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 2,
-          "doc": "\"Give me a range of addresses and let me decide later what goes behind it\": device windows, non-contiguous buffers, guard-paged stacks. The arena is a libs/vma AddressSpace over the vmap area past the reserved windows, because a kernel arena and a process address space are the same problem. Allocation identity lives in a second map beside it, because the arena merges adjacent equal ranges, which is right for a process and wrong for an allocator.",
+          "doc": "\"Give me a range of addresses and let me decide later what goes behind it\": device windows, non-contiguous buffers, guard-paged stacks. The arena is a libs/kernel/vma AddressSpace over the vmap area past the reserved windows, because a kernel arena and a process address space are the same problem. Allocation identity lives in a second map beside it, because the arena merges adjacent equal ranges, which is right for a process and wrong for an allocator.",
           "source": {
             "file": "docs/sysml/04-memory.sysml",
             "line": 203
@@ -10609,7 +10609,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 6,
-          "doc": "kernel/src/user/space.rs: a root frame, a libs/vma AddressSpace, and a map from id to VMO. Each Vma names a VMO, an offset, a protection and a share mode. VMOs are shared through Arc, so this references them and never owns them. The kernel half is shared into the root by prepare_user_root.",
+          "doc": "kernel/src/user/space.rs: a root frame, a libs/kernel/vma AddressSpace, and a map from id to VMO. Each Vma names a VMO, an offset, a protection and a share mode. VMOs are shared through Arc, so this references them and never owns them. The kernel half is shared into the root by prepare_user_root.",
           "source": {
             "file": "docs/sysml/04-memory.sysml",
             "line": 338
@@ -10729,7 +10729,7 @@
               "kind": "action",
               "maturity": "implemented",
               "stage": 7,
-              "doc": "libs/vma's protect, with splitting and merging; PROT_NONE is kept as no access rather than widened to readable.",
+              "doc": "libs/kernel/vma's protect, with splitting and merging; PROT_NONE is kept as no access rather than widened to readable.",
               "source": {
                 "file": "docs/sysml/04-memory.sysml",
                 "line": 416
@@ -11015,7 +11015,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 6,
-          "doc": "kernel/src/syscall/load.rs over libs/elf. Each PT_LOAD is mapped as anonymous memory and its bytes copied in through the user copy layer, with permissions computed per page so two segments sharing a page get their union, and a union that is writable and executable refused. ET_EXEC; a static PIE, ET_DYN with no interpreter, placed at two thirds of the user half to relocate itself; and since dynamic linking a program whose PT_INTERP names a linker, loaded beside it at INTERP_BASE, which is entered with AT_BASE. Segments are still copied in rather than mapped from the file's VMO, though stage 8's page cache now exists.",
+          "doc": "kernel/src/syscall/load.rs over libs/platform/elf. Each PT_LOAD is mapped as anonymous memory and its bytes copied in through the user copy layer, with permissions computed per page so two segments sharing a page get their union, and a union that is writable and executable refused. ET_EXEC; a static PIE, ET_DYN with no interpreter, placed at two thirds of the user half to relocate itself; and since dynamic linking a program whose PT_INTERP names a linker, loaded beside it at INTERP_BASE, which is entered with AT_BASE. Segments are still copied in rather than mapped from the file's VMO, though stage 8's page cache now exists.",
           "source": {
             "file": "docs/sysml/04-memory.sysml",
             "line": 530
@@ -11525,7 +11525,7 @@
           "qualifiedName": "FerrixScheduling::SchedClass",
           "kind": "enum",
           "definition": true,
-          "doc": "Highest first. libs/sched names Fair and Idle today; the real-time classes are stage 14's.",
+          "doc": "Highest first. libs/kernel/sched names Fair and Idle today; the real-time classes are stage 14's.",
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
             "line": 150
@@ -11651,7 +11651,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 5,
-          "doc": "kernel/src/sched/task.rs: a kernel thread — a guard-paged stack, a saved stack pointer, and the bookkeeping that says where it is. Everything about choosing between tasks is libs/sched's. The saved stack pointer is touched only by the CPU that holds the owning run queue's lock at that moment. From stage 6 also a user thread, 1:1, forced by the ABI; one of the nine kernel objects.",
+          "doc": "kernel/src/sched/task.rs: a kernel thread — a guard-paged stack, a saved stack pointer, and the bookkeeping that says where it is. Everything about choosing between tasks is libs/kernel/sched's. The saved stack pointer is touched only by the CPU that holds the owning run queue's lock at that moment. From stage 6 also a user thread, 1:1, forced by the ABI; one of the nine kernel objects.",
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
             "line": 162
@@ -12203,7 +12203,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 5,
-          "doc": "libs/sched: entities with weight and virtual runtime; the queue's virtual time is the weight-average; an entity is eligible when its virtual runtime is at or behind it; the pick is the eligible entity with the earliest virtual deadline. The tree is an AVL ordered by deadline, each subtree remembering its minimum virtual runtime, so the pick is one O(log n) walk. Lag stays within one request, which is what the boot test measures.",
+          "doc": "libs/kernel/sched: entities with weight and virtual runtime; the queue's virtual time is the weight-average; an entity is eligible when its virtual runtime is at or behind it; the pick is the eligible entity with the earliest virtual deadline. The tree is an AVL ordered by deadline, each subtree remembering its minimum virtual runtime, so the pick is one O(log n) walk. Lag stays within one request, which is what the boot test measures.",
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
             "line": 337
@@ -12312,7 +12312,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 5,
-          "doc": "libs/sched/balance.rs. A geometric decay with a 33-millisecond half-life, in the shape of Linux's PELT, measuring *weighted demand* rather than occupancy — a processor is either running something or it is not, so \"busy\" saturates at one task and says nothing after that, which leaves a balancer nothing to compare. Four runnable nice-0 tasks read four times one.\n\nCarried with ten bits of extra precision, which is not a detail: each step truncates twice, and without them the loss balances the gain at about 978 of 1024, so a permanently busy processor would report 95% forever and every comparison would be against a ceiling nothing could reach.",
+          "doc": "libs/kernel/sched/balance.rs. A geometric decay with a 33-millisecond half-life, in the shape of Linux's PELT, measuring *weighted demand* rather than occupancy — a processor is either running something or it is not, so \"busy\" saturates at one task and says nothing after that, which leaves a balancer nothing to compare. Four runnable nice-0 tasks read four times one.\n\nCarried with ten bits of extra precision, which is not a detail: each step truncates twice, and without them the loss balances the gain at about 978 of 1024, so a permanently busy processor would report 95% forever and every comparison would be against a ceiling nothing could reach.",
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
             "line": 360
@@ -12560,7 +12560,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 5,
-          "doc": "libs/sched/domain.rs. CPUs are partitioned into domains, each in one of three modes, changeable at runtime. Per domain, not global: a four-core machine runs a HardRt partition on one core and Throughput on the other three, with rustc on the latter. Stage 5 builds one domain holding every CPU (up to 256) in Throughput; the mode is a property of the domain from the first line, the class stack is looked up from the mode, and SoftRt and HardRt are named and refused until stage 14. check_partition requires the domains to cover the online CPUs exactly once.",
+          "doc": "libs/kernel/sched/domain.rs. CPUs are partitioned into domains, each in one of three modes, changeable at runtime. Per domain, not global: a four-core machine runs a HardRt partition on one core and Throughput on the other three, with rustc on the latter. Stage 5 builds one domain holding every CPU (up to 256) in Throughput; the mode is a property of the domain from the first line, the class stack is looked up from the mode, and SoftRt and HardRt are named and refused until stage 14. check_partition requires the domains to cover the online CPUs exactly once.",
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
             "line": 447
@@ -12879,7 +12879,7 @@
               "kind": "part",
               "type": "LoadBalancing",
               "maturity": "implemented",
-              "doc": "Stage 5 left nothing beyond work stealing by an idle processor; Placement and Balancing above were added after it: kernel/src/sched/mod.rs's balance(), at most every 16 milliseconds per processor, pulling and pushing over libs/sched's arithmetic.",
+              "doc": "Stage 5 left nothing beyond work stealing by an idle processor; Placement and Balancing above were added after it: kernel/src/sched/mod.rs's balance(), at most every 16 milliseconds per processor, pulling and pushing over libs/kernel/sched's arithmetic.",
               "source": {
                 "file": "docs/sysml/05-scheduling.sysml",
                 "line": 513
@@ -13562,7 +13562,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 13,
-          "doc": "What a job and every job beneath it may hold at once, and hold now: the Security Target's FRU_RSA.1 (certification finding F-35, work order W-13). kernel/src/object/quota.rs: a slot in a table of atomics, named by a u32 so a frame freed under any lock finds its charge from the frame record alone. A charge walks the slots from the job up with a compare-and-swap at each, so a limit anywhere above refuses and no use passes a limit even briefly. Charged: the job's tasks (fork, clone, process_create; uncharged at reap), its programs' frames and page tables (at allocation, to the running task's job; at every free), the native objects they make (a token in each), and the kernel heap the Linux personality and its libraries hold for them (a libs/kmem token in each object, charged as memory in bytes against the same limit, as cgroup v2 folds kmem into memory.max; certification finding F-37, work order W-15). The processor is a weight, not a limit: each task runs at its own weight times its job's weight over its job's load. cgroupfs's pids, memory and cpu files are a view of it, memory.stat's kernel line the heap alone.",
+          "doc": "What a job and every job beneath it may hold at once, and hold now: the Security Target's FRU_RSA.1 (certification finding F-35, work order W-13). kernel/src/object/quota.rs: a slot in a table of atomics, named by a u32 so a frame freed under any lock finds its charge from the frame record alone. A charge walks the slots from the job up with a compare-and-swap at each, so a limit anywhere above refuses and no use passes a limit even briefly. Charged: the job's tasks (fork, clone, process_create; uncharged at reap), its programs' frames and page tables (at allocation, to the running task's job; at every free), the native objects they make (a token in each), and the kernel heap the Linux personality and its libraries hold for them (a libs/kernel/kmem token in each object, charged as memory in bytes against the same limit, as cgroup v2 folds kmem into memory.max; certification finding F-37, work order W-15). The processor is a weight, not a limit: each task runs at its own weight times its job's weight over its job's load. cgroupfs's pids, memory and cpu files are a view of it, memory.stat's kernel line the heap alone.",
           "source": {
             "file": "docs/sysml/06-objects.sysml",
             "line": 142
@@ -13715,7 +13715,7 @@
           "qualifiedName": "FerrixObjects::FdTable",
           "kind": "part",
           "definition": true,
-          "doc": "File descriptors and their sharing rules, stage 8: libs/vfs's descriptor table behind an Arc, shared where CLONE_FILES asks, with close-on-exec belonging to the number.",
+          "doc": "File descriptors and their sharing rules, stage 8: libs/fs/vfs's descriptor table behind an Arc, shared where CLONE_FILES asks, with close-on-exec belonging to the number.",
           "source": {
             "file": "docs/sysml/06-objects.sysml",
             "line": 183
@@ -13941,7 +13941,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 7,
-          "doc": "The entry path on every architecture, the dispatch table, and the ~150-call surface rustc needs. libs/linux-abi holds the numbers for x86-64, AArch64 and the ARM EABI table, the errnos, and the repr(C) layouts (statx, dirent64, sigaction, ...).\n\nkernel/src/syscall, reached through arch::decode_syscall, which is the only place in the kernel that knows which of the three number tables this build uses. Memory, files and paths, processes and threads, futex, signals, time, identity and credentials, terminals, sockets, epoll, eventfd, timerfd and signalfd; enough for somebody else's busybox (cargo xtask test-shell), a Rust program's threads (test-threads) and rustc compiling hello.rs (test-rustc). The boot test puts every number in 0..=600 through dispatch. Still ENOSYS, each named at its arm: swap, modules, System V IPC, acct, vhangup and rseq.",
+          "doc": "The entry path on every architecture, the dispatch table, and the ~150-call surface rustc needs. libs/proto/linux-abi holds the numbers for x86-64, AArch64 and the ARM EABI table, the errnos, and the repr(C) layouts (statx, dirent64, sigaction, ...).\n\nkernel/src/syscall, reached through arch::decode_syscall, which is the only place in the kernel that knows which of the three number tables this build uses. Memory, files and paths, processes and threads, futex, signals, time, identity and credentials, terminals, sockets, epoll, eventfd, timerfd and signalfd; enough for somebody else's busybox (cargo xtask test-shell), a Rust program's threads (test-threads) and rustc compiling hello.rs (test-rustc). The boot test puts every number in 0..=600 through dispatch. Still ENOSYS, each named at its arm: swap, modules, System V IPC, acct, vhangup and rseq.",
           "source": {
             "file": "docs/sysml/06-objects.sysml",
             "line": 234
@@ -14047,7 +14047,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 9,
-          "doc": "Syscall numbers from 0x1000. Handle-table operations, channel send/receive with handle passing, port wait, interrupt bind, VMO create/map, job create/kill. What devmgr and drivers speak; a process may use both ABIs.\n\nkernel/src/syscall/native.rs, branched to before any Linux table is asked, with the numbers in libs/native-abi/src/nr.rs and typed wrappers in libs/native. Beyond that first list: waits on one object or asynchronously through a port, VMO pins for a device's DMA, a job's quota set and read, process create and start, device info and quiesce, and the calls that make a block or net ring and a display, input or render control channel. Left: an EXECUTE right on a VMO handle, sub-page apertures, and the process calls beyond create and start, 0x1032..=0x1037 held for them.\n\nThe item answers every call on the core's objects in a match the compiler holds exhaustive. The six about a subsystem above it -- the five control-channel creates and job_for_cgroup -- are a table the subsystems register handlers into from main.rs's register_load, and the boot stops (FX-0006) if one has none. A native process is made and started through the Processes the Linux personality lends (syscall/launch.rs), which devmgr starts through too, and a quiesce waits out the Servers the rings and cards register. native.rs names nothing above the item (F-07).",
+          "doc": "Syscall numbers from 0x1000. Handle-table operations, channel send/receive with handle passing, port wait, interrupt bind, VMO create/map, job create/kill. What devmgr and drivers speak; a process may use both ABIs.\n\nkernel/src/syscall/native.rs, branched to before any Linux table is asked, with the numbers in libs/proto/native-abi/src/nr.rs and typed wrappers in libs/proto/native. Beyond that first list: waits on one object or asynchronously through a port, VMO pins for a device's DMA, a job's quota set and read, process create and start, device info and quiesce, and the calls that make a block or net ring and a display, input or render control channel. Left: an EXECUTE right on a VMO handle, sub-page apertures, and the process calls beyond create and start, 0x1032..=0x1037 held for them.\n\nThe item answers every call on the core's objects in a match the compiler holds exhaustive. The six about a subsystem above it -- the five control-channel creates and job_for_cgroup -- are a table the subsystems register handlers into from main.rs's register_load, and the boot stops (FX-0006) if one has none. A native process is made and started through the Processes the Linux personality lends (syscall/launch.rs), which devmgr starts through too, and a quiesce waits out the Servers the rings and cards register. native.rs names nothing above the item (F-07).",
           "source": {
             "file": "docs/sysml/06-objects.sysml",
             "line": 311
@@ -14876,7 +14876,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 3,
-          "doc": "kernel/src/acpi.rs: the one place a physical address firmware wrote becomes a reference the parser reads, through the direct map, refusing addresses or lengths outside it. libs/acpi never dereferences a pointer: RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT, HPET, and for stage 10 the MCFG, GICv2m frames, the DMAR and the IORT. No AML.",
+          "doc": "kernel/src/acpi.rs: the one place a physical address firmware wrote becomes a reference the parser reads, through the direct map, refusing addresses or lengths outside it. libs/platform/acpi never dereferences a pointer: RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT, HPET, and for stage 10 the MCFG, GICv2m frames, the DMAR and the IORT. No AML.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 20
@@ -14936,7 +14936,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 1,
-          "doc": "kernel/src/fdt.rs: the loader's copy of firmware's tree, read through the direct map from DeviceTree memory that nothing reclaims, so the borrow is honestly 'static. libs/fdt: nodes, properties, reg, interrupts, compatible, stdout-path, the interrupt controller, the timer, /cpus, the PSCI conduit.",
+          "doc": "kernel/src/fdt.rs: the loader's copy of firmware's tree, read through the direct map from DeviceTree memory that nothing reclaims, so the borrow is honestly 'static. libs/platform/fdt: nodes, properties, reg, interrupts, compatible, stdout-path, the interrupt controller, the timer, /cpus, the PSCI conduit.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 35
@@ -15085,7 +15085,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 10,
-          "doc": "ACPI on x86-64 and AArch64 under EDK2, device tree on ARMv7-A and where AArch64 firmware offers one; PCIe bus walk from either. kernel/src/pci.rs: MCFG (libs/acpi) or pci-host-ecam-generic (libs/fdt), ECAM mapped a bus at a time, the libs/pci walk with every BAR sized and every capability list walked, in the boot test on all three architectures. Device nodes are built from what it finds: see DeviceNode. Owed after the exit: trusting a BAR firmware placed but left decoding off, of which only the device tree's host-bridge windows are read so far.",
+          "doc": "ACPI on x86-64 and AArch64 under EDK2, device tree on ARMv7-A and where AArch64 firmware offers one; PCIe bus walk from either. kernel/src/pci.rs: MCFG (libs/platform/acpi) or pci-host-ecam-generic (libs/platform/fdt), ECAM mapped a bus at a time, the libs/platform/pci walk with every BAR sized and every capability list walked, in the boot test on all three architectures. Device nodes are built from what it finds: see DeviceNode. Owed after the exit: trusting a BAR firmware placed but left decoding off, of which only the device tree's host-bridge windows are read so far.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 83
@@ -15196,7 +15196,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 10,
-          "doc": "Where the hardware is: libs/acpi's dmar module (VT-d units and their device scopes) and iort module (root complex to SMMUv3 stream IDs), tested against QEMU's own table builders, and the device tree's arm,smmu-v3 nodes and iommu-map. kernel/src/iommu.rs places every PCI function behind a unit before any is programmed, counting what it cannot follow as unresolved rather than bypassing. VT-d on x86-64 and the SMMUv3 under ACPI on AArch64 translate from before PCI enumeration, and a deliberate out-of-domain write faults on both in every boot test. ARMv7-A stays in degraded trusted mode, announced at boot. AMD-Vi is not driven.",
+          "doc": "Where the hardware is: libs/platform/acpi's dmar module (VT-d units and their device scopes) and iort module (root complex to SMMUv3 stream IDs), tested against QEMU's own table builders, and the device tree's arm,smmu-v3 nodes and iommu-map. kernel/src/iommu.rs places every PCI function behind a unit before any is programmed, counting what it cannot follow as unresolved rather than bypassing. VT-d on x86-64 and the SMMUv3 under ACPI on AArch64 translate from before PCI enumeration, and a deliberate out-of-domain write faults on both in every boot test. ARMv7-A stays in degraded trusted mode, announced at boot. AMD-Vi is not driven.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 119
@@ -15232,7 +15232,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 10,
-          "doc": "An ordinary user process in its own Job, holding exactly the capabilities devmgr gave it. A driver fault is a process fault; a wedged driver is a Job kill. Eight exist, native programs on user/rt under /lib/drivers: blk, net, gpu, ltdc, input, usbhid, gc400 and vport, each a thin layer of handles over its libs/ crates.",
+          "doc": "An ordinary user process in its own Job, holding exactly the capabilities devmgr gave it. A driver fault is a process fault; a wedged driver is a Job kill. Eight exist, native programs on native/rt under /lib/drivers: blk, net, gpu, ltdc, input, usbhid, gc400 and vport, each a thin layer of handles over its libs/ crates.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 136
@@ -15330,7 +15330,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 10,
-          "doc": "The data path is not per-request IPC: driver and kernel share a descriptor ring in a VMO and ring a doorbell; requests batch. The same shape virtio and NVMe already use. libs/virtio's split virtqueue (driver and device halves, over abstract shared memory) is the first of these. Between kernel and driver: libs/blkring (docs/BLOCK-RING.md) and libs/netring (docs/NET-RING.md), with kernel/src/block_ring and kernel/src/net_ring as the kernel's ends and doorbells as port packets. The display and input drivers need none: frames do not move, and their control channels carry the rest.",
+          "doc": "The data path is not per-request IPC: driver and kernel share a descriptor ring in a VMO and ring a doorbell; requests batch. The same shape virtio and NVMe already use. libs/drivers/virtio's split virtqueue (driver and device halves, over abstract shared memory) is the first of these. Between kernel and driver: libs/proto/blkring (docs/BLOCK-RING.md) and libs/proto/netring (docs/NET-RING.md), with kernel/src/block_ring and kernel/src/net_ring as the kernel's ends and doorbells as port packets. The display and input drivers need none: frames do not move, and their control channels carry the rest.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 161
@@ -15385,7 +15385,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 10,
-          "doc": "A native program on user/rt, not a musl binary: user/devmgr, /sbin/devmgr. Receives a handle per device node, matches a driver, spawns it in its own Job with the four resources above. The kernel starts it from stage 10's boot check with DEVICES messages holding a job, every device node twice and every driver image /lib/drivers/MANIFEST lists (kernel/src/devmgr.rs, libs/devmgr-proto); it matches virtio-blk, virtio-net, virtio-gpu, virtio-input and the virtio-serial port by a table of its own, starts each driver with START, waits for every one but the port driver to be PUBLISHED before the next, and REPORTs. docs/DEVMGR.md.",
+          "doc": "A native program on native/rt, not a musl binary: native/devmgr, /sbin/devmgr. Receives a handle per device node, matches a driver, spawns it in its own Job with the four resources above. The kernel starts it from stage 10's boot check with DEVICES messages holding a job, every device node twice and every driver image /lib/drivers/MANIFEST lists (kernel/src/devmgr.rs, libs/proto/devmgr-proto); it matches virtio-blk, virtio-net, virtio-gpu, virtio-input and the virtio-serial port by a table of its own, starts each driver with START, waits for every one but the port driver to be PUBLISHED before the next, and REPORTs. docs/DEVMGR.md.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 179
@@ -15441,7 +15441,7 @@
           "specializes": "DriverProcess",
           "maturity": "implemented",
           "stage": 10,
-          "doc": "The first driver: virtio-blk as a user process. Exit test: a sector read through ring 3 with the IOMMU on, and a deliberate out-of-domain DMA attempt faulting. user/blk over libs/virtio-blk and libs/blkserve; the exit is met in the boot test, with VT-d translating on x86-64 and the SMMUv3 on AArch64, and ARMv7-A in degraded trusted mode.",
+          "doc": "The first driver: virtio-blk as a user process. Exit test: a sector read through ring 3 with the IOMMU on, and a deliberate out-of-domain DMA attempt faulting. native/drivers/blk over libs/drivers/virtio-blk and libs/drivers/blkserve; the exit is met in the boot test, with VT-d translating on x86-64 and the SMMUv3 on AArch64, and ARMv7-A in degraded trusted mode.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 207
@@ -15454,7 +15454,7 @@
           "definition": true,
           "specializes": "DriverProcess",
           "maturity": "implemented",
-          "doc": "user/net over libs/virtio-net and libs/netserve, speaking the net ring; cargo xtask test-net is its gate.",
+          "doc": "native/drivers/net over libs/drivers/virtio-net and libs/drivers/netserve, speaking the net ring; cargo xtask test-net is its gate.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 217
@@ -15468,7 +15468,7 @@
           "specializes": "DriverProcess",
           "maturity": "implemented",
           "stage": 17,
-          "doc": "user/gpu over libs/virtio-gpu: the display core's card0 over displayctl, and since stage 19 the render core's renderD128 over renderctl, turning its messages into virtio-gpu's 3D commands. cargo xtask test-display is its gate. The one driver devmgr starts again after it dies (restartDriver).",
+          "doc": "native/drivers/gpu over libs/drivers/virtio-gpu: the display core's card0 over displayctl, and since stage 19 the render core's renderD128 over renderctl, turning its messages into virtio-gpu's 3D commands. cargo xtask test-display is its gate. The one driver devmgr starts again after it dies (restartDriver).",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 222
@@ -15482,7 +15482,7 @@
           "specializes": "DriverProcess",
           "maturity": "implemented",
           "stage": 17,
-          "doc": "user/input over libs/virtio-input, feeding the input core's /dev/input/eventN over inputctl; cargo xtask test-input is its gate.",
+          "doc": "native/drivers/input over libs/drivers/virtio-input, feeding the input core's /dev/input/eventN over inputctl; cargo xtask test-input is its gate.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 231
@@ -15496,7 +15496,7 @@
           "specializes": "DriverProcess",
           "maturity": "implemented",
           "stage": 17,
-          "doc": "user/usbhid over libs/usb-host: the STM32MP157's EHCI controller, its hubs, and HID keyboards, mice and media keys read by their report descriptors, each served to the input core over a control channel of its own, keyboards' LEDs lit by the core's STATUS. devmgr starts it as a bus host and does not wait for it; its memory is pinned PIN_COHERENT. No QEMU machine has the device, so no boot test exercises it: its gates are libs/usb-host's tests against a model of EHCI and the board's bus, and it ran on the DK1 on 2026-09-23 (docs/INPUT.md §7).",
+          "doc": "native/drivers/usbhid over libs/drivers/usb-host: the STM32MP157's EHCI controller, its hubs, and HID keyboards, mice and media keys read by their report descriptors, each served to the input core over a control channel of its own, keyboards' LEDs lit by the core's STATUS. devmgr starts it as a bus host and does not wait for it; its memory is pinned PIN_COHERENT. No QEMU machine has the device, so no boot test exercises it: its gates are libs/drivers/usb-host's tests against a model of EHCI and the board's bus, and it ran on the DK1 on 2026-09-23 (docs/INPUT.md §7).",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 238
@@ -15510,7 +15510,7 @@
           "specializes": "DriverProcess",
           "maturity": "inProgress",
           "stage": 19,
-          "doc": "user/gc400 over libs/gc400: the STM32MP157's Vivante GC400T, the G2 step of the board's gears (docs/GPU.md §6.3). It prints the core's identity, soft-resets and initialises it as etnaviv does, starts the front end on a WAIT/LINK loop in one page pinned PIN_COHERENT, splices in two blocks that each raise an event, and takes each as the interrupt. devmgr starts it as an engine, which serves no kernel subsystem yet, and does not wait for it. No QEMU machine has the core; its gates are libs/gc400's tests against models of the host interface and the front end, and on the board, on 2026-09-24, both events arrived by interrupt (G2 done). Drawing is G3 to G5.",
+          "doc": "native/drivers/gc400 over libs/drivers/gc400: the STM32MP157's Vivante GC400T, the G2 step of the board's gears (docs/GPU.md §6.3). It prints the core's identity, soft-resets and initialises it as etnaviv does, starts the front end on a WAIT/LINK loop in one page pinned PIN_COHERENT, splices in two blocks that each raise an event, and takes each as the interrupt. devmgr starts it as an engine, which serves no kernel subsystem yet, and does not wait for it. No QEMU machine has the core; its gates are libs/drivers/gc400's tests against models of the host interface and the front end, and on the board, on 2026-09-24, both events arrived by interrupt (G2 done). Drawing is G3 to G5.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 252
@@ -15668,7 +15668,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 11,
-          "doc": "Request queues, merging, an I/O scheduler with per-cgroup bandwidth, and the ring protocol to userspace block drivers. A read into a page-cache page fills the VMO the cache already holds. The queue itself (merging, flush and FUA barriers, deadline scheduling) is libs/block, in front of every block ring (kernel/src/block_ring, libs/blkring): one kernel task per ring moves requests onto it and copies payloads through the ring's data VMO, and publishes the disk in devfs's registry as a BlockDevice (kernel/src/fs/block.rs) that reads, writes and flushes whole sectors. No per-cgroup bandwidth: cgroups are stage 13's.",
+          "doc": "Request queues, merging, an I/O scheduler with per-cgroup bandwidth, and the ring protocol to userspace block drivers. A read into a page-cache page fills the VMO the cache already holds. The queue itself (merging, flush and FUA barriers, deadline scheduling) is libs/fs/block, in front of every block ring (kernel/src/block_ring, libs/proto/blkring): one kernel task per ring moves requests onto it and copies payloads through the ring's data VMO, and publishes the disk in devfs's registry as a BlockDevice (kernel/src/fs/block.rs) that reads, writes and flushes whole sectors. No per-cgroup bandwidth: cgroups are stage 13's.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
             "line": 16
@@ -15750,7 +15750,7 @@
           "kind": "part",
           "definition": true,
           "maturity": "implemented",
-          "doc": "The networking stage (docs/ROADMAP.md, Networking), which is not on the path to rustc and was taken after stage 11: AF_INET and AF_INET6 sockets over libs/net, AF_NETLINK route sockets and the ifreq ioctls for configuring an interface, /proc/net for the programs that read it, the net ring, and virtio-net as its first driver, in ring 3, with AF_UNIX names under it all. Its exit criterion is met: cargo xtask test-net configures eth0, resolves a name and fetches a file byte for byte on every architecture.",
+          "doc": "The networking stage (docs/ROADMAP.md, Networking), which is not on the path to rustc and was taken after stage 11: AF_INET and AF_INET6 sockets over libs/network/net, AF_NETLINK route sockets and the ifreq ioctls for configuring an interface, /proc/net for the programs that read it, the net ring, and virtio-net as its first driver, in ring 3, with AF_UNIX names under it all. Its exit criterion is met: cargo xtask test-net configures eth0, resolves a name and fetches a file byte for byte on every architecture.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
             "line": 38
@@ -15763,7 +15763,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 8,
-          "doc": "libs/vfs's Inode trait, which tmpfs, devfs, procfs, pipes, sockets and btrfs implement; Inode::mapping offers what mmap maps.",
+          "doc": "libs/fs/vfs's Inode trait, which tmpfs, devfs, procfs, pipes, sockets and btrfs implement; Inode::mapping offers what mmap maps.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
             "line": 54
@@ -15871,7 +15871,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 8,
-          "doc": "rustc opens tens of thousands of files during a build; this is a performance requirement. Inode cache, dentry cache with negative entries, mount table per mount namespace, fd tables with their sharing rules.\n\nlibs/vfs, host-tested and fuzzed by vfs_ops: dentries with negative entries kept alive by a bounded queue of recent ones, mounts and one path walk for every call that takes a path, open file descriptions apart from descriptor tables, and the permission checks where Linux makes them. kernel/src/fs builds the one namespace every process resolves paths in; mount namespaces are stage 13's.",
+          "doc": "rustc opens tens of thousands of files during a build; this is a performance requirement. Inode cache, dentry cache with negative entries, mount table per mount namespace, fd tables with their sharing rules.\n\nlibs/fs/vfs, host-tested and fuzzed by vfs_ops: dentries with negative entries kept alive by a bounded queue of recent ones, mounts and one path walk for every call that takes a path, open file descriptions apart from descriptor tables, and the permission checks where Linux makes them. kernel/src/fs builds the one namespace every process resolves paths in; mount namespaces are stage 13's.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
             "line": 80
@@ -15995,7 +15995,7 @@
             "abstract"
           ],
           "maturity": "implemented",
-          "doc": "libs/vfs's FileSystem trait.",
+          "doc": "libs/fs/vfs's FileSystem trait.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
             "line": 120
@@ -16047,7 +16047,7 @@
           "specializes": "Filesystem",
           "maturity": "implemented",
           "stage": 8,
-          "doc": "libs/vfs/src/tmpfs.rs, whose file contents are a page store the kernel supplies as a VMO, so a shared mmap of a tmpfs file maps the file's own pages. The root and /tmp are tmpfs, and mount -t tmpfs makes a fresh one.",
+          "doc": "libs/fs/vfs/src/tmpfs.rs, whose file contents are a page store the kernel supplies as a VMO, so a shared mmap of a tmpfs file maps the file's own pages. The root and /tmp are tmpfs, and mount -t tmpfs makes a fresh one.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
             "line": 128
@@ -16075,7 +16075,7 @@
           "specializes": "Filesystem",
           "maturity": "implemented",
           "stage": 8,
-          "doc": "self/maps, self/exe, self/fd backed by the real VM and fd table; cpuinfo, meminfo. kernel/src/fs/procfs.rs over libs/procfs's text, rendered at open: each /proc/<pid> with its fd, status, comm, cmdline, stat, maps, exe, cwd, root, task and mounts, and /proc's mounts, stat, partitions, filesystems, uptime, version, sys, sysrq-trigger and net beside them.",
+          "doc": "self/maps, self/exe, self/fd backed by the real VM and fd table; cpuinfo, meminfo. kernel/src/fs/procfs.rs over libs/fs/procfs's text, rendered at open: each /proc/<pid> with its fd, status, comm, cmdline, stat, maps, exe, cwd, root, task and mounts, and /proc's mounts, stat, partitions, filesystems, uptime, version, sys, sysrq-trigger and net beside them.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
             "line": 143
@@ -16088,7 +16088,7 @@
           "definition": true,
           "specializes": "Filesystem",
           "maturity": "implemented",
-          "doc": "kernel/src/fs/sysfs.rs over libs/sysfs's text, a view that stores nothing, fed by the services that own each fact (docs/SYSFS.md): enumeration's device nodes under devices/pci and platform, the disks, interfaces, cards, render nodes and input devices the ring-3 drivers published, each inside the node its driver serves, and devmgr's word on which driver drives which device. A write to a driver's bind or unbind is sent to devmgr to decide. Mounted on /sys at boot; cgroup2 mounts on its fs/cgroup.",
+          "doc": "kernel/src/fs/sysfs.rs over libs/fs/sysfs's text, a view that stores nothing, fed by the services that own each fact (docs/SYSFS.md): enumeration's device nodes under devices/pci and platform, the disks, interfaces, cards, render nodes and input devices the ring-3 drivers published, each inside the node its driver serves, and devmgr's word on which driver drives which device. A write to a driver's bind or unbind is sent to devmgr to decide. Mounted on /sys at boot; cgroup2 mounts on its fs/cgroup.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
             "line": 153
@@ -16114,7 +16114,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 8,
-          "doc": "libs/cpio: the \"newc\" reader. Borrows, copies nothing, allocates nothing, rejects unsafe paths. Unpacked into tmpfs by libs/vfs's initramfs module through the same calls a program makes, hard links and device nodes included.",
+          "doc": "libs/fs/cpio: the \"newc\" reader. Borrows, copies nothing, allocates nothing, rejects unsafe paths. Unpacked into tmpfs by libs/fs/vfs's initramfs module through the same calls a program makes, hard links and device nodes included.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
             "line": 166
@@ -16127,7 +16127,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 11,
-          "doc": "libs/btrfs: superblock, sys chunk array and chunk map (logical to physical), B-tree nodes and leaves, item payloads (inode, inode ref, dir, extent data), crc32c. Pure functions over bytes, forbid(unsafe_code); no cache, no transactions. Fuzzed from images mkfs.btrfs produced.",
+          "doc": "libs/fs/btrfs: superblock, sys chunk array and chunk map (logical to physical), B-tree nodes and leaves, item payloads (inode, inode ref, dir, extent data), crc32c. Pure functions over bytes, forbid(unsafe_code); no cache, no transactions. Fuzzed from images mkfs.btrfs produced.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
             "line": 174
@@ -16141,7 +16141,7 @@
           "specializes": "Filesystem",
           "maturity": "implemented",
           "stage": 11,
-          "doc": "The real filesystem, read and write, single device, no RAID 5/6. The largest single piece of work in the project. kernel/src/fs/btrfs.rs mounts it from a block node, read-only over libs/btrfs-vfs or writable over libs/btrfs-write, one inode object per inode so two names share one page cache. `/` is a btrfs volume under cargo xtask run, and test-rustc's sysroot is one at /data.",
+          "doc": "The real filesystem, read and write, single device, no RAID 5/6. The largest single piece of work in the project. kernel/src/fs/btrfs.rs mounts it from a block node, read-only over libs/fs/btrfs-vfs or writable over libs/fs/btrfs-write, one inode object per inode so two names share one page cache. `/` is a btrfs volume under cargo xtask run, and test-rustc's sysroot is one at /data.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
             "line": 183
@@ -16197,7 +16197,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 11,
-          "doc": "Stage A: superblock, chunk tree, root tree, fs trees, extent data inline and regular, directory and inode items, crc32c verification, zstd/zlib/lzo. Enough to mount what mkfs.btrfs produced and read a sysroot out of it.\n\nlibs/btrfs and libs/btrfs-vfs, host-tested against real images, with every data sector checked against the checksum tree before its bytes are used and a bounded cache of metadata reads. Exit met on all three architectures: a mkfs.btrfs fixture on a second virtio-blk disk, served by the ring-3 driver, mounted at /mnt and read back against its manifest. A file on the read-only mount cannot be mapped yet (ENODEV); one on the writable mount can.",
+          "doc": "Stage A: superblock, chunk tree, root tree, fs trees, extent data inline and regular, directory and inode items, crc32c verification, zstd/zlib/lzo. Enough to mount what mkfs.btrfs produced and read a sysroot out of it.\n\nlibs/fs/btrfs and libs/fs/btrfs-vfs, host-tested against real images, with every data sector checked against the checksum tree before its bytes are used and a bounded cache of metadata reads. Exit met on all three architectures: a mkfs.btrfs fixture on a second virtio-blk disk, served by the ring-3 driver, mounted at /mnt and read back against its manifest. A file on the read-only mount cannot be mapped yet (ENODEV); one on the writable mount can.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
             "line": 198
@@ -16210,7 +16210,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 12,
-          "doc": "Stage B: copy-on-write allocation through the extent tree, delayed refs, transaction commit against both superblock copies with the right flush/FUA ordering, the free-space tree, the log tree and its replay.\n\nAll three are in libs/btrfs-write, mounted writable by the kernel through libs/btrfs-vfs, and clean under host btrfs check: over what every boot writes (cargo xtask test-btrfs), and before and after the log is replayed when QEMU is killed inside a transaction (cargo xtask test-powerfail). Owed beside the stage: writeback of pages written through MAP_SHARED.",
+          "doc": "Stage B: copy-on-write allocation through the extent tree, delayed refs, transaction commit against both superblock copies with the right flush/FUA ordering, the free-space tree, the log tree and its replay.\n\nAll three are in libs/fs/btrfs-write, mounted writable by the kernel through libs/fs/btrfs-vfs, and clean under host btrfs check: over what every boot writes (cargo xtask test-btrfs), and before and after the log is replayed when QEMU is killed inside a transaction (cargo xtask test-powerfail). Owed beside the stage: writeback of pages written through MAP_SHARED.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
             "line": 215
@@ -16856,7 +16856,7 @@
           "shortName": "S5",
           "type": "Stage",
           "maturity": "implemented",
-          "doc": "Task, kernel stacks, context switch, per-CPU runqueues, the class stack, EEVDF in libs/sched. Scheduling domains from the start with Throughput alone implemented. Exit, met on all three: a thousand kernel threads spawned on one processor run bounded work to completion and give every stack back (about 28,000 switches and 1,000 steals when it landed); then twelve spinners at two weights, each required to stay within EEVDF's own bound of its weighted share, the bound printed beside the lag. Three bugs it found: an idle processor never told of work, vmap::free releasing the address before unmapping, and banked private interrupt enables leaving every other core's timer off.",
+          "doc": "Task, kernel stacks, context switch, per-CPU runqueues, the class stack, EEVDF in libs/kernel/sched. Scheduling domains from the start with Throughput alone implemented. Exit, met on all three: a thousand kernel threads spawned on one processor run bounded work to completion and give every stack back (about 28,000 switches and 1,000 steals when it landed); then twelve spinners at two weights, each required to stay within EEVDF's own bound of its weighted share, the bound printed beside the lag. Three bugs it found: an idle processor never told of work, vmap::free releasing the address before unmapping, and banked private interrupt enables leaving every other core's timer off.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
             "line": 149
@@ -16963,7 +16963,7 @@
           "shortName": "S7",
           "type": "Stage",
           "maturity": "implemented",
-          "doc": "Syscall entry on every architecture, the dispatch table, the core surface: memory, files, process, threads and futex, signals with sigaltstack and rt_sigreturn, time, identity. Exit, met on all three with the script given to sh -c: Alpine's static musl busybox runs a builtins-only script and exits with its status, required line by line by cargo xtask test-shell, which is outside the boot test because it needs a binary the repository does not carry.\n\nBuilt: the three number tables in libs/linux-abi, the startup stack in libs/ustack, dispatch in kernel/src/syscall, the copy layer, the ELF loader, and the calls a static binary makes -- mmap, mmap2, munmap, mprotect, brk, set_tid_address, read and write/writev on the console, the clocks, getrandom, uname, the identity calls, and rt_sigaction, rt_sigprocmask and sigaltstack recorded without delivery; exit_group, arch_prctl and set_tls in each architecture's trap path. Running foreign binaries found a Thumb entry point entered in ARM state and the FPU closed to user mode on both Arm kernels. Since the exit: programs are scheduled tasks, preempted in user mode, with their thread pointer and FPU state switched per task, load/start/kill on Process, and two programs taking turns in the boot test; then fork, vfork and clone without threads, execve, wait4 and waitid, and the process-group and session calls, with a forking and an exec'ing program in the boot test, and the forking one's frames required back once its tasks are reaped; futex waits, wakes and requeues, and clone3 through the same path as clone; descriptors closed when a process ends; and the edge calls busybox makes -- prctl, limits, priorities, credentials, sleeps, clock setting, host names, sysinfo, syslog, reboot, and sockets refused; mremap, execveat, unshare and setns; and /proc/self/exe as the resolved file actually loaded. The program init starts is pid 1, and a process's orphans go to the nearest reaping ancestor or else to init, zombies included, with the parent-death signal each asked for.\n\nSignals delivered on every return to user mode, on Linux's frames, with rt_sigreturn, stop and continue, SIGPIPE, SIGALRM and faults as signals; an interrupted call restarted under SA_RESTART or with no handler and EINTR otherwise, poll never restarting and nanosleep resuming through restart_syscall, as arch_do_signal_or_restart decides. A sigpaths boot check drives the delivery decisions -- SIGCHLD to a handler with wait4 still reaping, stop and continue, the alarm, the alternate stack, the forced fault, and the SA_RESTART truth table -- each with a negative control.\n\nThe console a terminal: termios honoured by a line discipline, the terminal and job-control requests, select and pselect6, and Ctrl-C raised on the foreground group.\n\nLeft: threads, and the stand-ins for a tty, a clock chip and an entropy source. The fault-to-signal catch and an SA_RESTART interrupted read are proven at the kernel's decision, not yet end-to-end by a user program.",
+          "doc": "Syscall entry on every architecture, the dispatch table, the core surface: memory, files, process, threads and futex, signals with sigaltstack and rt_sigreturn, time, identity. Exit, met on all three with the script given to sh -c: Alpine's static musl busybox runs a builtins-only script and exits with its status, required line by line by cargo xtask test-shell, which is outside the boot test because it needs a binary the repository does not carry.\n\nBuilt: the three number tables in libs/proto/linux-abi, the startup stack in libs/kernel/ustack, dispatch in kernel/src/syscall, the copy layer, the ELF loader, and the calls a static binary makes -- mmap, mmap2, munmap, mprotect, brk, set_tid_address, read and write/writev on the console, the clocks, getrandom, uname, the identity calls, and rt_sigaction, rt_sigprocmask and sigaltstack recorded without delivery; exit_group, arch_prctl and set_tls in each architecture's trap path. Running foreign binaries found a Thumb entry point entered in ARM state and the FPU closed to user mode on both Arm kernels. Since the exit: programs are scheduled tasks, preempted in user mode, with their thread pointer and FPU state switched per task, load/start/kill on Process, and two programs taking turns in the boot test; then fork, vfork and clone without threads, execve, wait4 and waitid, and the process-group and session calls, with a forking and an exec'ing program in the boot test, and the forking one's frames required back once its tasks are reaped; futex waits, wakes and requeues, and clone3 through the same path as clone; descriptors closed when a process ends; and the edge calls busybox makes -- prctl, limits, priorities, credentials, sleeps, clock setting, host names, sysinfo, syslog, reboot, and sockets refused; mremap, execveat, unshare and setns; and /proc/self/exe as the resolved file actually loaded. The program init starts is pid 1, and a process's orphans go to the nearest reaping ancestor or else to init, zombies included, with the parent-death signal each asked for.\n\nSignals delivered on every return to user mode, on Linux's frames, with rt_sigreturn, stop and continue, SIGPIPE, SIGALRM and faults as signals; an interrupted call restarted under SA_RESTART or with no handler and EINTR otherwise, poll never restarting and nanosleep resuming through restart_syscall, as arch_do_signal_or_restart decides. A sigpaths boot check drives the delivery decisions -- SIGCHLD to a handler with wait4 still reaping, stop and continue, the alarm, the alternate stack, the forced fault, and the SA_RESTART truth table -- each with a negative control.\n\nThe console a terminal: termios honoured by a line discipline, the terminal and job-control requests, select and pselect6, and Ctrl-C raised on the foreground group.\n\nLeft: threads, and the stand-ins for a tty, a clock chip and an entropy source. The fault-to-signal catch and an SA_RESTART interrupted read are proven at the kernel's decision, not yet end-to-end by a user program.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
             "line": 192
@@ -17059,7 +17059,7 @@
           "shortName": "S9",
           "type": "Stage",
           "maturity": "implemented",
-          "doc": "Handle tables, Channel with handle passing, Port, Interrupt, IoMapping, Job; the 0x1000 syscalls. Exit: two processes exchange messages and a handle over a channel, and a Job kill takes down a process tree.\n\nBuilt: the byte-level half, in libs/native-abi and libs/objects, host-tested, fuzzed and under Miri; and in kernel/src/object and syscall/native, handle tables on every Process, channels carrying handles, VMOs, signals and object_wait_one, Job, ports with object_wait_async, and IoMapping and Interrupt minted from stage 10's device nodes, with interrupts delivered to ports. The exit criterion runs in the boot test: two user-mode programs exchange a message and a VMO handle over a channel, and a job kill ends every program in the job and beneath it. Since: Vmo::hold, which keeps a page a DMA pin holds on its frame, an interrupt that wakes its waiter from the handler, and vmo_map, shared and never executable. Left for later: an EXECUTE right on a VMO handle, with the native loader, sub-page apertures, and process creation in the native ABI.",
+          "doc": "Handle tables, Channel with handle passing, Port, Interrupt, IoMapping, Job; the 0x1000 syscalls. Exit: two processes exchange messages and a handle over a channel, and a Job kill takes down a process tree.\n\nBuilt: the byte-level half, in libs/proto/native-abi and libs/kernel/objects, host-tested, fuzzed and under Miri; and in kernel/src/object and syscall/native, handle tables on every Process, channels carrying handles, VMOs, signals and object_wait_one, Job, ports with object_wait_async, and IoMapping and Interrupt minted from stage 10's device nodes, with interrupts delivered to ports. The exit criterion runs in the boot test: two user-mode programs exchange a message and a VMO handle over a channel, and a job kill ends every program in the job and beneath it. Since: Vmo::hold, which keeps a page a DMA pin holds on its frame, an interrupt that wakes its waiter from the handler, and vmo_map, shared and never executable. Left for later: an EXECUTE right on a VMO handle, with the native loader, sub-page apertures, and process creation in the native ABI.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
             "line": 262
@@ -17107,7 +17107,7 @@
           "shortName": "S10",
           "type": "Stage",
           "maturity": "implemented",
-          "doc": "Enumeration, IOMMU domains, devmgr, the shared-ring block protocol, virtio-blk as a user process. Exit: a sector read through a ring-3 driver with the IOMMU on, and a deliberate out-of-domain DMA attempt faulting.\n\nBuilt: PCI configuration space in libs/pci, host-tested, fuzzed and under Miri; kernel enumeration from the MCFG and the device tree, in the boot test on all three architectures against a virtio-rng-pci device; device nodes whose apertures and vectors are tokens only device.rs mints; a virtio-rng device driven by DMA from the boot check, 64 bytes on every architecture; MSI-X tables and pending bits withheld from apertures; the DMAR and IORT parsed; the ten defects a review found fixed, apertures screened against everything the kernel owns and each other; the virtio-rng completion delivered by MSI-X on every architecture, through arch::msi_allocate (local APIC vectors, GICv2m SPIs); PCI vectors minted per MSI-X entry and masked at the entry, which stage 9's Interrupt uses; every IOMMU found and each PCI function placed behind one (DMAR, IORT, device tree), virtio's DMA sent through it on x86-64 and AArch64, and VT-d and stage-2 table encodings in libs/paging; an iommu::Domain every device node has, which the entropy check's DMA goes through; VT-d programmed at boot on x86-64 and the SMMUv3 under ACPI on AArch64, with translated domains. VMO_PIN pinning VMO pages into a device's domain; the out-of-domain write faulted on x86-64 and AArch64. The block ring (ferrix-blkring, BLOCK-RING.md) with its kernel side, block_ring_create and a disk in the devfs registry from an accepted HELLO; the kernel half of devmgr (device_info, device_quiesce, START, bus mastering at the first pin; DEVMGR.md). Exit met: /sbin/blk, the virtio-blk driver in ring 3, started from the boot check with START, reads sectors through the ring with VT-d and the SMMUv3 translating, ARMv7-A in degraded trusted mode. devmgr the program started by the kernel with every device and driver image, starting blk per disk. Still owed after the exit: trusting decoding-off BARs.",
+          "doc": "Enumeration, IOMMU domains, devmgr, the shared-ring block protocol, virtio-blk as a user process. Exit: a sector read through a ring-3 driver with the IOMMU on, and a deliberate out-of-domain DMA attempt faulting.\n\nBuilt: PCI configuration space in libs/platform/pci, host-tested, fuzzed and under Miri; kernel enumeration from the MCFG and the device tree, in the boot test on all three architectures against a virtio-rng-pci device; device nodes whose apertures and vectors are tokens only device.rs mints; a virtio-rng device driven by DMA from the boot check, 64 bytes on every architecture; MSI-X tables and pending bits withheld from apertures; the DMAR and IORT parsed; the ten defects a review found fixed, apertures screened against everything the kernel owns and each other; the virtio-rng completion delivered by MSI-X on every architecture, through arch::msi_allocate (local APIC vectors, GICv2m SPIs); PCI vectors minted per MSI-X entry and masked at the entry, which stage 9's Interrupt uses; every IOMMU found and each PCI function placed behind one (DMAR, IORT, device tree), virtio's DMA sent through it on x86-64 and AArch64, and VT-d and stage-2 table encodings in libs/kernel/paging; an iommu::Domain every device node has, which the entropy check's DMA goes through; VT-d programmed at boot on x86-64 and the SMMUv3 under ACPI on AArch64, with translated domains. VMO_PIN pinning VMO pages into a device's domain; the out-of-domain write faulted on x86-64 and AArch64. The block ring (ferrix-blkring, BLOCK-RING.md) with its kernel side, block_ring_create and a disk in the devfs registry from an accepted HELLO; the kernel half of devmgr (device_info, device_quiesce, START, bus mastering at the first pin; DEVMGR.md). Exit met: /sbin/blk, the virtio-blk driver in ring 3, started from the boot check with START, reads sectors through the ring with VT-d and the SMMUv3 translating, ARMv7-A in degraded trusted mode. devmgr the program started by the kernel with every device and driver image, starting blk per disk. Still owed after the exit: trusting decoding-off BARs.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
             "line": 287
@@ -17155,7 +17155,7 @@
           "shortName": "S11",
           "type": "Stage",
           "maturity": "implemented",
-          "doc": "Block core, then btrfs stage A. Exit: an image made by real mkfs.btrfs is mounted and a file tree read out byte-for-byte matching what the host wrote.\n\nBuilt, host-side: the btrfs read path in libs/btrfs (mount bootstrap, lookup, readdir, read, zlib/LZO/zstd), reading four real mkfs.btrfs images back exactly; the mount over stage 8's traits in libs/btrfs-vfs; the block queue in libs/block. In the kernel: mount -t btrfs on a registered block device, read-only, file data in the inode's VMO pages. Exit met: the mkfs.btrfs fixture on a second virtio-blk disk, served by the ring-3 driver, mounted at /mnt and read back against its manifest on all three architectures.",
+          "doc": "Block core, then btrfs stage A. Exit: an image made by real mkfs.btrfs is mounted and a file tree read out byte-for-byte matching what the host wrote.\n\nBuilt, host-side: the btrfs read path in libs/fs/btrfs (mount bootstrap, lookup, readdir, read, zlib/LZO/zstd), reading four real mkfs.btrfs images back exactly; the mount over stage 8's traits in libs/fs/btrfs-vfs; the block queue in libs/fs/block. In the kernel: mount -t btrfs on a registered block device, read-only, file data in the inode's VMO pages. Exit met: the mkfs.btrfs fixture on a second virtio-blk disk, served by the ring-3 driver, mounted at /mnt and read back against its manifest on all three architectures.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
             "line": 328
@@ -17443,7 +17443,7 @@
           "shortName": "S13",
           "type": "Stage",
           "maturity": "inProgress",
-          "doc": "All eight namespaces, the unified cgroup hierarchy with cpu, memory, io and pids, cgroupfs, classic-BPF seccomp with the interpreter in libs/. Exit: an unprivileged user namespace runs pid 1 under a memory limit that triggers scoped reclaim and a scoped OOM kill, with a seccomp filter blocking a syscall.\n\nCgroups first (customer, 2026-09-23): stage 15's init is planned as if they exist, so the cgroup half is built before namespaces and seccomp. docs/INIT.md section 0.1 lists what init needs, C1-C5 before its first boot. C8, accepted the same day: every cgroup is backed by a Job. docs/CGROUPS.md is the design: landings G1-G5 (27 points) for init, then the controllers (58), 85 for the cgroup half. G1 done on 2026-09-23: every process in exactly one job, fork inheriting it, populated counted exactly, the two kills apart. G2 done the same day: cgroupfs mounts as cgroup2, over libs/cgroupfs. G3 and G4 done on 2026-09-24: cgroup.events wakes poll, select and epoll with POLLPRI; clone3 starts a child in a cgroup; chown delegates a subtree under cgroup v2's common-ancestor rule. C1-C5 and C7 are met. G5 done on 2026-09-24. P1, M1's charging and S1 done on 2026-09-26, as the certification's job quotas (F-35): a quota slot per job, charged for tasks, memory and native objects, a weight per job scaling its tasks', and cgroupfs's cpu, memory and pids files over the same slot. M1's scoped OOM kill done on 2026-09-26: a fault past a cgroup's memory.max kills the process with the most resident pages in that cgroup, counted in memory.events with POLLPRI. Left: the rest of memory.stat, M2's reclaim, F1, S2 and B1.",
+          "doc": "All eight namespaces, the unified cgroup hierarchy with cpu, memory, io and pids, cgroupfs, classic-BPF seccomp with the interpreter in libs/. Exit: an unprivileged user namespace runs pid 1 under a memory limit that triggers scoped reclaim and a scoped OOM kill, with a seccomp filter blocking a syscall.\n\nCgroups first (customer, 2026-09-23): stage 15's init is planned as if they exist, so the cgroup half is built before namespaces and seccomp. docs/INIT.md section 0.1 lists what init needs, C1-C5 before its first boot. C8, accepted the same day: every cgroup is backed by a Job. docs/CGROUPS.md is the design: landings G1-G5 (27 points) for init, then the controllers (58), 85 for the cgroup half. G1 done on 2026-09-23: every process in exactly one job, fork inheriting it, populated counted exactly, the two kills apart. G2 done the same day: cgroupfs mounts as cgroup2, over libs/fs/cgroupfs. G3 and G4 done on 2026-09-24: cgroup.events wakes poll, select and epoll with POLLPRI; clone3 starts a child in a cgroup; chown delegates a subtree under cgroup v2's common-ancestor rule. C1-C5 and C7 are met. G5 done on 2026-09-24. P1, M1's charging and S1 done on 2026-09-26, as the certification's job quotas (F-35): a quota slot per job, charged for tasks, memory and native objects, a weight per job scaling its tasks', and cgroupfs's cpu, memory and pids files over the same slot. M1's scoped OOM kill done on 2026-09-26: a fault past a cgroup's memory.max kills the process with the most resident pages in that cgroup, counted in memory.events with POLLPRI. Left: the rest of memory.stat, M2's reclaim, F1, S2 and B1.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
             "line": 444
@@ -17539,7 +17539,7 @@
           "shortName": "S15",
           "type": "Stage",
           "maturity": "inProgress",
-          "doc": "Static musl busybox as /bin, a working init, job control, ttys, pipes. Exit: an interactive shell over serial a person can use.\n\nMost of it arrived under other stages' names: /bin is the uutils family and zinc rather than busybox, pipes are stage 8's, pseudo-terminals stage 18's, and the console's line discipline stage 8's over stage 7's receive interrupt.\n\nJob control landed on 2026-09-19, in the shell rather than the kernel: every call it is made of -- setpgid, TIOCSPGRP, TIOCSCTTY, the line discipline's SIGTSTP, wait4's WUNTRACED -- had been answered since stage 7 with nothing using them. zinc/src/jobs.rs puts a pipeline in one process group, hands the terminal to the foreground job and takes it back, and keeps the table jobs, fg, bg, wait, disown and kill %1 name. Verified by jobsSession and by zinc's pty gate.\n\nA working init landed on 2026-09-26 (L1 to L4 of docs/INIT.md): /sbin/init over libs/svc's manager, a cgroup per service, a getty on the console, shutdown by SIGTERM; the same day svc and its control socket, readiness, socket activation and resource limits (L5 to L7, L9) and the directory with native services (L8). Verified by initSession. Left: the images booting it (L10).\n\nDesigned on 2026-09-23 in docs/INIT.md: pid 1 and a service manager, systemd-shaped units, a cgroup per service, a pure manager in libs/svc behind backends a microkernel could serve. 67 points to L10, 61 of them spent; the stage 13 cgroups its first boot needs landed on 2026-09-24.",
+          "doc": "Static musl busybox as /bin, a working init, job control, ttys, pipes. Exit: an interactive shell over serial a person can use.\n\nMost of it arrived under other stages' names: /bin is the uutils family and zinc rather than busybox, pipes are stage 8's, pseudo-terminals stage 18's, and the console's line discipline stage 8's over stage 7's receive interrupt.\n\nJob control landed on 2026-09-19, in the shell rather than the kernel: every call it is made of -- setpgid, TIOCSPGRP, TIOCSCTTY, the line discipline's SIGTSTP, wait4's WUNTRACED -- had been answered since stage 7 with nothing using them. userland/zinc/src/jobs.rs puts a pipeline in one process group, hands the terminal to the foreground job and takes it back, and keeps the table jobs, fg, bg, wait, disown and kill %1 name. Verified by jobsSession and by zinc's pty gate.\n\nA working init landed on 2026-09-26 (L1 to L4 of docs/INIT.md): /sbin/init over libs/init/svc's manager, a cgroup per service, a getty on the console, shutdown by SIGTERM; the same day svc and its control socket, readiness, socket activation and resource limits (L5 to L7, L9) and the directory with native services (L8). Verified by initSession. Left: the images booting it (L10).\n\nDesigned on 2026-09-23 in docs/INIT.md: pid 1 and a service manager, systemd-shaped units, a cgroup per service, a pure manager in libs/init/svc behind backends a microkernel could serve. 67 points to L10, 61 of them spent; the stage 13 cgroups its first boot needs landed on 2026-09-24.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
             "line": 491
@@ -17923,7 +17923,7 @@
           "shortName": "D.fuzz",
           "type": "Principles::DesignRule",
           "maturity": "planned",
-          "doc": "fuzz/ has two targets, elf_parse and frame_alloc. Every written-ahead crate parses bytes from outside the system and is owed a target before its consuming stage starts.",
+          "doc": "tests/fuzz/ has two targets, elf_parse and frame_alloc. Every written-ahead crate parses bytes from outside the system and is owed a target before its consuming stage starts.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
             "line": 708
@@ -17936,7 +17936,7 @@
           "shortName": "D.miri",
           "type": "Principles::DesignRule",
           "maturity": "planned",
-          "doc": "CI runs Miri over libs/elf and libs/bootinfo only; frame, heap and paging run in the kernel today and are owed a step ahead of every crate in the written-ahead table.",
+          "doc": "CI runs Miri over libs/platform/elf and libs/proto/bootinfo only; frame, heap and paging run in the kernel today and are owed a step ahead of every crate in the written-ahead table.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
             "line": 713
@@ -18160,7 +18160,7 @@
           "kind": "verification",
           "definition": true,
           "maturity": "implemented",
-          "doc": "The acceptance test itself: cargo xtask test-rustc, and the CI job rustc. It attaches the sysroot scripts/fetch-rustc-sysroot.sh makes -- a btrfs volume the kernel mounts at /data -- under snapshot=on, and zinc runs rustc -vV, rustc hello.rs and ./hello, each with an exit status of its own. x86-64 only.",
+          "doc": "The acceptance test itself: cargo xtask test-rustc, and the CI job rustc. It attaches the sysroot scripts/fetch/fetch-rustc-sysroot.sh makes -- a btrfs volume the kernel mounts at /data -- under snapshot=on, and zinc runs rustc -vV, rustc hello.rs and ./hello, each with an exit status of its own. x86-64 only.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
             "line": 838
@@ -18258,7 +18258,7 @@
               "qualifiedName": "FerrixAssurance::hooksArmed",
               "kind": "attribute",
               "redefines": "command",
-              "value": "\"python3 scripts/check-commit-authors.py --hooks\"",
+              "value": "\"python3 scripts/check/check-commit-authors.py --hooks\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
                 "line": 27
@@ -18292,7 +18292,7 @@
               "qualifiedName": "FerrixAssurance::commitAuthorship",
               "kind": "attribute",
               "redefines": "command",
-              "value": "\"python3 scripts/check-commit-authors.py BASE HEAD\"",
+              "value": "\"python3 scripts/check/check-commit-authors.py BASE HEAD\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
                 "line": 34
@@ -18350,7 +18350,7 @@
               "qualifiedName": "FerrixAssurance::lineEndings",
               "kind": "attribute",
               "redefines": "command",
-              "value": "\"python3 scripts/check-line-endings.py\"",
+              "value": "\"python3 scripts/check/check-line-endings.py\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
                 "line": 49
@@ -18364,7 +18364,7 @@
           "kind": "verification",
           "type": "Gate",
           "maturity": "implemented",
-          "doc": "Fails on an assembly site not in scripts/asm-allowlist.json, on a file over its budget, and on a stale entry. Reports the Rust share on every run.",
+          "doc": "Fails on an assembly site not in scripts/data/asm-allowlist.json, on a file over its budget, and on a stale entry. Reports the Rust share on every run.",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
             "line": 52
@@ -18375,7 +18375,7 @@
               "qualifiedName": "FerrixAssurance::assemblyAllowList",
               "kind": "attribute",
               "redefines": "command",
-              "value": "\"python3 scripts/check-asm-budget.py\"",
+              "value": "\"python3 scripts/check/check-asm-budget.py\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
                 "line": 53
@@ -18409,7 +18409,7 @@
               "qualifiedName": "FerrixAssurance::deviceAccessAllowList",
               "kind": "attribute",
               "redefines": "command",
-              "value": "\"python3 scripts/check-device-access.py\"",
+              "value": "\"python3 scripts/check/check-device-access.py\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
                 "line": 60
@@ -18434,7 +18434,7 @@
               "qualifiedName": "FerrixAssurance::unsafeAudit",
               "kind": "attribute",
               "redefines": "command",
-              "value": "\"python3 scripts/check-unsafe-audit.py\"",
+              "value": "\"python3 scripts/check/check-unsafe-audit.py\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
                 "line": 67
@@ -18468,7 +18468,7 @@
               "qualifiedName": "FerrixAssurance::panicAudit",
               "kind": "attribute",
               "redefines": "command",
-              "value": "\"python3 scripts/check-panic-audit.py\"",
+              "value": "\"python3 scripts/check/check-panic-audit.py\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
                 "line": 74
@@ -18502,7 +18502,7 @@
               "qualifiedName": "FerrixAssurance::architectureDocument",
               "kind": "attribute",
               "redefines": "command",
-              "value": "\"python3 scripts/sysml/tests.py && python3 scripts/gen-arch-doc.py --check\"",
+              "value": "\"python3 scripts/gen/sysml/tests.py && python3 scripts/gen/gen-arch-doc.py --check\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
                 "line": 81
@@ -18527,7 +18527,7 @@
               "qualifiedName": "FerrixAssurance::waylandProtocolTables",
               "kind": "attribute",
               "redefines": "command",
-              "value": "\"python3 scripts/gen-wayland-protocol.py --check\"",
+              "value": "\"python3 scripts/gen/gen-wayland-protocol.py --check\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
                 "line": 86
@@ -18552,7 +18552,7 @@
               "qualifiedName": "FerrixAssurance::xkbTables",
               "kind": "attribute",
               "redefines": "command",
-              "value": "\"python3 scripts/gen-xkb-tables.py --check\"",
+              "value": "\"python3 scripts/gen/gen-xkb-tables.py --check\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
                 "line": 91
@@ -18577,7 +18577,7 @@
               "qualifiedName": "FerrixAssurance::panicFont",
               "kind": "attribute",
               "redefines": "command",
-              "value": "\"python3 scripts/gen-font.py --check\"",
+              "value": "\"python3 scripts/gen/gen-font.py --check\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
                 "line": 96
@@ -18602,7 +18602,7 @@
               "qualifiedName": "FerrixAssurance::terminalFont",
               "kind": "attribute",
               "redefines": "command",
-              "value": "\"python3 scripts/gen-term-font.py --check\"",
+              "value": "\"python3 scripts/gen/gen-term-font.py --check\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
                 "line": 100
@@ -18627,7 +18627,7 @@
               "qualifiedName": "FerrixAssurance::panicCatalog",
               "kind": "attribute",
               "redefines": "command",
-              "value": "\"python3 scripts/gen-panic-catalog.py --check\"",
+              "value": "\"python3 scripts/gen/gen-panic-catalog.py --check\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
                 "line": 106
@@ -18652,7 +18652,7 @@
               "qualifiedName": "FerrixAssurance::crateLayering",
               "kind": "attribute",
               "redefines": "command",
-              "value": "\"scripts/check-crate-layering.sh\"",
+              "value": "\"scripts/check/check-crate-layering.sh\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
                 "line": 111
@@ -18785,7 +18785,7 @@
           "kind": "verification",
           "type": "Gate",
           "maturity": "implemented",
-          "doc": "libs/elf, bootinfo, ustack, objects, vfs, pci, block, blkring, native, virtio-blk, frame, heap and paging. cargo xtask check --miri runs the same list, and an xtask test holds it to the workflow. A test too slow to interpret runs shorter under cfg(miri) rather than being ignored.",
+          "doc": "libs/platform/elf, bootinfo, ustack, objects, vfs, pci, block, blkring, native, virtio-blk, frame, heap and paging. cargo xtask check --miri runs the same list, and an xtask test holds it to the workflow. A test too slow to interpret runs shorter under cfg(miri) rather than being ignored.",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
             "line": 139
@@ -18926,7 +18926,7 @@
           "kind": "part",
           "definition": true,
           "maturity": "implemented",
-          "doc": "An absolute cap, because assembly here is a fixed cost that a scheduler, a filesystem or a driver must add nothing to. The ratio is a backstop and the target is the direction of travel: reached by writing the operating system, not by shrinking the vector table. 303 lines and about 99.2% Rust when this was written, across fifteen sites; scripts/asm-allowlist.json now names twenty-four: the x86-64 SYSCALL entry and the native runtime's three (docs/ASSEMBLY.md, A native program), the Pixel 7's loader entry, the x86-64 vDSO and the three side-channel sequences having joined them. The cap was 800 until 2026-09-27, when the count learned to read raw strings and found 1569 lines, not 733 (docs/ASSEMBLY.md, The budget).",
+          "doc": "An absolute cap, because assembly here is a fixed cost that a scheduler, a filesystem or a driver must add nothing to. The ratio is a backstop and the target is the direction of travel: reached by writing the operating system, not by shrinking the vector table. 303 lines and about 99.2% Rust when this was written, across fifteen sites; scripts/data/asm-allowlist.json now names twenty-four: the x86-64 SYSCALL entry and the native runtime's three (docs/ASSEMBLY.md, A native program), the Pixel 7's loader entry, the x86-64 vDSO and the three side-channel sequences having joined them. The cap was 800 until 2026-09-27, when the count learned to read raw strings and found 1569 lines, not 733 (docs/ASSEMBLY.md, The budget).",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
             "line": 179
@@ -18971,7 +18971,7 @@
               "kind": "attribute",
               "type": "AssemblySite",
               "multiplicity": "24",
-              "value": "( AssemblySite(file = \"boot/src/arch/x86_64.rs\", maxLines = 30), AssemblySite(file = \"boot/src/arch/aarch64.rs\", maxLines = 60), AssemblySite(file = \"boot/src/arch/armv7a.rs\", maxLines = 63), AssemblySite(file = \"kernel/src/arch/x86_64/cpu.rs\", maxLines = 100), AssemblySite(file = \"kernel/src/arch/aarch64/cpu.rs\", maxLines = 100), AssemblySite(file = \"kernel/src/arch/armv7a/cpu.rs\", maxLines = 102), AssemblySite(file = \"kernel/src/arch/x86_64/trap.rs\", maxLines = 171), AssemblySite(file = \"kernel/src/arch/aarch64/trap.rs\", maxLines = 145), AssemblySite(file = \"kernel/src/arch/armv7a/trap.rs\", maxLines = 130), AssemblySite(file = \"kernel/src/arch/x86_64/smp.rs\", maxLines = 41), AssemblySite(file = \"kernel/src/arch/aarch64/smp.rs\", maxLines = 58), AssemblySite(file = \"kernel/src/arch/armv7a/smp.rs\", maxLines = 40), AssemblySite(file = \"kernel/src/arch/x86_64/switch.rs\", maxLines = 32), AssemblySite(file = \"kernel/src/arch/aarch64/switch.rs\", maxLines = 75), AssemblySite(file = \"kernel/src/arch/armv7a/switch.rs\", maxLines = 67), AssemblySite(file = \"kernel/src/arch/x86_64/syscall.rs\", maxLines = 118), AssemblySite(file = \"user/rt/src/arch/x86_64.rs\", maxLines = 20), AssemblySite(file = \"user/rt/src/arch/aarch64.rs\", maxLines = 20), AssemblySite(file = \"user/rt/src/arch/armv7a.rs\", maxLines = 20), AssemblySite(file = \"bootloaders/pixel7/src/entry.rs\", maxLines = 130), AssemblySite(file = \"kernel/src/arch/x86_64/vdso.rs\", maxLines = 120), AssemblySite(file = \"kernel/src/arch/x86_64/speculation.rs\", maxLines = 16), AssemblySite(file = \"kernel/src/arch/aarch64/speculation.rs\", maxLines = 16), AssemblySite(file = \"kernel/src/arch/armv7a/speculation.rs\", maxLines = 16) )",
+              "value": "( AssemblySite(file = \"boot/uefi/src/arch/x86_64.rs\", maxLines = 30), AssemblySite(file = \"boot/uefi/src/arch/aarch64.rs\", maxLines = 60), AssemblySite(file = \"boot/uefi/src/arch/armv7a.rs\", maxLines = 63), AssemblySite(file = \"kernel/src/arch/x86_64/cpu.rs\", maxLines = 100), AssemblySite(file = \"kernel/src/arch/aarch64/cpu.rs\", maxLines = 100), AssemblySite(file = \"kernel/src/arch/armv7a/cpu.rs\", maxLines = 102), AssemblySite(file = \"kernel/src/arch/x86_64/trap.rs\", maxLines = 171), AssemblySite(file = \"kernel/src/arch/aarch64/trap.rs\", maxLines = 145), AssemblySite(file = \"kernel/src/arch/armv7a/trap.rs\", maxLines = 130), AssemblySite(file = \"kernel/src/arch/x86_64/smp.rs\", maxLines = 41), AssemblySite(file = \"kernel/src/arch/aarch64/smp.rs\", maxLines = 58), AssemblySite(file = \"kernel/src/arch/armv7a/smp.rs\", maxLines = 40), AssemblySite(file = \"kernel/src/arch/x86_64/switch.rs\", maxLines = 32), AssemblySite(file = \"kernel/src/arch/aarch64/switch.rs\", maxLines = 75), AssemblySite(file = \"kernel/src/arch/armv7a/switch.rs\", maxLines = 67), AssemblySite(file = \"kernel/src/arch/x86_64/syscall.rs\", maxLines = 118), AssemblySite(file = \"native/rt/src/arch/x86_64.rs\", maxLines = 20), AssemblySite(file = \"native/rt/src/arch/aarch64.rs\", maxLines = 20), AssemblySite(file = \"native/rt/src/arch/armv7a.rs\", maxLines = 20), AssemblySite(file = \"boot/pixel7/src/entry.rs\", maxLines = 130), AssemblySite(file = \"kernel/src/arch/x86_64/vdso.rs\", maxLines = 120), AssemblySite(file = \"kernel/src/arch/x86_64/speculation.rs\", maxLines = 16), AssemblySite(file = \"kernel/src/arch/aarch64/speculation.rs\", maxLines = 16), AssemblySite(file = \"kernel/src/arch/armv7a/speculation.rs\", maxLines = 16) )",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
                 "line": 220
@@ -19123,7 +19123,7 @@
               "qualifiedName": "FerrixAssurance::bootReach",
               "kind": "attribute",
               "redefines": "layer",
-              "value": "\"boot/\"",
+              "value": "\"boot/uefi/\"",
               "source": {
                 "file": "docs/sysml/11-assurance.sysml",
                 "line": 252
@@ -19243,7 +19243,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 12,
-          "doc": "Kill QEMU at a random point inside a transaction, remount, replay, btrfs check again, over hundreds of seeds: cargo xtask test-powerfail. Its adversarial half, every unflushed write kept or dropped at random, is libs/btrfs-write's powerfail tests. The test a CoW filesystem actually has to pass.",
+          "doc": "Kill QEMU at a random point inside a transaction, remount, replay, btrfs check again, over hundreds of seeds: cargo xtask test-powerfail. Its adversarial half, every unflushed write kept or dropped at random, is libs/fs/btrfs-write's powerfail tests. The test a CoW filesystem actually has to pass.",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
             "line": 279
@@ -19303,7 +19303,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 7,
-          "doc": "cargo xtask test-threads: threads-test/, a static musl Rust program of five threads using std::thread, Mutex and mpsc, booted as init on all three architectures, counting its threads through /proc/self; a build that expects one thread too many must fail on that count.",
+          "doc": "cargo xtask test-threads: tests/threads/, a static musl Rust program of five threads using std::thread, Mutex and mpsc, booted as init on all three architectures, counting its threads through /proc/self; a build that expects one thread too many must fail on that count.",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
             "line": 301
@@ -19502,7 +19502,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 18,
-          "doc": "cargo xtask test-pty: compositor/term --headless runs a program on a pseudoterminal pair, and what it wrote comes back through the master and the terminal's grid.",
+          "doc": "cargo xtask test-pty: userland/compositor/term --headless runs a program on a pseudoterminal pair, and what it wrote comes back through the master and the terminal's grid.",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
             "line": 366
@@ -23849,70 +23849,70 @@
           "id": "FerrixStructure::Workspace::bootinfo",
           "label": "bootinfo",
           "kind": "box",
-          "sublabel": "libs/bootinfo",
+          "sublabel": "libs/proto/bootinfo",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::elf",
           "label": "elf",
           "kind": "box",
-          "sublabel": "libs/elf",
+          "sublabel": "libs/platform/elf",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::frameCrate",
           "label": "frameCrate",
           "kind": "box",
-          "sublabel": "libs/frame",
+          "sublabel": "libs/kernel/frame",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::heap",
           "label": "heap",
           "kind": "box",
-          "sublabel": "libs/heap",
+          "sublabel": "libs/kernel/heap",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::paging",
           "label": "paging",
           "kind": "box",
-          "sublabel": "libs/paging",
+          "sublabel": "libs/kernel/paging",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::acpi",
           "label": "acpi",
           "kind": "box",
-          "sublabel": "libs/acpi",
+          "sublabel": "libs/platform/acpi",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::fdt",
           "label": "fdt",
           "kind": "box",
-          "sublabel": "libs/fdt",
+          "sublabel": "libs/platform/fdt",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::sync",
           "label": "sync",
           "kind": "box",
-          "sublabel": "libs/sync",
+          "sublabel": "libs/kernel/sync",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::crng",
           "label": "crng",
           "kind": "box",
-          "sublabel": "libs/crng",
+          "sublabel": "libs/kernel/crng",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::sched",
           "label": "sched",
           "kind": "box",
-          "sublabel": "libs/sched",
+          "sublabel": "libs/kernel/sched",
           "maturity": "implemented",
           "stage": 5
         },
@@ -23920,14 +23920,14 @@
           "id": "FerrixStructure::Workspace::vma",
           "label": "vma",
           "kind": "box",
-          "sublabel": "libs/vma",
+          "sublabel": "libs/kernel/vma",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::linuxAbi",
           "label": "linuxAbi",
           "kind": "box",
-          "sublabel": "libs/linux-abi",
+          "sublabel": "libs/proto/linux-abi",
           "maturity": "implemented",
           "stage": 7
         },
@@ -23935,7 +23935,7 @@
           "id": "FerrixStructure::Workspace::ustack",
           "label": "ustack",
           "kind": "box",
-          "sublabel": "libs/ustack",
+          "sublabel": "libs/kernel/ustack",
           "maturity": "implemented",
           "stage": 7
         },
@@ -23943,7 +23943,7 @@
           "id": "FerrixStructure::Workspace::cpio",
           "label": "cpio",
           "kind": "box",
-          "sublabel": "libs/cpio",
+          "sublabel": "libs/fs/cpio",
           "maturity": "implemented",
           "stage": 8
         },
@@ -23951,7 +23951,7 @@
           "id": "FerrixStructure::Workspace::vfs",
           "label": "vfs",
           "kind": "box",
-          "sublabel": "libs/vfs",
+          "sublabel": "libs/fs/vfs",
           "maturity": "implemented",
           "stage": 8
         },
@@ -23959,7 +23959,7 @@
           "id": "FerrixStructure::Workspace::procfs",
           "label": "procfs",
           "kind": "box",
-          "sublabel": "libs/procfs",
+          "sublabel": "libs/fs/procfs",
           "maturity": "implemented",
           "stage": 8
         },
@@ -23967,14 +23967,14 @@
           "id": "FerrixStructure::Workspace::sysfs",
           "label": "sysfs",
           "kind": "box",
-          "sublabel": "libs/sysfs",
+          "sublabel": "libs/fs/sysfs",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::virtio",
           "label": "virtio",
           "kind": "box",
-          "sublabel": "libs/virtio",
+          "sublabel": "libs/drivers/virtio",
           "maturity": "implemented",
           "stage": 10
         },
@@ -23982,49 +23982,49 @@
           "id": "FerrixStructure::Workspace::netwire",
           "label": "netwire",
           "kind": "box",
-          "sublabel": "libs/netwire",
+          "sublabel": "libs/network/netwire",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::nettcp",
           "label": "nettcp",
           "kind": "box",
-          "sublabel": "libs/nettcp",
+          "sublabel": "libs/network/nettcp",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::netCore",
           "label": "netCore",
           "kind": "box",
-          "sublabel": "libs/net",
+          "sublabel": "libs/network/net",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::netServe",
           "label": "netServe",
           "kind": "box",
-          "sublabel": "libs/netserve",
+          "sublabel": "libs/drivers/netserve",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::netRing",
           "label": "netRing",
           "kind": "box",
-          "sublabel": "libs/netring",
+          "sublabel": "libs/proto/netring",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::netlink",
           "label": "netlink",
           "kind": "box",
-          "sublabel": "libs/netlink",
+          "sublabel": "libs/network/netlink",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::virtioNet",
           "label": "virtioNet",
           "kind": "box",
-          "sublabel": "libs/virtio-net",
+          "sublabel": "libs/drivers/virtio-net",
           "maturity": "implemented",
           "stage": 10
         },
@@ -24032,7 +24032,7 @@
           "id": "FerrixStructure::Workspace::virtioGpu",
           "label": "virtioGpu",
           "kind": "box",
-          "sublabel": "libs/virtio-gpu",
+          "sublabel": "libs/drivers/virtio-gpu",
           "maturity": "implemented",
           "stage": 17
         },
@@ -24040,14 +24040,14 @@
           "id": "FerrixStructure::Workspace::virtioSnd",
           "label": "virtioSnd",
           "kind": "box",
-          "sublabel": "libs/virtio-snd",
+          "sublabel": "libs/drivers/virtio-snd",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::virtioInput",
           "label": "virtioInput",
           "kind": "box",
-          "sublabel": "libs/virtio-input",
+          "sublabel": "libs/drivers/virtio-input",
           "maturity": "implemented",
           "stage": 17
         },
@@ -24055,7 +24055,7 @@
           "id": "FerrixStructure::Workspace::displayctl",
           "label": "displayctl",
           "kind": "box",
-          "sublabel": "libs/displayctl",
+          "sublabel": "libs/proto/displayctl",
           "maturity": "implemented",
           "stage": 17
         },
@@ -24063,7 +24063,7 @@
           "id": "FerrixStructure::Workspace::inputctl",
           "label": "inputctl",
           "kind": "box",
-          "sublabel": "libs/inputctl",
+          "sublabel": "libs/proto/inputctl",
           "maturity": "implemented",
           "stage": 17
         },
@@ -24071,14 +24071,14 @@
           "id": "FerrixStructure::Workspace::sndctl",
           "label": "sndctl",
           "kind": "box",
-          "sublabel": "libs/sndctl",
+          "sublabel": "libs/proto/sndctl",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::pci",
           "label": "pci",
           "kind": "box",
-          "sublabel": "libs/pci",
+          "sublabel": "libs/platform/pci",
           "maturity": "implemented",
           "stage": 10
         },
@@ -24086,7 +24086,7 @@
           "id": "FerrixStructure::Workspace::nativeAbi",
           "label": "nativeAbi",
           "kind": "box",
-          "sublabel": "libs/native-abi",
+          "sublabel": "libs/proto/native-abi",
           "maturity": "implemented",
           "stage": 9
         },
@@ -24094,7 +24094,7 @@
           "id": "FerrixStructure::Workspace::objects",
           "label": "objects",
           "kind": "box",
-          "sublabel": "libs/objects",
+          "sublabel": "libs/kernel/objects",
           "maturity": "implemented",
           "stage": 9
         },
@@ -24102,7 +24102,7 @@
           "id": "FerrixStructure::Workspace::btrfs",
           "label": "btrfs",
           "kind": "box",
-          "sublabel": "libs/btrfs",
+          "sublabel": "libs/fs/btrfs",
           "maturity": "implemented",
           "stage": 11
         },
@@ -24110,7 +24110,7 @@
           "id": "FerrixStructure::Workspace::btrfsWrite",
           "label": "btrfsWrite",
           "kind": "box",
-          "sublabel": "libs/btrfs-write",
+          "sublabel": "libs/fs/btrfs-write",
           "maturity": "implemented",
           "stage": 12
         },
@@ -24118,7 +24118,7 @@
           "id": "FerrixStructure::Workspace::btrfsVfs",
           "label": "btrfsVfs",
           "kind": "box",
-          "sublabel": "libs/btrfs-vfs",
+          "sublabel": "libs/fs/btrfs-vfs",
           "maturity": "implemented",
           "stage": 11
         },
@@ -24126,7 +24126,7 @@
           "id": "FerrixStructure::Workspace::blockQueue",
           "label": "blockQueue",
           "kind": "box",
-          "sublabel": "libs/block",
+          "sublabel": "libs/fs/block",
           "maturity": "implemented",
           "stage": 11
         },
@@ -24134,7 +24134,7 @@
           "id": "FerrixStructure::Workspace::blkRing",
           "label": "blkRing",
           "kind": "box",
-          "sublabel": "libs/blkring",
+          "sublabel": "libs/proto/blkring",
           "maturity": "implemented",
           "stage": 10
         },
@@ -24142,7 +24142,7 @@
           "id": "FerrixStructure::Workspace::blkServe",
           "label": "blkServe",
           "kind": "box",
-          "sublabel": "libs/blkserve",
+          "sublabel": "libs/drivers/blkserve",
           "maturity": "implemented",
           "stage": 10
         },
@@ -24150,7 +24150,7 @@
           "id": "FerrixStructure::Workspace::virtioBlk",
           "label": "virtioBlk",
           "kind": "box",
-          "sublabel": "libs/virtio-blk",
+          "sublabel": "libs/drivers/virtio-blk",
           "maturity": "implemented",
           "stage": 10
         },
@@ -24158,7 +24158,7 @@
           "id": "FerrixStructure::Workspace::devmgrProto",
           "label": "devmgrProto",
           "kind": "box",
-          "sublabel": "libs/devmgr-proto",
+          "sublabel": "libs/proto/devmgr-proto",
           "maturity": "implemented",
           "stage": 10
         },
@@ -24166,14 +24166,14 @@
           "id": "FerrixStructure::Workspace::nativeCrate",
           "label": "nativeCrate",
           "kind": "box",
-          "sublabel": "libs/native",
+          "sublabel": "libs/proto/native",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::renderctl",
           "label": "renderctl",
           "kind": "box",
-          "sublabel": "libs/renderctl",
+          "sublabel": "libs/proto/renderctl",
           "maturity": "implemented",
           "stage": 19
         },
@@ -24181,7 +24181,7 @@
           "id": "FerrixStructure::Workspace::gc400",
           "label": "gc400",
           "kind": "box",
-          "sublabel": "libs/gc400",
+          "sublabel": "libs/drivers/gc400",
           "maturity": "implemented",
           "stage": 19
         },
@@ -24189,28 +24189,28 @@
           "id": "FerrixStructure::Workspace::fbtext",
           "label": "fbtext",
           "kind": "box",
-          "sublabel": "libs/fbtext",
+          "sublabel": "libs/kernel/fbtext",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::qr",
           "label": "qr",
           "kind": "box",
-          "sublabel": "libs/qr",
+          "sublabel": "libs/kernel/qr",
           "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Workspace::vdagent",
           "label": "vdagent",
           "kind": "box",
-          "sublabel": "libs/vdagent",
+          "sublabel": "libs/drivers/vdagent",
           "maturity": "writtenAhead"
         },
         {
           "id": "FerrixStructure::Workspace::virtioConsole",
           "label": "virtioConsole",
           "kind": "box",
-          "sublabel": "libs/virtio-console",
+          "sublabel": "libs/drivers/virtio-console",
           "maturity": "writtenAhead"
         },
         {

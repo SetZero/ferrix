@@ -91,7 +91,7 @@ pub(crate) struct Args {
     /// it unasked, and this is how they say they would rather it did not.
     pub(crate) no_net: bool,
     /// `--chrome`: `run-compositor` with Google's Chrome on the desktop,
-    /// from the volume `scripts/fetch-chrome.sh` makes, in place of the
+    /// from the volume `scripts/fetch/fetch-chrome.sh` makes, in place of the
     /// rustc volume, and a keybind for another window.
     pub(crate) chrome: bool,
     /// `--everything`: `run-compositor` with every feature a watched desktop

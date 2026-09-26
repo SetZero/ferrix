@@ -206,7 +206,7 @@ tool that only 64-bit addresses met (§3.4).
 QEMU's `drcov` TCG plugin records every basic block the guest translates and
 executes. The kernel's DWARF line table says which source statement each
 address belongs to; the denominator is the rows the compiler marked `is_stmt`,
-which is what gcov-shaped tools count. `scripts/coverage-report.py` intersects
+which is what gcov-shaped tools count. `scripts/gen/coverage-report.py` intersects
 the two and attributes each file to a ring using the same classifier the
 boundary gate uses, so the two cannot disagree.
 
@@ -231,7 +231,7 @@ KVM, and the launcher refuses rather than reporting zero), writes the traces to
 fails below the architecture's floor in `coverage-floor.json`. It needs boots,
 so it is not part of `cargo xtask check`. Adding `--json` and `--residual` to
 the printed command regenerates the evidence, and
-`scripts/gen-coverage-justification.py` the two documents from it.
+`scripts/gen/gen-coverage-justification.py` the two documents from it.
 
 **What this supports.** DO-178C table A-7 objective 5 at DAL C asks for
 statement coverage. This is that measurement, for ring-0 code, on every

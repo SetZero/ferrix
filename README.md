@@ -60,11 +60,11 @@ kept current with every landing. In short:
 * **Networking.** Sockets, a net core and a ring-3 virtio-net driver: `curl`
   fetches over HTTPS and `git` clones inside the guest, and `sshdt` serves
   SSH from it.
-* **A userland of its own.** [ferrousli](ferrousli/README.md), a C library
-  written in Rust; [zinc](zinc/README.md), a zsh-compatible shell that runs
+* **A userland of its own.** [ferrousli](userland/ferrousli/README.md), a C library
+  written in Rust; [zinc](userland/zinc/README.md), a zsh-compatible shell that runs
   oh-my-zsh and is `/bin/sh`; the uutils family for the utilities
   ([what is left of busybox](docs/UUTILS.md) is fourteen names).
-* **A desktop.** [hyprix](compositor/README.md), a Hyprland-shaped Wayland
+* **A desktop.** [hyprix](userland/compositor/README.md), a Hyprland-shaped Wayland
   compositor written from scratch, reads a real `hyprland.conf`, tiles
   windows, and composites on the host GPU through virgl
   ([docs/GPU.md](docs/GPU.md)); a terminal running zinc opens at boot.
@@ -94,7 +94,7 @@ The assembly that does exist — 437 lines against some 211,000 of Rust,
 function could run: installing a translation regime and jumping to an address
 that did not exist a moment earlier, trap and system-call entry, the context
 switch, and the CPU primitives with no Rust spelling. `docs/ASSEMBLY.md` is
-the argument for each one; `scripts/check-asm-budget.py` fails the build on
+the argument for each one; `scripts/check/check-asm-budget.py` fails the build on
 any site that is not on the list, on a file over its budget, and on an entry
 that has gone stale.
 
@@ -148,13 +148,13 @@ the volume, so their `/` is the tmpfs and what is on it cannot change what a
 test sees.
 
 On x86-64, `run` and `run-compositor` also attach the stage 16 rustc sysroot
-when `scripts/fetch-rustc-sysroot.sh` has made
+when `scripts/fetch/fetch-rustc-sysroot.sh` has made
 `~/.local/share/ferrix/rustc/rustc.img` (or `$FERRIX_RUSTC_SYSROOT/rustc.img`).
 The kernel mounts that btrfs disk at `/data`; QEMU's snapshot mode keeps
 guest writes from changing the source disk. The default system installs links
 for glibc and gcc, plus `/bin/rustc`, `/bin/cargo` and `/bin/cc`, so
 the Rust toolchain is on the PATH in an interactive shell or desktop terminal.
-Run `scripts/fetch-rustc-sysroot.sh` again to add Cargo and the standard
+Run `scripts/fetch/fetch-rustc-sysroot.sh` again to add Cargo and the standard
 libraries Ferrix's own image is built against to a sysroot made before
 them. Boots with the toolchain use 4 GiB RAM unless `--memory` overrides
 it. Without the fetched disk, those boots still start and say why rustc is
@@ -228,7 +228,7 @@ provides; busybox keeps the rest, which [docs/UUTILS.md](docs/UUTILS.md) §8
 counts down.
 
 The busybox Ferrix is measured with is built against
-[ferrousli](ferrousli/README.md), this repository's C library, and
+[ferrousli](userland/ferrousli/README.md), this repository's C library, and
 `--init ferrousli` names it. It is x86-64 only for now.
 
 On Windows, once, from PowerShell:
@@ -251,7 +251,7 @@ cargo xtask run --arch x86_64 --init ferrousli   # boot to a busybox shell
 
 Quit QEMU with `Ctrl-A x`.
 
-`cargo xtask busybox` runs `ferrousli/tools/busybox/build.sh`, or on Windows
+`cargo xtask busybox` runs `userland/ferrousli/tools/busybox/build.sh`, or on Windows
 `build-windows.sh` in Git for Windows' bash. Either downloads busybox 1.37.0
 and Alpine's configuration for it, both checked against pinned sums, builds
 ferrousli and busybox against it under `~/.local/share/ferrix/busybox/ferrousli`
@@ -260,7 +260,7 @@ installs `x86_64/bin/busybox.static` there, where `--init ferrousli` looks. On
 Windows clang cross-compiles and links it, Strawberry Perl's gcc and gmake run
 busybox's own build, and the kernel headers busybox includes come from Alpine's
 `linux-headers` package, pinned the same way. It takes a few minutes the first
-time. Run it again after `ferrousli/` changes; `--init ferrousli` uses whatever
+time. Run it again after `userland/ferrousli/` changes; `--init ferrousli` uses whatever
 it last installed.
 
 `cargo xtask test-shell --arch x86_64 --init ferrousli` runs a script in that
@@ -272,7 +272,7 @@ and glibc builds they check alongside.
 
 ### zinc, a zsh-compatible shell
 
-`build` and `run` with a program also put [zinc](zinc/README.md) in the
+`build` and `run` with a program also put [zinc](userland/zinc/README.md) in the
 initramfs, at `/bin/zinc` with `/bin/zsh` beside it: a zsh-compatible shell
 written in Rust, whose goal is to run oh-my-zsh. It is `/bin/sh` as well, so
 the shell the kernel starts is zinc. It is built for x86-64 and AArch64 by `cargo` alone, against the
@@ -310,7 +310,7 @@ cargo xtask test-display --arch x86_64                  # the same, judged pixel
 window. The window starts on the firmware's console (VGA on x86-64, ramfb on
 AArch64), where the loader draws; the card is the other console in the
 window's View menu. `--init blank` builds the compositor's first program,
-[`compositor/blank`](compositor/README.md), and boots it as init: it opens
+[`userland/compositor/blank`](userland/compositor/README.md), and boots it as init: it opens
 `/dev/dri/card0` through Ferrix's Linux DRM subset, sets the preferred mode
 (1024×768) and fills the screen with one colour, `#1E1E2E`. Its serial
 line says `compositor: scanout ...`, or why it failed. There is no input and
@@ -332,15 +332,15 @@ cargo xtask run-compositor --arch x86_64 --gl        # the same, on the 3D card
 cargo xtask run-compositor --arch x86_64 --no-gl     # the same, drawn in software
 ```
 
-`run-compositor` boots [`compositor/hyprix`](compositor/README.md) as init on
+`run-compositor` boots [`userland/compositor/hyprix`](userland/compositor/README.md) as init on
 a virtio-gpu card: the compositor reads a `hyprland.conf`, listens on a
 Wayland socket, tiles what connects to it and puts the frame on the screen.
 The configuration it writes into the initramfs starts a terminal first --
 `exec-once = /bin/term /bin/zinc` -- so the boot ends at a shell prompt rather
-than at a picture. [`compositor/term`](compositor/README.md) is the terminal,
+than at a picture. [`userland/compositor/term`](userland/compositor/README.md) is the terminal,
 a character grid with the escape sequences a shell actually sends, and it runs
 the program it is given on a pseudoterminal; that program is
-[zinc](zinc/README.md), with the busybox applets, the uutils and the ported
+[zinc](userland/zinc/README.md), with the busybox applets, the uutils and the ported
 programs the image carries beside it.
 
 What the keyboard does, in the configuration it writes itself:
@@ -348,7 +348,7 @@ What the keyboard does, in the configuration it writes itself:
 | keys | |
 |---|---|
 | `SUPER`+`RETURN` | another terminal running zinc |
-| `SUPER`+`P` | a `compositor/pattern` client, the picture the gates tile |
+| `SUPER`+`P` | a `userland/compositor/pattern` client, the picture the gates tile |
 | `SUPER`+`Q` | close the focused window |
 | `SUPER`+`F`, `SUPER`+`V` | fullscreen, floating |
 | `SUPER`+`H`, `SUPER`+`L` | move the focus; with `SHIFT`, move the window |
@@ -506,7 +506,7 @@ today's. `remote-desktop` does all four from a file of answers.
 cargo xtask remote-desktop
 ```
 
-Copy [`scripts/remote-desktop.toml.example`](scripts/remote-desktop.toml.example)
+Copy [`scripts/data/remote-desktop.toml.example`](scripts/data/remote-desktop.toml.example)
 to `~/.config/ferrix/remote.toml` -- or to `remote-desktop.toml` here, which
 git ignores, or anywhere and name it with `--config` or `$FERRIX_REMOTE` --
 and fill in the one key that has no default:
@@ -656,7 +656,7 @@ for, since every device a boot does not need is one fewer on the bus, and
 several of them exist to assert exactly what a machine enumerates.
 
 The same shape for `run`, which boots a program of your choosing rather than
-the compositor -- here `compositor/blank`, and `--init ferrousli` or a path
+the compositor -- here `userland/compositor/blank`, and `--init ferrousli` or a path
 to a busybox for a shell instead:
 
 ```
@@ -670,7 +670,7 @@ anyway; `run` is the one command that wants it said.
 bus with the port SPICE's agent protocol uses, and QEMU's own half of that
 protocol behind it, so the wire between the guest and the clipboard of
 whoever is watching is there and QEMU is talking on it. In the guest, the
-ring-3 driver `user/vport` opens the port and offers it at `/tmp/vport`, but
+ring-3 driver `native/drivers/vport` opens the port and offers it at `/tmp/vport`, but
 **nothing speaks the agent protocol over it yet** -- the vdagent program and
 the terminal's paste are still to come, so copy and paste between Ferrix and
 the host does not work, and pressing `CTRL`+`V` will do nothing across that
@@ -760,14 +760,14 @@ itself instead.
 | | |
 |---|---|
 | `libs/` | Architecture-neutral logic, some forty crates: the hand-off ABI, the ELF reader, paging, the allocators, the scheduler's queues, the VFS, btrfs read and write, the net stack, the virtio device protocols, the native ABI. Host-testable **by design** — it is the only code `cargo test`, Miri and the fuzzers can reach. |
-| `boot/` | The UEFI loader. Reads the kernel, builds the address space, leaves firmware. |
+| `boot/uefi/` | The UEFI loader. Reads the kernel, builds the address space, leaves firmware. |
 | `kernel/` | The kernel. |
-| `user/` | Native ring-3 programs: `devmgr`, the block, net, GPU, input and console drivers, and the runtime they share. |
-| `ferrousli/` | [A C library written in Rust](ferrousli/README.md), with its own dynamic linker. Its own workspace. |
-| `zinc/` | [A zsh-compatible shell](zinc/README.md). Its own workspace. |
-| `compositor/` | [hyprix, the terminal and the Wayland pieces](compositor/README.md). Its own workspace. |
+| `native/` | Native ring-3 programs: `devmgr`, the block, net, GPU, input and console drivers, and the runtime they share. |
+| `userland/ferrousli/` | [A C library written in Rust](userland/ferrousli/README.md), with its own dynamic linker. Its own workspace. |
+| `userland/zinc/` | [A zsh-compatible shell](userland/zinc/README.md). Its own workspace. |
+| `userland/compositor/` | [hyprix, the terminal and the Wayland pieces](userland/compositor/README.md). Its own workspace. |
 | `xtask/` | Host build driver: cross-compiles every half, converts the 32-bit loader from ELF to PE, writes the FAT32 image and initramfs, drives QEMU and every `test-*` gate. |
-| `fuzz/` | The fuzz targets over `libs/`. |
+| `tests/fuzz/` | The fuzz targets over `libs/`. |
 | `scripts/` | The quality gates, generators and sysroot fetchers. |
 | `docs/` | [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md) · [Backlog](docs/BACKLOG.md) · [Assembly](docs/ASSEMBLY.md) · [Reliability](docs/RELIABILITY.md) · [Boot log](docs/BOOT-LOG.md) · [Display](docs/DISPLAY.md) · [GPU](docs/GPU.md) · [Conventions](docs/CONVENTIONS.md) · [SysML v2 model](docs/sysml/README.md) |
 
@@ -779,7 +779,7 @@ Miri, fuzzing, and a lint table that denies `unwrap`, `expect`, `panic!`,
 `unreachable!` and unchecked indexing in production code — a kernel that cannot
 go on says so with `fatal!`, which names the catalog entry explaining the
 failure — with every exemption argued at the site and checked by
-`scripts/check-panic-audit.py`.
+`scripts/check/check-panic-audit.py`.
 
 Three gates are this project's own:
 
@@ -788,7 +788,7 @@ Three gates are this project's own:
   kernel cannot, because writing a page table entry *is* the program. So unsafe
   is not forbidden here, it is made expensive: a `SAFETY:` comment on every
   block, one unsafe operation per block, a `# Safety` section on every unsafe
-  function, and `scripts/check-unsafe-audit.py` in CI so that a clippy release
+  function, and `scripts/check/check-unsafe-audit.py` in CI so that a clippy release
   which softens a nursery lint cannot quietly retire the rule.
 * **The boot test.** Everything else checks the source. This one boots it, on
   every architecture. An OS that compiles and does not boot is not a passing

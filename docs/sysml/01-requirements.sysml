@@ -125,14 +125,14 @@ package FerrixRequirements {
         requirement <'P.6'> oneArchFacade : DesignRule {
             doc /* Generic code never names an architecture and
                  * #[cfg(target_arch)] appears nowhere outside arch/.
-                 * Enforced by scripts/check-crate-layering.sh, because a
+                 * Enforced by scripts/check/check-crate-layering.sh, because a
                  * facade maintained by convention is a facade for about six
                  * weeks. */
         }
         requirement <'P.7'> assemblyOnlyWhereTheMachineDefinesIt : DesignRule {
             doc /* No assembly at boot on any architecture. What exists is
                  * confined to constructs the machine defines before a Rust
-                 * function could run, listed in scripts/asm-allowlist.json
+                 * function could run, listed in scripts/data/asm-allowlist.json
                  * with an argument each, under an absolute line cap. */
         }
         requirement <'P.8'> oneLayoutPerAddressWidth : DesignRule {
@@ -216,7 +216,7 @@ package FerrixRequirements {
                  * scope; it is where btrfs itself is weakest. */
         }
         requirement <'N.3'> noAml : Principles::DesignRule {
-            doc /* libs/acpi reads the fixed tables only. There is no AML
+            doc /* libs/platform/acpi reads the fixed tables only. There is no AML
                  * interpreter and there will be none. */
         }
     }

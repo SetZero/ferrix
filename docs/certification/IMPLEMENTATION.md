@@ -242,7 +242,7 @@ Four code commits, each green, then the documents:
 
 ### Verify
 
-`python3 scripts/check-item-boundary.py --report` shows no `F-01` or `F-06`
+`python3 scripts/check/check-item-boundary.py --report` shows no `F-01` or `F-06`
 entry and nothing from `object/` or `sched/` above the core. Every boot gate
 exercises this code: `object/check.rs` and `sched/check.rs` on every boot,
 `test-threads` for the thread path, `test-jobs` for job control, and `test-shell`
@@ -400,7 +400,7 @@ command list for the run.
 
 ### Verify
 
-`python3 scripts/check-item-boundary.py --report` shows no upward reference and
+`python3 scripts/check/check-item-boundary.py --report` shows no upward reference and
 an empty register. The full boot gate row, `test-threads`, `test-jobs`,
 `test-net` and `test-boot --mitigations off`: every native call devmgr and its
 drivers make, every Linux call busybox makes, and the paranoid check's
@@ -413,7 +413,7 @@ breakpoints, go through the new paths.
 **Done 2026-09-25.** See F-25. **Corrected 2026-09-26:** the gate's string
 stripping mis-paired quotes after a `\`-newline continuation and left 328 of
 the item's 1,887 functions unmeasured. It now reads code through
-`scripts/rustlex.py`, shared with the boundary gate, and the baseline was
+`scripts/check/rustlex.py`, shared with the boundary gate, and the baseline was
 re-recorded at 47 entries.
 
 **Closes:** F-25. **Size:** medium. No kernel changes.
@@ -422,7 +422,7 @@ The one code gate the audit did not build. EN 50716 requires a coding standard
 with metrics; eleven gates enforce other properties and none bounds cyclomatic
 complexity, function length or recursion.
 
-Follow `scripts/check-item-boundary.py` exactly — it is the current best
+Follow `scripts/check/check-item-boundary.py` exactly — it is the current best
 example of the ratchet pattern: measure, record a baseline, refuse growth,
 fail on stale entries.
 
@@ -564,7 +564,7 @@ engineering — **answer step 1 before planning anything that depends on it.**
    list cover `armv7a-none-eabi` and the three UEFI targets? Expect those four
    to fall outside it.
 2. If they do, the reference configuration in
-   `scripts/certification-item.json` must say which targets are built with a
+   `scripts/data/certification-item.json` must say which targets are built with a
    qualified toolchain and which are not.
 3. Pinning a Ferrocene release means editing `rust-toolchain.toml`, which is
    its own commit by house convention, and re-running every gate.
@@ -621,13 +621,13 @@ code reports failure, except 73 at bring-up that are fatal by design. The
 design is [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) §1, and what follows is
 what to know before changing code under it.
 
-**The rule the gate enforces.** `scripts/check-fallible-alloc.py` fails
+**The rule the gate enforces.** `scripts/check/check-fallible-alloc.py` fails
 `cargo xtask check` on any call to an allocating standard-library API in the
 item that is not argued at the site. So in the item:
 
 * `Box::new`, `Vec::push`, `collect`, `format!`, `to_vec` and the rest go
   through `crate::fallible` (`try_box`, `try_push`, `try_collect`,
-  `try_format`, `try_to_vec`, …), re-exported from `libs/fallible`.
+  `try_format`, `try_to_vec`, …), re-exported from `libs/kernel/fallible`.
 * `Arc::new` is `fallible::try_arc`, `Arc::new_cyclic` is `try_arc_cyclic`,
   and a map or set insert is `fallible::insert` or `insert_into_set`. When the
   value must not be lost if the insert is refused, enter the section first
@@ -759,7 +759,7 @@ a program's, and is not charged as an object; its pages are charged as memory.
 
 **CPU**: a weight per job (`cpu.weight`, 1 to 10,000, default 100), so that a
 job's share no longer grows with its runnable tasks. Not a group entity in
-`libs/sched`'s EEVDF -- S1's 13 points, the largest change to the scheduler
+`libs/kernel/sched`'s EEVDF -- S1's 13 points, the largest change to the scheduler
 since EEVDF -- but the same arithmetic done on each task's weight: a job's
 *load* is the sum of its runnable tasks' weights and of its busy children's
 weights, and a task's effective weight is its own weight times, at each level
@@ -906,18 +906,18 @@ are not listed. Grouped by what is held:
 
 | Kind | Where | Bound before this |
 |---|---|---|
-| Open file descriptions | `libs/vfs` `OpenFile::new`, `with_io` | descriptors per process -- and none in flight, in a mapping, or behind an epoll registration |
-| Dentries, anonymous-file locations, mounts | `libs/vfs` `Dentry::new`, `Location::detached`, `Namespace::mount` | a 4,096-entry cache, plus whatever an open file or a working directory pins |
-| tmpfs inodes, names, symbolic links, instances; a file's VMO | `libs/vfs/src/tmpfs.rs`, `fs/pages.rs` | none: `/tmp` and `/dev/shm` are mode 1777 |
-| Pipes and their buffers | `fs/pipe.rs`, `libs/vfs/src/pipe.rs` | 64 KiB a pipe |
-| `AF_UNIX` sockets, their queues, descriptors in flight | `fs/socket.rs`, `libs/vfs/src/socket.rs` | 212,992 bytes of payload a direction, but an empty record counts one byte and holds a hundred, and a message carrying 253 descriptors counts one |
+| Open file descriptions | `libs/fs/vfs` `OpenFile::new`, `with_io` | descriptors per process -- and none in flight, in a mapping, or behind an epoll registration |
+| Dentries, anonymous-file locations, mounts | `libs/fs/vfs` `Dentry::new`, `Location::detached`, `Namespace::mount` | a 4,096-entry cache, plus whatever an open file or a working directory pins |
+| tmpfs inodes, names, symbolic links, instances; a file's VMO | `libs/fs/vfs/src/tmpfs.rs`, `fs/pages.rs` | none: `/tmp` and `/dev/shm` are mode 1777 |
+| Pipes and their buffers | `fs/pipe.rs`, `libs/fs/vfs/src/pipe.rs` | 64 KiB a pipe |
+| `AF_UNIX` sockets, their queues, descriptors in flight | `fs/socket.rs`, `libs/fs/vfs/src/socket.rs` | 212,992 bytes of payload a direction, but an empty record counts one byte and holds a hundred, and a message carrying 253 descriptors counts one |
 | epoll sets and registrations; eventfd, timerfd, signalfd | `fs/epoll.rs`, `fs/eventfd.rs`, `fs/timerfd.rs`, `fs/signalfd.rs` | descriptors -- but a closed file's registration stays until the next wait |
-| Regions of an address space; a shared file mapping's records | `libs/vma`, `user/space.rs` | the address space: 2^35 pages. No `max_map_count`, and a shared file mapping makes no VMO for the object limit to see |
+| Regions of an address space; a shared file mapping's records | `libs/kernel/vma`, `user/space.rs` | the address space: 2^35 pages. No `max_map_count`, and a shared file mapping makes no VMO for the object limit to see |
 | Record and whole-file locks | `syscall/flock.rs` | none: one owner may lock any number of disjoint ranges |
-| Descriptor tables | `libs/vfs/src/fd.rs` | `RLIMIT_NOFILE` a process |
+| Descriptor tables | `libs/fs/vfs/src/fd.rs` | `RLIMIT_NOFILE` a process |
 | A process's recorded program and arguments | `syscall/process.rs` `record_exec` | 256 KiB a process |
 | `/proc` and cgroupfs snapshots | `fs/procfs.rs` | one a descriptor, sized by what it shows |
-| Internet sockets and their queues | `net/socket.rs`, `libs/net`, `libs/nettcp` | 64 KiB each way a connection, 212,992 bytes of payload a datagram socket -- but an empty datagram counts nothing |
+| Internet sockets and their queues | `net/socket.rs`, `libs/network/net`, `libs/network/nettcp` | 64 KiB each way a connection, 212,992 bytes of payload a datagram socket -- but an empty datagram counts nothing |
 | Netlink queues | `net/netlink` | 256 KiB a socket |
 
 And five that are not a missing charge but a leak or a missing check, which
@@ -946,7 +946,7 @@ the global tables netlink writes, which get the privilege check Linux has.
   limit exactly and the compare-and-swap argument holds unchanged. A second
   count, kernel bytes alone, is kept beside it for `memory.stat`'s `kernel`
   line, and never limited.
-* **The token.** A new crate, `libs/kmem`, holds a `Charge`: a job's slot
+* **The token.** A new crate, `libs/kernel/kmem`, holds a `Charge`: a job's slot
   and a byte count, which uncharges as it drops. The object it pays for
   holds it, so every path that frees the object frees the charge, as W-13's
   object tokens do. It is a crate and not a kernel type because half the
@@ -956,7 +956,7 @@ the global tables netlink writes, which get the privilege check Linux has.
   charge is to nobody, which is also what the root job's programs get.
 * **What a charge is worth.** What the heap gave, not what was asked: the
   size class a request is served from, or the pages of a large one, from
-  `libs/heap`'s own arithmetic. A buffer is charged at its capacity, not its
+  `libs/kernel/heap`'s own arithmetic. A buffer is charged at its capacity, not its
   length, since that is what it holds.
 * **Who pays.** The job of the task whose call made the object, as Linux's
   `GFP_KERNEL_ACCOUNT` charges `current`'s memory cgroup. A buffer that
@@ -1009,7 +1009,7 @@ under KVM: open and close, a pipe write and read, a tmpfs create and write.
 
 ### As built
 
-Eight commits on `cert-f37-heap-quota`: this design; `libs/kmem`; the five
+Eight commits on `cert-f37-heap-quota`: this design; `libs/kernel/kmem`; the five
 fixes the audit found, in four commits -- a btrfs transaction committed once
 its changed nodes pass the threshold, a process's task list pruned, netlink
 changes refused without privilege, a closed listener's connections reaped

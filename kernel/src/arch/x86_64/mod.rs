@@ -31,7 +31,7 @@ pub(crate) const NAME: &str = "x86_64";
 /// This machine, as the hand-off structure names it.
 ///
 /// The kernel needs it for the same reason the loader does: to refuse an ELF
-/// image built for a different architecture. `boot/src/arch/` has carried the
+/// image built for a different architecture. `boot/uefi/src/arch/` has carried the
 /// same constant since stage 1; this is the kernel's copy, and the two are
 /// checked against each other by the image simply booting.
 pub(crate) const ARCH: Arch = Arch::X86_64;

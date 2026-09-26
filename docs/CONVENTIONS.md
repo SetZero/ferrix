@@ -29,7 +29,7 @@ CI is the half that does not.
 1. `.githooks/commit-msg` — refuses the trailer as the message is written.
 2. `.githooks/pre-push` — refuses it again over the range being pushed.
 3. `.github/workflows/ci.yml` → the **One author per commit** job, which runs
-   `scripts/check-commit-authors.py` over the range a push or PR adds. This one
+   `scripts/check/check-commit-authors.py` over the range a push or PR adds. This one
    needs no local setup and cannot be skipped with `--no-verify`.
 
 Hooks 1 and 2 are inert until a clone runs, once:

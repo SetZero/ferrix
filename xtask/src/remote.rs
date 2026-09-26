@@ -310,7 +310,7 @@ fn read_config(args: &Args) -> Result<(Config, String)> {
         let host = args.host.clone().ok_or_else(|| {
             Error::new(format!(
                 "no config file, and no --host. Looked at ${VAR} and:\n  {}\n\
-                 Copy scripts/remote-desktop.toml.example to one of those and fill it in, \
+                 Copy scripts/data/remote-desktop.toml.example to one of those and fill it in, \
                  or give --host <ssh destination>",
                 searched().join("\n  ")
             ))

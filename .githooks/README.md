@@ -20,7 +20,7 @@ for the rule and open for everything else.
 
 So the rule is now checked in a third place that needs no arming: the **One
 author per commit** job in `.github/workflows/ci.yml`, which runs
-`scripts/check-commit-authors.py` over the range a push or pull request adds.
+`scripts/check/check-commit-authors.py` over the range a push or pull request adds.
 The hooks below are still worth arming — they fail in a second, where the fix
 is still a message edit rather than a rebase — but they are the convenience,
 and CI is the guarantee.

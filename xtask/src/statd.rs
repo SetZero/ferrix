@@ -1,4 +1,4 @@
-//! Building `ferrix-statd`, the stat service in `statd/`, for the initramfs.
+//! Building `ferrix-statd`, the stat service in `userland/statd/`, for the initramfs.
 //!
 //! Built as zinc is (`zinc.rs`): a static Linux program with std against the
 //! target's own musl, from its own workspace into a target directory of its
@@ -24,7 +24,7 @@ pub(crate) fn file(arch: Arch) -> Result<Option<ports::File>> {
     let program = target_dir.join(target).join("release").join("ferrix-statd");
     crate::builds::Build::cargo(
         format!("cargo build (ferrix-statd) --target {target}"),
-        paths::workspace_root().join("statd"),
+        paths::workspace_root().join("userland/statd"),
     )
     .args(["build", "--release", "--target", target])
     .env("CARGO_TARGET_DIR", &target_dir)

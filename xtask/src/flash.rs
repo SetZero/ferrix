@@ -33,7 +33,7 @@ const INITRD_PATH: &str = "FERRIX/INITRD.IMG";
 /// symbol table, which the loader never reads and the kernel never looks at
 /// -- neither is in a loaded segment, and a panic prints addresses, which are
 /// resolved on the host against the ELF `build` leaves beside the image,
-/// which keeps all of it (`libs/elf/src/symbols.rs` is `xtask`'s reader).
+/// which keeps all of it (`libs/platform/elf/src/symbols.rs` is `xtask`'s reader).
 ///
 /// It matters for room and for time. A debug kernel is some 70 MB, the
 /// board's `bootfs` is 128 MiB, and with the compositor's initramfs beside it

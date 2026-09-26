@@ -55,7 +55,7 @@ jobs:
           HEAD: ${{ github.event_name == 'pull_request'
                     && github.event.pull_request.head.sha
                     || github.sha }}
-        run: python3 scripts/check-commit-authors.py "$BASE" "$HEAD"
+        run: python3 scripts/check/check-commit-authors.py "$BASE" "$HEAD"
 
   # ----------------------------------------------------------------
   # The founding claim, checked rather than asserted: this OS is written
@@ -71,7 +71,7 @@ jobs:
       # a contributor on Windows has `python` but no `python3`, where relying on
       # the shebang fails with a Microsoft Store message instead of a result.
       - name: Assembly stays inside its allow-list and budget
-        run: python3 scripts/check-asm-budget.py
+        run: python3 scripts/check/check-asm-budget.py
 
       # The number is the point, so put it in the run summary where it is read
       # without opening a log.
@@ -81,7 +81,7 @@ jobs:
           {
             echo '### Assembly budget'
             echo '```'
-            python3 scripts/check-asm-budget.py || true
+            python3 scripts/check/check-asm-budget.py || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -99,21 +99,21 @@ jobs:
       # reports it as `$'\r': command not found` -- naming neither the file's
       # real problem nor the line that has it.
       - name: Text files use LF
-        run: python3 scripts/check-line-endings.py
+        run: python3 scripts/check/check-line-endings.py
 
       # The kernel enumerates devices and drives none. Without this, the
       # claim survives exactly as long as nobody is in a hurry.
       - name: Device registers are touched only where the architecture allows
-        run: python3 scripts/check-device-access.py
+        run: python3 scripts/check/check-device-access.py
 
       - name: Every unsafe construct is justified at the site
-        run: python3 scripts/check-unsafe-audit.py
+        run: python3 scripts/check/check-unsafe-audit.py
 
       # The lints deny the panicking macros; this asserts that the exemptions
       # left behind are argued ones. Without it the deny is one `#[allow]` away
       # from meaning nothing, and nobody would notice.
       - name: Every panic-lint exemption is argued
-        run: python3 scripts/check-panic-audit.py
+        run: python3 scripts/check/check-panic-audit.py
 
   # ----------------------------------------------------------------
   # docs/generated/ is written from docs/sysml/ and committed, so the
@@ -121,7 +121,7 @@ jobs:
   # change that caused it. This job regenerates and compares: a model
   # edited without regenerating fails here, and the fix is one command.
   #
-  # It installs nothing. The reader in scripts/sysml/ is stdlib Python,
+  # It installs nothing. The reader in scripts/gen/sysml/ is stdlib Python,
   # because a gate that needs a pip install is a gate that does not run
   # on a stock checkout.
   # ----------------------------------------------------------------
@@ -135,15 +135,15 @@ jobs:
       # that quietly misunderstands a construct produces a wrong document
       # rather than a failed build.
       - name: The model reader and the renderers behave
-        run: python3 scripts/sysml/tests.py
+        run: python3 scripts/gen/sysml/tests.py
 
       - name: The generated document matches the model
-        run: python3 scripts/gen-arch-doc.py --check
+        run: python3 scripts/gen/gen-arch-doc.py --check
 
       # Useful on a red run: the regenerated document, to diff by eye.
       - name: Regenerate for inspection
         if: failure()
-        run: python3 scripts/gen-arch-doc.py --out "$RUNNER_TEMP/model-doc"
+        run: python3 scripts/gen/gen-arch-doc.py --out "$RUNNER_TEMP/model-doc"
 
       - name: Upload the regenerated document
         if: failure()
@@ -170,7 +170,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Layering holds
-        run: scripts/check-crate-layering.sh
+        run: scripts/check/check-crate-layering.sh
 
   # ----------------------------------------------------------------
   # Format, lint and test.
@@ -278,7 +278,7 @@ jobs:
   #
   # Seven of its unit tests compare with the glibc the test binary
   # links and skip on any other version than the one their data was
-  # recorded on (ferrousli/src/host_glibc.rs); this runner's glibc
+  # recorded on (userland/ferrousli/src/host_glibc.rs); this runner's glibc
   # differs, so they print a note and every other test runs.
   # ----------------------------------------------------------------
   ferrousli:
@@ -308,7 +308,7 @@ jobs:
 
       # ferrousli's math tests judge every function against libc-test's
       # tables, read from a checkout at FERROUSLI_LIBC_TEST, never copied
-      # (ferrousli/src/math/mtest.rs). This is the commit the landings are
+      # (userland/ferrousli/src/math/mtest.rs). This is the commit the landings are
       # gated against; move it here and in mtest.rs together.
       - name: Fetch libc-test's tables
         env:
@@ -407,7 +407,7 @@ jobs:
   # ----------------------------------------------------------------
   # Stage 16's exit: `rustc hello.rs && ./hello` on Ferrix. The compiler is
   # the rust-lang.org release on Debian's glibc, from a btrfs volume
-  # scripts/fetch-rustc-sysroot.sh makes out of pinned downloads; the
+  # scripts/fetch/fetch-rustc-sysroot.sh makes out of pinned downloads; the
   # downloads are cached by the script's hash, which pins them. Under KVM,
   # which the hosted runners have once /dev/kvm is opened to the user: LLVM
   # emulated instruction by instruction takes minutes where this takes
@@ -447,10 +447,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.local/share/ferrix/rustc/pool
-          key: rustc-sysroot-${{ hashFiles('scripts/fetch-rustc-sysroot.sh') }}
+          key: rustc-sysroot-${{ hashFiles('scripts/fetch/fetch-rustc-sysroot.sh') }}
 
       - name: Make the rustc volume
-        run: scripts/fetch-rustc-sysroot.sh
+        run: scripts/fetch/fetch-rustc-sysroot.sh
 
       - name: Compile and run hello.rs on Ferrix
         run: cargo xtask test-rustc --release --accel kvm --timeout 900
@@ -630,7 +630,7 @@ jobs:
   # initramfs assembled elsewhere. Both are parsed with the MMU on and no
   # supervisor above.
   #
-  # Replay first, search second. The committed corpus in `fuzz/corpus/` is
+  # Replay first, search second. The committed corpus in `tests/fuzz/corpus/` is
   # what makes this a regression test: an input that crashed once fails
   # again in seconds, rather than waiting for the fuzzer to rediscover it
   # inside a timebox.
@@ -646,7 +646,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: fuzz
-          workspaces: fuzz
+          workspaces: tests/fuzz
 
       - name: Install cargo-fuzz
         uses: taiki-e/install-action@v2
@@ -658,7 +658,7 @@ jobs:
       # AddressSanitizer and whose std the runner does not have.
       - name: Build every target
         run: cargo +nightly fuzz build --target x86_64-unknown-linux-gnu
-        working-directory: fuzz
+        working-directory: tests/fuzz
 
       - name: Replay the committed corpus
         run: |
@@ -668,7 +668,7 @@ jobs:
               --target x86_64-unknown-linux-gnu -- -runs=0
             echo "::endgroup::"
           done
-        working-directory: fuzz
+        working-directory: tests/fuzz
 
       - name: Search
         # Thirty seconds each: long enough to explore what the diff changed,
@@ -680,7 +680,7 @@ jobs:
               --target x86_64-unknown-linux-gnu -- -max_total_time=30
             echo "::endgroup::"
           done
-        working-directory: fuzz
+        working-directory: tests/fuzz
 
       - name: Keep the crashing input
         # Without this the run reports a crash and throws away the bytes that
@@ -689,5 +689,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fuzz-artifacts
-          path: fuzz/artifacts/
+          path: tests/fuzz/artifacts/
           if-no-files-found: ignore

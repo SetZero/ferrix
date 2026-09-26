@@ -109,7 +109,7 @@ pub(crate) fn test_restart(args: &Args) -> Result<()> {
     }
     let bytes = std::fs::read(&shell)
         .map_err(|error| Error::new(format!("reading {}: {error}", shell.display())))?;
-    // A program holding the card when its driver dies: `compositor/blank`
+    // A program holding the card when its driver dies: `userland/compositor/blank`
     // sets a mode, shows a buffer and waits, as a compositor's card stays open.
     let blank = crate::display::build_blank(arch, false)?;
     let mut carried = ports::installed(arch)?;

@@ -1,7 +1,7 @@
 //! `cargo xtask test-compositor`: the compositor itself, on Ferrix, on a
 //! screen.
 //!
-//! `cargo xtask test-display` boots `compositor/blank`, which fills the card
+//! `cargo xtask test-display` boots `userland/compositor/blank`, which fills the card
 //! with one colour: the proof that the path from a program through
 //! `/dev/dri/card0`, the kernel's display core and the ring-3 virtio-gpu
 //! driver to QEMU's window works at all. This boots the compositor, which
@@ -9,12 +9,12 @@
 //! configuration, the layout, the renderer and its own DRM backend with two
 //! dumb buffers and a page flip.
 //!
-//! Two `compositor/pattern` clients are carried in the initramfs at
+//! Two `userland/compositor/pattern` clients are carried in the initramfs at
 //! `/bin/pattern` and started by the compositor's own `exec-once`, so what
 //! reaches the screen is two real Wayland clients tiled by the dwindle
-//! layout -- the same picture `compositor/hyprix/tests/two_clients.rs` makes
+//! layout -- the same picture `userland/compositor/hyprix/tests/two_clients.rs` makes
 //! on the host, and compared against the same expected image that
-//! `compositor/render`'s own tests bless.
+//! `userland/compositor/render`'s own tests bless.
 //!
 //! # Three pictures, and two keybinds between them
 //!
@@ -27,8 +27,8 @@
 //! `virtio-keyboard-pci`, the kernel's evdev node and the compositor's seat.
 //!
 //! Each of the three states has an expected image of its own, blessed by
-//! `compositor/render`'s own tests by calling the renderer with rectangles
-//! from `compositor/layout`. The pictures compared here came from two
+//! `userland/compositor/render`'s own tests by calling the renderer with rectangles
+//! from `userland/compositor/layout`. The pictures compared here came from two
 //! programs talking Wayland to a server that worked the same rectangles out
 //! from their requests, so a difference between the two paths is a real one.
 //!
@@ -51,7 +51,7 @@ use crate::paths::{self, Arch};
 use crate::qemu::Watching;
 use crate::{Error, Result};
 
-/// The compositor's own background: `compositor/render`'s `Style::BACKGROUND`,
+/// The compositor's own background: `userland/compositor/render`'s `Style::BACKGROUND`,
 /// which is Hyprland's `misc:background_color` default.
 const BACKGROUND: [u8; 3] = [0x11, 0x11, 0x11];
 
@@ -77,19 +77,19 @@ const EITHER: &str = "hyprix: ";
 const SETTLE: Duration = Duration::from_secs(30);
 
 /// The three pictures, in the order the keybinds make them. Each is blessed
-/// by `compositor/render`'s own tests.
+/// by `userland/compositor/render`'s own tests.
 const EXPECTED: [(&str, &str); 3] = [
     (
         "tiled",
-        "compositor/render/tests/data/dwindle-two-clients.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "the focus moved left",
-        "compositor/render/tests/data/dwindle-two-clients-focus-left.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients-focus-left.xrle",
     ),
     (
         "the windows swapped",
-        "compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
     ),
 ];
 
@@ -126,7 +126,7 @@ const INSTANCE: &str = "ferrix";
 /// size its `monitor =` line asked for.
 const MODE_EXPECTED: [(&str, &str); 1] = [(
     "tiled on a 1920x1080 screen, which is the mode the configuration asked for",
-    "compositor/render/tests/data/dwindle-two-clients-1920x1080.xrle",
+    "userland/compositor/render/tests/data/dwindle-two-clients-1920x1080.xrle",
 )];
 
 /// The configuration the mode boot is given. The card prefers 1024x768, as
@@ -147,7 +147,7 @@ const TRANSFORM_EXPECTED: [(u32, (&str, &str)); 2] = [
         (
             "tiled on a monitor turned clockwise onto its edge, the picture turned \
              counter-clockwise into the buffer",
-            "compositor/render/tests/data/dwindle-two-clients-transform-1.xrle",
+            "userland/compositor/render/tests/data/dwindle-two-clients-transform-1.xrle",
         ),
     ),
     (
@@ -155,7 +155,7 @@ const TRANSFORM_EXPECTED: [(u32, (&str, &str)); 2] = [
         (
             "tiled on a monitor turned counter-clockwise onto its edge, the picture turned \
              clockwise into the buffer",
-            "compositor/render/tests/data/dwindle-two-clients-transform-3.xrle",
+            "userland/compositor/render/tests/data/dwindle-two-clients-transform-3.xrle",
         ),
     ),
 ];
@@ -177,21 +177,21 @@ exec-once = /bin/pattern gradient two --after one
 /// The picture a bar and two windows make, which the second boot requires.
 const BAR_EXPECTED: (&str, &str) = (
     "a bar across the top with the windows under it",
-    "compositor/render/tests/data/layer-bar-two-clients.xrle",
+    "userland/compositor/render/tests/data/layer-bar-two-clients.xrle",
 );
 
 /// The picture Hyprland's two window decorations make, which the third boot
 /// requires.
 const DECORATED_EXPECTED: (&str, &str) = (
     "corners cut, a shadow under each window, and the unfocused one dimmed",
-    "compositor/render/tests/data/decorated-two-clients.xrle",
+    "userland/compositor/render/tests/data/decorated-two-clients.xrle",
 );
 
 /// The configuration the third boot is given: the same two windows, with
 /// `decoration:rounding` and `decoration:inactive_opacity` set.
 const DECORATED_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
-# The same settings `compositor/render`'s `decorated_style` blesses the
+# The same settings `userland/compositor/render`'s `decorated_style` blesses the
 # picture with; a line changed here and not there is a picture that cannot
 # match.
 decoration:rounding = 12
@@ -209,11 +209,11 @@ exec-once = /bin/pattern gradient two --after one
 const GROUPED_EXPECTED: [(&str, &str); 2] = [
     (
         "tiled",
-        "compositor/render/tests/data/dwindle-two-clients.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "two windows in one slot, the one moved into the group drawn",
-        "compositor/render/tests/data/grouped-two-clients.xrle",
+        "userland/compositor/render/tests/data/grouped-two-clients.xrle",
     ),
 ];
 
@@ -243,18 +243,18 @@ bind = SUPER, W, exec, /bin/hyprctl activewindow
 const MONITOR_EXPECTED: [(&str, &str); 2] = [
     (
         "tiled",
-        "compositor/render/tests/data/dwindle-two-clients.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "the checkerboard alone on the first monitor",
-        "compositor/render/tests/data/two-monitors-left.xrle",
+        "userland/compositor/render/tests/data/two-monitors-left.xrle",
     ),
 ];
 
 /// What the second screen must show once the keybind has been pressed.
 const MONITOR_OTHERS: [(&str, &str); 1] = [(
     "the gradient alone on the second monitor",
-    "compositor/render/tests/data/two-monitors-right.xrle",
+    "userland/compositor/render/tests/data/two-monitors-right.xrle",
 )];
 
 /// The keybind the two-monitor boot presses between its two pictures.
@@ -278,7 +278,7 @@ bind = SUPER, W, exec, /bin/hyprctl activewindow
 /// The picture a scaled monitor makes, which the sixth boot requires.
 const SCALED_EXPECTED: (&str, &str) = (
     "every logical pixel drawn as two on a monitor at scale 2",
-    "compositor/render/tests/data/scaled-two-clients.xrle",
+    "userland/compositor/render/tests/data/scaled-two-clients.xrle",
 );
 
 /// The configuration the sixth boot is given: one monitor at scale 2, where
@@ -299,11 +299,11 @@ exec-once = /bin/pattern gradient two --after one
 const PLUGIN_EXPECTED: [(&str, &str); 2] = [
     (
         "tiled",
-        "compositor/render/tests/data/dwindle-two-clients.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "the windows swapped by the plugin's own dispatcher",
-        "compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
     ),
 ];
 
@@ -327,20 +327,20 @@ bind = SUPER, W, exec, /bin/hyprctl activewindow
 /// boot requires, since the slide is watched with them on.
 const ANIMATED_EXPECTED: [(&str, &str); 1] = [(
     "corners cut, a shadow under each window, and the unfocused one dimmed",
-    "compositor/render/tests/data/decorated-two-clients.xrle",
+    "userland/compositor/render/tests/data/decorated-two-clients.xrle",
 )];
 
 /// Where the slide ends: the same two windows, exchanged.
 const ANIMATED_MOVING: Moving<'static> = Moving {
     what: "a window sliding to the other side with its decorations on",
-    path: "compositor/render/tests/data/decorated-two-clients-swapped.xrle",
+    path: "userland/compositor/render/tests/data/decorated-two-clients-swapped.xrle",
     keys: &["meta_l", "a"],
 };
 
 /// How long a frame may take on the guest, in microseconds.
 ///
 /// Not the bound the renderer's software fallback has -- that one is stated
-/// and checked where it means something, by `compositor/render`'s own
+/// and checked where it means something, by `userland/compositor/render`'s own
 /// release-build test, at 250 ms for a frame with every effect on. This is
 /// the same frame under QEMU's `tcg`, which emulates every instruction and
 /// is tens of times slower than the processor it is emulating: the numbers
@@ -398,7 +398,7 @@ dispatch movewindow r
 /// The picture a window rule makes, which the tenth boot requires.
 const RULED_EXPECTED: [(&str, &str); 1] = [(
     "a window floating where a rule put it, each drawn as its own rules say",
-    "compositor/render/tests/data/ruled-two-clients.xrle",
+    "userland/compositor/render/tests/data/ruled-two-clients.xrle",
 )];
 
 /// The configuration the tenth boot is given: the same two clients, with
@@ -430,17 +430,17 @@ exec-once = /bin/pattern gradient two --after one
 const POINTER_EXPECTED: [(&str, &str); 2] = [
     (
         "tiled, with no pointer drawn because none has moved",
-        "compositor/render/tests/data/dwindle-two-clients.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "the pointer over the windows, its tip where the mouse was put",
-        "compositor/render/tests/data/pointer-on-two-clients.xrle",
+        "userland/compositor/render/tests/data/pointer-on-two-clients.xrle",
     ),
 ];
 
 /// Where the pointer is put, in QMP's 0..0x7FFF across the screen.
 ///
-/// `compositor/render` blesses the picture with the arrow's tip at
+/// `userland/compositor/render` blesses the picture with the arrow's tip at
 /// (700, 300) on a 1024x768 screen, and these are those two as a fraction
 /// of the axis QEMU's virtio tablet reports.
 ///
@@ -509,13 +509,13 @@ exec-once = /bin/pattern gradient two --after one
 /// picture it makes.
 const MENU_EXPECTED: [(&str, &str); 1] = [(
     "a menu over the window it hangs off, where the positioner puts it",
-    "compositor/render/tests/data/menu-on-a-window.xrle",
+    "userland/compositor/render/tests/data/menu-on-a-window.xrle",
 )];
 
 /// The configuration the sixteenth boot is given: a window with a menu and
 /// a window without one.
 ///
-/// `--menu 200` is what `compositor/render` blesses the picture with, and a
+/// `--menu 200` is what `userland/compositor/render` blesses the picture with, and a
 /// number changed here and not there is a picture that cannot match.
 const MENU_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
@@ -532,15 +532,15 @@ exec-once = /bin/pattern gradient two --after one
 const LOCK_EXPECTED: [(&str, &str); 3] = [
     (
         "tiled",
-        "compositor/render/tests/data/dwindle-two-clients.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "the lock's own surface over the whole screen, and no window on it",
-        "compositor/render/tests/data/locked-screen.xrle",
+        "userland/compositor/render/tests/data/locked-screen.xrle",
     ),
     (
         "the windows again, once the lock let go",
-        "compositor/render/tests/data/dwindle-two-clients.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
 ];
 
@@ -571,17 +571,17 @@ bind = , K, exec, /bin/lswt close one
 ///
 /// A screenshot changes nothing on the screen, so both are the tiled pair:
 /// what the boot is *for* is the digest the guest prints, which must be the
-/// digest of the picture `compositor/render` blesses. The second picture is
+/// digest of the picture `userland/compositor/render` blesses. The second picture is
 /// there so that a compositor which had stopped drawing would still be
 /// caught.
 const SHOT_EXPECTED: [(&str, &str); 2] = [
     (
         "tiled",
-        "compositor/render/tests/data/dwindle-two-clients.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "still tiled, with a screenshot taken of it",
-        "compositor/render/tests/data/dwindle-two-clients.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
 ];
 
@@ -612,15 +612,15 @@ bind = , S, exec, /bin/shot
 const TASKBAR_EXPECTED: [(&str, &str); 3] = [
     (
         "tiled",
-        "compositor/render/tests/data/dwindle-two-clients.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "still tiled, with a taskbar having listed both windows",
-        "compositor/render/tests/data/dwindle-two-clients.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "one window left, closed from outside it by the taskbar",
-        "compositor/render/tests/data/one-client-alone.xrle",
+        "userland/compositor/render/tests/data/one-client-alone.xrle",
     ),
 ];
 
@@ -628,7 +628,7 @@ const TASKBAR_EXPECTED: [(&str, &str); 3] = [
 ///
 /// No modifier, which matters here and nowhere else. A bind consumes its
 /// own key but never the modifier held with it, so `SUPER B` reaches the
-/// focused client as a `meta` press -- and `compositor/pattern` draws the
+/// focused client as a `meta` press -- and `userland/compositor/pattern` draws the
 /// *other* pattern for every key it is sent, on purpose, so that a key
 /// shows on the screen. It redraws only when it is configured, so in every
 /// other boot the change never reaches a frame; this is the one boot that
@@ -649,14 +649,14 @@ const TASKBAR_BINDS: [(&str, &[&str]); 2] = [
 /// really there and really went.
 const TWIN_EXPECTED: [(&str, &str); 1] = [(
     "one window left, after the client that owned two destroyed one of them",
-    "compositor/render/tests/data/one-client-alone.xrle",
+    "userland/compositor/render/tests/data/one-client-alone.xrle",
 )];
 
 /// The configuration the twentieth boot is given: one client with two
 /// windows.
 ///
 /// The kept window is the gradient because that is the window
-/// `compositor/render` blesses alone; `--twin` draws the other pattern in
+/// `userland/compositor/render` blesses alone; `--twin` draws the other pattern in
 /// the second one, so the screen while both are up is plainly two windows.
 const TWIN_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
@@ -683,27 +683,27 @@ bind = , K, exec, /bin/lswt close one
 const SUBMAP_EXPECTED: [(&str, &str); 6] = [
     (
         "tiled",
-        "compositor/render/tests/data/dwindle-two-clients.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "still tiled, now inside the submap",
-        "compositor/render/tests/data/dwindle-two-clients.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "still tiled, with the submap naming itself",
-        "compositor/render/tests/data/dwindle-two-clients.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "the windows swapped by a key bound only in the submap",
-        "compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
     ),
     (
         "still swapped, with the submap left",
-        "compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
     ),
     (
         "still swapped, with the global map naming itself",
-        "compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients-swapped.xrle",
     ),
 ];
 
@@ -752,7 +752,7 @@ submap = reset
 const CLIPBOARD_TEXT: &str = "the clipboard went through the compositor";
 const CLIPBOARD_EXPECTED: [(&str, &str); 1] = [(
     "the windows tiled while one program copied and another pasted",
-    "compositor/render/tests/data/dwindle-two-clients.xrle",
+    "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
 )];
 
 /// The configuration the eleventh boot is given: two windows, a program
@@ -785,7 +785,7 @@ const PRIMARY_TEXT: &str = "the primary selection is the other one";
 /// The picture a terminal makes, which the ninth boot requires.
 const TERMINAL_EXPECTED: [(&str, &str); 1] = [(
     "a terminal with a program's output in it",
-    "compositor/render/tests/data/terminal-hyprctl-version.xrle",
+    "userland/compositor/render/tests/data/terminal-hyprctl-version.xrle",
 )];
 
 /// The configuration the ninth boot is given: a terminal, and nothing else.
@@ -933,11 +933,11 @@ fn build(arch: Arch, package: &str, binary: &str) -> Result<PathBuf> {
         ))
     })?;
     let target_dir = paths::target_dir().join("compositor").join("hyprix");
-    println!("  building compositor/{binary} for {target}");
+    println!("  building userland/compositor/{binary} for {target}");
     let program = target_dir.join(target).join("release").join(binary);
     crate::builds::Build::cargo(
-        format!("cargo build (compositor/{binary}) --target {target}"),
-        paths::workspace_root().join("compositor"),
+        format!("cargo build (userland/compositor/{binary}) --target {target}"),
+        paths::workspace_root().join("userland/compositor"),
     )
     .args(["build", "--release", "-p", package, "--target", target])
     .env("CARGO_TARGET_DIR", &target_dir)
@@ -1009,9 +1009,9 @@ impl Wanted<'_> {
 ///
 /// `decoration:blur:noise` is 0.0117 in Hyprland and here, and the dither is
 /// drawn. But the pictures a boot is judged against are
-/// `compositor/render`'s expected images, and those are blessed without it
+/// `userland/compositor/render`'s expected images, and those are blessed without it
 /// (`Style::undithered` says why: a dither is the one thing a run-length
-/// encoded image cannot hold). `compositor/hyprix/tests/two_clients.rs`
+/// encoded image cannot hold). `userland/compositor/hyprix/tests/two_clients.rs`
 /// tells the compositor under test the same thing for the same reason.
 ///
 /// Without this a boot fails on a dither and nothing else: every pixel that
@@ -1613,7 +1613,7 @@ const GPU_EXPECTED_PATH: &str = "etc/expected.xrle";
 /// the blur's -- and a key that holds a screenshot to the expected image.
 ///
 /// The settings are `DECORATED_CONFIG`'s, for its reason: the picture is
-/// `compositor/render`'s `decorated_style`.
+/// `userland/compositor/render`'s `decorated_style`.
 const GPU_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor --gl`.
 decoration:rounding = 12
@@ -1639,7 +1639,7 @@ const GPU_PATIENCE: Duration = Duration::from_secs(90);
 
 /// `test-compositor --gl`: the compositor drawing on the GPU, in the guest.
 ///
-/// The frame is drawn by `compositor/render`'s GPU painter through
+/// The frame is drawn by `userland/compositor/render`'s GPU painter through
 /// `/dev/dri/renderD128` -- the kernel's render node, the ring-3 driver,
 /// virtio-gpu's 3D commands and the host's virglrenderer -- and what is
 /// required is that it is the picture the software renderer blesses.
@@ -1787,8 +1787,8 @@ fn judge_gpu(arch: Arch, said: &[String]) -> Result<()> {
 /// `exec-once`: the boot ends at a shell prompt rather than at a picture,
 /// which is what somebody who asked to watch the compositor asked for.
 ///
-/// Every dispatcher named here is one `compositor/layout` has. `SUPER+P`
-/// starts a `compositor/pattern` client, which is how the tiling a gate boot
+/// Every dispatcher named here is one `userland/compositor/layout` has. `SUPER+P`
+/// starts a `userland/compositor/pattern` client, which is how the tiling a gate boot
 /// shows is reached from a configuration that starts none.
 const RUN_CONFIG: &str = "# Written into the initramfs by `cargo xtask run-compositor`.
 # `--config <PATH>` carries a real `hyprland.conf` instead of this one.
@@ -2304,7 +2304,7 @@ fn desktop(
 /// so two cards in the guest.
 ///
 /// The keybind sends the focused window to the second monitor, and each
-/// screen is then required to be the picture `compositor/render`'s own tests
+/// screen is then required to be the picture `userland/compositor/render`'s own tests
 /// bless for it: one window each, neither monitor drawing the other's.
 fn test_monitors(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let (screens, said) = boot_and_dump(
@@ -2925,7 +2925,7 @@ fn one_picture(
 ///
 /// A compositor with a mouse and no arrow on the screen is one a person
 /// cannot use. This moves the pointer with QMP and requires the screen to
-/// become the picture `compositor/render` blesses for the arrow at that
+/// become the picture `userland/compositor/render` blesses for the arrow at that
 /// point -- and to have been the ordinary tiled pair before it, because the
 /// pointer is not drawn until it has moved.
 fn test_pointer(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
@@ -3001,11 +3001,11 @@ fn test_pointer(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
 const CURSOR_EXPECTED: [(&str, &str); 2] = [
     (
         "tiled, with no pointer drawn because none has moved",
-        "compositor/render/tests/data/dwindle-two-clients.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "the pointer swept over the windows and put down, and still not in the frame",
-        "compositor/render/tests/data/dwindle-two-clients.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
 ];
 
@@ -3294,7 +3294,7 @@ fn test_mode(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
 /// The card's mode stays 1024x768, and QEMU's screendump reads the card: so
 /// what is required is the buffer Hyprland would scan out for the same line,
 /// the windows tiled on a monitor 768 wide and 1024 tall and the picture
-/// turned into the buffer, pixel for pixel as `compositor/render` blesses
+/// turned into the buffer, pixel for pixel as `userland/compositor/render` blesses
 /// it. Both quarter turns, because each is the other upside down and a
 /// compositor that turned the wrong way would pass one of them by drawing
 /// the other; and `hyprctl monitors` from inside the guest has to say
@@ -3345,7 +3345,7 @@ fn test_transform(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
 /// for ever -- the menu simply does not appear. This boot is a window that
 /// asks for one the moment it has drawn, and what is required is the
 /// picture: the popup over the window, at the rectangle
-/// `xdg_positioner`'s rules put it, which `compositor/render` blesses by
+/// `xdg_positioner`'s rules put it, which `userland/compositor/render` blesses by
 /// calling those same rules.
 fn test_menu(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let (screens, said) = boot_and_dump(
@@ -3388,7 +3388,7 @@ fn test_menu(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
 /// Three pictures: the windows, the lock over them, and the windows again.
 /// The middle one is the point -- while the lock is held the compositor
 /// draws its surface and *nothing else*, so the screen must be the picture
-/// `compositor/render` blesses for a locked screen and not one pixel of
+/// `userland/compositor/render` blesses for a locked screen and not one pixel of
 /// either window.
 ///
 /// The second key is the other half. `K` closes a window, and it is pressed
@@ -3467,7 +3467,7 @@ fn test_lock(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
 /// every pixel. What is required is that the digest is the one the expected
 /// image has: the screenshot the compositor wrote into a client's shared
 /// memory inside the guest is, pixel for pixel, the frame
-/// `compositor/render` builds on the host by calling the renderer with
+/// `userland/compositor/render` builds on the host by calling the renderer with
 /// rectangles.
 ///
 /// That is a stronger statement than the screendump the other boots make.
@@ -3542,11 +3542,11 @@ fn test_screenshot(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
 const TYPING_EXPECTED: [(&str, &str); 2] = [
     (
         "tiled",
-        "compositor/render/tests/data/dwindle-two-clients.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "one window left, closed by a key another program typed",
-        "compositor/render/tests/data/one-client-alone.xrle",
+        "userland/compositor/render/tests/data/one-client-alone.xrle",
     ),
 ];
 
@@ -3623,7 +3623,7 @@ fn test_typing(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
 
 /// FNV-1a, which is how a whole screen is compared through a serial port.
 ///
-/// The same function `compositor/shot`'s `digest` is, and it has to stay the
+/// The same function `userland/compositor/shot`'s `digest` is, and it has to stay the
 /// same: the guest prints the digest of what it was handed and this is what
 /// that is compared against. Short enough to print on one line, and simple
 /// enough that two copies cannot drift without a test saying so.
@@ -3643,7 +3643,7 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 /// other way: the client stays and destroys one of its two
 /// `xdg_toplevel`s, which until 2026-09-18 left the layout tiling a window
 /// that was not there. The host test in
-/// `compositor/hyprix/tests/two_clients.rs` makes the same claim against
+/// `userland/compositor/hyprix/tests/two_clients.rs` makes the same claim against
 /// the compositor in a process; this makes it on Ferrix, on the card.
 fn test_twin(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let (screens, said) = boot_and_dump(
@@ -3905,13 +3905,13 @@ fn test_clipboard(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
 
 /// A ninth boot: a terminal, with a program running in it.
 ///
-/// The whole path at once: the compositor starts `compositor/term`, which
+/// The whole path at once: the compositor starts `userland/compositor/term`, which
 /// opens `/dev/ptmx`, opens the slave, runs a program on it with the slave
 /// for its session and its three descriptors, reads what it wrote back
 /// through the master, draws it in a grid with its antialiased Hack, and
 /// puts that in a `wl_shm` buffer the compositor composes into the frame.
 /// Every pixel of that frame is compared against the one
-/// `compositor/term`'s own test blesses.
+/// `userland/compositor/term`'s own test blesses.
 fn test_terminal(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let (screens, said) = boot_and_dump(
         arch,
@@ -4037,7 +4037,7 @@ fn frames_were_inside_the_bound(arch: Arch, said: &[String]) -> Result<()> {
     }
     println!(
         "  {arch}: the slowest frame the guest drew took {slowest} us, under emulation; the \
-         renderer's own bound is checked in release by `compositor/render`"
+         renderer's own bound is checked in release by `userland/compositor/render`"
     );
     Ok(())
 }
@@ -4255,7 +4255,7 @@ fn group_was_said(arch: Arch, said: &[String]) -> Result<()> {
 
 /// The expected image, as the `(red, green, blue)` bytes a screendump holds.
 ///
-/// `compositor/render/src/golden.rs` writes the format and says why: a
+/// `userland/compositor/render/src/golden.rs` writes the format and says why: a
 /// run-length image of `XRGB8888` rows, with a row that repeats the one above
 /// written as a single byte.
 fn expected(relative: &str) -> Result<Vec<u8>> {
@@ -4382,7 +4382,7 @@ const FOOT_ERROR: &str = "err: ";
 /// A window with nothing drawn in it is a handful: the compositor's
 /// background, the border, and foot's own background -- seven, as the
 /// development host's probe of a foot with no output records
-/// (`compositor/hyprix/probe/real-client.txt`). Text is antialiased, and
+/// (`userland/compositor/hyprix/probe/real-client.txt`). Text is antialiased, and
 /// every glyph's edges are greys between foot's foreground and background,
 /// so three short lines of it are dozens more.
 const TEXT_COLOURS: usize = 24;
@@ -4414,12 +4414,12 @@ fn colours(screen: &Image) -> usize {
 ///
 /// `docs/CHROME.md` §6's first milestone. The compositor's own tests use
 /// clients written against its own crates, which proves the two halves
-/// agree, not that the protocol is right; `compositor/hyprix/probe` runs
+/// agree, not that the protocol is right; `userland/compositor/hyprix/probe` runs
 /// foot against the compositor on a development host, which proves the
 /// protocol and nothing about Ferrix. This is both at once: foot and every
 /// library it links -- libwayland-client, libxkbcommon, pixman, freetype,
 /// fontconfig, fcft -- built against ferrousli by
-/// `ferrousli/tools/ports/foot`, started by the compositor on the guest,
+/// `userland/ferrousli/tools/ports/foot`, started by the compositor on the guest,
 /// drawing text in a font the image carries.
 ///
 /// No picture is blessed: foot's text is foot's rendering of a font, and an
@@ -4560,7 +4560,7 @@ const VKGEARS_PATIENCE: Duration = Duration::from_secs(120);
 /// `test-vkgears`: Vulkan's gears on Ferrix, drawn by the host's GPU.
 ///
 /// `docs/GPU.md` §6.1's exit. vkgears is mesa-demos' own, and Mesa's Venus
-/// driver is linked into it (`ferrousli/tools/ports/vkgears`): it opens the
+/// driver is linked into it (`userland/ferrousli/tools/ports/vkgears`): it opens the
 /// render node, makes a Venus context and its rings in host memory mapped
 /// through the device's window, compiles nothing -- the SPIR-V goes to the
 /// host's Vulkan driver -- and fences each frame on a ring, polling the
@@ -4837,7 +4837,7 @@ fn yellow_pixels(screen: &Image) -> usize {
 /// `test-chrome-window`: Google's Chrome in a window on the compositor, on
 /// Ferrix.
 ///
-/// The full browser from the volume `scripts/fetch-chrome.sh` makes -- the
+/// The full browser from the volume `scripts/fetch/fetch-chrome.sh` makes -- the
 /// same version `test-chrome` runs headless -- started by the compositor's
 /// `exec-once` as a Wayland client, drawing its tabs, its toolbar and a page
 /// into a window the compositor tiles. What is required is the page on the

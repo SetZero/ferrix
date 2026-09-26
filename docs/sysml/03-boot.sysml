@@ -10,7 +10,7 @@ package FerrixBoot {
     private import FerrixLifecycle::*;
 
     // -----------------------------------------------------------------------
-    // The hand-off structure (libs/bootinfo)
+    // The hand-off structure (libs/proto/bootinfo)
     // -----------------------------------------------------------------------
 
     enum def Arch {
@@ -131,7 +131,7 @@ package FerrixBoot {
     }
 
     part def VirtualLayout {
-        doc /* libs/bootinfo::Layout. Both instances are checked for overlap
+        doc /* libs/proto/bootinfo::Layout. Both instances are checked for overlap
              * at compile time on every build, whichever one the build uses. */
         attribute addressBits : Natural;
         attribute user : AddressRange;
@@ -176,7 +176,7 @@ package FerrixBoot {
     attribute tableEntries : Natural = 512;
 
     // -----------------------------------------------------------------------
-    // The loader's sequence (boot/src/main.rs)
+    // The loader's sequence (boot/uefi/src/main.rs)
     // -----------------------------------------------------------------------
 
     #implemented action def LoaderSequence {
@@ -193,7 +193,7 @@ package FerrixBoot {
         then action prepareCpu;
         then action stageKernel {
             doc /* Read /FERRIX/KERNEL.ELF from the volume the loader came from,
-                 * parse it with libs/elf, copy the segments to their link
+                 * parse it with libs/platform/elf, copy the segments to their link
                  * address. Malformed segments are refused here rather than
                  * discovered by the MMU. /FERRIX/INITRD.IMG, when the volume
                  * has one, is read into memory of its own kind, Initrd, which
@@ -204,7 +204,7 @@ package FerrixBoot {
                  * of room), memory map buffer. */
         }
         then action buildAddressSpace {
-            doc /* libs/paging Mapper: the image at its link address, the direct
+            doc /* libs/kernel/paging Mapper: the image at its link address, the direct
                  * map from the lowest RAM address, and an identity plan for the
                  * loader's own code so the instruction after the switch is
                  * fetchable. The loader also maps itself where the kernel can

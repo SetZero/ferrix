@@ -67,7 +67,7 @@ pub(crate) fn disable_interrupts() {
 }
 
 /// `CR4.PGE` — the bit that makes the global bit in a page table entry mean
-/// anything. The loader sets it; see `boot/src/arch/x86_64.rs`.
+/// anything. The loader sets it; see `boot/uefi/src/arch/x86_64.rs`.
 const CR4_PGE: u64 = 1 << 7;
 
 /// `CR4.SMEP` — the processor refuses to *execute* a user page in ring 0.

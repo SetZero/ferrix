@@ -3,7 +3,7 @@
 //! The browser is Chrome for Testing's prebuilt `chrome-headless-shell`, not
 //! one built here: a 198 MB position-independent glibc program that loads
 //! forty of the system's libraries, run by Debian's `ld-linux` on Debian's
-//! glibc, all of it on a btrfs volume `scripts/fetch-chrome.sh` makes from
+//! glibc, all of it on a btrfs volume `scripts/fetch/fetch-chrome.sh` makes from
 //! pinned downloads. `docs/CHROME.md` says why this is the first Chrome and
 //! what ferrousli standing in for that glibc would add.
 //!
@@ -127,75 +127,81 @@ pub(crate) const USER_AGENT: &str = "Mozilla/5.0 (X11; Ferrix; not Linux x86_64)
 /// stay `Linux`. Those are constants in Chrome's build, whatever `uname`
 /// says, and no switch reaches them: saying Ferrix there takes a Chromium
 /// built from source.
-/// Where the image carries the tree's `fonts/`: Inter, Liberation and the
+/// Where the image carries the tree's `assets/fonts/`: Inter, Liberation and the
 /// fontconfig file that adds them to the system's, which `FONTCONFIG_FILE`
-/// names ([`WINDOW_ENV`]). `fonts/README.md` says what each face is for and
+/// names ([`WINDOW_ENV`]). `assets/fonts/README.md` says what each face is for and
 /// where it came from.
 const FONTS: &str = "usr/share/ferrix/fonts";
 
-/// `fonts/`'s files, by their path under it.
+/// `assets/fonts/`'s files, by their path under it.
 const FONT_FILES: &[(&str, &[u8])] = &[
-    ("fonts.conf", include_bytes!("../../fonts/fonts.conf")),
+    (
+        "fonts.conf",
+        include_bytes!("../../assets/fonts/fonts.conf"),
+    ),
     (
         "inter/InterVariable.ttf",
-        include_bytes!("../../fonts/inter/InterVariable.ttf"),
+        include_bytes!("../../assets/fonts/inter/InterVariable.ttf"),
     ),
     (
         "inter/InterVariable-Italic.ttf",
-        include_bytes!("../../fonts/inter/InterVariable-Italic.ttf"),
+        include_bytes!("../../assets/fonts/inter/InterVariable-Italic.ttf"),
     ),
-    ("inter/LICENSE", include_bytes!("../../fonts/inter/LICENSE")),
+    (
+        "inter/LICENSE",
+        include_bytes!("../../assets/fonts/inter/LICENSE"),
+    ),
     (
         "liberation/LiberationSans-Regular.ttf",
-        include_bytes!("../../fonts/liberation/LiberationSans-Regular.ttf"),
+        include_bytes!("../../assets/fonts/liberation/LiberationSans-Regular.ttf"),
     ),
     (
         "liberation/LiberationSans-Bold.ttf",
-        include_bytes!("../../fonts/liberation/LiberationSans-Bold.ttf"),
+        include_bytes!("../../assets/fonts/liberation/LiberationSans-Bold.ttf"),
     ),
     (
         "liberation/LiberationSans-Italic.ttf",
-        include_bytes!("../../fonts/liberation/LiberationSans-Italic.ttf"),
+        include_bytes!("../../assets/fonts/liberation/LiberationSans-Italic.ttf"),
     ),
     (
         "liberation/LiberationSans-BoldItalic.ttf",
-        include_bytes!("../../fonts/liberation/LiberationSans-BoldItalic.ttf"),
+        include_bytes!("../../assets/fonts/liberation/LiberationSans-BoldItalic.ttf"),
     ),
     (
         "liberation/LiberationSerif-Regular.ttf",
-        include_bytes!("../../fonts/liberation/LiberationSerif-Regular.ttf"),
+        include_bytes!("../../assets/fonts/liberation/LiberationSerif-Regular.ttf"),
     ),
     (
         "liberation/LiberationSerif-Bold.ttf",
-        include_bytes!("../../fonts/liberation/LiberationSerif-Bold.ttf"),
+        include_bytes!("../../assets/fonts/liberation/LiberationSerif-Bold.ttf"),
     ),
     (
         "liberation/LiberationSerif-Italic.ttf",
-        include_bytes!("../../fonts/liberation/LiberationSerif-Italic.ttf"),
+        include_bytes!("../../assets/fonts/liberation/LiberationSerif-Italic.ttf"),
     ),
     (
         "liberation/LiberationSerif-BoldItalic.ttf",
-        include_bytes!("../../fonts/liberation/LiberationSerif-BoldItalic.ttf"),
+        include_bytes!("../../assets/fonts/liberation/LiberationSerif-BoldItalic.ttf"),
     ),
     (
         "liberation/LiberationMono-Regular.ttf",
-        include_bytes!("../../fonts/liberation/LiberationMono-Regular.ttf"),
+        include_bytes!("../../assets/fonts/liberation/LiberationMono-Regular.ttf"),
     ),
     (
         "liberation/LiberationMono-Bold.ttf",
-        include_bytes!("../../fonts/liberation/LiberationMono-Bold.ttf"),
+        include_bytes!("../../assets/fonts/liberation/LiberationMono-Bold.ttf"),
     ),
     (
         "liberation/LiberationMono-Italic.ttf",
-        include_bytes!("../../fonts/liberation/LiberationMono-Italic.ttf"),
+        include_bytes!("../../assets/fonts/liberation/LiberationMono-Italic.ttf"),
     ),
     (
         "liberation/LiberationMono-BoldItalic.ttf",
-        include_bytes!("../../fonts/liberation/LiberationMono-BoldItalic.ttf"),
+        include_bytes!("../../assets/fonts/liberation/LiberationMono-BoldItalic.ttf"),
     ),
     (
         "liberation/LICENSE",
-        include_bytes!("../../fonts/liberation/LICENSE"),
+        include_bytes!("../../assets/fonts/liberation/LICENSE"),
     ),
 ];
 
@@ -252,7 +258,7 @@ pub(crate) fn window_command(page: &str) -> String {
 pub(crate) const WINDOW_ENV: &str = "env = HOME,/dev/shm\nenv = XDG_RUNTIME_DIR,/tmp\n\
      env = FONTCONFIG_FILE,/usr/share/ferrix/fonts/fonts.conf\n";
 
-/// Where `scripts/fetch-chrome.sh` writes, unless `FERRIX_CHROME_VOLUME`
+/// Where `scripts/fetch/fetch-chrome.sh` writes, unless `FERRIX_CHROME_VOLUME`
 /// names another directory.
 pub(crate) fn volume() -> Result<std::path::PathBuf> {
     let directory = match std::env::var_os("FERRIX_CHROME_VOLUME") {
@@ -267,7 +273,7 @@ pub(crate) fn volume() -> Result<std::path::PathBuf> {
     let image = directory.join("chrome.img");
     if !image.is_file() {
         return Err(Error::new(format!(
-            "{} is not there: scripts/fetch-chrome.sh makes it",
+            "{} is not there: scripts/fetch/fetch-chrome.sh makes it",
             image.display()
         )));
     }
@@ -285,7 +291,7 @@ fn script(ferrousli: bool) -> String {
     }
 }
 
-/// Chrome as `scripts/fetch-chrome.sh` unpacked it beside the volume, whose
+/// Chrome as `scripts/fetch/fetch-chrome.sh` unpacked it beside the volume, whose
 /// `PT_INTERP` says where a loader of ferrousli's must go.
 fn program_on_host(volume: &std::path::Path) -> Result<std::path::PathBuf> {
     let program = volume
@@ -296,7 +302,7 @@ fn program_on_host(volume: &std::path::Path) -> Result<std::path::PathBuf> {
         Ok(program)
     } else {
         Err(Error::new(format!(
-            "{} is not there: scripts/fetch-chrome.sh leaves it beside the volume",
+            "{} is not there: scripts/fetch/fetch-chrome.sh leaves it beside the volume",
             program.display()
         )))
     }

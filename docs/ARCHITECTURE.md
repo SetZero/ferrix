@@ -97,7 +97,7 @@ Two ABIs coexist:
 
 A process may use both: a musl program can make native calls for the parts
 POSIX cannot express. `devmgr` and the ring-3 drivers are native programs,
-built on `user/rt`.
+built on `native/rt`.
 
 ---
 
@@ -143,7 +143,7 @@ own slabs, so a `Task` allocation is a pop off a list.
 **Virtual.** Tables of 512 eight-byte descriptors over a 4 KiB granule on all
 three architectures: four levels over 48-bit addresses on the 64-bit pair, three
 over 32 on ARMv7-A, whose Large Physical Address Extension is AArch64's
-descriptor format with a narrower physical address. `libs/paging` is written
+descriptor format with a narrower physical address. `libs/kernel/paging` is written
 once, over a *geometry* and an *encoding* each architecture supplies.
 
 The 64-bit pair share *identical layout constants*:
@@ -175,7 +175,7 @@ gets what the vmap area and the image leave, and its size is the ceiling on the
 RAM a 32-bit kernel can use. On every architecture the direct map begins at the
 lowest RAM address rather than at zero — a gibibyte in on QEMU's Arm machines,
 whose first gibibyte is flash and device registers — and `BootInfo` says where.
-`libs/bootinfo` holds both layouts and checks both at compile time on every
+`libs/proto/bootinfo` holds both layouts and checks both at compile time on every
 build, whichever the build is for.
 
 The direct map is writable and never executable, except over the kernel
@@ -280,9 +280,9 @@ The kernel enumerates buses, because that needs ACPI (x86-64, AArch64) or a
 device tree (ARMv7-A, and AArch64 firmware that offers one) and privileged
 access. It does not drive devices.
 
-**And that is gated, not merely meant.** `scripts/check-device-access.py` reads
+**And that is gated, not merely meant.** `scripts/check/check-device-access.py` reads
 every volatile access and port instruction under `kernel/` against
-`scripts/device-access-allowlist.json`, which says for each file whether it
+`scripts/data/device-access-allowlist.json`, which says for each file whether it
 touches a device register, RAM a device also reads, or ordinary memory made
 volatile so a boot check cannot be optimised away. A register access outside the
 paths this section and §1 permit is refused, a file over its budget is refused,
@@ -402,9 +402,9 @@ test that a CoW filesystem actually has to pass.
 | Layer | Lives in | Reachable by tests |
 |---|---|---|
 | Byte-level logic: ELF, cpio, btrfs item parsing, seccomp BPF, page-table arithmetic, allocators | `libs/` | `cargo test`, Miri, fuzzers |
-| Loader | `boot/` | QEMU boot test |
+| Loader | `boot/uefi/` | QEMU boot test |
 | Kernel | `kernel/` | QEMU boot test, in-kernel test harness |
-| Ring-3 programs: the native runtime, `devmgr`, drivers, test programs | `user/` | Built and linted with clippy per kernel target; xtask checks each program's ELF shape; run under the QEMU boot test or `test-shell` once native process creation lands |
+| Ring-3 programs: the native runtime, `devmgr`, drivers, test programs | `native/` | Built and linted with clippy per kernel target; xtask checks each program's ELF shape; run under the QEMU boot test or `test-shell` once native process creation lands |
 | Host tooling | `xtask/` | `cargo test` |
 
 The split is not cosmetic. Nothing in `kernel/` can be run by `cargo test`,
@@ -428,5 +428,5 @@ pair, U-Boot on ARMv7-A — calls a Rust `efi_main` with a stack and the MMU
 already set up. What assembly exists is confined to constructs the machine defines
 before a Rust function could run — exception vectors, the syscall trampoline,
 context switch, and the CPU primitives with no Rust spelling. `docs/ASSEMBLY.md`
-is the list, `scripts/asm-allowlist.json` is its machine-readable form, and CI
+is the list, `scripts/data/asm-allowlist.json` is its machine-readable form, and CI
 fails on an assembly site that is not in it.

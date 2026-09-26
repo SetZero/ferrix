@@ -4,7 +4,7 @@
  * same on each; where the image goes is not -- the 64-bit pair link it in the
  * top 2 GiB, ARMv7-A at 0xf0000000 -- so KERNEL_VIRT_BASE is not defined here.
  * `kernel/build.rs` defines it per word width with `--defsym`, from the same
- * number as KERNEL_VIRT_BASE in libs/bootinfo, and the loader refuses to start
+ * number as KERNEL_VIRT_BASE in libs/proto/bootinfo, and the loader refuses to start
  * a kernel linked anywhere else. A build that forgets the definition fails to
  * link rather than producing an image at address zero.
  *

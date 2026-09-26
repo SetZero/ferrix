@@ -8,7 +8,7 @@
 //!
 //! # Where the work actually is
 //!
-//! Not here. `libs/vma` already implements the interval tree and the three
+//! Not here. `libs/kernel/vma` already implements the interval tree and the three
 //! operations that reshape it — insert, remove and protect, with splitting and
 //! merging, host-tested — and `AddressSpace` already turns a region into pages
 //! on demand. What is left in this module is argument decoding, which sounds

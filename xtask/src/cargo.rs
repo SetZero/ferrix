@@ -17,7 +17,7 @@ use crate::{Error, Result};
 ///
 /// On the 64-bit pair that is what rustc produced. On ARMv7-A rustc produces
 /// an ELF static PIE, and the `.efi` is written beside it by `pe::convert` —
-/// which checks the ELF against `boot/linker/armv7a.ld`'s contract, so a
+/// which checks the ELF against `boot/uefi/linker/armv7a.ld`'s contract, so a
 /// loader that breaks it fails the build rather than the boot.
 pub(crate) fn build_loader(arch: Arch, release: bool) -> Result<PathBuf> {
     let name = if arch.loader_is_elf() {

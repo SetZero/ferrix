@@ -2,7 +2,7 @@
 //!
 //! "A static musl Rust program that uses `std::thread`, `Mutex` and `mpsc`
 //! runs under `test-shell` on all three architectures." The program is
-//! `threads-test/`, built here for each architecture's musl target and booted
+//! `tests/threads/`, built here for each architecture's musl target and booted
 //! as init. It prints a line per step and `threads: all ok`, and exits 0; this
 //! requires every one of those lines, in order, and the status.
 //!
@@ -50,7 +50,7 @@ fn build(arch: Arch, negative: bool) -> Result<PathBuf> {
     let program = target_dir.join(target).join("release").join("threads-test");
     let mut build = crate::builds::Build::cargo(
         format!("cargo build (threads-test, {flavour}) --target {target}"),
-        paths::workspace_root().join("threads-test"),
+        paths::workspace_root().join("tests/threads"),
     )
     .args(["build", "--release", "--target", target])
     .env("CARGO_TARGET_DIR", &target_dir)
@@ -60,7 +60,7 @@ fn build(arch: Arch, negative: bool) -> Result<PathBuf> {
     }
     // Ferrix's own `.cargo/config.toml` uses this triple for the ARMv7-A
     // loader, with its linker script, and cargo merges a parent directory's
-    // flags for a target into `threads-test/`'s. The variable replaces every
+    // flags for a target into `tests/threads/`'s. The variable replaces every
     // configured flag, so the program is linked as the other two are.
     if arch == Arch::Armv7a {
         build = build

@@ -29,7 +29,7 @@ rustflags = [
     # is every native program.
     #
     # Those programs must stay fixed-address executables, which is what the
-    # kernel's ELF loader takes (user/rt/linker/native.ld), so the link is
+    # kernel's ELF loader takes (native/rt/linker/native.ld), so the link is
     # told `-no-pie` here, and `kernel/build.rs` alone says `-pie` after it:
     # a build script's link arguments come after these, and the last wins.
     # `--mitigations off` builds the kernel with the static model again.
@@ -74,7 +74,7 @@ rustflags = [
 #   * `-znotext`, because read-only data holds absolute pointers too, and a PE
 #     loader applies relocations before it applies section permissions.
 #
-# The link script is named by `boot/build.rs`, absolutely, not here: see why
+# The link script is named by `boot/uefi/build.rs`, absolutely, not here: see why
 # there.
 [target.armv7-unknown-linux-musleabi]
 linker = "rust-lld"

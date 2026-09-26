@@ -133,7 +133,7 @@ A new in-kernel filesystem, `kernel/src/fs/cgroupfs.rs`, registered as
 `cgroup2` in `filesystem_named` (`kernel/src/syscall/fsctl.rs`, where the
 comment already says it joins that match) and listed in `/proc/filesystems`.
 Every text it reads or writes is parsed and rendered by a new
-`libs/cgroupfs`, a pure crate with host tests and a fuzzer. That covers
+`libs/fs/cgroupfs`, a pure crate with host tests and a fuzzer. That covers
 `+memory -cpu` lists, `max` or a byte count, `quota period`, `key value`
 tables and the pid lists.
 
@@ -222,7 +222,7 @@ descriptor past `INT_MAX` or a `struct clone_args` shorter than
 `POLLPRI` (and `EPOLLPRI`) once after every change, and `select` reports it
 in the exception set. Nothing polled priority before G3, so, as built:
 
-* `Readiness` (`libs/vfs/src/node.rs`) has `priority`, false for every file
+* `Readiness` (`libs/fs/vfs/src/node.rs`) has `priority`, false for every file
   but `cgroup.events`;
 * `poll` and `ppoll` map it to `POLLPRI` (`poll::revents`), `select` to the
   exception set (`poll::select_sets`, Linux's `POLLEX_SET`), and `epoll` to
@@ -270,7 +270,7 @@ of 2026-09-23 found these:
 | `pids` (tasks, as Linux counts) | `clone_with` and `process_create` for a process, `clone_thread` for a thread, before the pid is allocated | `Drop for Process` and `release_thread` |
 | `memory` | `mm::allocate_frames` callers on the user path: `commit_page` (anonymous and file faults), the copy-on-write copies, the fork copies of held pages, `write_page`/`hold`, and the page-cache fill in `fs/pages.rs` | the frame's free, from the owner recorded at charge |
 | `cpu` | the scheduler's entity for the job (§7, S1) | — |
-| `io` | a block request `Part` carries the job that submitted it (`libs/block/src/schedule.rs` already names this as stage 13's place) | — |
+| `io` | a block request `Part` carries the job that submitted it (`libs/fs/block/src/schedule.rs` already names this as stage 13's place) | — |
 
 **Memory has no owner today.** A VMO carries no charge, and `AddressSpace::
 resident_pages` is computed on demand. So landing M1 gives each committed
@@ -299,7 +299,7 @@ check runs in `test-shell` with zinc and uutils. The G landings are what
 | | Landing | Gives | Gate | Points |
 |---|---|---|---|---|
 | G1 | Every process in one job: root job, `membership`, fork inherits, `live`/`busy_children` counts, names and ids, the `cgroup.kill` kill beside `job_kill`, `drivers.slice` | C2's inheritance, C5's mechanism | boot checks: a fork's child in its parent's job; populated flips at the last exit, not the reap; a killed forking loop ends | 8 |
-| G2 | `libs/cgroupfs` and cgroupfs: mount, `mkdir`/`rmdir`, `cgroup.procs` read and move, `cgroup.kill`, `cgroup.events` (without `POLLPRI`), `subtree_control` with no controllers yet, `/proc/<pid>/cgroup` | C1, C2, C5 | host tests, Miri and the `cgroupfs_write` fuzzer; the `cgroups` boot check, which drives cgroupfs through the VFS as a program's calls would (mount, `mkdir`, a move by pid, `/proc/<pid>/cgroup`, `cgroup.events`, `cgroup.kill`, the limits, nine refusals), and its negative control, a `cgroup.kill` that does not kill. The user-level run moved to G4, whose delegation needs a user anyway | 8 |
+| G2 | `libs/fs/cgroupfs` and cgroupfs: mount, `mkdir`/`rmdir`, `cgroup.procs` read and move, `cgroup.kill`, `cgroup.events` (without `POLLPRI`), `subtree_control` with no controllers yet, `/proc/<pid>/cgroup` | C1, C2, C5 | host tests, Miri and the `cgroupfs_write` fuzzer; the `cgroups` boot check, which drives cgroupfs through the VFS as a program's calls would (mount, `mkdir`, a move by pid, `/proc/<pid>/cgroup`, `cgroup.events`, `cgroup.kill`, the limits, nine refusals), and its negative control, a `cgroup.kill` that does not kill. The user-level run moved to G4, whose delegation needs a user anyway | 8 |
 | G3 | `POLLPRI` through `Readiness`, `poll`, `select`, `epoll`; `cgroup.events` pollable | C4 | boot check: an `epoll` on `cgroup.events` wakes at the last exit and not before | 3 |
 | G4 | `CLONE_INTO_CGROUP`; delegation by ownership; the no-internal-process rule | C3, C7 | `test-shell` as a non-root user in a chowned subtree; a refused move outside it | 5 |
 | G5 | `EMPTY`; `job_for_cgroup`; native jobs as `job-<id>`; `devmgr`'s jobs under `drivers.slice` | C8 | boot check: a native wait for `EMPTY` fires with the populated flip; `test-restart` still passes | 3 |
@@ -307,9 +307,9 @@ check runs in `test-shell` with zinc and uutils. The G landings are what
 | M1 | `memory` charging: `memory.current`, `memory.max`, `memory.events`, `memory.stat` (anon, file); the scoped OOM kill | C6 | a process past `memory.max` in one cgroup killed, a sibling untouched | 13 |
 | M2 | Reclaim: clean page-cache pages, scoped to a job and global, and `memory.high`, which reclaims above it | stage 13's reclaim | a `memory.high` job's file pages evicted and read back identical | 13 |
 | F1 | `cgroup.freeze`, over the stopped state processes already have | C4's `frozen` | a frozen job's members stop and resume | 3 |
-| S1 | `cpu.weight`: a group entity per job in `libs/sched`'s EEVDF, hierarchical | C6 | host tests of shares; a boot check of two busy cgroups at 1:3 weights within 10% | 13 |
+| S1 | `cpu.weight`: a group entity per job in `libs/kernel/sched`'s EEVDF, hierarchical | C6 | host tests of shares; a boot check of two busy cgroups at 1:3 weights within 10% | 13 |
 | S2 | `cpu.max`: bandwidth per period, throttling a group's entity | C6 | a `cpu.max 20000 100000` job held near 20% | 8 |
-| B1 | `io.weight` in `libs/block`'s scheduler | C6 | host tests of the dispatch shares | 5 |
+| B1 | `io.weight` in `libs/fs/block`'s scheduler | C6 | host tests of the dispatch shares | 5 |
 
 G1 to G5 are **27 points**, and they are all `docs/INIT.md`'s first boot
 waits on. Its landings L1 and L2 are host-only and can run beside them. The
@@ -355,7 +355,7 @@ included, and the frame record keeps the slot, so every free uncharges; a
 charge past `memory.max` is refused like running out of memory, since
 there is no reclaim or scoped OOM kill yet; and `cpu.weight` scales each
 task's weight by its job's weight over its job's load instead of adding a
-group entity to `libs/sched` -- Linux's own per-processor approximation of
+group entity to `libs/kernel/sched` -- Linux's own per-processor approximation of
 a group's share, one task alone in its job keeping 50.0% of a processor
 against eight in another at boot. `BUILT` is `cpu memory pids`, so the
 no-internal-process rule is reachable, and its host tests have a boot path.
@@ -467,7 +467,7 @@ there.
 
 * **P1, `pids`** (3 points), done as written below but for the charge's
   place, which is the core's `Process::new`. `BUILT` in `kernel/src/fs/cgroupfs.rs` gains
-  `pids`, and `libs/cgroupfs`'s `files` a table of controller files beside
+  `pids`, and `libs/fs/cgroupfs`'s `files` a table of controller files beside
   the base ones (`pids.max`, `pids.current`, `pids.events`), each listed
   only where the parent's `subtree_control` enables it. The charge is per
   task, hierarchical, and taken where §6 says: in `clone_with` for the job
@@ -503,7 +503,7 @@ and fails by the check's own message. Five things cost a gate each today:
 * The kernel denies `unused_results` and `clippy::too_many_lines` (100).
 * A new panic-catalog entry needs `docs/generated/PANICS.md`, regenerated
   on Linux.
-* A new crate goes into `Cargo.lock` and `fuzz/Cargo.lock`: check with
+* A new crate goes into `Cargo.lock` and `tests/fuzz/Cargo.lock`: check with
   `cargo metadata --locked --offline` in both.
 * On nazuna, `pgrep -f` with a pattern that also appears in the calling
   command line matches its own shell.
@@ -527,7 +527,7 @@ carry today's sightings. The init's open decisions are `docs/INIT.md` §14,
   frame charged to no job, which the charge check must catch by name.
 * **`POLLPRI` is new to every poll path.** G3 adds it as a field that is
   false everywhere except `cgroup.events`, so a mistake shows only there.
-* **Group scheduling (S1)** is the largest change to `libs/sched` since
+* **Group scheduling (S1)** is the largest change to `libs/kernel/sched` since
   EEVDF. It is last on purpose: init, and the stage's exit, need none of it.
 
 ## 9. What the customer decides

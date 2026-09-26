@@ -1,7 +1,7 @@
 //! A program's own exceptions end it with the signal Linux gives each.
 //!
 //! Verification, not the handlers: a file of its own so that the manifest
-//! counts it as the test it is (`scripts/certification-item.json`,
+//! counts it as the test it is (`scripts/data/certification-item.json`,
 //! `test_file_patterns`). Each case is a real program, built into an ELF and
 //! run by the Linux personality's loader, because only an instruction a
 //! program executes at EL0 takes the path under test: the vector stub,

@@ -11,7 +11,7 @@
 //!
 //! Because it is the same problem. A kernel arena and a process address space
 //! are both a sorted set of non-overlapping ranges reshaped by insert, remove
-//! and protect. `libs/vma` was written for stage 6 and is already host-tested
+//! and protect. `libs/kernel/vma` was written for stage 6 and is already host-tested
 //! against sixty cases; using it here means stage 6 inherits an arena that has
 //! been running on a real machine for four stages rather than one written the
 //! week it is needed — and the bugs are found by the kernel that boots on
@@ -632,7 +632,7 @@ pub(crate) fn check_invariants() -> Result<(), &'static str> {
     Ok(())
 }
 
-/// The `libs/vma` spelling of a set of page table flags.
+/// The `libs/kernel/vma` spelling of a set of page table flags.
 ///
 /// Only the three permission bits carry over. The arena does not care whether
 /// a mapping is cacheable or global — those say how the hardware reaches the

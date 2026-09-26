@@ -19,8 +19,8 @@ package FerrixStorage {
              * bandwidth, and the ring protocol to userspace block drivers. A
              * read into a page-cache page fills the VMO the cache already
              * holds. The queue itself (merging, flush and FUA barriers,
-             * deadline scheduling) is libs/block, in front of every block
-             * ring (kernel/src/block_ring, libs/blkring): one kernel task
+             * deadline scheduling) is libs/fs/block, in front of every block
+             * ring (kernel/src/block_ring, libs/proto/blkring): one kernel task
              * per ring moves requests onto it and copies payloads through
              * the ring's data VMO, and publishes the disk in devfs's
              * registry as a BlockDevice (kernel/src/fs/block.rs) that
@@ -38,7 +38,7 @@ package FerrixStorage {
     #implemented part def NetCore {
         doc /* The networking stage (docs/ROADMAP.md, Networking), which is
              * not on the path to rustc and was taken after stage 11: AF_INET
-             * and AF_INET6 sockets over libs/net, AF_NETLINK route sockets
+             * and AF_INET6 sockets over libs/network/net, AF_NETLINK route sockets
              * and the ifreq ioctls for configuring an interface, /proc/net
              * for the programs that read it, the net ring, and virtio-net as
              * its first driver, in ring 3, with AF_UNIX names under it all.
@@ -53,7 +53,7 @@ package FerrixStorage {
 
     #implemented part def Inode {
         @stage { number = 8; }
-        doc /* libs/vfs's Inode trait, which tmpfs, devfs, procfs, pipes,
+        doc /* libs/fs/vfs's Inode trait, which tmpfs, devfs, procfs, pipes,
              * sockets and btrfs implement; Inode::mapping offers what mmap
              * maps. */
         ref part pages : Vmo {
@@ -84,7 +84,7 @@ package FerrixStorage {
              * entries, mount table per mount namespace, fd tables with their
              * sharing rules.
              *
-             * libs/vfs, host-tested and fuzzed by vfs_ops: dentries with
+             * libs/fs/vfs, host-tested and fuzzed by vfs_ops: dentries with
              * negative entries kept alive by a bounded queue of recent ones,
              * mounts and one path walk for every call that takes a path,
              * open file descriptions apart from descriptor tables, and the
@@ -118,7 +118,7 @@ package FerrixStorage {
     // -----------------------------------------------------------------------
 
     abstract #implemented part def Filesystem {
-        doc /* libs/vfs's FileSystem trait. */
+        doc /* libs/fs/vfs's FileSystem trait. */
         action mount;
         action lookup;
         action read;
@@ -127,7 +127,7 @@ package FerrixStorage {
 
     #implemented part def Tmpfs :> Filesystem {
         @stage { number = 8; }
-        doc /* libs/vfs/src/tmpfs.rs, whose file contents are a page store
+        doc /* libs/fs/vfs/src/tmpfs.rs, whose file contents are a page store
              * the kernel supplies as a VMO, so a shared mmap of a tmpfs file
              * maps the file's own pages. The root and /tmp are tmpfs, and
              * mount -t tmpfs makes a fresh one. */
@@ -144,14 +144,14 @@ package FerrixStorage {
         @stage { number = 8; }
         doc /* self/maps, self/exe, self/fd backed by the real VM and fd
              * table; cpuinfo, meminfo. kernel/src/fs/procfs.rs over
-             * libs/procfs's text, rendered at open: each /proc/<pid> with
+             * libs/fs/procfs's text, rendered at open: each /proc/<pid> with
              * its fd, status, comm, cmdline, stat, maps, exe, cwd, root,
              * task and mounts, and /proc's mounts, stat, partitions,
              * filesystems, uptime, version, sys, sysrq-trigger and net
              * beside them. */
     }
     #implemented part def Sysfs :> Filesystem {
-        doc /* kernel/src/fs/sysfs.rs over libs/sysfs's text, a view that
+        doc /* kernel/src/fs/sysfs.rs over libs/fs/sysfs's text, a view that
              * stores nothing, fed by the services that own each fact
              * (docs/SYSFS.md): enumeration's device nodes under
              * devices/pci and platform, the disks, interfaces, cards,
@@ -165,15 +165,15 @@ package FerrixStorage {
 
     #implemented part def InitramfsUnpack {
         @stage { number = 8; }
-        doc /* libs/cpio: the "newc" reader. Borrows, copies nothing,
+        doc /* libs/fs/cpio: the "newc" reader. Borrows, copies nothing,
              * allocates nothing, rejects unsafe paths. Unpacked into tmpfs
-             * by libs/vfs's initramfs module through the same calls a
+             * by libs/fs/vfs's initramfs module through the same calls a
              * program makes, hard links and device nodes included. */
     }
 
     #implemented part def BtrfsParsing {
         @stage { number = 11; }
-        doc /* libs/btrfs: superblock, sys chunk array and chunk map
+        doc /* libs/fs/btrfs: superblock, sys chunk array and chunk map
              * (logical to physical), B-tree nodes and leaves, item payloads
              * (inode, inode ref, dir, extent data), crc32c. Pure functions over
              * bytes, forbid(unsafe_code); no cache, no transactions. Fuzzed
@@ -185,7 +185,7 @@ package FerrixStorage {
         doc /* The real filesystem, read and write, single device, no RAID
              * 5/6. The largest single piece of work in the project.
              * kernel/src/fs/btrfs.rs mounts it from a block node, read-only
-             * over libs/btrfs-vfs or writable over libs/btrfs-write, one
+             * over libs/fs/btrfs-vfs or writable over libs/fs/btrfs-write, one
              * inode object per inode so two names share one page cache. `/`
              * is a btrfs volume under cargo xtask run, and test-rustc's
              * sysroot is one at /data. */
@@ -202,7 +202,7 @@ package FerrixStorage {
              * verification, zstd/zlib/lzo. Enough to mount what mkfs.btrfs
              * produced and read a sysroot out of it.
              *
-             * libs/btrfs and libs/btrfs-vfs, host-tested against real
+             * libs/fs/btrfs and libs/fs/btrfs-vfs, host-tested against real
              * images, with every data sector checked against the checksum
              * tree before its bytes are used and a bounded cache of
              * metadata reads. Exit met on all three architectures: a
@@ -219,8 +219,8 @@ package FerrixStorage {
              * with the right flush/FUA ordering, the free-space tree, the log
              * tree and its replay.
              *
-             * All three are in libs/btrfs-write, mounted writable by the
-             * kernel through libs/btrfs-vfs, and clean under host btrfs
+             * All three are in libs/fs/btrfs-write, mounted writable by the
+             * kernel through libs/fs/btrfs-vfs, and clean under host btrfs
              * check: over what every boot writes (cargo xtask test-btrfs),
              * and before and after the log is replayed when QEMU is killed
              * inside a transaction (cargo xtask test-powerfail). Owed beside

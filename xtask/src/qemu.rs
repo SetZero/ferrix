@@ -1245,7 +1245,7 @@ fn judged_vnc(args: &Args, card: Option<&str>) -> Vec<String> {
 /// only way to measure the kernel's coverage at all: `docs/sysml/
 /// 11-assurance.sysml` records that a fuzzer cannot drive a page-fault handler
 /// and Miri cannot interpret a privileged instruction, so QEMU is the only
-/// thing that reaches ring 0. `scripts/coverage-report.py` turns what the
+/// thing that reaches ring 0. `scripts/gen/coverage-report.py` turns what the
 /// plugin writes into statement coverage per certification ring; see
 /// `docs/certification/VERIFICATION.md`.
 ///

@@ -23,7 +23,7 @@ This document specifies iteration 1's cut of that:
 * **what a panic does** once the driver owns scanout.
 
 It is not the virtio-gpu protocol, which the driver speaks to the device
-(`libs/virtio::gpu`, to be written). It is not the GPU: no 3D, no render node,
+(`libs/drivers/virtio::gpu`, to be written). It is not the GPU: no 3D, no render node,
 no dmabuf, no PRIME (stage 19; how the GPU comes, and in what order, is
 decided in `docs/GPU.md`). It is not input (virtio-input is its own
 iteration).
@@ -106,13 +106,13 @@ The budget is one named constant with its arithmetic beside it: a 4K mode is
 256 MiB leaves room for a cursor and a third buffer and still bounds what one
 opener can commit.
 
-### 2.2 The driver protocol: a control channel, `libs/displayctl`
+### 2.2 The driver protocol: a control channel, `libs/proto/displayctl`
 
 Frames do not move, so there is no data ring. There is one control `Channel`
-per card, with the message shape `libs/blkring/src/control.rs` uses: a
+per card, with the message shape `libs/proto/blkring/src/control.rs` uses: a
 fixed-size little-endian message, a type, a version, validation in the order
 fields are read, and handles alongside. It goes in a new host-tested crate,
-`libs/displayctl`, with a fuzz target, as `libs/blkring` did.
+`libs/proto/displayctl`, with a fuzz target, as `libs/proto/blkring` did.
 
 **Bring-up follows blk.** devmgr's table gets `(0x1AF4, [0x1050], b"gpu",
 Kind::Display)`. `DEVMGR.md` already names 0x1050. `start_display` asks the
@@ -175,12 +175,12 @@ refuses `RESOURCE_DETACH_BACKING`, the driver does not unreference the
 resource and does not close the pin: the range stays pinned for good, and
 `DETACHED` reports `DeviceRefused`, which tells the core never to hand that
 range out again. Unpinning it would let the device write into memory that
-belongs to someone else (os-f6's decision, 2026-09-16; `libs/virtio-gpu`'s
+belongs to someone else (os-f6's decision, 2026-09-16; `libs/drivers/virtio-gpu`'s
 `pipeline` implements it and its fuzz target checks it).
 
 The driver runs commands one at a time on the control queue: a frame is two
 commands, and at 60 frames a second a queue per frame is not worth its
-complexity. The cursor queue is run the other way round (`libs/virtio-gpu`,
+complexity. The cursor queue is run the other way round (`libs/drivers/virtio-gpu`,
 "The cursor queue is the other way round"): sixteen slots on a page of their
 own, everything owed posted behind one doorbell, and no interrupt at all --
 the queue is given no MSI-X vector and asks for none, and a slot comes back
@@ -203,7 +203,7 @@ after `HELLO` is accepted, as blk registers its disk.
 
 ### 2.3 The DRM subset
 
-`card0` answers these ioctls. Numbers and layouts go into `libs/linux-abi`
+`card0` answers these ioctls. Numbers and layouts go into `libs/proto/linux-abi`
 (`drm` module), from a probe compiled on nazuna against `/usr/include/drm`
 (`linux-libc-dev`), at both pointer widths, and pinned by tests. The probe
 source is committed this time.
@@ -345,7 +345,7 @@ time the kernel said `card0 scanout 0 is now ...`, hyprix `Virtual-1 is
 ... now, as its monitor prefers`, and the screen was the new size with the
 windows tiled on it and the GPU still drawing.
 
-**How it is checked.** `compositor/blank` asks for universal planes after its
+**How it is checked.** `userland/compositor/blank` asks for universal planes after its
 modeset, reads the planes as Smithay does, and ends its marker line with
 `plane 4 Primary`: the plane whose `type` value is named `Primary` in the
 property's own enum list, and which must show the framebuffer and CRTC the
@@ -422,7 +422,7 @@ from `BootInfo`. What changes is what a person sees:
   `VIRTIO_F_ACCESS_PLATFORM`, so the driver runs in degraded trusted mode
   there, as the disk drivers do. The compositor's programs are built for
   `armv7-unknown-linux-musleabihf`, hard float.
-* **`test-display`.** Builds `compositor/blank` as init and boots it with the
+* **`test-display`.** Builds `userland/compositor/blank` as init and boots it with the
   device, waits for a line starting `compositor: `, then asks QEMU over QMP
   (TCP on localhost on every host) for `screendump device=gpu0 head=0` in
   QEMU's default PPM, and compares every pixel. A negative control, the
@@ -489,7 +489,7 @@ from `BootInfo`. What changes is what a person sees:
   file for the same job at `~/.config/ferrix/wallpaper.toml`. It could not be
   a compositor option anyway: every setting in it is spent by `ffmpeg` on the
   host when the image is built, and the guest has no encoder to change its
-  mind with. `compositor/config`'s table stays exactly Hyprland 0.56's, which
+  mind with. `userland/compositor/config`'s table stays exactly Hyprland 0.56's, which
   is what lets the differential harness compare it. The client keeps **two** buffers
   where a still wallpaper keeps one, because a compositor releases a buffer
   when a later commit replaces it: a client that drew once and waited for the
@@ -599,13 +599,13 @@ kernel code.
 
 | # | Landing | Kernel? | Points |
 |---|---|---|---|
-| L1 | `libs/linux-abi::drm`: ioctl numbers, `drm_mode_*` and `drm_event_vblank` layouts at both widths, from a committed probe | no | 3 |
-| L2 | `libs/virtio::gpu`: 2D control commands and responses encoded and decoded, config, features, hostile-device tests, fuzz target; checked against QEMU 9.2.4's `virtio_gpu.h` | no | 5 |
-| L3 | `libs/displayctl`: §2.2's messages and validation, host-tested, fuzzed | no | 3 |
-| L4 | `libs/virtio-gpu`: driver logic over `libs/virtio-blk`'s traits (bring-up, the command queue, resource lifecycle), tested against a simulated device | no | 5 |
-| L5 | `user/gpu` driver, devmgr's table entry, `DISPLAY_CONTROL_CREATE`, the core's control task and the §2.4 check; exit: the boot line names the mode the driver reported | yes | 8 |
+| L1 | `libs/proto/linux-abi::drm`: ioctl numbers, `drm_mode_*` and `drm_event_vblank` layouts at both widths, from a committed probe | no | 3 |
+| L2 | `libs/drivers/virtio::gpu`: 2D control commands and responses encoded and decoded, config, features, hostile-device tests, fuzz target; checked against QEMU 9.2.4's `virtio_gpu.h` | no | 5 |
+| L3 | `libs/proto/displayctl`: §2.2's messages and validation, host-tested, fuzzed | no | 3 |
+| L4 | `libs/drivers/virtio-gpu`: driver logic over `libs/drivers/virtio-blk`'s traits (bring-up, the command queue, resource lifecycle), tested against a simulated device | no | 5 |
+| L5 | `native/drivers/gpu` driver, devmgr's table entry, `DISPLAY_CONTROL_CREATE`, the core's control task and the §2.4 check; exit: the boot line names the mode the driver reported | yes | 8 |
 | L6 | devfs `/dev/dri/card0`: subdirectory, exclusive open, the ioctl branch and §2.3's subset, `mapping()` to the card VMO, event `read` | yes | 8 |
-| L7 | `compositor/` first binary (open, mode, dumb buffer, fill, `SETCRTC`), built into the initramfs; `xtask test-display` with QMP screendump and its negative control; `xtask run --display` | no | 5 |
+| L7 | `userland/compositor/` first binary (open, mode, dumb buffer, fill, `SETCRTC`), built into the initramfs; `xtask test-display` with QMP screendump and its negative control; `xtask run --display` | no | 5 |
 |  | **Iteration 1** |  | **37** |
 
 That is 3 more than the 34 first given. The difference is devfs
@@ -679,7 +679,7 @@ divider and nothing else of PLL4.
   kind and the binding number `TREE_STM32_HDMI`, and starts `/lib/drivers/ltdc`
   with blk's START shape, the two register windows where virtio's blocks
   would be.
-* **The driver** (`user/ltdc`, logic in `libs/stm32-display`, host-tested
+* **The driver** (`native/drivers/ltdc`, logic in `libs/drivers/stm32-display`, host-tested
   against models of the LTDC, the I2C controller, the bridge and an EDID
   EEPROM, and with real monitors' EDIDs): finds the bridge in TPI mode and
   checks its chip id, reads the monitor's EDID (base block and first
@@ -697,7 +697,7 @@ physically contiguous. The core fills such a card's ranges at ATTACH with
 one block from the frame allocator — 720p's 3.6 MB fits the largest block,
 4 MiB — or, for a larger buffer, with that many largest blocks lying back
 to back (`Frames::allocate_run`: 1920x1080's 8.3 MB and 1920x1200's 9.2 MB
-take three), which `libs/frame`'s `split` turns into single frames, so the
+take three), which `libs/kernel/frame`'s `split` turns into single frames, so the
 card VMO owns, maps, decommits and gives back each page exactly as it does
 any other, and the pages past the buffer go back at once. A run exists only
 where that much memory is free and aligned to 4 MiB, which after boot is
@@ -769,7 +769,7 @@ next one.
   HDMI sink before it read EDIDs; no monitor gets less than it had.
 
 The driver runs the largest, by pixels and then refresh. Two real monitors,
-from their EDIDs (`libs/stm32-display/src/edid_tests.rs`): a DELL U2415
+from their EDIDs (`libs/drivers/stm32-display/src/edid_tests.rs`): a DELL U2415
 (1920x1200, HDMI) lists VICs 32 to 34 and gets **1920x1080 at 30 Hz**; a
 DELL U2412M (1920x1200, DVI) lists nothing between 720x400 and 154 MHz and
 stays at **1280x720 at 60 Hz**. Scanout bandwidth does not change with the
@@ -826,7 +826,7 @@ reload at the next vertical blanking, and no frame is drawn.
   controller starts again.
 * The monitor is turned (`transform, 3`), and the card knows nothing of
   it. `hyprix` turns the plane's image, its hotspot and its place as it
-  turns the frame (`compositor/hyprix/src/plane.rs`, `turned`): the
+  turns the frame (`userland/compositor/hyprix/src/plane.rs`, `turned`): the
   pointer lands on the buffer pixel the frame would have drawn it on, for
   all eight transforms, which virtio-gpu's plane gets as well -- before
   this a turned monitor drew its pointer into the frame on every card.
@@ -838,7 +838,7 @@ step off.
 
 **What ran on the board (2026-09-23).** At `FERRIX-BOOT-OK stages 1-12` the
 node was published, `devmgr   1 devices, 6 drivers, 1 started, 0 failed`,
-`display  card0 scanout 0: 1280x720`. `compositor/blank` as init printed
+`display  card0 scanout 0: 1280x720`. `userland/compositor/blank` as init printed
 `compositor: scanout 1280x720 1280x720 colour 0x1e1e2e plane 4 Primary` and
 the customer saw that colour on the monitor. `hyprix` as init reported `1
 monitor [card0 HDMI-A-1 1280x720 1280x720]`, started a terminal running

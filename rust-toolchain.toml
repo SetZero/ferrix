@@ -24,9 +24,9 @@ targets = [
     # and no C runtime is linked: `.cargo/config.toml` says so.
     "armv7-unknown-linux-musleabi",
     # ferrousli, the C library, when it is built on a host that is not Linux:
-    # `ferrousli/tools/busybox/build-windows.sh` cross-builds it on Windows.
+    # `userland/ferrousli/tools/busybox/build-windows.sh` cross-builds it on Windows.
     "x86_64-unknown-linux-gnu",
-    # zinc, the zsh-compatible shell in `zinc/`: a static std program for the
+    # zinc, the zsh-compatible shell in `userland/zinc/`: a static std program for the
     # initramfs, linked by rust-lld against the target's own musl.
     "x86_64-unknown-linux-musl",
     "aarch64-unknown-linux-musl",
@@ -38,7 +38,7 @@ targets = [
     "armv7-unknown-linux-gnueabihf",
     # And its loader on ARMv7-A: a static PIE with no C library, which this
     # musl target links (AArch64's is the musl target above).
-    # And the compositor's programs on ARMv7-A (`compositor/.cargo/config.toml`):
+    # And the compositor's programs on ARMv7-A (`userland/compositor/.cargo/config.toml`):
     # hard float, since a compositor blends pixels in floating point and soft
     # float would make every one of those operations a library call.
     "armv7-unknown-linux-musleabihf",

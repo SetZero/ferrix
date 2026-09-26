@@ -23,7 +23,7 @@ it on the host. This document specifies the whole path:
   SPICE guest agent has used since 2010;
 * **the protocol on it**, SPICE's vdagent, of which this implements the
   clipboard messages and nothing else;
-* **the driver**, `user/vport`, which owns the device and offers the port as
+* **the driver**, `native/drivers/vport`, which owns the device and offers the port as
   a Unix socket. There is no kernel in this path at all, and §5 is why;
 * **the agent**, a program that is a `ext-data-control` client on one side and
   the port's reader on the other;
@@ -194,7 +194,7 @@ protocol, QEMU maps it to nothing, and the agent refuses it.
 
 Types: `UTF8_TEXT` (1) is version 1's whole vocabulary, mapped to the MIME
 type `text/plain;charset=utf-8` that the compositor's clipboard already
-carries (`compositor/clip`). `IMAGE_PNG` (2) is §7(b).
+carries (`userland/compositor/clip`). `IMAGE_PNG` (2) is §7(b).
 
 | Message | Number | Meaning |
 |---|---|---|
@@ -239,7 +239,7 @@ of process. They are two ranges of number, and one program may use both.
 `ferrix-rt` has in fact been doing exactly this since it was written: a
 native program's `exit` is Linux's `exit_group`, called with a Linux number
 through the same instruction as every native call
-(`user/rt/src/arch/x86_64.rs`). The trick this design turns on is already in
+(`native/rt/src/arch/x86_64.rs`). The trick this design turns on is already in
 the tree, on every architecture, in the runtime every driver links.
 
 So a driver may hold a device through native handles *and* create a Unix
@@ -255,7 +255,7 @@ character device -- another port, or a program that expects the Linux name --
 
 ## 6. The two programs
 
-**`user/vport`** is the driver, started by `devmgr` for PCI id `0x1043` like
+**`native/drivers/vport`** is the driver, started by `devmgr` for PCI id `0x1043` like
 any other. It is a native program: it takes the device in START, maps the
 register blocks, negotiates the features of §3.1, sets up the four queues of
 §3.2 and walks the control conversation of §3.3 until the port named
@@ -276,26 +276,26 @@ from its first seconds (`docs/COMPOSITOR-DAMAGE-HANDOFF.md` §2.8).
 
 `devmgr` needs one change beyond its table, and it is not optional. A driver
 that does not publish to a kernel subsystem is currently **killed** and
-counted as failed (`user/devmgr/src/main.rs`, after `await_published`), and
+counted as failed (`native/devmgr/src/main.rs`, after `await_published`), and
 `test-boot` requires `failed 0`. `vport` publishes to no subsystem because it
 has none, so it needs a kind of its own that is started and not waited for.
 
-**`compositor/vdagent`** is the agent, an ordinary `std` program beside the
+**`userland/compositor/vdagent`** is the agent, an ordinary `std` program beside the
 compositor's other clients. It connects to `vport`'s socket on one side and
-to the Wayland socket on the other, and it is where `libs/vdagent` and
+to the Wayland socket on the other, and it is where `libs/drivers/vdagent` and
 `ext-data-control` meet: a host grab becomes a `create_data_source`,
 `offer`, `set_selection`; a guest `selection` event becomes a grab, and the
 host's request for the data is answered from a pipe. It reuses
-`compositor/wire` and the client half of `compositor/clip`, which is why the
+`userland/compositor/wire` and the client half of `userland/compositor/clip`, which is why the
 agent is `std` and the driver is not.
 
 ## 6a. The terminal
 
 Copy and paste has to be reachable from a keyboard or it is not a feature a
-person has. `compositor/term` has **no clipboard code of any kind** today --
+person has. `userland/compositor/term` has **no clipboard code of any kind** today --
 no `wl_data_device`, no paste -- so `CTRL`+`SHIFT`+`V` in a Ferrix terminal
 would do nothing even with every part above built and working. That was
-found by reading `compositor/term/src/client.rs` after a person tried exactly
+found by reading `userland/compositor/term/src/client.rs` after a person tried exactly
 that key and nothing happened.
 
 So the terminal binds `wl_data_device`: `CTRL`+`SHIFT`+`V` asks for the
@@ -320,7 +320,7 @@ finished until the key works.
   to paint into a corner, so the driver carries the one port it needs and a
   second would be a change to one program. Nothing is owed here now.
 * **(d) The agent's name and its start.** **Settled by §5 and §6:**
-  `compositor/vdagent`, a `std` program beside the compositor's other
+  `userland/compositor/vdagent`, a `std` program beside the compositor's other
   clients, started as an `exec-once` the way the terminal and the wallpaper
   are. It exits quietly when the socket is not there, so a boot without
   `--clipboard` is a boot without a clipboard and not a boot with an error.
@@ -339,12 +339,12 @@ nothing from the kernel and are pure host-tested logic.
 | # | What | Where | State |
 |---|---|---|---|
 | 1 | this document | `docs/CLIPBOARD.md` | landed |
-| 2 | the vdagent protocol, encode and decode | `libs/vdagent` | landed |
-| 3 | the virtio-console device protocol | `libs/virtio/src/console.rs` | landed |
-| 4 | the console driver library | `libs/virtio-console` | landed |
-| 5 | the driver and its socket, and `devmgr`'s kind | `user/vport`, `user/devmgr` | landed |
-| 6 | the agent | `compositor/vdagent` | to do |
-| 7 | paste and copy in the terminal | `compositor/term` | to do |
+| 2 | the vdagent protocol, encode and decode | `libs/drivers/vdagent` | landed |
+| 3 | the virtio-console device protocol | `libs/drivers/virtio/src/console.rs` | landed |
+| 4 | the console driver library | `libs/drivers/virtio-console` | landed |
+| 5 | the driver and its socket, and `devmgr`'s kind | `native/drivers/vport`, `native/devmgr` | landed |
+| 6 | the agent | `userland/compositor/vdagent` | to do |
+| 7 | paste and copy in the terminal | `userland/compositor/term` | to do |
 | 8a | `--clipboard`: the device on the bus | `xtask` | landed |
 | 8b | starting the agent, and `test-clipboard` | `xtask` | to do |
 

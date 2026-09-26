@@ -379,7 +379,7 @@ fn published_by_devmgr(
 const DRIVER_DIED: &str = "a blk driver devmgr started died before publishing its disk";
 
 /// The step `/sbin/blk`'s exit status names: its `Step` enum, in
-/// `user/blk/src/main.rs`, whose numbers are its exit statuses.
+/// `native/drivers/blk/src/main.rs`, whose numbers are its exit statuses.
 fn blk_step(status: i32) -> &'static str {
     match status {
         1 => "at its start",

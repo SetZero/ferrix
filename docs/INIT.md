@@ -112,7 +112,7 @@ kernel additions it needs besides stage 13, each one also useful outside
 init.
 
 **Survive a microkernel.** One rule makes this hold: **the manager's logic
-never names a system call.** It is a pure state machine in `libs/svc` that
+never names a system call.** It is a pure state machine in `libs/init/svc` that
 takes events and returns actions (§3). Every effect goes through one of nine
 *backends*, and §7 says for each who serves it today and who would serve it
 in a microkernel. There is a second half to the rule. A microkernel's root
@@ -135,19 +135,19 @@ five mechanisms. This design takes all five, and adds one of its own:
 | Socket activation | Start a service on its first connection |
 | **The directory** (Ferrix's own, §6) | Offer or use a named native service, started on first use |
 
-Unit *kinds* are a trait in `libs/svc` (§4.2). A new kind, such as `timer` or
+Unit *kinds* are a trait in `libs/init/svc` (§4.2). A new kind, such as `timer` or
 `path`, is a new implementation of the trait; the graph and the operations
 do not change.
 
 ## 3. Shape
 
 ```
-libs/svc         no_std + alloc; host-tested, Miri, fuzzed
+libs/init/svc         no_std + alloc; host-tested, Miri, fuzzed
                  unit files -> model, the dependency graph, operations,
                  the slice tree, restart policy, and
                  Manager::step(event, now) -> actions
-libs/svc-proto   the control and notify wire formats, shared with `svc`
-init/            its own workspace, std on *-linux-musl, like zinc/
+libs/init/svc-proto   the control and notify wire formats, shared with `svc`
+userland/init/            its own workspace, std on *-linux-musl, like userland/zinc/
   init           /sbin/init: the event loop and the Linux backends
   svc            /bin/svc: the control client
   getty          /sbin/getty
@@ -426,7 +426,7 @@ these a service uses is set by its `Type=`:
 
 ### 5.4 Restarting
 
-Restarting is a policy function in `libs/svc`: given the history of a
+Restarting is a policy function in `libs/init/svc`: given the history of a
 unit's exits and the clock, restart now, restart at `t`, or give up. The
 defaults are systemd's: `RestartSec=100ms`, and at most five starts in ten
 seconds, after which the unit is `failed` and stays so until
@@ -581,9 +581,9 @@ Four things follow:
 | **Power** | `reboot(2)` | the power handle from K2 |
 | **Directory** | init's own, over bootstrap channels | unchanged: it is already what a root task is |
 
-Each backend is a Rust trait in `init/`, and the Linux implementations are
+Each backend is a Rust trait in `userland/init/`, and the Linux implementations are
 the only ones built in version 1. The table's right-hand column is not
-promised work. It is the check that nothing in `libs/svc` would have to change
+promised work. It is the check that nothing in `libs/init/svc` would have to change
 if that column were built. It holds for the Groups, Resources and Supervise
 rows only because of C8. Without C8, the microkernel column of those three
 rows would need a cgroup server rebuilt from nothing.
@@ -728,7 +728,7 @@ signals it needs to the port. It would be a different loop over the same
 ## 10. Control and logs
 
 `/run/ferrix/control` is a stream socket. Requests and replies are
-length-prefixed records in `libs/svc-proto`, not text, so `svc`'s output can
+length-prefixed records in `libs/init/svc-proto`, not text, so `svc`'s output can
 change without breaking another client. `SO_PEERCRED` says who is asking:
 anyone may ask for status. Only root may change state, except that a user
 may make a scope for their own processes under their own `user-<uid>.slice`.
@@ -798,8 +798,8 @@ cgroup half is what §0 asks for first.
 
 | | Landing | Needs | Gate | Points |
 |---|---|---|---|---|
-| L1 | `libs/svc`: the unit-file parser, drop-ins, templates, the model; a fuzzer | | host tests, Miri, fuzz | 5 |
-| L2 | `libs/svc`: the graph, transactions, operations, the slice tree, the restart policy, `step` | L1 | host tests replaying event scripts | 8 |
+| L1 | `libs/init/svc`: the unit-file parser, drop-ins, templates, the model; a fuzzer | | host tests, Miri, fuzz | 5 |
+| L2 | `libs/init/svc`: the graph, transactions, operations, the slice tree, the restart policy, `step` | L1 | host tests replaying event scripts | 8 |
 | L3 | K0, K7. **Done 2026-09-24** (§16) | | `test-boot`, `test-shell` | 3 |
 | L4 | `init` minimal: pid 1, reaping, `/run` and cgroupfs, `init.scope`, a cgroup per service, `simple`/`exec`/`oneshot`, `KillMode=`, restart, shutdown by `cgroup.kill`; `getty` and the generator. **Done 2026-09-26** (§16) | L2, L3, C1-C5 | `test-init` stages one and two (§15) | 10 |
 | L5 | Slices and scopes; the resource keys; `OOMPolicy=`; `Delegate=`. **Done 2026-09-26** (§16) | L4, C6, C7 | `test-init` stage three | 6 |
@@ -881,14 +881,14 @@ the system people will actually use.
 | L3 | done, 2026-09-24 | "Start pid 1 from the file ferrix.init= names, and commit the disks in reboot(2)" |
 | L1 | done, 2026-09-24 | "Read unit files in systemd's syntax" |
 | L2 | done, 2026-09-24 | "Run units as one state machine of events and actions" |
-| L4 | done, 2026-09-26 | "Add /sbin/init, getty and the getty generator around libs/svc's manager" |
-| L5, L6, L7, L9 | done, 2026-09-26 | "Give the manager reload, a readiness status, and socket units"; "Add libs/svc-proto: svc's control records and readiness lines"; "Give init svc, the log, readiness, sockets and resources" |
+| L4 | done, 2026-09-26 | "Add /sbin/init, getty and the getty generator around libs/init/svc's manager" |
+| L5, L6, L7, L9 | done, 2026-09-26 | "Give the manager reload, a readiness status, and socket units"; "Add libs/init/svc-proto: svc's control records and readiness lines"; "Give init svc, the log, readiness, sockets and resources" |
 | L8 | done, 2026-09-26: the kernel half (K2, K3, K4, K6), then init's | "Let a parent hand its child a bootstrap handle across execve" and the five after it; "Route the directory's OPENs, and start Type=native services" |
 | L10 to L13 | not started | |
 
 6 of L1 to L10's 67 points are left: L10's.
 
-**L1, as built (5 points).** `libs/svc` is on `main`: `no_std` with
+**L1, as built (5 points).** `libs/init/svc` is on `main`: `no_std` with
 `alloc`, `forbid(unsafe_code)`, 52 host tests, a Miri step in CI and in
 `cargo xtask check --miri`, and the `svc_unit` fuzz target with a seed
 corpus. What it does, module by module:
@@ -943,7 +943,7 @@ corpus. What it does, module by module:
   combines results. The tests themselves look at the machine, so they are
   the backend's to run.
 
-**L2, as built (8 points).** `Manager` in `libs/svc`: `step(event, now)`
+**L2, as built (8 points).** `Manager` in `libs/init/svc`: `step(event, now)`
 returns the actions, and `deadline()` says when the next `Timer` is due. It
 loads units as they are named (at `Boot`, every unit the directories have),
 resolves their dependencies with each kind's implied and default ones, and
@@ -1070,10 +1070,10 @@ did not survive poweroff -f -n"), and no `ferrix.onexit=panic` ("did not
 panic with FX-1501"). Under zinc only the first boot runs, because zinc
 cannot make the call.
 
-**L4, as built (10 points).** `init/` is a workspace of its own beside
+**L4, as built (10 points).** `userland/init/` is a workspace of its own beside
 zinc's and built the same way, a static musl program linked by rust-lld on
 any host, for all three architectures: `/sbin/init`, `/sbin/getty` and
-`/lib/ferrix/generators/getty-generator`, with the units of `init/units` in
+`/lib/ferrix/generators/getty-generator`, with the units of `userland/init/units` in
 `/lib/ferrix/units`. `cargo xtask check` runs its formatting, clippy and 8
 host tests by default, as it runs the compositor's.
 
@@ -1192,7 +1192,7 @@ branch, since each is a part of the same event loop, gated together by
   mode 0666; `SO_PEERCRED` says who connected. Anyone may call `status`,
   `list` and `log`; everything else is root's, but for a scope a user makes
   of their own processes under their own `user-<uid>.slice`. A connection
-  carries one call and init's answers, in `libs/svc-proto`'s records (a
+  carries one call and init's answers, in `libs/init/svc-proto`'s records (a
   length, a tag, fields; 1 MiB at most; fuzzed). Nothing blocks: a
   connection is read as bytes arrive, written as the socket takes them, and
   dropped once 4 MiB of answers wait unsent. `/bin/svc` has systemctl's
@@ -1303,14 +1303,14 @@ pid-ok-0`".
   or its start limit spent -- fails and closes, as systemd's does.
 * **Not done: sshd.** §13 names "sshd activated on connect" as L9's gate.
   sshdt binds its own socket and does not read `LISTEN_FDS`, so it needs a
-  patch in `ferrousli/tools/ports/sshdt`, and the port is x86-64 only; the
+  patch in `userland/ferrousli/tools/ports/sshdt`, and the port is x86-64 only; the
   activation it would show is shown above with `nc`.
 
 **K2, K3, K4, K6, as built (2026-09-26, the kernel half of L8).** Four
-native calls, numbered in `libs/native-abi/src/nr.rs`, and one message
-layout in `libs/native-abi/src/bootstrap.rs`, so `init/` can take both by
+native calls, numbered in `libs/proto/native-abi/src/nr.rs`, and one message
+layout in `libs/proto/native-abi/src/bootstrap.rs`, so `userland/init/` can take both by
 path. A Linux program makes each with `syscall(number, ...)`; a failure is
-`-1` and `errno`, as `libs/native-abi`'s `status` names it.
+`-1` and `errno`, as `libs/proto/native-abi`'s `status` names it.
 
 * **K3.** `process_give(pid, handle)`, `0x1032`, moves one handle out of the
   caller's table into the bootstrap slot of `pid`, which must be the caller's
@@ -1374,7 +1374,7 @@ signal ended did not say killed, by it"), and the descriptor offering no wake
 queue ("a packet queued on a port did not wake an epoll_wait on its
 descriptor", after 51 ms with 0 waits woken).
 
-**L8's init side, as built (8 points).** `init/init/src/directory.rs`.
+**L8's init side, as built (8 points).** `userland/init/init/src/directory.rs`.
 
 * **Pid 1's channel.** Init takes it with `process_bootstrap` at boot,
   reads the kernel's hello and says `the kernel greeted init, version 1`,
@@ -1399,13 +1399,13 @@ descriptor", after 51 ms with 0 waits woken).
   channel; `Refuse` writes REFUSED with the reason and then closes the end,
   so a client that sees its end close finds the reason waiting. A unit's
   channel and offers go when its cgroup does. The messages are fixed
-  little-endian layouts in `libs/native-abi/src/directory.rs`, which
+  little-endian layouts in `libs/proto/native-abi/src/directory.rs`, which
   allocates nothing, since native programs have no allocator.
 
-**The gate, stage five.** `user/pong` is a native service (READY, then
+**The gate, stage five.** `native/pong` is a native service (READY, then
 `pong <name> to <client>` down each CONNECTed end); `pong.service` is
 `Type=native` with `Offers=ferrix.test` and wanted by nothing, so only an
-OPEN starts it. `init/dirclient NAME` is a Linux client that OPENs a name
+OPEN starts it. `userland/init/dirclient NAME` is a Linux client that OPENs a name
 and prints `dir-answer: …` or `dir-refused: …`. `asker.service`
 (`Uses=ferrix.test`) must print `dir-answer: pong ferrix.test to
 asker.service`; `rogue.service` (`Uses=ferrix.other`) must be REFUSED;

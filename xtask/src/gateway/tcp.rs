@@ -16,7 +16,7 @@
 //!
 //! # What this is not
 //!
-//! It is not `libs/nettcp`. That crate is the *guest's* stack — the thing on
+//! It is not `libs/network/nettcp`. That crate is the *guest's* stack — the thing on
 //! the other end of this wire — and using it here would mean testing Ferrix's
 //! TCP against itself, where a shared misreading of RFC 9293 cancels out and
 //! both sides agree on something no other host does.

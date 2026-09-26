@@ -3,7 +3,7 @@
 //!
 //! The DK boards drive HDMI from the chip's LTDC through a Silicon Image
 //! `SiI9022` bridge on an I2C bus (`docs/DISPLAY.md` §6). The driver,
-//! `user/ltdc`, programs both controllers; what it cannot do is what every
+//! `native/drivers/ltdc`, programs both controllers; what it cannot do is what every
 //! peripheral on the chip shares -- the RCC's clock gates and the GPIO banks'
 //! pin multiplexing -- and a driver that could write those could stop the
 //! memory controller's clock or take the console's pins. So the kernel does

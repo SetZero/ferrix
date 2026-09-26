@@ -1,7 +1,7 @@
 //! The x86-64 vDSO's code: `clock_gettime`, `gettimeofday` and `time`.
 //!
 //! Assembled into the kernel's read-only data, never run where it is: the
-//! Linux personality copies the bytes into the image `libs/vdso` lays out,
+//! Linux personality copies the bytes into the image `libs/kernel/vdso` lays out,
 //! at `CODE_AT`, and a program runs them wherever that page lands. So
 //! nothing in them may name an address. Each function finds the data page by
 //! its own address -- `lea` of the code's first byte, less `CODE_AT` and a

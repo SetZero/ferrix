@@ -1,6 +1,6 @@
 //! Stage 8's self-checks for `/dev` and `/proc`.
 //!
-//! The host tests in `libs/procfs` hold the byte formats against lines a real
+//! The host tests in `libs/fs/procfs` hold the byte formats against lines a real
 //! Linux printed. What they cannot hold is the kernel's side: that a device
 //! node opened through the namespace reaches the device, that every name a
 //! `/proc` listing reports can be walked to — the property `busybox ls -R

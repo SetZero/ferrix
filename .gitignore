@@ -3,7 +3,7 @@
 /build
 *.img
 *.fd
-/fuzz/target
+/tests/fuzz/target
 __pycache__/
-/fuzz/artifacts
+/tests/fuzz/artifacts
 /remote-desktop.toml

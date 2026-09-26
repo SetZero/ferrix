@@ -49,7 +49,7 @@ ids the packages cite across files.
 
 Hexadecimal addresses are `String` attributes because the notation has no
 hexadecimal literal; the two layouts in `03-boot.sysml` are the same
-constants `libs/bootinfo` checks at compile time.
+constants `libs/proto/bootinfo` checks at compile time.
 
 ## The generated document
 
@@ -110,17 +110,17 @@ coordinates and the committed output is comparable byte for byte.
 ## The generator
 
 ```
-scripts/gen-arch-doc.py       the command
-scripts/sysml/parser.py       SysML v2 text  -> model.Model
-scripts/sysml/model.py        the element tree and the queries over it
-scripts/sysml/sections.py     model.Model    -> document.Doc      <- start here
-scripts/sysml/document.py     the format-neutral document
-scripts/sysml/diagrams.py     model.Model    -> figure.Figure     <- and here
-scripts/sysml/figure.py       the format-neutral graph
-scripts/sysml/layout.py       figure.Figure  -> coordinates
-scripts/sysml/render_*.py     document.Doc   -> Markdown / HTML / SVG / Mermaid
-scripts/sysml/emit_json.py    model.Model    -> JSON
-scripts/sysml/tests.py        all of the above
+scripts/gen/gen-arch-doc.py       the command
+scripts/gen/sysml/parser.py       SysML v2 text  -> model.Model
+scripts/gen/sysml/model.py        the element tree and the queries over it
+scripts/gen/sysml/sections.py     model.Model    -> document.Doc      <- start here
+scripts/gen/sysml/document.py     the format-neutral document
+scripts/gen/sysml/diagrams.py     model.Model    -> figure.Figure     <- and here
+scripts/gen/sysml/figure.py       the format-neutral graph
+scripts/gen/sysml/layout.py       figure.Figure  -> coordinates
+scripts/gen/sysml/render_*.py     document.Doc   -> Markdown / HTML / SVG / Mermaid
+scripts/gen/sysml/emit_json.py    model.Model    -> JSON
+scripts/gen/sysml/tests.py        all of the above
 ```
 
 Stdlib Python, no dependencies: a gate that needs a `pip install` is a gate

@@ -9,7 +9,7 @@
 //! test job went red while `cargo xtask check` stayed green.
 //!
 //! Now there is no list. A freestanding member is one at `boot`, at
-//! `bootloaders/pixel7`, at `kernel` or under `user/`, read from the workspace manifest; `cargo xtask check` and
+//! `boot/pixel7`, at `kernel` or under `native/`, read from the workspace manifest; `cargo xtask check` and
 //! CI both ask this module, through the same commands. And a member anywhere
 //! else whose `src/main.rs` says `#![no_main]` is refused, so a new program
 //! put in the wrong place fails the gate on the machine that added it.
@@ -20,10 +20,10 @@ use std::path::Path;
 use crate::{Error, Result};
 
 /// Where freestanding members live, relative to the workspace root.
-const FREESTANDING_PLACES: &[&str] = &["boot", "bootloaders/pixel7", "kernel"];
+const FREESTANDING_PLACES: &[&str] = &["boot/uefi", "boot/pixel7", "kernel"];
 
 /// The directory freestanding native programs live under.
-const NATIVE_PLACE: &str = "user/";
+const NATIVE_PLACE: &str = "native/";
 
 /// The workspace's members, sorted by what the host can do with them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,7 +32,7 @@ pub(crate) struct Members {
     pub(crate) host: Vec<String>,
     /// The loader and the kernel, by package name.
     pub(crate) kernel_and_loader: Vec<String>,
-    /// The native runtime and programs under `user/`, by package name.
+    /// The native runtime and programs under `native/`, by package name.
     pub(crate) native: Vec<String>,
 }
 
@@ -79,8 +79,8 @@ pub(crate) fn members(root: &Path) -> Result<Members> {
         } else if is_freestanding_program(&directory) {
             return Err(Error::new(format!(
                 "workspace member `{member}` is a freestanding program (its src/main.rs is \
-                 #![no_main]) outside boot, kernel and user/. The host gates build every other \
-                 member as a test harness, which fails for it; move it under user/"
+                 #![no_main]) outside boot, kernel and native/. The host gates build every other \
+                 member as a test harness, which fails for it; move it under native/"
             )));
         } else {
             sorted.host.push(name);

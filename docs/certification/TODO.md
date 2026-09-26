@@ -12,7 +12,7 @@ build says so, not that a document claims it.
 
 Finding ids refer to [FINDINGS.md](FINDINGS.md). The scope of everything below
 is the item defined in [ITEM.md](ITEM.md) and enforced by
-`scripts/certification-item.json`.
+`scripts/data/certification-item.json`.
 
 ---
 
@@ -41,21 +41,21 @@ sessions land concurrently, and the load ring in particular grows with every
 unrelated feature, so re-measure before citing:
 
 ```
-python3 scripts/check-item-boundary.py --report
+python3 scripts/check/check-item-boundary.py --report
 ```
 
 ---
 
 ## 1. Boundary — the cheapest real wins
 
-The debt register in `scripts/certification-item.json` is empty: no upward
+The debt register in `scripts/data/certification-item.json` is empty: no upward
 references, down from 94 when the audit began (W-5, 2026-09-26). It may not
 grow. A change that needs a new upward reference has to add an entry against a
 finding, which is a diff somebody argues for; the gate fails otherwise.
 
 Until 2026-09-26 the gate reported 29 and 62: it saw only the literal text
 `crate::a::b`. **When re-auditing, check the gate before trusting its count.**
-`python3 scripts/check-item-boundary.py --self-test` runs the lexer's and the
+`python3 scripts/check/check-item-boundary.py --self-test` runs the lexer's and the
 resolver's cases; every normal run runs them first too. The things it still
 cannot see are listed in its docstring -- chiefly a load-ring type reaching an
 item file through a value, with no name written.
@@ -175,7 +175,7 @@ FERRIX_DRCOV=/home/sebastian/Documents/qemu/qemu/build/contrib/plugins/libdrcov.
 It prints the `coverage-report.py` command it ran; add `--json` and
 `--residual` to regenerate `coverage-<arch>.json` and
 `coverage-residual-<arch>.json`, then run
-`scripts/gen-coverage-justification.py`. **Re-measure rather than trust the
+`scripts/gen/gen-coverage-justification.py`. **Re-measure rather than trust the
 figures below**: the ones published on 2026-09-25 were wrong (2.3), and the
 kernel moves under them.
 
@@ -211,7 +211,7 @@ Not in `cargo xtask check`, since it needs boots, and not in CI, whose packaged
 QEMU carries no drcov plugin. Raise the floor with the evidence.
 
 ### 2.5 Build a complexity and recursion gate — **F-25**
-**Done 2026-09-25** by `scripts/check-complexity.py`.
+**Done 2026-09-25** by `scripts/check/check-complexity.py`.
 
 The one code gate the audit did not build. A SIL 2 coding standard must specify
 complexity metrics; eleven gates enforce other things and none bounds
@@ -301,7 +301,7 @@ check must stop at *"a device window over the kernel image was mapped"*.
 **Done 2026-09-26** (IMPLEMENTATION.md W-12). F-23 is closed for the item's
 own allocations. What it does not cover is AoU-5 and V-05.
 
-To re-audit: run `python3 scripts/check-fallible-alloc.py --report`. It must
+To re-audit: run `python3 scripts/check/check-fallible-alloc.py --report`. It must
 say 0 unmarked in the item, and no more than the baseline's 14 in the load
 files it reaches (`process.rs`), and list the `FATAL-ALLOC` sites, which must
 all be bring-up. Check that `REACHED` still names what `process_create` and

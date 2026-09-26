@@ -1,7 +1,7 @@
 //! What each file under `/proc` says.
 //!
 //! The kernel's half of every file: gathering the numbers. The arranging of
-//! them is `libs/procfs`'s. Wherever a field has nothing true to put in it,
+//! them is `libs/fs/procfs`'s. Wherever a field has nothing true to put in it,
 //! the comment at the place it is filled says so and says why, because a
 //! plausible number with no source is the one kind of wrong answer nobody
 //! goes looking for.
@@ -904,7 +904,7 @@ fn stat_of(process: &Process, tid: u32) -> Result<Vec<u8>> {
         exit_signal: SIGCHLD,
         processor: smp::this_cpu().map_or(0, |cpu| u32::try_from(cpu.logical).unwrap_or(0)),
         start_brk: process.heap_range().map_or(0, |(start, _)| start),
-        // The startup image's addresses are `libs/ustack`'s, and not kept.
+        // The startup image's addresses are `libs/kernel/ustack`'s, and not kept.
         arg_start: 0,
         arg_end: 0,
         env_start: 0,
@@ -919,7 +919,7 @@ fn stat_of(process: &Process, tid: u32) -> Result<Vec<u8>> {
 // /proc/net
 //
 // Every one of these asks the net core for what it knows and hands it to
-// `libs/procfs`, which is where the formats are pinned. Nothing here decides a
+// `libs/fs/procfs`, which is where the formats are pinned. Nothing here decides a
 // column.
 // ---------------------------------------------------------------------------
 

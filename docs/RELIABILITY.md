@@ -20,7 +20,7 @@ is made expensive:
 | `clippy::missing_safety_doc` (deny) | A `# Safety` section on every `unsafe fn`, stating the caller's contract |
 | `clippy::multiple_unsafe_ops_per_block` (deny) | One unsafe operation per block, so a `SAFETY:` comment makes one claim rather than covering a paragraph of them |
 | `unsafe_op_in_unsafe_fn` (deny, and the edition-2024 default) | An `unsafe fn` body is not an unchecked region |
-| `scripts/check-unsafe-audit.py` | The same rules again, in CI, so a clippy release that softens a nursery lint cannot silently retire them |
+| `scripts/check/check-unsafe-audit.py` | The same rules again, in CI, so a clippy release that softens a nursery lint cannot silently retire them |
 
 The script also prints the unsafe-block count per crate on every run. That
 number is not a gate — it is meant to be visible in a diff, so that unsafe
@@ -38,7 +38,7 @@ unwinding either. So the panicking constructs are denied in production code —
 #[expect(clippy::indexing_slicing, reason = "AUDIT: len checked at :212")]
 ```
 
-Two rules, enforced by `scripts/check-panic-audit.py`:
+Two rules, enforced by `scripts/check/check-panic-audit.py`:
 
 1. The reason begins `AUDIT:`, so it reads as an argument in the diff that adds
    it rather than as a way past the lint.
@@ -103,7 +103,7 @@ returns its errors, and the kernel decides which of them are fatal.
 
 The catalog is `kernel/src/panic/catalog.rs`. Each entry has a stable code, a
 title, what the failed check establishes, the likely causes, and where to read
-more, and the report prints it below the trace. `scripts/gen-panic-catalog.py`
+more, and the report prints it below the trace. `scripts/gen/gen-panic-catalog.py`
 checks the catalog and renders it into `docs/generated/PANICS.md`, so an
 explanation can be read without the machine that stopped. `cargo xtask check`
 fails when that document is stale.
@@ -125,7 +125,7 @@ the width left beside it. The code holds as much of the report as fits at two
 pixels or more a module, cut at the end of a line, from the marker line down.
 When the report is taller than the screen, the text starts at the marker line
 and is cut at the bottom. On a small screen both lose the end of the
-explanation first, never the headline. The encoder is `libs/qr`, a port of Linux's `drm_panic_qr.rs` under
+explanation first, never the headline. The encoder is `libs/kernel/qr`, a port of Linux's `drm_panic_qr.rs` under
 its MIT licence. It allocates nothing, and its tests read every symbol back
 through an independent decoder.
 
@@ -157,7 +157,7 @@ the argument for `libs/`:
 
 ELF parsing, cpio unpacking, btrfs item decoding, seccomp BPF evaluation,
 page-table index arithmetic, buddy-order maths, the VMA interval tree — all of
-it is host-testable by construction, and `scripts/check-crate-layering.sh` keeps
+it is host-testable by construction, and `scripts/check/check-crate-layering.sh` keeps
 the layering that makes it so.
 
 What is left in `kernel/` is the part that genuinely needs a CPU, and it is

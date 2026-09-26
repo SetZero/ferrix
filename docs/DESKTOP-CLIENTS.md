@@ -3,7 +3,7 @@
 ## 1. The aim
 
 The customer runs Hyprland on nazuna, and Ferrix's compositor
-(`compositor/hyprix`) already reads their `~/.config/hypr/hyprland.conf`.
+(`userland/compositor/hyprix`) already reads their `~/.config/hypr/hyprland.conf`.
 That file starts `waybar` and `hypridle`, binds fuzzel to `SUPER+R` and
 hyprlock to `SUPER+L`. None of the four is on Ferrix, and all four are C or
 C++ on GTK, Pango, cairo, fontconfig and libwayland, none of which is either.
@@ -25,20 +25,20 @@ silence, and never a reason to refuse the file. What cannot work on Ferrix
 is said (§7), not faked.
 
 Each program is a binary named after its upstream, in a crate of the
-`compositor/` workspace, installed as `/bin/<name>` in the desktop image,
+`userland/compositor/` workspace, installed as `/bin/<name>` in the desktop image,
 so `exec-once = waybar` and `bind = …, exec, hyprlock` find it.
 
 ## 2. The foundation
 
 Four crates, on branch `clients-base` until each lands on `main`. They
 exist so that the four programs do not each write a fifth copy of the
-hand-rolled Wayland client that `compositor/term`, `compositor/lock` and
-`compositor/pattern` each carry.
+hand-rolled Wayland client that `userland/compositor/term`, `userland/compositor/lock` and
+`userland/compositor/pattern` each carry.
 
-### 2.1 `compositor/toolkit` -- the Wayland client runtime
+### 2.1 `userland/compositor/toolkit` -- the Wayland client runtime
 
 `compositor_toolkit::Client` is one connection and everything bound on it,
-over `compositor/wire`, `socket`, `shm`, `protocol` and `xkb` -- no
+over `userland/compositor/wire`, `socket`, `shm`, `protocol` and `xkb` -- no
 libwayland. Pull, not callbacks: a program makes its surfaces and turns
 `Client::dispatch(timeout)`, which blocks in `poll` on the Wayland socket,
 the timers, the children's pipes, a `signalfd` and any descriptor the
@@ -68,7 +68,7 @@ program hands it, and returns a `Vec<Event>`.
   compositor holds both), attaches, damages and commits. A program draws
   with tiny-skia directly -- there is no widget layer; waybar's box model
   is waybar's.
-* **The seat**: the keyboard through `compositor/xkb` (the keymap's groups
+* **The seat**: the keyboard through `userland/compositor/xkb` (the keymap's groups
   matched as `term` does, keysym names, the text a key types, modifiers,
   and repeat from `repeat_info`, done by the runtime and marked
   `repeat: true`); the pointer's enter, leave, motion, button (with its
@@ -92,7 +92,7 @@ program hands it, and returns a `Vec<Event>`.
   the interface's own generated table; `new_buffer` gives it a `wl_shm`
   buffer to hand to one.
 
-### 2.2 `compositor/text` -- fonts, shaping, glyphs, layout, markup
+### 2.2 `userland/compositor/text` -- fonts, shaping, glyphs, layout, markup
 
 * **Finding a face**: `Fonts::system()` scans `$FERRIX_FONT_DIRS`,
   `~/.local/share/fonts`, `~/.fonts`, `/usr/share/fonts`,
@@ -127,7 +127,7 @@ program hands it, and returns a `Vec<Event>`.
 
 Points are pixels × 72 / 96, as hyprgraphics and fcft both have it.
 
-### 2.3 `compositor/hyprlang` -- the configuration language
+### 2.3 `userland/compositor/hyprlang` -- the configuration language
 
 hyprlock.conf and hypridle.conf are hyprlang, the language of
 hyprland.conf without Hyprland's options. The crate is hyprlang 0.6's
@@ -149,13 +149,13 @@ refused, in its words (`Config error in file … at line 12: config option
 them as hyprlang's `INT` (colours `rgb()`/`rgba()`/`0xAARRGGBB`, booleans),
 `FLOAT` and `VEC2` do.
 
-`compositor/config` keeps its own grammar: it is Hyprland's, with
+`userland/compositor/config` keeps its own grammar: it is Hyprland's, with
 Hyprland's options wired to the compositor, and it was just fixed to match
 hyprlang on the two points above (`cc2eb016`). Moving it onto this crate
 would be a change to the compositor's startup path for no behaviour; it can
-be done later, gated by `compositor/config`'s own tests.
+be done later, gated by `userland/compositor/config`'s own tests.
 
-### 2.4 `compositor/image` -- PNG, JPEG, SVG
+### 2.4 `userland/compositor/image` -- PNG, JPEG, SVG
 
 `compositor_image::load(path, Fit)` sniffs the bytes and returns a
 `tiny_skia::Pixmap`: PNG through tiny-skia's own decoder, JPEG through
@@ -218,17 +218,17 @@ shell says it does, and the program reports it.
 
 ### Where it stands
 
-* **`compositor/toolkit` is on `main`** (2026-09-26). Its tests run hyprix
+* **`userland/compositor/toolkit` is on `main`** (2026-09-26). Its tests run hyprix
   in the test process, headless, and judge the frame it composed: a bar
   anchored across the top is drawn there, a lock surface covers the screen
   and comes off at unlock, and timers, children, signals and the waker come
   back as events. Two things are not tried end to end: the keyboard, since
   a headless seat has no keyboard (the key translation is tested as a
-  function against `compositor/xkb`'s `us` and `de` tables), and popups,
+  function against `userland/compositor/xkb`'s `us` and `de` tables), and popups,
   since hyprix refuses an `xdg_popup` whose parent comes from
   `zwlr_layer_surface_v1.get_popup` -- a gap in the compositor, which the
   waybar stream is fixing; the test for it is `#[ignore]`d with that reason.
-* `compositor/hyprlang` and `compositor/image` are written and gated on
-  `clients-base`, and land next; `compositor/text` is being written there.
+* `userland/compositor/hyprlang` and `userland/compositor/image` are written and gated on
+  `clients-base`, and land next; `userland/compositor/text` is being written there.
 * Not yet: the xtask flag that carries the user's dotfiles and fonts, and the
   boot check of a toolkit client drawing text in the user's font.

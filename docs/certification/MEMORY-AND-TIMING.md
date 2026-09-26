@@ -22,8 +22,8 @@ The item carries four allocators:
 
 | Allocator | Role |
 |---|---|
-| Buddy (`libs/frame`) | physical frames |
-| Kernel heap (`libs/heap`) | `GlobalAlloc` behind `Box`, `Vec`, `Arc`, the maps |
+| Buddy (`libs/kernel/frame`) | physical frames |
+| Kernel heap (`libs/kernel/heap`) | `GlobalAlloc` behind `Box`, `Vec`, `Arc`, the maps |
 | `vmap` arena | kernel virtual address space for device windows and stacks |
 | Demand paging / CoW (`user/vmo.rs`) | a program's pages, on first touch |
 
@@ -33,7 +33,7 @@ null pointer that every ordinary container sent to the allocation error
 handler. So the question is the heap's callers. On 2026-09-25 they were
 **225 sites across 40 files**, measured by hand, and every one was fatal.
 
-They are now counted by `scripts/check-fallible-alloc.py`, the "fallible
+They are now counted by `scripts/check/check-fallible-alloc.py`, the "fallible
 allocation" step of `cargo xtask check`. It finds every call to an allocating
 standard-library API in the item's product code: the constructors, `vec!` and
 `format!`, and every method that can grow a collection; a `Type::default()`
@@ -53,7 +53,7 @@ load files as it reads the item, the ones the item's own `process_create` and
 
 Everything else in the item allocates through `kernel/src/fallible.rs`, and
 the gate does not flag it. Its ratchet baseline,
-`scripts/fallible-alloc-baseline.json`, records `process.rs`'s 14 and nothing
+`scripts/data/fallible-alloc-baseline.json`, records `process.rs`'s 14 and nothing
 else: a count may fall and not rise, and a new unmarked site fails the build.
 
 ### 1.2 How failure is reported
@@ -61,11 +61,11 @@ else: a count may fall and not rise, and a new unmarked site fails the build.
 The obvious fix is unavailable. `#[alloc_error_handler]` is an unstable
 library feature (rust-lang #51540), and so are `Box::try_new`, `Arc::try_new`
 and `BTreeMap::try_insert`, verified against the pinned 1.97.1. `kernel/` and
-`boot/` use no unstable features by policy, and `TOOLS.md` leans on that.
+`boot/uefi/` use no unstable features by policy, and `TOOLS.md` leans on that.
 Only `Vec::try_reserve` is stable. So fallible construction is built from
 stable parts, in two kinds:
 
-* **What can be made fallible directly.** `libs/fallible` (`ferrix-fallible`)
+* **What can be made fallible directly.** `libs/kernel/fallible` (`ferrix-fallible`)
   gives `Box`, `Vec`, `VecDeque` and `String` fallible constructors.
   `try_box` allocates `Layout::new::<T>()` through the global allocator and
   makes the box with `Box::from_raw`: `Box`'s documentation makes that
@@ -109,7 +109,7 @@ Three paths were rebuilt so that they need no memory at all:
 * **The scheduler.** It used to allocate a tree node on every enqueue, and so
   allocated with the run queue locked and from interrupt context. Every task
   now lends the run queue and the sleepers' timeline a node of its own, made
-  when the task is made. `libs/sched/tests/no_allocation.rs` counts the
+  when the task is made. `libs/kernel/sched/tests/no_allocation.rs` counts the
   allocations of a queue and a timeline at work under a counting global
   allocator, and requires none.
 * **Taking pages out of an object** (munmap, madvise, truncation, mremap,
@@ -201,8 +201,8 @@ it.
   and none allocates. Each is an `Arc`, a `Weak`, an `Option` of one, an
   `Object` (an enum of `Arc`s) or a `FileMapping` (an `Arc` and a flag).
 * It does not see conversions that allocate, `write!` into a `String`, or
-  allocation inside a callee. `libs/vma`, `libs/objects`, `libs/sched` and
-  `libs/sync` were converted with the item. The other libraries the item calls
+  allocation inside a callee. `libs/kernel/vma`, `libs/kernel/objects`, `libs/kernel/sched` and
+  `libs/kernel/sync` were converted with the item. The other libraries the item calls
   allocate nothing on its paths. The load's callees are the table above.
 
 ### 1.4 Against the standards
@@ -267,7 +267,7 @@ even for an instant, and a refused charge takes nothing.
   refusal is an allocation failure, which §1.2 made an answer everywhere.
 * **Kernel heap** the Linux personality and its libraries hold for a
   program is charged as memory too, against the same limit, as cgroup v2
-  folds `kmem` into `memory.max` (F-37). A token from `libs/kmem` is made
+  folds `kmem` into `memory.max` (F-37). A token from `libs/kernel/kmem` is made
   where the allocation is -- to the job of the task whose call made it, at
   the size class the heap serves it from -- and kept inside the object, so
   every free path uncharges it. A buffer that grows is charged before it
@@ -362,7 +362,7 @@ early, which costs availability and never integrity.
 The item boundary helps here more than anywhere else. A WCET argument over
 93,646 lines including btrfs and a TCP stack is not a project anybody would
 start. Over the 38,989-line `core` ring, with no dynamic allocation on the RT
-path and no recursion anywhere (`scripts/check-complexity.py` establishes the
+path and no recursion anywhere (`scripts/check/check-complexity.py` establishes the
 second), it is at least conceivable. It has not been started.
 
 **Verdict: F-24 stands**, now with its scope stated: no WCET is claimed, the

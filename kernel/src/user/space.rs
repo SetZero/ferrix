@@ -4,7 +4,7 @@
 //! `docs/ARCHITECTURE.md` §3 names this as one of the nine kernel objects and
 //! §4 says what it is made of — "a red-black interval tree of `Vma`s, each
 //! naming a VMO, an offset, a protection and a share mode". The tree is
-//! `libs/vma`, host-tested for four stages as the vmap arena's allocator and
+//! `libs/kernel/vma`, host-tested for four stages as the vmap arena's allocator and
 //! used here for the first time as what it was written for.
 //!
 //! # Why this has a lock and the kernel's tables do not need one of their own
@@ -670,7 +670,7 @@ impl AddressSpace {
     /// copy-on-write: the memory half of `fork`.
     ///
     /// Nothing is copied. Every private writable region is marked
-    /// copy-on-write in *both* spaces — `libs/vma`'s `clone_for_fork` does the
+    /// copy-on-write in *both* spaces — `libs/kernel/vma`'s `clone_for_fork` does the
     /// marking, and it must be both, because the parent's own writes have to
     /// stop reaching pages the child can now see. Each private object is
     /// cloned page-list and all, with a reference taken on every committed

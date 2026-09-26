@@ -3,7 +3,7 @@
 **Status, 2026-09-26: not started.** Nothing of this is written. This document
 is the brief for whoever takes it up: why it is wanted, what the hardware is,
 what Ferrix already has to build it from, the rules that bound it, and the
-order to do it in. Read `bootloaders/pixel7/HANDOVER.md` first; it is the
+order to do it in. Read `boot/pixel7/HANDOVER.md` first; it is the
 phone's own state, and its rules apply here unchanged.
 
 ## 1. Why, and what done looks like
@@ -11,7 +11,7 @@ phone's own state, and its rules apply here unchanged.
 When the Pixel 7 boots Ferrix natively (`fastboot boot` from nazuna), nothing
 reaches the PC until the run is over. Android is gone, Ferrix has no USB, and
 so the phone is off USB for the whole run. Ferrix's console and the stat
-service's samples (`statd/`, `ferrix-statd`) go to the `ramoops` record in RAM,
+service's samples (`userland/statd/`, `ferrix-statd`) go to the `ramoops` record in RAM,
 which Android reads back after the watchdog reset. `tools/pixel7/monitor` then
 loads the record and fills its graphs after the fact. The owner wants them
 live.
@@ -28,7 +28,7 @@ streams live. This is only for native boots.
 ## 2. The rules
 
 These come from the owner, who has lost a device's touchscreen calibration to
-an agent before. `bootloaders/pixel7/HANDOVER.md`, "Never write anything that
+an agent before. `boot/pixel7/HANDOVER.md`, "Never write anything that
 survives a reset", is the full text.
 
 * **Only volatile state may be written**: RAM, and SoC controller registers
@@ -42,9 +42,9 @@ survives a reset", is the full text.
 * Before any test that writes hardware, list the exact addresses, check them
   against `~/.local/share/ferrix/pixel7/panther.dts`, tell the owner, and make
   each write conditional on the hardware being as expected (as
-  `bootloaders/pixel7/src/display.rs`'s `take_over` does).
+  `boot/pixel7/src/display.rs`'s `take_over` does).
 * Architecture: the kernel enumerates devices and drives none of them
-  (`docs/ARCHITECTURE.md` §1 and §7; `scripts/device-access-allowlist.json` is
+  (`docs/ARCHITECTURE.md` §1 and §7; `scripts/data/device-access-allowlist.json` is
   the gate). The controller is driven by a ring-3 driver. The kernel does only
   what the chip shares, as `kernel/src/stm32mp1_usb.rs` does for the DK1.
 
@@ -95,16 +95,16 @@ What the tree cannot tell, and phase 1 has to find:
 
 * **The device model.** The kernel publishes a device tree node for a binding
   it knows (`kernel/src/device.rs`: `BoardBinding`, `BoardDevice`,
-  `DmaShape`). `user/devmgr`'s `TREE_DRIVERS` table maps the binding to a
+  `DmaShape`). `native/devmgr`'s `TREE_DRIVERS` table maps the binding to a
   driver, which `devmgr` starts in a job of its own with the node's
   apertures and interrupt (`docs/DEVMGR.md` §3). Bindings are numbered in
-  `libs/native-abi/src/types.rs`: `TREE_STM32_HDMI = 1`, `_USBH = 2`,
+  `libs/proto/native-abi/src/types.rs`: `TREE_STM32_HDMI = 1`, `_USBH = 2`,
   `_GPU = 3`. A new one takes 4.
 * **The precedent to copy.** The DK1's USB host:
   * `kernel/src/stm32mp1_usb.rs` turns on clocks, resets, regulators and the
     PHY's PLL, with values read back from U-Boot, and publishes the node.
-  * `user/usbhid` drives the EHCI controller.
-  * `libs/usb-host` is the host-testable logic, with a register model under
+  * `native/drivers/usbhid` drives the EHCI controller.
+  * `libs/drivers/usb-host` is the host-testable logic, with a register model under
     `src/tests/model.rs`.
   * `docs/INPUT.md` §7 is its design.
 
@@ -119,9 +119,9 @@ What the tree cannot tell, and phase 1 has to find:
 * **The console.** `kernel/src/arch/aarch64/console.rs` has three backends:
   PL011, 16550 over MMIO, and the phone's `ramoops` zone. `ferrix-statd`
   writes its `FERRIX-STAT` lines to its standard output, which as pid 1 is
-  the console. `statd/README.md` has the format. How a ring-3 USB driver
+  the console. `userland/statd/README.md` has the format. How a ring-3 USB driver
   gets the console's bytes is a design decision still to make (§5, phase 4).
-* **The loader.** `bootloaders/pixel7`, which runs with the MMU off, so all
+* **The loader.** `boot/pixel7`, which runs with the MMU off, so all
   memory is Device memory: aligned, word-sized, volatile accesses only. It
   is where a read-only survey is cheapest (`display.rs` reports DECON's
   registers the same way).
@@ -150,7 +150,7 @@ Each phase ends with something run on the phone and written down here.
    for the owner.
 3. **The driver.** A host-testable library, say `libs/dwc3`: event buffer,
    TRB rings, event decoding, and endpoint 0's control state machine, tested
-   against a register model as `libs/usb-host` is. Device descriptors and the
+   against a register model as `libs/drivers/usb-host` is. Device descriptors and the
    CDC-ACM class go in `libs/usb-device`. The ring-3 program, say
    `user/usbdev`, goes in `devmgr`'s table. Run at high speed (USB 2.0) first:
    `DCFG` can hold the core there, which keeps the combo SuperSpeed PHY out of

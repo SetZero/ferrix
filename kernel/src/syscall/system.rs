@@ -15,7 +15,7 @@
 //! a program that reads those, or `/proc/version`, sees a Linux kernel. When a
 //! build that Ferrix has to run branches on the name, it is told which target
 //! to use rather than left to guess -- the fix goes there, not back here.
-//! `libs/linux-abi` says the same thing at [`Utsname::sysname`].
+//! `libs/proto/linux-abi` says the same thing at [`Utsname::sysname`].
 //!
 //! `uname -a` reads
 //!

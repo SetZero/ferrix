@@ -56,8 +56,8 @@ itself, which requires a general-purpose OS with a browser, a compositor and a
 self-hosting toolchain — the opposite of a frozen, analysable configuration.
 
 The item is a **51,525-line subset of the kernel**, defined in
-[`scripts/certification-item.json`](../../scripts/certification-item.json) and
-enforced on every build by `scripts/check-item-boundary.py`. Memory protection,
+[`scripts/data/certification-item.json`](../../scripts/data/certification-item.json) and
+enforced on every build by `scripts/check/check-item-boundary.py`. Memory protection,
 scheduling, capability objects, the trap and syscall entry paths, the IOMMU,
 SMP and device enumeration are inside; the VFS, btrfs, the network stack, the
 Linux personality -- its dispatcher, `mmap`, `futex` and threads included --
@@ -92,7 +92,7 @@ boundary.
 | KASLR | kernel image, direct map and vmap arena **moved every boot**: 18, 16 and 17 bits on the 64-bit pair, 11, 8 and 9 on ARMv7-A; off with the same switch |
 | Writable mappings of the kernel's text | **0**, every mapping of its frames swept each boot; the direct map's alias was one until 2026-09-26 (F-34) |
 | Assembly | 500 lines, 22 allow-listed sites, outside the Pixel 7 loader |
-| Cargo features in `kernel/`/`boot/` | 0 |
+| Cargo features in `kernel/`/`boot/uefi/` | 0 |
 
 The coverage rows were measured over the item as it stood before W-5 moved the
 Linux dispatcher's routing and five of the personality's files to the load ring

@@ -9,8 +9,8 @@
 //!
 //! # What is decided where
 //!
-//! Which handles are valid and what rights they carry is `libs/objects` and
-//! `libs/native-abi`. What an object does is [`crate::object`]. This file does
+//! Which handles are valid and what rights they carry is `libs/kernel/objects` and
+//! `libs/proto/native-abi`. What an object does is [`crate::object`]. This file does
 //! what only a system call layer can: turn registers and user pointers into
 //! those calls, and their failures into the status a program sees.
 //!
@@ -420,7 +420,7 @@ fn handle(register: u64) -> Handle {
 
 /// A new handle as a return value.
 ///
-/// Positive on every architecture: `libs/objects` keeps every handle value
+/// Positive on every architecture: `libs/kernel/objects` keeps every handle value
 /// below 2^31, so a 32-bit return register never reads one as an error.
 fn returned(handle: Handle) -> usize {
     handle.0 as usize

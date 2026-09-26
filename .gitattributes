@@ -19,8 +19,8 @@
 # Fuzz corpora: arbitrary bytes, chosen for the shape they have. `text=auto`
 # classifies the entries without a NUL byte as text and would rewrite their
 # line endings, changing the input the target replays.
-fuzz/corpus/** binary
-fuzz/artifacts/** binary
+tests/fuzz/corpus/** binary
+tests/fuzz/artifacts/** binary
 
 # Fonts: TrueType outlines, not text.
 *.ttf binary

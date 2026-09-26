@@ -1,7 +1,7 @@
 //! The vDSO: the page of code every Linux program is given to read the clock
 //! with, and the page of data that code reads.
 //!
-//! `libs/vdso` lays the image out and holds its code; this is the kernel's
+//! `libs/kernel/vdso` lays the image out and holds its code; this is the kernel's
 //! half. The two pages are one object, built the first time a program is
 //! started and kept for good, held in place so that nothing -- no `madvise`,
 //! no reclaim -- ever takes a frame out from under the processes mapping it.
@@ -13,7 +13,7 @@
 //! # What the data page holds, and keeping it true
 //!
 //! Which counter the kernel reads, the counter's frequency, and the real-time
-//! clock's offset from it: `libs/vdso` names the words. The first two are
+//! clock's offset from it: `libs/kernel/vdso` names the words. The first two are
 //! set when the page is built and never change. The offset changes whenever
 //! the real-time clock is set, and each change is written here under the same
 //! lock as the kernel's own copy is stored, so that the page cannot be left

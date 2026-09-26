@@ -53,7 +53,7 @@
 //!
 //! Every program started here is started with a bootstrap channel, as
 //! `devmgr` is (`docs/INIT.md` §6, K2). The kernel writes one message on its
-//! end before the program runs -- `libs/native-abi`'s `bootstrap` module says
+//! end before the program runs -- `libs/proto/native-abi`'s `bootstrap` module says
 //! what it holds -- and keeps that end for as long as the program runs, so a
 //! later message can carry what the first does not. The program takes its end
 //! with `process_bootstrap`; one that never does, which is every program a

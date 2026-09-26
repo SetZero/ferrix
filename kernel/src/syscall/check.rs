@@ -1,6 +1,6 @@
 //! Stage 7's self-checks: the dispatch path, on the real architecture.
 //!
-//! These do something the host tests in `libs/linux-abi` cannot, and it is the
+//! These do something the host tests in `libs/proto/linux-abi` cannot, and it is the
 //! whole reason they exist. That crate checks all three number tables against
 //! each other; what it cannot check is *which one this kernel was built to
 //! use*. A build that reached for the wrong table would pass every host test
@@ -689,7 +689,7 @@ fn check_errors_encode_as_negative(counter: &mut Counter) -> Result<(), &'static
 /// This architecture's number for a call, by asking the decoder rather than
 /// naming a table.
 ///
-/// A linear sweep because the tables run one way only: `libs/linux-abi` maps a
+/// A linear sweep because the tables run one way only: `libs/proto/linux-abi` maps a
 /// number to a call and deliberately offers no inverse, since an inverse would
 /// be a second copy of the table to disagree with the first.
 fn number_for(call: ferrix_linux_abi::nr::Syscall) -> Option<usize> {
@@ -2470,7 +2470,7 @@ fn map_rw(process: &Process, len: u64) -> Result<u64, &'static str> {
 // ---------------------------------------------------------------------------
 // The ELF loader
 //
-// `libs/elf` parses and is fuzzed; what it cannot check is the half that
+// `libs/platform/elf` parses and is fuzzed; what it cannot check is the half that
 // touches memory. These build an image for whichever architecture is running,
 // load it into a real address space, and then read the result back out of the
 // page tables -- which is the only place the answer actually lives.
@@ -2987,7 +2987,7 @@ fn write_word(process: &Process, at: u64, value: u64) -> Result<(), &'static str
 //
 // A file under `/tmp`, through the handlers: created, written, sought, read
 // back through a second descriptor that shares its offset, changed with
-// `fcntl`, truncated and closed. `libs/vfs` tests the same rules on the host;
+// `fcntl`, truncated and closed. `libs/fs/vfs` tests the same rules on the host;
 // what only this can test is the layer between -- arguments narrowed as the
 // ABI narrows them, this architecture's `open` flag bits, the table lock let
 // go before the file is touched, and every description closed and every page
@@ -4396,7 +4396,7 @@ mod paths {
     }
 
     /// Read a record back the way a C library would, at the offsets the
-    /// `libs/linux-abi` structure gives -- a second reading of the layout,
+    /// `libs/proto/linux-abi` structure gives -- a second reading of the layout,
     /// independent of the encoder that wrote it.
     fn decode(layout: StatLayout, b: &[u8]) -> Option<Decoded> {
         use types::aarch64::Stat as Generic;

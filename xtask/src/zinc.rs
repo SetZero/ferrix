@@ -1,7 +1,7 @@
-//! Building zinc, the zsh-compatible shell in `zinc/`, for the initramfs.
+//! Building zinc, the zsh-compatible shell in `userland/zinc/`, for the initramfs.
 //!
 //! zinc is a static Linux program built with std against the target's own
-//! musl, which rust-lld links without a C toolchain (`zinc/.cargo/config.toml`
+//! musl, which rust-lld links without a C toolchain (`userland/zinc/.cargo/config.toml`
 //! says how), so this works from any host, Windows included. It is its own
 //! cargo workspace, so it is built from its directory into a target directory
 //! of its own.
@@ -42,11 +42,11 @@ pub(crate) fn built(arch: Arch) -> Result<Option<PathBuf>> {
     let program = target_dir.join(target).join("release").join("zinc");
     crate::builds::Build::cargo(
         format!("cargo build (zinc) --target {target}"),
-        paths::workspace_root().join("zinc"),
+        paths::workspace_root().join("userland/zinc"),
     )
     .args(["build", "--release", "--target", target])
     .env("CARGO_TARGET_DIR", &target_dir)
-    // The flags `zinc/.cargo/config.toml` gives each target, set here
+    // The flags `userland/zinc/.cargo/config.toml` gives each target, set here
     // because cargo merges rustflags from every config file up the tree,
     // and the root one gives `armv7-unknown-linux-musleabi` the ARM
     // loader's linker script. RUSTFLAGS replaces the configured flags.
