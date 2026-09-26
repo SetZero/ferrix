@@ -19,7 +19,7 @@ use crate::capability::{
     self, BarOffset, Capabilities, Capability, ExtendedCapabilities, ID_MSIX, ID_PCI_EXPRESS,
     ID_VENDOR, MsiX,
 };
-use crate::ecam::{Ecam, Registers, Window};
+use crate::ecam::{Ecam, Layout, Registers, Window};
 use crate::header::{
     self, BusNumbers, COMMAND, COMMAND_BUS_MASTER, COMMAND_MEMORY_SPACE, Class, Endpoint,
     HeaderKind, Identity, STATUS_CAPABILITIES_LIST,
@@ -278,6 +278,55 @@ fn an_ecam_window_starting_above_bus_zero_counts_from_its_first_bus() {
         "above the window"
     );
     assert!(Window::new(0, 2, 1).is_none(), "an empty range");
+}
+
+#[test]
+fn a_cam_offset_is_a_sixteenth_of_ecams() {
+    let window = Window::with_layout(Layout::Cam, 0, 0, 0).unwrap();
+    assert_eq!(window.layout(), Layout::Cam, "layout");
+    assert_eq!(window.len(), 64 << 10, "64 KiB for its one bus");
+    assert_eq!(
+        window.offset(at(0, 1, 0), 0, 4),
+        Some(0x800),
+        "crosvm's first device, 00:01.0"
+    );
+    assert_eq!(
+        window.offset(at(0, 0x1f, 7), 0x3c, 4),
+        Some(0x1f << 11 | 7 << 8 | 0x3c),
+        "the interrupt register of 00:1f.7"
+    );
+    assert!(
+        window.offset(at(0, 0, 0), 252, 4).is_some(),
+        "the last conventional register"
+    );
+    assert_eq!(
+        window.offset(at(0, 0, 0), 256, 4),
+        None,
+        "no extended space"
+    );
+    assert_eq!(
+        window.offset(at(0, 0, 0), 254, 4),
+        None,
+        "straddles the end"
+    );
+    assert_eq!(window.offset(at(1, 0, 0), 0, 4), None, "past its bus");
+}
+
+#[test]
+fn cam_answers_all_ones_past_a_functions_256_bytes() {
+    let window = Window::with_layout(Layout::Cam, 0, 0, 1).unwrap();
+    let mut cam = Ecam::new(window, Buffer(vec![0; window.len() as usize]));
+    let function = at(1, 3, 1);
+    cam.write32(function, 0xfc, 0x1234_5678);
+    assert_eq!(cam.read32(function, 0xfc), 0x1234_5678, "round trip");
+    assert_eq!(
+        cam.read32(at(1, 3, 2), 0),
+        0,
+        "the next function starts 256 bytes on"
+    );
+    cam.write32(function, 0x100, 0xDEAD_BEEF);
+    assert_eq!(cam.read32(function, 0x100), u32::MAX, "no extended space");
+    assert_eq!(cam.read32(at(1, 3, 2), 0), 0, "and the write went nowhere");
 }
 
 #[test]

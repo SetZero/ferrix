@@ -14,15 +14,71 @@
 //! read and write bytes at an offset into a [`ConfigSpace`], answering for
 //! everything outside the window the way hardware answers for a function that
 //! is not there, so the kernel's side is four lines of volatile access.
+//!
+//! # CAM
+//!
+//! Conventional PCI's memory-mapped Configuration Access Mechanism is the same
+//! idea a sixteenth the size: 256 bytes a function, 64 KiB a bus.
+//!
+//! ```text
+//! offset = (bus - first_bus) << 16 | device << 11 | function << 8 | register
+//! ```
+//!
+//! crosvm describes its AArch64 host bridge this way, as
+//! `pci-host-cam-generic`. A [`Window`] carries its [`Layout`], and a function
+//! behind a CAM window has no extended configuration space: an access past
+//! its 256 bytes answers all ones, as one past 4 KiB does under ECAM.
 
 use core::ops::RangeInclusive;
 
-use crate::{Address, CONFIG_SPACE_SIZE, ConfigSpace};
+use crate::{Address, CONFIG_SPACE_SIZE, ConfigSpace, LEGACY_CONFIG_SPACE_SIZE};
 
-/// Bytes of window each bus occupies.
+/// Bytes of window each bus occupies under ECAM.
 pub const BYTES_PER_BUS: u64 = 1 << 20;
 
-/// One segment's ECAM window, without its base address.
+/// Bytes of window each bus occupies under CAM.
+pub const CAM_BYTES_PER_BUS: u64 = 1 << 16;
+
+/// How a window lays functions out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Layout {
+    /// PCI Express: 4 KiB a function, a megabyte a bus.
+    Ecam,
+    /// Conventional PCI: 256 bytes a function, 64 KiB a bus.
+    Cam,
+}
+
+impl Layout {
+    /// Bytes of window each bus occupies.
+    #[must_use]
+    pub const fn bytes_per_bus(self) -> u64 {
+        match self {
+            Layout::Ecam => BYTES_PER_BUS,
+            Layout::Cam => CAM_BYTES_PER_BUS,
+        }
+    }
+
+    /// Bytes of configuration space each function has.
+    #[must_use]
+    pub const fn function_bytes(self) -> u16 {
+        match self {
+            Layout::Ecam => CONFIG_SPACE_SIZE,
+            Layout::Cam => LEGACY_CONFIG_SPACE_SIZE,
+        }
+    }
+
+    /// How far the bus, device and function numbers are shifted: the
+    /// function's is the log of [`Layout::function_bytes`], and a bus holds
+    /// 32 devices of 8 functions each.
+    const fn function_shift(self) -> u32 {
+        match self {
+            Layout::Ecam => 12,
+            Layout::Cam => 8,
+        }
+    }
+}
+
+/// One segment's configuration window, without its base address.
 ///
 /// The base is the caller's business: it is a physical address in firmware's
 /// description and a virtual one once the kernel has mapped it, and this type
@@ -35,13 +91,27 @@ pub struct Window {
     first_bus: u8,
     /// The last bus the window covers, inclusive.
     last_bus: u8,
+    /// How functions are laid out in it.
+    layout: Layout,
 }
 
 impl Window {
-    /// The window for `segment`, covering `first_bus..=last_bus`, or `None` if
-    /// the range is empty.
+    /// The ECAM window for `segment`, covering `first_bus..=last_bus`, or
+    /// `None` if the range is empty.
     #[must_use]
     pub const fn new(segment: u16, first_bus: u8, last_bus: u8) -> Option<Self> {
+        Self::with_layout(Layout::Ecam, segment, first_bus, last_bus)
+    }
+
+    /// The window for `segment` laid out as `layout`, covering
+    /// `first_bus..=last_bus`, or `None` if the range is empty.
+    #[must_use]
+    pub const fn with_layout(
+        layout: Layout,
+        segment: u16,
+        first_bus: u8,
+        last_bus: u8,
+    ) -> Option<Self> {
         if first_bus > last_bus {
             return None;
         }
@@ -49,7 +119,14 @@ impl Window {
             segment,
             first_bus,
             last_bus,
+            layout,
         })
+    }
+
+    /// How functions are laid out.
+    #[must_use]
+    pub const fn layout(self) -> Layout {
+        self.layout
     }
 
     /// The segment group.
@@ -64,11 +141,11 @@ impl Window {
         self.first_bus..=self.last_bus
     }
 
-    /// How many bytes the window is: a megabyte per bus.
+    /// How many bytes the window is: [`Layout::bytes_per_bus`] per bus.
     #[must_use]
     pub const fn len(self) -> u64 {
         // At most 256 buses, so at most 256 MiB: no overflow is possible.
-        (self.last_bus as u64 - self.first_bus as u64 + 1) * BYTES_PER_BUS
+        (self.last_bus as u64 - self.first_bus as u64 + 1) * self.layout.bytes_per_bus()
     }
 
     /// Whether the window is empty, which a constructed one never is.
@@ -89,14 +166,16 @@ impl Window {
             return None;
         }
         // Both are below 4096 when they are summed, so the sum cannot wrap.
-        if register >= CONFIG_SPACE_SIZE || width > CONFIG_SPACE_SIZE - register {
+        let size = self.layout.function_bytes();
+        if register >= size || width > size - register {
             return None;
         }
+        let shift = self.layout.function_shift();
         let bus = (function.bus() - self.first_bus) as u64;
         Some(
-            bus << 20
-                | (function.device() as u64) << 15
-                | (function.function() as u64) << 12
+            bus << (shift + 8)
+                | (function.device() as u64) << (shift + 3)
+                | (function.function() as u64) << shift
                 | register as u64,
         )
     }
