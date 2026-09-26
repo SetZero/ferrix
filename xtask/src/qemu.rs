@@ -285,6 +285,10 @@ const FAULTED: &str = " out-of-domain writes faulted";
 /// What the kernel prints when it leaves an `SMMUv3` alone for having no stage 2.
 const NO_STAGE_2: &str = "left alone: it has no AArch64 stage 2";
 
+/// What stage 10's PCI check prints when the host bridges came from the device
+/// tree rather than ACPI's MCFG.
+const DEVICE_TREE_HOSTS: &str = " device-tree hosts";
+
 /// What stage 10's devmgr line ends with.
 const DEVMGR_FAILED: &str = " failed";
 
@@ -321,8 +325,22 @@ fn devmgr_problem(lines: &[String]) -> Option<String> {
 /// device's DMA through a translated domain. ARMv7-A does not — U-Boot keeps
 /// its virtio devices from offering the platform's translation, which the exit
 /// criterion states as degraded trusted mode — so it is not asked.
+///
+/// Nor is an AArch64 boot that found its PCI hosts in the device tree, which
+/// `FERRIX_ARM_MACHINE=acpi=off` asks for: the kernel brings an `SMMUv3` up
+/// from ACPI's IORT alone (`kernel/src/iommu.rs`), so on that path it is
+/// ARMv7-A's case, and says so in the same degraded-trusted-mode line. The
+/// coverage suite boots it for the Pixel 7's path, which has no ACPI.
 fn fault_problem(arch: Arch, lines: &[String]) -> Option<String> {
     if arch == Arch::Armv7a {
+        return None;
+    }
+    if let Some(line) = lines.iter().find(|line| line.contains(DEVICE_TREE_HOSTS)) {
+        println!(
+            "  {arch}: the out-of-domain write check was skipped: PCI came from the device \
+             tree, where no SMMUv3 is brought up (`{}`)",
+            line.trim()
+        );
         return None;
     }
     // A QEMU whose SMMUv3 offers no stage 2 leaves the unit alone, and the
@@ -2255,6 +2273,14 @@ mod tests {
             fault_problem(Arch::Armv7a, &none),
             None,
             "ARMv7-A is not asked"
+        );
+        let tree = lines(&[
+            "  pci      5 functions from 1 device-tree hosts (0 descriptions refused), 1 completions by MSI-X, 0 out-of-domain writes faulted",
+        ]);
+        assert_eq!(
+            fault_problem(Arch::AArch64, &tree),
+            None,
+            "nor is AArch64's device-tree path"
         );
     }
 

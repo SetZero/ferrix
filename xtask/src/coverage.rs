@@ -149,6 +149,8 @@ struct Gate {
     only: Option<Arch>,
     /// `FERRIX_ARM_MACHINE`, for a boot on a different Arm machine.
     arm_machine: Option<&'static str>,
+    /// `FERRIX_ARM_CPU`, for a boot on a different Arm processor.
+    arm_cpu: Option<&'static str>,
 }
 
 impl Gate {
@@ -160,6 +162,7 @@ impl Gate {
             userland,
             only: None,
             arm_machine: None,
+            arm_cpu: None,
         }
     }
 
@@ -175,6 +178,14 @@ impl Gate {
     const fn on_machine(self, machine: &'static str) -> Gate {
         Gate {
             arm_machine: Some(machine),
+            ..self
+        }
+    }
+
+    /// The same gate, on the Arm processor model `cpu`.
+    const fn on_cpu(self, cpu: &'static str) -> Gate {
+        Gate {
+            arm_cpu: Some(cpu),
             ..self
         }
     }
@@ -205,6 +216,18 @@ const SUITE: &[Gate] = &[
     Gate::new("test-boot", "boot-gicv3", false)
         .only(Arch::AArch64)
         .on_machine("gic-version=3"),
+    // The Pixel 7 has no ACPI: the kernel finds its interrupt controller,
+    // timer, processors and PSCI conduit in the device tree, which a `virt`
+    // with ACPI never makes it read. Once with the GICv2 and its v2m frame,
+    // and once as the phone is -- a GICv3 and ITS, on a processor with PAN,
+    // RNDR, SSBS and the rest of what `cortex-a72` lacks and its cores have.
+    Gate::new("test-boot", "boot-dt", false)
+        .only(Arch::AArch64)
+        .on_machine("acpi=off"),
+    Gate::new("test-boot", "boot-dt-gicv3", false)
+        .only(Arch::AArch64)
+        .on_machine("acpi=off,gic-version=3")
+        .on_cpu("max"),
     Gate::new("test-shell", "shell", true),
     Gate::new("test-vfs", "vfs", true).only(Arch::X86_64),
     Gate::new("test-net", "net", true),
@@ -330,6 +353,9 @@ fn run_gate(
     }
     if let Some(machine) = gate.arm_machine {
         let _ = command.env("FERRIX_ARM_MACHINE", machine);
+    }
+    if let Some(cpu) = gate.arm_cpu {
+        let _ = command.env("FERRIX_ARM_CPU", cpu);
     }
     if args.release {
         let _ = command.arg("--release");
