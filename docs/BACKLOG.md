@@ -299,6 +299,7 @@ log path and commit; a new sighting is added to its row the day it is seen.
 | devmgr does not restart `usbdev` (its `Gadget` kind, like `Port` and `Engine`): a driver that dies leaves the Pixel with no port until the next boot. The log core ends the claim when the channel closes, so a restart could reclaim it | open |
 | The Pixel's DWC3 runs with the PHY's suspend (`SUSPHY`, `ENBLSLPM`) and USB 2 LPM off, costing the power they save; turning them on needs Linux's save and restore around endpoint commands | open |
 | Read the Pixel's DWC3 release (`VER_NUMBER`, `0xC1A0`, `DWC_usb31`) in the loader's survey: it decides the soft-reset timing quirks `libs/drivers/dwc3` now covers by always waiting 50 ms more | open |
+| The log core's REFUSED can go missing: once, on an aarch64 `test-boot` under a host at load ~50, `kernel/src/logctl`'s boot check sent DATA as a driver and found the channel closed with no REFUSED queued, though the core's task had ended the claim (`FERRIX-PANIC log control self-check failed: a driver that sent DATA was not refused`, tree 566ca8be). The rerun passed. The check now requires the claim to end, with or without the REFUSED; why the REFUSED was not there is open. Log: `~/ferrix-logs/pixel7-usb-log/boot-aarch64-logctl-refused-566ca8be.log` | open |
 
 ### The desktop and the GPU, what is left
 

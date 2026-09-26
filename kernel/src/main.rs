@@ -1479,7 +1479,7 @@ fn check_log_control() {
     match logctl::check::run() {
         Ok(report) => println!(
             "  logctl   {} bytes from the log's oldest in two DATA ({} lost before them), a \
-             second reader refused, a driver that lied refused, a closed claim ended in {} ms",
+             second reader refused, a driver that lied lost its claim, a closed claim ended in {} ms",
             report.carried, report.lost, report.released_ms,
         ),
         Err(problem) => fatal!(
