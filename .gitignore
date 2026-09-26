@@ -8,3 +8,4 @@
 __pycache__/
 /tests/fuzz/artifacts
 /remote-desktop.toml
+/docs/roadmap/book/
