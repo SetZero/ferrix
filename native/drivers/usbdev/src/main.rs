@@ -47,7 +47,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use ferrix_blkring::control::{Message as StartMessage, START_BYTES, Start};
 use ferrix_dwc3::layout::AREA_BYTES;
-use ferrix_dwc3::usb_device::acm::{DATA_IN, DATA_OUT, SerialPort};
+use ferrix_dwc3::usb_device::acm::{ADB_OUT, DATA_IN, DATA_OUT, SerialPort};
 use ferrix_dwc3::{Clock, Controller, Dma, Error as UsbError, Parts, Registers};
 use ferrix_logctl::message::{MAX_BYTES, MAX_DATA, Message as LogMessage};
 use ferrix_native_abi::handle::Handle;
@@ -63,6 +63,8 @@ use ferrix_rt::native::port::{self, Port};
 use ferrix_rt::native::vmo::{self, Vmo};
 use ferrix_rt::{Bootstrap, Kernel};
 
+mod adb;
+
 ferrix_rt::entry!(main);
 
 /// A page, on every architecture this runs on.
@@ -77,6 +79,9 @@ const KEY_LOG: u64 = 2;
 /// How often the loop wakes when nothing happens, to see whether a host
 /// opened the port.
 const TICK_NANOS: u64 = 100_000_000;
+
+/// The tick while adbd is connected: two milliseconds.
+const ADB_TICK_NANOS: u64 = 2_000_000;
 
 /// The line that asks for a restart, as the monitor's button sends it. Only
 /// a whole line equal to it counts, so bytes typed by accident do nothing.
@@ -486,6 +491,7 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
         filled: 0,
         typed: [0; TYPED_BYTES],
         typed_len: 0,
+        adb: adb::Bridge::new(),
     };
     let ended = driver.serve();
     let Driver { mut usb, .. } = driver;
@@ -549,6 +555,8 @@ struct Driver {
     /// The line the host is typing, up to [`TYPED_BYTES`] of it.
     typed: [u8; TYPED_BYTES],
     typed_len: usize,
+    /// adb's interface, bridged to adbd.
+    adb: adb::Bridge,
 }
 
 impl Driver {
@@ -556,8 +564,17 @@ impl Driver {
     fn serve(&mut self) -> Result<(), Step> {
         loop {
             self.pump()?;
+            self.adb.pump(&mut self.usb)?;
+            // adb waits for an OKAY after every message, and the socket
+            // has no way to wake the port, so while adbd is here the loop
+            // looks at it often.
+            let tick = if self.adb.connected() {
+                ADB_TICK_NANOS
+            } else {
+                TICK_NANOS
+            };
             let now = self.usb.clock().now_nanos();
-            match self.port.wait(Deadline::At(now.saturating_add(TICK_NANOS))) {
+            match self.port.wait(Deadline::At(now.saturating_add(tick))) {
                 Ok(packet) if packet.kind == PACKET_INTERRUPT && packet.key == KEY_INTERRUPT => {
                     let serviced = self.usb.on_interrupt(&mut self.serial);
                     let _ = self.interrupt.ack();
@@ -598,7 +615,20 @@ impl Driver {
         if notice.disconnected {
             say(format_args!("usbdev: the host went away"));
         }
+        if notice.reset || notice.disconnected {
+            self.adb.reset();
+        }
         if notice.received {
+            let mut packet = [0_u8; 512];
+            let count = self
+                .usb
+                .read(ADB_OUT, &mut packet)
+                .map_err(|_| Step::Faulted)?;
+            if let Some(bytes) = packet.get(..count)
+                && !bytes.is_empty()
+            {
+                self.adb.take_from_host(bytes);
+            }
             let mut bytes = [0_u8; 512];
             let count = self
                 .usb
