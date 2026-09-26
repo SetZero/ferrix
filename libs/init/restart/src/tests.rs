@@ -1,12 +1,8 @@
-//! The restart policy (§5.4), alone, as `devmgr` will use it.
+//! The restart policy (§5.4), alone, as `devmgr` uses it.
 
 use core::time::Duration;
 
-use crate::event::Exit;
-use crate::kind::Restart;
-use crate::restart::{Backoff, Budget, Decision, Ended, Policy, wanted};
-use crate::time::Instant;
-use crate::value::Signal;
+use crate::{Backoff, Budget, Decision, Ended, Exit, Instant, Policy, Restart, Signal, wanted};
 
 #[test]
 fn which_ends_restart_is_systemds_table() {
@@ -78,19 +74,32 @@ fn the_backoff_doubles_to_32_times() {
     assert_eq!(zero.steps(), 101, "counting past the cap does not overflow");
 }
 
+/// systemd's `ratelimit_below`: the window begins at the first start and
+/// holds while no more than `interval` has passed since; the next start after
+/// that begins a new one. Not a sliding window: at ten seconds exactly the
+/// first start has not aged out, and just after it every start has.
 #[test]
-fn a_budget_with_a_clock_is_a_rate() {
+fn a_budget_with_a_clock_is_a_fixed_window() {
     let mut budget = Budget::new(5, Duration::from_secs(10));
-    let at = |secs: u64| Some(Instant::from_millis(secs * 1000));
+    let at = |millis: u64| Some(Instant::from_millis(millis));
     for second in 0..5 {
-        assert!(budget.start(at(second)), "start {second}");
+        assert!(budget.start(at(second * 1000)), "start {second}");
     }
-    assert!(!budget.start(at(5)), "a sixth within ten seconds");
-    assert!(!budget.start(at(9)));
-    assert!(budget.start(at(10)), "the first has aged out");
-    assert!(!budget.start(at(10)));
+    assert!(!budget.start(at(5000)), "a sixth within ten seconds");
+    assert!(!budget.start(at(9000)));
+    assert!(!budget.start(at(10_000)), "ten seconds is still the window");
+    assert!(budget.start(at(10_001)), "a new window begins");
+    assert_eq!(budget.used(), 1, "and counts from one");
+    for _ in 0..4 {
+        assert!(budget.start(at(10_002)));
+    }
+    assert!(
+        !budget.start(at(20_001)),
+        "the new window holds for its interval"
+    );
     budget.reset();
     assert_eq!(budget.used(), 0);
+    assert!(budget.start(at(20_001)), "a reset begins again at once");
 }
 
 #[test]

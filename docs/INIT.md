@@ -430,18 +430,23 @@ these a service uses is set by its `Type=`:
 
 ### 5.4 Restarting
 
-Restarting is a policy function in `libs/init/svc`: given the history of a
-unit's exits and the clock, restart now, restart at `t`, or give up. The
-defaults are systemd's: `RestartSec=100ms`, and at most five starts in ten
-seconds, after which the unit is `failed` and stays so until
-`svc reset-failed` or a new start. Each restart doubles the delay, up to
+Restarting is a policy function in `libs/init/restart`, which `libs/init/svc`
+re-exports and which allocates nothing, so that `devmgr` can link it: given
+the history of a unit's exits and the clock, restart now, restart at `t`, or
+give up. The defaults are systemd's: `RestartSec=100ms`, and at most five
+starts in ten seconds, after which the unit is `failed` and stays so until
+`svc reset-failed` or a new start. The ten seconds are systemd's fixed
+window (`ratelimit_below` in `src/basic/ratelimit.c`), not a sliding one: it
+begins at a start, holds while no more than the interval has passed since,
+and the first start after that begins the next, counting from one. Each restart doubles the delay, up to
 `RestartSec=` times 32. A restart always begins with an empty cgroup: a
 service's leftovers from its last run are killed before it starts again.
 
 `devmgr` has the same problem with no clock. It restarts a display driver at
-most eight times, counted (`docs/DEVMGR.md` §4). The policy function takes
-`Option<Instant>`: with none it falls back to a pure count, and with a clock
-it uses the rate. So `devmgr` and init share one tested implementation, and
+most eight times, counted (`docs/DEVMGR.md` §4), through the same `Policy`
+since L11. The policy function takes `Option<Instant>`: with none it falls
+back to a pure count, and with a clock it uses the window. So `devmgr` and
+init share one tested implementation, and
 when `devmgr` becomes a unit under init (§7.3) its drivers' budget can
 become a rate.
 
@@ -971,7 +976,8 @@ sends `KillSignal=` by `KillMode=`, writes `cgroup.kill` after
 `TimeoutStopSec=`, and is done when the cgroup is empty (`Emptied`), not when
 the main process exits. `Restart=` follows systemd's table, with
 `RestartSec=` doubled per restart in a row up to 32 times, and the start
-limit counts every start; the policy is `restart::Policy`, which takes
+limit counts every start in systemd's fixed window; the policy is
+`restart::Policy`, since L11 in `libs/init/restart`, which takes
 `Option<Instant>` and is a pure count without a clock, for `devmgr` (L11).
 Boot starts `default.target` or `ferrix.target=`'s, and isolates
 `rescue.target` if that cannot start or fails. Shutdown stops everything

@@ -55,7 +55,7 @@ kernel or a loader. Each crate sits in exactly one group:
 | `libs/fs/` | Storage and filesystems, including the text of the pseudo-filesystems | `vfs` `block` `btrfs` `btrfs-vfs` `btrfs-write` `cpio` `procfs` `sysfs` `cgroupfs` |
 | `libs/network/` | The network stack | `net` `netwire` `nettcp` `netlink` |
 | `libs/drivers/` | Device logic over an abstract transport, and the serve loops ring-3 drivers run | `virtio*` `usb-host` `gc400` `stm32-display` `blkserve` `netserve` `vdagent` |
-| `libs/init/` | The service manager's pure core and its wire formats | `svc` `svc-proto` |
+| `libs/init/` | The service manager's pure core, the restart policy it shares with `devmgr`, and its wire formats | `svc` `restart` `svc-proto` |
 
 **Choosing a group for a new lib.** Ask what the crate *is*, not who uses it
 first. A format two components agree on is `proto`, even if only the kernel

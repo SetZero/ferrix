@@ -54,39 +54,21 @@ impl ServiceType {
     }
 }
 
-/// `Restart=`: which ends of a service start it again (§5.4).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Restart {
-    /// Never.
-    #[default]
-    No,
-    /// After a clean exit only.
-    OnSuccess,
-    /// After an unclean exit, a signal, a timeout or a watchdog.
-    OnFailure,
-    /// After a signal, a timeout or a watchdog.
-    OnAbnormal,
-    /// After a watchdog timeout.
-    OnWatchdog,
-    /// After a signal that was not caught.
-    OnAbort,
-    /// After any end that was not asked for.
-    Always,
-}
+pub use ferrix_restart::Restart;
 
-impl Restart {
-    fn parse(text: &str) -> Result<Restart, ValueError> {
-        Ok(match text {
-            "no" => Restart::No,
-            "on-success" => Restart::OnSuccess,
-            "on-failure" => Restart::OnFailure,
-            "on-abnormal" => Restart::OnAbnormal,
-            "on-watchdog" => Restart::OnWatchdog,
-            "on-abort" => Restart::OnAbort,
-            "always" => Restart::Always,
-            _ => return Err(ValueError::Invalid),
-        })
-    }
+/// `Restart=`'s value. A free function, since [`Restart`] is
+/// `ferrix-restart`'s, which parses nothing.
+fn parse_restart(text: &str) -> Result<Restart, ValueError> {
+    Ok(match text {
+        "no" => Restart::No,
+        "on-success" => Restart::OnSuccess,
+        "on-failure" => Restart::OnFailure,
+        "on-abnormal" => Restart::OnAbnormal,
+        "on-watchdog" => Restart::OnWatchdog,
+        "on-abort" => Restart::OnAbort,
+        "always" => Restart::Always,
+        _ => return Err(ValueError::Invalid),
+    })
 }
 
 /// `KillMode=`: who is signalled to stop (§5.2).
@@ -443,7 +425,7 @@ const RUN_KEYS: [(&str, Setter<Service>); 13] = [
         }
     }),
     ("Restart", |s, a, w| {
-        s.restart = keys::parsed(a, w, Restart::parse).unwrap_or(s.restart);
+        s.restart = keys::parsed(a, w, parse_restart).unwrap_or(s.restart);
     }),
     ("RestartSec", |s, a, w| match keys::span(a, w) {
         Some(Span::Finite(delay)) => s.restart_sec = delay,

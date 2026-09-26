@@ -61,6 +61,7 @@ members = [
     "libs/fs/procfs",
     "libs/fs/cgroupfs",
     "libs/fs/sysfs",
+    "libs/init/restart",
     "libs/init/svc",
     "libs/platform/pci",
     "libs/kernel/qr",
@@ -170,6 +171,7 @@ ferrix-procfs = { path = "libs/fs/procfs" }
 ferrix-cgroupfs = { path = "libs/fs/cgroupfs" }
 ferrix-sysfs = { path = "libs/fs/sysfs" }
 ferrix-svc = { path = "libs/init/svc" }
+ferrix-restart = { path = "libs/init/restart" }
 ferrix-pci = { path = "libs/platform/pci" }
 ferrix-sched = { path = "libs/kernel/sched" }
 

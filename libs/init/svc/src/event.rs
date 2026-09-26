@@ -90,19 +90,7 @@ impl fmt::Display for GroupPath {
     }
 }
 
-/// How a process ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Exit {
-    /// It called `exit` with this status.
-    Code(i32),
-    /// A signal ended it.
-    Signal {
-        /// Which.
-        signal: Signal,
-        /// Whether it dumped core.
-        core: bool,
-    },
-}
+pub use ferrix_restart::Exit;
 
 /// Everything that happened, as the backends saw it.
 #[derive(Debug, Clone, PartialEq, Eq)]

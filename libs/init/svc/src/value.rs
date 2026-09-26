@@ -10,6 +10,8 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::time::Duration;
 
+use ferrix_restart::SIGNALS;
+
 /// A value that does not parse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueError {
@@ -274,66 +276,7 @@ pub fn permyriad(text: &str, bounded: bool) -> Result<u64, ValueError> {
     Ok(value)
 }
 
-/// Linux's signal names, by number; the same on every architecture Ferrix
-/// runs on.
-const SIGNALS: [(&str, u8); 31] = [
-    ("HUP", 1),
-    ("INT", 2),
-    ("QUIT", 3),
-    ("ILL", 4),
-    ("TRAP", 5),
-    ("ABRT", 6),
-    ("BUS", 7),
-    ("FPE", 8),
-    ("KILL", 9),
-    ("USR1", 10),
-    ("SEGV", 11),
-    ("USR2", 12),
-    ("PIPE", 13),
-    ("ALRM", 14),
-    ("TERM", 15),
-    ("STKFLT", 16),
-    ("CHLD", 17),
-    ("CONT", 18),
-    ("STOP", 19),
-    ("TSTP", 20),
-    ("TTIN", 21),
-    ("TTOU", 22),
-    ("URG", 23),
-    ("XCPU", 24),
-    ("XFSZ", 25),
-    ("VTALRM", 26),
-    ("PROF", 27),
-    ("WINCH", 28),
-    ("IO", 29),
-    ("PWR", 30),
-    ("SYS", 31),
-];
-
-/// A signal, by number.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Signal(pub u8);
-
-impl Signal {
-    /// `SIGHUP`.
-    pub const HUP: Signal = Signal(1);
-    /// `SIGINT`.
-    pub const INT: Signal = Signal(2);
-    /// `SIGKILL`.
-    pub const KILL: Signal = Signal(9);
-    /// `SIGTERM`.
-    pub const TERM: Signal = Signal(15);
-    /// `SIGCONT`.
-    pub const CONT: Signal = Signal(18);
-
-    /// Its name without `SIG`, if it has one.
-    pub fn name(self) -> Option<&'static str> {
-        SIGNALS
-            .iter()
-            .find(|&&(_, number)| number == self.0)
-            .map(|&(name, _)| name)
-    }
-}
+pub use ferrix_restart::Signal;
 
 /// A signal as `signal_from_string` reads one: `SIGTERM`, `TERM` or `15`,
 /// from 1 to 64.

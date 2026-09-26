@@ -31,8 +31,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-restart"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-svc"
 version = "0.1.0"
+dependencies = [
+ "ferrix-restart",
+]
 
 [[package]]
 name = "ferrix-svc-proto"
