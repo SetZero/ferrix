@@ -8,8 +8,10 @@ you touch the phone.
 
 ## State at a glance
 
-**Update, 2026-09-27 early (ferrix-0a): `main` boots the phone on all eight
-cores to `FERRIX-BOOT-OK`, and `nosmp` is gone from its command line.**
+**Update, 2026-09-27 (ferrix-0a): `main` boots the phone on all eight
+cores to `FERRIX-BOOT-OK`, seeded from TF-A's TRNG, with the kernel, the
+direct map and the vmap arena moved by KASLR, and the boot console drawn in
+74 s a boot. "What to do next" is empty; each item is under "Done".**
 None of it is pushed.
 
 * **The GICv3 ITS** (`c21ce40f..a8680955`) landed after a rebase and a
@@ -273,27 +275,10 @@ them). Check any new one against the phone before you rely on it.
 
 ## What to do next, most important first
 
-1. **The kernel is a PIE now, and boots on the phone** (KASLR,
-   `docs/certification/SPECULATION.md` §6.1, 2026-09-26). `boot/` moves it
-   each boot; this loader does not. It places the kernel at its link address
-   and applies its `R_AARCH64_RELATIVE` fixups there (`load.rs`
-   `apply_fixups`, aligned volatile stores, as everything here is written with
-   the caches off). The log says `kaslr    not offered by this loader`, and
-   the kernel reports `NOT randomised: this loader does not randomise`. Run
-   12 (`$P/run12-kaslr/`, `main` at `5ddb4cdd`) printed both, passed stage
-   1's FX-0101 layout check, and reached `FERRIX-BOOT-OK` on 8 cores in 90
-   s. The kernel the loader embeds is stripped with `llvm-objcopy
-   --strip-all`, which keeps AArch64's `.rela.dyn`. ARMv7-A would need
-   `--strip-debug`, since its fixups come from `--emit-relocs` sections.
-   What is left is moving the kernel here. The randomness is there now:
-   TF-A answers SMCCC `TRNG_RND64` (see the entropy entry under "Done"), so
-   this loader could ask it for a slide the way the kernel does, from EL1
-   with the MMU off. Then a run to try it.
-   Since `47934c84` (F-34) this loader also maps the kernel's text and
-   read-only data read-only in the direct map. Run 13 (`$P/run13-sealed/`)
-   passed stage 2's FX-0204 check (`sealed 3536 KiB of text and read-only
-   data, 1768 mappings of it, none writable`) and reached `FERRIX-BOOT-OK`
-   on 8 cores.
+Nothing on the list. The phone boots all eight cores, seeded, with KASLR
+and the boot console, to `FERRIX-BOOT-OK`. What is next for it is new work:
+a display driver of its own, input, storage, or the DK1's side of the
+TRNG (`TRNG_RND32`, if its TF-A answers it).
 
 ### Done, for the record
 
@@ -321,6 +306,27 @@ them). Check any new one against the phone before you rely on it.
   counts every line: the tree held 1569 lines, not 733, and the owner had
   the cap and nine budgets moved to the truth. AArch64's secondary entry,
   58 lines, is the one that had really grown, by the EL2 drop.
+* **KASLR on the phone.** The kernel is a PIE (KASLR,
+  `docs/certification/SPECULATION.md` §6.1), and this loader now moves it
+  as `boot/` does (`bootloaders/pixel7/src/kaslr.rs`): the image, the direct
+  map and the vmap arena, each from its own word of TF-A's SMCCC
+  `TRNG_RND64`, the source `ferrix_bootinfo::SOURCE_SMCCC_TRNG`. Only the
+  `smc` conduit is used, since the loader left EL2 itself, and nothing
+  stands in for the TRNG: without it the log says `NOT randomised: the
+  loader found no source of randomness`. `nokaslr` on the command line
+  keeps the fixed layout. The fixups are applied at the chosen slide before
+  the tables are built. Run 17 (`$P/run17-kaslr/`) moved the kernel by
+  `0x7688c000` with 18 bits, the direct map with 16 and the arena with 17.
+  Stage 1's FX-0101 check passed, and the boot reached `FERRIX-BOOT-OK` on
+  8 cores. Run 17-2, the same image, moved everything elsewhere (slide
+  `0xee25000`) and passed too. The kernel is stripped with `llvm-objcopy
+  --strip-all`, which keeps AArch64's `.rela.dyn`; ARMv7-A would need
+  `--strip-debug`.
+  Since `47934c84` (F-34) this loader also maps the kernel's text and
+  read-only data read-only in the direct map. Run 13 (`$P/run13-sealed/`)
+  passed stage 2's FX-0204 check (`sealed 3536 KiB of text and read-only
+  data, 1768 mappings of it, none writable`) and reached `FERRIX-BOOT-OK`
+  on 8 cores.
 * **A faster boot console.** The framebuffer was mapped as device memory,
   so every glyph pixel went out as its own uncached store. It is now normal
   non-cacheable memory, write-combining (`arch::FRAMEBUFFER_FLAGS`; x86-64
