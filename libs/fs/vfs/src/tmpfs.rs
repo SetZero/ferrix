@@ -668,6 +668,49 @@ pub struct Node {
     _charge: Charge,
 }
 
+impl Drop for Node {
+    /// Let go of what a directory holds without a frame per level.
+    ///
+    /// A directory holds each child's node, so dropping the last hold on one
+    /// dropped its children inside its own drop, and theirs inside those: a
+    /// chain 200 deep, torn down at `umount` or at power-off, ran off the end
+    /// of the kernel's stack and double-faulted (ferrix-ea, 2026-09-26). Here
+    /// a child this directory held last gives up its own entries before it
+    /// goes, and those wait on a list, so nothing is dropped with children
+    /// still in it. The list grows fallibly; a directory whose entries find
+    /// no room there is dropped as before, which only a heap already
+    /// exhausted brings about.
+    fn drop(&mut self) {
+        let Body::Dir(dir) = &mut self.state.get_mut().body else {
+            return;
+        };
+        let mut next = core::mem::take(&mut dir.by_cursor);
+        let mut waiting: Vec<BTreeMap<u64, Entry>> = Vec::new();
+        loop {
+            while let Some((_, entry)) = next.pop_first() {
+                let Entry { node, .. } = entry;
+                // `None` when someone else still holds it: nothing drops here.
+                let Some(mut child) = Arc::into_inner(node) else {
+                    continue;
+                };
+                let Body::Dir(dir) = &mut child.state.get_mut().body else {
+                    continue;
+                };
+                let entries = core::mem::take(&mut dir.by_cursor);
+                if !entries.is_empty() && waiting.try_reserve(1).is_ok() {
+                    waiting.push(entries);
+                }
+                // `child` goes here with nothing left in it; entries that
+                // found no room on the list went just before it, as before.
+            }
+            match waiting.pop() {
+                Some(entries) => next = entries,
+                None => return,
+            }
+        }
+    }
+}
+
 impl fmt::Debug for Node {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("tmpfs::Node")

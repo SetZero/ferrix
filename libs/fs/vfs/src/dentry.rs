@@ -344,6 +344,27 @@ impl Dentry {
     }
 }
 
+impl Drop for Dentry {
+    /// Let go of its parent, and of each ancestor only it kept, one after
+    /// another.
+    ///
+    /// A child holds its parent, so the last hold on the deepest dentry of a
+    /// chain nobody else holds used to drop its parent inside its own drop,
+    /// and that one its parent, a frame each: a directory 200 deep in a tmpfs
+    /// torn down at `umount` -- or at power-off, left in `/tmp` -- ran off the
+    /// end of the kernel's stack and double-faulted. Here each ancestor is
+    /// taken out of the chain before it goes, so it has no parent left to
+    /// drop, and the stack stays one frame deep however long the chain.
+    fn drop(&mut self) {
+        let mut next = self.state.get_mut().parent.take();
+        while let Some(parent) = next {
+            // `None` when someone else still holds it: the chain ends here.
+            next =
+                Arc::into_inner(parent).and_then(|mut parent| parent.state.get_mut().parent.take());
+        }
+    }
+}
+
 impl fmt::Debug for Dentry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let state = self.state.lock();

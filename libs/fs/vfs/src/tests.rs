@@ -678,6 +678,31 @@ fn a_cached_miss_does_not_hide_a_later_create() {
     assert_eq!(read_file(&ns, &ctx, "/later").unwrap_err(), Errno::ENOENT);
 }
 
+/// A chain of directories far deeper than a stack could drop one frame a
+/// level goes on a small stack: the kernel's double-faulted on a tmpfs 200
+/// deep at `umount` (ferrix-ea, 2026-09-26).
+#[test]
+fn a_deep_chain_of_dentries_drops_without_recursing() {
+    const DEPTH: usize = 20_000;
+    let dropped = std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let (ns, ctx) = fresh();
+            let mut at = ns.resolve(&ctx, None, b"/", true).unwrap();
+            for _ in 0..DEPTH {
+                ns.mkdir(&ctx, Some(&at), b"d", 0o755).unwrap();
+                at = ns.resolve(&ctx, Some(&at), b"d", false).unwrap();
+            }
+            // The deepest location is the chain's only hold on most of it.
+            drop(at);
+            drop(ctx);
+            drop(ns);
+        })
+        .unwrap()
+        .join();
+    assert!(dropped.is_ok(), "dropping the chain failed");
+}
+
 #[test]
 fn the_cache_is_bounded() {
     let ns = Namespace::with_cache(tmpfs(1), 8, Arc::new(SpinParker));
