@@ -94,14 +94,11 @@ pub(crate) fn remove(seed: &Seed, copy: u64, len: u64) {
             continue;
         }
         let word = |at: usize| (copy + at as u64) as *mut u32;
-        // SAFETY: `start` and `start + 4` are aligned words inside the copy,
-        // which the loader made and nothing else refers to.
-        let (token, length) = unsafe {
-            (
-                u32::from_be(ptr::read_volatile(word(start))),
-                u32::from_be(ptr::read_volatile(word(start + 4))),
-            )
-        };
+        // SAFETY: `start` is an aligned word inside the copy, which the loader
+        // made and nothing else refers to.
+        let token = u32::from_be(unsafe { ptr::read_volatile(word(start)) });
+        // SAFETY: as above, the word after it, still inside the copy.
+        let length = u32::from_be(unsafe { ptr::read_volatile(word(start + 4)) });
         if token != FDT_PROP || length as usize != value_len {
             continue;
         }
