@@ -438,6 +438,7 @@ fn lay_out(process: &Process) -> Result<Layout, &'static str> {
         stack: top - 64,
         argument: 0,
         vdso: 0,
+        abi: crate::trap::Abi::Native,
     });
     process.record_exec(
         b"/sbin/procfs-check",

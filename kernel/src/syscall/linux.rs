@@ -111,7 +111,7 @@ fn dispatch(call: Syscall, args: &SyscallArgs, regs: Option<&arch::UserRegs>) ->
             exec::sys_execve(caller, a[0], a[1], a[2])
         };
         return match entered {
-            Ok((entry, stack)) => Outcome::Enter { entry, stack },
+            Ok((entry, stack, abi)) => Outcome::Enter { entry, stack, abi },
             Err(exec::ExecveError::Refused(error)) => Outcome::Return(error.as_return_value()),
             Err(exec::ExecveError::Lost) => {
                 drop(process);

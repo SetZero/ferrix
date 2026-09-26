@@ -324,6 +324,34 @@ pub(crate) fn decode_syscall(number: usize) -> Option<Syscall> {
     nr::from_x86_64(super::nospec_index(number, nr::X86_64_END)?)
 }
 
+/// ELF's `e_machine` for i386.
+const EM_386: u16 = 3;
+
+/// The ABI a program image runs in, or `None` for one this machine cannot
+/// run: an x86-64 image natively, and a 32-bit i386 one in compatibility mode
+/// (`docs/I386.md` §3.4). The class is what says 32-bit: an `EM_386` image
+/// claiming 64-bit words is nothing a processor runs.
+pub(crate) fn image_abi(class: ferrix_elf::Class, machine: u16) -> Option<crate::trap::Abi> {
+    match (class, machine) {
+        (_, machine) if machine == ARCH.elf_machine() => Some(crate::trap::Abi::Native),
+        (ferrix_elf::Class::Elf32, EM_386) => Some(crate::trap::Abi::Compat),
+        _ => None,
+    }
+}
+
+/// One past the highest address a 32-bit program's space may hold: Linux's
+/// `IA32_PAGE_OFFSET`, the top page below 4 GiB left out, as the native
+/// space leaves out its own top page.
+pub(crate) const COMPAT_USER_END: u64 = 0xFFFF_E000;
+
+/// Fold an i386 system call number onto the call it means: a call through
+/// `int $0x80`, from a 32-bit program or a 64-bit one, as on Linux
+/// (`docs/I386.md` §3.2). Clamped against its own table's end for the reason
+/// [`decode_syscall`] is.
+pub(crate) fn decode_compat_syscall(number: usize) -> Option<Syscall> {
+    nr::from_i386(super::nospec_index(number, nr::I386_END)?)
+}
+
 /// The `open` flag bits that differ between architectures, as this one
 /// numbers them: the generic header's, which x86-64 does not override.
 pub(crate) const OPEN_FLAGS: OpenFlagBits = types::OPEN_FLAGS_GENERIC;
@@ -1084,30 +1112,85 @@ pub(crate) fn user_hwcaps() -> (u64, u64) {
 ///
 /// `arch/x86/include/asm/elf.h` defines `ELF_PLATFORM` as `utsname()->machine`,
 /// which is `"x86_64"` on this architecture and never anything else -- there is
-/// no second string the way ARMv7-A has one per core generation.
-pub(crate) const fn user_platform() -> Option<&'static [u8]> {
-    Some(b"x86_64")
+/// no second string the way ARMv7-A has one per core generation. A 32-bit
+/// program is told `COMPAT_ELF_PLATFORM`, `"i686"`, which is what its linker
+/// builds a platform library path from (`docs/I386.md` §3.4).
+pub(crate) const fn user_platform(abi: crate::trap::Abi) -> Option<&'static [u8]> {
+    match abi {
+        crate::trap::Abi::Native => Some(b"x86_64"),
+        crate::trap::Abi::Compat => Some(b"i686"),
+    }
 }
 
 /// Enter ring 3 for the first time, at `entry` on `stack`, with `argument` in
-/// the first argument register. Does not return.
+/// the first argument register, in the mode `abi` names. Does not return.
 ///
 /// # Safety
 ///
 /// Must be called by a user task, on its own kernel stack, with its address
 /// space installed; `entry` and `stack` must be addresses within it.
-pub(crate) unsafe fn enter_user(entry: u64, stack: u64, argument: u64) -> ! {
+pub(crate) unsafe fn enter_user(entry: u64, stack: u64, argument: u64, abi: crate::trap::Abi) -> ! {
     // SAFETY: the caller's guarantee, passed straight through.
-    unsafe { syscall::enter_user(entry, stack, argument) }
+    unsafe { syscall::enter_user(entry, stack, argument, abi) }
 }
 
-/// Service a system call that arrived through the trap vector.
+/// Service a system call that arrived through the trap vector: `int $0x80`,
+/// an i386 system call, from a 32-bit program or a 64-bit one
+/// (`docs/I386.md` §3.2, §3.3).
+///
+/// The i386 convention: the number in `EAX`, the arguments in `EBX`, `ECX`,
+/// `EDX`, `ESI`, `EDI` and `EBP`, the result in `EAX`. Each is read as the 32
+/// bits a 32-bit program can have put there, zero-extended, as ARMv7-A's
+/// entry reads its registers; the upper halves are whatever the processor
+/// kept from 64-bit mode, which the program did not choose to pass.
+///
+/// There are no saved registers to hand a fork child yet (`docs/I386.md`
+/// I2), so the dispatcher is given none, as for a kernel caller: `fork`,
+/// `clone` and the like are refused rather than started with registers that
+/// would return the child into 64-bit mode.
 ///
 /// # Errors
 ///
-/// Always, for now: a system call through the trap vector, where x86-64 uses SYSCALL.
-pub(crate) const fn system_call(_frame: &mut TrapFrame) -> Result<(), &'static str> {
-    Err("a system call through the trap vector, where x86-64 uses SYSCALL")
+/// A trap-vector system call that did not come from ring 3.
+pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
+    use crate::trap::{Abi, Outcome, SyscallArgs};
+
+    if !frame.came_from_user() {
+        return Err("a system call through the trap vector from ring 0");
+    }
+    let word = |register: u64| register & 0xFFFF_FFFF;
+    let args = SyscallArgs {
+        abi: Abi::Compat,
+        number: word(frame.rax) as usize,
+        args: [
+            word(frame.rbx),
+            word(frame.rcx),
+            word(frame.rdx),
+            word(frame.rsi),
+            word(frame.rdi),
+            word(frame.rbp),
+        ],
+    };
+
+    // Open while the call is served, as `SYSCALL`'s path opens them: the
+    // gate closed them on entry.
+    enable_interrupts();
+    let outcome = crate::trap::system_call(&args, None);
+    disable_interrupts();
+
+    match outcome {
+        // Sign-extended, as Linux stores a compat call's result: a 32-bit
+        // program reads `EAX`, and a 64-bit one issuing `int $0x80` reads
+        // `-errno` in all of `RAX`.
+        Outcome::Return(value) => frame.rax = value as i64 as u64,
+        // `execve`: the registers belong to a program that no longer exists,
+        // so they are replaced rather than returned into, in the new image's
+        // mode.
+        Outcome::Enter { entry, stack, abi } => {
+            UserContext::entering(entry, stack, abi).store_trap(frame);
+        }
+    }
+    Ok(())
 }
 
 /// Make a freshly allocated user root usable.

@@ -242,6 +242,23 @@ pub(crate) fn decode_syscall(number: usize) -> Option<Syscall> {
     nr::from_aarch64(super::nospec_index(number, nr::AARCH64_END)?)
 }
 
+/// The ABI a program image runs in, or `None` for one this machine cannot
+/// run: this machine's own images, natively. There is no second ABI here.
+pub(crate) fn image_abi(_class: ferrix_elf::Class, machine: u16) -> Option<crate::trap::Abi> {
+    (machine == ARCH.elf_machine()).then_some(crate::trap::Abi::Native)
+}
+
+/// One past the highest address a compatibility-mode program's space may
+/// hold: this architecture has none, so it is the native bound, never asked.
+pub(crate) const COMPAT_USER_END: u64 = ferrix_bootinfo::USER_VIRT_END;
+
+/// A compatibility-mode call: none on this architecture, which has no
+/// second ABI to run. Every entry here is [`crate::trap::Abi::Native`], so
+/// this is never asked; it answers as `ENOSYS` would if it were.
+pub(crate) const fn decode_compat_syscall(_number: usize) -> Option<Syscall> {
+    None
+}
+
 /// The `open` flag bits that differ between architectures, as this one
 /// numbers them. AArch64 uses the generic *call* table but not the generic
 /// flags: `arch/arm64/include/uapi/asm/fcntl.h` keeps 32-bit Arm's, so that a
@@ -1046,7 +1063,9 @@ pub(crate) fn user_hwcaps() -> (u64, u64) {
 /// alike. `AT_HWCAP` and `AT_HWCAP2` already say what this core can do; a
 /// linker that wants a platform-specific library path has nothing here to
 /// build one from, and glibc's `dl_platform` stays null on this architecture.
-pub(crate) const fn user_platform() -> Option<&'static [u8]> {
+/// There is no second ABI here, so `abi` is always the native one.
+pub(crate) const fn user_platform(abi: crate::trap::Abi) -> Option<&'static [u8]> {
+    let _ = abi;
     None
 }
 

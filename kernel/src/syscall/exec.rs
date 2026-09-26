@@ -18,7 +18,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END};
+use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
     AT_BASE, AT_CLKTCK, AT_EGID, AT_EMPTY_PATH, AT_ENTRY, AT_EUID, AT_FDCWD, AT_GID, AT_HWCAP,
@@ -41,6 +41,7 @@ use crate::syscall::process::{self, Process, Startup};
 use crate::syscall::program::ProgramFile;
 use crate::syscall::registry;
 use crate::syscall::uaccess;
+use crate::trap::Abi;
 use crate::user::space::{AddressSpace, MMAP_MIN_ADDR, SpaceError};
 
 /// How much address space a program's stack gets.
@@ -94,22 +95,24 @@ pub(crate) enum ExecError {
     Linker(Errno),
 }
 
-/// Where the stack goes: as high in the user half as a page allows.
+/// Where the stack goes: as high in the program's space as a page allows --
+/// the user half, or below 4 GiB for a 32-bit program on a 64-bit kernel.
 ///
-/// Below `USER_VIRT_END` rather than at it, because the top page is left
+/// Below the space's end rather than at it, because the top page is left
 /// unmapped deliberately — a program that walks off the end of its stack
 /// should fault rather than wrap to zero.
-fn stack_top() -> u64 {
-    (USER_VIRT_END - PAGE_SIZE) & !(ferrix_ustack::STACK_ALIGN - 1)
+fn stack_top(abi: Abi) -> u64 {
+    (load::user_end(abi) - PAGE_SIZE) & !(ferrix_ustack::STACK_ALIGN - 1)
 }
 
-/// This build's pointer width, as `libs/kernel/ustack` wants it told.
+/// The program's pointer width, as `libs/kernel/ustack` wants it told: this build's
+/// for the machine's own programs, and 32 bits for one in compatibility mode.
 ///
 /// From the width rather than from a `cfg`, because that is what the question
 /// actually is, and because generic kernel code naming an architecture is what
 /// the layering check forbids.
-fn width() -> Width {
-    if size_of::<usize>() == 8 {
+fn width(abi: Abi) -> Width {
+    if size_of::<usize>() == 8 && abi == Abi::Native {
         Width::Bits64
     } else {
         Width::Bits32
@@ -183,12 +186,18 @@ pub(crate) fn load_native(image: &[u8], name: &[u8]) -> Result<Arc<Process>, Exe
     let process =
         Process::new(Arc::clone(&space)).map_err(|_| ExecError::Space(SpaceError::OutOfMemory))?;
     let loaded = load_into(&space, Source::Bytes(image), None)?;
+    // A native process's start argument is a 64-bit handle, and it speaks
+    // the native ABI through `SYSCALL`: a 32-bit image cannot be one.
+    if loaded.loaded.abi != Abi::Native {
+        return Err(ExecError::Load(LoadError::WrongMachine(3)));
+    }
     process.record_exec(name, None, &[name]);
     process.set_startup(Startup {
         entry: loaded.loaded.start,
         stack: loaded.stack_top,
         argument: 0,
         vdso: 0,
+        abi: Abi::Native,
     });
     Ok(registry::register(process))
 }
@@ -283,7 +292,7 @@ pub(crate) fn load_into(
     let loaded = load::load(space, image, interpreter).map_err(ExecError::Load)?;
 
     // The stack region. Reserved whole; paid for a page at a time.
-    let top = stack_top();
+    let top = stack_top(loaded.abi);
     let low = top - STACK_SIZE;
     let _ = space
         .map_anonymous(low, STACK_SIZE, VmaFlags::READ_WRITE)
@@ -294,7 +303,7 @@ pub(crate) fn load_into(
     // 0x7FFFFFFFF000, the page this leaves unmapped above the stack, because
     // the free-space search runs top-down and that page was the highest hole.
     let _ = space
-        .map_anonymous(top, USER_VIRT_END - top, VmaFlags::NONE)
+        .map_anonymous(top, load::user_end(loaded.abi) - top, VmaFlags::NONE)
         .map_err(ExecError::Space)?;
     if let Some(guard_low) = low.checked_sub(STACK_GUARD) {
         let _ = space
@@ -343,8 +352,13 @@ fn populate(
     });
     // The vDSO, where there is one: `AT_SYSINFO_EHDR` is how the C library
     // finds it, and a program started without the entry makes the system
-    // calls the vDSO would have answered.
-    let vdso = super::vdso::map_into(space);
+    // calls the vDSO would have answered. Not for a 32-bit program: the vDSO
+    // is a 64-bit image its libc could not read, and both musl and glibc
+    // make those calls themselves without it (`docs/I386.md` §2).
+    let vdso = match loaded.abi {
+        Abi::Native => super::vdso::map_into(space),
+        Abi::Compat => None,
+    };
     let auxv = [
         (AT_SYSINFO_EHDR, vdso.unwrap_or(0)),
         (AT_HWCAP, hwcap),
@@ -373,8 +387,8 @@ fn populate(
         auxv: auxv.get(usize::from(vdso.is_none())..).unwrap_or_default(),
         random,
         exec_fn,
-        platform: arch::user_platform(),
-        width: width(),
+        platform: arch::user_platform(loaded.abi),
+        width: width(loaded.abi),
     };
     let startup = ferrix_ustack::build(&spec, top, &mut scratch).map_err(|_| ExecError::Startup)?;
     uaccess::copy_to_user(space, base, &scratch).map_err(|_| ExecError::Startup)?;
@@ -391,6 +405,7 @@ fn populate(
         stack: startup.sp,
         argument: 0,
         vdso: vdso.unwrap_or(0),
+        abi: loaded.abi,
     })
 }
 
@@ -580,7 +595,7 @@ pub(crate) fn sys_execve(
     path: u64,
     argv: u64,
     envp: u64,
-) -> Result<(u64, u64), ExecveError> {
+) -> Result<(u64, u64, Abi), ExecveError> {
     execve_at(process, AT_FDCWD, path, argv, envp, 0)
 }
 
@@ -601,7 +616,7 @@ pub(crate) fn sys_execveat(
     argv: u64,
     envp: u64,
     flags: u32,
-) -> Result<(u64, u64), ExecveError> {
+) -> Result<(u64, u64, Abi), ExecveError> {
     execve_at(process, dirfd, path, argv, envp, flags)
 }
 
@@ -613,7 +628,7 @@ fn execve_at(
     argv: u64,
     envp: u64,
     flags: u32,
-) -> Result<(u64, u64), ExecveError> {
+) -> Result<(u64, u64, Abi), ExecveError> {
     if flags & !(AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW) != 0 {
         return Err(Errno::EINVAL.into());
     }
@@ -758,7 +773,7 @@ fn execve_at(
     // SAFETY: called by the user task whose registers these are.
     unsafe { arch::reset_user_state() };
 
-    Ok((startup.entry, startup.stack))
+    Ok((startup.entry, startup.stack, startup.abi))
 }
 
 /// What `execve` answers for an image the loader refuses before the point of
@@ -824,10 +839,12 @@ fn descriptor_path(dirfd: i32, path: &[u8]) -> Vec<u8> {
 
 /// Take every mapping out of the user half.
 ///
-/// From [`MMAP_MIN_ADDR`] up, because nothing can be mapped below it and the
-/// map refuses a range that reaches outside its window.
+/// From [`MMAP_MIN_ADDR`] up to the space's ceiling, because nothing can be
+/// mapped outside that window and the map refuses a range that reaches past
+/// it -- which a 32-bit program's lower ceiling would make of the whole user
+/// half.
 fn empty_user_half(space: &AddressSpace) -> Result<(), SpaceError> {
-    space.unmap(MMAP_MIN_ADDR, USER_VIRT_END - MMAP_MIN_ADDR)
+    space.unmap(MMAP_MIN_ADDR, space.ceiling() - MMAP_MIN_ADDR)
 }
 
 /// Read a `NULL`-terminated array of string pointers from the program, as

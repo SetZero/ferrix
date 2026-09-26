@@ -395,7 +395,10 @@ pub(crate) unsafe fn resume_user(regs: &UserRegs) -> ! {
 ///
 /// Must be called by a user task, on its own kernel stack, with its address
 /// space installed; `entry` and `stack` must be addresses inside that space.
-pub(crate) unsafe fn enter_user(entry: u64, stack: u64, argument: u64) -> ! {
+pub(crate) unsafe fn enter_user(entry: u64, stack: u64, argument: u64, abi: crate::trap::Abi) -> ! {
+    // One mode of user code on this architecture: every program is entered
+    // as [`crate::trap::Abi::Native`], whatever it was asked to be.
+    let _ = abi;
     // SAFETY: the caller's guarantee is the assembly's contract.
     unsafe { ferrix_enter_user(entry, stack, argument) }
 }
@@ -423,6 +426,7 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
     }
     let [x0, x1, x2, x3, x4, x5, _, _, x8, ..] = frame.x;
     let args = SyscallArgs {
+        abi: crate::trap::Abi::Native,
         number: x8 as usize,
         args: [x0, x1, x2, x3, x4, x5],
     };
@@ -454,7 +458,7 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
         }
         // `execve`: the registers belong to a program that no longer exists, so
         // they are replaced rather than returned into.
-        Outcome::Enter { entry, stack } => {
+        Outcome::Enter { entry, stack, .. } => {
             frame.x = [0; 31];
             frame.sp = stack;
             frame.elr = entry;

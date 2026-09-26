@@ -603,6 +603,7 @@ fn call(caller: &Arc<Process>, number: usize, args: &[u64]) -> Result<usize, Err
         *slot = *value;
     }
     let args = SyscallArgs {
+        abi: crate::trap::Abi::Native,
         number,
         args: registers,
     };

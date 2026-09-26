@@ -399,7 +399,10 @@ pub(crate) unsafe fn resume_user(regs: &UserRegs) -> ! {
 ///
 /// Must be called by a user task, on its own kernel stack, with its address
 /// space installed; `entry` and `stack` must be addresses inside that space.
-pub(crate) unsafe fn enter_user(entry: u64, stack: u64, argument: u64) -> ! {
+pub(crate) unsafe fn enter_user(entry: u64, stack: u64, argument: u64, abi: crate::trap::Abi) -> ! {
+    // One mode of user code on this architecture: every program is entered
+    // as [`crate::trap::Abi::Native`], whatever it was asked to be.
+    let _ = abi;
     // A user address on this processor is below 4 GiB by construction: the
     // loader and the stack builder produced these inside a 32-bit user half.
     let entry = entry as u32;
@@ -432,6 +435,7 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
     }
     let [r0, r1, r2, r3, r4, r5, _, r7, ..] = frame.r;
     let args = SyscallArgs {
+        abi: crate::trap::Abi::Native,
         number: r7 as usize,
         args: [
             r0.into(),
@@ -487,7 +491,7 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
         // `execve`: the registers belong to a program that no longer exists, so
         // they are replaced rather than returned into. The stack pointer is
         // banked and set directly; Thumb follows the entry point's bit 0.
-        Outcome::Enter { entry, stack } => {
+        Outcome::Enter { entry, stack, .. } => {
             let entry = entry as u32;
             frame.r = [0; 13];
             frame.lr = 0;

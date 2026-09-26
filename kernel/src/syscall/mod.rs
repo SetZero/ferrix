@@ -27,7 +27,10 @@
 //! is the one architecture-dependent fact here, so it is asked of the facade
 //! ([`arch::decode_syscall`]) rather than decided with a `cfg` — generic kernel
 //! code naming an architecture is what `scripts/check/check-crate-layering.sh`
-//! exists to stop.
+//! exists to stop. A fourth table, i386's, is x86-64's compatibility entry
+//! ([`arch::decode_compat_syscall`]): which of the two a call is in is the
+//! entry's to say, in [`SyscallArgs::abi`], and the facade's to decode
+//! (`docs/I386.md` §3.2).
 //!
 //! # What is decided here, and what above
 //!
@@ -101,7 +104,7 @@ use crate::sched;
 /// The shape of a system call and of its answer, which the core's trap path
 /// owns: re-exported so the personality's handlers and their checks name them
 /// where they always have.
-pub(crate) use crate::trap::{Outcome, SyscallArgs};
+pub(crate) use crate::trap::{Abi, Outcome, SyscallArgs};
 
 /// Answer one system call, with `P` answering the Linux calls.
 ///
@@ -123,11 +126,19 @@ pub(crate) fn dispatch_with<P: Personality>(
 ) -> Outcome {
     // The native ABI first, by range, before any Linux table is asked: the
     // two ABIs never have to agree about a number, and `arch::decode_syscall`
-    // never sees one of Ferrix's own. See `native`.
-    if ferrix_native_abi::nr::is_native(args.number) {
+    // never sees one of Ferrix's own. See `native`. Only from the native
+    // entry: the native ABI is 64-bit words, and a 32-bit program's
+    // `int $0x80` reaches the i386 table alone.
+    if args.abi == Abi::Native && ferrix_native_abi::nr::is_native(args.number) {
         return native_call(args);
     }
-    let Some(call) = arch::decode_syscall(args.number) else {
+    // The table is the entry's (`crate::trap::Abi`), each behind its own
+    // clamp in the facade.
+    let decoded = match args.abi {
+        Abi::Native => arch::decode_syscall(args.number),
+        Abi::Compat => arch::decode_compat_syscall(args.number),
+    };
+    let Some(call) = decoded else {
         unanswered(None, args.number);
         return Outcome::Return(Errno::ENOSYS.as_return_value());
     };

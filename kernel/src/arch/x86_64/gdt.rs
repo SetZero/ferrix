@@ -10,28 +10,41 @@
 //! * the task state segment, which is the only way to say which stack the CPU
 //!   should switch to when a fault arrives from user mode.
 //!
-//! The layout below is the one Linux uses, and the order is not a preference.
-//! `SYSRET` loads `CS` from `STAR[63:48] + 16` and `SS` from `STAR[63:48] + 8`,
-//! so user data has to precede user 64-bit code by exactly eight bytes.
+//! The layout below is Linux's, entry for entry and selector for selector,
+//! and the order is not a preference. `SYSRET` loads `CS` from
+//! `STAR[63:48] + 16` and `SS` from `STAR[63:48] + 8`, so user data has to
+//! precede user 64-bit code by exactly eight bytes, and `SYSCALL` loads the
+//! kernel's pair the same way from `STAR[47:32]`. The numbers are Linux's too,
+//! because a 32-bit program's are part of what it sees: a signal handler
+//! reads `cs` out of its context, and Wine keeps both code selectors to
+//! switch between the modes (`docs/I386.md` §3.1).
 
 use alloc::boxed::Box;
 use core::cell::UnsafeCell;
 
 use super::cpu;
 
-/// Kernel code. `SYSCALL` loads this from `STAR[47:32]`.
-pub(crate) const KERNEL_CODE: u16 = 0x08;
-/// Kernel data.
-pub(crate) const KERNEL_DATA: u16 = 0x10;
-/// Unused 32-bit user code. Present only to put user data at the right offset
-/// for `SYSRET`, which is also why it cannot simply be deleted.
-const USER_CODE32: u16 = 0x18;
-/// User data. `SYSRET` computes this as `STAR[63:48] + 8`.
-pub(crate) const USER_DATA: u16 = 0x20;
+/// Kernel code. `SYSCALL` loads this from `STAR[47:32]`. Entry 2, as on
+/// Linux; entry 1 is Linux's 32-bit kernel code, which nothing here uses and
+/// which is left empty.
+pub(crate) const KERNEL_CODE: u16 = 0x10;
+/// Kernel data. `SYSCALL` loads this as `SS` from `STAR[47:32] + 8`.
+pub(crate) const KERNEL_DATA: u16 = 0x18;
+/// 32-bit user code: what an i386 program runs in, in compatibility mode.
+/// `SYSRET` with a 32-bit operand loads it from `STAR[63:48]`, which only the
+/// `CSTAR` stub's refusal uses; everything else enters it by `IRETQ`
+/// (`super::syscall` says why).
+pub(crate) const USER_CODE32: u16 = 0x20;
+/// User data, for both modes. `SYSRET` computes this as `STAR[63:48] + 8`.
+pub(crate) const USER_DATA: u16 = 0x28;
 /// User 64-bit code. `SYSRET` computes this as `STAR[63:48] + 16`.
-pub(crate) const USER_CODE: u16 = 0x28;
-/// The task state segment. Sixteen bytes, so it occupies two slots.
-const TSS_SELECTOR: u16 = 0x30;
+pub(crate) const USER_CODE: u16 = 0x30;
+/// The task state segment. Sixteen bytes, so it occupies two slots, 8 and 9.
+const TSS_SELECTOR: u16 = 0x40;
+/// Slots in the table: Linux's sixteen. 10 and 11 are its LDT's, and 12 to
+/// 14 the three thread-local descriptors `set_thread_area` fills; all five
+/// are empty until the i386 ABI's threads use them (`docs/I386.md` §3.5).
+const GDT_SLOTS: usize = 16;
 
 /// The base `SYSRET` computes user selectors from, without its RPL.
 ///
@@ -55,6 +68,16 @@ const _: () = assert!(
     USER_CODE == SYSRET_BASE + 16,
     "SYSRET loads CS from STAR[63:48] + 16, so user 64-bit code must sit there"
 );
+const _: () = assert!(
+    KERNEL_DATA == KERNEL_CODE + 8,
+    "SYSCALL loads SS from STAR[47:32] + 8, so kernel data must sit there"
+);
+// Linux's numbers, which a program can read: `__USER32_CS`, `__USER_DS` and
+// `__USER_CS` with their RPL of 3.
+const _: () = assert!(
+    USER_CODE32 | 3 == 0x23 && USER_DATA | 3 == 0x2b && USER_CODE | 3 == 0x33,
+    "the user selectors are Linux's numbers"
+);
 
 /// Descriptor bit: the segment is present.
 const PRESENT: u64 = 1 << 47;
@@ -70,6 +93,24 @@ const LONG_MODE: u64 = 1 << 53;
 const fn dpl(level: u64) -> u64 {
     level << 45
 }
+/// Descriptor bit: set by the processor on the first load, and set here so
+/// that it never writes the table.
+const ACCESSED: u64 = 1 << 40;
+/// Descriptor bit: a code segment may be read as well as executed.
+const READABLE: u64 = 1 << 41;
+/// Descriptor bit: 32-bit operands and addresses by default (`D`), or a
+/// 32-bit stack pointer for a data segment (`B`). Mutually exclusive with
+/// [`LONG_MODE`].
+const DEFAULT_32: u64 = 1 << 54;
+/// Descriptor bit: the limit counts pages rather than bytes.
+const GRANULARITY_4K: u64 = 1 << 55;
+/// A limit of `0xFFFFF` pages: the whole 4 GiB, which is what compatibility
+/// mode checks every 32-bit access against. Its low sixteen bits sit at the
+/// bottom of the descriptor, its high four at bits 48 to 51.
+const FLAT_LIMIT: u64 = 0xFFFF | (0xF << 48);
+/// Everything a flat 4 GiB user segment has but its type: present, a code or
+/// data segment, ring 3, page-granular, and already accessed.
+const FLAT_USER: u64 = USER_SEGMENT | PRESENT | dpl(3) | ACCESSED | GRANULARITY_4K | FLAT_LIMIT;
 
 /// System descriptor type 9: an available 64-bit task state segment.
 const TSS_AVAILABLE: u64 = 0b1001 << 40;
@@ -200,16 +241,15 @@ impl TaskStateSegment {
 /// that descriptor, so it is per processor too.
 #[repr(C, align(16))]
 struct Tables {
-    /// Seven eight-byte slots: the six selectors above plus the second half of
-    /// the sixteen-byte TSS descriptor.
-    gdt: [u64; 8],
+    /// Linux's sixteen eight-byte slots; the TSS descriptor takes two.
+    gdt: [u64; GDT_SLOTS],
     tss: TaskStateSegment,
 }
 
 impl Tables {
     const fn new() -> Tables {
         Tables {
-            gdt: [0; 8],
+            gdt: [0; GDT_SLOTS],
             tss: TaskStateSegment::new(),
         }
     }
@@ -383,15 +423,27 @@ unsafe fn load(tables: &'static mut Tables, ist_tops: [u64; IST_STACKS]) {
     let tss_address = (&raw const tables.tss) as u64;
     let (low, high) = tss_descriptor(tss_address);
 
+    // The two user segments compatibility mode runs in are flat 4 GiB ones
+    // with 32-bit defaults, because there, unlike in 64-bit mode, the
+    // processor checks every access against the limit and takes the operand
+    // size from `D`. Linux's `0x00cffb000000ffff` and `0x00cff3000000ffff`.
     tables.gdt = [
+        0,
         0,
         USER_SEGMENT | PRESENT | EXECUTABLE | LONG_MODE,
         USER_SEGMENT | PRESENT | WRITABLE,
-        USER_SEGMENT | PRESENT | EXECUTABLE | dpl(3),
-        USER_SEGMENT | PRESENT | WRITABLE | dpl(3),
+        FLAT_USER | EXECUTABLE | READABLE | DEFAULT_32,
+        FLAT_USER | WRITABLE | DEFAULT_32,
         USER_SEGMENT | PRESENT | EXECUTABLE | LONG_MODE | dpl(3),
+        0,
         low,
         high,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
     ];
 
     let pointer = DescriptorTablePointer {
@@ -405,7 +457,7 @@ unsafe fn load(tables: &'static mut Tables, ist_tops: [u64; IST_STACKS]) {
     // SAFETY: the GDT is loaded and holds a flat kernel code and data segment
     // at these selectors.
     unsafe { cpu::reload_segments(KERNEL_CODE, KERNEL_DATA) };
-    // SAFETY: slot 0x30 of the GDT just built is an available 64-bit TSS
+    // SAFETY: slot 0x40 of the GDT just built is an available 64-bit TSS
     // descriptor for `tables.tss`.
     unsafe { cpu::load_tss(TSS_SELECTOR) };
 

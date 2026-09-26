@@ -1,5 +1,6 @@
-//! A program's own exceptions end it with the signal Linux gives each, and
-//! `arch_prctl` refuses what it must.
+//! A program's own exceptions end it with the signal Linux gives each,
+//! `arch_prctl` refuses what it must, and compatibility mode is entered and
+//! left only the ways `docs/I386.md` §3.3 allows.
 //!
 //! Verification, not the handlers: a file of its own so that the manifest
 //! counts it as the test it is (`scripts/data/certification-item.json`,
@@ -129,6 +130,107 @@ const PRCTL: &[u8] = &[
     0x05,
 ];
 
+/// An i386 program, in an `ELFCLASS32` `EM_386` image: it writes a line
+/// through `int $0x80`, and exits with 42 only if the write returned its
+/// length, a write to descriptor -1 returned `-EBADF` whole in `EAX`, and
+/// number 39 -- i386's `mkdir`, which nobody has read for 32-bit widths yet
+/// -- answered `-ENOSYS` (`docs/I386.md` §3.2). 43 otherwise.
+///
+/// ```text
+///   movl $4, %eax ; movl $1, %ebx ; call 1f
+/// 1: popl %ecx ; addl $(msg - 1b), %ecx ; movl $16, %edx ; int $0x80
+///   cmpl $16, %eax ; jne 9f                     ; write(1, msg, 16)
+///   movl $4, %eax ; movl $-1, %ebx ; int $0x80
+///   cmpl $-9, %eax ; jne 9f                     ; write(-1): EBADF
+///   movl $39, %eax ; int $0x80
+///   cmpl $-38, %eax ; jne 9f                    ; unmapped: ENOSYS
+///   movl $252, %eax ; movl $42, %ebx ; int $0x80 ; exit_group(42)
+/// 9: movl $252, %eax ; movl $43, %ebx ; int $0x80
+/// msg: .ascii "hello from i386\n"
+/// ```
+///
+/// Assembled by GNU `as` in `.code32`, linked at the image's entry, and read
+/// back with `objdump -m i386`.
+const HELLO_I386: &[u8] = &[
+    0xb8, 0x04, 0x00, 0x00, 0x00, 0xbb, 0x01, 0x00, 0x00, 0x00, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x59,
+    0x81, 0xc1, 0x4a, 0x00, 0x00, 0x00, 0xba, 0x10, 0x00, 0x00, 0x00, 0xcd, 0x80, 0x3d, 0x10, 0x00,
+    0x00, 0x00, 0x75, 0x29, 0xb8, 0x04, 0x00, 0x00, 0x00, 0xbb, 0xff, 0xff, 0xff, 0xff, 0xcd, 0x80,
+    0x83, 0xf8, 0xf7, 0x75, 0x18, 0xb8, 0x27, 0x00, 0x00, 0x00, 0xcd, 0x80, 0x83, 0xf8, 0xda, 0x75,
+    0x0c, 0xb8, 0xfc, 0x00, 0x00, 0x00, 0xbb, 0x2a, 0x00, 0x00, 0x00, 0xcd, 0x80, 0xb8, 0xfc, 0x00,
+    0x00, 0x00, 0xbb, 0x2b, 0x00, 0x00, 0x00, 0xcd, 0x80, b'h', b'e', b'l', b'l', b'o', b' ', b'f',
+    b'r', b'o', b'm', b' ', b'i', b'3', b'8', b'6', b'\n',
+];
+
+/// What [`HELLO_I386`] exits with when every call answered as it had to.
+const HELLO_I386_STATUS: i32 = 42;
+
+/// ELF's `e_machine` for i386.
+const EM_386: u16 = 3;
+
+/// A 64-bit program's `int $0x80` is an i386 call, as on Linux: 20 is
+/// `getpid` there (and `writev` in x86-64's table), and must answer what a
+/// `SYSCALL` `getpid` does. Then `dup` of `0x1_0000_0001`, whose upper half a
+/// 32-bit program could never have set, must duplicate descriptor 1, and the
+/// copy close. Exits 0, or 1 if `getpid` disagreed, or 2 if the upper half
+/// was read.
+///
+/// ```text
+///   movl $39, %eax ; syscall ; movq %rax, %r12  ; getpid, x86-64's number
+///   movl $20, %eax ; int $0x80                  ; getpid, i386's number
+///   cmpq %rax, %r12 ; jne 1f
+///   movabsq $0x100000001, %rbx ; movl $41, %eax ; int $0x80   ; dup(1)
+///   testq %rax, %rax ; js 2f
+///   movl %eax, %ebx ; movl $6, %eax ; int $0x80 ; testq %rax, %rax ; jnz 2f
+///   movl $231, %eax ; xorl %edi, %edi ; syscall
+/// 1: movl $231, %eax ; movl $1, %edi ; syscall
+/// 2: movl $231, %eax ; movl $2, %edi ; syscall
+/// ```
+const INT80_FROM_64: &[u8] = &[
+    0xb8, 0x27, 0x00, 0x00, 0x00, 0x0f, 0x05, 0x49, 0x89, 0xc4, 0xb8, 0x14, 0x00, 0x00, 0x00, 0xcd,
+    0x80, 0x49, 0x39, 0xc4, 0x75, 0x2d, 0x48, 0xbb, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0xb8, 0x29, 0x00, 0x00, 0x00, 0xcd, 0x80, 0x48, 0x85, 0xc0, 0x78, 0x23, 0x89, 0xc3, 0xb8, 0x06,
+    0x00, 0x00, 0x00, 0xcd, 0x80, 0x48, 0x85, 0xc0, 0x75, 0x15, 0xb8, 0xe7, 0x00, 0x00, 0x00, 0x31,
+    0xff, 0x0f, 0x05, 0xb8, 0xe7, 0x00, 0x00, 0x00, 0xbf, 0x01, 0x00, 0x00, 0x00, 0x0f, 0x05, 0xb8,
+    0xe7, 0x00, 0x00, 0x00, 0xbf, 0x02, 0x00, 0x00, 0x00, 0x0f, 0x05,
+];
+
+/// A 64-bit program far-returns into the 32-bit code segment and issues
+/// `SYSCALL` there, which goes to `IA32_CSTAR` on AMD -- and under QEMU's
+/// TCG -- and is `#UD` on Intel. Either way it must not enter the kernel
+/// anywhere but the stub that answers `-ENOSYS` (`docs/I386.md` §3.3). Back
+/// in 64-bit mode by a far jump, it exits 0 for `-ENOSYS` and 1 for anything
+/// else; `SIGILL` ends it on Intel.
+///
+/// ```text
+/// .code64: pushq $0x23 ; pushq $compat ; lretq
+/// .code32: compat: syscall ; movl %eax, %esi ; ljmp $0x33, $back
+/// .code64: back: xorl %edi, %edi ; cmpl $-38, %esi ; je 1f ; movl $1, %edi
+///          1: movl $231, %eax ; syscall
+/// ```
+///
+/// Assembled by GNU `as`, linked at the image's entry, and read back in each
+/// half's own mode.
+const COMPAT_SYSCALL: &[u8] = &[
+    0x6a, 0x23, 0x68, 0x09, 0x01, 0x40, 0x00, 0x48, 0xcb, 0x0f, 0x05, 0x89, 0xc6, 0xea, 0x14, 0x01,
+    0x40, 0x00, 0x33, 0x00, 0x31, 0xff, 0x83, 0xfe, 0xda, 0x74, 0x05, 0xbf, 0x01, 0x00, 0x00, 0x00,
+    0xb8, 0xe7, 0x00, 0x00, 0x00, 0x0f, 0x05,
+];
+
+/// The same far return, then `SYSENTER`: `#GP` with `IA32_SYSENTER_CS` zero
+/// on Intel and under TCG, `#UD` on AMD, which has no `SYSENTER` in long mode.
+/// Either ends the program with a signal; reaching `exit_group(97)` means it
+/// entered the kernel somewhere and came back.
+///
+/// ```text
+/// .code64: pushq $0x23 ; pushq $compat ; lretq
+/// .code32: compat: sysenter ; ljmp $0x33, $back
+/// .code64: back: movl $231, %eax ; movl $97, %edi ; syscall
+/// ```
+const COMPAT_SYSENTER: &[u8] = &[
+    0x6a, 0x23, 0x68, 0x09, 0x01, 0x40, 0x00, 0x48, 0xcb, 0x0f, 0x34, 0xea, 0x12, 0x01, 0x40, 0x00,
+    0x33, 0x00, 0xb8, 0xe7, 0x00, 0x00, 0x00, 0xbf, 0x61, 0x00, 0x00, 0x00, 0x0f, 0x05,
+];
+
 /// `CR0.NE`: x87 exceptions are reported as `#MF`, not through the legacy
 /// `FERR#` line to an interrupt controller.
 const CR0_NE: u64 = 1 << 5;
@@ -145,26 +247,37 @@ const fn killed_by(signal: u32) -> i32 {
 /// The first program that could not be run, or ended other than it had to.
 pub(crate) fn run() -> Result<(), &'static str> {
     // What the trap path does after an `execve`: equal only to the same
-    // entry and stack. The dispatcher's callers compare outcomes, and an
-    // entry compared by its return value alone would restart a program at
-    // another's first instruction.
+    // entry, stack and mode. The dispatcher's callers compare outcomes, and
+    // an entry compared by its return value alone would restart a program at
+    // another's first instruction, or a 32-bit one in 64-bit mode.
     let entered = crate::trap::Outcome::Enter {
         entry: 0x40_1000,
         stack: 0x7fff_f000,
+        abi: crate::trap::Abi::Native,
     };
     let elsewhere = crate::trap::Outcome::Enter {
         entry: 0x40_1000,
         stack: 0x7fff_e000,
+        abi: crate::trap::Abi::Native,
+    };
+    let other_mode = crate::trap::Outcome::Enter {
+        entry: 0x40_1000,
+        stack: 0x7fff_f000,
+        abi: crate::trap::Abi::Compat,
     };
     let again = crate::trap::Outcome::Enter {
         entry: 0x40_1000,
         stack: 0x7fff_f000,
+        abi: crate::trap::Abi::Native,
     };
     // Through `black_box`, or the comparison is folded where it is written
     // and the trap path's own equality never runs.
     let entered = core::hint::black_box(entered);
-    if entered == core::hint::black_box(elsewhere) || entered != core::hint::black_box(again) {
-        return Err("two entries into a program compared by something but entry and stack");
+    if entered == core::hint::black_box(elsewhere)
+        || entered == core::hint::black_box(other_mode)
+        || entered != core::hint::black_box(again)
+    {
+        return Err("two entries into a program compared by something but entry, stack and mode");
     }
 
     if cpu::read_cr0() & CR0_NE == 0 {
@@ -232,6 +345,53 @@ pub(crate) fn run() -> Result<(), &'static str> {
     println!(
         "  prctl    arch_prctl refused a kernel thread pointer with EPERM and ARCH_GET_FS with \
          EINVAL"
+    );
+    check_compat()
+}
+
+/// The ways into and out of compatibility mode (`docs/I386.md` I1): an i386
+/// program runs and calls through `int $0x80`, a 64-bit program's `int $0x80`
+/// is an i386 call, and neither `SYSCALL` nor `SYSENTER` from 32-bit code
+/// enters the kernel anywhere else.
+fn check_compat() -> Result<(), &'static str> {
+    let file = crate::syscall::image::build_with(
+        ferrix_elf::Class::Elf32,
+        EM_386,
+        crate::syscall::image::Shape::Good,
+        HELLO_I386,
+    );
+    let status =
+        crate::syscall::exec::run(&file, &[b"/i386"], &[], [0x7e; ferrix_ustack::RANDOM_BYTES])
+            .map_err(|_| "an i386 program could not be started")?;
+    if status != HELLO_I386_STATUS {
+        println!("  i386     the i386 program ended with {status}, not {HELLO_I386_STATUS}");
+        return Err(
+            "an i386 program's calls through int $0x80 did not answer as the i386 ABI does",
+        );
+    }
+
+    match run_program(b"/int80", INT80_FROM_64)? {
+        0 => {}
+        1 => return Err("a 64-bit program's int $0x80 was not an i386 call"),
+        _ => return Err("int $0x80 read the upper half of a 64-bit program's register"),
+    }
+
+    let syscall_ended = run_program(b"/cstar", COMPAT_SYSCALL)?;
+    let syscall_how = match syscall_ended {
+        0 => "-ENOSYS",
+        status if status == killed_by(SIGILL) => "SIGILL",
+        _ => return Err("SYSCALL from compatibility mode was neither refused nor #UD"),
+    };
+    let sysenter_ended = run_program(b"/sysenter", COMPAT_SYSENTER)?;
+    let sysenter_how = match sysenter_ended {
+        status if status == killed_by(SIGSEGV) => "SIGSEGV",
+        status if status == killed_by(SIGILL) => "SIGILL",
+        _ => return Err("SYSENTER from compatibility mode did not end the program"),
+    };
+    println!(
+        "  i386     a 32-bit program wrote and exited through int $0x80, and a 64-bit one's int \
+         $0x80 was an i386 call; SYSCALL from 32-bit code answered {syscall_how}, SYSENTER \
+         {sysenter_how}"
     );
     Ok(())
 }

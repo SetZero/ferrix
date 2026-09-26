@@ -176,6 +176,17 @@ ferrix_trap_dispatch:
     // handler cannot have changed where the frame says it came from.
 .globl ferrix_trap_return
 ferrix_trap_return:
+    // Into 32-bit code, `DS` and `ES` must hold user data: long mode ignores
+    // them, but compatibility mode faults on a null one, and whatever ran on
+    // this processor since -- a 64-bit program may load a null one -- is what
+    // they hold now. Until each task keeps its own selectors (`docs/I386.md`
+    // §3.3), every return to 32-bit code loads both. RAX is popped below.
+    cmpq ${user_code32}, 144(%rsp)
+    jne 8f
+    movl ${user_data}, %eax
+    movl %eax, %ds
+    movl %eax, %es
+8:
     testb $3, 144(%rsp)
     jz ferrix_trap_restore
     swapgs
@@ -319,6 +330,8 @@ ferrix_paranoid_common:
     hardened = const super::speculation::ENTRY_HARDENING,
     clear = sym super::speculation::CLEAR_CPU_BUFFERS,
     selector = sym super::speculation::VERW_SELECTOR,
+    user_code32 = const gdt::USER_CODE32 | 3,
+    user_data = const gdt::USER_DATA | 3,
     options(att_syntax)
 );
 
@@ -378,13 +391,22 @@ struct Gate {
 /// by the same source before it has saved anything.
 const INTERRUPT_GATE: u8 = 0x8E;
 
+/// The same gate, callable from ring 3 by `int`: only the legacy system call's
+/// vector has one. Every other vector's DPL of 0 turns a program's `int n`
+/// into `#GP`, which is how a program is kept from faking an interrupt.
+const USER_INTERRUPT_GATE: u8 = INTERRUPT_GATE | (3 << 5);
+
 impl Gate {
     fn new(handler: u64, ist: u16) -> Gate {
+        Gate::with_flags(handler, ist, INTERRUPT_GATE)
+    }
+
+    fn with_flags(handler: u64, ist: u16, flags: u8) -> Gate {
         Gate {
             offset_low: handler as u16,
             selector: gdt::KERNEL_CODE,
             ist: (ist & 0b111) as u8,
-            flags: INTERRUPT_GATE,
+            flags,
             offset_middle: (handler >> 16) as u16,
             offset_high: (handler >> 32) as u32,
             reserved: 0,
@@ -451,6 +473,11 @@ pub(crate) unsafe fn init() {
             NMI => Gate::new(paranoid(1), gdt::NMI_IST),
             DOUBLE_FAULT => Gate::new(paranoid(2), gdt::DOUBLE_FAULT_IST),
             MACHINE_CHECK => Gate::new(paranoid(3), gdt::MACHINE_CHECK_IST),
+            // `int $0x80`: an i386 program's system call, and any program's
+            // through this instruction, as on Linux (`docs/I386.md` §3.3).
+            LEGACY_SYSCALL => {
+                Gate::with_flags(stubs + (vector * STUB_SIZE) as u64, 0, USER_INTERRUPT_GATE)
+            }
             _ => Gate::new(stubs + (vector * STUB_SIZE) as u64, 0),
         };
     }
@@ -524,7 +551,9 @@ pub(crate) const fn vector_name(vector: u64) -> &'static str {
 }
 
 /// The vector `int $0x80` raises: Linux's original 32-bit syscall entry.
-const LEGACY_SYSCALL_VECTOR: u64 = 0x80;
+pub(super) const LEGACY_SYSCALL_VECTOR: u64 = LEGACY_SYSCALL as u64;
+/// The same, as an index into the table.
+const LEGACY_SYSCALL: usize = 0x80;
 
 /// The first vector the interrupt controller is allowed to use.
 ///
@@ -550,11 +579,12 @@ pub(crate) fn classify(frame: &TrapFrame) -> crate::trap::Trap {
     match frame.vector {
         3 => Trap::Breakpoint,
         6 => Trap::IllegalInstruction,
-        // The legacy `int $0x80` entry. A 64-bit musl uses the `syscall`
-        // instruction instead, which does not come through here at all, but a
-        // 32-bit binary or an old static one still uses this and classifying it
-        // correctly is free.
-        LEGACY_SYSCALL_VECTOR => Trap::SystemCall,
+        // The legacy `int $0x80` entry: every i386 program's system call, and
+        // a 64-bit one's that uses the instruction. A 64-bit musl uses
+        // `syscall`, which does not come through here at all. Only from ring
+        // 3: nothing in the kernel issues it, and no device is given the
+        // vector (`super::msi` stops below it).
+        LEGACY_SYSCALL_VECTOR if frame.came_from_user() => Trap::SystemCall,
         14 => Trap::PageFault(PageFault {
             address: fault_address(),
             write: frame.error_code & FAULT_WRITE != 0,

@@ -95,6 +95,7 @@ use ferrix_vma::VmaFlags;
 use crate::arch;
 use crate::syscall::program::{self, ProgramFile};
 use crate::syscall::uaccess::{self, UserError};
+use crate::trap::Abi;
 use crate::user::space::{AddressSpace, FileMapping, FilePlace, SpaceError};
 
 /// Where an image's bytes are.
@@ -135,7 +136,7 @@ const INTERPRETER_MOST: u64 = 4096;
 /// user half, page-aligned, as Linux's `ELF_ET_DYN_BASE` puts an `ET_DYN` image
 /// on every architecture. Far above where a fixed-address program is linked,
 /// and far below the stack and the mappings that grow down from it.
-pub(crate) const PIE_BASE: u64 = (USER_VIRT_END / 3 * 2) & !(PAGE_SIZE - 1);
+pub(crate) const PIE_BASE: u64 = pie_base(Abi::Native);
 
 /// Where a dynamic linker's lowest page is placed: one third of the way up the
 /// user half, page-aligned.
@@ -146,12 +147,34 @@ pub(crate) const PIE_BASE: u64 = (USER_VIRT_END / 3 * 2) & !(PAGE_SIZE - 1);
 /// from the program up to the stack stays the program's. It is a fixed address
 /// rather than one `mmap` chooses because nothing else here allocates before
 /// the image is placed, and a fixed one is reproducible in a check.
-pub(crate) const INTERP_BASE: u64 = (USER_VIRT_END / 3) & !(PAGE_SIZE - 1);
+pub(crate) const INTERP_BASE: u64 = interp_base(Abi::Native);
 
 const _: () = assert!(
-    INTERP_BASE < PIE_BASE,
+    INTERP_BASE < PIE_BASE && interp_base(Abi::Compat) < pie_base(Abi::Compat),
     "the linker must be placed below the program, not in its heap's way"
 );
+
+/// One past the highest address a program running in `abi` may use: the user
+/// half for the machine's own programs, and 4 GiB less a page for a 32-bit
+/// program on a 64-bit kernel (`docs/I386.md` §3.4).
+pub(crate) const fn user_end(abi: Abi) -> u64 {
+    match abi {
+        Abi::Native => USER_VIRT_END,
+        Abi::Compat => arch::COMPAT_USER_END,
+    }
+}
+
+/// [`PIE_BASE`] for a program running in `abi`: the same two thirds, of the
+/// space that program has.
+pub(crate) const fn pie_base(abi: Abi) -> u64 {
+    (user_end(abi) / 3 * 2) & !(PAGE_SIZE - 1)
+}
+
+/// [`INTERP_BASE`] for a program running in `abi`: the same third, of the
+/// space that program has.
+pub(crate) const fn interp_base(abi: Abi) -> u64 {
+    (user_end(abi) / 3) & !(PAGE_SIZE - 1)
+}
 
 /// What the loader learned, and the program needs to be told.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +200,10 @@ pub(crate) struct Loaded {
     /// `AT_BASE`: where the dynamic linker was placed, or zero when the
     /// program named none and so is its own linker.
     pub(crate) base: u64,
+    /// The ABI the program runs in, which its image's class and machine say:
+    /// what mode it is entered in, how wide its startup stack's words are,
+    /// and how much of the address space it may have.
+    pub(crate) abi: Abi,
 }
 
 /// Why an image could not be loaded.
@@ -184,7 +211,8 @@ pub(crate) struct Loaded {
 pub(crate) enum LoadError {
     /// `libs/platform/elf` refused it.
     Malformed(ElfError),
-    /// Built for another architecture.
+    /// Built for another architecture, or, for a dynamic linker, for another
+    /// ABI than the program it would link.
     WrongMachine(u16),
     /// The image names an interpreter and the caller supplied none: a
     /// dynamically linked program handed to a loader that only places one
@@ -243,40 +271,47 @@ impl From<UserError> for LoadError {
 ///
 /// The [`LoadError`] [`load`] would return for the same image.
 pub(crate) fn check(image: Source<'_>, interpreter: Option<Source<'_>>) -> Result<(), LoadError> {
-    let elf = parse(image)?;
+    let (elf, abi) = parse(image)?;
     let (low, _) = elf.load_span(PAGE_SIZE).ok_or(LoadError::Empty)?;
-    let bias = bias_of(&elf, low, interpreter.is_some())?;
-    let _ = entry_point(&elf, bias)?;
+    let bias = bias_of(&elf, low, interpreter.is_some(), abi)?;
+    let _ = entry_point(&elf, bias, abi)?;
     if let Some(source) = interpreter {
-        let linker = parse(source)?;
-        check_is_a_linker(&linker)?;
+        let (linker, _) = parse_linker(source, abi)?;
         let (low, _) = linker.load_span(PAGE_SIZE).ok_or(LoadError::Empty)?;
-        let _ = entry_point(&linker, INTERP_BASE.wrapping_sub(low))?;
+        let _ = entry_point(&linker, interp_base(abi).wrapping_sub(low), abi)?;
     }
     Ok(())
 }
 
-/// Parse the image's headers and refuse what is wrong with them: every
-/// segment's contents have to be inside the image, which for a file is
-/// inside the file rather than inside the bytes read of it.
-fn parse(image: Source<'_>) -> Result<Elf<'_>, LoadError> {
+/// Parse the image's headers and refuse what is wrong with them: a machine,
+/// or a class, this kernel cannot run, and segments whose contents are not
+/// inside the image, which for a file is inside the file rather than inside
+/// the bytes read of it. Answers the ABI the image runs in.
+fn parse(image: Source<'_>) -> Result<(Elf<'_>, Abi), LoadError> {
     let elf = Elf::parse(image.head()).map_err(LoadError::Malformed)?;
-    elf.check_machine(arch::ARCH.elf_machine())
-        .map_err(|_| LoadError::WrongMachine(elf.machine()))?;
+    let abi = arch::image_abi(elf.class(), elf.machine())
+        .ok_or(LoadError::WrongMachine(elf.machine()))?;
     elf.validate_segments_within(image.len())
         .map_err(LoadError::Malformed)?;
-    Ok(elf)
+    Ok((elf, abi))
 }
 
-/// What an image has to be to be somebody's dynamic linker.
-fn check_is_a_linker(linker: &Elf<'_>) -> Result<(), LoadError> {
+/// Parse a dynamic linker for a program running in `abi`, and refuse one
+/// that could not be its linker: another ABI's -- a 64-bit `ld.so` cannot
+/// link an i386 program, whose `PT_INTERP` names its own -- one that must be
+/// placed at a fixed address, or one that asks for a linker itself.
+fn parse_linker(source: Source<'_>, abi: Abi) -> Result<(Elf<'_>, Abi), LoadError> {
+    let (linker, linker_abi) = parse(source)?;
+    if linker_abi != abi {
+        return Err(LoadError::WrongMachine(linker.machine()));
+    }
     if !linker.is_pie() {
         return Err(LoadError::InterpreterNotPie);
     }
     if linker.interpreter().is_some() {
         return Err(LoadError::InterpreterChain);
     }
-    Ok(())
+    Ok((linker, linker_abi))
 }
 
 /// The path of the linker `image` asks for, if it asks for one.
@@ -312,22 +347,22 @@ pub(crate) fn interpreter_of(image: Source<'_>) -> Result<Option<Vec<u8>>, LoadE
 }
 
 /// How far the image is moved from where it is linked: zero for a
-/// fixed-address image, and from its lowest page `low` to [`PIE_BASE`] for one
-/// that may be placed.
+/// fixed-address image, and from its lowest page `low` to [`pie_base`] of the
+/// ABI it runs in for one that may be placed.
 ///
 /// `linked` says whether the caller brought a dynamic linker. An image that
 /// names one and was given none is refused whatever its type: an `ET_EXEC`
 /// naming a `PT_INTERP` is as unrunnable without its linker as an `ET_DYN` is,
 /// and placing it and entering it would run a program whose every imported
 /// symbol is an unrelocated zero.
-fn bias_of(elf: &Elf<'_>, low: u64, linked: bool) -> Result<u64, LoadError> {
+fn bias_of(elf: &Elf<'_>, low: u64, linked: bool, abi: Abi) -> Result<u64, LoadError> {
     if !linked && elf.segments().any(|segment| segment.kind == PT_INTERP) {
         return Err(LoadError::NeedsInterpreter);
     }
     if !elf.is_pie() {
         return Ok(0);
     }
-    Ok(PIE_BASE.wrapping_sub(low))
+    Ok(pie_base(abi).wrapping_sub(low))
 }
 
 /// Where execution starts, if a program may run there.
@@ -342,13 +377,16 @@ fn bias_of(elf: &Elf<'_>, low: u64, linked: bool) -> Result<u64, LoadError> {
 /// the address with that bit clear. The test needs no mask for it: the bound is
 /// even, so clearing bit 0 cannot move an address from one side of it to the
 /// other, and the answer is the same with the bit or without it.
-fn entry_point(elf: &Elf<'_>, bias: u64) -> Result<u64, LoadError> {
+///
+/// A 32-bit program's entry has to be inside its own, smaller space too:
+/// compatibility mode cannot reach past 4 GiB.
+fn entry_point(elf: &Elf<'_>, bias: u64, abi: Abi) -> Result<u64, LoadError> {
     const _: () = assert!(
         USER_VIRT_END.is_multiple_of(2),
         "the Thumb bit could cross the bound"
     );
     let entry = elf.entry().wrapping_add(bias);
-    if !is_user_address(entry) {
+    if !is_user_address(entry) || entry >= user_end(abi) {
         return Err(LoadError::EntryNotUser(entry));
     }
     Ok(entry)
@@ -368,13 +406,17 @@ pub(crate) fn load(
     image: Source<'_>,
     interpreter: Option<Source<'_>>,
 ) -> Result<Loaded, LoadError> {
-    let elf = parse(image)?;
+    let (elf, abi) = parse(image)?;
     let (linked_low, _) = elf.load_span(PAGE_SIZE).ok_or(LoadError::Empty)?;
+    // The space's ceiling first, so that nothing is placed past it: a 32-bit
+    // program's space ends below 4 GiB, and `mmap`'s search stops there too.
+    space.set_ceiling(user_end(abi))?;
     let program = place(
         space,
         &elf,
-        bias_of(&elf, linked_low, interpreter.is_some())?,
+        bias_of(&elf, linked_low, interpreter.is_some(), abi)?,
         image,
+        abi,
     )?;
 
     // The auxiliary vector always describes the *program*: its headers, its
@@ -388,13 +430,19 @@ pub(crate) fn load(
         phnum: u64::from(elf.header().phnum),
         end: program.high,
         base: 0,
+        abi,
     };
 
     if let Some(source) = interpreter {
-        let linker = parse(source)?;
-        check_is_a_linker(&linker)?;
+        let (linker, _) = parse_linker(source, abi)?;
         let (low, _) = linker.load_span(PAGE_SIZE).ok_or(LoadError::Empty)?;
-        let placed = place(space, &linker, INTERP_BASE.wrapping_sub(low), source)?;
+        let placed = place(
+            space,
+            &linker,
+            interp_base(abi).wrapping_sub(low),
+            source,
+            abi,
+        )?;
         // Only where execution begins changes. `entry` stays the program's,
         // because that is what the linker is told to jump to.
         loaded.start = placed.entry;
@@ -474,9 +522,10 @@ fn place(
     elf: &Elf<'_>,
     bias: u64,
     source: Source<'_>,
+    abi: Abi,
 ) -> Result<Placed, LoadError> {
     let (linked_low, linked_high) = elf.load_span(PAGE_SIZE).ok_or(LoadError::Empty)?;
-    let entry = entry_point(elf, bias)?;
+    let entry = entry_point(elf, bias, abi)?;
 
     let low = linked_low.wrapping_add(bias);
     let high = linked_high.wrapping_add(bias);

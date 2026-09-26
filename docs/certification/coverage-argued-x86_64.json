@@ -89,14 +89,14 @@
     },
     {
       "file": "arch/x86_64/mod.rs",
-      "lines": "1238, 1240",
+      "lines": "1321, 1323",
       "category": "defensive",
       "match": "for _ in 0..1000 {",
       "why": "The keyboard controller's reset pulse, tried only when the FADT's reset register did not reset the machine. q35's register resets it at once (`boot-reset`), so the wait for the 8042's input buffer never starts. What it defends against is firmware that names a reset register that does nothing, which Linux's reboot order also allows for."
     },
     {
       "file": "arch/x86_64/mod.rs",
-      "lines": "1301",
+      "lines": "1384",
       "category": "failure-path",
       "match": "cpu::hlt();",
       "why": "`halt`'s loop runs on a processor that stops for good: after a panic, on the stop IPI a panic sends, or on a boot that could not build a console. A passing boot ends through `shutdown`, whose `debug_exit` ends QEMU before `halt` is entered, and the suite's one deliberate panic (`test-shell`'s `ferrix.onexit=panic`) exits QEMU from the panic report without its trace showing this instruction run."
@@ -138,7 +138,7 @@
     },
     {
       "file": "arch/x86_64/smp.rs",
-      "lines": "242",
+      "lines": "249",
       "category": "defensive",
       "match": "return Err(\"the trampoline does not fit in a page\");",
       "why": "The trampoline's length is fixed when the image is built, by three symbols around the assembly in this file, and is well under a page. The refusal defends against an edit that grows it past 4 KiB, which would otherwise be copied over whatever follows its frame below one mebibyte."
@@ -159,21 +159,21 @@
     },
     {
       "file": "arch/x86_64/trap.rs",
-      "lines": "500, 524",
+      "lines": "527, 551",
       "category": "failure-path",
       "match": "pub(crate) const fn vector_name(vector: u64) -> &'static str {",
       "why": "`vector_name`'s standalone copy, called by `report_trap` and by the paranoid entry's fatal arms, both of which run only when the kernel is stopping. `classify` carries its own inlined copy, which the stage 3 fault check reaches with a program's `hlt`."
     },
     {
       "file": "arch/x86_64/trap.rs",
-      "lines": "598",
+      "lines": "628",
       "category": "credited-elsewhere",
       "match": "Trap::PageFault(fault) => (SIGSEGV, SEGV_MAPERR, fault.address),",
-      "why": "Run by the stage 3 fault check's read of an unmapped address, which ends the program with SIGSEGV. The line's only statement row is in the copy of `fault_signal` that `dispatch` inlines for traps that are not page faults (in the measured image, inlined through `user_fault` into `dispatch` at trap.rs:102), where the arm cannot run. The copy `handle_page_fault` inlines (under trap.rs:460) computes the si_code as the fault's present bit plus one, one instruction under line 597's row, which is reached."
+      "why": "Run by the stage 3 fault check's read of an unmapped address, which ends the program with SIGSEGV. The line's only statement row is in the copy of `fault_signal` that `dispatch` inlines for traps that are not page faults (in the measured image, inlined through `user_fault` into `dispatch` at trap.rs:102), where the arm cannot run. The copy `handle_page_fault` inlines (under trap.rs:482) computes the si_code as the fault's present bit plus one, one instruction under line 627's row, which is reached."
     },
     {
       "file": "arch/x86_64/trap.rs",
-      "lines": "614, 620, 623-624, 639, 645",
+      "lines": "644, 650, 653-654, 669, 675",
       "category": "failure-path",
       "match": "pub(crate) fn report_trap(frame: &TrapFrame) {",
       "why": "The register dump the trap path prints when the kernel stops on an exception it cannot handle (`trap::report`); a passing run never prints it."
@@ -201,42 +201,42 @@
     },
     {
       "file": "trap.rs",
-      "lines": "242",
+      "lines": "264",
       "category": "defensive",
       "match": "None => Outcome::Return(Errno::ENOSYS.as_return_value()),",
       "why": "A system call with no dispatcher registered. `main.rs` registers the item's dispatcher before anything can enter user mode, and the first registration stands, so in this item every call finds one. The arm is what the core answers when built without a dispatcher above it, rather than a panic in a trap vector."
     },
     {
       "file": "trap.rs",
-      "lines": "345",
+      "lines": "367",
       "category": "failure-path",
       "match": "fatal(",
       "why": "A fault from user mode with no personality registered, which the kernel stops on; `main.rs` registers the Linux personality's return path before the first program."
     },
     {
       "file": "trap.rs",
-      "lines": "363",
+      "lines": "385",
       "category": "failure-path",
       "match": "FaultOutcome::NoProcess => fatal(",
       "why": "A fault from user mode that the personality finds no process for, which the kernel stops on: every task that enters ring 3 is a process's thread."
     },
     {
       "file": "trap.rs",
-      "lines": "400",
+      "lines": "422",
       "category": "defensive",
       "match": "return Err(None);",
       "why": "A fault from user mode on a task with no address space. `sched` gives a task made for a thread its process's space before it first runs, so this would be the kernel having entered ring 3 without recording who was running; it is reported as fatal rather than resolved."
     },
     {
       "file": "trap.rs",
-      "lines": "478, 480, 483-486",
+      "lines": "500, 502, 505-508",
       "category": "failure-path",
       "match": "report(",
       "why": "The report of a page fault the kernel could not resolve -- one in the kernel outside the demand window, or a user one with no program to blame -- printed as the kernel stops."
     },
     {
       "file": "trap.rs",
-      "lines": "500, 505, 515, 523-525, 527",
+      "lines": "522, 527, 537, 545-547, 549",
       "category": "failure-path",
       "match": "pub(crate) fn fatal(",
       "why": "`fatal` and `report`, the trap path's stop: the architecture's register dump, the abridged report for a second failure, and the panic's conclusion. Reached only when the kernel stops on a trap."

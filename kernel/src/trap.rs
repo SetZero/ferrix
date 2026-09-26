@@ -175,12 +175,31 @@ pub(crate) fn dispatch(frame: &mut arch::TrapFrame) {
 /// switched stacks must not meet a `Result`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SyscallArgs {
-    /// The number the program passed, in this architecture's own table.
+    /// Which table [`SyscallArgs::number`] is in: the entry's, not the
+    /// process's, as Linux decides it (`in_compat_syscall()`).
+    pub(crate) abi: Abi,
+    /// The number the program passed, in [`SyscallArgs::abi`]'s table.
     pub(crate) number: usize,
     /// The six argument registers, in order. A call taking fewer leaves the
     /// rest as whatever the program happened to have in them, which is why no
     /// handler may read past its own arity.
     pub(crate) args: [u64; 6],
+}
+
+/// The ABI a system call was made in, or a program is entered in.
+///
+/// Decided by the way in, never by asking the process: on x86-64 a
+/// `SYSCALL` from 64-bit code is an x86-64 call and `int $0x80` is an i386
+/// call, whatever image the process was started from (`docs/I386.md` §3.2).
+/// Every other entry on every architecture is [`Abi::Native`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Abi {
+    /// The architecture's own: x86-64's, AArch64's, or ARMv7-A's EABI.
+    Native,
+    /// A 32-bit program's on a 64-bit kernel: i386's, on x86-64. The kernel's
+    /// words are wider than the program's here, so every width the program
+    /// sees is chosen for it.
+    Compat,
 }
 
 /// What the trap path should do when a call returns.
@@ -207,6 +226,9 @@ pub(crate) enum Outcome {
         entry: u64,
         /// The stack pointer it starts with, already 16-byte aligned.
         stack: u64,
+        /// The mode it runs in: a 32-bit image on x86-64 is entered in
+        /// compatibility mode, whatever mode the `execve` came from.
+        abi: Abi,
     },
 }
 

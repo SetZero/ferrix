@@ -11,7 +11,7 @@
 //! beginning of a page below one mebibyte, whose number the start-up IPI
 //! carries. The trampoline below is the only 16-bit code in the project, and
 //! it does as little as it can there: load the boot processor's control
-//! registers, a three-entry GDT and a root table, and far-jump straight into a
+//! registers, a four-entry GDT and a root table, and far-jump straight into a
 //! 64-bit segment. Everything after that is Rust.
 //!
 //! Two frames have to be low, and both are borrowed for bring-up and given
@@ -87,8 +87,9 @@ const CR4_PCIDE: u64 = 1 << 17;
 
 /// The trampoline GDT's code selector. The same number as the kernel's, so an
 /// interrupt gate taken before the kernel's GDT is loaded still lands in a
-/// 64-bit kernel code segment.
-const TRAMPOLINE_CODE: u16 = 0x08;
+/// 64-bit kernel code segment. Slot 1 is left empty to put it there, as the
+/// kernel's own GDT leaves Linux's 32-bit kernel code slot empty.
+const TRAMPOLINE_CODE: u16 = super::gdt::KERNEL_CODE;
 /// 64-bit kernel code: present, ring 0, executable, long mode — and already
 /// marked accessed.
 ///
@@ -147,7 +148,7 @@ ferrix_trampoline:
 .code64
 .globl ferrix_trampoline_long
 ferrix_trampoline_long:
-    mov $0x10, %eax
+    mov ${data}, %eax
     mov %ax, %ds
     mov %ax, %es
     mov %ax, %ss
@@ -160,11 +161,12 @@ ferrix_trampoline_long:
 .balign 8
 .globl ferrix_trampoline_header
 ferrix_trampoline_header:
-    .fill 80, 1, 0
+    .fill 88, 1, 0
 .globl ferrix_trampoline_end
 ferrix_trampoline_end:
 .popsection
 "#,
+    data = const super::gdt::KERNEL_DATA,
     options(att_syntax)
 );
 
@@ -203,13 +205,18 @@ struct Header {
     entry: u64,
     /// Its argument: the new processor's per-CPU record.
     argument: u64,
-    /// The trampoline's GDT: null, 64-bit code, data.
-    gdt: [u64; 3],
+    /// The trampoline's GDT: null, empty, 64-bit code, data -- the kernel's
+    /// selectors for both.
+    gdt: [u64; 4],
 }
 
 const _: () = assert!(
-    size_of::<Header>() == 80,
-    "the trampoline reserves eighty bytes for its header"
+    size_of::<Header>() == 88,
+    "the trampoline reserves eighty-eight bytes for its header"
+);
+const _: () = assert!(
+    super::gdt::KERNEL_CODE == 0x10 && super::gdt::KERNEL_DATA == 0x18,
+    "the trampoline's GDT puts code and data in slots 2 and 3"
 );
 
 /// Offset of the GDT within the header.
@@ -278,7 +285,7 @@ impl CpuStarter {
         let gdt_base = code + header_offset + HEADER_GDT;
         let long = code + long_offset;
         let header = Header {
-            gdt_pointer: [23, gdt_base as u16, (gdt_base >> 16) as u16, 0],
+            gdt_pointer: [31, gdt_base as u16, (gdt_base >> 16) as u16, 0],
             far_jump: [long as u16, (long >> 16) as u16, TRAMPOLINE_CODE, 0],
             cr3: root as u32,
             cr4: (boot_cr4 & !CR4_PCIDE) as u32,
@@ -287,7 +294,7 @@ impl CpuStarter {
             stack_top: 0,
             entry: secondary_start as extern "C" fn(u64) -> ! as usize as u64,
             argument: 0,
-            gdt: [0, TRAMPOLINE_CODE64, TRAMPOLINE_DATA],
+            gdt: [0, 0, TRAMPOLINE_CODE64, TRAMPOLINE_DATA],
         };
 
         Ok(CpuStarter {
@@ -377,7 +384,7 @@ extern "C" fn secondary_start(record: u64) -> ! {
         unsafe { cpu::write_cr4(boot_cr4) };
     }
 
-    // The IDT before the GDT: every gate names selector 0x08, which is 64-bit
+    // The IDT before the GDT: every gate names selector 0x10, which is 64-bit
     // kernel code in the trampoline's GDT as much as in the kernel's, so a
     // fault in the allocations `init_secondary` makes is reported rather than
     // turned into a triple fault.

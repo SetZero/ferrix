@@ -290,6 +290,33 @@ impl AddressSpace {
         })
     }
 
+    /// Move the top of the window mappings may be placed in to `end`: what
+    /// `execve` does for a program whose address space is smaller than the
+    /// user half, a 32-bit program's, and back again for one whose is not
+    /// (`docs/I386.md` §3.4). `mmap`'s search and every fixed mapping stop
+    /// there.
+    ///
+    /// # Errors
+    ///
+    /// [`SpaceError::BadRange`] for an `end` that is not a page boundary
+    /// inside the user half, or below a region still mapped; nothing changes.
+    pub(crate) fn set_ceiling(&self, end: u64) -> Result<(), SpaceError> {
+        if end > USER_VIRT_END {
+            return Err(SpaceError::BadRange);
+        }
+        self.inner
+            .lock()
+            .map
+            .set_high(end)
+            .map_err(|_| SpaceError::BadRange)
+    }
+
+    /// One past the highest address a mapping may reach: the user half's
+    /// end, or a 32-bit program's lower ceiling.
+    pub(crate) fn ceiling(&self) -> u64 {
+        self.inner.lock().map.high()
+    }
+
     /// The physical address of the root table, for whoever installs it.
     pub(crate) fn root_table(&self) -> u64 {
         self.root * PAGE_SIZE

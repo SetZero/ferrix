@@ -37,6 +37,7 @@
 use core::mem::offset_of;
 
 use crate::smp::PerCpu;
+use crate::trap::{Abi, Outcome};
 
 use super::cpu;
 use super::gdt;
@@ -49,6 +50,11 @@ const IA32_EFER: u32 = 0xC000_0080;
 const IA32_STAR: u32 = 0xC000_0081;
 /// `IA32_LSTAR`. The 64-bit entry point.
 const IA32_LSTAR: u32 = 0xC000_0082;
+/// `IA32_CSTAR`. Where `SYSCALL` from compatibility mode goes, on AMD; Intel
+/// raises `#UD` instead.
+const IA32_CSTAR: u32 = 0xC000_0083;
+/// `IA32_SYSENTER_CS`. Zero makes `SYSENTER` fault with `#GP`.
+const IA32_SYSENTER_CS: u32 = 0x174;
 /// `IA32_FMASK`. Flags cleared on entry.
 const IA32_FMASK: u32 = 0xC000_0084;
 /// `IA32_KERNEL_GS_BASE`. What `swapgs` exchanges `GS_BASE` with.
@@ -300,6 +306,27 @@ ferrix_enter_user:
     swapgs
     sysretq
 
+// `SYSCALL` from compatibility mode, which only AMD processors take: Intel
+// raises `#UD` for it. Neither libc enters this way without an `AT_SYSINFO`
+// that points here, and Ferrix passes none (`docs/I386.md` §2), so it is
+// answered `ENOSYS` rather than supported. It cannot be left at zero: any
+// program can far-jump into the 32-bit code segment, and `CSTAR` zero would
+// be a ring-0 jump to address zero on the program's stack.
+//
+// Nothing is pushed and nothing is read, so the stack is not switched and
+// `GS` not swapped; `SFMASK` has closed interrupts. `SYSRETL` returns to the
+// instruction after, in compatibility mode, with the flags from R11. AMD's
+// `SYSRET` leaves `SS`'s cached attributes as they were, which is why every
+// other way into 32-bit code is `IRETQ` (`enter_user`); here that is harmless,
+// because `SYSCALL` has just loaded them and nothing between it and the
+// return can leave `SS` null.
+.globl ferrix_syscall32_stub
+.align 16
+ferrix_syscall32_stub:
+    movq $-{enosys}, %rax
+    FERRIX_CLEAR_BUFFERS
+    sysretl
+
 // Resume a program from a saved system call frame.
 //   rdi = a `SyscallFrame`, in the order the stub above pushed it
 // Never returns. The frame is popped exactly as the stub pops its own, so a
@@ -332,8 +359,15 @@ ferrix_resume_user:
     hardened = const super::speculation::ENTRY_HARDENING,
     clear = sym super::speculation::CLEAR_CPU_BUFFERS,
     selector = sym super::speculation::VERW_SELECTOR,
+    enosys = const ferrix_linux_abi::errno::Errno::ENOSYS.0,
     options(att_syntax)
 );
+
+/// Where the `CSTAR` entry point is: the stub that refuses a `SYSCALL` from
+/// compatibility mode.
+fn cstar_stub_address() -> u64 {
+    ferrix_syscall32_stub as *const () as usize as u64
+}
 
 /// Where the `LSTAR` entry point is: what `IA32_LSTAR` holds, and what the
 /// system call window check puts a breakpoint on.
@@ -352,6 +386,8 @@ unsafe extern "C" {
     fn ferrix_syscall_stub();
     /// Enter ring 3 at `entry` on `stack`.
     fn ferrix_enter_user(entry: u64, stack: u64, argument: u64) -> !;
+    /// The `CSTAR` entry point, defined in the block above.
+    fn ferrix_syscall32_stub();
     /// Resume ring 3 from a saved system call frame.
     fn ferrix_resume_user(frame: *const SyscallFrame) -> !;
 }
@@ -417,6 +453,7 @@ pub(crate) unsafe fn resume_user(regs: &UserRegs) -> ! {
 #[unsafe(no_mangle)]
 extern "C" fn ferrix_syscall_entry(frame: &mut SyscallFrame) {
     let args = crate::trap::SyscallArgs {
+        abi: Abi::Native,
         number: frame.rax as usize,
         args: [
             frame.rdi, frame.rsi, frame.rdx, frame.r10, frame.r8, frame.r9,
@@ -467,10 +504,13 @@ extern "C" fn ferrix_syscall_entry(frame: &mut SyscallFrame) {
     super::disable_interrupts();
 
     match outcome {
-        crate::trap::Outcome::Return(value) => {
+        Outcome::Return(value) => {
             frame.rax = value as u64;
         }
-        crate::trap::Outcome::Enter { entry, stack } => {
+        Outcome::Enter { entry, stack, abi } => {
+            if abi == Abi::Compat {
+                enter_compat_after_execve(entry, stack);
+            }
             // `execve` and a fresh `clone` child: the registers this frame
             // holds belong to a program that no longer exists, so they are
             // replaced rather than returned into. Everything else is cleared
@@ -510,6 +550,25 @@ extern "C" fn ferrix_syscall_entry(frame: &mut SyscallFrame) {
         (path.return_to_user)(&mut context);
         context.store_syscall(frame);
     }
+}
+
+/// Leave an `execve` of a 32-bit image, made through `SYSCALL`, into the new
+/// program. Compatibility mode is entered by `IRETQ` alone (`enter_user` says
+/// why), so this leaves the way `rt_sigreturn` does, through the trap stub's
+/// restore path, after the way back has had its look at the new program.
+fn enter_compat_after_execve(entry: u64, stack: u64) -> ! {
+    let mut context = super::signal::UserContext::entering(entry, stack, Abi::Compat);
+    if let Some(path) = crate::trap::return_path()
+        && (path.needs_attention)()
+    {
+        (path.return_to_user)(&mut context);
+    }
+    // SAFETY: the running task's own system call, on its own kernel stack,
+    // where `ferrix_syscall_entry` owns nothing; `context` holds ring 3's
+    // 32-bit selectors and the entry and stack `execve` placed in the new
+    // image, both user addresses, or the process ended and `return_to_user`
+    // did not come back.
+    unsafe { super::signal::resume_context(&context) }
 }
 
 /// `ARCH_SET_FS`, and the three requests that are not it.
@@ -579,6 +638,13 @@ pub(crate) unsafe fn init() {
 
     // SAFETY: the address of a function in the kernel's own text.
     unsafe { cpu::write_msr(IA32_LSTAR, stub_address()) };
+    // SAFETY: likewise; the stub answers `ENOSYS` and returns.
+    unsafe { cpu::write_msr(IA32_CSTAR, cstar_stub_address()) };
+    // Zero, so that `SYSENTER` from compatibility mode faults rather than
+    // entering the kernel wherever firmware left `SYSENTER_EIP` pointing.
+    // Linux leaves the same zero when it has no 32-bit entry there.
+    // SAFETY: the MSR exists on every 64-bit x86; zero enables nothing.
+    unsafe { cpu::write_msr(IA32_SYSENTER_CS, 0) };
     // SAFETY: a mask of flag bits.
     unsafe { cpu::write_msr(IA32_FMASK, FMASK) };
 
@@ -659,14 +725,32 @@ pub(crate) unsafe fn set_entry_stack(top: u64) {
 }
 
 /// Enter ring 3 for the first time, at `entry` on `stack`, with `argument` in
-/// RDI. Does not return.
+/// RDI, in the mode `abi` names. Does not return.
+///
+/// A 32-bit program is handed no argument: nothing starts one with a
+/// bootstrap handle, and its registers are all zero. It is entered by
+/// `IRETQ` rather than `SYSRET`: on AMD, `SYSRET` leaves `SS`'s cached
+/// attributes as they were, and after an interrupt from ring 3 the kernel's
+/// `SS` is null, which 32-bit code -- unlike 64-bit code -- then cannot push
+/// through. So it leaves through the trap stub's restore path, which loads
+/// `SS` whole and `DS` and `ES` first (`docs/I386.md` §3.3), from a frame
+/// built for its first instruction.
 ///
 /// # Safety
 ///
 /// Must be called by a user task, on its own kernel stack, with its address
 /// space installed and its entry stack set; `entry` and `stack` must be
-/// addresses inside that space.
-pub(crate) unsafe fn enter_user(entry: u64, stack: u64, argument: u64) -> ! {
-    // SAFETY: the caller's guarantee is the assembly's contract.
-    unsafe { ferrix_enter_user(entry, stack, argument) }
+/// addresses inside that space, and below 4 GiB for a 32-bit program.
+pub(crate) unsafe fn enter_user(entry: u64, stack: u64, argument: u64, abi: Abi) -> ! {
+    match abi {
+        // SAFETY: the caller's guarantee is the assembly's contract.
+        Abi::Native => unsafe { ferrix_enter_user(entry, stack, argument) },
+        Abi::Compat => {
+            let context = super::signal::UserContext::entering(entry, stack, abi);
+            // SAFETY: the caller's guarantee: this task's own kernel stack,
+            // with its space and user state loaded and nothing owned on it,
+            // and `context` a ring-3 frame at user addresses.
+            unsafe { super::signal::resume_context(&context) }
+        }
+    }
 }

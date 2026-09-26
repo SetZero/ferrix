@@ -293,7 +293,14 @@ impl Counter {
 
     /// Dispatch one number with arguments, and count it.
     fn call_with(&mut self, number: usize, args: [u64; 6]) -> Outcome {
-        let outcome = dispatch(&SyscallArgs { number, args }, None);
+        let outcome = dispatch(
+            &SyscallArgs {
+                abi: crate::trap::Abi::Native,
+                number,
+                args,
+            },
+            None,
+        );
         self.dispatched = self.dispatched.saturating_add(1);
         if let Outcome::Return(value) = outcome
             && value >= 0
@@ -649,6 +656,7 @@ fn sweep_every_number() -> i32 {
         }
         let outcome = dispatch(
             &SyscallArgs {
+                abi: crate::trap::Abi::Native,
                 number,
                 args: poison,
             },
@@ -710,7 +718,15 @@ pub(crate) fn call_by_number(
 ) -> Result<usize, Errno> {
     let number = number_for(call).ok_or(Errno::ENOSYS)?;
     let decoded = arch::decode_syscall(number).ok_or(Errno::ENOSYS)?;
-    crate::syscall::linux::handle(decoded, &SyscallArgs { number, args }, Some(process))
+    crate::syscall::linux::handle(
+        decoded,
+        &SyscallArgs {
+            abi: crate::trap::Abi::Native,
+            number,
+            args,
+        },
+        Some(process),
+    )
 }
 
 // ---------------------------------------------------------------------------

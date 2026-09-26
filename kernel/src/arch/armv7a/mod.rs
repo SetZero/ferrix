@@ -229,6 +229,23 @@ pub(crate) fn decode_syscall(number: usize) -> Option<Syscall> {
     nr::from_arm(number)
 }
 
+/// The ABI a program image runs in, or `None` for one this machine cannot
+/// run: this machine's own images, natively. There is no second ABI here.
+pub(crate) fn image_abi(_class: ferrix_elf::Class, machine: u16) -> Option<crate::trap::Abi> {
+    (machine == ARCH.elf_machine()).then_some(crate::trap::Abi::Native)
+}
+
+/// One past the highest address a compatibility-mode program's space may
+/// hold: this architecture has none, so it is the native bound, never asked.
+pub(crate) const COMPAT_USER_END: u64 = ferrix_bootinfo::USER_VIRT_END;
+
+/// A compatibility-mode call: none on this architecture, which has no
+/// second ABI to run. Every entry here is [`crate::trap::Abi::Native`], so
+/// this is never asked; it answers as `ENOSYS` would if it were.
+pub(crate) const fn decode_compat_syscall(_number: usize) -> Option<Syscall> {
+    None
+}
+
 /// The `open` flag bits that differ between architectures, as this one
 /// numbers them: `arch/arm/include/uapi/asm/fcntl.h`'s.
 pub(crate) const OPEN_FLAGS: OpenFlagBits = types::OPEN_FLAGS_ARM;
@@ -1071,7 +1088,9 @@ pub(crate) fn user_hwcaps() -> (u64, u64) {
 /// little-endian kernel. Ferrix targets ARMv7-A only, on the DK1 board and
 /// under QEMU's `virt` machine, so this is always `"v7l"` rather than a value
 /// read out of an identification register the way `user_hwcaps` reads several.
-pub(crate) const fn user_platform() -> Option<&'static [u8]> {
+/// There is no second ABI here, so `abi` is always the native one.
+pub(crate) const fn user_platform(abi: crate::trap::Abi) -> Option<&'static [u8]> {
+    let _ = abi;
     Some(b"v7l")
 }
 

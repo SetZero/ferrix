@@ -225,6 +225,8 @@ pub(crate) struct Startup {
     /// Where its vDSO's image is, the page above its data page, or zero
     /// for none: what names `[vdso]` and `[vvar]`.
     pub(crate) vdso: u64,
+    /// The mode it is entered in: its image's (`docs/I386.md` §3.4).
+    pub(crate) abi: crate::trap::Abi,
 }
 
 /// The parts of a process the lock protects.
@@ -1958,6 +1960,7 @@ pub(crate) fn run_program(_argument: usize) {
         entry,
         stack,
         argument,
+        abi,
         ..
     }) = startup
     else {
@@ -1968,7 +1971,7 @@ pub(crate) fn run_program(_argument: usize) {
     // state and entry stack; `entry` and `stack` came from the loader and the
     // stack builder, both inside that space. Nothing owned is left on this
     // frame to leak: the process reference was dropped above.
-    unsafe { crate::arch::enter_user(entry, stack, argument) }
+    unsafe { crate::arch::enter_user(entry, stack, argument, abi) }
 }
 
 /// Make a process over a fresh address space, for the self-checks.

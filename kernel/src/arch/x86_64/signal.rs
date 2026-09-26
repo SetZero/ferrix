@@ -139,6 +139,11 @@ impl UserContext {
     /// with -- `restart_syscall`'s number for a `restart_block` resume, the
     /// original number otherwise. The System V argument registers were never
     /// clobbered, so `orig_arg0` is not needed here.
+    ///
+    /// A call through `int $0x80` rewinds the same way -- its opcode is two
+    /// bytes too -- and restarts through i386's `restart_syscall`, which is
+    /// the table that call was made in (`docs/I386.md` §3.2). `orig_nr` is
+    /// already that table's number, being the one the program passed.
     pub(crate) const fn rewind_syscall(
         &mut self,
         orig_nr: u64,
@@ -146,12 +151,55 @@ impl UserContext {
         restart_block: bool,
     ) {
         let _ = orig_arg0;
-        self.0.rax = if restart_block {
-            ferrix_linux_abi::nr::x86_64::RESTART_SYSCALL as u64
-        } else {
-            orig_nr
+        self.0.rax = match (
+            restart_block,
+            self.0.vector == super::trap::LEGACY_SYSCALL_VECTOR,
+        ) {
+            (true, true) => ferrix_linux_abi::nr::i386::RESTART_SYSCALL as u64,
+            (true, false) => ferrix_linux_abi::nr::x86_64::RESTART_SYSCALL as u64,
+            (false, _) => orig_nr,
         };
         self.0.rip = self.0.rip.wrapping_sub(2);
+    }
+
+    /// A program about to run from its first instruction, as `execve` leaves
+    /// it: every register clear, interrupts open, and the selectors of the
+    /// mode `abi` names -- 32-bit user code for an i386 image.
+    pub(super) const fn entering(entry: u64, stack: u64, abi: crate::trap::Abi) -> UserContext {
+        let (cs, ss) = match abi {
+            crate::trap::Abi::Native => (USER_CS, USER_SS),
+            crate::trap::Abi::Compat => (USER_CS32, USER_SS),
+        };
+        UserContext(TrapFrame {
+            r15: 0,
+            r14: 0,
+            r13: 0,
+            r12: 0,
+            r11: 0,
+            r10: 0,
+            r9: 0,
+            r8: 0,
+            rbp: 0,
+            rdi: 0,
+            rsi: 0,
+            rdx: 0,
+            rcx: 0,
+            rbx: 0,
+            rax: 0,
+            vector: 0,
+            error_code: 0,
+            rip: entry,
+            cs,
+            rflags: FLAGS_ALWAYS,
+            rsp: stack,
+            ss,
+        })
+    }
+
+    /// True if these registers are a 32-bit program's: its code selector is
+    /// compatibility mode's.
+    pub(crate) const fn is_compat(&self) -> bool {
+        self.0.cs == USER_CS32
     }
 
     /// The registers a system call saved. `SYSCALL` put the return address in
@@ -261,6 +309,9 @@ impl UserContext {
 
 /// Ring 3's code selector, with its requested privilege level.
 const USER_CS: u64 = (gdt::USER_CODE | 3) as u64;
+/// Ring 3's 32-bit code selector, likewise: compatibility mode's.
+const USER_CS32: u64 = (gdt::USER_CODE32 | 3) as u64;
+
 /// Ring 3's stack selector, likewise.
 const USER_SS: u64 = (gdt::USER_DATA | 3) as u64;
 
@@ -276,6 +327,19 @@ fn write_fp_area(space: &AddressSpace, fpstate: u64) -> Result<(), BadFrame> {
     area.write(space, fpstate)
 }
 
+/// Whether this file can build the frame `request` asks for: the handler
+/// must name a restorer, because x86-64 has no default one to return through,
+/// and the program must be a 64-bit one. A 32-bit program's handler needs an
+/// i386 frame, which is not built yet (`docs/I386.md` §3.4, I2): refused,
+/// which ends the program with `SIGSEGV` as Linux ends one whose frame it
+/// cannot build, rather than entering its 32-bit handler in 64-bit mode.
+const fn frame_is_buildable(context: &UserContext, request: &FrameRequest) -> Result<(), BadFrame> {
+    if request.flags & SA_RESTORER == 0 || context.is_compat() {
+        return Err(BadFrame);
+    }
+    Ok(())
+}
+
 /// Write `request`'s frame below its stack and point `context` at the handler:
 /// `RDI` the signal, `RSI` the `siginfo`, `RDX` the `ucontext`, and the stack
 /// pointer at `pretcode`, as if the handler had just been called from it.
@@ -284,9 +348,7 @@ pub(crate) fn setup_signal_frame(
     context: &mut UserContext,
     request: &FrameRequest,
 ) -> Result<(), BadFrame> {
-    if request.flags & SA_RESTORER == 0 {
-        return Err(BadFrame);
-    }
+    frame_is_buildable(context, request)?;
     let fpstate = request
         .stack
         .checked_sub(FXSAVE_BYTES as u64)

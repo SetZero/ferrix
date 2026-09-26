@@ -800,6 +800,7 @@ fn check_the_native_range_is_not_a_linux_one() -> Result<(), &'static str> {
         return Err("this build's Linux table claims a native number");
     }
     let args = SyscallArgs {
+        abi: crate::trap::Abi::Native,
         number: nr::CHANNEL_CREATE,
         args: [0; 6],
     };
@@ -1190,6 +1191,7 @@ impl Side {
             *slot = *value;
         }
         let args = SyscallArgs {
+            abi: crate::trap::Abi::Native,
             number,
             args: registers,
         };
@@ -1685,6 +1687,7 @@ fn write_after_a_delay(_: usize) {
     let taken = WAKER.lock().take();
     if let Some((process, end)) = taken {
         let args = SyscallArgs {
+            abi: crate::trap::Abi::Native,
             number: nr::CHANNEL_WRITE,
             args: [reg(end), 0, 0, 0, 0, 0],
         };
