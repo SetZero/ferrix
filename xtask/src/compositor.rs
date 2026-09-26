@@ -2261,10 +2261,10 @@ fn desktop(
                 crate::wallpaper::Chosen::Still(_) => {
                     (WALLPAPER_PATH, format!("--wallpaper /{WALLPAPER_PATH}"))
                 }
-                // One word after `-o`, because `exec-once` is split on
-                // whitespace here and not by a shell: `hyprix::state` reads
-                // it with `split_whitespace`, so a quoted string would
-                // arrive as three arguments and two of them with quotes in.
+                // One word after `-o`, as mpvpaper's own examples write it.
+                // A quoted string would arrive whole too: the compositor
+                // splits `exec-once` as a shell would for its quoting
+                // (`hyprix::command`).
                 crate::wallpaper::Chosen::Moving(_) => {
                     (MOVIE_PATH, format!("--video -o no-audio ALL /{MOVIE_PATH}"))
                 }

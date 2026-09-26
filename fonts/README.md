@@ -11,9 +11,11 @@ them in `/usr/share/ferrix/fonts` on every image that runs Chrome in a window
 | `inter/` | Inter, variable, upright and italic | 4.1 | SIL Open Font License 1.1, `inter/LICENSE` |
 | `liberation/` | Liberation Sans, Serif and Mono, four styles each | 2.1.5 | SIL Open Font License 1.1, `liberation/LICENSE` |
 
-**Inter** is the sans-serif: Chrome's own interface and a page's
-`sans-serif`, `sans` and `system-ui`. It was drawn for screens, and its
-variable file carries every weight from Thin to Black in 0.9 MB.
+**Inter** is fontconfig's sans-serif: what a program gets for `sans`,
+`sans-serif` or `system-ui`, Chrome's own tabs, toolbar and menus among
+them. It was drawn for screens, and its variable file carries every weight
+from Thin to Black in 0.9 MB. A page's CSS `sans-serif` is Chrome's own
+preference, Arial on Linux, and so Liberation Sans.
 
 **Liberation** is metric-compatible with Arial, Times New Roman and Courier
 New: every glyph is as wide as the face it stands in for, so a page laid out

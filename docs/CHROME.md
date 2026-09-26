@@ -47,7 +47,7 @@ what is left:
 | The zygote, which could not learn its children's pids until `SCM_CREDENTIALS` carried them | **done** 2026-09-26: `test-chrome` (glibc and ferrousli) and `test-chrome-window` run without `--no-zygote` (§8) |
 | Chrome's speed: a futex wait woken every 5 ms, the HPET as the clock under KVM, `munmap` walking every page of a reservation, a shootdown for every write to a page after a fork, and the virtio-gpu doorbell held by QEMU | **done** 2026-09-26: idle 443% of a processor → 15%, the machine 96% busy → 6%, a turning box 1.5 frames a second → 60.8; then a vDSO (idle → 13%) and a kick to one processor (QEMU on the host 81% of a core → 65%); `cargo xtask bench-chrome` (§9) |
 | Chrome on the desktop's persistent btrfs root | **done** 2026-09-26: `/dev/shm` was not mounted there; `cargo xtask test-chrome-window --btrfs-root` (§9) |
-| Chrome's text, its name for the system, and Chrome for Testing's bar | **done** 2026-09-26: Inter and Liberation from the tree with slight hinting, Ferrix in the user agent, `navigator` and the client hints, no bar (§9) |
+| Chrome's text, its name for the system, and Chrome for Testing's bar | **done** 2026-09-26: Inter and Liberation from the tree with slight hinting, Ferrix in the user agent, no bar; `navigator.platform` and the client hints are Chrome's build's and say Linux (§9) |
 | Chrome on ferrousli's `libc.so.6` in glibc's place | **done** 2026-09-26, x86-64, headless, `cargo xtask test-chrome --interpreter ferrousli --library ferrousli` (§8); the window build on it is not tried |
 | Chrome on the STM32MP157D-DK1: an armhf Chromium, an SDMMC driver, page-cache eviction | not started, ≈ 45–55 points (§10) |
 | Chromium built against ferrousli, with Alpine's musl patches rebased | not needed for a first Chrome: the prebuilt one runs (§5, §8) |
@@ -912,22 +912,20 @@ Chrome for Testing is for automated testing only.
   directory, puts Inter first for `sans`, `sans-serif` and `system-ui`,
   asks for greyscale antialiasing with slight hinting, and then includes
   the system's configuration. A page's CSS `sans-serif` is not fontconfig's
-  alias. It is a preference of Chrome's own, Arial on Linux, and the
-  extension below sets it to Inter.
+  alias. It is a preference of Chrome's own, Arial on Linux, so a page
+  gets Liberation Sans.
 - **The name.** `--user-agent` gives `Mozilla/5.0 (Ferrix x86_64) ...
   Chrome/154.0.0.0`, and nothing else. Measured on the host:
   `navigator.platform` stays `Linux x86_64`, even with `uname` faked to say
   Ferrix. `navigator.userAgentData.platform` and the `Sec-CH-UA-Platform`
   header stay `Linux`. All three are constants in Chrome's build, and no
-  switch reaches them. So Chrome loads an extension from the image,
-  `xtask/chrome-extension`. Its `declarativeNetRequest` rule sets the
-  header on every request, the first navigation included. A main-world
-  script at `document_start` answers `navigator.platform` and the platform
-  in `userAgentData` with Ferrix. A worker's `navigator` is not reached,
-  since content scripts do not run in workers. `chrome://version` is not
-  reached either, as no extension runs on Chrome's own pages. With a user
-  agent of its own, Chrome also leaves the `architecture` client hint
-  empty.
+  switch reaches them. For a few hours an extension of the tree's own
+  rewrote them in each page. The customer did not want an extension only
+  to say Ferrix, and chose the flag alone over patching Google's binary
+  or building Chromium. So Ferrix says Ferrix (`uname -s`), and Chrome's
+  user agent does. The platform in `navigator` and the client hints says
+  Linux until Chrome is built from source. With a user agent of its own,
+  Chrome also leaves the `architecture` client hint empty.
 - **The bar.** `--disable-infobars` removes it.
   `test-chrome-window` now counts 623 621 yellow pixels where it counted
   532 386, because the page has the bar's height.
