@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "abe1458f1cd190932812bb8c431550b1ac3a70fd539278f90ed1a7b36951a063",
+  "digest": "02966d6804bbb43f02546dc4177bf526e497c5cdf82b7da9338ff8eec4fb41e9",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -17394,7 +17394,7 @@
           "shortName": "SC",
           "type": "Stage",
           "maturity": "inProgress",
-          "doc": "Placed after sysfs without a number of its own, asked for by the customer on 2026-09-23 (docs/CHROME.md). Google's prebuilt Chrome for Testing on Debian's glibc from a btrfs volume, by the customer's choice of 2026-09-24. Exit met on x86-64: cargo xtask test-chrome runs it headless, and cargo xtask test-chrome-window in a window on the compositor. On ferrousli in glibc's place, headless, since 2026-09-26: cargo xtask test-chrome --interpreter ferrousli --library ferrousli. On the persistent btrfs root since 2026-09-26. With its zygote since 2026-09-26, once SCM_CREDENTIALS carried its children's pids; idle at 13% of a processor where it took 443%, after the futex, clock, munmap, shootdown and doorbell fixes and a vDSO (cargo xtask bench-chrome); and playing sound through /dev/snd (cargo xtask test-chrome-audio). Owed: the full browser on ferrousli in a window, on a branch on 2026-09-26; inotify and the GPU; and the STM32MP157D-DK1, which needs an SDMMC driver and page-cache eviction first.",
+          "doc": "Placed after sysfs without a number of its own, asked for by the customer on 2026-09-23 (docs/CHROME.md). Google's prebuilt Chrome for Testing on Debian's glibc from a btrfs volume, by the customer's choice of 2026-09-24. Exit met on x86-64: cargo xtask test-chrome runs it headless, and cargo xtask test-chrome-window in a window on the compositor. On ferrousli in glibc's place, headless and in a window, since 2026-09-26: cargo xtask test-chrome and test-chrome-window with --interpreter ferrousli --library ferrousli. On the persistent btrfs root since 2026-09-26. With its zygote since 2026-09-26, once SCM_CREDENTIALS carried its children's pids; idle at 13% of a processor where it took 443%, after the futex, clock, munmap, shootdown and doorbell fixes and a vDSO (cargo xtask bench-chrome); and playing sound through /dev/snd (cargo xtask test-chrome-audio). Owed: inotify and the GPU; and the STM32MP157D-DK1, which needs an SDMMC driver and page-cache eviction first.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
             "line": 413

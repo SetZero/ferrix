@@ -14,7 +14,10 @@ ferrousli's `ld.so` and `libc.so.6` instead of Debian's loader and glibc,
 and `cargo xtask test-chrome --interpreter ferrousli --library ferrousli`
 requires the same three things of it -- the version, a page's script run by
 V8, a screenshot -- with its GPU process drawing through SwiftShader as it
-does on glibc (§8).
+does on glibc (§8). **So does the full browser in a window, the same day:**
+`cargo xtask test-chrome-window --interpreter ferrousli --library
+ferrousli` requires its page on the compositor's screen, and still there
+after a click and typing (§8).
 
 **Chrome runs on Ferrix, in a window on the compositor, since 2026-09-24.**
 `cargo xtask run-compositor --chrome` opens it on the desktop, and
@@ -48,7 +51,7 @@ what is left:
 | Chrome's speed: a futex wait woken every 5 ms, the HPET as the clock under KVM, `munmap` walking every page of a reservation, a shootdown for every write to a page after a fork, and the virtio-gpu doorbell held by QEMU | **done** 2026-09-26: idle 443% of a processor → 15%, the machine 96% busy → 6%, a turning box 1.5 frames a second → 60.8; then a vDSO (idle → 13%) and a kick to one processor (QEMU on the host 81% of a core → 65%); `cargo xtask bench-chrome` (§9) |
 | Chrome on the desktop's persistent btrfs root | **done** 2026-09-26: `/dev/shm` was not mounted there; `cargo xtask test-chrome-window --btrfs-root` (§9) |
 | Chrome's text, its name for the system, and Chrome for Testing's bar | **done** 2026-09-26: Inter and Liberation from the tree with slight hinting, Ferrix in the user agent, no bar; `navigator.platform` and the client hints are Chrome's build's and say Linux (§9) |
-| Chrome on ferrousli's `libc.so.6` in glibc's place | **done** 2026-09-26, x86-64, headless, `cargo xtask test-chrome --interpreter ferrousli --library ferrousli` (§8); the window build on it is not tried |
+| Chrome on ferrousli's `libc.so.6` in glibc's place | **done** 2026-09-26, x86-64, headless and in a window: `cargo xtask test-chrome` and `test-chrome-window`, each with `--interpreter ferrousli --library ferrousli` (§8); `run-compositor --chrome` does not take the flags |
 | Chrome on the STM32MP157D-DK1: an armhf Chromium, an SDMMC driver, page-cache eviction | not started, ≈ 45–55 points (§10) |
 | Chromium built against ferrousli, with Alpine's musl patches rebased | not needed for a first Chrome: the prebuilt one runs (§5, §8) |
 | A guest with the ~2 GiB a page wants | `test-chrome` boots 4 GiB, as `test-rustc` does (§2.3) |
@@ -62,7 +65,8 @@ freetype 2.14.1, expat 2.7.3, fontconfig 2.17.1, tllist 1.1.0 and fcft
 3.3.2, and DejaVu Sans Mono 2.37 is the font. **Then** headless Chrome,
 the same day (§8), and a window (§9). **Then**, on 2026-09-26, Chrome on
 ferrousli in glibc's place (§8), and the desktop's persistent btrfs root
-(§9). **Then**, the same day, Chrome's speed, and its zygote (§8, §9).
+(§9). **Then**, the same day, Chrome's speed, and its zygote (§8, §9), and
+the full browser in a window on ferrousli (§8).
 
 **Re-checked on 2026-09-19**, against a tree 37 commits further on. Everything
 in §2, §3 and §4 still holds but the two loose fixes in §6, which are now
@@ -694,6 +698,42 @@ order they were found:
    the first time it asks `__tls_get_addr` for one. With that the GPU
    process runs SwiftShader and the fallback is not taken; why the fallback
    meets `ENOENT` on Ferrix is not found.
+
+**The window on ferrousli, 2026-09-26, and passing.** `cargo xtask
+test-chrome-window --interpreter ferrousli --library ferrousli` stands
+ferrousli in for glibc as `test-chrome` does, for the full browser: the
+loader at `/lib64/ld-linux-x86-64.so.2`, where both Chrome's and its crash
+handler's `PT_INTERP` look, `libc.so.6` in `/lib`, and `LD_LIBRARY_PATH`
+given to what the compositor starts. The full browser loads 80 objects
+where the headless shell loads 46 -- cairo, pango, CUPS, GnuTLS, Kerberos
+and what they need -- and opens seven more later. Found by running it on
+nazuna's own kernel first, through a copy whose `PT_INTERP` names
+ferrousli's loader, then passing on Ferrix at the first boot:
+
+1. **The loader held 64 objects.** It refused the browser with "too many
+   shared objects" before `main`. It holds 256; the scope, a few hundred
+   bytes an object, is built where it is kept instead of on the loader's
+   stack.
+2. **`posix_fadvise64`.** Listing every glibc name the 79 libraries, the
+   seven opened later and the two programs import, against what ferrousli's
+   `libc.so.6` exports, left this one.
+3. **NSS could not load its soft token**, and Chrome's `FATAL` in
+   `nss_util.cc` ended the browser. NSS looks for `libsoftokn3.so` first in
+   the directory `dladdr` names for `libnss3.so`, and the loader named every
+   library by its `DT_NEEDED` name, which has no directory; then by name,
+   and the loader's search skipped `LD_LIBRARY_PATH`, because it kept a
+   pointer to the value in the environment block and Chrome had written
+   its process title over that block. The loader copies the value now, as
+   glibc does, and reports a library it searched for by the path it found,
+   to `dladdr`, `dl_iterate_phdr`, `link_map` and `RTLD_DI_ORIGIN`.
+   `tests/link.rs`'s check 85 requires both.
+
+One trap in the host copy, which Ferrix does not have: the loader knows
+itself by the file name of the program's `PT_INTERP`, so a copy that named
+it `/tmp/cwf-ld.so` loaded glibc's `ld-linux-x86-64.so.2` beside it for the
+libraries that need that name, and GnuTLS's finaliser faulted in glibc's
+`__tls_get_addr` at exit. Named with glibc's file name, as on Ferrix, it
+answers for itself.
 
 Running Chrome on the host showed one thing that is the host's: with
 `WAYLAND_DISPLAY` set, ANGLE wants `VK_KHR_wayland_surface`, which

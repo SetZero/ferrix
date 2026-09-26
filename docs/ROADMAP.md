@@ -86,7 +86,7 @@ under way, cgroups first because init needs them: cgroup2 with `pids`,
 `memory` and its scoped OOM kill, and `cpu.weight` (2026-09-26); reclaim,
 freezing, `cpu.max`, `io`, namespaces and seccomp are left.
 Chrome runs on Ferrix (2026-09-24): Google's prebuilt Chrome for Testing,
-headless and in a window on the compositor, on x86-64, and headless on
+headless and in a window on the compositor, on x86-64, and both on
 ferrousli's loader and C library in glibc's place (2026-09-26). Since
 2026-09-26 it runs with its zygote, idles at 13% of a processor where it
 took 443%, turns a box at 60 frames a second where it managed 1.5, and plays
@@ -170,8 +170,8 @@ sizes them.
 | ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | done |
 | ~~sysfs, fed by the services that own each fact (`docs/SYSFS.md`)~~ *done 2026-09-24* | ~~26~~ | done |
 | ~~Chrome on Ferrix, headless and in a window, x86-64 (`docs/CHROME.md`)~~ *done 2026-09-24* | foot and its ports 13, the kernel's rows ≈ 30, spent | done |
-| ~~Chrome: the zygote, its speed, ferrousli in glibc's place headless, the persistent btrfs root~~ *done 2026-09-26* | unsized, spent | done |
-| Chrome: its full browser on ferrousli in a window, `inotify`, the GPU | unsized | under way: the window on ferrousli is on branch `chrome-window-ferrousli`, not yet on `main` |
+| ~~Chrome: the zygote, its speed, ferrousli in glibc's place headless and in a window, the persistent btrfs root~~ *done 2026-09-26* | unsized, spent | done |
+| Chrome: `inotify`, the GPU | unsized | not started |
 | Chrome on the STM32MP157D-DK1 (`docs/CHROME.md` §10) | ≈ 45–55 | not started |
 | The Pixel 7, the customer's phone (`boot/pixel7/HANDOVER.md`) | a desktop in the launcher app's VM ≈ 17; the USB device driver unsized | under way: `main` boots it natively on all eight cores to `FERRIX-BOOT-OK stages 1-12`, and as a guest of the phone's own crosvm from a launcher app, with a monitor graphing the boot and `ferrix-statd`'s samples (2026-09-26); the customer chose the VM for a desktop the same day, hyprix in the launcher's VM (option A), started; the USB device driver has its brief (`docs/PIXEL7-USB-HANDOVER.md`) and a read-only survey on a branch |
 | Stage 13, namespaces, cgroups, seccomp | cgroups 85 (`docs/CGROUPS.md` §7: 27 for what init needs, 58 for the controllers); namespaces and seccomp unsized, the old guess for the whole stage was *month* ≈ 60 | under way: G1 to G5 done (27), which is all init needs from it, C8 for native services included; `pids`, `memory`'s charging and `cpu.weight` done (2026-09-26, as the certification's job quotas), and `memory`'s scoped OOM kill the same day (P1, M1, S1: 28), so 55 of 85; the rest of `memory.stat`, `memory`'s reclaim, freezing, `cpu.max` and `io` left, about 30 |
@@ -4246,6 +4246,16 @@ libc++ reads; the program's own `malloc`, which ferrousli's calls now
 follow; GNU's `strerror_r` in `libc.so.6`; and TLS in a `dlopen`ed library,
 in a static TLS surplus as glibc keeps.
 
+**Done (2026-09-26): Chrome on ferrousli in a window.** `cargo xtask
+test-chrome-window --interpreter ferrousli --library ferrousli` runs the
+full browser on ferrousli's loader and `libc.so.6`, and requires its page
+on the screen after a click and typing, as on glibc. The full browser loads
+80 objects to the headless shell's 46; what it found, in `docs/CHROME.md`
+§8: the loader's limit of 64 objects, now 256; `posix_fadvise64`; and NSS,
+which could not load its soft token because the loader kept a pointer into
+the environment Chrome writes its process title over, and named each
+library by its `DT_NEEDED` name where glibc gives the path it was found at.
+
 **Done (2026-09-26): the persistent btrfs root.** Chrome stopped on the
 desktop's btrfs root because the kernel mounted no tmpfs on `/dev/shm`
 inside it, only on the initramfs's root, and Chrome's profile is there; the
@@ -4275,10 +4285,9 @@ fixed, and a vDSO added on x86-64; `cargo xtask bench-chrome` measures it
 **Still to do:**
 
 * `--no-sandbox`, which is stage 13's.
-* Chrome on ferrousli in a window, which runs on branch
-  `chrome-window-ferrousli` and is not yet on `main`, and ferrousli's
-  `ld.so` run as a command, which it cannot be yet: Chrome reaches it by
-  `PT_INTERP`.
+* `run-compositor --chrome` on ferrousli, which only the test takes the
+  flags for; and ferrousli's `ld.so` run as a command, which it cannot be
+  yet: Chrome reaches it by `PT_INTERP`.
 * Why the GPU process's fallback path stops at the sandbox's
   `proc_util.cc:115` with `ENOENT` on Ferrix (`docs/CHROME.md` §8, item 8).
 * `inotify`, and the GPU: Chrome draws in software. (The vDSO landed on

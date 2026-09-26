@@ -102,7 +102,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1687 elements, 201 relations. Model digest `abe1458f1cd19093`.
+13 files, 16 packages, 1687 elements, 201 relations. Model digest `02966d6804bbb43f`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -3179,7 +3179,7 @@ Placed after stage 12 without a number of its own, built on 2026-09-24 in the sh
 
 **InProgress**  ·  size headless and a window spent; the DK1 about 45 to 55 points  ·  `#inProgress`
 
-Placed after sysfs without a number of its own, asked for by the customer on 2026-09-23 (docs/CHROME.md). Google's prebuilt Chrome for Testing on Debian's glibc from a btrfs volume, by the customer's choice of 2026-09-24. Exit met on x86-64: cargo xtask test-chrome runs it headless, and cargo xtask test-chrome-window in a window on the compositor. On ferrousli in glibc's place, headless, since 2026-09-26: cargo xtask test-chrome --interpreter ferrousli --library ferrousli. On the persistent btrfs root since 2026-09-26. With its zygote since 2026-09-26, once SCM_CREDENTIALS carried its children's pids; idle at 13% of a processor where it took 443%, after the futex, clock, munmap, shootdown and doorbell fixes and a vDSO (cargo xtask bench-chrome); and playing sound through /dev/snd (cargo xtask test-chrome-audio). Owed: the full browser on ferrousli in a window, on a branch on 2026-09-26; inotify and the GPU; and the STM32MP157D-DK1, which needs an SDMMC driver and page-cache eviction first.
+Placed after sysfs without a number of its own, asked for by the customer on 2026-09-23 (docs/CHROME.md). Google's prebuilt Chrome for Testing on Debian's glibc from a btrfs volume, by the customer's choice of 2026-09-24. Exit met on x86-64: cargo xtask test-chrome runs it headless, and cargo xtask test-chrome-window in a window on the compositor. On ferrousli in glibc's place, headless and in a window, since 2026-09-26: cargo xtask test-chrome and test-chrome-window with --interpreter ferrousli --library ferrousli. On the persistent btrfs root since 2026-09-26. With its zygote since 2026-09-26, once SCM_CREDENTIALS carried its children's pids; idle at 13% of a processor where it took 443%, after the futex, clock, munmap, shootdown and doorbell fixes and a vDSO (cargo xtask bench-chrome); and playing sound through /dev/snd (cargo xtask test-chrome-audio). Owed: inotify and the GPU; and the STM32MP157D-DK1, which needs an SDMMC driver and page-cache eviction first.
 
 **Allocated to: **`ferrix.userland`
 

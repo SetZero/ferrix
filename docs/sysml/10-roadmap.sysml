@@ -420,8 +420,9 @@ package FerrixRoadmap {
              * the customer's choice of 2026-09-24. Exit met on x86-64:
              * cargo xtask test-chrome runs it headless, and
              * cargo xtask test-chrome-window in a window on the compositor.
-             * On ferrousli in glibc's place, headless, since 2026-09-26:
-             * cargo xtask test-chrome --interpreter ferrousli
+             * On ferrousli in glibc's place, headless and in a window,
+             * since 2026-09-26: cargo xtask test-chrome and
+             * test-chrome-window with --interpreter ferrousli
              * --library ferrousli.
              * On the persistent btrfs root since 2026-09-26.
              * With its zygote since 2026-09-26, once SCM_CREDENTIALS carried
@@ -429,8 +430,7 @@ package FerrixRoadmap {
              * 443%, after the futex, clock, munmap, shootdown and doorbell
              * fixes and a vDSO (cargo xtask bench-chrome); and playing
              * sound through /dev/snd (cargo xtask test-chrome-audio).
-             * Owed: the full browser on ferrousli in a window, on a branch
-             * on 2026-09-26; inotify and the GPU; and the
+             * Owed: inotify and the GPU; and the
              * STM32MP157D-DK1, which needs an SDMMC driver and page-cache
              * eviction first. */
     }
