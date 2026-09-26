@@ -63,10 +63,19 @@ extern "C" fn early(device_tree: u64, current_el: u64, loaded_at: u64) {
 
 /// Called from the entry sequence at EL1: load Ferrix and start it.
 extern "C" fn main(device_tree: u64) -> ! {
-    let (_, frequency) = entry::counter();
+    // The count as well as the rate: Ferrix's clock is this counter, and
+    // tools/pixel7-monitor places the stat service's samples in the PC's time
+    // from this line, the loader starting as the phone leaves USB.
+    let (count, frequency) = entry::counter();
+    let millis = count
+        .checked_mul(1000)
+        .and_then(|m| m.checked_div(frequency))
+        .unwrap_or(0);
     say!(
-        "  now at EL{}, counter at {frequency} Hz",
-        entry::current_el()
+        "  now at EL{}, counter at {frequency} Hz, {}.{:03} s since it started",
+        entry::current_el(),
+        millis / 1000,
+        millis % 1000
     );
     let framebuffer = if board::is_guest() {
         say!("  a guest of crosvm: no watchdogs, no screen, console on its 16550");
