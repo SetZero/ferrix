@@ -225,8 +225,12 @@ pub struct Seat {
     /// The pointer buttons held down now, by their evdev codes. A drag ends
     /// when the last of them comes up.
     buttons: Vec<u32>,
-    /// The screen, which the pointer may not leave.
+    /// The screen, which the pointer may not leave: its size, from
+    /// [`origin`](Self::origin).
     screen: (f64, f64),
+    /// Where the screen's top-left corner is in the layout: 0, 0 unless no
+    /// monitor is there ([`Seat::place_at`]).
+    origin: (f64, f64),
     /// The submap in force, `None` for the global map.
     submap: Option<String>,
     /// Whether the session is locked, which is what `bindl` is for.
@@ -266,6 +270,7 @@ impl Seat {
             pointer: (f64::from(width) / 2.0, f64::from(height) / 2.0),
             used: false,
             screen: (f64::from(width), f64::from(height)),
+            origin: (0.0, 0.0),
             submap: None,
             locked: false,
             submaps: Vec::new(),
@@ -466,7 +471,10 @@ impl Seat {
                 repeat,
             } => self.key(code, pressed, repeat),
             Input::Motion { dx, dy } => self.move_to(self.pointer.0 + dx, self.pointer.1 + dy),
-            Input::Absolute { x, y } => self.move_to(x * self.screen.0, y * self.screen.1),
+            Input::Absolute { x, y } => self.move_to(
+                self.origin.0 + x * self.screen.0,
+                self.origin.1 + y * self.screen.1,
+            ),
             Input::Button { button, pressed } => {
                 self.used = true;
                 // Which buttons are down, for the one thing that has to
@@ -494,6 +502,30 @@ impl Seat {
                 actions.push(Action::Axis { axis, value });
                 actions
             }
+        }
+    }
+
+    /// Put the screen's top-left corner at `x`, `y` in the layout, moving
+    /// the pointer with it: where the leftmost monitor is, when a rule put it
+    /// somewhere other than 0, 0. A pointer nothing has moved yet is in the
+    /// middle, as it starts.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a layout's pixels are far inside f64's exact range"
+    )]
+    pub fn place_at(&mut self, x: i64, y: i64) {
+        let (was_x, was_y) = self.origin;
+        self.origin = (x as f64, y as f64);
+        if self.used {
+            let _ = self.move_to(
+                self.pointer.0 - was_x + self.origin.0,
+                self.pointer.1 - was_y + self.origin.1,
+            );
+        } else {
+            self.pointer = (
+                self.origin.0 + self.screen.0 / 2.0,
+                self.origin.1 + self.screen.1 / 2.0,
+            );
         }
     }
 
@@ -606,13 +638,16 @@ impl Seat {
         };
         // The pointer may not leave the screen, and a NaN from a device that
         // reported nonsense must not become the position.
-        let hold = |value: f64, limit: f64| {
+        let hold = |value: f64, from: f64, limit: f64| {
             if value.is_nan() {
-                return 0.0;
+                return from;
             }
-            value.clamp(0.0, (limit - 1.0).max(0.0))
+            value.clamp(from, from + (limit - 1.0).max(0.0))
         };
-        self.pointer = (hold(x, self.screen.0), hold(y, self.screen.1));
+        self.pointer = (
+            hold(x, self.origin.0, self.screen.0),
+            hold(y, self.origin.1, self.screen.1),
+        );
         vec![Action::Pointer {
             x: self.pointer.0,
             y: self.pointer.1,

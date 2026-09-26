@@ -484,3 +484,30 @@ fn the_keyboard_has_a_group_for_every_layout_the_configuration_named() {
     assert_eq!(one.keyboard().groups(), 1);
     assert_eq!(super::group_count(&config("input:kb_layout = de,us\n")), 2);
 }
+
+#[test]
+fn a_screen_placed_away_from_the_corner_is_where_the_pointer_moves() {
+    // `monitor = desc:…, preferred, 2560x0, 1` on the only monitor: the
+    // pointer starts in its middle and never leaves it, and a tablet's whole
+    // range is that monitor and not the empty 2560 pixels left of it.
+    let mut seat = seat("");
+    seat.place_at(2560, 0);
+    assert_eq!(seat.pointer(), (2560.0 + 512.0, 384.0));
+    let _ = seat.input(Input::Absolute { x: 0.0, y: 0.0 });
+    assert_eq!(seat.pointer(), (2560.0, 0.0));
+    let _ = seat.input(Input::Absolute { x: 0.5, y: 0.25 });
+    assert_eq!(seat.pointer(), (2560.0 + 512.0, 192.0));
+    let _ = seat.input(Input::Motion {
+        dx: -10_000.0,
+        dy: -10_000.0,
+    });
+    assert_eq!(seat.pointer(), (2560.0, 0.0));
+    let _ = seat.input(Input::Motion {
+        dx: 10_000.0,
+        dy: 10_000.0,
+    });
+    assert_eq!(seat.pointer(), (2560.0 + 1023.0, 767.0));
+    // The screen moving takes a used pointer with it.
+    seat.place_at(0, 0);
+    assert_eq!(seat.pointer(), (1023.0, 767.0));
+}

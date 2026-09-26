@@ -1842,3 +1842,46 @@ fn the_group_words_and_no_close_for() {
     );
     assert!(WindowRule::parse("no_close_for soon").is_err());
 }
+
+#[test]
+fn a_monitor_named_by_a_rule_is_not_the_catch_alls_even_above_it() {
+    // A configuration written for three monitors, as Hyprland's own users
+    // write one: a line for each by its description, then a catch-all for
+    // any other. Hyprland takes the named rule wherever the catch-all is.
+    let rules: Vec<MonitorRule> = [
+        "desc:Dell Inc. DELL P2418D MY3ND91J09CT, preferred, 0x0, 1",
+        "desc:Lenovo Group Limited R27qe Gen2 UTP03KBB, preferred, 2560x0, 1",
+        ", preferred, auto, 1",
+    ]
+    .iter()
+    .map(|line| MonitorRule::parse(line).unwrap())
+    .collect();
+    let lenovo = MonitorRule::for_monitor(
+        &rules,
+        "Virtual-1",
+        "Lenovo Group Limited R27qe Gen2 UTP03KBB",
+    )
+    .unwrap();
+    assert_eq!(lenovo.position, Position::At(2560, 0));
+    // A monitor no line names gets the catch-all.
+    let other = MonitorRule::for_monitor(&rules, "Virtual-1", "").unwrap();
+    assert_eq!(other.position, Position::Auto);
+    // Of two catch-alls the later wins, as of two rules for one connector.
+    let twice: Vec<MonitorRule> = [", 1024x768@60, auto, 1", ", preferred, auto, 2"]
+        .iter()
+        .map(|line| MonitorRule::parse(line).unwrap())
+        .collect();
+    let taken = MonitorRule::for_monitor(&twice, "Virtual-1", "").unwrap();
+    assert_eq!(taken.mode, Mode::Preferred);
+    let named: Vec<MonitorRule> = [
+        "Virtual-1, 1024x768@60, 0x0, 1",
+        ", preferred, auto, 1",
+        "Virtual-1, preferred, 100x0, 1",
+    ]
+    .iter()
+    .map(|line| MonitorRule::parse(line).unwrap())
+    .collect();
+    let taken = MonitorRule::for_monitor(&named, "Virtual-1", "").unwrap();
+    assert_eq!(taken.position, Position::At(100, 0));
+    assert_eq!(MonitorRule::for_monitor(&[], "Virtual-1", ""), None);
+}

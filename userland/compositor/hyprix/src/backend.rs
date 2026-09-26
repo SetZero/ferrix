@@ -367,11 +367,8 @@ impl Drm {
                 .as_ref()
                 .map(|edid| edid.describe(compositor_drm::registered))
                 .unwrap_or_default();
-            // The last rule that names this monitor, as everywhere else.
-            let rule = rules
-                .iter()
-                .rev()
-                .find(|rule| rule.matches(&plan.name, &description));
+            // The rule for this monitor, as everywhere else.
+            let rule = compositor_config::MonitorRule::for_monitor(rules, &plan.name, &description);
             if let Some(compositor_config::Mode::Fixed {
                 width,
                 height,

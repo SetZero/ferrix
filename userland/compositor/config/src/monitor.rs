@@ -388,6 +388,27 @@ impl MonitorRule {
         names(&self.name, name, description)
     }
 
+    /// The rule of `rules`, in the order the file has them, that is the one
+    /// for a monitor called `name` that describes itself as `description`:
+    /// the last that names it, by its connector or by `desc:`; or, where none
+    /// does, the last with no name at all.
+    ///
+    /// Hyprland's `CMonitorRuleManager::get`: it walks the rules backwards
+    /// for one that `matchesStaticSelector` -- which a rule with no name never
+    /// is -- and only then falls back to the rule with no name, of which it
+    /// keeps the last written, since adding a rule drops any other of the same
+    /// name. So `monitor = desc:…` above a catch-all `monitor = , …` is still
+    /// that monitor's rule, as a configuration written for several monitors
+    /// has it.
+    #[must_use]
+    pub fn for_monitor<'a>(rules: &'a [Self], name: &str, description: &str) -> Option<&'a Self> {
+        rules
+            .iter()
+            .rev()
+            .find(|rule| !rule.name.is_empty() && rule.matches(name, description))
+            .or_else(|| rules.iter().rev().find(|rule| rule.name.is_empty()))
+    }
+
     /// The scale as a number: `auto` is 1, and a scale at or below zero is
     /// not one, so it is 1 as well.
     #[must_use]

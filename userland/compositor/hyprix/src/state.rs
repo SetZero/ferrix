@@ -246,7 +246,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         report(&format!("hyprix: {} window rules", window_rules.len()));
     }
     // What the whole desktop covers, which is what the pointer moves over.
-    let (width, height) = Screen::desktop(&screens);
+    let desktop = Screen::desktop(&screens);
 
     // Where the socket goes. Wayland's rule is `$XDG_RUNTIME_DIR/<name>`,
     // which is what a session manager sets; a compositor started as init on a
@@ -320,7 +320,8 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             None
         }
     };
-    let mut seat = Seat::new(&config, width, height);
+    let mut seat = Seat::new(&config, desktop.2, desktop.3);
+    seat.place_at(desktop.0, desktop.1);
     let mut animations = crate::animate::Animations::new(&config);
     // What `hyprctl animations`, `configerrors` and `rollinglog` read,
     // gathered when the configuration is read rather than on every frame.
@@ -574,8 +575,9 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             screen.backend.modes_changed() | changed
         }) && follow_modes(&mut screens, &rules, options.renderer, &mut state, report)
         {
-            let (width, height) = Screen::desktop(&screens);
+            let (x, y, width, height) = Screen::desktop(&screens);
             seat.resize(width, height);
+            seat.place_at(x, y);
             let outputs: Vec<compositor_server::Output> =
                 screens.iter().map(Screen::output).collect();
             for slot in &mut slots {
@@ -3073,13 +3075,11 @@ impl Screen {
             let description = backend.description();
             // The last rule that names this monitor, or the last rule with
             // no name at all: Hyprland reads the file top to bottom and a
-            // later line wins. A rule names a monitor by its connector or
-            // by `desc:` and its description, and a person writes the
-            // second because a connector's name moves when a cable does.
-            let rule = rules
-                .iter()
-                .rev()
-                .find(|rule| rule.matches(&name, &description));
+            // later line wins, but a catch-all is only for a monitor no line
+            // names. A rule names a monitor by its connector or by `desc:`
+            // and its description, and a person writes the second because a
+            // connector's name moves when a cable does.
+            let rule = MonitorRule::for_monitor(rules, &name, &description);
             if rule.is_some_and(|rule| rule.disabled) {
                 continue;
             }
@@ -3214,21 +3214,39 @@ impl Screen {
     }
 
     /// What every screen covers together, which is the space the pointer
-    /// moves in.
-    fn desktop(screens: &[Self]) -> (u32, u32) {
-        let width = screens
+    /// moves in: its left and top edges, and its width and height.
+    ///
+    /// From the leftmost and topmost screen, not from 0, 0: a monitor rule
+    /// may put the only screen at `2560x0`, as a configuration written for
+    /// three monitors puts its middle one, and the pointer must then move
+    /// over that screen and not over the 2560 pixels left of it where
+    /// nothing is. Hyprland's layout box is the same.
+    fn desktop(screens: &[Self]) -> (i64, i64, u32, u32) {
+        let left = screens
+            .iter()
+            .map(|screen| screen.rect.x)
+            .min()
+            .unwrap_or(0);
+        let top = screens
+            .iter()
+            .map(|screen| screen.rect.y)
+            .min()
+            .unwrap_or(0);
+        let right = screens
             .iter()
             .map(|screen| screen.rect.right())
             .max()
             .unwrap_or(0);
-        let height = screens
+        let bottom = screens
             .iter()
             .map(|screen| screen.rect.bottom())
             .max()
             .unwrap_or(0);
         (
-            u32::try_from(width).unwrap_or(0),
-            u32::try_from(height).unwrap_or(0),
+            left,
+            top,
+            u32::try_from(right.saturating_sub(left)).unwrap_or(0),
+            u32::try_from(bottom.saturating_sub(top)).unwrap_or(0),
         )
     }
 
@@ -4666,12 +4684,7 @@ fn follow_modes(
     state: &mut State,
     report: &mut dyn FnMut(&str),
 ) -> bool {
-    let rule = |screen: &Screen| {
-        rules
-            .iter()
-            .rev()
-            .find(|rule| rule.matches(&screen.name, &screen.description))
-    };
+    let rule = |screen: &Screen| MonitorRule::for_monitor(rules, &screen.name, &screen.description);
     let mut changed = false;
     for screen in screens.iter_mut() {
         let Some(preferred) = screen.backend.preferred() else {
