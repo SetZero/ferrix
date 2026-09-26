@@ -33,6 +33,7 @@ mod early;
 mod fallible;
 mod fdt;
 mod fs;
+mod gs201_usb;
 mod hooks;
 mod init;
 mod input;
@@ -2287,6 +2288,7 @@ fn register_load(view: &BootView<'_>) {
     let registered = syscall::launch::install()
         .and_then(|()| fs::install())
         .and_then(|()| stm32mp1::install(view))
+        .and_then(|()| gs201_usb::install())
         .and_then(|()| block_ring::install())
         .and_then(|()| net_ring::install())
         .and_then(|()| display::install())

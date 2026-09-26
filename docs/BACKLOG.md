@@ -275,6 +275,7 @@ log path and commit; a new sighting is added to its row the day it is seen.
 | The ports built only when stale, not on every `cargo xtask ports` (5). Work is on branch `os-12/ports-autobuild` (1dd0e503: staleness per port, a build lock, the Linux path, Windows through WSL), state unreported; read its commits before trusting them | open |
 | zinc-next's remaining 21 points, as sized on 2026-09-17: the builtins B1 to B4 (B1 starts with the `BIN_FG` numbering fix), the history ring and file, ZLE, completion and modules, and the swap to `zinc` | open |
 | The `AF_PACKET` gaps: frames this host sends copied to `ETH_P_ALL` sockets (`PACKET_OUTGOING`), packet sockets on the loopback, and classic BPF (`SO_ATTACH_FILTER`, `SO_DETACH_FILTER`) | open |
+| The Pixel 7's USB serial port, live: during a native boot Ferrix presents a CDC-ACM port on the phone's USB-C port, and `tools/pixel7/monitor` streams the boot and `ferrix-statd`'s lines from `/dev/ttyACM*` rather than from the `ramoops` record afterwards. Asked for by the owner on 2026-09-26. The brief and plan are `docs/PIXEL7-USB-HANDOVER.md`: a read-only survey of what ABL leaves, the `TREE_GS201_DWC3` board binding, `libs/dwc3` and `libs/usb-device` tested against a register model, `user/usbdev` under devmgr, the console to USB, and the monitor. Any power-domain write waits for the owner's word. Branch `pixel7-usb` | ferrix-9c |
 
 ### The desktop and the GPU, what is left
 

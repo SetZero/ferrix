@@ -186,6 +186,7 @@
         "block_ring/**",
         "display/**",
         "fs/**",
+        "gs201_usb.rs",
         "input/**",
         "net/**",
         "net_ring/**",

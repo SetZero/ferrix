@@ -178,6 +178,11 @@ pub const TREE_STM32_USBH: u16 = 2;
 /// physical addresses, so a buffer it reads must be physically contiguous
 /// (`docs/GPU.md` §6.3).
 pub const TREE_STM32_GPU: u16 = 3;
+/// [`DeviceInfo::device_id`] of the Pixel 7's USB device controller, a
+/// Synopsys DWC3 on the phone's USB-C port: its registers in `common`,
+/// nothing in `device`, and its interrupt as vector 0. Its memory is not
+/// snooped, so the driver pins what it shares with `PIN_COHERENT`.
+pub const TREE_GS201_DWC3: u16 = 4;
 /// How many input control channels one USB host's node may hold at once.
 pub const USB_INPUT_FUNCTIONS: usize = 8;
 

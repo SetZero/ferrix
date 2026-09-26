@@ -611,6 +611,7 @@ fn device_name(index: usize) -> Option<Vec<u8>> {
             let kind = match node.binding() {
                 ferrix_native_abi::types::TREE_STM32_HDMI => "display-controller",
                 ferrix_native_abi::types::TREE_STM32_USBH => "usbh-ehci",
+                ferrix_native_abi::types::TREE_GS201_DWC3 => "dwc3",
                 _ => "device",
             };
             name::platform(&mut out, base, kind);
