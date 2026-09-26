@@ -7322,7 +7322,10 @@ staged until now.
   program than it looks. `xwayland_shell_v1` on the compositor's side is a
   table. 40 points as a first guess, most of it the server, counted in
   stage 19's remainder and not again here.
-* **Sound.** Ferrix has no audio at all: a `virtio-snd` driver in ring 3,
+* **Sound.** Playback is done, 2026-09-26 (`docs/AUDIO.md` §8): a
+  `virtio-snd` driver in ring 3, the audio core and `/dev/snd`, and Chrome
+  playing through them, which `test-audio` and `test-chrome-audio` gate.
+  What stage 22 still needs of it is the server. As it was written: Ferrix had no audio at all: a `virtio-snd` driver in ring 3,
   an audio core with a `/dev/snd` shaped enough for a client library, and a
   server speaking the PulseAudio or PipeWire protocol over a Unix socket,
   which is what Steam and every game link against. 30 points as a first

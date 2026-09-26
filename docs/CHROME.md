@@ -362,7 +362,17 @@ that a program which asks for isolation now finds out it cannot have it.
   fonts, which is what these are for. Note that `compositor/README.md`'s "no
   C device stack, ever" is a rule about the compositor, not about its
   clients.
-* **No audio at all**, which a browser survives and a person notices.
+* ~~**No audio at all**, which a browser survives and a person notices.~~
+  **Done, 2026-09-26** (`docs/AUDIO.md`): Chrome's audio service falls back
+  to ALSA, since there is no libpulse on the volume, and plays through
+  alsa-lib's `default`, which is `plug` over `/dev/snd/pcmC0D0p`. The volume
+  now carries alsa-lib's configuration (`libasound2-data`, linked at
+  `/usr/share/alsa`), and `window_command` passes
+  `--alsa-output-device=default`, `--audio-buffer-size=960` and
+  `--autoplay-policy=no-user-gesture-required`. `cargo xtask
+  test-chrome-audio` requires a page's 440 Hz tone in the file QEMU writes;
+  `run-compositor --chrome --audio pipewire` plays it aloud, from the welcome
+  page's button.
 
 ---
 

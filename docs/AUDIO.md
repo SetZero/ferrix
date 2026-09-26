@@ -598,8 +598,7 @@ underrun, drop, reset, close and a driver that lies are each checked; the
 refine answers alsa-lib's `any`, `set_*` and `set_*_near` calls. The
 `sndctl` fuzz target ran 5,047,081 scripts in five minutes on nazuna,
 mixing requests, completions and lies, without breaking a property.
- `ferrix-linux-abi` gained `EBADFD` and
-`ESTRPIPE`.
+`ferrix-linux-abi` gained `EBADFD` and `ESTRPIPE`.
 
 L4 is done (2026-09-26): `libs/virtio-snd` is the driver's logic over a
 transport, its own scratch memory and the core's buffer. §3.3 decided most
@@ -626,7 +625,56 @@ requests in order. They also cover what a hostile device and a hostile
 core are refused. It is not fuzzed yet: virtio-input's driver fuzz target
 builds its own device, and this crate's device lives in its tests.
 
-The rest of this document is design, with §2's calls read from source and
-§3.3's device read from QEMU 9.2.4's, and none of it run on Ferrix yet. L5
-is next: `user/snd`, devmgr's entry, `SOUND_CONTROL_CREATE` and the
-kernel's core task. It is the first landing that changes the image.
+L5, L6 and L7 are done (2026-09-26), in one landing since none is
+testable without the others. They met the audio iteration's exit on x86-64
+and AArch64:
+
+* **L5.** `user/snd` is the driver process. devmgr starts it for PCI
+  0x1059 (`Kind::Sound`), and `sound_control_create` (native call 0x1050)
+  gives it its channel. `kernel/src/audio` is the core: a task per card
+  that judges HELLO, allocates the stream's buffer as a four-page VMO,
+  publishes the card and answers READY with it. The boot line is
+  `audio    card0 virtio-snd: playback 48000 Hz, 2 channels, S16_LE, 1
+  stream left out`.
+* **L6.** devfs has `/dev/snd/controlC0` (116:0) and `pcmC0D0p` (116:16)
+  while a card is published. `kernel/src/audio/pcm.rs` answers §3.4's
+  subset over `ferrix-sndctl`'s stream. `WRITEI_FRAMES` copies from the
+  program with no lock held and then submits, and a non-blocking descriptor
+  gets a short count or `EAGAIN`. Every message the stream asks the driver
+  for is written with the stream's lock held, so SUBMITs reach the driver
+  in sequence order whether a program's write or a completion made them.
+  `/sys/class/sound` is not published: no client of this iteration reads
+  it.
+* **L7.** `compositor/tone` and `cargo xtask test-audio`. A second of the
+  counter, written through the ALSA ioctls in 700-frame blocks, was found
+  in QEMU's WAV file frame for frame, on x86-64 and on AArch64. It took
+  1.1 s of guest time, the device's own pace. The negative control failed
+  at frame 10561, the first frame of the period it moved. §4 said
+  `10 × 960 + 1`; the moved period is the eleventh, so it is `11 × 960 + 1`.
+  `--audio BACKEND` puts the card on any boot: `pipewire` or `pa` to hear
+  it, `wav:PATH` to record it.
+
+Chrome plays through it (`docs/CHROME.md` §3). Its audio service falls back
+to ALSA by itself, since there is no libpulse on the volume. It asks
+`snd_pcm_set_params` for S16, stereo, 48 kHz, which is exactly the one
+configuration, through alsa-lib's `default`, which is `plug` over the card.
+The volume gained `libasound2-data`, linked at `/usr/share/alsa`, and Chrome
+gained three flags (`xtask/src/chrome.rs`, `window_command`). `cargo xtask
+test-chrome-audio` boots the desktop with Chrome on a page that plays
+440 Hz and requires the tone in the card's WAV file. Its first run under
+KVM found 6.6 s of it at 439.9 Hz, amplitude 6553 (the page's gain of 0.2),
+with no gap anywhere. `cargo xtask run-compositor --chrome --audio pipewire`
+puts the same card behind the host's PipeWire, and the welcome page's
+button plays the tone aloud.
+
+Three things are still open:
+
+* **§3.3's reading of QEMU was of 9.2.4.** The QEMU these runs used is
+  10.2.1: `~/.local/bin` on nazuna links it ahead of `/usr/local/bin`'s
+  9.2.4, and it is the one that has `pipewire` and `pa`. §6's decision 8 is
+  answered by that link for x86-64. AArch64 runs 9.2.4's, and passed.
+* **ARMv7-A is not run yet.** The card is attached without
+  `iommu_platform=on` there, as input's devices are.
+* **The server is not written.** U1 and U2 remain, and §6 decision 5's
+  proposal is unchanged.
+
