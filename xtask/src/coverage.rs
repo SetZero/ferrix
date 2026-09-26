@@ -228,6 +228,14 @@ const SUITE: &[Gate] = &[
         .only(Arch::AArch64)
         .on_machine("acpi=off,gic-version=3")
         .on_cpu("max"),
+    // The reference ARMv7-A core is a Cortex-A7, which Arm lists as affected
+    // by no Spectre variant, so the switch barrier the kernel keeps for the
+    // cores that are is never issued on it. A Cortex-A15 is one of those, and
+    // the one other ARMv7-A core `virt` takes: the A8 and A9 have no generic
+    // timer.
+    Gate::new("test-boot", "boot-a15", false)
+        .only(Arch::Armv7a)
+        .on_cpu("cortex-a15"),
     Gate::new("test-shell", "shell", true),
     Gate::new("test-vfs", "vfs", true).only(Arch::X86_64),
     Gate::new("test-net", "net", true),
