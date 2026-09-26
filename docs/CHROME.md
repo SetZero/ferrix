@@ -47,6 +47,7 @@ what is left:
 | The zygote, which could not learn its children's pids until `SCM_CREDENTIALS` carried them | **done** 2026-09-26: `test-chrome` (glibc and ferrousli) and `test-chrome-window` run without `--no-zygote` (§8) |
 | Chrome's speed: a futex wait woken every 5 ms, the HPET as the clock under KVM, `munmap` walking every page of a reservation, a shootdown for every write to a page after a fork, and the virtio-gpu doorbell held by QEMU | **done** 2026-09-26: idle 443% of a processor → 15%, the machine 96% busy → 6%, a turning box 1.5 frames a second → 60.8; `cargo xtask bench-chrome` (§9) |
 | Chrome on the desktop's persistent btrfs root | **done** 2026-09-26: `/dev/shm` was not mounted there; `cargo xtask test-chrome-window --btrfs-root` (§9) |
+| Chrome's text, its name for the system, and Chrome for Testing's bar | **done** 2026-09-26: Inter and Liberation from the tree with slight hinting, Ferrix in the user agent, `navigator` and the client hints, no bar (§9) |
 | Chrome on ferrousli's `libc.so.6` in glibc's place | **done** 2026-09-26, x86-64, headless, `cargo xtask test-chrome --interpreter ferrousli --library ferrousli` (§8); the window build on it is not tried |
 | Chrome on the STM32MP157D-DK1: an armhf Chromium, an SDMMC driver, page-cache eviction | not started, ≈ 45–55 points (§10) |
 | Chromium built against ferrousli, with Alpine's musl patches rebased | not needed for a first Chrome: the prebuilt one runs (§5, §8) |
@@ -848,6 +849,50 @@ came to about 160 MiB between them. The browser holds 46, two renderers
 36 and 27, and the rest 17 and less. Anonymous memory is what Chrome
 itself asks for, and there is not much of it to take away. The rest of
 the 521 is cached file pages and the kernel.
+
+**What it looks like, the same day.** The customer's screenshot showed three
+things. Chrome drew everything, its own tabs and toolbar included, in
+DejaVu Sans Mono. It said it was Linux. And a bar under the toolbar said
+Chrome for Testing is for automated testing only.
+
+- **The font.** On the desktop `/etc/fonts` is foot's port: its
+  `fonts.conf` includes `conf.d`, and the port makes none. fontconfig knew
+  no generic family and no metric alias, so `sans`, `sans-serif` and
+  `Arial` all fell to the one font it had, foot's monospace. The desktop
+  now links `/etc/fonts/conf.d` to the volume's, Debian's. The faces are
+  in the tree, in `fonts/`, so no image depends on a font installed
+  anywhere: Inter 4.1 as the sans-serif, and Liberation 2.1.5, the faces
+  metric-compatible with Arial, Times New Roman and Courier New, which are
+  Chrome's own defaults on Linux. Both are under the SIL Open Font
+  License. xtask carries them to `/usr/share/ferrix/fonts` with
+  `fonts/fonts.conf`, which `FONTCONFIG_FILE` names. That file adds the
+  directory, puts Inter first for `sans`, `sans-serif` and `system-ui`,
+  asks for greyscale antialiasing with slight hinting, and then includes
+  the system's configuration. A page's CSS `sans-serif` is not fontconfig's
+  alias. It is a preference of Chrome's own, Arial on Linux, and the
+  extension below sets it to Inter.
+- **The name.** `--user-agent` gives `Mozilla/5.0 (Ferrix x86_64) ...
+  Chrome/154.0.0.0`, and nothing else. Measured on the host:
+  `navigator.platform` stays `Linux x86_64`, even with `uname` faked to say
+  Ferrix. `navigator.userAgentData.platform` and the `Sec-CH-UA-Platform`
+  header stay `Linux`. All three are constants in Chrome's build, and no
+  switch reaches them. So Chrome loads an extension from the image,
+  `xtask/chrome-extension`. Its `declarativeNetRequest` rule sets the
+  header on every request, the first navigation included. A main-world
+  script at `document_start` answers `navigator.platform` and the platform
+  in `userAgentData` with Ferrix. A worker's `navigator` is not reached,
+  since content scripts do not run in workers. `chrome://version` is not
+  reached either, as no extension runs on Chrome's own pages. With a user
+  agent of its own, Chrome also leaves the `architecture` client hint
+  empty.
+- **The bar.** `--disable-infobars` removes it.
+  `test-chrome-window` now counts 623 621 yellow pixels where it counted
+  532 386, because the page has the bar's height.
+
+The user agent has spaces, and the compositor split an `exec` line at every
+space. It now splits the line as `sh -c` would for quoting alone
+(`compositor/hyprix/src/command.rs`), which is what a Hyprland
+configuration assumes, since Hyprland hands the line to the shell.
 
 ---
 

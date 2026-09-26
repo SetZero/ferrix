@@ -106,9 +106,132 @@ pub(crate) const MEMORY: u32 = 4096;
 /// browser, emulated when there is no KVM.
 const TIMEOUT: u64 = 1800;
 
+/// What the browser in a window says it is: Chrome's own user agent, reduced
+/// as Chrome reduces it, with Ferrix where the build says `X11; Linux`.
+/// There is no X11 here either; the window is Wayland's.
+pub(crate) const USER_AGENT: &str = "Mozilla/5.0 (Ferrix x86_64) AppleWebKit/537.36 \
+     (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
+
+/// Where the image carries `xtask/chrome-extension`, which the browser in a
+/// window loads.
+///
+/// `--user-agent` changes the user agent and nothing else: Chrome's build
+/// answers `navigator.platform` with `Linux x86_64` and the client hints --
+/// `navigator.userAgentData` and the `Sec-CH-UA-Platform` header -- with
+/// `Linux`, from constants, whatever `uname` says, and no switch reaches
+/// them. The extension rewrites the header and the page's `navigator`. It
+/// also sets the font Chrome gives a page's `sans-serif`, a preference of its
+/// own that no switch sets either.
+const EXTENSION: &str = "usr/share/ferrix/chrome-extension";
+
+/// The extension's files, by name.
+const EXTENSION_FILES: &[(&str, &str)] = &[
+    (
+        "manifest.json",
+        include_str!("../chrome-extension/manifest.json"),
+    ),
+    ("rules.json", include_str!("../chrome-extension/rules.json")),
+    (
+        "platform.js",
+        include_str!("../chrome-extension/platform.js"),
+    ),
+    ("fonts.js", include_str!("../chrome-extension/fonts.js")),
+];
+
+/// Where the image carries the tree's `fonts/`: Inter, Liberation and the
+/// fontconfig file that adds them to the system's, which `FONTCONFIG_FILE`
+/// names ([`WINDOW_ENV`]). `fonts/README.md` says what each face is for and
+/// where it came from.
+const FONTS: &str = "usr/share/ferrix/fonts";
+
+/// `fonts/`'s files, by their path under it.
+const FONT_FILES: &[(&str, &[u8])] = &[
+    ("fonts.conf", include_bytes!("../../fonts/fonts.conf")),
+    (
+        "inter/InterVariable.ttf",
+        include_bytes!("../../fonts/inter/InterVariable.ttf"),
+    ),
+    (
+        "inter/InterVariable-Italic.ttf",
+        include_bytes!("../../fonts/inter/InterVariable-Italic.ttf"),
+    ),
+    ("inter/LICENSE", include_bytes!("../../fonts/inter/LICENSE")),
+    (
+        "liberation/LiberationSans-Regular.ttf",
+        include_bytes!("../../fonts/liberation/LiberationSans-Regular.ttf"),
+    ),
+    (
+        "liberation/LiberationSans-Bold.ttf",
+        include_bytes!("../../fonts/liberation/LiberationSans-Bold.ttf"),
+    ),
+    (
+        "liberation/LiberationSans-Italic.ttf",
+        include_bytes!("../../fonts/liberation/LiberationSans-Italic.ttf"),
+    ),
+    (
+        "liberation/LiberationSans-BoldItalic.ttf",
+        include_bytes!("../../fonts/liberation/LiberationSans-BoldItalic.ttf"),
+    ),
+    (
+        "liberation/LiberationSerif-Regular.ttf",
+        include_bytes!("../../fonts/liberation/LiberationSerif-Regular.ttf"),
+    ),
+    (
+        "liberation/LiberationSerif-Bold.ttf",
+        include_bytes!("../../fonts/liberation/LiberationSerif-Bold.ttf"),
+    ),
+    (
+        "liberation/LiberationSerif-Italic.ttf",
+        include_bytes!("../../fonts/liberation/LiberationSerif-Italic.ttf"),
+    ),
+    (
+        "liberation/LiberationSerif-BoldItalic.ttf",
+        include_bytes!("../../fonts/liberation/LiberationSerif-BoldItalic.ttf"),
+    ),
+    (
+        "liberation/LiberationMono-Regular.ttf",
+        include_bytes!("../../fonts/liberation/LiberationMono-Regular.ttf"),
+    ),
+    (
+        "liberation/LiberationMono-Bold.ttf",
+        include_bytes!("../../fonts/liberation/LiberationMono-Bold.ttf"),
+    ),
+    (
+        "liberation/LiberationMono-Italic.ttf",
+        include_bytes!("../../fonts/liberation/LiberationMono-Italic.ttf"),
+    ),
+    (
+        "liberation/LiberationMono-BoldItalic.ttf",
+        include_bytes!("../../fonts/liberation/LiberationMono-BoldItalic.ttf"),
+    ),
+    (
+        "liberation/LICENSE",
+        include_bytes!("../../fonts/liberation/LICENSE"),
+    ),
+];
+
+/// The files an image with the browser in a window carries beside the
+/// volume's links: the extension, and the fonts.
+pub(crate) fn window_files() -> Vec<crate::ports::File> {
+    let extension = EXTENSION_FILES
+        .iter()
+        .map(|(name, text)| (format!("{EXTENSION}/{name}"), text.as_bytes()));
+    let fonts = FONT_FILES
+        .iter()
+        .map(|(name, bytes)| (format!("{FONTS}/{name}"), *bytes));
+    extension
+        .chain(fonts)
+        .map(|(path, bytes)| crate::ports::File {
+            path,
+            mode: 0o644,
+            content: crate::ports::Content::Bytes(bytes.to_vec()),
+        })
+        .collect()
+}
+
 /// The command that starts the full browser in a window on the compositor,
-/// showing `page`, which may hold no spaces: the compositor splits a command
-/// at them.
+/// showing `page`, which may hold no spaces or quotes: it is one word of the
+/// command, which the compositor splits as a shell would.
 ///
 /// `--ozone-platform=wayland` makes Chrome a Wayland client, drawing through
 /// `wl_shm`; `--disable-gpu` keeps its GPU process to software, since the
@@ -116,19 +239,26 @@ const TIMEOUT: u64 = 1800;
 /// which is tmpfs whatever the root is -- on the desktop's persistent btrfs
 /// root too since 2026-09-26, when the kernel began mounting one there; before
 /// that, it was devfs's bare directory there, and Chrome stopped at once.
-/// `--no-sandbox` for the reason at the top of this file.
+/// `--no-sandbox` for the reason at the top of this file. `--disable-infobars`
+/// takes away the bar Chrome for Testing shows under the toolbar, saying it
+/// is for automated testing only. [`USER_AGENT`] and [`EXTENSION`] say
+/// Ferrix where Chrome says Linux.
 pub(crate) fn window_command(page: &str) -> String {
     format!(
         "/data/chrome-window/chrome --no-sandbox --ozone-platform=wayland \
          --user-data-dir=/dev/shm/chrome --no-first-run --disable-gpu --disable-crash-reporter \
-         --disable-breakpad --enable-logging=stderr {page}"
+         --disable-breakpad --enable-logging=stderr --disable-infobars \
+         '--user-agent={USER_AGENT}' --load-extension=/{EXTENSION} {page}"
     )
 }
 
 /// The environment the compositor gives Chrome, as `env =` lines: a home in
 /// tmpfs, for [`window_command`]'s reason -- NSS keeps its database there --
-/// and a runtime directory that can be written.
-pub(crate) const WINDOW_ENV: &str = "env = HOME,/dev/shm\nenv = XDG_RUNTIME_DIR,/tmp\n";
+/// a runtime directory that can be written, and [`FONTS`]'s fontconfig file,
+/// which includes the system's. The compositor gives these to every program
+/// it starts, so foot draws with the same fonts file.
+pub(crate) const WINDOW_ENV: &str = "env = HOME,/dev/shm\nenv = XDG_RUNTIME_DIR,/tmp\n\
+     env = FONTCONFIG_FILE,/usr/share/ferrix/fonts/fonts.conf\n";
 
 /// Where `scripts/fetch-chrome.sh` writes, unless `FERRIX_CHROME_VOLUME`
 /// names another directory.
@@ -311,6 +441,43 @@ mod tests {
         assert!(!script.contains(COMPUTED));
         assert!(script.contains("Hello from Chrome on Ferrix"));
         assert!(!script.contains("'PAGE'") && !script.contains("'PICTURE'"));
+    }
+
+    #[test]
+    fn the_user_agent_is_one_quoted_word_of_the_window_command() {
+        let command = window_command("data:text/html,x");
+        let quoted: Vec<&str> = command.split('\'').collect();
+        assert_eq!(quoted.len(), 3, "{command}");
+        assert_eq!(quoted[1], format!("--user-agent={USER_AGENT}"));
+        assert!(USER_AGENT.contains("(Ferrix x86_64)") && !USER_AGENT.contains("Linux"));
+        assert!(command.contains(&format!("--load-extension=/{EXTENSION} ")));
+    }
+
+    #[test]
+    fn fontconfig_is_pointed_at_the_carried_fonts() {
+        let conf = String::from_utf8_lossy(FONT_FILES[0].1);
+        assert_eq!(FONT_FILES[0].0, "fonts.conf");
+        assert!(WINDOW_ENV.contains(&format!("env = FONTCONFIG_FILE,/{FONTS}/fonts.conf\n")));
+        assert!(conf.contains(&format!("<dir>/{FONTS}</dir>")));
+        assert!(conf.contains("<include ignore_missing=\"yes\">/etc/fonts/fonts.conf</include>"));
+        let paths: Vec<_> = window_files().into_iter().map(|file| file.path).collect();
+        for face in [
+            "inter/InterVariable.ttf",
+            "liberation/LiberationSans-Regular.ttf",
+        ] {
+            assert!(paths.contains(&format!("{FONTS}/{face}")), "{face}");
+        }
+    }
+
+    #[test]
+    fn the_extension_carries_every_file_its_manifest_names() {
+        let files = window_files();
+        let manifest = EXTENSION_FILES[0].1;
+        for (name, _) in &EXTENSION_FILES[1..] {
+            assert!(manifest.contains(&format!("\"{name}\"")), "{name}");
+        }
+        let carried = files.iter().filter(|file| file.path.starts_with(EXTENSION));
+        assert_eq!(carried.count(), EXTENSION_FILES.len());
     }
 
     #[test]

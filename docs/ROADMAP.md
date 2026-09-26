@@ -4216,6 +4216,15 @@ root's mounts include it now, `run-compositor --chrome` no longer forces a
 tmpfs root, and `cargo xtask test-chrome-window --btrfs-root` requires the
 page on the screen from a fresh btrfs root (`docs/CHROME.md` §9).
 
+**Done (2026-09-26): what Chrome looks like and what it says it is.** Its
+text was all foot's monospace, because the desktop's fontconfig had no
+`conf.d`. It is now Inter and Liberation, carried from the tree's `fonts/`
+and drawn with slight hinting. The user agent, `navigator.platform`, the
+client hints and the `Sec-CH-UA-Platform` header say Ferrix, through
+`--user-agent` and an extension of the tree's own. Chrome for Testing's bar
+is gone. The compositor now splits an `exec` line as the shell would for
+its quoting (`docs/CHROME.md` §9).
+
 **Still to do:**
 
 * The zygote's fork fails on Ferrix, so the tests run Chrome with
@@ -4227,6 +4236,8 @@ page on the screen from a fresh btrfs root (`docs/CHROME.md` §9).
   `proc_util.cc:115` with `ENOENT` on Ferrix (`docs/CHROME.md` §8, item 8).
 * `inotify`, and the GPU: Chrome draws in software. (The vDSO landed on
   x86-64 on 2026-09-26: `docs/CHROME.md` §3.)
+* Where Chrome still says Linux: a worker's `navigator`, and
+  `chrome://version`, which no extension reaches.
 * **The STM32MP157D-DK1**, sized on 2026-09-24 (`docs/CHROME.md` §10), about
   45 to 55 points: an armhf browser, Debian 13's Chromium 150, on the same
   kind of volume (3); a ring-3 SDMMC driver so the volume can live on the

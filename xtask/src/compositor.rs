@@ -2220,6 +2220,7 @@ fn desktop(
     if args.chrome {
         let links = chrome_links(&carried.ports);
         carried.ports.extend(links);
+        carried.ports.extend(crate::chrome::window_files());
         if args.everything {
             let links = rustc_links(&carried.ports);
             carried.ports.extend(links);
@@ -4739,7 +4740,11 @@ fn chrome_window_config() -> String {
 /// `/etc/fonts` and its one font in `/usr/share/fonts`; that
 /// configuration scans every directory under `/usr/share/fonts`, so there the
 /// volume's fonts are linked in beside foot's as `truetype`, where Debian
-/// keeps them, and `/etc/fonts` stays foot's.
+/// keeps them. `/etc/fonts/fonts.conf` stays foot's, and includes
+/// `/etc/fonts/conf.d`, which foot's port does not make: that is linked to
+/// the volume's, Debian's. Without it fontconfig knew no generic family and
+/// no metric alias, and Chrome drew every face, its own tabs and toolbar
+/// too, in foot's one font, a monospace.
 fn chrome_links(carried: &[crate::ports::File]) -> Vec<crate::ports::File> {
     let taken = |path: &str| {
         carried.iter().any(|file| {
@@ -4756,6 +4761,8 @@ fn chrome_links(carried: &[crate::ports::File]) -> Vec<crate::ports::File> {
             links.push((path, target));
         } else if path == "usr/share/fonts" {
             links.push(("usr/share/fonts/truetype", "/data/usr/share/fonts/truetype"));
+        } else if path == "etc/fonts" && !taken("etc/fonts/conf.d") {
+            links.push(("etc/fonts/conf.d", "/data/etc/fonts/conf.d"));
         }
     }
     crate::rustc::files(&links)
@@ -4826,8 +4833,10 @@ pub(crate) fn test_chrome_window(args: &Args) -> Result<()> {
         args.memory = crate::chrome::MEMORY;
     }
     let programs = Programs::build(arch)?;
+    let mut ports = crate::rustc::files(crate::chrome::LINKS);
+    ports.extend(crate::chrome::window_files());
     let carried = Carried {
-        ports: crate::rustc::files(crate::chrome::LINKS),
+        ports,
         ..Carried::none()
     };
     let (image, kernel) = build_image(
@@ -5014,6 +5023,7 @@ pub(crate) fn bench_chrome(args: &Args) -> Result<()> {
     })?;
     let programs = Programs::build(arch)?;
     let mut ports = crate::rustc::files(crate::chrome::LINKS);
+    ports.extend(crate::chrome::window_files());
     ports.push(crate::ports::File {
         path: "etc/bench.sh".to_owned(),
         mode: 0o644,

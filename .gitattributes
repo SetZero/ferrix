@@ -21,3 +21,6 @@
 # line endings, changing the input the target replays.
 fuzz/corpus/** binary
 fuzz/artifacts/** binary
+
+# Fonts: TrueType outlines, not text.
+*.ttf binary
