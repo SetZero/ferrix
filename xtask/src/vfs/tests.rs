@@ -255,6 +255,20 @@ const APPLETS_ON_X86_64: &[(usize, &[&str])] = &[
             "root took its shell back",
         ],
     ),
+    (
+        19,
+        &[
+            "4+0 records in",
+            "4+0 records out",
+            "4096 bytes (4.0KB) copied, 0.000531 seconds, 7.4MB/s",
+            "4+0 records in",
+            "4+0 records out",
+            "4096 bytes (4.0KB) copied, 0.000499 seconds, 7.8MB/s",
+            "4+0 records in",
+            "4+0 records out",
+            "4096 bytes (4.0KB) copied, 0.000507 seconds, 7.7MB/s",
+        ],
+    ),
 ];
 
 /// A log of the applets alone, numbered after the criterion's commands, each

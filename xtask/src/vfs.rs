@@ -28,10 +28,10 @@
 //! applets that a sweep of the static Alpine build found failing, each for a
 //! filesystem piece that has since been added -- `/proc/<pid>/cwd` and
 //! `root`, `/proc/sys`, `/proc/partitions`, `/proc/stat`, and `mknod` of a
-//! character device. They guard those pieces against coming undone. They are
-//! not the criterion, so they are judged and reported as a group of their own:
-//! the criterion's line says what it always said, and a failing applet fails
-//! the test on a line of its own.
+//! character device, and `lseek` on `/dev/null`. They guard those pieces
+//! against coming undone. They are not the criterion, so they are judged and
+//! reported as a group of their own: the criterion's line says what it always
+//! said, and a failing applet fails the test on a line of its own.
 //!
 //! # The log
 //!
@@ -337,8 +337,33 @@ pub(crate) const APPLETS: &[Command] = &[
             "root took its shell back",
         ]),
     },
+    // `lseek` on the memory devices answers 0, as Linux's does, rather than
+    // `ESPIPE`: busybox `dd` seeks its output for `seek=` and its input for
+    // `skip=`, and dies if the output's seek is refused. The last copy goes
+    // through a `mknod`ed node, which reaches the device another way.
+    Command {
+        argv: &["sh", "-c", DD_SCRIPT],
+        status: 10,
+        expect: Expect::Shaped(&[
+            "4+0 records in",
+            "4+0 records out",
+            "4+0 records in",
+            "4+0 records out",
+            "4+0 records in",
+            "4+0 records out",
+        ]),
+    },
     // `mount -t proc` and `mount -t devtmpfs` go here once mount takes them.
 ];
+
+/// busybox's own `dd`, by path, since uutils has a `dd` too: a plain copy
+/// from `/dev/zero` to `/dev/null`, one that seeks both, and one that seeks
+/// a node `mknod` made. Each failure exits with a status of its own.
+const DD_SCRIPT: &str = r"/bin/busybox dd if=/dev/zero of=/dev/null bs=1k count=4 || exit 1
+/bin/busybox dd if=/dev/zero of=/dev/null bs=1k count=4 skip=1 seek=1 || exit 2
+mknod /tmp/dd-null c 1 3 || exit 3
+/bin/busybox dd if=/dev/zero of=/tmp/dd-null bs=1k count=4 seek=1 || exit 4
+exit 10";
 
 /// Root makes a private file, a closed directory and a script nobody may
 /// execute; `su` becomes the image's user `ferrix`, uid 1000, which is
