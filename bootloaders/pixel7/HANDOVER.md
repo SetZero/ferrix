@@ -275,10 +275,14 @@ them). Check any new one against the phone before you rely on it.
 
 ## What to do next, most important first
 
-Nothing on the list. The phone boots all eight cores, seeded, with KASLR
-and the boot console, to `FERRIX-BOOT-OK`. What is next for it is new work:
-a display driver of its own, input, storage, or the DK1's side of the
-TRNG (`TRNG_RND32`, if its TF-A answers it).
+1. **A USB device driver**, so a native boot streams its console and
+   `ferrix-statd`'s samples to the PC live, as a crosvm guest already does:
+   `docs/PIXEL7-USB-HANDOVER.md` is the brief. Not started.
+
+Otherwise the phone boots all eight cores, seeded, with KASLR and the boot
+console, to `FERRIX-BOOT-OK`, and further work is new: a display driver of
+its own, input, storage, or the DK1's side of the TRNG (`TRNG_RND32`, if its
+TF-A answers it).
 
 ### Done, for the record
 
