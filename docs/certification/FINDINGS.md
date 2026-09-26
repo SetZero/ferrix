@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-16 findings are open and 23 are closed, of 39. F-10 advanced from 71.4% to 81.9%, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
+16 findings are open and 23 are closed, of 39. F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -328,54 +328,66 @@ only `debug_hook`, which its own handler runs. The boot's lines are unchanged.
 
 ## B. Verification
 
-### F-10 — statement coverage is 81.9%, not 100%
-**Major**, advanced 2026-09-25 from 71.4%. Adding `test-jobs` to the union
-takes the certified item to 5,795 of 7,073 statements: core 80.4%, item ring
-85.2%.
+### F-10 — statement coverage is 74.7%, not 100%
+**Major**, re-measured 2026-09-26 on main at a6d505a2, with KASLR. Every boot
+gate that exercises the item now contributes, on every architecture: the
+certified item is 5,103 of 6,828 statements on x86-64 (74.7%), 5,189 of 7,041
+on AArch64 (73.7%) and 4,895 of 6,908 on ARMv7-A (70.9%). `cargo xtask coverage` runs the
+suite and fails below the floor `coverage-floor.json` records, which is W-7's
+ratchet.
 
-The residual is now enumerated *and sorted*:
-`coverage-residual-x86_64.json` lists all 1,278 unreached statements by file
-and line, and [COVERAGE-RESIDUAL.md](COVERAGE-RESIDUAL.md) puts each into the
-category table A-7 asks about.
+**The 81.9% published on 2026-09-25 was wrong**, and not in one direction.
+`coverage-report.py` had two defects (VERIFICATION.md §3.4): a search sentinel
+below the higher half that skipped every block starting exactly on a
+statement, which under-reported x86-64 and AArch64 by about a third, and a
+union that read every gate's trace against one kernel although the gates build
+different ones, which over-reported by crediting statements nobody ran. The
+figure was the two netted against each other. The corrected suite, with eight
+more gates in it than the published one had, reads seven points lower.
 
-The sorted answer is less comfortable than the percentage. **103 statements are
-argued** — 65 unreachable on the measured architecture, 38 reached only when
-the kernel is stopping — 121 are a statement about which machine was measured
-rather than an argument, and **1,054 simply need a test**. 82% of the residual
-is real work, not justification.
+The four gates that used to write an empty trace -- `test-btrfs`,
+`test-shell`, `test-sysfs`, `test-restart` -- ended by killing QEMU, and the
+plugin writes its table only when QEMU exits. xtask now asks QEMU to stop
+before killing it, and numbers each boot's trace so a gate that boots several
+times keeps them all. AArch64 also boots once on a GICv3, the Pixel 7's
+interrupt controller, which the default `virt` does not have.
 
-Two things learned in the attempt. Four further gates -- `test-btrfs`,
-`test-shell`, `test-sysfs`, `test-restart` -- pass under the plugin and write
-an *empty* trace, because the plugin flushes when QEMU exits and those gates
-end by killing it; their coverage is unobtainable until they power the guest
-down instead. And part of the residual is unreachable by construction rather
-than untested: `iommu/smmuv3.rs` is 65 statements of AArch64 IOMMU that no
-x86-64 run can reach, so the justification has to be made per configuration.
+The residual is enumerated per architecture (`coverage-residual-<arch>.json`)
+and sorted in [COVERAGE-RESIDUAL.md](COVERAGE-RESIDUAL.md). On x86-64, **146
+statements are argued** -- 131 of another architecture's code, 15 reached only
+when stopping -- 259 are a statement about which machine was measured, and
+**1,320 simply need a test**; AArch64 owes 1,481 and ARMv7-A 1,446.
+[COVERAGE-WORKLIST.md](COVERAGE-WORKLIST.md) groups them by module for the
+test-writing that closes this.
 
-*Closes when:* the 1,054 in the *needs-a-test* category are covered or
-individually justified. The other 224 have their argument written.
+*Closes when:* the *needs-a-test* category is covered or individually
+justified on every architecture. The argued categories have their argument
+written.
 
 ### F-11 — coverage measures the debug profile, the item ships release
 **Closed 2026-09-25.** The release profile is now measured:
-`coverage-x86_64-release.json`, 47.6% of the item against the debug profile's
-46.6% on the same gate.
+`coverage-x86_64-release.json`, 75.2% of the item from one boot against the
+debug profile's 71.6% on the same gate (re-measured 2026-09-26 with the
+corrected tool; the figures first published were 47.6% and 46.6%, F-10 says
+why).
 
 The finding's premise was right and its expected consequence was wrong. The
-percentage barely moves; the *denominator* moves by a third, 7,065 statements
-to 4,798, because optimisation leaves fewer distinct `is_stmt` rows to reach.
-So the number survives a change of profile and the population being counted
-does not, which is the thing a submission has to state. VERIFICATION.md §3.2.
+percentage moves a few points; the *denominator* moves by a third, 6,828
+statements to 4,462, because optimisation leaves fewer distinct `is_stmt` rows
+to reach. So the number survives a change of profile and the population being
+counted does not, which is the thing a submission has to state. VERIFICATION.md
+§3.2.
 
 ### F-12 — coverage is x86-64 only
-**Closed 2026-09-25.** AArch64 at 46.1% and ARMv7-A at 70.8% of the item, one
-`test-boot` each: `coverage-aarch64.json`, `coverage-armv7a.json`. Every
-architecture in the reference configuration can now be measured, which is what
-this finding asked.
+**Closed 2026-09-25.** Every architecture in the reference configuration can be
+measured, which is what this finding asked; since 2026-09-26 each has the
+whole suite and not one boot: `coverage-aarch64.json` at 73.7% and
+`coverage-armv7a.json` at 70.9% of the item.
 
-Raising them to the four-gate suite x86-64 has is part of F-10, not this. The
-gap between the two Arm numbers is itself informative and recorded in
-VERIFICATION.md §3.2: x86-64 carries more arch-specific code that a plain boot
-never reaches, so the same gate covers a smaller share of it.
+The gap first recorded between them -- ARMv7-A at 70.8% from one boot against
+46.1% for AArch64, put down to x86-64 and AArch64 carrying more arch-specific
+code -- was the tool's sentinel defect, which only 64-bit addresses met. The
+three agree within four points.
 
 ### F-13 — no decision or MC/DC coverage
 **Informational.** Not required at DAL C. Required at DAL B and DAL A, and the
@@ -455,6 +467,12 @@ TOR-3 records that it has **no independent verification** and does not pretend
 otherwise. Its mitigation is that both biases are declared, the residual is
 enumerable, and cross-checking it against raw `objdump` is what found three
 measurement defects. Qualification would need a second implementation.
+
+That mitigation was tested on 2026-09-26 and held only partly: two more
+defects were found, and the published 81.9% had both (F-10). Neither showed in
+the tool's own output. They were found by comparing architectures, which
+disagreed on generic code every boot runs -- a cross-check, not a second
+implementation, and one the per-architecture evidence now makes routine.
 
 The finding stands on that residual.
 

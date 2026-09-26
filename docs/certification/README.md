@@ -16,7 +16,7 @@ that does not exist.
 | Target | Standard | Verdict |
 |---|---|---|
 | EAL5+ | Common Criteria (ISO/IEC 15408) | **Not met.** Security Target and vulnerability analysis written, and the boundary has no upward reference left; blocked on design evidence at module granularity and an accredited laboratory. |
-| DAL C | DO-178C / ED-12C | **Not met.** Coverage is measured, at 81.9%; planning data, requirements traceability and the 1,054 statements that still need a test are not done. |
+| DAL C | DO-178C / ED-12C | **Not met.** Coverage is measured on every architecture, at 74.7% on x86-64; planning data, requirements traceability and the 1,320 statements that still need a test are not done. |
 | Class C | IEC 62304 | **Closest of the four.** No SOUP in the item; element-level safety analysis written. Blocked on a QMS and the integrator's risk file. |
 | SIL 2 | EN 50716:2023 | **Reachable.** Most of Annex A satisfied; generic software argument and application conditions written. Blocked on independent assessment. |
 
@@ -34,9 +34,10 @@ specific, measured, and mostly documents rather than code.
 * [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) — what the item allocates, and what it promises about time
 * [SOUP.md](SOUP.md) — generated; the item contains none
 * [VERIFICATION.md](VERIFICATION.md) — what exercises the item, and the traceability gap
-* [COVERAGE-RESIDUAL.md](COVERAGE-RESIDUAL.md) — generated; the uncovered statements, sorted into argued and gap
+* [COVERAGE-RESIDUAL.md](COVERAGE-RESIDUAL.md) — generated; the uncovered statements per architecture, sorted into argued and gap
+* [COVERAGE-WORKLIST.md](COVERAGE-WORKLIST.md) — generated; the statements that need a test, by module, for whoever writes them
 * [TOOLS.md](TOOLS.md) — tool classification under EN 50716 §6.7 and DO-330
-* `coverage-x86_64.json` — statement coverage evidence, per file
+* `coverage-<arch>.json`, `coverage-residual-<arch>.json` — statement coverage evidence per file, and the unreached lines; `coverage-floor.json` — the ratchet
 
 **Not written, and why.** A *hazard analysis* and a *risk management file*
 (F-20) need an application: hazards belong to a device or a train, not to a
@@ -74,9 +75,9 @@ boundary.
 | Item product code | 51,525 lines |
 | Uncertified load | 47,528 lines |
 | In-kernel self-tests | 31,785 lines |
-| Statement coverage, certified item | **81.9%** |
-| Statement coverage, core ring | 80.4% |
-| Unreached statements | 1,278 — **103 argued, 1,054 need a test** |
+| Statement coverage, certified item | **74.7%** x86-64, 73.7% AArch64, 70.9% ARMv7-A |
+| Statement coverage, core ring | 72.1% x86-64 |
+| Unreached statements, x86-64 | 1,725 — **146 argued, 1,320 need a test** |
 | SOUP in the item | **0** |
 | External crates, host-side | 21 |
 | Upward boundary references | **0**, from 94 at the start of the work (29 and 62 before the gate could resolve module paths) |
@@ -151,7 +152,7 @@ decomposed to the item's modules.
 
 62 objectives, 5 requiring independence.
 
-*In place:* statement coverage is now measurable and measured (F-10 at 81.9%),
+*In place:* statement coverage is now measurable and measured (F-10 at 74.7%),
 which was the objective everyone assumes is impossible for a kernel. 492 lines
 of assembly across 22 allow-listed sites makes the source-to-object question
 tractable. Zero Cargo features in the item, and one two-valued build switch of
@@ -216,11 +217,10 @@ In order of value per unit of effort:
    assert rich properties; they need requirement ids attached and low-level
    requirements to attach them to. This one piece of work unblocks DAL C,
    62304 §5.4 and `ADV_TDS.3`.
-2. **Cover the 1,054 statements that need a test (F-10).** Four gates —
-   `test-btrfs`, `test-shell`, `test-sysfs`, `test-restart` — write an empty
-   trace because they end by killing QEMU; powering the guest down instead is
-   the cheapest part. The two Arm architectures have one gate's worth of data
-   each and want the suite.
+2. **Cover the 1,320 statements that need a test (F-10).** Every gate now
+   counts on every architecture, and `cargo xtask coverage` ratchets the
+   union; what is left is tests. COVERAGE-WORKLIST.md splits them by module,
+   so the work divides. AArch64 owes 1,481 and ARMv7-A 1,446.
 3. **Adopt Ferrocene (F-17).** A qualified toolchain is the difference between
    "written in a memory-safe language" as a talking point and as evidence.
    Whether it covers `armv7a-none-eabi` and the UEFI targets is the first

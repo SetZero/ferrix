@@ -65,79 +65,99 @@ check.rs` at 9,537 lines, `object/check.rs` at 3,318, `user/check.rs` at 1,263,
 
 ## 3. Structural coverage
 
-Measured 2026-09-25. Raw per-file data in `coverage-*.json`.
+Measured 2026-09-26, and **not comparable with the figures published on
+2026-09-25**, which two defects in the measurement made wrong in opposite
+directions (§3.4). Raw per-file data in `coverage-*.json`; the ratchet in
+`coverage-floor.json`.
 
-### 3.1 The suite, x86-64
+### 3.1 The suite, every architecture
 
-Union of five boot gates — `test-boot`, `test-threads`, `test-vfs`,
-`test-net`, `test-jobs` — on the debug profile:
+The union of every boot gate that exercises the item and passes under the
+plugin — `cargo xtask coverage` runs them. Thirteen on x86-64: `test-boot`,
+`test-shell`, `test-vfs`, `test-net`, `test-threads`, `test-pty`, `test-btrfs`,
+`test-powerfail`, `test-display`, `test-input`, `test-jobs`, `test-restart` and
+`test-sysfs`. Nine on AArch64 and on ARMv7-A (`--smp 2`): the x86-64-only four
+are `test-jobs`, `test-restart` and `test-sysfs`, which carry uutils, and
+`test-vfs`, which fails off x86-64 for a reason of its own (§3.5). AArch64 runs
+`test-boot` a second time on a `virt` with a GICv3 and its ITS
+(`FERRIX_ARM_MACHINE=gic-version=3`): the default `virt` has a GICv2, and
+without that boot the Pixel 7's interrupt controller reads as 187 statements
+nobody reached. Debug profile, measured on main at a6d505a2, with KASLR:
 
-| Ring | Reached | Total | Covered |
+| Ring | x86-64 | AArch64 | ARMv7-A |
 |---|---:|---:|---:|
-| `core` | 3,904 | 4,854 | **80.4%** |
-| `item` | 1,891 | 2,219 | **85.2%** |
-| **Certified item** | **5,795** | **7,073** | **81.9%** |
-| `load` (not claimed) | 7,938 | 10,874 | 73.0% |
+| `core` | 3,754 / 5,205 — 72.1% | 3,890 / 5,441 — 71.5% | 3,625 / 5,325 — 68.1% |
+| `item` | 1,349 / 1,623 — 83.1% | 1,299 / 1,600 — 81.2% | 1,270 / 1,583 — 80.2% |
+| **Certified item** | **5,103 / 6,828 — 74.7%** | **5,189 / 7,041 — 73.7%** | **4,895 / 6,908 — 70.9%** |
+| `load` (not claimed) | 8,139 / 11,674 — 69.7% | 8,000 / 11,709 — 68.3% | 8,115 / 11,809 — 68.7% |
 
-**Not every gate can contribute.** `test-btrfs`, `test-shell`, `test-sysfs` and
-`test-restart` all pass under the plugin and all write an empty trace: the
-plugin flushes its table when QEMU exits, and those gates end by killing it.
-Their coverage is unobtainable by this method until they are taught to power
-the guest down. That is a limitation of the collection, not of the tests, and
-it is why the suite above is five gates and not nine.
+**Every gate now counts.** `test-btrfs`, `test-shell`, `test-sysfs`,
+`test-restart` and the rest used to pass under the plugin and write an empty
+trace: the plugin writes its table when QEMU exits, and those gates ended by
+killing it. xtask now asks QEMU to stop (SIGTERM, which QEMU treats as a host
+shutdown and exits from normally) before it kills it, and numbers the trace of
+every boot after a gate's first, since the plugin truncates its file at each
+start and `test-shell` boots four times. The one boot that still leaves
+nothing is `test-powerfail`'s churn, whose point is that QEMU is killed with no
+chance to finish anything; its replay boots count.
+
+**Most of it is the boot.** One `test-boot` reaches 71.6% of the item on
+x86-64; the other twelve gates add 3.1 points between them. The self-checks
+that run on every boot (§2) are the item's real test suite, and the gates
+mostly exercise the uncertified load ring above it — 69.7% of `load` against
+one boot's 57.9%.
 
 ### 3.1.1 The residual
 
-`coverage-residual-x86_64.json` lists all **1,278** statements in the item the
-suite did not reach, by file and line. DO-178C wants each one either driven by
-a new requirements-based test or justified as unreachable defensive code, and
-neither conversation can start from a percentage.
+`coverage-residual-<arch>.json` lists every statement in the item the suite did
+not reach, by file and line, on each architecture. DO-178C wants each one
+either driven by a new requirements-based test or justified as unreachable
+defensive code, and neither conversation can start from a percentage.
+[COVERAGE-RESIDUAL.md](COVERAGE-RESIDUAL.md) sorts them:
 
-Where it concentrates:
+| | x86-64 | AArch64 | ARMv7-A |
+|---|---:|---:|---:|
+| Unreached | 1,725 | 1,852 | 2,013 |
+| Argued: another architecture or board | 131 | 124 | 144 |
+| Argued: reached only when stopping | 15 | 8 | 61 |
+| Hardware the machine does not present | 259 | 239 | 362 |
+| **Needs a test** | **1,320** | **1,481** | **1,446** |
 
-| Statements | Ring | File |
-|---:|---|---|
-| 81 | core | `device.rs` |
-| 65 | core | `iommu/smmuv3.rs` |
-| 62 | core | `mm.rs` |
-| 62 | item | `syscall/native.rs` |
-| 62 | core | `vmap.rs` |
-| 60 | item | `main.rs` |
+[COVERAGE-WORKLIST.md](COVERAGE-WORKLIST.md) groups the last row by module,
+with each file's count on every architecture and the lines no architecture
+reaches, so that a module can be taken as one piece of work. The largest on
+x86-64: `user/space.rs` 107, `iommu.rs` 94, `main.rs` 70, `mm.rs` 69,
+`sched/task.rs` 60, `syscall/native.rs` 59.
 
-`iommu/smmuv3.rs` is the shape of a justification rather than a gap: it is the
-AArch64 IOMMU, and no x86-64 run can reach it. Measuring the same residual on
-AArch64 would move those 65 statements from *unreached* to *covered*, which is
-an argument the analysis has to make per configuration rather than once.
+The failure path is mostly covered now, and by a passing test: `test-shell`'s
+last boot asks for `ferrix.onexit=panic` and gets FX-1501, so the panic report
+runs — 15 statements of it are left on x86-64 and 8 on AArch64. ARMv7-A's
+61 are mostly the panic screen's renderer (53), which that boot does not draw
+there.
 
-### 3.2 Every architecture, and both profiles
+### 3.2 One boot, and both profiles
 
-One `test-boot` each, so these are **not** comparable with the four-gate suite
-above; they answer whether the configuration can be measured at all, which
-until now it could not.
+One `test-boot` each, for the question F-11 and F-12 asked — whether each
+configuration can be measured at all — and not for comparison with §3.1.
 
 | Configuration | Certified item | Core | Statements |
 |---|---:|---:|---:|
-| x86-64, debug, one boot | 46.6% | 44.9% | 7,065 |
-| x86-64, **release**, one boot | **47.6%** | 47.8% | 4,798 |
-| AArch64, debug, one boot | 46.1% | 44.2% | 6,841 |
-| ARMv7-A, debug, one boot | **70.8%** | 66.8% | 7,127 |
+| x86-64, debug, one boot | 71.6% | 69.3% | 6,828 |
+| x86-64, **release**, one boot | **75.2%** | 74.3% | 4,462 |
+| AArch64, debug, one boot | 68.6% | 65.6% | 7,041 |
+| ARMv7-A, debug, one boot | 69.0% | 66.3% | 6,908 |
 
-Two things in that table are worth reading carefully.
+**The profile moves the denominator more than the percentage.** Release
+optimisation cuts the item's statement count by a third — 6,828 to 4,462 —
+because inlining and merging leave fewer distinct `is_stmt` rows to reach. The
+proportion reached moves 3.6 points. So a submission has to say which profile
+it measured, and this one measures both, which is what F-11 asked for.
 
-**The profile moves the denominator, not the percentage.** Release optimisation
-cuts the item's statement count by a third — 7,065 to 4,798 — because inlining
-and merging leave fewer distinct `is_stmt` rows to reach. The proportion
-reached barely moves, 46.6% to 47.6%. So the coverage *figure* survives the
-change of configuration while the *population being counted* does not, and a
-submission has to say which one it measured. This one measures release as well
-as debug, which is what F-11 asked for.
-
-**ARMv7-A reaches far more from one boot** — 70.8% against x86-64's 46.6% on
-the same gate. Not a better-tested architecture: x86-64 carries more
-arch-specific code that a plain boot never touches (the APIC, MSI, the GDT, the
-`SYSCALL` entry, the paranoid-stack path), so its denominator contains more
-code that only later gates reach. It is a reminder that a coverage percentage
-is only meaningful against a stated configuration and a stated test set.
+**The three architectures agree**, within four points, on one boot and on the
+suite. The table published on 2026-09-25 had ARMv7-A at 70.8% against 46.6%
+and 46.1% for the 64-bit pair, and explained the gap by x86-64's larger
+arch-specific share. That explanation was wrong: the gap was a defect in the
+tool that only 64-bit addresses met (§3.4).
 
 ### 3.3 Method
 
@@ -148,21 +168,81 @@ which is what gcov-shaped tools count. `scripts/coverage-report.py` intersects
 the two and attributes each file to a ring using the same classifier the
 boundary gate uses, so the two cannot disagree.
 
+Gates build different kernels — `test-shell` builds its program in, `test-vfs`
+and `test-net` their command lists — so each boot's trace is kept with the ELF
+it ran (`<trace>.kernel` names it), each trace is read against its own ELF,
+less the slide KASLR gave that boot (`<trace>.slide`), and the union is of
+*statements*, a file and a line. The denominator is the
+plain `test-boot` build's.
+
+To reproduce, with QEMU's `contrib/plugins/libdrcov.so` built:
+
+```
+FERRIX_DRCOV=/path/to/qemu/build/contrib/plugins/libdrcov.so \
+  cargo xtask coverage --arch x86_64 \
+    --init "$HOME/.local/share/ferrix/busybox/{arch}/bin/busybox.static"
+```
+
+That runs the suite with `--accel tcg` (a TCG plugin observes nothing under
+KVM, and the launcher refuses rather than reporting zero), writes the traces to
+`build/coverage/<arch>`, prints the `coverage-report.py` command it runs, and
+fails below the architecture's floor in `coverage-floor.json`. It needs boots,
+so it is not part of `cargo xtask check`. Adding `--json` and `--residual` to
+the printed command regenerates the evidence, and
+`scripts/gen-coverage-justification.py` the two documents from it.
+
 **What this supports.** DO-178C table A-7 objective 5 at DAL C asks for
 statement coverage. This is that measurement, for ring-0 code, on every
 architecture and both profiles in the reference configuration, without
 modifying the toolchain.
 
-**What it does not.** 81.9% is not 100%. The residual is enumerated and
-sorted in [COVERAGE-RESIDUAL.md](COVERAGE-RESIDUAL.md), and 1,054 of its 1,278
-statements still need a test rather than an argument (F-10). The Arm architectures have only a single
-gate's worth of data, not the suite (F-12 is closed in the sense that they can
-now be measured; raising them is part of F-10). There is no decision or MC/DC
-coverage, which DAL C does not require and DAL B and A do (F-13).
+**What it does not.** 74.7% is not 100%. The residual is enumerated and
+sorted, and 1,320 of x86-64's 1,725 statements still need a test rather than an
+argument (F-10); AArch64 and ARMv7-A owe 1,481 and 1,446. There is no decision
+or MC/DC coverage, which DAL C does not require and DAL B and A do (F-13).
 
 Two biases, both optimistic and both declared in the tool's own docstring: a
 basic block credits every statement inside it even if a trap left it early, and
 optimised builds map one address to several source lines.
+
+### 3.4 Two defects, and what they did to the published figures
+
+Found 2026-09-26 by comparing the three architectures' per-file results, which
+disagreed on generic code that every boot runs — `syscall/mod.rs`'s dispatch
+arms for `brk`, `munmap` and `wait4` read unreached on x86-64 and reached on
+ARMv7-A — and then reading the raw blocks against `objdump`.
+
+1. **A sentinel below the higher half.** The lookup that asks whether an
+   address lies in an executed block searched with `(address, 1 << 62)`,
+   meant to sort after every block starting at that address. Every block end
+   in a kernel linked at `0xffffffff80000000` is above `1 << 62`, so a block
+   starting *exactly* on a statement was never found. On x86-64 and AArch64
+   that under-reported by about a third: one boot of the 2026-09-25 tree read
+   46.6% and was 73.4%. ARMv7-A's 32-bit addresses never met it.
+2. **Every trace read against one ELF.** The union read all the gates' traces
+   against whichever kernel was built last, and the gates build different
+   kernels whose code sits at different addresses. On the 2026-09-25 tree,
+   `test-vfs`'s trace read against the `test-boot` build gives 66.4% of the
+   item; against its own, 73.6%. Misattributed blocks land on statements
+   nobody ran, so this over-reported, and more the more gates were in the
+   union.
+
+The published 81.9% had both, one pulling each way, and neither this tool nor
+anyone could have told it from a correct figure. Both are fixed in the tool,
+and TOOLS.md TOR-3 records them beside the three found before.
+
+### 3.5 What the suite leaves out
+
+`test-vfs` on AArch64 and ARMv7-A fails with and without the plugin: its
+permissions command expects uutils' `cat: /tmp/dac-private: Permission denied`,
+and the Arm images carry busybox, which says `cat: can't open ...`. The kernel
+refused correctly; the expectation is x86-64's. `test-seat` and
+`test-compositor` pass under TCG but not under the plugin, which slows TCG
+enough that the first misses its redraw and the second trips the TLB
+shootdown's bound (`processor 0 never flushed its TLB for a shootdown`). A
+failing run is not coverage evidence, so none of the three counts. `test-foot`,
+`test-video`, `test-vkgears`, `test-rustc`, `test-chrome` and `test-selfhost`
+need a GL host, ports or fetched volumes.
 
 ## 4. The traceability gap
 

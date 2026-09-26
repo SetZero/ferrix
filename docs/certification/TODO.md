@@ -162,56 +162,46 @@ core's product code names nothing above it.
 
 ---
 
-## 2. Coverage — the tooling exists, nobody has run it
+## 2. Coverage — measured everywhere, ratcheted, and short of 100%
 
-All three commands below work today. Reproducing the audit's number:
+One command runs the suite on an architecture and fails below its floor:
 
 ```
-FERRIX_QEMU_PLUGIN="/home/sebastian/Documents/qemu/qemu/build/contrib/plugins/libdrcov.so,filename=/tmp/cov-boot.drcov" \
-  cargo run -q -p xtask -- test-boot --arch x86_64 --accel tcg
-
-python3 scripts/coverage-report.py \
-  --drcov /tmp/cov-boot.drcov \
-  --elf target/x86_64-unknown-none/debug/ferrix-kernel
+FERRIX_DRCOV=/home/sebastian/Documents/qemu/qemu/build/contrib/plugins/libdrcov.so \
+  cargo xtask coverage --arch x86_64 \
+    --init "$HOME/.local/share/ferrix/busybox/{arch}/bin/busybox.static"
 ```
 
-`--accel tcg` is mandatory — a TCG plugin sees nothing under KVM, and the
-launcher refuses rather than reporting zero. Gates needing a userland want
-`--init "$HOME/.local/share/ferrix/busybox/{arch}/bin/busybox.static"`;
-`test-vfs` and `test-net` fail without it.
+It prints the `coverage-report.py` command it ran; add `--json` and
+`--residual` to regenerate `coverage-<arch>.json` and
+`coverage-residual-<arch>.json`, then run
+`scripts/gen-coverage-justification.py`. **Re-measure rather than trust the
+figures below**: the ones published on 2026-09-25 were wrong (2.3), and the
+kernel moves under them.
 
 ### 2.1 Measure AArch64 and ARMv7-A — **F-12**
-**Done 2026-09-25**: AArch64 46.1%, ARMv7-A 70.8%, one `test-boot` each.
-Raising them to the full suite is part of 2.3.
-
-Both are in the reference configuration with no data at all. The tooling is
-architecture-agnostic; the ELF path and QEMU binary change. Note ARMv7-A wants
-`--smp 2` to match the board.
+**Done 2026-09-25, the suite since 2026-09-26**: AArch64 73.7%, ARMv7-A 70.9%
+(`--smp 2`). AArch64's single-boot figure first published, 46.1%, had the
+sentinel defect in 2.3; ARMv7-A's 70.8% did not, and stands for its tree.
 
 ### 2.2 Measure the release profile — **F-11**
-**Done 2026-09-25**: 47.6% against debug's 46.6% on the same gate. The
-percentage barely moves and the denominator shrinks by a third; VERIFICATION.md
-§3.2 states it.
+**Done 2026-09-25, re-measured 2026-09-26**: 75.2% against debug's 71.6% on one
+boot. The denominator shrinks by a third and the percentage moves a few points;
+VERIFICATION.md §3.2 states it.
 
-The reference configuration is `release`; the audit measured `debug`. Optimised
-builds inline, so the line table is approximate and the number will move.
-Measure it, then either adopt release as the coverage configuration or write
-the argument for the difference. DAL C requires one or the other.
+### 2.3 Cover what needs a test — **F-10**
+**Measured 2026-09-26** at 74.7% on x86-64 over thirteen gates. The 81.9%
+before it was the net of two defects in `coverage-report.py`, one each way
+(VERIFICATION.md §3.4), both fixed. COVERAGE-RESIDUAL.md sorts the residual
+per architecture: on x86-64 146 argued, 259 depending on the machine, **1,320
+that need a test**.
 
-### 2.3 Push past 81.9% — **F-10**
-**Advanced 2026-09-25** from 71.4%, by adding `test-jobs`. The residual is
-enumerated and sorted in COVERAGE-RESIDUAL.md: 103 statements argued, 121
-depending on which machine was measured, and **1,054 that need a test**.
-
-`test-btrfs`, `test-shell`, `test-sysfs` and `test-restart` pass under the
-plugin and write an *empty* trace, because the plugin flushes when QEMU exits
-and those gates end by killing it. Make them power the guest down, then add
-them and `test-powerfail` to the union.
+The work left is tests, one module at a time, from COVERAGE-WORKLIST.md.
 
 ### 2.4 Make coverage a ratchet
-`coverage-report.py --min-item N` already fails below a threshold. Once the
-number is stable, wire it into `cargo xtask check` — or a slower CI job, since
-it needs a boot — so coverage cannot regress silently.
+**Done 2026-09-26** as `cargo xtask coverage` against `coverage-floor.json`.
+Not in `cargo xtask check`, since it needs boots, and not in CI, whose packaged
+QEMU carries no drcov plugin. Raise the floor with the evidence.
 
 ### 2.5 Build a complexity and recursion gate — **F-25**
 **Done 2026-09-25** by `scripts/check-complexity.py`.

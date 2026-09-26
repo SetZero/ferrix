@@ -1,556 +1,293 @@
 {
+  "arch": "armv7a",
   "profile": "debug",
-  "blocks_executed": 103872,
-  "blocks_in_image": 88319,
+  "traces": 22,
+  "blocks_executed": 2400073,
+  "blocks_in_image": 907156,
   "rings": {
-    "item": {
-      "total": 2158,
-      "hit": 1725
-    },
     "core": {
-      "total": 4969,
-      "hit": 3319
+      "total": 5325,
+      "hit": 3625
     },
     "load": {
-      "total": 11008,
-      "hit": 6161
+      "total": 11809,
+      "hit": 8115
+    },
+    "item": {
+      "total": 1583,
+      "hit": 1270
     }
   },
   "files": {
-    "pci.rs": {
-      "ring": "item",
-      "total": 114,
-      "hit": 77
-    },
-    "mmio.rs": {
-      "ring": "core",
-      "total": 14,
-      "hit": 9
-    },
-    "user/vmo.rs": {
-      "ring": "core",
-      "total": 239,
-      "hit": 186
-    },
-    "syscall/credentials.rs": {
-      "ring": "load",
-      "total": 155,
-      "hit": 120
-    },
     "sched/mod.rs": {
       "ring": "core",
-      "total": 363,
-      "hit": 322
+      "total": 367,
+      "hit": 330
     },
-    "syscall/process.rs": {
-      "ring": "load",
-      "total": 553,
-      "hit": 412
-    },
-    "arch/armv7a/cpu.rs": {
-      "ring": "core",
-      "total": 90,
-      "hit": 51
-    },
-    "timer.rs": {
-      "ring": "core",
-      "total": 18,
-      "hit": 12
-    },
-    "sched/wait.rs": {
-      "ring": "core",
-      "total": 59,
-      "hit": 46
-    },
-    "iommu/gate.rs": {
-      "ring": "core",
-      "total": 31,
-      "hit": 1
-    },
-    "irq.rs": {
-      "ring": "core",
-      "total": 13,
-      "hit": 7
-    },
-    "net/packet.rs": {
-      "ring": "load",
-      "total": 132,
-      "hit": 59
-    },
-    "render/mod.rs": {
-      "ring": "load",
-      "total": 365,
-      "hit": 4
-    },
-    "net/netlink/mod.rs": {
-      "ring": "load",
-      "total": 101,
-      "hit": 48
-    },
-    "acpi.rs": {
-      "ring": "core",
-      "total": 24,
-      "hit": 8
-    },
-    "mm.rs": {
-      "ring": "core",
-      "total": 297,
-      "hit": 215
-    },
-    "syscall/uaccess.rs": {
-      "ring": "core",
-      "total": 307,
-      "hit": 269
-    },
-    "arch/armv7a/mod.rs": {
-      "ring": "core",
-      "total": 97,
-      "hit": 49
-    },
-    "fs/mod.rs": {
-      "ring": "load",
-      "total": 79,
-      "hit": 69
-    },
-    "syscall/time.rs": {
-      "ring": "load",
-      "total": 162,
-      "hit": 98
-    },
-    "console.rs": {
-      "ring": "core",
-      "total": 51,
-      "hit": 34
-    },
-    "object/job.rs": {
-      "ring": "core",
-      "total": 194,
-      "hit": 147
-    },
-    "syscall/load.rs": {
-      "ring": "load",
-      "total": 163,
-      "hit": 144
-    },
-    "device.rs": {
-      "ring": "core",
-      "total": 380,
-      "hit": 238
-    },
-    "syscall/futex.rs": {
-      "ring": "item",
-      "total": 83,
-      "hit": 72
-    },
-    "syscall/family.rs": {
-      "ring": "load",
-      "total": 175,
-      "hit": 123
-    },
-    "arch/armv7a/switch.rs": {
-      "ring": "core",
-      "total": 50,
-      "hit": 38
-    },
-    "arch/armv7a/trap.rs": {
+    "object/channel.rs": {
       "ring": "core",
       "total": 93,
-      "hit": 48
-    },
-    "syscall/registry.rs": {
-      "ring": "item",
-      "total": 62,
-      "hit": 56
-    },
-    "syscall/file.rs": {
-      "ring": "load",
-      "total": 107,
-      "hit": 83
-    },
-    "syscall/timerfd.rs": {
-      "ring": "load",
-      "total": 34,
-      "hit": 33
-    },
-    "fs/timerfd.rs": {
-      "ring": "load",
-      "total": 116,
-      "hit": 105
-    },
-    "sched/queue.rs": {
-      "ring": "core",
-      "total": 124,
-      "hit": 102
-    },
-    "sched/task.rs": {
-      "ring": "core",
-      "total": 107,
-      "hit": 47
-    },
-    "syscall/thread.rs": {
-      "ring": "item",
-      "total": 46,
-      "hit": 26
-    },
-    "syscall/signal.rs": {
-      "ring": "load",
-      "total": 312,
-      "hit": 209
-    },
-    "syscall/mod.rs": {
-      "ring": "item",
-      "total": 145,
-      "hit": 135
-    },
-    "syscall/deliver.rs": {
-      "ring": "load",
-      "total": 98,
-      "hit": 73
-    },
-    "object/interrupt.rs": {
-      "ring": "core",
-      "total": 54,
-      "hit": 37
+      "hit": 72
     },
     "object/port.rs": {
       "ring": "core",
-      "total": 43,
-      "hit": 27
+      "total": 46,
+      "hit": 29
+    },
+    "mm.rs": {
+      "ring": "core",
+      "total": 329,
+      "hit": 244
+    },
+    "arch/armv7a/cpu.rs": {
+      "ring": "core",
+      "total": 99,
+      "hit": 52
+    },
+    "block_ring/mod.rs": {
+      "ring": "load",
+      "total": 281,
+      "hit": 243
+    },
+    "net_ring/mod.rs": {
+      "ring": "load",
+      "total": 156,
+      "hit": 139
+    },
+    "syscall/native.rs": {
+      "ring": "item",
+      "total": 467,
+      "hit": 410
+    },
+    "sched/wait.rs": {
+      "ring": "core",
+      "total": 61,
+      "hit": 49
+    },
+    "fs/socket.rs": {
+      "ring": "load",
+      "total": 405,
+      "hit": 321
     },
     "arch/gicv2.rs": {
       "ring": "core",
       "total": 55,
       "hit": 39
     },
-    "fs/cgroupfs.rs": {
-      "ring": "load",
-      "total": 318,
-      "hit": 249
-    },
-    "syscall/poll.rs": {
-      "ring": "load",
-      "total": 142,
-      "hit": 125
-    },
-    "fs/epoll.rs": {
-      "ring": "load",
-      "total": 126,
-      "hit": 117
-    },
-    "fs/wake.rs": {
-      "ring": "load",
-      "total": 22,
-      "hit": 12
-    },
-    "console/input.rs": {
+    "mmio.rs": {
       "ring": "core",
-      "total": 53,
-      "hit": 36
-    },
-    "fs/block.rs": {
-      "ring": "load",
-      "total": 8,
-      "hit": 3
-    },
-    "fs/anon.rs": {
-      "ring": "load",
-      "total": 7,
-      "hit": 4
-    },
-    "syscall/limits.rs": {
-      "ring": "item",
-      "total": 106,
-      "hit": 85
-    },
-    "render/fence.rs": {
-      "ring": "load",
-      "total": 23,
-      "hit": 0
-    },
-    "sync.rs": {
-      "ring": "core",
-      "total": 3,
-      "hit": 2
-    },
-    "iommu.rs": {
-      "ring": "core",
-      "total": 205,
-      "hit": 85
-    },
-    "trap.rs": {
-      "ring": "core",
-      "total": 65,
-      "hit": 38
-    },
-    "iommu/vtd.rs": {
-      "ring": "core",
-      "total": 114,
-      "hit": 0
-    },
-    "iommu/smmuv3.rs": {
-      "ring": "core",
-      "total": 123,
-      "hit": 0
-    },
-    "syscall/kill.rs": {
-      "ring": "load",
-      "total": 125,
-      "hit": 56
-    },
-    "user/space.rs": {
-      "ring": "core",
-      "total": 652,
-      "hit": 546
-    },
-    "smp.rs": {
-      "ring": "core",
-      "total": 196,
-      "hit": 153
-    },
-    "panic.rs": {
-      "ring": "core",
-      "total": 70,
-      "hit": 8
+      "total": 14,
+      "hit": 9
     },
     "vmap.rs": {
       "ring": "core",
-      "total": 136,
-      "hit": 99
+      "total": 139,
+      "hit": 101
     },
-    "syscall/exec.rs": {
-      "ring": "load",
-      "total": 174,
-      "hit": 112
+    "timer.rs": {
+      "ring": "core",
+      "total": 22,
+      "hit": 16
     },
-    "fs/root_disk.rs": {
+    "syscall/time.rs": {
       "ring": "load",
-      "total": 79,
-      "hit": 9
+      "total": 164,
+      "hit": 107
+    },
+    "console/screen.rs": {
+      "ring": "core",
+      "total": 48,
+      "hit": 7
+    },
+    "console.rs": {
+      "ring": "core",
+      "total": 50,
+      "hit": 36
+    },
+    "syscall/uaccess.rs": {
+      "ring": "core",
+      "total": 339,
+      "hit": 299
+    },
+    "syscall/process.rs": {
+      "ring": "load",
+      "total": 488,
+      "hit": 391
+    },
+    "object/process.rs": {
+      "ring": "core",
+      "total": 110,
+      "hit": 69
+    },
+    "arch/speculation.rs": {
+      "ring": "core",
+      "total": 24,
+      "hit": 17
+    },
+    "arch/armv7a/speculation.rs": {
+      "ring": "core",
+      "total": 22,
+      "hit": 15
+    },
+    "arch/armv7a/mod.rs": {
+      "ring": "core",
+      "total": 107,
+      "hit": 57
+    },
+    "syscall/registry.rs": {
+      "ring": "load",
+      "total": 43,
+      "hit": 39
+    },
+    "syscall/signal.rs": {
+      "ring": "load",
+      "total": 311,
+      "hit": 216
+    },
+    "syscall/thread.rs": {
+      "ring": "load",
+      "total": 62,
+      "hit": 36
+    },
+    "syscall/poll.rs": {
+      "ring": "load",
+      "total": 143,
+      "hit": 131
+    },
+    "user/space.rs": {
+      "ring": "core",
+      "total": 657,
+      "hit": 549
+    },
+    "fs/mod.rs": {
+      "ring": "load",
+      "total": 86,
+      "hit": 76
+    },
+    "syscall/fsctl.rs": {
+      "ring": "load",
+      "total": 145,
+      "hit": 118
     },
     "syscall/fd.rs": {
       "ring": "load",
       "total": 151,
-      "hit": 134
+      "hit": 140
     },
-    "syscall/attributes.rs": {
-      "ring": "load",
-      "total": 125,
-      "hit": 67
-    },
-    "arch/pl011.rs": {
+    "trap.rs": {
       "ring": "core",
-      "total": 34,
-      "hit": 22
-    },
-    "early.rs": {
-      "ring": "core",
-      "total": 26,
-      "hit": 18
-    },
-    "fs/eventfd.rs": {
-      "ring": "load",
-      "total": 58,
-      "hit": 48
-    },
-    "syscall/epoll.rs": {
-      "ring": "load",
-      "total": 87,
-      "hit": 75
-    },
-    "syscall/eventfd.rs": {
-      "ring": "load",
-      "total": 5,
-      "hit": 5
-    },
-    "syscall/signalfd.rs": {
-      "ring": "load",
-      "total": 14,
-      "hit": 13
-    },
-    "fs/signalfd.rs": {
-      "ring": "load",
-      "total": 58,
-      "hit": 48
-    },
-    "syscall/tty.rs": {
-      "ring": "load",
-      "total": 119,
+      "total": 80,
       "hit": 46
     },
-    "fs/pty.rs": {
+    "syscall/memory.rs": {
       "ring": "load",
-      "total": 160,
-      "hit": 5
+      "total": 128,
+      "hit": 113
+    },
+    "syscall/credentials.rs": {
+      "ring": "load",
+      "total": 158,
+      "hit": 122
+    },
+    "syscall/exec.rs": {
+      "ring": "load",
+      "total": 175,
+      "hit": 133
+    },
+    "syscall/image.rs": {
+      "ring": "load",
+      "total": 72,
+      "hit": 60
+    },
+    "smp.rs": {
+      "ring": "core",
+      "total": 205,
+      "hit": 166
     },
     "fs/terminal.rs": {
       "ring": "load",
       "total": 195,
-      "hit": 126
+      "hit": 129
     },
-    "net/mod.rs": {
+    "syscall/system.rs": {
       "ring": "load",
-      "total": 62,
-      "hit": 54
-    },
-    "fs/sysfs.rs": {
-      "ring": "load",
-      "total": 656,
-      "hit": 412
-    },
-    "object/mod.rs": {
-      "ring": "core",
-      "total": 38,
-      "hit": 26
-    },
-    "fs/devfs.rs": {
-      "ring": "load",
-      "total": 225,
-      "hit": 125
-    },
-    "fs/console.rs": {
-      "ring": "load",
-      "total": 46,
-      "hit": 14
-    },
-    "display/mod.rs": {
-      "ring": "load",
-      "total": 326,
-      "hit": 4
-    },
-    "input/mod.rs": {
-      "ring": "load",
-      "total": 134,
-      "hit": 2
-    },
-    "input/evdev.rs": {
-      "ring": "load",
-      "total": 180,
-      "hit": 3
-    },
-    "claim.rs": {
-      "ring": "core",
-      "total": 20,
-      "hit": 2
-    },
-    "arch/armv7a/timer.rs": {
-      "ring": "core",
-      "total": 11,
-      "hit": 6
-    },
-    "syscall/image.rs": {
-      "ring": "load",
-      "total": 65,
-      "hit": 52
-    },
-    "fs/procfs.rs": {
-      "ring": "load",
-      "total": 233,
-      "hit": 190
+      "total": 93,
+      "hit": 75
     },
     "syscall/program.rs": {
       "ring": "item",
       "total": 40,
       "hit": 25
     },
-    "object/pin.rs": {
+    "sched/task.rs": {
       "ring": "core",
-      "total": 16,
-      "hit": 9
-    },
-    "panic/screen.rs": {
-      "ring": "core",
-      "total": 54,
-      "hit": 0
-    },
-    "fs/btrfs.rs": {
-      "ring": "load",
-      "total": 49,
-      "hit": 36
-    },
-    "syscall/flock.rs": {
-      "ring": "load",
-      "total": 183,
-      "hit": 139
-    },
-    "syscall/memory.rs": {
-      "ring": "item",
-      "total": 128,
-      "hit": 113
-    },
-    "syscall/system.rs": {
-      "ring": "item",
-      "total": 93,
-      "hit": 71
-    },
-    "net/socket.rs": {
-      "ring": "load",
-      "total": 337,
-      "hit": 168
-    },
-    "net/ifreq.rs": {
-      "ring": "load",
-      "total": 140,
-      "hit": 0
-    },
-    "fs/procfs/render.rs": {
-      "ring": "load",
-      "total": 304,
-      "hit": 181
-    },
-    "net_ring/mod.rs": {
-      "ring": "load",
-      "total": 149,
-      "hit": 130
-    },
-    "pci/virtio.rs": {
-      "ring": "item",
-      "total": 164,
-      "hit": 105
-    },
-    "init.rs": {
-      "ring": "item",
-      "total": 44,
-      "hit": 11
-    },
-    "stm32mp1.rs": {
-      "ring": "load",
-      "total": 189,
-      "hit": 5
-    },
-    "fs/pipe.rs": {
-      "ring": "load",
-      "total": 186,
-      "hit": 144
-    },
-    "fs/socket.rs": {
-      "ring": "load",
-      "total": 386,
-      "hit": 297
-    },
-    "display/drm.rs": {
-      "ring": "load",
-      "total": 520,
-      "hit": 1
-    },
-    "syscall/sockets.rs": {
-      "ring": "load",
-      "total": 405,
-      "hit": 315
-    },
-    "object/io_mapping.rs": {
-      "ring": "core",
-      "total": 7,
-      "hit": 4
-    },
-    "block_ring/mod.rs": {
-      "ring": "load",
-      "total": 281,
-      "hit": 244
+      "total": 106,
+      "hit": 47
     },
     "signal_frame.rs": {
       "ring": "core",
       "total": 35,
       "hit": 32
+    },
+    "pci/virtio.rs": {
+      "ring": "item",
+      "total": 163,
+      "hit": 103
+    },
+    "iommu.rs": {
+      "ring": "core",
+      "total": 239,
+      "hit": 91
+    },
+    "iommu/vtd.rs": {
+      "ring": "core",
+      "total": 112,
+      "hit": 1
+    },
+    "iommu/smmuv3.rs": {
+      "ring": "core",
+      "total": 129,
+      "hit": 0
+    },
+    "irq.rs": {
+      "ring": "core",
+      "total": 13,
+      "hit": 7
+    },
+    "device.rs": {
+      "ring": "core",
+      "total": 365,
+      "hit": 245
+    },
+    "pci.rs": {
+      "ring": "item",
+      "total": 114,
+      "hit": 78
+    },
+    "panic.rs": {
+      "ring": "core",
+      "total": 51,
+      "hit": 47
+    },
+    "backtrace.rs": {
+      "ring": "core",
+      "total": 12,
+      "hit": 8
+    },
+    "iommu/gate.rs": {
+      "ring": "core",
+      "total": 27,
+      "hit": 0
+    },
+    "fs/btrfs.rs": {
+      "ring": "load",
+      "total": 49,
+      "hit": 41
+    },
+    "syscall/flock.rs": {
+      "ring": "load",
+      "total": 187,
+      "hit": 143
     },
     "syscall/memfd.rs": {
       "ring": "load",
@@ -559,128 +296,428 @@
     },
     "syscall/path.rs": {
       "ring": "load",
-      "total": 232,
-      "hit": 203
+      "total": 234,
+      "hit": 213
     },
-    "fs/sockname.rs": {
-      "ring": "load",
+    "sync.rs": {
+      "ring": "core",
+      "total": 3,
+      "hit": 2
+    },
+    "main.rs": {
+      "ring": "item",
+      "total": 522,
+      "hit": 450
+    },
+    "early.rs": {
+      "ring": "core",
       "total": 25,
-      "hit": 23
+      "hit": 16
     },
-    "render/node.rs": {
+    "display/mod.rs": {
       "ring": "load",
-      "total": 317,
-      "hit": 1
-    },
-    "devmgr.rs": {
-      "ring": "item",
-      "total": 152,
-      "hit": 108
-    },
-    "syscall/fsctl.rs": {
-      "ring": "load",
-      "total": 144,
-      "hit": 114
-    },
-    "syscall/native.rs": {
-      "ring": "item",
-      "total": 469,
-      "hit": 402
-    },
-    "fs/pages.rs": {
-      "ring": "load",
-      "total": 93,
-      "hit": 84
-    },
-    "stm32mp1_usb.rs": {
-      "ring": "load",
-      "total": 73,
-      "hit": 6
-    },
-    "console/output.rs": {
-      "ring": "core",
-      "total": 63,
-      "hit": 47
-    },
-    "stm32mp1_gpu.rs": {
-      "ring": "load",
-      "total": 49,
-      "hit": 4
-    },
-    "fs/data_disk.rs": {
-      "ring": "load",
-      "total": 23,
-      "hit": 7
-    },
-    "arch/armv7a/smp.rs": {
-      "ring": "core",
-      "total": 73,
-      "hit": 64
-    },
-    "object/channel.rs": {
-      "ring": "core",
-      "total": 85,
-      "hit": 69
-    },
-    "syscall/namespace.rs": {
-      "ring": "load",
-      "total": 10,
-      "hit": 5
-    },
-    "syscall/pipe.rs": {
-      "ring": "load",
-      "total": 168,
-      "hit": 146
-    },
-    "syscall/stat.rs": {
-      "ring": "load",
-      "total": 100,
-      "hit": 97
-    },
-    "arch/armv7a/signal.rs": {
-      "ring": "core",
-      "total": 82,
-      "hit": 75
+      "total": 338,
+      "hit": 163
     },
     "random.rs": {
       "ring": "item",
       "total": 28,
       "hit": 27
     },
+    "arch/armv7a/switch.rs": {
+      "ring": "core",
+      "total": 50,
+      "hit": 38
+    },
+    "power.rs": {
+      "ring": "item",
+      "total": 25,
+      "hit": 17
+    },
+    "fs/wake.rs": {
+      "ring": "load",
+      "total": 20,
+      "hit": 15
+    },
+    "fs/pty.rs": {
+      "ring": "load",
+      "total": 159,
+      "hit": 62
+    },
+    "net/mod.rs": {
+      "ring": "load",
+      "total": 62,
+      "hit": 55
+    },
+    "net/socket.rs": {
+      "ring": "load",
+      "total": 337,
+      "hit": 224
+    },
+    "net/ifreq.rs": {
+      "ring": "load",
+      "total": 143,
+      "hit": 33
+    },
+    "arch/armv7a/smp.rs": {
+      "ring": "core",
+      "total": 74,
+      "hit": 65
+    },
+    "object/mod.rs": {
+      "ring": "core",
+      "total": 38,
+      "hit": 26
+    },
+    "devmgr.rs": {
+      "ring": "item",
+      "total": 161,
+      "hit": 116
+    },
+    "claim.rs": {
+      "ring": "core",
+      "total": 20,
+      "hit": 9
+    },
+    "syscall/stat.rs": {
+      "ring": "load",
+      "total": 108,
+      "hit": 105
+    },
+    "arch/armv7a/trap.rs": {
+      "ring": "core",
+      "total": 92,
+      "hit": 46
+    },
+    "arch/armv7a/signal.rs": {
+      "ring": "core",
+      "total": 82,
+      "hit": 75
+    },
+    "syscall/sockets.rs": {
+      "ring": "load",
+      "total": 424,
+      "hit": 392
+    },
+    "net/packet.rs": {
+      "ring": "load",
+      "total": 132,
+      "hit": 69
+    },
+    "net/netlink/mod.rs": {
+      "ring": "load",
+      "total": 101,
+      "hit": 56
+    },
+    "fs/procfs.rs": {
+      "ring": "load",
+      "total": 230,
+      "hit": 187
+    },
+    "fs/eventfd.rs": {
+      "ring": "load",
+      "total": 60,
+      "hit": 50
+    },
+    "fs/anon.rs": {
+      "ring": "load",
+      "total": 7,
+      "hit": 4
+    },
+    "fs/sysfs.rs": {
+      "ring": "load",
+      "total": 656,
+      "hit": 540
+    },
+    "fs/devfs.rs": {
+      "ring": "load",
+      "total": 232,
+      "hit": 177
+    },
+    "input/mod.rs": {
+      "ring": "load",
+      "total": 140,
+      "hit": 100
+    },
+    "render/mod.rs": {
+      "ring": "load",
+      "total": 371,
+      "hit": 4
+    },
+    "sched/queue.rs": {
+      "ring": "core",
+      "total": 124,
+      "hit": 102
+    },
+    "arch/armv7a/timer.rs": {
+      "ring": "core",
+      "total": 11,
+      "hit": 6
+    },
+    "render/node.rs": {
+      "ring": "load",
+      "total": 321,
+      "hit": 7
+    },
+    "syscall/epoll.rs": {
+      "ring": "load",
+      "total": 84,
+      "hit": 72
+    },
+    "fs/signalfd.rs": {
+      "ring": "load",
+      "total": 55,
+      "hit": 46
+    },
+    "syscall/futex.rs": {
+      "ring": "load",
+      "total": 84,
+      "hit": 75
+    },
+    "fs/timerfd.rs": {
+      "ring": "load",
+      "total": 118,
+      "hit": 107
+    },
+    "syscall/deliver.rs": {
+      "ring": "load",
+      "total": 99,
+      "hit": 75
+    },
+    "fs/pipe.rs": {
+      "ring": "load",
+      "total": 185,
+      "hit": 149
+    },
+    "syscall/family.rs": {
+      "ring": "load",
+      "total": 178,
+      "hit": 128
+    },
+    "input/evdev.rs": {
+      "ring": "load",
+      "total": 180,
+      "hit": 104
+    },
+    "display/drm.rs": {
+      "ring": "load",
+      "total": 526,
+      "hit": 277
+    },
+    "syscall/load.rs": {
+      "ring": "load",
+      "total": 163,
+      "hit": 145
+    },
+    "render/fence.rs": {
+      "ring": "load",
+      "total": 28,
+      "hit": 0
+    },
+    "stm32mp1.rs": {
+      "ring": "load",
+      "total": 198,
+      "hit": 15
+    },
+    "arch/pl011.rs": {
+      "ring": "core",
+      "total": 34,
+      "hit": 22
+    },
+    "fs/epoll.rs": {
+      "ring": "load",
+      "total": 126,
+      "hit": 119
+    },
+    "console/input.rs": {
+      "ring": "core",
+      "total": 60,
+      "hit": 42
+    },
+    "console/output.rs": {
+      "ring": "core",
+      "total": 63,
+      "hit": 49
+    },
     "arch/armv7a/console.rs": {
       "ring": "core",
-      "total": 47,
+      "total": 46,
       "hit": 33
+    },
+    "user/vmo.rs": {
+      "ring": "core",
+      "total": 238,
+      "hit": 186
+    },
+    "fs/procfs/render.rs": {
+      "ring": "load",
+      "total": 313,
+      "hit": 232
+    },
+    "syscall/attributes.rs": {
+      "ring": "load",
+      "total": 124,
+      "hit": 69
+    },
+    "syscall/limits.rs": {
+      "ring": "load",
+      "total": 108,
+      "hit": 87
+    },
+    "syscall/tty.rs": {
+      "ring": "load",
+      "total": 123,
+      "hit": 69
+    },
+    "fs/cgroupfs.rs": {
+      "ring": "load",
+      "total": 332,
+      "hit": 262
+    },
+    "fs/pages.rs": {
+      "ring": "load",
+      "total": 92,
+      "hit": 83
+    },
+    "fdt.rs": {
+      "ring": "core",
+      "total": 10,
+      "hit": 9
+    },
+    "object/interrupt.rs": {
+      "ring": "core",
+      "total": 54,
+      "hit": 37
+    },
+    "object/pin.rs": {
+      "ring": "core",
+      "total": 17,
+      "hit": 10
+    },
+    "fs/data_disk.rs": {
+      "ring": "load",
+      "total": 23,
+      "hit": 20
+    },
+    "fs/root_disk.rs": {
+      "ring": "load",
+      "total": 81,
+      "hit": 11
+    },
+    "object/job.rs": {
+      "ring": "core",
+      "total": 195,
+      "hit": 148
+    },
+    "syscall/kill.rs": {
+      "ring": "load",
+      "total": 124,
+      "hit": 95
+    },
+    "fs/block.rs": {
+      "ring": "load",
+      "total": 8,
+      "hit": 3
+    },
+    "object/io_mapping.rs": {
+      "ring": "core",
+      "total": 6,
+      "hit": 3
+    },
+    "acpi.rs": {
+      "ring": "core",
+      "total": 24,
+      "hit": 8
+    },
+    "syscall/file.rs": {
+      "ring": "load",
+      "total": 119,
+      "hit": 110
+    },
+    "hooks.rs": {
+      "ring": "core",
+      "total": 9,
+      "hit": 5
     },
     "arch/stm32_usart.rs": {
       "ring": "core",
       "total": 37,
       "hit": 4
     },
-    "power.rs": {
+    "init.rs": {
       "ring": "item",
-      "total": 18,
-      "hit": 11
+      "total": 50,
+      "hit": 35
     },
-    "backtrace.rs": {
+    "fs/console.rs": {
+      "ring": "load",
+      "total": 46,
+      "hit": 14
+    },
+    "syscall/timerfd.rs": {
+      "ring": "load",
+      "total": 32,
+      "hit": 31
+    },
+    "syscall/linux.rs": {
+      "ring": "load",
+      "total": 140,
+      "hit": 130
+    },
+    "stm32mp1_usb.rs": {
+      "ring": "load",
+      "total": 75,
+      "hit": 5
+    },
+    "panic/screen.rs": {
       "ring": "core",
-      "total": 11,
-      "hit": 0
+      "total": 57,
+      "hit": 4
     },
-    "main.rs": {
+    "syscall/launch.rs": {
+      "ring": "load",
+      "total": 29,
+      "hit": 23
+    },
+    "syscall/eventfd.rs": {
+      "ring": "load",
+      "total": 10,
+      "hit": 10
+    },
+    "syscall/signalfd.rs": {
+      "ring": "load",
+      "total": 14,
+      "hit": 13
+    },
+    "syscall/namespace.rs": {
+      "ring": "load",
+      "total": 10,
+      "hit": 6
+    },
+    "syscall/mod.rs": {
       "ring": "item",
-      "total": 466,
-      "hit": 401
+      "total": 13,
+      "hit": 9
+    },
+    "stm32mp1_gpu.rs": {
+      "ring": "load",
+      "total": 53,
+      "hit": 5
+    },
+    "fs/sockname.rs": {
+      "ring": "load",
+      "total": 25,
+      "hit": 23
+    },
+    "syscall/pipe.rs": {
+      "ring": "load",
+      "total": 170,
+      "hit": 148
     },
     "net/netlink/route.rs": {
       "ring": "load",
-      "total": 155,
-      "hit": 107
-    },
-    "fdt.rs": {
-      "ring": "core",
-      "total": 10,
-      "hit": 9
+      "total": 152,
+      "hit": 111
     }
   }
 }

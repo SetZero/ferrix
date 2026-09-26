@@ -442,40 +442,51 @@ is below them — record what exists, then ratchet.
 
 ## W-7 — Finish the coverage story
 
-**Mostly done 2026-09-25.** Steps 1, 2 and 4 are done (F-11 and F-12 closed,
-the residual sorted in COVERAGE-RESIDUAL.md). Step 3 added `test-jobs` and
-took the item to 81.9%; the other four gates write an empty trace because
-they end by killing QEMU, and the plugin only flushes when QEMU exits. Step 5
-is not wired up. F-10 stays open on 1,054 statements that need a test.
+**Done 2026-09-26**, except that F-10 stays open on the statements that need a
+test. Steps 1 to 5 are done: every architecture and both profiles measured,
+every boot gate that exercises the item in the union on every architecture
+(thirteen on x86-64, nine on ARMv7-A, and on AArch64 the same nine plus a
+`test-boot` on a GICv3), the residual sorted per architecture, and the ratchet
+wired up as `cargo xtask coverage`. Doing step 3 found two defects in
+`coverage-report.py` that had made the published 81.9% wrong;
+VERIFICATION.md §3.4. The corrected figures, on main at a6d505a2, are 74.7%
+(x86-64), 73.7% (AArch64) and 70.9% (ARMv7-A).
 
 **Closes:** F-10, F-11, F-12. **Size:** medium, mostly running things.
 
-Tooling exists and works. Reproduction:
+Reproduction, with QEMU's drcov plugin built from its source tree:
 
 ```
-FERRIX_QEMU_PLUGIN="/home/sebastian/Documents/qemu/qemu/build/contrib/plugins/libdrcov.so,filename=/tmp/cov-boot.drcov" \
-  cargo run -q -p xtask -- test-boot --arch x86_64 --accel tcg
-
-python3 scripts/coverage-report.py --drcov /tmp/cov-boot.drcov \
-  --elf target/x86_64-unknown-none/debug/ferrix-kernel
+FERRIX_DRCOV=/home/sebastian/Documents/qemu/qemu/build/contrib/plugins/libdrcov.so \
+  cargo xtask coverage --arch x86_64 \
+    --init "$HOME/.local/share/ferrix/busybox/{arch}/bin/busybox.static"
 ```
 
-`--accel tcg` is mandatory — a TCG plugin observes nothing under KVM, and the
-launcher refuses rather than reporting zero. Gates with a userland need
-`--init "$HOME/.local/share/ferrix/busybox/{arch}/bin/busybox.static"`;
-`test-vfs` and `test-net` fail without it. ARMv7-A wants `--smp 2`.
+It runs each gate with `--accel tcg` (a TCG plugin observes nothing under KVM)
+and `--smp 2` on ARMv7-A, keeps every boot's trace and the kernel it ran in
+`build/coverage/<arch>`, and runs `coverage-report.py` over the lot against the
+floor in `coverage-floor.json`. One gate by hand is still
+`FERRIX_QEMU_PLUGIN="<libdrcov.so>,filename=<dir>/x.drcov" cargo xtask <gate>
+--accel tcg`.
 
-1. **AArch64 and ARMv7-A** (F-12) — no data at all today.
-2. **Release profile** (F-11) — the reference configuration is release, the
-   audit measured debug. The number will move; either adopt release as the
-   coverage configuration or write the argument for the difference.
-3. **More gates in the union** (F-10) — add `test-btrfs`, `test-shell`,
-   `test-restart`, `test-sysfs`, `test-jobs`. `--drcov` takes several traces.
-4. **Enumerate the residual** — split what is left into "needs a test" and
-   "unreachable defensive code, justified". The second list is legitimate and
-   must be written.
-5. **Ratchet it** — `--min-item N` already fails below a threshold. Wire it
-   into a CI job (not `xtask check`; it needs a boot).
+1. **AArch64 and ARMv7-A** (F-12) — done, and since 2026-09-26 the suite.
+2. **Release profile** (F-11) — done, one boot: 75.2% against debug's 71.6%.
+3. **More gates in the union** (F-10) — done. The gates that ended by killing
+   QEMU are now asked to stop first, which lets the plugin write its table,
+   and each boot of a gate keeps its own trace. Not in the union, and why:
+   VERIFICATION.md §3.5 (`test-vfs` off x86-64, `test-seat`,
+   `test-compositor`, and the gates needing a GL host or fetched volumes).
+4. **Enumerate the residual** — done per architecture: COVERAGE-RESIDUAL.md
+   sorts it, COVERAGE-WORKLIST.md groups the *needs a test* category by module.
+5. **Ratchet it** — done as `cargo xtask coverage`, not in `cargo xtask
+   check` since it needs boots, and not in CI, whose packaged QEMU carries no
+   drcov plugin (the one used here is built from QEMU's source tree). Floors
+   are the measured figure less a point.
+
+**What is left is F-10's test-writing**: 1,320 statements on x86-64, 1,481 on
+AArch64 and 1,446 on ARMv7-A, by module in COVERAGE-WORKLIST.md. Take a module,
+write the tests, re-run `cargo xtask coverage`, regenerate the evidence and
+raise the floor.
 
 ---
 
@@ -592,9 +603,9 @@ each of the rest.
 ## Suggested order
 
 **Done:** order zero, W-3, W-2, W-6, W-9, W-4 (with F-08), W-1, W-5 (with
-F-09 and F-33), most of W-7, and W-11.
-**Remaining:** W-7's last gates → W-8 (largest), with W-10 in parallel
-whenever someone can answer step 1.
+F-09 and F-33), W-7's measurement and ratchet, and W-11.
+**Remaining:** F-10's tests, by module from COVERAGE-WORKLIST.md → W-8
+(largest), with W-10 in parallel whenever someone can answer step 1.
 
 W-1 landed as a split rather than a move, and took the boundary from 36
 references to 29 by the gate's count of the day. What it leaves is F-09's:

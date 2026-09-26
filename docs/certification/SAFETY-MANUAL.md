@@ -237,7 +237,7 @@ claimed — AoU-4).
 | [SECURITY-TARGET.md](SECURITY-TARGET.md) | the security counterpart, CC EAL5+ |
 | [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) | AVA_VAN.4, six residual vulnerabilities |
 | [SPECULATION.md](SPECULATION.md) | the side-channel defences behind AoU-11, per architecture, and what they cost |
-| [VERIFICATION.md](VERIFICATION.md) | what exercises the element; 81.9% statement coverage |
+| [VERIFICATION.md](VERIFICATION.md) | what exercises the element; 74.7% statement coverage on x86-64, 73.7% AArch64, 70.9% ARMv7-A |
 | [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) | the determinism arguments behind AoU-4 and AoU-5 |
 | [TOOLS.md](TOOLS.md) | tool classification and operational requirements |
 | [SOUP.md](SOUP.md) | generated; the element contains none |

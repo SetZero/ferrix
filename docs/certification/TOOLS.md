@@ -187,10 +187,12 @@ defects.
 | Failure mode | **a coverage figure nobody can distinguish from a correct one** |
 | Verification | none independent. This is the gap. |
 | Known biases | two, both optimistic and both declared in the tool's docstring and in F-11: a basic block credits every statement inside it even when a trap left it early, and optimised builds map one address to several source lines |
-| Evidence it is not wildly wrong | three measurement defects were found and fixed by cross-checking its output against raw `objdump` and against the source — the bare-name recursion match, the `Drop::drop` case, and `extern "C"` declarations taking the following item's body |
+| Evidence it is not wildly wrong | three measurement defects were found and fixed by cross-checking its output against raw `objdump` and against the source — the bare-name recursion match, the `Drop::drop` case, and `extern "C"` declarations taking the following item's body. Two more on 2026-09-26, found by comparing architectures: a search sentinel below the higher half that dropped every block starting on a statement (under-reported x86-64 and AArch64 by about a third), and a union that read every gate's trace against one kernel although the gates build different ones (over-reported). The published 81.9% had both; VERIFICATION.md §3.4 |
 
 **TOR-3 has no independent verification and should not pretend to.** The
 honest mitigation is that its biases are documented, its residual output is
-enumerable (`coverage-residual-x86_64.json`), and a reviewer can spot-check any
-file against the source. A qualification effort would need a second
+enumerable (`coverage-residual-<arch>.json`), and a reviewer can spot-check any
+file against the source. Measuring three architectures is itself a cross-check:
+generic code every boot runs must read alike on all three, and the two defects
+of 2026-09-26 were found because it did not. A qualification effort would need a second
 implementation to compare against.
