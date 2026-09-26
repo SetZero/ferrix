@@ -2151,8 +2151,8 @@ impl<'a> Fdt<'a> {
         Some(IdMap { map, mask })
     }
 
-    /// The GIC interrupt a function's legacy INTx `pin` (1 for INTA to 4
-    /// for INTD) reaches through `host`'s `interrupt-map`.
+    /// The GIC interrupt a function's legacy `INTx` `pin` (1 for `INTA` to 4
+    /// for `INTD`) reaches through `host`'s `interrupt-map`.
     ///
     /// The function is matched by its unit address, `bus << 16 | device <<
     /// 11 | function << 8` in the first cell, and the pin, each masked by

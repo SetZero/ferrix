@@ -1622,6 +1622,12 @@ fn check_pci(view: &BootView<'_>) -> (Vec<device::DeviceNode>, device::Reserved)
         report.entropy_by_interrupt,
         report.out_of_domain_faulted,
     );
+    if report.intx > 0 {
+        println!(
+            "  pci      {} functions interrupt by INTx lines: the machine has no MSI controller",
+            report.intx
+        );
+    }
     if let Some(why) = report.out_of_domain_skip {
         println!("  pci      an out-of-domain write was not shown to fault: {why}");
     }

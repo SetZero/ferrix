@@ -528,6 +528,9 @@ pub(crate) struct Seen<'a> {
     pub(crate) secondary_bus: Option<u8>,
     /// A virtio GPU's host-visible window, if it has one.
     pub(crate) host_visible: Option<&'a SharedMemory>,
+    /// The line its `INTx` pin drives, on a machine with no MSI controller:
+    /// then its one vector, and its MSI-X table is not offered.
+    pub(crate) intx: Option<GicInterrupt>,
 }
 
 /// What enumeration read off a PCI function and kept, because whoever starts
@@ -636,7 +639,8 @@ pub(crate) struct DeviceNode {
     index: usize,
     /// Its memory, in BAR or `reg` order.
     apertures: Vec<Aperture>,
-    /// A device tree node's interrupts, in firmware's order.
+    /// A device tree node's interrupts, in firmware's order, or a PCI
+    /// function's `INTx` line on a machine with no MSI controller.
     vectors: Vec<Vector>,
     /// A PCI function's MSI-X table, when it has one vectors can be minted
     /// from.
@@ -695,7 +699,8 @@ impl DeviceNode {
     ///
     /// The MSI-X table is kept for minting vectors from when it lies whole in
     /// an assigned memory BAR, clear of reserved memory, and `config_phys`
-    /// says where the function's configuration space is.
+    /// says where the function's configuration space is -- unless `seen`
+    /// gives the function an `INTx` line, which is then its one vector.
     pub(crate) fn pci(
         address: Address,
         seen: &Seen<'_>,
@@ -706,6 +711,17 @@ impl DeviceNode {
     ) -> Self {
         let mut node = DeviceNode::empty(Location::Pci(address));
         let identity = seen.identity;
+        // With a line, the table stays withheld from the apertures below but
+        // is never offered: nothing on the machine could take its messages.
+        let offered = if seen.intx.is_some() { None } else { msix };
+        if let Some(line) = seen.intx {
+            // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
+            node.vectors.push(Vector {
+                number: line.id,
+                trigger: Some(trigger_of(line.trigger)),
+                masking: Masking::Controller,
+            });
+        }
         node.pci = Some(PciFunction {
             vendor: identity.vendor,
             device: identity.device,
@@ -720,7 +736,7 @@ impl DeviceNode {
             virtio: seen
                 .transport
                 .and_then(|transport| VirtioBlocks::of(transport, regions)),
-            msix_table_size: msix.map_or(0, |(_, table)| table.table_size),
+            msix_table_size: offered.map_or(0, |(_, table)| table.table_size),
             host_visible: seen
                 .host_visible
                 .and_then(|window| Window::of(window, regions, reserved)),
@@ -756,9 +772,12 @@ impl DeviceNode {
                 }
             }
         }
-        node.msix = seen.config_phys.zip(msix).and_then(|(config_phys, found)| {
-            MsixTable::of(address, config_phys, found, regions, reserved)
-        });
+        node.msix = seen
+            .config_phys
+            .zip(offered)
+            .and_then(|(config_phys, found)| {
+                MsixTable::of(address, config_phys, found, regions, reserved)
+            });
         node
     }
 
@@ -940,7 +959,7 @@ impl DeviceNode {
     }
 
     /// How many vectors the device can be asked for: a device tree node's
-    /// interrupts, or a PCI function's MSI-X entries.
+    /// interrupts, a PCI function's MSI-X entries, or its one `INTx` line.
     pub(crate) fn vector_count(&self) -> usize {
         self.msix
             .as_ref()
@@ -990,7 +1009,8 @@ impl DeviceNode {
     /// The device's vector at `index`, if it has one.
     ///
     /// For a PCI function, the vector of MSI-X entry `index`: minted the first
-    /// time it is asked for, and the same vector every time after. `None` if
+    /// time it is asked for, and the same vector every time after. A function
+    /// given an `INTx` line has that as vector 0 instead. `None` if
     /// the table has no such entry, the node is not published yet, or the
     /// architecture has no vector left to give.
     pub(crate) fn vector(&self, index: usize) -> Option<Vector> {
@@ -1041,6 +1061,23 @@ impl MsixTable {
             minted: IrqSpinLock::new(BTreeMap::new()),
         })
     }
+}
+
+/// How a line signals, from what the tree says. A PCI `INTx` line is level
+/// triggered whatever the tree omits, so a line it gives no trigger is level.
+fn trigger_of(trigger: Option<TreeTrigger>) -> Trigger {
+    match trigger {
+        Some(TreeTrigger::EdgeRising | TreeTrigger::EdgeFalling) => Trigger::Edge,
+        Some(TreeTrigger::LevelHigh | TreeTrigger::LevelLow) | None => Trigger::Level,
+    }
+}
+
+/// Whether GIC line `id` may become a PCI function's vector, recording it in
+/// `taken` if so: a shared peripheral interrupt no kernel handler and no
+/// other function holds, as a device tree node's lines are screened.
+pub(crate) fn claim_line(id: u32, taken: &mut BTreeSet<u32>) -> bool {
+    // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
+    id >= FIRST_SHARED_INTERRUPT && !irq::is_registered(id) && taken.insert(id)
 }
 
 /// Every `virtio,mmio` node in the device tree, on a machine without ACPI.

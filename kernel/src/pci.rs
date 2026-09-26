@@ -9,7 +9,9 @@
 //!
 //! On a machine with ACPI tables — x86-64, and AArch64 under EDK2 — the MCFG
 //! says, and it is authoritative even if a device tree came too. Otherwise the
-//! device tree's `pci-host-ecam-generic` nodes say. The two disagree about
+//! device tree's `pci-host-ecam-generic` nodes say, and its
+//! `pci-host-cam-generic` ones, which crosvm writes: the same idea with 256
+//! bytes a function and 64 KiB a bus. The two disagree about
 //! what their address means — bus zero's for the MCFG, the first bus's for a
 //! device tree — and both parsers hand over the first bus's, so nothing here
 //! has to remember which it read.
@@ -28,6 +30,17 @@
 //! arena has — and half a megabyte of page tables, to reach a handful of
 //! functions on bus zero. So [`Space`] maps a bus's megabyte the first time
 //! the walk reads from it, and gives every window back when it is dropped.
+//!
+//! # Lines, where there are no messages
+//!
+//! A device tree that describes neither a GICv3 ITS nor a `GICv2m` frame gives
+//! its devices no way to signal a message, which is crosvm's machine. There a
+//! function's `INTx` pin is followed through its host's `interrupt-map` to the
+//! GIC line it drives, and that line becomes the function's one vector
+//! (`DeviceNode::pci`). Only functions on a host's root bus are followed,
+//! because one behind a bridge has its pin swizzled on the way, which crosvm
+//! never needs; and a line two functions share is given to the first, since
+//! a vector belongs to one driver.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
@@ -36,11 +49,12 @@ use core::fmt;
 use core::ops::RangeInclusive;
 
 use ferrix_bootinfo::BootView;
+use ferrix_fdt::{EcamHost, Fdt, GicInterrupt};
 use ferrix_pci::bar::{self, Region};
 use ferrix_pci::capability::{
     self as pci_capability, Capabilities, Capability, ExtendedCapabilities, ID_MSIX, MsiX,
 };
-use ferrix_pci::ecam::{BYTES_PER_BUS, Window};
+use ferrix_pci::ecam::{Layout, Window};
 use ferrix_pci::header::{
     BusNumbers, CLASS_BRIDGE, COMMAND, COMMAND_MEMORY_SPACE, Endpoint, HeaderKind,
     SUBCLASS_HOST_BRIDGE,
@@ -51,7 +65,7 @@ use ferrix_pci::{Address, ConfigSpace, PciError};
 
 mod virtio;
 
-use crate::device::{DeviceNode, Reserved, Seen};
+use crate::device::{self, DeviceNode, Reserved, Seen};
 use crate::mmio::Mmio;
 use crate::vmap;
 use crate::{acpi, fdt};
@@ -61,7 +75,7 @@ use crate::{acpi, fdt};
 pub(crate) enum Source {
     /// The ACPI MCFG table.
     Mcfg,
-    /// A `pci-host-ecam-generic` device tree node.
+    /// A `pci-host-ecam-generic` or `pci-host-cam-generic` device tree node.
     DeviceTree,
 }
 
@@ -74,13 +88,16 @@ impl fmt::Display for Source {
     }
 }
 
-/// An ECAM window firmware described.
+/// A configuration window firmware described.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Host {
     /// The functions it reaches.
     pub(crate) window: Window,
     /// The physical address of its first bus.
     pub(crate) phys: u64,
+    /// The device tree's node for it, which says where its `INTx` pins go.
+    /// `None` for an MCFG allocation.
+    pub(crate) tree: Option<EcamHost>,
 }
 
 /// One description of a host, before it is given a segment and checked
@@ -94,6 +111,10 @@ struct Described {
     end_bus: u8,
     /// The physical address of the first bus.
     phys: u64,
+    /// How functions are laid out in the window.
+    layout: Layout,
+    /// The device tree's node, if that is where it came from.
+    tree: Option<EcamHost>,
 }
 
 /// Whether two bus ranges share a bus.
@@ -117,6 +138,8 @@ fn hosts(view: &BootView<'_>) -> (Vec<Host>, usize, Source) {
                         start_bus: allocation.start_bus,
                         end_bus: allocation.end_bus,
                         phys,
+                        layout: Layout::Ecam,
+                        tree: None,
                     }),
                     None => refused += 1,
                 }
@@ -132,6 +155,8 @@ fn hosts(view: &BootView<'_>) -> (Vec<Host>, usize, Source) {
                     start_bus: host.start_bus,
                     end_bus: host.end_bus,
                     phys: host.window.address,
+                    layout: if host.cam { Layout::Cam } else { Layout::Ecam },
+                    tree: Some(host),
                 });
             }
         }
@@ -150,9 +175,9 @@ fn hosts(view: &BootView<'_>) -> (Vec<Host>, usize, Source) {
                         .any(|taken| taken.window.segment() == *candidate)
             })
         });
-        let Some(window) =
-            segment.and_then(|segment| Window::new(segment, host.start_bus, host.end_bus))
-        else {
+        let Some(window) = segment.and_then(|segment| {
+            Window::with_layout(host.layout, segment, host.start_bus, host.end_bus)
+        }) else {
             refused += 1;
             continue;
         };
@@ -168,9 +193,52 @@ fn hosts(view: &BootView<'_>) -> (Vec<Host>, usize, Source) {
         hosts.push(Host {
             window,
             phys: host.phys,
+            tree: host.tree,
         });
     }
     (hosts, refused, source)
+}
+
+/// Where `INTx` lines go on a machine whose device tree describes no MSI
+/// controller, and the lines already given out.
+struct Lines {
+    /// The tree the hosts came from.
+    tree: Fdt<'static>,
+    /// GIC identifiers already some function's vector.
+    taken: BTreeSet<u32>,
+}
+
+impl Lines {
+    /// The lines of `view`'s machine, if its functions are to be given lines
+    /// at all: a device tree machine with no ITS and no `GICv2m` frame.
+    fn of(view: &BootView<'_>, source: Source) -> Option<Self> {
+        if source != Source::DeviceTree {
+            return None;
+        }
+        let tree = fdt::open(view).ok()?;
+        let messages = tree.gicv3_its().is_some() || tree.gicv2m_frames().next().is_some();
+        (!messages).then(|| Lines {
+            tree,
+            taken: BTreeSet::new(),
+        })
+    }
+
+    /// The line `function`'s `INTx` `pin` drives, if it is on `host`'s root
+    /// bus, the map names one, and no function holds it yet.
+    fn line(&mut self, host: &Host, function: Address, pin: u8) -> Option<GicInterrupt> {
+        let described = host.tree?;
+        if function.bus() != described.start_bus {
+            return None;
+        }
+        let line = self.tree.ecam_intx(
+            &described,
+            function.bus(),
+            function.device(),
+            function.function(),
+            pin,
+        )?;
+        device::claim_line(line.id, &mut self.taken).then_some(line)
+    }
 }
 
 /// One host's configuration space, mapped a bus at a time.
@@ -199,10 +267,11 @@ impl Space {
             return mapped.map(Mmio::at);
         }
         let index = bus.checked_sub(*self.host.window.buses().start())?;
+        let per_bus = self.host.window.layout().bytes_per_bus();
         let mapped = u64::from(index)
-            .checked_mul(BYTES_PER_BUS)
+            .checked_mul(per_bus)
             .and_then(|offset| self.host.phys.checked_add(offset))
-            .and_then(|phys| vmap::map_device(phys, BYTES_PER_BUS).ok());
+            .and_then(|phys| vmap::map_device(phys, per_bus).ok());
         // FATAL-ALLOC: boot only: PCI enumeration runs once, at stage 10, before any program runs.
         let _ = buses.insert(bus, mapped);
         mapped.map(Mmio::at)
@@ -229,7 +298,7 @@ impl Space {
         }
         let at = self.host.window.offset(function, offset, width)?;
         let registers = self.bus(function.bus())?;
-        Some((registers, at % BYTES_PER_BUS))
+        Some((registers, at % self.host.window.layout().bytes_per_bus()))
     }
 }
 
@@ -294,6 +363,9 @@ pub(crate) struct Report {
     pub(crate) capabilities: usize,
     /// Virtio functions with a complete transport inside their memory BARs.
     pub(crate) virtio: usize,
+    /// Functions given an `INTx` line for a vector, on a machine with no MSI
+    /// controller.
+    pub(crate) intx: usize,
     /// Bytes of entropy virtio-rng devices wrote into memory the kernel gave
     /// them.
     pub(crate) entropy_bytes: u32,
@@ -393,6 +465,7 @@ pub(crate) fn check(view: &BootView<'_>) -> Result<(Report, Vec<DeviceNode>, Res
         aperture_bytes: 0,
         capabilities: 0,
         virtio: 0,
+        intx: 0,
         entropy_bytes: 0,
         entropy_skipped: 0,
         entropy_skip: None,
@@ -403,8 +476,9 @@ pub(crate) fn check(view: &BootView<'_>) -> Result<(Report, Vec<DeviceNode>, Res
         out_of_domain_skip: None,
     };
     let mut nodes = Vec::new();
+    let mut lines = Lines::of(view, source);
     for host in hosts {
-        check_host(host, &reserved, &mut report, &mut nodes)?;
+        check_host(host, &reserved, &mut report, &mut nodes, lines.as_mut())?;
     }
     Ok((report, nodes, reserved))
 }
@@ -415,6 +489,7 @@ fn check_host(
     reserved: &Reserved,
     report: &mut Report,
     nodes: &mut Vec<DeviceNode>,
+    mut lines: Option<&mut Lines>,
 ) -> Result<(), Failure> {
     let mut space = Space::new(host);
 
@@ -448,9 +523,16 @@ fn check_host(
             .and_then(|offset| host.phys.checked_add(offset));
         // What sysfs shows beside the identity: the board's ids for an
         // endpoint, the bus behind a bridge.
-        let subsystem = Endpoint::read(&space, function.address).map_or((0, 0), |endpoint| {
+        let endpoint = Endpoint::read(&space, function.address).ok();
+        let subsystem = endpoint.as_ref().map_or((0, 0), |endpoint| {
             (endpoint.subsystem_vendor, endpoint.subsystem)
         });
+        let intx = endpoint.as_ref().and_then(|endpoint| {
+            lines
+                .as_deref_mut()?
+                .line(&host, function.address, endpoint.interrupt_pin)
+        });
+        report.intx += usize::from(intx.is_some());
         let secondary_bus = BusNumbers::read(&space, function.address)
             .ok()
             .map(|numbers| numbers.secondary);
@@ -464,6 +546,7 @@ fn check_host(
                 subsystem,
                 secondary_bus,
                 host_visible: host_visible.as_ref(),
+                intx,
             },
             &regions,
             msix.as_ref(),
