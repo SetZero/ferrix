@@ -155,14 +155,9 @@
         "pci/**",
         "power.rs",
         "random.rs",
-        "syscall/futex.rs",
-        "syscall/limits.rs",
-        "syscall/memory.rs",
         "syscall/mod.rs",
         "syscall/native.rs",
         "syscall/program.rs",
-        "syscall/system.rs",
-        "syscall/thread.rs",
         "syscall/unmap_check.rs"
       ]
     },
@@ -204,12 +199,15 @@
         "syscall/file.rs",
         "syscall/flock.rs",
         "syscall/fsctl.rs",
+        "syscall/futex.rs",
         "syscall/image.rs",
         "syscall/kill.rs",
         "syscall/launch.rs",
+        "syscall/limits.rs",
         "syscall/linux.rs",
         "syscall/load.rs",
         "syscall/memfd.rs",
+        "syscall/memory.rs",
         "syscall/namespace.rs",
         "syscall/path.rs",
         "syscall/pipe.rs",
@@ -220,6 +218,8 @@
         "syscall/signalfd.rs",
         "syscall/sockets.rs",
         "syscall/stat.rs",
+        "syscall/system.rs",
+        "syscall/thread.rs",
         "syscall/time.rs",
         "syscall/timerfd.rs",
         "syscall/tty.rs"
@@ -262,111 +262,6 @@
       "pattern had read as a literal (docs/certification/FINDINGS.md, A)."
     ],
     "entries": [
-      {
-        "file": "syscall/limits.rs",
-        "references": "syscall::process",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/memory.rs",
-        "references": "syscall::process",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/system.rs",
-        "references": "syscall::process",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/thread.rs",
-        "references": "syscall::process",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/futex.rs",
-        "references": "syscall::poll",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/futex.rs",
-        "references": "syscall::time",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/limits.rs",
-        "references": "syscall::attributes",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/limits.rs",
-        "references": "syscall::credentials",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/limits.rs",
-        "references": "syscall::time",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/memory.rs",
-        "references": "render::node",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/memory.rs",
-        "references": "syscall::fd",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/system.rs",
-        "references": "syscall::attributes",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/system.rs",
-        "references": "syscall::credentials",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/system.rs",
-        "references": "syscall::time",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/thread.rs",
-        "references": "syscall::signal",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
       {
         "file": "arch/x86_64/paranoid.rs",
         "references": "fs",

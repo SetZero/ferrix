@@ -124,36 +124,6 @@
       "lines": 82,
       "recursive": false
     },
-    "syscall/futex.rs::sys_futex": {
-      "complexity": 16,
-      "lines": 61,
-      "recursive": false
-    },
-    "syscall/limits.rs::dispatch": {
-      "complexity": 15,
-      "lines": 19,
-      "recursive": false
-    },
-    "syscall/memory.rs::map_file": {
-      "complexity": 20,
-      "lines": 32,
-      "recursive": false
-    },
-    "syscall/memory.rs::sys_madvise": {
-      "complexity": 18,
-      "lines": 42,
-      "recursive": false
-    },
-    "syscall/memory.rs::sys_mmap": {
-      "complexity": 16,
-      "lines": 42,
-      "recursive": false
-    },
-    "syscall/memory.rs::sys_mremap": {
-      "complexity": 16,
-      "lines": 37,
-      "recursive": false
-    },
     "syscall/native.rs::channel_read": {
       "complexity": 16,
       "lines": 54,
@@ -182,11 +152,6 @@
     "syscall/native.rs::vmo_pin": {
       "complexity": 24,
       "lines": 38,
-      "recursive": false
-    },
-    "syscall/system.rs::sys_syslog": {
-      "complexity": 16,
-      "lines": 21,
       "recursive": false
     },
     "trap.rs::handle_page_fault": {
