@@ -1481,6 +1481,13 @@ extern "C" fn task_start(_argument: usize) -> ! {
 
 /// End the running task.
 pub(crate) fn exit() -> ! {
+    // **Nothing switches it out while this frame holds the task.** From the
+    // moment it is marked dead, a switch takes it off its queue for good and
+    // the reaper frees this stack, with whatever it held still held: the
+    // task's own `Arc`, taken here to mark it, leaked with its hold on its
+    // job's quota slot and, for a program, its thread's process. So the
+    // reference is dropped before interrupts come back on.
+    let saved = <arch::Irq as IrqControl>::disable();
     if let Some(task) = current() {
         // Whatever sleep it once meant to take is over: a deadline left here
         // is one `choose_next` would otherwise file the dead task under.
@@ -1489,7 +1496,9 @@ pub(crate) fn exit() -> ! {
         // must see this task from the moment nothing else sees it running.
         let _ = EXITED_UNREAPED.fetch_add(1, Ordering::AcqRel);
         task.set_state(DEAD);
+        drop(task);
     }
+    <arch::Irq as IrqControl>::restore(saved);
     schedule();
     // A dead task is never picked again, so this is not reached. If it ever
     // were, stopping is the only answer that cannot corrupt anything.
