@@ -93,7 +93,7 @@ pub(crate) fn test_boot_lines(
     let watched = watch(arch, image, kernel, args, SUCCESS_MARKER)?;
     match watched.verdict {
         Verdict::Reached => {
-            let code = watched.status.code().unwrap_or(0);
+            let code = watched.ended.status.code().unwrap_or(0);
             if code != 0 && code != DEBUG_EXIT_SUCCESS {
                 return Err(Error::new(format!(
                     "the {arch} kernel reported success but QEMU exited {code}"
@@ -594,10 +594,20 @@ struct Watched {
     lines: Vec<String>,
     /// How it ended.
     verdict: Verdict,
-    /// QEMU's exit status.
-    status: std::process::ExitStatus,
+    /// How QEMU ended.
+    ended: Ended,
     /// Where the serial output was saved.
     log: PathBuf,
+}
+
+/// How QEMU ended: [`finish`]'s answer.
+#[derive(Debug, Clone, Copy)]
+struct Ended {
+    /// QEMU's exit status.
+    status: std::process::ExitStatus,
+    /// Whether the guest powered the machine off itself, rather than QEMU
+    /// being stopped from outside once the verdict was in.
+    powered_off: bool,
 }
 
 /// Stage 12's exit, the boot half: boot as [`test_boot`] does, and say
@@ -663,9 +673,9 @@ pub(crate) fn watch_then(
 ///
 /// For a test that reads back a disk the guest wrote. The kernel commits
 /// `/data` on its way to the power-off (`power::finish`), and the few
-/// seconds [`watch_then`] gives a guest before killing QEMU are not enough
-/// to commit a build. A QEMU killed rather than exited is an error, since
-/// its last commit may be half written.
+/// seconds [`watch_then`] gives a guest before stopping QEMU are not enough
+/// to commit a build. A QEMU stopped from outside rather than powered off by
+/// its guest is an error, since its last commit may be half written.
 ///
 /// # Errors
 ///
@@ -695,12 +705,14 @@ pub(crate) fn watch_to_power_off(
             )));
         }
     }
-    let code = watched.status.code();
-    if code != Some(0) && code != Some(DEBUG_EXIT_SUCCESS) {
+    let code = watched.ended.status.code();
+    // A QEMU asked to stop exits 0 as well, so the status alone would pass a
+    // guest that never powered off.
+    if !watched.ended.powered_off || (code != Some(0) && code != Some(DEBUG_EXIT_SUCCESS)) {
         return Err(Error::new(format!(
             "{arch}: the guest did not power itself off ({}), so what it wrote to /data may \
              not be committed.\n  Serial output is in {}",
-            watched.status,
+            watched.ended.status,
             watched.log.display()
         )));
     }
@@ -948,7 +960,7 @@ fn watch_hooked(
         started,
         keyboard.as_mut(),
     );
-    let status = finish(&mut child, verdict != Verdict::Silent && !cut)?;
+    let ended = finish(&mut child, verdict != Verdict::Silent, cut)?;
     drop(receiver);
     let _ = reader.join();
     // Before the error below says QEMU's own is "above": joining the sieve's
@@ -968,14 +980,14 @@ fn watch_hooked(
     // ends it at once, with the reason on the stderr above, and "did not
     // finish within 600s" sends whoever reads it to look at the guest.
     if closed && verdict == Verdict::Silent {
-        return Err(exited_early(arch, status, started, until, &log_path));
+        return Err(exited_early(arch, ended.status, started, until, &log_path));
     }
 
     hooked?;
     sieved
         .dma
         .judge(arch, verdict == Verdict::Reached, &lines, &log_path)?;
-    finish_watching(lines, verdict, status, log_path)
+    finish_watching(lines, verdict, ended, log_path)
 }
 
 /// What [`watch_hooked`] saw, once QEMU is gone; and, for a coverage run, the
@@ -984,14 +996,14 @@ fn watch_hooked(
 fn finish_watching(
     lines: Vec<String>,
     verdict: Verdict,
-    status: std::process::ExitStatus,
+    ended: Ended,
     log: PathBuf,
 ) -> Result<Watched> {
     crate::kaslr::record_coverage_slide(&lines)?;
     Ok(Watched {
         lines,
         verdict,
-        status,
+        ended,
         log,
     })
 }
@@ -1110,21 +1122,87 @@ pub(crate) fn take_panic_report(
     Ok(())
 }
 
-/// Wait for QEMU to exit, killing it if the boot already reached a verdict.
-fn finish(child: &mut std::process::Child, decided: bool) -> Result<std::process::ExitStatus> {
-    if decided {
+/// How long a guest that has reached its verdict is given to power itself off.
+const POWER_OFF_GRACE: Duration = Duration::from_secs(5);
+
+/// How long QEMU is given to exit once it has been asked to.
+const STOP_GRACE: Duration = Duration::from_secs(10);
+
+/// Wait for QEMU to exit, and end it if the guest will not.
+///
+/// Answers QEMU's status and whether the guest powered the machine off
+/// itself, which [`watch_to_power_off`] requires and nothing else does.
+///
+/// A guest that does not power off -- an interactive shell still waiting at
+/// its prompt, a kernel halted by the panic a test asked for -- is *asked* to
+/// stop before it is killed. QEMU treats SIGTERM as a host shutdown: it stops
+/// the machine and exits normally, and a normal exit is the only one that
+/// runs the TCG plugins' exit hooks. The coverage plugin writes its whole
+/// table from that hook, so a killed QEMU leaves an empty trace, and every
+/// gate that ended by killing QEMU used to contribute nothing to the coverage
+/// measurement (`docs/certification/VERIFICATION.md` §3). The guest sees no
+/// difference: it is stopped either way, after its verdict was read.
+///
+/// `cut` is `test-powerfail`'s power failure, which is killed at once and
+/// never asked: the point of it is that nothing, QEMU's own block layer
+/// included, gets to finish anything.
+fn finish(child: &mut std::process::Child, decided: bool, cut: bool) -> Result<Ended> {
+    if !cut {
         // Give the guest a moment to shut itself down cleanly, so a working
         // power-off path is exercised rather than always being papered over.
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline {
-            if let Some(status) = child.try_wait()? {
-                return Ok(status);
-            }
-            std::thread::sleep(Duration::from_millis(50));
+        if decided && let Some(status) = exited_within(child, POWER_OFF_GRACE)? {
+            return Ok(Ended {
+                status,
+                powered_off: true,
+            });
+        }
+        if ask_to_stop(child)
+            && let Some(status) = exited_within(child, STOP_GRACE)?
+        {
+            return Ok(Ended {
+                status,
+                powered_off: false,
+            });
         }
     }
     let _ = child.kill();
-    Ok(child.wait()?)
+    Ok(Ended {
+        status: child.wait()?,
+        powered_off: false,
+    })
+}
+
+/// QEMU's status if it exits within `grace`.
+fn exited_within(
+    child: &mut std::process::Child,
+    grace: Duration,
+) -> Result<Option<std::process::ExitStatus>> {
+    let deadline = Instant::now() + grace;
+    while Instant::now() < deadline {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(None)
+}
+
+/// Send QEMU SIGTERM, through `kill(1)` since this program links no libc
+/// crate. Says whether the signal was sent.
+#[cfg(unix)]
+fn ask_to_stop(child: &std::process::Child) -> bool {
+    Command::new("kill")
+        .args(["-s", "TERM", &child.id().to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// Windows has no SIGTERM to send, so QEMU is killed there as it always was.
+#[cfg(not(unix))]
+fn ask_to_stop(_child: &std::process::Child) -> bool {
+    false
 }
 
 /// A VNC server on the loopback for a judged boot that needs a viewer's view
