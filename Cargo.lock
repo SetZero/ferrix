@@ -274,6 +274,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-kmem"
+version = "0.1.0"
+dependencies = [
+ "ferrix-heap",
+ "ferrix-sync",
+]
+
+[[package]]
 name = "ferrix-linux-abi"
 version = "0.1.0"
 

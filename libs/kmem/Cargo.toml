@@ -1,0 +1,21 @@
+[package]
+name = "ferrix-kmem"
+description = "Kernel memory held for a program, charged to its job: the token and the hook the kernel installs"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license.workspace = true
+publish = false
+
+[features]
+# A recording account for host tests of the crates that charge: a job per
+# test thread, with a limit, so parallel tests do not see each other's
+# charges. Needs std. The kernel never enables it.
+testing = []
+
+[dependencies]
+ferrix-heap = { workspace = true }
+ferrix-sync = { workspace = true }
+
+[lints]
+workspace = true

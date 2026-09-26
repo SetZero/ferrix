@@ -21,6 +21,7 @@ members = [
     "libs/fallible",
     "libs/frame",
     "libs/heap",
+    "libs/kmem",
     "libs/btrfs",
     "libs/btrfs-vfs",
     "libs/btrfs-write",
@@ -115,6 +116,7 @@ ferrix-fdt = { path = "libs/fdt" }
 ferrix-frame = { path = "libs/frame" }
 ferrix-fallible = { path = "libs/fallible" }
 ferrix-heap = { path = "libs/heap" }
+ferrix-kmem = { path = "libs/kmem" }
 ferrix-btrfs = { path = "libs/btrfs" }
 ferrix-btrfs-vfs = { path = "libs/btrfs-vfs" }
 ferrix-btrfs-write = { path = "libs/btrfs-write" }
