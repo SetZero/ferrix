@@ -200,6 +200,9 @@ class Phone:
                     raise RuntimeError(f"fastboot {step[0]} failed: {result.stderr.strip()}")
             began = time.monotonic()
             self.wait("Ferrix is running", lambda: not self.in_fastboot(), 60)
+            # When the phone left fastboot, in the PC's time: the loader starts
+            # then, so a monitor can place Ferrix's own samples from it.
+            left_fastboot = time.time()
             self.wait(
                 "Ferrix is running, then Android boots",
                 lambda: self.adb("shell", "getprop", "sys.boot_completed", timeout=10).stdout.strip()
@@ -220,6 +223,7 @@ class Phone:
                 "when": started,
                 "image": str(image),
                 "stats": str(stats) if stats is not None else "",
+                "left_fastboot": f"{left_fastboot:.1f}",
                 "result": ended.strip(),
                 "seconds": str(seconds),
                 "record": str(record / "run.log"),

@@ -54,7 +54,10 @@ class LineChart {
     const x = (t) => left + ((t - start) / this.span) * plotW;
     const y = (v) => top + plotH - ((v - min) / (max - min || 1)) * plotH;
 
-    // Gridlines and their labels.
+    const hasData = series.some((s) => s.points.some(([t]) => t >= start));
+
+    // Gridlines, and their labels only when there is something to read
+    // against them: an empty chart's scale is not a value.
     g.font = "11px Inter, Roboto, sans-serif";
     g.textAlign = "right";
     g.textBaseline = "middle";
@@ -64,7 +67,7 @@ class LineChart {
       g.strokeStyle = i === 0 ? "#34344a" : "#23232f";
       g.beginPath(); g.moveTo(left, yy); g.lineTo(width - right, yy); g.stroke();
       g.fillStyle = "#77758a";
-      g.fillText(format(v, this.decimals > 0 && max - min < 10 ? 1 : 0), left - 6, yy);
+      if (hasData) g.fillText(format(v, this.decimals > 0 && max - min < 10 ? 1 : 0), left - 6, yy);
     }
     g.textAlign = "left";
     g.fillStyle = "#77758a";
@@ -81,8 +84,20 @@ class LineChart {
       if (to <= from) continue;
       g.fillStyle = band.color + "22";
       g.fillRect(from, top, to - from, plotH);
-      g.fillStyle = band.color + "aa";
-      g.fillRect(from, top, to - from, 2);
+      // Dashed edges rather than a stripe along the top, which would read
+      // as a line at the top of the scale.
+      g.strokeStyle = band.color + "99";
+      g.lineWidth = 1;
+      g.setLineDash([3, 3]);
+      g.beginPath();
+      for (const edge of [from, to]) {
+        if (edge > left + 0.5 && edge < left + plotW - 0.5) {
+          g.moveTo(Math.round(edge) + 0.5, top);
+          g.lineTo(Math.round(edge) + 0.5, top + plotH);
+        }
+      }
+      g.stroke();
+      g.setLineDash([]);
       if (to - from > 34) {
         g.font = "10px Inter, Roboto, sans-serif";
         g.textAlign = "left";
@@ -122,7 +137,7 @@ class LineChart {
       }
     });
 
-    if (!series.some((s) => s.points.some(([t]) => t >= start))) {
+    if (!hasData) {
       g.fillStyle = "#77758a";
       g.textAlign = "center";
       g.textBaseline = "middle";

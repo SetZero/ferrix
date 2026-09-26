@@ -138,6 +138,7 @@ main {
   transition: background 0.3s;
 }
 .stage b { font-size: 14px; color: var(--text); }
+.stage.pending { border-style: dashed; animation: pulse 1.6s infinite; }
 .stage.done { background: #1d3a2b; border-color: #2c5a41; }
 .stage.done b { color: var(--ok); }
 .stage.now { background: #2b2a45; border-color: var(--primary); }

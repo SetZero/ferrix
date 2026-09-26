@@ -183,8 +183,11 @@ function bands() {
 // phone was in Ferrix. The loader logs the counter as it starts, which is as
 // the phone leaves fastboot, and Ferrix's `t` is that counter: so a sample's
 // time is the stretch's start plus how far the counter got past the loader's.
-function fillFromFerrix() {
-  const away = bands().filter((b) => b.state === "ferrix").pop();
+function fillFromFerrix(leftFastboot = null) {
+  let away = bands().filter((b) => b.state === "ferrix").pop();
+  // The helper saw the phone leave fastboot, which beats the monitor's own
+  // view when the monitor started while the phone was already away.
+  if (leftFastboot) away = { from: leftFastboot, to: away ? Math.max(away.to, leftFastboot + 600) : leftFastboot + 600 };
   const anchor = consoleLines
     .map((line) => /counter at \d+ Hz, (\d+\.\d+) s since it started/.exec(line))
     .find(Boolean);
@@ -312,8 +315,11 @@ function onSample(s) {
   // The helper's native boot: its phase while it runs, and its record once
   // Android is back.
   if (helper && helper.phase !== "idle") {
-    const away = helper.phase.startsWith("Ferrix") ? " The phone is off USB until Android is back; its graphs fill in then." : "";
+    const away = helper.phase.startsWith("Ferrix")
+      ? " The phone is off USB while Ferrix runs, so the stages and Ferrix's stats arrive with its record when Android is back."
+      : "";
     showResult("busy", `Native boot: ${helper.phase}…${away}`);
+    if (!consoleLines.length) document.querySelectorAll(".stage").forEach((el) => el.classList.add("pending"));
     setSource(`native boot of ${shortImage(helper.image)}`);
   }
   const last = helper && helper.last && helper.last.when ? helper.last : null;
@@ -321,7 +327,7 @@ function onSample(s) {
     lastHelperRun = last ? last.when : null;
   } else if (last && last.when !== lastHelperRun) {
     lastHelperRun = last.when;
-    if (last.record) loadRun(last.record, `native boot ${last.when}`, true);
+    if (last.record) loadRun(last.record, `native boot ${last.when}`, last.left_fastboot ? Number(last.left_fastboot) : true);
     refreshRuns();
   }
 
@@ -503,7 +509,7 @@ async function loadRun(path, label, fill = false) {
     }
     rerender();
     $("lines").textContent = `${consoleLines.length} lines`;
-    if (fill) fillFromFerrix();
+    if (fill) fillFromFerrix(typeof fill === "number" ? fill : null);
     if (ferrix.samples.length) {
       showTab("ferrix");
       drawFerrix();
