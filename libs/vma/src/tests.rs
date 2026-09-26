@@ -1825,6 +1825,9 @@ fn a_change_that_cannot_grow_the_map_changes_nothing() {
             Backing::Anonymous { id: 1, offset: 0 },
         )
         .unwrap();
+    // No spare room, so that every change below has to grow the list: room
+    // already there is not an allocation, and injection does not fail it.
+    space.regions.shrink_to_fit();
     let before = space.clone();
 
     FAIL.with(|fail| fail.set(true));

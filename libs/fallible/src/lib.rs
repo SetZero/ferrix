@@ -212,11 +212,17 @@ fn exact_boxed_slice<T>(vec: Vec<T>) -> Result<Box<[T]>, AllocError> {
 
 /// `vec.try_reserve(additional)`, asking the injection policy first.
 ///
+/// Room already there is not an allocation, so it is not failed: a caller
+/// that reserved ahead can count on the room it reserved, injection or not.
+///
 /// # Errors
 ///
 /// [`AllocError`] when the allocator refuses, the capacity overflows, or the
 /// injection policy says so. `vec` is unchanged.
 pub fn try_reserve<T>(vec: &mut Vec<T>, additional: usize) -> Result<(), AllocError> {
+    if vec.capacity() - vec.len() >= additional {
+        return Ok(());
+    }
     check()?;
     vec.try_reserve(additional)?;
     Ok(())
@@ -373,6 +379,9 @@ pub fn try_append<T>(vec: &mut Vec<T>, other: &mut Vec<T>) -> Result<(), AllocEr
 ///
 /// As [`try_reserve`].
 pub fn try_reserve_deque<T>(queue: &mut VecDeque<T>, additional: usize) -> Result<(), AllocError> {
+    if queue.capacity() - queue.len() >= additional {
+        return Ok(());
+    }
     check()?;
     queue.try_reserve(additional)?;
     Ok(())

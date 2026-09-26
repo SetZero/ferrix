@@ -401,6 +401,17 @@ struct NewRegion {
     sharing: Sharing,
 }
 
+/// The object an `mremap` of the region at `old`, naming `id`, resizes or
+/// moves; with room had in the map for what follows -- a split at each end of
+/// the two removals, and the region put back -- because once the old range
+/// is out, a refusal to put it back down would lose the mapping.
+fn remap_object(inner: &mut Inner, id: u64, old: u64) -> Result<Arc<Vmo>, SpaceError> {
+    let vmo = Arc::clone(inner.objects.get(&id).ok_or(SpaceError::NotMapped(old))?);
+    // FALLIBLE: the map's reserve refuses with `VmaError::NoMemory`.
+    inner.map.reserve(3).map_err(map_error)?;
+    Ok(vmo)
+}
+
 /// Copy page `index` of `vmo`, whose frame `shared` another space still
 /// holds, into a frame of its own: the copy, and the original taken out of
 /// the object, to be retired.
@@ -1356,7 +1367,7 @@ impl AddressSpace {
         let mut pages = TlbPages::new();
         let cpus = {
             let mut inner = self.inner.lock();
-            let removed = inner.map.remove(range).map_err(|_| SpaceError::BadRange)?;
+            let removed = inner.map.remove(range).map_err(map_error)?;
             self.take_down(&removed, &mut freeing, &mut pages);
             self.begin_shootdown(&inner)
         };
@@ -1888,7 +1899,7 @@ impl AddressSpace {
                     return Err(SpaceError::OutOfMemory);
                 }
             }
-            let vmo = Arc::clone(inner.objects.get(&id).ok_or(SpaceError::NotMapped(old))?);
+            let vmo = remap_object(&mut inner, id, old)?;
 
             // A private region's pages move to an object of their own, and the
             // move goes first, before the map changes, because it is the last
@@ -2106,16 +2117,10 @@ impl AddressSpace {
         pages: &mut TlbPages,
     ) -> Result<(), SpaceError> {
         if fixed {
-            let removed = inner
-                .map
-                .remove(new_range)
-                .map_err(|_| SpaceError::BadRange)?;
+            let removed = inner.map.remove(new_range).map_err(map_error)?;
             self.take_down(&removed, freeing, pages);
         }
-        let _ = inner
-            .map
-            .remove(old_range)
-            .map_err(|_| SpaceError::BadRange)?;
+        let _ = inner.map.remove(old_range).map_err(map_error)?;
         let _ = mm::unmap_in(self.root * PAGE_SIZE, old_range.start(), old_range.bytes());
         pages.add_range(old_range.start(), old_range.bytes());
         Ok(())
@@ -2766,10 +2771,7 @@ impl AddressSpace {
                 return Err(SpaceError::Refused(at));
             }
 
-            inner
-                .map
-                .protect(range, flags)
-                .map_err(|_| SpaceError::BadRange)?;
+            inner.map.protect(range, flags).map_err(map_error)?;
 
             // Every page in the range re-faults and is reinstalled with the
             // permissions the map now carries.

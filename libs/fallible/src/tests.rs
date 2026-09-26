@@ -340,6 +340,21 @@ fn an_armed_injector_fails_every_constructor_without_allocating() {
         "an injected failure allocates nothing: {log:?}"
     );
 
+    // Room reserved ahead is not an allocation, so it is not failed: what a
+    // caller set aside stays usable while allocations fail.
+    INJECT.with(|on| on.set(false));
+    let mut roomy: Vec<u8> = Vec::with_capacity(4);
+    let mut deque: VecDeque<u8> = VecDeque::with_capacity(4);
+    INJECT.with(|on| on.set(true));
+    let reserved = (
+        try_reserve(&mut roomy, 4),
+        try_push(&mut roomy, 1),
+        try_reserve_deque(&mut deque, 4),
+        try_reserve(&mut roomy, 4).err(),
+    );
+    INJECT.with(|on| on.set(false));
+    assert_eq!(reserved, (Ok(()), Ok(()), Ok(()), Some(AllocError)));
+
     // Disarmed, or asked on a thread whose policy says no, nothing fails.
     assert!(try_box(1u8).is_ok());
     arm(false);
