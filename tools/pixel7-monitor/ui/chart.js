@@ -14,8 +14,11 @@ class LineChart {
     this.decimals = decimals;
   }
 
-  // `series`: [{ label, color, points: [[t, value], ...] }]
-  draw(series, now) {
+  // `series`: [{ label, color, points: [[t, value], ...] }]. `bands`:
+  // [{ from, to, label, color }], spans shaded behind the lines, for where the
+  // phone was away. A gap of more than `gap` seconds between two points is
+  // left as a gap rather than drawn across.
+  draw(series, now, bands = [], gap = 3) {
     const canvas = this.canvas;
     const ratio = window.devicePixelRatio || 1;
     const width = canvas.clientWidth;
@@ -67,24 +70,55 @@ class LineChart {
     g.fillStyle = "#77758a";
     g.fillText(`−${Math.round(this.span / 60)} min`, left, height - 6);
 
-    // The series.
+    // The bands, behind everything but the grid.
+    g.save();
+    g.beginPath();
+    g.rect(left, top, plotW, plotH);
+    g.clip();
+    for (const band of bands) {
+      const from = Math.max(x(band.from), left);
+      const to = Math.min(x(band.to), left + plotW);
+      if (to <= from) continue;
+      g.fillStyle = band.color + "22";
+      g.fillRect(from, top, to - from, plotH);
+      g.fillStyle = band.color + "aa";
+      g.fillRect(from, top, to - from, 2);
+      if (to - from > 34) {
+        g.font = "10px Inter, Roboto, sans-serif";
+        g.textAlign = "left";
+        g.textBaseline = "top";
+        g.fillStyle = band.color;
+        g.fillText(band.label, from + 4, top + 4, to - from - 8);
+      }
+    }
+    g.restore();
+
+    // The series, a run of points at a time: a gap stays a gap.
     series.forEach((s, index) => {
       const points = s.points.filter(([t]) => t >= start - 2);
-      if (points.length < 2) return;
-      g.lineWidth = 1.8;
-      g.strokeStyle = s.color;
-      g.beginPath();
-      points.forEach(([t, v], i) => (i ? g.lineTo(x(t), y(v)) : g.moveTo(x(t), y(v))));
-      g.stroke();
-      if (index === 0) {
-        const fill = g.createLinearGradient(0, top, 0, top + plotH);
-        fill.addColorStop(0, s.color + "40");
-        fill.addColorStop(1, s.color + "00");
-        g.lineTo(x(points[points.length - 1][0]), top + plotH);
-        g.lineTo(x(points[0][0]), top + plotH);
-        g.closePath();
-        g.fillStyle = fill;
-        g.fill();
+      const runs = [];
+      for (const point of points) {
+        const run = runs[runs.length - 1];
+        if (run && point[0] - run[run.length - 1][0] <= gap) run.push(point);
+        else runs.push([point]);
+      }
+      for (const run of runs) {
+        if (run.length < 2) continue;
+        g.lineWidth = 1.8;
+        g.strokeStyle = s.color;
+        g.beginPath();
+        run.forEach(([t, v], i) => (i ? g.lineTo(x(t), y(v)) : g.moveTo(x(t), y(v))));
+        g.stroke();
+        if (index === 0) {
+          const fill = g.createLinearGradient(0, top, 0, top + plotH);
+          fill.addColorStop(0, s.color + "40");
+          fill.addColorStop(1, s.color + "00");
+          g.lineTo(x(run[run.length - 1][0]), top + plotH);
+          g.lineTo(x(run[0][0]), top + plotH);
+          g.closePath();
+          g.fillStyle = fill;
+          g.fill();
+        }
       }
     });
 

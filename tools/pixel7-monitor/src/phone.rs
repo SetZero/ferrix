@@ -7,10 +7,19 @@
 //! which still reads the processors, memory and battery. One `su` for the
 //! whole session, rather than one a second, which Magisk would announce each
 //! time.
+//!
+//! Two threads. One says where the phone is, once a second, and never waits
+//! on the phone for longer than `adb devices` takes. The other keeps the
+//! shell and runs the script. Opening a root shell can take as long as
+//! Magisk does to wake after a boot, and that wait must not stop the graphs.
+//! A shell that is not root is asked again for root every 15 seconds, so
+//! temperatures come back once Magisk is ready.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -40,6 +49,7 @@ echo @bat; for f in capacity status current_now voltage_now temp; do echo "$f $(
 echo @load; cat /proc/loadavg
 echo @vm; for x in $(pidof crosvm); do echo "$x $(cut -d' ' -f14,15 /proc/$x/stat) $(cut -d' ' -f2 /proc/$x/statm)"; done
 echo @id; id -u
+echo @boot; getprop sys.boot_completed
 "#;
 
 /// One processor cluster: its first processor, and its frequency now and at
@@ -107,6 +117,9 @@ pub struct Sample {
     vms: Vec<Vm>,
     /// What the launcher's helper says, if it is running.
     helper: Option<serde_json::Value>,
+    /// Whether Android says it has finished booting.
+    #[serde(skip)]
+    booted: bool,
 }
 
 /// A shell on the phone that stays open, and reads what it prints.
@@ -118,11 +131,6 @@ struct Shell {
 }
 
 impl Shell {
-    /// A root shell, or failing that a plain one.
-    fn open(serial: &str) -> Option<Shell> {
-        Shell::start(serial, &["shell", "su"]).or_else(|| Shell::start(serial, &["shell"]))
-    }
-
     fn start(serial: &str, arguments: &[&str]) -> Option<Shell> {
         let mut child = Command::new("adb")
             .arg("-s")
@@ -145,7 +153,7 @@ impl Shell {
         });
         let mut shell = Shell { child, stdin, lines, root: false };
         // Ask who it is: a `su` Magisk refused has already exited.
-        let answer = shell.run("id -u\n", Duration::from_secs(20))?;
+        let answer = shell.run("id -u\n", Duration::from_secs(8))?;
         shell.root = answer.first().map(|id| id.trim() == "0").unwrap_or(false);
         Some(shell)
     }
@@ -202,13 +210,27 @@ fn usb_state(serial: &str) -> String {
     "absent".into()
 }
 
+/// The collector's newest stats, and when they were read.
+#[derive(Default)]
+struct Collected {
+    at: Option<Instant>,
+    stats: Sample,
+}
+
+/// Stats older than this are not shown: the phone went away, or its shell
+/// stopped answering.
+const FRESH: Duration = Duration::from_millis(2500);
+
 /// Poll the phone for as long as the app runs, and send each sample to the
 /// window as the event `sample`.
 pub fn poll(app: AppHandle) {
     let serial = serial();
-    let mut shell: Option<Shell> = None;
-    let mut previous_cpu: Vec<(u64, u64)> = Vec::new();
-    let mut previous_vm: Vec<(u32, u64, Instant)> = Vec::new();
+    let collected = Arc::new(Mutex::new(Collected::default()));
+    let android = Arc::new(AtomicBool::new(false));
+    {
+        let (serial, collected, android) = (serial.clone(), collected.clone(), android.clone());
+        thread::spawn(move || collect(&serial, &collected, &android));
+    }
     let mut last_usb = String::new();
     loop {
         let began = Instant::now();
@@ -227,30 +249,60 @@ pub fn poll(app: AppHandle) {
             usb.clone()
         };
         last_usb = state.clone();
+        android.store(state == "android", Ordering::Relaxed);
 
-        let mut sample = Sample {
-            t: SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0),
-            state: state.clone(),
-            helper,
-            ..Sample::default()
-        };
-        if state == "android" {
-            if shell.is_none() {
-                shell = Shell::open(&serial);
-            }
-            match shell.as_mut().and_then(|shell| shell.run(SCRIPT, Duration::from_secs(5))) {
-                Some(lines) => {
-                    sample.root = shell.as_ref().is_some_and(|shell| shell.root);
-                    parse(&lines, &mut sample, &mut previous_cpu, &mut previous_vm);
-                }
-                None => shell = None,
-            }
-        } else {
+        let mut sample = Sample::default();
+        if state == "android"
+            && let Ok(collected) = collected.lock()
+            && collected.at.is_some_and(|at| at.elapsed() < FRESH)
+        {
+            sample = collected.stats.clone();
+        }
+        sample.t = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+        sample.state = if state == "android" && !sample.booted { "booting".into() } else { state };
+        sample.helper = helper;
+        let _ = app.emit("sample", &sample);
+        thread::sleep(Duration::from_secs(1).saturating_sub(began.elapsed()));
+    }
+}
+
+/// Keep a shell on the phone while it runs Android, run the script once a
+/// second, and leave the newest stats in `collected`.
+fn collect(serial: &str, collected: &Mutex<Collected>, android: &AtomicBool) {
+    let mut shell: Option<Shell> = None;
+    let mut asked_root: Option<Instant> = None;
+    let mut previous_cpu: Vec<(u64, u64)> = Vec::new();
+    let mut previous_vm: Vec<(u32, u64, Instant)> = Vec::new();
+    loop {
+        let began = Instant::now();
+        if !android.load(Ordering::Relaxed) {
             shell = None;
+            asked_root = None;
             previous_cpu.clear();
             previous_vm.clear();
+            thread::sleep(Duration::from_millis(500));
+            continue;
         }
-        let _ = app.emit("sample", &sample);
+        let root = shell.as_ref().is_some_and(|shell| shell.root);
+        if !root && asked_root.is_none_or(|at| at.elapsed() >= Duration::from_secs(15)) {
+            asked_root = Some(Instant::now());
+            match Shell::start(serial, &["shell", "su"]) {
+                Some(root_shell) if root_shell.root => shell = Some(root_shell),
+                _ if shell.is_none() => shell = Shell::start(serial, &["shell"]),
+                _ => {}
+            }
+        }
+        let lines = shell.as_mut().and_then(|shell| shell.run(SCRIPT, Duration::from_secs(4)));
+        match lines {
+            Some(lines) => {
+                let mut stats = Sample { root: shell.as_ref().is_some_and(|shell| shell.root), ..Sample::default() };
+                parse(&lines, &mut stats, &mut previous_cpu, &mut previous_vm);
+                if let Ok(mut collected) = collected.lock() {
+                    *collected = Collected { at: Some(Instant::now()), stats };
+                }
+            }
+            None => shell = None,
+        }
         thread::sleep(Duration::from_secs(1).saturating_sub(began.elapsed()));
     }
 }
@@ -280,6 +332,7 @@ fn parse(
                 "bat" => "bat",
                 "load" => "load",
                 "vm" => "vm",
+                "boot" => "boot",
                 _ => "",
             };
             continue;
@@ -330,6 +383,7 @@ fn parse(
                     _ => {}
                 }
             }
+            "boot" => sample.booted = fields.first() == Some(&"1"),
             "load" if fields.len() >= 3 => {
                 let n = |i: usize| fields[i].parse::<f64>().unwrap_or(0.0);
                 sample.load = Some([n(0), n(1), n(2)]);

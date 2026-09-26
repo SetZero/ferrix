@@ -13,10 +13,13 @@ const FOLLOW_LINES = 10;
 
 const samples = [];
 let lastSample = null;
+let lastAndroid = null;
 let vmRunning = false;
 let vmPaused = false;
 let vmStarted = 0;
-let lastHelperRun = null;
+// The helper's last run as first seen, so that one is not loaded as if it had
+// just happened: `undefined` until the helper has answered once.
+let lastHelperRun = undefined;
 let selectedRun = null;
 
 // ---------------------------------------------------------- Ferrix's stats
@@ -139,9 +142,85 @@ const COLORS = ["#cfbcff", "#64b5f6", "#3ddc84", "#ffb74d", "#ff6b6b", "#4dd0e1"
 const CLUSTER = { 0: "LITTLE", 4: "MID", 6: "BIG" };
 const THERMAL = ["BIG", "MID", "LITTLE", "G3D", "TPU", "battery", "neutral_therm", "disp_therm"];
 
+// Ferrix's own samples, placed in the PC's time, for the stretch of a native
+// boot when the phone was in Ferrix and Android had nothing to say: what
+// `fillFromFerrix` makes of a run's record once it is back.
+let ferrixFill = [];
+
+// The spans the phone was away from Android, from the states the samples
+// carry: each shaded and named behind the charts, so a gap reads as what it
+// was rather than as a line drawn across it.
+const BANDS = {
+  fastboot: ["fastboot", "#ffb74d"],
+  ferrix: ["in Ferrix", "#64b5f6"],
+  booting: ["Android booting", "#ffd54f"],
+  absent: ["not connected", "#8a8898"],
+  offline: ["adb offline", "#ff6b6b"],
+  unauthorized: ["adb unauthorized", "#ff6b6b"],
+};
+
+function bands() {
+  const out = [];
+  for (const s of samples) {
+    const kind = BANDS[s.state];
+    const last = out[out.length - 1];
+    if (!kind) continue;
+    if (last && last.state === s.state && s.t - last.to <= 3) {
+      last.to = s.t + 1;
+    } else {
+      out.push({ state: s.state, from: s.t, to: s.t + 1, label: kind[0], color: kind[1] });
+    }
+  }
+  for (const band of out) {
+    if (band.state === "ferrix" && ferrixFill.some((f) => f.t >= band.from && f.t <= band.to)) {
+      band.label = "in Ferrix · its own stats";
+    }
+  }
+  return out;
+}
+
+// Place the loaded record's `ferrix-statd` samples in the last stretch the
+// phone was in Ferrix. The loader logs the counter as it starts, which is as
+// the phone leaves fastboot, and Ferrix's `t` is that counter: so a sample's
+// time is the stretch's start plus how far the counter got past the loader's.
+function fillFromFerrix() {
+  const away = bands().filter((b) => b.state === "ferrix").pop();
+  const anchor = consoleLines
+    .map((line) => /counter at \d+ Hz, (\d+\.\d+) s since it started/.exec(line))
+    .find(Boolean);
+  if (!away || !anchor || !ferrix.samples.length) return;
+  const loaderAt = Number(anchor[1]);
+  const clusters = lastAndroid ? lastAndroid.clusters.map((c) => ({ first_cpu: c.first_cpu, mhz: null, max_mhz: null })) : [];
+  const placed = ferrix.samples.map((s) => ({
+    t: away.from + (s.t - loaderAt),
+    state: "ferrix",
+    fromFerrix: true,
+    cores: s.cpu,
+    total: s.all,
+    clusters,
+    memory: {
+      total: s.mem.total / 1024,
+      available: s.mem.available / 1024,
+      cached: s.mem.cached / 1024,
+      swap_total: 0,
+      swap_free: 0,
+    },
+    thermal: [],
+    vms: [],
+  }));
+  // A record that does not fit the stretch is some other run's.
+  if (placed[0].t < away.from - 5 || placed[placed.length - 1].t > away.to + 60) return;
+  ferrixFill = placed;
+  drawCharts();
+}
+
+function allSamples() {
+  return ferrixFill.length ? [...samples, ...ferrixFill].sort((a, b) => a.t - b.t) : samples;
+}
+
 function seriesOf(pick, label, color) {
   const points = [];
-  for (const s of samples) {
+  for (const s of allSamples()) {
     const v = pick(s);
     if (v !== null && v !== undefined && !Number.isNaN(v)) points.push([s.t, v]);
   }
@@ -150,6 +229,7 @@ function seriesOf(pick, label, color) {
 
 function drawCharts() {
   const now = lastSample ? lastSample.t : Date.now() / 1000;
+  const away = bands();
   const clusters = (s, first) => {
     const members = (s.cores || []).filter((_, i) => clusterOf(s, i) === first);
     return members.length ? members.reduce((a, b) => a + b, 0) / members.length : null;
@@ -159,27 +239,27 @@ function drawCharts() {
     seriesOf((s) => clusters(s, 6), "BIG", COLORS[4]),
     seriesOf((s) => clusters(s, 4), "MID", COLORS[3]),
     seriesOf((s) => clusters(s, 0), "LITTLE", COLORS[1]),
-  ], now);
+  ], now, away);
   charts.freq.draw([0, 4, 6].map((first, i) =>
-    seriesOf((s) => (s.clusters.find((c) => c.first_cpu === first) || {}).mhz, CLUSTER[first], [COLORS[1], COLORS[3], COLORS[4]][i])), now);
+    seriesOf((s) => (s.clusters.find((c) => c.first_cpu === first) || {}).mhz, CLUSTER[first], [COLORS[1], COLORS[3], COLORS[4]][i])), now, away);
   charts.mem.draw([
     seriesOf((s) => s.memory && (s.memory.total - s.memory.available) / 1024, "used", COLORS[0]),
     seriesOf((s) => s.memory && s.memory.cached / 1024, "cached", COLORS[1]),
     seriesOf((s) => s.memory && (s.memory.swap_total - s.memory.swap_free) / 1024, "swap", COLORS[3]),
-  ], now);
+  ], now, away);
   const zones = THERMAL.filter((name) => lastSample && lastSample.thermal.some(([z]) => z === name)).slice(0, 6);
   charts.temp.draw(zones.map((name, i) =>
-    seriesOf((s) => { const z = s.thermal.find(([n]) => n === name); return z ? z[1] : null; }, name.replace("_therm", ""), COLORS[i])), now);
+    seriesOf((s) => { const z = s.thermal.find(([n]) => n === name); return z ? z[1] : null; }, name.replace("_therm", ""), COLORS[i])), now, away);
   charts.gpu.draw([
     seriesOf((s) => s.gpu && s.gpu[0], "GPU", COLORS[2]),
     seriesOf((s) => s.mif_mhz, "memory bus", COLORS[5]),
-  ], now);
+  ], now, away);
   charts.bat.draw([
     seriesOf((s) => s.battery && s.battery.current_ma !== null ? -s.battery.current_ma : null, "draw", COLORS[3]),
-  ], now);
+  ], now, away);
   charts.vm.draw([
     seriesOf((s) => s.vms && s.vms.length ? s.vms.reduce((a, v) => a + v.cpu, 0) : null, "CPU", COLORS[0]),
-  ], now);
+  ], now, away);
 }
 
 function clusterOf(s, core) {
@@ -192,6 +272,7 @@ function clusterOf(s, core) {
 
 const STATES = {
   android: ["ok", "Android"],
+  booting: ["warn", "Android booting"],
   fastboot: ["warn", "fastboot"],
   ferrix: ["info", "running Ferrix"],
   unauthorized: ["bad", "adb unauthorized"],
@@ -199,7 +280,7 @@ const STATES = {
   recovery: ["warn", "recovery"],
   absent: ["bad", "not connected"],
 };
-const TIMELINE_COLORS = { android: "#3ddc84", fastboot: "#ffb74d", ferrix: "#64b5f6", absent: "#3a3a48" };
+const TIMELINE_COLORS = { android: "#3ddc84", booting: "#ffd54f", fastboot: "#ffb74d", ferrix: "#64b5f6", absent: "#3a3a48" };
 
 function pill(id, kind, text) {
   const el = $(id);
@@ -211,6 +292,8 @@ function onSample(s) {
   samples.push(s);
   if (samples.length > KEEP) samples.shift();
   lastSample = s;
+  if (s.state === "android" && s.clusters.length) lastAndroid = s;
+  if (ferrixFill.length && ferrixFill[ferrixFill.length - 1].t < samples[0].t) ferrixFill = [];
 
   const [kind, text] = STATES[s.state] || ["bad", s.state];
   pill("state", kind, vmRunning ? `${text} · VM ${vmPaused ? "paused" : "running"}` : text);
@@ -234,9 +317,11 @@ function onSample(s) {
     setSource(`native boot of ${shortImage(helper.image)}`);
   }
   const last = helper && helper.last && helper.last.when ? helper.last : null;
-  if (last && last.when !== lastHelperRun) {
-    if (lastHelperRun !== null && last.record) loadRun(last.record, `native boot ${last.when}`);
+  if (helper && lastHelperRun === undefined) {
+    lastHelperRun = last ? last.when : null;
+  } else if (last && last.when !== lastHelperRun) {
     lastHelperRun = last.when;
+    if (last.record) loadRun(last.record, `native boot ${last.when}`, true);
     refreshRuns();
   }
 
@@ -397,7 +482,7 @@ function clearConsole() {
   resetBoot();
 }
 
-async function loadRun(path, label) {
+async function loadRun(path, label, fill = false) {
   try {
     const text = await invoke("read_run", { path });
     clearConsole();
@@ -418,6 +503,7 @@ async function loadRun(path, label) {
     }
     rerender();
     $("lines").textContent = `${consoleLines.length} lines`;
+    if (fill) fillFromFerrix();
     if (ferrix.samples.length) {
       showTab("ferrix");
       drawFerrix();
