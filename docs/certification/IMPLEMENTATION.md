@@ -199,9 +199,15 @@ wants, via an arch-owned enum or a plain discriminant the personality maps.
 
 ## W-4 — Registration for board support and the block ring
 
-**Half done 2026-09-25:** F-05 closed. The board half, F-04, remains.
+**Done 2026-09-26.** F-05 closed on 2026-09-25 and F-04 on 2026-09-26, and
+F-08, which had no order of its own, went with it: power, init and `devmgr`
+took the same shape, an interface the item defines and the load ring
+registers into. `kernel/src/hooks.rs` is the list type the item keeps
+registrations in, and `main.rs`'s `register_load` is the one place they are
+made, in bring-up order, with a check that each was (FX-0006). FINDINGS.md
+F-04 and F-08 say what moved and what the gate still cannot see.
 
-**Closes:** F-04 (6), F-05 (1). **Size:** small.
+**Closes:** F-04 (6), F-05 (1), and F-08 (6). **Size:** small.
 
 `device.rs` names `stm32mp1`, `stm32mp1_gpu`, `stm32mp1_usb`; `claim.rs` names
 `block_ring`. Both want the dependency the other way: board support registers
@@ -219,7 +225,7 @@ finding of its own.
 
 **Closes:** F-07 (9 references). **Size:** medium.
 
-`syscall/native.rs:98` is a `match call { … }` naming eleven load-ring modules.
+`syscall/native.rs:98` is a `match call { … }` naming ten load-ring modules.
 Replace with a table subsystems register handlers into, so the item's exported
 interface can be analysed without the whole load ring.
 
@@ -368,12 +374,11 @@ engineering — **answer step 1 before planning anything that depends on it.**
 
 ## Suggested order
 
-**Done:** order zero, W-3, W-2, W-6, W-9, F-05 (the first half of W-4), and
-most of W-7.
-**Remaining:** W-1 (keystone) → W-4's board half → W-5 → W-7's last gates →
+**Done:** order zero, W-3, W-2, W-6, W-9, W-4 (with F-08), and most of W-7.
+**Remaining:** W-1 (keystone) → W-5 → W-7's last gates →
 W-8 (largest), with W-10 in parallel whenever someone can answer step 1.
 
-W-1 is still first among what is left: twenty-four of the 48 remaining
+W-1 is still first among what is left: twenty-four of the 36 remaining
 boundary references are it and its downstream, and W-5 and W-8 both read
 better once the core object exists.
 

@@ -48,7 +48,7 @@ python3 scripts/check-item-boundary.py --report
 
 ## 1. Boundary — the cheapest real wins
 
-The debt register in `scripts/certification-item.json` holds 48 upward
+The debt register in `scripts/certification-item.json` holds 36 upward
 references, down from 62 when the audit began. It may shrink freely; it may not grow. After each fix, delete the
 entries it retires — the gate fails on stale entries, so it will tell you which.
 
@@ -63,7 +63,7 @@ into the core while the gate went green. It has to be split, and the
 `Task -> Thread -> Process` chain crosses the boundary twice, so `Thread` needs
 a home decided too. IMPLEMENTATION.md W-1 has the measurement.
 
-*Highest value single change in this list.* It is 10 of 48 references, it is
+*Highest value single change in this list.* It is 10 of 36 references, it is
 the most-cited structural defect, and F-09's 14 references are mostly
 downstream of it — so it plausibly retires ~24 at once. It is also the clearest
 `ADV_INT.2` counter-example in the item.
@@ -79,7 +79,13 @@ The personality should ask the arch facade which layout it wants. Smallest fix
 here; do it while learning the gate.
 
 ### 1.3 Board and ring registration — **F-04 and F-05, 7 references**
-**F-05 done 2026-09-25.** F-04's six references from `device.rs` remain.
+**Done**: F-05 on 2026-09-25, F-04 on 2026-09-26. Board support registers
+`BoardBinding`s with the registry and its boot mode with power, from
+`main.rs`'s `register_load`.
+
+*To re-audit:* the three bindings find nothing under QEMU, which has no
+STM32MP15 tree, so the only evidence the DK1 still publishes its display, USB
+host and GPU is a board boot. Look for the `display`, `usb` and `gpu` lines.
 
 `device.rs` names `stm32mp1*`; `claim.rs` names `block_ring`. Both want
 registration into the core rather than the core naming them.
@@ -96,8 +102,20 @@ most trusted path in the system, and while it stands the core cannot be built
 or analysed without the personality present.
 
 ### 1.5 A registration table for the native dispatcher — **F-07, 9 references**
-`syscall/native.rs` names eleven load-ring modules. Subsystems should register
+`syscall/native.rs` names ten load-ring modules. Subsystems should register
 handlers in a table the dispatcher walks.
+
+### 1.6 Bring-up and power — **F-08, 6 references**
+**Done 2026-09-26.** Power commits registered `Flush`es, init starts pid 1
+with a registered `Launcher`, and `devmgr` reads with a registered
+`ReadFile`; `main.rs` checks all three are there before anything uses them.
+
+*To re-audit:* the gate is blind to two kinds of edge, so "no F-08 entries"
+is not the whole answer. Grep the item's files for `use crate::<module>::{`
+-- a brace below `crate::` is not expanded, and `devmgr.rs` still reaches
+`syscall::exec` and `syscall::process` that way -- and read `main.rs`'s
+bare-path calls into `fs`, `syscall` and `stm32mp1`, which are the
+composition root's and which the gate does not read at all.
 
 ---
 

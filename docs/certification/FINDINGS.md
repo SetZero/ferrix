@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-23 findings are open and 14 are closed, of 37. F-10 advanced from 71.4% to 81.9%. No finding here is closed by argument:
+21 findings are open and 16 are closed, of 37. F-10 advanced from 71.4% to 81.9%. No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 2 | 8 | 10 | 2 | 1 |
+| Open | 2 | 8 | 9 | 1 | 1 |
 
 Blocking: F-27 and F-28 — independent assessment and a quality management
 system. Both need an organisation; neither is a defect in the code.
@@ -29,7 +29,7 @@ of use, which is how every general-purpose certified kernel handles them.
 
 ## A. Boundary integrity
 
-Measured by `scripts/check-item-boundary.py`; 48 upward references in 19 files,
+Measured by `scripts/check-item-boundary.py`; 36 upward references in 15 files,
 from 62 in 27 when the audit began.
 These are recorded in `scripts/certification-item.json` as a debt register that
 may shrink freely and may not grow.
@@ -96,11 +96,33 @@ in the personality, and the dependency now points downward. 62 upward
 references became 59.
 
 ### F-04 — the core device registry names STM32MP1 board support
-**Minor.** 6 references from `device.rs` into `stm32mp1`, `stm32mp1_gpu` and
-`stm32mp1_usb`.
+**Closed 2026-09-26.** All six of the manifest's F-04 entries are gone: the
+three from `device.rs` into `stm32mp1`, `stm32mp1_gpu` and `stm32mp1_usb`, and
+the three from the item that reached the same board for its boot mode
+(`power.rs`, `syscall/system.rs`) and its pixel clock (`syscall/native.rs`).
 
-*Closes when:* board support registers itself with the registry rather than
-being named by it.
+The registry now keeps a list of `BoardBinding`s: a binding number, a
+`prepare` function that answers with registers, an interrupt, a DMA shape and
+a line for the log, and the one clock a driver may set, if there is one. The
+list is a `Hooks` (`kernel/src/hooks.rs`, core), a handful of `Once` cells
+read without a lock, because board support waits on the timer while it
+prepares a device. `stm32mp1::install` registers the display, the USB host and
+the GPU, in the order their nodes were published before, and hands power the
+function that writes U-Boot's boot mode. The registry mints the apertures and
+the vector from what `prepare` says under the rules it applies to every node,
+so board support still cannot hand a driver memory the kernel owns.
+`device_clock` asks `device::board_clock` for the node's binding's clock.
+
+Registration is one explicit call in `main.rs`'s `register_load`, before
+enumeration, not a link-time table. The boot prints what was registered and
+stops with FX-0006 if anything is missing.
+
+*Not verified on the board.* QEMU's machines carry no STM32MP15 device tree,
+so under every gate the three bindings find nothing. The DK1's display, USB
+host and GPU were not enumerated again on hardware for this change. The path
+is the old one reshaped -- same order, same minting, same log lines -- and the
+next board session should confirm that the `display`, `usb` and `gpu` lines
+are unchanged.
 
 ### F-05 — `claim.rs` names `block_ring`
 **Closed 2026-09-25.** Only the `StillServed` enum was wanted, and it belongs
@@ -116,8 +138,8 @@ the present ratings, and it is on the ratchet's path to an EAL6+/ASIL D `core`.
 
 ### F-07 — the native ABI dispatcher fans out across the load ring
 **Major.** 9 references from `syscall/native.rs` into `block_ring`, `net_ring`,
-`fs::cgroupfs`, `display`, `render`, `input`, `stm32mp1` and three personality
-syscall modules.
+`fs::cgroupfs`, `display`, `render`, `input` and three personality syscall
+modules. Its tenth, `stm32mp1`, was F-04's and went with it.
 
 Expected of a dispatcher and still a dependency: the item's exported interface
 cannot be analysed without the whole of the load ring it dispatches into.
@@ -126,11 +148,39 @@ cannot be analysed without the whole of the load ring it dispatches into.
 rather than the dispatcher naming each subsystem.
 
 ### F-08 — bring-up and power name the filesystem
-**Moderate.** 6 references from `init.rs`, `power.rs` and `devmgr.rs` into
-`fs`, `fs::root_disk`, `fs::data_disk`, `block_ring` and `stm32mp1`.
+**Closed 2026-09-26.** All six entries are gone, from `init.rs`, `power.rs`
+and `devmgr.rs` into `fs`, `fs::root_disk`, `fs::data_disk`, `block_ring` and
+`syscall::load`. Each consumer in the item now defines what it needs, and the
+load ring registers into it from `main.rs` before the first use:
 
-Legitimate in intent — init has to start a filesystem, and power has to flush
-one — and the fix is the same interface inversion as F-07.
+* **Power** keeps a list of `Flush`es -- a mount point and a commit -- and
+  commits every one, in the order registered, before the machine stops.
+  `fs::install` registers `/` and then `/data`, so a power-off still commits
+  both before power goes, in the old order. `test-shell`'s `/data/k7`
+  surviving `poweroff -f -n`, and `test-powerfail`, both pass.
+* **Init** decides which program runs and says how it ended; how a program is
+  opened and started is a `Launcher` that `syscall/launch.rs`, in the load
+  ring, registers. That also removed `init.rs`'s use of `syscall::exec`,
+  which the gate never reported (below).
+* **`devmgr`** reads its program and drivers through a `ReadFile` the
+  filesystem registers. `location_of` -- the PCI location devmgr's messages
+  and every ring's HELLO name a device by -- moved from `block_ring` into
+  `devmgr.rs`, and `block_ring` re-exports it.
+
+`main.rs` checks, on every boot and before anything uses them, that a flush,
+the launcher and the reader are registered (FX-0006).
+
+*What the gate does not see.* Two kinds of edge from the item into the load
+ring are invisible to `check-item-boundary.py`, and closing this finding does
+not claim them. A `use crate::syscall::{exec, process}` nests its brace below
+`crate::`, which the gate's expansion does not reach: `devmgr.rs` still has
+one, for the native process creation `devmgr` is started with and for the
+`Process` type, which are F-07's and F-01's ground. And `main.rs`, the crate
+root, calls the load ring by bare module paths (`fs::install`,
+`syscall::launch::install`, `stm32mp1::install`, and long before this change
+`fs::init` and `fs::root_disk::init`). Those are the composition root's
+edges and how registration is meant to happen, but the gate cannot tell them
+from a dependency either.
 
 ### F-09 — item-ring syscalls reach personality modules
 **Moderate.** 14 references from `syscall/{futex,limits,memory,mod,registry,

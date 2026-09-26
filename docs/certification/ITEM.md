@@ -42,12 +42,12 @@ three nested rings. A file in no ring fails the build.
 
 | Ring | Product lines | In-kernel test lines | Carries |
 |---|---:|---:|---|
-| `core` | 38,989 | 7,807 | EAL6+, ASIL D, SIL 3/4, DAL B — *aspirational* |
-| `item` | 10,442 | 248 | EAL5+, DAL C, Class C, SIL 2 — *the present claim* |
-| `load` | 44,215 | 23,080 | nothing |
+| `core` | 40,038 | 7,807 | EAL6+, ASIL D, SIL 3/4, DAL B — *aspirational* |
+| `item` | 10,688 | 248 | EAL5+, DAL C, Class C, SIL 2 — *the present claim* |
+| `load` | 44,438 | 23,080 | nothing |
 
-**The certified item is `core` + `item`: 49,431 lines of product code**, against
-44,215 lines of uncertified load. The item is 52.8% of the kernel's product
+**The certified item is `core` + `item`: 50,726 lines of product code**, against
+44,438 lines of uncertified load. The item is 53.3% of the kernel's product
 code.
 
 ### `core` — the minimal trusted base
@@ -70,6 +70,16 @@ syscalls that belong to the item rather than to the Linux personality
 
 The native ABI is here rather than in `core` because it is the interface the
 item *exports*, and an interface is evaluated with the thing that exports it.
+
+Where the item has to act on the load -- power commits a filesystem before the
+machine stops, init starts a program from one, `devmgr` reads its drivers
+from one, device enumeration asks board support what it prepared -- the item
+defines the interface and the load registers into it
+(`kernel/src/hooks.rs`). `main.rs` is the crate root: it declares every
+module, and its `register_load` is the one place the load is told to
+register, in bring-up order, with a boot check that it did. Those calls are
+the composition root's edges into the load, and the gate does not read them;
+FINDINGS.md F-08 says what else it cannot see.
 
 ### `load` — everything it runs and does not vouch for
 
@@ -110,22 +120,22 @@ visible instead of letting "Ferrix is certified" absorb it.
 ## 4. What the measurement found
 
 The boundary above is a claim about dependencies, so the gate measures it.
-Today the item contains **48 upward references** (62 when the audit began) — places where a
+Today the item contains **36 upward references** (62 when the audit began) — places where a
 ring names something in a ring above it. They are recorded in the manifest
 against finding ids and analysed in [FINDINGS.md](FINDINGS.md).
 
 They are not a reason to move the boundary. They are the reason the boundary is
 worth having: each one is a specific, addressable piece of coupling that was
-invisible while the architecture was described in prose. Fourteen have been
-paid down since the audit began — F-02, F-02a, F-03 and F-05 — and the three
-that remain worth naming are structural rather than incidental:
+invisible while the architecture was described in prose. Twenty-six have been
+paid down since the audit began — F-02, F-02a, F-03, F-04, F-05 and F-08 — and
+the three that remain worth naming are structural rather than incidental:
 
 * **F-01** — the `Process` type and `current()` are core concepts living in
   `syscall/process.rs`, a 2,229-line Linux-personality file. The measurement in
   `docs/certification/IMPLEMENTATION.md` W-1 found the core-facing interface is
   only about seven operations, but that the ownership chain crosses two
   boundaries: `Task` holds a `Thread`, and `Thread` holds the `Process`.
-* **F-07** — `syscall/native.rs`, the native ABI dispatcher, names eleven
+* **F-07** — `syscall/native.rs`, the native ABI dispatcher, names ten
   modules in the load ring. Expected of a dispatcher, and still a dependency.
 * **F-09** — the item-ring syscall modules reach the personality, mostly for
   the `Process` type, so most of it is downstream of F-01.
