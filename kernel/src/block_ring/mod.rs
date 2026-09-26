@@ -1275,6 +1275,7 @@ impl Serving<'_> {
                     Ok(()) => {
                         let _ = self.free.pop();
                         let _ = self.flying.insert(token.raw(), region);
+                        crate::fs::seam::submitted();
                     }
                     Err(SubmitError::Full) => {
                         let _ = state.queue.requeue(token);
@@ -1298,6 +1299,7 @@ impl Serving<'_> {
             let Some(region) = self.flying.remove(&token) else {
                 continue;
             };
+            crate::fs::seam::completed();
             let result = outcome(&completed);
             let offset = u64::from(region) * self.region_bytes;
             answer(

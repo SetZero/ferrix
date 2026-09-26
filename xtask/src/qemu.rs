@@ -430,6 +430,21 @@ pub(crate) fn test_shell(arch: Arch, image: &Path, kernel: &Path, args: &Args) -
     Ok(())
 }
 
+/// What crossed the seam over the whole run, as the kernel counted it: the
+/// second "seam measured" row's line (`docs/OPAQUE-KERNEL.md`, S0), from the
+/// command that read it rather than the echo of the command.
+fn print_seam(arch: Arch, after_boot: &[String]) {
+    if let Some(line) = after_boot
+        .iter()
+        .find(|line| line.contains("seam syscalls ") && !line.contains("cat "))
+    {
+        let counters = line
+            .get(line.find("seam syscalls").unwrap_or(0)..)
+            .unwrap_or(line);
+        println!("  {arch}: {}", counters.trim_end());
+    }
+}
+
 /// Boot an image whose kernel runs `vfs::commands(carried)`, and judge each
 /// command by its status and its output.
 ///
@@ -445,6 +460,7 @@ pub(crate) fn test_vfs(
     let applets = &crate::vfs::applets(carried)[..];
     let shell = crate::vfs::SHELL;
     let utilities = crate::vfs::utilities(carried);
+    let seam = crate::vfs::SEAM;
     println!(
         "  {arch}: running {} programs, {} applets, {} shell and {} uutils commands \
          under QEMU (timeout {}s)",
@@ -499,6 +515,12 @@ pub(crate) fn test_vfs(
             "uutils commands",
             "the uutils family ran on Ferrix",
         ),
+        (
+            seam,
+            commands.len() + applets.len() + shell.len() + utilities.len(),
+            "seam counters",
+            "the seam's counters were read",
+        ),
     ];
     let mut failures = Vec::new();
     for (group, first, what, all_passed) in groups {
@@ -523,6 +545,7 @@ pub(crate) fn test_vfs(
             )),
         }
     }
+    print_seam(arch, after_boot);
     if ending.is_none() && failures.is_empty() {
         return Ok(());
     }

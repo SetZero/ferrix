@@ -36,6 +36,17 @@ now, makes init start devmgr, and is the first step of that on-ramp.
   cores, the Linux personality) run in ring 0. A bug there is a kernel
   compromise, and `ITEM.md` has to argue the load ring around the item.
 
+### S0's first result (2026-09-27): the seam measured, 2
+
+A warm `rustc` compile made 4,345 system calls and crossed to ring 3 once,
+for a single page, while the page cache served 16,566 pages. A cold run
+crossed about once per three calls while the cache filled (stage 11's
+roadmap section has the table). For this plan that means the page cache, and
+the VFS caches in front of it, carry the compiler. Option B must keep them in
+the kernel, as it does. A filesystem server in B sees cold fills and
+metadata writes, never the warm path. Row 1, the cost of one crossing, is
+next.
+
 ## 1. What "opaque" means here
 
 The kernel keeps what only a kernel can do:

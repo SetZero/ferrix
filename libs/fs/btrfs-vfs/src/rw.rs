@@ -453,6 +453,10 @@ impl<D> fmt::Debug for Source<D> {
 }
 
 impl<D: WriteHandle> PageSource for Source<D> {
+    fn reads_disk(&self) -> bool {
+        true
+    }
+
     fn fill_range(&self, first: u64, pages: &mut [&mut [u8]]) -> Result<usize> {
         if pages.is_empty() {
             return Err(Errno::EINVAL);

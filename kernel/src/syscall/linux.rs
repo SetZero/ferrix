@@ -64,6 +64,7 @@ impl Personality for Linux {
 /// caller is a trap vector with a program waiting on it -- so every path here
 /// has to end in a value.
 fn dispatch(call: Syscall, args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Outcome {
+    crate::fs::seam::syscall();
     // Resolved once, here, rather than reached for inside each handler: the
     // handlers take `&Process` so that the boot self-check can call them
     // against a process it built itself, months before a program can.

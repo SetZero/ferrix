@@ -361,6 +361,11 @@ pub(super) fn cmdline_file(_: &Kernel) -> Result<Vec<u8>> {
 /// `/proc/version`: the release and version `uname` reports, in the sentence
 /// Linux writes them in, with the compiler it names being the one that built
 /// this kernel.
+/// `/proc/ferrix-seam`: what crosses the seam (`fs::seam`). Not Linux's.
+pub(super) fn seam(_: &Kernel) -> Result<Vec<u8>> {
+    Ok(fs::seam::render())
+}
+
 pub(super) fn version(_: &Kernel) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     put(

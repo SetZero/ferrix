@@ -653,5 +653,8 @@ fn an_image_carries_uutils_when_it_carries_coreutils() {
     let uutils = commands(Utilities::Uutils);
     let busybox = commands(Utilities::Busybox);
     assert_eq!(uutils.len(), busybox.len() + UTILITIES.len());
-    assert_eq!(busybox.len(), COMMANDS.len() + APPLETS.len() + SHELL.len());
+    assert_eq!(
+        busybox.len(),
+        COMMANDS.len() + APPLETS.len() + SHELL.len() + SEAM.len()
+    );
 }

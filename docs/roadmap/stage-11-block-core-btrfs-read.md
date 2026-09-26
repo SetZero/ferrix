@@ -120,6 +120,29 @@ reader with its checksums and the page source. What the check compares is a
 checksum per file rather than every byte on the wire, and the checksum is the
 manifest's; a byte wrong anywhere in the stack is a CRC that differs.
 
+**The seam measured, 2 (2026-09-27): how much of a build crosses it.** The
+kernel counts, from boot:
+- Linux system calls answered;
+- file pages served from a page cache against pages filled from a source,
+  and of those the pages read from a disk;
+- block-ring submissions and completions (`kernel/src/fs/seam.rs`,
+  `/proc/ferrix-seam`).
+
+`test-vfs` prints the line at its end. `test-rustc` prints it after its cold
+run, and again after compiling `hello.rs` once more on a warm page cache.
+Measured on x86-64 under KVM on 2026-09-27:
+
+| Run | Syscalls | Pages served | Pages from disk | Ring crossings |
+|---|---|---|---|---|
+| `test-rustc`, cold: `rustc -vV`, `cargo -V`, rustc and gcc compile and run | 9,024 | 35,431 | 46,172 | 2,986 |
+| `test-rustc`, the warm second `rustc hello.rs` alone | 4,345 | 16,566 | 1 | 1 |
+| `test-vfs`, its programs and applets, boot checks included | 18,607 | 12,267 | 3,090 | 394 |
+
+A cold compile crosses to ring 3 about once per three system calls, each
+crossing carrying about fifteen pages. A warm one crossed once in 4,345 calls.
+The compiler's path is on the page cache, a function call away, as the
+decision of 2026-09-16 claimed, and ring 3 sees it only while the cache fills.
+
 **Still to do, after the exit.**
 
 * A mapping of a file on the read-only mount. File `mmap` landed on

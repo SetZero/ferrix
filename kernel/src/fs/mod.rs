@@ -51,6 +51,7 @@ pub(crate) mod portfd;
 pub(crate) mod procfs;
 pub(crate) mod pty;
 pub(crate) mod root_disk;
+pub(crate) mod seam;
 pub(crate) mod signalfd;
 pub(crate) mod signalfd_check;
 pub(crate) mod socket;

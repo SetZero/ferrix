@@ -1172,9 +1172,20 @@ pub(crate) fn utilities(utilities: Utilities) -> &'static [Command] {
     }
 }
 
+/// What crosses the seam, read last so it counts every command above: the
+/// kernel's counters from boot (`kernel/src/fs/seam.rs`), for the second
+/// "seam measured" row of `docs/BACKLOG.md` (`docs/OPAQUE-KERNEL.md`, S0).
+pub(crate) const SEAM: &[Command] = &[Command {
+    argv: &["cat", "/proc/ferrix-seam"],
+    status: 0,
+    expect: Expect::Shaped(&[
+        "seam syscalls # served # filled # from-disk # submitted # completed #",
+    ]),
+}];
+
 /// The commands the kernel is built to run in an image carrying `utilities`,
-/// in order: the criterion's three, the applets, which shell `/bin/sh` is, and
-/// uutils where the image carries it.
+/// in order: the criterion's three, the applets, which shell `/bin/sh` is,
+/// uutils where the image carries it, and last what crossed the seam.
 ///
 /// Only an `x86_64` image carries uutils, because ferrousli is built for
 /// `x86_64` only, so only there do the rows that need it run. Every image runs
@@ -1184,6 +1195,7 @@ pub(crate) fn commands(utilities: Utilities) -> Vec<Command> {
     all.extend(applets(utilities));
     all.extend_from_slice(SHELL);
     all.extend_from_slice(self::utilities(utilities));
+    all.extend_from_slice(SEAM);
     all
 }
 

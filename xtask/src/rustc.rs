@@ -59,6 +59,9 @@ echo '#include <stdio.h>' > hello.c
 echo 'int main(void) { puts("rustc-gate: hello from gcc on Ferrix"); return 0; }' >> hello.c
 cc hello.c -o hello-c || exit 7
 ./hello-c || exit 8
+while read -r l; do echo "cold $l"; done < /proc/ferrix-seam
+rustc hello.rs -o hello-again || exit 4
+while read -r l; do echo "warm $l"; done < /proc/ferrix-seam
 exit 16
 "#;
 
@@ -331,6 +334,16 @@ fn judge(arch: Arch, lines: &[String]) -> Result<()> {
                 "  {arch}: rustc compiled hello.rs on Ferrix, Cargo started, gcc compiled \
                  hello.c, and both ran"
             );
+            // What crossed the seam, as the kernel counted it: the second
+            // "seam measured" row (docs/OPAQUE-KERNEL.md, S0). The counters
+            // after the cold run, and after compiling hello.rs again on a
+            // warm page cache; the second compile is their difference.
+            for (label, line) in seam_lines(after_boot) {
+                println!("  {arch}: {label} seam {line}");
+            }
+            if let Some(delta) = warm_delta(after_boot) {
+                println!("  {arch}: the warm compile alone: {delta}");
+            }
             Ok(())
         }
         Some("3") => Err(Error::new(format!("{arch}: `rustc -vV` failed"))),
@@ -353,6 +366,50 @@ fn judge(arch: Arch, lines: &[String]) -> Result<()> {
         ))),
         None => Err(Error::new(format!("{arch}: the shell never exited"))),
     }
+}
+
+/// The counters the script printed, labelled `cold` and `warm`, from the lines
+/// the shell ran rather than the ones it echoed.
+fn seam_lines(lines: &[String]) -> Vec<(&'static str, String)> {
+    ["cold", "warm"]
+        .into_iter()
+        .filter_map(|label| {
+            let prefix = format!("{label} seam syscalls ");
+            lines.iter().find_map(|line| {
+                let at = line.find(&prefix)?;
+                let rest = line.get(at + label.len() + " seam ".len()..)?;
+                Some((label, rest.trim().to_owned()))
+            })
+        })
+        .collect()
+}
+
+/// The warm compile's own counters: `warm` less `cold`, field by field.
+fn warm_delta(lines: &[String]) -> Option<String> {
+    let seen = seam_lines(lines);
+    let [(_, cold), (_, warm)] = seen.as_slice() else {
+        return None;
+    };
+    let numbers = |text: &str| -> Vec<(String, u64)> {
+        let words: Vec<&str> = text.split_whitespace().collect();
+        words
+            .chunks(2)
+            .filter_map(|pair| match pair {
+                [name, value] => Some(((*name).to_owned(), value.parse().ok()?)),
+                _ => None,
+            })
+            .collect()
+    };
+    let (cold, warm) = (numbers(cold), numbers(warm));
+    if cold.len() != warm.len() || cold.is_empty() {
+        return None;
+    }
+    let parts: Vec<String> = cold
+        .iter()
+        .zip(&warm)
+        .map(|((name, before), (_, after))| format!("{name} {}", after.saturating_sub(*before)))
+        .collect();
+    Some(parts.join(" "))
 }
 
 #[cfg(test)]

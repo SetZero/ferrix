@@ -216,6 +216,7 @@ impl Filler for Fill {
     /// per page is what would make that slow.
     fn fill(&self, vmo: &Vmo, index: u64) -> Result<()> {
         if !self.wants_fill(vmo, index) {
+            super::seam::served(1);
             return Ok(());
         }
         let last = index.saturating_add(MAX_FILL_RUN as u64 - 1);
@@ -295,7 +296,10 @@ impl Fill {
             source.fill_range(first, &mut pages)
         };
         let got = match filled {
-            Ok(got) if (1..=count).contains(&got) => got,
+            Ok(got) if (1..=count).contains(&got) => {
+                super::seam::filled(got as u64, source.reads_disk());
+                got
+            }
             Ok(_) => {
                 release_all(frames);
                 return Err(Errno::EIO);
@@ -336,6 +340,8 @@ impl Pages for VmoPages {
             if self.wants_fill(index) {
                 let (last, _, _) = piece(offset, len - 1, len)?;
                 self.fill_from(index, last)?;
+            } else {
+                super::seam::served(1);
             }
             // Under the object's lock: a page a truncation took away since
             // the fill reads as the zeros the file now has there.

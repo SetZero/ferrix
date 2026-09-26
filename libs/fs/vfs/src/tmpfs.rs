@@ -193,6 +193,13 @@ pub trait PageSource: Send + Sync + fmt::Debug {
             _ => Err(Errno::EIO),
         }
     }
+
+    /// Whether a fill reads a disk: what the kernel counts as a page brought
+    /// across the seam to a ring-3 driver, apart from a source that makes its
+    /// pages up (a self-check's). `false` unless a source says so.
+    fn reads_disk(&self) -> bool {
+        false
+    }
 }
 
 /// Where new files get their [`Pages`].
