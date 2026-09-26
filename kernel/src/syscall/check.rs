@@ -122,6 +122,9 @@ pub(crate) struct Report {
     /// How the vDSO answered a program's clock -- by reading the TSC or by
     /// making the system call -- or `None` on an architecture without one.
     pub(crate) vdso: Option<&'static str>,
+    /// Whether that vDSO is the signal return trampoline alone, with no
+    /// clock for a program to call.
+    pub(crate) vdso_trampoline_only: bool,
     /// Guest milliseconds each group of checks took, in order: the dispatch
     /// table, the handler checks with their leak window, and then each of the
     /// program checks.
@@ -259,6 +262,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         unmap_waited,
         futex_woken,
         vdso,
+        vdso_trampoline_only: vdso == Some(crate::syscall::vdso_check::SIGRETURN_ONLY),
         spent_ms: spent,
     })
 }

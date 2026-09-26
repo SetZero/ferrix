@@ -1488,16 +1488,47 @@ pub(crate) fn forbid_user_access() {
     cpu::forbid_user_access();
 }
 
-/// No vDSO here: nothing has written its code for this architecture yet, so a
-/// program is started without `AT_SYSINFO_EHDR` and makes the system call.
+/// The vDSO's code: `__kernel_rt_sigreturn` alone, the trampoline a signal
+/// handler without `SA_RESTORER` returns through, as Linux's AArch64 vDSO
+/// has it -- a `nop` first, which Linux keeps so that an unwinder looking one
+/// instruction back from the return address lands in the trampoline, then
+/// `mov x8, #139` (`rt_sigreturn`) and `svc #0`. Instruction words, little
+/// endian, rather than assembly: the kernel never runs them, a program does
+/// wherever the page lands, and nothing in them names an address.
+///
+/// No clock functions: a C library asking for `__kernel_clock_gettime`
+/// finds none and makes the system call, as it did before.
+const VDSO_CODE: [u8; 12] = {
+    const NOP: u32 = 0xd503_201f;
+    const MOV_X8_RT_SIGRETURN: u32 = 0xd280_0000 | (139 << 5) | 8;
+    const SVC_0: u32 = 0xd400_0001;
+    let [a, b, c, d] = NOP.to_le_bytes();
+    let [e, f, g, h] = MOV_X8_RT_SIGRETURN.to_le_bytes();
+    let [i, j, k, l] = SVC_0.to_le_bytes();
+    [a, b, c, d, e, f, g, h, i, j, k, l]
+};
+
+/// What the vDSO exports: the trampoline, after its `nop`.
+const VDSO_FUNCTIONS: &[ferrix_vdso::Function<'static>] = &[ferrix_vdso::Function {
+    name: ferrix_vdso::SIGRETURN,
+    alias: None,
+    offset: 4,
+}];
+
+/// The vDSO, which here is the signal return trampoline and nothing else.
 pub(crate) fn vdso_spec() -> Option<ferrix_vdso::Spec<'static>> {
-    None
+    Some(ferrix_vdso::Spec {
+        machine: ferrix_elf::EM_AARCH64,
+        code: &VDSO_CODE,
+        functions: VDSO_FUNCTIONS,
+    })
 }
 
-/// With no vDSO, nothing in a program reads the counter.
+/// The vDSO has no clock functions, so nothing in a program reads the
+/// counter through it.
 pub(crate) fn vdso_can_read_counter() -> bool {
     false
 }
 
-/// No program to check a vDSO with, since there is none.
+/// No clock program to check the vDSO with: it has no clock.
 pub(crate) const USER_VDSO_PROGRAM: &[u8] = &[];

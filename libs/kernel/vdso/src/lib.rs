@@ -76,6 +76,10 @@ pub const MODE_TSC: u64 = 1;
 /// The name the image gives itself, Linux's for its vDSO.
 pub const SONAME: &str = "linux-vdso.so.1";
 
+/// The name of the return trampoline a signal handler without
+/// `SA_RESTORER` goes back through, as Linux's AArch64 vDSO exports it.
+pub const SIGRETURN: &str = "__kernel_rt_sigreturn";
+
 /// The version its functions are defined at, which glibc and musl ask for.
 pub const VERSION: &str = "LINUX_2.6";
 
