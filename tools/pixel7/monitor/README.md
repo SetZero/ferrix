@@ -11,6 +11,9 @@ USB with adb authorised, and nothing else: no Claude, no terminal.
   the monitor starts it. While the phone is away the boot card follows the
   helper's phase, and when Android is back it loads the run's `ramoops`
   record.
+* **Boot Android** while Ferrix runs natively and its USB serial port is
+  up: Ferrix restarts, which on the phone is the watchdog reset every run
+  ends with, and Android comes back.
 * **Run Ferrix in a VM** on the phone's own crosvm, with the vCPUs, RAM and
   stat service chosen in the header. The console streams live, and pause, resume and stop
   go to crosvm's control socket. Each guest's console is kept as

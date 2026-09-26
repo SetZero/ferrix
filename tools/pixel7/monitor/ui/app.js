@@ -640,6 +640,7 @@ listen("vm-line", (event) => {
 // sends, from the phone itself.
 listen("usb-state", (event) => {
   const { port, seconds } = event.payload;
+  $("boot-android").disabled = !port;
   if (port) {
     clearConsole();
     resetBoot();
@@ -653,6 +654,18 @@ listen("usb-state", (event) => {
   refreshRuns();
 });
 listen("usb-line", (event) => appendLine(event.payload.line, event.payload.t));
+
+// Ferrix restarts when its USB port is sent usbdev's one command, and on the
+// phone a restart is the watchdog reset that brings Android back.
+$("boot-android").onclick = async () => {
+  try {
+    await invoke("usb_reboot");
+    $("boot-android").disabled = true;
+    showResult("busy", "Asked Ferrix to restart; Android comes back in about a minute…");
+  } catch (error) {
+    showResult("bad", String(error));
+  }
+};
 listen("vm-ended", (event) => {
   vmRunning = false;
   vmPaused = false;

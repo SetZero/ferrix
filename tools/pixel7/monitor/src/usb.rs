@@ -12,6 +12,8 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::io::Write;
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -31,6 +33,12 @@ const PRODUCT_NAME: &str = "Ferrix console";
 /// and the phone leaving USB hung it up: `SIGHUP` ended the monitor
 /// silently. The same value on every Linux architecture this runs on.
 const O_NOCTTY: i32 = 0o400;
+
+/// The line `usbdev` restarts Ferrix on (`native/drivers/usbdev`).
+const REBOOT: &[u8] = b"ferrix-usbdev: reboot\n";
+
+/// The port being streamed, while there is one.
+static PORT: Mutex<Option<String>> = Mutex::new(None);
 
 /// How often to look for the port while it is not there.
 const LOOK_EVERY: Duration = Duration::from_millis(500);
@@ -102,6 +110,9 @@ fn stream(app: &AppHandle, port: &str) {
     else {
         return;
     };
+    if let Ok(mut current) = PORT.lock() {
+        *current = Some(port.to_string());
+    }
     let _ = app.emit("usb-state", State { port: Some(port.to_string()), record: None, seconds: 0.0 });
     let mut console = String::new();
     for line in BufReader::new(file).split(b'\n').map_while(Result::ok) {
@@ -110,6 +121,25 @@ fn stream(app: &AppHandle, port: &str) {
         console.push('\n');
         let _ = app.emit("usb-line", Line { t: now(), line });
     }
+    if let Ok(mut current) = PORT.lock() {
+        *current = None;
+    }
     let record = (!console.is_empty()).then(|| runs::save("usb", &console).ok()).flatten();
     let _ = app.emit("usb-state", State { port: None, record, seconds: began.elapsed().as_secs_f64() });
+}
+
+/// Ask Ferrix to restart, over its port: on the phone that is the watchdog
+/// reset every run ends with, and Android comes back.
+pub fn reboot() -> Result<(), String> {
+    let port = PORT
+        .lock()
+        .map_err(|_| "poisoned")?
+        .clone()
+        .ok_or("Ferrix's USB port is not up")?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .custom_flags(O_NOCTTY)
+        .open(&port)
+        .map_err(|error| format!("{port}: {error}"))?;
+    file.write_all(REBOOT).map_err(|error| format!("{port}: {error}"))
 }

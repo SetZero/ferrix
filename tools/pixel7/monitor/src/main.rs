@@ -62,6 +62,11 @@ fn vm_control(command: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn usb_reboot() -> Result<(), String> {
+    usb::reboot()
+}
+
+#[tauri::command]
 fn list_runs() -> Vec<runs::Run> {
     runs::list()
 }
@@ -96,6 +101,7 @@ fn main() {
             start_helper,
             vm_start,
             vm_control,
+            usb_reboot,
             list_runs,
             read_run
         ])
