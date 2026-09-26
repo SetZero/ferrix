@@ -16,7 +16,14 @@
 //!   the master, because on a pseudoterminal the *terminal* is the program
 //!   holding the master, and it is the one that has to draw it.
 //! * The slave writes the program's output. `OPOST` and `ONLCR` are applied,
-//!   as the console's writes are, and the master reads the result.
+//!   as the console's writes are, and the master reads the result. At most
+//!   `OUTPUT_LIMIT` bytes wait for the master; a write that finds no room
+//!   waits for the master to read, and returns once all of it is written, as
+//!   Linux's `n_tty_write` does. A program writing a whole screen at once --
+//!   btop's first frame is tens of kilobytes -- must not be told that only
+//!   part of it went: C's `stdio`, and C++'s streams on top of it, take a
+//!   write of nothing as an error, and btop's `cout` then dropped every frame
+//!   after its first eight kilobytes.
 //!
 //! # What a pair is, and when it goes
 //!
@@ -259,14 +266,21 @@ impl Pty {
         self.state.lock().output.len()
     }
 
+    /// Whether the slave's output has room for another byte.
+    fn output_room(&self) -> bool {
+        self.state.lock().output.len() < OUTPUT_LIMIT
+    }
+
     /// Throw away what has been typed and not read.
     pub(crate) fn flush_input(&self) {
         self.state.lock().discipline.flush_input();
     }
 
-    /// Throw away what the slave wrote and the master has not read.
+    /// Throw away what the slave wrote and the master has not read, which
+    /// makes room for a writer that was waiting for it.
     pub(crate) fn flush_output(&self) {
         self.state.lock().output.clear();
+        self.changed.wake_all();
     }
 
     /// Send `signal` to every process in the foreground group.
@@ -340,18 +354,24 @@ impl Pty {
         written
     }
 
-    /// Take what the master may read.
+    /// Take what the master may read, which makes room for a writer that
+    /// was waiting for it.
     fn read_written(&self, buf: &mut [u8]) -> usize {
-        let mut state = self.state.lock();
         let mut taken = 0;
-        while taken < buf.len() {
-            let Some(byte) = state.output.pop_front() else {
-                break;
-            };
-            if let Some(slot) = buf.get_mut(taken) {
-                *slot = byte;
+        {
+            let mut state = self.state.lock();
+            while taken < buf.len() {
+                let Some(byte) = state.output.pop_front() else {
+                    break;
+                };
+                if let Some(slot) = buf.get_mut(taken) {
+                    *slot = byte;
+                }
+                taken += 1;
             }
-            taken += 1;
+        }
+        if taken > 0 {
+            self.changed.wake_all();
         }
         taken
     }
@@ -538,19 +558,48 @@ impl Inode for SlaveFile {
             .map(|written| (written, offset))
     }
 
-    /// The program's output, on its way to the master.
-    fn write_stream(&self, buf: &[u8], _nonblock: bool) -> VfsResult<usize> {
-        if !self.pty.master_open() {
-            return Err(Errno::EIO);
+    /// The program's output, on its way to the master: all of it, waiting
+    /// for the master to read whenever the output is full, unless `nonblock`,
+    /// when it is as much as fits and `EAGAIN` if nothing does. A signal, or
+    /// the master closing, ends the wait with what was written so far, and
+    /// with the error only when that is nothing.
+    fn write_stream(&self, buf: &[u8], nonblock: bool) -> VfsResult<usize> {
+        let mut written = 0;
+        loop {
+            if !self.pty.master_open() {
+                return if written > 0 {
+                    Ok(written)
+                } else {
+                    Err(Errno::EIO)
+                };
+            }
+            written += self.pty.wrote(buf.get(written..).unwrap_or_default());
+            if written >= buf.len() {
+                return Ok(written);
+            }
+            if nonblock {
+                return if written > 0 {
+                    Ok(written)
+                } else {
+                    Err(Errno::EAGAIN)
+                };
+            }
+            if let Err(error) = self
+                .pty
+                .wait_for(|| self.pty.output_room() || !self.pty.master_open())
+            {
+                return if written > 0 { Ok(written) } else { Err(error) };
+            }
         }
-        Ok(self.pty.wrote(buf))
     }
 
     fn poll(&self) -> Readiness {
         let gone = !self.pty.master_open();
         Readiness {
             readable: self.pty.slave_available() > 0 || gone,
-            writable: !gone,
+            // A write to a pair whose master has gone does not wait either:
+            // it fails at once.
+            writable: gone || self.pty.output_room(),
             hangup: gone,
             error: false,
             priority: false,
