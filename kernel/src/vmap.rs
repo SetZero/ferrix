@@ -73,7 +73,10 @@ pub(crate) const DEMAND_WINDOW: u64 = KERNEL_VMAP_BASE + KERNEL_VMAP_RESERVED / 
 /// Where the arena starts.
 pub(crate) const ARENA_BASE: u64 = KERNEL_VMAP_BASE + KERNEL_VMAP_RESERVED;
 
-/// Where it ends: the rest of the kernel's dynamic area.
+/// Where its region ends: the rest of the kernel's dynamic area. The arena
+/// itself ends at or below this, where the loader put its top
+/// ([`ferrix_bootinfo::Kaslr::vmap_end`]), since the search that places
+/// allocations starts from the top.
 pub(crate) const ARENA_END: u64 = KERNEL_VMAP_BASE + KERNEL_VMAP_SIZE;
 
 /// Unmapped pages on each side of every allocation.
@@ -158,18 +161,22 @@ struct Arena {
 /// `cli` and an `sti` around a few hundred instructions.
 static ARENA: IrqSpinLock<Option<Arena>, crate::arch::Irq> = IrqSpinLock::new(None);
 
-/// Bring up the arena.
+/// Bring up the arena, with its top at `top`: [`ARENA_END`], or below it
+/// where the loader moved it, so that kernel stacks and device windows are
+/// not at the same addresses every boot (KASLR,
+/// `docs/certification/SPECULATION.md` §6). `BootInfo::validate` has already
+/// held `top` to the places the layout allows.
 ///
 /// Must run after `mm::init`: an `AddressSpace` is a `Vec`, and there is no
 /// heap before then.
 ///
 /// # Errors
 ///
-/// Only if the window constants above are inconsistent, which is a bug in this
-/// file rather than a condition a machine can produce.
-pub(crate) fn init() -> Result<(), VmapError> {
-    let space =
-        AddressSpace::new(ARENA_BASE, ARENA_END).map_err(|_| VmapError::BadLength(ARENA_END))?;
+/// Only if the window constants above are inconsistent, or `top` leaves the
+/// arena empty, which is a bug rather than a condition a machine can produce.
+pub(crate) fn init(top: u64) -> Result<(), VmapError> {
+    let top = top.min(ARENA_END);
+    let space = AddressSpace::new(ARENA_BASE, top).map_err(|_| VmapError::BadLength(top))?;
     *ARENA.lock() = Some(Arena {
         space,
         live: BTreeMap::new(),

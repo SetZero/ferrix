@@ -78,10 +78,17 @@ pub(crate) fn walk(start: u64, mut report: impl FnMut(u64)) -> usize {
     found
 }
 
+/// Where the running image begins: its link address, or wherever the loader
+/// moved it, since the code computes this as it computes every other address
+/// in the image.
+pub(crate) fn image_start() -> u64 {
+    u64::try_from((&raw const __kernel_start).addr()).unwrap_or(u64::MAX)
+}
+
 /// Whether `address` is inside the kernel image, and so could be a return
 /// address into kernel code.
 fn in_kernel(address: u64) -> bool {
-    let start = u64::try_from((&raw const __kernel_start).addr()).unwrap_or(u64::MAX);
+    let start = image_start();
     let end = u64::try_from((&raw const __kernel_end).addr()).unwrap_or(0);
     (start..end).contains(&address)
 }

@@ -63,7 +63,7 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use ferrix_bootinfo::{BootInfo, BootView, MemKind, PAGE_SIZE};
+use ferrix_bootinfo::{BootInfo, BootView, KASLR_FIXED_IMAGE, KASLR_MOVED, MemKind, PAGE_SIZE};
 use ferrix_paging::MapFlags;
 
 use console::println;
@@ -150,7 +150,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
 
     let stats = bring_up_memory(view);
 
-    if let Err(problem) = vmap::init() {
+    if let Err(problem) = vmap::init(view.raw().kaslr.vmap_end) {
         fatal!(
             catalog::VMAP_ARENA_BRING_UP,
             "could not bring up the kernel address arena: {problem}"
@@ -2754,6 +2754,7 @@ fn report(view: &BootView<'_>) {
         mebibytes(info.physmap_len),
         info.physmap_phys
     );
+    report_layout(view);
     let unreachable = view.max_ram_address().saturating_sub(view.physmap_limit());
     if unreachable != 0 {
         println!(
@@ -2823,8 +2824,64 @@ fn self_check(view: &BootView<'_>, memory: &mut EarlyMemory) -> Result<(), &'sta
         return Err("the kernel can write through a read-only mapping: CR0.WP is clear");
     }
 
+    check_layout(view)?;
     check_direct_map(view, memory)?;
     check_early_mapper(view, memory)
+}
+
+/// Prove the kernel runs where the loader says it put it, and that it moved
+/// if it was built to (KASLR, `docs/certification/SPECULATION.md` §6).
+///
+/// The running image's first byte is `__kernel_start` as the code itself
+/// computes it, which after the loader's fixups is where the image really is.
+/// A loader that says it moved the image, and did not, would be reporting a
+/// randomisation that never happened; a kernel built `--mitigations on` that
+/// arrived as a fixed-address image lost its fixups on the way, in the build
+/// or in a copy stripped of them. Every other reason not to move is honest
+/// and reported, not failed: `nokaslr`, no source of randomness, a loader
+/// that does not randomise.
+fn check_layout(view: &BootView<'_>) -> Result<(), &'static str> {
+    let info = view.raw();
+    let kaslr = info.kaslr;
+    let running = backtrace::image_start();
+    if running != info.kernel_virt {
+        return Err("the kernel is not running where the loader says it put it");
+    }
+    let moved = running != kaslr.link;
+    match kaslr.state {
+        KASLR_MOVED if !moved => {
+            Err("the loader says it moved the kernel, and it runs at its link address")
+        }
+        KASLR_MOVED => Ok(()),
+        _ if moved => Err("the kernel moved, and the loader says it did not"),
+        KASLR_FIXED_IMAGE if arch::HARDENED => Err(
+            "a kernel built to move (--mitigations on) arrived without its fixups; \
+             a stripped copy loses them, `--strip-debug` keeps them",
+        ),
+        _ => Ok(()),
+    }
+}
+
+/// Say where the layout came from, without the addresses, which `report`
+/// already printed and the loader's own line gives with the slide.
+fn report_layout(view: &BootView<'_>) {
+    let kaslr = view.raw().kaslr;
+    if kaslr.state != KASLR_MOVED {
+        println!("  kaslr    {}", kaslr.state_text());
+    } else if kaslr.is_random() {
+        println!(
+            "  kaslr    image, direct map and arena moved, {}, {} and {} bits from {}",
+            kaslr.image_bits,
+            kaslr.physmap_bits,
+            kaslr.vmap_bits,
+            kaslr.source_text()
+        );
+    } else {
+        println!(
+            "  kaslr    moved, but from {}: NOT randomised against a local attacker",
+            kaslr.source_text()
+        );
+    }
 }
 
 /// Require each thing the loader handed over to lie inside one region of the

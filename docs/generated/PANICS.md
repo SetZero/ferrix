@@ -230,12 +230,14 @@ kernel/src/init.rs; docs/certification/FINDINGS.md F-04 and F-08.
 Stage 1 checks what the UEFI loader handed over before anything depends on it.
 The memory map must be non-empty, sorted, free of overlaps, report usable RAM,
 and describe the loader's own allocations: the kernel image, the page tables and
-the boot information. The kernel's first bytes must read the same through the
-direct map as through the image mapping, walking the page tables must find the
-image where the loader said it put it, and a framebuffer, where there is one,
-must be mappable. The frame allocator hands out frames from this map and
-everything after it reads physical memory through these mappings, so a wrong
-hand-off would surface much later as corruption with no visible source.
+the boot information. The kernel must run where the loader says it put it, and a
+kernel built to move (KASLR) must have moved, or the loader must say honestly
+why not. The kernel's first bytes must read the same through the direct map as
+through the image mapping, walking the page tables must find the image where the
+loader said it put it, and a framebuffer, where there is one, must be mappable.
+The frame allocator hands out frames from this map and everything after it reads
+physical memory through these mappings, so a wrong hand-off would surface much
+later as corruption with no visible source.
 
 1. The loader did not mark its own allocations in the memory map with their own
    kinds, so the kernel would hand out the frames holding its own page tables.
@@ -244,9 +246,12 @@ hand-off would surface much later as corruption with no visible source.
    mappings.
 3. The loader passed on a memory map whose regions are out of order or overlap.
 4. Firmware reported a framebuffer at an address the early mapper could not map.
+5. The kernel was built `--mitigations on` and arrived as a fixed-address image
+   without its fixups, because a copy was stripped with `--strip-all` rather
+   than `--strip-debug`; or a loader reported a move it did not make.
 
-See: kernel/src/main.rs self_check; kernel/src/early.rs; docs/ROADMAP.md stage
-1.
+See: kernel/src/main.rs self_check and check_layout; kernel/src/early.rs;
+docs/certification/SPECULATION.md section 6; docs/ROADMAP.md stage 1.
 
 <a id="fx-0201"></a>
 

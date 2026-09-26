@@ -44,6 +44,13 @@
 
 use core::fmt;
 
+mod kaslr;
+pub use kaslr::{
+    KASLR_DECLINED, KASLR_FIXED_IMAGE, KASLR_MOVED, KASLR_NO_ENTROPY, KASLR_NOT_OFFERED,
+    KERNEL_TOP_GUARD, Kaslr, SOURCE_COUNTER, SOURCE_CPU_RNG, SOURCE_FIRMWARE_RNG, SOURCE_NONE,
+    Slots,
+};
+
 /// Magic number identifying a [`BootInfo`], ASCII `FERRIXBI`.
 ///
 /// Checked by the kernel before it touches anything else in the structure.
@@ -63,8 +70,11 @@ pub const BOOTINFO_MAGIC: u64 = 0x4645_5252_4958_4249;
 /// that checks a certificate or makes a key. Version 6 added
 /// [`BootInfo::firmware_seed_len`], because a phone's bootloader gives fewer
 /// random bytes than the seed holds, and the kernel credits what it was
-/// given, not what the field can hold.
-pub const BOOTINFO_VERSION: u32 = 6;
+/// given, not what the field can hold. Version 7 added [`BootInfo::kaslr`],
+/// and let the direct map begin anywhere in its region rather than at its
+/// base: the loader moves the kernel image, the direct map and the top of the
+/// vmap arena at random each boot, and says how, and how well.
+pub const BOOTINFO_VERSION: u32 = 7;
 
 /// [`BootInfo::firmware_flags`]: [`BootInfo::firmware_time`] holds the time
 /// firmware's `GetTime` gave.
@@ -210,6 +220,15 @@ impl Layout {
         if self.address_bits < 64 && self.kernel_base >= 1 << self.address_bits {
             return Some("the kernel image must be inside the address space");
         }
+        // The arena's top may move down by up to this much, and the arena
+        // left has to stay most of what it was.
+        if (self.vmap_slots() - 1) * self.vmap_granule() > (self.vmap_size - self.vmap_reserved) / 8
+        {
+            return Some("the vmap arena's top may move by at most an eighth of the arena");
+        }
+        if self.kernel_ceiling() <= self.kernel_base {
+            return Some("the kernel image's region must be above the guard at the top");
+        }
         None
     }
 }
@@ -289,9 +308,10 @@ pub const KERNEL_VMAP_SIZE: u64 = LAYOUT.vmap_size;
 /// windows. See [`Layout::vmap_reserved`].
 pub const KERNEL_VMAP_RESERVED: u64 = LAYOUT.vmap_reserved;
 
-/// Where the kernel image is linked. The linker script is told the same
-/// number by `.cargo/config.toml`, and the loader refuses a kernel linked
-/// anywhere else.
+/// Where the kernel image is linked. `kernel/build.rs` tells the linker the
+/// same number, and the loader refuses a kernel linked anywhere else. It is
+/// also where the image runs when it does not move; when it does (KASLR), it
+/// runs at one of [`Layout::kernel_slots`] above this.
 pub const KERNEL_VIRT_BASE: u64 = LAYOUT.kernel_base;
 
 /// The lowest kernel address.
@@ -495,6 +515,26 @@ pub struct IdentityPlan {
     pub len: u64,
 }
 
+/// Where a loader put the two kernel regions that move.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Placement {
+    /// The direct map's base.
+    pub physmap_base: u64,
+    /// The kernel image's base.
+    pub kernel_base: u64,
+}
+
+impl Placement {
+    /// Both at their fixed addresses.
+    #[must_use]
+    pub const fn fixed(layout: &Layout) -> Placement {
+        Placement {
+            physmap_base: layout.physmap_base,
+            kernel_base: layout.kernel_base,
+        }
+    }
+}
+
 /// True if `a_start..a_end` and `b_start..b_end` share an address.
 const fn overlaps(a_start: u64, a_end: u64, b_start: u64, b_end: u64) -> bool {
     a_start < b_end && b_start < a_end
@@ -545,6 +585,32 @@ impl Layout {
         loader_len: u64,
         kernel_len: u64,
     ) -> Result<IdentityPlan, &'static str> {
+        self.plan_identity_map_in(
+            Placement::fixed(self),
+            physmap_phys,
+            physmap_len,
+            loader_base,
+            loader_len,
+            kernel_len,
+        )
+    }
+
+    /// [`Layout::plan_identity_map`], with the direct map and the kernel image
+    /// where `placed` says the loader put them this boot rather than at their
+    /// fixed addresses.
+    ///
+    /// # Errors
+    ///
+    /// As [`Layout::plan_identity_map`].
+    pub const fn plan_identity_map_in(
+        &self,
+        placed: Placement,
+        physmap_phys: u64,
+        physmap_len: u64,
+        loader_base: u64,
+        loader_len: u64,
+        kernel_len: u64,
+    ) -> Result<IdentityPlan, &'static str> {
         // Every byte of RAM is translatable through a tree of the loader's
         // own, so map all of it there, as every machine with RAM below the
         // split has always done.
@@ -574,13 +640,18 @@ impl Layout {
         } else if overlaps(
             base,
             end,
-            self.physmap_base,
-            self.physmap_base + physmap_len,
+            placed.physmap_base,
+            placed.physmap_base + physmap_len,
         ) {
             Some("the loader's image is where the kernel's direct map already is")
         } else if overlaps(base, end, self.vmap_base, self.vmap_base + self.vmap_size) {
             Some("the loader's image is where the kernel's mapping arena already is")
-        } else if overlaps(base, end, self.kernel_base, self.kernel_base + kernel_len) {
+        } else if overlaps(
+            base,
+            end,
+            placed.kernel_base,
+            placed.kernel_base + kernel_len,
+        ) {
             Some("the loader's image is where the kernel image itself is")
         } else {
             None
@@ -840,7 +911,7 @@ pub fn allocator_owns(regions: impl IntoIterator<Item = MemRegion>, base: u64, l
 /// tables the loader installed before jumping to the kernel, which is to say
 /// inside the direct map at [`PHYSMAP_BASE`]. Fields named `_phys` are
 /// physical. None of them is a pointer type, so the structure is the same
-/// 288 bytes on every word width.
+/// 328 bytes on every word width.
 ///
 /// Read it through [`BootInfo::validate`] rather than field by field.
 #[repr(C)]
@@ -859,8 +930,9 @@ pub struct BootInfo {
     /// Number of entries `regions` holds.
     pub regions_len: u64,
 
-    /// Base of the direct physical map. Mirrors [`PHYSMAP_BASE`], carried
-    /// explicitly so the kernel never has to assume.
+    /// Base of the direct physical map: one of [`Layout::physmap_slots`], a
+    /// different one each boot when the loader randomises, and
+    /// [`PHYSMAP_BASE`] when it does not.
     pub physmap_base: u64,
     /// The physical address that appears at `physmap_base`: the lowest RAM
     /// address, rounded down to [`PHYSMAP_ALIGN`]. Nothing below it is in the
@@ -874,7 +946,8 @@ pub struct BootInfo {
 
     /// Physical address the kernel image was loaded at.
     pub kernel_phys: u64,
-    /// Virtual address the kernel image is mapped at.
+    /// Virtual address the kernel image is mapped at: its link address
+    /// ([`Kaslr::link`]) or one of [`Layout::kernel_slots`].
     pub kernel_virt: u64,
     /// Size of the kernel image in bytes, page rounded.
     pub kernel_len: u64,
@@ -940,13 +1013,16 @@ pub struct BootInfo {
     /// set: 32 from `EFI_RNG_PROTOCOL`, 8 from the Pixel 7's bootloader. More
     /// than 32 are worth no more than 32, since the seed holds no more.
     pub firmware_seed_len: u64,
+
+    /// What the loader did about layout randomisation, and with what.
+    pub kaslr: Kaslr,
 }
 
 // The claim the module documentation makes, asserted where it can fail: a
 // field whose size follows the pointer width would break it, and the loader
 // and the host tests would then disagree about a layout neither of them sees.
 const _: () = assert!(
-    size_of::<BootInfo>() == 288,
+    size_of::<BootInfo>() == 328,
     "BootInfo must be laid out identically on every word width"
 );
 const _: () = assert!(
@@ -968,7 +1044,8 @@ pub enum BootInfoError {
     VersionMismatch(u32),
     /// The memory map address was zero, or its length zero.
     NoMemoryMap,
-    /// The direct map does not start where the kernel was built to expect.
+    /// The direct map does not start on one of [`Layout::physmap_slots`], or
+    /// runs out of its region.
     PhysmapMismatch,
     /// The direct map's physical origin is not a multiple of
     /// [`PHYSMAP_ALIGN`].
@@ -978,6 +1055,12 @@ pub enum BootInfoError {
     PhysmapTooLarge,
     /// The command line was not valid UTF-8.
     CmdlineNotUtf8,
+    /// The kernel image is not inside its region, not page aligned, or the
+    /// link address the loader reports is not the one the kernel was built
+    /// with.
+    KernelOutsideRegion,
+    /// The top of the vmap arena is not one of [`Layout::vmap_ends`].
+    VmapOutsideRegion,
 }
 
 impl fmt::Display for BootInfoError {
@@ -992,7 +1075,7 @@ impl fmt::Display for BootInfoError {
             }
             BootInfoError::NoMemoryMap => f.write_str("boot info carries no memory map"),
             BootInfoError::PhysmapMismatch => {
-                f.write_str("direct map is not where the kernel expects")
+                f.write_str("direct map is not on a slot of its region")
             }
             BootInfoError::PhysmapMisaligned => {
                 f.write_str("direct map's physical origin is not 2 MiB aligned")
@@ -1001,6 +1084,12 @@ impl fmt::Display for BootInfoError {
                 f.write_str("direct map is larger than its region of the address space")
             }
             BootInfoError::CmdlineNotUtf8 => f.write_str("kernel command line is not UTF-8"),
+            BootInfoError::KernelOutsideRegion => {
+                f.write_str("kernel image is not where its region and link address allow")
+            }
+            BootInfoError::VmapOutsideRegion => {
+                f.write_str("vmap arena's top is not one the layout allows")
+            }
         }
     }
 }
@@ -1028,14 +1117,30 @@ impl BootInfo {
         if self.regions == 0 || self.regions_len == 0 {
             return Err(BootInfoError::NoMemoryMap);
         }
-        if self.physmap_base != PHYSMAP_BASE {
-            return Err(BootInfoError::PhysmapMismatch);
-        }
         if !self.physmap_phys.is_multiple_of(PHYSMAP_ALIGN) {
             return Err(BootInfoError::PhysmapMisaligned);
         }
         if self.physmap_len > PHYSMAP_END - PHYSMAP_BASE {
             return Err(BootInfoError::PhysmapTooLarge);
+        }
+        if self.physmap_base < PHYSMAP_BASE
+            || !(self.physmap_base - PHYSMAP_BASE).is_multiple_of(LAYOUT.physmap_granule())
+            || self.physmap_base > PHYSMAP_END - self.physmap_len
+        {
+            return Err(BootInfoError::PhysmapMismatch);
+        }
+        if self.kaslr.link != KERNEL_VIRT_BASE
+            || self.kernel_virt < KERNEL_VIRT_BASE
+            || !self.kernel_virt.is_multiple_of(PAGE_SIZE)
+            || LAYOUT
+                .kernel_ceiling()
+                .checked_sub(self.kernel_virt)
+                .is_none_or(|room| self.kernel_len > room)
+        {
+            return Err(BootInfoError::KernelOutsideRegion);
+        }
+        if !LAYOUT.is_vmap_end(self.kaslr.vmap_end) {
+            return Err(BootInfoError::VmapOutsideRegion);
         }
 
         // The addresses were exposed by whoever wrote them — the loader, or a
@@ -1341,6 +1446,7 @@ mod tests {
             firmware_seed: [0; 32],
             firmware_flags: 0,
             firmware_seed_len: 0,
+            kaslr: Kaslr::fixed(&LAYOUT, KASLR_DECLINED),
         }
     }
 
@@ -1475,6 +1581,70 @@ mod tests {
             unsafe { info.validate() }.unwrap_err(),
             BootInfoError::PhysmapMismatch
         );
+
+        let mut info = boot_info(&map, "");
+        info.physmap_base = PHYSMAP_BASE + LAYOUT.physmap_granule() / 2;
+        assert_eq!(
+            // SAFETY: as in the tests above.
+            unsafe { info.validate() }.unwrap_err(),
+            BootInfoError::PhysmapMismatch,
+            "a direct map between two slots is one no loader chose"
+        );
+
+        let mut info = boot_info(&map, "");
+        info.physmap_base = PHYSMAP_BASE + 5 * LAYOUT.physmap_granule();
+        // SAFETY: as in the tests above.
+        let valid = unsafe { info.validate() }.is_ok();
+        assert!(
+            valid,
+            "a direct map moved by whole slots is one a loader chose"
+        );
+    }
+
+    #[test]
+    fn rejects_a_kernel_or_arena_a_loader_could_not_have_placed() {
+        let map = regions();
+
+        let mut info = boot_info(&map, "");
+        info.kernel_virt = KERNEL_VIRT_BASE + 0x2_0000;
+        // SAFETY: as in the tests above.
+        assert!(unsafe { info.validate() }.is_ok());
+
+        for (virt, link) in [
+            (KERNEL_VIRT_BASE - PAGE_SIZE, KERNEL_VIRT_BASE),
+            (KERNEL_VIRT_BASE + 1, KERNEL_VIRT_BASE),
+            (LAYOUT.kernel_ceiling(), KERNEL_VIRT_BASE),
+            (KERNEL_VIRT_BASE, KERNEL_VIRT_BASE + PAGE_SIZE),
+        ] {
+            let mut info = boot_info(&map, "");
+            info.kernel_virt = virt;
+            info.kaslr.link = link;
+            assert_eq!(
+                // SAFETY: as in the tests above.
+                unsafe { info.validate() }.unwrap_err(),
+                BootInfoError::KernelOutsideRegion,
+                "{virt:#x} linked at {link:#x}"
+            );
+        }
+
+        let mut info = boot_info(&map, "");
+        info.kaslr.vmap_end = LAYOUT.vmap_end() - LAYOUT.vmap_granule();
+        // SAFETY: as in the tests above.
+        assert!(unsafe { info.validate() }.is_ok());
+        for end in [
+            LAYOUT.vmap_end() - PAGE_SIZE,
+            LAYOUT.vmap_end() + LAYOUT.vmap_granule(),
+            0,
+        ] {
+            let mut info = boot_info(&map, "");
+            info.kaslr.vmap_end = end;
+            assert_eq!(
+                // SAFETY: as in the tests above.
+                unsafe { info.validate() }.unwrap_err(),
+                BootInfoError::VmapOutsideRegion,
+                "{end:#x}"
+            );
+        }
     }
 
     #[test]

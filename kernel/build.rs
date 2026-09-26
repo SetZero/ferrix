@@ -78,6 +78,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     // than producing an image at address zero.
     println!("cargo::rustc-link-arg-bins=--defsym=KERNEL_VIRT_BASE={base}");
     println!("cargo::rustc-link-arg-bins=-T{}", script.display());
+    for argument in relocatable_link()? {
+        println!("cargo::rustc-link-arg-bins={argument}");
+    }
 
     // Relink when the script changes. Without this a script edit is invisible:
     // cargo reruns a build script only when something it declares has changed,
@@ -134,6 +137,36 @@ fn main() -> Result<(), Box<dyn Error>> {
         script_file.display()
     );
     init_commands()
+}
+
+/// What makes the image movable, so that the loader can put it somewhere new
+/// each boot (KASLR, `docs/certification/SPECULATION.md` section 6): nothing
+/// when it is built `--mitigations off`, which is a fixed-address image as
+/// it always was.
+///
+/// * **x86-64 and AArch64** link a static PIE, whose `.rela.dyn` the loader
+///   applies. `-pie` comes after the `-no-pie` `.cargo/config.toml` gives
+///   every x86-64 program, and wins. AArch64 code is built for the static
+///   model, which on that architecture addresses everything relative to the
+///   program counter, so only the words that hold addresses need moving and
+///   lld can write them as `R_AARCH64_RELATIVE`. Some of those words are in
+///   read-only data, hence `-z notext`: the loader patches the image before
+///   it maps it, so which pages are writable later does not matter to it.
+/// * **ARMv7-A** cannot be a PIE. The target's precompiled `core` builds
+///   addresses with `movw`/`movt` pairs, which no dynamic relocation
+///   expresses, so the link fails. It is linked at its fixed address and
+///   keeps its relocations with `--emit-relocs`; the loader applies the
+///   absolute ones (`ferrix_elf::Elf::fixups`).
+fn relocatable_link() -> Result<&'static [&'static str], Box<dyn Error>> {
+    if std::env::var_os("CARGO_CFG_FERRIX_MITIGATIONS_OFF").is_some() {
+        return Ok(&[]);
+    }
+    Ok(match std::env::var("CARGO_CFG_TARGET_ARCH")?.as_str() {
+        "x86_64" => &["-pie", "--no-dynamic-linker"],
+        "aarch64" => &["-pie", "--no-dynamic-linker", "-znotext"],
+        "arm" => &["--emit-relocs"],
+        other => return Err(format!("the kernel does not know how to move on {other}").into()),
+    })
 }
 
 /// A list of programs for init to run in turn, in place of the shell.

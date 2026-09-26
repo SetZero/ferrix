@@ -58,6 +58,38 @@ pub(crate) fn prepare_cpu() -> Result<(), &'static str> {
 /// table written through the cache is visible to it without being cleaned.
 pub(crate) const fn clean_dcache(_start: u64, _len: u64) {}
 
+/// A random word from the processor's `RDRAND`, where `CPUID` says it has
+/// one: the loader's second choice for KASLR, after firmware's
+/// `EFI_RNG_PROTOCOL`.
+///
+/// Tried ten times, which is what Intel's guidance allows for the transient
+/// underflow a busy generator reports.
+pub(crate) fn cpu_random() -> Option<u64> {
+    // CPUID.01H:ECX.RDRAND is bit 30.
+    if core::arch::x86_64::__cpuid(1).ecx & (1 << 30) == 0 {
+        return None;
+    }
+    (0..10).find_map(|_| {
+        // SAFETY: CPUID says this processor implements RDRAND.
+        unsafe { rdrand() }
+    })
+}
+
+/// One `RDRAND`, or `None` if the generator had nothing to give.
+#[target_feature(enable = "rdrand")]
+fn rdrand() -> Option<u64> {
+    let mut word = 0;
+    (core::arch::x86_64::_rdrand64_step(&mut word) == 1).then_some(word)
+}
+
+/// The time-stamp counter: the loader's last resort for KASLR, and a poor
+/// one, since how long firmware took to get here can be guessed.
+pub(crate) fn counter() -> u64 {
+    // SAFETY: RDTSC exists on every 64-bit x86, and reading the counter has
+    // no side effects.
+    unsafe { core::arch::x86_64::_rdtsc() }
+}
+
 /// Read a model-specific register.
 ///
 /// # Safety

@@ -8,6 +8,11 @@
  * a kernel linked anywhere else. A build that forgets the definition fails to
  * link rather than producing an image at address zero.
  *
+ * The link address is where the image goes when it does not move. Built with
+ * the default `--mitigations on`, it moves: the loader picks a new base each
+ * boot above this one (KASLR, docs/certification/SPECULATION.md section 6)
+ * and applies the image's fixups for it.
+ *
  * The build script is also what passes this file to the linker, and the
  * comment there says why that cannot go back into `.cargo/config.toml`: a
  * merged configuration passes it twice, and a script evaluated twice produces
@@ -43,6 +48,20 @@ SECTIONS
         *(.rodata .rodata.*)
         *(.srodata .srodata.*)
     } :rodata
+    /* A static PIE's relocation table, which the loader applies before the
+     * kernel runs (KASLR; kernel/build.rs says which builds are PIEs). Loaded,
+     * because lld places an allocated section only in a segment, but read
+     * only by the loader: some 200 KiB of read-only data nothing else looks
+     * at. There is no PT_DYNAMIC -- the loader finds the table by section
+     * header, and nothing at run time reads the dynamic section -- so none of
+     * this is in a fixed-address build, where these sections do not exist. */
+    .rela.dyn : { *(.rela.dyn) *(.rela.*) } :rodata
+    .rel.dyn  : { *(.rel.dyn) *(.rel.*) }   :rodata
+    .dynsym   : { *(.dynsym) }   :rodata
+    .dynstr   : { *(.dynstr) }   :rodata
+    .hash     : { *(.hash) }     :rodata
+    .gnu.hash : { *(.gnu.hash) } :rodata
+    .dynamic  : { *(.dynamic) }  :rodata
 
     . = ALIGN(4096);
     .data : ALIGN(4096) {
@@ -77,8 +96,6 @@ SECTIONS
         *(.note) *(.note.*)
         *(.comment)
         *(.interp)
-        *(.dynamic) *(.dynsym) *(.dynstr) *(.hash) *(.gnu.hash)
-        *(.rela) *(.rela.*) *(.rel) *(.rel.*)
         *(.gcc_except_table*)
     }
 }

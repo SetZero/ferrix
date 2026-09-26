@@ -190,7 +190,9 @@ pub(crate) static STAGE1_HANDOFF: Explanation = Explanation {
     meaning: "Stage 1 checks what the UEFI loader handed over before anything depends on it. \
               The memory map must be non-empty, sorted, free of overlaps, report usable RAM, \
               and describe the loader's own allocations: the kernel image, the page tables \
-              and the boot information. The kernel's first bytes must read the same through \
+              and the boot information. The kernel must run where the loader says it put \
+              it, and a kernel built to move (KASLR) must have moved, or the loader must \
+              say honestly why not. The kernel's first bytes must read the same through \
               the direct map as through the image mapping, walking the page tables must find \
               the image where the loader said it put it, and a framebuffer, where there is \
               one, must be mappable. The frame allocator hands out frames from this map and \
@@ -203,8 +205,12 @@ pub(crate) static STAGE1_HANDOFF: Explanation = Explanation {
          recorded, so one physical address reads different bytes through the two mappings.",
         "The loader passed on a memory map whose regions are out of order or overlap.",
         "Firmware reported a framebuffer at an address the early mapper could not map.",
+        "The kernel was built `--mitigations on` and arrived as a fixed-address image \
+         without its fixups, because a copy was stripped with `--strip-all` rather than \
+         `--strip-debug`; or a loader reported a move it did not make.",
     ],
-    see: "kernel/src/main.rs self_check; kernel/src/early.rs; docs/ROADMAP.md stage 1",
+    see: "kernel/src/main.rs self_check and check_layout; kernel/src/early.rs; \
+          docs/certification/SPECULATION.md section 6; docs/ROADMAP.md stage 1",
 };
 
 /// For `kmain` in `main.rs`, when `mm::init` fails.

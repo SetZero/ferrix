@@ -16,10 +16,11 @@ use core::ptr;
 
 use ferrix_bootinfo::{
     Arch, BOOT_STACK_SIZE, BOOTINFO_MAGIC, BOOTINFO_VERSION, BootInfo, FIRMWARE_SEED, Framebuffer,
-    KERNEL_VIRT_BASE, MemKind, MemRegion, PAGE_SIZE, PHYSMAP_ALIGN, PHYSMAP_BASE, PHYSMAP_END,
-    allocator_owns, direct_map_address, direct_map_runs, physmap_origin,
+    KASLR_NOT_OFFERED, KERNEL_VIRT_BASE, Kaslr, LAYOUT, MemKind, MemRegion, PAGE_SIZE,
+    PHYSMAP_ALIGN, PHYSMAP_BASE, PHYSMAP_END, allocator_owns, direct_map_address, direct_map_runs,
+    physmap_origin,
 };
-use ferrix_elf::{Class, EM_AARCH64, Elf, PF_W, PF_X, Segment};
+use ferrix_elf::{Class, EM_AARCH64, Elf, FixupKind, PF_W, PF_X, Segment};
 use ferrix_paging::aarch64::{AArch64, MAIR_EL1};
 use ferrix_paging::{MapFlags, Mapper, PhysAddr, PhysMem, VirtAddr};
 
@@ -131,8 +132,9 @@ fn parse_kernel(bytes: &[u8]) -> Result<Elf<'_>, &'static str> {
     }
     elf.check_machine(EM_AARCH64)
         .map_err(|_| "the kernel was built for another architecture")?;
-    elf.check_fixed_address()
-        .map_err(|_| "the kernel is not a fixed-address executable")?;
+    // A PIE is accepted and placed at its link address: `place_kernel`
+    // applies its fixups for no move at all. `boot/` moves it (KASLR); this
+    // loader does not, and says so, until it has been tried on the phone.
     elf.validate_segments()
         .map_err(|_| "the kernel has a malformed segment")?;
     Ok(elf)
@@ -156,7 +158,39 @@ fn place_kernel(memory: &mut Memory, elf: &Elf<'_>) -> Result<Taken, &'static st
         // this segment is part of; `.bss` is already zero.
         unsafe { ptr::copy_nonoverlapping(data.as_ptr(), destination as *mut u8, data.len()) };
     }
+    apply_fixups(elf, image, low)?;
     Ok(image)
+}
+
+/// Apply a PIE's fixups for the image in `image`, linked at `low`, run where
+/// it was linked.
+///
+/// A `RELA` table keeps its addends in the table rather than in the words it
+/// patches, so an unmoved PIE still needs this. Each is an aligned word,
+/// written with one volatile store, as everything here is written with the
+/// caches off.
+fn apply_fixups(elf: &Elf<'_>, image: Taken, low: u64) -> Result<(), &'static str> {
+    for fixup in elf.fixups() {
+        let fixup = fixup.map_err(|_| "the kernel has a fixup this loader cannot apply")?;
+        let FixupKind::Relative(_) = fixup.kind else {
+            return Err("the kernel has a fixup this loader cannot apply");
+        };
+        let offset = fixup
+            .at
+            .checked_sub(low)
+            .filter(|offset| offset.is_multiple_of(8) && offset + 8 <= image.len)
+            .ok_or("a kernel fixup is outside the image, or unaligned")?;
+        let at = (image.base + offset) as *mut u64;
+        // SAFETY: an aligned word inside the image allocation, checked above,
+        // which nothing else refers to yet.
+        let stored = unsafe { ptr::read_volatile(at) };
+        let value = fixup
+            .apply(0, stored)
+            .ok_or("the kernel has a fixup this loader cannot apply")?;
+        // SAFETY: as above.
+        unsafe { ptr::write_volatile(at, value) };
+    }
+    Ok(())
 }
 
 /// The direct map a machine with this memory gets: from the lowest RAM,
@@ -365,6 +399,7 @@ fn write_boot_info(
         firmware_seed: seed.bytes,
         firmware_flags: if seed.is_any() { FIRMWARE_SEED } else { 0 },
         firmware_seed_len: seed.found as u64,
+        kaslr: Kaslr::fixed(&LAYOUT, KASLR_NOT_OFFERED),
     };
     // SAFETY: the info area is the loader's, larger than one boot info.
     unsafe { ptr::write_volatile(info.base as *mut BootInfo, boot_info) };
@@ -390,6 +425,11 @@ pub(crate) fn boot(memory: &mut Memory, carried: Carried<'_>) -> Result<(), &'st
             bytes.len() as u64,
         )),
     };
+    // `boot/` moves the kernel, the direct map and the vmap arena each boot.
+    // This loader has no tested source of randomness on the phone and has not
+    // been tried moving anything there, so it keeps the fixed layout and the
+    // kernel reports it as not randomised.
+    say!("  kaslr    not offered by this loader: the kernel runs at its link address");
     say!(
         "  kernel {:#x}+{:#x}, tables {:#x}, stack {:#x}, info {:#x}",
         image.base,

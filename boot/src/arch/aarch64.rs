@@ -138,6 +138,25 @@ fn intermediate_physical_size() -> u64 {
     (features & 0xF).min(5)
 }
 
+/// No random number instruction: `RNDR` is `FEAT_RNG`, an ARMv8.5 feature
+/// the reference Cortex-A72 does not have, so KASLR falls back from
+/// firmware's `EFI_RNG_PROTOCOL` straight to [`counter`].
+pub(crate) const fn cpu_random() -> Option<u64> {
+    None
+}
+
+/// The virtual count of the generic timer, which every `ARMv8` core has: the
+/// loader's last resort for KASLR, and a poor one, since how long firmware
+/// took to get here can be guessed.
+pub(crate) fn counter() -> u64 {
+    let count: u64;
+    // SAFETY: CNTVCT_EL0 is readable at EL1 and has no side effects.
+    unsafe {
+        asm!("mrs {}, cntvct_el0", out(reg) count, options(nomem, nostack, preserves_flags));
+    }
+    count
+}
+
 /// The exception level the loader is running at.
 fn current_exception_level() -> u64 {
     let level: u64;

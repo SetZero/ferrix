@@ -148,6 +148,35 @@ fn current_mode() -> u32 {
     cpsr & MODE_MASK
 }
 
+/// No random number instruction: ARMv7-A has none, so KASLR falls back from
+/// firmware's `EFI_RNG_PROTOCOL` straight to [`counter`].
+pub(crate) const fn cpu_random() -> Option<u64> {
+    None
+}
+
+/// The virtual count of the generic timer, or zero on a core without one:
+/// the loader's last resort for KASLR, and a poor one, since how long
+/// firmware took to get here can be guessed.
+pub(crate) fn counter() -> u64 {
+    let features: u32;
+    // SAFETY: ID_PFR1 is readable at PL1 and has no side effects.
+    unsafe {
+        asm!("mrc p15, 0, {}, c0, c1, 1", out(reg) features, options(nomem, nostack, preserves_flags));
+    }
+    // ID_PFR1.GenTimer, bits 19:16: zero on a core without the generic timer,
+    // where reading its count is an undefined instruction.
+    if (features >> 16) & 0xF == 0 {
+        return 0;
+    }
+    let (low, high): (u32, u32);
+    // SAFETY: the core implements the generic timer, whose virtual count is
+    // readable at PL1 and has no side effects.
+    unsafe {
+        asm!("mrrc p15, 1, {}, {}, c14", out(reg) low, out(reg) high, options(nomem, nostack, preserves_flags));
+    }
+    (u64::from(high) << 32) | u64::from(low)
+}
+
 /// The virtual memory system this CPU implements, as `ID_MMFR0.VMSA`.
 fn memory_model() -> u32 {
     let features: u32;

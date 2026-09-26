@@ -627,6 +627,13 @@ impl Services {
     /// Thirty-two bytes from firmware's `EFI_RNG_PROTOCOL`, or `None` when
     /// firmware offers none or it fails.
     pub(crate) fn firmware_seed(&self) -> Option<[u8; 32]> {
+        self.firmware_random()
+    }
+
+    /// `N` bytes from firmware's `EFI_RNG_PROTOCOL`, or `None` when firmware
+    /// offers none or it fails. Each call asks again, so two callers never
+    /// share bytes.
+    pub(crate) fn firmware_random<const N: usize>(&self) -> Option<[u8; N]> {
         let mut interface: *mut c_void = ptr::null_mut();
         // SAFETY: `locate_protocol` writes an interface pointer into a live
         // local; boot services are live.
@@ -637,7 +644,7 @@ impl Services {
             return None;
         }
         let rng = interface.cast::<Rng>();
-        let mut seed = [0_u8; 32];
+        let mut seed = [0_u8; N];
         // SAFETY: firmware returned a live `EFI_RNG_PROTOCOL`.
         let get_rng = unsafe { (*rng).get_rng };
         // SAFETY: `get_rng` writes `seed.len()` bytes into a live local, with

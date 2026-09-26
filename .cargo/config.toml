@@ -20,7 +20,21 @@ rustflags = [
     # AArch64 side below genuinely needs it and the two should not silently
     # disagree about segment alignment.
     "-C", "link-arg=-zmax-page-size=4096",
-    "-C", "relocation-model=static",
+    # Position-independent code, so that the kernel can be linked as a static
+    # PIE and moved by the loader (KASLR, docs/certification/SPECULATION.md
+    # section 6). Code built for the static model addresses the kernel with
+    # sign-extended 32-bit absolutes, which no dynamic relocation can move,
+    # and lld refuses to link it as a PIE. It is a codegen flag, so it has to
+    # be target-wide: every library the kernel links is built with it, and so
+    # is every native program.
+    #
+    # Those programs must stay fixed-address executables, which is what the
+    # kernel's ELF loader takes (user/rt/linker/native.ld), so the link is
+    # told `-no-pie` here, and `kernel/build.rs` alone says `-pie` after it:
+    # a build script's link arguments come after these, and the last wins.
+    # `--mitigations off` builds the kernel with the static model again.
+    "-C", "relocation-model=pie",
+    "-C", "link-arg=-no-pie",
     # A panic report walks the frame-pointer chain for its backtrace, and
     # without this the compiler is free to use the register for anything.
     "-C", "force-frame-pointers=yes",

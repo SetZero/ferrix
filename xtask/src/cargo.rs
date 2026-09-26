@@ -55,7 +55,9 @@ pub(crate) fn set_mitigations(setting: Mitigations) {
 }
 
 /// The `--config` that builds the kernel for `target` without its
-/// side-channel defences.
+/// side-channel defences, and without KASLR: the static relocation model,
+/// which on x86-64 is the code the kernel was built as before it moved, and
+/// which `kernel/build.rs` links at its fixed address.
 ///
 /// A `--config` array is *appended* to the one in `.cargo/config.toml`, so the
 /// per-target flags [`refuse_inherited_rustflags`] protects are kept and the
@@ -63,7 +65,9 @@ pub(crate) fn set_mitigations(setting: Mitigations) {
 /// every crate built for the target, the libraries' clamps included
 /// (`ferrix_sync::nospec`).
 pub(crate) fn mitigations_off_config(target: &str) -> String {
-    format!("target.{target}.rustflags=[\"--cfg\",\"ferrix_mitigations_off\"]")
+    format!(
+        "target.{target}.rustflags=[\"--cfg\",\"ferrix_mitigations_off\",\"-C\",\"relocation-model=static\"]"
+    )
 }
 
 /// Where a kernel without its defences is built: a target directory of its

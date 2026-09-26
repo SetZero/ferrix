@@ -5,7 +5,8 @@
 //! has no bootstrap assembly on any architecture. From there the job is:
 //!
 //! 1. read the kernel off the volume the loader came from,
-//! 2. copy it to the address it was linked for,
+//! 2. choose where it, the direct map and the vmap arena go (`kaslr`), copy
+//!    it, and patch it to run there,
 //! 3. build the address space `docs/ARCHITECTURE.md` §4 describes,
 //! 4. take firmware's memory map and leave boot services,
 //! 5. install the new tables and jump.
@@ -18,6 +19,7 @@
 
 mod arch;
 mod console;
+mod kaslr;
 mod load;
 mod services;
 mod uefi;
@@ -28,7 +30,7 @@ use core::ptr;
 
 use ferrix_bootinfo::{
     BOOT_STACK_SIZE, BOOTINFO_MAGIC, BOOTINFO_VERSION, BootInfo, FIRMWARE_SEED, FIRMWARE_TIME,
-    Framebuffer, MemRegion, PAGE_SIZE, PHYSMAP_BASE,
+    Framebuffer, MemRegion, PAGE_SIZE,
 };
 
 use console::println;
@@ -150,7 +152,12 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
     let direct = measure_direct_map(&services)?;
     services.allocate_below(direct.end());
 
-    let kernel = stage_kernel(&services)?;
+    // Before the kernel is placed, because the command line can say
+    // `nokaslr`, and that decides where the kernel goes.
+    let (info_area, cmdline_len) = boot_info_area(&services)?;
+    let loader = services.image_range()?;
+    let (kernel, choice) = stage_kernel(&services, (direct, loader), (info_area, cmdline_len))?;
+    let direct = direct.at(choice.physmap_base);
     let mut memory = LoaderMemory::new(&services)?;
 
     let stack = services.allocate(
@@ -158,15 +165,14 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
         BOOT_STACK_SIZE,
         MemoryType::FERRIX_BOOT_STACK,
     )?;
-    let info_area = services.allocate(
-        "allocating the boot info",
-        BOOT_INFO_BYTES,
-        MemoryType::FERRIX_BOOT_INFO,
-    )?;
     let device_tree = copy_device_tree(&services)?;
     let initrd = load_initrd(&services)?;
-    let loader = services.image_range()?;
-    let switch = load::place_switch(&services, direct, loader, kernel.image.memory.len)?;
+    let switch = load::place_switch(
+        &services,
+        direct,
+        loader,
+        (kernel.image.virt_base, kernel.image.memory.len),
+    )?;
     let map_buffer = services.allocate(
         "allocating the memory map buffer",
         services.memory_map_size()?,
@@ -220,10 +226,10 @@ fn boot(image: Handle, system_table: *mut SystemTable) -> Result<Infallible> {
 
     write_boot_info(
         &services,
-        &kernel.image,
+        (&kernel.image, choice),
         &space,
         stack,
-        info_area,
+        (info_area, cmdline_len),
         direct,
         Carried {
             device_tree,
@@ -366,20 +372,53 @@ impl StagedKernel {
     }
 }
 
-/// Read the kernel and copy it to where it will run.
-fn stage_kernel(services: &Services) -> Result<StagedKernel> {
+/// Allocate the boot info area and read the command line into it, and say
+/// how many bytes that came to.
+fn boot_info_area(services: &Services) -> Result<(Allocation, u64)> {
+    let info_area = services.allocate(
+        "allocating the boot info",
+        BOOT_INFO_BYTES,
+        MemoryType::FERRIX_BOOT_INFO,
+    )?;
+    Ok((info_area, load_cmdline(services, info_area)))
+}
+
+/// Read the kernel, decide where it and the other moving regions go, and copy
+/// it there.
+///
+/// `info_area` holds the `cmdline_len` bytes of command line
+/// [`load_cmdline`] put there, which may say `nokaslr`.
+fn stage_kernel(
+    services: &Services,
+    (direct, loader): (DirectMap, (u64, u64)),
+    (info_area, cmdline_len): (Allocation, u64),
+) -> Result<(StagedKernel, kaslr::Choice)> {
     let (file, file_len) = load::read_kernel_file(services, KERNEL_PATH)?;
     let staged = StagedKernel {
         file,
         file_len,
-        image: KernelImage {
-            memory: Allocation { address: 0, len: 0 },
-            virt_base: 0,
-            entry: 0,
-        },
+        image: KernelImage::EMPTY,
     };
-    let image = load::place_kernel(services, &staged.elf()?)?;
-    Ok(StagedKernel { image, ..staged })
+    let elf = staged.elf()?;
+    // SAFETY: `load_cmdline` wrote `cmdline_len` bytes of UTF-8 there, inside
+    // the loader's own allocation, and nothing writes them again.
+    let cmdline = unsafe {
+        core::slice::from_raw_parts(
+            (info_area.address + CMDLINE_OFFSET) as *const u8,
+            cmdline_len as usize,
+        )
+    };
+    let declined = core::str::from_utf8(cmdline).is_ok_and(kaslr::declined);
+    let choice = kaslr::choose(
+        services,
+        &elf,
+        load::kernel_span(&elf)?,
+        direct,
+        loader,
+        declined,
+    )?;
+    let image = load::place_kernel(services, &elf, choice.kernel_virt)?;
+    Ok((StagedKernel { image, ..staged }, choice))
 }
 
 /// What the loader copied into memory the kernel keeps, besides the kernel.
@@ -410,10 +449,10 @@ fn firmware_rsdp(services: &Services) -> u64 {
 /// Fill in everything about the boot info that firmware can still be asked.
 fn write_boot_info(
     services: &Services,
-    kernel: &KernelImage,
+    (kernel, choice): (&KernelImage, kaslr::Choice),
     space: &AddressSpace,
     stack: Allocation,
-    info_area: Allocation,
+    (info_area, cmdline_len): (Allocation, u64),
     direct: DirectMap,
     carried: Carried,
 ) {
@@ -422,7 +461,6 @@ fn write_boot_info(
         initrd,
         framebuffer,
     } = carried;
-    let cmdline_len = load_cmdline(services, info_area);
     let time = services.firmware_time();
     let seed = services.firmware_seed();
     // What the kernel's clock and random generator start from, said here
@@ -439,7 +477,7 @@ fn write_boot_info(
         // Filled in by `finish_boot_info` once the final map has been taken.
         regions: 0,
         regions_len: 0,
-        physmap_base: PHYSMAP_BASE,
+        physmap_base: direct.base,
         physmap_phys: direct.origin,
         physmap_len: direct.len,
         kernel_phys: kernel.memory.address,
@@ -472,6 +510,7 @@ fn write_boot_info(
         firmware_seed: seed.unwrap_or([0; 32]),
         firmware_flags: time.map_or(0, |_| FIRMWARE_TIME) | seed.map_or(0, |_| FIRMWARE_SEED),
         firmware_seed_len: seed.map_or(0, |bytes| bytes.len() as u64),
+        kaslr: choice.kaslr,
     };
 
     // SAFETY: `info_area` is our own allocation of BOOT_INFO_BYTES, identity

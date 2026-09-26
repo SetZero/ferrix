@@ -168,7 +168,17 @@ pub(crate) fn conclude(entry: Option<&Explanation>) -> ! {
 /// Addresses only: the kernel carries no symbol table, and a panic is the
 /// worst moment to go looking for one. `xtask` names them from the image it
 /// booted as the report arrives.
+///
+/// The addresses are where the code ran, which in a kernel the loader moved
+/// (KASLR) is not where the image was linked. So the report first says how far
+/// it moved, and `xtask` takes that off before it looks an address up. Said on
+/// the console, which no program reads back; `SPECULATION.md` §6 argues why
+/// that is not a leak.
 fn report_backtrace() {
+    let slide = backtrace::image_start().wrapping_sub(ferrix_bootinfo::KERNEL_VIRT_BASE);
+    if slide != 0 {
+        println!("  kaslr     slide {slide:#x}");
+    }
     let mut index = 0;
     let found = backtrace::walk(arch::frame_pointer(), |address| {
         println!("  trace     #{index:<2} {address:#018x}");

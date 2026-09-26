@@ -4,7 +4,7 @@ use core::ptr;
 
 use ferrix_bootinfo::{
     IdentityPlan, IdentityTree, KERNEL_VIRT_BASE, LAYOUT, MemKind, MemRegion, PAGE_SIZE,
-    PHYSMAP_ALIGN, PHYSMAP_BASE, PHYSMAP_END, direct_map_address, direct_map_runs, physmap_origin,
+    PHYSMAP_ALIGN, PHYSMAP_BASE, PHYSMAP_END, Placement, direct_map_runs, physmap_origin,
     rsdp_region,
 };
 use ferrix_elf::{Elf, PF_W, PF_X, Segment};
@@ -99,14 +99,8 @@ pub(crate) fn parse_kernel(bytes: &[u8]) -> Result<Elf<'_>> {
     }
     elf.check_machine(arch::ELF_MACHINE)
         .map_err(|_| BootError::plain("the kernel was built for another architecture"))?;
-    // `place_kernel` copies segments to their link-time addresses and applies
-    // no relocations, so a position-independent kernel would start with every
-    // absolute address in it wrong.
-    elf.check_fixed_address().map_err(|_| {
-        BootError::plain(
-            "the kernel is not a fixed-address executable, and the loader does not relocate",
-        )
-    })?;
+    // A position-independent kernel is accepted: `place_kernel` applies its
+    // fixups, wherever it goes, including to its own link address.
     elf.validate_segments()
         .map_err(|_| BootError::plain("the kernel has a malformed segment"))?;
     Ok(elf)
@@ -117,17 +111,27 @@ pub(crate) fn parse_kernel(bytes: &[u8]) -> Result<Elf<'_>> {
 pub(crate) struct KernelImage {
     /// Physical memory holding the image.
     pub(crate) memory: Allocation,
-    /// Lowest virtual address the image occupies.
+    /// Lowest virtual address the image occupies: where it was linked, or
+    /// where KASLR moved it.
     pub(crate) virt_base: u64,
-    /// Virtual address of the entry point.
+    /// Lowest virtual address the image was linked at.
+    pub(crate) link: u64,
+    /// Virtual address of the entry point, moved with the image.
     pub(crate) entry: u64,
 }
 
-/// Copy the kernel where it will run.
-///
-/// The image goes wherever firmware offers physical memory and is mapped to the
-/// address it was linked for, so nothing here depends on a physical layout.
-pub(crate) fn place_kernel(services: &Services, elf: &Elf<'_>) -> Result<KernelImage> {
+impl KernelImage {
+    /// Nothing placed yet.
+    pub(crate) const EMPTY: KernelImage = KernelImage {
+        memory: Allocation { address: 0, len: 0 },
+        virt_base: 0,
+        link: 0,
+        entry: 0,
+    };
+}
+
+/// The kernel's link address and the bytes its segments span, page rounded.
+pub(crate) fn kernel_span(elf: &Elf<'_>) -> Result<(u64, u64)> {
     let (low, high) = elf
         .load_span(PAGE_SIZE)
         .ok_or_else(|| BootError::plain("the kernel loads no segments"))?;
@@ -136,22 +140,71 @@ pub(crate) fn place_kernel(services: &Services, elf: &Elf<'_>) -> Result<KernelI
             "the kernel is not linked at the address the loader maps it to",
         ));
     }
+    Ok((low, high - low))
+}
+
+/// Copy the kernel where it will run, and patch it to run at `virt`.
+///
+/// The image goes wherever firmware offers physical memory and is mapped at
+/// `virt` — its link address, or where [`crate::kaslr`] moved it — so nothing
+/// here depends on a physical layout. Every fixup is applied, even when the
+/// image did not move: a PIE's `RELA` table carries its addends in the table,
+/// not in the words it patches.
+pub(crate) fn place_kernel(services: &Services, elf: &Elf<'_>, virt: u64) -> Result<KernelImage> {
+    let (low, len) = kernel_span(elf)?;
 
     let memory = services.allocate(
         "allocating the kernel image",
-        high - low,
+        len,
         MemoryType::FERRIX_KERNEL,
     )?;
 
     for segment in elf.loadable() {
         copy_segment(elf, &segment, memory.address, low)?;
     }
+    let bias = virt.wrapping_sub(low);
+    apply_fixups(elf, memory, low, bias)?;
 
     Ok(KernelImage {
         memory,
-        virt_base: low,
-        entry: elf.entry(),
+        virt_base: virt,
+        link: low,
+        entry: elf.entry().wrapping_add(bias),
     })
+}
+
+/// Patch every place `elf` says has to change for the image in `memory`,
+/// linked at `low`, to run moved by `bias`.
+fn apply_fixups(elf: &Elf<'_>, memory: Allocation, low: u64, bias: u64) -> Result<()> {
+    let refused = || BootError::plain("the kernel's fixups are of a kind the loader cannot apply");
+    let outside = || BootError::plain("a kernel fixup is outside the image");
+    for fixup in elf.fixups() {
+        let fixup = fixup.map_err(|_| refused())?;
+        let width = fixup.width(elf.class()) as u64;
+        let offset = fixup.at.checked_sub(low).ok_or_else(outside)?;
+        if offset.checked_add(width).is_none_or(|end| end > memory.len) {
+            return Err(outside());
+        }
+        let at = memory.address + offset;
+        let stored = if width == 8 {
+            // SAFETY: `at` is inside the image allocation, checked above; the
+            // image is the loader's own and nothing else refers to it.
+            unsafe { ptr::read_unaligned(at as *const u64) }
+        } else {
+            // SAFETY: as above, for a 4-byte word.
+            u64::from(unsafe { ptr::read_unaligned(at as *const u32) })
+        };
+        let value = fixup.apply(bias, stored).ok_or_else(refused)?;
+        if width == 8 {
+            // SAFETY: as above.
+            unsafe { ptr::write_unaligned(at as *mut u64, value) };
+        } else {
+            // SAFETY: as above, for a 4-byte word; `apply` gives a 32-bit
+            // value for every 4-byte fixup, so nothing is cut off.
+            unsafe { ptr::write_unaligned(at as *mut u32, value as u32) };
+        }
+    }
+    Ok(())
 }
 
 /// Copy one segment into the image and zero the `.bss` tail behind it.
@@ -194,10 +247,12 @@ fn copy_segment(elf: &Elf<'_>, segment: &Segment, base: u64, virt_base: u64) -> 
 /// [`direct_map_runs`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DirectMap {
-    /// The physical address at [`PHYSMAP_BASE`].
+    /// The physical address at `base`.
     pub(crate) origin: u64,
     /// Bytes from there that are mapped.
     pub(crate) len: u64,
+    /// Where it begins: [`PHYSMAP_BASE`] until [`crate::kaslr`] moves it.
+    pub(crate) base: u64,
 }
 
 impl DirectMap {
@@ -221,7 +276,13 @@ impl DirectMap {
         Ok(DirectMap {
             origin,
             len: (end - origin).min(PHYSMAP_END - PHYSMAP_BASE),
+            base: PHYSMAP_BASE,
         })
+    }
+
+    /// The same span of RAM, mapped from `base`.
+    pub(crate) const fn at(self, base: u64) -> DirectMap {
+        DirectMap { base, ..self }
     }
 
     /// Check that `map`, fetched after the loader's allocations, gives the same
@@ -231,7 +292,7 @@ impl DirectMap {
     /// are RAM too, so the span cannot have moved. A firmware for which it did
     /// would have placed the kernel against a ceiling that no longer holds.
     pub(crate) fn confirm(self, map: &MemoryMap) -> Result<()> {
-        if DirectMap::of(map)? == self {
+        if DirectMap::of(map)?.at(self.base) == self {
             Ok(())
         } else {
             Err(BootError::plain(
@@ -242,7 +303,7 @@ impl DirectMap {
 
     /// Where physical address `phys` appears in the direct map.
     pub(crate) const fn address(self, phys: u64) -> u64 {
-        direct_map_address(self.origin, phys)
+        self.base + (phys - self.origin)
     }
 
     /// One past the last physical address the direct map covers.
@@ -288,10 +349,21 @@ pub(crate) fn place_switch(
     services: &Services,
     direct: DirectMap,
     loader: (u64, u64),
-    kernel_len: u64,
+    (kernel_base, kernel_len): (u64, u64),
 ) -> Result<Switch> {
+    let placed = Placement {
+        physmap_base: direct.base,
+        kernel_base,
+    };
     let plan = LAYOUT
-        .plan_identity_map(direct.origin, direct.len, loader.0, loader.1, kernel_len)
+        .plan_identity_map_in(
+            placed,
+            direct.origin,
+            direct.len,
+            loader.0,
+            loader.1,
+            kernel_len,
+        )
         .map_err(BootError::plain)?;
     if plan.tree != IdentityTree::Trampoline {
         return Ok(Switch {
@@ -350,7 +422,7 @@ pub(crate) struct AddressSpace {
 ///
 /// Three mappings, and deliberately no more: an identity map so the
 /// instructions after the switch still fetch, a direct map of physical
-/// memory, and the kernel image at the address it was linked for. The boot
+/// memory, and the kernel image where [`crate::kaslr`] put it. The boot
 /// stack and the boot info need no mapping of their own — they are in RAM, so
 /// the direct map already covers them.
 ///
@@ -498,12 +570,12 @@ fn map_segment(
     // that, the mapper would refuse rather than silently re-permission a page.
     let base = segment.vaddr & !(PAGE_SIZE - 1);
     let length = (segment.vaddr - base + segment.memsz).next_multiple_of(PAGE_SIZE);
-    let offset = base - image.virt_base;
+    let offset = base - image.link;
 
     kernel
         .map_range(
             memory,
-            VirtAddr(base),
+            VirtAddr(image.virt_base + offset),
             PhysAddr(image.memory.address + offset),
             length,
             flags,
