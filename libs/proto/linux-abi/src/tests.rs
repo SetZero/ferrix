@@ -3424,3 +3424,50 @@ fn thread_area_descriptors_are_refused_and_cleared_as_linux_does() {
     );
     assert_eq!(tls_index(u32::MAX), None);
 }
+
+/// Every descriptor `user_desc` can build is one ring 3 may hold and nothing
+/// more (certification review, T.ESCALATE path 7): walked over every flag
+/// word -- `lm`, bit 7, included -- with bases and limits at their ends.
+/// Accepted means present, a code-or-data segment (S=1), DPL 3, not 64-bit,
+/// and data, never code or conforming code; anything else is refused, or
+/// empties the entry to the null descriptor. There is no field for a
+/// privilege level, a system type or a gate, so none can be asked for.
+#[test]
+fn a_user_desc_can_only_ever_describe_ring_3_data() {
+    use crate::user_desc::UserDesc;
+    const PRESENT: u64 = 1 << 47;
+    const CODE_OR_DATA: u64 = 1 << 44;
+    const DPL_3: u64 = 3 << 45;
+    const EXECUTABLE: u64 = 1 << 43;
+    const LONG_MODE: u64 = 1 << 53;
+    let mut accepted = 0;
+    for flags in 0_u32..256 {
+        for (base, limit) in [(0, 0), (0xffff_ffff, 0xf_ffff), (0x1234_5678, 0x1_0000)] {
+            let mut bytes = [0_u8; 16];
+            bytes[4..8].copy_from_slice(&u32::to_le_bytes(base));
+            bytes[8..12].copy_from_slice(&u32::to_le_bytes(limit));
+            bytes[12..16].copy_from_slice(&flags.to_le_bytes());
+            let desc = UserDesc::from_bytes(&bytes).unwrap();
+            match desc.to_descriptor() {
+                Ok(0) => assert!(desc.clears(), "{flags:#x}: null without clearing"),
+                Ok(descriptor) => {
+                    accepted += 1;
+                    assert_eq!(descriptor & PRESENT, PRESENT, "{flags:#x}");
+                    assert_eq!(descriptor & CODE_OR_DATA, CODE_OR_DATA, "{flags:#x}");
+                    assert_eq!(descriptor & DPL_3, DPL_3, "{flags:#x}");
+                    assert_eq!(descriptor & (EXECUTABLE | LONG_MODE), 0, "{flags:#x}");
+                }
+                Err(_) => {
+                    let contents = (flags >> 1) & 3;
+                    assert!(
+                        flags & 1 == 0 || contents > 1 || flags & (1 << 5) != 0,
+                        "{flags:#x} was refused though tls_desc_okay takes it"
+                    );
+                }
+            }
+        }
+    }
+    // 32-bit, data or expand-down, present: four free bits (read-only,
+    // pages, useable, lm), two contents, three shapes of base and limit.
+    assert_eq!(accepted, 16 * 2 * 3);
+}

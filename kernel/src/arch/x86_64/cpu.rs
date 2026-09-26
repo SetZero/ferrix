@@ -607,6 +607,9 @@ pub(crate) unsafe fn load_data_selectors(ds: u16, es: u16, fs: u16) {
 /// instructions, since a handler entered between the two `swapgs` would find
 /// the program's base where the kernel's belongs; an NMI there is the
 /// paranoid entry's, which asks the MSR rather than trusting the order.
+/// Both `swapgs` always run, in the kernel with its own `GS`, so there is no
+/// skipped swap to mispredict and F-31's `lfence` after an entry's `swapgs`
+/// does not apply here.
 ///
 /// # Safety
 ///

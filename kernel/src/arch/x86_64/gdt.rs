@@ -24,6 +24,8 @@ use core::cell::UnsafeCell;
 
 use super::cpu;
 
+pub(super) mod check;
+
 /// Kernel code. `SYSCALL` loads this from `STAR[47:32]`. Entry 2, as on
 /// Linux; entry 1 is Linux's 32-bit kernel code, which nothing here uses and
 /// which is left empty.
@@ -122,6 +124,20 @@ const FLAT_LIMIT: u64 = 0xFFFF | (0xF << 48);
 /// Everything a flat 4 GiB user segment has but its type: present, a code or
 /// data segment, ring 3, page-granular, and already accessed.
 const FLAT_USER: u64 = USER_SEGMENT | PRESENT | dpl(3) | ACCESSED | GRANULARITY_4K | FLAT_LIMIT;
+/// The 32-bit user code segment's descriptor: Linux's `0x00cffb000000ffff`.
+const USER_CODE32_DESCRIPTOR: u64 = FLAT_USER | EXECUTABLE | READABLE | DEFAULT_32;
+/// The user data segment's: Linux's `0x00cff3000000ffff`.
+const USER_DATA_DESCRIPTOR: u64 = FLAT_USER | WRITABLE | DEFAULT_32;
+/// Descriptor field: the privilege level, two bits.
+const DPL_MASK: u64 = dpl(3);
+/// Descriptor bit, for code: conforming, which runs at the caller's level.
+const CONFORMING: u64 = 1 << 42;
+
+const _: () = assert!(
+    USER_CODE32_DESCRIPTOR == 0x00cf_fb00_0000_ffff
+        && USER_DATA_DESCRIPTOR == 0x00cf_f300_0000_ffff,
+    "the 32-bit user segments are Linux's"
+);
 
 /// System descriptor type 9: an available 64-bit task state segment.
 const TSS_AVAILABLE: u64 = 0b1001 << 40;
@@ -442,27 +458,52 @@ pub(crate) unsafe fn write_tls(tls: &[u64; TLS_SLOTS]) {
 }
 
 /// `selector` if it can be loaded into a data segment register with `tls`
-/// in the thread-local slots, and the null selector if it cannot.
+/// in the thread-local slots, with RPL 3, and the null selector if it cannot.
 ///
 /// What a program loaded was valid when it loaded it, but a thread-local
 /// descriptor may have been emptied since, and a load of a selector naming
 /// an empty slot is `#GP` in ring 0. Linux recovers from that fault; here the
-/// selector is checked first, against the only slots a program can load: 32-bit
-/// user code, which is readable, user data, and a present thread-local
-/// descriptor. The LDT's (bit 2) name nothing, as there is none.
+/// selector is checked first (certification review, T.ESCALATE path 7). It
+/// has to name one of the only slots a program may load -- 32-bit user code,
+/// user data, or a thread-local slot -- never the LDT (bit 2), and the
+/// descriptor there has to be one ring 3 may hold ([`ring_3_segment`]).
+/// RPL is forced to 3: a program may load its own segments with a lower one,
+/// which means the same segment and no more.
 pub(crate) fn loadable(selector: u16, tls: &[u64; TLS_SLOTS]) -> u16 {
     const TABLE_INDICATOR: u16 = 1 << 2;
+    if selector & TABLE_INDICATOR != 0 {
+        return 0;
+    }
     let slot = usize::from(selector >> 3);
-    let fits = match slot {
-        _ if selector & TABLE_INDICATOR != 0 => false,
-        _ if u16::try_from(slot << 3) == Ok(USER_CODE32) => true,
-        _ if u16::try_from(slot << 3) == Ok(USER_DATA) => true,
-        _ => slot
+    let descriptor = match slot {
+        _ if slot == usize::from(USER_CODE32 >> 3) => USER_CODE32_DESCRIPTOR,
+        _ if slot == usize::from(USER_DATA >> 3) => USER_DATA_DESCRIPTOR,
+        _ => match slot
             .checked_sub(TLS_FIRST_SLOT)
             .and_then(|index| tls.get(index))
-            .is_some_and(|descriptor| descriptor & PRESENT != 0),
+        {
+            Some(&descriptor) => descriptor,
+            None => return 0,
+        },
     };
-    if fits { selector } else { 0 }
+    if ring_3_segment(descriptor) {
+        selector | 3
+    } else {
+        0
+    }
+}
+
+/// Whether ring 3 may hold `descriptor` in a data segment register: present,
+/// a code or data segment rather than a system one or a gate, DPL 3, not a
+/// 64-bit segment, and data, or code that is readable and not conforming.
+pub(crate) const fn ring_3_segment(descriptor: u64) -> bool {
+    let usable = descriptor & PRESENT != 0
+        && descriptor & USER_SEGMENT != 0
+        && descriptor & DPL_MASK == DPL_MASK
+        && descriptor & LONG_MODE == 0;
+    let kind = descriptor & EXECUTABLE == 0
+        || (descriptor & READABLE != 0 && descriptor & CONFORMING == 0);
+    usable && kind
 }
 
 /// Build and load this secondary processor's own GDT and TSS./// Build and load this secondary processor's own GDT and TSS.
@@ -523,8 +564,8 @@ unsafe fn load(tables: &'static mut Tables, ist_tops: [u64; IST_STACKS]) {
         0,
         USER_SEGMENT | PRESENT | EXECUTABLE | LONG_MODE,
         USER_SEGMENT | PRESENT | WRITABLE,
-        FLAT_USER | EXECUTABLE | READABLE | DEFAULT_32,
-        FLAT_USER | WRITABLE | DEFAULT_32,
+        USER_CODE32_DESCRIPTOR,
+        USER_DATA_DESCRIPTOR,
         USER_SEGMENT | PRESENT | EXECUTABLE | LONG_MODE | dpl(3),
         0,
         low,
