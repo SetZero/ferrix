@@ -14,13 +14,20 @@
 //! reply against what it is waiting for, so a driver that answers a question
 //! nobody asked is caught here, host-tested, and not in the kernel.
 //!
+//! [`edid`] is what a connector's `EDID` property carries: the file
+//! `drm.edid_firmware=` names for it, checked, and how the property calls
+//! answer for it.
+//!
 //! Nothing here sends, maps or waits; the glue does.
 
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod edid;
 pub mod message;
 pub mod session;
 
+#[cfg(test)]
+mod edid_tests;
 #[cfg(test)]
 mod tests;
