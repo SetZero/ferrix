@@ -21,6 +21,7 @@ use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use ferrix_sched::{CpuSet, EntityState, Slot};
+use ferrix_sync::IrqControl;
 
 use crate::arch;
 use crate::fallible::{self, AllocError};
@@ -410,13 +411,25 @@ impl Task {
 
     /// Say what it is doing: and, as it becomes runnable or stops being, add
     /// its weight to its job's processor load or take it out.
+    ///
+    /// **One step on this processor**, under masked interrupts. A switch
+    /// acts on the state alone: one that finds the running task not
+    /// runnable takes it off the queue, and a task marked dead is never run
+    /// again. With interrupts on, a switch between the state and the load
+    /// found an exiting task dead and still counted, and the line that would
+    /// have taken its weight out never ran: its job's load stayed up for good
+    /// (FX-0905, the quota check's "tasks gone and still counted"). A task
+    /// switched out there as it blocked kept its weight while asleep, and
+    /// took it out once woken, running uncounted until it next blocked.
     pub(crate) fn set_state(&self, state: u8) {
+        let saved = <arch::Irq as IrqControl>::disable();
         let before = self.state.swap(state, Ordering::AcqRel);
         if before != RUNNABLE && state == RUNNABLE {
             self.join_group();
         } else if before == RUNNABLE && state != RUNNABLE {
             self.leave_group();
         }
+        <arch::Irq as IrqControl>::restore(saved);
     }
 
     /// The job whose processor share it runs in, or `quota::NONE`.
