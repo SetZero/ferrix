@@ -41,6 +41,8 @@ use crate::smp::PerCpu;
 use super::cpu;
 use super::gdt;
 
+pub(super) mod check;
+
 /// `IA32_EFER`. Bit 0 enables `SYSCALL`/`SYSRET`.
 const IA32_EFER: u32 = 0xC000_0080;
 /// `IA32_STAR`. Holds the two segment bases.
