@@ -394,6 +394,12 @@ pub(crate) enum Cause {
     /// other than its address, or tables the kernel wrote that the unit
     /// refused, and either is worse than a refused address.
     Event(u8),
+    /// An `SMMUv3` event queue that overflowed: the unit had events to record
+    /// and no room, and dropped them. It names no stream, and it counts as
+    /// stray, as an event does: what was lost is unknown, so none of it can be
+    /// shown to be what a check provoked, and the probe provokes one fault
+    /// where a full queue is 128 unread.
+    Lost,
 }
 
 impl Fault {
@@ -425,6 +431,7 @@ impl core::fmt::Display for Fault {
                 self.stream,
                 smmuv3::event_name(kind)
             ),
+            Cause::Lost => write!(f, "an SMMUv3 event queue overflowed: events were lost"),
         }
     }
 }
@@ -1016,8 +1023,8 @@ static PROVOKED: SpinLock<Vec<(u32, u64)>> = SpinLock::new(Vec::new());
 /// taken and then dropped unseen.
 static STRAY: AtomicU64 = AtomicU64::new(0);
 
-/// Of [`STRAY`], the ones that were [`Cause::Event`]: an `SMMUv3` event other
-/// than a refused access.
+/// Of [`STRAY`], the ones that were [`Cause::Event`] or [`Cause::Lost`]: an
+/// `SMMUv3` event other than a refused access, or an overflow of its queue.
 static STRAY_EVENTS: AtomicU64 = AtomicU64::new(0);
 
 /// Record that `stream`'s device is about to be made to write `page`, which its

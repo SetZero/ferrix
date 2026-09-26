@@ -1618,6 +1618,10 @@ DMA it was not given, and a unit whose faults nobody reads would hide it.
    stream is past the 256 entries of the table, C_BAD_STE or F_WALK_EABT for
    tables the kernel wrote that the unit would not use. The `first read here`
    line names the event.
+6. An SMMUv3's event queue overflowed and the unit dropped events it had to
+   record: what they were is unknown, so the audit counts the overflow as one
+   stray event. The queue holds 128 records, and nothing but a device's DMA
+   faulting over and over, or tables the unit keeps refusing, fills it.
 
 See: kernel/src/iommu.rs audit_faults; kernel/src/pci/virtio.rs
 probe_out_of_domain; kernel/src/iommu/vtd.rs Unit::take_fault;

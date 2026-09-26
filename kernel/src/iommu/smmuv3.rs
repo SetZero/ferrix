@@ -71,6 +71,11 @@ const EVENTQ_BASE: u64 = 0xA0;
 const EVENTQ_PROD: u64 = 0xA8;
 /// Event queue consumer index.
 const EVENTQ_CONS: u64 = 0xAC;
+/// Bit 31 of both event queue indexes: `OVFLG` in the producer's, which the
+/// unit toggles when it had an event to record and the queue was full, and
+/// `OVACKFLG` in the consumer's, which software sets equal to it to say it
+/// has seen that. Unequal, events were lost since the last acknowledgement.
+const EVENTQ_OVERFLOW: u32 = 1 << 31;
 
 /// IDR0: stage 2 is supported.
 const IDR0_S2P: u32 = 1 << 0;
@@ -317,10 +322,28 @@ impl Unit {
     /// access. This used to consume those unread, passing over every event
     /// but a translation fault, so a stream past the table or a stream table
     /// entry the unit refused would have gone unseen.
+    ///
+    /// An overflow comes back too, first, as [`Cause::Lost`], and is
+    /// acknowledged in the same step: the queue was full and the unit dropped
+    /// events it had to record. Each consumption keeps the acknowledgement it
+    /// found, as Linux's `queue_inc_cons` keeps `Q_OVF`, so it is not undone.
     pub(crate) fn take_fault(&self) -> Option<Fault> {
         let index = (1_u32 << (EVENT_BITS + 1)) - 1;
-        let produced = self.registers.read32(EVENTQ_PROD) & index;
-        let consumed = self.registers.read32(EVENTQ_CONS) & index;
+        let producer = self.registers.read32(EVENTQ_PROD);
+        let consumer = self.registers.read32(EVENTQ_CONS);
+        let acknowledged = consumer & EVENTQ_OVERFLOW;
+        let consumed = consumer & index;
+        if (producer ^ consumer) & EVENTQ_OVERFLOW != 0 {
+            self.registers
+                .write32(EVENTQ_CONS, consumed | (producer & EVENTQ_OVERFLOW));
+            return Some(Fault {
+                stream: 0,
+                page: 0,
+                write: false,
+                cause: Cause::Lost,
+            });
+        }
+        let produced = producer & index;
         if produced == consumed {
             return None;
         }
@@ -331,7 +354,8 @@ impl Unit {
         let first = read_entry(at);
         let access = read_entry(at + 8);
         let address = read_entry(at + 16);
-        self.registers.write32(EVENTQ_CONS, (consumed + 1) & index);
+        self.registers
+            .write32(EVENTQ_CONS, ((consumed + 1) & index) | acknowledged);
         let kind = (first & 0xFF) as u8;
         Some(Fault {
             stream: (first >> 32) as u32,
