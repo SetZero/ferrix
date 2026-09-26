@@ -1,9 +1,9 @@
 //! `waybar`: `-c config`, `-s style`, `-l level`, `-b bar`, `-v`, `-h`, as
 //! upstream's `Client::main` takes them.
 //!
-//! Until the drawing lands on the clients' foundation (`compositor/toolkit`)
-//! this reads and checks both files -- saying what waybar would say about
-//! them -- and exits, saying that it draws nothing yet.
+//! Until the drawing lands -- it waits on the foundation's text and image
+//! crates reaching main -- this reads and checks both files, saying what
+//! waybar would say about them, and exits, saying that it draws nothing yet.
 
 use std::io::Write;
 use std::process::ExitCode;
@@ -65,7 +65,7 @@ fn main() -> ExitCode {
     if options.level <= Level::Critical {
         let _ = writeln!(
             err,
-            "[critical] this waybar does not draw yet: its drawing waits on compositor/toolkit, which is not on main"
+            "[critical] this waybar does not draw yet: its drawing waits on userland/compositor/text and image"
         );
     }
     ExitCode::from(1)

@@ -183,7 +183,7 @@ programs are carried as `/bin/waybar`, `/bin/fuzzel`, `/bin/hyprlock`,
 
 ## 3. waybar
 
-`compositor/waybar` is `/bin/waybar`: it reads `config.jsonc` and
+`userland/compositor/waybar` is `/bin/waybar`: it reads `config.jsonc` and
 `style.css` the way waybar 0.15 (Alexays/Waybar at 1684389) and GTK 3.24
 read them, and draws the bar GTK would draw from them. Upstream's source is
 the reference, read file by file; `waybar-probe` is the host-side check
@@ -218,7 +218,7 @@ that lists what of the user's real files is not carried out.
   to the last layer's box, layers last listed first, inset shadows, border.
   An `url()` image is rasterised at its own size and scaled, as GTK3's
   pixbuf loader does. Text and images are behind traits, for
-  `compositor/text` and `compositor/image`.
+  `userland/compositor/text` and `userland/compositor/image`.
 * **Modules** (`modules/`): each a state machine over a `Host` (children,
   timers, files, Hyprland requests, interface ioctls), tested with a fake
   one against upstream's rules: `custom/*` (its three workers, `exec-if`,
@@ -269,8 +269,8 @@ its first slice: config, formats, style, layout, painter, modules, the
 probe and upstream's command line (the binary checks both files and says it
 does not draw yet). The user's `style.css` parses with no error.
 
-Next, in order: the drawing on `compositor/toolkit` (on main) with
-`compositor/text` and `compositor/image` as they land -- the bar's layer
+Next, in order: the drawing on `userland/compositor/toolkit` (on main) with
+`userland/compositor/text` and `userland/compositor/image` as they land -- the bar's layer
 surface per matching output, the pointer (hover, `:hover` restyle, clicks,
 scrolls, the hand cursor), tooltips as `xdg_popup`s through
 `zwlr_layer_surface_v1.get_popup`; hyprix's server refused a parentless
@@ -282,7 +282,7 @@ Then `xtask` installs `/bin/waybar`, and a `test-compositor` boot runs it
 against a test config whose `output` names QEMU's screen, compared as
 `test-compositor` compares its boots. Then a PulseAudio-protocol client.
 
-A text measurement to settle when `compositor/text` lands: the user's
+A text measurement to settle when `userland/compositor/text` lands: the user's
 comment measures `line_height='2.0'` as 10.5 px over and 11.5 under at
 their `font-size: 15px`; clients-base measured 8.41 each way at 15 px and
 11.21 at 15 pt. GTK3 gives Pango a CSS `px` size as `px × PANGO_SCALE × 72

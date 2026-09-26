@@ -24,7 +24,7 @@ path = "src/bin/probe.rs"
 
 [dependencies]
 # The rasteriser the bar's CSS boxes are drawn with: the one version the
-# workspace pins (compositor/render's reasons), so the foundation's glyphs
+# workspace pins (userland/compositor/render's reasons), so the foundation's glyphs
 # and images and this crate's boxes are one tiny-skia.
 tiny-skia = { version = "=0.12.0", default-features = false, features = ["std", "simd"] }
 

@@ -5,7 +5,7 @@
 //! `.socket.sock` (a request per connection: `j/monitors` answers JSON) and
 //! `.socket2.sock` (a line per event: `activewindow>>class,title`), with
 //! `/tmp/hypr` when `$XDG_RUNTIME_DIR/hypr` is not there. hyprix makes both
-//! and hands its children the signature (`compositor/hyprix/src/control.rs`).
+//! and hands its children the signature (`userland/compositor/hyprix/src/control.rs`).
 //!
 //! The module listens for `activewindow`, `closewindow`, `movewindow`,
 //! `changefloatingmode` and `fullscreen`, and on each asks three things,

@@ -7128,7 +7128,7 @@ QEMU with independent workspaces; a plugin-shaped extension loaded from the
 configuration.
 
 **Begun -- waybar in Rust, the part that needs no screen (2026-09-26).**
-`compositor/waybar` reads the user's own `~/.config/waybar/config.jsonc`
+`userland/compositor/waybar` reads the user's own `~/.config/waybar/config.jsonc`
 and `style.css` as waybar does: jsoncpp's JSONC, `src/config.cpp`'s search
 path, `include` merging and `output` matching, libfmt's format strings, a
 GTK3 stylesheet with `@define-color`, `alpha()`, `calc()`, layered `url()`
@@ -7138,7 +7138,7 @@ the painter, and every module the user's file names (`custom/*`,
 `clock`), each tested against upstream's own rules with a fake host.
 `waybar-probe` reads the real files on the host: the stylesheet parses
 without an error, and only `#tray menu` matches nothing. The drawing waits
-on `compositor/toolkit`, `text` and `image` reaching main.
+on `userland/compositor/toolkit`, `text` and `image` reaching main.
 
 **Where the exit stands (reviewed 2026-09-21).** The existing exit criterion
 is met: `cargo xtask test-compositor` covers the non-GPU path on x86-64 and
