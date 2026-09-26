@@ -879,6 +879,131 @@ negative control: put `unmap_in`'s old callback back (scratch), and stage 4
 must stop at *"an unmap gave back the tables it emptied before its
 shootdown"*.
 
+## W-15 — The Linux personality's heap, charged to the job
+
+**Open.** Closes F-37. What follows is the design as argued before the code;
+an "As built" section follows once it is.
+
+W-13 charges a job for its programs' frames and page tables, their native
+objects and their tasks. What it leaves out is the kernel heap a program
+drives through the Linux personality and the libraries under it: an open
+file, a tmpfs inode, a pipe's buffer, a region of its address space, a
+message in a socket's queue. Each is bounded by the machine's memory and by
+nothing that belongs to one job, so one job can take that heap from every
+other, and the load's allocations -- still infallible, AoU-5 -- stop the
+machine when it is gone (V-05).
+
+### The audit
+
+Every allocation in the load ring and its libraries that a program can make
+*and keep* after its call returns, with the count in the program's hands,
+was listed on 2026-09-26 by reading each path from the system call down.
+Transient allocations freed before the call returns do not accumulate and
+are not listed. Grouped by what is held:
+
+| Kind | Where | Bound before this |
+|---|---|---|
+| Open file descriptions | `libs/vfs` `OpenFile::new`, `with_io` | descriptors per process -- and none in flight, in a mapping, or behind an epoll registration |
+| Dentries, anonymous-file locations, mounts | `libs/vfs` `Dentry::new`, `Location::detached`, `Namespace::mount` | a 4,096-entry cache, plus whatever an open file or a working directory pins |
+| tmpfs inodes, names, symbolic links, instances; a file's VMO | `libs/vfs/src/tmpfs.rs`, `fs/pages.rs` | none: `/tmp` and `/dev/shm` are mode 1777 |
+| Pipes and their buffers | `fs/pipe.rs`, `libs/vfs/src/pipe.rs` | 64 KiB a pipe |
+| `AF_UNIX` sockets, their queues, descriptors in flight | `fs/socket.rs`, `libs/vfs/src/socket.rs` | 212,992 bytes of payload a direction, but an empty record counts one byte and holds a hundred, and a message carrying 253 descriptors counts one |
+| epoll sets and registrations; eventfd, timerfd, signalfd | `fs/epoll.rs`, `fs/eventfd.rs`, `fs/timerfd.rs`, `fs/signalfd.rs` | descriptors -- but a closed file's registration stays until the next wait |
+| Regions of an address space; a shared file mapping's records | `libs/vma`, `user/space.rs` | the address space: 2^35 pages. No `max_map_count`, and a shared file mapping makes no VMO for the object limit to see |
+| Record and whole-file locks | `syscall/flock.rs` | none: one owner may lock any number of disjoint ranges |
+| Descriptor tables | `libs/vfs/src/fd.rs` | `RLIMIT_NOFILE` a process |
+| A process's recorded program and arguments | `syscall/process.rs` `record_exec` | 256 KiB a process |
+| `/proc` and cgroupfs snapshots | `fs/procfs.rs` | one a descriptor, sized by what it shows |
+| Internet sockets and their queues | `net/socket.rs`, `libs/net`, `libs/nettcp` | 64 KiB each way a connection, 212,992 bytes of payload a datagram socket -- but an empty datagram counts nothing |
+| Netlink queues | `net/netlink` | 256 KiB a socket |
+
+And five that are not a missing charge but a leak or a missing check, which
+no charge would fix: a closed TCP listener leaks the connections it had not
+accepted, with their receive buffers; a process's list of tasks is never
+pruned, so a loop of threads grows it for the process's life; netlink adds
+addresses and routes to the global tables with no privilege check; an empty
+datagram is queued without counting against its socket's capacity; and a
+btrfs root's metadata changes are held in memory for up to the commit
+interval without counting toward the commit threshold.
+
+### The choice: bytes, charged at the site, to memory
+
+(a) A kernel-memory counter charged at each site, folded into the job's
+memory limit as Linux folds `kmem` into `memory.max`; or (b) a count limit
+per kind. (b) is simpler at each site and wrong in aggregate: twelve limits
+that each allow a job its share still let it take twelve shares, and a job's
+supervisor has no single number to set. (a) is what cgroup v2 does, and what
+a Linux program expects `memory.max` to mean: `memory.current` counts kernel
+memory, and a charge past `memory.max` fails the allocation with `ENOMEM`.
+**Chosen: (a)**, with (b) only where bytes cannot be attributed to a job --
+the global tables netlink writes, which get the privilege check Linux has.
+
+* **One counter, in bytes.** The memory resource W-13 counts in pages is
+  counted in bytes, a frame charging 4,096, so heap and frames meet one
+  limit exactly and the compare-and-swap argument holds unchanged. A second
+  count, kernel bytes alone, is kept beside it for `memory.stat`'s `kernel`
+  line, and never limited.
+* **The token.** A new crate, `libs/kmem`, holds a `Charge`: a job's slot
+  and a byte count, which uncharges as it drops. The object it pays for
+  holds it, so every path that frees the object frees the charge, as W-13's
+  object tokens do. It is a crate and not a kernel type because half the
+  sites are in libraries (`ferrix-vfs`, `ferrix-vma`, `ferrix-net`) that
+  cannot name the kernel. The kernel installs the account it calls through
+  at boot; a library's host tests install a recording one; with none, a
+  charge is to nobody, which is also what the root job's programs get.
+* **What a charge is worth.** What the heap gave, not what was asked: the
+  size class a request is served from, or the pages of a large one, from
+  `libs/heap`'s own arithmetic. A buffer is charged at its capacity, not its
+  length, since that is what it holds.
+* **Who pays.** The job of the task whose call made the object, as Linux's
+  `GFP_KERNEL_ACCOUNT` charges `current`'s memory cgroup. A buffer that
+  grows later is charged where its object is: a pipe's or socket queue's
+  growth to the job that made the pipe or the socket, as Linux charges a
+  socket's buffers to the cgroup its socket was made in; a message's bytes
+  to its writer; a connection a listener accepts, to the listener's job.
+* **An object outlives its job, or moves to another.** It stays charged to
+  the job that made it until it goes, as a frame does and as Linux's
+  `obj_cgroup` does: the charge holds the job's slot, so a gone job's
+  counters stay exact until the last thing charged to it is freed. A
+  descriptor passed over a Unix socket (`SCM_RIGHTS`) stays its opener's;
+  the message that carries it -- the list of files and the queue entry -- is
+  the sender's, which is what Linux charges (`scm_fp_dup` is
+  `GFP_KERNEL_ACCOUNT` in the sender).
+* **Refused is `ENOMEM`**, from the call that would have made or grown the
+  object, with nothing changed: a charge is made before the first mutation,
+  so a rename refused its new name keeps its old one. A write that has
+  queued some bytes reports those. The network's input path cannot answer
+  anyone: a segment or datagram whose charge is refused is dropped, as one
+  arriving at a full buffer is, and TCP's retransmission makes that
+  back-pressure.
+
+### What is argued rather than charged
+
+* **Per-page bookkeeping of charged frames**: a VMO's page list entry is a
+  few dozen bytes per 4,096-byte frame already charged, so it is bounded by
+  the memory limit at under one per cent.
+* **Futex waiters, signal state, a thread's kernel stack and queue nodes**:
+  one per task, bounded by the task limit.
+* **Pseudoterminals**: 256 pairs on the machine, and a few kilobytes each.
+* **The dentry cache** keeps up to 4,096 dentries nobody holds, charged to
+  whoever looked them up. A job whose limit they take meets `ENOMEM` where
+  Linux would reclaim them; reclaim is M1's rest (`docs/CGROUPS.md`).
+* **The load's own infallible allocations** stay infallible (AoU-5). What
+  changes is that a limited job cannot drive the heap to exhaustion through
+  them.
+
+### Evidence
+
+A boot check per kind: a job at a memory limit is refused one more of each
+-- an open file, a tmpfs file, a name, a pipe and its buffer, a socket and
+a message, a descriptor in flight, an epoll registration, a region, a lock
+range -- while a sibling makes the same; and when the job's objects go, its
+counter reads zero and its slot is given back. A `test-vfs` command fills
+`/tmp` from a shell in a cgroup with a small `memory.max` until creation is
+refused, reads `memory.current` and `memory.stat` against it, removes what
+it made and sees the charge go. Negative controls in scratch. Cost timed
+under KVM: open and close, a pipe write and read, a tmpfs create and write.
+
 ---
 
 ## Suggested order
