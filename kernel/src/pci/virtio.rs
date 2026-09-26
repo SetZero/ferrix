@@ -693,12 +693,14 @@ const COMPLETION_GRACE_NANOS: u64 = 20_000_000;
 /// DMA.
 ///
 /// The unit's fault record is cleared first, because VT-d has a single record
-/// and drops a second fault from the same device while it is full. The answer
-/// is the unit's record, not the device's completion: QEMU's device completes
-/// the request with the length it was given even though its write was refused
-/// (see [`Faulted`]), so a completion is held until the deadline and counts
-/// against the domain only if no fault is recorded by then. The caller resets
-/// the device either way.
+/// and drops a second fault from the same device while it is full. Any fault
+/// read here that is not the probe's is counted as stray by the domain, and
+/// fails the boot in `iommu::audit_faults`. The answer is the unit's record,
+/// not the device's completion: QEMU's device completes the request with the
+/// length it was given even though its write was refused (see [`Faulted`]),
+/// so a completion is held until the deadline and counts against the domain
+/// only if no fault is recorded by then. The caller resets the device either
+/// way.
 ///
 /// # Errors
 ///
@@ -718,7 +720,9 @@ fn probe_out_of_domain(
     if domain.resolve(PROBE_PAGE).is_some() {
         return Ok(Err("the probe page is mapped in the domain"));
     }
-    domain.clear_faults();
+    // Before the doorbell, so a fault for it is never counted as stray, even
+    // one the unit records after this has stopped reading.
+    domain.provoke(PROBE_PAGE);
     if queue
         .add_chain(&[Buffer::writable(PROBE_PAGE, REQUEST)])
         .is_err()

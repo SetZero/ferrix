@@ -316,6 +316,10 @@ fn check_timer_and_start_clocks(info: &BootInfo) {
 /// skipped.
 fn say_booted() {
     if checks::run() {
+        // Last before the marker, so every driver the boot starts has run: a
+        // DMA fault its unit recorded and nothing provoked fails the boot
+        // here rather than sitting unread in the unit's record.
+        check_dma_faults();
         println!("{SUCCESS_MARKER} stages 1-12");
     } else {
         println!(
@@ -1579,6 +1583,34 @@ fn bring_up_processors(view: &BootView<'_>) -> &'static smp::Topology {
 /// Halts rather than returning, for the reason `bring_up_processors` does:
 /// "stage 5 failed" would say nothing about which of four checks, on which of
 /// a thousand threads, did.
+/// Stage 10: no IOMMU recorded a fault that no check provoked.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_dma_faults() {
+    let audit = iommu::audit_faults();
+    println!(
+        "  iommu    {} DMA faults recorded that no check provoked, across {} translating units; \
+         {} late faults from the out-of-domain probe",
+        audit.stray, audit.units, audit.provoked,
+    );
+    if audit.stray == 0 {
+        return;
+    }
+    if let Some(fault) = audit.first {
+        println!(
+            "  iommu    the first read here: stream {:#x}, page {:#x}, {}",
+            fault.stream,
+            fault.page,
+            if fault.write { "a write" } else { "a read" },
+        );
+    }
+    fatal!(
+        catalog::STAGE10_DMA_FAULT,
+        "stage 10 self-check failed: {} DMA faults no check provoked",
+        audit.stray
+    );
+}
+
 fn start_scheduler(cpus: &'static smp::Topology) {
     if let Err(problem) = sched::init(cpus) {
         fatal!(

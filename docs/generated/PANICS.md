@@ -72,6 +72,7 @@ Causes are listed most likely first.
 | [FX-1004](#fx-1004) | the block ring's control plane answered a driver wrongly |
 | [FX-1005](#fx-1005) | the ring-3 virtio-blk driver did not serve the test disk |
 | [FX-1006](#fx-1006) | devmgr could not be started, or did not report |
+| [FX-1007](#fx-1007) | an IOMMU faulted DMA that no check provoked |
 | [FX-1101](#fx-1101) | the btrfs disk did not mount and read back as the host wrote it |
 | [FX-1150](#fx-1150) | the net core did not carry a packet round its own loopback |
 | [FX-1151](#fx-1151) | the net ring did not carry a frame between the kernel and a driver |
@@ -1544,6 +1545,35 @@ whose driver died. The boot's block drivers come from it from then on.
 
 See: kernel/src/devmgr.rs; user/devmgr/src/main.rs; docs/DEVMGR.md;
 docs/ROADMAP.md stage 10.
+
+<a id="fx-1007"></a>
+
+## FX-1007 — an IOMMU faulted DMA that no check provoked
+
+Every PCI function sits in an IOMMU domain that maps only what its driver
+pinned, so a device that reaches for anything else is stopped by its unit, which
+records the stream, the page and whether it was a write. The one fault a boot
+provokes on purpose is the out-of-domain probe's, in `pci/virtio.rs`, which
+registers its stream and page with `Domain::provoke` before ringing the
+doorbell. `iommu::audit_faults`, last before the success marker and after every
+driver the boot starts has run, reads every unit's records and counts every
+other fault since translation went on: the isolation held, but something tried
+DMA it was not given, and a unit whose faults nobody reads would hide it.
+
+1. A driver gave its device an address it never pinned, or one it had already
+   unpinned: a buffer handed out before `Domain::pin` returned, or a descriptor
+   left in a ring after the pin behind it was given back.
+2. A device was left running across a reset or a driver's restart and completed
+   a stale descriptor into a domain that no longer maps its buffer.
+3. A domain lost a mapping it should hold: `Domain::unpin` or the unit's tables
+   removed more than was asked, or an IOTLB invalidation was missed on a pin, so
+   a unit in caching mode still answers from a stale not-present entry.
+4. The probe's fault arrived at a stream or page other than the ones it
+   registered, which is what FX-1001 once was: a fault record read out of order.
+
+See: kernel/src/iommu.rs audit_faults; kernel/src/pci/virtio.rs
+probe_out_of_domain; kernel/src/iommu/vtd.rs Unit::take_fault;
+xtask/src/dma_faults.rs; docs/certification/VULNERABILITY-ANALYSIS.md T.DMA.
 
 <a id="fx-1101"></a>
 

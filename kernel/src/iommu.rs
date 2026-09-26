@@ -48,6 +48,7 @@ use ferrix_pci::Address;
 use ferrix_sync::Once;
 
 use crate::device::{DeviceNode, Location};
+use crate::sync::SpinLock;
 use crate::{acpi, arch, fdt, mm, println};
 
 mod gate;
@@ -559,13 +560,29 @@ impl Domain {
 
     /// The next DMA fault the domain's unit recorded, for any device on it, or
     /// `None`. Taking it clears it, so the unit can record the next.
+    ///
+    /// A fault no check provoked is counted on the way, so that one taken and
+    /// then passed over still fails the boot in [`audit_faults`].
     pub(crate) fn take_fault(&self) -> Option<Fault> {
-        self.translation.take_fault()
+        let fault = self.translation.take_fault()?;
+        let _ = count_if_stray(fault);
+        Some(fault)
+    }
+
+    /// Clear the unit's faults, and say that this domain's device is about to
+    /// be made to write `page`, which the domain does not map, so the fault the
+    /// unit records for it is known for the check's own and not counted stray.
+    pub(crate) fn provoke(&self, page: u64) {
+        self.clear_faults();
+        if let Some(stream) = self.stream() {
+            record_provoked(stream, page);
+        }
     }
 
     /// Clear every fault the domain's unit holds, so the next one read is new.
     /// Bounded: a device faulting without end cannot keep the caller here.
-    pub(crate) fn clear_faults(&self) {
+    /// Nothing provoked what is cleared, so [`Domain::take_fault`] counts each.
+    fn clear_faults(&self) {
         for _ in 0..256 {
             if self.take_fault().is_none() {
                 return;
@@ -912,6 +929,103 @@ fn smmu_stream_for(
             map.stream.checked_add(offset)?,
         ))
     })
+}
+
+// ---------------------------------------------------------------------------
+// Faults
+// ---------------------------------------------------------------------------
+
+/// The accesses a check made fault on purpose, by stream and page: the
+/// out-of-domain probe's. A fault for one of these is the check working; any
+/// other is DMA a device attempted outside its domain, which is a driver
+/// handing its device an address it never pinned, or a device left running
+/// across a reset, and [`audit_faults`] fails the boot on it.
+static PROVOKED: SpinLock<Vec<(u32, u64)>> = SpinLock::new(Vec::new());
+
+/// Faults taken from a unit that nothing provoked: cleared before a check
+/// began, or read by one and not recognised. Counted here so that no fault is
+/// taken and then dropped unseen.
+static STRAY: AtomicU64 = AtomicU64::new(0);
+
+/// Record that `stream`'s device is about to be made to write `page`, which its
+/// domain does not map, so the fault the unit records for it is not stray.
+///
+/// Said on the console too, before the write: `xtask` holds every fault the
+/// emulated unit traces over a whole run, well past the boot, to these lines.
+fn record_provoked(stream: u32, page: u64) {
+    PROVOKED.lock().push((stream, page));
+    println!(
+        "  iommu    stream {stream:#x} is made to write page {page:#x} outside its domain, on purpose"
+    );
+}
+
+/// Whether a check provoked `fault`.
+fn provoked(fault: Fault) -> bool {
+    PROVOKED
+        .lock()
+        .iter()
+        .any(|&(stream, page)| fault.stream == stream && fault.page == page)
+}
+
+/// Count `fault` as stray unless a check provoked it, however late it
+/// arrives, and say whether it was.
+fn count_if_stray(fault: Fault) -> bool {
+    let stray = !provoked(fault);
+    if stray {
+        let _ = STRAY.fetch_add(1, Ordering::Relaxed);
+    }
+    stray
+}
+
+/// What [`audit_faults`] found.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct FaultAudit {
+    /// Units translating, whose records were read.
+    pub(crate) units: usize,
+    /// Faults a check provoked that were still recorded: the out-of-domain
+    /// probe's, arriving after it had stopped looking.
+    pub(crate) provoked: u64,
+    /// Faults nothing provoked, since translation was turned on.
+    pub(crate) stray: u64,
+    /// The first stray fault the audit itself read, if it read one.
+    pub(crate) first: Option<Fault>,
+}
+
+/// Empty every translating unit's fault records, and count every fault since
+/// translation went on that no check provoked.
+///
+/// A unit that faults a device's DMA stops it, and records why; if nothing
+/// reads the record, the isolation holds but the bug that attempted the DMA
+/// goes unseen. VT-d's fault event interrupt is left masked, so this is where
+/// the record is read: last in boot, after every driver the boot starts has
+/// run. Bounded per unit, as [`Domain::clear_faults`] is.
+pub(crate) fn audit_faults() -> FaultAudit {
+    let mut audit = FaultAudit::default();
+    if let Some(programmed) = PROGRAMMED.get() {
+        for unit in &programmed.vtd {
+            drain(|| unit.take_fault(), &mut audit);
+        }
+        for unit in &programmed.smmu {
+            drain(|| unit.take_fault(), &mut audit);
+        }
+    }
+    audit.stray = STRAY.load(Ordering::Relaxed);
+    audit
+}
+
+/// Read one unit's faults into `audit`, counting it.
+fn drain(mut take: impl FnMut() -> Option<Fault>, audit: &mut FaultAudit) {
+    audit.units += 1;
+    for _ in 0..256 {
+        let Some(fault) = take() else {
+            return;
+        };
+        if count_if_stray(fault) {
+            audit.first = audit.first.or(Some(fault));
+        } else {
+            audit.provoked += 1;
+        }
+    }
 }
 
 /// What the domain check found.

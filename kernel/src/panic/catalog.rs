@@ -1156,6 +1156,37 @@ pub(crate) static STAGE10_IOMMU: Explanation = Explanation {
           docs/ARCHITECTURE.md section 7; docs/ROADMAP.md stage 10",
 };
 
+/// For `check_dma_faults` in `main.rs`, when an IOMMU recorded a fault no
+/// check provoked.
+pub(crate) static STAGE10_DMA_FAULT: Explanation = Explanation {
+    code: "FX-1007",
+    title: "an IOMMU faulted DMA that no check provoked",
+    meaning: "Every PCI function sits in an IOMMU domain that maps only what its driver pinned, \
+              so a device that reaches for anything else is stopped by its unit, which records \
+              the stream, the page and whether it was a write. The one fault a boot provokes on \
+              purpose is the out-of-domain probe's, in `pci/virtio.rs`, which registers its \
+              stream and page with `Domain::provoke` before ringing the doorbell. \
+              `iommu::audit_faults`, last before the success marker and after every driver the \
+              boot starts has run, reads every unit's records and counts every other fault since \
+              translation went on: the isolation held, but something tried DMA it was not \
+              given, and a unit whose faults nobody reads would hide it.",
+    causes: &[
+        "A driver gave its device an address it never pinned, or one it had already unpinned: \
+         a buffer handed out before `Domain::pin` returned, or a descriptor left in a ring \
+         after the pin behind it was given back.",
+        "A device was left running across a reset or a driver's restart and completed a stale \
+         descriptor into a domain that no longer maps its buffer.",
+        "A domain lost a mapping it should hold: `Domain::unpin` or the unit's tables removed \
+         more than was asked, or an IOTLB invalidation was missed on a pin, so a unit in \
+         caching mode still answers from a stale not-present entry.",
+        "The probe's fault arrived at a stream or page other than the ones it registered, \
+         which is what FX-1001 once was: a fault record read out of order.",
+    ],
+    see: "kernel/src/iommu.rs audit_faults; kernel/src/pci/virtio.rs probe_out_of_domain; \
+          kernel/src/iommu/vtd.rs Unit::take_fault; xtask/src/dma_faults.rs; \
+          docs/certification/VULNERABILITY-ANALYSIS.md T.DMA",
+};
+
 /// For `check_devices` in `main.rs`, when `device::publish` fails.
 pub(crate) static STAGE10_DEVICES: Explanation = Explanation {
     code: "FX-1002",
@@ -1938,6 +1969,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE10_RING,
     &STAGE10_DRIVER,
     &STAGE10_DEVMGR,
+    &STAGE10_DMA_FAULT,
     &STAGE11_MOUNT,
     &NET_CORE,
     &NET_RING,
