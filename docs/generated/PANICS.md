@@ -94,11 +94,13 @@ Causes are listed most likely first.
 
 When a kernel mapping is removed or made less permissive on x86-64,
 `flush_tlb_everywhere` flushes this processor's TLB, interrupts every other
-online processor, and waits up to a second for each to flush its own. A
-processor that has not answered may still translate through the old entry, so
-the memory behind it cannot safely be freed or the narrowed permission relied
-on, and the kernel stops instead. AArch64 and ARMv7-A invalidate every
-processor's TLB in hardware and never wait here.
+online processor, and waits for each to flush its own: at least a second, and
+until it has asked 16,777,216 times, a count that takes longer the slower the
+machine runs (about 1.8 s under KVM, 5 s under QEMU's tcg, 32 s under its
+coverage plugin). A processor that has not answered may still translate through
+the old entry, so the memory behind it cannot safely be freed or the narrowed
+permission relied on, and the kernel stops instead. AArch64 and ARMv7-A
+invalidate every processor's TLB in hardware and never wait here.
 
 1. The named processor was spinning with interrupts masked on a lock this one
    held when it asked for the shootdown, so it could not take the interrupt;
@@ -108,22 +110,27 @@ processor's TLB in hardware and never wait here.
    interrupt.
 3. Inter-processor interrupts sent through the local APIC are not reaching the
    named processor; the sends here ignore the APIC's own refusal.
+4. A host that stopped running the named virtual processor, and kept running
+   this one, for longer than the count takes, which is the host's fault and not
+   the kernel's.
 
-See: kernel/src/smp.rs flush_tlb_everywhere; docs/ROADMAP.md stage 4.
+See: kernel/src/smp.rs flush_tlb_everywhere; kernel/src/smp.rs patience;
+docs/ROADMAP.md stage 4.
 
 <a id="fx-0002"></a>
 
 ## FX-0002 — a processor never left a read-side section
 
 `synchronize` waits for a grace period by interrupting every other online
-processor and waiting up to five seconds for each to take the interrupt, which
-none can do inside a read-side section, because a section masks interrupts. A
-writer frees what it unpublished only after that wait, so a processor that never
+processor and waiting for each to take the interrupt -- at least five seconds,
+and until it has asked five times as often as a shootdown does -- which none can
+do inside a read-side section, because a section masks interrupts. A writer
+frees what it unpublished only after that wait, so a processor that never
 answers may still be reading it, and the kernel stops rather than free memory
 that is in use.
 
-1. A read-side section on the named processor ran for more than five seconds, or
-   waited for something, which a section must never do.
+1. A read-side section on the named processor ran for more than five seconds and
+   that many polls, or waited for something, which a section must never do.
 2. The named processor was spinning with interrupts masked on a lock this one
    held when it called `synchronize`.
 3. The named processor is halted or stuck with interrupts masked, so it takes no
@@ -139,11 +146,11 @@ docs/ROADMAP.md stage 4.
 On x86-64 one processor at a time runs a TLB shootdown, and
 `flush_tlb_everywhere` waits for the turn while answering the shootdowns ahead
 of it. Every holder takes a new generation as soon as it has the turn, and gives
-up on the machine after a second of waiting for the other processors, so a
-generation that stands still for four seconds while the turn is held means its
-holder is no longer running. Nothing would ever release the turn, and the memory
-this processor's caller is about to free could never be made safe, so the kernel
-stops instead of waiting forever.
+up on the machine after a second and its count of polls waiting for the other
+processors, so a generation that stands still for four times both while the turn
+is held means its holder is no longer running. Nothing would ever release the
+turn, and the memory this processor's caller is about to free could never be
+made safe, so the kernel stops instead of waiting forever.
 
 1. The task holding the turn was preempted while holding it and has not run
    since, because its processor stopped taking interrupts or never gives it a

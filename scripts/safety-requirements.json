@@ -169,6 +169,14 @@
         "kernel/src/vmap.rs::allocate_stack",
         "kernel/src/main.rs::check_stacks"
       ]
+    },
+    {
+      "id": "FM-10",
+      "mitigated_by": [
+        "kernel/src/smp.rs::wait_for",
+        "kernel/src/smp.rs::patience",
+        "kernel/src/smp.rs::take_turn"
+      ]
     }
   ],
   "assumptions_of_use": [

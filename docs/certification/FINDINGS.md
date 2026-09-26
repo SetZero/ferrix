@@ -464,7 +464,8 @@ The finding stands on that residual.
 
 ### F-20 — no hazard analysis and no risk management file
 **Closed at the element level 2026-09-25** by
-[SAFETY-MANUAL.md](SAFETY-MANUAL.md) §5: nine failure modes of the element,
+[SAFETY-MANUAL.md](SAFETY-MANUAL.md) §5: nine failure modes of the element
+(ten since 2026-09-26, FM-10 the shootdown wait),
 each with its effect at the element boundary, its detection, its mitigation and
 its residual. FM-9 — kernel stack overflow with no guard page and no depth
 bound — is named as the least-defended.

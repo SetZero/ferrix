@@ -579,16 +579,75 @@ static SHOOTING: SpinLock<()> = SpinLock::new(());
 /// Shootdowns run, for the boot log.
 static SHOOTDOWNS: AtomicU64 = AtomicU64::new(0);
 
-/// How long a shootdown waits for every processor before calling it fatal.
+/// How long a shootdown waits for every processor before calling it fatal, at
+/// the least: see [`patience`] for the other half of the bound.
 const SHOOTDOWN_TIMEOUT_NANOS: u64 = 1_000_000_000;
 
-/// How long the shootdown generation may stand still while a processor waits
-/// for its turn before the holder is taken to have stopped.
+/// How many times a waiter asks, for each second of its wall-clock bound,
+/// before a processor that has not answered is taken to be stuck.
 ///
-/// A holder gives up on the machine after [`SHOOTDOWN_TIMEOUT_NANOS`] of its
-/// own waiting, so anything past that is a holder not running at all. Four
-/// times it, because a holder preempted on a host with more virtual
-/// processors than real ones can lose whole seconds without being stuck.
+/// See [`patience`]. What a shootdown's count came to on the development
+/// host, a processor made to stop answering with interrupts masked
+/// (2026-09-26): 1.8 s under KVM, 5.1 s under QEMU's `tcg`, 32 s under
+/// `tcg` with the coverage plugin -- against the one second every one of them
+/// used to get.
+const POLLS_PER_SECOND: u64 = 1 << 24;
+
+/// How many polls a waiter makes between readings of the clock.
+///
+/// A poll is a few loads and an interrupt mask round trip; a reading of the
+/// clock can be three loads from the HPET, each a trip out of the guest under
+/// a hypervisor and a device access under QEMU's global lock under `tcg` --
+/// the lock the processor being waited for needs to take its interrupt. Read
+/// every poll, the clock was nineteen microseconds of each one under KVM, and
+/// the count would have measured the HPET rather than the guest.
+const CLOCK_EVERY: u64 = 256;
+
+/// The polls a wait whose wall-clock bound is `timeout` makes before it may
+/// give up: [`POLLS_PER_SECOND`] for each whole second.
+///
+/// **Why a wait is bounded twice, and why the count is the bound that
+/// matters.** Waiting longer never makes a shootdown or a grace period
+/// unsafe -- nothing is freed and no permission is relied on until every
+/// processor has answered -- so the bound's one job is to turn a processor
+/// that will never answer into a report, and never to call a live one stuck.
+/// A wall-clock bound cannot do the second. It measures the host, not the
+/// guest: an emulated machine runs its code tens of times slower than the
+/// processor it emulates, and slower again under an instrumenting plugin,
+/// which also serialises every virtual processor on one lock per translated
+/// block; a section with interrupts masked that takes microseconds on a
+/// board takes a second there, and a virtual processor the host does not run
+/// for a while answers nothing in the meantime. Under the coverage plugin a
+/// second was not enough (`test-compositor`, 2026-09-26).
+///
+/// A count of the waiter's own polls is a clock in the guest's units. Each
+/// poll is the same short run of instructions, so whatever slows the machine
+/// slows the count with it, and while the waiter itself is not running -- a
+/// task in [`synchronize`] preempted, or any waiter's virtual processor
+/// descheduled by the host -- the count stands still where the wall clock
+/// would run on. A processor that is stuck answers no number of polls, so it
+/// is still found; the count only decides how long finding it takes. The
+/// wall-clock half keeps a wait on hardware fast enough to make the count
+/// in less than the old bound from ending sooner than it did before.
+///
+/// What it does not cover: a host that keeps running the waiter and stops
+/// running the processor it waits for. The count then passes at full speed
+/// and the wait ends, as the wall clock would have, only later. No guest can
+/// see that from inside without the host's help (KVM's steal time would be
+/// that help, and is not read here); `docs/BACKLOG.md` keeps the row.
+const fn patience(timeout: u64) -> u64 {
+    POLLS_PER_SECOND.saturating_mul(timeout / 1_000_000_000)
+}
+
+/// How long the shootdown generation may stand still while a processor waits
+/// for its turn before the holder is taken to have stopped, at the least; the
+/// waiter must also have asked [`patience`] of it times.
+///
+/// A holder gives up on the machine after [`SHOOTDOWN_TIMEOUT_NANOS`] and
+/// its own polls' worth of waiting, so anything past that is a holder not
+/// running at all. Four times both, because a holder preempted on a host with
+/// more virtual processors than real ones can lose whole seconds without
+/// being stuck.
 const TURN_TIMEOUT_NANOS: u64 = 4 * SHOOTDOWN_TIMEOUT_NANOS;
 
 /// How often a processor waiting on all the others re-sends its interrupt.
@@ -715,22 +774,31 @@ fn shootdown_waits_for_others() {
 fn take_turn() -> impl Sized {
     let mut seen = TLB_GENERATION.load(Ordering::SeqCst);
     let mut since = crate::timer::now_nanos();
+    let mut polls: u64 = 0;
     loop {
         if let Some(turn) = SHOOTING.try_lock() {
             break turn;
         }
         halt_if_stopping();
         as_this_cpu(service_tlb);
+        polls = polls.saturating_add(1);
+        if !polls.is_multiple_of(CLOCK_EVERY) {
+            spin_loop();
+            continue;
+        }
         let generation = TLB_GENERATION.load(Ordering::SeqCst);
         let now = crate::timer::now_nanos();
+        let stood = now.saturating_sub(since);
         if generation != seen {
             seen = generation;
             since = now;
-        } else if now.saturating_sub(since) > TURN_TIMEOUT_NANOS {
+            polls = 0;
+        } else if stood > TURN_TIMEOUT_NANOS && polls > patience(TURN_TIMEOUT_NANOS) {
             crate::panic::fatal!(
                 crate::panic::catalog::SHOOTDOWN_TURN_TIMEOUT,
-                "no shootdown started for {} ms while this processor waited for its turn",
-                TURN_TIMEOUT_NANOS / 1_000_000
+                "no shootdown started for {} ms while this processor waited for its turn, \
+                 asking {polls} times",
+                stood / 1_000_000
             );
         }
         spin_loop();
@@ -746,10 +814,12 @@ fn take_turn() -> impl Sized {
 /// other processors' shootdowns — two processors each waiting for the other
 /// would otherwise wait forever — and answers for this processor itself if the
 /// waiting task has moved to one the interrupt was not sent to. It calls
-/// `kick` to re-send its interrupt every [`KICK_NANOS`]. After `timeout` it
-/// gives up on the machine: a processor that never answers is one whose TLB
-/// or whose read-side section nothing can vouch for any more, and carrying on
-/// would be carrying on regardless.
+/// `kick` to re-send its interrupt every [`KICK_NANOS`]. Once `timeout` has
+/// passed *and* it has asked [`patience`] times, it gives up on the machine: a
+/// processor that never answers is one whose TLB or whose read-side section
+/// nothing can vouch for any more, and carrying on would be carrying on
+/// regardless. Both, because `timeout` alone measures the host rather than
+/// the guest; [`patience`] argues it.
 #[expect(
     clippy::too_many_arguments,
     reason = "three callers differ in exactly these; a struct would name each once more"
@@ -766,13 +836,26 @@ fn wait_for(
 ) {
     let started = crate::timer::now_nanos();
     let mut kicked = started;
+    let needed = patience(timeout);
+    let mut polls: u64 = 0;
     for cpu in topology.cpus.iter().filter(|cpu| waited(cpu)) {
         while !done(cpu) {
             halt_if_stopping();
             as_this_cpu(answer);
+            polls = polls.saturating_add(1);
+            if !polls.is_multiple_of(CLOCK_EVERY) {
+                spin_loop();
+                continue;
+            }
             let now = crate::timer::now_nanos();
-            if now.saturating_sub(started) > timeout {
-                crate::panic::fatal!(*entry, "processor {} never {what}", cpu.logical);
+            let waited = now.saturating_sub(started);
+            if waited > timeout && polls > needed {
+                crate::panic::fatal!(
+                    *entry,
+                    "processor {} never {what}: no answer in {} ms, asked {polls} times",
+                    cpu.logical,
+                    waited / 1_000_000
+                );
             }
             if now.saturating_sub(kicked) > KICK_NANOS {
                 kick();

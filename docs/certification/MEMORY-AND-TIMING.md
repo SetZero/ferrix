@@ -119,6 +119,26 @@ Real, and narrower than a WCET:
 * **Preemptible kernel**, so a long section delays rather than blocks.
 * **Interrupts that cannot steal unaccounted time.**
 
+### 2.2a The one bound the item puts on its own waiting
+
+A processor that interrupts the others and waits for each to answer -- a TLB
+shootdown or a grace period, `kernel/src/smp.rs` `wait_for` and `take_turn` --
+gives up and stops the machine (FX-0001 to FX-0003) if one never answers.
+That bound is a liveness diagnosis, not a safety property: waiting longer never
+frees memory early, so its one job is to report a processor that will never
+answer without ever calling a live one stuck.
+
+Until 2026-09-26 it was one second of wall-clock time, and that measured the
+host rather than the guest. Under QEMU's coverage plugin, which runs every
+translated block through one process-wide lock, `test-compositor` stopped on
+FX-0001 with nothing stuck. The bound is now two conditions together: the
+wall-clock floor it always had, and a count of the waiter's own polls, which
+slows exactly as the machine does and stands still while the waiter is not
+running. A processor made to stop answering is still found: in 1.8 s under
+KVM, 5.1 s under `tcg` and 32 s under the plugin. The residual is a host that
+starves one virtual processor while it runs the waiter; that ends the wait
+early, which costs availability and never integrity.
+
 ### 2.3 What is missing, per standard
 
 * **DO-178C DAL C** does not require WCET as such, but does require that

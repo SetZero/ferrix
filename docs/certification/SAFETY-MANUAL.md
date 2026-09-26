@@ -195,6 +195,7 @@ cause.
 | FM-7 | A partition exhausts memory | safe state entered, service lost | allocation failure | job quotas | unquota'd paths exist (V-05, AoU-5) |
 | FM-8 | A partition is starved of processor time | ASR-8 violated | none | EEVDF eligibility, EDF admission | no WCET, so no bound is provable (AoU-4) |
 | FM-9 | Kernel stack overflow | page fault at the instruction that overflowed | **guard page below every kernel stack**, and a boot check that the guard is unmapped | `vmap` reserves an unmapped page on each side of every allocation; no recursion in the element | the loader-provided boot stack is not guarded (early boot only) |
+| FM-10 | A processor stops answering a TLB shootdown or grace period (x86-64) | none while the wait lasts: nothing is freed and no narrowed permission relied on until every processor answers; then the safe state (FX-0001, FX-0002, FX-0003) | `smp::wait_for` and `take_turn`: a wall-clock floor (1 s, 5 s) **and** a count of the waiter's own polls, which stretches with the emulator's slowness | the count is in guest units, so a slow machine is not called stuck; a stuck processor answers no count and is still found (negative control: 1.8 s under KVM, 5.1 s under `tcg`, 32 s under the coverage plugin) | a host that stops running one virtual processor and keeps running the waiter can still end the wait early: availability lost, never integrity |
 
 **FM-9 was recorded as the worst entry in this table and that was wrong.**
 Every kernel stack is guard-paged at both ends: `crate::vmap` reserves an

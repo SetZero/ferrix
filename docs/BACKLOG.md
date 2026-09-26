@@ -379,7 +379,13 @@ can lose whole seconds without being stuck". The processors a shootdown
 waits on get only `SHOOTDOWN_TIMEOUT_NANOS`, one second, and a preempted
 virtual processor loses that time just the same. The fix to try first is the
 same room for both, or Linux's unbounded wait with a warning; then run
-stage 20's plan again. Logs:
+stage 20's plan again. **Advanced 2026-09-26:** both waits now also need a
+count of the waiter's own polls (`smp::patience`), which a slow emulator
+stretches and a descheduled waiter does not spend: 1.8 s under KVM, 5.1 s
+under `tcg`, 32 s under the coverage plugin for a processor that really is
+stuck. A host that stops running the processor waited for while it runs the
+waiter still ends the wait, only later; KVM's steal time is what would see
+that, and is the next thing to try if the plan stops on FX-0001 again. Logs:
 `~/ferrix-logs/fx0001/2026-09-24-selfhost-plan-smp8-454eaab{,-2}.log` on
 nazuna.
 
