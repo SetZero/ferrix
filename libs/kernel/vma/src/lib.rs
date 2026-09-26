@@ -375,13 +375,18 @@ pub struct Vma {
     pub flags: VmaFlags,
     /// What the pages are backed by, taken at the region's first page.
     pub backing: Backing,
-    /// Copy-on-write: the pages are shared read-only with another address
-    /// space, and a write fault must copy the page before letting the write
-    /// through. Set by [`AddressSpace::clone_for_fork`] on both sides.
+    /// Copy-on-write: the pages may be shared read-only with another address
+    /// space, and a write fault must copy a page someone else holds before
+    /// letting the write through. Set by [`AddressSpace::clone_for_fork`] on
+    /// both sides, and by [`AddressSpace::protect`] on a private region it
+    /// makes writable, which a fork may have shared while it was read-only.
     ///
     /// This is a field of the region rather than of [`VmaFlags`] so that
     /// `mprotect`, which replaces the flags wholesale, cannot clear it and let
-    /// a child write into pages its parent can still see.
+    /// a child write into pages its parent can still see. Set where it need
+    /// not be, it costs a fault that copies nothing: a page nobody else holds
+    /// is taken in place. So two regions differing only in it merge, and the
+    /// merged one keeps it.
     pub cow: bool,
 }
 
@@ -408,7 +413,6 @@ pub struct Unmapping {
 fn mergeable(left: &Vma, right: &Vma) -> bool {
     left.range.end == right.range.start
         && left.flags == right.flags
-        && left.cow == right.cow
         && contiguous_backing(left.backing, right.backing, left.range.bytes())
 }
 
@@ -903,6 +907,17 @@ impl AddressSpace {
         let last = self.first_beyond(range.end);
         for region in self.regions.get_mut(first..last).into_iter().flatten() {
             region.flags = flags;
+            // A private region made writable may hold frames a fork left in
+            // another space: read-only at the fork, it was not marked then,
+            // and its first write would land in the frame the other space
+            // still reads. Marked now, that write copies a frame someone else
+            // holds and takes one nobody else does in place, as a region
+            // writable at the fork does. Chromium on AArch64 met it: glibc's
+            // stack guard lives in ld.so's RELRO page there, and a child's
+            // `mprotect` of that page wrote its guard into its parent's.
+            if needs_cow(region) {
+                region.cow = true;
+            }
         }
         self.merge_span(first, last);
         Ok(())
@@ -1138,6 +1153,7 @@ impl AddressSpace {
         let absorbed = self.regions.remove(next);
         if let Some(left) = self.regions.get_mut(index) {
             left.range.end = absorbed.range.end;
+            left.cow |= absorbed.cow;
         }
         true
     }
