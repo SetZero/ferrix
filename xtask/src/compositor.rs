@@ -4925,6 +4925,341 @@ fn click_and_type(qmp: &mut Qmp, watching: &mut Watching<'_>, dump: &Path) -> Re
     emptiest.ok_or_else(|| Error::new("no screen was taken after the click"))
 }
 
+/// The page `bench-chrome` opens: a box turning for ever, which Chrome
+/// draws sixty times a second if it can, and a thousand lines to scroll
+/// through and point at. No spaces, for [`CHROME_WINDOW_PAGE`]'s reason.
+const BENCH_PAGE: &str = "data:text/html,<style>@keyframes%20t{to{transform:rotate(360deg)}}\
+%23t{width:120px;height:120px;background:%23c30;animation:t%202s%20linear%20infinite}\
+p:hover{background:%23fff}</style><body%20style=background:%23fc0;font-family:sans-serif>\
+<div%20id=t></div><script>for(let%20i=0;i<1000;i++)document.body.insertAdjacentHTML(\
+'beforeend','<p>Line%20'+i+'%20of%20the%20benchmark,%20long%20enough%20to%20wrap%20a%20little\
+%20and%20be%20pointed%20at.</p>')</script>";
+
+/// What the guest runs beside Chrome for `bench-chrome`: it waits for the
+/// browser to be up and settled, then says what every process has used and
+/// how much memory is taken at the start and after each phase the host
+/// drives. Phases are ten seconds on both sides of the wire.
+const BENCH_SCRIPT: &str = r#"PATH=/bin
+i=0
+while [ $i -lt 240 ]; do
+  n=0
+  for c in /proc/[0-9]*/comm; do
+    read -r x < $c 2>/dev/null && [ "$x" = chrome ] && n=$((n+1))
+  done
+  [ $n -ge 4 ] && break
+  sleep 1
+  i=$((i+1))
+done
+sleep 15
+snap() {
+  for s in /proc/[0-9]*/stat; do
+    read -r x < $s 2>/dev/null && echo "bench: $1 proc $x"
+  done
+  read -r x < /proc/stat
+  echo "bench: $1 $x"
+  while read -r k v u; do
+    case $k in MemTotal:|MemAvailable:|Shmem:) echo "bench: $1 mem $k $v";; esac
+  done < /proc/meminfo
+}
+echo "bench: start"
+snap start
+for p in idle scroll hover; do
+  sleep 10
+  snap $p
+done
+echo "bench: end"
+"#;
+
+/// The phases `bench-chrome` drives, in order, after the one it starts at.
+const BENCH_PHASES: [&str; 3] = ["idle", "scroll", "hover"];
+
+/// `cargo xtask bench-chrome`: Chrome in a window on the compositor, driven
+/// for thirty seconds -- left alone with its animation, scrolled, pointed
+/// at -- and what that cost: each phase's processor time by who spent it,
+/// the compositor's frames and their time, and the memory taken at the end.
+///
+/// A number to hold a change to, not a gate: it fails only when the boot
+/// never got as far as measuring.
+///
+/// # Errors
+///
+/// When the image cannot be built, QEMU cannot be run, or the guest never
+/// says what it measured.
+pub(crate) fn bench_chrome(args: &Args) -> Result<()> {
+    let arch = Arch::X86_64;
+    if args.arches()?.iter().any(|&asked| asked != arch) {
+        return Err(Error::new(
+            "bench-chrome runs on x86-64 only, as Chrome does",
+        ));
+    }
+    let mut args = args.clone();
+    args.data_image = Some(crate::chrome::volume()?);
+    if !args.memory_given {
+        args.memory = crate::chrome::MEMORY;
+    }
+    let busybox = gates_busybox(arch).ok_or_else(|| {
+        Error::new("bench-chrome needs ~/.local/share/ferrix/busybox/x86_64/bin/busybox.static")
+    })?;
+    let programs = Programs::build(arch)?;
+    let mut ports = crate::rustc::files(crate::chrome::LINKS);
+    ports.push(crate::ports::File {
+        path: "etc/bench.sh".to_owned(),
+        mode: 0o644,
+        content: crate::ports::Content::Bytes(BENCH_SCRIPT.as_bytes().to_vec()),
+    });
+    let carried = Carried {
+        busybox: Some(PathBuf::from(busybox)),
+        ports,
+        ..Carried::none()
+    };
+    let config = format!(
+        "# Carried into the initramfs by `cargo xtask bench-chrome`.\n{}exec-once = {}\nexec-once = /bin/busybox sh /etc/bench.sh\n",
+        crate::chrome::WINDOW_ENV,
+        crate::chrome::window_command(BENCH_PAGE)
+    );
+    let (image, kernel) = build_image(arch, &programs, &undithered(&config), carried, &args)?;
+    let port = free_port()?;
+    let mut qemu_args = args;
+    qemu_args.display = true;
+    qemu_args.qmp_port = Some(port);
+    let mut said: Vec<String> = Vec::new();
+    let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
+        let started = watching.read_more(Instant::now() + CHROME_WINDOW_PATIENCE, |lines| {
+            lines.iter().any(|line| line.contains("bench: start"))
+        })?;
+        if !started {
+            return Err(with_the_transcript(
+                &Error::new(format!("{arch}: the guest never started measuring")),
+                watching,
+            ));
+        }
+        drive_bench(&mut qmp, watching)?;
+        let _ = watching.read_more(Instant::now() + Duration::from_secs(30), |lines| {
+            lines.iter().any(|line| line.contains("bench: end"))
+        })?;
+        said = watching.after().to_vec();
+        Ok(())
+    };
+    let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
+    let report = bench_report(&said)?;
+    println!("{report}");
+    Ok(())
+}
+
+/// The input of [`BENCH_PHASES`], ten seconds each: nothing, the wheel
+/// turned down and back up, and the pointer swept across the page.
+fn drive_bench(qmp: &mut Qmp, watching: &mut Watching<'_>) -> Result<()> {
+    let wheel = |button: &str, down: bool| {
+        format!("{{\"type\":\"btn\",\"data\":{{\"down\":{down},\"button\":\"{button}\"}}}}")
+    };
+    let phase = Duration::from_secs(10);
+    // Left alone: only the animation draws.
+    let _ = watching.read_more(Instant::now() + phase, |_| false)?;
+    // Scrolled: a notch every 50 ms, down for five seconds and back up.
+    qmp.input_send_event(&[absolute("x", 16384), absolute("y", 16384)])?;
+    let began = Instant::now();
+    let mut turned = 0u32;
+    while began.elapsed() < phase {
+        let button = if turned % 200 < 100 {
+            "wheel-down"
+        } else {
+            "wheel-up"
+        };
+        qmp.input_send_event(&[wheel(button, true)])?;
+        qmp.input_send_event(&[wheel(button, false)])?;
+        turned += 1;
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // Pointed at: across the page and back, a move every 16 ms.
+    let began = Instant::now();
+    let mut step = 0i32;
+    while began.elapsed() < phase {
+        let across = (step % 100 - 50).abs();
+        let x = 4000 + across * 500;
+        let y = 6000 + (step % 37) * 600;
+        qmp.input_send_event(&[absolute("x", x), absolute("y", y)])?;
+        step += 1;
+        std::thread::sleep(Duration::from_millis(16));
+    }
+    Ok(())
+}
+
+/// One process as `/proc/<pid>/stat` said it in a `bench:` line: its
+/// name, processor time in clock ticks and resident pages.
+fn bench_process(stat: &str) -> Option<(u32, String, u64, u64)> {
+    let pid = stat.split_whitespace().next()?.parse().ok()?;
+    let open = stat.find('(')?;
+    let close = stat.rfind(')')?;
+    let name = stat.get(open + 1..close)?.to_owned();
+    let rest: Vec<&str> = stat.get(close + 1..)?.split_whitespace().collect();
+    // After the name: state is field 3, utime 14, stime 15 and rss 24.
+    let field = |number: usize| rest.get(number - 3)?.parse::<u64>().ok();
+    Some((pid, name, field(14)? + field(15)?, field(24)?))
+}
+
+/// What one snapshot of the guest held.
+#[derive(Default)]
+struct BenchSnap {
+    /// Each process's name and ticks, by pid.
+    ticks: std::collections::BTreeMap<u32, (String, u64)>,
+    /// Resident pages by process name, and how many processes had it.
+    resident: std::collections::BTreeMap<String, (u64, u32)>,
+    /// `/proc/stat`'s busy and idle ticks, summed over the processors.
+    busy: u64,
+    idle: u64,
+    /// `/proc/meminfo`, in KiB, by key.
+    memory: std::collections::BTreeMap<String, u64>,
+    /// The frames the compositor had reported drawing before it, and the
+    /// microseconds they took.
+    frames: (u64, u64),
+}
+
+impl BenchSnap {
+    /// Take in one `bench:` line's worth, after its tag.
+    fn take(&mut self, what: &str) {
+        if let Some(stat) = what.strip_prefix("proc ") {
+            if let Some((pid, name, ticks, pages)) = bench_process(stat) {
+                let entry = self.resident.entry(name.clone()).or_default();
+                entry.0 += pages;
+                entry.1 += 1;
+                let _ = self.ticks.insert(pid, (name, ticks));
+            }
+        } else if let Some(memory) = what.strip_prefix("mem ") {
+            let mut words = memory.split_whitespace();
+            if let (Some(key), Some(value)) = (words.next(), words.next()) {
+                let _ = self.memory.insert(
+                    key.trim_end_matches(':').to_owned(),
+                    value.parse().unwrap_or(0),
+                );
+            }
+        } else if let Some(cpu) = what.strip_prefix("cpu ") {
+            let ticks: Vec<u64> = cpu
+                .split_whitespace()
+                .filter_map(|word| word.parse().ok())
+                .collect();
+            self.busy = ticks.iter().take(3).sum();
+            self.idle = ticks.get(3).copied().unwrap_or(0);
+        }
+    }
+}
+
+/// The guest's snapshots, by tag in the order taken, from its `bench:` lines
+/// and the compositor's frame reports between them.
+fn bench_snapshots(said: &[String]) -> Vec<(String, BenchSnap)> {
+    let mut snaps: Vec<(String, BenchSnap)> = Vec::new();
+    let (mut counted, mut spent) = (0u64, 0u64);
+    for line in said {
+        let line = said_on_its_own(line);
+        if let Some(rest) = line.strip_prefix("hyprix: frames ") {
+            let words: Vec<&str> = rest.split_whitespace().collect();
+            // "N slowest of the last M X us, all of them Y us (...".
+            if let (Some(m), Some(y)) = (words.get(5), words.get(11)) {
+                counted += m.parse::<u64>().unwrap_or(0);
+                spent += y.parse::<u64>().unwrap_or(0);
+            }
+            continue;
+        }
+        let Some((tag, what)) = line
+            .strip_prefix("bench: ")
+            .and_then(|rest| rest.split_once(' '))
+        else {
+            continue;
+        };
+        if snaps.last().is_none_or(|(last, _)| last != tag) {
+            let snap = BenchSnap {
+                frames: (counted, spent),
+                ..BenchSnap::default()
+            };
+            snaps.push((tag.to_owned(), snap));
+        }
+        if let Some((_, snap)) = snaps.last_mut() {
+            snap.take(what);
+        }
+    }
+    snaps
+}
+
+/// One phase's row: how busy the machine was, the frames drawn and their
+/// time, and the processor time each process name spent.
+fn bench_row(tag: &str, before: &BenchSnap, after: &BenchSnap) -> String {
+    let mut by: std::collections::BTreeMap<&str, u64> = std::collections::BTreeMap::new();
+    for (pid, (name, ticks)) in &after.ticks {
+        let was = before.ticks.get(pid).map_or(0, |(_, ticks)| *ticks);
+        *by.entry(name.as_str()).or_default() += ticks.saturating_sub(was);
+    }
+    let mut by: Vec<(&str, u64)> = by.into_iter().filter(|&(_, ticks)| ticks >= 10).collect();
+    by.sort_by_key(|&(_, ticks)| std::cmp::Reverse(ticks));
+    let busy = after.busy.saturating_sub(before.busy);
+    let idle = after.idle.saturating_sub(before.idle);
+    let busy_share = if busy + idle == 0 {
+        0.0
+    } else {
+        100.0 * busy as f64 / (busy + idle) as f64
+    };
+    let drawn = after.frames.0.saturating_sub(before.frames.0);
+    let took = after.frames.1.saturating_sub(before.frames.1);
+    let per_frame = if drawn == 0 {
+        0.0
+    } else {
+        took as f64 / drawn as f64 / 1000.0
+    };
+    // A tick is a hundredth of a second and a phase ten seconds, so a
+    // name's ticks in a phase over ten are its percent of one processor.
+    let spent: Vec<String> = by
+        .iter()
+        .map(|(name, ticks)| format!("{name} {}%", ticks / 10))
+        .collect();
+    format!(
+        "bench-chrome: {tag:<7} {busy_share:>5.1} {drawn:>7} {:>5.1} {per_frame:>9.2}  {}\n",
+        drawn as f64 / 10.0,
+        spent.join(", ")
+    )
+}
+
+/// `bench-chrome`'s table, from the guest's `bench:` lines and the
+/// compositor's frame reports between them.
+fn bench_report(said: &[String]) -> Result<String> {
+    use std::fmt::Write as _;
+    let snaps = bench_snapshots(said);
+    if snaps.len() < BENCH_PHASES.len() + 1 {
+        return Err(Error::new(format!(
+            "the guest said {} of the {} snapshots bench-chrome takes",
+            snaps.len(),
+            BENCH_PHASES.len() + 1
+        )));
+    }
+    let mut out = String::from(
+        "bench-chrome: phase   busy%  frames   fps  ms/frame  processor time by process name\n",
+    );
+    for pair in snaps.windows(2) {
+        if let [(_, before), (tag, after)] = pair {
+            out.push_str(&bench_row(tag, before, after));
+        }
+    }
+    if let Some((_, last)) = snaps.last() {
+        let total = last.memory.get("MemTotal").copied().unwrap_or(0);
+        let available = last.memory.get("MemAvailable").copied().unwrap_or(0);
+        let _ = writeln!(
+            out,
+            "bench-chrome: memory used {} MiB of {} MiB, shmem {} MiB",
+            total.saturating_sub(available) / 1024,
+            total / 1024,
+            last.memory.get("Shmem").copied().unwrap_or(0) / 1024
+        );
+        for (name, (pages, count)) in &last.resident {
+            if *pages * 4 >= 8 * 1024 {
+                let _ = writeln!(
+                    out,
+                    "bench-chrome: resident {name} {} MiB in {count} processes",
+                    pages * 4 / 1024
+                );
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// What [`test_chrome_window`] requires of what the guest said and showed.
 fn judge_chrome_window(
     arch: Arch,
@@ -5113,5 +5448,56 @@ mod tests {
     fn the_default_configuration_opens_a_terminal() {
         assert!(RUN_CONFIG.contains("exec-once = /bin/term /bin/zinc"));
         assert!(RUN_CONFIG.contains("bind = SUPER, RETURN, exec, /bin/term /bin/zinc"));
+    }
+
+    /// `bench-chrome`'s table from the guest's snapshots: each phase's
+    /// processor time by name, from the ticks each process added, and the
+    /// frames the compositor reported between two snapshots.
+    #[test]
+    fn the_chrome_bench_reads_its_snapshots() {
+        let stat = |pid: u32, name: &str, ticks: u64| {
+            format!("{pid} ({name}) S 1 1 1 0 -1 0 0 0 0 0 {ticks} 0 0 0 20 0 1 0 0 4096 256")
+        };
+        let mut said = Vec::new();
+        for (tag, chrome, gpu, busy) in [("start", 100, 10, 1000), ("idle", 150, 30, 1100)] {
+            said.push(format!(
+                "  1.00 | bench: {tag} proc {}",
+                stat(7, "chrome", chrome)
+            ));
+            said.push(format!(
+                "  1.00 | bench: {tag} proc {}",
+                stat(8, "gpu", gpu)
+            ));
+            said.push(format!(
+                "  1.00 | bench: {tag} cpu  {busy} 0 0 {busy} 0 0 0"
+            ));
+            said.push(format!("  1.00 | bench: {tag} mem MemTotal: 4096000 kB"));
+            said.push(format!(
+                "  1.00 | bench: {tag} mem MemAvailable: 3072000 kB"
+            ));
+            if tag == "start" {
+                said.push(
+                    "  1.00 | hyprix: frames 9 slowest of the last 60 9000 us, all of them 300000 us (x)"
+                        .to_owned(),
+                );
+            }
+        }
+        for tag in ["scroll", "hover"] {
+            said.push(format!("  1.00 | bench: {tag} cpu  1100 0 0 1100 0 0 0"));
+            said.push(format!("  1.00 | bench: {tag} mem MemTotal: 4096000 kB"));
+            said.push(format!(
+                "  1.00 | bench: {tag} mem MemAvailable: 3072000 kB"
+            ));
+        }
+        let report = super::bench_report(&said).unwrap();
+        assert!(
+            report
+                .contains("bench-chrome: idle     50.0      60   6.0      5.00  chrome 5%, gpu 2%"),
+            "{report}"
+        );
+        assert!(
+            report.contains("memory used 1000 MiB of 4000 MiB"),
+            "{report}"
+        );
     }
 }
