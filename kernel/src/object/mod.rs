@@ -24,6 +24,7 @@ pub(crate) mod alloc_check;
 pub(crate) mod channel;
 pub(crate) mod check;
 pub(crate) mod edge_check;
+pub(crate) mod format_check;
 pub(crate) mod interrupt;
 pub(crate) mod io_mapping;
 pub(crate) mod job;

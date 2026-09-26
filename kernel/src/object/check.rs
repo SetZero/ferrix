@@ -207,6 +207,11 @@ pub(crate) fn run() -> Result<Report, &'static str> {
          packet put back, a registration passed over, a cycle walk meeting one end twice, a \
          delivery to a line nobody holds"
     );
+    let formatted = object::format_check::run()?;
+    crate::console::println!(
+        "  format   {formatted} errors and objects formatted for a diagnostic, each under its \
+         own name, through every lock it holds without waiting for one"
+    );
 
     Ok(Report {
         messages: counter.messages,
@@ -643,6 +648,7 @@ fn check_an_unstarted_child_ends_with_its_handles(
             _ => None,
         })
         .ok_or("a made process's handle has no way back to it")?;
+    formats(side, orphan, "Process(ProcessRef {")?;
     spawner.watch(orphan, 73, "watching an unstarted process failed")?;
     let _ = side
         .call(nr::HANDLE_CLOSE, &[reg(orphan)])
@@ -1260,6 +1266,18 @@ fn endpoint(side: &Side, handle: Handle) -> Result<Arc<Endpoint>, &'static str> 
             _ => None,
         })
         .ok_or("a handle did not name a channel end")
+}
+
+/// Format what `handle` names in `side`, as a diagnostic would, and require
+/// it to begin with `name` (`object::format_check`).
+fn formats(side: &Side, handle: Handle, name: &str) -> Result<(), &'static str> {
+    let named = side
+        .process
+        .with_handles(|table| table.get(handle).map(|(object, _)| object.clone()))
+        .map_err(|_| "a handle to format named nothing")?;
+    let formatted = object::format_check::names(&named, name).map(|_| ());
+    object::dispose([named]);
+    formatted
 }
 
 /// A length as a register.
@@ -2055,6 +2073,7 @@ fn check_a_pin_gives_a_device_exactly_its_pages(counter: &mut Counter) -> Result
     };
     let side = Side::new()?;
     let handle = device_handle(&side, &node)?;
+    formats(&side, handle, "Device(")?;
     let vmo = side.handle(
         nr::VMO_CREATE,
         &[2 * PAGE_SIZE],
@@ -2074,6 +2093,7 @@ fn check_a_pin_gives_a_device_exactly_its_pages(counter: &mut Counter) -> Result
         &[reg(handle), reg(vmo), 0, 2 * PAGE_SIZE, 0],
         "vmo_pin of a VMO for its own device failed",
     )?;
+    formats(&side, pin, "Pin(Pin {")?;
     check_a_pin_stays_where_it_was_made(&side, pin, counter)?;
     let pages = side
         .call(nr::VMO_PIN_ADDRESSES, &[reg(pin), PINNED_AT, 2])
@@ -2321,6 +2341,7 @@ fn check_a_device_gives_exactly_its_own_memory(counter: &mut Counter) -> Result<
         &[reg(handle), SPEC],
         "io_mapping_create of a device's own aperture failed",
     )?;
+    formats(&side, mapping, "IoMapping(IoMapping {")?;
     let at = side
         .call(nr::IO_MAPPING_MAP, &[reg(mapping), 0])
         .map_err(|_| "io_mapping_map failed")? as u64;
@@ -3357,6 +3378,7 @@ fn check_a_bound_interrupt_reaches_its_port(
         "an interrupt was bound to a second port",
         counter,
     )?;
+    formats(side, interrupt, "Interrupt(Interrupt {")?;
 
     interrupt::on_interrupt(number);
     interrupt::on_interrupt(number);
