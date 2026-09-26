@@ -2262,7 +2262,8 @@ fn desktop(
     } else {
         format!("{}x{}@60", size.0, size.1)
     };
-    let config = format!("monitor = , {mode}, auto, 1\n{config}");
+    let scale = args.scale.as_deref().unwrap_or("1");
+    let config = format!("monitor = , {mode}, auto, {scale}\n{config}");
     // A wallpaper that moves is started the way a still one is, and the way
     // `mpvpaper ALL <file>` is started from a Linux desktop's `exec-once`:
     // the difference is the flag, and that the frames were decoded on a
