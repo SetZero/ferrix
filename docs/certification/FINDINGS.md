@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-17 findings are open and 28 are closed, of 45. F-38, F-39 and F-40 were found by other work on 2026-09-26 and recorded by the certification review that work now goes through: F-39, a native process any user made running as root, closed with its fix; F-38, a device model writing a dead driver's frames after they were given back, and F-40, a delegated job lifting its own limits, open with their fixes designed and reviewed. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
+16 findings are open and 29 are closed, of 45. F-38, F-39 and F-40 were found by other work on 2026-09-26 and recorded by the certification review that work now goes through: F-39, a native process any user made running as root, and F-38, a device model writing a dead driver's frames after they were given back, closed with their fixes; F-40, a delegated job lifting its own limits, open with its fix designed and reviewed. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 2 | 5 | 9 | 0 | 1 |
+| Open | 2 | 5 | 8 | 0 | 1 |
 
 Blocking: F-27 and F-28 — independent assessment and a quality management
 system. Both need an organisation; neither is a defect in the code.
@@ -931,10 +931,9 @@ Cost under KVM: an open and close 60 ns (1.5%) dearer in the root job and
 tmpfs create, 4 KiB write and unlink 4.0% and 4.8% dearer.
 
 ### F-38 — a device can write a dead driver's frames after the kernel gave them back
-**Moderate.** Open. Found 2026-09-26 by the audio work (ferrix-90); owned
-there, with the fix designed and reviewed.
+**Found and closed 2026-09-26** (found by the audio work, ferrix-90).
 
-`object/pin.rs` gives a pinned buffer's frames back the moment the pin closes.
+*Was:* **Moderate.** `object/pin.rs` gives a pinned buffer's frames back the moment the pin closes.
 The order it closes in is right for the hardware the claim names: the domain's
 unpin takes the translation out and waits for the unit's invalidation to
 *complete* -- VT-d's invalidation-wait descriptor, the SMMUv3's `TLBI` and
@@ -953,18 +952,42 @@ objective holds on hardware whose devices honour the invalidation and is not
 met for this device model under the emulator the reference configuration
 names.
 
-*Would close it:* the pin quarantine (branch `pin-quarantine`, reviewed
-2026-09-26): a pin closed because its creator died keeps its frames on the
-device's domain instead of freeing them, uncharged from the dead job, until the
-device's core accepts the next driver's `HELLO` -- after that driver has reset
-the device, and virtio-snd has drained its streams, in bring-up. A release on
-that event, never on a timer. A device never driven again keeps its
-quarantine, one dead driver's pages at most. Address translation services
-are never enabled (VT-d `TT=00`, SMMUv3 `EATS=0`), so no device holds a
-translation of its own past the unit's invalidation; that becomes an
-assumption of use with a boot assertion. Checked by `test-audio --boot
-restart` on all three architectures, with the x86-64 DMA-fault check as its
-negative control.
+*Now:* a pin closed because the process that made it died is not given back:
+it stays mapped in its device's domain, its frames held, one reference each,
+and moved off the dead job's memory charge to nobody's (`mm::disown_frame`), so
+that job's counters come back to zero. What the device writes late lands in the
+dead driver's own pages, still mapped, and neither faults nor reaches a frame
+anything else holds. The quarantine is released on an event, not a timer: the
+device's core accepting the next driver's `HELLO` (`object::pin::
+quarantine_release`, called by the audio and display cores), which that driver
+sends only after resetting the device and, for virtio-snd, releasing every
+stream with no transmit queue enabled. The release unpins as any pin is, the
+invalidation completed first, and only then gives the frames to the allocator.
+The record a quarantine needs is allocated with the pin, so a close allocates
+nothing (F-23). A device no driver takes up again keeps its quarantine, as an
+untranslated domain keeps its pins. The kernel bounds the quarantine itself
+rather than rely on devmgr to stop restarting: a domain whose quarantine holds
+`QUARANTINE_CAP_PAGES` (two drivers' worst case, the display card's 65536
+pages and 1024 more, each) refuses the next pin for its device with
+`QUARANTINE_FULL` until a release. A frame whose reference cannot be taken is
+kept for good, never given back. A pin closed by a live driver is given back
+as before. Address translation services are never enabled, and enumeration
+switches off any firmware left on (SAFETY-MANUAL AoU-12). With the quarantine
+in, devmgr starts a sound driver again as it does a display driver.
+
+*Checked by the build:* a stage 10 boot check drives a translated domain's
+quarantine to a cap of one page, requires a dead process's pin to be
+quarantined, the next pin to be refused, one to be taken again after the
+release, and a live process's pin to be given back at once. `cargo xtask
+test-audio`'s restart boot, on all three architectures: `snd` killed twice under a running stream, the card back each
+time, and a second played whole on the third driver's card. On x86-64 and
+AArch64 it requires each death's pins to be quarantined and released, and the
+device to have written at least one quarantined page after its driver died,
+which the release counts by the pages' contents: the writes that before
+landed in frames handed on. The x86-64 run's DMA-fault check is clean. With the
+quarantine switched off the AArch64 restart died of `SIGILL`; the fault check
+alone is not a reliable negative control, since QEMU's late status writes go
+through the mapping it took at pop and do not fault.
 
 ### F-39 — a native process made by any user ran as root
 **Found and closed 2026-09-26** (f84a8d3c, found by the init work, ferrix-15).

@@ -183,19 +183,19 @@ DIED     devmgr -> kernel, 16 bytes
    process handle (`process_status`, `docs/INIT.md` K6): `137` for a
    `SIGKILL`, `1` for a driver that exited 1. One whose status cannot be read
    is reported as `137`, as every death was before K6;
-3. starts a **display** driver again, once the quiesce succeeded: in a new
-   job, on a duplicate of its kept device handle, with the START it was
-   first given, and waits for PUBLISHED as at boot. The kernel numbers cards
-   and render nodes lowest-free, so the card comes back as the `card<N>` it
-   was, and a compositor that waits for it (hyprix does) opens it again.
-   The audio core is ready for the same: it waits for the claim, numbers
-   `controlC<N>` lowest-free, and a program holding the dead card gets
-   `EBADFD`. But a **sound** driver is not started again yet. QEMU writes a
-   dead one's buffers' status through mappings it took before the pins
-   were closed, into frames a translated domain has already freed, and a
-   driver started at once is given those frames. It waits for the pin
-   quarantine (`docs/BACKLOG.md`). A driver that publishes gets RESTARTED, which the kernel
-   prints:
+3. starts a **display** or **sound** driver again, once the quiesce
+   succeeded: in a new job, on a duplicate of its kept device handle, with
+   the START it was first given, and waits for PUBLISHED as at boot. The
+   kernel numbers cards and render nodes lowest-free, so the card comes back
+   as the `card<N>` or `controlC<N>` it was, and a compositor that waits for
+   it (hyprix does) opens it again; a program holding a dead sound card gets
+   `EBADFD`. A dead driver's pins on a translated domain stay mapped, their
+   frames held, until the core accepts the next driver's HELLO, which it
+   sends after resetting the device (`kernel/src/object/pin.rs`, finding
+   F-38): QEMU writes a dead driver's buffers late, and those writes must
+   not reach frames the allocator has handed on. A core that restarts a new
+   kind calls `object::pin::quarantine_release` where it accepts a HELLO. A
+   driver that publishes gets RESTARTED, which the kernel prints:
 
 ```
 RESTARTED devmgr -> kernel, 16 bytes
@@ -219,9 +219,9 @@ decision. The net and input cores wait for a dead driver's claim in the
 quiesce, and are ready for a driver started again: a net interface is parked
 with its index, name and addresses until the next driver's HELLO takes it up
 (`docs/NET-RING.md`), and an input device comes back as the `event<N>` it
-was. They are not in `restarted` yet, and neither is a disk: a device can
-still write through a dead driver's DMA mappings into frames freed for
-someone else until the kernel's pin quarantine lands (`docs/BACKLOG.md`).
+was. They are not in `restarted` yet, and neither is a disk: a dead
+driver's pins are quarantined by the kernel, but those cores do not yet give
+them back at the next driver's HELLO (`object::pin::quarantine_release`).
 The serial port (`vport`) has no core to wait for.
 
 **Where it stands (2026-09-26).** The last step is ferrix-90's, after its pin
@@ -257,9 +257,9 @@ desktop took the card away for good, the compositor ended on `ENODEV`, and
 the compositor was init, so the machine powered off.
 `cargo xtask test-restart` (a shell kills it twice) and
 `cargo xtask test-compositor --boot restart` (a script kills it twice under
-hyprix) are the gates. For sound, `cargo xtask test-audio --boot restart`
-kills `snd` twice under a running stream and plays a second on the third
-driver's card. It is run only when asked for until the quarantine lands.
+hyprix) are the gates. For sound, `cargo xtask test-audio`'s restart boot
+kills `snd` twice under a running stream, requires the quarantine to have
+caught a late write, and plays a second on the third driver's card.
 
 `device_quiesce` needs `MANAGE`, and `devmgr` gave one device handle away in
 START; the quiesce goes through the second handle §2 gave it for exactly

@@ -697,8 +697,13 @@ its card's descriptor reading 0, as a lost screen and draws on the card again
 when it is back. Gates: `cargo xtask test-restart` (a shell kills the driver
 twice) and `cargo xtask test-compositor --boot restart` (a script kills it
 twice under hyprix, and the screen must then be the tiled picture, every
-pixel). **Still to do:** the net, input and serial cores' claims, so their
-drivers can be restarted too; a GPU renderer that comes back, since hyprix
+pixel). A sound driver is started again the same way (2026-09-26), gated by
+`test-audio`'s restart boot. A dead driver's pins on a translated domain stay
+mapped, their frames held, until the device's core accepts the next driver's
+HELLO (`kernel/src/object/pin.rs`, finding F-38): QEMU writes a dead
+driver's buffers late, and those writes must not reach frames handed on.
+**Still to do:** the net, input and serial cores' claims and their calls to
+`object::pin::quarantine_release`, so their drivers can be restarted too; a GPU renderer that comes back, since hyprix
 draws in software after a restart; and a card with two connectors, whose
 screens would each try to reopen it.
 

@@ -439,6 +439,26 @@ pub(crate) fn release_frame(frame: Frame) -> bool {
     freed.is_some()
 }
 
+/// Take a frame's charge off the job it was charged to, and charge it to
+/// nobody from now on: for a frame the kernel keeps after that job's process
+/// has gone (`object::pin`'s quarantine), so the job's counters come back to
+/// zero while the frame is still held. Nothing for a frame charged to nobody,
+/// or one that is not an allocated single frame.
+pub(crate) fn disown_frame(frame: Frame) {
+    let owner = with_frames(|frames| {
+        let owner = frames.owner(frame);
+        frames
+            .set_owner(frame, crate::object::quota::NONE)
+            .ok()
+            .map(|()| owner)
+    })
+    .flatten();
+    // After the allocator's lock, as `release_frame` does.
+    if let Some(owner) = owner {
+        crate::object::quota::uncharge_frame(owner);
+    }
+}
+
 /// How many references there are to a frame.
 ///
 /// For the fault handler's one real decision: a copy-on-write fault on a page

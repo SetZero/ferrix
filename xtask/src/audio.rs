@@ -221,17 +221,6 @@ pub(crate) fn test_audio(args: &Args) -> Result<()> {
             }
         }
 
-        // Until devmgr starts a sound driver again, which waits for the pin
-        // quarantine (`docs/BACKLOG.md`), the restart boot is run only when
-        // asked for: without the quarantine a restarted driver is handed
-        // pages QEMU still writes.
-        if args.boot.as_deref() != Some("restart") {
-            println!(
-                "  {arch}: the restart boot is run with `--boot restart` only, until devmgr \
-                 starts a sound driver again"
-            );
-            continue;
-        }
         let restart = build_tone(arch, Flavour::Restart)?;
         let lines = boot_and_play(arch, &restart, &wav, args)?;
         played_whole(arch, &lines, &wav)?;
@@ -241,6 +230,7 @@ pub(crate) fn test_audio(args: &Args) -> Result<()> {
                 "{arch}: devmgr said `{RESTARTED}` {restarts} times, not 2"
             )));
         }
+        quarantined(arch, &lines)?;
         println!(
             "  {arch}: the sound driver was killed twice under a running stream, the stream \
              answered EBADFD each time, devmgr started the driver again, and the third one's \
@@ -252,6 +242,48 @@ pub(crate) fn test_audio(args: &Args) -> Result<()> {
 
 /// What devmgr's word of a driver started again says, printed by the kernel.
 const RESTARTED: &str = "was started again and published";
+
+/// What the kernel says as a dead driver's quarantined pins go back
+/// (`kernel/src/object/pin.rs`), before the count of pages written late.
+const RELEASED: &str = "pages a dead driver's device could still write went back";
+
+/// Require, on an architecture whose card is behind a translating IOMMU,
+/// that each death's pins went to the quarantine and back, and that QEMU
+/// wrote at least one of their pages after the driver had died: the writes
+/// that, before the quarantine, landed in frames the allocator had given to
+/// the next driver (`docs/AUDIO.md` §3.3). ARMv7-A's card is behind none, and
+/// an untranslated domain keeps a dead driver's pins for good instead.
+fn quarantined(arch: Arch, lines: &[String]) -> Result<()> {
+    if arch == Arch::Armv7a {
+        return Ok(());
+    }
+    let late: Vec<usize> = lines
+        .iter()
+        .filter_map(|line| {
+            let (_, rest) = line.split_once(RELEASED)?;
+            let (_, count) = rest.split_once(", ")?;
+            count.split_whitespace().next()?.parse().ok()
+        })
+        .collect();
+    if late.len() < 2 {
+        return Err(Error::new(format!(
+            "{arch}: the kernel said `{RELEASED}` {} times, not once for each of the 2 deaths",
+            late.len()
+        )));
+    }
+    let written: usize = late.iter().sum();
+    if written == 0 {
+        return Err(Error::new(format!(
+            "{arch}: no quarantined page was written after its driver died, so this boot \
+             no longer shows what the quarantine is for"
+        )));
+    }
+    println!(
+        "  {arch}: each dead driver's pins were quarantined until the next driver had reset \
+         the card, and the device wrote {written} of their pages after its driver had died"
+    );
+    Ok(())
+}
 
 /// Require that tone finished and that the file holds the counter whole.
 fn played_whole(arch: Arch, lines: &[String], wav: &Path) -> Result<()> {
@@ -281,7 +313,28 @@ fn played_whole(arch: Arch, lines: &[String], wav: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{FRAMES, PERIOD, first_wrong, frames};
+    use super::{FRAMES, PERIOD, first_wrong, frames, quarantined};
+    use crate::paths::Arch;
+
+    #[test]
+    fn the_quarantine_must_have_caught_a_late_write_where_a_unit_translates() {
+        let line = |written: usize| {
+            format!(
+                "    8.53 |   iommu    20 pages a dead driver's device could still write went \
+                 back once its next driver had reset it, {written} of them written after it died"
+            )
+        };
+        assert!(quarantined(Arch::X86_64, &[line(2), line(0)]).is_ok());
+        assert!(quarantined(Arch::AArch64, &[line(0), line(0)]).is_err());
+        assert!(
+            quarantined(Arch::X86_64, &[line(3)]).is_err(),
+            "one death of two"
+        );
+        assert!(
+            quarantined(Arch::Armv7a, &[]).is_ok(),
+            "no unit, no quarantine"
+        );
+    }
 
     fn counter(moved: bool) -> Vec<(u16, u16)> {
         (1..=FRAMES)

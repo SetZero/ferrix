@@ -38,6 +38,13 @@ pub const EXTENDED_ID_AER: u16 = 0x0001;
 /// Extended capability ID: access control services, which is what an IOMMU
 /// needs a switch to have before two functions behind it are isolated.
 pub const EXTENDED_ID_ACS: u16 = 0x000D;
+/// Extended capability ID: address translation services, with which a
+/// device caches translations of its own (PCIe base 6.0 §10.5.1).
+pub const EXTENDED_ID_ATS: u16 = 0x000F;
+/// Where an ATS capability's control register is, from the capability.
+pub const ATS_CONTROL: u16 = 0x06;
+/// The ATS control register's enable bit.
+pub const ATS_CONTROL_ENABLE: u16 = 1 << 15;
 
 /// One entry in the standard list.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

@@ -408,6 +408,13 @@ pub(crate) enum Failure {
     Queue(ferrix_virtio::QueueError),
     /// The entropy self-check saw a completion that cannot be right.
     Entropy(&'static str),
+    /// A function kept ATS on after it was switched off, so its device could
+    /// translate for itself past an unpin (`docs/certification/SAFETY-MANUAL.md`,
+    /// AoU-12).
+    AtsOn {
+        /// The function.
+        function: Address,
+    },
 }
 
 impl fmt::Display for Failure {
@@ -425,6 +432,10 @@ impl fmt::Display for Failure {
             Failure::Refused(error) => write!(f, "{error}"),
             Failure::Queue(error) => write!(f, "virtio queue: {error:?}"),
             Failure::Entropy(what) => write!(f, "virtio-rng: {what}"),
+            Failure::AtsOn { function } => write!(
+                f,
+                "{function} kept address translation services on after it was switched off"
+            ),
         }
     }
 }
@@ -568,6 +579,54 @@ type Examined = (
     Option<SharedMemory>,
 );
 
+/// Walk a function's extended capability list, counting each, and leave its
+/// address translation services off if it has them ([`keep_ats_off`]).
+///
+/// # Errors
+///
+/// What the walk refused, and [`Failure::AtsOn`].
+fn walk_extended(space: &mut Space, function: Address, report: &mut Report) -> Result<(), Failure> {
+    let mut ats = None;
+    for capability in ExtendedCapabilities::new(&*space, function) {
+        let capability = capability?;
+        report.capabilities += 1;
+        if capability.id == pci_capability::EXTENDED_ID_ATS {
+            ats = Some(capability.offset);
+        }
+    }
+    match ats {
+        Some(at) => keep_ats_off(space, function, at),
+        None => Ok(()),
+    }
+}
+
+/// Leave a function's address translation services off, as the kernel
+/// assumes (`docs/certification/SAFETY-MANUAL.md`, AoU-12): a device that
+/// cached translations of its own could reach a page after its unpin, which
+/// invalidates the IOMMU's translations and not a device's. Firmware may have
+/// switched it on; it is switched off here, before any driver runs.
+///
+/// # Errors
+///
+/// [`Failure::AtsOn`] for a function that keeps it on.
+fn keep_ats_off(space: &mut Space, function: Address, at: u16) -> Result<(), Failure> {
+    let control = at + pci_capability::ATS_CONTROL;
+    let value = space.read16(function, control);
+    if value & pci_capability::ATS_CONTROL_ENABLE == 0 {
+        return Ok(());
+    }
+    space.write16(
+        function,
+        control,
+        value & !pci_capability::ATS_CONTROL_ENABLE,
+    );
+    if space.read16(function, control) & pci_capability::ATS_CONTROL_ENABLE != 0 {
+        return Err(Failure::AtsOn { function });
+    }
+    crate::println!("  pci      {function}: address translation services switched off");
+    Ok(())
+}
+
 /// Size every BAR of one function and walk both its capability lists,
 /// returning the BARs it decodes, its MSI-X capability if it has one, and
 /// whether firmware left its memory decoding on.
@@ -589,10 +648,7 @@ fn check_function(
         let _ = capability?;
         report.capabilities += 1;
     }
-    for capability in ExtendedCapabilities::new(&*space, address) {
-        let _ = capability?;
-        report.capabilities += 1;
-    }
+    walk_extended(space, address, report)?;
 
     let msix = match pci_capability::find(&*space, address, ID_MSIX)? {
         Some(capability) => Some((capability, MsiX::read(&*space, capability)?)),

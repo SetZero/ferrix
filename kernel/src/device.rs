@@ -999,6 +999,12 @@ impl DeviceNode {
         Ok(domain)
     }
 
+    /// The device's IOMMU domain if one was ever made: [`DeviceNode::domain`]
+    /// without making one, for a question about pins that may never have been.
+    pub(crate) fn domain_made(&self) -> Option<Arc<iommu::Domain>> {
+        self.domain.lock().as_ref().map(Arc::clone)
+    }
+
     /// `len` bytes at `phys`, if they lie inside one of the device's
     /// apertures. The only way to make an [`Aperture`] after enumeration.
     pub(crate) fn aperture(&self, phys: u64, len: u64) -> Option<Aperture> {

@@ -1723,6 +1723,17 @@ fn check_iommu(view: &BootView<'_>) {
         domains.refusals,
         domains.waits,
     );
+    match object::pin::check_quarantine(device::devices()) {
+        Ok(true) => println!(
+            "  iommu    a dead driver's pin was quarantined, a pin past the quarantine's cap \
+             refused and one taken again once it was released, a live driver's given back"
+        ),
+        Ok(false) => {}
+        Err(problem) => fatal!(
+            catalog::STAGE10_IOMMU,
+            "stage 10 self-check failed: {problem}"
+        ),
+    }
 }
 
 fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>, reserved: &device::Reserved) {

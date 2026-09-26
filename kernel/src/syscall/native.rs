@@ -1802,19 +1802,30 @@ fn vmo_pin(
     } else {
         ferrix_paging::MapFlags::DMA
     };
-    let pin = pin_through(&node, held, flags)?;
+    let pin = pin_through(&node, held, flags, process.exit_record())?;
     insert_new(process, Object::Pin(pin), Rights::PIN)
 }
 
-/// Pin `held` into `node`'s IOMMU domain with `flags`.
+/// Pin `held` into `node`'s IOMMU domain with `flags`, for the process whose
+/// end is `owner` (`object::pin`'s quarantine).
 fn pin_through(
     node: &DeviceNode,
     held: crate::user::vmo::Held,
     flags: ferrix_paging::MapFlags,
+    owner: Arc<object::process::Exit>,
 ) -> Result<Arc<object::pin::Pin>, Errno> {
     let domain = node.domain().map_err(|_| status::NO_MEMORY)?;
-    let pin = object::pin::Pin::new(domain, held, flags).map_err(domain_status)?;
+    let pin = object::pin::Pin::new(domain, held, flags, owner).map_err(pin_status)?;
     fallible::try_arc(pin).map_err(|_| status::NO_MEMORY)
+}
+
+/// The status a refused pin travels as.
+fn pin_status(why: object::pin::PinError) -> Errno {
+    match why {
+        object::pin::PinError::Domain(why) => domain_status(why),
+        object::pin::PinError::NoMemory => status::NO_MEMORY,
+        object::pin::PinError::QuarantineFull => status::QUARANTINE_FULL,
+    }
 }
 
 /// The status a refused pin travels as.

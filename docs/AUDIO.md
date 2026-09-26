@@ -208,8 +208,8 @@ when it dies, as it does a display driver (`docs/DEVMGR.md` §4). It claims
 the device through `crate::claim`, so a quiesce waits for the dead
 driver's task to let go. It numbers its cards lowest-free, so the card
 comes back as `C0`. A program holding the dead card gets `EBADFD` and opens
-the new one. devmgr does not restart it yet: that waits for the pin
-quarantine (§3.3's sixth quirk, `docs/BACKLOG.md`).
+the new one. A dead driver's pins are kept until the next driver's HELLO
+(§3.3's sixth quirk).
 
 | Type | Direction | Body | Handles |
 |---|---|---|---|
@@ -305,11 +305,13 @@ driver has to live with:
   writes each returned buffer's status through the mapping it took when
   it popped the buffer, so on x86-64 those eight bytes land in the dead
   driver's pages after the IOMMU has let them go. A driver started at once
-  is given those frames: on AArch64 a restarted `snd` died of `SIGILL` 30 ms
-  in, and on x86-64 xtask's DMA-fault check caught the writes the unit
-  faulted. Real hardware is stopped at the IOMMU. Until the kernel keeps a
-  dead driver's frames in quarantine for longer than a device can hold
-  them, devmgr does not start a sound driver again.
+  was given those frames: on AArch64 a restarted `snd` died of `SIGILL`
+  30 ms in, and on x86-64 xtask's DMA-fault check caught the writes the
+  unit faulted. Real hardware is stopped at the IOMMU. So the kernel keeps a
+  dead driver's pins mapped and its frames held until the core accepts the
+  next driver's HELLO, which comes after this drain (`object/pin.rs`, the
+  quarantine; finding F-38). The release counts the pages written after
+  the death: one to three in each of test-audio's restarts.
 
 Formats offered are S8, U8, S16, U16, S32, U32 and FLOAT, and rates from
 5512 to 384000 Hz (lines 40–61). Version 1 uses one of each.
