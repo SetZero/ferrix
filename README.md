@@ -72,9 +72,10 @@ kept current with every landing. In short:
   an STM32MP157D-DK1 from its SD card ([the board guide](docs/stm32mp157-dk.md)).
 
 Still to come, in the roadmap's order: the rest of stage 19 (XWayland and the
-second-pass effects), namespaces, cgroups and seccomp (13), real-time domains
-(14), a real init (the rest of 15), self-hosting (20), bare metal with a GPU
-of Ferrix's own (21), and Steam (22).
+second-pass effects), namespaces, seccomp and the rest of cgroups (13),
+real-time domains (14), the images booting the init, and authentication
+(the rest of 15), self-hosting (20), bare metal with a GPU of Ferrix's own
+(21), and Steam (22).
 
 Every boot proves its own claims rather than asserting them: the memory map
 is checked against the loader's allocations, the direct map is checked to

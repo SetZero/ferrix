@@ -15,10 +15,12 @@ from pathlib import Path
 
 OUT = Path(__file__).resolve().parent.parent.parent / "docs" / "img"
 
-TODAY = date(2026, 9, 24)
+TODAY = date(2026, 9, 26)
 
 # Points landed per day (docs/BACKLOG.md, *Velocity*). 09-18 to 09-23 were
 # sized afterwards from `git log`; 09-23 is what is left of that backfill.
+# From 09-24 a day is what was estimated before the work started plus what
+# was sized afterwards, and AFTERWARDS says how much of it is the latter.
 LANDED = [
     (date(2026, 9, 14), 131),
     (date(2026, 9, 15), 34),
@@ -30,27 +32,35 @@ LANDED = [
     (date(2026, 9, 21), 96),
     (date(2026, 9, 22), 20),
     (date(2026, 9, 23), 53),
-    (date(2026, 9, 24), 99),
+    (date(2026, 9, 24), 126),
+    (date(2026, 9, 25), 26),
+    (date(2026, 9, 26), 278),
 ]
 BACKFILLED = {date(2026, 9, d) for d in range(18, 24)}
+AFTERWARDS = {date(2026, 9, 24): 27, date(2026, 9, 25): 26, date(2026, 9, 26): 175}
 
-# The status table's sized, unfinished rows after 2026-09-24's landings,
-# in the table's order.
+# The status table's sized, unfinished rows after 2026-09-26's landings.
 REMAINING = [
     ("Client pages as texture backing", 8),
     ("XWayland and the second pass", 48),
     ("GC400, the rest", 21),
-    ("Stage 13, the controllers", 58),
-    ("Stage 15, the init's rest", 51),
+    ("Stage 13, the controllers' rest", 30),
+    ("Stage 15, init L10 and auth", 35),
+    ("Desktop clients' foundation", 21),
+    ("Pixel 7, a desktop in its VM", 17),
     ("Chrome on the DK1", 50),
     ("Stage 14, real-time", 40),
     ("dmabuf and virgl", 48),
-    ("Stage 22, Steam's sized part", 51),
+    ("Stage 22, Steam's sized part", 24),
     ("Stage 22, the rest (guess)", 100),
 ]
 SCOPE = sum(p for _, p in REMAINING)
-RATES = [(79, "79 a day, the running average"), (54, "54 a day, as 09-18 to 09-23")]
-FORECAST_RATE = 54
+# The running average counts everything that landed; the second rate is only
+# what had an estimate before it started, 09-24 to 09-26, which is the rate
+# the sized scope above is burned at.
+RATES = [(92, "92 a day, the running average"),
+         (67, "67 a day, estimated work, 09-24 to 09-26")]
+FORECAST_RATE = 67
 
 D = date
 DONE = [
@@ -63,13 +73,23 @@ DONE = [
     ("Stage 16, rustc", D(2026, 9, 22), D(2026, 9, 22)),
     ("Cursor plane (13)", D(2026, 9, 23), D(2026, 9, 23)),
     ("sysfs, device queue, Chrome", D(2026, 9, 24), D(2026, 9, 24)),
+    ("Init L1 to L9 (61)", D(2026, 9, 24), D(2026, 9, 26)),
+    ("cgroups P1, M1, S1 (28)", D(2026, 9, 26), D(2026, 9, 26)),
+    ("Audio L1 to L7 (24)", D(2026, 9, 26), D(2026, 9, 26)),
+    ("Chrome: zygote, speed, ferrousli", D(2026, 9, 26), D(2026, 9, 26)),
 ]
 ACTIVE = [
     ("Stage 19, the rest (56 left)", D(2026, 9, 17)),
     ("Stage 20, self-hosting", D(2026, 9, 22)),
-    ("Stage 13 cgroups (27 of 85)", D(2026, 9, 23)),
+    ("Stage 13 cgroups (55 of 85)", D(2026, 9, 23)),
     ("Gears (50 of 71)", D(2026, 9, 24)),
-    ("Stage 15 init (16 of 67)", D(2026, 9, 24)),
+    ("Init L10, on a branch (6)", D(2026, 9, 26)),
+    ("Chrome on ferrousli, a window", D(2026, 9, 24)),
+    ("Certification findings", D(2026, 9, 25)),
+    ("Audio: alsa-lib and a server", D(2026, 9, 26)),
+    ("i386 ABI, I1 on a branch", D(2026, 9, 26)),
+    ("Desktop clients", D(2026, 9, 26)),
+    ("Pixel 7: VM desktop, USB", D(2026, 9, 26)),
 ]
 
 FONT = "system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif"
@@ -153,7 +173,7 @@ def burndown():
     svg.text(left, 28, f"Sized points remaining at the end of each day, from {label(TODAY)}",
              size=16, weight="bold")
     svg.text(left, 46, f"{SCOPE} points in the status table's sized, unfinished rows; "
-             "unsized stages (20, 21, Chrome's zygote) are outside it",
+             "unsized work (stages 20 and 21, the audio server, i386's I5) is outside it",
              size=12, fill=MUTED)
     days = 10
     ymax = 500
@@ -184,8 +204,8 @@ def burndown():
     top, bottom = 390, 590
     svg.text(left, 350, "Points landed per day, and the running total", size=16,
              weight="bold")
-    svg.text(left, 368, "hatched days were sized afterwards from git log, "
-             "not reported by a session", size=12, fill=MUTED)
+    svg.text(left, 368, "hatched: sized afterwards from git log, "
+             "not estimated before the work started", size=12, fill=MUTED)
     svg.add('<defs><pattern id="hatch" width="6" height="6" '
             'patternUnits="userSpaceOnUse" patternTransform="rotate(45)">'
             f'<rect width="6" height="6" fill="{FORECAST_C}"/>'
@@ -193,7 +213,7 @@ def burndown():
             '</pattern></defs>')
     n = len(LANDED)
     slot = (right - left) / n
-    bmax, cmax = 250, 1000
+    bmax, cmax = 300, 1400
     yb = lambda v: bottom - (bottom - top) * v / bmax
     yc = lambda v: bottom - (bottom - top) * v / cmax
     for v in range(0, bmax + 1, 50):
@@ -206,8 +226,12 @@ def burndown():
     total, pts = 0, []
     for i, (d, p) in enumerate(LANDED):
         cx = left + slot * (i + 0.5)
-        fill = "url(#hatch)" if d in BACKFILLED else ACTIVE_C
-        svg.rect(cx - slot * 0.32, yb(p), slot * 0.64, yb(0) - yb(p), fill)
+        after = p if d in BACKFILLED else AFTERWARDS.get(d, 0)
+        est = p - after
+        if est:
+            svg.rect(cx - slot * 0.32, yb(est), slot * 0.64, yb(0) - yb(est), ACTIVE_C)
+        if after:
+            svg.rect(cx - slot * 0.32, yb(p), slot * 0.64, yb(est) - yb(p), "url(#hatch)")
         svg.text(cx, yb(p) - 5, str(p), anchor="middle", size=11)
         svg.text(cx, bottom + 18, label(d), anchor="middle", fill=MUTED)
         total += p

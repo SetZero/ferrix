@@ -25,7 +25,7 @@ The status table after *Where it stands* records the pointed remainder and
 its current state. A dated forecast is made only from a fresh velocity count;
 estimates are arithmetic, not promises.
 
-**Where it stands (reviewed 2026-09-23):** stages 0–12 and 16 are done, and
+**Where it stands (reviewed 2026-09-26):** stages 0–12 and 16 are done, and
 so are networking, 17 and 18. Stages 0–12 are in the boot test on all three
 architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-12`.
 ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4 — and has run on
@@ -79,11 +79,20 @@ architectures, since ferrousli itself was ported to AArch64 and ARMv7-A on
 with `svc` to drive it, readiness, socket activation and resource limits,
 gives the console a getty, and powers the machine off, on all three
 architectures (`cargo xtask test-init`). The images do not boot it yet; that
-is L10 of `docs/INIT.md`.
+is L10 of `docs/INIT.md`, built on a branch and not yet on `main`. Stage
+15's next is authentication (`docs/AUTH.md`, approved by the customer on
+2026-09-26): `authd`, passwords and a real hyprlock, 27 points. Stage 13 is
+under way, cgroups first because init needs them: cgroup2 with `pids`,
+`memory` and its scoped OOM kill, and `cpu.weight` (2026-09-26); reclaim,
+freezing, `cpu.max`, `io`, namespaces and seccomp are left.
 Chrome runs on Ferrix (2026-09-24): Google's prebuilt Chrome for Testing,
 headless and in a window on the compositor, on x86-64, and headless on
-ferrousli's loader and C library in glibc's place (2026-09-26) (*Chrome*,
-after sysfs, and `docs/CHROME.md`).
+ferrousli's loader and C library in glibc's place (2026-09-26). Since
+2026-09-26 it runs with its zygote, idles at 13% of a processor where it
+took 443%, turns a box at 60 frames a second where it managed 1.5, and plays
+sound (*Chrome*, after sysfs, and `docs/CHROME.md`). Sound is a ring-3
+virtio-snd driver, an audio core in the kernel and `/dev/snd`, gated by
+`cargo xtask test-audio` on x86-64 and AArch64 (`docs/AUDIO.md`, 2026-09-26).
 Networking is done: sockets, a net core and a ring-3 virtio-net driver, with
 `curl` fetching over HTTPS and `git` cloning inside the guest. sysfs is done
 (2026-09-24): `/sys` is a view of the devices as enumeration, the ring-3
@@ -100,8 +109,17 @@ behind a blurred translucent terminal from 39 ms in software to 12
 (`docs/GPU.md` §3.7 and §3.8; 60 fps is 16.7). What stage 19 still owes is
 XWayland, `dwindle:precise_mouse_move` and the second-pass effects; Mesa and
 `zwp_linux_dmabuf`, for clients that draw on the GPU themselves, are priced
-beside it. Stage 21
-is bare metal with a card of Ferrix's own, and stage 22 is Steam. Stage 17's display iteration is done:
+beside it. The desktop's own clients -- waybar, fuzzel, hyprlock and
+hypridle, written in Rust -- are begun: fuzzel's core is on `main`
+(2026-09-26), and the rest is on branches. Stage 21
+is bare metal with a card of Ferrix's own, and stage 22 is Steam, whose
+32-bit x86 ABI is under way on branch `i386-abi` (`docs/I386.md` there).
+Ferrix also boots on the customer's Pixel 7: natively on all eight cores
+to `FERRIX-BOOT-OK stages 1-12`, and as a guest of the phone's own crosvm
+from a launcher app. A desktop in that VM and a USB device driver for the
+native boot are under way. The kernel's certification set
+(`docs/certification/`) closed F-23, F-31 and F-35 on 2026-09-26:
+fallible allocation, side-channel defences with KASLR, and job quotas. Stage 17's display iteration is done:
 `/dev/dri/card0` served by a ring-3 virtio-gpu driver, with `cargo xtask
 test-display` requiring a compositor's colour pixel for pixel on all three
 architectures. Its input iteration is done too, to the same standard:
@@ -117,7 +135,7 @@ QEMU's far end.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
-**Status and estimates (reviewed 2026-09-23).** Over the four days of the
+**Status and estimates (reviewed 2026-09-26).** Over the four days of the
 points era that the fleet ran, 2026-09-14 to -17, about 445 points landed:
 131, 34, 66 and 214, which is ≈ 111 a calendar day and ≈ 150 a day the fleet
 was running, with 8–10 sessions, 15–20 points a session-day, and 21 points a
@@ -126,9 +144,12 @@ held, and stages 17 and 18 came in at the sizes they were given
 (`docs/BACKLOG.md`, *Velocity*). The count since then, to 2026-09-24, is
 ≈ 870 points in 11 calendar days (≈ 79 a day), and 2026-09-24 alone landed
 ≈ 99, about 22 an hour over the landing window, on a code base of 703 k
-lines of Rust. That is historical velocity, not a current
-schedule: the dates projected from it have elapsed, and stage 19 and
-dynamic linking remain under way. The table records the state now.
+lines of Rust. Counted again on 2026-09-26, the total is ≈ 1,200 points in
+13 calendar days (≈ 92 a day): 2026-09-25, a day of one or two sessions on
+the certification audit, landed ≈ 26, and 2026-09-26, with about twelve
+sessions, ≈ 278, of which 103 had been estimated before the work started
+and the rest were sized afterwards from `git log`. That is historical
+velocity, not a current schedule. The table records the state now.
 Stages 12 to 16 were sized in words before points existed; their points are
 first guesses rather than an owner's estimate and are replaced when a session
 sizes them.
@@ -140,6 +161,7 @@ sizes them.
 | ~~Stage 19: the device queue, commands in flight and a frame that waits once (`docs/GPU.md` §3.11)~~ *done 2026-09-24* | ~~13~~ | done |
 | Stage 19: the desktop's speed as it is watched (`docs/GPU.md` §3.9): client pages as texture backing | 8 | in progress |
 | Stage 19: XWayland 40, and `dwindle:precise_mouse_move`, the second-pass effects and the window rule `xray` about 8 | 48 | in progress |
+| The desktop's own clients: waybar, fuzzel, hyprlock and hypridle in Rust, reading the customer's own files (`docs/DESKTOP-CLIENTS.md`, on the clients' branches) | the foundation they share 21 (`docs/BACKLOG.md`); the four programs unsized | under way: fuzzel's pure core, its icons, cache, dmenu input and layout on `main` (2026-09-26); the foundation's crates, waybar, hyprlock, hypridle and fuzzel's window on branches |
 | After stage 19's 178: `zwp_linux_dmabuf` with a GBM-shaped allocator, and Mesa's virgl on ferrousli, for clients that draw on the GPU themselves (`docs/BACKLOG.md`) | 8, and 40 or more | not started |
 | Gears (`docs/GPU.md` §6, the customer's order of 2026-09-24): vkgears through Venus on the Linux host 39, which is also stage 22's "Venus 8" and more; GLES2 gears on the DK1's GC400 32 | 71 | under way: vkgears draws through Venus (39 done, 2026-09-24); the GC400 runs a command buffer on the board, its events by interrupt (G1 and G2, 11 of its 32, 2026-09-24) |
 | ~~Dynamic linking: the kernel half, ferrousli's loader, glibc's names~~ *done 2026-09-23* | ~~39~~ | done |
@@ -147,49 +169,60 @@ sizes them.
 | ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | done |
 | ~~sysfs, fed by the services that own each fact (`docs/SYSFS.md`)~~ *done 2026-09-24* | ~~26~~ | done |
 | ~~Chrome on Ferrix, headless and in a window, x86-64 (`docs/CHROME.md`)~~ *done 2026-09-24* | foot and its ports 13, the kernel's rows ≈ 30, spent | done |
-| Chrome: the zygote's fork | unsized; ferrousli in glibc's place, headless, and the persistent btrfs root are done, 2026-09-26 | under way |
+| ~~Chrome: the zygote, its speed, ferrousli in glibc's place headless, the persistent btrfs root~~ *done 2026-09-26* | unsized, spent | done |
+| Chrome: its full browser on ferrousli in a window, `inotify`, the GPU | unsized | under way: the window on ferrousli is on branch `chrome-window-ferrousli`, not yet on `main` |
 | Chrome on the STM32MP157D-DK1 (`docs/CHROME.md` §10) | ≈ 45–55 | not started |
-| Stage 13, namespaces, cgroups, seccomp | cgroups 85 (`docs/CGROUPS.md` §7: 27 for what init needs, 58 for the controllers); namespaces and seccomp unsized, the old guess for the whole stage was *month* ≈ 60 | under way: G1 to G5 done (27 of 85), which is all init needs from it, C8 for native services included; its cgroups come first, as init's prerequisite (`docs/INIT.md` §0); `pids`, `memory`'s charging and `cpu.weight` done (2026-09-26, as the certification's job quotas), and `memory`'s scoped OOM kill the same day; `memory`'s reclaim, freezing, `cpu.max` and `io` left |
-| Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51 | not started |
-| Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | not started |
+| The Pixel 7, the customer's phone (`boot/pixel7/HANDOVER.md`) | a desktop in the launcher app's VM ≈ 17; the USB device driver unsized | under way: `main` boots it natively on all eight cores to `FERRIX-BOOT-OK stages 1-12`, and as a guest of the phone's own crosvm from a launcher app, with a monitor graphing the boot and `ferrix-statd`'s samples (2026-09-26); the customer chose the VM for a desktop the same day, hyprix in the launcher's VM (option A), started; the USB device driver has its brief (`docs/PIXEL7-USB-HANDOVER.md`) and a read-only survey on a branch |
+| Stage 13, namespaces, cgroups, seccomp | cgroups 85 (`docs/CGROUPS.md` §7: 27 for what init needs, 58 for the controllers); namespaces and seccomp unsized, the old guess for the whole stage was *month* ≈ 60 | under way: G1 to G5 done (27), which is all init needs from it, C8 for native services included; `pids`, `memory`'s charging and `cpu.weight` done (2026-09-26, as the certification's job quotas), and `memory`'s scoped OOM kill the same day (P1, M1, S1: 28), so 55 of 85; the rest of `memory.stat`, `memory`'s reclaim, freezing, `cpu.max` and `io` left, about 30 |
+| Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51; sound re-sized by `docs/AUDIO.md` as 24 for the driver, the core and a gate, spent, then alsa-lib 3 (U1) and a server unsized (U2), so 24 of the 51 left sized | sound under way: playback done 2026-09-26 -- a ring-3 virtio-snd driver, the audio core, `/dev/snd`, `test-audio`, Chrome playing through it, and `run-compositor --everything` bringing the card; U1 and U2 left; bubblewrap and Venus not started |
+| Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess; `docs/I386.md` on branch `i386-abi` sizes I1 to I4 at 42, I5 unsized | under way on branch `i386-abi`: I1, a 32-bit program through `int $0x80`, done there 2026-09-26 (8 of 42), not yet on `main` |
 | Stage 14, real-time domains | *month* ≈ 40 | not started |
-| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, of which 61 are spent (L1 to L9), and 18 later | partially complete: `/sbin/init`, `getty`, `svc`, readiness, socket activation, resource limits and the directory over `libs/init/svc` landed by 2026-09-26, gated by `test-init` on all three architectures; L10 (the images booting it) is left |
+| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, of which 61 are spent (L1 to L9), and 18 later; authentication (`docs/AUTH.md`, approved 2026-09-26): a kernel fix first (P0) 2, phase 1 27, phase 2 31 and phase 3 about 32 later | partially complete: `/sbin/init`, `getty`, `svc`, readiness, socket activation, resource limits and the directory over `libs/init/svc` landed by 2026-09-26, gated by `test-init` on all three architectures; L10 (the images booting it) is built on branch `init-l10`, not yet on `main`; authentication's P0 -- `process_create` gave a child root's credentials -- is being fixed, and phase 1 is not started |
 | ~~Stage 16, `rustc`~~ *exit met 2026-09-22* | ~~*the goal* ≈ 40~~ 8 spent | done |
 | Stage 20, self-hosting | *longer*, unsized | in progress: the x86-64 image builds on Ferrix and boots (2026-09-23); every build of the matrix recorded, Ferrix making them stops on FX-0001 (2026-09-24) |
 | Stage 21, bare metal and a GPU of Ferrix's own | over 100, unsized | planned when bare-metal work is requested |
 
 ### Burndown
 
-Scope is the table's sized, unfinished rows on 2026-09-24, after the day's
+Scope is the table's sized, unfinished rows on 2026-09-26, after the day's
 landings: client pages 8, XWayland and the second pass 48, dmabuf and virgl
-48, the GC400's remaining 21 of 32, Chrome on the DK1 50, stage 13's rest 58,
-stage 15's rest 51, stage 14 40 and stage 22's 151 (its 51 and the guess of
-100) -- **≈ 475 points**. The unsized rows (stage 20, stage 21, the Chrome
-zygote) are outside it, so the chart shows when the *sized* work ends, not
-when the roadmap does. Scope has grown as often as it has shrunk (stage 19
-went from 144 to 178, Chrome and gears were added), so the chart is a
-forecast from today, not a history.
+48, the GC400's remaining 21 of 32, Chrome on the DK1 50, stage 13's rest 30,
+stage 15's 35 (init's L10 6, and authentication's P0 2 and phase 1 27),
+the desktop clients' foundation 21, a desktop in the Pixel 7's VM 17,
+stage 14 40 and stage 22's 124 (bubblewrap 13, alsa-lib 3, Venus 8, and the
+guess of 100 for the 32-bit ABI and Proton) -- **≈ 442 points**. The
+unsized rows (stage 20, stage 21, the audio server, Chrome's window on
+ferrousli, the desktop clients' own programs, the Pixel's USB driver) are
+outside it, so the chart shows when the *sized* work ends, not when the
+roadmap does. Scope has grown as often as it has shrunk: since 2026-09-24,
+97 points of it landed (init 45, cgroups 28, sound 24), sound's server and
+its 3 points went out of it to be sized, and 67 were added
+(authentication, the clients' foundation, the Pixel's desktop), so the
+chart is a forecast from today, not a history.
 
-![Burndown: 475 sized points remaining from 2026-09-24, done 10-01 at 79 a day or 10-03 at 54 a day; below it, points landed per day from 09-14 to 09-24, about 868 in total](img/burndown.svg)
+![Burndown: 442 sized points remaining from 2026-09-26, done 10-01 at 92 a day or 10-03 at 67 a day; below it, points landed per day from 09-14 to 09-26, about 1,200 in total](img/burndown.svg)
 
-In the upper chart the steeper line is the running average, 79 a day, and
-the shallower is the 54 a day of 09-18 to 09-23, the better guide while the
-work is GPU, ports and a server. Neither allows for the qualification
-below: a step full of unknowns may take twice its estimate. The lower chart
-is what has landed, by day, and the running total; the hatched days, 09-18
-to 09-23, were sized afterwards from `git log` (`docs/BACKLOG.md`,
+In the upper chart the steeper line is the running average, 92 a day,
+which counts everything that landed. The shallower is 67 a day, only the
+work that was estimated before it started, 2026-09-24 to -26: that is the
+rate the sized scope burns at, since the unsized work that lands beside it
+-- the certification, the Pixel, Chrome's polish -- takes nothing off it.
+Neither allows for the qualification below: a step full of unknowns may
+take twice its estimate. The lower chart is what has landed, by day, and
+the running total; hatched is what was sized afterwards from `git log`, all
+of 09-18 to 09-23 and most of 09-25 and 09-26 (`docs/BACKLOG.md`,
 *Velocity*).
 
 ### Gantt
 
 Done bars are dated from the rows above and the ledger, and start where the
 first landing was; they overlap because the work ran in parallel. The
-forecast is one queue at 54 points a day, in the order of the table, with
+forecast is one queue at 67 points a day, in the order of the table, with
 the sized rows only. It is a sequence for reading the size of the work, not
 a plan: several of these would run side by side, and the order is the
 customer's to change.
 
-![Gantt: done work from 2026-09-13 to 09-24, five streams in progress, and the sized remainder as one queue at 54 points a day ending 10-03](img/gantt.svg)
+![Gantt: done work from 2026-09-13 to 09-26, eleven streams in progress, and the sized remainder as one queue at 67 points a day ending 10-03](img/gantt.svg)
 
 Both charts are drawn by `scripts/gen/gen-roadmap-charts.py`, which holds their
 numbers; change them there when the table or the velocity count changes, and
@@ -4227,11 +4260,22 @@ and drawn with slight hinting. The user agent says Ferrix, through
 is gone. The compositor now splits an `exec` line as the shell would for
 its quoting (`docs/CHROME.md` §9).
 
+**Done (2026-09-26): the zygote, Chrome's speed and its sound.** The
+zygote learns its children's pids from `SCM_CREDENTIALS`, which a unix
+socket message now carries, so the tests run without `--no-zygote`
+(`docs/CHROME.md` §8). Idle Chrome took 443% of a processor and takes 13%,
+and a turning box went from 1.5 frames a second to 60, after a futex wait
+woken every 5 ms, the HPET as the clock under KVM, `munmap` walking every
+page, a shootdown per write after a fork, and the GPU's doorbell were
+fixed, and a vDSO added on x86-64; `cargo xtask bench-chrome` measures it
+(§9). It plays sound through `/dev/snd` (`cargo xtask test-chrome-audio`,
+`docs/AUDIO.md`).
+
 **Still to do:**
 
-* The zygote's fork fails on Ferrix, so the tests run Chrome with
-  `--no-zygote`; `--no-sandbox` is stage 13's.
-* Chrome on ferrousli in a window, which is not tried, and ferrousli's
+* `--no-sandbox`, which is stage 13's.
+* Chrome on ferrousli in a window, which runs on branch
+  `chrome-window-ferrousli` and is not yet on `main`, and ferrousli's
   `ld.so` run as a command, which it cannot be yet: Chrome reaches it by
   `PT_INTERP`.
 * Why the GPU process's fallback path stops at the sandbox's
@@ -4552,9 +4596,20 @@ host-only and were built while stage 13 was.
 **Where it stands.** The init is a service manager a person drives, with
 the directory native services are reached through (L1 to L9), gated by
 `cargo xtask test-init` on all three architectures. What is left is L10,
-which moves the images onto it. The
+which moves the images onto it; it is built on branch `init-l10` and not
+yet on `main` (2026-09-26). The
 stage's exit has been met by `test-jobs` since 2026-09-19; the images still
 start their own pid 1 until L10.
+
+**Next: authentication (`docs/AUTH.md`, approved by the customer on
+2026-09-26, all eleven decisions as recommended).** `authd`, a service
+that checks a person's password with Argon2id, throttles and audits, with
+`passwd`, `authctl` and hyprlock's real backend on it: phase 1, 27 points,
+not started. Phase 2 moves the desktop off root (31, and L10) and phase 3
+adds PAM for ferrousli's programs, TOTP, ssh passwords and privilege
+prompts (about 32). Its P0 is a kernel hole it names:
+`process_create` gave the process it made root's credentials instead of
+its creator's (2 points, being fixed).
 
 `test-jobs` is x86-64 only, because `sleep` is uutils' and uutils is built
 for x86-64 alone (`docs/UUTILS.md` D3).
@@ -7297,7 +7352,11 @@ staged until now.
   `mmap` and `brk` limits, `TLS` through `set_thread_area` and the `GDT`
   entries it needs, 32-bit signal frames, and `AT_SYSINFO` absent as
   `AT_SYSINFO_EHDR` is. x86-64 only; the Arm architectures have nothing
-  to run. Unsized: the table is as long as stage 7's was.
+  to run. Unsized: the table is as long as stage 7's was. Under way on
+  branch `i386-abi` since 2026-09-26, at the customer's request:
+  `docs/I386.md` there sizes I1 to I4 at 42 points, and I1, a 32-bit
+  program entering compatibility mode and calling through `int $0x80`, is
+  built and gated there, not yet on `main`.
 * **glibc's place, taken.** The dynamic linking stage's third part, glibc's
   names, with Steam as its stress test: `ld-linux` and `libc.so.6` requested
   by name, `dlopen` from the client and from every Steam runtime library,

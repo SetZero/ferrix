@@ -102,14 +102,14 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1683 elements, 201 relations. Model digest `69929052f6c2acca`.
+13 files, 16 packages, 1683 elements, 201 relations. Model digest `4c5b90ce0a7f49df`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
 | `#implemented` | 270 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
-| `#inProgress` | 10 | The owning stage has started; part of the element runs. |
+| `#inProgress` | 11 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 3 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
-| `#planned` | 38 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
+| `#planned` | 37 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
 | `@deferred` | 20 | Work a finished stage explicitly left behind, carrying the reason that stage gave. |
 
 An element carries its own keyword or none; a keyword is never inherited from a parent, so a `#planned` field inside an `#implemented` part still reads as planned.
@@ -2923,7 +2923,7 @@ flowchart TB
   n23_FerrixRoadmap_stage18Compositor["S18  Stage 18 compositor<br>Done · 96 points, spent"]
   n24_FerrixRoadmap_stage19HyprlandFidelity["S19  Stage 19 hyprland fidelity<br>InProgress · 178 points, about 56 left"]
   n25_FerrixRoadmap_stage21BareMetalGpu["S21  Stage 21 bare metal gpu<br>Planned · unsized, over 100 points"]
-  n26_FerrixRoadmap_stage22Steam["S22  Stage 22 steam<br>Planned · unsized, over 300 points"]
+  n26_FerrixRoadmap_stage22Steam["S22  Stage 22 steam<br>InProgress · unsized, over 300 points"]
   n27_FerrixRoadmap_stage20SelfHosting["S20  Stage 20 self hosting<br>InProgress · longer"]
   n0_FerrixRoadmap_stage0Foundation -. "depends on" .-> n1_FerrixRoadmap_stage1Boot
   n1_FerrixRoadmap_stage1Boot -. "depends on" .-> n2_FerrixRoadmap_stage2Memory
@@ -2968,8 +2968,8 @@ flowchart TB
   classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
   class n0_FerrixRoadmap_stage0Foundation,n1_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixRoadmap_stage3TrapsInterruptsTime,n4_FerrixRoadmap_stage4Smp,n5_FerrixRoadmap_armv7aPort,n6_FerrixRoadmap_stage5Scheduler,n7_FerrixRoadmap_stage6UserMode,n8_FerrixRoadmap_stage7LinuxAbi,n9_FerrixRoadmap_stage8Vfs,n10_FerrixRoadmap_stage9NativeAbi,n11_FerrixRoadmap_stage10UserspaceDrivers,n12_FerrixRoadmap_stage11BtrfsRead,n13_FerrixRoadmap_stageNetworking,n14_FerrixRoadmap_stageDynamicLinking,n15_FerrixRoadmap_stageSysfs,n17_FerrixRoadmap_stage12BtrfsWrite,n21_FerrixRoadmap_stage16Rustc,n22_FerrixRoadmap_stage17DisplayAndInput,n23_FerrixRoadmap_stage18Compositor implemented
-  class n16_FerrixRoadmap_stageChrome,n18_FerrixRoadmap_stage13Isolation,n20_FerrixRoadmap_stage15Userland,n24_FerrixRoadmap_stage19HyprlandFidelity,n27_FerrixRoadmap_stage20SelfHosting inProgress
-  class n19_FerrixRoadmap_stage14RealTime,n25_FerrixRoadmap_stage21BareMetalGpu,n26_FerrixRoadmap_stage22Steam planned
+  class n16_FerrixRoadmap_stageChrome,n18_FerrixRoadmap_stage13Isolation,n20_FerrixRoadmap_stage15Userland,n24_FerrixRoadmap_stage19HyprlandFidelity,n26_FerrixRoadmap_stage22Steam,n27_FerrixRoadmap_stage20SelfHosting inProgress
+  class n19_FerrixRoadmap_stage14RealTime,n25_FerrixRoadmap_stage21BareMetalGpu planned
 ```
 
 **Figure 17 — The roadmap, stage by stage.** An arrow points from a stage to the stage it unblocks. The two stages with a second arrow into them are the ones that need more than their predecessor. [SVG](diagrams/roadmap-stages.svg) Source: `10-roadmap.sysml`.
@@ -3002,7 +3002,7 @@ flowchart TB
 | `S18` | 18 | Stage 18 compositor | Done | 96 points, spent | `#implemented` |
 | `S19` | 19 | Stage 19 hyprland fidelity | InProgress | 178 points, about 56 left | `#inProgress` |
 | `S21` | 21 | Stage 21 bare metal gpu | Planned | unsized, over 100 points | `#planned` |
-| `S22` | 22 | Stage 22 steam | Planned | unsized, over 300 points | `#planned` |
+| `S22` | 22 | Stage 22 steam | InProgress | unsized, over 300 points | `#inProgress` |
 | `S20` | 20 | Stage 20 self hosting | InProgress | longer | `#inProgress` |
 
 Sizes are order-of-magnitude and not a schedule.
@@ -3177,7 +3177,7 @@ Placed after stage 12 without a number of its own, built on 2026-09-24 in the sh
 
 **InProgress**  ·  size headless and a window spent; the DK1 about 45 to 55 points  ·  `#inProgress`
 
-Placed after sysfs without a number of its own, asked for by the customer on 2026-09-23 (docs/CHROME.md). Google's prebuilt Chrome for Testing on Debian's glibc from a btrfs volume, by the customer's choice of 2026-09-24. Exit met on x86-64: cargo xtask test-chrome runs it headless, and cargo xtask test-chrome-window in a window on the compositor. On ferrousli in glibc's place, headless, since 2026-09-26: cargo xtask test-chrome --interpreter ferrousli --library ferrousli. On the persistent btrfs root since 2026-09-26. Owed: the zygote's fork, and the STM32MP157D-DK1, which needs an SDMMC driver and page-cache eviction first.
+Placed after sysfs without a number of its own, asked for by the customer on 2026-09-23 (docs/CHROME.md). Google's prebuilt Chrome for Testing on Debian's glibc from a btrfs volume, by the customer's choice of 2026-09-24. Exit met on x86-64: cargo xtask test-chrome runs it headless, and cargo xtask test-chrome-window in a window on the compositor. On ferrousli in glibc's place, headless, since 2026-09-26: cargo xtask test-chrome --interpreter ferrousli --library ferrousli. On the persistent btrfs root since 2026-09-26. With its zygote since 2026-09-26, once SCM_CREDENTIALS carried its children's pids; idle at 13% of a processor where it took 443%, after the futex, clock, munmap, shootdown and doorbell fixes and a vDSO (cargo xtask bench-chrome); and playing sound through /dev/snd (cargo xtask test-chrome-audio). Owed: the full browser on ferrousli in a window, on a branch on 2026-09-26; inotify and the GPU; and the STM32MP157D-DK1, which needs an SDMMC driver and page-cache eviction first.
 
 **Allocated to: **`ferrix.userland`
 
@@ -3215,7 +3215,9 @@ Most of it arrived under other stages' names: /bin is the uutils family and zinc
 
 Job control landed on 2026-09-19, in the shell rather than the kernel: every call it is made of -- setpgid, TIOCSPGRP, TIOCSCTTY, the line discipline's SIGTSTP, wait4's WUNTRACED -- had been answered since stage 7 with nothing using them. userland/zinc/src/jobs.rs puts a pipeline in one process group, hands the terminal to the foreground job and takes it back, and keeps the table jobs, fg, bg, wait, disown and kill %1 name. Verified by jobsSession and by zinc's pty gate.
 
-A working init landed on 2026-09-26 (L1 to L4 of docs/INIT.md): /sbin/init over libs/init/svc's manager, a cgroup per service, a getty on the console, shutdown by SIGTERM; the same day svc and its control socket, readiness, socket activation and resource limits (L5 to L7, L9) and the directory with native services (L8). Verified by initSession. Left: the images booting it (L10).
+A working init landed on 2026-09-26 (L1 to L4 of docs/INIT.md): /sbin/init over libs/init/svc's manager, a cgroup per service, a getty on the console, shutdown by SIGTERM; the same day svc and its control socket, readiness, socket activation and resource limits (L5 to L7, L9) and the directory with native services (L8). Verified by initSession. Left: the images booting it (L10), built on a branch on 2026-09-26 and not yet on main.
+
+Next: authentication (docs/AUTH.md, approved by the customer on 2026-09-26): authd, passwords checked by Argon2id, passwd, authctl and a real hyprlock, phase 1, 27 points, not started; its P0, process_create giving a child root's credentials rather than its creator's, 2 points, being fixed.
 
 Designed on 2026-09-23 in docs/INIT.md: pid 1 and a service manager, systemd-shaped units, a cgroup per service, a pure manager in libs/init/svc behind backends a microkernel could serve. 67 points to L10, 61 of them spent; the stage 13 cgroups its first boot needs landed on 2026-09-24.
 
@@ -3263,6 +3265,8 @@ Of the 178, about 56 are left: the desktop's speed as it is watched (client page
 
 Gears, the customer's order of 2026-09-24 (docs/GPU.md 6): vkgears through Venus -- Mesa's Vulkan driver in the guest, the host's GPU under virglrenderer's render server -- on the Linux host, 39 points, done the same day: vkgears draws on the host's RADV (cargo xtask test-vkgears); and gears drawn by the DK1's own Vivante GC400T, an OpenGL ES 2.0 core with no Vulkan in any driver, through a ring-3 driver of Ferrix's own, 32 points, of which G1 and G2 (11) ran on the board the same day: the core runs a command buffer, its events by interrupt.
 
+The desktop's own clients, begun on 2026-09-26 at the customer's request: waybar, fuzzel, hyprlock and hypridle in Rust, reading their own configuration files unchanged, over a shared foundation of 21 points. fuzzel's pure core is on main; the foundation and the other programs are on branches.
+
 ### S21 — Stage 21 bare metal gpu
 
 **Planned**  ·  size unsized, over 100 points  ·  `#planned`
@@ -3271,9 +3275,11 @@ Ferrix on bare metal with an NVIDIA card driven by Ferrix itself: Path B of the 
 
 ### S22 — Stage 22 steam
 
-**Planned**  ·  size unsized, over 300 points  ·  `#planned`
+**InProgress**  ·  size unsized, over 300 points  ·  `#inProgress`
 
 Steam on Ferrix, put on the roadmap by the customer on 2026-09-18 as the step after the GPU decision; a guest's stage first, on Path A's GPU, that does not wait for bare metal. What it stands on that nothing else staged: the 32-bit x86 ABI for the i386 client and 32-bit Wine, glibc's place taken by ferrousli under the Steam runtime, bubblewrap's needs over stage 13, a root on btrfs, XWayland, sound (virtio-snd, an audio core, a PulseAudio or PipeWire server), and Vulkan through Venus on a KVM host. Exit in three boots: the client logs in with its browser helper drawing; a native game installs, plays and sounds; a Windows game runs through Proton.
+
+Under way since 2026-09-26. Sound's playback is done (docs/AUDIO.md, 24 points): a ring-3 virtio-snd driver, the kernel's audio core and /dev/snd, verified by cargo xtask test-audio on x86-64 and AArch64; alsa-lib (U1, 3) and a sound server (U2, unsized) are left. The 32-bit x86 ABI is designed in docs/I386.md on branch i386-abi, I1 to I4 at 42 points, and I1 is built there, not yet on main.
 
 ### S20 — Stage 20 self hosting
 
@@ -3723,7 +3729,7 @@ flowchart LR
 | `S18` | `stage18Compositor` | `dependency` | — | `#implemented` |
 | `S19` | `stage19HyprlandFidelity` | `dependency` | — | `#inProgress` |
 | `S21` | `stage21BareMetalGpu` | — | — | `#planned` |
-| `S22` | `stage22Steam` | — | — | `#planned` |
+| `S22` | `stage22Steam` | — | — | `#inProgress` |
 | `S20` | `stage20SelfHosting` | — | — | `#inProgress` |
 | `D.fuzz` | `fuzzTargetsOwed` | — | — | `#planned` |
 | `D.miri` | `miriOwed` | — | — | `#planned` |

@@ -424,7 +424,13 @@ package FerrixRoadmap {
              * cargo xtask test-chrome --interpreter ferrousli
              * --library ferrousli.
              * On the persistent btrfs root since 2026-09-26.
-             * Owed: the zygote's fork, and the
+             * With its zygote since 2026-09-26, once SCM_CREDENTIALS carried
+             * its children's pids; idle at 13% of a processor where it took
+             * 443%, after the futex, clock, munmap, shootdown and doorbell
+             * fixes and a vDSO (cargo xtask bench-chrome); and playing
+             * sound through /dev/snd (cargo xtask test-chrome-audio).
+             * Owed: the full browser on ferrousli in a window, on a branch
+             * on 2026-09-26; inotify and the GPU; and the
              * STM32MP157D-DK1, which needs an SDMMC driver and page-cache
              * eviction first. */
     }
@@ -515,7 +521,14 @@ package FerrixRoadmap {
              * same day svc and its control socket, readiness, socket
              * activation and resource limits (L5 to L7, L9) and the
              * directory with native services (L8). Verified by
-             * initSession. Left: the images booting it (L10).
+             * initSession. Left: the images booting it (L10), built on a
+             * branch on 2026-09-26 and not yet on main.
+             *
+             * Next: authentication (docs/AUTH.md, approved by the customer
+             * on 2026-09-26): authd, passwords checked by Argon2id, passwd,
+             * authctl and a real hyprlock, phase 1, 27 points, not started;
+             * its P0, process_create giving a child root's credentials
+             * rather than its creator's, 2 points, being fixed.
              *
              * Designed on 2026-09-23 in docs/INIT.md: pid 1 and a service
              * manager, systemd-shaped units, a cgroup per service, a pure
@@ -620,7 +633,14 @@ package FerrixRoadmap {
              * the DK1's own Vivante GC400T, an OpenGL ES 2.0 core with no
              * Vulkan in any driver, through a ring-3 driver of Ferrix's own,
              * 32 points, of which G1 and G2 (11) ran on the board the same
-             * day: the core runs a command buffer, its events by interrupt. */
+             * day: the core runs a command buffer, its events by interrupt.
+             *
+             * The desktop's own clients, begun on 2026-09-26 at the
+             * customer's request: waybar, fuzzel, hyprlock and hypridle in
+             * Rust, reading their own configuration files unchanged, over a
+             * shared foundation of 21 points. fuzzel's pure core is on
+             * main; the foundation and the other programs are on
+             * branches. */
     }
 
     #planned requirement <'S21'> stage21BareMetalGpu : Stage {
@@ -637,9 +657,9 @@ package FerrixRoadmap {
              * stage 19 exit on real hardware, drawn by the card. */
     }
 
-    #planned requirement <'S22'> stage22Steam : Stage {
+    #inProgress requirement <'S22'> stage22Steam : Stage {
         attribute :>> number = 22;
-        attribute :>> status = StageStatus::Planned;
+        attribute :>> status = StageStatus::InProgress;
         attribute :>> size = "unsized, over 300 points";
         doc /* Steam on Ferrix, put on the roadmap by the customer on
              * 2026-09-18 as the step after the GPU decision; a guest's
@@ -652,7 +672,15 @@ package FerrixRoadmap {
              * through Venus on a KVM host. Exit in three boots: the client
              * logs in with its browser helper drawing; a native game
              * installs, plays and sounds; a Windows game runs through
-             * Proton. */
+             * Proton.
+             *
+             * Under way since 2026-09-26. Sound's playback is done
+             * (docs/AUDIO.md, 24 points): a ring-3 virtio-snd driver, the
+             * kernel's audio core and /dev/snd, verified by
+             * cargo xtask test-audio on x86-64 and AArch64; alsa-lib (U1,
+             * 3) and a sound server (U2, unsized) are left. The 32-bit x86
+             * ABI is designed in docs/I386.md on branch i386-abi, I1 to I4
+             * at 42 points, and I1 is built there, not yet on main. */
     }
 
     #inProgress requirement <'S20'> stage20SelfHosting : Stage {

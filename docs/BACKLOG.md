@@ -425,6 +425,29 @@ first week's 111 a day reads as a change in the kind of work (the zsh
 compatibility tail, and GPU, dynamic linking and btrfs write, whose steps
 each have unknowns) and not as a stall.
 
+### Update, 2026-09-26
+
+Counted from the 2026-09-24 count (88cd2740) to 02afa6c8, 356 commits, by
+the same rule: a landing counts at the estimate written before its work
+started, and what had none is sized afterwards from `git log`, in
+clusters, on the same scale, and said to be so.
+
+| day | estimated before | sized afterwards | what |
+|---|---|---|---|
+| 2026-09-24, after the count | 0 | ≈ 27 | the DK1's desktop at the speed of a hand, its cursor plane, its HDMI modes, the console sending by interrupt, zinc's start |
+| 2026-09-25 | 0 | ≈ 26 | the certification audit: the item's boundary, coverage, the Security Target and the rest of its set, SMEP, SMAP and PAN, the trap return and `StatLayout` inverted; one or two sessions |
+| 2026-09-26 | 103 | ≈ 175 | estimated: init L4 to L9 45, audio L1 to L7 24, cgroups P1, M1 and S1 28, `SCM_CREDENTIALS` 2, the vDSO ≈ 4; afterwards: the certification's F-23, F-31 with KASLR, F-34, F-36, F-37, the item's split and its coverage suite ≈ 70, the Pixel 7 ≈ 39, Chrome on ferrousli, its speed and its desktop ≈ 33, and the terminal, fuzzel and Linux-compat fixes ≈ 33; about twelve sessions |
+
+So **≈ 26 on 2026-09-25 and ≈ 278 on 2026-09-26**, 103 of the latter
+estimated before it started. S1 counts its 13 although it was built
+differently from its plan, and the vDSO's 4 is its share of a joint
+estimate; both are soft. The running total is **≈ 1,200 points in 13
+calendar days, ≈ 92 a day**, or ≈ 973 (≈ 75 a day) counting after
+2026-09-24 only what had an estimate. What was estimated landed at ≈ 67 a
+day over 2026-09-24 to -26, and that is the rate the roadmap's sized scope,
+≈ 442 points, burns at: the unsized work beside it takes nothing off it.
+The roadmap's *Burndown* lists that scope.
+
 ---
 
 ## Decisions
