@@ -136,8 +136,12 @@ pub(crate) fn describe_cpus(view: &BootView<'_>) -> Result<Described, &'static s
     // all, so requiring one would silently boot a dual-core board on one core.
     // A node naming some *other* method is still left out, because this kernel
     // cannot start one that way.
+    // From the loader's command line, which xtask's `--kernel-option` writes,
+    // or from `/chosen/bootargs`, where U-Boot puts `bootargs` on a board:
+    // either says it, as AArch64 reads the one and `power::init` both.
     let args = tree.bootargs().unwrap_or("");
-    if flag_in(args, "noactlr") {
+    let flag = |name: &str| view.flag(name) || flag_in(args, name);
+    if flag("noactlr") {
         READ_ACTLR.store(false, Ordering::Relaxed);
     }
     // The boot core is in Rust already, so it can be counted here; the others
@@ -153,7 +157,7 @@ pub(crate) fn describe_cpus(view: &BootView<'_>) -> Result<Described, &'static s
     // core reaching the end of stage 3 says the loader, the hand-off, the page
     // tables, the console and the timer are all right, and narrows what is
     // left to the thing this flag turned off.
-    if flag_in(args, "nosmp") {
+    if flag("nosmp") {
         return Ok(Described {
             id_name: "MPIDR",
             boot,
