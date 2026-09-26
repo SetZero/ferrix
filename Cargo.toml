@@ -41,6 +41,7 @@ members = [
     "libs/gc400",
     "libs/sync",
     "libs/ustack",
+    "libs/vdso",
     "libs/vdagent",
     "libs/virtio",
     "libs/virtio-blk",
@@ -136,6 +137,7 @@ ferrix-net-driver = { path = "user/net" }
 ferrix-objects = { path = "libs/objects" }
 ferrix-sync = { path = "libs/sync" }
 ferrix-ustack = { path = "libs/ustack" }
+ferrix-vdso = { path = "libs/vdso" }
 ferrix-virtio = { path = "libs/virtio" }
 ferrix-virtio-blk = { path = "libs/virtio-blk" }
 ferrix-virtio-gpu = { path = "libs/virtio-gpu" }

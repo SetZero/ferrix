@@ -455,6 +455,10 @@ name = "ferrix-vdagent"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-vdso"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-vfs"
 version = "0.1.0"
 dependencies = [
