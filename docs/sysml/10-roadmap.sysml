@@ -469,8 +469,11 @@ package FerrixRoadmap {
              * the certification's job quotas (F-35): a quota slot per job,
              * charged for tasks, memory and native objects, a weight per
              * job scaling its tasks', and cgroupfs's cpu, memory and pids
-             * files over the same slot. Left: M1's memory.stat and scoped
-             * OOM kill, M2's reclaim, F1, S2 and B1. */
+             * files over the same slot. M1's scoped OOM kill done on
+             * 2026-09-26: a fault past a cgroup's memory.max kills the
+             * process with the most resident pages in that cgroup, counted
+             * in memory.events with POLLPRI. Left: the rest of memory.stat,
+             * M2's reclaim, F1, S2 and B1. */
     }
 
     #planned requirement <'S14'> stage14RealTime : Stage {
@@ -508,15 +511,16 @@ package FerrixRoadmap {
              *
              * A working init landed on 2026-09-26 (L1 to L4 of
              * docs/INIT.md): /sbin/init over libs/svc's manager, a cgroup
-             * per service, a getty on the console, shutdown by SIGTERM.
-             * Verified by initSession. Left: the images boot it (L10), and
-             * svc, slices, readiness, the directory and sockets between
-             * (L5 to L9).
+             * per service, a getty on the console, shutdown by SIGTERM; the
+             * same day svc and its control socket, readiness, socket
+             * activation and resource limits (L5 to L7, L9) and the kernel
+             * half of L8. Verified by initSession. Left: L8's init side,
+             * the directory, and the images booting it (L10).
              *
              * Designed on 2026-09-23 in docs/INIT.md: pid 1 and a service
              * manager, systemd-shaped units, a cgroup per service, a pure
              * manager in libs/svc behind backends a microkernel could
-             * serve. 67 points to L10, 26 of them spent; the stage 13
+             * serve. 67 points to L10, 53 of them spent; the stage 13
              * cgroups its first boot needs landed on 2026-09-24. */
     }
 

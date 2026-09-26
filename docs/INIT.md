@@ -276,7 +276,10 @@ run at once. That parallelism is the reason to have a graph at all.
 Every service and socket gets `After=sysinit.target` and
 `Before=shutdown.target Conflicts=shutdown.target` unless it sets
 `DefaultDependencies=no`. That is what makes shutdown stop everything
-without every unit saying so.
+without every unit saying so. A service is also `After=basic.target`, as
+under systemd, so shutdown stops it before `basic.target`; a socket is
+`Before=sockets.target`, which `basic.target` wants, and before the service
+it activates.
 
 The targets shipped with the image:
 
@@ -799,11 +802,11 @@ cgroup half is what §0 asks for first.
 | L2 | `libs/svc`: the graph, transactions, operations, the slice tree, the restart policy, `step` | L1 | host tests replaying event scripts | 8 |
 | L3 | K0, K7. **Done 2026-09-24** (§16) | | `test-boot`, `test-shell` | 3 |
 | L4 | `init` minimal: pid 1, reaping, `/run` and cgroupfs, `init.scope`, a cgroup per service, `simple`/`exec`/`oneshot`, `KillMode=`, restart, shutdown by `cgroup.kill`; `getty` and the generator. **Done 2026-09-26** (§16) | L2, L3, C1-C5 | `test-init` stages one and two (§15) | 10 |
-| L5 | Slices and scopes; the resource keys; `OOMPolicy=`; `Delegate=` | L4, C6, C7 | `test-init` stage three | 6 |
-| L6 | `svc` and the control socket; `log` output; `set-property`, `top` | L4 | `test-init` stage four | 5 |
-| L7 | `notify` readiness; `forking` | L4 | host tests + `test-init` | 3 |
+| L5 | Slices and scopes; the resource keys; `OOMPolicy=`; `Delegate=`. **Done 2026-09-26** (§16) | L4, C6, C7 | `test-init` stage three | 6 |
+| L6 | `svc` and the control socket; `log` output; `set-property`, `top`. **Done 2026-09-26** (§16) | L4 | `test-init` stage four | 5 |
+| L7 | `notify` readiness; `forking`. **Done 2026-09-26** (§16) | L4 | host tests + `test-init` | 3 |
 | L8 | K2, K3, K4, K6; `Type=native` in the cgroup's job; the directory (§6) | L5, C8 | `test-init` stage five | 16 |
-| L9 | `.socket` units | L4 | `test-init`: sshd activated on connect | 5 |
+| L9 | `.socket` units. **Done 2026-09-26** (§16), sshd aside | L4 | `test-init`: sshd activated on connect | 5 |
 | L10 | Move the images over: `cargo xtask run` and `run-compositor` boot init with `multi-user.target` / `graphical.target`; hyprix stops being pid 1 and makes a scope per client | L5, L6 | `test-compositor` under init | 6 |
 | L11 | `devmgr` shares the restart policy | L2 | `test-restart` | 2 |
 | L12 | *later*: the kernel starts init alone and init starts `devmgr` (§7.3) | L8 | `test-boot` on all three architectures | 8 |
@@ -848,8 +851,7 @@ landing adds a stage, and each stage requires its lines:
    getty on the console gives a zinc prompt whose session and controlling
    terminal are its own, read from `/proc/self/stat`, not taken from the
    transcript. A test service that exits 1 is restarted by its budget and then
-   reported `failed`. `svc poweroff` (`kill -TERM 1` until L6 builds `svc`)
-   from the prompt ends with every unit
+   reported `failed`. `svc poweroff` from the prompt ends with every unit
    stopped in reverse order, `sync`, and a `btrfs check` of the volume that
    finds it clean.
 2. **Groups** (L4). A service forks twice and its main process exits. The
@@ -880,9 +882,12 @@ the system people will actually use.
 | L1 | done, 2026-09-24 | "Read unit files in systemd's syntax" |
 | L2 | done, 2026-09-24 | "Run units as one state machine of events and actions" |
 | L4 | done, 2026-09-26 | "Add /sbin/init, getty and the getty generator around libs/svc's manager" |
-| L5 to L13 | not started | |
+| L5, L6, L7, L9 | done, 2026-09-26 | "Give the manager reload, a readiness status, and socket units"; "Add libs/svc-proto: svc's control records and readiness lines"; "Give init svc, the log, readiness, sockets and resources" |
+| L8 | kernel half done, 2026-09-26: K2, K3, K4, K6 | "Let a parent hand its child a bootstrap handle across execve" and the five after it |
+| L10 to L13 | not started | |
 
-41 of L1 to L10's 67 points are left.
+14 of L1 to L10's 67 points are left: L8's init side (8; its kernel half's
+8 are spent) and L10's 6.
 
 **L1, as built (5 points).** `libs/svc` is on `main`: `no_std` with
 `alloc`, `forbid(unsafe_code)`, 52 host tests, a Miri step in CI and in
@@ -1180,13 +1185,127 @@ grandchild 356 alive", after 20 looks 1.5 s apart.
   `test-init`'s alone. The gate uses zinc's builtins only, so it runs on
   AArch64 and ARMv7-A without uutils.
 
-**What the next session does first.** L5 to L9 all build on L4 (§12). L6,
-`svc` and the control socket with `log` output, is what makes init
-something a person drives, and turns stage one's `kill -TERM 1` into
-`svc poweroff`. L5 needs stage 13's controllers (C6), of which `pids`,
-`memory`'s charging and `cpu.weight` are in. Until L10 moves the images over,
-`cargo xtask run` and every gate but `test-init` still start a program as
-pid 1 themselves.
+**L5, L6, L7 and L9, as built (19 points).** Four landings in one
+branch, since each is a part of the same event loop, gated together by
+`test-init`'s stages three to six below on all three architectures.
+
+* **L6, control and the log.** `/run/ferrix/control` is a stream socket,
+  mode 0666; `SO_PEERCRED` says who connected. Anyone may call `status`,
+  `list` and `log`; everything else is root's, but for a scope a user makes
+  of their own processes under their own `user-<uid>.slice`. A connection
+  carries one call and init's answers, in `libs/svc-proto`'s records (a
+  length, a tag, fields; 1 MiB at most; fuzzed). Nothing blocks: a
+  connection is read as bytes arrive, written as the socket takes them, and
+  dropped once 4 MiB of answers wait unsent. `/bin/svc` has systemctl's
+  verbs: `status`, `list [--failed]`, `start`, `stop`, `restart`, `reload`,
+  `isolate`, `reset-failed`, `poweroff`, `reboot`, `log [-n N]`,
+  `daemon-reload`, `enable`, `disable`, `mask`, `unmask`, `set-property
+  [--persistent]`, `scope` and `top`, with systemctl's exit statuses (3 for
+  a unit not active, 4 for one not loaded). `enable` links what `[Install]`
+  names in `/etc/ferrix/units`; `set-property` writes a drop-in
+  (`/run/ferrix/units/<unit>.d/50-set-property.conf`, or `/etc` with
+  `--persistent`), reloads, and writes the running cgroup's files; `top`
+  reads `memory.current`, `pids.current` and `cpu.stat` itself.
+  `daemon-reload` runs the generators and reads the directories again. A
+  stream whose output is `log` -- the default off a terminal -- is a pipe
+  init reads: each line goes to the console as `unit[pid]: line` and into a
+  ring of the unit's last 256 lines, which `svc log` reads. The manager
+  gained `Request::Reload`, which runs `ExecReload=` with the service active
+  throughout.
+* **L7, readiness.** A `Type=notify` service gets a pipe on `NotifyFd=` (3
+  by default, 3 to 63) and `NOTIFY_FD` saying which; `READY=1` is readiness,
+  `STATUS=` what `svc status` shows -- a new `Event::Status`, since
+  `Event::Ready` is readiness itself -- and `MAINPID=` the main process. A
+  `forking` service's main process is the live pid its `PIDFile=` names,
+  or the one process left in its cgroup, told to the manager as soon as the
+  first process's exit 0 is reaped. Init's own pipes sit above descriptor 100
+  in the parent, so the child's `dup2` onto 3 can never land on one.
+* **L9, sockets.** A `.socket` unit's sockets are made by init
+  (`ListenStream=` a port, `address:port` or a path; `ListenDatagram=`,
+  `ListenSequentialPacket=`, `ListenFIFO=`), stay blocking as systemd hands
+  them over, and are watched until readable. With `Accept=no` that starts the
+  service, whose main process gets every up socket of its own as 3 and up
+  with `LISTEN_FDS`, `LISTEN_FDNAMES` and `LISTEN_PID` -- written by the
+  child, which alone knows its pid, into a buffer on its stack -- and the
+  socket is watched again when the service is down. With `Accept=yes` init
+  accepts, and each connection starts `name@N.service` with the connection
+  as its `socket` streams. A socket is before the service it activates and
+  before `sockets.target`, which `basic.target` now wants.
+* **L5, resources.** The limits were written since L4; what L5 added is the
+  kernel's side (stage 13's scoped OOM kill, landed beside it) and init's
+  watch of it. Each cgroup's `memory.events` is read after every wake and
+  before any child is reaped, so a service the OOM kill ended is `oom-kill`
+  and not `signal`, and `OOMPolicy=` then applies. `Delegate=yes` with
+  `User=` chowns the service's cgroup and its `cgroup.procs`,
+  `cgroup.subtree_control` and `cgroup.threads` to that user, and a cgroup
+  is removed with everything beneath it, deepest first, so what a delegate
+  made goes with it. Slices and scopes were the manager's since L2; `svc
+  scope` is how a scope is asked for.
+
+**The gate.** `test-init` now also types, after stage two:
+
+* **Four (L6):** `svc status` gives `echoer.service`'s main pid and `svc
+  log` the line it wrote; `svc restart` changes the pid; `su ferrix -c 'svc
+  stop …'` is refused with its reason, exits 1, and changes nothing;
+  `set-property TasksMax=7` reaches `pids.max`; `enable` and `disable` make
+  and remove the `.wants/` link; `top` lists the unit.
+* **Readiness (L7):** `notifier.service` is active on `READY=1` and shows
+  its last `STATUS=`; `lazy.service`, which never says `READY=1`, stays
+  `activating (start)` with its status; `daemon.service`'s main pid is its
+  `PIDFile=`'s.
+* **Sockets (L9):** `hello.service` is inactive until `nc` connects to
+  `hello.socket`, and then says `LISTEN_FDS=1`, its socket's name and
+  `LISTEN_PID` equal to its own pid; `echo ping | nc` to `echo.socket` is
+  answered `echoed ping` by an `echo@1.service` instance.
+* **Three (L5):** `hog.service`, in `test.slice` with `MemoryMax=16M`,
+  grows until the OOM kill takes it and is reported `failed (oom-kill)`,
+  while `echoer.service` runs on; `tasks.service`'s forks past `TasksMax=3`
+  fail and `pids.events` counts them; a process started at the prompt is in
+  `probe.scope` after `svc scope`; `deleg.service`, uid 1000 with
+  `Delegate=yes`, makes a cgroup in its own.
+* Shutdown is `svc poweroff`, and every unit stops before the targets it is
+  after.
+
+Negative controls, scratch edits booted once on x86-64: no `memory.events`
+read failed with "hog.service, past its MemoryMax=, was not reported failed
+(oom-kill)"; no delegation failed with "deleg.service, uid 1000 with
+Delegate=yes, could not make a cgroup in its own"; every uid allowed to
+change state failed stage four's refusal checks; `STATUS=` taken as
+readiness failed with "lazy.service, which never says READY=1, was not left
+activating"; no main pid for a forked service failed with "daemon.service's
+main pid is None"; no sockets handed on failed with "hello.service was
+started without the socket as sd_listen_fds says it: `hello-fds
+pid-ok-0`".
+
+**What building them changed.**
+
+* Services are `After=basic.target` by default, as under systemd (§4.3).
+  Without it shutdown stopped `basic.target` before most services.
+* A typed `m=x; echo "$m $?"` reads the assignment's status, 0, not the
+  command's: the gate saves `$?` first. It looked like `su` losing the
+  status until three probes showed it was the line.
+* `test-init`'s image carries busybox for `su`, `nc` and `mkdir`, and
+  `/etc/passwd` with uid 1000.
+* **The getty generator masked every getty on its second run.** `svc
+  daemon-reload` runs the generators again; the link from the first run was
+  there, `symlink` failed, and the fallback's `File::create` followed the
+  link and emptied `/lib/ferrix/units/getty@.service` -- and an empty unit
+  masks. Shutdown then never ended. The generator now leaves an entry that is
+  there and never opens one to write (`create_new`), with a host test.
+* **A running unit a reload fails keeps its settings until it stops.**
+  With the getty masked while it ran, the manager had no settings to stop it
+  by, and `poweroff.target` waited for ever. systemd can stop a unit it has
+  since masked, and so can the manager now; it says so in a line.
+* **A socket neither re-arms at shutdown nor spins on a refused start.** A
+  connection still in `hello.socket`'s backlog made it readable again the
+  moment `hello.service` stopped, and a start refused as "the machine is
+  going down" put it back to listening, for ever. Now nothing listens again
+  once shutdown has begun, and a socket whose service cannot start -- refused,
+  or its start limit spent -- fails and closes, as systemd's does.
+* **Not done: sshd.** §13 names "sshd activated on connect" as L9's gate.
+  sshdt binds its own socket and does not read `LISTEN_FDS`, so it needs a
+  patch in `ferrousli/tools/ports/sshdt`, and the port is x86-64 only; the
+  activation it would show is shown above with `nc`.
 
 **K2, K3, K4, K6, as built (2026-09-26, the kernel half of L8).** Four
 native calls, numbered in `libs/native-abi/src/nr.rs`, and one message
@@ -1255,3 +1374,10 @@ for it to read"), the recorded signal ignored ("process_status of a process a
 signal ended did not say killed, by it"), and the descriptor offering no wake
 queue ("a packet queued on a port did not wake an epoll_wait on its
 descriptor", after 51 ms with 0 waits woken).
+
+**What the next session does first.** L8's init side: take pid 1's
+bootstrap channel (K2, K3), give each `Type=native` service or service
+with `Uses=`/`Offers=` a channel of its own (K3), wait on the port through
+`port_fd` (K4), and route OPEN, CONNECT and REFUSED (§6), with `test-init`'s
+stage five. Then L10, which moves `cargo xtask run` and the desktop onto
+init.

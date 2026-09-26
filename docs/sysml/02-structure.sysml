@@ -375,9 +375,13 @@ package FerrixStructure {
                  * around libs/svc's manager. It mounts /run and cgroup2, runs
                  * each service in a cgroup of its own from clone3, reaps,
                  * restarts, gives the console a getty and a shell with a
-                 * session of its own, and powers off on SIGTERM. Only
-                 * cargo xtask test-init boots it; the images still start
-                 * their program as pid 1 until L10. */
+                 * session of its own, and powers off. /bin/svc drives it over
+                 * /run/ferrix/control; it waits for notify readiness, starts
+                 * services on a socket's first connection, and applies
+                 * MemoryMax=, TasksMax= and OOMPolicy= over the scoped OOM
+                 * kill. Only cargo xtask test-init boots it; the images still
+                 * start their program as pid 1 until L10, and native services
+                 * and the directory (L8's init side) are left. */
         }
         #implemented part shell : UserProcess {
             doc /* busybox sh was the first foreign binary to run on Ferrix:

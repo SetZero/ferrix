@@ -76,6 +76,7 @@ and on ferrousli's loader and `libc.so.6` in glibc's place, on all three
 architectures, since ferrousli itself was ported to AArch64 and ARMv7-A on
 2026-09-23. Stage 15 has job control and, since 2026-09-26, a real init:
 `/sbin/init` runs services in cgroups of their own over `libs/svc`'s manager,
+with `svc` to drive it, readiness, socket activation and resource limits,
 gives the console a getty, and powers the machine off, on all three
 architectures (`cargo xtask test-init`). The images do not boot it yet; that
 is L10 of `docs/INIT.md`.
@@ -152,7 +153,7 @@ sizes them.
 | Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51 | not started |
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | not started |
 | Stage 14, real-time domains | *month* ≈ 40 | not started |
-| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, of which L3's 3, L1's 5, L2's 8 and L4's 10 are spent, and 18 later | partially complete: a working init (L1 to L4) landed by 2026-09-26: `/sbin/init`, `getty` and the generator over `libs/svc`, gated by `test-init` on all three architectures; the images still start their program as pid 1 until L10, and `svc`, slices, readiness and the directory are L5 to L9 |
+| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, of which 53 are spent (L1 to L7, L9, and L8's kernel half), and 18 later | partially complete: `/sbin/init`, `getty`, `svc`, readiness, socket activation and resource limits over `libs/svc` landed by 2026-09-26, gated by `test-init` on all three architectures; L8's init side (the directory) and L10 (the images booting it) are left |
 | ~~Stage 16, `rustc`~~ *exit met 2026-09-22* | ~~*the goal* ≈ 40~~ 8 spent | done |
 | Stage 20, self-hosting | *longer*, unsized | in progress: the x86-64 image builds on Ferrix and boots (2026-09-23); every build of the matrix recorded, Ferrix making them stops on FX-0001 (2026-09-24) |
 | Stage 21, bare metal and a GPU of Ferrix's own | over 100, unsized | planned when bare-metal work is requested |
@@ -4508,12 +4509,22 @@ in its service's `cgroup.procs` and gone when the service stops, the
 shutdown order, and a clean `btrfs check` afterwards. Both negative controls
 fired. `docs/INIT.md` §16 has the details.
 
-**Still to do:** the rest of the init. L1 to L4 are what `docs/INIT.md` §13
-calls a working init, but no image boots it yet: `cargo xtask run` and
-every gate but `test-init` still start a program as pid 1 themselves, until
-L10 moves them over. Between are `svc` and the control socket (L6), slices,
-scopes and the resource keys (L5), `notify` readiness and `forking` (L7),
-the directory and native services (L8), and `.socket` units (L9).
+**Done -- L5, L6, L7 and L9 (2026-09-26, 19 points), and L8's kernel half.**
+`/bin/svc` over `/run/ferrix/control` with systemctl's verbs, root-only
+changes judged by `SO_PEERCRED`, and a per-unit log of what services print
+(L6); `Type=notify` readiness over `NotifyFd=` and `forking` services by
+their `PIDFile=` (L7); `.socket` units with `LISTEN_FDS` for `Accept=no` and
+an instance per connection for `Accept=yes` (L9); and stage 13's scoped OOM
+kill with init's `OOMPolicy=` on it, `Delegate=`, and scopes (L5). The kernel
+calls L8 needs -- pid 1's bootstrap channel, `process_give` and
+`process_bootstrap`, `process_status`, `port_fd` -- are in. `test-init`
+types every one of these at the prompt on all three architectures;
+`docs/INIT.md` §16 has what each stage requires and its negative control.
+
+**Still to do:** L8's init side, the directory and native services (§6),
+and L10: no image boots the init yet -- `cargo xtask run` and every gate but
+`test-init` start a program as pid 1 themselves -- and hyprix is still pid 1
+on the desktop.
 
 **Designed (2026-09-23): `docs/INIT.md`.** `/sbin/init` is pid 1 and a
 service manager in one program. Its units are in systemd's syntax, with
@@ -4525,17 +4536,17 @@ native services between them.
 
 Init waited on stage 13's cgroups, which the customer put first; what its
 first boot needs of them (C1 to C5 and C7) landed on 2026-09-24. Its landings
-come to 67 points up to hyprix no longer being pid 1, 26 of them spent on
-L3, L1, L2 and L4: six kernel items of 11 points besides stage 13, two of them
+come to 67 points up to hyprix no longer being pid 1, 53 of them spent on
+L1 to L7, L9 and L8's kernel half: six kernel items of 11 points besides stage 13, two of them
 (K0, K7) built, and `cargo xtask test-init` growing a stage per landing. Its
 first two landings, the unit parser and the dependency engine, were
 host-only and were built while stage 13 was.
 
-**Where it stands.** A working init is in (L1 to L4), gated by
-`cargo xtask test-init` on all three architectures. The next landing is
-L6, `svc` and the control socket, which makes it something a person drives;
-L5, L7 and L9 can go beside it. The stage's exit has been met by `test-jobs`
-since 2026-09-19; the images still start their own pid 1 until L10.
+**Where it stands.** The init is a service manager a person drives (L1 to
+L7, L9), gated by `cargo xtask test-init` on all three architectures. What
+is left is L8's init side and L10, which moves the images onto it. The
+stage's exit has been met by `test-jobs` since 2026-09-19; the images still
+start their own pid 1 until L10.
 
 `test-jobs` is x86-64 only, because `sleep` is uutils' and uutils is built
 for x86-64 alone (`docs/UUTILS.md` D3).
