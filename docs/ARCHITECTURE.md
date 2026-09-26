@@ -178,6 +178,13 @@ whose first gibibyte is flash and device registers — and `BootInfo` says where
 `libs/bootinfo` holds both layouts and checks both at compile time on every
 build, whichever the build is for.
 
+The direct map is writable and never executable, except over the kernel
+image's own text and read-only data, which it aliases read only: a writable
+alias of the text would change the code the image mapping runs without ever
+being writable and executable itself. Both loaders cut the direct map around
+that span, and every boot walks each mapping of its frames and requires none
+to be writable.
+
 These are regions, not addresses. Built `--mitigations on`, the default, the
 loader puts the kernel image, the direct map and the top of the vmap arena
 somewhere new in its region each boot (KASLR), and `BootInfo` says where;

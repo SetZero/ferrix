@@ -162,7 +162,9 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // are all check are gated here, in the order they run; the steps that do
     // both gate their own checks inside.
     if checks::run() {
-        check_allocators_and_traps(&stats, view.raw().kernel_phys);
+        // The image's data, not its text: the device-window checks map it
+        // writable, and the text has no writable mapping anywhere.
+        check_allocators_and_traps(&stats, mm::image_data_phys(view));
     }
 
     // Everything above is synchronous: traps the kernel caused deliberately.
@@ -281,8 +283,8 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
 }
 
 /// Stage 2's allocators and stage 3's synchronous traps: all check.
-fn check_allocators_and_traps(stats: &mm::Stats, kernel_phys: u64) {
-    if let Err(problem) = memory_check(stats, kernel_phys) {
+fn check_allocators_and_traps(stats: &mm::Stats, aperture: u64) {
+    if let Err(problem) = memory_check(stats, aperture) {
         fatal!(
             catalog::STAGE2_ALLOCATORS,
             "stage 2 self-check failed: {problem}"
@@ -1837,6 +1839,32 @@ fn sweep_w_xor_x(view: &BootView<'_>) -> Result<(), &'static str> {
         "  w^x      {} mappings swept, {} executable, none writable",
         wx.leaves, wx.executable
     );
+
+    // And the frames the image's text sits in, through every mapping of them:
+    // the direct map aliases them, never executably, so the sweep above
+    // cannot see an alias that writes the code it just passed.
+    let sealed = match mm::check_sealed_image(view) {
+        Ok(report) => report,
+        Err(found) if found.len == 0 => {
+            println!(
+                "  sealed   the direct map does not alias all of the image's text at {:#x}",
+                found.virt
+            );
+            return Err("the direct map does not alias the kernel's text, so nothing was swept");
+        }
+        Err(found) => {
+            println!(
+                "  sealed   {:#x} writes the kernel's text or read-only data, {} bytes of it",
+                found.virt, found.len
+            );
+            return Err("a mapping can write the kernel's text or read-only data");
+        }
+    };
+    println!(
+        "  sealed   {} KiB of text and read-only data, {} mappings of it, none writable",
+        sealed.bytes / 1024,
+        sealed.mappings
+    );
     Ok(())
 }
 
@@ -2344,7 +2372,7 @@ fn report_memory(stats: &mm::Stats) {
 /// Every one of these is an invariant a later subsystem will assume without
 /// checking, because by then there will be no way to check it: a scheduler that
 /// gets a `Vec` back with the wrong contents has no idea the heap is at fault.
-fn memory_check(stats: &mm::Stats, kernel_phys: u64) -> Result<(), &'static str> {
+fn memory_check(stats: &mm::Stats, aperture: u64) -> Result<(), &'static str> {
     if stats.managed_frames == 0 {
         return Err("the frame allocator was given nothing");
     }
@@ -2374,7 +2402,7 @@ fn memory_check(stats: &mm::Stats, kernel_phys: u64) -> Result<(), &'static str>
         return Err("the heap kept more slab pages than one per size class");
     }
 
-    check_vmap(kernel_phys)?;
+    check_vmap(aperture)?;
     check_stacks()?;
     Ok(())
 }
@@ -2385,7 +2413,7 @@ fn memory_check(stats: &mm::Stats, kernel_phys: u64) -> Result<(), &'static str>
 /// pages and never unmapped them would pass every read-back check here and
 /// leak a frame per page. Requiring the free count to return to exactly where
 /// it started is the only assertion that notices.
-fn check_vmap(kernel_phys: u64) -> Result<(), &'static str> {
+fn check_vmap(aperture: u64) -> Result<(), &'static str> {
     const PAGES: u64 = 8;
 
     let free_before = mm::free_frames();
@@ -2415,8 +2443,8 @@ fn check_vmap(kernel_phys: u64) -> Result<(), &'static str> {
     check_vmap_contents(first)?;
     check_vmap_guards(first)?;
     check_vmap_protection(first)?;
-    check_device_windows(kernel_phys)?;
-    vmap::check_failed_device_map(kernel_phys)?;
+    check_device_windows(aperture)?;
+    vmap::check_failed_device_map(aperture)?;
     vmap::check_invariants()?;
 
     vmap::free(first.base).map_err(|_| "vmap refused to free its own allocation")?;
@@ -2547,25 +2575,26 @@ fn check_stacks() -> Result<(), &'static str> {
 /// A device window lands where it was asked to, offset and all, and can be
 /// taken back.
 ///
-/// The aperture used is the kernel's own image, which is real RAM rather than
-/// registers — nothing is read or written through the window, only translated,
+/// The aperture used is the kernel's own data, which is real RAM rather than
+/// registers, and writable anyway, where its text has no writable mapping
+/// anywhere (`mm::check_sealed_image`) — nothing is read or written through the window, only translated,
 /// because reading RAM through an uncached device mapping while the same bytes
 /// sit in a cache is exactly the aliasing the architecture does not define.
 /// What is under test is the *address arithmetic*, which is where the bugs
 /// are: an I/O APIC's registers start at an offset within their page, and a
 /// window that rounded that away would work perfectly for the GIC and silently
 /// address the wrong register here.
-fn check_device_windows(kernel_phys: u64) -> Result<(), &'static str> {
+fn check_device_windows(aperture: u64) -> Result<(), &'static str> {
     const OFFSET: u64 = 0x40;
 
     let free_before = mm::free_frames();
-    let at = vmap::map_device(kernel_phys + OFFSET, 0x100)
+    let at = vmap::map_device(aperture + OFFSET, 0x100)
         .map_err(|_| "a device window could not be mapped")?;
 
     if at % PAGE_SIZE != OFFSET {
         return Err("a device window did not preserve its offset within the page");
     }
-    if mm::translate(at) != Some(kernel_phys + OFFSET) {
+    if mm::translate(at) != Some(aperture + OFFSET) {
         return Err("a device window does not resolve to the registers it was asked for");
     }
     match mm::permissions_of(at) {

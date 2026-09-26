@@ -286,13 +286,21 @@ pub(crate) static STAGE2_FINISH_MEMORY: Explanation = Explanation {
               loader's identity map as a violation, which proves the sweep can find one; \
               then it drops the identity map and requires address zero to translate to \
               nothing, sweeps every live page table root for a mapping that is both writable \
-              and executable, and gives the loader's memory and the ACPI tables back to the \
-              frame allocator, requiring something to come back. A kernel still running with \
-              a writable and executable mapping, or still depending on the identity map, is \
-              not the kernel the boot marker describes.",
+              and executable, requires no mapping of the frames holding the kernel's text and \
+              read-only data to be writable and the direct map to alias every one of them, \
+              and gives the loader's memory and the ACPI tables back to the frame allocator, \
+              requiring something to come back. A kernel still running with a writable and \
+              executable mapping, with a writable alias of its own code, or still depending \
+              on the identity map, is not the kernel the boot marker describes.",
     causes: &[
         "A mapping was installed writable and executable; the `w^x` line printed before the \
          panic gives its address and length.",
+        "A loader mapped the direct map writable over the kernel's text or read-only data, \
+         or something mapped those frames writable later; the `sealed` line gives the \
+         mapping's address. Both loaders cut the direct map around the span \
+         `ferrix_bootinfo::read_only_span` computes.",
+        "The direct map does not alias all of the image's text, so the sealed sweep checked \
+         nothing; the `sealed` line gives where the alias should have been.",
         "The architecture's `drop_identity_map` did not remove the lower half, so address \
          zero still translates.",
         "On AArch64 and ARMv7-A the identity map is a root of its own, and \
@@ -301,8 +309,8 @@ pub(crate) static STAGE2_FINISH_MEMORY: Explanation = Explanation {
         "The memory map marks no loader or ACPI-reclaimable region inside the range the \
          per-frame array covers, so nothing was reclaimed.",
     ],
-    see: "kernel/src/main.rs finish_memory; kernel/src/mm.rs check_w_xor_x; \
-          kernel/src/mm.rs reclaim_boot_memory; docs/ROADMAP.md stage 2",
+    see: "kernel/src/main.rs finish_memory; kernel/src/mm.rs check_w_xor_x and \
+          check_sealed_image; kernel/src/mm.rs reclaim_boot_memory; docs/ROADMAP.md stage 2",
 };
 
 /// For `kmain` in `main.rs`, when `trap_check` fails.

@@ -64,7 +64,12 @@ SECTIONS
     .dynamic  : { *(.dynamic) }  :rodata
 
     . = ALIGN(4096);
+    /* Everything below this is text or read-only data, which the loader maps
+     * read only in the direct map as well as in the image, and which the
+     * kernel's boot sweep requires no mapping to write (kernel/src/mm.rs
+     * check_sealed_image). */
     .data : ALIGN(4096) {
+        __data_start = .;
         *(.data .data.*)
         *(.sdata .sdata.*)
         *(.got) *(.got.plt)

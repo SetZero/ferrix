@@ -623,7 +623,9 @@ pub(crate) fn root_table() -> u64 {
 }
 
 /// Where physical address `phys` can be read and written: its alias in the
-/// direct map.
+/// direct map. Read only over the kernel's own text and read-only data, which
+/// the loaders seal there ([`check_sealed_image`]); every frame the allocator
+/// hands out is outside that span, since the image is never freed.
 pub(crate) fn direct_map(phys: u64) -> u64 {
     physmap(phys)
 }
@@ -1031,6 +1033,102 @@ pub(crate) fn check_w_xor_x(view: &BootView<'_>) -> Result<WxReport, WriteExecut
         Some(found) => Err(found),
         None => Ok(report),
     }
+}
+
+// Where the link script puts the image's first byte and the first byte of its
+// data: everything between the two is text or read-only data. Declared rather
+// than defined, because only their addresses mean anything.
+unsafe extern "C" {
+    static __kernel_start: u8;
+    static __data_start: u8;
+}
+
+/// The physical span of the image's text and read-only data, as its first
+/// byte and a length.
+fn sealed_span(view: &BootView<'_>) -> (u64, u64) {
+    let start = u64::try_from((&raw const __kernel_start).addr()).unwrap_or(u64::MAX);
+    let data = u64::try_from((&raw const __data_start).addr()).unwrap_or(0);
+    (view.raw().kernel_phys, data.saturating_sub(start))
+}
+
+/// The physical address of the image's first byte of data: RAM the kernel
+/// owns and may map writable elsewhere, which its text and read-only data are
+/// not.
+pub(crate) fn image_data_phys(view: &BootView<'_>) -> u64 {
+    let (low, bytes) = sealed_span(view);
+    low.saturating_add(bytes)
+}
+
+/// What the sealed-image sweep found.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SealReport {
+    /// Bytes of text and read-only data the image holds.
+    pub(crate) bytes: u64,
+    /// Mappings of any of those bytes, the image's own included.
+    pub(crate) mappings: u64,
+}
+
+/// Walk the kernel's tables and require that no mapping of the physical pages
+/// holding the kernel's text and read-only data is writable.
+///
+/// The W^X sweep asks each mapping about itself, and the image mapping passes
+/// it. The direct map is a second mapping of the same frames, never executable
+/// and so never a W^X violation, and until the loaders sealed it it was
+/// writable: a write through the alias changed the code the image mapping
+/// runs. So this asks about the *frames*, whatever maps them — the direct
+/// map, the image, or a device window somebody opened over the image.
+///
+/// And it requires the direct map to alias every byte of the span, which is
+/// what makes a clean result mean something: a sweep that never met the alias
+/// it is looking for would pass on a kernel whose direct map moved.
+///
+/// # Errors
+///
+/// The first writable mapping of a sealed frame, or, as a zero-length
+/// [`WriteExecute`] at the span's direct-map address, a direct map that does
+/// not cover the whole span.
+pub(crate) fn check_sealed_image(view: &BootView<'_>) -> Result<SealReport, WriteExecute> {
+    let (low, bytes) = sealed_span(view);
+    let high = low.saturating_add(bytes);
+    let physmap = PHYSMAP.load(Ordering::Relaxed);
+    let physmap_phys = PHYSMAP_PHYS.load(Ordering::Relaxed);
+
+    let mut report = SealReport { bytes, mappings: 0 };
+    let mut aliased = 0u64;
+    let mut offender = None;
+    let _ = sweep(ROOT_TABLE.load(Ordering::Relaxed), |leaf| {
+        let first = leaf.phys.0;
+        let end = first.saturating_add(leaf.bytes());
+        if end <= low || first >= high {
+            return true;
+        }
+        report.mappings += 1;
+        if leaf.flags.write {
+            offender = Some(WriteExecute {
+                virt: leaf.virt.0,
+                len: leaf.bytes(),
+            });
+            return false;
+        }
+        let direct = first
+            .checked_sub(physmap_phys)
+            .and_then(|offset| physmap.checked_add(offset));
+        if direct == Some(leaf.virt.0) {
+            aliased += end.min(high) - first.max(low);
+        }
+        true
+    });
+
+    if let Some(found) = offender {
+        return Err(found);
+    }
+    if bytes == 0 || aliased != bytes {
+        return Err(WriteExecute {
+            virt: direct_map(low),
+            len: 0,
+        });
+    }
+    Ok(report)
 }
 
 // ---------------------------------------------------------------------------
