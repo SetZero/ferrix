@@ -59,6 +59,9 @@ pub(crate) struct Args {
     /// `--statd`: the image carries the stat service at
     /// `/sbin/ferrix-statd`, for `ferrix.init=` to start.
     pub(crate) statd: bool,
+    /// `--adbd`: the image carries adbd at `/bin/adbd`, which nothing
+    /// starts (`docs/ADB.md`).
+    pub(crate) adbd: bool,
     /// `--miri`: add CI's Miri steps to `check`.
     pub(crate) miri: bool,
     /// `--reset`: the image carries `ferrix.onexit=reset` in `CMDLINE.TXT`, and
@@ -406,6 +409,7 @@ impl Args {
                 "--ferrousli" => args.ferrousli = true,
                 "--zinc" => args.zinc = true,
                 "--statd" => args.statd = true,
+                "--adbd" => args.adbd = true,
                 "--miri" => args.miri = true,
                 "--reset" => args.reset = true,
                 "--compositor" => args.compositor = true,

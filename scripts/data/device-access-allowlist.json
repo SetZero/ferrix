@@ -113,6 +113,12 @@
       "reason": "Root and context table entries in RAM the VT-d unit walks itself. Volatile because the unit observes the write, not because the address is a register."
     },
     {
+      "file": "kernel/src/object/pin.rs",
+      "kind": "shared",
+      "max_sites": 1,
+      "reason": "A quarantined pin's pages, read whole as they enter the quarantine and as they leave it, to count those a device wrote after its driver died. RAM a device may still write, not a register: volatile because the device may be writing it at the time."
+    },
+    {
       "file": "kernel/src/iommu/smmuv3.rs",
       "kind": "shared",
       "max_sites": 3,

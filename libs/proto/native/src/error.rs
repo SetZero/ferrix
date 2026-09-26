@@ -52,6 +52,9 @@ pub enum Error {
     NotChild,
     /// `EINTR`: the process is being killed, and the call gave up waiting.
     Interrupted,
+    /// [`status::QUARANTINE_FULL`]: a device's DMA quarantine holds all it
+    /// may, so no pin for it is taken until a driver of it is accepted.
+    QuarantineFull,
     /// Some other `errno`, which no native call is documented to return.
     Other(Errno),
     /// A success value this call cannot produce: a handle of zero, or one
@@ -83,6 +86,7 @@ impl Error {
             Errno::ESRCH => Error::NoProcess,
             status::NOT_CHILD => Error::NotChild,
             Errno::EINTR => Error::Interrupted,
+            status::QUARANTINE_FULL => Error::QuarantineFull,
             other => Error::Other(other),
         }
     }
@@ -110,6 +114,7 @@ impl Error {
             Error::NoProcess => Errno::ESRCH,
             Error::NotChild => status::NOT_CHILD,
             Error::Interrupted => Errno::EINTR,
+            Error::QuarantineFull => status::QUARANTINE_FULL,
             Error::Other(errno) => errno,
             Error::Unexpected(_) => return None,
         })

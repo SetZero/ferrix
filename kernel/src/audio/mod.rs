@@ -414,6 +414,10 @@ fn judge(start: &Start, message: &ChannelMessage) -> Result<Publication, Refusal
 #[inline(never)]
 fn accept(start: &Start, message: &ChannelMessage) -> Result<(Arc<Card>, Session), Refusal> {
     let publication = judge(start, message)?;
+    // The driver reset the device, and released what its streams held,
+    // before it sent HELLO: what a dead one's pins kept from the allocator
+    // can go back (`object::pin`'s quarantine, `docs/AUDIO.md` §3.3).
+    crate::object::pin::quarantine_release(&start.device);
     let config = publication.config;
     let pages = (config.buffer_bytes() as usize).div_ceil(PAGE_BYTES) as u64;
     let buffer = Vmo::new_anonymous(pages).map_err(|_| Refusal::Hello)?;

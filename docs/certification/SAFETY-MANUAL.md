@@ -205,6 +205,32 @@ KPTI a program with a timer can locate the kernel, and no ASR rests on it; and
 shall treat a program that can read the framebuffer the boot console drew on
 as able to read the slide the log printed there. (Finding F-31.)
 
+### AoU-12 — no device translates for itself
+An unpin takes a page out of its device's domain and waits for the IOMMU's
+invalidation to complete before the frame goes back (`object/pin.rs`), which
+stops a device that asks the IOMMU on every access. A device with address
+translation services (PCIe ATS) keeps translations of its own, which that
+invalidation does not reach. The element never enables ATS: VT-d context
+entries are written with `TT=00`, SMMUv3 stream table entries with `EATS=0`,
+and PCI enumeration switches off any ATS capability firmware left on, and
+refuses to boot a function that keeps it on (`pci.rs`, `keep_ats_off`). The
+integrator shall not enable ATS on any device, nor configure its IOMMU to
+accept translated requests, nor add a device-TLB invalidation path without
+the element's.
+
+A dead driver's pins on a translated domain are not given back until its
+device's next driver has reset it and been accepted; until then they stay
+mapped, their frames held and charged to no job. devmgr starts no driver again
+after one that died before publishing, or once a device's restart budget is
+spent, so a device keeps at most two drivers' pins that way. An explicit rebind
+of a device whose drivers die before publishing keeps one more driver's pins
+each time, up to the element's own cap: once a device's quarantine holds
+133120 pages (520 MiB, two drivers' worst case), a new pin for it is refused
+with `QUARANTINE_FULL` and the device stops working until a driver of it is
+accepted or the element restarts. The integrator shall not rebind such a
+device in a loop, and shall treat `QUARANTINE_FULL` as a device that has
+failed. (Finding F-38.)
+
 ---
 
 ## 5. Element failure analysis

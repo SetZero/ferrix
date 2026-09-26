@@ -1,0 +1,13 @@
+[package]
+name = "ferrix-adb"
+description = "The Android Debug Bridge's wire protocol, as adbd speaks it: messages, and the sync service's requests and replies"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

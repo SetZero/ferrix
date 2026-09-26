@@ -1464,11 +1464,18 @@ fn check_driver(started_by_devmgr: bool) {
         println!("  driver   not checked: {why}");
         return;
     }
-    println!(
-        "  driver   blk serves {} ({} sectors) through the block ring; {} sectors read back \
-         through the registry as xtask wrote them",
-        report.names, report.sectors, report.read,
-    );
+    if checks::run() {
+        println!(
+            "  driver   blk serves {} ({} sectors) through the block ring; {} sectors read back \
+             through the registry as xtask wrote them",
+            report.names, report.sectors, report.read,
+        );
+    } else {
+        println!(
+            "  driver   blk serves {} ({} sectors) through the block ring; nothing read back",
+            report.names, report.sectors,
+        );
+    }
     // Stage 11's and 12's exits are checks against the gates' fixture disks;
     // a boot that skips them still switches `/` to a root disk and mounts a
     // data disk, which `check_btrfs_write` does last either way.
@@ -1728,6 +1735,17 @@ fn check_iommu(view: &BootView<'_>) {
         domains.refusals,
         domains.waits,
     );
+    match object::pin::check_quarantine(device::devices()) {
+        Ok(true) => println!(
+            "  iommu    a dead driver's pin was quarantined, a pin past the quarantine's cap \
+             refused and one taken again once it was released, a live driver's given back"
+        ),
+        Ok(false) => {}
+        Err(problem) => fatal!(
+            catalog::STAGE10_IOMMU,
+            "stage 10 self-check failed: {problem}"
+        ),
+    }
 }
 
 fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>, reserved: &device::Reserved) {

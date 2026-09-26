@@ -13,7 +13,9 @@
 //! a third volume out of the two trees, linked rather than copied, and
 //! makes it again whenever either image is newer than it. Two files at one
 //! path that differ stop it, naming the path, rather than one quietly
-//! winning.
+//! winning -- with one exception, [`newer_runtime`] and [`newer_soname`]: a library whose newer build
+//! runs everything built against the older, where the newer is kept and the
+//! choice is said.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -136,10 +138,24 @@ fn merge(from: &Path, into: &Path) -> Result<u64> {
             let link = std::fs::read_link(&source)
                 .map_err(|error| Error::new(format!("{}: {error}", source.display())))?;
             if std::fs::symlink_metadata(&target).is_ok() {
-                if std::fs::read_link(&target).ok().as_ref() != Some(&link) {
-                    return Err(clash(&target));
+                let there = std::fs::read_link(&target).ok();
+                if there.as_ref() == Some(&link) {
+                    continue;
                 }
-                continue;
+                match there
+                    .as_deref()
+                    .and_then(|there| newer_soname(&target, there, &link))
+                {
+                    Some(Keep::There) => {
+                        say_kept(&target, "the rustc volume's");
+                        continue;
+                    }
+                    Some(Keep::Here) => {
+                        say_kept(&target, "the Chrome volume's");
+                        remove(&target)?;
+                    }
+                    None => return Err(clash(&target)),
+                }
             }
             std::os::unix::fs::symlink(&link, &target)
                 .map_err(|error| Error::new(format!("{}: {error}", target.display())))?;
@@ -152,20 +168,163 @@ fn merge(from: &Path, into: &Path) -> Result<u64> {
             bytes += merge(&source, &target)?;
         } else {
             if let Ok(there) = std::fs::symlink_metadata(&target) {
-                if !there.is_file() || !same_contents(&source, &target)? {
+                if !there.is_file() {
                     return Err(clash(&target));
                 }
-                continue;
+                if same_contents(&source, &target)? {
+                    continue;
+                }
+                match newer_runtime(&target, &target, &source)? {
+                    Some(Keep::There) => {
+                        say_kept(&target, "the rustc volume's");
+                        continue;
+                    }
+                    Some(Keep::Here) => {
+                        say_kept(&target, "the Chrome volume's");
+                        // Its bytes were counted when the other copy came.
+                        remove(&target)?;
+                        link_or_copy(&source, &target)?;
+                        continue;
+                    }
+                    None => return Err(clash(&target)),
+                }
             }
-            if std::fs::hard_link(&source, &target).is_err() {
-                let _ = std::fs::copy(&source, &target)
-                    .map_err(|error| Error::new(format!("{}: {error}", target.display())))?;
-            }
+            link_or_copy(&source, &target)?;
             // Rounded up to a block, as the file system will store it.
             bytes += kind.len().div_ceil(4096) * 4096;
         }
     }
     Ok(bytes)
+}
+
+/// Remove the copy a newer one replaces.
+fn remove(path: &Path) -> Result<()> {
+    std::fs::remove_file(path).map_err(|error| Error::new(format!("{}: {error}", path.display())))
+}
+
+/// Hard-link `source` at `target`, or copy it where a link cannot be made.
+fn link_or_copy(source: &Path, target: &Path) -> Result<()> {
+    if std::fs::hard_link(source, target).is_err() {
+        let _ = std::fs::copy(source, target)
+            .map_err(|error| Error::new(format!("{}: {error}", target.display())))?;
+    }
+    Ok(())
+}
+
+/// Which of two copies at one path the volume keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Keep {
+    /// The one already there: the rustc volume's, merged first.
+    There,
+    /// The one arriving: the Chrome volume's.
+    Here,
+}
+
+/// Say which copy of a runtime the volume took, in one line.
+fn say_kept(path: &Path, whose: &str) {
+    println!(
+        "  everything: {}: the two volumes differ; kept {whose}, the newer runtime",
+        path.display()
+    );
+}
+
+/// The GCC runtime, by file-name prefix, and the prefix of the symbol
+/// versions each defines. GCC keeps every one backward compatible: the
+/// rustc volume takes gcc 16's from sid for gcc 15, the Chrome volume
+/// trixie's gcc 14, and a program built against the older runs on the newer.
+const RUNTIMES: &[(&str, &str)] = &[
+    ("libgcc_s.so", "GCC_"),
+    ("libatomic.so", "LIBATOMIC_"),
+    ("libstdc++.so", "GLIBCXX_"),
+];
+
+/// For a GCC runtime the two volumes hold different builds of, which to keep:
+/// the one whose newest symbol version is later, and on a tie the rustc
+/// volume's, whose runtime is sid's and the newer build. `None` for any other
+/// file, which stays a clash.
+fn newer_runtime(path: &Path, there: &Path, here: &Path) -> Result<Option<Keep>> {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Ok(None);
+    };
+    let Some(&(_, prefix)) = RUNTIMES.iter().find(|(start, _)| name.starts_with(start)) else {
+        return Ok(None);
+    };
+    let read = |path: &Path| {
+        std::fs::read(path).map_err(|error| Error::new(format!("{}: {error}", path.display())))
+    };
+    let (there, here) = (
+        newest_version(&read(there)?, prefix),
+        newest_version(&read(here)?, prefix),
+    );
+    Ok(match (there, here) {
+        (Some(there), Some(here)) if here > there => Some(Keep::Here),
+        (Some(_), Some(_)) => Some(Keep::There),
+        // Not the library its name says: a clash after all.
+        _ => None,
+    })
+}
+
+/// The latest `<prefix>N.N…` version a library's string table names, as
+/// numbers to compare. The names of the versions it defines are in its
+/// `.dynstr` beside the ones it needs, and only its own carry its prefix.
+fn newest_version(bytes: &[u8], prefix: &str) -> Option<Vec<u32>> {
+    let prefix = prefix.as_bytes();
+    let mut newest: Option<Vec<u32>> = None;
+    let mut at = 0;
+    while let Some(found) = bytes.get(at..).and_then(|rest| {
+        rest.windows(prefix.len())
+            .position(|window| window == prefix)
+    }) {
+        let start = at + found + prefix.len();
+        let end = bytes
+            .get(start..)
+            .and_then(|rest| {
+                rest.iter()
+                    .position(|&byte| !(byte.is_ascii_digit() || byte == b'.'))
+            })
+            .map_or(bytes.len(), |length| start + length);
+        let version: Option<Vec<u32>> =
+            std::str::from_utf8(bytes.get(start..end).unwrap_or_default())
+                .ok()
+                .filter(|text| !text.is_empty())
+                .and_then(|text| text.split('.').map(|part| part.parse().ok()).collect());
+        if let Some(version) = version
+            && newest.as_ref().is_none_or(|newest| &version > newest)
+        {
+            newest = Some(version);
+        }
+        at = end.max(start);
+    }
+    newest
+}
+
+/// For a library's soname link the two volumes point at different builds of,
+/// which to keep: the later version, which is how `ldconfig` would have
+/// chosen. Only a link named `lib*.so.N` whose two targets are that name
+/// followed by a version; `None` for any other link, which stays a clash.
+fn newer_soname(path: &Path, there: &Path, here: &Path) -> Option<Keep> {
+    let name = path.file_name()?.to_str()?;
+    let major = name.get(name.find(".so.")? + 4..)?;
+    if !name.starts_with("lib")
+        || major.is_empty()
+        || !major.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let version = |target: &Path| -> Option<Vec<u32>> {
+        let target = target.to_str()?;
+        if target.contains('/') {
+            return None;
+        }
+        let rest = target.strip_prefix(name)?.strip_prefix('.')?;
+        rest.split('.').map(|part| part.parse().ok()).collect()
+    };
+    let (there, here) = (version(there)?, version(here)?);
+    Some(if here > there {
+        Keep::Here
+    } else {
+        Keep::There
+    })
 }
 
 /// Whether two files hold the same bytes.
@@ -196,4 +355,125 @@ fn modified(path: &Path) -> Result<SystemTime> {
     std::fs::metadata(path)
         .and_then(|metadata| metadata.modified())
         .map_err(|error| Error::new(format!("{}: {error}", path.display())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A tree under the target directory's scratch, with each `(path, bytes)`
+    /// as a file and each `(path, target)` as a symbolic link.
+    fn tree(name: &str, files: &[(&str, &[u8])], links: &[(&str, &str)]) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("ferrix-everything-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (path, bytes) in files {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        }
+        for (path, target) in links {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(target, path).unwrap();
+        }
+        root
+    }
+
+    const LIB: &str = "usr/lib/x86_64-linux-gnu";
+
+    #[test]
+    fn a_newer_version_is_read_from_the_string_table() {
+        let table = b"\0GLIBC_2.2.5\0GCC_3.0\0GCC_14.0.0\0GCC_4.2.0\0";
+        assert_eq!(newest_version(table, "GCC_"), Some(vec![14, 0, 0]));
+        assert_eq!(newest_version(table, "GLIBCXX_"), None);
+    }
+
+    /// The rule the volumes met on 2026-09-26: gcc 16's runtime from sid in
+    /// the rustc volume, gcc 14's from trixie in the Chrome volume, both
+    /// topping out at `GCC_14.0.0`, and wayland 1.24 against 1.23.
+    #[test]
+    fn differing_runtimes_keep_the_newer_and_say_so() {
+        let libgcc = format!("{LIB}/libgcc_s.so.1");
+        let libstdcxx = format!("{LIB}/libstdc++.so.6.0.33");
+        let wayland = format!("{LIB}/libwayland-server.so.0");
+        let rustc = tree(
+            "runtime-rustc",
+            &[
+                (&libgcc, b"sid\0GCC_14.0.0\0"),
+                (&libstdcxx, b"old\0GLIBCXX_3.4.33\0"),
+            ],
+            &[(&wayland, "libwayland-server.so.0.24.0")],
+        );
+        let chrome = tree(
+            "runtime-chrome",
+            &[
+                (&libgcc, b"trixie\0GCC_14.0.0\0"),
+                (&libstdcxx, b"new\0GLIBCXX_3.4.34\0"),
+            ],
+            &[(&wayland, "libwayland-server.so.0.23.1")],
+        );
+        let into = tree("runtime-into", &[], &[]);
+        create_dir(&into).unwrap();
+        let _ = merge(&rustc, &into).unwrap();
+        let _ = merge(&chrome, &into).unwrap();
+        // A tie goes to the rustc volume's; a later version wins either way.
+        assert!(
+            std::fs::read(into.join(&libgcc))
+                .unwrap()
+                .starts_with(b"sid")
+        );
+        assert!(
+            std::fs::read(into.join(&libstdcxx))
+                .unwrap()
+                .starts_with(b"new")
+        );
+        assert_eq!(
+            std::fs::read_link(into.join(&wayland)).unwrap(),
+            PathBuf::from("libwayland-server.so.0.24.0")
+        );
+        for root in [rustc, chrome, into] {
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    /// The negative control: any other library that differs still stops the
+    /// merge, and so does a soname link to somewhere that is not a version.
+    #[test]
+    fn any_other_difference_is_still_a_clash() {
+        let libz = format!("{LIB}/libz.so.1.3.1");
+        let rustc_z = tree("clash-file-rustc", &[(&libz, b"one")], &[]);
+        let chrome_z = tree("clash-file-chrome", &[(&libz, b"two")], &[]);
+        let into_z = tree("clash-file-into", &[], &[]);
+        create_dir(&into_z).unwrap();
+        let _ = merge(&rustc_z, &into_z).unwrap();
+        let error = merge(&chrome_z, &into_z).unwrap_err().to_string();
+        assert!(error.contains("libz.so.1.3.1"), "{error}");
+
+        let odd = format!("{LIB}/libfoo.so.1");
+        let rustc = tree("clash-link-rustc", &[], &[(&odd, "libfoo.so.1.2")]);
+        let chrome = tree(
+            "clash-link-chrome",
+            &[],
+            &[(&odd, "../elsewhere/libfoo.so.1.3")],
+        );
+        let into = tree("clash-link-into", &[], &[]);
+        create_dir(&into).unwrap();
+        let _ = merge(&rustc, &into).unwrap();
+        let error = merge(&chrome, &into).unwrap_err().to_string();
+        assert!(error.contains("libfoo.so.1"), "{error}");
+        // A GCC runtime whose name says it is one but that names no version.
+        let libgcc = format!("{LIB}/libgcc_s.so.1");
+        let rustc_gcc = tree("clash-gcc-rustc", &[(&libgcc, b"no versions")], &[]);
+        let chrome_gcc = tree("clash-gcc-chrome", &[(&libgcc, b"none here")], &[]);
+        let into_gcc = tree("clash-gcc-into", &[], &[]);
+        create_dir(&into_gcc).unwrap();
+        let _ = merge(&rustc_gcc, &into_gcc).unwrap();
+        assert!(merge(&chrome_gcc, &into_gcc).is_err());
+        for root in [
+            rustc, chrome, into, rustc_gcc, chrome_gcc, into_gcc, rustc_z, chrome_z, into_z,
+        ] {
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
 }

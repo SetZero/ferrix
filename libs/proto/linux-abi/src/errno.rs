@@ -166,6 +166,8 @@ impl Errno {
     pub const EALREADY: Self = Self(114);
     /// Operation now in progress.
     pub const EINPROGRESS: Self = Self(115);
+    /// A quota was exceeded (Ferrix: a device's DMA quarantine is full).
+    pub const EDQUOT: Self = Self(122);
     /// Operation canceled: a timerfd armed with `TFD_TIMER_CANCEL_ON_SET`
     /// read after the real-time clock was set.
     pub const ECANCELED: Self = Self(125);

@@ -60,8 +60,13 @@ pub const NO_PROCESS: Errno = Errno::ESRCH;
 /// A process id names a live process that is not the caller's child.
 pub const NOT_CHILD: Errno = Errno::ECHILD;
 
+/// A device's DMA quarantine holds all it may: the pins of drivers that died
+/// before one of their successors reset the device (`object::pin` in the
+/// kernel). A pin for it is refused until a driver of the device is accepted.
+pub const QUARANTINE_FULL: Errno = Errno::EDQUOT;
+
 /// Every name above, for the tests that hold them distinct.
-pub const ALL: [Errno; 16] = [
+pub const ALL: [Errno; 17] = [
     BAD_HANDLE,
     WRONG_TYPE,
     ACCESS_DENIED,
@@ -78,4 +83,5 @@ pub const ALL: [Errno; 16] = [
     BAD_STATE,
     NO_PROCESS,
     NOT_CHILD,
+    QUARANTINE_FULL,
 ];

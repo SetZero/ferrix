@@ -239,16 +239,17 @@ fn died_status(exit: Exit) -> i32 {
 /// Whether a driver of `kind` is started again when it dies
 /// (`docs/DEVMGR.md` §4).
 ///
-/// A display driver only. A disk's death under a mounted filesystem is
-/// still a dead disk: what a filesystem does with a device that went and
-/// came back is its own decision. The net, input and serial cores do not yet
-/// wait for a dead driver's claim to go (`kernel/src/claim.rs`), so a driver
-/// started again would be refused its channel. The audio core does, but a
-/// sound driver waits for the pin quarantine (`docs/BACKLOG.md`): QEMU
-/// writes a dead one's buffers' status into pages a translated domain has
-/// already freed, and a driver started at once is given them.
+/// A display or sound driver only: their cores wait for a dead driver's
+/// claim to go (`kernel/src/claim.rs`), publish the card again under the
+/// number it had, and give a dead driver's quarantined pins back only once
+/// the next one has reset the device (`kernel/src/object/pin.rs`). A disk's
+/// death under a mounted filesystem is still a dead disk: what a filesystem
+/// does with a device that went and came back is its own decision. The net
+/// and input cores wait for the claim too, but do not yet give a dead
+/// driver's quarantined pins back at the next HELLO, and the serial port has
+/// no core to wait for.
 const fn restarted(kind: Kind) -> bool {
-    matches!(kind, Kind::Display)
+    matches!(kind, Kind::Display | Kind::Sound)
 }
 
 /// A driver devmgr started, and what it keeps of it.

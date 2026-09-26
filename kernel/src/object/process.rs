@@ -554,6 +554,21 @@ impl Exit {
         }
     }
 
+    /// An end no process has, for a boot check that needs one: terminated
+    /// already when `ended`, as a dying process's is before it lets go of
+    /// anything (`object::pin`'s quarantine check).
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`].
+    pub(crate) fn for_check(ended: bool) -> Result<Arc<Exit>, AllocError> {
+        let exit = fallible::try_arc(Exit::new())?;
+        if ended {
+            exit.record(0, 0);
+        }
+        Ok(exit)
+    }
+
     /// Whether it has terminated, by exiting or by being killed. True from the
     /// moment it starts to end, before it has let go of anything.
     pub(crate) fn is_terminated(&self) -> bool {

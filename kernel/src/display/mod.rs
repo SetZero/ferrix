@@ -75,6 +75,13 @@ const MAX_EVENTS: usize = 64;
 /// a third buffer (`docs/DISPLAY.md` §2.1).
 pub(crate) const CARD_BYTES: u64 = 256 * 1024 * 1024;
 
+// The pin quarantine's cap counts a driver's pins as at most the card
+// (`object::pin::QUARANTINE_CAP_PAGES`).
+const _: () = assert!(
+    CARD_BYTES / PAGE_SIZE <= crate::object::pin::LARGEST_DRIVER_PIN_PAGES as u64,
+    "the card is larger than the quarantine's cap allows a driver to pin"
+);
+
 /// How long the core waits for its driver's HELLO.
 const HELLO_PATIENCE_NANOS: u64 = 10_000_000_000;
 
@@ -1059,6 +1066,9 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
     if RECLAIMABLE_FRAMEBUFFER.load(Ordering::Relaxed) {
         return Err(Refusal::Framebuffer);
     }
+    // The driver reset the device before it sent HELLO, so what a dead one's
+    // pins kept from the allocator can go back (`object::pin`'s quarantine).
+    crate::object::pin::quarantine_release(&start.device);
 
     let vmo = Vmo::new_anonymous(CARD_BYTES / PAGE_SIZE).map_err(|_| Refusal::Malformed)?;
     // The wire protocol has no refusal for memory; a malformed start is the

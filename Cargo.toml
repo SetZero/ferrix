@@ -17,6 +17,7 @@ members = [
     "libs/proto/renderctl",
     "libs/proto/inputctl",
     "libs/proto/sndctl",
+    "libs/proto/adb",
     "libs/proto/logctl",
     "libs/proto/bootinfo",
     "libs/platform/elf",
@@ -124,6 +125,7 @@ ferrix-displayctl = { path = "libs/proto/displayctl" }
 ferrix-renderctl = { path = "libs/proto/renderctl" }
 ferrix-inputctl = { path = "libs/proto/inputctl" }
 ferrix-sndctl = { path = "libs/proto/sndctl" }
+ferrix-adb = { path = "libs/proto/adb" }
 ferrix-logctl = { path = "libs/proto/logctl" }
 ferrix-bootinfo = { path = "libs/proto/bootinfo" }
 ferrix-elf = { path = "libs/platform/elf" }
