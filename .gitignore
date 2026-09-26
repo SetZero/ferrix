@@ -1,5 +1,6 @@
 /target
 /target-remote
+/target-*/
 /build
 *.img
 *.fd

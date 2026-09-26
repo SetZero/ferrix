@@ -126,6 +126,14 @@ rule below comes from something seen there.
    both, in each agent's report. That is what shows whether a stream is slow
    because of its code, its gates, or its reruns.
 
+## Where a new file goes
+
+[LAYOUT.md](LAYOUT.md) says which directory each kind of thing belongs in:
+a new lib in the `libs/` group it is, a ring-3 driver under
+`native/drivers/`, a Linux program under `userland/`, a script under the
+`scripts/` role it has. Nothing new goes at the top level without adding
+it there, and scratch files never go in a checkout at all.
+
 ## Before calling a change done
 
 ```

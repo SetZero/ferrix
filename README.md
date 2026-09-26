@@ -757,19 +757,23 @@ itself instead.
 
 ## Layout
 
-| | |
+The tree is grouped by what each part is. [docs/LAYOUT.md](docs/LAYOUT.md)
+has every directory, which group a new crate goes in, and what lives outside
+the repository.
+
+| Path | What |
 |---|---|
-| `libs/` | Architecture-neutral logic, some forty crates: the hand-off ABI, the ELF reader, paging, the allocators, the scheduler's queues, the VFS, btrfs read and write, the net stack, the virtio device protocols, the native ABI. Host-testable **by design** — it is the only code `cargo test`, Miri and the fuzzers can reach. |
-| `boot/uefi/` | The UEFI loader. Reads the kernel, builds the address space, leaves firmware. |
+| `boot/` | The loaders: `boot/uefi/` for x86-64, AArch64 and ARMv7-A, `boot/pixel7/` for the phone. |
 | `kernel/` | The kernel. |
-| `native/` | Native ring-3 programs: `devmgr`, the block, net, GPU, input and console drivers, and the runtime they share. |
-| `userland/ferrousli/` | [A C library written in Rust](userland/ferrousli/README.md), with its own dynamic linker. Its own workspace. |
-| `userland/zinc/` | [A zsh-compatible shell](userland/zinc/README.md). Its own workspace. |
-| `userland/compositor/` | [hyprix, the terminal and the Wayland pieces](userland/compositor/README.md). Its own workspace. |
+| `libs/` | Architecture-neutral logic, nearly sixty crates in seven groups: `proto`, `kernel`, `platform`, `fs`, `network`, `drivers`, `init`. Host-testable **by design** — it is the only code `cargo test`, Miri and the fuzzers can reach. |
+| `native/` | Ring-3 programs on the native ABI: the runtime, `devmgr`, and one process per driver under `native/drivers/`. |
+| `userland/` | Linux-ABI programs, each its own workspace: [the compositor](userland/compositor/README.md), [the init](userland/init/README.md), [zinc](userland/zinc/README.md), statd and [ferrousli](userland/ferrousli/README.md), the C library. |
+| `tests/` | The fuzz targets over `libs/`, and test programs that live outside any one crate. |
+| `assets/` | Fonts that ship in the image. |
 | `xtask/` | Host build driver: cross-compiles every half, converts the 32-bit loader from ELF to PE, writes the FAT32 image and initramfs, drives QEMU and every `test-*` gate. |
-| `tests/fuzz/` | The fuzz targets over `libs/`. |
-| `scripts/` | The quality gates, generators and sysroot fetchers. |
-| `docs/` | [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md) · [Backlog](docs/BACKLOG.md) · [Assembly](docs/ASSEMBLY.md) · [Reliability](docs/RELIABILITY.md) · [Boot log](docs/BOOT-LOG.md) · [Display](docs/DISPLAY.md) · [GPU](docs/GPU.md) · [Conventions](docs/CONVENTIONS.md) · [SysML v2 model](docs/sysml/README.md) |
+| `scripts/` | `check/` the quality gates, `gen/` the generators, `fetch/` the pinned downloads, `test/` hand-run test drivers, `data/` the allow-lists and baselines. |
+| `tools/` | Host applications for particular hardware: the Pixel 7 launcher and monitor. |
+| `docs/` | [Layout](docs/LAYOUT.md) · [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md) · [Backlog](docs/BACKLOG.md) · [Assembly](docs/ASSEMBLY.md) · [Reliability](docs/RELIABILITY.md) · [Boot log](docs/BOOT-LOG.md) · [Display](docs/DISPLAY.md) · [GPU](docs/GPU.md) · [Conventions](docs/CONVENTIONS.md) · [SysML v2 model](docs/sysml/README.md) |
 
 ## Quality gates
 
