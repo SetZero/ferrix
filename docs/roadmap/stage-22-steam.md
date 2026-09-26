@@ -33,7 +33,13 @@ staged until now.
   DPL-3 gate decoding through an i386 table in `libs/proto/linux-abi`, an
   `EM_386` image `execve`d into a 4 GiB space and entered in compatibility
   mode, and compatibility mode's `SYSCALL` and `SYSENTER` made harmless;
-  the boot runs a hand-assembled i386 program.
+  the boot runs a hand-assembled i386 program. **I2a is on `main`** the
+  same day (5 points): the thread pointer, through `set_thread_area`,
+  `get_thread_area` and `%gs`, with each thread's GDT descriptors and
+  segment selectors kept across a switch, and every saved selector checked
+  against the descriptor it names before it is loaded; reviewed by the
+  certification consultant. I2b, `fork`, `clone` and the signal frames, is
+  next.
 * **glibc's place, taken.** The dynamic linking stage's third part, glibc's
   names, with Steam as its stress test: `ld-linux` and `libc.so.6` requested
   by name, `dlopen` from the client and from every Steam runtime library,
