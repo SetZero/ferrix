@@ -9,15 +9,23 @@
 //! its arguments on.
 
 /// Writes one `global_asm!` of branches, one per `alias => target` pair, for
-/// the architecture's branch instruction and symbol-type syntax.
+/// the architecture's branch instruction and symbol-type syntax. `weak`
+/// before the pairs makes each name weak, for a function a program may bring
+/// its own copy of ([`crate::obstack`]).
 macro_rules! aliases {
+    (weak $($alias:literal => $target:literal),* $(,)?) => {
+        aliases!(@write ".weak ", $($alias => $target),*);
+    };
     ($($alias:literal => $target:literal),* $(,)?) => {
+        aliases!(@write ".globl ", $($alias => $target),*);
+    };
+    (@write $binding:literal, $($alias:literal => $target:literal),*) => {
         #[cfg(all(not(test), target_arch = "x86_64"))]
         core::arch::global_asm!(
             ".pushsection .text.ferrousli_glibc_aliases,\"ax\",@progbits",
             ".p2align 4",
             $(
-                concat!(".globl ", $alias),
+                concat!($binding, $alias),
                 concat!(".type ", $alias, ", @function"),
                 concat!($alias, ":"),
                 concat!("jmp ", $target),
@@ -29,7 +37,7 @@ macro_rules! aliases {
             ".pushsection .text.ferrousli_glibc_aliases,\"ax\",%progbits",
             ".p2align 2",
             $(
-                concat!(".globl ", $alias),
+                concat!($binding, $alias),
                 concat!(".type ", $alias, ", %function"),
                 concat!($alias, ":"),
                 concat!("b ", $target),
@@ -42,7 +50,7 @@ macro_rules! aliases {
             ".p2align 2",
             ".arm",
             $(
-                concat!(".globl ", $alias),
+                concat!($binding, $alias),
                 concat!(".type ", $alias, ", %function"),
                 concat!($alias, ":"),
                 concat!("b ", $target),
@@ -72,3 +80,5 @@ aliases! {
     "__wcsxfrm_l" => "wcsxfrm_l",
     "__wctype_l" => "wctype_l",
 }
+
+pub(crate) use aliases;

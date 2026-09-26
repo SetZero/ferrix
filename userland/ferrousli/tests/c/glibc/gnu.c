@@ -24,15 +24,7 @@ void free_sized(void *, size_t);
 void free_aligned_sized(void *, size_t, size_t);
 
 #ifndef __GLIBC__
-struct random_data {
-	int32_t *fptr, *rptr, *state;
-	int rand_type, rand_deg, rand_sep;
-	int32_t *end_ptr;
-};
-int random_r(struct random_data *, int32_t *);
-int srandom_r(unsigned, struct random_data *);
-int initstate_r(unsigned, char *, size_t, struct random_data *);
-int setstate_r(char *, struct random_data *);
+/* stdlib.h declares struct random_data and the _r functions. */
 struct mallinfo2 {
 	size_t arena, ordblks, smblks, hblks, hblkhd, usmblks, fsmblks, uordblks, fordblks, keepcost;
 };

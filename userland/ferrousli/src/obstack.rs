@@ -18,6 +18,7 @@ use core::ffi::{c_char, c_int, c_long, c_uint, c_void};
 use core::mem::size_of;
 use core::ptr::null_mut;
 
+use crate::glibc_aliases::aliases;
 use crate::stdio::printf::vasprintf;
 use crate::string::memcpy;
 use crate::va::{self, VaListArg};
@@ -81,6 +82,25 @@ const DEFAULT_ALIGNMENT: usize = 2 * size_of::<usize>();
 /// allocator keeps beside a block.
 const DEFAULT_SIZE: usize = 4096 - 32;
 
+// Every function's name, weak: a program may bring its own obstack -- git's
+// port links GNU's `compat/obstack.o`, and gnulib carries one -- and a
+// static link that took this library for other names would otherwise find
+// two definitions of each. The functions themselves are named
+// `__ferrousli_...`, since Rust cannot make a function weak; each public name
+// is a branch to one. The variables below are weak for the same reason.
+aliases! {
+    weak
+    "_obstack_begin" => "__ferrousli__obstack_begin",
+    "_obstack_begin_1" => "__ferrousli__obstack_begin_1",
+    "_obstack_newchunk" => "__ferrousli__obstack_newchunk",
+    "obstack_free" => "__ferrousli_obstack_free",
+    "_obstack_free" => "__ferrousli__obstack_free",
+    "_obstack_allocated_p" => "__ferrousli__obstack_allocated_p",
+    "_obstack_memory_used" => "__ferrousli__obstack_memory_used",
+    "obstack_vprintf" => "__ferrousli_obstack_vprintf",
+    "__obstack_vprintf_chk" => "__ferrousli___obstack_vprintf_chk",
+}
+
 // `obstack_alloc_failed_handler`, null until a program sets it, and
 // `obstack_exit_failure`, 1. In assembly, as `gnu.rs`'s variables are, so
 // that a program's copy of either is the variable.
@@ -88,12 +108,12 @@ const DEFAULT_SIZE: usize = 4096 - 32;
 core::arch::global_asm!(
     ".pushsection .data.ferrousli_obstack,\"aw\"",
     ".p2align 3",
-    ".globl obstack_alloc_failed_handler",
+    ".weak obstack_alloc_failed_handler",
     ".type obstack_alloc_failed_handler, %object",
     ".size obstack_alloc_failed_handler, 8",
     "obstack_alloc_failed_handler:",
     ".zero 8",
-    ".globl obstack_exit_failure",
+    ".weak obstack_exit_failure",
     ".type obstack_exit_failure, %object",
     ".size obstack_exit_failure, 4",
     "obstack_exit_failure:",
@@ -106,12 +126,12 @@ core::arch::global_asm!(
 core::arch::global_asm!(
     ".pushsection .data.ferrousli_obstack,\"aw\"",
     ".p2align 2",
-    ".globl obstack_alloc_failed_handler",
+    ".weak obstack_alloc_failed_handler",
     ".type obstack_alloc_failed_handler, %object",
     ".size obstack_alloc_failed_handler, 4",
     "obstack_alloc_failed_handler:",
     ".zero 4",
-    ".globl obstack_exit_failure",
+    ".weak obstack_exit_failure",
     ".type obstack_exit_failure, %object",
     ".size obstack_exit_failure, 4",
     "obstack_exit_failure:",
@@ -268,7 +288,7 @@ unsafe fn begin(h: &mut Obstack, size: c_int, alignment: c_int) -> c_int {
 ///
 /// `h` must be valid for writes of a `struct obstack`, and the functions an
 /// allocator and its release.
-#[cfg_attr(not(test), unsafe(no_mangle))]
+#[cfg_attr(not(test), unsafe(export_name = "__ferrousli__obstack_begin"))]
 pub unsafe extern "C" fn _obstack_begin(
     h: *mut Obstack,
     size: c_int,
@@ -291,7 +311,7 @@ pub unsafe extern "C" fn _obstack_begin(
 /// # Safety
 ///
 /// As [`_obstack_begin`].
-#[cfg_attr(not(test), unsafe(no_mangle))]
+#[cfg_attr(not(test), unsafe(export_name = "__ferrousli__obstack_begin_1"))]
 pub unsafe extern "C" fn _obstack_begin_1(
     h: *mut Obstack,
     size: c_int,
@@ -316,7 +336,7 @@ pub unsafe extern "C" fn _obstack_begin_1(
 /// # Safety
 ///
 /// `h` must be a started obstack.
-#[cfg_attr(not(test), unsafe(no_mangle))]
+#[cfg_attr(not(test), unsafe(export_name = "__ferrousli__obstack_newchunk"))]
 pub unsafe extern "C" fn _obstack_newchunk(h: *mut Obstack, length: c_int) {
     // SAFETY: the caller passes a started obstack.
     let h = unsafe { &mut *h };
@@ -364,7 +384,7 @@ pub unsafe extern "C" fn _obstack_newchunk(h: *mut Obstack, length: c_int) {
 /// # Safety
 ///
 /// `h` must be a started obstack, and `obj` null or an object in it.
-#[cfg_attr(not(test), unsafe(no_mangle))]
+#[cfg_attr(not(test), unsafe(export_name = "__ferrousli_obstack_free"))]
 pub unsafe extern "C" fn obstack_free(h: *mut Obstack, obj: *mut c_void) {
     // SAFETY: the caller passes a started obstack.
     let h = unsafe { &mut *h };
@@ -401,7 +421,7 @@ pub unsafe extern "C" fn obstack_free(h: *mut Obstack, obj: *mut c_void) {
 /// # Safety
 ///
 /// As [`obstack_free`].
-#[cfg_attr(not(test), unsafe(no_mangle))]
+#[cfg_attr(not(test), unsafe(export_name = "__ferrousli__obstack_free"))]
 pub unsafe extern "C" fn _obstack_free(h: *mut Obstack, obj: *mut c_void) {
     // SAFETY: the caller's contract is `obstack_free`'s.
     unsafe { obstack_free(h, obj) }
@@ -412,7 +432,7 @@ pub unsafe extern "C" fn _obstack_free(h: *mut Obstack, obj: *mut c_void) {
 /// # Safety
 ///
 /// `h` must be a started obstack.
-#[cfg_attr(not(test), unsafe(no_mangle))]
+#[cfg_attr(not(test), unsafe(export_name = "__ferrousli__obstack_allocated_p"))]
 pub unsafe extern "C" fn _obstack_allocated_p(h: *mut Obstack, obj: *mut c_void) -> c_int {
     let at = obj.addr();
     // SAFETY: the caller passes a started obstack.
@@ -430,7 +450,7 @@ pub unsafe extern "C" fn _obstack_allocated_p(h: *mut Obstack, obj: *mut c_void)
 /// # Safety
 ///
 /// `h` must be a started obstack.
-#[cfg_attr(not(test), unsafe(no_mangle))]
+#[cfg_attr(not(test), unsafe(export_name = "__ferrousli__obstack_memory_used"))]
 pub unsafe extern "C" fn _obstack_memory_used(h: *mut Obstack) -> c_int {
     let mut total = 0_usize;
     // SAFETY: the caller passes a started obstack.
@@ -452,7 +472,7 @@ pub unsafe extern "C" fn _obstack_memory_used(h: *mut Obstack) -> c_int {
 /// # Safety
 ///
 /// `h` must be a started obstack, and `ap`'s arguments match `fmt`.
-#[cfg_attr(not(test), unsafe(no_mangle))]
+#[cfg_attr(not(test), unsafe(export_name = "__ferrousli_obstack_vprintf"))]
 pub unsafe extern "C" fn obstack_vprintf(
     h: *mut Obstack,
     fmt: *const c_char,
@@ -489,7 +509,7 @@ pub unsafe extern "C" fn obstack_vprintf(
 /// # Safety
 ///
 /// As [`obstack_vprintf`].
-#[cfg_attr(not(test), unsafe(no_mangle))]
+#[cfg_attr(not(test), unsafe(export_name = "__ferrousli___obstack_vprintf_chk"))]
 pub unsafe extern "C" fn __obstack_vprintf_chk(
     h: *mut Obstack,
     _flag: c_int,

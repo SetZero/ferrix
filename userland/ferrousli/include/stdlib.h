@@ -149,6 +149,21 @@ int clearenv(void);
 #define WIFCONTINUED(s) ((s) == 0xffff)
 void *reallocarray (void *, size_t, size_t);
 void qsort_r (void *, size_t, size_t, int (*)(const void *, const void *, void *), void *);
+/* glibc's reentrant random(), with its state in the caller's struct, in
+   glibc's layout; fontconfig uses them when it finds them. */
+struct random_data {
+	int *fptr;
+	int *rptr;
+	int *state;
+	int rand_type;
+	int rand_deg;
+	int rand_sep;
+	int *end_ptr;
+};
+int random_r (struct random_data *__restrict, int *__restrict);
+int srandom_r (unsigned int, struct random_data *);
+int initstate_r (unsigned int, char *__restrict, size_t, struct random_data *__restrict);
+int setstate_r (char *__restrict, struct random_data *__restrict);
 #endif
 
 #ifdef _GNU_SOURCE

@@ -114,3 +114,8 @@ fn a_checked_strlcpy_given_too_small_an_object_aborts_before_writing() {
 fn what_rustc_cargo_and_llvm_import_is_here_and_a_glibc_recursive_mutex_is_recursive() {
     check(&Case::named("glibc/rustc"));
 }
+
+#[test]
+fn a_programs_own_obstack_functions_win_and_random_r_is_declared() {
+    check(&Case::named("glibc/overrides"));
+}
