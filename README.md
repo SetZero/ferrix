@@ -6,7 +6,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/SetZero/ferrix/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/SetZero/ferrix/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/licence-MIT-blue"></a>
   <a href="docs/ASSEMBLY.md"><img alt="99.79% Rust" src="https://img.shields.io/badge/kernel-99.79%25%20Rust-f26b1d"></a>
   <img alt="x86-64, AArch64, ARMv7-A" src="https://img.shields.io/badge/arch-x86--64%20%7C%20AArch64%20%7C%20ARMv7--A-555">
@@ -22,8 +21,23 @@
 </p>
 
 <p align="center">
-  <img src="docs/brand/screenshots/desktop-hero.png" alt="The Ferrix desktop: the hyprix Wayland compositor tiling a zinc terminal, btop and Chrome" width="100%">
+  <img src="docs/brand/screenshots/desktop-hero.png" alt="The Ferrix desktop: the hyprix Wayland compositor tiling btop, a zinc terminal and Chrome on rust-lang.org" width="100%">
 </p>
+
+<table>
+  <tr>
+    <td width="33%"><img src="docs/brand/screenshots/terminal-omz.png" alt="zinc with oh-my-zsh: uname, the ring-3 driver processes, svc, df and curl over HTTPS"></td>
+    <td width="33%"><img src="docs/brand/screenshots/desktop-chrome.png" alt="Chrome on Ferrix showing Wikipedia's article on Rust"></td>
+    <td width="33%"><img src="docs/brand/screenshots/btop.png" alt="btop monitoring Chrome, the compositor and the user-space drivers"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>zinc, a zsh in Rust, running oh-my-zsh; the drivers are processes</sub></td>
+    <td align="center"><sub>Chrome, unmodified, on Ferrix's own libc</sub></td>
+    <td align="center"><sub>btop watching a live system</sub></td>
+  </tr>
+</table>
+
+<p align="center"><sub>Real captures, x86-64 under KVM; how each was made is in <a href="docs/brand/screenshots/CAPTIONS.md">CAPTIONS.md</a>.</sub></p>
 
 # Ferrix
 

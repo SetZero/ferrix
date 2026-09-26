@@ -103,6 +103,14 @@ h1 code { font-size: .86em; }
 .stats b { display: block; font-size: 38px; font-weight: 800; letter-spacing: -.03em; line-height: 1.1; }
 .stats span { color: var(--muted); font-size: 15px; }
 
+/* gallery */
+.gallery-sec { padding-bottom: 0; }
+.gallery { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+.gallery figure { margin: 0; }
+.gallery img { display: block; border-radius: 10px; border: 1px solid var(--line); box-shadow: var(--shadow); }
+.gallery figcaption { color: var(--muted); font-size: 14.5px; margin-top: 10px; }
+@media (max-width: 760px) { .gallery { grid-template-columns: minmax(0, 1fr); } }
+
 /* sections */
 .section { padding: 88px 0; }
 .section.alt { background: var(--bg-alt); border-block: 1px solid var(--line); }

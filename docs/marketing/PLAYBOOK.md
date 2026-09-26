@@ -121,6 +121,16 @@ path does not render in the notification e-mail.
 
 ### Before launch day (checklist)
 
+- [ ] **CI green on `main`.** On 2026-09-27 the last green run was 2026-09-24:
+      `Test (windows-latest)`, `Fuzz` and `Boot in QEMU (x86_64)` fail. A red
+      cross beside the latest commit is the first thing a visitor sees on the
+      repository page, and HN will link it. Once it holds green, put the CI
+      badge back into the README header:
+      `<a href="https://github.com/SetZero/ferrix/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/SetZero/ferrix/actions/workflows/ci.yml/badge.svg"></a>`.
+- [ ] **zinc's `zformat`.** oh-my-zsh prints `VCS_INFO_formats:87: command
+      not found: zformat` at every prompt inside a git repository, which is
+      exactly where a visitor who cloned Ferrix will first type. Also make
+      btop's CPU graph draw a history again: it is in the screenshots.
 - [ ] Run `sh scripts/marketing/github-setup.sh releases`.
 - [ ] Upload `docs/brand/social-preview.png` as the social preview.
 - [ ] Check https://setzero.github.io/ferrix/ loads, then paste the URL into
