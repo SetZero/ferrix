@@ -548,10 +548,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 continue;
             };
             if ready.as_ref().is_some_and(|fds| fds.contains(&fd)) && screen.backend.check() {
-                report(&format!(
-                    "hyprix: {}: the card went away; waiting for it to come back",
-                    screen.name
-                ));
+                screen.say_gone(report);
                 owed = true;
             }
         }
@@ -1327,7 +1324,14 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 // frame and drawn for only once it is back: then as a whole
                 // frame, since the card it is on now has seen none of the
                 // last one's, and in software, since the GPU went with it.
+                // The loss is said here too: a cursor that could not be
+                // shown or moved finds it with nothing said, and a driver
+                // killed as the pointer first reaches its plane is lost
+                // that way, before any frame or wait could find it.
                 let lost = screen.backend.lost();
+                if lost {
+                    screen.say_gone(report);
+                }
                 if lost && !screen.backend.recover() {
                     waiting = true;
                     continue;
@@ -1337,6 +1341,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                         "hyprix: {}: the card is back; drawing on it again",
                         screen.name
                     ));
+                    screen.said_gone = false;
                     screen.gpu = None;
                     screen.watch = crate::damage::Watch::default();
                     screen.plane.forget();
@@ -1550,10 +1555,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 }
                 match drew {
                     Ok(()) if screen.backend.lost() => {
-                        report(&format!(
-                            "hyprix: {}: the card went away; waiting for it to come back",
-                            screen.name
-                        ));
+                        screen.say_gone(report);
                         waiting = true;
                     }
                     Ok(()) => {}
@@ -2972,9 +2974,22 @@ struct Screen {
     watch: crate::damage::Watch,
     /// Its cursor plane, as it was last told: `crate::plane`.
     plane: crate::plane::Plane,
+    /// Whether its card's going has been said since it last came back.
+    said_gone: bool,
 }
 
 impl Screen {
+    /// Say that the card went away, once a loss, whichever path found it.
+    fn say_gone(&mut self, report: &mut dyn FnMut(&str)) {
+        if !self.said_gone {
+            report(&format!(
+                "hyprix: {}: the card went away; waiting for it to come back",
+                self.name
+            ));
+            self.said_gone = true;
+        }
+    }
+
     /// Put the frame where a reader of this screen's pixels will find it.
     ///
     /// A frame drawn in software is in the backend's buffer already. One
@@ -3087,6 +3102,7 @@ impl Screen {
                 // frame a whole one.
                 watch: crate::damage::Watch::default(),
                 plane: crate::plane::Plane::default(),
+                said_gone: false,
             });
         }
         if screens.is_empty() {
