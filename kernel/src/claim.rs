@@ -1,5 +1,5 @@
-//! What the display and render cores share about the devices they serve: a
-//! device's claim by one driver's control channel, which a quiesce waits out,
+//! What the cores that serve devices through a control channel share: a
+//! device's claim by a driver's control channel, which a quiesce waits out,
 //! and the numbers their nodes are published under, which a driver started
 //! again gets back.
 //!
@@ -71,14 +71,30 @@ impl Claims {
     /// when it is claimed already, or when there was no memory to record the
     /// claim -- which the caller answers as it does a device in use.
     pub(crate) fn claim(&self, node: &Arc<DeviceNode>, control: &Arc<Endpoint>) -> bool {
+        self.claim_up_to(node, control, 1)
+    }
+
+    /// Claim `node` for one more channel, `limit` at most at once: a USB
+    /// host's driver asks the input core for a channel per keyboard or mouse
+    /// behind it, all on the host's one node. `false` as [`Claims::claim`].
+    pub(crate) fn claim_up_to(
+        &self,
+        node: &Arc<DeviceNode>,
+        control: &Arc<Endpoint>,
+        limit: usize,
+    ) -> bool {
         let mut held = self.held.lock();
-        if held.iter().any(|(claimed, _)| Arc::ptr_eq(claimed, node)) {
+        let claims = held
+            .iter()
+            .filter(|(claimed, _)| Arc::ptr_eq(claimed, node))
+            .count();
+        if claims >= limit {
             return false;
         }
         crate::fallible::try_push(&mut held, (Arc::clone(node), Arc::clone(control))).is_ok()
     }
 
-    /// Let `node` go, and wake a quiesce waiting for it.
+    /// Let `node` go, every claim of it, and wake a quiesce waiting for it.
     pub(crate) fn release(&self, node: &Arc<DeviceNode>) {
         self.held
             .lock()
@@ -86,19 +102,35 @@ impl Claims {
         self.released.wake_all();
     }
 
-    /// The control channel `node` is claimed through, if it is.
-    fn control_of(&self, node: &Arc<DeviceNode>) -> Option<Arc<Endpoint>> {
+    /// Let go of the one claim of `node` made through `control`, leaving the
+    /// node's others -- a USB host's other devices -- theirs.
+    pub(crate) fn release_one(&self, node: &Arc<DeviceNode>, control: &Arc<Endpoint>) {
+        self.held.lock().retain(|(claimed, through)| {
+            !(Arc::ptr_eq(claimed, node) && Arc::ptr_eq(through, control))
+        });
+        self.released.wake_all();
+    }
+
+    /// Whether `node` is claimed through any channel.
+    fn is_claimed(&self, node: &Arc<DeviceNode>) -> bool {
         self.held
             .lock()
             .iter()
-            .find(|(claimed, _)| Arc::ptr_eq(claimed, node))
-            .map(|(_, control)| Arc::clone(control))
+            .any(|(claimed, _)| Arc::ptr_eq(claimed, node))
+    }
+
+    /// Whether a driver still holds its end of a channel `node` is claimed
+    /// through.
+    fn is_held_by_a_driver(&self, node: &Arc<DeviceNode>) -> bool {
+        self.held.lock().iter().any(|(claimed, control)| {
+            Arc::ptr_eq(claimed, node) && !control.signals().intersects(Signals::PEER_CLOSED)
+        })
     }
 
     /// Wait until `node` is not claimed, for a quiesce: at once when it is
-    /// not, bounded when its driver's end has closed, refused when a driver
-    /// still holds it. `cancelled` ends the wait early for a caller that is
-    /// being terminated.
+    /// not, bounded when every driver end it is claimed through has closed,
+    /// refused while any driver still holds one. `cancelled` ends the wait
+    /// early for a caller that is being terminated.
     ///
     /// # Errors
     ///
@@ -110,15 +142,15 @@ impl Claims {
     ) -> Result<(), StillServed> {
         let deadline = timer::now_nanos().saturating_add(PATIENCE_NANOS);
         loop {
-            let Some(control) = self.control_of(node) else {
+            if !self.is_claimed(node) {
                 return Ok(());
-            };
-            if !control.signals().intersects(Signals::PEER_CLOSED) {
+            }
+            if self.is_held_by_a_driver(node) {
                 return Err(StillServed::ByADriver);
             }
             let released = self
                 .released
-                .wait_until_deadline(|| self.control_of(node).is_none() || cancelled(), deadline);
+                .wait_until_deadline(|| !self.is_claimed(node) || cancelled(), deadline);
             if !released || cancelled() {
                 return Err(StillServed::Waiting);
             }

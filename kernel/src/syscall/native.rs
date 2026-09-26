@@ -304,15 +304,17 @@ pub(crate) struct Server {
 pub(crate) type WaitUnserved =
     fn(node: &Arc<DeviceNode>, cancelled: &dyn Fn() -> bool) -> Result<(), StillServed>;
 
-/// What a quiesce waits out, in the order it was registered.
-static SERVERS: Hooks<Server, 4> = Hooks::new();
+/// What a quiesce waits out, in the order it was registered: the block and
+/// net rings, the display, the renderer, input and audio, with room for two
+/// more.
+static SERVERS: Hooks<Server, 8> = Hooks::new();
 
 /// Have a quiesce wait out `server`.
 ///
 /// # Errors
 ///
-/// [`Full`] past four, which is more subsystems serving devices than the item
-/// expects.
+/// [`Full`] past eight, which is more subsystems serving devices than the
+/// item expects.
 pub(crate) fn register_server(server: &'static Server) -> Result<(), Full> {
     SERVERS.register(server)
 }

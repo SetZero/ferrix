@@ -49,6 +49,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let mut report = Report::default();
     a_list_keeps_its_order_and_its_bound(&mut report)?;
     a_claim_is_refused_while_its_driver_lives(&mut report)?;
+    a_shared_node_waits_for_every_claim(&mut report)?;
     a_number_given_back_is_the_next_taken()?;
     a_boot_mode_nobody_keeps_is_refused(&mut report)?;
     failures_read_as_they_are_documented(&mut report)?;
@@ -124,6 +125,45 @@ fn a_claim_is_refused_while_its_driver_lives(report: &mut Report) -> Result<(), 
     claims.release(node);
     if claims.wait_until_released(node, &|| false) != Ok(()) {
         return Err("a released device was still waited for");
+    }
+    report.refusals += 3;
+    Ok(())
+}
+
+/// A node claimed through several channels -- a USB host's keyboard and
+/// mouse -- takes no more than its limit, refuses a quiesce while any one
+/// driver end is open, and is free only once every claim has gone; letting
+/// one claim go leaves the other standing.
+fn a_shared_node_waits_for_every_claim(report: &mut Report) -> Result<(), &'static str> {
+    let Some(node) = crate::device::devices().first() else {
+        return Ok(());
+    };
+    let claims = Claims::new();
+    let (first, first_driver) = Endpoint::pair().map_err(|_| "no memory for a claim's channel")?;
+    let (second, second_driver) =
+        Endpoint::pair().map_err(|_| "no memory for a claim's channel")?;
+
+    if !claims.claim_up_to(node, &first, 2) || !claims.claim_up_to(node, &second, 2) {
+        return Err("a device could not be claimed up to its limit");
+    }
+    if claims.claim_up_to(node, &first, 2) {
+        return Err("a device was claimed past its limit");
+    }
+
+    // One driver goes; the other still serves the node.
+    drop(first_driver);
+    if claims.wait_until_released(node, &|| false) != Err(StillServed::ByADriver) {
+        return Err("a device was quiesced under one of its drivers");
+    }
+    claims.release_one(node, &first);
+    if claims.wait_until_released(node, &|| true) != Err(StillServed::ByADriver) {
+        return Err("letting one claim go let the node's other go too");
+    }
+
+    drop(second_driver);
+    claims.release_one(node, &second);
+    if claims.wait_until_released(node, &|| false) != Ok(()) {
+        return Err("a node was still waited for after its last claim went");
     }
     report.refusals += 3;
     Ok(())
