@@ -107,10 +107,16 @@ pub(crate) const MEMORY: u32 = 4096;
 const TIMEOUT: u64 = 1800;
 
 /// What the browser in a window says it is: Chrome's own user agent, reduced
-/// as Chrome reduces it, with Ferrix where the build says `X11; Linux`.
-/// There is no X11 here either; the window is Wayland's.
-pub(crate) const USER_AGENT: &str = "Mozilla/5.0 (Ferrix x86_64) AppleWebKit/537.36 \
-     (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
+/// as Chrome reduces it, with Ferrix in the platform, which says it is not
+/// Linux in words a site that looks for `Linux x86_64` still finds.
+///
+/// `(Ferrix x86_64)` alone had Google's search answer with its page for a
+/// browser it no longer supports, every time: a site that knows the
+/// platforms it serves does not know Ferrix. With the words `Linux x86_64`
+/// in it, as Ubuntu's Firefox said `X11; Ubuntu; Linux x86_64` for years,
+/// the same search is answered as Chrome's own user agent is.
+pub(crate) const USER_AGENT: &str = "Mozilla/5.0 (X11; Ferrix; not Linux x86_64) \
+     AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
 
 /// `--user-agent` changes the user agent and the `User-Agent` header, and
 /// nothing else. `navigator.platform` stays `Linux x86_64`, and the client
@@ -423,7 +429,8 @@ mod tests {
         let quoted: Vec<&str> = command.split('\'').collect();
         assert_eq!(quoted.len(), 3, "{command}");
         assert_eq!(quoted[1], format!("--user-agent={USER_AGENT}"));
-        assert!(USER_AGENT.contains("(Ferrix x86_64)") && !USER_AGENT.contains("Linux"));
+        // Ferrix by name, and the words a site looking for Linux looks for.
+        assert!(USER_AGENT.contains("(X11; Ferrix; not Linux x86_64)"));
     }
 
     #[test]

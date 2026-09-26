@@ -914,8 +914,14 @@ Chrome for Testing is for automated testing only.
   the system's configuration. A page's CSS `sans-serif` is not fontconfig's
   alias. It is a preference of Chrome's own, Arial on Linux, so a page
   gets Liberation Sans.
-- **The name.** `--user-agent` gives `Mozilla/5.0 (Ferrix x86_64) ...
-  Chrome/154.0.0.0`, and nothing else. Measured on the host:
+- **The name.** `--user-agent` gives `Mozilla/5.0 (X11; Ferrix; not Linux
+  x86_64) ... Chrome/154.0.0.0`, and nothing else. It said `(Ferrix
+  x86_64)` at first, and Google's search answered with its page for a
+  browser it no longer supports, three times in three: a site that knows
+  the platforms it serves does not know Ferrix. With the words `Linux
+  x86_64` in it -- Ubuntu's Firefox said `X11; Ubuntu; Linux x86_64` for
+  years -- the same search is answered as Chrome's own user agent is.
+  Measured on the host:
   `navigator.platform` stays `Linux x86_64`, even with `uname` faked to say
   Ferrix. `navigator.userAgentData.platform` and the `Sec-CH-UA-Platform`
   header stay `Linux`. All three are constants in Chrome's build, and no
