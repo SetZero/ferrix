@@ -23,6 +23,7 @@ mod log;
 mod memory;
 mod payload;
 mod seed;
+mod usb;
 
 use core::panic::PanicInfo;
 use core::ptr;
@@ -83,7 +84,9 @@ extern "C" fn main(device_tree: u64) -> ! {
     } else {
         report_watchdogs();
         display::report();
-        display::take_over()
+        let framebuffer = display::take_over();
+        usb::report();
+        framebuffer
     };
     if let Err(why) = start(device_tree, framebuffer.unwrap_or(Framebuffer::NONE)) {
         say!("FERRIX-PANIC loader: {why}");
