@@ -18,7 +18,9 @@ use compositor_protocol::session_lock::{
     self, ext_session_lock_manager_v1, ext_session_lock_surface_v1, ext_session_lock_v1,
 };
 use compositor_protocol::xdg_output::{self, zxdg_output_manager_v1, zxdg_output_v1};
-use compositor_protocol::xdg_shell::{self, xdg_popup, xdg_positioner, xdg_surface, xdg_wm_base};
+use compositor_protocol::xdg_shell::{
+    self, xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
+};
 use compositor_shm::Shared;
 use compositor_socket::{Connection, RecvError};
 use compositor_wire::{Arg, Fd, Fixed, Interface, ObjectId, Reader, Writer};
@@ -29,7 +31,8 @@ use crate::loop_sources::{Command, Waker};
 use crate::sources::{Children, Sources};
 use crate::{
     ChildId, CursorShape, Event, IdleId, Key, KeyboardEvent, LayerOptions, Output, OutputId,
-    PointerEvent, PopupOptions, Rect, SurfaceId, TimerId, Transform, Value, WatchId,
+    PointerEvent, PopupOptions, Rect, SurfaceId, TimerId, ToplevelOptions, Transform, Value,
+    WatchId,
 };
 
 /// Why something could not be done.
@@ -129,6 +132,7 @@ enum Role {
     WmBase,
     XdgSurface(SurfaceId),
     Popup(SurfaceId),
+    Toplevel(SurfaceId),
     LayerSurface(SurfaceId),
     Surface(SurfaceId),
     Lock,
@@ -167,6 +171,14 @@ enum Kind {
         parent: SurfaceId,
         options: PopupOptions,
         /// The size the last `xdg_popup.configure` gave.
+        pending: (u32, u32),
+    },
+    Toplevel {
+        xdg: ObjectId,
+        toplevel: ObjectId,
+        options: ToplevelOptions,
+        /// The size the last `xdg_toplevel.configure` gave; a zero is the
+        /// compositor leaving it to the program.
         pending: (u32, u32),
     },
 }
@@ -637,6 +649,91 @@ impl Client {
         Ok(id)
     }
 
+    /// A window: an `xdg_toplevel` with `options`' title and app id,
+    /// committed bare so the compositor configures it. A
+    /// [`Event::Configure`] follows with the size to draw at -- the
+    /// compositor's, or `options.size` where it leaves the choice to the
+    /// program -- and a person closing the window arrives as
+    /// [`Event::CloseRequested`], which tears nothing down.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Missing`] without `xdg_wm_base`.
+    pub fn toplevel(&mut self, options: &ToplevelOptions) -> Result<SurfaceId, Error> {
+        let (base, version) = self.global("xdg_wm_base")?;
+        let id = self.new_surface_id();
+        let surface = self.create_surface(id)?;
+        let xdg = self.make(&xdg_shell::XDG_SURFACE, version, Role::XdgSurface(id));
+        self.send(
+            base,
+            xdg_wm_base::request::GET_XDG_SURFACE,
+            &[Arg::NewId(xdg), Arg::Object(surface)],
+        )?;
+        let toplevel = self.make(&xdg_shell::XDG_TOPLEVEL, version, Role::Toplevel(id));
+        self.send(
+            xdg,
+            xdg_surface::request::GET_TOPLEVEL,
+            &[Arg::NewId(toplevel)],
+        )?;
+        self.send(
+            toplevel,
+            xdg_toplevel::request::SET_TITLE,
+            &[Arg::Str(Some(&options.title))],
+        )?;
+        self.send(
+            toplevel,
+            xdg_toplevel::request::SET_APP_ID,
+            &[Arg::Str(Some(&options.app_id))],
+        )?;
+        self.send(surface, wl_surface::request::COMMIT, &[])?;
+        let _ = self.surfaces.insert(
+            id,
+            SurfaceState::new(
+                surface,
+                Kind::Toplevel {
+                    xdg,
+                    toplevel,
+                    options: options.clone(),
+                    pending: (0, 0),
+                },
+            ),
+        );
+        Ok(id)
+    }
+
+    /// Change a window's title (`xdg_toplevel.set_title`). Anything but a
+    /// window is left alone.
+    pub fn set_title(&mut self, window: SurfaceId, title: &str) {
+        let result = self.toplevel_text(window, xdg_toplevel::request::SET_TITLE, title);
+        self.defer(result);
+    }
+
+    /// Change a window's app id (`xdg_toplevel.set_app_id`). Anything but a
+    /// window is left alone.
+    pub fn set_app_id(&mut self, window: SurfaceId, app_id: &str) {
+        let result = self.toplevel_text(window, xdg_toplevel::request::SET_APP_ID, app_id);
+        self.defer(result);
+    }
+
+    fn toplevel_text(&mut self, window: SurfaceId, opcode: u16, text: &str) -> Result<(), Error> {
+        let Some(SurfaceState {
+            kind: Kind::Toplevel {
+                toplevel, options, ..
+            },
+            ..
+        }) = self.surfaces.get_mut(&window)
+        else {
+            return Ok(());
+        };
+        if opcode == xdg_toplevel::request::SET_TITLE {
+            text.clone_into(&mut options.title);
+        } else {
+            text.clone_into(&mut options.app_id);
+        }
+        let toplevel = *toplevel;
+        self.send(toplevel, opcode, &[Arg::Str(Some(text))])
+    }
+
     /// Move a popup (`xdg_popup.reposition`, version 3); where the
     /// compositor's `xdg_wm_base` is older, the popup is made again at the
     /// new place under the same [`SurfaceId`].
@@ -700,6 +797,10 @@ impl Client {
             }
             Kind::Popup { xdg, popup, .. } => {
                 self.destroy_object(popup, xdg_popup::request::DESTROY);
+                self.destroy_object(xdg, xdg_surface::request::DESTROY);
+            }
+            Kind::Toplevel { xdg, toplevel, .. } => {
+                self.destroy_object(toplevel, xdg_toplevel::request::DESTROY);
                 self.destroy_object(xdg, xdg_surface::request::DESTROY);
             }
         }
@@ -1497,6 +1598,7 @@ impl Client {
                 Role::Surface(id) if id == from => Role::Surface(to),
                 Role::XdgSurface(id) if id == from => Role::XdgSurface(to),
                 Role::Popup(id) if id == from => Role::Popup(to),
+                Role::Toplevel(id) if id == from => Role::Toplevel(to),
                 Role::Frame(id) if id == from => Role::Frame(to),
                 Role::SurfaceBuffer(id) if id == from => Role::SurfaceBuffer(to),
                 other => other,
@@ -1820,8 +1922,29 @@ impl Client {
                     xdg_surface::request::ACK_CONFIGURE,
                     &[Arg::Uint(uint(0))],
                 )?;
-                let size = match self.surfaces.get(&surface).map(|state| &state.kind) {
-                    Some(Kind::Popup { pending, .. }) => *pending,
+                let size = match self.surfaces.get(&surface) {
+                    Some(SurfaceState {
+                        kind: Kind::Popup { pending, .. },
+                        ..
+                    }) => *pending,
+                    // Zero is "you choose": the size the window has, or,
+                    // before it has one, the size it asked for. A window the
+                    // compositor sized and then let go (floated) keeps its
+                    // size rather than snapping back.
+                    Some(SurfaceState {
+                        kind:
+                            Kind::Toplevel {
+                                pending, options, ..
+                            },
+                        configured,
+                        ..
+                    }) => {
+                        let (width, height) = configured.unwrap_or(options.size);
+                        (
+                            if pending.0 == 0 { width } else { pending.0 },
+                            if pending.1 == 0 { height } else { pending.1 },
+                        )
+                    }
                     _ => (0, 0),
                 };
                 self.configured(surface, size.0, size.1);
@@ -1838,6 +1961,21 @@ impl Client {
                     }
                 }
                 xdg_popup::event::POPUP_DONE => self.pending.push(Event::Closed(surface)),
+                _ => {}
+            },
+            Role::Toplevel(surface) => match opcode {
+                // The size (and the states, which this does not keep) the
+                // `xdg_surface.configure` that follows commits to.
+                xdg_toplevel::event::CONFIGURE => {
+                    if let Some(SurfaceState {
+                        kind: Kind::Toplevel { pending, .. },
+                        ..
+                    }) = self.surfaces.get_mut(&surface)
+                    {
+                        *pending = (nonnegative(signed(0)), nonnegative(signed(1)));
+                    }
+                }
+                xdg_toplevel::event::CLOSE => self.pending.push(Event::CloseRequested(surface)),
                 _ => {}
             },
             Role::LayerSurface(surface) => match opcode {

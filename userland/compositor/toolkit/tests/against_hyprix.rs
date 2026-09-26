@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use compositor_toolkit::tiny_skia;
 use compositor_toolkit::{
     Anchor, ChildOutput, Client, Command, Event, KeyboardInteractivity, Layer, LayerOptions,
+    ToplevelOptions,
 };
 use hyprix::{Options, Renderer};
 
@@ -166,6 +167,52 @@ fn a_bar_on_a_layer_surface_is_drawn_where_it_asked() {
     );
     assert_eq!(pixel(&frame, WIDTH - 10, 39), (200, 30, 40));
     assert_ne!(pixel(&frame, 10, 45), (200, 30, 40), "and nowhere below it");
+}
+
+#[test]
+fn a_window_is_tiled_by_the_compositor_and_drawn_there() {
+    let (answer, frame) = with_compositor("toplevel", 3000, |socket| {
+        let mut client = Client::connect_to(socket).map_err(|error| error.to_string())?;
+        let window = client
+            .toplevel(&ToplevelOptions {
+                title: "toolkit test".to_owned(),
+                app_id: "toolkit-test".to_owned(),
+                size: (200, 100),
+            })
+            .map_err(|error| error.to_string())?;
+        let mut size = None;
+        until(&mut client, Duration::from_secs(2), |client, event| {
+            if let Event::Configure {
+                surface,
+                width,
+                height,
+            } = event
+                && *surface == window
+            {
+                size = Some((*width, *height));
+                client.set_title(window, "toolkit test, retitled");
+                let _ = client.draw(window, |pixmap| {
+                    pixmap.fill(tiny_skia::Color::from_rgba8(30, 160, 90, 255));
+                });
+                client.request_frame(window);
+            }
+            matches!(event, Event::Frame { surface, .. } if *surface == window)
+        })?;
+        let _ = until(&mut client, Duration::from_secs(5), |_, _| false);
+        Ok::<_, String>(size)
+    });
+    let (width, height) = answer.expect("the client worked").expect("configured");
+    // A tiling compositor gives the one window the screen less its gaps,
+    // not the 200x100 asked for.
+    assert!(
+        width > 200 && height > 100 && width <= WIDTH && height <= HEIGHT,
+        "tiled to {width}x{height}"
+    );
+    assert_eq!(
+        pixel(&frame, WIDTH / 2, HEIGHT / 2),
+        (30, 160, 90),
+        "the window is drawn where it was tiled"
+    );
 }
 
 /// Lock, draw a colour on the lock surface, and either unlock or leave

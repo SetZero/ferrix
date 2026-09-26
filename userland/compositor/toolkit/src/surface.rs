@@ -140,6 +140,21 @@ pub struct LayerOptions {
     pub keyboard: KeyboardInteractivity,
 }
 
+/// A window: an `xdg_toplevel`, which the compositor places, sizes and
+/// decorates as it does every other program's window.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ToplevelOptions {
+    /// `xdg_toplevel.set_title`: what a task bar or a window list shows.
+    pub title: String,
+    /// `xdg_toplevel.set_app_id`: what `windowrule`s match, and the name of
+    /// the program's `.desktop` file without its suffix.
+    pub app_id: String,
+    /// The size asked for, in logical pixels, used for as long as the
+    /// compositor's configures say `0x0` ("choose yourself"). A tiling
+    /// compositor gives its own size instead.
+    pub size: (u32, u32),
+}
+
 /// A rectangle in a surface's logical pixels.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Rect {

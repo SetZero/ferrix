@@ -13,7 +13,8 @@
 //!
 //! [`Client`] is the connection and everything bound on it. A program
 //! connects, looks at [`Client::outputs`], makes the surfaces it wants
-//! ([`Client::layer_surface`], [`Client::lock_surface`], [`Client::popup`]),
+//! ([`Client::layer_surface`], [`Client::lock_surface`], [`Client::popup`],
+//! [`Client::toplevel`]),
 //! and then turns [`Client::dispatch`], which blocks until something happens
 //! -- the compositor said something, a timer came due, a child wrote a line,
 //! a signal arrived -- and hands back what happened as [`Event`]s. Drawing is
@@ -29,7 +30,7 @@
 //! Everything below, each at the lower of the version this crate speaks and
 //! the version the compositor offers ([`Client::bound_version`] says which):
 //! `wl_compositor`, `wl_shm`, `wl_seat` (keyboard and pointer), every
-//! `wl_output`, `xdg_wm_base` (for popups), `zwlr_layer_shell_v1`,
+//! `wl_output`, `xdg_wm_base` (for popups and windows), `zwlr_layer_shell_v1`,
 //! `ext_session_lock_manager_v1`, `wp_cursor_shape_manager_v1`,
 //! `ext_idle_notifier_v1`. Anything missing is simply not there: a call that
 //! needs it answers [`Error::Missing`].
@@ -70,7 +71,7 @@ pub use output::{Output, OutputId, Transform};
 pub use spawn::spawn;
 pub use surface::{
     Anchor, CursorShape, IdleId, KeyboardInteractivity, Layer, LayerOptions, Margin, PopupOptions,
-    Rect, SurfaceId,
+    Rect, SurfaceId, ToplevelOptions,
 };
 
 /// The protocol tables, for a program that binds something of its own.

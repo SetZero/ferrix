@@ -31,6 +31,11 @@ pub enum Event {
     /// popup's `popup_done`. The program should forget it and
     /// [`crate::Client::destroy`] it.
     Closed(SurfaceId),
+    /// A person asked for a window to close (`xdg_toplevel.close`). Nothing
+    /// has been torn down: the window stays until the program
+    /// [`crate::Client::destroy`]s it, which it may do at once, or after
+    /// asking whether to save.
+    CloseRequested(SurfaceId),
     /// The frame callback [`crate::Client::request_frame`] asked for: now is
     /// a good time to draw the next frame.
     Frame {
