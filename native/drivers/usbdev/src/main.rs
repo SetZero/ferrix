@@ -39,6 +39,7 @@
 
 use core::fmt::{self, Write as _};
 use core::ptr;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_blkring::control::{Message as StartMessage, START_BYTES, Start};
 use ferrix_dwc3::layout::AREA_BYTES;
@@ -163,18 +164,32 @@ impl fmt::Write for Line {
 
 /// The controller's register window.
 ///
-/// Every access that could change the controller is logged, and so is
-/// every read made before the first of them: the product owner's condition
-/// for writing this controller at all (`docs/PIXEL7-USB-HANDOVER.md` §8)
-/// is that the record shows the guard's reads and each write. Reads after
-/// that -- mostly `GEVNTCOUNT`, at each interrupt -- are not logged.
+/// What it writes is logged, and so is every read made before the first
+/// write: the product owner's condition for writing this controller at
+/// all (`docs/PIXEL7-USB-HANDOVER.md` §8) is that each run's record shows
+/// the guard's reads and which registers were written. Until the
+/// controller runs, every write is logged; after that, only the first
+/// write to each register. Logging them all, as the first run did, fed
+/// itself once the log went over USB: each line sent is a transfer, and
+/// each transfer is five more writes to log. Reads after the first write
+/// -- mostly `GEVNTCOUNT`, at each interrupt -- are not logged.
 struct Window {
     _mapping: IoMapping<Kernel>,
     base: usize,
     len: usize,
     /// Whether anything has been written yet.
     wrote: bool,
+    /// Which registers have been written, a bit per word of the window.
+    written: [u64; WINDOW_WORDS / 64],
 }
+
+/// Whether the controller runs: from then on, only a register's first
+/// write is logged. A flag of the process's, since the controller owns the
+/// window once it has started.
+static RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// Words in the controller's 64 KiB window.
+const WINDOW_WORDS: usize = 0x1_0000 / 4;
 
 impl Window {
     fn address(&self, offset: u32) -> usize {
@@ -199,7 +214,15 @@ impl Registers for Window {
     }
 
     fn write32(&mut self, offset: u32, value: u32) {
-        say(format_args!("usbdev: write {offset:#06x} = {value:#010x}"));
+        let word = offset as usize / 4;
+        let first = self.written.get_mut(word / 64).is_some_and(|bits| {
+            let was = *bits & (1 << (word % 64)) != 0;
+            *bits |= 1 << (word % 64);
+            !was
+        });
+        if !RUNNING.load(Ordering::Relaxed) || first {
+            say(format_args!("usbdev: write {offset:#06x} = {value:#010x}"));
+        }
         self.wrote = true;
         // SAFETY: as for `read32`, and the mapping is writable.
         unsafe { ptr::write_volatile(self.address(offset) as *mut u32, value) }
@@ -355,6 +378,7 @@ fn window(start: &Start, device: &Device<Kernel>) -> Result<Window, Step> {
         base,
         len,
         wrote: false,
+        written: [0; WINDOW_WORDS / 64],
     })
 }
 
@@ -379,7 +403,10 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
         memory,
         clock,
     }) {
-        Ok(usb) => usb,
+        Ok(usb) => {
+            RUNNING.store(true, Ordering::Relaxed);
+            usb
+        }
         Err((error, parts)) => return Err(refused(error, parts)),
     };
     say(format_args!("usbdev: DWC3 running, waiting for a host"));
