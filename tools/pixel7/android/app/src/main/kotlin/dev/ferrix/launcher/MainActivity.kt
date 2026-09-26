@@ -1,7 +1,10 @@
 package dev.ferrix.launcher
 
 import android.app.Activity
+import android.content.pm.ActivityInfo
 import android.os.Bundle
+import android.os.Process
+import android.util.Log
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import androidx.activity.ComponentActivity
@@ -76,14 +79,17 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -103,7 +109,7 @@ import org.json.JSONObject
  *
  * **Run in a VM** needs no PC and no reboot: Ferrix runs as a guest of the
  * phone's own KVM, through Android's crosvm, started as root, and its console
- * is shown here. The image is the one the helper last put in
+ * and screen are shown here. The image is the one the helper last put in
  * /data/local/tmp/ferrix-vm.
  */
 class MainActivity : ComponentActivity() {
@@ -119,15 +125,33 @@ private const val VM_DIR = "/data/local/tmp/ferrix-vm"
 private const val CROSVM = "/apex/com.android.virt/bin/crosvm"
 
 private const val SOCKET = "$VM_DIR/crosvm.sock"
+private const val TOUCH = "$VM_DIR/touch.sock"
 
 /**
- * The guest: 8 vCPUs and 4 GiB, its 16550 on crosvm's standard output, and a
- * control socket that `suspend`, `resume` and `stop` go to.
+ * The guest: 8 vCPUs and 4 GiB, its 16550 on crosvm's standard output, a
+ * control socket that `suspend`, `resume` and `stop` go to, and a screen of
+ * [size] with a single-touch device on it.
+ *
+ * The screen needs the [Bridge] (from this APK, [apk], with the Terminal
+ * app's for virtualizationservice's classes) listening on the touch socket
+ * before crosvm starts, for crosvm connects to it and will not start without
+ * it. If the bridge has not bound it within ten seconds, or ended, the guest
+ * runs as before, with its console only.
  */
-private const val GUEST_COMMAND =
-    "cd $VM_DIR && [ -f ferrix.Image ] || { echo 'FERRIX-VM no image in $VM_DIR'; exit 3; }; " +
-        "rm -f $SOCKET; echo FERRIX-VM-PID $$; exec $CROSVM run --disable-sandbox " +
-        "-m 4096 --cpus 8 -s $SOCKET --serial type=stdout,num=1 ferrix.Image 2>/dev/null"
+private fun guestCommand(apk: String, uid: Int, token: String, size: IntSize): String {
+    val (w, h) = size.width to size.height
+    return "cd $VM_DIR && [ -f ferrix.Image ] || { echo 'FERRIX-VM no image in $VM_DIR'; exit 3; }; " +
+        "rm -f $SOCKET $TOUCH; echo FERRIX-VM-PID $$; " +
+        "T=$(pm path com.android.virtualization.terminal | sed -n 's/^package://p' | head -n 1); " +
+        "CLASSPATH=$apk:\$T app_process /system/bin ${Bridge::class.java.name} $$ $token $uid $TOUCH " +
+        "2>/dev/null & B=$!; i=0; " +
+        "while [ ! -S $TOUCH ] && [ \$i -lt 100 ] && kill -0 \$B 2>/dev/null; do sleep 0.1; i=$((i+1)); done; " +
+        "if [ -S $TOUCH ]; then set -- --gpu 'backend=2d,displays=[[mode=windowed[$w,$h]]]' " +
+        "--android-display-service ferrix --input 'single-touch[path=$TOUCH,width=$w,height=$h]'; " +
+        "else echo 'FERRIX-VM-BRIDGE did not start: no screen'; set --; fi; " +
+        "exec $CROSVM run --disable-sandbox -m 4096 --cpus 8 -s $SOCKET --serial type=stdout,num=1 " +
+        "\"\$@\" ferrix.Image 2>/dev/null"
+}
 
 /** How the guest is doing. */
 private sealed interface Guest {
@@ -173,14 +197,26 @@ private fun Launcher() {
     var refusal by remember { mutableStateOf<String?>(null) }
     var guest by remember { mutableStateOf<Guest>(Guest.Idle) }
     var fullScreen by remember { mutableStateOf(false) }
+    var screenSize by remember { mutableStateOf(IntSize.Zero) }
     val console = remember { mutableStateListOf<String>() }
     val scope = rememberCoroutineScope()
+    val activity = LocalContext.current as Activity
     val run: () -> Unit = {
         console.clear()
         guest = Guest.Running(null)
         fullScreen = true
+        // The guest's screen is the phone's, held upright.
+        val bounds = activity.windowManager.maximumWindowMetrics.bounds
+        screenSize = IntSize(minOf(bounds.width(), bounds.height()), maxOf(bounds.width(), bounds.height()))
+        val token = UUID.randomUUID().toString()
+        GuestScreen.token = token
+        GuestScreen.link = null
+        val command = guestCommand(activity.applicationInfo.sourceDir, Process.myUid(), token, screenSize)
         scope.launch {
-            guest = runGuest(console) { pid -> (guest as? Guest.Running)?.let { guest = it.copy(pid = pid) } }
+            guest = runGuest(console, command) { pid ->
+                (guest as? Guest.Running)?.let { guest = it.copy(pid = pid) }
+            }
+            if (GuestScreen.token == token) GuestScreen.link = null
         }
     }
     val stop: () -> Unit = {
@@ -209,6 +245,8 @@ private fun Launcher() {
         VmScreen(
             guest = guest,
             console = console,
+            link = GuestScreen.link,
+            screenSize = screenSize,
             onBack = { fullScreen = false },
             onPause = pause,
             onStop = stop,
@@ -477,22 +515,28 @@ private fun GuestCard(
 }
 
 /**
- * The guest's console across the whole screen, under one bar: its state, and
- * a menu to pause or resume it, stop it, run it again, or go back. The phone's
- * own bars are hidden meanwhile, and a swipe brings them back for a moment.
+ * The guest across the whole screen: its console under one bar, with its
+ * state and a menu to pause or resume it, stop it, run it again, or go back;
+ * or, once the bridge has delivered its [link], its screen, held upright, with
+ * the same menu floating in a corner and a switch between the two in it. The
+ * phone's own bars are hidden meanwhile, and a swipe brings them back for a
+ * moment.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun VmScreen(
     guest: Guest,
     console: List<String>,
+    link: Link?,
+    screenSize: IntSize,
     onBack: () -> Unit,
     onPause: () -> Unit,
     onStop: () -> Unit,
     onRunAgain: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
-    val window = (LocalContext.current as Activity).window
+    val activity = LocalContext.current as Activity
+    val window = activity.window
     DisposableEffect(window) {
         val bars = window.insetsController
         bars?.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -500,6 +544,12 @@ private fun VmScreen(
         onDispose { bars?.show(WindowInsets.Type.systemBars()) }
     }
     var menu by remember { mutableStateOf(false) }
+    var showScreen by remember { mutableStateOf(false) }
+    LaunchedEffect(link) { showScreen = link != null }
+    DisposableEffect(showScreen) {
+        if (showScreen) activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        onDispose { activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
+    }
     var now by remember { mutableStateOf(System.nanoTime()) }
     LaunchedEffect(guest) {
         while (guest is Guest.Running) {
@@ -514,6 +564,66 @@ private fun VmScreen(
             if (guest.pid == null) "starting…" else if (guest.paused) "paused · $seconds s" else "running · $seconds s"
         }
         is Guest.Ended -> "${guest.result} · ${guest.seconds} s"
+    }
+    val menuButton: @Composable () -> Unit = {
+        Box {
+            IconButton(onClick = { menu = true }) {
+                Icon(Icons.Rounded.Menu, contentDescription = "Menu")
+            }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                if (guest is Guest.Running) {
+                    DropdownMenuItem(
+                        text = { Text(if (guest.paused) "Resume" else "Pause") },
+                        leadingIcon = if (guest.paused) {
+                            { Icon(Icons.Rounded.PlayArrow, null) }
+                        } else {
+                            null
+                        },
+                        enabled = guest.pid != null,
+                        onClick = { menu = false; onPause() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Stop") },
+                        leadingIcon = { Icon(Icons.Rounded.Close, null) },
+                        enabled = guest.pid != null,
+                        onClick = { menu = false; onStop() },
+                    )
+                } else {
+                    DropdownMenuItem(
+                        text = { Text("Run again") },
+                        leadingIcon = { Icon(Icons.Rounded.Refresh, null) },
+                        onClick = { menu = false; onRunAgain() },
+                    )
+                }
+                if (link != null) {
+                    DropdownMenuItem(
+                        text = { Text(if (showScreen) "Show the console" else "Show the screen") },
+                        onClick = { menu = false; showScreen = !showScreen },
+                    )
+                }
+                DropdownMenuItem(
+                    text = { Text("Back to main page") },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Rounded.ArrowBack, null) },
+                    onClick = { menu = false; onBack() },
+                )
+            }
+        }
+    }
+    if (showScreen && link != null) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            AndroidView(
+                factory = { GuestView(it, screenSize.width, screenSize.height) },
+                update = { it.link = link },
+                modifier = Modifier.fillMaxSize(),
+            )
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(12.dp)
+                    .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.6f), CircleShape),
+            ) { menuButton() }
+        }
+        return
     }
     Column(Modifier.fillMaxSize().background(Color(0xFF0B0B10))) {
         TopAppBar(
@@ -531,44 +641,7 @@ private fun VmScreen(
                     )
                 }
             },
-            actions = {
-                Box {
-                    IconButton(onClick = { menu = true }) {
-                        Icon(Icons.Rounded.Menu, contentDescription = "Menu")
-                    }
-                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        if (guest is Guest.Running) {
-                            DropdownMenuItem(
-                                text = { Text(if (guest.paused) "Resume" else "Pause") },
-                                leadingIcon = if (guest.paused) {
-                                    { Icon(Icons.Rounded.PlayArrow, null) }
-                                } else {
-                                    null
-                                },
-                                enabled = guest.pid != null,
-                                onClick = { menu = false; onPause() },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Stop") },
-                                leadingIcon = { Icon(Icons.Rounded.Close, null) },
-                                enabled = guest.pid != null,
-                                onClick = { menu = false; onStop() },
-                            )
-                        } else {
-                            DropdownMenuItem(
-                                text = { Text("Run again") },
-                                leadingIcon = { Icon(Icons.Rounded.Refresh, null) },
-                                onClick = { menu = false; onRunAgain() },
-                            )
-                        }
-                        DropdownMenuItem(
-                            text = { Text("Back to main page") },
-                            leadingIcon = { Icon(Icons.AutoMirrored.Rounded.ArrowBack, null) },
-                            onClick = { menu = false; onBack() },
-                        )
-                    }
-                }
-            },
+            actions = { menuButton() },
             colors = TopAppBarDefaults.topAppBarColors(
                 containerColor = MaterialTheme.colorScheme.surfaceContainer,
             ),
@@ -624,13 +697,16 @@ private fun ConsolePane(lines: List<String>, modifier: Modifier, fontSize: Int =
     }
 }
 
-/** Run the guest to its end, appending its console to `console`. */
-private suspend fun runGuest(console: MutableList<String>, started: (Int) -> Unit): Guest =
+/**
+ * Run the guest with `command` to its end, appending its console to
+ * `console`, and the bridge's lines with it.
+ */
+private suspend fun runGuest(console: MutableList<String>, command: String, started: (Int) -> Unit): Guest =
     withContext(Dispatchers.IO) {
         val began = System.nanoTime()
         var result: String? = null
         val process = try {
-            ProcessBuilder("su", "-c", GUEST_COMMAND).start()
+            ProcessBuilder("su", "-c", command).start()
         } catch (error: IOException) {
             return@withContext Guest.Ended("could not run su: ${error.message}", 0, false)
         }
@@ -643,6 +719,7 @@ private suspend fun runGuest(console: MutableList<String>, started: (Int) -> Uni
                     }
                     continue
                 }
+                if (line.startsWith("FERRIX-VM-BRIDGE ")) Log.i("FerrixVm", line)
                 if (line.startsWith("FERRIX-BOOT-OK") || line.startsWith("FERRIX-PANIC") ||
                     line.startsWith("FERRIX-VM ")
                 ) {

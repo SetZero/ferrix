@@ -74,11 +74,14 @@ port while the cable is in, and all it could do is what the button does.
 
 ### The VM
 
-The app runs, through `su` (Magisk asks once):
+The app runs, through `su` (Magisk asks once), after starting the screen's
+bridge (below):
 
 ```sh
 cd /data/local/tmp/ferrix-vm && /apex/com.android.virt/bin/crosvm run \
-    --disable-sandbox -m 4096 --cpus 8 --serial type=stdout,num=1 ferrix.Image
+    --disable-sandbox -m 4096 --cpus 8 -s crosvm.sock --serial type=stdout,num=1 \
+    --gpu 'backend=2d,displays=[[mode=windowed[1080,2400]]]' --android-display-service ferrix \
+    --input 'single-touch[path=touch.sock,width=1080,height=2400]' ferrix.Image
 ```
 
 `ferrix.Image` is the raw loader `Image` from the helper's run directory, the
@@ -87,8 +90,9 @@ the phone's copy differs. It needs to have been built with guest support
 (`9df3769b` or later). The loader finds it is a guest, entered at EL1 with
 crosvm's 16550 as `stdout-path`, and sends its log and the kernel's there.
 crosvm's machine has 2 to 8 vCPUs, GICv3, PSCI through `hvc`, and RAM at
-`0x8000_0000`, with no screen and no virtio devices yet. The guest powers off
-at the end of its run, and crosvm exits.
+`0x8000_0000`, and a virtio-gpu and a virtio-input single-touch device that
+Ferrix does not drive yet. The guest powers off at the end of its run, and
+crosvm exits.
 
 Starting a VM opens it full screen: one bar, with the run's state and a menu
 to pause or resume it, stop it, run it again, or go back, and the console
@@ -97,3 +101,44 @@ lines of the end. Pause and stop go to crosvm's control socket
 (`crosvm suspend|resume|stop /data/local/tmp/ferrix-vm/crosvm.sock`). A
 paused guest's counter keeps running, so pausing during the boot's
 self-checks can fail a timing check, as it did once in stage 3 (FX-0302).
+
+### The screen
+
+The guest's display is the phone's, upright: its full size in pixels
+(1080×2400 on this Pixel 7), measured when the VM starts. Once it is there,
+the VM opens on it, with the menu floating in a corner, and the menu switches
+between the screen and the console. How it gets there, all of it tried on
+this phone (Android 17, Magisk):
+
+1. With `--gpu … --android-display-service ferrix`, crosvm makes a binder,
+   `android.crosvm.ICrosvmAndroidDisplayService`, and gives it to
+   `android.system.virtualizationservice` (`setDisplayService`), which hands
+   it on to root only.
+2. So a root process fetches it: the app's own `Bridge` class, run by the su
+   script as `CLASSPATH=<this APK>:<the Terminal app's APK> app_process
+   /system/bin dev.ferrix.launcher.Bridge …`. The Terminal app's APK carries
+   `IVirtualizationServiceInternal`'s generated classes. virtualizationservice
+   keeps the last binder it was given even after that crosvm died, so the
+   bridge asks until the one it gets answers a ping.
+3. The bridge hands it to the app through the app's exported provider
+   (`GuestLink`, which takes calls from root only and for the current run's
+   token), by the activity manager's `getContentProviderExternal` and the
+   provider's `call`.
+4. The app calls the binder itself, which works from an untrusted app:
+   `setSurface` (transaction 1) with its SurfaceView's surface when it has
+   one, `saveFrameForSurface` (4) and `removeSurface` (3) when it goes, and
+   `drawSavedFrameForSurface` (5) when it is back.
+5. crosvm's `--input single-touch[path=…]` connects to a Unix socket at that
+   path as it starts, and will not start if nothing listens there ("failed to
+   open event device"). The bridge listens on `touch.sock` first, and the
+   script starts crosvm once the socket is there. If it is not there within
+   ten seconds, the guest runs with its console only.
+6. The bridge also hands the app a binder of its own, which takes batches of
+   virtio_input_events (8 bytes, little-endian: `u16 type, u16 code, u32
+   value`) and writes them to crosvm's connection. A finger on the screen is
+   `EV_ABS ABS_X`/`ABS_Y` in the display's pixels, `EV_KEY BTN_TOUCH` 1 or 0,
+   and `EV_SYN SYN_REPORT`.
+
+The bridge ends when crosvm does, by its process or its connection, so
+stopping the VM stops it too. It prints its steps as `FERRIX-VM-BRIDGE` lines
+among the console's.

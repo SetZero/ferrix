@@ -10,13 +10,20 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:allowBackup="false"
         android:theme="@android:style/Theme.Material.NoActionBar">
+        <!-- Rotating keeps the activity, and the running guest with it. -->
         <activity
             android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Where the root bridge hands over the guest's screen; it takes root's calls only. -->
+        <provider
+            android:name=".GuestLink"
+            android:authorities="dev.ferrix.launcher.vm"
+            android:exported="true" />
     </application>
 </manifest>
