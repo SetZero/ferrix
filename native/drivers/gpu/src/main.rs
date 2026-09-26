@@ -55,7 +55,7 @@ use ferrix_rt::{Bootstrap, Kernel};
 use ferrix_virtio::QueueMemory;
 use ferrix_virtio::gpu::{self, Command, DeviceConfig, DeviceError as Refusal, MemEntry, Response};
 use ferrix_virtio::pci::{CommonConfig, NO_VECTOR};
-use ferrix_virtio_gpu::pipeline::{Pipeline, Request, Step as Next};
+use ferrix_virtio_gpu::pipeline::{Pipeline, Request, Step as Next, TransferOffset};
 use ferrix_virtio_gpu::{
     CAPSET_ROOM, CONTROL_SLOTS, CommandArea, DevicePages, Driver, ISR_QUEUE, Options, Parts,
     SLOT_AREA_BYTES, SubmitError, Teardown, Transport,
@@ -1635,6 +1635,11 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
     let mut serving = Serving {
         render_armed: render.is_some(),
         render,
+        pipeline: Pipeline::for_device(TransferOffset::for_device(
+            start.pci_device_id,
+            start.pci_subsystem_vendor_id,
+            start.pci_subsystem_id,
+        )),
         ..Serving::new(driver, scratch, card, device, control, port)
     };
     let ended = serving.serve();

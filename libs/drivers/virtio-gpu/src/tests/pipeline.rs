@@ -6,7 +6,7 @@ use ferrix_displayctl::message::{
 };
 use ferrix_virtio::gpu::{Command, DeviceError as Refusal, Format, MemEntry, Rect, Response};
 
-use crate::pipeline::{Pipeline, PipelineError, QUEUE_DEPTH, Request, Step};
+use crate::pipeline::{Pipeline, PipelineError, QUEUE_DEPTH, Request, Step, TransferOffset};
 
 const ENTRIES: [MemEntry; 2] = [
     MemEntry {
@@ -168,6 +168,59 @@ fn a_failed_attach_is_undone_and_reported() {
             buffer: 7,
             status: Status::DeviceRefused
         })
+    );
+}
+
+/// crosvm adds the rectangle's origin to the offset itself, so a pipeline
+/// for its device sends the backing's start, and the same rectangle.
+#[test]
+fn a_crosvm_flush_transfers_from_the_backings_start() {
+    let mut pipeline = Pipeline::for_device(TransferOffset::BackingStart);
+    attached(&mut pipeline, 7);
+    let area = CtlRect {
+        x: 4,
+        y: 2,
+        width: 8,
+        height: 3,
+    };
+    pipeline
+        .push(Request::Flush {
+            buffer: 7,
+            sequence: 9,
+            rect: area,
+        })
+        .expect("room");
+    assert_eq!(
+        pipeline.next(&ENTRIES),
+        Step::Submit(Command::TransferToHost2d {
+            rect: Rect {
+                x: 4,
+                y: 2,
+                width: 8,
+                height: 3,
+            },
+            offset: 0,
+            resource_id: 7
+        })
+    );
+}
+
+#[test]
+fn the_machine_is_told_by_the_gpus_pci_subsystem() {
+    assert_eq!(
+        TransferOffset::for_device(0x1050, 0x1af4, 0x1050),
+        TransferOffset::BackingStart,
+        "crosvm repeats the device identifier"
+    );
+    assert_eq!(
+        TransferOffset::for_device(0x1050, 0x1af4, 0x1100),
+        TransferOffset::RectangleStart,
+        "QEMU's subsystem"
+    );
+    assert_eq!(
+        TransferOffset::for_device(0x1050, 0, 0),
+        TransferOffset::RectangleStart,
+        "none said: the specification's reading"
     );
 }
 
