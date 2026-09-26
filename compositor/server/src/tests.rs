@@ -2124,6 +2124,9 @@ fn seated_client() -> Client {
         |opcode: u16, id: u32| request(7, opcode, &[ArgType::NewId], &[Arg::NewId(ObjectId(id))]);
     let mut bytes = ask(core::wl_seat::request::GET_KEYBOARD, 10);
     bytes.extend(ask(core::wl_seat::request::GET_POINTER, 11));
+    // The surface the focus goes to: an event may name only a surface the
+    // client still has.
+    bytes.extend(create_surface(3));
     assert_eq!(client.read(&bytes, &[]), bytes.len());
     assert_eq!(client.fatal(), None);
     let _ = sent(&mut client);
@@ -2312,6 +2315,7 @@ fn a_modern_pointer_hears_the_scroll_in_value120() {
         &[ArgType::NewId],
         &[Arg::NewId(ObjectId(11))],
     ));
+    bytes.extend(create_surface(3));
     assert_eq!(client.read(&bytes, &[]), bytes.len());
     assert_eq!(client.fatal(), None);
     let _ = sent(&mut client);
@@ -2362,6 +2366,41 @@ fn a_modern_pointer_hears_the_scroll_in_value120() {
             "Fixed(30)".to_owned(),
         ]
     );
+}
+
+/// A surface the client has destroyed is never named in `enter` or `leave`.
+///
+/// The client has been sent `delete_id` for it, and libwayland treats an
+/// event naming an id it has let go of as an unknown object and ends the
+/// connection. Chrome closed a context menu under the pointer, the pointer
+/// moved off where the menu had been, and the `wl_pointer.leave` for the
+/// menu took the whole browser down.
+#[test]
+fn a_destroyed_surface_is_not_told_the_focus_left() {
+    let mut client = seated_client();
+    let surface = ObjectId(3);
+    let _ = client
+        .pointer_enter(surface, Fixed::from_int(1), Fixed::from_int(1))
+        .expect("a pointer");
+    let _ = client
+        .keyboard_enter(surface, &[], compositor_xkb::Modifiers::default())
+        .expect("a keyboard");
+    let destroy = request(3, core::wl_surface::request::DESTROY, &[], &[]);
+    assert_eq!(client.read(&destroy, &[]), destroy.len());
+    assert_eq!(client.fatal(), None);
+    let _ = sent(&mut client);
+
+    assert_eq!(client.pointer_leave(surface), None);
+    assert_eq!(client.keyboard_leave(surface), None);
+    assert_eq!(
+        client.pointer_enter(surface, Fixed::ZERO, Fixed::ZERO),
+        None
+    );
+    assert_eq!(
+        client.keyboard_enter(surface, &[], compositor_xkb::Modifiers::default()),
+        None
+    );
+    assert!(sent(&mut client).is_empty());
 }
 
 /// A client that never asked for a keyboard is sent no key, and is told so.

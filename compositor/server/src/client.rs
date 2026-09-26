@@ -1246,7 +1246,8 @@ impl Client {
     /// failure and it is not nothing: a window is often mapped in the same
     /// burst of requests that asks the seat for its keyboard, and whichever
     /// the server reads first, the client has to be told it has the focus. So
-    /// the caller is told the focus did not arrive, and asks again.
+    /// the caller is told the focus did not arrive, and asks again. The same
+    /// for a `surface` the client has destroyed, which an event may not name.
     pub fn keyboard_enter(
         &mut self,
         surface: ObjectId,
@@ -1254,7 +1255,7 @@ impl Client {
         modifiers: Modifiers,
     ) -> Option<u32> {
         let keyboards = self.objects_with(Role::Keyboard);
-        if keyboards.is_empty() {
+        if keyboards.is_empty() || !self.surfaces.contains_key(&surface) {
             return None;
         }
         let serial = self.next_serial();
@@ -1283,10 +1284,14 @@ impl Client {
     /// Take the keyboard focus away from `surface`.
     ///
     /// `None` when this client has no `wl_keyboard`, as in
-    /// [`Client::keyboard_enter`].
+    /// [`Client::keyboard_enter`], or when `surface` is no longer one of its
+    /// surfaces. A surface the client destroyed has had its `delete_id`, and
+    /// an event naming it is one libwayland calls an unknown object and
+    /// ends the connection over -- which is how Chrome died when a menu it
+    /// had just closed was told the pointer left it.
     pub fn keyboard_leave(&mut self, surface: ObjectId) -> Option<u32> {
         let keyboards = self.objects_with(Role::Keyboard);
-        if keyboards.is_empty() {
+        if keyboards.is_empty() || !self.surfaces.contains_key(&surface) {
             return None;
         }
         let serial = self.next_serial();
@@ -1364,11 +1369,11 @@ impl Client {
 
     /// The pointer came onto `surface` at `(x, y)` in its own coordinates.
     ///
-    /// `None` when this client has no `wl_pointer`, as in
-    /// [`Client::keyboard_enter`].
+    /// `None` when this client has no `wl_pointer` or no longer has
+    /// `surface`, as in [`Client::keyboard_enter`].
     pub fn pointer_enter(&mut self, surface: ObjectId, x: Fixed, y: Fixed) -> Option<u32> {
         let pointers = self.objects_with(Role::Pointer);
-        if pointers.is_empty() {
+        if pointers.is_empty() || !self.surfaces.contains_key(&surface) {
             return None;
         }
         let serial = self.next_serial();
@@ -1395,10 +1400,11 @@ impl Client {
 
     /// The pointer left `surface`.
     ///
-    /// `None` when this client has no `wl_pointer`.
+    /// `None` when this client has no `wl_pointer` or no longer has
+    /// `surface`, as in [`Client::keyboard_leave`].
     pub fn pointer_leave(&mut self, surface: ObjectId) -> Option<u32> {
         let pointers = self.objects_with(Role::Pointer);
-        if pointers.is_empty() {
+        if pointers.is_empty() || !self.surfaces.contains_key(&surface) {
             return None;
         }
         let serial = self.next_serial();

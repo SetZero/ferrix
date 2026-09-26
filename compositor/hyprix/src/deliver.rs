@@ -118,6 +118,28 @@ impl Focus {
         moved(&mut self.pointer, places);
     }
 
+    /// Forget a focus whose surface its client has destroyed, telling
+    /// nobody.
+    ///
+    /// Called every pass once the clients have been read. The client has
+    /// had `delete_id` for the surface, so a `leave` naming it is an unknown
+    /// object to libwayland, which ends the connection: Chrome closed a menu
+    /// under the pointer, the pointer moved, and the `leave` for the menu
+    /// took the whole browser down. Forgetting it in the same pass also
+    /// keeps a `leave` from reaching whatever the client gives the id to
+    /// next, which it may do as soon as it reads the `delete_id`.
+    pub fn prune(&mut self, slots: &[Slot]) {
+        let alive = |held: Option<(usize, ObjectId)>| {
+            held.filter(|(client, surface)| {
+                slots
+                    .get(*client)
+                    .is_some_and(|slot| slot.client().surface(*surface).is_some())
+            })
+        };
+        self.keyboard = alive(self.keyboard);
+        self.pointer = alive(self.pointer);
+    }
+
     /// Give the keyboard to whatever the layout says is focused.
     ///
     /// Called every time round the loop. A focus that has not moved sends

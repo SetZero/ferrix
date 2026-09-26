@@ -849,6 +849,9 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 changed = true;
             }
         }
+        // A focus on a surface a client has just destroyed, dropped before
+        // anything moves the focus and sends a `leave` naming it.
+        focus.prune(&slots);
         // The drag, now that every client's own borrow is over: it reaches
         // two connections at once and a client's borrow holds one of them.
         changed |= carry_drag(
