@@ -1,10 +1,11 @@
 # Audio: `/dev/snd` over a ring-3 virtio-snd driver
 
-Version 1, a draft for the product owner (ferrix-32), written on 2026-09-26
-at the customer's request. The customer moved audio forward the same day
-(§6, decision 1); the rest of §6 is still the owner's. It has the shape of `docs/INPUT.md` on purpose: a core in the
-kernel, a ring-3 driver started by devmgr, the Linux ABI (ALSA) with its
-subset taken from a UAPI probe, and QEMU's far end as the test's witness.
+Version 1, a draft written on 2026-09-26 at the customer's request. The
+customer is the product owner (`docs/BACKLOG.md`, since 2026-09-15), moved
+audio forward the same day (§6, decision 1), and decides the rest of §6. It
+has the shape of `docs/INPUT.md` on purpose: a core in the kernel, a ring-3
+driver started by devmgr, the Linux ABI (ALSA) with its subset taken from a
+UAPI probe, and QEMU's far end as the test's witness.
 
 ## 1. What this is, and what it is not
 
@@ -373,7 +374,7 @@ replacement will look there. No client in this iteration needs them.
   `audio_pcm_hw_add_`). So the file should hold exactly the frames the device
   consumed. That is read from source, not yet seen, and L7's first run
   confirms it. If it does not hold, the check falls back to a tolerance,
-  which §6 asks the owner to accept or refuse. QEMU writes the WAV header's
+  which §6 asks the customer to accept or refuse. QEMU writes the WAV header's
   lengths when the voice closes (`wav_fini_out`), so xtask ends QEMU with
   QMP `quit` and, if the header still says zero, reads the data from byte 44
   to the end.
@@ -433,19 +434,19 @@ it.
 
 The roadmap prices all three parts at 30. This breakdown puts the first two
 at 27 and leaves 3 for the server, which is not credible: PipeWire alone is
-a daemon, a session manager and a protocol server. The product owner
+a daemon, a session manager and a protocol server. The customer
 re-baselines once U2's first attempt has sized it.
 
 ## 6. Decisions and open questions
 
-**For the product owner (ferrix-32):**
+**For the customer, as product owner:**
 
 1. **Priority. Decided by the customer, 2026-09-26: audio is current
    work, not stage 22's.** It was written into stage 22 (Steam), which has
    not started, and none of this iteration depends on the rest of that
    stage. The browser (`docs/CHROME.md` §3) and the desktop want it sooner.
    Where it sits in the roadmap's numbering, and how it is ordered against
-   the other open streams, is the owner's.
+   the other open streams, is still to say.
 2. **A kernel core with `/dev/snd`**, rather than a driver with no kernel
    subsystem that binds a Unix socket itself (devmgr's `Kind::Port`, as
    vport does for the clipboard). The socket design is less kernel code, but
@@ -473,14 +474,12 @@ re-baselines once U2's first attempt has sized it.
    If the first run shows QEMU changing samples with the mixing engine off,
    accept a tolerance of ±1 per sample, or treat it as a finding against
    QEMU and keep the exact check?
-7. **Owner.** No session owns audio in `docs/BACKLOG.md`.
-
-**For the customer:**
-
-* **Which QEMU `run --audio` uses** (§4). Either reinstall the local 9.2.4
-  with its `pa` and `pipewire` backends, which its build is already
-  configured for, or use `/usr/bin`'s 10.2.1, which has them but is x86-64
-  only. The test itself needs neither: `wav` is in both.
+7. **Owner.** ferrix-90, the session that wrote this, from 2026-09-26 at
+   the customer's word, with a row in `docs/BACKLOG.md`'s owners table.
+8. **Which QEMU `run --audio` uses** (§4). Either reinstall the local
+   9.2.4 with its `pa` and `pipewire` backends, which its build is already
+   configured for, or use `/usr/bin`'s 10.2.1, which has them but is x86-64
+   only. The test itself needs neither: `wav` is in both.
 
 **For others:**
 
@@ -520,4 +519,4 @@ re-baselines once U2's first attempt has sized it.
 
 Nothing has landed. This document is the design, with §2's calls read from
 source and §3.3's device read from QEMU 9.2.4's, and none of it run yet. The
-first landing is L1, which needs no decision from §6 other than 7.
+first landing is L1, which needs none of §6's open decisions.
