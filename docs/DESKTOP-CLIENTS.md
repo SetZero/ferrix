@@ -184,7 +184,23 @@ temporary directory, and the clients fall back to the same place.
 The four
 programs are carried as `/bin/waybar`, `/bin/fuzzel`, `/bin/hyprlock`,
 `/bin/hypridle` by one line each in `xtask/src/compositor.rs`'s
-`DESKTOP_CLIENTS`.
+`DESKTOP_CLIENTS`. `--no-dotfiles` carries the file alone. On nazuna the
+user's files are 35 and their fonts 20 files, 10.4 MiB: Ubuntu, GFS Didot,
+DejaVu Sans, and the host's `sans-serif` and `monospace`.
+
+### 2.6 The foundation's boot: `caption`
+
+`userland/compositor/caption` is the smallest program on the whole
+foundation: a line of text in a named font on an overlay layer surface,
+held 40 pixels from the top-left corner. `cargo xtask test-compositor
+--boot caption` draws `Ferrix 12:34 — AVATAR To…` at 32 points in the font
+`~/.config/hypr/hyprlock.conf` names first (`$font Light`, which is Ubuntu
+at weight 300), with that font's files carried as `run-compositor` carries
+them. The font is the user's and is never committed, so the expected
+picture cannot be either: it is made at gate time by running the `x86_64`
+build of the same client on the host with `--render`, from the same font
+files (`--fonts-dir` on both sides), and the screendump's rectangle must
+match it pixel for pixel on `x86_64` (within 2 a channel elsewhere).
 
 ## 3. waybar
 
@@ -591,9 +607,16 @@ shell says it does, and the program reports it.
   and measured `line_height='2.0'` on Ubuntu at 15pt as 11.2 pixels above and
   below, which is the user's own measurement of their waybar tooltips. Not
   done: colour glyphs (Noto Color Emoji draws nothing), bidi reordering,
-  instancing on axes other than `wght`, and a font cache on disk
-  (`Fonts::system()` scans every time).
-* Next: the xtask slice -- `run-compositor --config` carrying the user's
-  dotfiles and fonts, `DESKTOP_CLIENTS`, and the `caption` boot.
-* Not yet: the xtask flag that carries the user's dotfiles and fonts, and the
-  boot check of a toolkit client drawing text in the user's font.
+  instancing on axes other than `wght`, a font cache on disk
+  (`Fonts::system()` scans every time), and **hinted metrics**: Pango on
+  nazuna (1.57, 96 dpi, GTK3's `font-size: 15px` on Ubuntu) rounds every
+  advance to a whole pixel -- `vol 0%` is 44 wide, `cpu 19%` 57, ascent 14,
+  descent 3 -- where this crate keeps HarfBuzz's fractional advances, so a
+  bar's modules can sit a pixel from GTK's. The waybar stream's reference
+  numbers are in `~/.local/share/ferrix/logs/waybar/pango-reference.txt`;
+  rounding the advances in `Fonts::shape` (as `hint-metrics` does) is the
+  change, about a point.
+* **The dotfiles and fonts carried by `run-compositor --config` (§2.5), and
+  the `caption` boot (§2.6), are on `main`** (2026-09-26): on x86_64 the
+  caption's 565x80 pixels, drawn in the user's Ubuntu Light, are the ones the
+  host draws.

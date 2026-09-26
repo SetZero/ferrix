@@ -102,6 +102,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-caption"
+version = "0.1.0"
+dependencies = [
+ "compositor-text",
+ "compositor-toolkit",
+]
+
+[[package]]
 name = "compositor-clip"
 version = "0.1.0"
 dependencies = [

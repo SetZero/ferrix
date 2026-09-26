@@ -23,7 +23,7 @@
 //! files (with `$variables` expanded), `font=` in `fuzzel.ini`,
 //! `font-family` in waybar's CSS -- is resolved on this machine with
 //! `fc-match`, and every file of that family (`fc-list`) goes to
-//! `/usr/share/fonts/host/`, where `compositor/text` looks. They are read
+//! `/usr/share/fonts/host/`, where `userland/compositor/text` looks. They are read
 //! from the host when the image is built and never committed: they are the
 //! user's own and their licences are theirs. A family the host cannot
 //! resolve is said and skipped; a host with no fontconfig carries none.
@@ -93,6 +93,22 @@ pub(crate) fn carried(config: &Path) -> Result<Vec<File>> {
     Ok(files)
 }
 
+/// The font the user's lock screen names first -- `font_family` in
+/// `~/.config/hypr/hyprlock.conf`, `$variables` expanded -- which is the
+/// face the `caption` boot draws in. `None` without such a file.
+pub(crate) fn users_font() -> Option<String> {
+    let home = std::env::var_os("HOME")?;
+    let path = Path::new(&home).join(".config/hypr/hyprlock.conf");
+    let text = std::fs::read_to_string(path).ok()?;
+    hyprlang_families(&text).into_iter().next()
+}
+
+/// Every file of each of `families` on this machine, as image files under
+/// [`FONT_DIR`].
+pub(crate) fn font_files(families: &[String]) -> Vec<File> {
+    fonts(&families.iter().cloned().collect())
+}
+
 /// The directory `config`'s directory is in: `~/.config` for
 /// `~/.config/hypr/hyprland.conf`.
 fn config_root(config: &Path) -> Option<PathBuf> {
@@ -123,8 +139,9 @@ fn walk(dir: &Path, name: &str, out: &mut Vec<File>) -> Result<()> {
                 meta.len() / 1024
             );
         } else if meta.is_file() {
-            let bytes = std::fs::read(&path)
-                .map_err(|error| crate::Error::new(format!("reading {}: {error}", path.display())))?;
+            let bytes = std::fs::read(&path).map_err(|error| {
+                crate::Error::new(format!("reading {}: {error}", path.display()))
+            })?;
             use std::os::unix::fs::PermissionsExt as _;
             let mode = if meta.permissions().mode() & 0o111 != 0 {
                 0o755
@@ -285,7 +302,10 @@ fn fonts(families: &BTreeSet<String>) -> Vec<File> {
     let mut out = Vec::new();
     let mut names = BTreeSet::new();
     for path in paths {
-        let Some(name) = path.file_name().map(|name| name.to_string_lossy().into_owned()) else {
+        let Some(name) = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+        else {
             continue;
         };
         // Two families' files with one name: the first is kept.
@@ -323,7 +343,14 @@ fn fonts(families: &BTreeSet<String>) -> Vec<File> {
 fn resolve(name: &str) -> Option<(String, Vec<PathBuf>)> {
     let generic = matches!(
         name.to_ascii_lowercase().as_str(),
-        "sans-serif" | "sans" | "serif" | "monospace" | "mono" | "system-ui" | "cursive" | "fantasy"
+        "sans-serif"
+            | "sans"
+            | "serif"
+            | "monospace"
+            | "mono"
+            | "system-ui"
+            | "cursive"
+            | "fantasy"
     );
     let mut words: Vec<&str> = name.split_whitespace().collect();
     loop {
@@ -432,7 +459,15 @@ mod probe {
             return;
         }
         let files = super::carried(&config).unwrap_or_default();
-        assert!(files.iter().any(|file| file.path == ".config/hypr/hyprlock.conf"));
-        assert!(files.iter().any(|file| file.path.starts_with("usr/share/fonts/host/")));
+        assert!(
+            files
+                .iter()
+                .any(|file| file.path == ".config/hypr/hyprlock.conf")
+        );
+        assert!(
+            files
+                .iter()
+                .any(|file| file.path.starts_with("usr/share/fonts/host/"))
+        );
     }
 }
