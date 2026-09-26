@@ -287,7 +287,9 @@ pub(crate) fn sys_sysinfo(process: &Process, at: u64) -> Result<usize, Errno> {
         Some(bytes) if bytes <= word_max => (1_u32, bytes, free_pages * PAGE_SIZE),
         _ => (PAGE_SIZE as u32, total_pages, free_pages),
     };
-    let procs = u16::try_from(crate::object::process::live().len()).unwrap_or(u16::MAX);
+    let live = crate::object::process::live().map_err(|_| Errno::ENOMEM)?;
+    let procs = u16::try_from(live.len()).unwrap_or(u16::MAX);
+    drop(live);
 
     let mut bytes = [0_u8; 112];
     let buffer = bytes.get_mut(..SYSINFO_SIZE).ok_or(Errno::EINVAL)?;

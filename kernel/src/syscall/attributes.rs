@@ -469,7 +469,7 @@ fn named_by(process: &Process, which: i32, who: i32) -> Result<Vec<Subject<'_>>,
                 Ok(group) => group,
                 Err(_) => return Ok(Vec::new()),
             };
-            Ok(registry::live()
+            Ok(registry::live()?
                 .into_iter()
                 .filter(|member| member.pgid() == group)
                 .map(Subject::Other)
@@ -483,7 +483,7 @@ fn named_by(process: &Process, which: i32, who: i32) -> Result<Vec<Subject<'_>>,
                 Ok(uid) => uid,
                 Err(_) => return Ok(Vec::new()),
             };
-            Ok(registry::live()
+            Ok(registry::live()?
                 .into_iter()
                 .filter(|member| member.with_credentials(|ids| ids.user.real) == uid)
                 .map(Subject::Other)

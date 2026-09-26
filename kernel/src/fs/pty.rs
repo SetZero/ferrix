@@ -275,7 +275,8 @@ impl Pty {
         if group == 0 {
             return;
         }
-        for target in crate::syscall::registry::live() {
+        // As `tty::signal_foreground_group`: lost, with no memory to list.
+        for target in crate::syscall::registry::live().unwrap_or_default() {
             if target.pgid() == group {
                 crate::syscall::kill::send(&target, signal, crate::syscall::signal::Origin::Kernel);
             }

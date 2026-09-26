@@ -48,7 +48,6 @@
 //! two processes made at once cannot be given the same one.
 
 use alloc::collections::BTreeMap;
-use alloc::collections::btree_map::Entry;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::any::Any;
@@ -57,8 +56,9 @@ use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
 use ferrix_native_abi::signals::Signals as ObjectSignals;
 
+use crate::fallible::{self, AllocError};
 use crate::object::job::{self, Job, JobError};
-use crate::object::port::{self, Observer, PortError};
+use crate::object::port::{self, Observer, Observers, PortError};
 use crate::object::{self as objects, HandleTable};
 use crate::sched::WaitQueue;
 use crate::sync::SpinLock;
@@ -96,19 +96,28 @@ impl Process {
     /// A process over `space`, numbered `pid` -- which the caller has
     /// reserved with [`allocate`] or [`allocate_init`], or zero -- and
     /// counted in `job` from now on.
-    pub(crate) fn new(space: Arc<AddressSpace>, pid: u32, job: Arc<Job>) -> Process {
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`], before it is counted anywhere.
+    pub(crate) fn new(
+        space: Arc<AddressSpace>,
+        pid: u32,
+        job: Arc<Job>,
+    ) -> Result<Process, AllocError> {
+        let exit = fallible::try_arc(Exit::new())?;
         let mut flipped = job::Flipped::new();
         job.count_in(&mut flipped);
         job::notify(flipped);
-        Process {
+        Ok(Process {
             space,
             pid,
             started: crate::timer::now_nanos(),
             handles: SpinLock::new(HandleTable::new(objects::HANDLE_LIMIT)),
             membership: SpinLock::new(job),
             counted: AtomicBool::new(true),
-            exit: Arc::new(Exit::new()),
-        }
+            exit,
+        })
     }
 
     /// What it can see.
@@ -293,7 +302,7 @@ pub(crate) struct Exit {
     exited: WaitQueue,
     /// Port registrations waiting for it to end, and `None` once it has
     /// closed its handles and descriptors and they have been taken.
-    observers: SpinLock<Option<Vec<Observer>>>,
+    observers: SpinLock<Option<Observers>>,
     /// Set under the observers lock as they are taken, so that
     /// [`Exit::is_closed`], which every poll of a handle's signals asks, need
     /// not take the lock.
@@ -308,7 +317,7 @@ impl Exit {
             ended_by: AtomicU32::new(0),
             terminated: AtomicBool::new(false),
             exited: WaitQueue::new(),
-            observers: SpinLock::new(Some(Vec::new())),
+            observers: SpinLock::new(Some(Observers::new())),
             closed: AtomicBool::new(false),
         }
     }
@@ -348,7 +357,8 @@ impl Exit {
     ///
     /// # Errors
     ///
-    /// [`PortError::Full`] at [`port::MAX_OBSERVERS`] registrations.
+    /// [`PortError::Full`] at [`port::MAX_OBSERVERS`] registrations;
+    /// [`PortError::NoMemory`].
     pub(crate) fn observe(&self, observer: Observer) -> Result<(), PortError> {
         debug_assert!(
             crate::arch::interrupts_enabled(),
@@ -380,7 +390,10 @@ impl Exit {
         );
         let mut observers = self.observers.lock();
         self.closed.store(true, Ordering::Release);
-        observers.take().unwrap_or_default()
+        observers
+            .take()
+            .map(|mut observers| observers.take_listed())
+            .unwrap_or_default()
     }
 }
 
@@ -422,14 +435,29 @@ impl ProcessRef {
 
     /// A handle to `host`, made and not yet started, which holds it until a
     /// start takes it over or the last such handle is closed.
-    pub(crate) fn created(host: Arc<dyn Host>) -> ProcessRef {
-        ProcessRef {
-            exit: Arc::clone(&host.core().exit),
-            control: Some(Arc::new(Control {
-                process: Arc::downgrade(&host),
-                unstarted: SpinLock::new(Some(host)),
-            })),
-        }
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`]. `host` has been dropped, unstarted -- and so, by
+    /// [`Control`]'s rule, killed first.
+    pub(crate) fn created(host: Arc<dyn Host>) -> Result<ProcessRef, AllocError> {
+        let exit = Arc::clone(&host.core().exit);
+        let process = Arc::downgrade(&host);
+        let control = match fallible::try_arc(Control {
+            process,
+            unstarted: SpinLock::new(Some(Arc::clone(&host))),
+        }) {
+            Ok(control) => control,
+            Err(error) => {
+                host.kill(job::KILLED_STATUS);
+                return Err(error);
+            }
+        };
+        drop(host);
+        Ok(ProcessRef {
+            exit,
+            control: Some(control),
+        })
     }
 
     /// How it ended, and who is waiting to hear.
@@ -537,7 +565,8 @@ static TABLE: SpinLock<Table> = SpinLock::new(Table {
     last: INIT_PID,
 });
 
-/// Choose and reserve a number, or `None` if every one is in use.
+/// Choose and reserve a number, or `None` if every one is in use or there was
+/// no memory to record it.
 pub(crate) fn allocate() -> Option<u32> {
     let mut guard = TABLE.lock();
     let table = &mut *guard;
@@ -548,8 +577,8 @@ pub(crate) fn allocate() -> Option<u32> {
         } else {
             candidate + 1
         };
-        if let Entry::Vacant(slot) = table.live.entry(candidate) {
-            let _ = slot.insert(None);
+        if !table.live.contains_key(&candidate) {
+            let _ = fallible::insert(&mut table.live, candidate, None).ok()?;
             table.last = candidate;
             return Some(candidate);
         }
@@ -558,14 +587,14 @@ pub(crate) fn allocate() -> Option<u32> {
 }
 
 /// Reserve [`INIT_PID`] for the process init starts, or `None` if a process
-/// still holds it.
+/// still holds it or there was no memory to record it.
 pub(crate) fn allocate_init() -> Option<u32> {
     let mut guard = TABLE.lock();
-    if let Entry::Vacant(slot) = guard.live.entry(INIT_PID) {
-        let _ = slot.insert(None);
-        return Some(INIT_PID);
+    if guard.live.contains_key(&INIT_PID) {
+        return None;
     }
-    None
+    let _ = fallible::insert(&mut guard.live, INIT_PID, None).ok()?;
+    Some(INIT_PID)
 }
 
 /// Whether no process, live or on its way out, holds `number`.
@@ -575,8 +604,21 @@ pub(crate) fn is_free(number: u32) -> bool {
 
 /// Have `number` find `process` from now on: its pid once it is complete, or
 /// one of its threads' numbers, which find their process too.
-pub(crate) fn name(number: u32, process: Weak<dyn Host>) {
-    let _ = TABLE.lock().live.insert(number, Some(process));
+///
+/// A number [`allocate`] reserved is already in the table and naming it
+/// allocates nothing.
+///
+/// # Errors
+///
+/// [`AllocError`] for a number not reserved, when there was no memory to add
+/// it.
+pub(crate) fn name(number: u32, process: Weak<dyn Host>) -> Result<(), AllocError> {
+    let mut table = TABLE.lock();
+    if let Some(entry) = table.live.get_mut(&number) {
+        *entry = Some(process);
+        return Ok(());
+    }
+    fallible::insert(&mut table.live, number, Some(process)).map(|_| ())
 }
 
 /// Give `number` back, whatever it names. Called by a process as it is
@@ -630,26 +672,25 @@ pub(crate) fn find(number: u32) -> Option<Arc<dyn Host>> {
 /// The strong references are taken under the lock and the lock released
 /// before they are returned, so a caller that drops the last reference to a
 /// process drops it with the table unlocked -- [`release`] needs the lock.
-pub(crate) fn live() -> Vec<Arc<dyn Host>> {
+///
+/// # Errors
+///
+/// [`AllocError`].
+pub(crate) fn live() -> Result<Vec<Arc<dyn Host>>, AllocError> {
     // Each process once, under its pid and not under its threads' numbers.
     // Filtered after the lock is let go, since a reference dropped here may be
     // a process's last, and dropping a process takes the lock.
-    let entries: Vec<(u32, Arc<dyn Host>)> = {
+    let mut entries: Vec<(u32, Arc<dyn Host>)> = {
         let table = TABLE.lock();
-        table
-            .live
-            .iter()
-            .filter_map(|(&number, entry)| {
-                entry
-                    .as_ref()
-                    .and_then(Weak::upgrade)
-                    .map(|host| (number, host))
-            })
-            .collect()
+        fallible::try_collect(table.live.iter().filter_map(|(&number, entry)| {
+            entry
+                .as_ref()
+                .and_then(Weak::upgrade)
+                .map(|host| (number, host))
+        }))?
     };
-    entries
-        .into_iter()
-        .filter(|(number, host)| host.core().pid() == *number)
-        .map(|(_, host)| host)
-        .collect()
+    // In place: the pairs whose number is not their process's pid go, and
+    // the processes move into the space the pairs held.
+    entries.retain(|(number, host)| host.core().pid() == *number);
+    fallible::try_collect(entries.into_iter().map(|(_, host)| host))
 }

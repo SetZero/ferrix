@@ -47,7 +47,6 @@
 //! `0x1032..=0x1037`. Those numbers do not decode yet, and answer `ENOSYS`.
 
 use alloc::sync::Arc;
-use alloc::vec;
 use alloc::vec::Vec;
 
 use ferrix_bootinfo::PAGE_SIZE;
@@ -70,12 +69,13 @@ use ferrix_vma::VmaFlags;
 use crate::arch;
 use crate::claim::StillServed;
 use crate::device::DeviceNode;
+use crate::fallible;
 use crate::hooks::{Full, Hooks};
 use crate::object::channel::{self, ChannelMessage, Endpoint, ReadError, WriteFailure};
 use crate::object::interrupt::{Interrupt, InterruptError};
 use crate::object::io_mapping::{IoMapping, IoMappingError};
 use crate::object::job::{self, Job};
-use crate::object::port::{Observer, Port};
+use crate::object::port::{Observer, Port, PortError};
 use crate::object::process::{Host, Process, ProcessRef};
 use crate::object::{self, HandleTable, Object};
 use crate::syscall::uaccess::{self, UserError};
@@ -397,7 +397,7 @@ pub(crate) fn dispatch(args: &SyscallArgs, caller: Option<&dyn Host>) -> Result<
         NativeCall::IoMappingMap => io_mapping_map(process, handle(a[0]), a[1]),
         NativeCall::VmoPin => vmo_pin(process, handle(a[0]), handle(a[1]), a[2], a[3], a[4]),
         NativeCall::VmoPinAddresses => vmo_pin_addresses(process, handle(a[0]), a[1], a[2]),
-        NativeCall::PortCreate => insert_new(process, Object::Port(Port::new()), Rights::PORT),
+        NativeCall::PortCreate => port_create(process),
         NativeCall::PortQueue => port_queue(process, handle(a[0]), a[1]),
         NativeCall::PortWait => port_wait(caller, handle(a[0]), a[1], a[2]),
         NativeCall::ObjectWaitAsync => {
@@ -427,6 +427,7 @@ fn table_error(error: TableError) -> Errno {
         TableError::AccessDenied => status::ACCESS_DENIED,
         TableError::Full => status::NO_HANDLES,
         TableError::Repeated => status::INVALID_ARGS,
+        TableError::NoMemory => status::NO_MEMORY,
     }
 }
 
@@ -462,30 +463,50 @@ fn handle_replace(process: &Process, handle: Handle, rights: u64) -> Result<usiz
         .map_err(table_error)
 }
 
+/// `port_create`.
+fn port_create(process: &Process) -> Result<usize, Errno> {
+    let port = Port::new().map_err(|_| status::NO_MEMORY)?;
+    insert_new(process, Object::Port(port), Rights::PORT)
+}
+
 /// `channel_create`.
 fn channel_create(process: &Process, out: u64) -> Result<usize, Errno> {
-    let (first, second) = Endpoint::pair().ok_or(status::NO_MEMORY)?;
-    let ends = vec![
-        (Object::Channel(first), Rights::CHANNEL),
-        (Object::Channel(second), Rights::CHANNEL),
-    ];
-    let handles = match process.with_handles(|table| table.insert_many(ends)) {
-        Ok(handles) => handles,
-        Err(ends) => {
-            object::dispose(ends.into_iter().map(|(object, _)| object));
-            return Err(status::NO_HANDLES);
-        }
-    };
-    if let Err(problem) = uaccess::copy_to_user(process.space(), out, &handle_bytes(&handles)) {
+    let (first, second) = Endpoint::pair().map_err(|_| status::NO_MEMORY)?;
+    let mut ends = fallible::try_with_capacity(2).map_err(|_| status::NO_MEMORY)?;
+    for end in [first, second] {
+        let _ = fallible::push_within(&mut ends, (Object::Channel(end), Rights::CHANNEL));
+    }
+    let handles = insert_all(process, ends)?;
+    let written = handle_bytes(&handles)
+        .and_then(|bytes| uaccess::copy_to_user(process.space(), out, &bytes).map_err(fault));
+    if let Err(problem) = written {
         // The program never learned the numbers, so nothing can close them
         // but this. Another thread may already have guessed one and closed
         // it, in which case the rest are that thread's to find.
         if let Ok(taken) = process.with_handles(|table| table.take_many(&handles, Rights::NONE)) {
             object::dispose(taken.into_iter().map(|(object, _)| object));
         }
-        return Err(fault(problem));
+        return Err(problem);
     }
     Ok(0)
+}
+
+/// Open a handle for each of `objects`, all or none; the objects are freed
+/// when there is no room for all of them.
+fn insert_all(process: &Process, objects: Vec<(Object, Rights)>) -> Result<Vec<Handle>, Errno> {
+    let placed = process.with_handles(|table| {
+        // FALLIBLE: the handle table's reserve refuses with `TableError::NoMemory`.
+        if let Err(error) = table.reserve(objects.len()) {
+            return Err((table_error(error), objects));
+        }
+        table
+            .insert_many(objects)
+            .map_err(|(why, objects)| (table_error(why), objects))
+    });
+    placed.map_err(|(status, objects)| {
+        object::dispose(objects.into_iter().map(|(object, _)| object));
+        status
+    })
 }
 
 /// `channel_write`.
@@ -505,7 +526,7 @@ fn channel_write(
     // before a handle table in the lock order, never inside one.
     let (writer, carried) = process.with_handles(|table| {
         let writer = channel_in(table, channel, Rights::WRITE)?;
-        let carried = carried_endpoints(table, &values);
+        let carried = carried_endpoints(table, &values)?;
         refuse_the_writing_end(&writer, channel, &values, &carried)?;
         Ok::<_, Errno>((writer, carried))
     })?;
@@ -513,16 +534,13 @@ fn channel_write(
     // Held from the check to the push, so no other send can close a cycle in
     // between. Only a message carrying an endpoint takes it: nothing else can
     // add an edge to the graph it guards.
-    let checked: Vec<*const Endpoint> = carried.iter().map(Arc::as_ptr).collect();
+    let checked: Vec<*const Endpoint> =
+        fallible::try_collect(carried.iter().map(Arc::as_ptr)).map_err(|_| status::NO_MEMORY)?;
     let _topology = if carried.is_empty() {
         None
     } else {
         let guard = object::TOPOLOGY.lock();
-        match channel::check_carry(&writer, carried) {
-            Reach::Clear => {}
-            Reach::Found => return Err(status::INVALID_ARGS),
-            Reach::TooFar => return Err(status::TOO_BIG),
-        }
+        reach_status(channel::check_carry(&writer, carried))?;
         Some(guard)
     };
 
@@ -537,7 +555,7 @@ fn channel_write(
         // name the writing end itself at the second. So the writing end and
         // the endpoints the message carries are compared, and a message whose
         // handles changed underneath it is refused as try-again.
-        let carried_now = carried_endpoints(table, &values);
+        let carried_now = carried_endpoints(table, &values)?;
         if !Arc::ptr_eq(&endpoint, &writer)
             || carried_now
                 .iter()
@@ -551,14 +569,30 @@ fn channel_write(
             .write(data, values.len(), || {
                 table.take_many(&values, Rights::TRANSFER)
             })
-            .map_err(|failure| match failure {
-                WriteFailure::PeerClosed => status::PEER_CLOSED,
-                WriteFailure::TooBig => status::TOO_BIG,
-                WriteFailure::Full => status::SHOULD_WAIT,
-                WriteFailure::Take(error) => table_error(error),
-            })
+            .map_err(write_status)
     })?;
     Ok(0)
+}
+
+/// What a cycle check's answer means for the send that asked.
+fn reach_status(reach: Reach) -> Result<(), Errno> {
+    match reach {
+        Reach::Clear => Ok(()),
+        Reach::Found => Err(status::INVALID_ARGS),
+        Reach::TooFar => Err(status::TOO_BIG),
+        Reach::NoMemory => Err(status::NO_MEMORY),
+    }
+}
+
+/// The status a refused write travels as.
+fn write_status(failure: WriteFailure<TableError>) -> Errno {
+    match failure {
+        WriteFailure::PeerClosed => status::PEER_CLOSED,
+        WriteFailure::TooBig => status::TOO_BIG,
+        WriteFailure::Full => status::SHOULD_WAIT,
+        WriteFailure::Take(error) => table_error(error),
+        WriteFailure::NoMemory => status::NO_MEMORY,
+    }
 }
 
 /// Refuse a message carrying the end it is written through.
@@ -585,14 +619,12 @@ fn refuse_the_writing_end(
 ///
 /// A value that names nothing is skipped here; taking the handles refuses it
 /// afterwards, with the status that says why.
-fn carried_endpoints(table: &HandleTable, values: &[Handle]) -> Vec<Arc<Endpoint>> {
-    values
-        .iter()
-        .filter_map(|&value| match table.get(value) {
-            Ok((Object::Channel(endpoint), _)) => Some(Arc::clone(endpoint)),
-            _ => None,
-        })
-        .collect()
+fn carried_endpoints(table: &HandleTable, values: &[Handle]) -> Result<Vec<Arc<Endpoint>>, Errno> {
+    fallible::try_collect(values.iter().filter_map(|&value| match table.get(value) {
+        Ok((Object::Channel(endpoint), _)) => Some(Arc::clone(endpoint)),
+        _ => None,
+    }))
+    .map_err(|_| status::NO_MEMORY)
 }
 
 /// `channel_read`.
@@ -747,19 +779,32 @@ fn deliver(
         bytes: data,
         handles: transfers,
     } = message;
-    let values = match process.with_handles(|table| table.insert_many(transfers)) {
+    // FALLIBLE: the handle table's reserve refuses with `TableError::NoMemory`.
+    let placed = process.with_handles(|table| match table.reserve(transfers.len()) {
+        Ok(()) => table
+            .insert_many(transfers)
+            .map_err(|(why, transfers)| (table_error(why), transfers)),
+        Err(error) => Err((table_error(error), transfers)),
+    });
+    let values = match placed {
         Ok(values) => values,
-        Err(transfers) => {
-            endpoint.unread(Message {
-                bytes: data,
-                handles: transfers,
-            });
-            return Err(Undelivered::Refused(status::NO_HANDLES));
+        Err((why, transfers)) => {
+            unread(
+                endpoint,
+                Message {
+                    bytes: data,
+                    handles: transfers,
+                },
+            );
+            return Err(Undelivered::Refused(why));
         }
     };
 
     let copied = put_user(process, at.bytes, &data, through)
-        .and_then(|()| put_user(process, at.handles, &handle_bytes(&values), through))
+        .and_then(|()| {
+            let bytes = handle_bytes(&values).map_err(Undelivered::Refused)?;
+            put_user(process, at.handles, &bytes, through)
+        })
         .and_then(|()| {
             put_user(
                 process,
@@ -772,16 +817,30 @@ fn deliver(
         // Taken back and requeued, so a bad buffer loses nothing. If another
         // thread of this process has already closed one of the new handles,
         // the rest stay where they are: that thread has seen them.
+        // Taking them back needs a list; with no memory for one they stay,
+        // as if that other thread had closed one.
         if let Ok(transfers) = process.with_handles(|table| table.take_many(&values, Rights::NONE))
         {
-            endpoint.unread(Message {
-                bytes: data,
-                handles: transfers,
-            });
+            unread(
+                endpoint,
+                Message {
+                    bytes: data,
+                    handles: transfers,
+                },
+            );
         }
         return Err(problem);
     }
     Ok(())
+}
+
+/// Put `message` back at the head of `endpoint`'s queue, or free what it
+/// carries if the queue could not grow to take it: the read putting it back
+/// was failing anyway.
+fn unread(endpoint: &Endpoint, message: ChannelMessage) {
+    if let Err(message) = endpoint.unread(message) {
+        object::dispose(message.handles.into_iter().map(|(object, _)| object));
+    }
 }
 
 /// Copy `data` to `at` in the reader's memory, as `through` allows.
@@ -863,7 +922,7 @@ fn capacity(count: u64, max: usize) -> usize {
 
 /// `count` bytes from the caller's memory.
 fn copy_in(process: &Process, at: u64, count: usize) -> Result<Vec<u8>, Errno> {
-    let mut data = vec![0_u8; count];
+    let mut data = fallible::try_filled(0_u8, count).map_err(|_| status::NO_MEMORY)?;
     if count > 0 {
         uaccess::copy_from_user(process.space(), at, &mut data).map_err(fault)?;
     }
@@ -873,21 +932,19 @@ fn copy_in(process: &Process, at: u64, count: usize) -> Result<Vec<u8>, Errno> {
 /// `count` handle values from the caller's memory.
 fn copy_in_handles(process: &Process, at: u64, count: usize) -> Result<Vec<Handle>, Errno> {
     let bytes = copy_in(process, at, count * HANDLE_BYTES)?;
-    bytes
-        .chunks_exact(HANDLE_BYTES)
-        .map(|word| {
-            <[u8; HANDLE_BYTES]>::try_from(word).map(|word| Handle(u32::from_ne_bytes(word)))
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| status::INVALID_ARGS)
+    let mut handles = fallible::try_with_capacity(count).map_err(|_| status::NO_MEMORY)?;
+    for word in bytes.chunks_exact(HANDLE_BYTES) {
+        let word = <[u8; HANDLE_BYTES]>::try_from(word).map_err(|_| status::INVALID_ARGS)?;
+        fallible::push_within(&mut handles, Handle(u32::from_ne_bytes(word)))
+            .map_err(|_| status::INVALID_ARGS)?;
+    }
+    Ok(handles)
 }
 
 /// Handle values as a user buffer holds them.
-fn handle_bytes(handles: &[Handle]) -> Vec<u8> {
-    handles
-        .iter()
-        .flat_map(|handle| handle.0.to_ne_bytes())
-        .collect()
+fn handle_bytes(handles: &[Handle]) -> Result<Vec<u8>, Errno> {
+    fallible::try_collect(handles.iter().flat_map(|handle| handle.0.to_ne_bytes()))
+        .map_err(|_| status::NO_MEMORY)
 }
 
 /// A 64-bit value read through a pointer argument.
@@ -903,7 +960,8 @@ fn vmo_create(process: &Process, bytes: u64) -> Result<usize, Errno> {
     if pages > MAX_VMO_PAGES {
         return Err(status::NO_MEMORY);
     }
-    insert_new(process, Object::Vmo(Vmo::new_anonymous(pages)), Rights::VMO)
+    let vmo = Vmo::try_new_anonymous(pages).map_err(|_| status::NO_MEMORY)?;
+    insert_new(process, Object::Vmo(vmo), Rights::VMO)
 }
 
 /// Which way a VMO copy goes.
@@ -955,29 +1013,42 @@ fn vmo_copy(
         return Err(status::INVALID_ARGS);
     }
 
-    let mut scratch = vec![0_u8; PAGE_SIZE as usize];
+    let mut scratch =
+        fallible::try_filled(0_u8, PAGE_SIZE as usize).map_err(|_| status::NO_MEMORY)?;
     let mut done = 0_u64;
     while done < buffer.count {
         let at = offset + done;
-        let within = (at % PAGE_SIZE) as usize;
         let chunk = (PAGE_SIZE - at % PAGE_SIZE).min(buffer.count - done) as usize;
         let slot = scratch.get_mut(..chunk).ok_or(status::INVALID_ARGS)?;
-        let user = buffer.at + done;
-        match direction {
-            Direction::Read => {
-                vmo.read_page(at / PAGE_SIZE, within, slot)
-                    .map_err(vmo_error)?;
-                uaccess::copy_to_user(process.space(), user, slot).map_err(fault)?;
-            }
-            Direction::Write => {
-                uaccess::copy_from_user(process.space(), user, slot).map_err(fault)?;
-                vmo.write_page(at / PAGE_SIZE, within, slot)
-                    .map_err(vmo_error)?;
-            }
-        }
+        copy_page(process, &vmo, at, buffer.at + done, slot, direction)?;
         done += chunk as u64;
     }
     Ok(0)
+}
+
+/// Copy `slot.len()` bytes between the VMO at byte `at` and the caller's
+/// memory at `user`, through `slot`, which lies within one page.
+fn copy_page(
+    process: &Process,
+    vmo: &Vmo,
+    at: u64,
+    user: u64,
+    slot: &mut [u8],
+    direction: Direction,
+) -> Result<(), Errno> {
+    let within = (at % PAGE_SIZE) as usize;
+    match direction {
+        Direction::Read => {
+            vmo.read_page(at / PAGE_SIZE, within, slot)
+                .map_err(vmo_error)?;
+            uaccess::copy_to_user(process.space(), user, slot).map_err(fault)
+        }
+        Direction::Write => {
+            uaccess::copy_from_user(process.space(), user, slot).map_err(fault)?;
+            vmo.write_page(at / PAGE_SIZE, within, slot)
+                .map_err(vmo_error)
+        }
+    }
 }
 
 /// The status a VMO refusal travels as.
@@ -1001,11 +1072,19 @@ pub(crate) fn insert_new(
     object: Object,
     rights: Rights,
 ) -> Result<usize, Errno> {
-    match process.with_handles(|table| table.insert(object, rights)) {
+    // FALLIBLE: the handle table's reserve refuses with `TableError::NoMemory`.
+    let placed = process.with_handles(|table| match table.reserve(1) {
+        Ok(()) => table
+            // FALLIBLE: the handle table's insert hands the object back.
+            .insert(object, rights)
+            .map_err(|object| (status::NO_HANDLES, object)),
+        Err(error) => Err((table_error(error), object)),
+    });
+    match placed {
         Ok(handle) => Ok(returned(handle)),
-        Err(object) => {
+        Err((why, object)) => {
             object::dispose([object]);
-            Err(status::NO_HANDLES)
+            Err(why)
         }
     }
 }
@@ -1081,7 +1160,10 @@ fn job_in(process: &Process, job: Handle, needed: Rights) -> Result<Arc<Job>, Er
 /// `job_create`.
 fn job_create(process: &Process, parent: Handle) -> Result<usize, Errno> {
     let parent = job_in(process, parent, Rights::MANAGE)?;
-    let child = parent.new_child().map_err(|_| status::BAD_STATE)?;
+    let child = parent.new_child().map_err(|why| match why {
+        job::JobError::NoMemory => status::NO_MEMORY,
+        _ => status::BAD_STATE,
+    })?;
     insert_new(process, Object::Job(child), Rights::JOB)
 }
 
@@ -1092,7 +1174,9 @@ fn job_create(process: &Process, parent: Handle) -> Result<usize, Errno> {
 /// rather than here, with nothing held.
 fn job_kill(process: &Process, job: Handle) -> Result<usize, Errno> {
     let job = job_in(process, job, Rights::MANAGE)?;
-    let _ended = job.kill(job::KILLED_STATUS);
+    let _ended = job
+        .kill(job::KILLED_STATUS)
+        .map_err(|_| status::NO_MEMORY)?;
     Ok(0)
 }
 
@@ -1129,11 +1213,8 @@ fn process_create(
         child.kill(job::KILLED_STATUS);
         return Err(status::BAD_STATE);
     }
-    insert_new(
-        process,
-        Object::Process(ProcessRef::created(child)),
-        Rights::PROCESS,
-    )
+    let created = ProcessRef::created(child).map_err(|_| status::NO_MEMORY)?;
+    insert_new(process, Object::Process(created), Rights::PROCESS)
 }
 
 /// Every byte of a VMO, for `process_create` to load.
@@ -1143,11 +1224,7 @@ fn image_bytes(vmo: &Vmo) -> Result<Vec<u8>, Errno> {
         return Err(status::TOO_BIG);
     }
     let len = usize::try_from(len).map_err(|_| status::TOO_BIG)?;
-    let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(len)
-        .map_err(|_| status::NO_MEMORY)?;
-    bytes.resize(len, 0);
+    let mut bytes = fallible::try_filled(0_u8, len).map_err(|_| status::NO_MEMORY)?;
     for (index, page) in bytes.chunks_mut(PAGE_SIZE as usize).enumerate() {
         vmo.read_page(index as u64, 0, page).map_err(vmo_error)?;
     }
@@ -1223,12 +1300,15 @@ fn move_handle(from: &Process, to: &Process, handle: Handle) -> Result<Handle, E
             if target.room() == 0 {
                 return Err(status::NO_HANDLES);
             }
+            // FALLIBLE: the handle table's reserve refuses with `TableError::NoMemory`.
+            target.reserve(1).map_err(table_error)?;
             let (object, rights) = source.remove(handle).map_err(table_error)?;
             // Room was there under this same lock, so the insert takes it; a
             // refusal anyway puts the object back rather than dropping it here.
             Ok(target
+                // FALLIBLE: the handle table's insert hands the object back.
                 .insert(object, rights)
-                .map_err(|object| source.insert(object, rights)))
+                .map_err(|object| source.insert(object, rights))) // FALLIBLE: the handle table's insert.
         })
     })?;
     match outcome {
@@ -1273,6 +1353,7 @@ fn interrupt_create(process: &Process, device: Handle, index: u64) -> Result<usi
     let interrupt = Interrupt::new(vector).map_err(|why| match why {
         InterruptError::Taken | InterruptError::AlreadyBound => status::ALREADY_BOUND,
         InterruptError::NotMaskable => status::INVALID_ARGS,
+        InterruptError::NoMemory => status::NO_MEMORY,
     })?;
     insert_new(process, Object::Interrupt(interrupt), Rights::INTERRUPT)
 }
@@ -1308,6 +1389,7 @@ fn io_mapping_create(process: &Process, device: Handle, spec: u64) -> Result<usi
     let aperture = node.aperture(phys, len).ok_or(status::ACCESS_DENIED)?;
     let mapping = IoMapping::new(aperture).map_err(|why| match why {
         IoMappingError::NotWholePages => status::INVALID_ARGS,
+        IoMappingError::NoMemory => status::NO_MEMORY,
     })?;
     insert_new(process, Object::IoMapping(mapping), Rights::IO_MAPPING)
 }
@@ -1491,16 +1573,20 @@ fn vmo_pin(
     } else {
         ferrix_paging::MapFlags::DMA
     };
-    let pin = object::pin::Pin::new(node.domain(), held, flags).map_err(|why| {
-        use crate::iommu::DomainError;
-        match why {
-            DomainError::Empty => status::INVALID_ARGS,
-            DomainError::OutOfRange | DomainError::Tables => status::NO_MEMORY,
-            DomainError::AlreadyPinned => status::ALREADY_BOUND,
-            DomainError::Foreign | DomainError::Unit(_) => status::BAD_STATE,
-        }
-    })?;
-    insert_new(process, Object::Pin(Arc::new(pin)), Rights::PIN)
+    let pin = object::pin::Pin::new(node.domain(), held, flags).map_err(domain_status)?;
+    let pin = fallible::try_arc(pin).map_err(|_| status::NO_MEMORY)?;
+    insert_new(process, Object::Pin(pin), Rights::PIN)
+}
+
+/// The status a refused pin travels as.
+fn domain_status(why: crate::iommu::DomainError) -> Errno {
+    use crate::iommu::DomainError;
+    match why {
+        DomainError::Empty => status::INVALID_ARGS,
+        DomainError::OutOfRange | DomainError::Tables => status::NO_MEMORY,
+        DomainError::AlreadyPinned => status::ALREADY_BOUND,
+        DomainError::Foreign | DomainError::Unit(_) => status::BAD_STATE,
+    }
 }
 
 /// `vmo_pin_addresses`. Writes up to `capacity` device addresses, and answers
@@ -1524,16 +1610,18 @@ fn vmo_pin_addresses(
     let addresses = pin.addresses();
     let count =
         usize::try_from(capacity).map_or(addresses.len(), |capacity| capacity.min(addresses.len()));
-    let bytes: Vec<u8> = addresses
-        .iter()
-        .take(count)
-        .flat_map(|address| address.to_ne_bytes())
-        .collect();
-    let written = if bytes.is_empty() {
-        Ok(())
-    } else {
-        uaccess::copy_to_user(process.space(), at, &bytes).map_err(fault)
+    let bytes = fallible::try_collect(
+        addresses
+            .iter()
+            .take(count)
+            .flat_map(|address| address.to_ne_bytes()),
+    );
+    let written = match &bytes {
+        Err(_) => Err(status::NO_MEMORY),
+        Ok(bytes) if bytes.is_empty() => Ok(()),
+        Ok(bytes) => uaccess::copy_to_user(process.space(), at, bytes).map_err(fault),
     };
+    drop(bytes);
     let pages = addresses.len();
     object::dispose([Object::Pin(pin)]);
     written.map(|()| pages)
@@ -1725,8 +1813,23 @@ fn object_wait_async(
         Ok(object.clone())
     })?;
 
-    let observer = Observer::new(&port, key, wanted);
-    let registered = match &target {
+    let Ok(observer) = Observer::new(&port, key, wanted) else {
+        object::dispose([target]);
+        return Err(status::NO_MEMORY);
+    };
+    let registered = observe(&target, observer);
+    object::dispose([target]);
+    match registered {
+        None => Err(status::WRONG_TYPE),
+        Some(Ok(())) => Ok(0),
+        Some(Err(_)) => Err(status::NO_MEMORY),
+    }
+}
+
+/// Register `observer` on `target`, or `None` for an object with no signal
+/// that changes.
+fn observe(target: &Object, observer: Observer) -> Option<Result<(), PortError>> {
+    match target {
         Object::Channel(endpoint) => Some(endpoint.observe(observer)),
         Object::Job(job) => Some(job.observe(observer)),
         Object::Process(process) => Some(process.exit().observe(observer)),
@@ -1736,12 +1839,6 @@ fn object_wait_async(
         | Object::Interrupt(_)
         | Object::IoMapping(_)
         | Object::Pin(_) => None,
-    };
-    object::dispose([target]);
-    match registered {
-        None => Err(status::WRONG_TYPE),
-        Some(Ok(())) => Ok(0),
-        Some(Err(_)) => Err(status::NO_MEMORY),
     }
 }
 
@@ -1776,6 +1873,7 @@ fn interrupt_bind(
     let bound = interrupt.bind(&port, key).map_err(|why| match why {
         InterruptError::AlreadyBound | InterruptError::Taken => status::ALREADY_BOUND,
         InterruptError::NotMaskable => status::INVALID_ARGS,
+        InterruptError::NoMemory => status::NO_MEMORY,
     });
     object::dispose([Object::Interrupt(interrupt)]);
     bound.map(|()| 0)

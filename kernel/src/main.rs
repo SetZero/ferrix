@@ -29,6 +29,7 @@ mod device;
 mod devmgr;
 mod display;
 mod early;
+mod fallible;
 mod fdt;
 mod fs;
 mod hooks;
@@ -370,6 +371,10 @@ fn check_programs() {
     // system rests on are cheaper to find broken at boot than inside a
     // driver.
     check_native_objects();
+
+    // Finding F-23's negative control: allocations made to fail under the
+    // native calls stage 9 just proved, and the kernel required to carry on.
+    check_allocation_failure();
 }
 
 /// Stage 6: the memory objects, the frames they must give back, and the
@@ -1074,6 +1079,25 @@ fn check_native_objects() {
         "  spawn    {} programs made from a VMO and started through a handle, their ends heard; \
          {} never started, ended with their last handle",
         report.spawned, report.abandoned,
+    );
+}
+
+/// Stage 9: allocation failure, injected under the native calls, survived
+/// (finding F-23).
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_allocation_failure() {
+    let report = match object::alloc_check::run() {
+        Ok(report) => report,
+        Err(problem) => fatal!(
+            catalog::STAGE9_ALLOCATION,
+            "allocation failure self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  no-mem   {} native calls with {} allocations failed under them: {} answered \
+         NO_MEMORY, the rest succeeded, nothing leaked; {} allocations served from a reserve",
+        report.calls, report.injected, report.refused, report.drawn,
     );
 }
 

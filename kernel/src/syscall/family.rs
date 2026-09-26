@@ -418,14 +418,16 @@ fn clone_with(
     // in its parent's: its first instruction already runs in it.
     let child = parent
         .fork_memory(|space| {
-            Arc::new(Process::forked_into(
+            Process::forked_into(
                 parent,
                 space,
                 flags & CLONE_FILES != 0,
                 flags & CLONE_FS != 0,
                 into.clone(),
-            ))
+            )
         })
+        .map_err(|_| Errno::ENOMEM)?
+        .map(Arc::new)
         .map_err(|_| Errno::ENOMEM)?;
     let pid = child.pid();
     if pid == 0 {
@@ -790,7 +792,7 @@ pub(crate) fn sys_setpgid(process: &Process, pid: i32, pgid: i32) -> Result<usiz
         return Err(Errno::EPERM);
     }
     if group != target_process.pid() {
-        let exists = registry::live()
+        let exists = registry::live()?
             .iter()
             .any(|other| other.pgid() == group && other.sid() == process.sid());
         if !exists {
@@ -834,7 +836,7 @@ pub(crate) fn sys_getsid(process: &Process, pid: i32) -> Result<usize, Errno> {
 /// `EPERM` if the caller already leads a process group, which is what stops a
 /// group leader from leaving its members in a session it no longer belongs to.
 pub(crate) fn sys_setsid(process: &Process) -> Result<usize, Errno> {
-    let leads_a_group = registry::live()
+    let leads_a_group = registry::live()?
         .iter()
         .any(|other| other.pgid() == process.pid());
     if leads_a_group {

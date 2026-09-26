@@ -32,6 +32,7 @@ use crate::fs::SetIds;
 use ferrix_vma::VmaFlags;
 
 use crate::arch;
+use crate::fallible::AllocError;
 use crate::syscall::fd;
 use crate::syscall::load::{self, LoadError, Source};
 use crate::syscall::process::{self, Process, Startup};
@@ -177,7 +178,8 @@ pub(crate) fn load(
 /// [`ExecError`].
 pub(crate) fn load_native(image: &[u8], name: &[u8]) -> Result<Arc<Process>, ExecError> {
     let space = AddressSpace::new().map_err(ExecError::Space)?;
-    let process = Process::new(Arc::clone(&space));
+    let process =
+        Process::new(Arc::clone(&space)).map_err(|_| ExecError::Space(SpaceError::OutOfMemory))?;
     let loaded = load_into(&space, Source::Bytes(image), None)?;
     process.record_exec(name, None, &[name]);
     process.set_startup(Startup {
@@ -205,14 +207,15 @@ pub(crate) fn load_executable(
 /// [`load_executable`], making the process with `make`: [`Process::new`], or
 /// [`Process::new_init`] for init's.
 fn load_as(
-    make: fn(Arc<AddressSpace>) -> Process,
+    make: fn(Arc<AddressSpace>) -> Result<Process, AllocError>,
     program: Executable<'_>,
     args: &[&[u8]],
     env: &[&[u8]],
     random: [u8; ferrix_ustack::RANDOM_BYTES],
 ) -> Result<Arc<Process>, ExecError> {
     let space = AddressSpace::new().map_err(ExecError::Space)?;
-    let process = make(Arc::clone(&space));
+    let process =
+        make(Arc::clone(&space)).map_err(|_| ExecError::Space(SpaceError::OutOfMemory))?;
     let startup = populate(&space, &process, program, args, env, random)?;
     process.set_startup(startup);
     Ok(registry::register(process))
@@ -483,7 +486,7 @@ pub(crate) fn run_init(
 
 /// Load `program` with [`load_as`], run it, and wait for it to end.
 fn run_as(
-    make: fn(Arc<AddressSpace>) -> Process,
+    make: fn(Arc<AddressSpace>) -> Result<Process, AllocError>,
     program: Executable<'_>,
     args: &[&[u8]],
     env: &[&[u8]],

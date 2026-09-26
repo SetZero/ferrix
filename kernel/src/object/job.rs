@@ -54,10 +54,8 @@
 //! locks. Nothing is woken under any of these.
 
 use alloc::boxed::Box;
-use alloc::format;
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
-use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -68,8 +66,9 @@ use ferrix_cgroupfs::write::Limit;
 use ferrix_native_abi::signals::Signals;
 use ferrix_sync::Once;
 
-use super::port::{Observer, PortError, register, triggered};
+use super::port::{Observer, Observers, PortError, deliver, register, trigger};
 use super::process::{self, Process};
+use crate::fallible::{self, AllocError};
 use crate::sched::WaitQueue;
 
 /// The status a process ended by a job kill reports.
@@ -97,6 +96,14 @@ pub(crate) enum JobError {
     /// The no-internal-process rule forbids it (`docs/CGROUPS.md` §3.1):
     /// processes beside controllers enabled for the children.
     Internal,
+    /// There was no memory for it.
+    NoMemory,
+}
+
+impl From<AllocError> for JobError {
+    fn from(_: AllocError) -> JobError {
+        JobError::NoMemory
+    }
 }
 
 /// Serialises every change to a job's counts, across the whole tree.
@@ -114,8 +121,20 @@ static ROOT: Once<Arc<Job>> = Once::new();
 
 /// The root job: cgroupfs's root, and every process's job until something
 /// moves it or it was forked from one elsewhere.
+///
+/// Made by the first call, which bring-up makes (`main.rs`) before the first
+/// program runs, so the allocation is a boot one.
 pub(crate) fn root() -> &'static Arc<Job> {
-    ROOT.call_once(Job::new_root)
+    ROOT.call_once(|| {
+        // FATAL-ALLOC: the root job is made once, during bring-up, before any
+        // program exists to be told memory ran out.
+        Job::new_root().unwrap_or_else(|_| {
+            crate::panic::fatal!(
+                crate::panic::catalog::BOOT_OUT_OF_MEMORY,
+                "no memory for the root job"
+            )
+        })
+    })
 }
 
 /// A job.
@@ -178,7 +197,7 @@ struct Members {
     /// Its children that are populated. Changed only under [`TREE`].
     busy: usize,
     /// Port registrations waiting for it to be killed or to become empty.
-    observers: Vec<Observer>,
+    observers: Observers,
     /// `cgroup.max.depth`: how many levels of jobs may be made beneath it.
     max_depth: Limit,
     /// `cgroup.max.descendants`: how many jobs may be beneath it at once.
@@ -199,7 +218,7 @@ impl Default for Members {
             named: Vec::new(),
             live: 0,
             busy: 0,
-            observers: Vec::new(),
+            observers: Observers::new(),
             max_depth: Limit::Max,
             max_descendants: Limit::Max,
             removed: false,
@@ -248,7 +267,38 @@ impl Members {
 
 /// Jobs whose populated state a count change flipped, to be told once every
 /// lock is let go ([`notify`]).
-pub(crate) type Flipped = Vec<Arc<Job>>;
+///
+/// A count change flips a run of jobs going up from the one it started at,
+/// so a run is its first job and how many it covers, and nothing has to be
+/// allocated to remember it: this is filled as a process leaves its job,
+/// where nobody can be told memory ran out. A change is at most a move, one
+/// run out of the old job and one into the new, so two runs are enough.
+#[derive(Debug, Default)]
+pub(crate) struct Flipped {
+    /// Each run: its lowest job, and how many jobs from there up flipped.
+    runs: [Option<(Arc<Job>, usize)>; 2],
+}
+
+impl Flipped {
+    /// Nothing flipped yet.
+    pub(crate) fn new() -> Flipped {
+        Flipped::default()
+    }
+
+    /// Record that `job` flipped, as the next job up of the run `starting`
+    /// began, or as the start of a new run.
+    fn add(&mut self, job: &Arc<Job>, starting: bool) {
+        if !starting
+            && let Some(Some((_, flipped))) = self.runs.iter_mut().rev().find(|run| run.is_some())
+        {
+            *flipped += 1;
+            return;
+        }
+        if let Some(free) = self.runs.iter_mut().find(|run| run.is_none()) {
+            *free = Some((Arc::clone(job), 1));
+        }
+    }
+}
 
 /// Wake whatever waits on each job a count change flipped: a poll of its
 /// `cgroup.events`, a native wait on its handle, and the port registrations
@@ -259,57 +309,62 @@ pub(crate) type Flipped = Vec<Arc<Job>>;
 /// is for a level, so it waits on. One made in between found the job empty
 /// and fired as it was made ([`Job::observe`]), so none is lost either way.
 pub(crate) fn notify(flipped: Flipped) {
-    for job in flipped {
-        let emptied = {
-            let mut members = job.state.lock();
-            if members.populated() {
-                Vec::new()
-            } else {
-                triggered(&mut members.observers, Signals::EMPTY)
+    for (lowest, count) in flipped.runs.into_iter().flatten() {
+        let mut at = Some(&lowest);
+        for _ in 0..count {
+            let Some(job) = at else { break };
+            let emptied = {
+                let mut members = job.state.lock();
+                !members.populated() && trigger(&mut members.observers, Signals::EMPTY)
+            };
+            if emptied {
+                deliver(|| job.state.lock().observers.next_fired());
             }
-        };
-        for observer in emptied {
-            observer.fire(Signals::EMPTY);
+            job.events.wake_all();
+            job.waiters.wake_all();
+            at = job.parent.as_ref();
         }
-        job.events.wake_all();
-        job.waiters.wake_all();
     }
 }
 
 impl Job {
     /// A job with no parent.
-    pub(crate) fn new_root() -> Arc<Job> {
-        Arc::new(Job::bare(None, None))
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`].
+    pub(crate) fn new_root() -> Result<Arc<Job>, AllocError> {
+        fallible::try_arc(Job::bare(None, None)?)
     }
 
     /// A job inside `parent`, or none, not yet listed anywhere.
-    fn bare(parent: Option<Arc<Job>>, name: Option<Box<str>>) -> Job {
-        Job {
+    fn bare(parent: Option<Arc<Job>>, name: Option<Box<str>>) -> Result<Job, AllocError> {
+        Ok(Job {
             parent,
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             name,
             state: SpinLock::new(Members::default()),
             waiters: WaitQueue::new(),
-            events: Arc::new(WaitQueue::new()),
+            events: fallible::try_arc(WaitQueue::new())?,
             nodes: SpinLock::new(Vec::new()),
-        }
+        })
     }
 
     /// A new anonymous job inside this one.
     ///
     /// # Errors
     ///
-    /// [`JobError::Killed`].
+    /// [`JobError::Killed`], [`JobError::NoMemory`].
     pub(crate) fn new_child(self: &Arc<Job>) -> Result<Arc<Job>, JobError> {
+        let child = fallible::try_arc(Job::bare(Some(Arc::clone(self)), None)?)?;
         let mut members = self.state.lock();
         if members.killed {
             return Err(JobError::Killed);
         }
-        let child = Arc::new(Job::bare(Some(Arc::clone(self)), None));
         // Pruned as it grows, so a job that makes and drops children in a
         // loop does not keep a list of every one it ever had.
         members.children.retain(|child| child.strong_count() > 0);
-        members.children.push(Arc::downgrade(&child));
+        fallible::try_push(&mut members.children, Arc::downgrade(&child))?;
         Ok(child)
     }
 
@@ -320,9 +375,12 @@ impl Job {
     ///
     /// [`JobError::Killed`], [`JobError::Removed`] if `rmdir` took this one,
     /// [`JobError::Exists`] if a named child already has that name, or
-    /// [`JobError::Limited`] if a limit at or above it allows no further job.
+    /// [`JobError::Limited`] if a limit at or above it allows no further job,
+    /// or [`JobError::NoMemory`].
     pub(crate) fn new_named_child(self: &Arc<Job>, name: &str) -> Result<Arc<Job>, JobError> {
         self.room_for_a_child()?;
+        let name_held = fallible::try_boxed_str(name)?;
+        let child = fallible::try_arc(Job::bare(Some(Arc::clone(self)), Some(name_held))?)?;
         let mut members = self.state.lock();
         if members.killed {
             return Err(JobError::Killed);
@@ -333,8 +391,7 @@ impl Job {
         if members.named.iter().any(|child| child.name() == Some(name)) {
             return Err(JobError::Exists);
         }
-        let child = Arc::new(Job::bare(Some(Arc::clone(self)), Some(Box::from(name))));
-        members.named.push(Arc::clone(&child));
+        fallible::try_push(&mut members.named, Arc::clone(&child))?;
         Ok(child)
     }
 
@@ -391,7 +448,8 @@ impl Job {
     /// # Errors
     ///
     /// [`JobError::Missing`] for a controller not offered, [`JobError::Busy`]
-    /// for one a child still enables, [`JobError::Internal`] for the rule.
+    /// for one a child still enables, [`JobError::Internal`] for the rule,
+    /// [`JobError::NoMemory`].
     pub(crate) fn change_subtree_control(
         &self,
         change: Change,
@@ -404,7 +462,7 @@ impl Job {
             return Err(JobError::Missing);
         }
         if self
-            .children()
+            .children()?
             .iter()
             .any(|child| !child.subtree_control().intersect(disable).is_empty())
         {
@@ -428,24 +486,34 @@ impl Job {
     }
 
     /// Record the owner, group and mode of the node at `slot`.
-    pub(crate) fn set_node(&self, slot: u64, attributes: NodeAttributes) {
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`] when a node not yet listed could not be.
+    pub(crate) fn set_node(&self, slot: u64, attributes: NodeAttributes) -> Result<(), AllocError> {
         let mut nodes = self.nodes.lock();
         match nodes.iter_mut().find(|(at, _)| *at == slot) {
             Some((_, held)) => *held = attributes,
-            None => nodes.push((slot, attributes)),
+            None => fallible::try_push(&mut nodes, (slot, attributes))?,
         }
+        Ok(())
     }
 
     /// The jobs directly inside it that still exist, named ones first in the
     /// order they were made, then anonymous ones in theirs.
-    pub(crate) fn children(&self) -> Vec<Arc<Job>> {
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`].
+    pub(crate) fn children(&self) -> Result<Vec<Arc<Job>>, AllocError> {
         let members = self.state.lock();
-        members
-            .named
-            .iter()
-            .cloned()
-            .chain(members.children.iter().filter_map(Weak::upgrade))
-            .collect()
+        fallible::try_collect(
+            members
+                .named
+                .iter()
+                .cloned()
+                .chain(members.children.iter().filter_map(Weak::upgrade)),
+        )
     }
 
     /// Take the named child `name` out of it, as `rmdir` does: only when
@@ -486,9 +554,13 @@ impl Job {
     }
 
     /// How many jobs are beneath it.
-    pub(crate) fn descendants(self: &Arc<Job>) -> u32 {
-        let count = self.walk(|_| {}).len().saturating_sub(1);
-        u32::try_from(count).unwrap_or(u32::MAX)
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`]: counting walks the tree.
+    pub(crate) fn descendants(self: &Arc<Job>) -> Result<u32, AllocError> {
+        let count = self.walk(|_| {})?.len().saturating_sub(1);
+        Ok(u32::try_from(count).unwrap_or(u32::MAX))
     }
 
     /// Its `cgroup.max.depth` and `cgroup.max.descendants`.
@@ -517,7 +589,7 @@ impl Job {
         let mut at = Some(Arc::clone(self));
         while let Some(job) = at {
             let (depth, descendants) = job.limits();
-            if !descendants.allows(job.descendants().saturating_add(1)) || !depth.allows(level) {
+            if !descendants.allows(job.descendants()?.saturating_add(1)) || !depth.allows(level) {
                 return Err(JobError::Limited);
             }
             level = level.saturating_add(1);
@@ -529,24 +601,32 @@ impl Job {
     /// The names from the root's child down to it, an anonymous job named
     /// `job-<id>`: what cgroupfs and `/proc/<pid>/cgroup` build its path
     /// from. Empty for a root.
-    pub(crate) fn path_names(&self) -> Vec<String> {
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`].
+    pub(crate) fn path_names(&self) -> Result<Vec<String>, AllocError> {
         let mut names = Vec::new();
         let mut at = Some(self);
         while let Some(job) = at {
             if job.parent.is_some() {
-                names.push(job.display_name());
+                fallible::try_push(&mut names, job.display_name()?)?;
             }
             at = job.parent.as_deref();
         }
         names.reverse();
-        names
+        Ok(names)
     }
 
     /// The name cgroupfs shows it by in its parent's directory.
-    pub(crate) fn display_name(&self) -> String {
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`].
+    pub(crate) fn display_name(&self) -> Result<String, AllocError> {
         match &self.name {
-            Some(name) => String::from(&**name),
-            None => format!("job-{}", self.id),
+            Some(name) => fallible::try_string(name),
+            None => fallible::try_format(format_args!("job-{}", self.id)),
         }
     }
 
@@ -655,7 +735,7 @@ impl Job {
             if !changed {
                 break;
             }
-            flipped.push(Arc::clone(&job));
+            flipped.add(&job, own);
             let Some(parent) = job.parent.clone() else {
                 break;
             };
@@ -697,7 +777,7 @@ impl Job {
     /// # Errors
     ///
     /// [`PortError::Full`] when the job already holds
-    /// [`super::port::MAX_OBSERVERS`] registrations.
+    /// [`super::port::MAX_OBSERVERS`] registrations; [`PortError::NoMemory`].
     pub(crate) fn observe(&self, observer: Observer) -> Result<(), PortError> {
         let mut members = self.state.lock();
         let asserted = members.signals();
@@ -730,19 +810,32 @@ impl Job {
     /// Walked with a list rather than recursion, for the reason
     /// `object::dispose` drops that way: a job tree is as deep as a program
     /// made it. Each job's lock is taken alone, and `visit` runs under it.
-    fn walk(self: &Arc<Job>, mut visit: impl FnMut(&mut Members)) -> Vec<Arc<Job>> {
-        let mut pending = vec![Arc::clone(self)];
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`] when the list could not grow. `visit` has run on some
+    /// of the jobs by then, so a caller whose `visit` changes something
+    /// walks once without changing anything first.
+    fn walk(
+        self: &Arc<Job>,
+        mut visit: impl FnMut(&mut Members),
+    ) -> Result<Vec<Arc<Job>>, AllocError> {
+        let mut pending = Vec::new();
+        fallible::try_push(&mut pending, Arc::clone(self))?;
         let mut seen = Vec::new();
         while let Some(job) = pending.pop() {
             {
                 let mut members = job.state.lock();
                 visit(&mut members);
-                pending.extend(members.children.iter().filter_map(Weak::upgrade));
-                pending.extend(members.named.iter().cloned());
+                fallible::try_extend(
+                    &mut pending,
+                    members.children.iter().filter_map(Weak::upgrade),
+                )?;
+                fallible::try_extend(&mut pending, members.named.iter().cloned())?;
             }
-            seen.push(job);
+            fallible::try_push(&mut seen, job)?;
         }
-        seen
+        Ok(seen)
     }
 
     /// End every live process in this job or beneath it with `status`, found
@@ -751,9 +844,14 @@ impl Job {
     /// A process numbered 0 -- made when every pid was in use -- is not in
     /// the registry and is not found. `fork` refuses to make one, and nothing
     /// else can put one in a job but a boot check.
-    fn end_members(&self, status: i32) -> usize {
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`] when the pid table could not be listed; nothing has
+    /// been ended.
+    fn end_members(&self, status: i32) -> Result<usize, AllocError> {
         let mut ended = 0;
-        for member in process::live() {
+        for member in process::live()? {
             if !self.contains(&member.core().job()) {
                 continue;
             }
@@ -762,7 +860,7 @@ impl Job {
             }
             member.kill(status);
         }
-        ended
+        Ok(ended)
     }
 
     /// End every process in this job and in every job beneath it with
@@ -775,16 +873,28 @@ impl Job {
     /// processes have been told.
     ///
     /// Returns how many of the processes it found had not already ended.
-    pub(crate) fn kill(self: &Arc<Job>, status: i32) -> usize {
-        let mut observers = Vec::new();
-        let jobs = self.walk(|members| {
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`], in two places. Listing the jobs comes first, and a
+    /// failure there changes nothing. Listing the processes comes after the
+    /// jobs are marked, because that order is what keeps a fork from slipping
+    /// between the two; a failure there leaves the jobs killed -- refusing
+    /// every new member, their registrations fired -- and their processes
+    /// running, and a second kill ends them. A job made beneath one of them
+    /// between the listing and the marking is not marked itself, but refuses
+    /// new members all the same, through the killed job above it.
+    pub(crate) fn kill(self: &Arc<Job>, status: i32) -> Result<usize, AllocError> {
+        let jobs = self.walk(|_| {})?;
+        for job in &jobs {
+            let mut members = job.state.lock();
             members.killed = true;
             // Only those waiting for the kill: one waiting for `EMPTY` alone
             // waits on for the members to end.
-            observers.append(&mut triggered(&mut members.observers, Signals::TERMINATED));
-        });
-        for observer in observers {
-            observer.fire(Signals::TERMINATED);
+            let _ = trigger(&mut members.observers, Signals::TERMINATED);
+        }
+        for job in &jobs {
+            deliver(|| job.state.lock().observers.next_fired());
         }
         let ended = self.end_members(status);
         for job in jobs {
@@ -797,8 +907,16 @@ impl Job {
     /// and leave every job as usable as it was.
     ///
     /// Returns how many of the processes it found had not already ended.
-    pub(crate) fn kill_members(self: &Arc<Job>) -> usize {
-        let jobs = self.walk(|members| members.killing += 1);
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`] when the jobs or the processes could not be listed;
+    /// nothing has been ended, and every job is as it was.
+    pub(crate) fn kill_members(self: &Arc<Job>) -> Result<usize, AllocError> {
+        let jobs = self.walk(|_| {})?;
+        for job in &jobs {
+            job.state.lock().killing += 1;
+        }
         let ended = self.end_members(KILLED_STATUS);
         for job in jobs {
             let mut members = job.state.lock();

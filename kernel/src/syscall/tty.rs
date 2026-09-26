@@ -148,7 +148,7 @@ fn set(flush: bool, settings: impl FnOnce(Termios) -> Termios) {
 /// after it is released: dropping the last reference to a process frees its
 /// memory, which is not something to do under a spin lock.
 fn job_control(process: &Process, request: u32, arg: u64) -> Result<usize, Errno> {
-    let live = registry::live();
+    let live = registry::live()?;
     let answer = match request {
         TIOCSCTTY => terminal::with(|terminal| take_controlling(process, terminal, &live, arg)),
         TIOCNOTTY => terminal::with(|terminal| {
@@ -272,7 +272,9 @@ pub(crate) fn signal_foreground_group(signal: u32) {
     if foreground == 0 {
         return;
     }
-    for target in registry::live() {
+    // With no memory for the list the signal is not sent: a keyboard's
+    // interrupt under memory exhaustion is lost rather than the machine.
+    for target in registry::live().unwrap_or_default() {
         if target.pgid() == foreground {
             crate::syscall::kill::send(&target, signal, crate::syscall::signal::Origin::Kernel);
         }
@@ -426,7 +428,7 @@ fn pty_job_control(
     request: u32,
     arg: u64,
 ) -> Result<usize, Errno> {
-    let live = registry::live();
+    let live = registry::live()?;
     let answer = match request {
         TIOCSCTTY => {
             let session = pty.session();

@@ -173,7 +173,7 @@ fn control_create(caller: &dyn Host, registers: &[u64; 6]) -> Result<usize, Errn
 ///
 /// [`CreateError`].
 pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<(usize, Arc<Endpoint>), CreateError> {
-    let (kernel_end, driver_end) = Endpoint::pair().ok_or(CreateError::NoMemory)?;
+    let (kernel_end, driver_end) = Endpoint::pair().map_err(|_| CreateError::NoMemory)?;
     let id = NEXT_RING.fetch_add(1, Ordering::Relaxed);
     {
         let mut claimed = CLAIMED.lock();
@@ -404,7 +404,12 @@ fn take_up(start: &Start, message: &ChannelMessage) -> Result<Serving, Refusal> 
     PLACED.lock().push((index, start.device.index()));
     core.set_carrier(index, flags.carrier);
 
-    let kernel_port = Port::new();
+    let Ok(kernel_port) = Port::new() else {
+        // The wire protocol has no refusal for memory; a malformed start is
+        // the nearest it has.
+        forget(index);
+        return Err(Refusal::Malformed);
+    };
     core.wake_on_transmit(index, &kernel_port);
     let ready = {
         let mut bytes = [0_u8; MAX_MESSAGE];
@@ -719,7 +724,7 @@ impl Serving {
                 CONTROL_KEY,
                 Signals::READABLE | Signals::PEER_CLOSED,
             );
-            self.watching = self.control.observe(observer).is_ok();
+            self.watching = observer.is_ok_and(|observer| self.control.observe(observer).is_ok());
         }
         if !matches!(self.side.prepare_to_sleep(&mut self.ring), Ok(Wait::Sleep)) {
             return;

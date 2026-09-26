@@ -21,6 +21,8 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use ferrix_linux_abi::errno::Errno;
+
 use crate::object::process::{self as table, Host};
 use crate::syscall::process::{self, Process};
 use crate::syscall::thread::Thread;
@@ -52,7 +54,8 @@ pub(crate) fn publish_forked(child: &Arc<Process>, thread: &Arc<Thread>) {
 /// id reach its process. `None` if every number is in use.
 pub(crate) fn allocate_thread(process: &Arc<Process>) -> Option<u32> {
     let tid = table::allocate()?;
-    table::name(tid, weak(process));
+    // Reserved just above, so naming it adds no entry and cannot fail.
+    let _ = table::name(tid, weak(process));
     Some(tid)
 }
 
@@ -77,7 +80,9 @@ pub(crate) fn numbers_naming(process: &Process) -> usize {
 pub(crate) fn publish(process: &Arc<Process>) {
     let pid = process.pid();
     if pid != 0 {
-        table::name(pid, weak(process));
+        // Reserved by `allocate` when the process was made, so naming it adds
+        // no entry and cannot fail.
+        let _ = table::name(pid, weak(process));
     }
 }
 
@@ -95,11 +100,13 @@ pub(crate) fn find(pid: u32) -> Option<Arc<Process>> {
 ///
 /// Dropped, if it is dropped, with the table unlocked: see
 /// [`table::live`].
-pub(crate) fn live() -> Vec<Arc<Process>> {
-    table::live()
-        .into_iter()
-        .filter_map(table::downcast)
-        .collect()
+///
+/// # Errors
+///
+/// `ENOMEM` when there was no memory for the list.
+pub(crate) fn live() -> Result<Vec<Arc<Process>>, Errno> {
+    let hosts = table::live().map_err(|_| Errno::ENOMEM)?;
+    Ok(hosts.into_iter().filter_map(table::downcast).collect())
 }
 
 /// The boot self-check's part: numbers are distinct, found, listed in order,
@@ -120,7 +127,11 @@ pub(crate) fn check() -> Result<u32, &'static str> {
     if !found(one, &first) || !found(two, &second) {
         return Err("a process is not found by its own pid");
     }
-    let listed: Vec<u32> = live().iter().map(|process| process.pid()).collect();
+    let listed: Vec<u32> = live()
+        .map_err(|_| "no memory to list the live processes")?
+        .iter()
+        .map(|process| process.pid())
+        .collect();
     let ascending = listed
         .windows(2)
         .all(|pair| matches!(pair, [low, high] if low < high));

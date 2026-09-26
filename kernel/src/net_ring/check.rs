@@ -378,7 +378,7 @@ impl Driver {
         Ok(Driver {
             ring_vmo,
             data_vmo,
-            port: Port::new(),
+            port: Port::new().map_err(|_| "no memory for a port")?,
             ring,
             data,
             side,

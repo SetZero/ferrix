@@ -31,6 +31,8 @@ pub(crate) enum IoMappingError {
     /// The aperture does not start on a page boundary or is not a whole
     /// number of pages, so no page mapping covers it and nothing else.
     NotWholePages,
+    /// There was no memory for it.
+    NoMemory,
 }
 
 /// A device aperture a driver may map.
@@ -45,12 +47,12 @@ impl IoMapping {
     ///
     /// # Errors
     ///
-    /// [`IoMappingError::NotWholePages`].
+    /// [`IoMappingError::NotWholePages`], [`IoMappingError::NoMemory`].
     pub(crate) fn new(aperture: Aperture) -> Result<Arc<IoMapping>, IoMappingError> {
         if !aperture.whole_pages() {
             return Err(IoMappingError::NotWholePages);
         }
-        Ok(Arc::new(IoMapping { aperture }))
+        crate::fallible::try_arc(IoMapping { aperture }).map_err(|_| IoMappingError::NoMemory)
     }
 
     /// Map it into `space`, at `at` or wherever it fits, readable and

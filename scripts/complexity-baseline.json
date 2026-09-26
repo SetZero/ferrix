@@ -55,8 +55,8 @@
       "recursive": false
     },
     "devmgr.rs::start": {
-      "complexity": 24,
-      "lines": 71,
+      "complexity": 22,
+      "lines": 63,
       "recursive": false
     },
     "main.rs::check_filesystems": {
@@ -80,8 +80,8 @@
       "recursive": false
     },
     "main.rs::kmain": {
-      "complexity": 14,
-      "lines": 73,
+      "complexity": 12,
+      "lines": 67,
       "recursive": false
     },
     "main.rs::start_scheduler": {
@@ -105,12 +105,12 @@
       "recursive": false
     },
     "pci/virtio.rs::probe_out_of_domain": {
-      "complexity": 27,
-      "lines": 66,
+      "complexity": 24,
+      "lines": 62,
       "recursive": false
     },
     "sched/mod.rs::init": {
-      "complexity": 16,
+      "complexity": 15,
       "lines": 32,
       "recursive": false
     },
@@ -125,28 +125,18 @@
       "recursive": false
     },
     "syscall/native.rs::channel_write": {
-      "complexity": 22,
-      "lines": 43,
+      "complexity": 19,
+      "lines": 36,
       "recursive": false
     },
     "syscall/native.rs::dispatch": {
-      "complexity": 39,
+      "complexity": 34,
       "lines": 88,
       "recursive": false
     },
-    "syscall/native.rs::object_wait_async": {
-      "complexity": 16,
-      "lines": 28,
-      "recursive": false
-    },
-    "syscall/native.rs::vmo_copy": {
-      "complexity": 17,
-      "lines": 32,
-      "recursive": false
-    },
     "syscall/native.rs::vmo_pin": {
-      "complexity": 24,
-      "lines": 38,
+      "complexity": 21,
+      "lines": 32,
       "recursive": false
     },
     "trap.rs::handle_page_fault": {

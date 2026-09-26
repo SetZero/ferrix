@@ -55,14 +55,15 @@
 //! is masked and left alone.
 
 use alloc::collections::{BTreeMap, BTreeSet};
-use alloc::sync::{Arc, Weak};
+use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_sync::IrqSpinLock;
 
-use super::port::Port;
+use super::port::{Port, Promise};
 use crate::arch;
 use crate::device::Vector;
+use crate::fallible;
 use crate::irq;
 use crate::sched::WaitQueue;
 
@@ -82,13 +83,17 @@ pub(crate) enum InterruptError {
     NotMaskable,
     /// The interrupt is already bound to a port someone still holds.
     AlreadyBound,
+    /// There was no memory to claim or bind it.
+    NoMemory,
 }
 
 /// Where a bound interrupt's packets go.
 #[derive(Debug)]
 struct Binding {
-    /// The port. Weak, so a binding does not keep a port nobody holds alive.
-    port: Weak<Port>,
+    /// The port, and the room it promised for this line's packet: a line
+    /// queues at most one at a time, so one promise lasts the binding.
+    /// Weak, so a binding does not keep a port nobody holds alive.
+    port: Promise,
     /// The key its packets carry.
     key: u64,
 }
@@ -129,7 +134,7 @@ impl Line {
                 return;
             }
             binding.as_ref().and_then(|bound| {
-                let port = bound.port.upgrade()?;
+                let port = bound.port.port()?;
                 let _ = port.queue_from_interrupt(bound.key, crate::timer::now_nanos());
                 Some(port)
             })
@@ -144,6 +149,23 @@ impl Line {
     fn is_pending(&self) -> bool {
         self.pending.load(Ordering::Acquire)
     }
+}
+
+/// Register [`on_interrupt`] on line `number`, once for the life of the
+/// machine, and record that it is.
+///
+/// Room to record it is reserved first: `irq` has no way to take a handler
+/// back out, so one registered and not recorded would be registered again by
+/// the next claim, and refused.
+fn register_handler(number: u32) -> Result<(), InterruptError> {
+    let mut lines = REGISTERED.lock();
+    if lines.contains(&number) {
+        return Ok(());
+    }
+    let held = fallible::reserve().map_err(|_| InterruptError::NoMemory)?;
+    irq::register(number, on_interrupt).map_err(|_| InterruptError::Taken)?;
+    let _ = fallible::insert_into_set_held(&held, &mut lines, number);
+    Ok(())
 }
 
 /// A device interrupt a driver holds, and with it the claim on its line.
@@ -168,17 +190,19 @@ impl Interrupt {
     ///
     /// # Errors
     ///
-    /// [`InterruptError::Taken`], and [`InterruptError::NotMaskable`].
+    /// [`InterruptError::Taken`], [`InterruptError::NotMaskable`], and
+    /// [`InterruptError::NoMemory`].
     pub(crate) fn new(vector: Vector) -> Result<Arc<Interrupt>, InterruptError> {
         let number = vector.number();
-        let interrupt = Arc::new(Interrupt {
-            line: Arc::new(Line {
-                vector,
-                pending: AtomicBool::new(false),
-                binding: IrqSpinLock::new(None),
-                waiters: WaitQueue::new(),
-            }),
-        });
+        let line = fallible::try_arc(Line {
+            vector,
+            pending: AtomicBool::new(false),
+            binding: IrqSpinLock::new(None),
+            waiters: WaitQueue::new(),
+        })
+        .map_err(|_| InterruptError::NoMemory)?;
+        let interrupt =
+            fallible::try_arc(Interrupt { line }).map_err(|_| InterruptError::NoMemory)?;
 
         {
             let mut bound = BOUND.lock();
@@ -187,26 +211,17 @@ impl Interrupt {
                 // the live holder's line alone: see `Drop`.
                 return Err(InterruptError::Taken);
             }
-            let _ = bound.insert(number, Arc::clone(&interrupt.line));
+            let _ = fallible::insert(&mut bound, number, Arc::clone(&interrupt.line))
+                .map_err(|_| InterruptError::NoMemory)?;
         }
 
-        let registered = {
-            let mut lines = REGISTERED.lock();
-            if lines.contains(&number) {
-                Ok(())
-            } else {
-                let result = irq::register(number, on_interrupt);
-                if result.is_ok() {
-                    let _ = lines.insert(number);
-                }
-                result
-            }
-        };
-        if registered.is_err() {
-            // The kernel handles this line itself. Unclaimed before the
-            // object is dropped, so its drop does not mask the kernel's line.
+        let registered = register_handler(number);
+        if let Err(why) = registered {
+            // The kernel handles this line itself, or there was no memory to
+            // say that this one does. Unclaimed before the object is
+            // dropped, so its drop does not mask the kernel's line.
             let _unclaimed = BOUND.lock().remove(&number);
-            return Err(InterruptError::Taken);
+            return Err(why);
         }
 
         if vector.unmask().is_err() {
@@ -224,20 +239,18 @@ impl Interrupt {
     /// # Errors
     ///
     /// [`InterruptError::AlreadyBound`] if it is bound to a port anyone still
-    /// holds.
+    /// holds; [`InterruptError::NoMemory`] if the port could not promise room
+    /// for the line's packet.
     pub(crate) fn bind(&self, port: &Arc<Port>, key: u64) -> Result<(), InterruptError> {
+        // Promised before the binding's lock is taken, and given back as it
+        // drops if the bind is refused.
+        let promise = Promise::new(port).map_err(|_| InterruptError::NoMemory)?;
         let pending = {
             let mut binding = self.line.binding.lock();
-            if binding
-                .as_ref()
-                .is_some_and(|bound| bound.port.strong_count() > 0)
-            {
+            if binding.as_ref().is_some_and(|bound| bound.port.is_live()) {
                 return Err(InterruptError::AlreadyBound);
             }
-            *binding = Some(Binding {
-                port: Arc::downgrade(port),
-                key,
-            });
+            *binding = Some(Binding { port: promise, key });
             self.line.is_pending()
         };
         if pending {

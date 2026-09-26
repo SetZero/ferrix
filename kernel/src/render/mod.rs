@@ -540,7 +540,7 @@ fn control_create(caller: &dyn Host, registers: &[u64; 6]) -> Result<usize, Errn
 /// Make the control channel for `node` and start its task; answer the
 /// driver's end.
 pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<Arc<Endpoint>, CreateError> {
-    let (kernel_end, driver_end) = Endpoint::pair().ok_or(CreateError::NoMemory)?;
+    let (kernel_end, driver_end) = Endpoint::pair().map_err(|_| CreateError::NoMemory)?;
     if !CLAIMS.claim(node, &kernel_end) {
         return Err(CreateError::InUse);
     }
@@ -701,7 +701,9 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Renderer>, Refu
     // of it and never reads what is written there (`docs/GPU.md` §3.3), and
     // it keeps its own reference because the node writes those ranges.
     let work = Vmo::new_anonymous(WORK_BYTES / PAGE_SIZE);
-    let core_port = Port::new();
+    // The wire protocol has no refusal for memory; a malformed start is the
+    // nearest it has.
+    let core_port = Port::new().map_err(|_| Refusal::Malformed)?;
     let renderer = Arc::new(Renderer {
         index,
         node: start.device.index(),

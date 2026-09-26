@@ -24,6 +24,7 @@ ferrix-fdt.workspace = true
 ferrix-fbtext.workspace = true
 ferrix-frame.workspace = true
 ferrix-elf.workspace = true
+ferrix-fallible.workspace = true
 ferrix-heap.workspace = true
 ferrix-linux-abi.workspace = true
 ferrix-net.workspace = true

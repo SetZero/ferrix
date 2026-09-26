@@ -155,7 +155,7 @@ pub(crate) fn sys_kill(process: &Process, pid: i32, signal: u32) -> Result<usize
         } else {
             pid.unsigned_abs()
         };
-        registry::live()
+        registry::live()?
             .into_iter()
             .filter(|other| match pid {
                 -1 => other.pid() != caller && other.pid() != 1,
@@ -318,7 +318,8 @@ fn run_alarm_clock(_argument: usize) {
     loop {
         let now = crate::timer::now_nanos();
         let mut next = u64::MAX;
-        for process in registry::live() {
+        // With no memory for the list this round, the next finds the alarms.
+        for process in registry::live().unwrap_or_default() {
             let (due, alarm) = process.with_signals(|signals| {
                 let due = signals.tick_alarm(now);
                 (due, signals.alarm())

@@ -191,7 +191,7 @@ fn insert_many_is_all_or_nothing() {
     let three = vec![(1, Rights::READ), (2, Rights::READ), (3, Rights::READ)];
     assert_eq!(
         t.insert_many(three.clone()),
-        Err(three),
+        Err((TableError::Full, three)),
         "no room for three"
     );
     assert_eq!(t.len(), 1, "nothing inserted");
@@ -291,7 +291,7 @@ fn unpop_restores_the_head() {
     q.push(message(1, 0)).unwrap();
     q.push(message(2, 0)).unwrap();
     let head = q.pop_fitting(8, 2).unwrap();
-    q.unpop(head);
+    q.unpop(head).unwrap();
     assert_eq!(q.peek_sizes(), Some((1, 0)), "the first is first again");
     assert_eq!(q.drain().len(), 2, "both");
     assert!(q.is_empty(), "drained");
@@ -312,9 +312,15 @@ fn walk(graph: &[&[usize]], start: &[usize], target: usize, limit: usize) -> Rea
         start.to_vec(),
         |&node| node,
         target,
-        |&node| graph.get(node).map_or_else(Vec::new, |next| next.to_vec()),
+        |&node| Some(graph.get(node).map_or_else(Vec::new, |next| next.to_vec())),
         limit,
     )
+}
+
+#[test]
+fn a_walk_whose_children_cannot_be_listed_stops_without_an_answer() {
+    let answer = reaches(vec![0usize], |&node| node, 9, |_| None, 8);
+    assert_eq!(answer, Reach::NoMemory);
 }
 
 #[test]
@@ -371,7 +377,7 @@ fn a_node_reached_twice_is_expanded_once() {
         9,
         |&node| {
             expanded.push(node);
-            graph.get(node).map_or_else(Vec::new, |next| next.to_vec())
+            Some(graph.get(node).map_or_else(Vec::new, |next| next.to_vec()))
         },
         8,
     );
@@ -385,7 +391,7 @@ fn a_closed_table_refuses_every_insertion() {
     let mut t = table(8);
     let _ = t.insert(1, Rights::ALL).unwrap();
     let _ = t.insert(2, Rights::DUPLICATE).unwrap();
-    let mut objects = t.close();
+    let mut objects: Vec<_> = t.close().collect();
     objects.sort_unstable();
     assert_eq!(objects, vec![1, 2], "every object back");
     assert!(t.is_closed(), "closed");
@@ -397,7 +403,7 @@ fn a_closed_table_refuses_every_insertion() {
     );
     assert_eq!(
         t.insert_many(vec![(4, Rights::ALL)]),
-        Err(vec![(4, Rights::ALL)]),
+        Err((TableError::Full, vec![(4, Rights::ALL)])),
         "a batch refused whole"
     );
     assert!(t.is_empty(), "still empty");
@@ -412,11 +418,11 @@ fn duplicate_children_are_admitted_once() {
         99,
         |&node| {
             expanded += 1;
-            if node == 0 {
+            Some(if node == 0 {
                 vec![1; 10_000]
             } else {
                 Vec::new()
-            }
+            })
         },
         2,
     );
@@ -429,4 +435,46 @@ fn duplicate_children_are_admitted_once() {
         expanded, 2,
         "a node offered ten thousand times is expanded once"
     );
+}
+
+#[test]
+fn a_reserved_table_takes_that_many_without_growing() {
+    let mut t = table(64);
+    t.reserve(10).unwrap();
+    let (_, slots, free) = t.capacities();
+    let handles: Vec<Handle> = (0..10).map(|n| t.insert(n, Rights::ALL).unwrap()).collect();
+    assert_eq!(t.capacities(), (10, slots, free), "nothing grew");
+    for handle in handles {
+        let _ = t.remove(handle).unwrap();
+    }
+    let (len, _, free_after) = t.capacities();
+    assert_eq!(free_after, free, "closing every handle grew nothing either");
+    assert!(free_after >= len, "every slot fits on the free list");
+}
+
+#[test]
+fn a_close_hands_back_every_object_in_slot_order_and_keeps_nothing() {
+    let mut t = table(8);
+    let first = t.insert(1, Rights::ALL).unwrap();
+    let _ = t.insert(2, Rights::ALL).unwrap();
+    let _ = t.insert(3, Rights::ALL).unwrap();
+    let _ = t.remove(first).unwrap();
+    assert_eq!(t.close().collect::<Vec<_>>(), vec![2, 3]);
+    assert!(t.is_empty());
+    assert_eq!(t.get(first), Err(TableError::BadHandle));
+}
+
+#[test]
+fn a_drained_queue_keeps_its_order() {
+    let mut q = MessageQueue::new(LIMITS);
+    for n in 0..2u8 {
+        q.push(Message {
+            bytes: vec![n],
+            handles: Vec::<u32>::new(),
+        })
+        .unwrap();
+    }
+    let drained: Vec<u8> = q.drain().into_iter().map(|m| m.bytes[0]).collect();
+    assert_eq!(drained, vec![0, 1]);
+    assert!(q.is_empty());
 }

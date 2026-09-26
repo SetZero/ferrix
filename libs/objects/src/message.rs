@@ -49,6 +49,8 @@ pub enum SendError {
     TooBig,
     /// The queue is full. Waiting for the reader will.
     Full,
+    /// There was no memory to queue it.
+    NoMemory,
 }
 
 /// Why nothing was received.
@@ -124,6 +126,9 @@ impl<H> MessageQueue<H> {
         if self.is_full() {
             return Err((SendError::Full, message));
         }
+        if ferrix_fallible::try_reserve_deque(&mut self.queue, 1).is_err() {
+            return Err((SendError::NoMemory, message));
+        }
         self.queue.push_back(message);
         Ok(())
     }
@@ -170,14 +175,27 @@ impl<H> MessageQueue<H> {
     /// out not to be writable. Putting it back at the *head* is what keeps
     /// message order intact across that failure. Ignores the bound: the slot
     /// was this message's a moment ago.
-    pub fn unpop(&mut self, message: Message<H>) {
+    ///
+    /// # Errors
+    ///
+    /// The message back, when the queue had to grow to take it and there was
+    /// no memory: a writer took its slot meanwhile.
+    pub fn unpop(&mut self, message: Message<H>) -> Result<(), Message<H>> {
+        // A write may have taken the slot the message came out of, so the
+        // queue can need to grow to take it back.
+        if ferrix_fallible::try_reserve_deque(&mut self.queue, 1).is_err() {
+            return Err(message);
+        }
         self.queue.push_front(message);
+        Ok(())
     }
 
     /// Take everything, for when the reading endpoint closes and no one will
     /// ever read these. The caller drops them, and the objects with them,
     /// outside whatever lock guards the queue.
-    pub fn drain(&mut self) -> Vec<Message<H>> {
-        self.queue.drain(..).collect()
+    pub fn drain(&mut self) -> VecDeque<Message<H>> {
+        // Moved out whole rather than collected: this runs as an endpoint
+        // closes, where there is nobody to tell that memory ran out.
+        core::mem::take(&mut self.queue)
     }
 }

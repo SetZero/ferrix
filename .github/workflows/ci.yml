@@ -601,6 +601,14 @@ jobs:
       - name: Miri (heap)
         run: cargo +nightly miri test -p ferrix-heap --lib
 
+      # Fallible construction for the certified item (finding F-23). `try_box`
+      # writes a value into memory the global allocator handed back and turns
+      # it into a `Box` with `from_raw`, and the tests swap in a global
+      # allocator that records and refuses; Miri checks the write, the layout
+      # the `Box` is freed with, and the recording allocator itself.
+      - name: Miri (fallible construction)
+        run: cargo +nightly miri test -p ferrix-fallible --lib
+
       # Page-table construction for every encoding the kernel builds: the
       # three CPUs', VT-d's second level and the SMMU's stage 2. The walk
       # derives each next table's index from the descriptor it just read,

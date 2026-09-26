@@ -167,9 +167,10 @@ pub(crate) fn run(started_by_devmgr: bool) -> Result<Report, &'static str> {
     let file = fs::read_file(&fs::namespace().context(), None, PROGRAM)
         .map_err(|_| "the initramfs carries no /lib/drivers/blk")?;
     let image = image_vmo(&side, &file)?;
+    let root = Job::new_root().map_err(|_| "no memory for the driver's job")?;
     let job = side
         .process
-        .with_handles(|table| table.insert(Object::Job(Job::new_root()), Rights::JOB))
+        .with_handles(|table| table.insert(Object::Job(root), Rights::JOB))
         .map_err(|_| "no room for the driver's job")?;
     side.put(NAME_AT, NAME)?;
 

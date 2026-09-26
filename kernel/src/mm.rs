@@ -60,6 +60,10 @@ use ferrix_paging::{
 };
 use ferrix_sync::IrqSpinLock;
 
+mod reserve;
+
+pub(crate) use reserve::{Reserved, bypass_heap_in_sections, reserve, reserve_counts};
+
 /// Why memory could not be brought up.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum MemoryError {
@@ -479,13 +483,19 @@ struct KernelAllocator;
 unsafe impl GlobalAlloc for KernelAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let request = Request::new(layout.size(), layout.align());
-        with_heap(|heap| match heap.allocate(&mut KernelPages, request) {
-            Ok(address) => address as *mut u8,
-            // A null return is how `GlobalAlloc` reports failure; the caller
-            // turns it into whatever it considers appropriate, which for `Box`
-            // is the allocation error handler.
-            Err(_) => core::ptr::null_mut(),
-        })
+        if reserve::bypassing_heap()
+            && let Some(address) = reserve::draw(request)
+        {
+            return address as *mut u8;
+        }
+        let address = with_heap(|heap| heap.allocate(&mut KernelPages, request).ok())
+            // Refused: inside a reserved section, the reserve serves it
+            // instead (`mm/reserve.rs`, finding F-23).
+            .or_else(|| reserve::draw(request));
+        // A null return is how `GlobalAlloc` reports failure. A fallible
+        // caller -- `try_reserve`, `ferrix_fallible` -- turns it into an
+        // error; an infallible one calls the allocation error handler.
+        address.map_or(core::ptr::null_mut(), |address| address as *mut u8)
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {

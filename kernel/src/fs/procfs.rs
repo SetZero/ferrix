@@ -1002,7 +1002,7 @@ fn list_root(cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> Result<
     }
     let from = cursor.saturating_sub(PID_CURSORS);
     let mut digits = [0_u8; 20];
-    for process in registry::live() {
+    for process in registry::live()? {
         let pid = u64::from(process.pid());
         if pid < from {
             continue;

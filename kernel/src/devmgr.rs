@@ -367,7 +367,8 @@ pub(crate) fn start() -> Result<Option<Report>, &'static str> {
         images.push(vmo_of(&bytes)?);
     }
     let nodes = device::devices();
-    let (kernel_end, devmgr_end) = Endpoint::pair().ok_or("no memory for devmgr's channel")?;
+    let (kernel_end, devmgr_end) =
+        Endpoint::pair().map_err(|_| "no memory for devmgr's channel")?;
     // As many DEVICES messages as the handles need: the first with the job
     // and the images, the rest with devices only. ARMv7-A publishes 36
     // device nodes, and a message carries 64 handles.
@@ -390,7 +391,7 @@ pub(crate) fn start() -> Result<Option<Report>, &'static str> {
             .ok_or("more drivers than one DEVICES message names")?;
         let mut transfers: Vec<Transfer> = Vec::with_capacity(message.handles());
         if first {
-            transfers.push((Object::Job(drivers_job()), Rights::JOB));
+            transfers.push((Object::Job(drivers_job()?), Rights::JOB));
         }
         for node in nodes.iter().skip(index).take(take) {
             transfers.push((Object::Device(Arc::clone(node)), DEVICE_RIGHTS));
@@ -537,11 +538,16 @@ const DRIVERS_JOB: &str = "drivers.slice";
 ///
 /// A second start, which a boot never makes, finds the name taken and gets an
 /// anonymous job in its place rather than none.
-fn drivers_job() -> Arc<Job> {
+///
+/// # Errors
+///
+/// When there was no memory for any job at all.
+fn drivers_job() -> Result<Arc<Job>, &'static str> {
     let root = job::root();
     root.new_named_child(DRIVERS_JOB)
         .or_else(|_| root.new_child())
-        .unwrap_or_else(|_| Job::new_root())
+        .or_else(|_| Job::new_root())
+        .map_err(|_| "no memory for the drivers' job")
 }
 
 /// The manifest's names, each NUL-padded to a driver name; an image without

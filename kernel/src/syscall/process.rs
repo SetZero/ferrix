@@ -50,6 +50,7 @@ use alloc::vec::Vec;
 use core::any::Any;
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
+use crate::fallible::AllocError;
 use crate::sync::SpinLock;
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_linux_abi::errno::Errno;
@@ -267,7 +268,11 @@ impl Process {
     /// A process over an address space, with no heap yet.
     ///
     /// It is in the root job, and counted there from now on.
-    pub(crate) fn new(space: Arc<AddressSpace>) -> Process {
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`] when the core's part of it could not be allocated.
+    pub(crate) fn new(space: Arc<AddressSpace>) -> Result<Process, AllocError> {
         Process::with_pid(
             space,
             object::process::allocate().unwrap_or(0),
@@ -277,7 +282,11 @@ impl Process {
 
     /// [`Process::new`], for the process init starts: pid 1 when no other
     /// process holds it, any other pid when one does.
-    pub(crate) fn new_init(space: Arc<AddressSpace>) -> Process {
+    ///
+    /// # Errors
+    ///
+    /// As [`Process::new`].
+    pub(crate) fn new_init(space: Arc<AddressSpace>) -> Result<Process, AllocError> {
         let pid = object::process::allocate_init()
             .or_else(object::process::allocate)
             .unwrap_or(0);
@@ -286,9 +295,9 @@ impl Process {
 
     /// A process over an address space, numbered `pid`, which the caller has
     /// reserved in the registry, and counted in `job`.
-    fn with_pid(space: Arc<AddressSpace>, pid: u32, job: Arc<Job>) -> Process {
-        Process {
-            core: object::process::Process::new(space, pid, job),
+    fn with_pid(space: Arc<AddressSpace>, pid: u32, job: Arc<Job>) -> Result<Process, AllocError> {
+        Ok(Process {
+            core: object::process::Process::new(space, pid, job)?,
             umask: AtomicU32::new(DEFAULT_UMASK),
             oom_score_adj: AtomicI32::new(0),
             identity: SpinLock::new(Identity::default()),
@@ -327,7 +336,7 @@ impl Process {
             // A process the kernel starts is root's. A fork child takes its
             // parent's instead, below.
             credentials: SpinLock::new(Credentials::root()),
-        }
+        })
     }
 
     /// A copy of `parent` over `space`, which is already a copy of its
@@ -353,7 +362,7 @@ impl Process {
         space: Arc<AddressSpace>,
         share_files: bool,
         share_fs: bool,
-    ) -> Process {
+    ) -> Result<Process, AllocError> {
         Process::forked_into(parent, space, share_files, share_fs, None)
     }
 
@@ -367,9 +376,9 @@ impl Process {
         share_files: bool,
         share_fs: bool,
         job: Option<Arc<Job>>,
-    ) -> Process {
+    ) -> Result<Process, AllocError> {
         let job = job.unwrap_or_else(|| parent.job());
-        let mut child = Process::with_pid(space, object::process::allocate().unwrap_or(0), job);
+        let mut child = Process::with_pid(space, object::process::allocate().unwrap_or(0), job)?;
         child.files = if share_files {
             Arc::clone(&parent.files)
         } else {
@@ -391,7 +400,7 @@ impl Process {
         child.oom_score_adj = AtomicI32::new(parent.oom_score_adj());
         child.credentials = SpinLock::new(parent.credentials.lock().clone());
         child.identity = SpinLock::new(parent.identity.lock().clone());
-        child
+        Ok(child)
     }
 
     /// Its descriptor table.
@@ -1907,7 +1916,8 @@ pub(crate) fn run_program(_argument: usize) {
 ///
 /// Whatever [`AddressSpace::new`] refuses.
 pub(crate) fn new_for_check() -> Result<Arc<Process>, SpaceError> {
-    Ok(registry::register(Process::new(AddressSpace::new()?)))
+    let process = Process::new(AddressSpace::new()?).map_err(|_| SpaceError::OutOfMemory)?;
+    Ok(registry::register(process))
 }
 
 /// Make a process whose space is a `fork` of `parent`'s, as `fork` makes one
@@ -1918,6 +1928,8 @@ pub(crate) fn new_for_check() -> Result<Arc<Process>, SpaceError> {
 ///
 /// As [`AddressSpace::fork`].
 pub(crate) fn fork_for_check(parent: &Arc<Process>) -> Result<Arc<Process>, SpaceError> {
-    let child = parent.fork_memory(|space| Process::forked(parent, space, false, false))?;
+    let child = parent
+        .fork_memory(|space| Process::forked(parent, space, false, false))?
+        .map_err(|_| SpaceError::OutOfMemory)?;
     Ok(registry::register(child))
 }

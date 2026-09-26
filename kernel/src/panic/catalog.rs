@@ -183,6 +183,52 @@ pub(crate) static LOAD_REGISTRATION: Explanation = Explanation {
           kernel/src/init.rs; docs/certification/FINDINGS.md F-04 and F-08",
 };
 
+/// For an allocation the kernel makes while it comes up, before the first
+/// program runs, when memory has already run out.
+pub(crate) static BOOT_OUT_OF_MEMORY: Explanation = Explanation {
+    code: "FX-0007",
+    title: "memory ran out while the kernel was coming up",
+    meaning: "After the kernel has booted, an allocation that fails is reported to whoever \
+              asked -- a program gets `ENOMEM` or `NO_MEMORY`, and nothing stops \
+              (docs/certification/MEMORY-AND-TIMING.md section 1). While it is still coming \
+              up there is nobody to report to: the structure being built is one every later \
+              step depends on, such as the root job, a processor's run queue or the table of \
+              processors. Those allocations are fatal by design and marked `FATAL-ALLOC` \
+              where they are made, and `scripts/check-fallible-alloc.py` lists them. Reaching \
+              one means the machine does not have the memory to run the kernel at all.",
+    causes: &[
+        "The machine has far less memory than the kernel needs, or firmware reported \
+         almost none of it as usable.",
+        "An earlier boot step leaked or reserved most of memory, so a later one found none.",
+    ],
+    see: "docs/certification/MEMORY-AND-TIMING.md; scripts/check-fallible-alloc.py; \
+          kernel/src/fallible.rs",
+};
+
+/// For `check_allocation_failure` in `main.rs`.
+pub(crate) static STAGE9_ALLOCATION: Explanation = Explanation {
+    code: "FX-0902",
+    title: "an allocation failure was not survived",
+    meaning: "`object::alloc_check::run` makes allocations fail on purpose and requires the \
+              kernel to carry on (finding F-23). An `Arc` and a map insert must complete on \
+              the reserve their section filled when the heap refuses inside it, and must \
+              fail before they start when the reserve cannot be filled. Then one process \
+              drives rounds of native calls that allocate while every `n`th fallible \
+              allocation of its task fails: each call must succeed or answer `NO_MEMORY`, \
+              some must do each, no frame may leak, and a round with nothing failing must \
+              succeed whole. A kernel failing this has an allocation failure that corrupts \
+              state, leaks, or is reported as something it is not.",
+    causes: &[
+        "A caller of `crate::fallible` turned an `AllocError` into a status other than \
+         `NO_MEMORY`, or dropped it and carried on with state half changed.",
+        "An error path freed nothing it had taken, so the frame window saw a leak.",
+        "The reserve in `mm/reserve.rs` was not drawn on when the heap refused inside a \
+         section, or a section went ahead with its reserve unfilled.",
+    ],
+    see: "kernel/src/object/alloc_check.rs; kernel/src/fallible.rs; kernel/src/mm/reserve.rs; \
+          docs/certification/MEMORY-AND-TIMING.md",
+};
+
 /// For `kmain` in `main.rs`, when `self_check` fails.
 pub(crate) static STAGE1_HANDOFF: Explanation = Explanation {
     code: "FX-0101",
@@ -1987,6 +2033,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &SPACE_SET_WITHOUT_RECORD,
     &PRIVATE_OBJECT_SHARED,
     &LOAD_REGISTRATION,
+    &BOOT_OUT_OF_MEMORY,
     &STAGE1_HANDOFF,
     &MEMORY_BRING_UP,
     &VMAP_ARENA_BRING_UP,
@@ -2030,6 +2077,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE8_SIGNALFD,
     &SYSFS,
     &STAGE9_OBJECTS,
+    &STAGE9_ALLOCATION,
     &STAGE10_PCI,
     &STAGE10_DEVICES,
     &STAGE10_IOMMU,

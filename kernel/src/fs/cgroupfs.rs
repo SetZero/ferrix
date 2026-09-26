@@ -151,6 +151,7 @@ fn move_errno(refused: JobError) -> Errno {
         JobError::Removed => Errno::ENODEV,
         // `cgroup_migrate_vet_dst`.
         JobError::Internal => Errno::EBUSY,
+        JobError::NoMemory => Errno::ENOMEM,
         // Sealed by the native `job_kill`, which Linux has no counterpart of.
         JobError::Killed
         | JobError::Exists
@@ -225,7 +226,7 @@ fn node_metadata(
 /// Record `change`'s owner, group and mode for the node `before` describes,
 /// as chown and chmod leave them. Times are accepted and not kept: every
 /// time here is the mount's.
-fn set_node(job: &Job, slot: u64, before: &Metadata, change: &SetAttributes) {
+fn set_node(job: &Job, slot: u64, before: &Metadata, change: &SetAttributes) -> Result<()> {
     job.set_node(
         slot,
         NodeAttributes {
@@ -235,7 +236,8 @@ fn set_node(job: &Job, slot: u64, before: &Metadata, change: &SetAttributes) {
                 .permissions
                 .map_or(before.permissions, |permissions| permissions & 0o7777),
         },
-    );
+    )
+    .map_err(|_| Errno::ENOMEM)
 }
 
 /// The metadata of `job`'s `cgroup.procs`, whose write permission is what a
@@ -361,11 +363,15 @@ struct Directory {
 
 impl Directory {
     /// The child job shown as `name`, if there is one.
+    ///
+    /// With no memory to list the children, there is none: the lookup is
+    /// answered as `ENOENT` rather than stopping the machine.
     fn child(&self, name: &[u8]) -> Option<Arc<Job>> {
-        self.job
-            .children()
-            .into_iter()
-            .find(|child| child.display_name().as_bytes() == name)
+        self.job.children().ok()?.into_iter().find(|child| {
+            child
+                .display_name()
+                .is_ok_and(|shown| shown.as_bytes() == name)
+        })
     }
 
     /// Whether this is the root of the tree cgroupfs shows.
@@ -389,8 +395,7 @@ impl Inode for Directory {
     /// `cgroup.subtree_control`). The namespace has already checked the
     /// change is the caller's to make.
     fn set_attributes(&self, change: &SetAttributes) -> Result<()> {
-        set_node(&self.job, 0, &self.metadata(), change);
-        Ok(())
+        set_node(&self.job, 0, &self.metadata(), change)
     }
 
     /// Asked afresh on every walk: a native `job_create` adds a directory,
@@ -432,11 +437,12 @@ impl Inode for Directory {
                 JobError::Exists => Errno::EEXIST,
                 JobError::Limited => Errno::EAGAIN,
                 JobError::Removed => Errno::ENODEV,
+                JobError::NoMemory => Errno::ENOMEM,
                 JobError::Killed | JobError::Missing | JobError::Busy | JobError::Internal => {
                     Errno::ENOENT
                 }
             })?;
-        own_new(&child, permissions);
+        own_new(&child, permissions)?;
         Ok(Arc::new(Directory {
             job: child,
             shared: Arc::clone(&self.shared),
@@ -474,10 +480,10 @@ impl Inode for Directory {
         // Children in id order, resumed by id, so a child made or removed
         // between two reads neither repeats nor hides another.
         let from = cursor.saturating_sub(CHILD_CURSORS);
-        let mut children = self.job.children();
+        let mut children = self.job.children().map_err(|_| Errno::ENOMEM)?;
         children.sort_unstable_by_key(|child| child.id());
         for child in children.iter().filter(|child| child.id() >= from) {
-            let name = child.display_name();
+            let name = child.display_name().map_err(|_| Errno::ENOMEM)?;
             let accepted = emit(DirEntry {
                 ino: ino(child, 0),
                 kind: FileType::Directory,
@@ -497,7 +503,7 @@ impl Inode for Directory {
 /// maker's filesystem ids, unless both are root's, which every node has
 /// anyway. The directory takes the mode `mkdir` asked for, as kernfs gives
 /// it.
-fn own_new(job: &Job, permissions: u32) {
+fn own_new(job: &Job, permissions: u32) -> Result<()> {
     let who = caller_access();
     let root = who.uid == 0 && who.gid == 0;
     if permissions & 0o7777 != 0o755 || !root {
@@ -508,10 +514,11 @@ fn own_new(job: &Job, permissions: u32) {
                 gid: who.gid,
                 permissions: permissions & 0o7777,
             },
-        );
+        )
+        .map_err(|_| Errno::ENOMEM)?;
     }
     if root {
-        return;
+        return Ok(());
     }
     for file in files::FILES {
         job.set_node(
@@ -521,8 +528,10 @@ fn own_new(job: &Job, permissions: u32) {
                 gid: who.gid,
                 permissions: u32::from(file.mode()),
             },
-        );
+        )
+        .map_err(|_| Errno::ENOMEM)?;
     }
+    Ok(())
 }
 
 /// A file's place in [`files::FILES`], which its inode number, and where its
@@ -574,8 +583,7 @@ impl Inode for Interface {
 
     /// `chown` and `chmod` of this one file.
     fn set_attributes(&self, change: &SetAttributes) -> Result<()> {
-        set_node(&self.job, self.slot(), &self.metadata(), change);
-        Ok(())
+        set_node(&self.job, self.slot(), &self.metadata(), change)
     }
 
     /// Accepted and ignored, as kernfs ignores the `O_TRUNC` a shell's `>`
@@ -737,7 +745,8 @@ fn contents(job: &Arc<Job>, kind: Kind) -> Vec<u8> {
         Kind::Events => render::events(&mut out, job.is_populated(), false),
         Kind::MaxDescendants => render::limit(&mut out, job.limits().1),
         Kind::MaxDepth => render::limit(&mut out, job.limits().0),
-        Kind::Stat => render::stat(&mut out, job.descendants()),
+        // With no memory to count them, as many as a count can say.
+        Kind::Stat => render::stat(&mut out, job.descendants().unwrap_or(u32::MAX)),
         Kind::Freeze => out.extend_from_slice(b"0\n"),
         Kind::Kill => {}
     }
@@ -745,8 +754,11 @@ fn contents(job: &Arc<Job>, kind: Kind) -> Vec<u8> {
 }
 
 /// The live processes directly in `job`, not beneath it, in pid order.
+///
+/// None, with no memory to list them.
 fn members_processes(job: &Arc<Job>) -> Vec<Arc<Process>> {
     registry::live()
+        .unwrap_or_default()
         .into_iter()
         .filter(|process| Arc::ptr_eq(&process.job(), job) && !process.is_terminated())
         .collect()
@@ -792,7 +804,7 @@ fn write_to(job: &Arc<Job>, kind: Kind, data: &[u8], opener: &Writer) -> Result<
         }
         Kind::Kill => {
             write::parse_kill(data).map_err(errno)?;
-            let _ = job.kill_members();
+            let _ = job.kill_members().map_err(|_| Errno::ENOMEM)?;
         }
         Kind::SubtreeControl => {
             // Nothing is built yet, so nothing parses but an empty change;
@@ -801,6 +813,7 @@ fn write_to(job: &Arc<Job>, kind: Kind, data: &[u8], opener: &Writer) -> Result<
             job.change_subtree_control(change, offered(job))
                 .map_err(|refused| match refused {
                     JobError::Busy | JobError::Internal => Errno::EBUSY,
+                    JobError::NoMemory => Errno::ENOMEM,
                     _ => Errno::ENOENT,
                 })?;
         }
@@ -814,11 +827,11 @@ fn write_to(job: &Arc<Job>, kind: Kind, data: &[u8], opener: &Writer) -> Result<
 }
 
 /// `/proc/<pid>/cgroup` for a process in `job`.
-pub(crate) fn proc_cgroup(job: &Job) -> Vec<u8> {
-    let names = job.path_names();
+pub(crate) fn proc_cgroup(job: &Job) -> Result<Vec<u8>> {
+    let names = job.path_names().map_err(|_| Errno::ENOMEM)?;
     let mut out = Vec::new();
     render::proc_cgroup(&mut out, names.iter().map(String::as_bytes));
-    out
+    Ok(out)
 }
 
 /// What [`check`] counted, for the boot line.

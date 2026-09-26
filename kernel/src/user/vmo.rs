@@ -66,6 +66,7 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use crate::fallible::AllocError;
 use crate::sync::SpinLock;
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_frame::Frame;
@@ -269,10 +270,24 @@ impl Vmo {
         Vmo::new_filled(pages, None)
     }
 
+    /// [`Vmo::new_anonymous`], or [`AllocError`] when memory has run out.
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`].
+    pub(crate) fn try_new_anonymous(pages: u64) -> Result<Arc<Vmo>, AllocError> {
+        crate::fallible::try_arc(Vmo::unfilled(pages, None))
+    }
+
     /// An object of `pages` pages holding a file's contents, whose absent
     /// pages `filler` fills before a fault commits them.
     pub(crate) fn new_filled(pages: u64, filler: Option<Arc<dyn Filler>>) -> Arc<Vmo> {
-        Arc::new(Vmo {
+        Arc::new(Vmo::unfilled(pages, filler))
+    }
+
+    /// The object [`Vmo::new_filled`] allocates.
+    fn unfilled(pages: u64, filler: Option<Arc<dyn Filler>>) -> Vmo {
+        Vmo {
             pages: SpinLock::new(Pages::default()),
             len: AtomicU64::new(pages),
             bound: AtomicU64::new(u64::MAX),
@@ -281,7 +296,7 @@ impl Vmo {
             mapped_written: AtomicBool::new(false),
             filler,
             coherent: AtomicBool::new(false),
-        })
+        }
     }
 
     /// Fill page `index` from the file before a fault commits it, if this

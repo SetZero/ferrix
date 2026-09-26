@@ -74,6 +74,14 @@ pub enum TableError {
     Full,
     /// The same handle appears twice in one batch.
     Repeated,
+    /// There was no memory for the table to grow.
+    NoMemory,
+}
+
+impl From<ferrix_fallible::AllocError> for TableError {
+    fn from(_: ferrix_fallible::AllocError) -> TableError {
+        TableError::NoMemory
+    }
 }
 
 /// One slot of the table.
@@ -98,6 +106,25 @@ enum Slot<T> {
     Retired,
 }
 
+/// What [`HandleTable::close`] hands back: every object the table held, in
+/// slot order.
+#[derive(Debug)]
+pub struct Closed<T> {
+    /// The table's slots, taken out of it.
+    slots: alloc::vec::IntoIter<Slot<T>>,
+}
+
+impl<T> Iterator for Closed<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
+        self.slots.by_ref().find_map(|slot| match slot {
+            Slot::Occupied { object, .. } => Some(object),
+            Slot::Vacant { .. } | Slot::Retired => None,
+        })
+    }
+}
+
 /// A table of handles, each naming a `T` with some [`Rights`].
 #[derive(Debug)]
 pub struct HandleTable<T> {
@@ -105,6 +132,10 @@ pub struct HandleTable<T> {
     slots: Vec<Slot<T>>,
     /// Vacant slots, oldest-emptied first, so reuse is spread across slots
     /// rather than hammering one slot's generation.
+    ///
+    /// Its capacity is kept at least the number of slots, reserved as each
+    /// slot is made, so closing a handle -- which puts its slot here -- never
+    /// allocates: a close has nobody to tell that memory ran out.
     free: VecDeque<u32>,
     /// How many slots are occupied.
     live: usize,
@@ -160,17 +191,39 @@ impl<T> HandleTable<T> {
     ///
     /// # Errors
     ///
-    /// The object back, if the table is full.
+    /// The object back, if the table is full, or if it had to grow for a new
+    /// slot and there was no memory. [`HandleTable::reserve`] first tells the
+    /// two apart.
     pub fn insert(&mut self, object: T, rights: Rights) -> Result<Handle, T> {
         if self.room() == 0 {
             return Err(object);
         }
-        Ok(self.insert_with_room(object, rights))
+        self.insert_with_room(object, rights)
+    }
+
+    /// Make sure the next `count` insertions need no memory: room for that
+    /// many fresh slots, beyond the vacant ones, and for every slot to be
+    /// vacant at once.
+    ///
+    /// # Errors
+    ///
+    /// [`TableError::NoMemory`]; nothing has changed.
+    pub fn reserve(&mut self, count: usize) -> Result<(), TableError> {
+        let fresh = count.saturating_sub(self.free.len());
+        ferrix_fallible::try_reserve(&mut self.slots, fresh)?;
+        let slots = self.slots.len().saturating_add(fresh);
+        let additional = slots.saturating_sub(self.free.len());
+        ferrix_fallible::try_reserve_deque(&mut self.free, additional)?;
+        Ok(())
     }
 
     /// Open a handle, when the caller has already established there is room.
-    fn insert_with_room(&mut self, object: T, rights: Rights) -> Handle {
-        self.live += 1;
+    ///
+    /// # Errors
+    ///
+    /// The object back, when a fresh slot was needed and there was no memory
+    /// for it.
+    fn insert_with_room(&mut self, object: T, rights: Rights) -> Result<Handle, T> {
         if let Some(index) = self.free.pop_front()
             && let Some(slot) = self.slots.get_mut(index as usize)
             && let Slot::Vacant { generation } = *slot
@@ -180,17 +233,22 @@ impl<T> HandleTable<T> {
                 rights,
                 object,
             };
-            return encode(index, generation);
+            self.live += 1;
+            return Ok(encode(index, generation));
         }
         // No vacant slot, so `room` promised a fresh one. The index fits: the
         // slot count is at most `MAX_SLOTS`, which is 2^20.
+        if self.reserve(1).is_err() {
+            return Err(object);
+        }
         let index = self.slots.len() as u32;
         self.slots.push(Slot::Occupied {
             generation: 1,
             rights,
             object,
         });
-        encode(index, 1)
+        self.live += 1;
+        Ok(encode(index, 1))
     }
 
     /// The object a handle names, and the rights it carries.
@@ -253,6 +311,7 @@ impl<T> HandleTable<T> {
         };
         if matches!(slot, Slot::Vacant { .. }) {
             // The index came from a handle, so it fits in the index bits.
+            // Never allocates: `free` has room for every slot.
             self.free.push_back(index as u32);
         }
         self.live -= 1;
@@ -320,8 +379,12 @@ impl<T> HandleTable<T> {
         if self.free.is_empty() && self.slots.len() >= MAX_SLOTS {
             return Err(TableError::Full);
         }
+        // The new slot is reserved before the old handle is closed, so a
+        // refusal changes nothing.
+        self.reserve(1)?;
         let (object, _) = self.remove(handle)?;
-        Ok(self.insert_with_room(object, rights))
+        self.insert_with_room(object, rights)
+            .map_err(|_| TableError::NoMemory)
     }
 
     /// Close every handle in `handles` and hand back what they named, if every
@@ -341,11 +404,13 @@ impl<T> HandleTable<T> {
                 return Err(TableError::Repeated);
             }
         }
-        let mut taken = Vec::with_capacity(handles.len());
+        let mut taken = ferrix_fallible::try_with_capacity(handles.len())?;
         for &handle in handles {
             // Validated above, and removing one cannot invalidate another:
             // they are distinct, so they are in distinct slots.
-            taken.push(self.remove(handle)?);
+            if ferrix_fallible::push_within(&mut taken, self.remove(handle)?).is_err() {
+                return Err(TableError::NoMemory);
+            }
         }
         Ok(taken)
     }
@@ -354,18 +419,33 @@ impl<T> HandleTable<T> {
     ///
     /// # Errors
     ///
-    /// The objects back, untouched, if there is not.
+    /// The objects back, untouched, with [`TableError::Full`] if there is no
+    /// room for them, or [`TableError::NoMemory`] if there was no memory for
+    /// the table to grow or for the list of handles.
+    #[expect(
+        clippy::type_complexity,
+        reason = "a refusal hands the batch back beside why; naming the pair would hide that"
+    )]
     pub fn insert_many(
         &mut self,
         objects: Vec<(T, Rights)>,
-    ) -> Result<Vec<Handle>, Vec<(T, Rights)>> {
+    ) -> Result<Vec<Handle>, (TableError, Vec<(T, Rights)>)> {
         if objects.len() > self.room() {
-            return Err(objects);
+            return Err((TableError::Full, objects));
         }
-        Ok(objects
-            .into_iter()
-            .map(|(object, rights)| self.insert_with_room(object, rights))
-            .collect())
+        if self.reserve(objects.len()).is_err() {
+            return Err((TableError::NoMemory, objects));
+        }
+        let Ok(mut handles) = ferrix_fallible::try_with_capacity(objects.len()) else {
+            return Err((TableError::NoMemory, objects));
+        };
+        for (object, rights) in objects {
+            // Reserved above: neither the table nor the list can need memory.
+            if let Ok(handle) = self.insert_with_room(object, rights) {
+                let _ = ferrix_fallible::push_within(&mut handles, handle);
+            }
+        }
+        Ok(handles)
     }
 
     /// Close every handle, give back every object, and refuse every insertion
@@ -379,9 +459,26 @@ impl<T> HandleTable<T> {
     /// process meant to release them, its channel peers never seeing
     /// `PEER_CLOSED`. After this, every insertion is refused with its object
     /// handed back, for the caller to dispose of.
-    pub fn close(&mut self) -> Vec<T> {
+    pub fn close(&mut self) -> Closed<T> {
         self.closed = true;
-        self.clear()
+        self.live = 0;
+        self.free.clear();
+        // The slots move out whole: a process's end has nobody to tell that
+        // memory ran out, so this allocates nothing.
+        Closed {
+            slots: core::mem::take(&mut self.slots).into_iter(),
+        }
+    }
+
+    /// Slots, and the capacities of the slot list and the free list: what a
+    /// test needs to see that nothing grew.
+    #[cfg(test)]
+    pub(crate) fn capacities(&self) -> (usize, usize, usize) {
+        (
+            self.slots.len(),
+            self.slots.capacity(),
+            self.free.capacity(),
+        )
     }
 
     /// Whether [`HandleTable::close`] has been called.

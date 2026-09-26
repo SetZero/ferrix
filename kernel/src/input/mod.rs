@@ -267,7 +267,7 @@ fn control_create(caller: &dyn Host, registers: &[u64; 6]) -> Result<usize, Errn
 /// keyboard or mouse it finds -- and [`CreateError::NoMemory`] when the
 /// channel or the task could not be made.
 pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<Arc<Endpoint>, CreateError> {
-    let (kernel_end, driver_end) = Endpoint::pair().ok_or(CreateError::NoMemory)?;
+    let (kernel_end, driver_end) = Endpoint::pair().map_err(|_| CreateError::NoMemory)?;
     {
         let mut claimed = CLAIMED.lock();
         let held = claimed
@@ -427,7 +427,10 @@ fn send_ready(control: &Endpoint, index: u32) -> Result<(), Refusal> {
         .encode()
         .as_bytes()
         .to_vec();
-    let handed = vec![(Object::Port(Port::new()), Rights::WRITE)];
+    // The wire protocol has no refusal for memory; a malformed start is the
+    // nearest it has.
+    let port = Port::new().map_err(|_| Refusal::Malformed)?;
+    let handed = vec![(Object::Port(port), Rights::WRITE)];
     control
         .write(ready, 1, || Ok::<Vec<Transfer>, Infallible>(handed))
         .map_err(|_| Refusal::Malformed)

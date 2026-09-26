@@ -243,7 +243,9 @@ fn check(a: usize) -> Result<Report, &'static str> {
         .space()
         .fork()
         .map_err(|_| "the address space holding the shared object could not be forked")?;
-    let child = registry::register(Process::forked(&parent, child_space, false, false));
+    let child = registry::register(
+        Process::forked(&parent, child_space, false, false).map_err(|_| "no memory for a fork")?,
+    );
     // The child's role is its argument count: two, where the parent has one.
     let stack = child
         .startup()

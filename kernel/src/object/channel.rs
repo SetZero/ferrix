@@ -50,7 +50,7 @@
 //! `Channel` adds no edge: what a side's queue holds is freed when that
 //! side's `Endpoint` goes, whichever end still holds the channel.
 
-use alloc::collections::BTreeSet;
+use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -61,8 +61,9 @@ use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES};
 use ferrix_objects::message::{Limits, Message, MessageQueue, ReceiveError, SendError};
 use ferrix_objects::reach::{Reach, reaches};
 
-use super::port::{Observer, PortError, register, triggered};
+use super::port::{Observer, Observers, PortError, deliver, register, trigger};
 use super::{Object, Transfer, dispose};
+use crate::fallible::{self, AllocError};
 use crate::sched::WaitQueue;
 
 /// The most messages an endpoint holds unread.
@@ -102,6 +103,8 @@ pub(crate) enum WriteFailure<E> {
     Full,
     /// Taking the handles out of the sender's table was refused.
     Take(E),
+    /// There was no memory to queue it.
+    NoMemory,
 }
 
 /// Why a read found nothing to return.
@@ -153,7 +156,7 @@ struct Half {
     /// Port registrations waiting on this side's signals. Taken only inside
     /// `inbox`'s lock, which is what serialises a registration against the
     /// change it waits for.
-    observers: SpinLock<Vec<Observer>>,
+    observers: SpinLock<Observers>,
     /// Whether this side's [`Endpoint`] has gone. Set once, under `inbox`'s
     /// lock as the queue is emptied, and never cleared.
     closed: AtomicBool,
@@ -165,7 +168,7 @@ impl Half {
         Half {
             inbox: SpinLock::new(MessageQueue::new(LIMITS)),
             waiters: WaitQueue::new(),
-            observers: SpinLock::new(Vec::new()),
+            observers: SpinLock::new(Observers::new()),
             closed: AtomicBool::new(false),
         }
     }
@@ -210,24 +213,24 @@ pub(crate) struct Endpoint {
 impl Endpoint {
     /// A new channel's two ends.
     ///
-    /// Always `Some` today: the allocator's failure is fatal (AoU-5). The
-    /// `Option` is where a fallible construction will say no, which is what
-    /// making the paths a program can drive fallible asks of this one (item 2
-    /// of `docs/certification/MEMORY-AND-TIMING.md` §1).
-    pub(crate) fn pair() -> Option<(Arc<Endpoint>, Arc<Endpoint>)> {
-        let channel = Arc::new(Channel {
+    /// # Errors
+    ///
+    /// [`AllocError`] when the channel or either end could not be allocated
+    /// (finding F-23).
+    pub(crate) fn pair() -> Result<(Arc<Endpoint>, Arc<Endpoint>), AllocError> {
+        let channel = fallible::try_arc(Channel {
             first: Half::new(),
             second: Half::new(),
-        });
-        let first = Arc::new(Endpoint {
+        })?;
+        let first = fallible::try_arc(Endpoint {
             channel: Arc::clone(&channel),
             side: Side::First,
-        });
-        let second = Arc::new(Endpoint {
+        })?;
+        let second = fallible::try_arc(Endpoint {
             channel,
             side: Side::Second,
-        });
-        Some((first, second))
+        })?;
+        Ok((first, second))
     }
 
     /// This end's side.
@@ -272,12 +275,10 @@ impl Endpoint {
                 return Err(WriteFailure::Full);
             }
             let handles = take().map_err(WriteFailure::Take)?;
+            // NOALLOC: `MessageQueue::push` reserves fallibly and refuses with
+            // `SendError::NoMemory`.
             let refused = inbox.push(Message { bytes, handles }).err();
-            let fired = if refused.is_none() {
-                triggered(&mut peer.observers.lock(), Signals::READABLE)
-            } else {
-                Vec::new()
-            };
+            let fired = refused.is_none() && trigger(&mut peer.observers.lock(), Signals::READABLE);
             (refused, fired)
         };
         // Checked above under the same lock, so this is unreachable; if it
@@ -289,8 +290,8 @@ impl Endpoint {
                 // for it, and a port's wake-up takes locks of its own. The
                 // reader may close its end before this returns, and it is
                 // closed when it does: this holds the channel, not that end.
-                for observer in fired {
-                    observer.fire(Signals::READABLE);
+                if fired {
+                    deliver(|| peer.observers.lock().next_fired());
                 }
                 peer.waiters.wake_all();
                 Ok(())
@@ -300,6 +301,7 @@ impl Endpoint {
                 Err(match why {
                     SendError::TooBig => WriteFailure::TooBig,
                     SendError::Full => WriteFailure::Full,
+                    SendError::NoMemory => WriteFailure::NoMemory,
                 })
             }
         }
@@ -373,9 +375,16 @@ impl Endpoint {
     ///
     /// Wakes this end's waiters, because the message is readable again and a
     /// second reader may have gone to sleep while it was out.
-    pub(crate) fn unread(&self, message: ChannelMessage) {
-        self.own().inbox.lock().unpop(message);
+    ///
+    /// # Errors
+    ///
+    /// The message back, when a writer took its slot meanwhile and the queue
+    /// could not grow to take it again. The caller disposes of what it
+    /// carries once it holds no lock; its call was failing already.
+    pub(crate) fn unread(&self, message: ChannelMessage) -> Result<(), ChannelMessage> {
+        self.own().inbox.lock().unpop(message)?;
         self.own().waiters.wake_all();
+        Ok(())
     }
 
     /// Whether nobody holds the other end.
@@ -452,6 +461,9 @@ impl Endpoint {
 ///
 /// Call it holding [`super::TOPOLOGY`], and make the send before releasing
 /// it: the answer is only about a graph nothing else is adding edges to.
+///
+/// [`Reach::NoMemory`] when the walk ran out of memory, which the caller
+/// refuses as it does a walk too long.
 pub(crate) fn check_carry(writer: &Endpoint, carried: Vec<Arc<Endpoint>>) -> Reach {
     // A closed peer is no cycle, and the write itself will say it is closed.
     if writer.peer_closed() {
@@ -479,10 +491,13 @@ fn identity(endpoint: &Arc<Endpoint>) -> usize {
 /// The match is exhaustive on purpose. An object kind added later that can
 /// hold other objects has to be followed here, or it is a way round the check,
 /// and the compiler is what asks the question.
-fn queued_endpoints(endpoint: &Arc<Endpoint>) -> Vec<Arc<Endpoint>> {
+fn queued_endpoints(endpoint: &Arc<Endpoint>) -> Option<Vec<Arc<Endpoint>>> {
     let inbox = endpoint.own().inbox.lock();
-    let mut distinct = BTreeSet::new();
-    inbox
+    // Identities seen, sorted: a vector rather than a set, so that growing it
+    // can be refused.
+    let mut distinct: Vec<usize> = Vec::new();
+    let mut queued_ends = Vec::new();
+    let carried = inbox
         .iter()
         .flat_map(|message| message.handles.iter())
         .filter_map(|(object, _)| match object {
@@ -496,16 +511,23 @@ fn queued_endpoints(endpoint: &Arc<Endpoint>) -> Vec<Arc<Endpoint>> {
             // A process handle holds how the process ended, not its table.
             | Object::Process(_)
             | Object::Port(_) => None,
-        })
+        });
+    for queued in carried {
         // Once each, and no more than the walk could use: an inbox can hold
         // two hundred and fifty-six messages of sixty-four handles, and
         // cloning sixteen thousand references under the topology lock to
         // find the walk was too far anyway would be the cost the bound is
         // there to prevent.
-        .filter(|queued| distinct.insert(queued.identity()))
-        .take(MAX_WALK + 1)
-        .map(Arc::clone)
-        .collect()
+        if queued_ends.len() > MAX_WALK {
+            break;
+        }
+        let identity = queued.identity();
+        if let Err(at) = distinct.binary_search(&identity) {
+            fallible::try_insert_at(&mut distinct, at, identity).ok()?;
+            fallible::try_push(&mut queued_ends, Arc::clone(queued)).ok()?;
+        }
+    }
+    Some(queued_ends)
 }
 
 /// Whether a message carries a channel endpoint.
@@ -526,13 +548,17 @@ impl Drop for Endpoint {
         // made under, so one made a moment ago is found here.
         let fired = {
             let _inbox = peer.inbox.lock();
-            triggered(&mut peer.observers.lock(), Signals::PEER_CLOSED)
+            trigger(&mut peer.observers.lock(), Signals::PEER_CLOSED)
         };
-        for observer in fired {
-            observer.fire(Signals::PEER_CLOSED);
+        if fired {
+            deliver(|| peer.observers.lock().next_fired());
         }
         peer.waiters.wake_all();
-        dispose(unread);
+        dispose(
+            unread
+                .into_iter()
+                .flat_map(|message| message.handles.into_iter().map(|(object, _)| object)),
+        );
     }
 }
 
@@ -545,7 +571,10 @@ impl Endpoint {
     /// peer sees `PEER_CLOSED`, and a write to this side is refused rather
     /// than left in a queue nobody reads. Its registrations go too; the ports
     /// they name are held weakly, so letting them go frees no object.
-    pub(super) fn take_unread(&self) -> Vec<Object> {
+    ///
+    /// The queue moves out whole, to be taken apart as it is walked: this
+    /// runs as an end closes, where nothing can be told memory ran out.
+    pub(super) fn take_unread(&self) -> VecDeque<ChannelMessage> {
         let own = self.own();
         let messages = {
             let mut inbox = own.inbox.lock();
@@ -555,8 +584,5 @@ impl Endpoint {
         let registrations = core::mem::take(&mut *own.observers.lock());
         drop(registrations);
         messages
-            .into_iter()
-            .flat_map(|message| message.handles.into_iter().map(|(object, _)| object))
-            .collect()
     }
 }

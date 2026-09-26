@@ -244,6 +244,7 @@ dependencies = [
  "ferrix-devmgr-proto",
  "ferrix-displayctl",
  "ferrix-elf",
+ "ferrix-fallible",
  "ferrix-fbtext",
  "ferrix-fdt",
  "ferrix-frame",
@@ -359,6 +360,7 @@ version = "0.1.0"
 name = "ferrix-objects"
 version = "0.1.0"
 dependencies = [
+ "ferrix-fallible",
  "ferrix-native-abi",
  "ferrix-sync",
 ]

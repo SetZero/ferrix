@@ -65,6 +65,15 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         python("scripts/check-complexity.py")
     })?;
 
+    // Allocation failure is an error the certified item reports, never a
+    // stop (finding F-23). An allocating standard-library call in the item's
+    // product code is refused unless it goes through `kernel/src/fallible.rs`
+    // or is argued at the site; a ratchet over a recorded baseline, like the
+    // two above. docs/certification/MEMORY-AND-TIMING.md.
+    step("fallible allocation", || {
+        python("scripts/check-fallible-alloc.py")
+    })?;
+
     // The safety manual is an out-of-context argument an integrator designs
     // against, so a claim in it that quietly stopped being true would be worse
     // than no manual. Every claim names its evidence, and this fails when a
@@ -546,7 +555,7 @@ fn host_cargo(
 /// A test below reads `.github/workflows/ci.yml` and fails when the two
 /// disagree, so a step added to one and not the other is found by `cargo
 /// xtask check` rather than by a contributor who trusted `--miri`.
-const MIRI_PACKAGES: [&str; 14] = [
+const MIRI_PACKAGES: [&str; 15] = [
     "ferrix-elf",
     "ferrix-bootinfo",
     "ferrix-ustack",
@@ -559,6 +568,7 @@ const MIRI_PACKAGES: [&str; 14] = [
     "ferrix-virtio-blk",
     "ferrix-frame",
     "ferrix-heap",
+    "ferrix-fallible",
     "ferrix-paging",
     "ferrix-svc",
 ];

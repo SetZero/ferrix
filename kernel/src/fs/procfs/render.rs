@@ -496,7 +496,7 @@ pub(super) fn cmdline(process: &Process) -> Result<Vec<u8>> {
 /// `/proc/<pid>/cgroup`: the one line of the unified hierarchy, `0::/path`,
 /// naming the cgroup -- the job -- the process is in.
 pub(super) fn cgroup(process: &Process) -> Result<Vec<u8>> {
-    Ok(fs::cgroupfs::proc_cgroup(&process.job()))
+    fs::cgroupfs::proc_cgroup(&process.job())
 }
 
 /// `/proc/<pid>/comm`.

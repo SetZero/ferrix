@@ -20,6 +20,7 @@
 //! to [`dispose`], which drops them one level at a time in a loop. However
 //! deep the chain, the stack holds one drop at a time.
 
+pub(crate) mod alloc_check;
 pub(crate) mod channel;
 pub(crate) mod check;
 pub(crate) mod interrupt;
@@ -31,13 +32,14 @@ pub(crate) mod process;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use crate::sync::SpinLock;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 
 use crate::device::DeviceNode;
+use crate::fallible;
 use crate::sched::WaitQueue;
 use crate::user::vmo::Vmo;
 
@@ -144,6 +146,17 @@ static ORPHANS: SpinLock<Vec<Object>> = SpinLock::new(Vec::new());
 /// Whether some context is already draining [`ORPHANS`].
 static DISPOSING: AtomicBool = AtomicBool::new(false);
 
+/// Objects being dropped where they were disposed of, because [`ORPHANS`]
+/// could not grow to queue them.
+static DROPPING_IN_PLACE: AtomicUsize = AtomicUsize::new(0);
+
+/// How deep drops in place may nest before an object is given up instead.
+const IN_PLACE_DEPTH: usize = 4;
+
+/// Objects given up, because [`ORPHANS`] could not grow and drops in place
+/// were already [`IN_PLACE_DEPTH`] deep: see [`defer`].
+static ABANDONED: AtomicU64 = AtomicU64::new(0);
+
 /// Drop `objects`, and everything they contain, without recursing.
 ///
 /// An object that holds no other object is dropped here, at once: its drop
@@ -175,15 +188,16 @@ pub(crate) fn dispose(objects: impl IntoIterator<Item = Object>) {
             // it. Nothing done on the peer holds it (see `channel`).
             Object::Channel(end) => {
                 if let Some(end) = Arc::into_inner(end) {
-                    let carried = end.take_unread();
-                    if !carried.is_empty() {
-                        ORPHANS.lock().extend(carried);
-                    }
+                    let carried = end
+                        .take_unread()
+                        .into_iter()
+                        .flat_map(|message| message.handles.into_iter().map(|(object, _)| object));
+                    carried.for_each(defer);
                     drop(end);
                 }
             }
             object if object.drops_at_once() => drop(object),
-            object => ORPHANS.lock().push(object),
+            object => defer(object),
         }
     }
     loop {
@@ -207,6 +221,46 @@ pub(crate) fn dispose(objects: impl IntoIterator<Item = Object>) {
             return;
         }
     }
+}
+
+/// Queue `object` on [`ORPHANS`] for the drainer.
+///
+/// A dispose happens as something closes, which has nobody to tell that
+/// memory ran out (finding F-23). So when the queue cannot grow, the object
+/// is dropped here instead -- which is what the queue was avoiding, a drop
+/// that can reach others and recurse, so only while fewer than
+/// [`IN_PLACE_DEPTH`] such drops are under way. Past that it is given up:
+/// never dropped, its memory lost, and counted in [`ABANDONED`], which the
+/// boot report prints. A machine gets there only with its heap exhausted and
+/// four closes deep in nested channels at once, and losing an object's memory
+/// is the one outcome of the three -- stop, overflow the stack, or this --
+/// that leaves it running.
+fn defer(object: Object) {
+    let refused = {
+        let mut orphans = ORPHANS.lock();
+        match fallible::try_reserve(&mut orphans, 1) {
+            Ok(()) => fallible::push_within(&mut orphans, object).err(),
+            Err(_) => Some(object),
+        }
+    };
+    let Some(object) = refused else { return };
+    if DROPPING_IN_PLACE.fetch_add(1, Ordering::AcqRel) < IN_PLACE_DEPTH {
+        drop(object);
+    } else {
+        let _ = ABANDONED.fetch_add(1, Ordering::Relaxed);
+        #[expect(
+            clippy::mem_forget,
+            reason = "AUDIT: an object given up under memory exhaustion rather than dropped \
+                      where its drop could recurse without bound; see `defer`"
+        )]
+        core::mem::forget(object);
+    }
+    let _ = DROPPING_IN_PLACE.fetch_sub(1, Ordering::AcqRel);
+}
+
+/// Objects [`defer`] has given up since boot.
+pub(crate) fn abandoned() -> u64 {
+    ABANDONED.load(Ordering::Relaxed)
 }
 
 impl Object {

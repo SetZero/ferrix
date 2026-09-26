@@ -273,9 +273,10 @@ impl<'a> Spawner<'a> {
     /// Build the image of `arch::USER_ARGUMENT_PROGRAM`, write it into a VMO
     /// through `vmo_write`, and give `side` a job and a port.
     fn new(side: &'a Side) -> Result<Spawner<'a>, &'static str> {
+        let job = Job::new_root().map_err(|_| "no memory for the starter's job")?;
         let root = side
             .process
-            .with_handles(|table| table.insert(Object::Job(Job::new_root()), Rights::JOB))
+            .with_handles(|table| table.insert(Object::Job(job), Rights::JOB))
             .map_err(|_| "no room for the starter's job")?;
         let class = if size_of::<usize>() == 8 {
             Class::Elf64
@@ -1751,7 +1752,7 @@ fn ended_by_the_kill(process: &Process, task: &Task) -> Result<(), &'static str>
 /// wait sees `PEER_CLOSED` and the program ends by itself.
 fn waiting_program() -> Result<(Arc<Process>, Arc<Endpoint>), &'static str> {
     let program = native_program(b'r')?;
-    let (near, far) = Endpoint::pair().ok_or("could not make a channel")?;
+    let (near, far) = Endpoint::pair().map_err(|_| "could not make a channel")?;
     let placed = program
         .with_handles(|table| table.insert(Object::Channel(near), Rights::CHANNEL))
         .map_err(|_| "no room for a bootstrap handle")?;
@@ -1766,9 +1767,10 @@ fn check_a_job_kill_takes_down_a_process_tree(counter: &mut Counter) -> Result<(
         return Ok(());
     }
     let side = Side::new()?;
+    let job = Job::new_root().map_err(|_| "no memory for a job")?;
     let root = side
         .process
-        .with_handles(|table| table.insert(Object::Job(Job::new_root()), Rights::JOB))
+        .with_handles(|table| table.insert(Object::Job(job), Rights::JOB))
         .map_err(|_| "no room for a job handle")?;
     let middle = side.handle(
         nr::JOB_CREATE,
@@ -2447,7 +2449,7 @@ fn check_two_programs_talk_over_a_channel(counter: &mut Counter) -> Result<(), &
     }
     let sender = native_program(b's')?;
     let receiver = native_program(b'r')?;
-    let (first, second) = Endpoint::pair().ok_or("could not make a channel")?;
+    let (first, second) = Endpoint::pair().map_err(|_| "could not make a channel")?;
     for (program, end) in [(&sender, first), (&receiver, second)] {
         let placed = program
             .with_handles(|table| table.insert(Object::Channel(end), Rights::CHANNEL))
@@ -2505,7 +2507,7 @@ const JOB_CHAIN: usize = 10_000;
 /// `job_create` and `handle_close` would, and dropped from the deepest end. A
 /// recursive drop reaches the guard page long before the end of the chain.
 fn check_a_long_chain_of_jobs_is_freed_without_recursion() -> Result<(), &'static str> {
-    let root = Job::new_root();
+    let root = Job::new_root().map_err(|_| "no memory for a job")?;
     let mut deepest = Arc::clone(&root);
     for _ in 0..JOB_CHAIN {
         deepest = deepest
@@ -2533,7 +2535,7 @@ fn job_member() -> Result<Arc<Process>, &'static str> {
 /// processes are never started, so a kill releases each at once, and every
 /// reference to them is still held when the job is read: reaped they are not.
 fn check_a_job_counts_its_members() -> Result<(), &'static str> {
-    let tree = Job::new_root();
+    let tree = Job::new_root().map_err(|_| "no memory for a job")?;
     let leaf = tree.new_child().map_err(|_| "a live job refused a child")?;
     let parent = job_member()?;
     if !Arc::ptr_eq(&parent.job(), job::root()) {
@@ -2550,7 +2552,9 @@ fn check_a_job_counts_its_members() -> Result<(), &'static str> {
 
     let space = crate::user::space::AddressSpace::new()
         .map_err(|_| "no address space for the job checks")?;
-    let child = linux::registry::register(Process::forked(&parent, space, false, false));
+    let child = linux::registry::register(
+        Process::forked(&parent, space, false, false).map_err(|_| "no memory for a fork")?,
+    );
     if !Arc::ptr_eq(&child.job(), &leaf) || leaf.live() != 2 {
         return Err("a fork's child is not in its parent's job");
     }
@@ -2579,12 +2583,12 @@ fn check_a_job_counts_its_members() -> Result<(), &'static str> {
 /// ends them and seals it and everything beneath it. A move a sealed job
 /// refuses leaves the process where it was.
 fn check_the_two_kills() -> Result<(), &'static str> {
-    let tree = Job::new_root();
+    let tree = Job::new_root().map_err(|_| "no memory for a job")?;
     let leaf = tree.new_child().map_err(|_| "a live job refused a child")?;
     let member = job_member()?;
     leaf.adopt(&member)
         .map_err(|_| "a live job refused a process")?;
-    if leaf.kill_members() != 1 || !member.is_terminated() {
+    if leaf.kill_members() != Ok(1) || !member.is_terminated() {
         return Err("killing a job's members did not end its member");
     }
     if leaf.is_populated() || leaf.is_killed() || leaf.is_dying() {
@@ -2594,7 +2598,7 @@ fn check_the_two_kills() -> Result<(), &'static str> {
     leaf.adopt(&next)
         .map_err(|_| "a job whose members were killed refused a new one")?;
 
-    if tree.kill(KILLED_STATUS) != 1 || !next.is_terminated() {
+    if tree.kill(KILLED_STATUS) != Ok(1) || !next.is_terminated() {
         return Err("a job kill did not end the member of a job beneath it");
     }
     let late = job_member()?;
@@ -2610,7 +2614,7 @@ fn check_the_two_kills() -> Result<(), &'static str> {
     }
 
     // A name is held once among a job's children.
-    let names = Job::new_root();
+    let names = Job::new_root().map_err(|_| "no memory for a job")?;
     let named = names
         .new_named_child("a.slice")
         .map_err(|_| "a live job refused a named child")?;

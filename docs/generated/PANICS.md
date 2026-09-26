@@ -24,6 +24,7 @@ Causes are listed most likely first.
 | [FX-0004](#fx-0004) | an address space was switched on a processor that cannot name itself |
 | [FX-0005](#fx-0005) | a private region's object was mapped by more than one address space |
 | [FX-0006](#fx-0006) | the load ring did not register what the item needs from it |
+| [FX-0007](#fx-0007) | memory ran out while the kernel was coming up |
 | [FX-0101](#fx-0101) | the loader's hand-off is not what the kernel needs |
 | [FX-0201](#fx-0201) | the frame allocator could not be built |
 | [FX-0202](#fx-0202) | the kernel address arena could not be created |
@@ -67,6 +68,7 @@ Causes are listed most likely first.
 | [FX-0884](#fx-0884) | signalfd failed its self-check |
 | [FX-0890](#fx-0890) | sysfs did not show the machine's devices as Linux shows them |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
+| [FX-0902](#fx-0902) | an allocation failure was not survived |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
 | [FX-1003](#fx-1003) | an IOMMU domain gave a device the wrong addresses |
@@ -222,6 +224,27 @@ mattered, so the kernel stops at the first line that can say so.
 
 See: kernel/src/main.rs register_load; kernel/src/hooks.rs; kernel/src/power.rs;
 kernel/src/init.rs; docs/certification/FINDINGS.md F-04 and F-08.
+
+<a id="fx-0007"></a>
+
+## FX-0007 — memory ran out while the kernel was coming up
+
+After the kernel has booted, an allocation that fails is reported to whoever
+asked -- a program gets `ENOMEM` or `NO_MEMORY`, and nothing stops
+(docs/certification/MEMORY-AND-TIMING.md section 1). While it is still coming up
+there is nobody to report to: the structure being built is one every later step
+depends on, such as the root job, a processor's run queue or the table of
+processors. Those allocations are fatal by design and marked `FATAL-ALLOC` where
+they are made, and `scripts/check-fallible-alloc.py` lists them. Reaching one
+means the machine does not have the memory to run the kernel at all.
+
+1. The machine has far less memory than the kernel needs, or firmware reported
+   almost none of it as usable.
+2. An earlier boot step leaked or reserved most of memory, so a later one found
+   none.
+
+See: docs/certification/MEMORY-AND-TIMING.md; scripts/check-fallible-alloc.py;
+kernel/src/fallible.rs.
 
 <a id="fx-0101"></a>
 
@@ -1429,6 +1452,29 @@ give userspace drivers a capability system that confines nothing.
 
 See: kernel/src/object/check.rs run; kernel/src/syscall/native.rs;
 kernel/src/object/channel.rs; docs/ROADMAP.md stage 9.
+
+<a id="fx-0902"></a>
+
+## FX-0902 — an allocation failure was not survived
+
+`object::alloc_check::run` makes allocations fail on purpose and requires the
+kernel to carry on (finding F-23). An `Arc` and a map insert must complete on
+the reserve their section filled when the heap refuses inside it, and must fail
+before they start when the reserve cannot be filled. Then one process drives
+rounds of native calls that allocate while every `n`th fallible allocation of
+its task fails: each call must succeed or answer `NO_MEMORY`, some must do each,
+no frame may leak, and a round with nothing failing must succeed whole. A kernel
+failing this has an allocation failure that corrupts state, leaks, or is
+reported as something it is not.
+
+1. A caller of `crate::fallible` turned an `AllocError` into a status other than
+   `NO_MEMORY`, or dropped it and carried on with state half changed.
+2. An error path freed nothing it had taken, so the frame window saw a leak.
+3. The reserve in `mm/reserve.rs` was not drawn on when the heap refused inside
+   a section, or a section went ahead with its reserve unfilled.
+
+See: kernel/src/object/alloc_check.rs; kernel/src/fallible.rs;
+kernel/src/mm/reserve.rs; docs/certification/MEMORY-AND-TIMING.md.
 
 <a id="fx-1001"></a>
 

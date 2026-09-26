@@ -317,6 +317,40 @@ fn preempt_count(cpu: usize) -> u32 {
         .map_or(0, |count| count.load(Ordering::Acquire))
 }
 
+/// The task each processor is running, by identifier, for a reader that must
+/// not take the run queue's lock: [`current_id`]. Zero before the processor
+/// runs one.
+static RUNNING: Once<Vec<AtomicU64>> = Once::new();
+
+/// Make the per-processor words [`NEXT_BALANCE`] and [`RUNNING`].
+fn per_cpu_words(online: usize) {
+    let _ = NEXT_BALANCE.call_once(|| (0..online).map(|_| AtomicU64::new(0)).collect());
+    let _ = RUNNING.call_once(|| (0..online).map(|_| AtomicU64::new(0)).collect());
+}
+
+/// Record that `cpu` now runs task `id`.
+fn note_running(cpu: usize, id: TaskId) {
+    if let Some(slot) = RUNNING.get().and_then(|running| running.get(cpu)) {
+        slot.store(id, Ordering::Release);
+    }
+}
+
+/// The identifier of the task running on this processor, read without a lock.
+///
+/// [`current`] takes the run queue's lock to clone the task, which a caller
+/// that may itself be running under that lock cannot do. The failure
+/// injection policy in `fallible.rs` is such a caller: it is asked from inside
+/// allocations, and the scheduler allocates. `None` before the scheduler runs.
+pub(crate) fn current_id() -> Option<TaskId> {
+    let saved = <arch::Irq as IrqControl>::disable();
+    let id = this_cpu()
+        .and_then(|cpu| RUNNING.get()?.get(cpu))
+        .map(|slot| slot.load(Ordering::Acquire))
+        .filter(|&id| id != 0);
+    <arch::Irq as IrqControl>::restore(saved);
+    id
+}
+
 /// The machine's one scheduling domain, until stage 14 makes more.
 static DOMAIN: Once<Domain> = Once::new();
 
@@ -518,7 +552,7 @@ pub(crate) fn init(topology: &'static Topology) -> Result<(), &'static str> {
             .map(|_| core::sync::atomic::AtomicPtr::new(core::ptr::null_mut()))
             .collect()
     });
-    let _ = NEXT_BALANCE.call_once(|| (0..online).map(|_| AtomicU64::new(0)).collect());
+    per_cpu_words(online);
 
     adopt_boot_task()?;
     joined(0);
@@ -600,6 +634,7 @@ fn adopt_boot_task() -> Result<(), &'static str> {
         // already on the processor.
         let _ = queue.fair.pick_next();
         queue.exec_start = crate::timer::now_nanos();
+        note_running(0, boot.id);
         queue.current = Some(boot);
     }
     <arch::Irq as IrqControl>::restore(saved);
@@ -641,6 +676,7 @@ pub(crate) fn enter_idle() -> ! {
         {
             let mut queue = lock.lock();
             queue.idle = Some(Arc::clone(&idle));
+            note_running(cpu, idle.id);
             queue.current = Some(idle);
             queue.exec_start = crate::timer::now_nanos();
         }
@@ -1620,6 +1656,7 @@ fn choose_next(
     }
     queue.previous = Some(Arc::clone(&previous));
     queue.current = Some(Arc::clone(&next));
+    note_running(cpu, next.id);
     queue.exec_start = now;
     queue.arm_timer(now);
     next.note_switch(cpu);

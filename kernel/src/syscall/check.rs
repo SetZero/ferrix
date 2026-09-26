@@ -378,7 +378,9 @@ fn check_orphans_are_reparented() -> Result<(), &'static str> {
     let make = || process::new_for_check().map_err(|_| NO_SPACE);
     let child_of = |parent: &Arc<Process>| -> Result<Arc<Process>, &'static str> {
         let space = AddressSpace::new().map_err(|_| NO_SPACE)?;
-        let child = registry::register(Process::forked(parent, space, false, false));
+        let child = registry::register(
+            Process::forked(parent, space, false, false).map_err(|_| "no memory for a fork")?,
+        );
         parent.adopt(Arc::clone(&child));
         Ok(child)
     };
@@ -402,7 +404,7 @@ fn check_orphans_are_reparented() -> Result<(), &'static str> {
     drop((parent, orphan));
 
     let space = AddressSpace::new().map_err(|_| NO_SPACE)?;
-    let init = registry::register(Process::new_init(space));
+    let init = registry::register(Process::new_init(space).map_err(|_| "no memory for init")?);
     if init.pid() != registry::INIT_PID {
         return Err("the orphan check's init was not given pid 1");
     }
@@ -5952,7 +5954,9 @@ fn check_untested_signal_paths() -> Result<(), &'static str> {
 fn child_of(parent: &Arc<Process>) -> Result<Arc<Process>, &'static str> {
     let space = crate::user::space::AddressSpace::new()
         .map_err(|_| "a check could not make an address space")?;
-    let child = crate::syscall::registry::register(Process::forked(parent, space, false, false));
+    let child = crate::syscall::registry::register(
+        Process::forked(parent, space, false, false).map_err(|_| "no memory for a fork")?,
+    );
     parent.adopt(Arc::clone(&child));
     Ok(child)
 }
@@ -6202,7 +6206,9 @@ fn check_a_signal_is_judged_against_its_takers_mask() -> Result<(), &'static str
 
     let space = crate::user::space::AddressSpace::new()
         .map_err(|_| "a check could not make an address space")?;
-    let child = Arc::new(Process::forked(&parent, space, false, false));
+    let child = Arc::new(
+        Process::forked(&parent, space, false, false).map_err(|_| "no memory for a fork")?,
+    );
     let child_thread = Arc::new(Thread::forked(&child, &parent_thread));
     child.add_thread(&child_thread);
     if child.post_signal(SIGTERM, Origin::Kernel) != Posted::Pending {
@@ -7830,7 +7836,7 @@ fn check_what_uid_1000_is_told(user: &Arc<Process>, page: u64) -> Result<(), &'s
 
     let space = crate::user::space::AddressSpace::new()
         .map_err(|_| "no address space for the credential check's child")?;
-    let child = Process::forked(user, space, false, false);
+    let child = Process::forked(user, space, false, false).map_err(|_| "no memory for a fork")?;
     if child.with_credentials(|credentials| credentials.clone())
         != user.with_credentials(|credentials| credentials.clone())
     {

@@ -170,7 +170,7 @@ static NEXT_RING: AtomicUsize = AtomicUsize::new(1);
 /// [`CreateError`].
 pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<Arc<Endpoint>, CreateError> {
     let location = location_of(node).ok_or(CreateError::NotPci)?;
-    let (kernel_end, driver_end) = Endpoint::pair().ok_or(CreateError::NoMemory)?;
+    let (kernel_end, driver_end) = Endpoint::pair().map_err(|_| CreateError::NoMemory)?;
     let id = NEXT_RING.fetch_add(1, Ordering::Relaxed);
     {
         let mut claims = CLAIMS.lock();
@@ -569,7 +569,8 @@ fn take_up<'s>(
         depth,
     )
     .map_err(|_| Refusal::Device)?;
-    let kernel_port = Port::new();
+    // The wire protocol has no refusal for memory; the device's is nearest.
+    let kernel_port = Port::new().map_err(|_| Refusal::Device)?;
     let disk = Arc::new(RingDisk::new(device, limits, Arc::clone(&kernel_port)));
     // The device node the ring was made for, which sysfs shows the disk in.
     let node = CLAIMS
@@ -1166,7 +1167,7 @@ impl Serving<'_> {
                 CONTROL_KEY,
                 Signals::READABLE | Signals::PEER_CLOSED,
             );
-            self.watching = self.control.observe(observer).is_ok();
+            self.watching = observer.is_ok_and(|observer| self.control.observe(observer).is_ok());
         }
         let deadline = timer::now_nanos().saturating_add(RECHECK_NANOS);
         let port = &self.kernel_port;
