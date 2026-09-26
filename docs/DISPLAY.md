@@ -896,7 +896,15 @@ says is refused, a base block with a bad checksum, fewer than six header
 bytes right or a version other than 1 is refused, two wrong header bytes
 are put right, and an extension block that is not valid is dropped and the
 base block's count and checksum made to agree -- all as `edid_load` and
-`drm_edid_block_valid` do. `kernel/src/display/edid.rs` reads the option
+`drm_edid_block_valid` do. The name must stay beneath `/lib/firmware`:
+one that is empty, absolute, holds a NUL or has a `..` component
+(`../etc/shadow`, `/etc/shadow`) is refused before anything is read, and
+the read walks from `/lib/firmware` one component at a time following no
+symbolic link (`fs::read_file_beneath`, `openat2`'s `RESOLVE_NO_SYMLINKS`),
+so a link planted there is `ELOOP`. Linux's loader is laxer on both; the
+certification consultant asked for it (2026-09-26), since the bytes are
+handed to every program that opens the card. Stage 8's boot check holds
+the kernel half. `kernel/src/display/edid.rs` reads the option
 from the loader's command line when a driver's HELLO is accepted, before
 READY, once per card: that is Linux's connector probe. The connector is
 named as Linux names one, `Virtual-1` or `HDMI-A-1`, numbered per card
@@ -986,7 +994,7 @@ R27qe, alone at `2560x0`, at the window's size. What that did, looked for:
   ` (Virtual-1)` cut off, which is now the monitor's description, so the
   bar goes on this screen.
 
-**Tests.** `libs/proto/displayctl` (12: the grammar, the checks, the identity,
+**Tests.** `libs/proto/displayctl` (13: the grammar, the name rule, the checks, the identity,
 the property and blob answers); `xtask` (3: finding a monitor among
 connector directories, describing one, what an image carries);
 `userland/compositor/config` (rule precedence) and `hyprix` (the pointer over a
