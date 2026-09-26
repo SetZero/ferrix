@@ -882,12 +882,12 @@ the question, and the core reads the file itself:
   ring-3 drivers are native programs with handles and no filesystem: the
   driver-side design would have been a new displayctl message (protocol
   version 7), a way for a native driver to be handed `/proc/cmdline` and a
-  firmware file, and the same parse in `user/gpu` and `user/ltdc` both.
+  firmware file, and the same parse in `native/drivers/gpu` and `native/drivers/ltdc` both.
 * One place means every client sees the same bytes: hyprix through the
   property, anything else through the same ioctls, and
   `/sys/class/drm/card0-Virtual-1/edid`, which the core now has too.
 
-The grammar and the checks are `libs/displayctl/src/edid.rs`'s, host-tested
+The grammar and the checks are `libs/proto/displayctl/src/edid.rs`'s, host-tested
 (`edid_tests.rs`): the comma-separated entries, the first `<connector>:`
 entry whose connector the name *starts with* (Linux's `strncmp` over the
 entry's length, so `DP-1:` is `DP-10`'s too), else the last entry with no
@@ -946,7 +946,7 @@ bar. Never by connector: `card2-DP-1` today is another connector after the
 host's next boot. The EDID goes to `/lib/firmware/edid/LEN-R27qe-Gen2.bin`
 in the initramfs, `drm.edid_firmware=edid/LEN-R27qe-Gen2.bin` into the
 image's `DEFAULTS.TXT`, and the host's `/usr/share/hwdata/pnp.ids` to the
-same path in the guest, where `compositor/drm`'s `registered` turns `LEN`
+same path in the guest, where `userland/compositor/drm`'s `registered` turns `LEN`
 into `Lenovo Group Limited`. Neither file is ever committed: both are read
 from the machine the image is built on. On a host without `pnp.ids` the
 make is the code and the description `LEN R27qe Gen2 UTP03KBB`, which the
@@ -986,10 +986,10 @@ R27qe, alone at `2560x0`, at the window's size. What that did, looked for:
   ` (Virtual-1)` cut off, which is now the monitor's description, so the
   bar goes on this screen.
 
-**Tests.** `libs/displayctl` (12: the grammar, the checks, the identity,
+**Tests.** `libs/proto/displayctl` (12: the grammar, the checks, the identity,
 the property and blob answers); `xtask` (3: finding a monitor among
 connector directories, describing one, what an image carries);
-`compositor/config` (rule precedence) and `hyprix` (the pointer over a
+`userland/compositor/config` (rule precedence) and `hyprix` (the pointer over a
 screen at `2560x0`). `test-compositor --boot edid` boots with the host's
 monitor, or on a host without it a stand-in EDID xtask makes (`FRX Ferrix
 Test EDID0001`), and requires the kernel's line, `hyprctl monitors` saying
