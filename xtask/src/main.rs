@@ -65,6 +65,7 @@ mod chrome;
 mod compositor;
 mod console;
 mod display;
+mod dma_faults;
 mod everything;
 mod fat;
 mod ferrousli;

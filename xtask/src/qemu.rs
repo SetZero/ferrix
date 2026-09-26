@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use crate::args::Args;
 use crate::btrfs_disk;
 use crate::console::{self, Console};
+use crate::dma_faults;
 use crate::paths::{self, Arch, Firmware};
 use crate::symbolize::Symbolizer;
 use crate::test_disk;
@@ -814,6 +815,9 @@ fn watch_hooked(
 ) -> Result<Watched> {
     let symbols = Symbolizer::open(kernel);
     let (mut command, network) = qemu_command(arch, image, args, &Console::Owned)?;
+    // Every DMA fault the machine's IOMMU records, which the run is judged by
+    // below; `crate::dma_faults` says why QEMU's own remarks are not enough.
+    let _ = command.args(dma_faults::trace_args(arch));
     // Stderr is piped rather than inherited so that one message can be taken
     // out of it; everything else QEMU says there still reaches the terminal,
     // which the error below about a boot that never started depends on.
@@ -831,7 +835,7 @@ fn watch_hooked(
         .stdout
         .take()
         .ok_or_else(|| Error::new("QEMU produced no stdout to read"))?;
-    let noise = child.stderr.take().map(crate::noise::Filter::start);
+    let noise = child.stderr.take().map(crate::noise::Filter::start_judged);
     // The guest's keyboard. Held for the whole boot rather than dropped,
     // because `-serial stdio` gives it to the guest's console: closing it
     // would be a person walking away from the terminal, and a shell reading
@@ -923,7 +927,8 @@ fn watch_hooked(
     let _ = reader.join();
     // Before the error below says QEMU's own is "above": joining the sieve's
     // thread is what makes that true, since it ends when stderr does.
-    crate::noise::report(noise.map_or(0, crate::noise::Filter::finish));
+    let sieved = noise.map(crate::noise::Filter::finish).unwrap_or_default();
+    crate::noise::report(sieved.hidden);
     log.flush()?;
     // After QEMU has gone, so that the numbers are final and the gateway's
     // thread is not still being fed while they are read.
@@ -941,6 +946,9 @@ fn watch_hooked(
     }
 
     hooked?;
+    sieved
+        .dma
+        .judge(arch, verdict == Verdict::Reached, &lines, &log_path)?;
     Ok(Watched {
         lines,
         verdict,
