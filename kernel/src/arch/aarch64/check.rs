@@ -287,8 +287,8 @@ fn check_refusals() -> Result<usize, &'static str> {
     // A `GICv2m` frame at address zero, or one whose range firmware states
     // past the shared peripheral interrupts, is refused before anything is
     // recorded, so the frame the machine has is untouched.
-    if crate::arch::gicv2::init_msi_frame(0, None).is_ok()
-        || crate::arch::gicv2::init_msi_frame(0x0802_0000, Some((1024, 64))).is_ok()
+    if crate::arch::arm_common::gicv2::init_msi_frame(0, None).is_ok()
+        || crate::arch::arm_common::gicv2::init_msi_frame(0x0802_0000, Some((1024, 64))).is_ok()
     {
         return Err("a GICv2m frame at address zero or past the SPIs was taken");
     }

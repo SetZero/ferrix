@@ -146,7 +146,7 @@ forbid ferrix-blkserve "block driver serve loop" "ferrix-kernel|ferrix-boot"
 # pair share; everything else under kernel/src must go through it.
 # ---------------------------------------------------------------------------
 if [[ -d kernel/src ]]; then
-    offenders=$(grep -rnE '(crate::)?arch::(x86_64|aarch64|armv7a|gicv2|pl011)::' kernel/src \
+    offenders=$(grep -rnE '(crate::)?arch::(x86_64|aarch64|armv7a|arm_common)::' kernel/src \
         --include='*.rs' \
         | grep -v '^kernel/src/arch/' || true)
     if [[ -n "$offenders" ]]; then

@@ -154,7 +154,7 @@
       "total": 109,
       "hit": 87
     },
-    "stm32mp1.rs": {
+    "platform/st/stm32mp1.rs": {
       "ring": "load",
       "total": 161,
       "hit": 0
@@ -609,12 +609,12 @@
       "total": 11,
       "hit": 7
     },
-    "stm32mp1_gpu.rs": {
+    "platform/st/stm32mp1/gpu.rs": {
       "ring": "load",
       "total": 41,
       "hit": 0
     },
-    "stm32mp1_usb.rs": {
+    "platform/st/stm32mp1/usb.rs": {
       "ring": "load",
       "total": 53,
       "hit": 0

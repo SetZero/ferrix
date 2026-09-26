@@ -314,7 +314,7 @@ F-04 and F-08 say what moved and what the gate still cannot see.
 
 **Closes:** F-04 (6), F-05 (1), and F-08 (6). **Size:** small.
 
-`device.rs` names `stm32mp1`, `stm32mp1_gpu`, `stm32mp1_usb`; `claim.rs` names
+`device.rs` names `stm32mp1`, `platform::st::stm32mp1::gpu`, `platform::st::stm32mp1::usb`; `claim.rs` names
 `block_ring`. Both want the dependency the other way: board support registers
 itself with the core registry at init instead of the registry naming each
 board.

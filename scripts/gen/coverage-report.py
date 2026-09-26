@@ -93,7 +93,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 # again. Run wide (`-w`), it names that file once per unit, as `CU: path:`,
 # and a sequence end returns to it. Before 2026-09-26 the rows after one were
 # filed under whichever header came last -- `core`'s `map.rs` counted as
-# lines of `arch/gicv2.rs`, `check.rs` and `drm.rs` as `syscall/uaccess.rs`
+# lines of `arch/arm_common/gicv2.rs`, `check.rs` and `drm.rs` as `syscall/uaccess.rs`
 # -- about 700 statement rows on AArch64.
 FILE_HEADER = re.compile(r"^(CU: )?(\S+\.rs):$")
 # `image.rs   86   0xffffffff80000110   x` -- name, line (`-` ends a

@@ -247,7 +247,7 @@ is how the kernel learns whether `SYSTEM_OFF` is an `smc` or an `hvc`.
 Two drivers are byte-for-byte the same hardware on both ARM machines and are
 currently written under `aarch64/`: the GICv2 register driver (`gic.rs`, minus
 its MADT lookup) and the PL011 (`console.rs`, minus its hard-coded address).
-They move to `kernel/src/arch/gicv2.rs` and `kernel/src/arch/pl011.rs`, gated
+They move to `kernel/src/arch/arm_common/gicv2.rs` and `kernel/src/arch/arm_common/pl011.rs`, gated
 by `#[cfg(any(target_arch = "aarch64", target_arch = "arm"))]` in
 `arch/mod.rs` — a conditional inside the arch directory, which is where the
 layering script permits them. `aarch64/gic.rs` keeps the MADT walk and calls

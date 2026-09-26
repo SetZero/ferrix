@@ -83,13 +83,13 @@
       "reason": "The 16550's data and status ports. The kernel's own console: a panic that cannot print is a panic nobody can read, so this cannot wait for a ring-3 driver."
     },
     {
-      "file": "kernel/src/arch/pl011.rs",
+      "file": "kernel/src/arch/arm_common/pl011.rs",
       "kind": "register",
       "max_sites": 3,
       "reason": "The PL011's data and flag registers, the AArch64 and ARMv7-A console. As the 16550 above."
     },
     {
-      "file": "kernel/src/arch/stm32_usart.rs",
+      "file": "kernel/src/arch/arm_common/stm32_usart.rs",
       "kind": "register",
       "max_sites": 3,
       "reason": "The STM32MP157's USART, the DK1's console. As the 16550 above."
@@ -125,7 +125,7 @@
       "reason": "Stream table entries in RAM the SMMUv3 walks itself. As vtd.rs."
     },
     {
-      "file": "kernel/src/arch/aarch64/gicv3_its.rs",
+      "file": "kernel/src/arch/aarch64/gic/gicv3_its.rs",
       "kind": "shared",
       "max_sites": 3,
       "reason": "The GICv3 ITS's command queue and the LPI property table, in RAM the ITS and the redistributor read themselves. As smmuv3.rs: volatile because the interrupt controller observes the write, not because the address is a register."

@@ -4,9 +4,6 @@ mod check;
 pub(crate) mod console;
 mod cpu;
 mod gic;
-mod gicv3;
-mod gicv3_its;
-mod gs201;
 mod signal;
 mod smp;
 pub(super) mod speculation;
@@ -33,6 +30,7 @@ use ferrix_linux_abi::types::{self, OpenFlagBits};
 
 use crate::early::{EarlyError, EarlyMemory};
 use crate::irq::Report;
+use crate::platform::google::gs201::watchdog;
 
 /// Name for log lines.
 pub(crate) const NAME: &str = "aarch64";
@@ -1208,7 +1206,7 @@ pub(crate) fn shutdown() -> ! {
     // On the Pixel 7, a watchdog reset instead: powered off, the phone would
     // lose the `ramoops` record that is its whole console. Returns anywhere
     // else.
-    gs201::reset_now();
+    watchdog::reset_now();
     cpu::psci_system_off();
     halt()
 }
@@ -1216,12 +1214,12 @@ pub(crate) fn shutdown() -> ! {
 /// Find the watchdogs the device tree lists that firmware left running --
 /// the Pixel 7's two -- and feed them once. Nothing elsewhere.
 pub(crate) fn init_watchdogs(tree: &ferrix_fdt::Fdt<'_>) {
-    gs201::init(tree);
+    watchdog::init(tree);
 }
 
 /// Start the task that keeps feeding them, once the scheduler can run one.
 pub(crate) fn start_watchdogs() {
-    gs201::start();
+    watchdog::start();
 }
 
 /// Reset the machine, once the console has sent its last line.
@@ -1231,7 +1229,7 @@ pub(crate) fn start_watchdogs() {
 /// carries on as though it had reset is not.
 pub(crate) fn reset() -> ! {
     crate::console::drain();
-    gs201::reset_now();
+    watchdog::reset_now();
     cpu::psci_system_reset();
     crate::console::println!("  power    firmware did not reset the machine; powering off");
     shutdown()

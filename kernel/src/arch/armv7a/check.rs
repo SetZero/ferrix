@@ -33,7 +33,7 @@ use ferrix_fdt::{FDT_BEGIN_NODE, FDT_END, FDT_END_NODE, FDT_MAGIC, FDT_PROP, Fdt
 use ferrix_linux_abi::types::{SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
 
 use super::trap::{TrapFrame, UserRegs, classify, fault_signal};
-use crate::arch::gicv2;
+use crate::arch::arm_common::gicv2;
 use crate::console::println;
 use crate::trap::{PageFault, Trap};
 

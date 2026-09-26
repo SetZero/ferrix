@@ -768,7 +768,7 @@ package FerrixStructure {
              * architectures, gated by cfg(any(aarch64, arm)) inside the arch
              * directory where the layering check permits it. */
         part gicv2 : Gicv2 {
-            doc /* kernel/src/arch/gicv2.rs: distributor (machine-wide) and CPU
+            doc /* kernel/src/arch/arm_common/gicv2.rs: distributor (machine-wide) and CPU
                  * interface (per core). 0..16 software-generated, 16..32
                  * private peripheral, 32.. shared. IPIs through GICD_SGIR.
                  * Private interrupts' enable bits are banked per core, so the
@@ -777,10 +777,10 @@ package FerrixStructure {
                  * included, which is what stage 5 found missing. */
         }
         part pl011 : Pl011 {
-            doc /* kernel/src/arch/pl011.rs. Used by ARMv7-A today. */
+            doc /* kernel/src/arch/arm_common/pl011.rs. Used by ARMv7-A today. */
         }
         part stm32Usart : Stm32Usart {
-            doc /* kernel/src/arch/stm32_usart.rs: the board's own UART. */
+            doc /* kernel/src/arch/arm_common/stm32_usart.rs: the board's own UART. */
         }
     }
     part def Gicv2; part def Pl011; part def Stm32Usart;

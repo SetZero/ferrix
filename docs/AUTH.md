@@ -435,7 +435,7 @@ and the service policy says which are needed.
 | `password` | Argon2id PHC string | 1 | nothing |
 | `password` legacy import | `$6$` / `$5$` string | 1 | the SHA-2 crypt code hyprlock already tested against Drepper's vectors (branch `hyprlock`, `userland/compositor/hyprlock/src/crypt.rs`), moved into `authd`. It verifies an imported hash, then rewrites it as Argon2id on the first success. |
 | `totp` | RFC 6238 seed, digits, period | 3 | HMAC-SHA-1 and a clock that is right, which on a board without a battery means NTP first (`ntpd` is in busybox) |
-| `fido2` | credential id and COSE public key, per key | 3 | CTAP2 over USB HID. `native/drivers/usbhid` exists, and the DK1 has USB host (`kernel/src/stm32mp1_usb.rs`). A hidraw-style path from that driver to `authd` is the unsized part. |
+| `fido2` | credential id and COSE public key, per key | 3 | CTAP2 over USB HID. `native/drivers/usbhid` exists, and the DK1 has USB host (`kernel/src/platform/st/stm32mp1/usb.rs`). A hidraw-style path from that driver to `authd` is the unsized part. |
 | `fingerprint` | a reader's template handle | later | a reader driver. There is none. |
 | `sshkey` | nothing: ssh keys stay in `~/.ssh/authorized_keys` | 3 | `authd` only records and throttles an ssh login's verdict, which `sshdt` makes itself. |
 

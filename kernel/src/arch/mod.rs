@@ -54,19 +54,10 @@ pub(crate) enum StatLayout {
     Stat64,
 }
 
-// Register-level drivers for hardware the architecture that uses them has
-// already found in the machine's description — the MADT on AArch64, the device
-// tree on ARMv7-A. The GICv2 is shared by both Arm architectures. The two
-// serial ports are ARMv7-A's, which has to pick between them because the
-// machines it targets do not agree on one: `armv7a::console` is where the
-// device tree decides, and the layering check keeps generic code from naming
-// any of the three.
+// Drivers for the Arm peripherals both Arm architectures can have: the GICv2
+// and ARMv7-A's two serial ports.
 #[cfg(any(target_arch = "aarch64", target_arch = "arm"))]
-mod gicv2;
-#[cfg(target_arch = "arm")]
-mod pl011;
-#[cfg(target_arch = "arm")]
-mod stm32_usart;
+mod arm_common;
 
 #[cfg(target_arch = "aarch64")]
 pub(crate) use aarch64::{

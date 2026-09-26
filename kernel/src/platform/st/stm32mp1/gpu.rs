@@ -42,7 +42,7 @@ use crate::mmio::Mmio;
 use crate::{timer, vmap};
 
 /// The GPU, as the device registry is told about it
-/// (`crate::stm32mp1::install`).
+/// (`crate::platform::st::stm32mp1::install`).
 pub(crate) static BINDING: BoardBinding = BoardBinding {
     binding: TREE_STM32_GPU,
     label: "gpu",

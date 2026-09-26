@@ -1,9 +1,9 @@
 //! Finding the Generic Interrupt Controller on `AArch64`, and which of two
 //! drivers runs it.
 //!
-//! A GICv2 is `crate::arch::gicv2`, shared with ARMv7-A; a GICv3 is
-//! [`super::gicv3`], which is this architecture's alone because its CPU
-//! interface is system registers, with [`super::gicv3_its`] for its
+//! A GICv2 is `crate::arch::arm_common::gicv2`, shared with ARMv7-A; a GICv3 is
+//! [`gicv3`], which is this architecture's alone because its CPU
+//! interface is system registers, with [`gicv3_its`] for its
 //! message-signalled interrupts. Where the registers are comes from the MADT
 //! on a machine with ACPI and from the device tree on one without -- the
 //! Pixel 7's loader hands over a tree and no RSDP. Every other caller goes
@@ -14,14 +14,16 @@
 //! version's layouts into the other's registers and producing a machine that
 //! takes no interrupts for reasons nothing explains.
 
+mod gicv3;
+mod gicv3_its;
+
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use ferrix_acpi::{Acpi, Madt, MadtEntry};
 use ferrix_fdt::{Fdt, GicVersion};
 
-use super::{gicv3, gicv3_its};
 use crate::acpi::DirectMap;
-use crate::arch::gicv2;
+use crate::arch::arm_common::gicv2;
 
 /// Which driver [`init`] brought up: 2 or 3, and 0 before it has.
 static VERSION: AtomicU8 = AtomicU8::new(0);

@@ -9,7 +9,7 @@
 //!
 //! What the chip shares with it -- the HSI0 power domain the controller, its
 //! PHY and HSI0's clock unit sit in, and the PMU's PHY isolation control --
-//! the kernel would have to turn on, as `stm32mp1_usb` turns on the DK
+//! the kernel would have to turn on, as `platform::st::stm32mp1::usb` turns on the DK
 //! board's clocks and regulators. It does not: those are power domains, and
 //! writing one needs the owner's word first. ABL runs fastboot over this
 //! controller until it hands over, and this module relies on it leaving them

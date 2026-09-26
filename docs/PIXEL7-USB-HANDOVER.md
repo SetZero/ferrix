@@ -55,7 +55,7 @@ survives a reset", is the full text.
 * Architecture: the kernel enumerates devices and drives none of them
   (`docs/ARCHITECTURE.md` §1 and §7; `scripts/data/device-access-allowlist.json` is
   the gate). The controller is driven by a ring-3 driver. The kernel does only
-  what the chip shares, as `kernel/src/stm32mp1_usb.rs` does for the DK1.
+  what the chip shares, as `kernel/src/platform/st/stm32mp1/usb.rs` does for the DK1.
 
 The phone is shared with other sessions (`phone-link-9f`'s PhoneLink app,
 `dev.phonelink`, stays installed, with its data). `adb devices` listing it
@@ -110,7 +110,7 @@ What the tree cannot tell, and phase 1 has to find:
   `libs/proto/native-abi/src/types.rs`: `TREE_STM32_HDMI = 1`, `_USBH = 2`,
   `_GPU = 3`. A new one takes 4.
 * **The precedent to copy.** The DK1's USB host:
-  * `kernel/src/stm32mp1_usb.rs` turns on clocks, resets, regulators and the
+  * `kernel/src/platform/st/stm32mp1/usb.rs` turns on clocks, resets, regulators and the
     PHY's PLL, with values read back from U-Boot, and publishes the node.
   * `native/drivers/usbhid` drives the EHCI controller.
   * `libs/drivers/usb-host` is the host-testable logic, with a register model under
@@ -122,7 +122,7 @@ What the tree cannot tell, and phase 1 has to find:
 * **DMA.** `DmaShape`'s coherence flag (the DWC3 has no `dma-coherent`). The
   pinned VMOs `vmo_pin`, with `PIN_COHERENT` for uncached memory.
   `arch::clean_for_device` and `arch::flush_for_device`.
-* **The phone's board support.** `kernel/src/arch/aarch64/gs201.rs` covers the
+* **The phone's board support.** `kernel/src/platform/google/gs201/watchdog.rs` covers the
   two watchdogs only. The kernel feeds them while it runs, and ends a run by
   letting one fire (`reset_now`), which keeps the `ramoops` record.
 * **The console.** `kernel/src/arch/aarch64/console.rs` has three backends:
@@ -285,7 +285,7 @@ other users asked first; any other offset or block needs a new OK.
 What each part is, now on `main`:
 
 * `boot/pixel7/src/usb.rs`: the read-only survey, in every record.
-* `kernel/src/gs201_usb.rs`: `TREE_GS201_DWC3 = 4`, published only when
+* `kernel/src/platform/google/gs201/usb.rs`: `TREE_GS201_DWC3 = 4`, published only when
   `pd-hsi0` reads on and `GSNPSID` names a DWC3; nothing written.
 * `libs/drivers/usb-device`: chapter 9 and the CDC-ACM function.
 * `libs/drivers/dwc3`: the controller, tested against a register model
@@ -368,7 +368,7 @@ and every worktree, branch and target directory of its own removed.
   installs the udev rule above, ModemManager takes the log's first
   seconds.
 * **Where the parts are:** `boot/pixel7/src/usb.rs` (survey),
-  `kernel/src/gs201_usb.rs` (binding), `libs/drivers/dwc3` and
+  `kernel/src/platform/google/gs201/usb.rs` (binding), `libs/drivers/dwc3` and
   `libs/drivers/usb-device` (host-tested, `cargo test -p ferrix-dwc3
   -p ferrix-usb-device`), `native/drivers/usbdev` (driver),
   `kernel/src/console/log.rs` and `kernel/src/logctl` (the log and its

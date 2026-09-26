@@ -14,7 +14,7 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use ferrix_bootinfo::option_in;
 use ferrix_fdt::{Fdt, Node};
 
-use crate::arch::{pl011, stm32_usart};
+use crate::arch::arm_common::{pl011, stm32_usart};
 use crate::early::{EarlyError, EarlyMemory};
 
 /// The `compatible` string of the Arm primecell UART.

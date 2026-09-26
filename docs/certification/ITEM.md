@@ -146,7 +146,7 @@ debt register: ratcheted the same way, filed against no finding. Of the 38,
 `syscall::check` and eighteen more verification files, `fs::kmem_check`
 since F-37), and 17 are product
 modules: registration (`syscall::launch`, `syscall::linux`,
-`syscall::deliver`, `stm32mp1`, `fs`, and since W-5 `block_ring`,
+`syscall::deliver`, `platform::st::stm32mp1`, `fs`, and since W-5 `block_ring`,
 `net_ring`, `render` and `input`), the load's subsystems brought up in order
 (`fs::root_disk`, `fs::data_disk`, `net`, `syscall::time`, `display`), and
 the pieces `main.rs`'s own boot checks drive a program through

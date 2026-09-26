@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "e73dbc3a3f10b48c5d30e566df3e1fce4ecd5be9e4b3234060ac325680fa03cd",
+  "digest": "db24f7c73d7f8d4c5a74938e8ff192bdd0a10fd71b23387bbd619201aa0a0a94",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -3442,7 +3442,7 @@
               "qualifiedName": "FerrixStructure::SharedArmDrivers::gicv2",
               "kind": "part",
               "type": "Gicv2",
-              "doc": "kernel/src/arch/gicv2.rs: distributor (machine-wide) and CPU interface (per core). 0..16 software-generated, 16..32 private peripheral, 32.. shared. IPIs through GICD_SGIR. Private interrupts' enable bits are banked per core, so the driver records what the boot core enabled and init_this_cpu replays the whole set on every other core — the timer included, which is what stage 5 found missing.",
+              "doc": "kernel/src/arch/arm_common/gicv2.rs: distributor (machine-wide) and CPU interface (per core). 0..16 software-generated, 16..32 private peripheral, 32.. shared. IPIs through GICD_SGIR. Private interrupts' enable bits are banked per core, so the driver records what the boot core enabled and init_this_cpu replays the whole set on every other core — the timer included, which is what stage 5 found missing.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 770
@@ -3453,7 +3453,7 @@
               "qualifiedName": "FerrixStructure::SharedArmDrivers::pl011",
               "kind": "part",
               "type": "Pl011",
-              "doc": "kernel/src/arch/pl011.rs. Used by ARMv7-A today.",
+              "doc": "kernel/src/arch/arm_common/pl011.rs. Used by ARMv7-A today.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 779
@@ -3464,7 +3464,7 @@
               "qualifiedName": "FerrixStructure::SharedArmDrivers::stm32Usart",
               "kind": "part",
               "type": "Stm32Usart",
-              "doc": "kernel/src/arch/stm32_usart.rs: the board's own UART.",
+              "doc": "kernel/src/arch/arm_common/stm32_usart.rs: the board's own UART.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 782

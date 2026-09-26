@@ -33,7 +33,6 @@ mod early;
 mod fallible;
 mod fdt;
 mod fs;
-mod gs201_usb;
 mod hooks;
 mod init;
 mod input;
@@ -47,6 +46,23 @@ mod net_ring;
 mod object;
 mod panic;
 mod pci;
+// What belongs to one system on chip rather than to an architecture: the
+// kernel's part in a board's devices, each found in the device tree at boot
+// and a no-op on a machine without one, grouped by the vendor prefix of the
+// chip's `compatible`. The gs201 is the Pixel 7's Tensor G2; its watchdogs
+// are serviced from `arch::aarch64` alone.
+mod platform {
+    pub(crate) mod google {
+        pub(crate) mod gs201 {
+            pub(crate) mod usb;
+            #[allow(dead_code, reason = "only AArch64 has a gs201, the Pixel 7's")]
+            pub(crate) mod watchdog;
+        }
+    }
+    pub(crate) mod st {
+        pub(crate) mod stm32mp1;
+    }
+}
 mod power;
 mod random;
 mod render;
@@ -54,9 +70,6 @@ mod sched;
 mod service_check;
 mod signal_frame;
 mod smp;
-mod stm32mp1;
-mod stm32mp1_gpu;
-mod stm32mp1_usb;
 mod sync;
 mod syscall;
 mod timer;
@@ -2338,8 +2351,8 @@ fn report_clock_and_random(view: &BootView<'_>) {
 fn register_load(view: &BootView<'_>) {
     let registered = syscall::launch::install()
         .and_then(|()| fs::install())
-        .and_then(|()| stm32mp1::install(view))
-        .and_then(|()| gs201_usb::install())
+        .and_then(|()| platform::st::stm32mp1::install(view))
+        .and_then(|()| platform::google::gs201::usb::install())
         .and_then(|()| block_ring::install())
         .and_then(|()| net_ring::install())
         .and_then(|()| display::install())

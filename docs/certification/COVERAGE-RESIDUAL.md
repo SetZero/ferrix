@@ -187,7 +187,7 @@ Justified. These statements belong to another architecture or another board, and
 | Statements | Ring | File |
 |---:|---|---|
 | 108 | `core` | `iommu/vtd.rs` |
-| 16 | `core` | `arch/aarch64/gs201.rs` |
+| 16 | `core` | `platform/google/gs201/watchdog.rs` |
 
 ### aarch64: Reached only when the kernel is stopping — 8 statements
 
@@ -251,7 +251,7 @@ None.
 | 33 | `core` | `iommu/smmuv3.rs` |
 | 30 | `core` | `arch/aarch64/gic.rs` |
 | 29 | `core` | `arch/aarch64/console.rs` |
-| 22 | `core` | `arch/gicv2.rs` |
+| 22 | `core` | `arch/arm_common/gicv2.rs` |
 | 22 | `core` | `object/channel.rs` |
 | 21 | `core` | `sched/queue.rs` |
 | 304 | | *and 31 more files* |
@@ -278,7 +278,7 @@ Justified. These statements belong to another architecture or another board, and
 | Statements | Ring | File |
 |---:|---|---|
 | 111 | `core` | `iommu/vtd.rs` |
-| 33 | `core` | `arch/stm32_usart.rs` |
+| 33 | `core` | `arch/arm_common/stm32_usart.rs` |
 
 ### armv7a: Reached only when the kernel is stopping — 61 statements
 

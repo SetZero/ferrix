@@ -60,7 +60,7 @@
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_sync::IrqSpinLock;
 
-use super::{cpu, gicv3};
+use super::{super::cpu, gicv3};
 use crate::irq::Msi;
 use crate::mm;
 use crate::mmio::Mmio;

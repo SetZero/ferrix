@@ -1073,7 +1073,7 @@ compiles its GLSL with Mesa's virgl driver (§3.8).
 
 | # | what | points |
 |---|---|---|
-| G1 | **The kernel's part**: the GPU's clocks and reset in `kernel/src/stm32mp1.rs`, and a device node with its registers and interrupt, as the LTDC has | 3 |
+| G1 | **The kernel's part**: the GPU's clocks and reset in `kernel/src/platform/st/stm32mp1.rs`, and a device node with its registers and interrupt, as the LTDC has | 3 |
 | G2 | **`native/drivers/gc400`, a ring-3 driver**: identify the core (model, revision, features), power it, run a command buffer through the front end, take its completion by interrupt. Proved on the board by a `WAIT`/`LINK` loop and an event | 8 |
 | G3 | **Pixels**: a render target cleared and resolved by the GPU into a buffer the LTDC shows | 8 |
 | G4 | **Drawing**: vertex streams, a depth buffer, the host-compiled shaders, and draws | 8 |
@@ -1094,8 +1094,8 @@ devmgr now counts 8 drivers.
 
 **What was built.**
 
-* `kernel/src/stm32mp1_gpu.rs` (G1), a sibling of `stm32mp1_usb.rs` rather
-  than a part of `stm32mp1.rs`, which the display's session is changing. It
+* `kernel/src/platform/st/stm32mp1/gpu.rs` (G1), a sibling of `platform/st/stm32mp1/usb.rs` rather
+  than a part of `platform/st/stm32mp1.rs`, which the display's session is changing. It
   finds the enabled `vivante,gc` node at `0x5900_0000`, reads its interrupt
   through `ferrix_fdt`, checks that PLL2 is on and locked and that its Q
   output (`DIVQEN`), the GPU's core clock, is enabled, and computes its rate
@@ -1106,7 +1106,7 @@ devmgr now counts 8 drivers.
   (0x198) and cleared in `RCC_AHB6RSTCLRR` (0x19C) 10 µs later. Every offset
   and bit is Linux's `clk-stm32mp1.c` (`K_MGATE(G_GPU, RCC_AHB6ENSETR, 5, 0)`,
   `pll2_q` gated by `RCC_PLL2CR` bit 5) and `stm32mp1-resets.h` (`GPU_R` =
-  3269 = 0x198 × 8 + 5). `stm32mp1_gpu.rs` registers the GPU with the device
+  3269 = 0x198 × 8 + 5). `platform/st/stm32mp1/gpu.rs` registers the GPU with the device
   registry at bring-up, and `device.rs` publishes the node as binding
   `TREE_STM32_GPU` (3): the registers a page, the interrupt as vector
   0, and a `DmaShape` that is contiguous and not coherent, as the LTDC's is.

@@ -35,7 +35,7 @@ use ferrix_fdt::{GicVersion, PsciConduit};
 use ferrix_linux_abi::nr::{self, Syscall};
 use ferrix_linux_abi::types::{self, OpenFlagBits};
 
-use super::gicv2;
+use super::arm_common::gicv2;
 use crate::early::{EarlyError, EarlyMemory};
 use crate::irq::Report;
 

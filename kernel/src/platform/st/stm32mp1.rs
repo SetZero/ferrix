@@ -52,6 +52,9 @@
 //! asks for are slower than high speed, the ceiling is the rate firmware
 //! left, which the boot check has just found to be 74.25 MHz.
 
+mod gpu;
+mod usb;
+
 use alloc::format;
 use alloc::vec::Vec;
 use core::fmt;
@@ -83,8 +86,8 @@ use crate::{power, timer, vmap};
 /// [`Full`] when the device registry has no room for another binding.
 pub(crate) fn install(view: &BootView<'_>) -> Result<(), Full> {
     device::register_board(&DISPLAY)?;
-    device::register_board(&crate::stm32mp1_usb::BINDING)?;
-    device::register_board(&crate::stm32mp1_gpu::BINDING)?;
+    device::register_board(&usb::BINDING)?;
+    device::register_board(&gpu::BINDING)?;
     if let Ok(tree) = crate::fdt::open(view) {
         note_boot_context(&tree);
     }

@@ -102,7 +102,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1687 elements, 201 relations. Model digest `e73dbc3a3f10b48c`.
+13 files, 16 packages, 1687 elements, 201 relations. Model digest `db24f7c73d7f8d4c`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -682,9 +682,9 @@ Every architecture supplies each of these; generic kernel code reaches the CPU t
 
 Register-level drivers under arch/ shared by the two Arm architectures, gated by cfg(any(aarch64, arm)) inside the arch directory where the layering check permits it.
 
-- **`gicv2` : `Gicv2`** — kernel/src/arch/gicv2.rs: distributor (machine-wide) and CPU interface (per core). 0..16 software-generated, 16..32 private peripheral, 32.. shared. IPIs through GICD_SGIR. Private interrupts' enable bits are banked per core, so the driver records what the boot core enabled and init_this_cpu replays the whole set on every other core — the timer included, which is what stage 5 found missing.
-- **`pl011` : `Pl011`** — kernel/src/arch/pl011.rs. Used by ARMv7-A today.
-- **`stm32Usart` : `Stm32Usart`** — kernel/src/arch/stm32_usart.rs: the board's own UART.
+- **`gicv2` : `Gicv2`** — kernel/src/arch/arm_common/gicv2.rs: distributor (machine-wide) and CPU interface (per core). 0..16 software-generated, 16..32 private peripheral, 32.. shared. IPIs through GICD_SGIR. Private interrupts' enable bits are banked per core, so the driver records what the boot core enabled and init_this_cpu replays the whole set on every other core — the timer included, which is what stage 5 found missing.
+- **`pl011` : `Pl011`** — kernel/src/arch/arm_common/pl011.rs. Used by ARMv7-A today.
+- **`stm32Usart` : `Stm32Usart`** — kernel/src/arch/arm_common/stm32_usart.rs: the board's own UART.
 
 ## Boot
 

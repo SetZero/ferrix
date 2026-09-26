@@ -69,7 +69,7 @@
       "total": 405,
       "hit": 321
     },
-    "arch/gicv2.rs": {
+    "arch/arm_common/gicv2.rs": {
       "ring": "core",
       "total": 55,
       "hit": 39
@@ -514,12 +514,12 @@
       "total": 28,
       "hit": 0
     },
-    "stm32mp1.rs": {
+    "platform/st/stm32mp1.rs": {
       "ring": "load",
       "total": 198,
       "hit": 15
     },
-    "arch/pl011.rs": {
+    "arch/arm_common/pl011.rs": {
       "ring": "core",
       "total": 34,
       "hit": 22
@@ -639,7 +639,7 @@
       "total": 9,
       "hit": 5
     },
-    "arch/stm32_usart.rs": {
+    "arch/arm_common/stm32_usart.rs": {
       "ring": "core",
       "total": 37,
       "hit": 4
@@ -664,7 +664,7 @@
       "total": 140,
       "hit": 130
     },
-    "stm32mp1_usb.rs": {
+    "platform/st/stm32mp1/usb.rs": {
       "ring": "load",
       "total": 75,
       "hit": 5
@@ -699,7 +699,7 @@
       "total": 13,
       "hit": 9
     },
-    "stm32mp1_gpu.rs": {
+    "platform/st/stm32mp1/gpu.rs": {
       "ring": "load",
       "total": 53,
       "hit": 5

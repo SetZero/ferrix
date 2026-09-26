@@ -1,11 +1,11 @@
 //! The Generic Interrupt Controller, version 3.
 //!
-//! What changed from `crate::arch::gicv2`, and why this is a second driver
+//! What changed from `crate::arch::arm_common::gicv2`, and why this is a second driver
 //! rather than a flag on the first:
 //!
 //! * The **CPU interface is system registers** (`ICC_*_EL1`), not a memory
 //!   window. Claiming, retiring and sending an inter-processor interrupt are
-//!   each one instruction, in `super::cpu`.
+//!   each one instruction, in `aarch64::cpu`.
 //! * Each core has a **redistributor**: a pair of 64 KiB frames holding what a
 //!   GICv2 banked in the distributor for interrupts 0..32 -- their enables and
 //!   priorities -- plus a power control a core must clear before its
@@ -25,7 +25,7 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use super::{cpu, gicv3_its};
+use super::{super::cpu, gicv3_its};
 use crate::mmio::Mmio;
 
 /// Distributor control.
