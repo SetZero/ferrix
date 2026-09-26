@@ -190,7 +190,7 @@ COMMANDS:
     test-jobs     Boot an interactive shell on the console, type a session with jobs at it, and require the answers
     test-init     Boot /sbin/init as pid 1, type at the shell its getty gives, and require its session, a failing
                   service's restart budget, a service's cgroup, and a shutdown btrfs check finds clean
-    test-restart  Boot a shell beside a virtio-gpu, kill -9 the gpu driver twice, and require it started again each time
+    test-restart  Boot a shell beside a device, kill -9 its driver twice, and require it started again each time (--boot gpu|input|net|blk|all; gpu if not given)
     test-sysfs    Boot a shell beside a card, input devices and a network adapter, read sysfs, and unbind and bind the card through it
     test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count
     test-rustc    Attach the rustc volume scripts/fetch/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`

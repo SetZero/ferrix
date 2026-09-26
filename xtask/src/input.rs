@@ -48,7 +48,7 @@ const PATIENCE: Duration = Duration::from_secs(20);
 
 /// Build `userland/compositor/evecho` for `arch`, with the negative control or
 /// without, and say where the program is.
-fn build_evecho(arch: Arch, negative: bool) -> Result<PathBuf> {
+pub(crate) fn build_evecho(arch: Arch, negative: bool) -> Result<PathBuf> {
     let target = crate::display::target(arch).ok_or_else(|| {
         Error::new(format!(
             "{arch} has no virtio-input in QEMU's machine; the input test runs on x86_64 and \
@@ -81,7 +81,7 @@ fn build_evecho(arch: Arch, negative: bool) -> Result<PathBuf> {
 }
 
 /// One `InputEvent` of QMP's `input-send-event`, as its JSON.
-fn key(name: &str, down: bool) -> String {
+pub(crate) fn key(name: &str, down: bool) -> String {
     format!(
         "{{\"type\":\"key\",\"data\":{{\"down\":{down},\"key\":\
          {{\"type\":\"qcode\",\"data\":{}}}}}}}",
@@ -109,7 +109,7 @@ fn absolute(axis: &str, value: i32) -> String {
 ///
 /// A line reads `evecho: event0 QEMU Virtio Keyboard [0x...] EV_SYN ...`, so
 /// the node is the second word.
-fn node_of(lines: &[String], what: &str) -> Option<String> {
+pub(crate) fn node_of(lines: &[String], what: &str) -> Option<String> {
     lines
         .iter()
         .find(|line| line.contains(what) && line.contains("evecho: event"))

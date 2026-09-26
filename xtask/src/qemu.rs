@@ -1950,7 +1950,11 @@ fn attach_data_image(command: &mut Command, arch: Arch, args: &Args) {
 fn attach_root_disk(command: &mut Command, arch: Arch, args: &Args) -> Result<()> {
     // A test's root is made fresh for it, so its boot still depends on
     // nothing an earlier one left.
-    let test = args.btrfs_root && args.command.as_deref() == Some("test-chrome-window");
+    let test = args.btrfs_root
+        && matches!(
+            args.command.as_deref(),
+            Some("test-chrome-window" | "test-restart")
+        );
     if !test && !matches!(args.command.as_deref(), Some("run" | "run-compositor")) {
         return Ok(());
     }
