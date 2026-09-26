@@ -123,7 +123,10 @@ const CONFIG_PATH: &str = "etc/hyprland.conf";
 /// `exec-once = waybar` and `bind = …, exec, hyprlock` find it. One line a
 /// program, added by its stream when it lands. A judged boot carries none,
 /// so its archive stays the bytes it was.
-const DESKTOP_CLIENTS: &[(&str, &str)] = &[("compositor-waybar", "waybar")];
+const DESKTOP_CLIENTS: &[(&str, &str)] = &[
+    ("compositor-waybar", "waybar"),
+    ("compositor-fuzzel", "fuzzel"),
+];
 
 /// Where `run-compositor` puts the wallpaper it carries.
 const WALLPAPER_PATH: &str = "etc/wallpaper.fxwall";
@@ -2459,6 +2462,13 @@ fn desktop(
     } else {
         carried.ports.extend(crate::rustc::default_links(args));
     }
+    // The applications fuzzel lists, and their icons.
+    let chrome = args
+        .chrome
+        .then(|| crate::chrome::window_command(CHROME_WELCOME_PAGE));
+    carried
+        .ports
+        .extend(crate::fuzzel::files(chrome.as_deref())?);
     let config = crate::ssh::with_server(config, args, &mut carried.ports)?;
     let config = crate::badapple::on_the_desktop(arch, config, &mut carried.ports, args)?;
     // A wallpaper, from this machine's own and from nowhere else:
@@ -2619,7 +2629,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are twenty of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 30] = [
+const BOOTS: [(&str, Boot); 31] = [
     ("restart", test_driver_restart),
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
@@ -2650,6 +2660,7 @@ const BOOTS: [(&str, Boot); 30] = [
     ("caption", test_caption),
     ("waybar", test_waybar),
     ("waybar-volume", test_waybar_volume),
+    ("fuzzel", test_fuzzel),
 ];
 
 /// What the `caption` boot draws: a clock's digits, letters with kerning
@@ -4333,6 +4344,42 @@ fn test_menu(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
         screen.width * screen.height
     );
     Ok(())
+}
+
+/// A twenty-fifth boot: fuzzel, the launcher, against its own `fuzzel.ini`.
+///
+/// It is started as the desktop comes up, and three pictures are required:
+/// fuzzel over the empty screen with every entry listed and the first
+/// selected; the list after `/bin/vkbd` has typed `pat` through
+/// `zwp_virtual_keyboard_v1`, with the test pattern ranked first and
+/// selected; and after `vkbd` has pressed Return, fuzzel gone and the
+/// pattern's window it started tiled alone. The first two are the pictures
+/// `userland/compositor/fuzzel`'s own host test makes of the same frames -- fuzzel's
+/// drawing composited by `userland/compositor/render` as the compositor composites a
+/// layer surface -- so a launcher that drew one pixel differently on Ferrix
+/// fails here.
+fn test_fuzzel(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let fuzzel = build(arch, "compositor-fuzzel", "fuzzel")?;
+    let carried = Carried {
+        ports: crate::fuzzel::boot_files(&fuzzel)?,
+        ..Carried::none()
+    };
+    let (screens, said) = boot_and_dump_carrying(
+        arch,
+        programs,
+        crate::fuzzel::BOOT_CONFIG,
+        (carried, None),
+        &Wanted {
+            states: &crate::fuzzel::EXPECTED,
+            others: &[],
+            moving: None,
+            pointer: None,
+            awaiting: &crate::fuzzel::AWAITING,
+        },
+        &crate::fuzzel::BINDS,
+        args,
+    )?;
+    crate::fuzzel::judge(arch, screens.len(), &said)
 }
 
 /// A fifteenth boot: the screen lock, through `ext-session-lock-v1`.
