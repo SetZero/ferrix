@@ -273,10 +273,7 @@ them). Check any new one against the phone before you rely on it.
 
 ## What to do next, most important first
 
-1. **A faster boot console**, if anything comes to need one: map the
-   framebuffer write-combining rather than as device memory (run 4 lost
-   about 28 s to drawing).
-2. **The kernel is a PIE now, and boots on the phone** (KASLR,
+1. **The kernel is a PIE now, and boots on the phone** (KASLR,
    `docs/certification/SPECULATION.md` §6.1, 2026-09-26). `boot/` moves it
    each boot; this loader does not. It places the kernel at its link address
    and applies its `R_AARCH64_RELATIVE` fixups there (`load.rs`
@@ -324,6 +321,13 @@ them). Check any new one against the phone before you rely on it.
   counts every line: the tree held 1569 lines, not 733, and the owner had
   the cap and nine budgets moved to the truth. AArch64's secondary entry,
   58 lines, is the one that had really grown, by the EL2 drop.
+* **A faster boot console.** The framebuffer was mapped as device memory,
+  so every glyph pixel went out as its own uncached store. It is now normal
+  non-cacheable memory, write-combining (`arch::FRAMEBUFFER_FLAGS`; x86-64
+  keeps the device mapping, since write-combining there needs the PAT).
+  Runs 15 and 16 (`$P/run15-wc/`, `$P/run16-wc/`) were back in 74 s, not
+  95, with stage 6's `handlers` at 738 ms, not 2029. The owner watched run
+  16 and saw the boot text as before.
 * **Entropy.** The owner allowed reading the SoC's random source, read
   only. Android's `/sys/class/misc/hw_random/rng_current` said
   `smccc_trng`, so no register of the security block is touched: the kernel

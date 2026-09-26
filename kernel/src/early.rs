@@ -143,6 +143,34 @@ impl EarlyMemory {
     /// image, which no device window may map ([`crate::mm::overlaps_image`]);
     /// [`EarlyError::MapFailed`] for what the mapper refuses.
     pub(crate) fn map_device(&mut self, virt: u64, phys: u64, len: u64) -> Result<(), EarlyError> {
+        self.map_window(virt, phys, len, MapFlags::KERNEL_DEVICE)
+    }
+
+    /// Map `len` bytes of a framebuffer at `virt`, with the attributes
+    /// [`arch::FRAMEBUFFER_FLAGS`] gives: write-combining where the
+    /// architecture has it, so the boot console's stores may gather into
+    /// bursts rather than go out one at a time.
+    ///
+    /// # Errors
+    ///
+    /// As [`EarlyMemory::map_device`].
+    pub(crate) fn map_framebuffer(
+        &mut self,
+        virt: u64,
+        phys: u64,
+        len: u64,
+    ) -> Result<(), EarlyError> {
+        self.map_window(virt, phys, len, arch::FRAMEBUFFER_FLAGS)
+    }
+
+    /// [`EarlyMemory::map_device`] with the attributes `flags` gives.
+    fn map_window(
+        &mut self,
+        virt: u64,
+        phys: u64,
+        len: u64,
+        flags: MapFlags,
+    ) -> Result<(), EarlyError> {
         let span = len
             .checked_next_multiple_of(PAGE_SIZE)
             .filter(|&span| phys.checked_add(span).is_some())
@@ -154,13 +182,7 @@ impl EarlyMemory {
         }
         let mapper: Mapper<PageEncoding> = Mapper::new(self.root);
         mapper
-            .map_range(
-                self,
-                VirtAddr(virt),
-                PhysAddr(phys),
-                span,
-                MapFlags::KERNEL_DEVICE,
-            )
+            .map_range(self, VirtAddr(virt), PhysAddr(phys), span, flags)
             .map_err(EarlyError::MapFailed)?;
 
         // The page table walker is a separate observer of memory. On AArch64 it

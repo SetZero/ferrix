@@ -127,6 +127,16 @@ pub(crate) unsafe fn init_traps() {
     );
 }
 
+/// How the kernel maps a framebuffer: normal memory the caches do not hold,
+/// write-combining, so stores may gather into bursts where a device mapping
+/// sends each one out alone. On the Pixel 7 the boot console drawing through
+/// a device mapping cost about 21 of a boot's 95 seconds.
+pub(crate) const FRAMEBUFFER_FLAGS: ferrix_paging::MapFlags = ferrix_paging::MapFlags {
+    device: false,
+    uncached: true,
+    ..ferrix_paging::MapFlags::KERNEL_DEVICE
+};
+
 /// Fill `out` with full-entropy bytes from firmware's TRNG, through SMCCC,
 /// and say how many: 0 where firmware offers none. See `trng.rs`.
 pub(crate) fn firmware_entropy(view: &BootView<'_>, out: &mut [u8]) -> usize {

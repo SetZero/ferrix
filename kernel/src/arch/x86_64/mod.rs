@@ -1480,6 +1480,12 @@ pub(crate) fn sync_instructions(start: u64, len: u64) {
     let _ = (start, len);
 }
 
+/// How the kernel maps a framebuffer: as a device. Write-combining needs the
+/// PAT, which is not programmed, and these tables ignore `uncached`, which
+/// would leave a framebuffer write-back.
+pub(crate) const FRAMEBUFFER_FLAGS: ferrix_paging::MapFlags =
+    ferrix_paging::MapFlags::KERNEL_DEVICE;
+
 /// Entropy from firmware's TRNG: none, since a PC has no SMCCC. The CPU's
 /// `RDSEED` is [`hardware_random`].
 pub(crate) fn firmware_entropy(_view: &BootView<'_>, _out: &mut [u8]) -> usize {

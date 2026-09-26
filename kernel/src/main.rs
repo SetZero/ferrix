@@ -3356,7 +3356,7 @@ fn check_early_mapper(view: &BootView<'_>, memory: &mut EarlyMemory) -> Result<(
     if framebuffer.is_present() && !framebuffer.is_reclaimable() {
         let at = vmap::FRAMEBUFFER_WINDOW;
         let len = framebuffer_bytes(&framebuffer).min(vmap::FRAMEBUFFER_WINDOW_SIZE);
-        if memory.map_device(at, framebuffer.phys, len).is_err() {
+        if memory.map_framebuffer(at, framebuffer.phys, len).is_err() {
             return Err("could not map the framebuffer");
         }
         if memory.translate(at) != Some(framebuffer.phys) {

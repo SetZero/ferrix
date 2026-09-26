@@ -984,6 +984,16 @@ pub(crate) fn hardware_random() -> Option<u64> {
     None
 }
 
+/// How the kernel maps a framebuffer: normal memory the caches do not hold,
+/// write-combining, so stores may gather into bursts where a device mapping
+/// sends each one out alone. On the Pixel 7 the boot console drawing through
+/// a device mapping cost about 21 of a boot's 95 seconds.
+pub(crate) const FRAMEBUFFER_FLAGS: ferrix_paging::MapFlags = ferrix_paging::MapFlags {
+    device: false,
+    uncached: true,
+    ..ferrix_paging::MapFlags::KERNEL_DEVICE
+};
+
 /// Entropy from firmware's TRNG: none yet on this architecture, though
 /// SMCCC defines `TRNG_RND32` for it; the DK1's TF-A has not been asked.
 pub(crate) fn firmware_entropy(_view: &BootView<'_>, _out: &mut [u8]) -> usize {

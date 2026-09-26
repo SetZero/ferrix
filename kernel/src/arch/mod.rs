@@ -241,6 +241,14 @@ pub(crate) use armv7a::flush_for_device;
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::flush_for_device;
 
+// How a framebuffer is mapped: write-combining where the architecture has it.
+#[cfg(target_arch = "aarch64")]
+pub(crate) use aarch64::FRAMEBUFFER_FLAGS;
+#[cfg(target_arch = "arm")]
+pub(crate) use armv7a::FRAMEBUFFER_FLAGS;
+#[cfg(target_arch = "x86_64")]
+pub(crate) use x86_64::FRAMEBUFFER_FLAGS;
+
 // Full-entropy bytes firmware hands out, where it has a TRNG to ask.
 #[cfg(target_arch = "aarch64")]
 pub(crate) use aarch64::firmware_entropy;
