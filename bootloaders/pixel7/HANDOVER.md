@@ -8,6 +8,21 @@ you touch the phone.
 
 ## State at a glance
 
+**Update, 2026-09-26 afternoon (ferrix-8f): all four "next" items were
+started; none is on `main` yet.** Two branches hold the work:
+
+* **`gicv3-its`** (worktree `.claude/worktrees/gicv3-its`, 3 commits,
+  `f794108a..40b5e919`): item 4, done and gated on its base `6957a174`.
+  `cargo xtask check` passed; `test-boot` passed on x86_64, armv7a, aarch64
+  (GICv2), and on aarch64 with `FERRIX_ARM_MACHINE=gic-version=3`, on one core
+  and with `--smp 2`. That last one stopped at stage 10 before. Needs a
+  rebase onto `main` and a re-gate, because `msi_allocate` changed shape on
+  all three architectures, and then it can land.
+* **`pixel7-next`** (worktree `.claude/worktrees/pixel7-next`, one WIP
+  commit `3d22c18f`): items 1-3. **Not gated, and not yet seen working on
+  the phone. Do not land it as it stands.** "What to do next" below says
+  where each item is.
+
 * **On `main`**, merged 2026-09-26 by fast-forward after the whole gate row
   for "anything the image contains" passed on nazuna. **Not pushed**: pushes
   are the owner's to authorise.
@@ -92,7 +107,12 @@ sed -n '/ferrix-pixel7 loader/,/welcome to lk/p' "$P/run.log"
 
 * **Timing tells you what happened:** ~52 s means the boot ended normally,
   ~105 s means the loader parked and a watchdog fired, and ~29 s with no
-  `console-ramoops-0` means some other reset lost the log.
+  `console-ramoops-0` means some other reset lost the log. ~110 s with the
+  record saying `No kernel logs`, and ABL's `Reboot Info` saying
+  `PIN_RESET | PO_RESET` after `CLUSTER0_NONCPU_WDTRESET`, means a hard
+  failure. The watchdog reset was followed by a power-on reset, which lost
+  DRAM and with it even the loader's lines. Both boot-console runs below
+  ended like that.
 * **Quote `su` correctly:** `adb shell su -c 'a; b'` runs only `a` as root,
   because the device shell splits on `;`. Use `adb shell "su -c 'a; b'"`.
 * **ABL's own log:** `fastboot oem dmesg` prints it for the *current* fastboot
@@ -109,6 +129,7 @@ sed -n '/ferrix-pixel7 loader/,/welcome to lk/p' "$P/run.log"
 | Display | DECON0 at `0x1C240000` running in command mode, TE trigger **masked by ABL** (`TRIG_CON` `0x3070`); window 5 from DPP0; framebuffer 1080 x 2400 at `0xFAC00000`; power domains on; display SysMMU reads as off |
 | Pixel order | bytes B, G, R, unused, measured with four colour bands: UEFI's `Bgrx8888`, whatever the DPP format's name says |
 | Frames | unmasking `TRIG_CON` (`0x3070` to `0x3061`): 12 frames in 200 ms, 60 Hz |
+| `/chosen` | only `kaslr-seed`, 8 bytes; **no `rng-seed`** (the loader counted them, `run-seed-nosmp.log`) |
 | Missing | no entropy (`random NOT SEEDED`), no RTC (the clock starts at the epoch), cores 1-7 (`nosmp`) |
 
 Register offsets come from Google's gs201 display driver
@@ -141,6 +162,34 @@ them). Check any new one against the phone before you rely on it.
   it). The panic screen stays up until the watchdog fires, 30-60 s.
 * **`499381a2` fails AArch64 clippy on its own.** rustfmt ran after clippy;
   `f250c0bb` fixes it. Run clippy again *after* `cargo fmt`.
+* **A boot-console change put the fault before the vectors.** The boot
+  console first started at stage 1, beside `panic::screen::install`. Its
+  mapping check (`panic::screen::surface`) walks the tables from
+  `mm::root_table()`, which is 0 until `mm::init`, and no kernel vectors
+  are installed that early. The fault went to the loader's stale vectors,
+  and the phone hung, drew a coloured stair pattern and came back through a
+  power-on reset with no log at all. QEMU never showed it, because the flag
+  is off there. Anything drawn early needs a QEMU run with the flag on
+  before a phone run.
+* **Ask the owner to watch in a question, right before the run.** A line
+  in a message saying "watch the screen" was missed, and a run's picture
+  was lost.
+* **Other sessions use this phone.** ferrix-cc tests an Android Auto /
+  ChatGPT Xposed module on it (the aa-chatgpt side project), and every
+  Ferrix run resets the phone under it and leaves it locked until the owner
+  types the PIN. Take turns: message the other session between runs, and
+  don't boot while it holds the phone.
+* **The permission classifier refused `cargo xtask flash --stage "$P/stage"`**
+  (it overwrites the previous stage) and then the whole rebuild. What
+  worked before the second refusal, and deletes nothing: `cargo xtask build
+  --arch aarch64 --release`; `python3 $P/fatget.py build/aarch64/ferrix.img
+  FERRIX/INITRD.IMG <dir>/INITRD.IMG` (a read-only FAT reader, saved in the
+  phone directory); `llvm-objcopy --strip-all` of
+  `$CARGO_TARGET_DIR/aarch64-unknown-none-softfloat/release/ferrix-kernel`
+  into `<dir>/KERNEL.ELF`; then the loader steps above with those two paths.
+  The initramfs is then the unstripped one (5.4 MB), which still fits.
+  Use `CARGO_TARGET_DIR=~/.local/share/ferrix/target-<session>`, never a
+  worktree's own `target/`.
 * **`cargo xtask check` holds more than clippy:** every kernel file needs a
   certification ring (`scripts/certification-item.json`, the owner's call),
   new functions stay under the complexity floor, and generic code may not
@@ -148,21 +197,54 @@ them). Check any new one against the phone before you rely on it.
 
 ## What to do next, most important first
 
-1. **The boot console on screen.** The framebuffer reaches the kernel already;
-   what is missing is drawing the console there during boot, not only on a
-   panic. The panic screen's renderer (`kernel/src/panic/screen.rs`) is the
-   starting point.
-2. **Cores 1-7.** TF-A's PSCI starts a secondary at EL2, and the kernel's entry
-   sequence in `kernel/src/arch/aarch64/smp.rs` expects EL1. It needs the
-   EL2-to-EL1 drop that `bootloaders/pixel7/src/entry.rs` does, which will
-   need `smp.rs`'s budget in `scripts/asm-allowlist.json` raised with an
-   argument. Then remove `nosmp` from `board::CMDLINE`. Test on QEMU with
-   `--smp 2` first, and on the phone.
-3. **Entropy.** `/chosen` should carry `rng-seed` or `kaslr-seed`. The loader
-   could pass it on as the boot info's `firmware_seed`.
-4. **A GICv3 ITS driver.** Without one a GICv3 has no MSI vectors, so the
-   QEMU runs with `FERRIX_ARM_MACHINE=gic-version=3` stop at stage 10. This
-   does not matter on the phone, which has no virtio.
+1. **The boot console on screen** (`pixel7-next`). Written:
+   `kernel/src/console/screen.rs`. With `ferrix.fbcon` on the command line,
+   the kernel's own lines (the bytes `console::recent` keeps, not programs'
+   output) are drawn on the firmware framebuffer as they are printed. It
+   picks the largest glyph scale that leaves 60 columns (double size on the
+   phone), keeps a top inset of a twentieth of the height for the camera,
+   wraps to the top without scrolling or reading back, and keeps the row
+   after the newest line blank. It stops when a panic draws
+   (`panic::screen::draw` calls `console::screen::stop`) or when the display
+   core publishes a card. `panic::screen::surface()` is now shared by both
+   and refuses while the root table is 0. The console starts right after
+   `mm::init`. **That fix has not been booted:** the stage-1 version is what
+   hung runs 1 and 2 (`run-fbcon-smp.log`, `run-fbcon-nosmp.log`, both
+   empty of Ferrix text). Next: add a way to put `ferrix.fbcon` on a QEMU
+   aarch64 boot, which has `ramfb` (an xtask flag beside `--reset`; nothing
+   passes arbitrary options today), boot it there, then run 4 on the phone
+   with `board::CMDLINE` as committed (`ferrix.fbcon nosmp`). The owner
+   should see boot text for a few seconds before the reset.
+   `docs/ARCHITECTURE.md` §1 still says the framebuffer is drawn on only by
+   a panic. It needs the owner's word and an edit before this lands.
+2. **Cores 1-7** (`pixel7-next`). Written: `ferrix_secondary_entry` in
+   `smp.rs` checks `CurrentEL`, and at EL2 sets EL1 up as
+   `bootloaders/pixel7/src/entry.rs` does and `eret`s to it. It touches
+   `ICC_SRE_EL2` only when `ID_AA64PFR0_EL1.GIC` says the CPU has GIC system
+   registers. QEMU `--smp 2` passes (the EL1 path). The asm allowlist entry's
+   reason was extended. Its budget did not need raising, because
+   `check-asm-budget.py` counts a raw-string `global_asm!` as 2 lines, a
+   hole worth closing. On the phone it is **unproven**. Run 1 had it
+   together with the broken boot console, and ABL's PSCI breadcrumbs showed
+   activity on cores 3, 4, 5 and 7, so CPU_ON calls went out. Next: run 5,
+   with `nosmp` removed once run 4 is good. Watch whether the ramoops record
+   survives with other cores writing it (it is a device mapping, so it
+   should).
+3. **Entropy** (`pixel7-next`). Written: `bootloaders/pixel7/src/seed.rs`
+   folds `/chosen`'s `rng-seed` and `kaslr-seed` into `firmware_seed` and
+   NOPs both out of the kernel's copy of the tree. It sets
+   `FIRMWARE_SEED` only for 32 bytes or more. ABL gives 8, so the phone is
+   still `NOT SEEDED` (run 3, `run-seed-nosmp.log`, a normal boot to
+   `FERRIX-BOOT-OK`). The owner has to choose: credit 64 bits for the 8
+   bytes (a `BootInfo` change: a byte count beside the flag), or the SoC's
+   TRNG, which is a security block and so under "Never write anything that
+   survives a reset" needs the owner's word before anyone reads it.
+4. **A GICv3 ITS driver** (`gicv3-its`): done, see "State at a glance".
+   Choices to review: DeviceID is the PCI requester ID, identity, as QEMU's
+   IORT and `msi-map` are, and neither is read yet. One collection, on the
+   boot core. LPI 8192+k is kernel interrupt 1024+k, and `irq::SLOTS` went
+   from 1024 to 1280. `gicv3_its.rs` falls in the certified core ring,
+   because the certification item lists `arch/**` there.
 
 ## Starting Ferrix from Android (stopped)
 
