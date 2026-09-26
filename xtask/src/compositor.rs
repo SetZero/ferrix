@@ -2070,18 +2070,14 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
         args.variant = variant;
     }
     if args.chrome {
-        // One data disk: Chrome's, in the rustc volume's place.
-        if arch != Arch::X86_64 {
-            return Err(Error::new(
-                "--chrome runs on x86_64 only: Chrome for Testing publishes linux64 alone",
-            ));
-        }
+        // One data disk: the browser's, in the rustc volume's place --
+        // Chrome for Testing's on x86-64, Debian's Chromium on AArch64.
         // `--everything` has both downloads on the one disk the kernel
-        // mounts; `--chrome` alone has Chrome's in the rustc volume's place.
-        args.data_image = Some(if args.everything {
+        // mounts, and is x86-64's.
+        args.data_image = Some(if args.everything && arch == Arch::X86_64 {
             crate::everything::volume()?
         } else {
-            crate::chrome::volume()?
+            crate::chrome::volume_for(arch)?
         });
         if !args.memory_given {
             args.memory = crate::chrome::MEMORY;
@@ -2109,7 +2105,7 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
             .map_err(|error| Error::new(format!("reading {path}: {error}")))?,
         None => RUN_CONFIG.to_owned(),
     };
-    let config = with_chrome(config, &args);
+    let config = with_chrome(config, &args, arch);
     // A watched boot has a network unless it was told not to: a person at a
     // screen expects a machine that can fetch something, and finding out
     // that `ping` says `bad address` for want of a device is nobody's
@@ -2204,7 +2200,10 @@ pub(crate) fn board_files(arch: Arch, args: &Args) -> Result<crate::flash::Board
             .map_err(|error| Error::new(format!("reading {path}: {error}")))?,
         None => RUN_CONFIG.to_owned(),
     };
-    let config = format!("{BOARD_LAYOUT}{config}");
+    // `flash --compositor --chrome` is a board's desktop with the browser
+    // on it, from a volume the board attaches itself: the Pixel 7's VM gives
+    // crosvm Chromium's as a disk (`tools/pixel7`).
+    let config = with_chrome(format!("{BOARD_LAYOUT}{config}"), args, arch);
     // A shell with no `ls` or `mkdir` is what the board's first desktop had:
     // the only busybox `Carried::wanted` finds unasked is ferrousli's, which
     // has no ARM port. So the static one the gates boot is carried, when it
@@ -2334,7 +2333,7 @@ fn desktop(
             .extend(crate::dotfiles::carried(Path::new(path))?);
     }
     if args.chrome {
-        let mut links = chrome_links(&carried.ports);
+        let mut links = chrome_links(arch, &carried.ports);
         if crate::chrome::on_ferrousli(args) {
             // ferrousli's loader takes `/lib64`'s place, so every program
             // on the volume runs on it -- Chrome, and with `--everything`
@@ -2343,7 +2342,7 @@ fn desktop(
             links.retain(|file| file.path != "lib64");
             links.extend(crate::chrome::ferrousli_loader(
                 arch,
-                &crate::chrome::volume()?,
+                &crate::chrome::volume_for(arch)?,
                 crate::chrome::WINDOW_PROGRAM,
                 args,
             )?);
@@ -5111,7 +5110,7 @@ fn chrome_window_config(ferrousli: bool) -> String {
 /// the volume's, Debian's. Without it fontconfig knew no generic family and
 /// no metric alias, and Chrome drew every face, its own tabs and toolbar
 /// too, in foot's one font, a monospace.
-fn chrome_links(carried: &[crate::ports::File]) -> Vec<crate::ports::File> {
+fn chrome_links(arch: Arch, carried: &[crate::ports::File]) -> Vec<crate::ports::File> {
     let taken = |path: &str| {
         carried.iter().any(|file| {
             file.path == path
@@ -5122,7 +5121,7 @@ fn chrome_links(carried: &[crate::ports::File]) -> Vec<crate::ports::File> {
         })
     };
     let mut links: Vec<(&str, &str)> = Vec::new();
-    for &(path, target) in crate::chrome::LINKS {
+    for &(path, target) in crate::chrome::links(arch) {
         if !taken(path) {
             links.push((path, target));
         } else if path == "usr/share/fonts" {
@@ -5169,11 +5168,11 @@ const CHROME_WELCOME_PAGE: &str = "data:text/html,<body%20style=font-family:sans
 /// What `run-compositor --chrome` adds to the desktop's configuration:
 /// Chrome's environment, a window as the desktop starts, and SUPER+B for
 /// another.
-fn with_chrome(config: String, args: &Args) -> String {
+fn with_chrome(config: String, args: &Args, arch: Arch) -> String {
     if !args.chrome {
         return config;
     }
-    let command = crate::chrome::window_command(CHROME_WELCOME_PAGE);
+    let command = crate::chrome::window_command_for(arch, CHROME_WELCOME_PAGE);
     format!(
         "{config}\n# Added by `cargo xtask run-compositor --chrome`.\n{}{}exec-once = {command}\n\
          bind = SUPER, B, exec, {command}\n",
