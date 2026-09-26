@@ -49,7 +49,7 @@ use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use catalog::Explanation;
 
-use crate::console::{self, println};
+use crate::console::{self, println, println_unlogged};
 use crate::{arch, backtrace, smp};
 
 /// Whether a failure report has begun, on any processor.
@@ -237,16 +237,17 @@ pub(crate) fn conclude(entry: Option<&Explanation>) -> ! {
 /// The addresses are where the code ran, which in a kernel the loader moved
 /// (KASLR) is not where the image was linked. So the report first says how far
 /// it moved, and `xtask` takes that off before it looks an address up. Said on
-/// the console, which no program reads back; `SPECULATION.md` §6 argues why
-/// that is not a leak.
+/// the port and the screen and kept out of the kernel log, which privileged
+/// programs read back (`console::write_unlogged`); `SPECULATION.md` §6 argues
+/// why that is not a leak.
 fn report_backtrace() {
     let slide = backtrace::image_start().wrapping_sub(ferrix_bootinfo::KERNEL_VIRT_BASE);
     if slide != 0 {
-        println!("  kaslr     slide {slide:#x}");
+        println_unlogged!("  kaslr     slide {slide:#x}");
     }
     let mut index = 0;
     let found = backtrace::walk(arch::frame_pointer(), |address| {
-        println!("  trace     #{index:<2} {address:#018x}");
+        println_unlogged!("  trace     #{index:<2} {address:#018x}");
         index += 1;
     });
     if found == 0 {

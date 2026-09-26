@@ -637,34 +637,34 @@ pub(crate) fn fault_signal(frame: &TrapFrame, trap: &crate::trap::Trap) -> (u32,
     }
 }
 
-/// Print the interrupted state.
+/// Print the interrupted state, unlogged (`console::write_unlogged`).
 ///
 /// Called only when the kernel is about to stop, so it prints everything: on a
 /// machine with no debugger attached this is the entire post-mortem.
 pub(crate) fn report_trap(frame: &TrapFrame) {
-    use crate::console::println;
+    use crate::console::println_unlogged;
 
-    println!(
+    println_unlogged!(
         "  vector   {} ({}), error {:#x}",
         frame.vector,
         vector_name(frame.vector),
         frame.error_code
     );
     if frame.vector == 14 {
-        println!("  cr2      {:#018x}", fault_address());
+        println_unlogged!("  cr2      {:#018x}", fault_address());
     }
-    println!("  rip      {:#018x}  cs  {:#x}", frame.rip, frame.cs);
-    println!("  rsp      {:#018x}  ss  {:#x}", frame.rsp, frame.ss);
-    println!("  rflags   {:#018x}", frame.rflags);
-    println!("  rax {:#018x}  rbx {:#018x}", frame.rax, frame.rbx);
-    println!("  rcx {:#018x}  rdx {:#018x}", frame.rcx, frame.rdx);
-    println!("  rsi {:#018x}  rdi {:#018x}", frame.rsi, frame.rdi);
-    println!("  rbp {:#018x}  r8  {:#018x}", frame.rbp, frame.r8);
-    println!("  r9  {:#018x}  r10 {:#018x}", frame.r9, frame.r10);
-    println!("  r11 {:#018x}  r12 {:#018x}", frame.r11, frame.r12);
-    println!("  r13 {:#018x}  r14 {:#018x}", frame.r13, frame.r14);
-    println!("  r15 {:#018x}", frame.r15);
-    println!(
+    println_unlogged!("  rip      {:#018x}  cs  {:#x}", frame.rip, frame.cs);
+    println_unlogged!("  rsp      {:#018x}  ss  {:#x}", frame.rsp, frame.ss);
+    println_unlogged!("  rflags   {:#018x}", frame.rflags);
+    println_unlogged!("  rax {:#018x}  rbx {:#018x}", frame.rax, frame.rbx);
+    println_unlogged!("  rcx {:#018x}  rdx {:#018x}", frame.rcx, frame.rdx);
+    println_unlogged!("  rsi {:#018x}  rdi {:#018x}", frame.rsi, frame.rdi);
+    println_unlogged!("  rbp {:#018x}  r8  {:#018x}", frame.rbp, frame.r8);
+    println_unlogged!("  r9  {:#018x}  r10 {:#018x}", frame.r9, frame.r10);
+    println_unlogged!("  r11 {:#018x}  r12 {:#018x}", frame.r11, frame.r12);
+    println_unlogged!("  r13 {:#018x}  r14 {:#018x}", frame.r13, frame.r14);
+    println_unlogged!("  r15 {:#018x}", frame.r15);
+    println_unlogged!(
         "  from     {}",
         if frame.came_from_user() {
             "user mode"

@@ -529,11 +529,11 @@ pub(crate) fn fatal(
 
 /// Report a trap under `headline`, with the registers it saved, and stop.
 ///
-/// The opening lines are the trap's own. Everything after them — the
-/// processor, stopping the others, the trace, the explanation, the screen — is
-/// what every failure report has, and comes from `panic.rs`, so a fatal trap
-/// is drawn on the framebuffer as a panic is. One marker line, not two: the
-/// page fault's description is the headline, not a line above it.
+/// The opening lines are the trap's own, unlogged (`console::write_unlogged`).
+/// Everything after them — the processor, stopping the others, the trace, the
+/// explanation, the screen — is what every failure report has, and comes from
+/// `panic.rs`, so a fatal trap is drawn on the framebuffer as a panic is. One
+/// marker line, not two: the page fault's description is the headline.
 fn report(
     frame: &arch::TrapFrame,
     headline: core::fmt::Arguments<'_>,
@@ -541,7 +541,7 @@ fn report(
 ) -> ! {
     let first = crate::panic::begin_report();
     println!();
-    println!("FERRIX-PANIC {headline}");
+    crate::console::println_unlogged!("FERRIX-PANIC {headline}");
     arch::report_trap(frame);
     if !first {
         crate::panic::abridged()

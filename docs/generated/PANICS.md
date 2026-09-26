@@ -50,6 +50,7 @@ Causes are listed most likely first.
 | [FX-0502](#fx-0502) | the scheduler failed its self-check |
 | [FX-0503](#fx-0503) | a task tried to block while holding a lock that disables preemption |
 | [FX-0504](#fx-0504) | console output did not go out by interrupt |
+| [FX-0505](#fx-0505) | the kernel log lost track of what it keeps |
 | [FX-0601](#fx-0601) | the memory a process is built from failed its self-check |
 | [FX-0602](#fx-0602) | a page taken from a mapped object stayed reachable, or was not taken as it should be |
 | [FX-0701](#fx-0701) | the system call dispatch path failed its self-check |
@@ -879,6 +880,32 @@ waiting on an interrupt that does not come.
    reports; `kmain` calls it straight after the scheduler is started.
 
 See: kernel/src/console/output.rs check; kernel/src/console.rs emit.
+
+<a id="fx-0505"></a>
+
+## FX-0505 — the kernel log lost track of what it keeps
+
+The kernel log is a ring of every byte the console sends, which `syslog(2)` and
+a log control channel read. Once the scheduler runs, `console::log_check` drives
+small rings of its own past their length and requires the last bytes kept in
+order, a reader that fell behind to be told exactly how many it lost, a partial
+read to resume where it stopped, the unread count to match, and two writers
+racing on two processors to lose nothing of the count while a reader keeps up.
+Then it requires a task's write and a line written as a failure report is to be
+in the kernel log, and a line sent unlogged not to be. A failure means a reader
+of the log can be handed stale bytes without being told, or the log keeps what
+was meant to stay on the port: the kernel's layout.
+
+1. `Ring::read` stopped moving a cursor behind the oldest byte forward, or
+   stopped counting what it skipped or what a writer replaced during the copy.
+2. `Ring::record_byte` claims its place before storing the byte, or with a plain
+   store rather than a compare-and-exchange, so racing writers share a place.
+3. The console stopped recording on one of its paths: `Writer::bytes`,
+   `Unlocked`, or `output::try_queue` for a task's write; or `Kind::Unlogged` is
+   recorded after all.
+
+See: kernel/src/console/log_check.rs; kernel/src/console/log.rs;
+kernel/src/console.rs.
 
 <a id="fx-0601"></a>
 

@@ -69,7 +69,7 @@ use alloc::vec::Vec;
 use ferrix_bootinfo::{BootInfo, BootView, KASLR_FIXED_IMAGE, KASLR_MOVED, MemKind, PAGE_SIZE};
 use ferrix_paging::{MapError, MapFlags};
 
-use console::println;
+use console::{println, println_unlogged};
 use early::EarlyMemory;
 use panic::{catalog, fatal};
 
@@ -2023,9 +2023,10 @@ fn sweep_w_xor_x(view: &BootView<'_>) -> Result<(), &'static str> {
             // Printed rather than counted: one offending mapping is enough,
             // and an address is what makes it findable. A count would say
             // there is a problem without saying where.
-            println!(
+            println_unlogged!(
                 "  w^x      {:#x} is writable and executable, {} bytes of it",
-                found.virt, found.len
+                found.virt,
+                found.len
             );
             return Err("a mapping is both writable and executable");
         }
@@ -2044,16 +2045,17 @@ fn sweep_w_xor_x(view: &BootView<'_>) -> Result<(), &'static str> {
     let sealed = match mm::check_sealed_image(view) {
         Ok(report) => report,
         Err(found) if found.len == 0 => {
-            println!(
+            println_unlogged!(
                 "  sealed   the direct map does not alias all of the image's text at {:#x}",
                 found.virt
             );
             return Err("the direct map does not alias the kernel's text, so nothing was swept");
         }
         Err(found) => {
-            println!(
+            println_unlogged!(
                 "  sealed   {:#x} writes the kernel's text or read-only data, {} bytes of it",
-                found.virt, found.len
+                found.virt,
+                found.len
             );
             return Err("a mapping can write the kernel's text or read-only data");
         }
@@ -2423,7 +2425,8 @@ fn start_console_input(view: &BootView<'_>) {
 }
 
 /// A task's write to the console, checked to leave the writer at once and go
-/// out by the port's transmit interrupt, and said how it went.
+/// out by the port's transmit interrupt, and said how it went; then the log
+/// every byte the console sends is recorded in.
 fn check_console_output() {
     match console::output::check() {
         // What the interrupt sent while the line went out, which includes
@@ -2444,6 +2447,29 @@ fn check_console_output() {
         Err(problem) => fatal!(
             catalog::CONSOLE_OUTPUT,
             "console output self-check failed: {problem}"
+        ),
+    }
+    check_console_log();
+}
+
+/// The kernel log, which every line after this is recorded in: what a reader
+/// of it is promised, and what the console records and keeps out. Here, as
+/// the output check, because it needs tasks: two racing writers and a task's
+/// write.
+fn check_console_log() {
+    if !checks::run() {
+        return;
+    }
+    match console::log_check::run() {
+        Ok(report) => println!(
+            "  log      {} bytes kept of a wrapped ring and {} reported lost, resumed after \
+             a partial read; {} bytes from two writers on {} processor(s) counted, {} read \
+             while they wrote; a task's write and a failure report recorded, an unlogged line not",
+            report.kept, report.lost, report.raced, report.processors, report.read_racing,
+        ),
+        Err(problem) => fatal!(
+            catalog::CONSOLE_LOG,
+            "console log self-check failed: {problem}"
         ),
     }
 }
@@ -2568,8 +2594,10 @@ fn bring_up_memory(view: &BootView<'_>) -> mm::Stats {
     stats
 }
 
+/// Unlogged: the page array's address is in the direct map, which KASLR moves
+/// (`console::write_unlogged`).
 fn report_memory(stats: &mm::Stats) {
-    println!(
+    println_unlogged!(
         "  frames   {} MiB managed, {} MiB free, {} entries at {:#x} ({} KiB)",
         stats.managed_frames * 4 / 1024,
         stats.free_frames * 4 / 1024,
@@ -3100,13 +3128,15 @@ fn report(view: &BootView<'_>) {
         mebibytes(view.usable_ram()),
         view.regions().len()
     );
-    println!(
+    // Where the loader put the image and the direct map: to the port, not the
+    // kernel log, which a program may read (`console::write_unlogged`).
+    println_unlogged!(
         "  kernel   {:#x} -> {:#x}, {} KiB",
         info.kernel_phys,
         info.kernel_virt,
         info.kernel_len / 1024
     );
-    println!(
+    println_unlogged!(
         "  physmap  {:#x} covering {} MiB from {:#x}",
         info.physmap_base,
         mebibytes(info.physmap_len),

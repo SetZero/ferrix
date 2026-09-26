@@ -656,6 +656,31 @@ pub(crate) static CONSOLE_OUTPUT: Explanation = Explanation {
     see: "kernel/src/console/output.rs check; kernel/src/console.rs emit",
 };
 
+/// For `kmain` in `main.rs`, when `console::log_check::run` fails.
+pub(crate) static CONSOLE_LOG: Explanation = Explanation {
+    code: "FX-0505",
+    title: "the kernel log lost track of what it keeps",
+    meaning: "The kernel log is a ring of every byte the console sends, which `syslog(2)` and a \
+              log control channel read. Once the scheduler runs, `console::log_check` drives \
+              small rings of its own past their length and requires the last bytes kept in \
+              order, a reader that fell behind to be told exactly how many it lost, a partial \
+              read to resume where it stopped, the unread count to match, and two writers \
+              racing on two processors to lose nothing of the count while a reader keeps up. \
+              Then it requires a task's write and a line written as a failure report is to be \
+              in the kernel log, and a line sent unlogged not to be. A failure means a reader \
+              of the log can be handed stale bytes without being told, or the log keeps what \
+              was meant to stay on the port: the kernel's layout.",
+    causes: &[
+        "`Ring::read` stopped moving a cursor behind the oldest byte forward, or stopped \
+         counting what it skipped or what a writer replaced during the copy.",
+        "`Ring::record_byte` claims its place before storing the byte, or with a plain store \
+         rather than a compare-and-exchange, so racing writers share a place.",
+        "The console stopped recording on one of its paths: `Writer::bytes`, `Unlocked`, or \
+         `output::try_queue` for a task's write; or `Kind::Unlogged` is recorded after all.",
+    ],
+    see: "kernel/src/console/log_check.rs; kernel/src/console/log.rs; kernel/src/console.rs",
+};
+
 /// For `kmain` in `main.rs`, when `random::check` fails.
 pub(crate) static RANDOM_GENERATOR: Explanation = Explanation {
     code: "FX-0306",
@@ -2316,6 +2341,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE5_SCHEDULER,
     &SCHEDULE_WITH_PREEMPTION_HELD,
     &CONSOLE_OUTPUT,
+    &CONSOLE_LOG,
     &STAGE6_USER_MEMORY,
     &STAGE6_REVERSE_MAP,
     &STAGE7_SYSCALLS,

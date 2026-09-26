@@ -29,8 +29,19 @@
 //! [`begin_panic`] has been called, a writer waits a bounded time for the lock
 //! and then writes without it. A panic report interleaved with another CPU's
 //! line is legible; one that never appears is not.
+//!
+//! # The log
+//!
+//! Every byte sent, the kernel's lines and programs' output alike, is also
+//! recorded in the kernel [`log`], which `syslog(2)` and a log control
+//! channel read. Recording is the one thing this module asks of it, and it
+//! takes no lock and never waits. The lines that say where the kernel is in
+//! memory are sent with [`println_unlogged!`] instead and are not recorded:
+//! [`write_unlogged`] lists them.
 
 pub(crate) mod input;
+pub(crate) mod log;
+pub(crate) mod log_check;
 pub(crate) mod output;
 pub(crate) mod screen;
 
@@ -109,6 +120,9 @@ struct Writer<'port> {
     /// Whether bytes are kept in [`RECENT`] for a failure report: the
     /// kernel's own lines are, a program's output is not.
     remembered: bool,
+    /// Whether bytes are recorded in the kernel [`log`]: everything is but
+    /// the lines [`write_unlogged`] sends.
+    logged: bool,
     /// Whether a flush on the way in made room a waiting writer can use.
     wake: bool,
 }
@@ -117,12 +131,13 @@ impl<'port> Writer<'port> {
     /// Start writing to `port`. A writer that polls empties the ring first, so
     /// that its bytes follow everything queued before them; one that queues
     /// first looks for a port that has stopped taking bytes.
-    fn new(port: &'port mut Transmit, queued: bool, remembered: bool) -> Writer<'port> {
+    fn new(port: &'port mut Transmit, queued: bool, kind: Kind) -> Writer<'port> {
         let wake = if queued { port.unstall() } else { port.flush() };
         Writer {
             port,
             queued,
-            remembered,
+            remembered: kind.remembered(),
+            logged: kind.logged(),
             wake,
         }
     }
@@ -138,6 +153,9 @@ impl<'port> Writer<'port> {
 
     /// `bytes`, a bare newline as CRLF if `crlf`.
     fn bytes(&mut self, bytes: &[u8], crlf: bool) {
+        if self.logged {
+            log::record(bytes);
+        }
         for &byte in bytes {
             // A serial terminal wants CRLF; a bare newline leaves the cursor
             // where it was and the boot log becomes a staircase.
@@ -168,11 +186,18 @@ impl Write for Writer<'_> {
 }
 
 /// Somewhere for a failure report to go when the port's lock cannot be had:
-/// straight to the port, past the ring and whoever holds it.
-struct Unlocked;
+/// straight to the port, past the ring and whoever holds it. Recorded in the
+/// kernel [`log`] if `logged`.
+struct Unlocked {
+    /// Whether the bytes go into the kernel log too.
+    logged: bool,
+}
 
 impl Write for Unlocked {
     fn write_str(&mut self, text: &str) -> fmt::Result {
+        if self.logged {
+            log::record(text.as_bytes());
+        }
         for byte in text.bytes() {
             if byte == b'\n' {
                 crate::arch::console::write_byte(b'\r');
@@ -216,31 +241,101 @@ fn may_queue() -> bool {
         && crate::arch::interrupts_enabled()
 }
 
-/// Write formatted output to the console, if there is one yet.
+/// Whose bytes a writer sends, which decides where else they are kept.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// The kernel's own line: kept for a failure report and in the log.
+    Line,
+    /// A kernel line that says where the kernel is: kept for a failure
+    /// report, and not in the log. See [`write_unlogged`].
+    Unlogged,
+    /// A program's output: kept in the log only.
+    Program,
+}
+
+impl Kind {
+    /// Whether the bytes are kept in [`RECENT`] and drawn on the screen.
+    const fn remembered(self) -> bool {
+        matches!(self, Kind::Line | Kind::Unlogged)
+    }
+
+    /// Whether the bytes are recorded in the kernel [`log`].
+    const fn logged(self) -> bool {
+        matches!(self, Kind::Line | Kind::Program)
+    }
+}
+
+/// Write formatted output to the console, if there is one yet, and record it
+/// in the kernel [`log`].
 ///
 /// Queued with interrupts on and polled with them masked, as [`output`]
 /// explains, and never waiting for room: the idle task prints too.
 pub(crate) fn write(arguments: fmt::Arguments<'_>) {
+    write_as(arguments, Kind::Line);
+}
+
+/// Write formatted output to the console, as [`write`] does, but keep it out
+/// of the kernel [`log`]: it goes to the port, the panic screen and the
+/// recent-output ring a failure report draws, and to nothing a program can
+/// read. [`println_unlogged!`] is the way in.
+///
+/// For the lines that print where the kernel is, and no others. The log is
+/// readable by privileged programs (`syslog(2)`) and by the driver of a device
+/// allowed to stream it off the machine (`logctl`), and the layout randomised
+/// at boot (KASLR, `docs/certification/SPECULATION.md` §6.1) is worth only as
+/// much as nothing a program can read gives it away. So these stay out:
+///
+/// * a panic's `kaslr slide` line and its backtrace, whose frames are the
+///   image's own addresses (`panic.rs`);
+/// * a fatal trap's registers and fault address, which hold kernel pointers
+///   whenever the kernel was what trapped (`arch::report_trap`, and the
+///   report's headline in `trap.rs`);
+/// * stage 2's report of where the loader put the image, the direct map and
+///   the page array, and the W^X and sealed-image sweeps' failure lines,
+///   which name the kernel mapping that failed (`main.rs`).
+///
+/// Nothing else the kernel prints names a kernel virtual address: device
+/// apertures, IOMMU pages and fault addresses in a program are physical,
+/// device-side or the program's own. A panic's message is logged as written,
+/// whatever it holds: by the time it is, every other processor is stopping
+/// and no reader will run again.
+pub(crate) fn write_unlogged(arguments: fmt::Arguments<'_>) {
+    write_as(arguments, Kind::Unlogged);
+}
+
+/// [`write`] or [`write_unlogged`], as `kind` says.
+fn write_as(arguments: fmt::Arguments<'_>, kind: Kind) {
     if !READY.load(Ordering::Acquire) {
         return;
     }
-    if !PANICKING.load(Ordering::Relaxed) {
-        let queued = may_queue();
-        let wake = {
-            let mut port = PORT.lock();
-            let mut writer = Writer::new(&mut port, queued, true);
-            let _ = writer.write_fmt(arguments);
-            writer.finish()
-        };
-        if wake {
-            output::wake_writers();
-        }
+    if PANICKING.load(Ordering::Relaxed) {
+        write_panicking(arguments, kind == Kind::Line);
         return;
     }
+    let queued = may_queue();
+    let wake = {
+        let mut port = PORT.lock();
+        let mut writer = Writer::new(&mut port, queued, kind);
+        let _ = writer.write_fmt(arguments);
+        writer.finish()
+    };
+    if wake {
+        output::wake_writers();
+    }
+}
 
+/// How [`write`] writes once [`begin_panic`] has been called: the lock waited
+/// for a bounded time, then passed by, and the bytes polled straight out.
+/// Recorded in the kernel [`log`] if `logged`.
+///
+/// Also run by the log's boot check (`console::log_check`) without a panic, so
+/// that the path a failure report takes into the log is exercised on every
+/// boot rather than only on the one that fails.
+pub(crate) fn write_panicking(arguments: fmt::Arguments<'_>, logged: bool) {
+    let kind = if logged { Kind::Line } else { Kind::Unlogged };
     for _ in 0..PANIC_SPINS {
         if let Some(mut port) = PORT.try_lock() {
-            let _ = Writer::new(&mut port, false, true).write_fmt(arguments);
+            let _ = Writer::new(&mut port, false, kind).write_fmt(arguments);
             return;
         }
         spin_loop();
@@ -248,7 +343,7 @@ pub(crate) fn write(arguments: fmt::Arguments<'_>) {
     // Whoever holds the lock is not going to release it — quite possibly
     // because it is this CPU, part way through the line that failed. What was
     // queued stays queued; the report goes out.
-    let _ = Unlocked.write_fmt(arguments);
+    let _ = Unlocked { logged }.write_fmt(arguments);
 }
 
 /// Send everything written so far, and wait until the port has, for a caller
@@ -320,7 +415,7 @@ fn emit(bytes: &[u8], crlf: bool) {
     }
     let wake = {
         let mut port = PORT.lock();
-        let mut writer = Writer::new(&mut port, queued, false);
+        let mut writer = Writer::new(&mut port, queued, Kind::Program);
         writer.bytes(bytes, crlf);
         writer.finish()
     };
@@ -338,3 +433,13 @@ macro_rules! println {
 }
 
 pub(crate) use println;
+
+/// Print to the kernel console, with a newline, and keep the line out of the
+/// kernel log: see [`write_unlogged`] for which lines, and why.
+macro_rules! println_unlogged {
+    ($($argument:tt)*) => {
+        $crate::console::write_unlogged(format_args!("{}\n", format_args!($($argument)*)))
+    };
+}
+
+pub(crate) use println_unlogged;

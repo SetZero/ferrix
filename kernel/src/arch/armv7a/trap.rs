@@ -605,25 +605,27 @@ const fn kind_name(kind: u32) -> &'static str {
     }
 }
 
-/// Print the interrupted state.
+/// Print the interrupted state, unlogged (`console::write_unlogged`).
 pub(crate) fn report_trap(frame: &TrapFrame) {
-    use crate::console::println;
+    use crate::console::println_unlogged;
 
-    println!(
+    println_unlogged!(
         "  vector   {} ({})  fsr {:#010x}  far {:#010x}",
         frame.kind,
         kind_name(frame.kind),
         frame.fsr,
         frame.far
     );
-    println!(
+    println_unlogged!(
         "  pc       {:#010x}  cpsr {:#010x}  lr {:#010x}",
-        frame.pc, frame.cpsr, frame.lr
+        frame.pc,
+        frame.cpsr,
+        frame.lr
     );
     for quad in 0..4 {
         let register = |index: usize| frame.r.get(index).copied().unwrap_or(0);
         let first = quad * 4;
-        println!(
+        println_unlogged!(
             "  r{:<2} {:#010x}  r{:<2} {:#010x}  r{:<2} {:#010x}  r{:<2} {:#010x}",
             first,
             register(first),
@@ -635,7 +637,7 @@ pub(crate) fn report_trap(frame: &TrapFrame) {
             register(first + 3),
         );
     }
-    println!(
+    println_unlogged!(
         "  from     {}",
         if frame.came_from_user() {
             "user mode"

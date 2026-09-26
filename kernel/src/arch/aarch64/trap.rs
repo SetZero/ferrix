@@ -588,24 +588,24 @@ const fn class_name(class: u64) -> &'static str {
     }
 }
 
-/// Print the interrupted state.
+/// Print the interrupted state, unlogged (`console::write_unlogged`).
 pub(crate) fn report_trap(frame: &TrapFrame) {
-    use crate::console::println;
+    use crate::console::println_unlogged;
 
-    println!(
+    println_unlogged!(
         "  esr      {:#018x}  class {:#04x} ({})",
         frame.esr,
         frame.exception_class(),
         class_name(frame.exception_class())
     );
-    println!("  far      {:#018x}", frame.far);
-    println!("  elr      {:#018x}  spsr {:#018x}", frame.elr, frame.spsr);
-    println!("  sp_el0   {:#018x}  vector entry {}", frame.sp, frame.kind);
+    println_unlogged!("  far      {:#018x}", frame.far);
+    println_unlogged!("  elr      {:#018x}  spsr {:#018x}", frame.elr, frame.spsr);
+    println_unlogged!("  sp_el0   {:#018x}  vector entry {}", frame.sp, frame.kind);
 
     for pair in 0..15 {
         let low = frame.x.get(pair * 2).copied().unwrap_or(0);
         let high = frame.x.get(pair * 2 + 1).copied().unwrap_or(0);
-        println!(
+        println_unlogged!(
             "  x{:<2} {:#018x}  x{:<2} {:#018x}",
             pair * 2,
             low,
@@ -613,8 +613,8 @@ pub(crate) fn report_trap(frame: &TrapFrame) {
             high
         );
     }
-    println!("  x30 {:#018x}", frame.x.get(30).copied().unwrap_or(0));
-    println!(
+    println_unlogged!("  x30 {:#018x}", frame.x.get(30).copied().unwrap_or(0));
+    println_unlogged!(
         "  from     {}",
         if frame.came_from_user() {
             "EL0"
