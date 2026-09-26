@@ -23,6 +23,11 @@
 //! that exits before publishing fails the check with its exit status printed,
 //! which names the step it stopped at.
 //!
+//! A boot that skips its self-checks (`ferrix.checks=skip`) still starts
+//! every driver and waits for every disk, since what mounts next needs them,
+//! but reads nothing back: its first disk is whatever the machine was given,
+//! a desktop's volume say, and not the test disk.
+//!
 //! The driver is left running. Its disk stays in `/dev` for what comes after
 //! this check — a btrfs mount of the next disk is stage 11's exit — and the
 //! process ends with the machine.
@@ -40,6 +45,7 @@ use ferrix_vfs::initramfs::makedev;
 use ferrix_vma::VmaFlags;
 
 use super::{VIRTIO_BLK_MAJOR, start_for};
+use crate::checks;
 use crate::device;
 use crate::fs;
 use crate::fs::block::BlockDevice;
@@ -106,7 +112,8 @@ pub(crate) struct Report {
     pub(crate) names: &'static str,
     /// The first disk's size in sectors, as its driver announced it.
     pub(crate) sectors: u64,
-    /// Sectors of the first disk read back as written.
+    /// Sectors of the first disk read back as written: none on a boot that
+    /// skips its self-checks.
     pub(crate) read: u32,
     /// Why nothing was checked, on a machine without the device.
     pub(crate) skipped: Option<&'static str>,
@@ -149,7 +156,11 @@ pub(crate) fn run(started_by_devmgr: bool) -> Result<Report, &'static str> {
             }
         }
         let disk = first.ok_or("no disk was published")?;
-        let read = read_back(disk.as_ref())?;
+        let read = if checks::run() {
+            read_back(disk.as_ref())?
+        } else {
+            0
+        };
         return Ok(Report {
             names: names_str(nodes.len()),
             sectors: disk.sectors(),
@@ -192,7 +203,11 @@ pub(crate) fn run(started_by_devmgr: bool) -> Result<Report, &'static str> {
 
     // Sectors through the first disk, the path a mount takes.
     let disk = first.ok_or("no disk was published")?;
-    let read = read_back(disk.as_ref())?;
+    let read = if checks::run() {
+        read_back(disk.as_ref())?
+    } else {
+        0
+    };
     Ok(Report {
         names: names_str(nodes.len()),
         sectors: disk.sectors(),
