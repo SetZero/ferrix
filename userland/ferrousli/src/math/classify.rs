@@ -64,6 +64,65 @@ pub extern "C" fn __fpclassifyf(x: f32) -> c_int {
     }
 }
 
+/// `isnan` as a function rather than `math.h`'s macro: nonzero for a NaN.
+/// glibc exports it under both names, and programs built against it before
+/// C99 made it a macro, LLVM among them, still import it.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn isnan(x: f64) -> c_int {
+    c_int::from(x.is_nan())
+}
+
+/// glibc's internal name for [`isnan`], which `cargo` imports.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn __isnan(x: f64) -> c_int {
+    isnan(x)
+}
+
+/// [`isnan`] for `float`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn isnanf(x: f32) -> c_int {
+    c_int::from(x.is_nan())
+}
+
+/// glibc's internal name for [`isnanf`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn __isnanf(x: f32) -> c_int {
+    isnanf(x)
+}
+
+/// `isinf` as a function: 1 for positive infinity, -1 for negative, 0
+/// otherwise, which is glibc's function and says more than the macro.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn isinf(x: f64) -> c_int {
+    match x {
+        f64::INFINITY => 1,
+        f64::NEG_INFINITY => -1,
+        _ => 0,
+    }
+}
+
+/// glibc's internal name for [`isinf`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn __isinf(x: f64) -> c_int {
+    isinf(x)
+}
+
+/// [`isinf`] for `float`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn isinff(x: f32) -> c_int {
+    match x {
+        f32::INFINITY => 1,
+        f32::NEG_INFINITY => -1,
+        _ => 0,
+    }
+}
+
+/// glibc's internal name for [`isinff`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn __isinff(x: f32) -> c_int {
+    isinff(x)
+}
+
 /// 1 if `x`'s sign bit is set, which it is for -0 and for some NaNs, and 0
 /// otherwise.
 #[cfg_attr(not(test), unsafe(no_mangle))]

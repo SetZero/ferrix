@@ -145,6 +145,20 @@ fn processors() -> c_long {
     }
 }
 
+/// How many processors are online: GNU's `get_nprocs`, which LLVM imports,
+/// answered as `sysconf(_SC_NPROCESSORS_ONLN)` is.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn get_nprocs() -> c_int {
+    c_int::try_from(processors()).unwrap_or(c_int::MAX)
+}
+
+/// How many processors are configured: GNU's `get_nprocs_conf`, answered as
+/// `sysconf(_SC_NPROCESSORS_CONF)` is.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn get_nprocs_conf() -> c_int {
+    get_nprocs()
+}
+
 /// Pages of physical memory from a `sysinfo` result.
 fn phys_pages(info: &Sysinfo, page: usize) -> c_long {
     let unit = u128::from(info.mem_unit.max(1));

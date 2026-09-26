@@ -58,6 +58,7 @@ pub mod err;
 pub mod errno;
 pub mod ether;
 pub mod eventfd;
+pub mod execinfo;
 pub mod exit;
 pub mod fcntl;
 pub mod fenv;
@@ -69,6 +70,7 @@ pub mod fts;
 pub mod ftw;
 pub mod futex;
 pub mod getopt;
+mod glibc_aliases;
 #[cfg(target_arch = "arm")]
 pub mod glibc_time64;
 pub mod glob;
@@ -158,6 +160,8 @@ pub mod times;
 pub mod tm;
 pub mod ttyent;
 pub mod tz;
+#[cfg(target_arch = "x86_64")]
+mod ucontext;
 pub mod uio;
 pub mod unistd;
 pub mod utmpx;

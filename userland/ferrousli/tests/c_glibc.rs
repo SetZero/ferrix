@@ -109,3 +109,8 @@ fn a_checked_strlcpy_given_too_small_an_object_aborts_before_writing() {
         ..Case::named("glibc/libraries")
     });
 }
+
+#[test]
+fn what_rustc_cargo_and_llvm_import_is_here_and_a_glibc_recursive_mutex_is_recursive() {
+    check(&Case::named("glibc/rustc"));
+}

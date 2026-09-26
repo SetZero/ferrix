@@ -546,6 +546,37 @@ pub unsafe extern "C" fn memrchr(s: *const c_void, c: c_int, n: usize) -> *mut c
     null_mut()
 }
 
+/// The address of the first byte `c` at `s`, which the caller knows is
+/// there, so no length bounds the search: GNU's `rawmemchr`.
+///
+/// # Safety
+///
+/// `s` must hold the byte `c` before its end.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn rawmemchr(s: *const c_void, c: c_int) -> *mut c_void {
+    let wanted = c as u8;
+    let s = s.cast::<u8>();
+    let mut i = 0;
+    // SAFETY: the caller vouches that the byte is there, so every byte up
+    // to it is readable.
+    while unsafe { byte_at(s, i) } != wanted {
+        i += 1;
+    }
+    s.wrapping_add(i).cast_mut().cast()
+}
+
+/// glibc's internal name for [`rawmemchr`], which `rustc` and `cargo`
+/// import.
+///
+/// # Safety
+///
+/// As [`rawmemchr`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __rawmemchr(s: *const c_void, c: c_int) -> *mut c_void {
+    // SAFETY: the caller's contract is `rawmemchr`'s.
+    unsafe { rawmemchr(s, c) }
+}
+
 /// Copies the string `src` to `dest` and returns the address of the NUL
 /// written.
 ///

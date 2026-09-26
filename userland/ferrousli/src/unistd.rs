@@ -535,6 +535,30 @@ pub extern "C" fn get_current_dir_name() -> *mut c_char {
     unsafe { crate::string::strdup(buf.as_ptr()) }
 }
 
+/// Moves the program break by `increment` bytes and answers where it was, or
+/// `(void *)-1` with `ENOMEM`. Nothing in this library uses the break --
+/// `malloc` maps its memory -- so it is the program's alone, as glibc leaves
+/// it; `sbrk(0)`, where it is, is what GCC and `rustc` ask.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn sbrk(increment: isize) -> *mut c_void {
+    // SAFETY: `brk(0)` changes nothing and answers the break.
+    let current = unsafe { syscall::syscall2(nr::BRK, 0, 0) }.cast_unsigned();
+    if increment == 0 {
+        return core::ptr::with_exposed_provenance_mut(current);
+    }
+    let Some(want) = current.checked_add_signed(increment) else {
+        errno::set(errno::ENOMEM);
+        return core::ptr::without_provenance_mut(usize::MAX);
+    };
+    // SAFETY: the kernel moves the break or leaves it; either is answered.
+    let now = unsafe { syscall::syscall2(nr::BRK, want, 0) }.cast_unsigned();
+    if now != want {
+        errno::set(errno::ENOMEM);
+        return core::ptr::without_provenance_mut(usize::MAX);
+    }
+    core::ptr::with_exposed_provenance_mut(current)
+}
+
 /// How many descriptors the process may have open: the soft
 /// `RLIMIT_NOFILE`, or `OPEN_MAX`'s 256 without one, as in musl.
 #[cfg_attr(not(test), unsafe(no_mangle))]

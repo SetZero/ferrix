@@ -293,7 +293,12 @@ const NAME_MAX: usize = 255;
 const DIRECTORY: &[u8] = b"/dev/shm/";
 
 /// A path buffer: the directory, a name and a NUL.
-type PathBuf = [u8; 9 + NAME_MAX + 1];
+pub(crate) type PathBuf = [u8; 9 + NAME_MAX + 1];
+
+/// An empty [`PathBuf`], for [`map_name`] to fill.
+pub(crate) const fn path_buffer() -> PathBuf {
+    [0; 9 + NAME_MAX + 1]
+}
 
 /// Writes `/dev/shm/<name>` into `buf` for a semaphore `name`, which may
 /// start with slashes but hold no other. musl's `__shm_mapname`.
@@ -301,7 +306,7 @@ type PathBuf = [u8; 9 + NAME_MAX + 1];
 /// # Safety
 ///
 /// `name` must be a NUL-terminated string.
-unsafe fn map_name(name: *const c_char, buf: &mut PathBuf) -> Result<(), c_int> {
+pub(crate) unsafe fn map_name(name: *const c_char, buf: &mut PathBuf) -> Result<(), c_int> {
     let mut at = name;
     // SAFETY: the caller passes a NUL-terminated string, and `at` stays
     // inside it.

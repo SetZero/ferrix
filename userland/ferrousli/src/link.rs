@@ -221,7 +221,7 @@ pub unsafe extern "C" fn dlopen(path: *const c_char, flags: c_int) -> *mut c_voi
 ///
 /// `name` must be a NUL-terminated string.
 #[cfg_attr(test, allow(dead_code, reason = "tests reach it through `dlsym`"))]
-unsafe extern "C" fn dlsym_caller(
+pub(crate) unsafe extern "C" fn dlsym_caller(
     handle: *mut c_void,
     name: *const c_char,
     caller: *const c_void,

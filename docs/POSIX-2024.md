@@ -18,13 +18,13 @@ variables it specifies beside them.
 
 | Status | Interfaces | Meaning |
 |---|---|---|
-| present | 1068 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
+| present | 1070 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
 | macro only | 3 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
-| broken | 1 | present, but it fails to link or gives a wrong answer |
+| broken | 2 | present, but it fails to link or gives a wrong answer |
 | stubbed | 0 | a stand-in that ends the program; the last left `src/stubs.rs` on 2026-09-16, and the file is gone |
-| absent | 171 | not there |
+| absent | 168 | not there |
 
-176 interfaces are missing in one of the last four ways. None of them is
+173 interfaces are missing in one of the last four ways. None of them is
 written on a branch any more: the three unlanded branches of 2026-09-13,
 `ferrousli-math`, `ferrousli-threads` and `ferrousli-misc`, were built,
 fixed and landed on 2026-09-16.
@@ -41,7 +41,7 @@ new subsystem. Every area's missing names are in the index at the end.
 | Strings and characters | 72 | 0 | 0 | 0 | landed: `strcasecmp_l`, `strncasecmp_l` |
 | Wide and multibyte characters | 118 | 0 | 0 | 0 | landed: the `wscanf` family, `fwscanf` to `wscanf`; `open_wmemstream`; the `wprintf` family, `fwprintf` to `wprintf`; wide-character stream I/O (`fgetwc`, `fgetws`, `fputwc`, `fputws`, `getwc`, `getwchar`, `putwc`, `putwchar`, `ungetwc`, `fwide`); the `wcstol` and `wcstod` families with `wcstoimax` and `wcstoumax`; `wcsftime`, `wcslcpy`, `wcslcat` |
 | Standard I/O | 70 | 0 | 0 | 0 | landed: `tmpnam` |
-| Math and the floating-point environment | 201 | 28 | 0 | 5 | the 28 `long double` forms the x87 has no single instruction for -- the transcendentals, `powl` among them as a `double` stand-in, `cbrtl`, `hypotl`, `fmal` and the gamma and error functions -- each a port of musl's, 5. Landed: every `double` and `float` function: the error and gamma functions with `signgam` and `lgamma_r`, the Bessel functions; the hyperbolic functions and `hypot` for `double` and `float`; `tan`, `asin`, `acos`, `atan` for `double`, and all of them with `sin`, `cos` and `atan2` for `float`; `exp2`, `expm1`, `log2`, `log10`, `log1p` for `double` and `float`, with `expf`, `logf` and `powf`; `fenv.h`; rounding, manipulation, remainders and `fma` for `double` and `float`; `sin`, `cos`, `exp`, `log`, `pow` and `atan2` for `double`, bit for bit musl's in every rounding mode; and the classifiers for all three types; the 31 `long double` forms the x87 computes directly, through naked shims for the calling convention no Rust signature can say: `fabsl`, `copysignl`, `sqrtl`, the rounding family, the remainder family and the manipulation family |
+| Math and the floating-point environment | 201 | 28 | 0 | 5 | the 28 `long double` forms the x87 has no single instruction for -- the transcendentals, `powl` and `logl` among them as `double` stand-ins, `cbrtl`, `hypotl`, `fmal` and the gamma and error functions -- each a port of musl's, 5. Landed: every `double` and `float` function: the error and gamma functions with `signgam` and `lgamma_r`, the Bessel functions; the hyperbolic functions and `hypot` for `double` and `float`; `tan`, `asin`, `acos`, `atan` for `double`, and all of them with `sin`, `cos` and `atan2` for `float`; `exp2`, `expm1`, `log2`, `log10`, `log1p` for `double` and `float`, with `expf`, `logf` and `powf`; `fenv.h`; rounding, manipulation, remainders and `fma` for `double` and `float`; `sin`, `cos`, `exp`, `log`, `pow` and `atan2` for `double`, bit for bit musl's in every rounding mode; and the classifiers for all three types; the 31 `long double` forms the x87 computes directly, through naked shims for the calling convention no Rust signature can say: `fabsl`, `copysignl`, `sqrtl`, the rounding family, the remainder family and the manipulation family |
 | Complex arithmetic | 69 | 22 | 0 | 2 | the `long double complex` forms, after the rest of `long double` math 2. Landed: every `double complex` and `float complex` function, `creal` and `cimag` among them as functions, bit for bit musl's |
 | Locales, messages and conversion | 32 | 3 | 0 | 8 | reading `.mo` catalogues for the `gettext` family 3; `iconv`'s other character sets and glibc's transliteration 2; `strfmon`, `strfmon_l` 2; `getlocalename_l` 1. Landed: the `gettext` family with the answers glibc gives without a catalogue, and `iconv` between UTF-8, UTF-16, UTF-32, UCS-2, UCS-4, ASCII, ISO-8859-1 and CP1252, for GLib (`docs/CHROME.md`); `catopen`, `catgets`, `catclose` |
 | Files, directories and I/O multiplexing | 46 | 1 | 0 | 1 | `posix_getdents` |
@@ -51,20 +51,21 @@ new subsystem. Every area's missing names are in the index at the end.
 | Time and clocks | 29 | 3 | 0 | 3 | `getdate` and `getdate_err` 2; `timespec_get` 1 |
 | Threads and scheduling | 145 | 6 | 0 | 3 | the `clock` variants of the condition, mutex, read-write lock and semaphore waits 2; `pthread_atfork` 1. Landed: cancellation, `pthread_cancel` and `pthread_testcancel` with their cancellation points |
 | Memory mapping and System V IPC | 21 | 0 | 0 | 0 | landed: `ftok`, for NSPR (`docs/CHROME.md`) |
-| Realtime: asynchronous I/O, message queues, timers, shared memory | 29 | 27 | 0 | 11 | `aio.h` over threads 3; the rest of `mqueue.h`, `mq_open` to `mq_notify`, 3; `timer_*` with `SIGEV_THREAD` 3; `shm_open`, `shm_unlink` 1; `clock_getcpuclockid` 1. Typed memory (`posix_typed_mem_*`, `posix_mem_offset`) is the TYM option, which ferrousli does not claim: 0 |
+| Realtime: asynchronous I/O, message queues, timers, shared memory | 29 | 25 | 0 | 10 | `aio.h` over threads 3; the rest of `mqueue.h`, `mq_open` to `mq_notify`, 3; `timer_*` with `SIGEV_THREAD` 3; `clock_getcpuclockid` 1. Landed: `shm_open` and `shm_unlink`, for LLVM (`docs/roadmap/chrome.md`). Typed memory (`posix_typed_mem_*`, `posix_mem_offset`) is the TYM option, which ferrousli does not claim: 0 |
 | Terminals and devices | 25 | 2 | 0 | 2 | `ctermid` 1; `posix_devctl` and `<devctl.h>` 1. Landed: `posix_openpt`, `grantpt`, `unlockpt`, `ptsname`, `ptsname_r`, for foot (`docs/CHROME.md`) |
 | Networking and name resolution | 55 | 0 | 0 | 0 | landed: `getaddrinfo`, `getnameinfo`, `freeaddrinfo` and `gai_strerror` over `/etc/hosts` and a DNS stub resolver; the hosts, networks, protocols and services databases; `if_nameindex`, `if_freenameindex`, `if_indextoname`; `in6addr_any`, `in6addr_loopback`, `sockatmark` |
 | Patterns, paths and search | 23 | 2 | 0 | 3 | `wordexp` 3. Landed: `nftw`, musl's with glibc's type flags and `FTW_ACTIONRETVAL`, for GLib (`docs/CHROME.md`); `glob` and `globfree`; `search.h`'s hash table, trees, linear search and queues; `libgen.h`'s `basename` and `dirname`, and `regex.h`, replacing five stubs |
 | Users, groups and databases | 29 | 9 | 0 | 3 | `<ndbm.h>` and the `dbm_*` functions |
 | Dynamic loading | 5 | 4 | 0 | 2 | `dlopen`, `dlsym`, `dlclose` and `dlerror` for a static program, failing cleanly; a loader is the README's fifth item and is not priced here. Landed: `dladdr`, over the program's own headers |
 | Across areas | | | | 3 | POSIX.1-2024's declarations in `include/` 3 |
-| **All** | **1243** | **175** | **0** | **65** | |
+| **All** | **1243** | **173** | **0** | **64** | |
 
 ## Present but broken
 
-One is: `powl`, which Chrome imports, is `pow` of its arguments rounded to
+Two are: `powl`, which Chrome imports, is `pow` of its arguments rounded to
 `double` and widened back, as musl does for AArch64's binary128 `long double`,
-until musl's x87 `powl` is ported. Its results carry 53 bits, not 64.
+until musl's x87 `powl` is ported; and `logl`, which LLVM imports, is `log`
+the same way. Their results carry 53 bits, not 64.
 
 This list held interfaces that looked present and were not,
 which made them worse than a missing name: a program compiled against the
@@ -239,8 +240,8 @@ interface.
 |---|---|---|
 | `<fenv.h>` | present (11) | `feclearexcept`, `fegetenv`, `fegetexceptflag`, `fegetround`, `feholdexcept`, `feraiseexcept`, `fesetenv`, `fesetexceptflag`, `fesetround`, `fetestexcept`, `feupdateenv` |
 | `<math.h>` | present (162) | `acos`, `acosf`, `acosh`, `acoshf`, `asin`, `asinf`, `asinh`, `asinhf`, `atan`, `atan2`, `atan2f`, `atanf`, `atanh`, `atanhf`, `cbrt`, `cbrtf`, `ceil`, `ceilf`, `ceill`, `copysign`, `copysignf`, `copysignl`, `cos`, `cosf`, `cosh`, `coshf`, `erf`, `erfc`, `erfcf`, `erff`, `exp`, `exp2`, `exp2f`, `expf`, `expm1`, `expm1f`, `fabs`, `fabsf`, `fabsl`, `fdim`, `fdimf`, `fdiml`, `floor`, `floorf`, `floorl`, `fma`, `fmaf`, `fmax`, `fmaxf`, `fmaxl`, `fmin`, `fminf`, `fminl`, `fmod`, `fmodf`, `fmodl`, `fpclassify`, `frexp`, `frexpf`, `frexpl`, `hypot`, `hypotf`, `ilogb`, `ilogbf`, `ilogbl`, `isfinite`, `isgreater`, `isgreaterequal`, `isinf`, `isless`, `islessequal`, `islessgreater`, `isnan`, `isnormal`, `isunordered`, `j0`, `j1`, `jn`, `ldexp`, `ldexpf`, `ldexpl`, `lgamma`, `lgammaf`, `llrint`, `llrintf`, `llrintl`, `llround`, `llroundf`, `llroundl`, `log`, `log10`, `log10f`, `log1p`, `log1pf`, `log2`, `log2f`, `logb`, `logbf`, `logbl`, `logf`, `lrint`, `lrintf`, `lrintl`, `lround`, `lroundf`, `lroundl`, `modf`, `modff`, `modfl`, `nan`, `nanf`, `nanl`, `nearbyint`, `nearbyintf`, `nearbyintl`, `nextafter`, `nextafterf`, `nextafterl`, `nexttoward`, `nexttowardf`, `nexttowardl`, `pow`, `powf`, `remainder`, `remainderf`, `remainderl`, `remquo`, `remquof`, `remquol`, `rint`, `rintf`, `rintl`, `round`, `roundf`, `roundl`, `scalbln`, `scalblnf`, `scalblnl`, `scalbn`, `scalbnf`, `scalbnl`, `signbit`, `signgam`, `sin`, `sinf`, `sinh`, `sinhf`, `sqrt`, `sqrtf`, `sqrtl`, `tan`, `tanf`, `tanh`, `tanhf`, `tgamma`, `tgammaf`, `trunc`, `truncf`, `truncl`, `y0`, `y1`, `yn` |
-| `<math.h>` | absent (27) | `acoshl`, `acosl`, `asinhl`, `asinl`, `atan2l`, `atanhl`, `atanl`, `cbrtl`, `coshl`, `cosl`, `erfcl`, `erfl`, `exp2l`, `expl`, `expm1l`, `fmal`, `hypotl`, `lgammal`, `log10l`, `log1pl`, `log2l`, `logl`, `sinhl`, `sinl`, `tanhl`, `tanl`, `tgammal` |
-| `<math.h>` | broken (1) | `powl`, computed in `double` |
+| `<math.h>` | absent (26) | `acoshl`, `acosl`, `asinhl`, `asinl`, `atan2l`, `atanhl`, `atanl`, `cbrtl`, `coshl`, `cosl`, `erfcl`, `erfl`, `exp2l`, `expl`, `expm1l`, `fmal`, `hypotl`, `lgammal`, `log10l`, `log1pl`, `log2l`, `sinhl`, `sinl`, `tanhl`, `tanl`, `tgammal` |
+| `<math.h>` | broken (2) | `logl`, `powl`, computed in `double` |
 
 ### Complex arithmetic
 
@@ -328,7 +329,7 @@ interface.
 | Header | Status | Interfaces |
 |---|---|---|
 | `<sys/ipc.h>` | present (1) | `ftok` (XSI) |
-| `<sys/mman.h>` | present (9) | `mlock` (MLR), `mlockall` (ML), `mmap`, `mprotect`, `msync` (XSI or SIO), `munlock` (MLR), `munlockall` (ML), `munmap`, `posix_madvise` (ADV) |
+| `<sys/mman.h>` | present (11) | `mlock` (MLR), `mlockall` (ML), `mmap`, `mprotect`, `msync` (XSI or SIO), `munlock` (MLR), `munlockall` (ML), `munmap`, `posix_madvise` (ADV), `shm_open` (SHM), `shm_unlink` (SHM) |
 | `<sys/msg.h>` | present (4) | `msgctl` (XSI), `msgget` (XSI), `msgrcv` (XSI), `msgsnd` (XSI) |
 | `<sys/sem.h>` | present (3) | `semctl` (XSI), `semget` (XSI), `semop` (XSI) |
 | `<sys/shm.h>` | present (4) | `shmat` (XSI), `shmctl` (XSI), `shmdt` (XSI), `shmget` (XSI) |
@@ -340,7 +341,7 @@ interface.
 | `<aio.h>` | absent (8) | `aio_cancel`, `aio_error`, `aio_fsync` (FSC or SIO), `aio_read`, `aio_return`, `aio_suspend`, `aio_write`, `lio_listio` |
 | `<mqueue.h>` | absent (8) | `mq_close` (MSG), `mq_notify` (MSG), `mq_open` (MSG), `mq_receive` (MSG), `mq_send` (MSG), `mq_timedreceive` (MSG), `mq_timedsend` (MSG), `mq_unlink` (MSG) |
 | `<mqueue.h>` | present (2) | `mq_getattr` (MSG), `mq_setattr` (MSG) |
-| `<sys/mman.h>` | absent (5) | `posix_mem_offset` (TYM), `posix_typed_mem_get_info` (TYM), `posix_typed_mem_open` (TYM), `shm_open` (SHM), `shm_unlink` (SHM) |
+| `<sys/mman.h>` | absent (3) | `posix_mem_offset` (TYM), `posix_typed_mem_get_info` (TYM), `posix_typed_mem_open` (TYM) |
 | `<time.h>` | absent (6) | `clock_getcpuclockid` (CPT), `timer_create`, `timer_delete`, `timer_getoverrun`, `timer_gettime`, `timer_settime` |
 
 ### Terminals and devices

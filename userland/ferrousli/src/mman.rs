@@ -256,6 +256,51 @@ pub unsafe extern "C" fn memfd_create(name: *const c_char, flags: c_uint) -> c_i
     errno::from_syscall(ret) as c_int
 }
 
+/// `O_CLOEXEC`, which every architecture here numbers alike.
+const O_CLOEXEC: c_int = 0o2_000_000;
+/// `O_NONBLOCK`, likewise.
+const O_NONBLOCK: c_int = 0o4000;
+
+/// Opens the shared memory object `name`, a file in `/dev/shm`, with
+/// `flags` and, when it is created, `mode`: musl's `shm_open`. The name is
+/// mapped as a named semaphore's is ([`crate::semaphore::map_name`]).
+///
+/// # Safety
+///
+/// `name` must be a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn shm_open(name: *const c_char, flags: c_int, mode: c_uint) -> c_int {
+    let mut path = crate::semaphore::path_buffer();
+    // SAFETY: the caller passes a NUL-terminated string.
+    if let Err(error) = unsafe { crate::semaphore::map_name(name, &mut path) } {
+        errno::set(error);
+        return -1;
+    }
+    let old = crate::cancel::set_state(crate::cancel::DISABLE);
+    let flags = flags | crate::fcntl::O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK;
+    // SAFETY: `path` is NUL-terminated.
+    let fd = unsafe { crate::fcntl::open(path.as_ptr().cast(), flags, mode) };
+    let _ = crate::cancel::set_state(old);
+    fd
+}
+
+/// Removes the shared memory object `name` ([`shm_open`]).
+///
+/// # Safety
+///
+/// `name` must be a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn shm_unlink(name: *const c_char) -> c_int {
+    let mut path = crate::semaphore::path_buffer();
+    // SAFETY: the caller passes a NUL-terminated string.
+    if let Err(error) = unsafe { crate::semaphore::map_name(name, &mut path) } {
+        errno::set(error);
+        return -1;
+    }
+    // SAFETY: `path` is NUL-terminated.
+    unsafe { crate::unistd::unlink(path.as_ptr().cast()) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -543,6 +543,36 @@ pub unsafe extern "C" fn futimens(fd: c_int, times: *const Timespec) -> c_int {
     unsafe { utimensat(fd, null(), times, 0) }
 }
 
+/// Sets the access and modification times of the file `fd` refers to, to
+/// microseconds: the BSD call, which `cargo` imports. A null `times` is now.
+///
+/// # Safety
+///
+/// `times` must be null or valid for a read of two `struct timeval`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn futimes(fd: c_int, times: *const Timeval) -> c_int {
+    if times.is_null() {
+        // SAFETY: a null `times` is what `futimens` takes for now.
+        return unsafe { futimens(fd, null()) };
+    }
+    let mut converted = [Timespec::default(); 2];
+    for (index, slot) in converted.iter_mut().enumerate() {
+        // SAFETY: the caller vouches for two `struct timeval`.
+        let time = unsafe { times.wrapping_add(index).read() };
+        if !(0..1_000_000).contains(&time.tv_usec) {
+            errno::set(errno::EINVAL);
+            return -1;
+        }
+        *slot = Timespec {
+            tv_sec: time.tv_sec,
+            // Below 10^9 after the check, so a `long` on every target.
+            tv_nsec: c_long::try_from(time.tv_usec * 1000).unwrap_or_default(),
+        };
+    }
+    // SAFETY: the two converted times are live.
+    unsafe { futimens(fd, converted.as_ptr()) }
+}
+
 /// glibc's large-file name for [`stat`].
 ///
 /// # Safety
@@ -648,6 +678,27 @@ pub unsafe extern "C" fn __fxstatat(
 // `struct stat64` is `struct stat`. ARMv7-A's glibc gives them its 32-bit
 // `time_t` structure, which this library does not have, so they are not
 // defined there, and such a program fails to load naming one.
+
+/// glibc's versioned `mknod`, from before `mknod` was a function of its own:
+/// `version` is ignored and the device is read through `dev`. LLVM imports
+/// it.
+///
+/// # Safety
+///
+/// `path` must be a NUL-terminated string and `dev` valid for a read.
+#[cfg(not(target_arch = "arm"))]
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __xmknod(
+    _version: c_int,
+    path: *const c_char,
+    mode: c_uint,
+    dev: *const u64,
+) -> c_int {
+    // SAFETY: the caller vouches for `dev`.
+    let dev = unsafe { dev.read() };
+    // SAFETY: the caller's contract is `mknod`'s.
+    unsafe { mknod(path, mode, dev) }
+}
 
 /// glibc's pre-2.33 name for [`stat64`].
 ///
