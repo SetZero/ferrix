@@ -679,8 +679,10 @@ package FerrixRoadmap {
              * kernel's audio core and /dev/snd, verified by
              * cargo xtask test-audio on x86-64 and AArch64; alsa-lib (U1,
              * 3) and a sound server (U2, unsized) are left. The 32-bit x86
-             * ABI is designed in docs/I386.md on branch i386-abi, I1 to I4
-             * at 42 points, and I1 is built there, not yet on main. */
+             * ABI is designed in docs/I386.md, I1 to I4 at 42 points, and
+             * I1 is met: a 32-bit program entered in compatibility mode,
+             * making its calls through int $0x80, on a GDT in Linux's
+             * order. */
     }
 
     #inProgress requirement <'S20'> stage20SelfHosting : Stage {

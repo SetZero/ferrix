@@ -113,7 +113,8 @@ beside it. The desktop's own clients -- waybar, fuzzel, hyprlock and
 hypridle, written in Rust -- are begun: fuzzel's core is on `main`
 (2026-09-26), and the rest is on branches. Stage 21
 is bare metal with a card of Ferrix's own, and stage 22 is Steam, whose
-32-bit x86 ABI is under way on branch `i386-abi` (`docs/I386.md` there).
+32-bit x86 ABI is under way (`docs/I386.md`): I1, a 32-bit program
+through `int $0x80`, is on `main`.
 Ferrix also boots on the customer's Pixel 7: natively on all eight cores
 to `FERRIX-BOOT-OK stages 1-12`, and as a guest of the phone's own crosvm
 from a launcher app. A desktop in that VM and a USB device driver for the
@@ -175,7 +176,7 @@ sizes them.
 | The Pixel 7, the customer's phone (`boot/pixel7/HANDOVER.md`) | a desktop in the launcher app's VM ≈ 17; the USB device driver unsized | under way: `main` boots it natively on all eight cores to `FERRIX-BOOT-OK stages 1-12`, and as a guest of the phone's own crosvm from a launcher app, with a monitor graphing the boot and `ferrix-statd`'s samples (2026-09-26); the customer chose the VM for a desktop the same day, hyprix in the launcher's VM (option A), started; the USB device driver has its brief (`docs/PIXEL7-USB-HANDOVER.md`) and a read-only survey on a branch |
 | Stage 13, namespaces, cgroups, seccomp | cgroups 85 (`docs/CGROUPS.md` §7: 27 for what init needs, 58 for the controllers); namespaces and seccomp unsized, the old guess for the whole stage was *month* ≈ 60 | under way: G1 to G5 done (27), which is all init needs from it, C8 for native services included; `pids`, `memory`'s charging and `cpu.weight` done (2026-09-26, as the certification's job quotas), and `memory`'s scoped OOM kill the same day (P1, M1, S1: 28), so 55 of 85; the rest of `memory.stat`, `memory`'s reclaim, freezing, `cpu.max` and `io` left, about 30 |
 | Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51; sound re-sized by `docs/AUDIO.md` as 24 for the driver, the core and a gate, spent, then alsa-lib 3 (U1) and a server unsized (U2), so 24 of the 51 left sized | sound under way: playback done 2026-09-26 -- a ring-3 virtio-snd driver, the audio core, `/dev/snd`, `test-audio`, Chrome playing through it, and `run-compositor --everything` bringing the card; U1 and U2 left; bubblewrap and Venus not started |
-| Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess; `docs/I386.md` on branch `i386-abi` sizes I1 to I4 at 42, I5 unsized | under way on branch `i386-abi`: I1, a 32-bit program through `int $0x80`, done there 2026-09-26 (8 of 42), not yet on `main` |
+| Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess; `docs/I386.md` sizes I1 to I4 at 42, I5 unsized | under way: I1, a 32-bit program through `int $0x80`, done and on `main` 2026-09-26 (8 of 42); I2, threads and signals, next |
 | Stage 14, real-time domains | *month* ≈ 40 | not started |
 | Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, of which 61 are spent (L1 to L9), and 18 later; authentication (`docs/AUTH.md`, approved 2026-09-26): a kernel fix first (P0) 2, phase 1 27, phase 2 31 and phase 3 about 32 later | partially complete: `/sbin/init`, `getty`, `svc`, readiness, socket activation, resource limits and the directory over `libs/init/svc` landed by 2026-09-26, gated by `test-init` on all three architectures; L10 (the images booting it) is built on branch `init-l10`, not yet on `main`; authentication's P0 -- `process_create` gave a child root's credentials -- is being fixed, and phase 1 is not started |
 | ~~Stage 16, `rustc`~~ *exit met 2026-09-22* | ~~*the goal* ≈ 40~~ 8 spent | done |
@@ -7352,11 +7353,16 @@ staged until now.
   `mmap` and `brk` limits, `TLS` through `set_thread_area` and the `GDT`
   entries it needs, 32-bit signal frames, and `AT_SYSINFO` absent as
   `AT_SYSINFO_EHDR` is. x86-64 only; the Arm architectures have nothing
-  to run. Unsized: the table is as long as stage 7's was. Under way on
-  branch `i386-abi` since 2026-09-26, at the customer's request:
-  `docs/I386.md` there sizes I1 to I4 at 42 points, and I1, a 32-bit
-  program entering compatibility mode and calling through `int $0x80`, is
-  built and gated there, not yet on `main`.
+  to run. Unsized: the table is as long as stage 7's was. Under way
+  since 2026-09-26, at the customer's request: `docs/I386.md` sizes I1 to
+  I4 at 42 points, taking it from the way in to Alpine's and Debian's i386
+  busyboxes and an i686 thread program, and I5, unsized, is what the
+  Steam runtime finds missing. **I1 is on `main`** (2026-09-26): the GDT
+  in Linux's order and numbers with real 32-bit segments, `int $0x80` as a
+  DPL-3 gate decoding through an i386 table in `libs/proto/linux-abi`, an
+  `EM_386` image `execve`d into a 4 GiB space and entered in compatibility
+  mode, and compatibility mode's `SYSCALL` and `SYSENTER` made harmless;
+  the boot runs a hand-assembled i386 program.
 * **glibc's place, taken.** The dynamic linking stage's third part, glibc's
   names, with Steam as its stress test: `ld-linux` and `libc.so.6` requested
   by name, `dlopen` from the client and from every Steam runtime library,

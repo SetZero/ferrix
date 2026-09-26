@@ -102,7 +102,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1683 elements, 201 relations. Model digest `4c5b90ce0a7f49df`.
+13 files, 16 packages, 1683 elements, 201 relations. Model digest `9bc0088a63420a6b`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -3279,7 +3279,7 @@ Ferrix on bare metal with an NVIDIA card driven by Ferrix itself: Path B of the 
 
 Steam on Ferrix, put on the roadmap by the customer on 2026-09-18 as the step after the GPU decision; a guest's stage first, on Path A's GPU, that does not wait for bare metal. What it stands on that nothing else staged: the 32-bit x86 ABI for the i386 client and 32-bit Wine, glibc's place taken by ferrousli under the Steam runtime, bubblewrap's needs over stage 13, a root on btrfs, XWayland, sound (virtio-snd, an audio core, a PulseAudio or PipeWire server), and Vulkan through Venus on a KVM host. Exit in three boots: the client logs in with its browser helper drawing; a native game installs, plays and sounds; a Windows game runs through Proton.
 
-Under way since 2026-09-26. Sound's playback is done (docs/AUDIO.md, 24 points): a ring-3 virtio-snd driver, the kernel's audio core and /dev/snd, verified by cargo xtask test-audio on x86-64 and AArch64; alsa-lib (U1, 3) and a sound server (U2, unsized) are left. The 32-bit x86 ABI is designed in docs/I386.md on branch i386-abi, I1 to I4 at 42 points, and I1 is built there, not yet on main.
+Under way since 2026-09-26. Sound's playback is done (docs/AUDIO.md, 24 points): a ring-3 virtio-snd driver, the kernel's audio core and /dev/snd, verified by cargo xtask test-audio on x86-64 and AArch64; alsa-lib (U1, 3) and a sound server (U2, unsized) are left. The 32-bit x86 ABI is designed in docs/I386.md, I1 to I4 at 42 points, and I1 is met: a 32-bit program entered in compatibility mode, making its calls through int $0x80, on a GDT in Linux's order.
 
 ### S20 — Stage 20 self hosting
 
