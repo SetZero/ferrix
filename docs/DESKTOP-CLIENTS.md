@@ -183,9 +183,112 @@ programs are carried as `/bin/waybar`, `/bin/fuzzel`, `/bin/hyprlock`,
 
 ## 3. waybar
 
+`compositor/waybar` is `/bin/waybar`: it reads `config.jsonc` and
+`style.css` the way waybar 0.15 (Alexays/Waybar at 1684389) and GTK 3.24
+read them, and draws the bar GTK would draw from them. Upstream's source is
+the reference, read file by file; `waybar-probe` is the host-side check
+that lists what of the user's real files is not carried out.
+
+* **The config** (`json.rs`, `config.rs`): jsoncpp's defaults (comments,
+  trailing commas, the last of a repeated key, waybar's `\x` rewrite, and
+  `isUInt`/`isInt`/`asString` as the options read them); the search path
+  (`$WAYBAR_CONFIG_DIR`, `$XDG_CONFIG_HOME/waybar`, `~/.config/waybar`, …,
+  `config` before `config.jsonc` in each); `include` merging, which fills in
+  and never overrides; one bar or an array; `output` by equality against the
+  name or the description less its ` (NAME)`, with `!`, `*`, `$VAR` and
+  `output-dimensions`.
+* **Formats** (`fmt.rs`): libfmt as waybar calls it -- `{}` counts named
+  arguments, so a custom module's `{}` is `{text}` and memory's is the
+  percentage; `{used:0.1f}`; waybar's own `pow_format` for bandwidths; and
+  `strftime` for the clock's `{:%H:%M}`.
+* **The style** (`css/`): a GTK3 stylesheet -- `@define-color`, `alpha()`,
+  `shade()` (GTK's HLS rule), `mix()`, `lighter()`, `darker()`, `calc()`,
+  `url()` and linear-gradient layers with their size, position, repeat,
+  clip and origin lists, the shorthands resetting what they do not set,
+  GTK's parse errors in its words -- matched against the node tree waybar's
+  widgets make (`window#waybar > box > box.modules-* > widget >
+  label#cpu.module` or `box#custom-x.module > image, label.flat.text-button`;
+  a tooltip is `tooltip.background > box > label`), by specificity then
+  order, with GTK3's initial values and inheritance.
+* **Layout and drawing** (`layout.rs`, `paint.rs`): GTK3's gadget box model
+  (content at least `min-width`, then padding, border and margin, which may
+  be negative), box packing with `spacing` and a centre widget, a label's
+  natural, ellipsized (`max-length`) and wrapped (a tooltip's 70 characters)
+  widths, and each box drawn in GTK's order: outset shadows, colour clipped
+  to the last layer's box, layers last listed first, inset shadows, border.
+  An `url()` image is rasterised at its own size and scaled, as GTK3's
+  pixbuf loader does. Text and images are behind traits, for
+  `compositor/text` and `compositor/image`.
+* **Modules** (`modules/`): each a state machine over a `Host` (children,
+  timers, files, Hyprland requests, interface ioctls), tested with a fake
+  one against upstream's rules: `custom/*` (its three workers, `exec-if`,
+  `return-type: json`, `signal` from the C library's `SIGRTMIN`, clicks,
+  scrolls), `hyprland/window` (`j/monitors`, `j/workspaces`, `j/clients`,
+  the bar's `empty`/`solo` classes), `cpu`, `memory`, `network`, `clock`,
+  `pulseaudio`, `tray`.
+
+What the user's file does on Ferrix, line by line where it differs:
+
+* `"output": "Lenovo Group Limited R27qe Gen2 UTP03KBB"` matches no QEMU
+  screen, which has no EDID; upstream would draw no bar, and so does this.
+  The user chose (2026-09-26) to give QEMU's screen that monitor's own EDID
+  the way Linux overrides one (`drm.edid_firmware=`), in its own landing
+  (branch `edid-override`); with it the line matches as on nazuna.
+* The ten `custom/ws-N`, `custom/clock` and `custom/logout`'s click run
+  `/home/sebastian/.local/bin/hypr-workspaces`, `ba-calendar` and
+  `hypr-logout`, Python scripts that are not on Ferrix. `sh` answers 127,
+  and waybar hides a module whose script fails or prints nothing, so the
+  desktop chips and the clock are hidden -- and `ba-calendar daemon` logs
+  waybar's own `clock stopped unexpectedly, is it endless?`. The launcher
+  and logout chips have no `exec` and show. What would fill the gap is a
+  Rust equivalent of each script; that is the user's call.
+* `pulseaudio`: waybar connects with `PA_CONTEXT_NOFAIL` and shows its
+  starting values until a server answers. Ferrix has no PulseAudio-protocol
+  server yet (`docs/AUDIO.md` §5, U2), so the chip reads `vol 0%`, and says
+  once why. `on-click`'s `wpctl` and `on-click-right`'s `pavucontrol` are not
+  on Ferrix either.
+* `cpu`'s `{load}`: no `/proc/loadavg` on Ferrix and `sysinfo` loads of 0,
+  so `0`, said once.
+* `network`: `ethernet` over the default route, the address from the
+  `ifreq` ioctls; no nl80211, so never `wifi`, said once.
+* `tray`: StatusNotifierItem needs D-Bus; an empty tray is hidden, as
+  upstream hides it, and `#tray menu` in the style matches nothing.
+
+Approximations, each said by the probe: GTK's theme (Yaru) is not applied
+under the user's rules, so what only the theme sets takes CSS initial
+values -- the user's file sets or zeroes everything its bar shows; a border
+style other than `solid` is drawn solid; `transition` draws the new state
+at once; a blurred shadow is a triple box blur. `hyprland/window`'s
+`rewrite` is not carried out (regex replacement; the tree's regex crate only
+matches).
+
 ### Where it stands
 
-(The waybar stream's to fill.)
+2026-09-26: the part that needs no screen is on branch `waybar`, landing as
+its first slice: config, formats, style, layout, painter, modules, the
+probe and upstream's command line (the binary checks both files and says it
+does not draw yet). The user's `style.css` parses with no error.
+
+Next, in order: the drawing on `compositor/toolkit` (on main) with
+`compositor/text` and `compositor/image` as they land -- the bar's layer
+surface per matching output, the pointer (hover, `:hover` restyle, clicks,
+scrolls, the hand cursor), tooltips as `xdg_popup`s through
+`zwlr_layer_surface_v1.get_popup`; hyprix's server refused a parentless
+popup, and the fix is on branch `waybar-popup` (server + hyprix, with
+clients-base's `a_tooltip_hangs_under_the_bar_it_belongs_to` passing against
+it once its client stays connected to the end); branch `waybar-ipc` gives
+`j/workspaces` its `lastwindow`/`lastwindowtitle`, which the title needs.
+Then `xtask` installs `/bin/waybar`, and a `test-compositor` boot runs it
+against a test config whose `output` names QEMU's screen, compared as
+`test-compositor` compares its boots. Then a PulseAudio-protocol client.
+
+A text measurement to settle when `compositor/text` lands: the user's
+comment measures `line_height='2.0'` as 10.5 px over and 11.5 under at
+their `font-size: 15px`; clients-base measured 8.41 each way at 15 px and
+11.21 at 15 pt. GTK3 gives Pango a CSS `px` size as `px × PANGO_SCALE × 72
+/ 96` points with the screen at 96 dpi, which is 15 px; so either the
+comment was measured at another size or the rounding differs. Measure it
+on the host with GTK before blessing a golden image.
 
 ## 4. fuzzel
 
