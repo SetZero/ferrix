@@ -66,12 +66,21 @@ pub(crate) struct WaitQueue {
     /// is the one the scheduler's own check contends.
     waiters: IrqSpinLock<Vec<Arc<Task>>, arch::Irq>,
     /// Waits on this queue that a wake ended: `wake_all` took the task off the
-    /// list, and the wait found what it was waiting for when it ran again.
+    /// list, and the wait found what it was waiting for when it ran again --
+    /// or at its last look before sleeping, when the wake came between the
+    /// task listing itself and that look.
     ///
     /// For the checks, which need to tell a wake from the recheck without
     /// timing either. A task the recheck timer wakes is still on the list when
     /// it runs; one a waker woke is not, however long the processor took to
     /// run it -- so the count is a fact about the waker, not about the host.
+    /// That holds only if the last look counts too. A check sends its event
+    /// once it sees the waiter listed, and a waiter listed is one that has not
+    /// yet looked a last time; on a loaded host its processor can stall there
+    /// for milliseconds, the event lands, and the wait ends at the last look
+    /// with nobody asleep. Uncounted, that read as the recheck having ended
+    /// it, and failed the signalfd check (FX-0884) once in a loaded control of
+    /// twenty `test-shell` runs on 2026-09-26.
     woken: AtomicU32,
     /// How many times [`WaitQueue::wake_all`] has run, whether or not anyone
     /// was waiting: a number that moves whenever what the queue waits for may
@@ -174,11 +183,15 @@ impl WaitQueue {
             // us. Cancelling the sleep as well as the block, so a deadline
             // this task never used cannot wake it out of some later wait, and
             // in the reverse order for the same reason: runnable first, so a
-            // switch in between leaves the task where it is.
+            // switch in between leaves the task where it is. A waker that took
+            // the task off the list meanwhile ended this wait, and is counted
+            // as one that found it asleep would be.
             if ready() {
                 task.set_state(RUNNABLE);
                 let _ = task.take_sleep_deadline();
-                let _ = self.unqueue(task.id);
+                if !self.unqueue(task.id) {
+                    let _ = self.woken.fetch_add(1, Ordering::Relaxed);
+                }
                 return true;
             }
             super::block();
@@ -243,9 +256,12 @@ impl WaitQueue {
             if ready() {
                 task.set_state(RUNNABLE);
                 let _ = task.take_sleep_deadline();
-                for queue in queues {
-                    let _ = queue.unqueue(task.id);
+                // Counted where a waker got there first, as the single
+                // queue's last look counts.
+                for (queue, was) in queues.iter().zip(drained.iter_mut()) {
+                    *was = !queue.unqueue(task.id);
                 }
+                count_wakes(queues, &drained);
                 return true;
             }
             super::block();
