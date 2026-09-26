@@ -144,6 +144,29 @@ const fn killed_by(signal: u32) -> i32 {
 ///
 /// The first program that could not be run, or ended other than it had to.
 pub(crate) fn run() -> Result<(), &'static str> {
+    // What the trap path does after an `execve`: equal only to the same
+    // entry and stack. The dispatcher's callers compare outcomes, and an
+    // entry compared by its return value alone would restart a program at
+    // another's first instruction.
+    let entered = crate::trap::Outcome::Enter {
+        entry: 0x40_1000,
+        stack: 0x7fff_f000,
+    };
+    let elsewhere = crate::trap::Outcome::Enter {
+        entry: 0x40_1000,
+        stack: 0x7fff_e000,
+    };
+    let again = crate::trap::Outcome::Enter {
+        entry: 0x40_1000,
+        stack: 0x7fff_f000,
+    };
+    // Through `black_box`, or the comparison is folded where it is written
+    // and the trap path's own equality never runs.
+    let entered = core::hint::black_box(entered);
+    if entered == core::hint::black_box(elsewhere) || entered != core::hint::black_box(again) {
+        return Err("two entries into a program compared by something but entry and stack");
+    }
+
     if cpu::read_cr0() & CR0_NE == 0 {
         return Err("CR0.NE is clear, so an x87 exception is not an exception");
     }

@@ -370,7 +370,8 @@ fn read_probe(_me: &'static PerCpu) {
 }
 
 /// A scoped shootdown's page set: pages up to the ceiling one by one, the
-/// whole TLB past it, and a set merged into another carrying either along.
+/// whole TLB past it, and a set merged into another carrying either along;
+/// and the processor mask whose snapshot says where to send it.
 ///
 /// A retirement merges the set its caller's own space already built into its
 /// own before it sends one shootdown for both (`user::vmo`), and a merged set
@@ -403,6 +404,25 @@ fn page_sets() -> Result<(), &'static str> {
     merged.add_all(&over);
     if !merged.is_everything() {
         return Err("a page set merged with one asking for the whole TLB did not ask for it too");
+    }
+
+    // The mask a shootdown snapshots, joined by two processors and left by
+    // one, reads back as the one left in it -- as its snapshot and as the
+    // words an address space's failure report prints.
+    let mask = super::CpuMask::new();
+    mask.join(0);
+    mask.join(3);
+    mask.leave(0);
+    let snapshot = mask.snapshot();
+    if snapshot.contains(0) || !snapshot.contains(3) {
+        return Err("a processor mask did not keep the processors that joined and stayed");
+    }
+    let printed = alloc::format!("{mask:?}");
+    let first_word = printed
+        .strip_prefix("CpuMask { words: [8")
+        .and_then(|rest| rest.chars().next());
+    if !matches!(first_word, Some(',' | ']')) {
+        return Err("a processor mask does not print as the words it holds");
     }
     Ok(())
 }
