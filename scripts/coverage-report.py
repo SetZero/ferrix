@@ -42,11 +42,30 @@ number people trust is worse than none if its caveats travel separately:
     inside it. That over-reports where a block was entered and left early by a
     trap. The effect is small and always in the optimistic direction, which is
     the direction worth declaring.
+
+A suite, not one boot
+---------------------
+
+`--drcov` takes every trace of a suite and reports the union. Gates build
+different kernels -- `test-shell` builds its program in, `test-vfs` its command
+list -- so an address means a statement only in the build that ran it. A trace
+`cargo xtask` wrote has a `<trace>.kernel` file beside it naming the ELF that
+boot ran, and each trace is read against its own ELF, less its own KASLR
+slide (`<trace>.slide`); a trace without a kernel file is read against
+`--elf`. What is unioned is the *statement*, a source file and
+line, and `--elf` alone says which statements there are to reach: the
+denominator is the build that ships, and the other builds only say which of its
+statements a test executed.
+
+`cargo xtask coverage` runs the suite and calls this with `--floor`, the
+ratchet: the certified item's share may not fall below the figure recorded for
+the architecture in `docs/certification/coverage-floor.json`.
 """
 
 from __future__ import annotations
 
 import argparse
+import bisect
 import importlib.util
 import json
 import re
@@ -92,6 +111,11 @@ def read_drcov(path: Path) -> list[tuple[int, int]]:
     `reconstruct` puts it back.
     """
     blob = path.read_bytes()
+    if not blob:
+        raise SystemExit(
+            f"{path}: empty. The plugin writes its table when QEMU exits, and a "
+            f"QEMU killed rather than stopped never does."
+        )
     marker = b"BB Table: "
     index = blob.find(marker)
     if index < 0:
@@ -194,6 +218,60 @@ def read_line_table(elf: Path) -> dict[str, dict[int, list[int]]]:
     return table
 
 
+def kernel_of(trace: Path, default: Path) -> Path:
+    """The ELF a trace's boot ran: its sidecar's, or `default`."""
+    sidecar = trace.with_name(trace.name + ".kernel")
+    if sidecar.is_file():
+        return trace.parent / sidecar.read_text(encoding="utf-8").strip()
+    return default
+
+
+def relative(path: str) -> str | None:
+    """A line-table path as the boundary gate names it; None outside the kernel."""
+    if "kernel/src/" not in path:
+        return None
+    return path.split("kernel/src/", 1)[1]
+
+
+def statements_reached(
+    table: dict[str, dict[int, list[int]]], executed: list[tuple[int, int]]
+) -> set[tuple[str, int]]:
+    """Every (file, line) with an address inside an executed block."""
+
+    def was_executed(address: int) -> bool:
+        # The sentinel has to sort after every block that starts *at* this
+        # address, so it must exceed any end. It was `1 << 62` until
+        # 2026-09-26, which is below every higher-half address: on x86-64 and
+        # AArch64 a block starting exactly on a statement was skipped, and
+        # both read about a third lower than they were. ARMv7-A's 32-bit
+        # addresses never met it, which is why it alone looked right.
+        index = bisect.bisect_right(executed, (address, 1 << 65))
+        # A block starting at or before this address may contain it. Blocks are
+        # short, so walking back a few is cheaper than an interval tree.
+        for start, end in reversed(executed[max(0, index - 64) : index]):
+            if start <= address < end:
+                return True
+        return False
+
+    reached: set[tuple[str, int]] = set()
+    for path, lines in table.items():
+        rel = relative(path)
+        if rel is None:
+            continue
+        for line, addresses in lines.items():
+            if any(was_executed(address) for address in addresses):
+                reached.add((rel, line))
+    return reached
+
+
+def read_floor(path: Path, arch: str | None) -> float:
+    """The floor `path` records for `arch`."""
+    floors = json.loads(path.read_text(encoding="utf-8"))
+    if arch is None or arch not in floors.get("item", {}):
+        raise SystemExit(f"{path}: no floor recorded for --arch {arch}")
+    return float(floors["item"][arch])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -225,55 +303,71 @@ def main() -> int:
         default=None,
         help="fail below this percent covered in the certified item",
     )
+    parser.add_argument(
+        "--floor",
+        type=Path,
+        help="as --min-item, with the figure this file records for --arch",
+    )
+    parser.add_argument(
+        "--arch",
+        help="the architecture measured, recorded in --json and --residual",
+    )
     args = parser.parse_args()
+    if args.floor is not None:
+        args.min_item = read_floor(args.floor, args.arch)
 
     gate = load_gate()
     manifest = gate.load_manifest()
     ring_of, _, _ = gate.classify(manifest, gate.kernel_files())
 
-    low, high = elf_text_range(args.elf)
+    # Each trace with the ELF its boot ran: the one its sidecar names, or
+    # `--elf`. Grouped, so that each build's line table is read once.
+    by_elf: dict[Path, list[Path]] = defaultdict(list)
+    for trace in args.drcov:
+        by_elf[kernel_of(trace, args.elf)].append(trace)
 
-    # Executed address ranges, as a sorted list to test membership against.
     # The union across traces: a statement reached by any test in the suite is
     # a covered statement, which is how every coverage tool aggregates a run.
-    blocks: list[tuple[int, int]] = []
-    ranges: set[tuple[int, int]] = set()
-    for trace in args.drcov:
-        found = read_drcov(trace)
-        blocks.extend(found)
-        # Reconstructed against where the image ran, then moved back to where
-        # it was linked, which is what the line table is in.
-        slide = trace_slide(trace, args.slide)
-        for low32, size in found:
-            start = reconstruct(low32, low + slide, high + slide)
-            if start is not None:
-                start -= slide
-                ranges.add((start, start + max(size, 1)))
-        print(f"coverage: {trace.name}: {len(found)} blocks, slide {slide:#x}")
+    # Keyed by (file, line) rather than by address, because the builds differ.
+    reached: set[tuple[str, int]] = set()
+    blocks_executed = 0
+    blocks_in_image = 0
+    table = None
+    for elf, traces in by_elf.items():
+        low, high = elf_text_range(elf)
+        ranges: set[tuple[int, int]] = set()
+        for trace in traces:
+            found = read_drcov(trace)
+            blocks_executed += len(found)
+            # Reconstructed against where the image ran, then moved back to
+            # where it was linked, which is what the line table is in.
+            slide = trace_slide(trace, args.slide)
+            for low32, size in found:
+                start = reconstruct(low32, low + slide, high + slide)
+                if start is not None:
+                    start -= slide
+                    ranges.add((start, start + max(size, 1)))
+            print(
+                f"coverage: {trace.name}: {len(found)} blocks, slide {slide:#x}, "
+                f"kernel {elf.name}"
+            )
+        blocks_in_image += len(ranges)
+        elf_table = read_line_table(elf)
+        reached |= statements_reached(elf_table, sorted(ranges))
+        if elf.resolve() == args.elf.resolve():
+            table = elf_table
 
-    executed = sorted(ranges)
-
-    def was_executed(address: int) -> bool:
-        import bisect
-
-        index = bisect.bisect_right(executed, (address, 1 << 62))
-        # A block starting at or before this address may contain it. Blocks are
-        # short, so walking back a few is cheaper than an interval tree.
-        for start, end in reversed(executed[max(0, index - 64) : index]):
-            if start <= address < end:
-                return True
-        return False
-
-    table = read_line_table(args.elf)
+    if table is None:
+        table = read_line_table(args.elf)
 
     totals: dict[str, dict[str, int]] = defaultdict(lambda: {"total": 0, "hit": 0})
     per_file: dict[str, dict[str, int]] = {}
     residual: dict[str, dict] = {}
 
     for path, lines in table.items():
-        if "kernel/src/" not in path:
+        rel = relative(path)
+        if rel is None:
             continue
-        rel = path.split("kernel/src/", 1)[1]
         ring = ring_of.get(rel)
         if ring is None:
             continue
@@ -283,9 +377,9 @@ def main() -> int:
 
         total = hit = 0
         missed: list[int] = []
-        for line, addresses in lines.items():
+        for line in lines:
             total += 1
-            if any(was_executed(address) for address in addresses):
+            if (rel, line) in reached:
                 hit += 1
             else:
                 missed.append(line)
@@ -297,8 +391,8 @@ def main() -> int:
             residual[rel] = {"ring": ring, "lines": sorted(missed)}
 
     profile = "release" if "/release/" in str(args.elf) else "debug"
-    print(f"coverage: {len(blocks)} basic blocks executed, "
-          f"{len(executed)} inside the kernel image ({profile} profile)")
+    print(f"coverage: {blocks_executed} basic blocks executed, "
+          f"{blocks_in_image} inside the kernel images ({profile} profile)")
     print("coverage: statements reached, by certification ring")
 
     item_total = item_hit = 0
@@ -321,9 +415,11 @@ def main() -> int:
         args.json.write_text(
             json.dumps(
                 {
+                    "arch": args.arch,
                     "profile": profile,
-                    "blocks_executed": len(blocks),
-                    "blocks_in_image": len(executed),
+                    "traces": len(args.drcov),
+                    "blocks_executed": blocks_executed,
+                    "blocks_in_image": blocks_in_image,
                     "rings": {k: dict(v) for k, v in totals.items()},
                     "files": per_file,
                 },
@@ -346,6 +442,7 @@ def main() -> int:
                         "unreachable defensive code; this is the list that work",
                         "starts from. A percentage cannot be argued with.",
                     ],
+                    "arch": args.arch,
                     "profile": profile,
                     "unreached": count,
                     "files": dict(sorted(inside.items(), key=lambda kv: -len(kv[1]["lines"]))),
@@ -364,6 +461,7 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
+        print(f"coverage: at or above the {args.min_item:.1f}% floor")
 
     return 0
 
