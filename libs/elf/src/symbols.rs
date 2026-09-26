@@ -75,14 +75,17 @@ impl Symbol<'_> {
     }
 }
 
-/// The fields of a section header the symbol table needs.
+/// The fields of a section header the symbol table, and the relocations
+/// `crate::fixups` reads, need.
 #[derive(Clone, Copy, Debug)]
-struct Section {
-    kind: u32,
-    offset: u64,
-    size: u64,
-    link: u32,
-    entsize: u64,
+pub(crate) struct Section {
+    pub(crate) kind: u32,
+    pub(crate) flags: u64,
+    pub(crate) offset: u64,
+    pub(crate) size: u64,
+    pub(crate) link: u32,
+    pub(crate) info: u32,
+    pub(crate) entsize: u64,
 }
 
 impl Section {
@@ -92,23 +95,27 @@ impl Section {
         match class {
             Class::Elf32 => Some(Section {
                 kind: u32_at(image, at(4)?)?,
+                flags: u64::from(u32_at(image, at(8)?)?),
                 offset: u64::from(u32_at(image, at(16)?)?),
                 size: u64::from(u32_at(image, at(20)?)?),
                 link: u32_at(image, at(24)?)?,
+                info: u32_at(image, at(28)?)?,
                 entsize: u64::from(u32_at(image, at(36)?)?),
             }),
             Class::Elf64 => Some(Section {
                 kind: u32_at(image, at(4)?)?,
+                flags: u64_at(image, at(8)?)?,
                 offset: u64_at(image, at(24)?)?,
                 size: u64_at(image, at(32)?)?,
                 link: u32_at(image, at(40)?)?,
+                info: u32_at(image, at(44)?)?,
                 entsize: u64_at(image, at(56)?)?,
             }),
         }
     }
 
     /// The section's contents, if they are inside the image.
-    fn bytes<'a>(&self, image: &'a [u8]) -> Option<&'a [u8]> {
+    pub(crate) fn bytes<'a>(&self, image: &'a [u8]) -> Option<&'a [u8]> {
         let start = usize::try_from(self.offset).ok()?;
         let len = usize::try_from(self.size).ok()?;
         image.get(start..start.checked_add(len)?)
@@ -118,7 +125,7 @@ impl Section {
 impl<'a> Elf<'a> {
     /// Where the section header table is, how large its entries are, and how
     /// many there are.
-    fn section_table(&self) -> Option<(u64, u64, u64)> {
+    pub(crate) fn section_table(&self) -> Option<(u64, u64, u64)> {
         let class = self.class();
         let (shoff, shentsize, shnum, minimum) = match class {
             Class::Elf32 => (32, 46, 48, SHDR32_SIZE),
@@ -131,7 +138,7 @@ impl<'a> Elf<'a> {
     }
 
     /// The section header at `index`, if it is inside the image.
-    fn section(&self, index: u64) -> Option<Section> {
+    pub(crate) fn section(&self, index: u64) -> Option<Section> {
         let (table, entsize, count) = self.section_table()?;
         if index >= count {
             return None;

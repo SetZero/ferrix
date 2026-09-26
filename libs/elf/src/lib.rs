@@ -3,8 +3,8 @@
 //! Used three times: by the loader to place the kernel, by the kernel to place
 //! user programs, and by `xtask` to name the functions in a kernel panic's
 //! backtrace. It understands what those jobs need — program headers, the load
-//! span, the relative relocations a static PIE carries, and the symbol table —
-//! and nothing else.
+//! span, the relative relocations a static PIE carries, the fixups that move
+//! a kernel image (`fixups`), and the symbol table — and nothing else.
 //!
 //! # Two classes, one interface
 //!
@@ -903,6 +903,12 @@ impl Iterator for Relocations<'_> {
 
 #[cfg(test)]
 mod tests;
+
+mod fixups;
+pub use fixups::{
+    Fixup, FixupKind, Fixups, MOVW_MOVT_GRANULE, R_ARM_ABS32, R_ARM_MOVT_ABS, R_ARM_MOVW_ABS_NC,
+    R_ARM_TARGET1, SHF_ALLOC, SHT_REL, SHT_RELA,
+};
 
 mod symbols;
 pub use symbols::{
