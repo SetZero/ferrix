@@ -400,6 +400,11 @@ pub(crate) enum Cause {
     /// shown to be what a check provoked, and the probe provokes one fault
     /// where a full queue is 128 unread.
     Lost,
+    /// A VT-d unit's primary fault overflow: a fault found the unit's record
+    /// full and was dropped. The fault's `stream` and `page` are the full
+    /// record's, the one taken last before the overflow was seen, and the
+    /// lost fault is unknown. [`provoked`] says when it counts as stray.
+    Overflow,
 }
 
 impl Fault {
@@ -432,6 +437,11 @@ impl core::fmt::Display for Fault {
                 smmuv3::event_name(kind)
             ),
             Cause::Lost => write!(f, "an SMMUv3 event queue overflowed: events were lost"),
+            Cause::Overflow => write!(
+                f,
+                "a VT-d fault was lost to a full record, which held stream {:#x}, page {:#x}",
+                self.stream, self.page
+            ),
         }
     }
 }
@@ -1023,8 +1033,10 @@ static PROVOKED: SpinLock<Vec<(u32, u64)>> = SpinLock::new(Vec::new());
 /// taken and then dropped unseen.
 static STRAY: AtomicU64 = AtomicU64::new(0);
 
-/// Of [`STRAY`], the ones that were [`Cause::Event`] or [`Cause::Lost`]: an
-/// `SMMUv3` event other than a refused access, or an overflow of its queue.
+/// Of [`STRAY`], the ones that were not a refused access: an `SMMUv3` event
+/// of another type ([`Cause::Event`]), an overflow of its queue
+/// ([`Cause::Lost`]), or a VT-d fault lost to a full record
+/// ([`Cause::Overflow`]).
 static STRAY_EVENTS: AtomicU64 = AtomicU64::new(0);
 
 /// Record that `stream`'s device is about to be made to write `page`, which its
@@ -1041,8 +1053,23 @@ fn record_provoked(stream: u32, page: u64) {
 
 /// Whether a check provoked `fault`: a refused access, by the stream and to
 /// the page it registered.
+///
+/// Or a VT-d overflow while the full record held such an access, because
+/// then the fault lost may have been the same device's next: the probe's
+/// device writes its 64 bytes four at a time, sixteen faults in an instant,
+/// and a unit that does not collapse a device's repeated faults into its
+/// pending record -- the VT-d specification recommends collapsing, it does
+/// not require it -- overflows on the probe's second. Any other overflow is
+/// stray. QEMU 9.2.4's unit collapses (`vtd_try_collapse_fault` in
+/// `vtd_report_frcd_fault`), with one record, so there an overflow is only
+/// ever a second source's fault: the probe's own sixteen never set it, and
+/// the one overflow this passes over under QEMU is another device faulting
+/// while the probe's record was pending. That is the price of never failing
+/// a boot on the probe's own faults on a unit that records each; `xtask`
+/// still fails such a run, since QEMU traces `vtd_dmar_fault` for every
+/// fault before it decides whether to record it (`xtask/src/dma_faults.rs`).
 fn provoked(fault: Fault) -> bool {
-    fault.cause == Cause::Access
+    matches!(fault.cause, Cause::Access | Cause::Overflow)
         && PROVOKED
             .lock()
             .iter()

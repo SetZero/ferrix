@@ -85,7 +85,9 @@ const IOTLB_GLOBAL: u64 = 1 << 60;
 /// IOTLB register: one domain, named in bits 47:32.
 const IOTLB_DOMAIN: u64 = 2 << 60;
 
-/// FSTS: a fault was lost for want of a free record. Write one to clear.
+/// FSTS: primary fault overflow, a fault was lost for want of a free record.
+/// Write one to clear. While it is set the unit records nothing: QEMU's
+/// `vtd_report_frcd_fault` drops every fault until it is cleared.
 const PFO: u32 = 1 << 0;
 /// Fault recording register, the top 32 bits of its high quad: the record
 /// holds a fault.
@@ -121,6 +123,10 @@ pub(crate) struct Unit {
     identifiers: u32,
     /// The tables' bookkeeping.
     tables: IrqSpinLock<Tables, arch::Irq>,
+    /// The stream and page of the record [`Unit::take_fault`] last took, which
+    /// an overflow is reported against. Held across each take, so two cannot
+    /// interleave and this is always the last record taken.
+    taken: IrqSpinLock<Option<(u32, u64)>, arch::Irq>,
     /// Held across a command and its wait, so two cannot interleave. A gate,
     /// not a lock: the wait is made with interrupts on.
     commands: Gate,
@@ -194,6 +200,7 @@ impl Unit {
             caching: cap & CAP_CM != 0,
             identifiers: 1 << (4 + 2 * (cap & 0b111)),
             tables: IrqSpinLock::new(Tables::default()),
+            taken: IrqSpinLock::new(None),
             commands: Gate::new(),
         })
     }
@@ -215,6 +222,7 @@ impl Unit {
             self.registers.write32(self.faults + 12, FRCD_F);
         }
         self.registers.write32(FSTS, PFO);
+        *self.taken.lock() = None;
         self.command(TE, "it never started translating")
     }
 
@@ -225,9 +233,22 @@ impl Unit {
     /// device while it is full, so a caller that wants a particular fault clears
     /// the record before provoking it.
     ///
-    /// **F is read first, and alone.** A fault recording register is 128 bits
-    /// and this kernel reads it 32 at a time, so the order matters. The unit
-    /// fills the record before it announces it: QEMU's `vtd_record_frcd`
+    /// **A primary fault overflow comes back too**, as [`Cause::Overflow`], once
+    /// the record is empty: `FSTS.PFO`, set when a fault found the record full
+    /// and was dropped. It used to be cleared unread with every record taken.
+    /// While it is set the unit records nothing, so the record that was full
+    /// when the fault was lost is the one this last took, and the overflow is
+    /// reported against that record's stream and page: `iommu::provoked` says
+    /// what that decides. `FSTS` is read before F, so an overflow is reported
+    /// only after the record that was full has been, and a record the unit
+    /// fills between the two reads is taken first, with the overflow left for
+    /// the next call, as Linux's `dmar_fault` reads every record before it
+    /// clears PFO.
+    ///
+    /// **F is read before the rest of the record, and alone.** A fault
+    /// recording register is 128 bits and this kernel reads it 32 at a time,
+    /// so the order matters. The unit fills the record before it announces
+    /// it: QEMU's `vtd_record_frcd`
     /// writes the low quad and then the high quad with F still clear -- its
     /// comment says "Must not update F field now, should be done later" --
     /// and a second write then sets F. The source id lives in the *low* half
@@ -241,20 +262,34 @@ impl Unit {
     /// under TCG. Reading F by itself first, and the rest only once it is set,
     /// is correct by construction against that write order.
     pub(crate) fn take_fault(&self) -> Option<Fault> {
+        let mut taken = self.taken.lock();
+        let status = self.registers.read32(FSTS);
         let flags = self.registers.read32(self.faults + 12);
-        if flags & FRCD_F == 0 {
+        if flags & FRCD_F != 0 {
+            // F is set, so every other field was written before it and is whole.
+            let stream = self.registers.read32(self.faults + 8) & 0xFFFF;
+            let page = read64(self.registers, self.faults) & !0xFFF;
+            self.registers.write32(self.faults + 12, FRCD_F);
+            *taken = Some((stream, page));
+            return Some(Fault {
+                stream,
+                page,
+                write: flags & FRCD_READ == 0,
+                cause: Cause::Access,
+            });
+        }
+        if status & PFO == 0 {
             return None;
         }
-        // F is set, so every other field was written before it and is whole.
-        let stream = self.registers.read32(self.faults + 8) & 0xFFFF;
-        let low = read64(self.registers, self.faults);
-        self.registers.write32(self.faults + 12, FRCD_F);
         self.registers.write32(FSTS, PFO);
+        // No record taken since translation went on: nothing a check
+        // registered, since a source ID is sixteen bits.
+        let (stream, page) = taken.unwrap_or((u32::MAX, 0));
         Some(Fault {
             stream,
-            page: low & !0xFFF,
-            write: flags & FRCD_READ == 0,
-            cause: Cause::Access,
+            page,
+            write: false,
+            cause: Cause::Overflow,
         })
     }
 

@@ -1237,6 +1237,11 @@ pub(crate) static STAGE10_DMA_FAULT: Explanation = Explanation {
          what they were is unknown, so the audit counts the overflow as one stray event. The \
          queue holds 128 records, and nothing but a device's DMA faulting over and over, or \
          tables the unit keeps refusing, fills it.",
+        "A VT-d unit set its primary fault overflow: a fault found the record full and was \
+         dropped. It counts as one stray event unless the full record held the probe's own \
+         fault, when the lost one may have been the probe's next; the `first read here` line \
+         names the record that was full. QEMU's unit never overflows on one device's faults, \
+         so there it means a second device faulted.",
     ],
     see: "kernel/src/iommu.rs audit_faults; kernel/src/pci/virtio.rs probe_out_of_domain; \
           kernel/src/iommu/vtd.rs Unit::take_fault; kernel/src/iommu/smmuv3.rs \
