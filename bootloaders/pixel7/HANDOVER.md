@@ -8,9 +8,8 @@ you touch the phone.
 
 ## State at a glance
 
-**Update, 2026-09-27 early (ferrix-0a): all eight cores boot the phone to
-`FERRIX-BOOT-OK`, and what that took is on `main`. One commit, the one that
-drops `nosmp`, waits for the side-channel check to allow mixed cores.**
+**Update, 2026-09-27 early (ferrix-0a): `main` boots the phone on all eight
+cores to `FERRIX-BOOT-OK`, and `nosmp` is gone from its command line.**
 None of it is pushed.
 
 * **The GICv3 ITS** (`c21ce40f..a8680955`) landed after a rebase and a
@@ -62,18 +61,19 @@ None of it is pushed.
   all three commits: `cargo xtask check`, and `test-boot` on x86_64,
   armv7a, armv7a `--smp 2`, aarch64, aarch64 `--smp 2`, and GICv3
   `--smp 2 --kernel-option ferrix.fbcon`.
-* **What still keeps `nosmp` on.** `pixel7-next` holds one commit, "Start
-  all eight of the Pixel 7's cores", which drops `nosmp`. Run 9
-  (`$P/run9-final/`), built from it on today's `main`, failed after stage 7
-  with FX-0307: `the branch history loop's count disagrees with the plan`.
-  The side-channel defences that landed on `main` tonight decide the plan
-  on the boot core, an A55 needing no Spectre-BHB loop, and
-  `apply_this_cpu` only ever takes defences away. `apply` still raises the
-  global `BHB_LOOPS` to 32 on the A78s and X1s. The loop does run on every
-  core, but the plan and the per-core records disagree, and the check says
-  so. That code belongs to the certification session, which has been told.
-  Once it allows mixed cores, rebuild and boot with `$P/build-run.sh` and
-  `$P/boot-run.sh`, and land the commit.
+* **Mixed cores and the side-channel check.** Run 9 failed with FX-0307
+  (`the branch history loop's count disagrees with the plan`): the
+  certification session's defences decided the plan on the boot core, an
+  A55 needing no Spectre-BHB loop, and the A78s and X1s raised the loop's
+  count anyway. ferrix-55 fixed it in `41327ee3`: each secondary decides
+  the loop and SSBS for its own core. Run 10 (`$P/run10-bhb/`), that fix
+  with `nosmp` dropped, reached `FERRIX-BOOT-OK stages 1-12` with
+  `speculation defences read back on 8 processors`, 88 s. The commit that
+  drops `nosmp` landed on top, in a tree identical to run 10's, after
+  `cargo xtask check` passed. ferrix-55 has two follow-ups queued: a
+  machine-wide exposure line, since the one printed is the boot core's, and
+  Linux's Spectre v2 safe list (A35/A53/A55), since the A55 is reported as
+  `NOT covered` for v2.
 * **Running the phone with nobody there.** `$P/build-run.sh <name>` builds
   `pixel7-next` into `$P/<name>/`, keeping the tree's diff and a debug
   kernel. `$P/boot-run.sh <name>` boots it and saves the record. Neither
@@ -266,12 +266,10 @@ them). Check any new one against the phone before you rely on it.
 
 ## What to do next, most important first
 
-1. **Cores 1-7: drop `nosmp`** (`pixel7-next`, one commit). Everything
-   the cores need is on `main`, and three runs passed on 8 cores. What is
-   left is FX-0307 on mixed cores, described in "State at a glance"; after
-   that, one run with `$P/build-run.sh`/`$P/boot-run.sh`, then land. The
-   asm budget still counts a raw-string `global_asm!` as 2 lines, a hole
-   worth closing.
+1. **Boot the phone again after ferrix-55's exposure follow-ups land,**
+   with `$P/build-run.sh`/`$P/boot-run.sh`: they change what the boot core
+   decides for Spectre v2. The asm budget still counts a raw-string
+   `global_asm!` as 2 lines, a hole worth closing.
 2. **Entropy beyond 64 bits.** ABL gives 8 bytes, and the kernel credits
    them (`BootInfo.firmware_seed_len`), so the phone boots
    `NOT SEEDED: 64 of 256 bits`. The rest would have to come from the SoC's
