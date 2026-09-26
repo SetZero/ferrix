@@ -151,10 +151,18 @@ impl fmt::Write for Line {
 // ---------------------------------------------------------------------------
 
 /// The controller's register window.
+///
+/// Every access that could change the controller is logged, and so is
+/// every read made before the first of them: the product owner's condition
+/// for writing this controller at all (`docs/PIXEL7-USB-HANDOVER.md` §8)
+/// is that the record shows the guard's reads and each write. Reads after
+/// that -- mostly `GEVNTCOUNT`, at each interrupt -- are not logged.
 struct Window {
     _mapping: IoMapping<Kernel>,
     base: usize,
     len: usize,
+    /// Whether anything has been written yet.
+    wrote: bool,
 }
 
 impl Window {
@@ -172,10 +180,16 @@ impl Registers for Window {
     fn read32(&self, offset: u32) -> u32 {
         // SAFETY: mapped device memory the kernel gave this process, the
         // offset inside it and aligned, read volatile.
-        unsafe { ptr::read_volatile(self.address(offset) as *const u32) }
+        let value = unsafe { ptr::read_volatile(self.address(offset) as *const u32) };
+        if !self.wrote {
+            say(format_args!("usbdev: read  {offset:#06x} = {value:#010x}"));
+        }
+        value
     }
 
     fn write32(&mut self, offset: u32, value: u32) {
+        say(format_args!("usbdev: write {offset:#06x} = {value:#010x}"));
+        self.wrote = true;
         // SAFETY: as for `read32`, and the mapping is writable.
         unsafe { ptr::write_volatile(self.address(offset) as *mut u32, value) }
     }
@@ -329,6 +343,7 @@ fn window(start: &Start, device: &Device<Kernel>) -> Result<Window, Step> {
         _mapping: mapping,
         base,
         len,
+        wrote: false,
     })
 }
 
