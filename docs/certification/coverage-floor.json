@@ -9,8 +9,8 @@
     "decision to argue in the commit that makes it."
   ],
   "item": {
-    "x86_64": 75.5,
+    "x86_64": 73.5,
     "aarch64": 72.5,
-    "armv7a": 71.5
+    "armv7a": 69.5
   }
 }
