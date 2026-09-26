@@ -107,7 +107,7 @@ fn build_tone(arch: Arch, flavour: Flavour) -> Result<PathBuf> {
 /// Boot tone with a virtio-snd card whose far end writes `wav`, and give the
 /// lines tone printed.
 fn boot_and_play(arch: Arch, program: &Path, wav: &Path, args: &Args) -> Result<Vec<String>> {
-    boot_and_record(arch, program, "", &[], wav, args)
+    boot_and_record(arch, program, "", &[], 1, wav, args)
 }
 
 /// Boot `init`, running `script` if it is a shell, with `files` in the
@@ -119,6 +119,7 @@ fn boot_and_record(
     init: &Path,
     script: &str,
     files: &[crate::ports::File],
+    ends: usize,
     wav: &Path,
     args: &Args,
 ) -> Result<Vec<String>> {
@@ -136,8 +137,8 @@ fn boot_and_record(
     let mut lines = Vec::new();
     let hook = |watching: &mut Watching<'_>| -> Result<()> {
         let _ = watching.read_more(Instant::now() + PATIENCE, |seen| {
-            seen.iter()
-                .any(|line| line.contains(DONE) || line.contains(FAILED))
+            seen.iter().any(|line| line.contains(FAILED))
+                || seen.iter().filter(|line| line.contains(DONE)).count() >= ends
         })?;
         // QEMU's audio backend writes the file at the audio's own pace, a
         // buffer behind the device: a moment for the last of it to land.
@@ -260,6 +261,7 @@ pub(crate) fn test_audio(args: &Args) -> Result<()> {
         );
         test_aplay(arch, &wav, args)?;
         test_pulsed(arch, &wav, args)?;
+        test_mixed(arch, &wav, args)?;
     }
     Ok(())
 }
@@ -304,7 +306,7 @@ fn test_aplay(arch: Arch, wav: &Path, args: &Args) -> Result<()> {
         mode: 0o644,
         content: crate::ports::Content::Bytes(counter_wav()),
     });
-    let lines = boot_and_record(arch, &shell, APLAY_SCRIPT, &files, wav, args)?;
+    let lines = boot_and_record(arch, &shell, APLAY_SCRIPT, &files, 1, wav, args)?;
     played_whole(arch, &lines, wav)?;
     println!(
         "  {arch}: ferrousli's aplay played all {FRAMES} frames of the counter through \
@@ -368,13 +370,128 @@ fn test_pulsed(arch: Arch, wav: &Path, args: &Args) -> Result<()> {
         program_file(&build_media(arch, "media-pulsed", "pulsed")?, "pulsed")?,
         program_file(&build_media(arch, "media-pa-tone", "pa-tone")?, "pa-tone")?,
     ];
-    let lines = boot_and_record(arch, &shell, &pulsed_script(), &files, wav, args)?;
+    let lines = boot_and_record(arch, &shell, &pulsed_script(), &files, 1, wav, args)?;
     played_whole(arch, &lines, wav)?;
     println!(
         "  {arch}: pa-tone sent all {FRAMES} frames of the counter to pulsed over the \
          PulseAudio protocol, and the card played them whole and in order"
     );
     Ok(())
+}
+
+/// The two sines the mixed boot plays, each a second at a quarter of full
+/// scale: `(hz, rate)`. The first at the card's rate, the second at CD's,
+/// so that the server converts one of them.
+const SINES: [(u32, u32); 2] = [(440, 48_000), (1000, 44_100)];
+
+/// A frequency neither sine has, at which the mix must be near silence: the
+/// sum is the two tones and not their product, a distortion, or noise.
+const CONTROL_HZ: u32 = 700;
+
+/// A quarter of full scale, the amplitude each sine has.
+const SINE_AMPLITUDE: f64 = 8192.0;
+
+/// The mixed boot's shell: the server, one sine in the background, the other
+/// in front, and then `wait`, for the reason [`pulsed_script`] gives.
+fn mixed_script() -> String {
+    let [(a, a_rate), (b, b_rate)] = SINES;
+    format!(
+        "/bin/pulsed {PULSE_SOCKET} &\n/bin/pa-tone {PULSE_SOCKET} sine {a} {a_rate} &\n\
+         /bin/pa-tone {PULSE_SOCKET} sine {b} {b_rate}\nwait\n"
+    )
+}
+
+/// The sixth boot (`docs/AUDIO.md`, U2c): two clients at once, a 440 Hz sine
+/// at 48 kHz and a 1000 Hz one at 44.1 kHz, which `pulsed` mixes after
+/// converting the second to the card's rate. In the middle half second of
+/// what QEMU's file holds, the left channel must have each sine at a quarter
+/// of full scale, within 5%, and nothing at 700 Hz. Skipped where zinc is
+/// not built.
+fn test_mixed(arch: Arch, wav: &Path, args: &Args) -> Result<()> {
+    let Some(shell) = crate::zinc::built(arch)? else {
+        println!("  {arch}: zinc is not built here, so the mixed boot is skipped");
+        return Ok(());
+    };
+    let files = [
+        program_file(&build_media(arch, "media-pulsed", "pulsed")?, "pulsed")?,
+        program_file(&build_media(arch, "media-pa-tone", "pa-tone")?, "pa-tone")?,
+    ];
+    let lines = boot_and_record(arch, &shell, &mixed_script(), &files, 2, wav, args)?;
+    if let Some(line) = lines.iter().find(|line| line.contains(FAILED)) {
+        return Err(Error::new(format!("{arch}: {}", line.trim())));
+    }
+    let bytes =
+        std::fs::read(wav).map_err(|error| Error::new(format!("{}: {error}", wav.display())))?;
+    let left: Vec<f64> = frames(&bytes)?
+        .iter()
+        .map(|&(left, _)| f64::from(left as i16))
+        .collect();
+    let window = middle(&left, 24_000).ok_or_else(|| {
+        Error::new(format!(
+            "{arch}: QEMU's file holds {} frames, less than the half second the check reads",
+            left.len()
+        ))
+    })?;
+    let heard: Vec<(u32, f64)> = SINES
+        .iter()
+        .map(|&(hz, _)| (hz, amplitude(window, hz)))
+        .collect();
+    let control = amplitude(window, CONTROL_HZ);
+    for &(hz, got) in &heard {
+        if (got - SINE_AMPLITUDE).abs() > SINE_AMPLITUDE * 0.05 {
+            return Err(Error::new(format!(
+                "{arch}: the mix has {hz} Hz at {got:.0}, not {SINE_AMPLITUDE:.0} within 5%, \
+                 and {} Hz at {:.0}",
+                heard
+                    .iter()
+                    .find(|&&(other, _)| other != hz)
+                    .map_or(0, |&(other, _)| other),
+                heard
+                    .iter()
+                    .find(|&&(other, _)| other != hz)
+                    .map_or(0.0, |&(_, a)| a),
+            )));
+        }
+    }
+    if control > SINE_AMPLITUDE * 0.02 {
+        return Err(Error::new(format!(
+            "{arch}: the mix has {control:.0} at {CONTROL_HZ} Hz, where neither sine is"
+        )));
+    }
+    println!(
+        "  {arch}: pulsed mixed a 440 Hz sine at 48 kHz with a 1000 Hz one it converted from \
+         44.1 kHz: {:.0} and {:.0} of {SINE_AMPLITUDE:.0}, and {control:.0} at {CONTROL_HZ} Hz",
+        heard.first().map_or(0.0, |&(_, a)| a),
+        heard.get(1).map_or(0.0, |&(_, a)| a),
+    );
+    Ok(())
+}
+
+/// `length` samples from the middle of what in `samples` is not silence.
+fn middle(samples: &[f64], length: usize) -> Option<&[f64]> {
+    let start = samples.iter().position(|sample| sample.abs() > 64.0)?;
+    let end = samples.iter().rposition(|sample| sample.abs() > 64.0)? + 1;
+    if end - start < length {
+        return None;
+    }
+    let from = start + (end - start - length) / 2;
+    samples.get(from..from + length)
+}
+
+/// The amplitude of `hz` in `samples` at 48 kHz, by the Goertzel algorithm:
+/// a window a whole number of cycles long leaks nothing from the other
+/// tones.
+fn amplitude(samples: &[f64], hz: u32) -> f64 {
+    let omega = std::f64::consts::TAU * f64::from(hz) / 48_000.0;
+    let coefficient = 2.0 * omega.cos();
+    let (mut previous, mut before) = (0.0_f64, 0.0_f64);
+    for &sample in samples {
+        let now = sample + coefficient * previous - before;
+        before = previous;
+        previous = now;
+    }
+    let power = previous * previous + before * before - coefficient * previous * before;
+    2.0 * power.max(0.0).sqrt() / samples.len().max(1) as f64
 }
 
 /// The second tone plays, as a WAV file: `S16_LE`, two channels, 48 kHz,
@@ -480,6 +597,20 @@ fn played_whole(arch: Arch, lines: &[String], wav: &Path) -> Result<()> {
 mod tests {
     use super::{FRAMES, PERIOD, first_wrong, frames, quarantined};
     use crate::paths::Arch;
+
+    #[test]
+    fn the_goertzel_reads_each_tone_of_a_mix_and_nothing_between() {
+        let samples: Vec<f64> = (0..24_000)
+            .map(|n| {
+                let t = f64::from(n) / 48_000.0;
+                8192.0 * (std::f64::consts::TAU * 440.0 * t).sin()
+                    + 4096.0 * (std::f64::consts::TAU * 1000.0 * t).sin()
+            })
+            .collect();
+        assert!((super::amplitude(&samples, 440) - 8192.0).abs() < 1.0);
+        assert!((super::amplitude(&samples, 1000) - 4096.0).abs() < 1.0);
+        assert!(super::amplitude(&samples, 700) < 1.0);
+    }
 
     #[test]
     fn the_counters_wav_file_reads_back_as_the_counter() {

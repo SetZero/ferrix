@@ -18,5 +18,8 @@ path = "src/lib.rs"
 # (docs/AUDIO.md §6, decision 5).
 pulseaudio = { git = "https://github.com/colinmarc/pulseaudio-rs", rev = "3c0325feceb35c8356dfb1e0da5ede6e85aa409c" }
 
+# Every stream not at the card's rate is converted to it (U2c).
+media-resample = { path = "../resample" }
+
 [lints]
 workspace = true

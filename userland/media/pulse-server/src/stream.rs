@@ -61,6 +61,12 @@ pub(crate) struct Stream {
     pub(crate) corked: bool,
     /// Its properties, as the client last set them.
     pub(crate) props: pulseaudio::protocol::Props,
+    /// Its volume, one per channel.
+    pub(crate) volume: pulseaudio::protocol::ChannelVolume,
+    /// Whether it is muted.
+    pub(crate) muted: bool,
+    /// What it becomes on the card.
+    pub(crate) converter: crate::mix::Converter,
     queue: VecDeque<u8>,
     /// Bytes asked for and not yet written.
     asked: u64,
@@ -82,6 +88,10 @@ pub(crate) struct Stream {
 impl Stream {
     /// A stream with `attr` already resolved, corked when `corked`, and
     /// what it asks for first.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "everything CREATE_PLAYBACK_STREAM settles, each once"
+    )]
     pub(crate) fn new(
         index: u32,
         spec: SampleSpec,
@@ -89,6 +99,8 @@ impl Stream {
         attr: BufferAttr,
         corked: bool,
         props: pulseaudio::protocol::Props,
+        volume: pulseaudio::protocol::ChannelVolume,
+        converter: crate::mix::Converter,
     ) -> (Stream, u32) {
         let state = if attr.pre_buffering == 0 {
             State::Playing
@@ -102,6 +114,9 @@ impl Stream {
             attr,
             corked,
             props,
+            volume,
+            muted: false,
+            converter,
             queue: VecDeque::new(),
             asked: 0,
             state,
@@ -232,6 +247,7 @@ impl Stream {
     pub(crate) fn flush(&mut self, owed: &mut Vec<Owed>) {
         let dropped = self.queue.len() as u64;
         self.queue.clear();
+        self.converter.clear();
         self.read = self.read.saturating_add(dropped);
         if self.attr.pre_buffering != 0 {
             self.state = State::Prebuffering;

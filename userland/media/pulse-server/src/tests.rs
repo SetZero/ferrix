@@ -357,11 +357,11 @@ fn mpvs_stream_is_made_from_its_format_list_and_plays_once_uncorked() {
 }
 
 #[test]
-fn a_format_other_than_the_cards_is_refused_until_there_is_mixing() {
+fn a_format_the_converter_cannot_read_is_refused_and_one_with_no_format_is_invalid() {
     let mut server = Server::new(card(), 7);
     let mut client = Client::handshake(&mut server);
     let mut params = default_stream();
-    params.sample_spec.sample_rate = 44_100;
+    params.sample_spec.format = SampleFormat::S24Le;
     let seq = client.send(&mut server, &Command::CreatePlaybackStream(params));
     assert!(matches!(
         client.got(&mut server).as_slice(),
@@ -374,6 +374,204 @@ fn a_format_other_than_the_cards_is_refused_until_there_is_mixing() {
         client.got(&mut server).as_slice(),
         [Got::Error { seq: s, error: PulseError::Invalid }] if *s == seq
     ));
+}
+
+/// A playing stream of `spec`, `prebuf` 0 so it plays from its first byte.
+fn playing(
+    server: &mut Server,
+    client: &mut Client,
+    spec: SampleSpec,
+) -> CreatePlaybackStreamReply {
+    let mut params = default_stream();
+    params.sample_spec = spec;
+    params.channel_map = if spec.channels == 1 {
+        ChannelMap::mono()
+    } else {
+        ChannelMap::stereo()
+    };
+    params.buffer_attr.pre_buffering = 0;
+    create(server, client, params)
+}
+
+/// Frames as the card's bytes: `(left, right)` each.
+fn s16(frames: &[(i16, i16)]) -> Vec<u8> {
+    frames
+        .iter()
+        .flat_map(|&(left, right)| {
+            let mut bytes = left.to_le_bytes().to_vec();
+            bytes.extend(right.to_le_bytes());
+            bytes
+        })
+        .collect()
+}
+
+fn mixed(server: &mut Server, frames: usize) -> Vec<i16> {
+    let mut out = Vec::new();
+    let made = server.mix(frames, &mut out);
+    assert_eq!(out.len(), made * 2);
+    out
+}
+
+#[test]
+fn a_stream_in_the_cards_format_at_full_volume_reaches_the_card_bit_for_bit() {
+    let mut server = Server::new(card(), 7);
+    let mut client = Client::handshake(&mut server);
+    let channel = playing(&mut server, &mut client, stereo_48k()).channel;
+    let frames: Vec<(i16, i16)> = (0..960).map(|n| (n as i16 - 480, !(n as i16))).collect();
+    client.write(&mut server, channel, &s16(&frames));
+    let out = mixed(&mut server, 960);
+    let expected: Vec<i16> = frames.iter().flat_map(|&(l, r)| [l, r]).collect();
+    assert_eq!(out, expected);
+    assert_eq!(out.first(), Some(&-480));
+    let extremes = [(i16::MIN, i16::MAX)];
+    client.write(&mut server, channel, &s16(&extremes));
+    assert_eq!(mixed(&mut server, 1), [i16::MIN, i16::MAX]);
+}
+
+#[test]
+fn two_streams_are_summed_and_the_sum_is_clipped() {
+    let mut server = Server::new(card(), 7);
+    let mut one = Client::handshake(&mut server);
+    let mut two = Client::handshake(&mut server);
+    let a = playing(&mut server, &mut one, stereo_48k()).channel;
+    let b = playing(&mut server, &mut two, stereo_48k()).channel;
+    one.write(&mut server, a, &s16(&[(1000, -1000), (30_000, -30_000)]));
+    two.write(&mut server, b, &s16(&[(2000, -500), (30_000, -30_000)]));
+    assert_eq!(mixed(&mut server, 2), [3000, -1500, 32_767, -32_768]);
+}
+
+#[test]
+fn a_stream_with_less_is_silent_for_the_rest_and_alone_gives_the_card_less() {
+    let mut server = Server::new(card(), 7);
+    let mut one = Client::handshake(&mut server);
+    let mut two = Client::handshake(&mut server);
+    let a = playing(&mut server, &mut one, stereo_48k()).channel;
+    let b = playing(&mut server, &mut two, stereo_48k()).channel;
+    one.write(&mut server, a, &s16(&[(100, 100); 4]));
+    two.write(&mut server, b, &s16(&[(10, 10); 2]));
+    assert_eq!(
+        mixed(&mut server, 4),
+        [110, 110, 110, 110, 100, 100, 100, 100]
+    );
+    one.write(&mut server, a, &s16(&[(7, 7); 3]));
+    assert_eq!(
+        mixed(&mut server, 10),
+        [7, 7, 7, 7, 7, 7],
+        "three frames, not ten"
+    );
+}
+
+#[test]
+fn mono_is_heard_in_both_channels() {
+    let mut server = Server::new(card(), 7);
+    let mut client = Client::handshake(&mut server);
+    let spec = SampleSpec {
+        channels: 1,
+        ..stereo_48k()
+    };
+    let channel = playing(&mut server, &mut client, spec).channel;
+    client.write(&mut server, channel, &[0x00, 0x10, 0x00, 0xf0]);
+    assert_eq!(mixed(&mut server, 2), [4096, 4096, -4096, -4096]);
+}
+
+#[test]
+fn volume_is_cubed_and_mute_silences() {
+    let mut server = Server::new(card(), 7);
+    let mut client = Client::handshake(&mut server);
+    let reply = playing(&mut server, &mut client, stereo_48k());
+    let mut half = protocol::ChannelVolume::empty();
+    half.push(protocol::Volume::from_u32_clamped(
+        protocol::Volume::NORM.as_u32() / 2,
+    ));
+    half.push(protocol::Volume::NORM);
+    let seq = client.send(
+        &mut server,
+        &Command::SetSinkInputVolume(protocol::SetStreamVolumeParams {
+            index: reply.stream_index,
+            volume: half,
+        }),
+    );
+    assert!(acked(&client.got(&mut server), seq));
+    client.write(&mut server, reply.channel, &s16(&[(8000, 8000)]));
+    assert_eq!(
+        mixed(&mut server, 1),
+        [1000, 8000],
+        "half the slider, an eighth"
+    );
+
+    let seq = client.send(
+        &mut server,
+        &Command::SetSinkInputMute(protocol::SetStreamMuteParams {
+            index: reply.stream_index,
+            mute: true,
+        }),
+    );
+    assert!(acked(&client.got(&mut server), seq));
+    client.write(&mut server, reply.channel, &s16(&[(8000, 8000)]));
+    assert_eq!(mixed(&mut server, 1), [0, 0]);
+    let seq = client.send(&mut server, &Command::GetSinkInputInfo(reply.stream_index));
+    let info: protocol::SinkInputInfo = client.reply(&mut server, seq);
+    assert!(info.muted && info.volume_writable);
+}
+
+#[test]
+fn a_stream_at_another_rate_is_converted_to_the_cards() {
+    let mut server = Server::new(card(), 7);
+    let mut client = Client::handshake(&mut server);
+    let spec = SampleSpec {
+        sample_rate: 44_100,
+        ..stereo_48k()
+    };
+    let reply = playing(&mut server, &mut client, spec);
+    assert_eq!(reply.sample_spec, spec, "the stream keeps its rate");
+    // A tenth of a second of a constant, which a resampler keeps constant.
+    client.write(
+        &mut server,
+        reply.channel,
+        &s16(&vec![(10_000, -10_000); 4410]),
+    );
+    let mut out = Vec::new();
+    while server.mix(480, &mut out) != 0 {}
+    let frames = out.len() / 2;
+    assert!((4750..=4800).contains(&frames), "{frames} frames for 4800");
+    let middle = &out[2000..2002];
+    assert!(
+        middle[0].abs_diff(10_000) <= 20 && middle[1].abs_diff(-10_000) <= 20,
+        "{middle:?}"
+    );
+}
+
+#[test]
+fn floats_and_bytes_are_read_as_what_they_are() {
+    let mut server = Server::new(card(), 7);
+    let mut client = Client::handshake(&mut server);
+    let float = playing(
+        &mut server,
+        &mut client,
+        SampleSpec {
+            format: SampleFormat::Float32Le,
+            ..stereo_48k()
+        },
+    )
+    .channel;
+    let mut bytes = 0.5_f32.to_le_bytes().to_vec();
+    bytes.extend((-0.25_f32).to_le_bytes());
+    client.write(&mut server, float, &bytes);
+    assert_eq!(mixed(&mut server, 1), [16_384, -8192]);
+
+    let mut server = Server::new(card(), 7);
+    let mut client = Client::handshake(&mut server);
+    let unsigned = playing(
+        &mut server,
+        &mut client,
+        SampleSpec {
+            format: SampleFormat::U8,
+            ..stereo_48k()
+        },
+    )
+    .channel;
+    client.write(&mut server, unsigned, &[192, 64]);
+    assert_eq!(mixed(&mut server, 1), [16_384, -16_384]);
 }
 
 #[test]

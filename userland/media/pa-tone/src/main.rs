@@ -9,6 +9,10 @@
 //! `xtask test-audio` holds QEMU's file to the same check. Its lines start
 //! `tone:`, for the same reason. It is blocking and single-threaded: the
 //! server is the clock.
+//!
+//! `pa-tone SOCKET sine HZ RATE` plays a second of a sine at `HZ` instead,
+//! at a quarter of full scale and `RATE` frames a second, for the boot that
+//! mixes two of them at different rates (U2c).
 
 use std::io::{self, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -19,8 +23,62 @@ use pulseaudio::protocol::{
     PlaybackStreamParams, Props, SampleFormat, SampleSpec, SetClientNameReply,
 };
 
-/// Frames in the second played.
-const FRAMES: u32 = 48_000;
+/// What is played.
+#[derive(Clone, Copy, Debug)]
+enum Signal {
+    /// tone's counter, at 48 kHz.
+    Counter,
+    /// A sine at `hz`, `rate` frames a second.
+    Sine {
+        /// Its frequency.
+        hz: f64,
+        /// Its sample rate.
+        rate: u32,
+    },
+}
+
+impl Signal {
+    /// From the arguments after the socket.
+    fn from_args(mut args: impl Iterator<Item = String>) -> Option<Signal> {
+        match args.next().as_deref() {
+            None => Some(Signal::Counter),
+            Some("sine") => Some(Signal::Sine {
+                hz: args.next()?.parse().ok()?,
+                rate: args.next()?.parse().ok()?,
+            }),
+            Some(_) => None,
+        }
+    }
+
+    /// Frames a second.
+    const fn rate(self) -> u32 {
+        match self {
+            Signal::Counter => 48_000,
+            Signal::Sine { rate, .. } => rate,
+        }
+    }
+
+    /// Frames `from` to `from + count`, counting from 1, as bytes.
+    fn samples(self, from: u32, count: u32) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(count as usize * 4);
+        for n in from..from + count {
+            let (left, right) = match self {
+                Signal::Counter => {
+                    let value = n as u16;
+                    (value, !value)
+                }
+                Signal::Sine { hz, rate } => {
+                    let phase = std::f64::consts::TAU * hz * f64::from(n - 1) / f64::from(rate);
+                    let value = (8192.0 * phase.sin()).round() as i16 as u16;
+                    (value, value)
+                }
+            };
+            bytes.extend_from_slice(&left.to_le_bytes());
+            bytes.extend_from_slice(&right.to_le_bytes());
+        }
+        bytes
+    }
+}
 
 fn say(text: &str) {
     let mut out = io::stdout();
@@ -29,25 +87,19 @@ fn say(text: &str) {
 }
 
 fn main() {
-    let Some(path) = std::env::args_os().nth(1) else {
+    let mut args = std::env::args().skip(1);
+    let Some(path) = args.next() else {
         say("failed: no socket named");
         return;
     };
-    match play(std::path::Path::new(&path)) {
+    let Some(signal) = Signal::from_args(args) else {
+        say("failed: usage: pa-tone SOCKET [sine HZ RATE]");
+        return;
+    };
+    match play(std::path::Path::new(&path), signal) {
         Ok(()) => say("done"),
         Err(error) => say(&format!("failed: {error}")),
     }
-}
-
-/// Frames `from` to `from + count`, as bytes.
-fn samples(from: u32, count: u32) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(count as usize * 4);
-    for n in from..from + count {
-        let value = n as u16;
-        bytes.extend_from_slice(&value.to_le_bytes());
-        bytes.extend_from_slice(&(!value).to_le_bytes());
-    }
-    bytes
 }
 
 /// The server's socket, waited for for up to five seconds: the boot that
@@ -72,13 +124,20 @@ fn connect(path: &std::path::Path) -> io::Result<UnixStream> {
     }
 }
 
-/// As much of the counter as `bytes` asks for, from frame `next` on.
-fn send(writer: &mut UnixStream, channel: u32, bytes: u32, next: &mut u32) -> io::Result<()> {
-    let frames = (bytes / 4).min(FRAMES + 1 - *next);
+/// As much of a second of `signal` as `bytes` asks for, from frame `next`
+/// on.
+fn send(
+    writer: &mut UnixStream,
+    channel: u32,
+    signal: Signal,
+    bytes: u32,
+    next: &mut u32,
+) -> io::Result<()> {
+    let frames = (bytes / 4).min(signal.rate() + 1 - *next);
     if frames == 0 {
         return Ok(());
     }
-    protocol::write_memblock(writer, channel, &samples(*next, frames), 0)
+    protocol::write_memblock(writer, channel, &signal.samples(*next, frames), 0)
         .map_err(protocol_error)?;
     *next += frames;
     Ok(())
@@ -88,7 +147,7 @@ fn protocol_error(error: protocol::ProtocolError) -> io::Error {
     io::Error::other(error.to_string())
 }
 
-fn play(path: &std::path::Path) -> io::Result<()> {
+fn play(path: &std::path::Path, signal: Signal) -> io::Result<()> {
     let socket = connect(path)?;
     let mut writer = socket.try_clone()?;
     let mut reader = BufReader::new(socket);
@@ -125,7 +184,7 @@ fn play(path: &std::path::Path) -> io::Result<()> {
             sample_spec: SampleSpec {
                 format: SampleFormat::S16Le,
                 channels: 2,
-                sample_rate: 48_000,
+                sample_rate: signal.rate(),
             },
             channel_map: ChannelMap::stereo(),
             buffer_attr: BufferAttr {
@@ -152,13 +211,14 @@ fn play(path: &std::path::Path) -> io::Result<()> {
     send(
         &mut writer,
         stream.channel,
+        signal,
         stream.requested_bytes,
         &mut next,
     )?;
     const DRAIN: u32 = 3;
     let mut drained = false;
     loop {
-        if next > FRAMES && !drained {
+        if next > signal.rate() && !drained {
             protocol::write_command_message(
                 &mut writer,
                 DRAIN,
@@ -172,7 +232,13 @@ fn play(path: &std::path::Path) -> io::Result<()> {
             protocol::read_command_message(&mut reader, version).map_err(protocol_error)?;
         match command {
             Command::Request(request) if request.channel == stream.channel => {
-                send(&mut writer, stream.channel, request.length, &mut next)?;
+                send(
+                    &mut writer,
+                    stream.channel,
+                    signal,
+                    request.length,
+                    &mut next,
+                )?;
             }
             Command::Reply if seq == DRAIN => return Ok(()),
             Command::Error(error) => {

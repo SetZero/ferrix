@@ -54,8 +54,6 @@ fn serve() -> io::Result<()> {
     let mut listener = UnixListener::bind(&path)?;
     let mut playback = Playback::open(|config| config.period)?;
     let config = playback.config();
-    let frame_bytes = 2 * config.channels as usize;
-    let period_bytes = config.period as usize * frame_bytes;
     let latency =
         Duration::from_micros(u64::from(config.buffer) * 1_000_000 / u64::from(config.rate.max(1)));
     let card = Card {
@@ -105,7 +103,7 @@ fn serve() -> io::Result<()> {
                 close(&poll, &mut server, &mut connections, event.token());
             }
         }
-        feed(&mut playback, &mut server, period_bytes, frame_bytes)?;
+        feed(&mut playback, &mut server)?;
         let stuck: Vec<Token> = connections
             .iter_mut()
             .filter_map(|(&token, connection)| send(connection, &mut server).err().map(|_| token))
@@ -194,41 +192,20 @@ fn close(
     }
 }
 
-/// Write the card a period at a time while it has room for one and a stream
-/// is playing, each from the first stream that is.
-fn feed(
-    playback: &mut Playback,
-    server: &mut Server,
-    period_bytes: usize,
-    frame_bytes: usize,
-) -> io::Result<()> {
+/// Write the card a period at a time while it has room for one, each the
+/// mix of every stream that is playing.
+fn feed(playback: &mut Playback, server: &mut Server) -> io::Result<()> {
     let config = playback.config();
-    let mut bytes = Vec::with_capacity(period_bytes);
+    let mut samples = Vec::with_capacity(config.period as usize * config.channels as usize);
     loop {
         let queued = playback.written().saturating_sub(playback.played()?);
         if queued + u64::from(config.period) > u64::from(config.buffer) {
             return Ok(());
         }
-        let Some(&(id, channel)) = server.playing().first() else {
-            return Ok(());
-        };
-        bytes.clear();
-        let taken = server.read(id, channel, period_bytes, &mut bytes);
-        let whole = taken - taken % frame_bytes;
-        if whole == 0 {
+        samples.clear();
+        if server.mix(config.period as usize, &mut samples) == 0 {
             return Ok(());
         }
-        let samples: Vec<i16> = bytes
-            .get(..whole)
-            .unwrap_or_default()
-            .chunks_exact(2)
-            .map(|pair| {
-                i16::from_le_bytes([
-                    pair.first().copied().unwrap_or(0),
-                    pair.get(1).copied().unwrap_or(0),
-                ])
-            })
-            .collect();
         playback.write(&samples)?;
     }
 }

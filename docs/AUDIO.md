@@ -479,7 +479,7 @@ repeats. Each slice lands on its own:
 |---|---|---|---|
 | U2a | **Done 2026-09-27.** `pulse-server`, the protocol state machine, on `pulseaudio` at the pinned revision: `AUTH` at protocol 35 with shared memory and memfd both refused, so samples come inline; the client's name; the server's, sink's and source's information and lists (one sink, the card's 48 kHz S16_LE stereo); `CREATE_PLAYBACK_STREAM` and `DELETE_PLAYBACK_STREAM` with the buffer attributes, and requests accounted as `pa_memblockq` does (`tlength`, `minreq`, `prebuf`); `CORK`, `FLUSH`, `DRAIN`, `GET_PLAYBACK_LATENCY`. One stream, no mixing | Host tests replay command sequences `patrace` recorded between the host's `paplay` or Chrome and its server, and each answer matches in kind and field | 4 |
 | U2b | **Done 2026-09-27.** `pulsed`, the daemon: `$XDG_RUNTIME_DIR/pulse/native`, one stream written through `media/pcm` to `/dev/snd` and clocked by the card; `pa-tone`, a Rust client that sends tone's counter over the protocol | `test-audio`'s fifth boot, `pulsed` and `pa-tone`, frame for frame, with a negative control | 4 |
-| U2c | Mixing: any number of streams summed with saturation into the card's one format, each resampled from its own rate by `media/resample` and its channels mapped (mono to stereo), per-stream volume and mute, an underrun filled with silence | Host tests of the mix against a model; a boot of two `pa-tone`s at 44.1 and 48 kHz whose sum the file holds within the resampler's bound | 5 |
+| U2c | **Done 2026-09-27.** Mixing: any number of streams summed with saturation into the card's one format, each resampled from its own rate by `media/resample` and its channels mapped (mono to stereo), per-stream volume and mute, an underrun filled with silence | Host tests of the mix against a model; a boot of two `pa-tone`s at 44.1 and 48 kHz whose sum the file holds within the resampler's bound | 5 |
 | U2d | The desktop: `pulsed` as an init unit of the session, Debian's `libpulse0` and what it links on Chrome's volume, Chrome through Pulse rather than ALSA (it prefers Pulse once `libpulse.so.0` loads) | `test-chrome-audio` through `pulsed`; `run-compositor --everything` plays a video's sound through it | 5 |
 
 U3's SDL and games then find what is missing by running.
@@ -782,4 +782,21 @@ three architectures on its first gate. Writing it found a flaw in the
 powers off while QEMU's audio backend still holds the last 100 ms or so,
 which never reach the file. Under KVM that cut 6084 frames. The scripts
 now stay up, and the harness waits a second after a program's last word.
+
+U2c is done (2026-09-27): `pulse-server`'s `Server::mix` takes every
+playing stream as the card takes it and sums them. Each is decoded from
+U8, S16, S32 or float, its channels mapped onto the card's (left to left,
+right to right, mono, centre and LFE to both at -3 dB), converted from its
+own rate by `media/resample`, and scaled by its volume and the sink's,
+cubed as `PulseAudio` does. The sum is clipped once, and encoded as the
+inverse of how S16 is decoded, so a stream in the card's own format at full
+volume reaches the card bit for bit, which the counter boots hold it to.
+`SET_SINK_INPUT_VOLUME`, `SET_SINK_INPUT_MUTE`, `SET_SINK_VOLUME` and
+`SET_SINK_MUTE` set them. A stream with less than the others is silent for
+the rest of a period; with nothing from any, nothing is made. `test-audio`'s
+sixth boot plays two `pa-tone` sines at once, 440 Hz at 48 kHz and 1000 Hz
+at 44.1 kHz. In the middle half second of QEMU's file, a Goertzel filter
+must find each at a quarter of full scale within 5%, and nothing at 700 Hz.
+On x86-64 it found 8192 and 8192 of 8192, and 0. With the mix taking only
+the first stream, the check failed with 440 Hz at 7.
 

@@ -23,11 +23,14 @@
 //! * Playback streams: create, delete, cork, flush, trigger, prebuf, drain,
 //!   latency, name and proplist ([`stream`]).
 //!
-//! A stream plays only in the card's own format until mixing and resampling
-//! arrive (U2c): anything else is refused with `NOTSUPPORTED`, which libpulse
-//! reports to its caller. Every other command answers `NOTIMPLEMENTED`.
+//! Streams play in any of the usual formats, U8, S16, S32 and float, at any
+//! rate the resampler can convert, mono or stereo or more: [`Server::mix`]
+//! decodes, maps, resamples and scales each (`mix`) and sums them for the
+//! card (U2c). A stream's volume and mute, and the sink's, are set with the
+//! usual commands. Every other command answers `NOTIMPLEMENTED`.
 
 mod format;
+mod mix;
 mod stream;
 
 use std::collections::BTreeMap;
@@ -110,6 +113,9 @@ pub struct Server {
     next_client: u32,
     next_input: u32,
     cookie: u32,
+    /// The sink's own volume and mute, over every stream's.
+    sink_volume: ChannelVolume,
+    sink_muted: bool,
 }
 
 impl Server {
@@ -118,11 +124,13 @@ impl Server {
     #[must_use]
     pub fn new(card: Card, cookie: u32) -> Server {
         Server {
-            card,
             clients: BTreeMap::new(),
             next_client: 0,
             next_input: 0,
             cookie,
+            sink_volume: ChannelVolume::norm(card.spec.channels),
+            sink_muted: false,
+            card,
         }
     }
 
@@ -206,6 +214,46 @@ impl Server {
         let taken = stream.read(max, out, &mut owed);
         send_owed(client, channel, &owed);
         taken
+    }
+
+    /// Mix up to `frames` of the card's frames from every playing stream into
+    /// `out`, the card's channels interleaved: how many frames it made. Each
+    /// stream is taken as the card takes it, so its requests, underruns and
+    /// drains follow ([`Server::read`]). A stream with less than the others is
+    /// silent for the rest; with nothing from any, nothing is made, so the
+    /// card is never given sound no client sent.
+    pub fn mix(&mut self, frames: usize, out: &mut Vec<i16>) -> usize {
+        let channels = usize::from(self.card.spec.channels);
+        let mut sum = vec![0.0_f32; frames * channels];
+        let mut made = 0;
+        let sink_gain = if self.sink_muted {
+            0.0
+        } else {
+            self.sink_volume
+                .channels()
+                .first()
+                .map_or(1.0, protocol::Volume::to_linear)
+        };
+        let mut bytes = Vec::new();
+        for client in self.clients.values_mut() {
+            let mut owed_by = Vec::new();
+            for (&channel, stream) in &mut client.streams {
+                let mut owed = Vec::new();
+                made = made.max(mix_stream(
+                    stream, frames, sink_gain, &mut sum, &mut bytes, &mut owed,
+                ));
+                owed_by.push((channel, owed));
+            }
+            for (channel, owed) in owed_by {
+                send_owed(client, channel, &owed);
+            }
+        }
+        out.extend(
+            sum.iter()
+                .take(made * channels)
+                .map(|&sample| mix::to_card(sample)),
+        );
+        made
     }
 
     /// Bytes from `id`'s socket, `now` the server's clock. What they ask is
@@ -371,6 +419,62 @@ impl Server {
             }
             Command::CreatePlaybackStream(params) => self.create_playback(id, seq, params),
             Command::CreateRecordStream(_) => error_to(client, seq, PulseError::NoEntity),
+            Command::SetSinkVolume(params) => {
+                let ours = params.device_index.is_none_or(|index| index == SINK_INDEX)
+                    && params
+                        .device_name
+                        .as_ref()
+                        .is_none_or(|name| *name == self.card.name);
+                if ours {
+                    self.sink_volume = params.volume;
+                    if let Some(client) = self.clients.get_mut(&id) {
+                        ack_to(client, seq);
+                    }
+                    self.announce(
+                        SubscriptionEventFacility::Sink,
+                        SubscriptionEventType::Changed,
+                        SINK_INDEX,
+                    );
+                } else if let Some(client) = self.clients.get_mut(&id) {
+                    error_to(client, seq, PulseError::NoEntity);
+                }
+            }
+            Command::SetSinkMute(params) => {
+                let ours = params.device_index.is_none_or(|index| index == SINK_INDEX)
+                    && params
+                        .device_name
+                        .as_ref()
+                        .is_none_or(|name| *name == self.card.name);
+                if ours {
+                    self.sink_muted = params.mute;
+                    if let Some(client) = self.clients.get_mut(&id) {
+                        ack_to(client, seq);
+                    }
+                    self.announce(
+                        SubscriptionEventFacility::Sink,
+                        SubscriptionEventType::Changed,
+                        SINK_INDEX,
+                    );
+                } else if let Some(client) = self.clients.get_mut(&id) {
+                    error_to(client, seq, PulseError::NoEntity);
+                }
+            }
+            Command::SetSinkInputVolume(params) => {
+                self.set_input(id, seq, params.index, |stream| {
+                    if params.volume.channels().len() == usize::from(stream.spec.channels) {
+                        stream.volume = params.volume;
+                        true
+                    } else {
+                        false
+                    }
+                });
+            }
+            Command::SetSinkInputMute(params) => {
+                self.set_input(id, seq, params.index, |stream| {
+                    stream.muted = params.mute;
+                    true
+                });
+            }
             command => self.stream_command(id, seq, command, now),
         }
     }
@@ -493,20 +597,29 @@ impl Server {
                     return;
                 }
             };
-        // Until U2c mixes and resamples, the card's own format only.
-        if spec != card.spec {
-            error_to(client, seq, PulseError::NotSupported);
-            return;
-        }
+        let converter = match mix::Converter::new(&spec, &map, &card.spec) {
+            Ok(converter) => converter,
+            Err(error) => {
+                error_to(client, seq, error);
+                return;
+            }
+        };
+        let volume = params
+            .cvolume
+            .filter(|volume| volume.channels().len() == usize::from(spec.channels))
+            .unwrap_or_else(|| ChannelVolume::norm(spec.channels));
         let attr = format::resolve(params.buffer_attr, &spec);
-        let (stream, requested) = Stream::new(
+        let (mut stream, requested) = Stream::new(
             index,
             spec,
             map,
             attr,
             params.flags.start_corked,
             params.props,
+            volume,
+            converter,
         );
+        stream.muted = params.flags.start_muted.unwrap_or(false);
         let channel = client.next_channel;
         client.next_channel = client.next_channel.wrapping_add(1);
         let _ = client.streams.insert(channel, stream);
@@ -531,6 +644,38 @@ impl Server {
             SubscriptionEventType::New,
             index,
         );
+    }
+
+    /// Change the sink input `index`, whichever client's it is, and answer
+    /// `seq` of `id`: `change` says whether what it was given was valid.
+    fn set_input(
+        &mut self,
+        id: ClientId,
+        seq: u32,
+        index: u32,
+        change: impl FnOnce(&mut Stream) -> bool,
+    ) {
+        let found = self
+            .clients
+            .values_mut()
+            .flat_map(|client| client.streams.values_mut())
+            .find(|stream| stream.index == index)
+            .map(change);
+        let Some(client) = self.clients.get_mut(&id) else {
+            return;
+        };
+        match found {
+            Some(true) => {
+                ack_to(client, seq);
+                self.announce(
+                    SubscriptionEventFacility::SinkInput,
+                    SubscriptionEventType::Changed,
+                    index,
+                );
+            }
+            Some(false) => error_to(client, seq, PulseError::Invalid),
+            None => error_to(client, seq, PulseError::NoEntity),
+        }
     }
 
     /// `GET_SERVER_INFO`'s answer.
@@ -558,7 +703,8 @@ impl Server {
         sink.name = self.card.name.clone();
         sink.description = Some(self.card.description.clone());
         sink.sample_spec = self.card.spec;
-        sink.cvolume = ChannelVolume::norm(self.card.spec.channels);
+        sink.cvolume = self.sink_volume;
+        sink.muted = self.sink_muted;
         sink.state = if running {
             SinkState::Running
         } else {
@@ -605,7 +751,8 @@ impl Server {
                     sink_index: SINK_INDEX,
                     sample_spec: stream.spec,
                     channel_map: stream.map,
-                    cvolume: ChannelVolume::norm(stream.spec.channels),
+                    cvolume: stream.volume,
+                    muted: stream.muted,
                     buffer_latency: u64::try_from(
                         format::duration_of(&stream.spec, stream.queued() as u64).as_micros(),
                     )
@@ -615,7 +762,7 @@ impl Server {
                     props: stream.props.clone(),
                     corked: stream.corked,
                     has_volume: true,
-                    volume_writable: false,
+                    volume_writable: true,
                     format: pcm_format(),
                     ..SinkInputInfo::default()
                 })
@@ -647,6 +794,42 @@ impl Server {
             }
         }
     }
+}
+
+/// Add up to `frames` of `stream`, scaled by its volume and `sink_gain`,
+/// into `sum`, reading from its queue as the card would: how many frames it
+/// added. `bytes` is scratch.
+fn mix_stream(
+    stream: &mut Stream,
+    frames: usize,
+    sink_gain: f32,
+    sum: &mut [f32],
+    bytes: &mut Vec<u8>,
+    owed: &mut Vec<Owed>,
+) -> usize {
+    let gains: Vec<f32> = stream
+        .volume
+        .channels()
+        .iter()
+        .map(|volume| {
+            if stream.muted {
+                0.0
+            } else {
+                volume.to_linear() * sink_gain
+            }
+        })
+        .collect();
+    while stream.playing() && stream.converter.pending_frames() < frames {
+        let want = stream
+            .converter
+            .bytes_for(frames - stream.converter.pending_frames());
+        bytes.clear();
+        if stream.read(want, bytes, owed) == 0 {
+            break;
+        }
+        stream.converter.feed(bytes, &gains);
+    }
+    stream.converter.take(frames, sum)
 }
 
 /// The card's index as a sink.

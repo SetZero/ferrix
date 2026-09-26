@@ -7,11 +7,10 @@
 //!
 //! **The card is the clock.** The loop waits for the sockets at most a
 //! quarter of a period, then writes the card a period at a time for as long
-//! as it has room, each period taken from the stream that is playing. What a
-//! stream has not got is not made up: a stream that underruns gives the card
-//! less, and the card plays what it has, so nothing is heard that no client
-//! sent. One stream plays at a time until U2c mixes them. Its lines start
-//! `pulsed:`.
+//! as it has room, each period the mix of every stream that is playing
+//! (`media-pulse-server`'s `Server::mix`). What no stream has is not made
+//! up: with every stream short, the card is given less, so nothing is heard
+//! that no client sent. Its lines start `pulsed:`.
 
 #[cfg(target_os = "linux")]
 mod linux;

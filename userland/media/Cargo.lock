@@ -283,6 +283,7 @@ dependencies = [
 name = "media-pulse-server"
 version = "0.1.0"
 dependencies = [
+ "media-resample",
  "pulseaudio",
 ]
 
