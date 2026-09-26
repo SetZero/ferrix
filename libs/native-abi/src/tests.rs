@@ -283,3 +283,13 @@ fn init_hello_is_recognised_and_nothing_else_is() {
         "version zero"
     );
 }
+
+#[test]
+fn a_port_descriptor_sits_in_the_port_block() {
+    assert_eq!(nr::decode(0x1018), Some(NativeCall::PortCreate));
+    assert_eq!(nr::decode(0x101A), Some(NativeCall::PortWait));
+    assert_eq!(nr::decode(0x101B), Some(NativeCall::PortFd));
+    for number in 0x101C..=0x101F {
+        assert_eq!(nr::decode(number), None, "{number:#x} was assigned");
+    }
+}

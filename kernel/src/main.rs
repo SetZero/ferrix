@@ -617,10 +617,12 @@ fn check_init_calls() {
     };
     println!(
         "  initcall init's bootstrap channel greeted it with version {}, {} bootstraps given and \
-         taken, {} ends read through process handles, {} refusals as the ABI says, {}",
+         taken, {} ends read through process handles, an epoll_wait on a port's descriptor woken \
+         by its packet after {} ms, {} refusals as the ABI says, {}",
         report.hello,
         report.taken,
         report.statuses,
+        report.woken_after_ms,
         report.refusals,
         if report.from_a_program {
             "a program took its bootstrap after its execve and one given none was answered zero"

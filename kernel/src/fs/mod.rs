@@ -45,6 +45,7 @@ pub(crate) mod memfd_check;
 pub(crate) mod mmap_check;
 mod pages;
 pub(crate) mod pipe;
+pub(crate) mod portfd;
 pub(crate) mod procfs;
 pub(crate) mod pty;
 pub(crate) mod root_disk;
@@ -113,7 +114,8 @@ pub(crate) fn install() -> Result<(), Full> {
     crate::power::register_flush(&ROOT_FLUSH)?;
     crate::power::register_flush(&DATA_FLUSH)?;
     crate::devmgr::register_reader(read_from_root);
-    cgroupfs::install()
+    cgroupfs::install()?;
+    portfd::install()
 }
 
 /// Read the file at `path` in the root the initramfs was unpacked into.

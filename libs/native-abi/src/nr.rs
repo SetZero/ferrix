@@ -38,6 +38,8 @@ pub const PORT_CREATE: usize = 0x1018;
 pub const PORT_QUEUE: usize = 0x1019;
 /// [`NativeCall::PortWait`].
 pub const PORT_WAIT: usize = 0x101A;
+/// [`NativeCall::PortFd`].
+pub const PORT_FD: usize = 0x101B;
 
 /// [`NativeCall::VmoCreate`].
 pub const VMO_CREATE: usize = 0x1020;
@@ -150,6 +152,18 @@ pub enum NativeCall {
     /// `(port, deadline: *u64, packet: *PortPacket)`. Take the next packet,
     /// waiting for one up to the deadline. Needs `READ`.
     PortWait,
+    /// `(port, flags)` → descriptor. A Linux file descriptor on the port,
+    /// which `poll`, `select` and `epoll` report readable (`POLLIN`,
+    /// `EPOLLIN`) while the port has a packet queued and not otherwise, and
+    /// which wakes a waiter on it whenever a packet is queued: how a program
+    /// that waits in `epoll_wait` hears a port (`docs/INIT.md` §9, K4). The
+    /// descriptor only reports: packets are taken with `port_wait`, and a
+    /// `read` or `write` of it is `EINVAL`. It keeps the port alive while it
+    /// is open, whatever becomes of the handle. `flags` is
+    /// [`crate::types::PORT_FD_CLOEXEC`] or zero. Needs `WAIT`; `INVALID_ARGS`
+    /// for another flag, `NO_HANDLES` (`EMFILE`) when the descriptor table is
+    /// full.
+    PortFd,
     /// `(bytes)` → handle. Make an anonymous VMO, rounded up to whole pages.
     VmoCreate,
     /// `(vmo, buffer, count, offset: *u64)`. Copy out of a VMO. Needs `READ`.
@@ -315,7 +329,7 @@ pub enum NativeCall {
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 41] = [
+pub const ALL: [NativeCall; 42] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -327,6 +341,7 @@ pub const ALL: [NativeCall; 41] = [
     NativeCall::PortCreate,
     NativeCall::PortQueue,
     NativeCall::PortWait,
+    NativeCall::PortFd,
     NativeCall::VmoCreate,
     NativeCall::VmoRead,
     NativeCall::VmoWrite,
@@ -383,6 +398,7 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         PORT_CREATE => NativeCall::PortCreate,
         PORT_QUEUE => NativeCall::PortQueue,
         PORT_WAIT => NativeCall::PortWait,
+        PORT_FD => NativeCall::PortFd,
         VMO_CREATE => NativeCall::VmoCreate,
         VMO_READ => NativeCall::VmoRead,
         VMO_WRITE => NativeCall::VmoWrite,
@@ -433,6 +449,7 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::PortCreate => PORT_CREATE,
         NativeCall::PortQueue => PORT_QUEUE,
         NativeCall::PortWait => PORT_WAIT,
+        NativeCall::PortFd => PORT_FD,
         NativeCall::VmoCreate => VMO_CREATE,
         NativeCall::VmoRead => VMO_READ,
         NativeCall::VmoWrite => VMO_WRITE,

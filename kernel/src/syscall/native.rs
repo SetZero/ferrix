@@ -19,8 +19,10 @@
 //! Most calls act on the core's objects and are answered here, by a `match`
 //! the compiler holds exhaustive. Five make a device's control channel for a
 //! subsystem in the load ring -- the block and network rings, the display, the
-//! renderer and input -- and one, `job_for_cgroup`, reads a cgroupfs
-//! directory. Those are answered by whatever registered for them with
+//! renderer and input -- one, `job_for_cgroup`, reads a cgroupfs directory,
+//! one, `process_give`, needs to know whose child a process is, and one,
+//! `port_fd`, makes a file descriptor. Those are answered by whatever
+//! registered for them with
 //! [`serve`], from `main.rs`'s `register_load`, and the boot stops (FX-0006)
 //! if any of them has nothing registered ([`unserved`]): the exhaustiveness
 //! the `match` gave them at compile time is kept, at boot, on every boot.
@@ -150,7 +152,7 @@ impl Served {
 /// of these calls makes a channel for a driver, not the path a driver's work
 /// takes. A `Once` per call, as [`crate::hooks`] keeps them: written at
 /// bring-up, read without a lock.
-static SERVED: [Served; 7] = [
+static SERVED: [Served; 8] = [
     Served::new(NativeCall::BlockRingCreate),
     Served::new(NativeCall::NetRingCreate),
     Served::new(NativeCall::DisplayControlCreate),
@@ -158,6 +160,7 @@ static SERVED: [Served; 7] = [
     Served::new(NativeCall::InputControlCreate),
     Served::new(NativeCall::JobForCgroup),
     Served::new(NativeCall::ProcessGive),
+    Served::new(NativeCall::PortFd),
 ];
 
 /// Answer `call` with `handler`. Called from `main.rs`'s `register_load`, by
@@ -388,7 +391,8 @@ pub(crate) fn dispatch(args: &SyscallArgs, caller: Option<&dyn Host>) -> Result<
         | NativeCall::RenderControlCreate
         | NativeCall::InputControlCreate
         | NativeCall::JobForCgroup
-        | NativeCall::ProcessGive => served(call, caller, &a),
+        | NativeCall::ProcessGive
+        | NativeCall::PortFd => served(call, caller, &a),
         NativeCall::ProcessBootstrap => process_bootstrap(process),
         NativeCall::ProcessStatus => process_status(process, handle(a[0]), a[1]),
         NativeCall::DeviceInfo => device_info(process, handle(a[0]), a[1]),
@@ -1917,8 +1921,9 @@ fn space_status(why: SpaceError) -> Errno {
     }
 }
 
-/// The port a handle names, if it carries `needed`.
-fn port_in(process: &Process, port: Handle, needed: Rights) -> Result<Arc<Port>, Errno> {
+/// The port a handle names, if it carries `needed`: for the port calls, and
+/// for `port_fd`, which the load ring answers.
+pub(crate) fn port_in(process: &Process, port: Handle, needed: Rights) -> Result<Arc<Port>, Errno> {
     process.with_handles(|table| {
         let (object, rights) = table.get(port).map_err(table_error)?;
         let Object::Port(port) = object else {

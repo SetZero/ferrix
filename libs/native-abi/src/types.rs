@@ -41,6 +41,10 @@ pub const PACKET_SIGNAL: u32 = 1;
 /// A packet a bound interrupt produced.
 pub const PACKET_INTERRUPT: u32 = 2;
 
+/// `port_fd`'s flag: the descriptor is closed on `execve`, as `O_CLOEXEC`
+/// makes one.
+pub const PORT_FD_CLOEXEC: u64 = 1;
+
 /// `vmo_map`'s protection: the mapping may be read. Every mapping asks for it.
 pub const MAP_READ: u32 = 1 << 0;
 /// `vmo_map`'s protection: the mapping may also be written.

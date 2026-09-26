@@ -2115,7 +2115,13 @@ close it and exit 0, the kernel's end hearing the close. K6: `process_status`
 (0x1034) must read a process nothing ended as running, one a SIGTERM ended as
 killed by 15, one its job's kill ended as killed by 9, and a program that exited
 42 as exited with 42; and refuse a handle without WAIT (ACCESS_DENIED), a
-channel (WRONG_TYPE) and an unmapped answer (FAULT). K3: `process_give` (0x1032)
+channel (WRONG_TYPE) and an unmapped answer (FAULT). K4: `port_fd` (0x101B) must
+give a descriptor, close-on-exec when asked, that polls readable only while the
+port has a packet; an epoll_wait of five seconds on it must be woken, by the
+port's queue and within 900 ms, by a packet a kernel task queues 50 ms in, and
+report EPOLLIN with its cookie; it must go quiet once port_wait takes the
+packet, read as EINVAL, keep the port after the handle is closed, and refuse an
+unknown flag, a channel and a handle without WAIT. K3: `process_give` (0x1032)
 must move a handle out of the caller's table into its own child's bootstrap
 slot, and `process_bootstrap` (0x1033) must answer that handle once, with its
 rights, and zero after and in a process given nothing. A give must be refused
@@ -2129,31 +2135,35 @@ execve /tmp/k3-exec, take its bootstrap by number, close it and exit 0, the kept
 end hearing the close; its parent, given nothing, must exit with the close's
 EBADF (247).
 
-1. `process_status` (`syscall/native.rs`) read the status without the signal the
+1. `fs/portfd.rs` offers `poll` a queue the port does not wake, or none, so a
+   wait ends only at its own next look; or a way of queueing a packet in
+   `object/port.rs` no longer wakes the port's queue.
+2. `process_status` (`syscall/native.rs`) read the status without the signal the
    personality records beside it (`Exit::record`), so a killed process reads as
    exited with 128 plus the signal, or it reads an exit before the process
    ended.
-2. `init::bootstrap_channel` no longer writes the hello from `libs/native-abi`'s
+3. `init::bootstrap_channel` no longer writes the hello from `libs/native-abi`'s
    `bootstrap` module, or writes more than one message, or
    `exec::give_bootstrap` does not put the program's end in the new process's
    slot.
-3. `process_give` (`syscall/launch.rs`) judged the parent by something other
+4. `process_give` (`syscall/launch.rs`) judged the parent by something other
    than the child's own parent pointer, or `give_bootstrap`
    (`syscall/native.rs`) copied the handle rather than removing it, or moved it
    before checking the slot.
-4. `execve` did not seal the slot (`Process::mark_execed` calling
+5. `execve` did not seal the slot (`Process::mark_execed` calling
    `seal_bootstrap`), or sealed a slot already holding a handle, which the new
    program then cannot take.
-5. A process's release does not dispose of an untaken bootstrap
+6. A process's release does not dispose of an untaken bootstrap
    (`close_bootstrap`), so the peer never hears PEER_CLOSED.
-6. The program's machine code (`arch::USER_BOOTSTRAP_PROGRAM`) does not make the
+7. The program's machine code (`arch::USER_BOOTSTRAP_PROGRAM`) does not make the
    calls by the numbers `libs/native-abi` gives, or the dispatcher does not
    route a native number from a Linux program.
 
 See: kernel/src/syscall/init_calls_check.rs; kernel/src/init.rs;
 kernel/src/syscall/native.rs; kernel/src/syscall/launch.rs;
 kernel/src/object/process.rs; libs/native-abi/src/nr.rs;
-libs/native-abi/src/bootstrap.rs; docs/INIT.md §6, §11, §16.
+kernel/src/fs/portfd.rs; libs/native-abi/src/bootstrap.rs; docs/INIT.md §6, §9,
+§11, §16.
 
 <a id="fx-9001"></a>
 

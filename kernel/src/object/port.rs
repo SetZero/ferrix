@@ -81,8 +81,10 @@ pub(crate) struct Port {
     /// Packets, oldest first, and what they are owed: see the module
     /// documentation.
     queue: IrqSpinLock<Queue, arch::Irq>,
-    /// Woken when a packet is queued.
-    waiters: WaitQueue,
+    /// Woken when a packet is queued. Shared, because a `port_fd`
+    /// descriptor's `poll` and `epoll_wait` hold on to the queues they sleep
+    /// on (`fs::wake`).
+    waiters: Arc<WaitQueue>,
     /// The kernel object it is, charged to the job that made it
     /// (`object::quota`).
     #[expect(
@@ -135,6 +137,7 @@ impl Port {
     pub(crate) fn new() -> Result<Arc<Port>, AllocError> {
         let charge = Charge::running(Resource::Objects, 1).map_err(|_| AllocError)?;
         let packets = fallible::try_deque_with_capacity(PORT_CAPACITY)?;
+        let waiters = fallible::try_arc(WaitQueue::new())?;
         fallible::try_arc(Port {
             queue: IrqSpinLock::new(Queue {
                 packets,
@@ -142,7 +145,7 @@ impl Port {
                 promised: 0,
                 lost: 0,
             }),
-            waiters: WaitQueue::new(),
+            waiters,
             charge,
         })
     }
@@ -289,6 +292,12 @@ impl Port {
 
     /// The queue woken when a packet arrives.
     pub(crate) fn waiters(&self) -> &WaitQueue {
+        &self.waiters
+    }
+
+    /// [`Port::waiters`], as a reference a wait can keep: what a `port_fd`
+    /// descriptor offers `poll` and `epoll_wait` to sleep on.
+    pub(crate) fn shared_waiters(&self) -> &Arc<WaitQueue> {
         &self.waiters
     }
 }

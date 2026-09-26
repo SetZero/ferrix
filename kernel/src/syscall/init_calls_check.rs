@@ -11,6 +11,16 @@
 //! loaded program, the program must take it by number and close it, and the
 //! kernel's end must hear the close.
 //!
+//! **K4.** `port_fd` by number on a port gives a descriptor, close-on-exec
+//! when asked, that polls not readable while the port is empty. An
+//! `epoll_wait` on it, with five seconds to wait, is ended by a packet a
+//! kernel task queues a moment later -- by the port's queue waking it, and
+//! well before the wait's own one-second look -- and reports `EPOLLIN` with
+//! the registration's cookie. Once the packet is taken with `port_wait` the
+//! descriptor is quiet again. A `read` is `EINVAL`, and the descriptor keeps
+//! the port after its handle is closed. Refused for a flag it does not know,
+//! a handle that is not a port, and one without `WAIT`.
+//!
 //! **K6.** `process_status` by number on handles to processes: running
 //! before anything ends it, then killed by the signal a kill named, `SIGKILL`
 //! for a job's kill, and exited with the code a program exited with; and
@@ -37,8 +47,11 @@
 //! `EBADF`: `process_bootstrap` answered zero.
 
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 use ferrix_linux_abi::errno::Errno;
+use ferrix_linux_abi::nr::Syscall;
+use ferrix_linux_abi::types::{EPOLL_CTL_ADD, EPOLLIN, F_GETFD, FD_CLOEXEC};
 use ferrix_native_abi::bootstrap::{
     INIT_HELLO_BYTES, INIT_HELLO_HANDLES, INIT_HELLO_VERSION, init_hello_version,
 };
@@ -47,17 +60,20 @@ use ferrix_native_abi::nr;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
-use ferrix_native_abi::types::{PROCESS_EXITED, PROCESS_KILLED, PROCESS_RUNNING};
+use ferrix_native_abi::types::{PORT_FD_CLOEXEC, PROCESS_EXITED, PROCESS_KILLED, PROCESS_RUNNING};
 use ferrix_vfs::OpenFlags;
 
 use crate::arch;
 use crate::init;
 use crate::object::channel::Endpoint;
 use crate::object::check::{SCRATCH, Side};
+use crate::object::port::Port;
 use crate::object::process::ProcessRef;
 use crate::object::{self, Object};
+use crate::sync::SpinLock;
+use crate::syscall::epoll::{self as epoll_calls, EVENT_BYTES};
 use crate::syscall::process::{self, Process};
-use crate::syscall::{exec, image, native};
+use crate::syscall::{check as syscall_check, exec, fd, file, image, native};
 use crate::trap::SyscallArgs;
 
 /// The path [`arch::USER_EXEC_PROGRAM`] carries at its end, on every
@@ -91,6 +107,9 @@ pub(crate) struct Report {
     pub(crate) hello: u32,
     /// Ends read back through process handles.
     pub(crate) statuses: u32,
+    /// How long, in milliseconds, an `epoll_wait` on a port's descriptor
+    /// took to be woken by a packet queued 50 ms into it.
+    pub(crate) woken_after_ms: u64,
 }
 
 /// Run every check.
@@ -105,6 +124,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     };
     check_init_takes_its_channel()?;
     check_process_status(&mut report)?;
+    report.woken_after_ms = check_port_descriptor(&mut report)?;
     check_give_and_take(&mut report)?;
     report.from_a_program = check_a_program_takes_it_after_execve()?;
     Ok(report)
@@ -350,6 +370,230 @@ fn process_statuses(side: &Side, report: &mut Report) -> Result<(), &'static str
     }
     report.statuses += 1;
     Ok(())
+}
+
+/// Where the port check stages what it hands the calls, in a [`Side`]'s
+/// scratch region: the event `epoll_ctl` reads, the events a wait writes, a
+/// deadline long past, a packet, and a byte to read into.
+const EVENT_AT: u64 = SCRATCH + 0xA00;
+const EVENTS_AT: u64 = SCRATCH + 0xA40;
+const DEADLINE_AT: u64 = SCRATCH + 0xB00;
+const PACKET_AT: u64 = SCRATCH + 0xB40;
+const BYTE_AT: u64 = SCRATCH + 0xB80;
+
+/// The cookie the port's descriptor is registered in the epoll set with.
+const PORT_COOKIE: u64 = 0x4b34_706f_7274;
+
+/// How long the kernel task waits before it queues the packet.
+const QUEUE_AFTER_NANOS: u64 = 50_000_000;
+
+/// How long the `epoll_wait` may take to be woken: under the one second a
+/// wait on trusted queues sleeps between its own looks
+/// (`fs::wake::TRUSTED_RECHECK_NANOS`), so only a wake ends it in time.
+const WOKEN_WITHIN_NANOS: u64 = 900_000_000;
+
+/// The port the kernel task queues a packet on.
+static LATE_PORT: SpinLock<Option<Arc<Port>>> = SpinLock::new(None);
+
+/// The kernel task: wait, then queue one user packet on [`LATE_PORT`].
+fn queue_late(_argument: usize) {
+    crate::sched::sleep_for(QUEUE_AFTER_NANOS);
+    let port = LATE_PORT.lock().take();
+    if let Some(port) = port {
+        let _ = port.queue_user(PORT_COOKIE, [1, 2]);
+    }
+}
+
+/// K4: a port as a descriptor an `epoll_wait` hears. The milliseconds the
+/// woken wait took.
+fn check_port_descriptor(report: &mut Report) -> Result<u64, &'static str> {
+    let side = Side::new()?;
+    let outcome = port_descriptor(&side, report);
+    for fd in 3..16 {
+        let _ = fd::sys_close(&side.process, fd);
+    }
+    side.close_everything();
+    outcome
+}
+
+/// A descriptor a call answered.
+fn descriptor(got: Result<usize, Errno>, what: &'static str) -> Result<i32, &'static str> {
+    got.ok().and_then(|fd| i32::try_from(fd).ok()).ok_or(what)
+}
+
+/// `port_fd`'s refusals, on `port` in `side`: an unknown flag, a channel, a
+/// handle without `WAIT`. The handle without `WAIT` is answered, to close.
+fn port_fd_refusals(
+    side: &Side,
+    port: Handle,
+    report: &mut Report,
+) -> Result<Handle, &'static str> {
+    let (channel, ..) = channel_in(&side.process, Rights::CHANNEL)?;
+    let blind = side
+        .process
+        .with_handles(|table| {
+            table.duplicate(
+                port,
+                ferrix_native_abi::rights::Requested::Exactly(Rights::READ),
+            )
+        })
+        .map_err(|_| "could not make a port handle without WAIT")?;
+    for (result, wanted, what) in [
+        (
+            side.call(nr::PORT_FD, &[reg(port), 2]),
+            status::INVALID_ARGS,
+            "port_fd with a flag it does not know was not refused with INVALID_ARGS",
+        ),
+        (
+            side.call(nr::PORT_FD, &[reg(channel), 0]),
+            status::WRONG_TYPE,
+            "port_fd on a channel was not refused with WRONG_TYPE",
+        ),
+        (
+            side.call(nr::PORT_FD, &[reg(blind), 0]),
+            status::ACCESS_DENIED,
+            "port_fd through a handle without WAIT was not refused with ACCESS_DENIED",
+        ),
+    ] {
+        refused(result, wanted, what, report)?;
+    }
+    Ok(blind)
+}
+
+/// The body of [`check_port_descriptor`].
+fn port_descriptor(side: &Side, report: &mut Report) -> Result<u64, &'static str> {
+    let port = side.handle(nr::PORT_CREATE, &[], "port_create failed")?;
+    let blind = port_fd_refusals(side, port, report)?;
+
+    let process = &side.process;
+    let watched = descriptor(
+        side.call(nr::PORT_FD, &[reg(port), PORT_FD_CLOEXEC]),
+        "port_fd on a port was refused",
+    )?;
+    if fd::sys_fcntl(process, watched, F_GETFD, 0) != Ok(FD_CLOEXEC as usize) {
+        return Err("port_fd's PORT_FD_CLOEXEC did not reach the descriptor");
+    }
+    let file = fd::file(process, watched).map_err(|_| "port_fd's descriptor is not open")?;
+    let the_port = fs_port(&file)?;
+    if file.poll().readable {
+        return Err("a port's descriptor polled readable with nothing queued");
+    }
+    let set = descriptor(
+        syscall_check::call_by_number(process, Syscall::EpollCreate1, [0; 6]),
+        "epoll_create1 was refused",
+    )?;
+    side.put(EVENT_AT, &epoll_calls::encode(EPOLLIN, PORT_COOKIE))?;
+    let added = syscall_check::call_by_number(
+        process,
+        Syscall::EpollCtl,
+        [
+            set as u64,
+            u64::from(EPOLL_CTL_ADD),
+            watched as u64,
+            EVENT_AT,
+            0,
+            0,
+        ],
+    );
+    if added != Ok(0) {
+        return Err("epoll_ctl refused a port's descriptor");
+    }
+    if !events(side, set, 0)?.is_empty() {
+        return Err("epoll_wait reported a port's descriptor with nothing queued");
+    }
+
+    let took = check_a_packet_wakes_the_wait(side, set, &the_port)?;
+    if !file.poll().readable {
+        return Err("a port's descriptor did not poll readable with a packet queued");
+    }
+    if file::sys_read(process, watched, BYTE_AT, 1) != Err(Errno::EINVAL) {
+        return Err("a read of a port's descriptor was not EINVAL");
+    }
+
+    side.put(DEADLINE_AT, &1_u64.to_ne_bytes())?;
+    if side.call(nr::PORT_WAIT, &[reg(port), DEADLINE_AT, PACKET_AT]) != Ok(0) {
+        return Err("port_wait did not take the packet a descriptor reported");
+    }
+    if file.poll().readable || !events(side, set, 0)?.is_empty() {
+        return Err("a port's descriptor stayed readable once its packet was taken");
+    }
+
+    // The descriptor keeps the port once the handle has gone.
+    let _ = side.call(nr::HANDLE_CLOSE, &[reg(port)]);
+    let _ = side.call(nr::HANDLE_CLOSE, &[reg(blind)]);
+    drop(the_port);
+    let kept = fs_port(&file)?;
+    if kept.queue_user(0, [0, 0]).is_err() || !file.poll().readable {
+        return Err("a port's descriptor did not keep the port after its handle was closed");
+    }
+    Ok(took / 1_000_000)
+}
+
+/// A packet queued from another task, 50 ms into an `epoll_wait` of five
+/// seconds on `set`, which watches `port`'s descriptor, ends the wait by a
+/// wake and is reported. The nanoseconds the wait took.
+fn check_a_packet_wakes_the_wait(
+    side: &Side,
+    set: i32,
+    the_port: &Arc<Port>,
+) -> Result<u64, &'static str> {
+    let wakes_before = the_port.waiters().waits_ended_by_a_wake();
+    *LATE_PORT.lock() = Some(Arc::clone(the_port));
+    let task = crate::sched::spawn("port-fd check", queue_late, 0, ferrix_sched::NICE_0_WEIGHT)
+        .map_err(|_| "no task to queue a packet from")?;
+    let started = crate::timer::now_nanos();
+    let reported = events(side, set, 5_000)?;
+    let took = crate::timer::now_nanos().saturating_sub(started);
+    crate::sched::wait_until_gone(&task, crate::sched::REAPER_PATIENCE_NANOS)?;
+    let woken = the_port
+        .waiters()
+        .waits_ended_by_a_wake()
+        .wrapping_sub(wakes_before);
+    if reported != [(EPOLLIN, PORT_COOKIE)] {
+        crate::console::println!(
+            "  initcall epoll_wait on a port's descriptor reported {} events after {} ms",
+            reported.len(),
+            took / 1_000_000
+        );
+        return Err("epoll_wait on a port's descriptor did not report EPOLLIN with its cookie");
+    }
+    if woken == 0 || took >= WOKEN_WITHIN_NANOS {
+        crate::console::println!(
+            "  initcall epoll_wait on a port's descriptor ended after {} ms, {woken} waits woken",
+            took / 1_000_000
+        );
+        return Err("a packet queued on a port did not wake an epoll_wait on its descriptor");
+    }
+    Ok(took)
+}
+
+/// The port behind a `port_fd` descriptor.
+fn fs_port(file: &ferrix_vfs::OpenFile) -> Result<Arc<Port>, &'static str> {
+    crate::fs::portfd::of(file)
+        .map(|file| Arc::clone(file.port()))
+        .ok_or("port_fd's descriptor is not a port's")
+}
+
+/// `epoll_wait` on `set` for up to four events and `timeout` milliseconds:
+/// each event's mask and cookie.
+fn events(side: &Side, set: i32, timeout: i32) -> Result<Vec<(u32, u64)>, &'static str> {
+    let count = epoll_calls::sys_epoll_wait(&side.process, set, EVENTS_AT, 4, timeout)
+        .map_err(|_| "epoll_wait was refused")?;
+    let bytes = side.get(EVENTS_AT, count * EVENT_BYTES)?;
+    Ok(bytes
+        .chunks_exact(EVENT_BYTES)
+        .map(|event| {
+            let mut mask = [0_u8; 4];
+            let mut cookie = [0_u8; 8];
+            for (slot, byte) in mask.iter_mut().zip(event) {
+                *slot = *byte;
+            }
+            for (slot, byte) in cookie.iter_mut().zip(event.iter().skip(EVENT_BYTES - 8)) {
+                *slot = *byte;
+            }
+            (u32::from_le_bytes(mask), u64::from_le_bytes(cookie))
+        })
+        .collect())
 }
 
 /// Make native call `number` as `caller`.
