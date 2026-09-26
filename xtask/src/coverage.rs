@@ -138,19 +138,44 @@ fn keep_kernel(trace: &Path, kernel: &Path) -> Result<String> {
 struct Gate {
     /// The xtask command.
     command: &'static str,
+    /// What its traces are called: the command without `test-`, unless one
+    /// command runs twice.
+    name: &'static str,
     /// Whether it needs `--init`, a static busybox.
     userland: bool,
-    /// Whether it counts on x86-64 alone: the gate refuses the others, or
-    /// fails on them for a reason [`SUITE`] gives.
-    x86_64_only: bool,
+    /// The one architecture it counts on, if it is only one: the gate refuses
+    /// the others, fails on them for a reason [`SUITE`] gives, or is a second
+    /// machine for that architecture.
+    only: Option<Arch>,
+    /// `FERRIX_ARM_MACHINE`, for a boot on a different Arm machine.
+    arm_machine: Option<&'static str>,
 }
 
 impl Gate {
-    const fn new(command: &'static str, userland: bool, x86_64_only: bool) -> Gate {
+    /// A gate on every architecture.
+    const fn new(command: &'static str, name: &'static str, userland: bool) -> Gate {
         Gate {
             command,
+            name,
             userland,
-            x86_64_only,
+            only: None,
+            arm_machine: None,
+        }
+    }
+
+    /// The same gate, on `arch` alone.
+    const fn only(self, arch: Arch) -> Gate {
+        Gate {
+            only: Some(arch),
+            ..self
+        }
+    }
+
+    /// The same gate, on the Arm machine `machine` adds to `virt`.
+    const fn on_machine(self, machine: &'static str) -> Gate {
+        Gate {
+            arm_machine: Some(machine),
+            ..self
         }
     }
 }
@@ -173,19 +198,25 @@ impl Gate {
 ///   and `test-selfhost`: a GL host, ports or volumes fetched from outside
 ///   the tree.
 const SUITE: &[Gate] = &[
-    Gate::new("test-boot", false, false),
-    Gate::new("test-shell", true, false),
-    Gate::new("test-vfs", true, true),
-    Gate::new("test-net", true, false),
-    Gate::new("test-threads", false, false),
-    Gate::new("test-pty", false, false),
-    Gate::new("test-btrfs", false, false),
-    Gate::new("test-powerfail", false, false),
-    Gate::new("test-display", false, false),
-    Gate::new("test-input", false, false),
-    Gate::new("test-jobs", false, true),
-    Gate::new("test-restart", false, true),
-    Gate::new("test-sysfs", false, true),
+    Gate::new("test-boot", "boot", false),
+    // `virt` presents a GICv2 by default. The GICv3 and its ITS are the
+    // Pixel 7's, and a boot on a `virt` that has them is the only run that
+    // reaches that driver.
+    Gate::new("test-boot", "boot-gicv3", false)
+        .only(Arch::AArch64)
+        .on_machine("gic-version=3"),
+    Gate::new("test-shell", "shell", true),
+    Gate::new("test-vfs", "vfs", true).only(Arch::X86_64),
+    Gate::new("test-net", "net", true),
+    Gate::new("test-threads", "threads", false),
+    Gate::new("test-pty", "pty", false),
+    Gate::new("test-btrfs", "btrfs", false),
+    Gate::new("test-powerfail", "powerfail", false),
+    Gate::new("test-display", "display", false),
+    Gate::new("test-input", "input", false),
+    Gate::new("test-jobs", "jobs", false).only(Arch::X86_64),
+    Gate::new("test-restart", "restart", false).only(Arch::X86_64),
+    Gate::new("test-sysfs", "sysfs", false).only(Arch::X86_64),
 ];
 
 /// Where the floor each architecture's coverage may not fall below is kept.
@@ -226,7 +257,7 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         };
         clear(&directory)?;
         for gate in SUITE {
-            if gate.x86_64_only && arch != Arch::X86_64 {
+            if gate.only.is_some_and(|only| only != arch) {
                 continue;
             }
             if let Err(error) = run_gate(arch, gate, &plugin, init, &directory, args) {
@@ -279,10 +310,7 @@ fn run_gate(
     directory: &Path,
     args: &Args,
 ) -> Result<()> {
-    let trace = directory.join(format!(
-        "{}.drcov",
-        gate.command.trim_start_matches("test-")
-    ));
+    let trace = directory.join(format!("{}.drcov", gate.name));
     let program = std::env::current_exe()?;
     let mut command = Command::new(program);
     let _ = command
@@ -300,13 +328,16 @@ fn run_gate(
     if gate.userland {
         let _ = command.args(["--init", init]);
     }
+    if let Some(machine) = gate.arm_machine {
+        let _ = command.env("FERRIX_ARM_MACHINE", machine);
+    }
     if args.release {
         let _ = command.arg("--release");
     }
     if args.timeout_given {
         let _ = command.args(["--timeout", &args.timeout.to_string()]);
     }
-    println!("\n  coverage: {arch}: {}", gate.command);
+    println!("\n  coverage: {arch}: {} ({})", gate.command, gate.name);
     crate::cargo::run(command, &format!("{} on {arch}", gate.command))
 }
 
