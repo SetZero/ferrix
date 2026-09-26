@@ -102,7 +102,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1681 elements, 201 relations. Model digest `03677742f5c359bc`.
+13 files, 16 packages, 1681 elements, 201 relations. Model digest `1c19b68b79b42fe6`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -3214,9 +3214,9 @@ Most of it arrived under other stages' names: /bin is the uutils family and zinc
 
 Job control landed on 2026-09-19, in the shell rather than the kernel: every call it is made of -- setpgid, TIOCSPGRP, TIOCSCTTY, the line discipline's SIGTSTP, wait4's WUNTRACED -- had been answered since stage 7 with nothing using them. zinc/src/jobs.rs puts a pipeline in one process group, hands the terminal to the foreground job and takes it back, and keeps the table jobs, fg, bg, wait, disown and kill %1 name. Verified by jobsSession and by zinc's pty gate.
 
-A working init landed on 2026-09-26 (L1 to L4 of docs/INIT.md): /sbin/init over libs/svc's manager, a cgroup per service, a getty on the console, shutdown by SIGTERM; the same day svc and its control socket, readiness, socket activation and resource limits (L5 to L7, L9) and the kernel half of L8. Verified by initSession. Left: L8's init side, the directory, and the images booting it (L10).
+A working init landed on 2026-09-26 (L1 to L4 of docs/INIT.md): /sbin/init over libs/svc's manager, a cgroup per service, a getty on the console, shutdown by SIGTERM; the same day svc and its control socket, readiness, socket activation and resource limits (L5 to L7, L9) and the directory with native services (L8). Verified by initSession. Left: the images booting it (L10).
 
-Designed on 2026-09-23 in docs/INIT.md: pid 1 and a service manager, systemd-shaped units, a cgroup per service, a pure manager in libs/svc behind backends a microkernel could serve. 67 points to L10, 53 of them spent; the stage 13 cgroups its first boot needs landed on 2026-09-24.
+Designed on 2026-09-23 in docs/INIT.md: pid 1 and a service manager, systemd-shaped units, a cgroup per service, a pure manager in libs/svc behind backends a microkernel could serve. 67 points to L10, 61 of them spent; the stage 13 cgroups its first boot needs landed on 2026-09-24.
 
 **Allocated to: **`ferrix.userland`
 

@@ -379,9 +379,10 @@ package FerrixStructure {
                  * /run/ferrix/control; it waits for notify readiness, starts
                  * services on a socket's first connection, and applies
                  * MemoryMax=, TasksMax= and OOMPolicy= over the scoped OOM
-                 * kill. Only cargo xtask test-init boots it; the images still
-                 * start their program as pid 1 until L10, and native services
-                 * and the directory (L8's init side) are left. */
+                 * kill. It gives services bootstrap channels, starts native
+                 * ones in their cgroup's job, and routes the directory's
+                 * OPENs. Only cargo xtask test-init boots it; the images still
+                 * start their program as pid 1 until L10. */
         }
         #implemented part shell : UserProcess {
             doc /* busybox sh was the first foreign binary to run on Ferrix:

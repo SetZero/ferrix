@@ -513,14 +513,14 @@ package FerrixRoadmap {
              * docs/INIT.md): /sbin/init over libs/svc's manager, a cgroup
              * per service, a getty on the console, shutdown by SIGTERM; the
              * same day svc and its control socket, readiness, socket
-             * activation and resource limits (L5 to L7, L9) and the kernel
-             * half of L8. Verified by initSession. Left: L8's init side,
-             * the directory, and the images booting it (L10).
+             * activation and resource limits (L5 to L7, L9) and the
+             * directory with native services (L8). Verified by
+             * initSession. Left: the images booting it (L10).
              *
              * Designed on 2026-09-23 in docs/INIT.md: pid 1 and a service
              * manager, systemd-shaped units, a cgroup per service, a pure
              * manager in libs/svc behind backends a microkernel could
-             * serve. 67 points to L10, 53 of them spent; the stage 13
+             * serve. 67 points to L10, 61 of them spent; the stage 13
              * cgroups its first boot needs landed on 2026-09-24. */
     }
 

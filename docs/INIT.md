@@ -805,7 +805,7 @@ cgroup half is what §0 asks for first.
 | L5 | Slices and scopes; the resource keys; `OOMPolicy=`; `Delegate=`. **Done 2026-09-26** (§16) | L4, C6, C7 | `test-init` stage three | 6 |
 | L6 | `svc` and the control socket; `log` output; `set-property`, `top`. **Done 2026-09-26** (§16) | L4 | `test-init` stage four | 5 |
 | L7 | `notify` readiness; `forking`. **Done 2026-09-26** (§16) | L4 | host tests + `test-init` | 3 |
-| L8 | K2, K3, K4, K6; `Type=native` in the cgroup's job; the directory (§6) | L5, C8 | `test-init` stage five | 16 |
+| L8 | K2, K3, K4, K6; `Type=native` in the cgroup's job; the directory (§6). **Done 2026-09-26** (§16) | L5, C8 | `test-init` stage five | 16 |
 | L9 | `.socket` units. **Done 2026-09-26** (§16), sshd aside | L4 | `test-init`: sshd activated on connect | 5 |
 | L10 | Move the images over: `cargo xtask run` and `run-compositor` boot init with `multi-user.target` / `graphical.target`; hyprix stops being pid 1 and makes a scope per client | L5, L6 | `test-compositor` under init | 6 |
 | L11 | `devmgr` shares the restart policy | L2 | `test-restart` | 2 |
@@ -883,11 +883,10 @@ the system people will actually use.
 | L2 | done, 2026-09-24 | "Run units as one state machine of events and actions" |
 | L4 | done, 2026-09-26 | "Add /sbin/init, getty and the getty generator around libs/svc's manager" |
 | L5, L6, L7, L9 | done, 2026-09-26 | "Give the manager reload, a readiness status, and socket units"; "Add libs/svc-proto: svc's control records and readiness lines"; "Give init svc, the log, readiness, sockets and resources" |
-| L8 | kernel half done, 2026-09-26: K2, K3, K4, K6 | "Let a parent hand its child a bootstrap handle across execve" and the five after it |
+| L8 | done, 2026-09-26: the kernel half (K2, K3, K4, K6), then init's | "Let a parent hand its child a bootstrap handle across execve" and the five after it; "Route the directory's OPENs, and start Type=native services" |
 | L10 to L13 | not started | |
 
-14 of L1 to L10's 67 points are left: L8's init side (8; its kernel half's
-8 are spent) and L10's 6.
+6 of L1 to L10's 67 points are left: L10's.
 
 **L1, as built (5 points).** `libs/svc` is on `main`: `no_std` with
 `alloc`, `forbid(unsafe_code)`, 52 host tests, a Miri step in CI and in
@@ -1375,9 +1374,53 @@ signal ended did not say killed, by it"), and the descriptor offering no wake
 queue ("a packet queued on a port did not wake an epoll_wait on its
 descriptor", after 51 ms with 0 waits woken).
 
-**What the next session does first.** L8's init side: take pid 1's
-bootstrap channel (K2, K3), give each `Type=native` service or service
-with `Uses=`/`Offers=` a channel of its own (K3), wait on the port through
-`port_fd` (K4), and route OPEN, CONNECT and REFUSED (§6), with `test-init`'s
-stage five. Then L10, which moves `cargo xtask run` and the desktop onto
-init.
+**L8's init side, as built (8 points).** `init/init/src/directory.rs`.
+
+* **Pid 1's channel.** Init takes it with `process_bootstrap` at boot,
+  reads the kernel's hello and says `the kernel greeted init, version 1`,
+  and holds it; version 1 sends nothing after.
+* **The port.** One port, whose `port_fd` descriptor sits in init's epoll
+  beside the rest (§9); every service channel and native process is watched
+  through it with `object_wait_async`, re-armed after each packet.
+* **A channel per service that needs one** -- `Uses=` or `Offers=`, and
+  every `Type=native` service. A Linux service's child waits, as the last
+  step before `execve`, on a pipe init writes once `process_give` has put
+  the service's end in its slot (§5.2 step 3); a give that fails is said,
+  and the child runs without. A `Type=native` service is made with
+  `process_create` in the job behind its cgroup (`job_for_cgroup`, C8) from
+  the ELF file `ExecStart=` names, started with its end by `process_start`,
+  and watched for `TERMINATED`; how it ended is read with `process_status`
+  (K6) and given to the manager as an exit, under the pid its cgroup lists.
+  Its readiness is READY on its channel.
+* **The directory.** READY is readiness; OFFER keeps a provider's channel
+  for its name; OPEN becomes the manager's `Event::Open`, and its handle
+  waits under a token. `Route` forwards the end as CONNECT with the client
+  unit's name, down the offered channel or else the provider's bootstrap
+  channel; `Refuse` writes REFUSED with the reason and then closes the end,
+  so a client that sees its end close finds the reason waiting. A unit's
+  channel and offers go when its cgroup does. The messages are fixed
+  little-endian layouts in `libs/native-abi/src/directory.rs`, which
+  allocates nothing, since native programs have no allocator.
+
+**The gate, stage five.** `user/pong` is a native service (READY, then
+`pong <name> to <client>` down each CONNECTed end); `pong.service` is
+`Type=native` with `Offers=ferrix.test` and wanted by nothing, so only an
+OPEN starts it. `init/dirclient NAME` is a Linux client that OPENs a name
+and prints `dir-answer: …` or `dir-refused: …`. `asker.service`
+(`Uses=ferrix.test`) must print `dir-answer: pong ferrix.test to
+asker.service`; `rogue.service` (`Uses=ferrix.other`) must be REFUSED;
+`svc status pong.service`'s main pid must be the one process in its
+`cgroup.procs`; and the kernel's hello must have been read. Passed on all
+three architectures. Negative controls, on x86-64: no `process_give` failed
+with "asker.service's OPEN of ferrix.test was not answered by
+pong.service: … dir-none"; refusals dropped failed with "rogue.service's OPEN
+… was not REFUSED: … dir-silent". Building it found that a refusal must be
+sent before the end closes, or the client sees only the close.
+
+**Not done.** `devmgr` still reports 137 for every death; K6 is there for
+it to use. Linux services' own OFFERs are kept but no gate offers one yet.
+
+**What the next session does first.** L10: `cargo xtask run` and
+`run-compositor` boot init with `multi-user.target` and `graphical.target`,
+hyprix stops being pid 1 and makes a scope per client, and `test-jobs`
+moves onto a getty.
