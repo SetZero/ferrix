@@ -471,6 +471,7 @@ fn write_boot_info(
         firmware_time: time.unwrap_or(0),
         firmware_seed: seed.unwrap_or([0; 32]),
         firmware_flags: time.map_or(0, |_| FIRMWARE_TIME) | seed.map_or(0, |_| FIRMWARE_SEED),
+        firmware_seed_len: seed.map_or(0, |bytes| bytes.len() as u64),
     };
 
     // SAFETY: `info_area` is our own allocation of BOOT_INFO_BYTES, identity

@@ -15,7 +15,7 @@
 use core::ptr;
 
 use ferrix_bootinfo::{
-    Arch, BOOT_STACK_SIZE, BOOTINFO_MAGIC, BOOTINFO_VERSION, BootInfo, Framebuffer,
+    Arch, BOOT_STACK_SIZE, BOOTINFO_MAGIC, BOOTINFO_VERSION, BootInfo, FIRMWARE_SEED, Framebuffer,
     KERNEL_VIRT_BASE, MemKind, MemRegion, PAGE_SIZE, PHYSMAP_ALIGN, PHYSMAP_BASE, PHYSMAP_END,
     allocator_owns, direct_map_address, direct_map_runs, physmap_origin,
 };
@@ -27,6 +27,7 @@ use crate::entry::{self, Handoff};
 use crate::log::say;
 use crate::memory::{MAX_REGIONS, Memory, NO_REGION};
 use crate::payload;
+use crate::seed::{self, Seed};
 
 /// Frames for page tables. Mapping eight gibibytes in 2 MiB blocks takes a
 /// few dozen tables; this is ample.
@@ -61,6 +62,8 @@ pub(crate) struct Carried<'a> {
     /// The framebuffer the display is showing, or [`Framebuffer::NONE`].
     /// `reclaimable` is filled in here, from the final memory map.
     pub(crate) framebuffer: Framebuffer,
+    /// The random bytes in ABL's `/chosen`, removed from the kernel's copy.
+    pub(crate) seed: Seed,
 }
 
 /// The page table pool: physical memory, used directly, because the MMU is
@@ -297,6 +300,7 @@ fn write_boot_info(
     regions: &[MemRegion],
     cmdline: &str,
     framebuffer: Framebuffer,
+    seed: &Seed,
 ) {
     let (origin, len) = placed.direct;
     let info = placed.info;
@@ -358,8 +362,9 @@ fn write_boot_info(
         },
         cmdline_len: cmdline.len() as u64,
         firmware_time: 0,
-        firmware_seed: [0; 32],
-        firmware_flags: 0,
+        firmware_seed: seed.bytes,
+        firmware_flags: if seed.is_any() { FIRMWARE_SEED } else { 0 },
+        firmware_seed_len: seed.found as u64,
     };
     // SAFETY: the info area is the loader's, larger than one boot info.
     unsafe { ptr::write_volatile(info.base as *mut BootInfo, boot_info) };
@@ -373,6 +378,11 @@ pub(crate) fn boot(memory: &mut Memory, carried: Carried<'_>) -> Result<(), &'st
     let stack = take(memory, BOOT_STACK_SIZE, MemKind::BootStack)?;
     let info = take(memory, BOOT_INFO_BYTES, MemKind::BootInfo)?;
     let device_tree = take_copy(memory, carried.device_tree, MemKind::DeviceTree)?;
+    seed::remove(
+        &carried.seed,
+        device_tree.base,
+        carried.device_tree.len() as u64,
+    );
     let initrd = match payload::initrd() {
         [] => None,
         bytes => Some((
@@ -413,7 +423,13 @@ pub(crate) fn boot(memory: &mut Memory, carried: Carried<'_>) -> Result<(), &'st
         roots,
         direct,
     };
-    write_boot_info(&placed, regions, carried.cmdline, carried.framebuffer);
+    write_boot_info(
+        &placed,
+        regions,
+        carried.cmdline,
+        carried.framebuffer,
+        &carried.seed,
+    );
 
     let written = [image, pool, stack, info, device_tree];
     for taken in written

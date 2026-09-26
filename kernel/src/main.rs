@@ -1960,19 +1960,17 @@ fn report_clock_and_random(info: &BootInfo) {
         None => println!("  clock    firmware has no clock: CLOCK_REALTIME starts at the epoch"),
     }
     let seeding = random::init(info);
-    let firmware = if seeding.firmware {
-        "firmware"
-    } else {
-        "no firmware"
-    };
+    let firmware = seeding.firmware_bytes;
     if seeding.seeded {
         println!(
-            "  random   seeded with {} bits: {firmware}, {} words from the CPU, timer jitter",
+            "  random   seeded with {} bits: {firmware} bytes from firmware, {} words from the CPU, timer jitter",
             seeding.credited, seeding.cpu_words
         );
     } else {
         println!(
-            "  random   NOT SEEDED: {firmware}, {} words from the CPU, only timer jitter; keys made on this boot are guessable",
+            "  random   NOT SEEDED: {} of {} bits, from {firmware} bytes from firmware and {} words from the CPU, and timer jitter; keys made on this boot are guessable",
+            seeding.credited,
+            ferrix_crng::SEEDED_BITS,
             seeding.cpu_words
         );
     }

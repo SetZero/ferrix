@@ -60,15 +60,19 @@ pub const BOOTINFO_MAGIC: u64 = 0x4645_5252_4958_4249;
 /// framebuffer in boot-services memory the kernel hands out again. Version 5
 /// added what firmware knows that the kernel cannot find out for itself: the
 /// time of day, and random bytes. HTTPS needs both, and so does anything else
-/// that checks a certificate or makes a key.
-pub const BOOTINFO_VERSION: u32 = 5;
+/// that checks a certificate or makes a key. Version 6 added
+/// [`BootInfo::firmware_seed_len`], because a phone's bootloader gives fewer
+/// random bytes than the seed holds, and the kernel credits what it was
+/// given, not what the field can hold.
+pub const BOOTINFO_VERSION: u32 = 6;
 
 /// [`BootInfo::firmware_flags`]: [`BootInfo::firmware_time`] holds the time
 /// firmware's `GetTime` gave.
 pub const FIRMWARE_TIME: u64 = 1 << 0;
 
-/// [`BootInfo::firmware_flags`]: [`BootInfo::firmware_seed`] holds bytes from
-/// firmware's `EFI_RNG_PROTOCOL`.
+/// [`BootInfo::firmware_flags`]: [`BootInfo::firmware_seed`] holds random bytes
+/// from firmware, [`BootInfo::firmware_seed_len`] of them: `EFI_RNG_PROTOCOL`'s,
+/// or what a phone's bootloader left in the device tree's `/chosen`.
 pub const FIRMWARE_SEED: u64 = 1 << 1;
 
 /// A calendar time as firmware's clock reports it, `offset_minutes` east of
@@ -836,7 +840,7 @@ pub fn allocator_owns(regions: impl IntoIterator<Item = MemRegion>, base: u64, l
 /// tables the loader installed before jumping to the kernel, which is to say
 /// inside the direct map at [`PHYSMAP_BASE`]. Fields named `_phys` are
 /// physical. None of them is a pointer type, so the structure is the same
-/// 280 bytes on every word width.
+/// 288 bytes on every word width.
 ///
 /// Read it through [`BootInfo::validate`] rather than field by field.
 #[repr(C)]
@@ -931,13 +935,18 @@ pub struct BootInfo {
     /// Which of the two above firmware provided: [`FIRMWARE_TIME`] and
     /// [`FIRMWARE_SEED`].
     pub firmware_flags: u64,
+    /// How many random bytes firmware gave, folded into
+    /// [`BootInfo::firmware_seed`] by exclusive or, if [`FIRMWARE_SEED`] is
+    /// set: 32 from `EFI_RNG_PROTOCOL`, 8 from the Pixel 7's bootloader. More
+    /// than 32 are worth no more than 32, since the seed holds no more.
+    pub firmware_seed_len: u64,
 }
 
 // The claim the module documentation makes, asserted where it can fail: a
 // field whose size follows the pointer width would break it, and the loader
 // and the host tests would then disagree about a layout neither of them sees.
 const _: () = assert!(
-    size_of::<BootInfo>() == 280,
+    size_of::<BootInfo>() == 288,
     "BootInfo must be laid out identically on every word width"
 );
 const _: () = assert!(
@@ -1331,6 +1340,7 @@ mod tests {
             firmware_time: 0,
             firmware_seed: [0; 32],
             firmware_flags: 0,
+            firmware_seed_len: 0,
         }
     }
 

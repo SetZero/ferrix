@@ -21,6 +21,7 @@ mod load;
 mod log;
 mod memory;
 mod payload;
+mod seed;
 
 use core::panic::PanicInfo;
 use core::ptr;
@@ -95,6 +96,16 @@ fn start(device_tree: u64, framebuffer: Framebuffer) -> Result<(), &'static str>
         blob.len(),
         tree.model()
     );
+    let seed = seed::gather(&tree, blob);
+    say!(
+        "  /chosen holds {} random bytes, {}",
+        seed.found,
+        if seed.is_any() {
+            "passed on to the kernel's seed"
+        } else {
+            "so the kernel has no seed from firmware"
+        }
+    );
     load::boot(
         &mut memory,
         load::Carried {
@@ -102,6 +113,7 @@ fn start(device_tree: u64, framebuffer: Framebuffer) -> Result<(), &'static str>
             cmdline: CMDLINE,
             loader,
             framebuffer,
+            seed,
         },
     )
 }

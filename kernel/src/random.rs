@@ -8,8 +8,10 @@
 //!
 //! Three sources, mixed in at [`init`], in order of how much each is trusted:
 //!
-//! * **Firmware's `EFI_RNG_PROTOCOL`**, 32 bytes the loader asked for before it
-//!   left boot services. Credited in full, 256 bits.
+//! * **Firmware's random bytes**: 32 the loader asked `EFI_RNG_PROTOCOL` for
+//!   before it left boot services, or what a phone's bootloader left in the
+//!   device tree, 8 on the Pixel 7. Credited in full, 8 bits a byte, up to
+//!   the seed's 256.
 //! * **The CPU's random instruction**: `RDSEED`, or `RDRAND` without it, on
 //!   x86-64; `RNDR` on AArch64. Eight 64-bit words, each credited at half, as
 //!   Linux credits `RDRAND`: 256 bits for all eight.
@@ -52,8 +54,8 @@ const CPU_WORDS: usize = 8;
 /// What [`init`] found, for the boot line.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Seeding {
-    /// Whether firmware gave bytes.
-    pub(crate) firmware: bool,
+    /// How many random bytes firmware gave, 0 for none.
+    pub(crate) firmware_bytes: u64,
     /// How many words the CPU gave.
     pub(crate) cpu_words: usize,
     /// Bits credited in all.
@@ -66,10 +68,15 @@ pub(crate) struct Seeding {
 pub(crate) fn init(info: &BootInfo) -> Seeding {
     let mut rng = RNG.lock();
 
-    let firmware = info.firmware_flags & FIRMWARE_SEED != 0;
-    if firmware {
+    let firmware_bytes = if info.firmware_flags & FIRMWARE_SEED == 0 {
+        0
+    } else {
+        info.firmware_seed_len
+    };
+    if firmware_bytes > 0 {
         rng.mix(&info.firmware_seed);
-        rng.credit(256);
+        let credited = firmware_bytes.min(info.firmware_seed.len() as u64) * 8;
+        rng.credit(u32::try_from(credited).unwrap_or(u32::MAX));
     }
 
     let mut cpu_words = 0;
@@ -97,7 +104,7 @@ pub(crate) fn init(info: &BootInfo) -> Seeding {
     rng.mix(&arch::counter_now().to_le_bytes());
 
     Seeding {
-        firmware,
+        firmware_bytes,
         cpu_words,
         credited: rng.credited(),
         seeded: rng.seeded(),

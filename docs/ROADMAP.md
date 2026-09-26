@@ -3408,15 +3408,18 @@ read it. A boot says what it had:
 ```
   firmware clock read, random number protocol read
   clock    1789590336 seconds since the epoch, from firmware's clock
-  random   seeded with 512 bits: firmware, 8 words from the CPU, timer jitter
+  random   seeded with 512 bits: 32 bytes from firmware, 8 words from the CPU, timer jitter
 ```
 
 That was OVMF with RDRAND turned on in `xtask`'s QEMU CPU. AAVMF, and U-Boot's
 EFI on ARMv7-A, gave both the time and the random bytes too. A machine with no
 firmware protocol and no CPU instruction boots `NOT SEEDED`, in capitals, and
 `getrandom` answers anyway. Linux would block instead, but that wait never ends
-on a machine with nothing to wait for. The boot check reads the generator twice
-and panics as FX-0306 if the two reads match. Its negative control, not
+on a machine with nothing to wait for. `BootInfo` version 6 adds how many bytes
+firmware gave, and the kernel credits 8 bits for each, up to 256. The Pixel 7's
+loader passes on the 8 bytes ABL leaves in `/chosen`, so the phone boots
+`NOT SEEDED: 64 of 256 bits`, since its cores have no `RNDR`. The boot check
+reads the generator twice and panics as FX-0306 if the two reads match. Its negative control, not
 committed, on x86-64: with the second read replaced by a copy of the first, the
 boot printed `FERRIX-PANIC random generator check failed: two reads of the
 random generator were the same` under FX-0306. The clock's: with the loader's
