@@ -2038,7 +2038,14 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
     };
     let programs = Programs::build(arch)?;
     let size = args.size.unwrap_or(crate::wallpaper::SCREEN);
-    let (config, carried) = desktop(arch, config, size, Backdrop::Any, args)?;
+    // A desktop somebody watches is the size of what it is watched in, and
+    // follows it when that is resized: QEMU's GTK and SDL windows tell the
+    // card their size whenever it changes, and so does a VNC viewer that
+    // asks for a resize (`SetDesktopSize`, which TigerVNC sends to match its
+    // window). A screen nobody resizes stays the size QEMU was given.
+    // `--size` pins it.
+    let follow = args.size.is_none();
+    let (config, carried) = desktop(arch, config, size, follow, Backdrop::Any, args)?;
     // The desktop a person watches boots as a board's does: with its
     // self-checks skipped, which only the `desktop` boot of the judged ones
     // is.
@@ -2126,7 +2133,7 @@ pub(crate) fn board_files(arch: Arch, args: &Args) -> Result<crate::flash::Board
     let programs = Programs::build(arch)?;
     let size = args.size.unwrap_or(BOARD_SCREEN);
     let screen = laid_out(size, &config);
-    let (config, mut carried) = desktop(arch, config, size, Backdrop::Board(screen), args)?;
+    let (config, mut carried) = desktop(arch, config, size, false, Backdrop::Board(screen), args)?;
     // Nor the ports: on ARMv7-A they are curl, git and the TLS test server
     // curl's gate talks to, programs for a network the board does not have,
     // and 13 MB of an archive the loader reads off the card at some 16 MB/s
@@ -2212,6 +2219,7 @@ fn desktop(
     arch: Arch,
     config: String,
     size: (u32, u32),
+    follow: bool,
     backdrop: Backdrop,
     args: &Args,
 ) -> Result<(String, Carried)> {
@@ -2243,7 +2251,18 @@ fn desktop(
     // told, and the kernel lists the standard sizes beside that one so that
     // such a line can pick. A configuration's own line for the monitor
     // comes later and wins.
-    let config = format!("monitor = , {}x{}@60, auto, 1\n{config}", size.0, size.1);
+    //
+    // Unless the desktop is to `follow` its window: then the line says
+    // `preferred`, the card's preferred size is the window's, and when the
+    // window is resized the driver hears of it and the compositor takes the
+    // new size up. A pinned size in a larger window is stretched to fit,
+    // pixels and all, which is what made small text look unsmoothed.
+    let mode = if follow {
+        "preferred".to_owned()
+    } else {
+        format!("{}x{}@60", size.0, size.1)
+    };
+    let config = format!("monitor = , {mode}, auto, 1\n{config}");
     // A wallpaper that moves is started the way a still one is, and the way
     // `mpvpaper ALL <file>` is started from a Linux desktop's `exec-once`:
     // the difference is the flag, and that the frames were decoded on a

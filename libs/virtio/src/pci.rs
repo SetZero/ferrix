@@ -315,6 +315,18 @@ pub fn activate_queue<C: CommonConfig + ?Sized>(
     })
 }
 
+/// Ask for configuration changes on MSI-X `vector`, and answer the vector
+/// the device kept: [`NO_VECTOR`] when it has no room for one, in which case
+/// a change raises no interrupt at all.
+///
+/// Belongs before [`driver_ok`]. A device that is never given a vector
+/// signals a configuration change through the ISR byte alone, which only an
+/// `INTx` driver reads.
+pub fn set_config_vector<C: CommonConfig + ?Sized>(config: &mut C, vector: u16) -> u16 {
+    config.write16(CONFIG_MSIX_VECTOR, vector);
+    config.read16(CONFIG_MSIX_VECTOR)
+}
+
 /// Tell the device the driver is ready.
 ///
 /// # Errors

@@ -172,3 +172,25 @@ mod monitors {
         assert_eq!(Edid::parse(&zeroed), None);
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_connector_change_is_found_among_page_flips_by_each_events_length() {
+    use crate::card::connectors_changed;
+    let event = |kind: u32, length: u32| {
+        let mut bytes = vec![0u8; length as usize];
+        bytes[..4].copy_from_slice(&kind.to_le_bytes());
+        bytes[4..8].copy_from_slice(&length.to_le_bytes());
+        bytes
+    };
+    let flip = event(ferrix_linux_abi::drm::EVENT_FLIP_COMPLETE, 32);
+    let change = event(ferrix_linux_abi::drm::EVENT_FERRIX_CONNECTORS, 8);
+    assert!(!connectors_changed(&flip));
+    assert!(connectors_changed(&[change.clone(), flip.clone()].concat()));
+    assert!(connectors_changed(&[flip.clone(), change.clone()].concat()));
+    // A length shorter than a header ends the walk rather than loop on it.
+    let broken = event(ferrix_linux_abi::drm::EVENT_FLIP_COMPLETE, 4 + 4);
+    let mut stuck = broken.clone();
+    stuck[4..8].copy_from_slice(&0u32.to_le_bytes());
+    assert!(!connectors_changed(&[stuck, change].concat()));
+}

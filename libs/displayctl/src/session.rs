@@ -10,7 +10,9 @@
 //! driver goes through [`Session::receive`], which accepts only the reply the
 //! session is waiting for: an ATTACHED for a buffer being attached, a FLIPPED
 //! for the oldest flush in flight, a DETACHED for a buffer being detached, a
-//! STOPPED after STOP. Anything else is [`Refusal::Protocol`], after which
+//! STOPPED after STOP -- and MODES, which the driver sends unasked when the
+//! device's displays change, if it describes the card HELLO did. Anything
+//! else is [`Refusal::Protocol`], after which
 //! the session is broken and refuses everything, and the glue quiesces the
 //! driver the way it quiesces a block driver that lies.
 //!
@@ -20,7 +22,7 @@
 use crate::message::AttachObject;
 use crate::message::{
     Attach, AttachError, CURSOR_SIZE, Hello, MAX_SCANOUTS, Message, Rect, Refusal, ScanoutMode,
-    Status,
+    Status, validate_modes,
 };
 use ferrix_native_abi::rights::Rights;
 
@@ -85,6 +87,9 @@ pub enum Event {
     },
     /// The driver stopped.
     Stopped,
+    /// The scanouts' preferred modes changed; [`Session::modes`] has the
+    /// new ones.
+    Modes,
 }
 
 /// What the session remembers of a buffer, whichever way it was made.
@@ -431,8 +436,18 @@ impl Session {
             Message::Flipped { sequence, status } => self.on_flipped(sequence, status),
             Message::Detached { buffer, status } => self.on_detached(buffer, status),
             Message::Stopped if self.stopping => Ok(Event::Stopped),
+            Message::Modes { modes } => self.on_modes(modes),
             _ => Err(self.violation()),
         }
+    }
+
+    fn on_modes(&mut self, modes: [ScanoutMode; MAX_SCANOUTS]) -> Result<Event, Refusal> {
+        let scanouts = u16::try_from(self.scanouts).unwrap_or(u16::MAX);
+        if validate_modes(&modes, scanouts).is_err() {
+            return Err(self.violation());
+        }
+        self.modes = modes;
+        Ok(Event::Modes)
     }
 
     fn on_attached(&mut self, buffer: u32, status: Status) -> Result<Event, Refusal> {

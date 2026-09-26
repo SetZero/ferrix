@@ -171,6 +171,15 @@ pub const EVENT_VBLANK: u32 = 0x01;
 pub const EVENT_FLIP_COMPLETE: u32 = 0x02;
 /// `DRM_EVENT_CRTC_SEQUENCE`.
 pub const EVENT_CRTC_SEQUENCE: u32 = 0x03;
+/// Ferrix's own: the card's connectors changed, so their modes are worth
+/// asking for again. Eight bytes, the header alone.
+///
+/// Linux leaves event types from `0x8000_0000` to drivers
+/// (`DRM_VMW_EVENT_FENCE_SIGNALED`, `DRM_EXYNOS_G2D_EVENT`), and libdrm's
+/// `drmHandleEvent` steps over one it does not know by its length, so a
+/// Linux program reading the card is not upset by it. Linux itself says a
+/// connector changed with a udev uevent, which Ferrix does not send.
+pub const EVENT_FERRIX_CONNECTORS: u32 = 0x8000_0000;
 
 // ---------------------------------------------------------------------------
 // Modes, connectors, encoders

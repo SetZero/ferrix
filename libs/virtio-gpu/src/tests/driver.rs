@@ -504,6 +504,21 @@ fn a_device_that_breaks_the_protocol_is_failed() {
 }
 
 #[test]
+fn a_display_change_raises_the_control_queues_interrupt_and_is_asked_once() {
+    let (_bus, device, mut driver) = build((64, 16));
+    // The transport's vector is the control queue's, and a host resizing a
+    // window is only heard of if the configuration shares it.
+    assert_eq!(device.borrow().config_vector, 1);
+    assert!(!driver.display_changed());
+    device.borrow_mut().config_mut()[0..4].copy_from_slice(&1u32.to_le_bytes());
+    assert!(driver.display_changed());
+    assert!(!driver.display_changed());
+    // An event that is not a display's is taken and is not one.
+    device.borrow_mut().config_mut()[0..4].copy_from_slice(&2u32.to_le_bytes());
+    assert!(!driver.display_changed());
+}
+
+#[test]
 fn display_events_are_read_and_cleared() {
     let (_bus, device, mut driver) = build((64, 16));
     device.borrow_mut().config_mut()[0..4].copy_from_slice(&1u32.to_le_bytes());

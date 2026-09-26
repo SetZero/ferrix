@@ -21,10 +21,10 @@ use ferrix_virtio::gpu::{
     RESP_ERR_INVALID_RESOURCE_ID, RESP_OK_DISPLAY_INFO, RESP_OK_NODATA,
 };
 use ferrix_virtio::pci::{
-    CommonConfig, DEVICE_FEATURE, DEVICE_FEATURE_SELECT, DEVICE_STATUS, DRIVER_FEATURE,
-    DRIVER_FEATURE_SELECT, FEATURE_ACCESS_PLATFORM, FEATURE_VERSION_1, NO_VECTOR, NUM_QUEUES,
-    QUEUE_DESC, QUEUE_DEVICE, QUEUE_DRIVER, QUEUE_ENABLE, QUEUE_MSIX_VECTOR, QUEUE_NOTIFY_OFF,
-    QUEUE_SELECT, QUEUE_SIZE, STATUS_DEVICE_NEEDS_RESET, STATUS_DRIVER_OK,
+    CONFIG_MSIX_VECTOR, CommonConfig, DEVICE_FEATURE, DEVICE_FEATURE_SELECT, DEVICE_STATUS,
+    DRIVER_FEATURE, DRIVER_FEATURE_SELECT, FEATURE_ACCESS_PLATFORM, FEATURE_VERSION_1, NO_VECTOR,
+    NUM_QUEUES, QUEUE_DESC, QUEUE_DEVICE, QUEUE_DRIVER, QUEUE_ENABLE, QUEUE_MSIX_VECTOR,
+    QUEUE_NOTIFY_OFF, QUEUE_SELECT, QUEUE_SIZE, STATUS_DEVICE_NEEDS_RESET, STATUS_DRIVER_OK,
 };
 use ferrix_virtio::{Descriptor, Layout, QueueMemory, SplitQueueDevice};
 
@@ -274,6 +274,8 @@ pub(super) struct Device {
     /// Hand the chains of one [`Device::serve`] back last first, which a
     /// device may: a completion names its chain, not its turn.
     pub(super) complete_backwards: bool,
+    /// The MSI-X vector configuration changes are raised on.
+    pub(super) config_vector: u16,
 }
 
 impl Device {
@@ -301,6 +303,7 @@ impl Device {
             protocol_errors: Vec::new(),
             streams: Vec::new(),
             complete_backwards: false,
+            config_vector: NO_VECTOR,
         }
     }
 
@@ -346,6 +349,7 @@ impl Device {
                     }
             }
             QUEUE_SELECT => u32::from(self.queue_select),
+            CONFIG_MSIX_VECTOR => u32::from(self.config_vector),
             QUEUE_SIZE => queue.map_or(0, |queue| u32::from(queue.size)),
             QUEUE_MSIX_VECTOR => queue.map_or(0, |queue| u32::from(queue.vector)),
             QUEUE_ENABLE => queue.map_or(0, |queue| u32::from(queue.ring.is_some())),
@@ -380,6 +384,7 @@ impl Device {
                 }
             }
             QUEUE_SELECT => self.queue_select = value as u16,
+            CONFIG_MSIX_VECTOR => self.config_vector = value as u16,
             _ => {
                 let bus = Rc::clone(&self.bus);
                 let Some(queue) = self.queues.get_mut(usize::from(self.queue_select)) else {

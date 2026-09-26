@@ -21,7 +21,7 @@ pub mod modeset;
 mod render;
 
 #[cfg(target_os = "linux")]
-pub use card::{Card, Dumb, Imported, Plan, Shown, cards, plan, planes, plans, rename, show};
+pub use card::{Card, Dumb, Imported, News, Plan, Shown, cards, plan, planes, plans, rename, show};
 #[cfg(target_os = "linux")]
 pub use device::RenderDevice;
 pub use edid::{Edid, registered};

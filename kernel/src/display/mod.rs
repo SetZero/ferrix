@@ -26,7 +26,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::convert::Infallible;
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use ferrix_blkring::identity::Location;
 use ferrix_bootinfo::PAGE_SIZE;
@@ -146,7 +146,11 @@ pub(crate) struct Card {
     pub(crate) index: u32,
     /// The pages the dumb buffers are ranges of.
     pub(crate) vmo: Arc<Vmo>,
-    modes: [ScanoutMode; MAX_SCANOUTS],
+    /// Each scanout's preferred mode: HELLO's, then each MODES's.
+    modes: SpinLock<[ScanoutMode; MAX_SCANOUTS]>,
+    /// How many times MODES changed `modes`, which an open card reads to
+    /// tell its program the connectors changed.
+    pub(crate) modes_changed: AtomicU64,
     scanouts: usize,
     control: Arc<Endpoint>,
     state: SpinLock<State>,
@@ -288,18 +292,15 @@ impl State {
     /// to decommit and give back.
     fn settle(&mut self, control: &Endpoint, event: Event) -> Option<Range> {
         let mut freed = None;
-        let mut wanted = true;
-        match event {
+        let wanted = match event {
             Event::Attached { buffer, status } => {
                 if status != Status::Ok {
                     // The driver unpins what it pinned before it says so.
                     freed = self.take_range(buffer);
                 }
-                wanted = !self.orphans.contains(&buffer);
+                !self.orphans.contains(&buffer)
             }
-            Event::Flipped { sequence, .. } => {
-                wanted = !self.forget(Unwanted::Flipped(sequence));
-            }
+            Event::Flipped { sequence, .. } => !self.forget(Unwanted::Flipped(sequence)),
             Event::Detached { buffer, status } => {
                 let range = self.take_range(buffer);
                 // A refused detach leaves the pages the device's: its range
@@ -307,10 +308,12 @@ impl State {
                 if status == Status::Ok {
                     freed = range;
                 }
-                wanted = !self.forget(Unwanted::Detached(buffer));
+                !self.forget(Unwanted::Detached(buffer))
             }
-            Event::Stopped => {}
-        }
+            // Nobody waits for either: [`serve`] ends at STOPPED and takes
+            // MODES's modes itself.
+            Event::Stopped | Event::Modes => false,
+        };
         if wanted {
             if self.events.len() >= MAX_EVENTS {
                 let _ = self.events.remove(0);
@@ -394,9 +397,34 @@ impl core::fmt::Debug for Card {
 }
 
 impl Card {
-    /// Each scanout's preferred mode, as the driver reported it.
-    pub(crate) fn modes(&self) -> &[ScanoutMode] {
-        self.modes.get(..self.scanouts).unwrap_or(&[])
+    /// Each scanout's preferred mode, as the driver last reported it.
+    pub(crate) fn modes(&self) -> Vec<ScanoutMode> {
+        let modes = *self.modes.lock();
+        modes.get(..self.scanouts).unwrap_or(&[]).to_vec()
+    }
+
+    /// Take the modes a MODES gave the session, and say so on the console.
+    fn modes_from(&self, modes: [ScanoutMode; MAX_SCANOUTS]) {
+        let mut held = self.modes.lock();
+        if *held == modes {
+            return;
+        }
+        *held = modes;
+        drop(held);
+        let _ = self.modes_changed.fetch_add(1, Ordering::AcqRel);
+        for (scanout, mode) in modes.iter().enumerate().take(self.scanouts) {
+            crate::console::println!(
+                "  display  card{} scanout {scanout} is now {}x{}{}",
+                self.index,
+                mode.width,
+                mode.height,
+                if mode.enabled {
+                    ""
+                } else {
+                    ", nothing attached"
+                }
+            );
+        }
     }
 
     /// The modes scanout 0 runs, the one running at HELLO first; empty for
@@ -1041,7 +1069,8 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
         index,
         node: start.device.index(),
         vmo: Arc::clone(&vmo),
-        modes: hello.modes,
+        modes: SpinLock::new(hello.modes),
+        modes_changed: AtomicU64::new(0),
         scanouts: usize::from(hello.scanouts),
         control: Arc::clone(&start.control),
         state: SpinLock::new(State {
@@ -1198,6 +1227,14 @@ fn serve(card: &Card) {
         let accepted = card.state.lock().session.receive(&decoded);
         match accepted {
             Ok(Event::Stopped) => break,
+            Ok(Event::Modes) => {
+                let mut modes = [ScanoutMode::default(); MAX_SCANOUTS];
+                for (into, mode) in modes.iter_mut().zip(card.state.lock().session.modes()) {
+                    *into = *mode;
+                }
+                card.modes_from(modes);
+                card.changed.wake_all();
+            }
             Ok(event) => {
                 let freed = card.state.lock().settle(&card.control, event);
                 if let Some(range) = freed {

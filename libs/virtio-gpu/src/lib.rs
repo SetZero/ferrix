@@ -554,7 +554,8 @@ fn plan_queue<T: CommonConfig>(
 }
 
 /// Enable the control queue on the vector the transport names and the
-/// cursor queue on none, then `DRIVER_OK`.
+/// cursor queue on none, ask for configuration changes -- a display the host
+/// resized -- on the control queue's vector, then `DRIVER_OK`.
 fn start_queues<T: Transport>(
     transport: &mut T,
     control: (Layout, QueueAddresses),
@@ -583,6 +584,10 @@ fn start_queues<T: Transport>(
         pci::NO_VECTOR,
     )
     .map_err(InitError::Transport)?;
+    // A device with no room for it keeps none, and a display change is then
+    // noticed at the next completion instead: [`Driver::display_changed`]
+    // reads the event register itself.
+    let _kept = pci::set_config_vector(transport, asked);
     pci::driver_ok(transport).map_err(InitError::Transport)?;
     Ok((active, cursor))
 }
@@ -1222,6 +1227,19 @@ where
                 .notify(gpu::CURSOR_QUEUE, self.cursor_notify_off);
         }
         Ok(())
+    }
+
+    /// Whether the device's displays changed since this was last asked --
+    /// `VIRTIO_GPU_EVENT_DISPLAY`, which QEMU raises when the window a
+    /// scanout is shown in is resized -- acknowledging it. `GET_DISPLAY_INFO`
+    /// says what they are now.
+    ///
+    /// The event register is read rather than the ISR's configuration bit,
+    /// because under MSI-X there is no ISR byte and the configuration's
+    /// vector is the control queue's: after any interrupt, this is the
+    /// question to ask.
+    pub fn display_changed(&mut self) -> bool {
+        self.take_events() & gpu::EVENT_DISPLAY != 0
     }
 
     /// Read the configuration's pending events and acknowledge them.

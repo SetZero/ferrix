@@ -526,6 +526,24 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             }
         }
 
+        // A card whose modes changed -- a virtio-gpu whose window on the host
+        // was resized -- has its screens follow, where their `monitor =` line
+        // leaves the mode to the monitor.
+        if screens.iter_mut().fold(false, |changed, screen| {
+            screen.backend.modes_changed() | changed
+        }) && follow_modes(&mut screens, &rules, options.renderer, &mut state, report)
+        {
+            let (width, height) = Screen::desktop(&screens);
+            seat.resize(width, height);
+            let outputs: Vec<compositor_server::Output> =
+                screens.iter().map(Screen::output).collect();
+            for slot in &mut slots {
+                slot.client_mut().set_outputs(outputs.clone());
+                slot.client_mut().publish_outputs(&outputs);
+            }
+            owed = true;
+        }
+
         // New connections.
         let first_new = slots.len();
         if ready
@@ -2998,6 +3016,69 @@ impl Screen {
         Ok(screens)
     }
 
+    /// Run the screen at `size`, the connector's own pixels: its buffers,
+    /// canvas, backdrop and GPU target made again at that size, and the
+    /// GPU's frame adopted again where it was. What is laid out on it is
+    /// the caller's to move, since the logical size changes with it.
+    ///
+    /// A screen whose GPU target cannot be made again at the new size draws
+    /// in software from then on rather than not at all.
+    ///
+    /// # Errors
+    ///
+    /// The backend refusing the size; the screen is then as it was.
+    fn resize(
+        &mut self,
+        size: (u32, u32),
+        renderer: crate::options::Renderer,
+        report: &mut dyn FnMut(&str),
+    ) -> Result<(), String> {
+        let (width, height) = self.transform.size(size);
+        let canvas = Canvas::new(width, height).map_err(|error| format!("a canvas: {error:?}"))?;
+        let backdrop = compositor_render::Backdrop::new(width, height)
+            .map_err(|error| format!("a backdrop: {error:?}"))?;
+        self.backend
+            .resize(size)
+            .map_err(|error| error.to_string())?;
+        self.canvas = canvas;
+        self.backdrop = backdrop;
+        // The old target first: it holds a render device of its own.
+        let renderer = if self.gpu.take().is_some() {
+            renderer
+        } else {
+            crate::options::Renderer::Software
+        };
+        self.gpu = gpu_for(renderer, &self.name, (width, height), report).unwrap_or_else(|why| {
+            report(&format!(
+                "hyprix: {}: {why}; drawing in software",
+                self.name
+            ));
+            None
+        });
+        if let Some(held) = self.gpu.as_mut()
+            && self.transform == Transform::Normal
+        {
+            adopt(
+                held,
+                self.backend.as_mut(),
+                (width, height),
+                &self.name,
+                report,
+            );
+        }
+        self.rect = Rect::new(
+            self.rect.x,
+            self.rect.y,
+            logical(width, self.scale),
+            logical(height, self.scale),
+        );
+        // Nothing of the new buffers is drawn, and the cursor plane was set
+        // with the old mode.
+        self.watch = crate::damage::Watch::default();
+        self.plane = crate::plane::Plane::default();
+        Ok(())
+    }
+
     /// What every screen covers together, which is the space the pointer
     /// moves in.
     fn desktop(screens: &[Self]) -> (u32, u32) {
@@ -4433,6 +4514,80 @@ fn carry_out(
         report(&format!("hyprix: a bar asked for workspace {workspace}"));
     }
     changed
+}
+
+/// Give each screen the size its monitor prefers now, where its `monitor =`
+/// line says `preferred` or nothing: a line that names a mode keeps it, as
+/// Hyprland's does. Screens placed `auto` are placed again from the left,
+/// since the ones before them may have grown or shrunk. Gives whether any
+/// screen changed.
+///
+/// Every screen is looked at, not only the one whose card spoke: two
+/// connectors of one card are two screens, and the first to read the card
+/// takes its news for both.
+fn follow_modes(
+    screens: &mut [Screen],
+    rules: &[MonitorRule],
+    renderer: crate::options::Renderer,
+    state: &mut State,
+    report: &mut dyn FnMut(&str),
+) -> bool {
+    let rule = |screen: &Screen| {
+        rules
+            .iter()
+            .rev()
+            .find(|rule| rule.matches(&screen.name, &screen.description))
+    };
+    let mut changed = false;
+    for screen in screens.iter_mut() {
+        let Some(preferred) = screen.backend.preferred() else {
+            continue;
+        };
+        let was = screen.backend.size();
+        if preferred == was || screen.backend.lost() {
+            continue;
+        }
+        if let Some(MonitorRule {
+            mode: compositor_config::Mode::Fixed { .. },
+            ..
+        }) = rule(screen)
+        {
+            report(&format!(
+                "hyprix: {} now prefers {}x{}; its `monitor =` line names a mode, which it keeps",
+                screen.name, preferred.0, preferred.1
+            ));
+            continue;
+        }
+        match screen.resize(preferred, renderer, report) {
+            Ok(()) => {
+                report(&format!(
+                    "hyprix: {} is {}x{} now, as its monitor prefers (was {}x{})",
+                    screen.name, preferred.0, preferred.1, was.0, was.1
+                ));
+                changed = true;
+            }
+            Err(why) => report(&format!(
+                "hyprix: {} prefers {}x{} and stays {}x{}: {why}",
+                screen.name, preferred.0, preferred.1, was.0, was.1
+            )),
+        }
+    }
+    if !changed {
+        return false;
+    }
+    // `auto` is to the right of the monitors already placed, as when the
+    // screens were first laid out ([`Screen::all`]).
+    let mut x = 0i64;
+    for screen in screens.iter_mut() {
+        let at = match rule(screen).map(|rule| rule.position) {
+            Some(Position::At(at_x, at_y)) => (at_x, at_y),
+            _ => (x, 0),
+        };
+        screen.rect = Rect::new(at.0, at.1, screen.rect.width, screen.rect.height);
+        x = at.0.saturating_add(screen.rect.width);
+        let _ = state.move_monitor(screen.monitor, screen.rect, screen.scale);
+    }
+    true
 }
 
 /// Move and scale the screens one arrangement names.

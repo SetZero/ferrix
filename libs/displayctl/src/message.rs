@@ -38,6 +38,8 @@
 //!   24 hot_x u32   28 hot_y u32   32 x i32   36 y i32
 //! MOVE      core -> driver, 24 bytes, not answered
 //!   8 scanout u32   12 reserved   16 x i32   20 y i32
+//! MODES     driver -> core, 200 bytes, not answered
+//!   8 scanout 0: width u32, height u32, enabled u32   ... 16 of them, as HELLO's
 //! ```
 //!
 //! CURSOR shows a [`CURSOR_SIZE`]-square buffer as a scanout's cursor, and
@@ -51,6 +53,14 @@
 //! malformed, so they can be given a meaning later without an old reader
 //! misreading them.
 //!
+//! MODES says the device's scanouts have changed since HELLO: a host that
+//! resized the window a virtio-gpu is shown in, which the device tells its
+//! driver with `VIRTIO_GPU_EVENT_DISPLAY`. It carries each scanout's
+//! preferred mode as HELLO did, and replaces what HELLO said; the scanout
+//! count is HELLO's and does not change. Nothing answers it, and the core
+//! goes on showing whatever it was showing until the card's user asks for
+//! another mode.
+//!
 //! HELLO's timings are for a card that runs only the modes it can make a
 //! clock for -- a board's HDMI output, not a virtio-gpu, which shows any
 //! size and lists none. The first is the mode the scanout runs now and has
@@ -63,8 +73,8 @@ use ::core::fmt;
 use ferrix_linux_abi::drm::FORMAT_XRGB8888;
 use ferrix_native_abi::rights::Rights;
 
-/// The protocol version this crate speaks. 5 added HELLO's timings.
-pub const VERSION: u16 = 5;
+/// The protocol version this crate speaks. 5 added HELLO's timings, 6 MODES.
+pub const VERSION: u16 = 6;
 
 /// HELLO's type.
 pub const HELLO: u32 = 1;
@@ -96,6 +106,8 @@ pub const ATTACH_OBJECT: u32 = 13;
 pub const CURSOR: u32 = 14;
 /// MOVE's type.
 pub const MOVE: u32 = 15;
+/// MODES's type.
+pub const MODES: u32 = 16;
 
 /// The width and height of a buffer CURSOR shows: the one cursor size
 /// virtio-gpu's host shows.
@@ -115,6 +127,8 @@ pub const TIMING_BYTES: usize = 24;
 const TIMINGS_AT: usize = 16 + MAX_SCANOUTS * SCANOUT_BYTES + 16;
 /// Bytes of HELLO.
 pub const HELLO_BYTES: usize = TIMINGS_AT + 4 + MAX_TIMINGS * TIMING_BYTES;
+/// Bytes of MODES.
+pub const MODES_BYTES: usize = HEADER_BYTES + MAX_SCANOUTS * SCANOUT_BYTES;
 /// Bytes of the longest message.
 pub const MAX_BYTES: usize = HELLO_BYTES;
 
@@ -396,19 +410,7 @@ impl Hello {
         if count == 0 || count > MAX_SCANOUTS {
             return Err(Refusal::Scanouts);
         }
-        for (index, mode) in self.modes.iter().enumerate() {
-            let fine = if index >= count {
-                *mode == ScanoutMode::default()
-            } else if mode.enabled {
-                (1..=MAX_DIMENSION).contains(&mode.width)
-                    && (1..=MAX_DIMENSION).contains(&mode.height)
-            } else {
-                mode.width <= MAX_DIMENSION && mode.height <= MAX_DIMENSION
-            };
-            if !fine {
-                return Err(Refusal::Mode);
-            }
-        }
+        validate_modes(&self.modes, self.scanouts)?;
         self.validate_timings()?;
         // A card that did not get `VIRTIO_GPU_F_VIRGL` has no capability
         // sets to speak of, and one that did and reports none has nothing a
@@ -453,6 +455,30 @@ impl Hello {
             && listed.iter().all(Timing::is_mode);
         if fine { Ok(()) } else { Err(Refusal::Mode) }
     }
+}
+
+/// Check a scanout list, HELLO's or MODES's, for a card of `scanouts`: an
+/// enabled mode has a size a display can have, a disabled one no larger, and
+/// every entry past the count is zero.
+///
+/// # Errors
+///
+/// [`Refusal::Mode`] for the first that is not.
+pub fn validate_modes(modes: &[ScanoutMode; MAX_SCANOUTS], scanouts: u16) -> Result<(), Refusal> {
+    let count = usize::from(scanouts);
+    for (index, mode) in modes.iter().enumerate() {
+        let fine = if index >= count {
+            *mode == ScanoutMode::default()
+        } else if mode.enabled {
+            (1..=MAX_DIMENSION).contains(&mode.width) && (1..=MAX_DIMENSION).contains(&mode.height)
+        } else {
+            mode.width <= MAX_DIMENSION && mode.height <= MAX_DIMENSION
+        };
+        if !fine {
+            return Err(Refusal::Mode);
+        }
+    }
+    Ok(())
 }
 
 /// READY: the core accepts the driver.
@@ -718,6 +744,13 @@ pub enum Message {
         /// The image's top edge on the scanout.
         y: i32,
     },
+    /// Driver to core: each scanout's preferred mode now, in HELLO's place.
+    /// Not answered.
+    Modes {
+        /// Each scanout's preferred mode; entries past HELLO's count are
+        /// zero.
+        modes: [ScanoutMode; MAX_SCANOUTS],
+    },
 }
 
 /// Why bytes are not a message.
@@ -768,6 +801,7 @@ impl Message {
             Self::Stopped => STOPPED,
             Self::Cursor { .. } => CURSOR,
             Self::Move { .. } => MOVE,
+            Self::Modes { .. } => MODES,
         }
     }
 
@@ -785,6 +819,7 @@ impl Message {
             FLUSH | CURSOR => 40,
             FLIPPED | MOVE => 24,
             STOP | STOPPED => HEADER_BYTES,
+            MODES => MODES_BYTES,
             _ => return None,
         })
     }
@@ -875,6 +910,7 @@ impl Message {
                 put32(bytes, 16, x as u32);
                 put32(bytes, 20, y as u32);
             }
+            Self::Modes { modes } => put_modes(bytes, HEADER_BYTES, &modes),
         }
         out
     }
@@ -961,6 +997,9 @@ fn decode_body(kind: u32, bytes: &[u8]) -> Option<Message> {
         STOP => Message::Stop,
         STOPPED => Message::Stopped,
         CURSOR | MOVE => return decode_cursor(kind, bytes),
+        MODES => Message::Modes {
+            modes: get_modes(bytes, HEADER_BYTES)?,
+        },
         _ => return None,
     })
 }
@@ -998,12 +1037,7 @@ fn put_hello(bytes: &mut [u8], hello: &Hello) {
     put16(bytes, 8, hello.version);
     put16(bytes, 10, hello.scanouts);
     put32(bytes, 12, hello.location);
-    for (index, mode) in hello.modes.iter().enumerate() {
-        let at = 16 + index * SCANOUT_BYTES;
-        put32(bytes, at, mode.width);
-        put32(bytes, at + 4, mode.height);
-        put32(bytes, at + 8, u32::from(mode.enabled));
-    }
+    put_modes(bytes, 16, &hello.modes);
     // After the modes, so that every offset above is where it
     // has always been and only the length grew.
     let at = 16 + MAX_SCANOUTS * SCANOUT_BYTES;
@@ -1057,19 +1091,7 @@ fn get_timing(bytes: &[u8], index: usize) -> Option<Timing> {
 
 /// HELLO, from `bytes`: `None` for a field outside its range.
 fn decode_hello(bytes: &[u8]) -> Option<Message> {
-    let mut modes = [ScanoutMode::default(); MAX_SCANOUTS];
-    for (index, mode) in modes.iter_mut().enumerate() {
-        let at = 16 + index * SCANOUT_BYTES;
-        *mode = ScanoutMode {
-            width: get32(bytes, at)?,
-            height: get32(bytes, at + 4)?,
-            enabled: match get32(bytes, at + 8)? {
-                0 => false,
-                1 => true,
-                _ => return None,
-            },
-        };
-    }
+    let modes = get_modes(bytes, 16)?;
     let mut timings = Timings {
         count: get32(bytes, TIMINGS_AT)?,
         ..Timings::NONE
@@ -1098,6 +1120,34 @@ fn decode_hello(bytes: &[u8]) -> Option<Message> {
         },
         timings,
     }))
+}
+
+/// The [`MAX_SCANOUTS`] scanouts HELLO and MODES carry, starting at `at`.
+fn put_modes(bytes: &mut [u8], at: usize, modes: &[ScanoutMode; MAX_SCANOUTS]) {
+    for (index, mode) in modes.iter().enumerate() {
+        let at = at + index * SCANOUT_BYTES;
+        put32(bytes, at, mode.width);
+        put32(bytes, at + 4, mode.height);
+        put32(bytes, at + 8, u32::from(mode.enabled));
+    }
+}
+
+/// [`put_modes`]'s scanouts back: `None` for an `enabled` other than 0 or 1.
+fn get_modes(bytes: &[u8], at: usize) -> Option<[ScanoutMode; MAX_SCANOUTS]> {
+    let mut modes = [ScanoutMode::default(); MAX_SCANOUTS];
+    for (index, mode) in modes.iter_mut().enumerate() {
+        let at = at + index * SCANOUT_BYTES;
+        *mode = ScanoutMode {
+            width: get32(bytes, at)?,
+            height: get32(bytes, at + 4)?,
+            enabled: match get32(bytes, at + 8)? {
+                0 => false,
+                1 => true,
+                _ => return None,
+            },
+        };
+    }
+    Some(modes)
 }
 
 fn get16(bytes: &[u8], at: usize) -> Option<u16> {

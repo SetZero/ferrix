@@ -125,9 +125,36 @@ pub trait Backend: core::fmt::Debug {
 
     /// Look, after [`Backend::raw_fd`] was readable, whether the screen has
     /// gone: `true` when it went just now. Without this a screen nothing is
-    /// redrawn on would not find out until its next frame.
+    /// redrawn on would not find out until its next frame. A change of its
+    /// modes found on the way is kept for [`Backend::modes_changed`].
     fn check(&mut self) -> bool {
         false
+    }
+
+    /// Whether the screen's modes changed since this was last asked: a
+    /// virtio-gpu whose window on the host was resized, which now prefers
+    /// the window's size.
+    fn modes_changed(&mut self) -> bool {
+        false
+    }
+
+    /// The size the screen prefers now, read from the card again: `None`
+    /// for a screen that cannot say.
+    fn preferred(&self) -> Option<(u32, u32)> {
+        None
+    }
+
+    /// Run the screen at another of its modes, `size`, with buffers made
+    /// afresh. A frame the GPU drew is no longer shown: the renderer's
+    /// target is the old size, and has to be made again and adopted.
+    ///
+    /// # Errors
+    ///
+    /// A screen that has no such mode or cannot change, and whatever the
+    /// card said; the screen is then as it was.
+    fn resize(&mut self, size: (u32, u32)) -> io::Result<()> {
+        let _ = size;
+        Err(io::Error::other("this screen has one size"))
     }
 
     /// What to say about this backend in the compositor's log line.
@@ -270,6 +297,9 @@ pub struct Drm {
     /// and its place change together at the card's next frame.
     cursors: [Option<compositor_drm::Dumb>; 2],
     next_cursor: usize,
+    /// Whether the card said its connectors changed and nobody has asked
+    /// [`Backend::modes_changed`] since.
+    modes_changed: bool,
 }
 
 /// How often a lost screen's card is looked for.
@@ -383,7 +413,19 @@ impl Drm {
             cursor_size,
             cursors: [None, None],
             next_cursor: 0,
+            modes_changed: false,
         })
+    }
+
+    /// This screen's connector as the card describes it now, named as it
+    /// was: `rename` numbered it among every card's.
+    fn replanned(&self) -> io::Result<compositor_drm::Plan> {
+        let mut plan = compositor_drm::plans(&self.card)?
+            .into_iter()
+            .find(|plan| plan.connector == self.plan.connector)
+            .ok_or_else(|| io::Error::other("the connector is not there any more"))?;
+        plan.name.clone_from(&self.plan.name);
+        Ok(plan)
     }
 
     /// The screen again, on a card opened afresh: the same connector, at the
@@ -612,11 +654,45 @@ impl Backend for Drm {
     }
 
     fn check(&mut self) -> bool {
-        if self.lost.is_some() || !self.card.gone() {
+        if self.lost.is_some() {
+            return false;
+        }
+        let news = self.card.news();
+        self.modes_changed |= news.connectors;
+        if !news.gone {
             return false;
         }
         self.lose();
         true
+    }
+
+    fn modes_changed(&mut self) -> bool {
+        core::mem::take(&mut self.modes_changed)
+    }
+
+    fn preferred(&self) -> Option<(u32, u32)> {
+        self.replanned().ok().map(|plan| plan.size())
+    }
+
+    fn resize(&mut self, (width, height): (u32, u32)) -> io::Result<()> {
+        let mut plan = self.replanned()?;
+        if !plan.take((width, height), None) || plan.size() != (width, height) {
+            return Err(io::Error::other(format!(
+                "the connector has no {width}x{height} mode"
+            )));
+        }
+        let first = compositor_drm::Dumb::new(&self.card, width, height)?;
+        let second = compositor_drm::Dumb::new(&self.card, width, height)?;
+        // Shown before anything old is let go: the card never points at a
+        // buffer that is gone, the GPU's adopted one included.
+        let _ = self.card.set_mode(&plan, &first)?;
+        self.adopted = None;
+        self.buffers = [first, second];
+        self.back = usize::from(!self.copied);
+        self.plan = plan;
+        self.width = width;
+        self.height = height;
+        Ok(())
     }
 
     fn recover(&mut self) -> bool {

@@ -1396,8 +1396,12 @@ impl Deferred {
     }
 }
 
-/// HELLO from what `GET_DISPLAY_INFO` said.
-fn hello(driver: &mut Gpu, port: &Port<Kernel>, location: u32) -> Result<Hello, Step> {
+/// Each scanout's preferred mode, from `GET_DISPLAY_INFO`: what HELLO and
+/// MODES carry.
+fn display_modes(
+    driver: &mut Gpu,
+    port: &Port<Kernel>,
+) -> Result<[ScanoutMode; MAX_SCANOUTS], Step> {
     let Ok(Response::DisplayInfo(scanouts)) = run_command(driver, port, &Command::GetDisplayInfo)?
     else {
         return Err(Step::Device);
@@ -1414,6 +1418,13 @@ fn hello(driver: &mut Gpu, port: &Port<Kernel>, location: u32) -> Result<Hello, 
             };
         }
     }
+    Ok(modes)
+}
+
+/// HELLO from what `GET_DISPLAY_INFO` said.
+fn hello(driver: &mut Gpu, port: &Port<Kernel>, location: u32) -> Result<Hello, Step> {
+    let modes = display_modes(driver, port)?;
+    let count = (driver.info().config.num_scanouts as usize).min(MAX_SCANOUTS);
     // What the card can do in 3D, which is the device's answer and not the
     // driver's wish: `VIRTIO_GPU_F_VIRGL` is granted or it is not, and the
     // capability sets are only worth walking when it was. The first set's
@@ -1683,6 +1694,9 @@ struct Serving {
     /// What the completion of each render command on the device is to be
     /// answered with, by its tag less [`TAG_RENDER`].
     owed: [Option<Owed>; CONTROL_SLOTS + 1],
+    /// Whether the device said its displays changed and the core has not
+    /// been sent MODES for it yet.
+    modes_stale: bool,
 }
 
 /// The tag of a command a blocking helper waits for, which is
@@ -1807,6 +1821,7 @@ impl Serving {
             render_armed: false,
             backlog: Backlog::new(),
             owed: [None; CONTROL_SLOTS + 1],
+            modes_stale: false,
         }
     }
 
@@ -1836,6 +1851,7 @@ impl Serving {
     /// can go before a completion; then ring the doorbell once for all of
     /// it. `Some` when the run is over.
     fn advance(&mut self) -> Result<Option<bool>, Step> {
+        self.send_modes()?;
         loop {
             let mut moved = self.read_render()?;
             moved |= self.start_render()?;
@@ -1852,9 +1868,27 @@ impl Serving {
         Ok(None)
     }
 
-    /// Take the device's completions and hand each to whoever posted it.
+    /// Tell the core what the scanouts' modes are now, once the device has
+    /// said they changed and has nothing in flight: `GET_DISPLAY_INFO` runs
+    /// to completion here, as the rare render requests do.
+    fn send_modes(&mut self) -> Result<(), Step> {
+        if !self.modes_stale || self.driver.is_busy() {
+            return Ok(());
+        }
+        self.modes_stale = false;
+        let modes = display_modes(&mut self.driver, &self.port)?;
+        self.control
+            .write(Message::Modes { modes }.encode().as_bytes())
+            .map_err(|_| Step::Control)
+    }
+
+    /// Take the device's completions and hand each to whoever posted it,
+    /// and note a change of the device's displays.
     fn completions(&mut self) -> Result<(), Step> {
         let _ = self.driver.on_interrupt().map_err(|_| Step::Faulted)?;
+        if self.driver.display_changed() {
+            self.modes_stale = true;
+        }
         while let Some(done) = self.driver.take_done().map_err(|_| Step::Faulted)? {
             if done.tag == TAG_DISPLAY {
                 self.pipeline.done(done.result).map_err(|_| Step::Faulted)?;

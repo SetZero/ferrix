@@ -224,7 +224,56 @@ fn every_message() -> Vec<Message> {
             x: -5,
             y: i32::MAX,
         },
+        Message::Modes { modes: resized() },
     ]
+}
+
+/// Scanout 0 at a window's new size, scanout 1 unplugged.
+fn resized() -> [ScanoutMode; MAX_SCANOUTS] {
+    let mut modes = [ScanoutMode::default(); MAX_SCANOUTS];
+    modes[0] = ScanoutMode {
+        width: 2554,
+        height: 1377,
+        enabled: true,
+    };
+    modes[1] = ScanoutMode {
+        width: 1024,
+        height: 768,
+        enabled: false,
+    };
+    modes
+}
+
+#[test]
+fn modes_carries_every_scanout_where_hello_does_after_its_header() {
+    let encoded = Message::Modes { modes: resized() }.encode();
+    let bytes = encoded.as_bytes();
+    assert_eq!(bytes.len(), 8 + 16 * 12);
+    assert_eq!(
+        [u32_at(bytes, 8), u32_at(bytes, 12), u32_at(bytes, 16)],
+        [2554, 1377, 1]
+    );
+    assert_eq!(
+        [u32_at(bytes, 20), u32_at(bytes, 24), u32_at(bytes, 28)],
+        [1024, 768, 0]
+    );
+    // An `enabled` other than 0 or 1 is not a MODES.
+    let mut bent = bytes.to_vec();
+    bent[16] = 2;
+    assert_eq!(Message::decode(&bent), Err(MessageError::Field));
+}
+
+#[test]
+fn a_mode_list_is_checked_against_the_card_hello_described() {
+    assert_eq!(validate_modes(&resized(), 2), Ok(()));
+    // A scanout past the count HELLO gave.
+    assert_eq!(validate_modes(&resized(), 1), Err(Refusal::Mode));
+    let mut empty = resized();
+    empty[0].width = 0;
+    assert_eq!(validate_modes(&empty, 2), Err(Refusal::Mode));
+    let mut huge = resized();
+    huge[0].height = MAX_DIMENSION + 1;
+    assert_eq!(validate_modes(&huge, 2), Err(Refusal::Mode));
 }
 
 // -- Bytes ----------------------------------------------------------------------
@@ -249,7 +298,7 @@ fn fields_lie_where_the_specification_puts_them() {
     // about 3D, 4 for whether it has a cursor plane, and 4 + 16 x 24 for
     // the timings a card that runs only some lists.
     assert_eq!(bytes.len(), 612);
-    assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 5, "VERSION");
+    assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 6, "VERSION");
     assert_eq!(u16::from_le_bytes([bytes[10], bytes[11]]), 1);
     assert_eq!(u32_at(bytes, 12), 0x800);
     assert_eq!(
@@ -484,6 +533,26 @@ fn attach_is_validated_against_itself_and_the_card() {
 
 fn session() -> Session {
     Session::accept(&hello(), &Hello::HANDLE_RIGHTS, CARD).expect("a good HELLO")
+}
+
+#[test]
+fn modes_replaces_what_hello_said_and_a_bad_list_breaks_the_session() {
+    let mut session = session();
+    let mut modes = [ScanoutMode::default(); MAX_SCANOUTS];
+    modes[0] = ScanoutMode {
+        width: 2554,
+        height: 1377,
+        enabled: true,
+    };
+    assert_eq!(session.receive(&Message::Modes { modes }), Ok(Event::Modes));
+    assert_eq!(session.modes(), &modes[..1]);
+    // HELLO's count stays: a second scanout is one the card never had.
+    modes[1] = modes[0];
+    assert_eq!(
+        session.receive(&Message::Modes { modes }),
+        Err(Refusal::Protocol)
+    );
+    assert!(session.is_broken());
 }
 
 fn full() -> Rect {

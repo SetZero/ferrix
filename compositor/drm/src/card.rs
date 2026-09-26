@@ -100,6 +100,17 @@ impl Card {
     /// waits on them (see [`Card::page_flip`]). Never blocks.
     #[must_use]
     pub fn gone(&self) -> bool {
+        self.news().gone
+    }
+
+    /// What the card has to say, read off its descriptor until nothing is
+    /// left: whether its driver has gone, and whether its connectors changed
+    /// -- Ferrix's own `EVENT_FERRIX_CONNECTORS`, which a virtio-gpu whose
+    /// host window was resized sends. Page-flip events are read and dropped,
+    /// as [`Card::gone`] says. Never blocks.
+    #[must_use]
+    pub fn news(&self) -> News {
+        let mut news = News::default();
         let mut events = [0u8; 4096];
         loop {
             let mut poll = libc::pollfd {
@@ -110,16 +121,22 @@ impl Card {
             // SAFETY: one live `pollfd`, and a zero timeout.
             let ready = unsafe { libc::poll(&raw mut poll, 1, 0) };
             if ready <= 0 || poll.revents & libc::POLLIN == 0 {
-                return false;
+                return news;
             }
             // SAFETY: `events` is a live buffer of the length passed.
             let read = unsafe { libc::read(self.fd, events.as_mut_ptr().cast(), events.len()) };
-            match read {
-                0 => return true,
-                read if read < 0 => {
-                    return io::Error::last_os_error().raw_os_error() == Some(libc::ENODEV);
+            match usize::try_from(read) {
+                Ok(0) => {
+                    news.gone = true;
+                    return news;
                 }
-                _ => {}
+                Ok(read) => {
+                    news.connectors |= connectors_changed(events.get(..read).unwrap_or(&[]));
+                }
+                Err(_) => {
+                    news.gone = io::Error::last_os_error().raw_os_error() == Some(libc::ENODEV);
+                    return news;
+                }
             }
         }
     }
@@ -478,6 +495,39 @@ pub fn show(card: &Card) -> io::Result<String> {
 /// page flip that promised one: `events EAGAIN 0 32`, or `events none <what
 /// went otherwise>`.
 ///
+/// What [`Card::news`] read.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct News {
+    /// The card's driver has gone.
+    pub gone: bool,
+    /// Its connectors changed, so their modes are worth reading again.
+    pub connectors: bool,
+}
+
+/// Whether the events a read gave hold a connector change: each event is a
+/// `drm_event` header, its type and its whole length, stepped over by that
+/// length as libdrm's `drmHandleEvent` does.
+pub(crate) fn connectors_changed(mut events: &[u8]) -> bool {
+    let mut changed = false;
+    while let (Some(kind), Some(length)) = (word(events, 0), word(events, 4)) {
+        changed |= kind == drm::EVENT_FERRIX_CONNECTORS;
+        let Some(rest) = usize::try_from(length)
+            .ok()
+            .filter(|&length| length >= 8)
+            .and_then(|length| events.get(length..))
+        else {
+            break;
+        };
+        events = rest;
+    }
+    changed
+}
+
+/// The little-endian word at `at`.
+fn word(bytes: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
+}
+
 /// Linux's `drm_read`, under `O_NONBLOCK` with nothing queued, is `EAGAIN`
 /// whatever the count -- measured on a 7.0 host, `card1` (amdgpu) and
 /// `card2` (nvidia) answer a read of 8 and of 0 so -- and with an event

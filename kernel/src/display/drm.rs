@@ -51,7 +51,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::any::Any;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_displayctl::message::{CURSOR_SIZE, MAX_DIMENSION, MAX_SCANOUTS, Rect, Status, Timing};
@@ -210,6 +210,9 @@ pub(crate) struct CardFile {
     /// Whether the open set `DRM_CLIENT_CAP_UNIVERSAL_PLANES`, without which
     /// `GETPLANERESOURCES` lists only overlay planes, and so none here.
     universal_planes: AtomicBool,
+    /// The card's `modes_changed` this open last told its program of with
+    /// [`drm::EVENT_FERRIX_CONNECTORS`].
+    modes_told: AtomicU64,
 }
 
 impl core::fmt::Debug for CardFile {
@@ -234,7 +237,6 @@ impl CardFile {
             return Err(Errno::EBUSY);
         }
         Ok(Arc::new(CardFile {
-            card,
             state: SpinLock::new(OpenState {
                 next_handle: 1,
                 next_framebuffer: FIRST_FRAMEBUFFER_ID,
@@ -243,6 +245,8 @@ impl CardFile {
             readable: Arc::new(WaitQueue::new()),
             modeset: SleepLock::new((), &SchedParker),
             universal_planes: AtomicBool::new(false),
+            modes_told: AtomicU64::new(card.modes_changed.load(Ordering::Acquire)),
+            card,
         }))
     }
 }
@@ -294,10 +298,11 @@ impl Inode for CardFile {
         self.read_stream(buf, false)
     }
 
-    /// Readable with a page-flip event to read, or once the driver is gone,
-    /// when a read returns 0; never writable, as on Linux.
+    /// Readable with a page-flip event to read, or a connector change not
+    /// told yet, or once the driver is gone, when a read returns 0; never
+    /// writable, as on Linux.
     fn poll(&self) -> Readiness {
-        let waiting = !self.state.lock().events.is_empty();
+        let waiting = !self.state.lock().events.is_empty() || self.modes_untold();
         Readiness {
             readable: waiting || self.card.is_gone(),
             writable: false,
@@ -324,10 +329,23 @@ impl Inode for CardFile {
     }
 
     /// Put back events a read took but could not deliver, as Linux's
-    /// `drm_read` does, so a bad buffer loses no flip.
+    /// `drm_read` does, so a bad buffer loses no flip. A connector change,
+    /// which a read puts first and alone is eight bytes, is owed again.
     fn unread_stream(&self, bytes: &[u8]) {
+        let flips = if bytes.len() % EventVblank::SIZE == Event::SIZE {
+            self.modes_told.store(
+                self.card
+                    .modes_changed
+                    .load(Ordering::Acquire)
+                    .wrapping_sub(1),
+                Ordering::Release,
+            );
+            bytes.get(Event::SIZE..).unwrap_or_default()
+        } else {
+            bytes
+        };
         let mut state = self.state.lock();
-        for chunk in bytes.chunks_exact(EventVblank::SIZE).rev() {
+        for chunk in flips.chunks_exact(EventVblank::SIZE).rev() {
             let mut event = [0u8; 32];
             event.copy_from_slice(chunk);
             state.events.push_front(event);
@@ -349,9 +367,26 @@ impl Inode for CardFile {
     /// `if (length > count - ret)` putting the event back and answering
     /// `ret`. This used to answer `EINVAL` for any read smaller than an
     /// event.
+    ///
+    /// A connector change comes first, as Ferrix's own eight-byte
+    /// [`drm::EVENT_FERRIX_CONNECTORS`], once however many changes there were
+    /// since the last: what it asks of the program is to read the
+    /// connectors again, which reads them as they are now.
     fn read_stream(&self, buf: &mut [u8], nonblock: bool) -> VfsResult<usize> {
         let mut written = 0;
         let mut take = || {
+            let changed = self.card.modes_changed.load(Ordering::Acquire);
+            let untold = self.modes_told.load(Ordering::Acquire) != changed;
+            if untold && let Some(slot) = buf.get_mut(..Event::SIZE) {
+                let event = Event {
+                    r#type: drm::EVENT_FERRIX_CONNECTORS,
+                    length: Event::SIZE as u32,
+                };
+                if event.write(slot).is_some() {
+                    written = Event::SIZE;
+                    self.modes_told.store(changed, Ordering::Release);
+                }
+            }
             let mut state = self.state.lock();
             while buf.len() - written >= EventVblank::SIZE {
                 let Some(event) = state.events.pop_front() else {
@@ -364,7 +399,7 @@ impl Inode for CardFile {
             }
             // An event still queued is one that did not fit: the read ends,
             // with what it took, 0 if nothing.
-            written > 0 || !state.events.is_empty() || self.card.is_gone()
+            written > 0 || !state.events.is_empty() || self.modes_untold() || self.card.is_gone()
         };
         if nonblock {
             if take() {
@@ -378,15 +413,29 @@ impl Inode for CardFile {
                 .as_ref()
                 .is_some_and(|process| process.signal_pending())
         };
-        let _ = self
+        // A connector change wakes the card's queue, not this open's, so the
+        // wait looks again every so often rather than miss one.
+        while !self
             .readable
-            .wait_until_deadline(|| take() || killed(), u64::MAX);
+            .wait_until_deadline(|| take() || killed(), timer::now_nanos() + RECHECK_NANOS)
+        {
+        }
         if written == 0 && !self.card.is_gone() && killed() {
             return Err(Errno::ERESTARTSYS);
         }
         Ok(written)
     }
 }
+
+impl CardFile {
+    /// Whether the card's connectors changed since this open last said so.
+    fn modes_untold(&self) -> bool {
+        self.modes_told.load(Ordering::Acquire) != self.card.modes_changed.load(Ordering::Acquire)
+    }
+}
+
+/// How often a blocking read of the card looks for a connector change.
+const RECHECK_NANOS: u64 = 50_000_000;
 
 /// The open card `file` reads and writes go to, if it is one.
 pub(crate) fn of(io: &Arc<dyn Inode>) -> Option<Arc<CardFile>> {

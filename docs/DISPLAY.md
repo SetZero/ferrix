@@ -137,6 +137,7 @@ others.
 | `STOP` / `STOPPED` | as blk | | |
 | `CURSOR` | core → driver | scanout, buffer id (64 × 64; 0 for none), sequence, hotspot, place; only to a card whose `HELLO` said it has a cursor plane | — |
 | `MOVE` | core → driver | scanout, place; nothing answers it; the same | — |
+| `MODES` | driver → core | each scanout's preferred mode, as `HELLO` gives it, in `HELLO`'s place; sent unasked when the device's displays change, and nothing answers it (protocol version 6, 2026-09-26) | — |
 
 **Each message maps to device commands:**
 
@@ -160,6 +161,14 @@ others.
   read, never behind the control queue. A move carries the cursor's
   resource, since QEMU's `update_cursor` hides a cursor whose move names
   none.
+* `MODES` comes the other way, from the device: `VIRTIO_GPU_EVENT_DISPLAY`
+  in the configuration's `events_read`, which QEMU raises when the window
+  or VNC viewer a scanout is shown in is resized. The driver asks for
+  configuration changes on the control queue's MSI-X vector, reads
+  `events_read` after every interrupt, and once nothing is in flight runs
+  `GET_DISPLAY_INFO` and sends what it says. The core takes a list that fits
+  the card `HELLO` described and refuses the rest, as it refuses a bad
+  `HELLO`.
 
 **Pages the device may still hold are never unpinned.** If the device
 refuses `RESOURCE_DETACH_BACKING`, the driver does not unreference the
@@ -214,7 +223,7 @@ source is committed this time.
 | `MODE_PAGE_FLIP` | `SCANOUT` if the buffer changed, then `FLUSH`; `DRM_MODE_PAGE_FLIP_EVENT` queues a `drm_event_vblank` when `FLIPPED` arrives |
 | `MODE_DIRTYFB` | `FLUSH` of the clip rectangles |
 | `MODE_CURSOR`, `MODE_CURSOR2` | the head's cursor plane, as Linux's `drm_mode_cursor_universal` sets it: `MOVE` is a `MOVE` to the image's top-left corner and waits for nothing; `BO` is a `CURSOR` of a 64 × 64 dumb buffer, or none for handle 0, with `CURSOR2`'s hotspot (`CURSOR` has none), and returns at `FLIPPED`; both flags set the place first. Another size `EINVAL`, a handle this open has not got `ENOENT`, a card with no cursor plane `ENXIO`, as Linux answers for a CRTC with none; the image is shown until the next one, and a card may read it from the buffer itself (the DK1's LTDC does), so a program draws each image into a buffer the card is not showing |
-| `read()` | `drm_event_vblank` records, as many as fit; 0 when one is queued that does not fit, which stays; blocks while none are queued, `EAGAIN` under `O_NONBLOCK`, whatever the count |
+| `read()` | `drm_event_vblank` records, as many as fit; 0 when one is queued that does not fit, which stays; blocks while none are queued, `EAGAIN` under `O_NONBLOCK`, whatever the count. Since 2026-09-26 a connector change comes first, as Ferrix's own eight-byte event `0x8000_0000` (`EVENT_FERRIX_CONNECTORS`), once however many `MODES` there were since the last: Linux leaves types from `0x8000_0000` to drivers, and libdrm steps over one it does not know. Linux says a connector changed with a udev uevent, which Ferrix does not send |
 | `MODE_GETPLANERESOURCES` | E4: one primary plane a head to an open that set `UNIVERSAL_PLANES`; no plane to one that did not |
 | `MODE_GETPLANE` | E4: format `XRGB8888`, `possible_crtcs` the bit of its head's CRTC, and the CRTC and framebuffer `SETCRTC` or `PAGE_FLIP` last showed on that head, 0 and 0 while nothing is; the formats are copied only into an array with room for all of them; another id `ENOENT` |
 | `MODE_OBJ_GETPROPERTIES` | E4: the plane has `type` (property 5) at `Primary` (1); the CRTC and the connector have none; the encoder, a framebuffer and the property have no property list, `EINVAL`; an id of another type than the one asked for, or no object, `ENOENT` |
@@ -316,6 +325,25 @@ resizes its window, which a headless test has nothing to do, so
 `cargo xtask test-compositor --screens 2` gives the guest two virtio-gpu
 *devices* instead: two cards, one screen each, which is the other shape a
 two-monitor machine comes in and the one a test can drive.
+
+**A desktop the size of its window (2026-09-26).** QEMU's GTK window
+stretched a 1920 × 1080 desktop to whatever size the window was, sampling
+the nearest pixel, and small text came out looking unsmoothed; the customer
+took it for fonts without antialiasing. The desktop now follows the window.
+QEMU tells the card the window's size whenever it changes, and a VNC
+viewer's resize request (`SetDesktopSize`) does the same. The driver sends
+`MODES`, the card lists the new size as its preferred mode and makes its
+open readable with `EVENT_FERRIX_CONNECTORS`, and hyprix, on a monitor
+whose `monitor =` line says `preferred`, sets the new mode: the buffers,
+canvas, backdrop and GPU target made again, the GPU's frame adopted again,
+the monitor moved in the layout, the pointer's bounds and every client's
+`wl_output` sent again. A line that names a mode keeps it, as Hyprland's
+does. `run-compositor` writes `preferred` unless given `--size`; judged
+boots keep their fixed sizes. Checked by a VNC viewer asking for 2560 ×
+1400, 1280 × 720 and 1600 × 900 in turn on the desktop with Chrome: each
+time the kernel said `card0 scanout 0 is now ...`, hyprix `Virtual-1 is
+... now, as its monitor prefers`, and the screen was the new size with the
+windows tiled on it and the GPU still drawing.
 
 **How it is checked.** `compositor/blank` asks for universal planes after its
 modeset, reads the planes as Smithay does, and ends its marker line with
