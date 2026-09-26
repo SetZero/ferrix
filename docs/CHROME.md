@@ -823,9 +823,15 @@ the driver's own user samples.
 
 What is left is Chrome's own work and its forty thousand `clock_gettime`
 calls a second, which a vDSO would answer without entering the kernel.
-Memory has not moved: 521 MiB is in use, and the most of that is page
-cache for Chrome's 294 MB program. `/proc/meminfo` counts the cache as
-used, because it reports `Cached` as 0.
+Memory has not moved: 521 MiB is in use, and most of that is page cache
+for Chrome's 294 MB program. `/proc/meminfo` counts the cache as used,
+because it reports `Cached` as 0. A trial kernel, not landed, reported
+each process's anonymous memory in proportion: every frame of an
+anonymous object or shadow, divided by its holders. Chrome's processes
+came to about 160 MiB between them. The browser holds 46, two renderers
+36 and 27, and the rest 17 and less. Anonymous memory is what Chrome
+itself asks for, and there is not much of it to take away. The rest of
+the 521 is cached file pages and the kernel.
 
 ---
 
