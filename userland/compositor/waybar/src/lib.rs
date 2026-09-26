@@ -1,5 +1,6 @@
 //! waybar, in Rust, for Ferrix.
 
+pub mod cli;
 pub mod config;
 pub mod css;
 pub mod diag;
