@@ -4,14 +4,16 @@
 //! it into Ferrix through the launcher's helper, or runs Ferrix as a guest of
 //! the phone's own crosvm with its console live. It graphs the phone's
 //! processors, memory, temperatures, GPU and battery, and any crosvm's
-//! processor and memory use, over time. And it keeps every run's record to
-//! read back. `README.md` says how to build and run it.
+//! processor and memory use, over time. During a native boot it streams
+//! Ferrix's own USB serial port, once Ferrix brings it up. And it keeps every
+//! run's record to read back. `README.md` says how to build and run it.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod helper;
 mod phone;
 mod runs;
+mod usb;
 mod vm;
 
 use std::process::Child;
@@ -75,6 +77,8 @@ fn main() {
         .setup(|app| {
             let handle = app.handle().clone();
             std::thread::spawn(move || phone::poll(handle));
+            let handle = app.handle().clone();
+            std::thread::spawn(move || usb::watch(handle));
             Ok(())
         })
         .on_window_event(|window, event| {

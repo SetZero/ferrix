@@ -101,8 +101,14 @@ fn stamp(seconds: u64) -> String {
 
 /// Keep a guest's console as a run record, `vm-<time>/run.log`.
 pub fn save_vm(console: &str) -> Result<String, String> {
+    save("vm", console)
+}
+
+/// Keep a console as a run record, `<kind>-<time>/run.log`: `vm` for a
+/// guest's, `usb` for what a native boot sent over its USB port.
+pub fn save(kind: &str, console: &str) -> Result<String, String> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    let dir = root().join(format!("vm-{}", stamp(now)));
+    let dir = root().join(format!("{kind}-{}", stamp(now)));
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     let log = dir.join("run.log");
     fs::write(&log, console).map_err(|error| error.to_string())?;

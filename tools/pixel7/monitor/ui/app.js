@@ -636,6 +636,23 @@ listen("vm-line", (event) => {
   if (consoleLines.length === 0) showResult("busy", "The guest is booting…");
   appendLine(event.payload.line, event.payload.t);
 });
+// Ferrix's USB serial port during a native boot: the same lines a guest
+// sends, from the phone itself.
+listen("usb-state", (event) => {
+  const { port, seconds } = event.payload;
+  if (port) {
+    clearConsole();
+    resetBoot();
+    ferrix.samples = [];
+    $("ferrix-badge").textContent = "";
+    setSource(`Native · USB serial ${port}`);
+    showResult("busy", `Ferrix is on USB (${port})…`);
+    return;
+  }
+  $("result").textContent += `  ·  USB gone after ${seconds.toFixed(1)} s`;
+  refreshRuns();
+});
+listen("usb-line", (event) => appendLine(event.payload.line, event.payload.t));
 listen("vm-ended", (event) => {
   vmRunning = false;
   vmPaused = false;
