@@ -179,7 +179,23 @@ is `/`: the compositor is init, and init's environment is `HOME=/`
 (`kernel/src/init.rs`), which every `exec-once` inherits. The four
 programs are carried as `/bin/waybar`, `/bin/fuzzel`, `/bin/hyprlock`,
 `/bin/hypridle` by one line each in `xtask/src/compositor.rs`'s
-`DESKTOP_CLIENTS`.
+`DESKTOP_CLIENTS`. `--no-dotfiles` carries the file alone. On nazuna the
+user's files are 35 and their fonts 20 files, 10.4 MiB: Ubuntu, GFS Didot,
+DejaVu Sans, and the host's `sans-serif` and `monospace`.
+
+### 2.6 The foundation's boot: `caption`
+
+`userland/compositor/caption` is the smallest program on the whole
+foundation: a line of text in a named font on an overlay layer surface,
+held 40 pixels from the top-left corner. `cargo xtask test-compositor
+--boot caption` draws `Ferrix 12:34 — AVATAR To…` at 32 points in the font
+`~/.config/hypr/hyprlock.conf` names first (`$font Light`, which is Ubuntu
+at weight 300), with that font's files carried as `run-compositor` carries
+them. The font is the user's and is never committed, so the expected
+picture cannot be either: it is made at gate time by running the `x86_64`
+build of the same client on the host with `--render`, from the same font
+files (`--fonts-dir` on both sides), and the screendump's rectangle must
+match it pixel for pixel on `x86_64` (within 2 a channel elsewhere).
 
 ## 3. waybar
 
@@ -236,5 +252,6 @@ shell says it does, and the program reports it.
   user's waybar icons on nazuna (an ignored probe test); JPEG decodes with
   zune-jpeg's SIMD off, so it forbids unsafe and is slower than it could be.
 * `userland/compositor/text` is written on `clients-base` and lands next.
-* Not yet: the xtask flag that carries the user's dotfiles and fonts, and the
-  boot check of a toolkit client drawing text in the user's font.
+* The dotfiles and fonts carried by `run-compositor --config` (§2.5), and
+  the `caption` boot (§2.6): on x86_64 its 565x80 pixels, drawn in the
+  user's Ubuntu Light, are the ones the host draws.

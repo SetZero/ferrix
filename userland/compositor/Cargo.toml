@@ -12,10 +12,10 @@
 [workspace]
 resolver = "3"
 members = [
-    "anim", "blank", "clip", "config", "ctl", "drm", "evecho", "fan", "fuzzel",
-    "hyprix", "hyprlang", "image", "ipc", "layout", "lock", "lswt", "pattern", "plug",
-    "protocol", "reboot", "regex", "render", "server", "shm", "shot", "socket", "term",
-    "text", "tone", "toolkit", "virgl", "vkbd", "wire", "xkb",
+    "anim", "blank", "caption", "clip", "config", "ctl", "drm", "evecho", "fan",
+    "fuzzel", "hyprix", "hyprlang", "image", "ipc", "layout", "lock", "lswt", "pattern",
+    "plug", "protocol", "reboot", "regex", "render", "server", "shm", "shot", "socket",
+    "term", "text", "tone", "toolkit", "virgl", "vkbd", "wire", "xkb",
 ]
 
 [workspace.package]

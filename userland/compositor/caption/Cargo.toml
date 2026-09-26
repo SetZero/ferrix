@@ -1,0 +1,23 @@
+[package]
+name = "compositor-caption"
+description = "A line of text in a named font on a layer surface: the desktop clients' foundation, booted"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "caption"
+path = "src/main.rs"
+
+[lib]
+name = "compositor_caption"
+path = "src/lib.rs"
+
+[dependencies]
+compositor-text = { path = "../text" }
+compositor-toolkit = { path = "../toolkit" }
+
+[lints]
+workspace = true
