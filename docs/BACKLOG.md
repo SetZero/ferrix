@@ -126,6 +126,17 @@ before a boot matrix and wait while available memory is under 12 GB. On
 reported it close to stalling: three worktrees on the tmpfs held 9 GB of build
 output, and ten sessions were building and booting at once.
 
+**Changes inside the certification item are reviewed first (customer,
+2026-09-26).** The certification session (ferrix-55 at the time) stays as a
+standing consultant. A change inside the item -- what
+`scripts/data/certification-item.json` puts in the `core` or `item` ring and
+`scripts/check/check-item-boundary.py` enforces; the `load` ring above it is
+outside -- gets its one-line OK before the landing lock is taken: send it the
+files, what changes and how it is tested. A structural change gets a design
+review before the code. The consultant records found-and-closed findings,
+coverage entries and threat updates in `docs/certification/` in small
+batches, and flags item changes on `main` that skipped it.
+
 **Agents.** Gates and boots in the foreground, never `run_in_background`; one
 architecture per tool call; the brief says so.
 
@@ -298,7 +309,6 @@ log path and commit; a new sighting is added to its row the day it is seen.
 | zinc-next's remaining 21 points, as sized on 2026-09-17: the builtins B1 to B4 (B1 starts with the `BIN_FG` numbering fix), the history ring and file, ZLE, completion and modules, and the swap to `zinc` | open |
 | The `AF_PACKET` gaps: frames this host sends copied to `ETH_P_ALL` sockets (`PACKET_OUTGOING`), packet sockets on the loopback, and classic BPF (`SO_ATTACH_FILTER`, `SO_DETACH_FILTER`) | open |
 | **Done 2026-09-26:** the Pixel 7's USB serial port, live. During a native boot Ferrix presents a CDC-ACM port (`1209:0001`, "Ferrix console") on the phone's USB-C port, and `tools/pixel7/monitor` streams the kernel log from `/dev/ttyACM*`: the boot's stages and `ferrix-statd`'s samples, live. Proven on the phone in run `usblog2`; `docs/PIXEL7-USB-HANDOVER.md` §8 has the three writing runs, the PO's standing write list and what is left. The survey, the `TREE_GS201_DWC3` binding, `libs/drivers/dwc3`, `libs/drivers/usb-device`, `native/drivers/usbdev`, the kernel log (`console/log.rs`, `syslog(2)`, `logctl`) and the monitor's watcher | ferrix-9c |
-| The Pixel's USB console on nazuna: ModemManager probes every new `ttyACM` and holds it, so `usbdev` streams the start of the kernel log to it and it is lost (run `usblog2`). A udev rule, `ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0001", ENV{ID_MM_DEVICE_IGNORE}="1"`, needs root, so it is the owner's to install (`docs/PIXEL7-USB-HANDOVER.md` §8) | open |
 | The Pixel's USB port at SuperSpeed: `libs/drivers/dwc3` holds `DCFG` at high speed and leaves the combo PHY (`0x110F_0000`) alone. SuperSpeed means writing that PHY's window, a new block the PO has to approve | open |
 | Input over the Pixel's USB port: `usbdev` reads what the host sends and drops it. A shell or tty over the port needs the console's input side to take bytes from a ring-3 driver | open |
 | Every driver kind restarted by devmgr (T0 of the live kernel update plan, customer 2026-09-26). **Kernel side in:** the net ring and input cores claim through `kernel/src/claim.rs` and a quiesce waits them out; a dead net driver's interface is parked with its index, name and addresses until the next driver's HELLO takes it up; `event<N>` numbers are lowest-free. Left: `Kind::Net`, `Kind::Input` and `Kind::Block` in devmgr's `restarted()`, each with `pin::quarantine_release` at HELLO acceptance and a `test-restart` row (block's on the x86-64 btrfs root, `btrfs check` after), **only after ferrix-90's pin quarantine lands**; then init's L11. Sound is ferrix-90's; `Port`, `Engine` and `Gadget` stay open | ferrix-55b |

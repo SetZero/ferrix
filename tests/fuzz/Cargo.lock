@@ -122,6 +122,7 @@ dependencies = [
  "ferrix-objects",
  "ferrix-pci",
  "ferrix-renderctl",
+ "ferrix-sndctl",
  "ferrix-svc",
  "ferrix-svc-proto",
  "ferrix-sync",
@@ -212,6 +213,14 @@ version = "0.1.0"
 name = "ferrix-renderctl"
 version = "0.1.0"
 dependencies = [
+ "ferrix-native-abi",
+]
+
+[[package]]
+name = "ferrix-sndctl"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
  "ferrix-native-abi",
 ]
 
