@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-16 findings are open and 26 are closed, of 42. F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
+15 findings are open and 27 are closed, of 42. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 2 | 5 | 8 | 0 | 1 |
+| Open | 2 | 5 | 7 | 0 | 1 |
 
 Blocking: F-27 and F-28 — independent assessment and a quality management
 system. Both need an organisation; neither is a defect in the code.
@@ -33,7 +33,7 @@ Measured by `scripts/check-item-boundary.py`; **no upward references**, from
 94 in 28 files when the audit began. The debt register in
 `scripts/certification-item.json` is empty since W-5 closed F-07, F-09 and F-33
 (2026-09-26), and stays, empty, so that a new upward reference has to be argued
-into it against a finding. `main.rs`'s 37 edges into the load are recorded
+into it against a finding. `main.rs`'s 38 edges into the load are recorded
 beside it, not in it: they are the composition root's ([ITEM.md](ITEM.md) §2).
 
 **Every count this section gave before 2026-09-26 was a lower bound** -- the
@@ -803,7 +803,8 @@ cannot record a security-relevant event can claim EAL5.
 ### F-35 — the job quotas FRU_RSA.1 claims are not built
 **Closed 2026-09-26** by work order W-13 ([IMPLEMENTATION.md](IMPLEMENTATION.md)),
 with `FRU_RSA.1` refined in the Security Target to what the quotas bound.
-What they leave out is F-37.
+What they left out was F-37, closed the same day by charging the kernel heap
+a job's programs hold to its memory limit.
 
 *Was:* **Major.** The Security Target claimed `FRU_RSA.1`: the TSF enforces
 maximum quotas of physical memory, kernel objects and CPU time that a job can
@@ -848,31 +849,85 @@ fault 848 ns against 832 on main and a fork 79 µs against 77, under KVM,
 within the runs' spread.
 
 ### F-37 — the kernel heap a job drives through the Linux personality is not bounded
-**Moderate.** Opened 2026-09-26, as F-35 closed. O.QUOTA is to bound the
-memory, objects and CPU a job may consume, and the quotas F-35 built bound a
-job's user memory and page tables, its native objects, its tasks and its
-share of a processor. What a job holds of the kernel heap *through the Linux
-personality* is not charged to it:
+**Closed 2026-09-26** by work order W-15 ([IMPLEMENTATION.md](IMPLEMENTATION.md)),
+with `FRU_RSA.1`'s memory refined to count the kernel heap a job's programs
+hold beside their frames.
 
-* the mapping regions of an address space: a shared mapping of a file makes a
-  region and no VMO, so a process mapping one page of a file at many
-  addresses holds a region each, and nothing counts them but memory;
-* the files and directories it makes in a memory filesystem -- their pages
-  are charged, their inodes and names are not;
-* descriptors in flight in a Unix socket's queue, and the sockets, pipes and
-  event files a descriptor holds, which `RLIMIT_NOFILE` bounds per process
-  and the task limit per job, but only as a product of the two.
+*Was:* **Moderate.** Opened 2026-09-26, as F-35 closed. The quotas F-35
+built bound a job's user memory and page tables, its native objects, its
+tasks and its share of a processor. What a job held of the kernel heap
+*through the Linux personality* was charged to no job: the regions of its
+address spaces (a shared mapping of a file makes a region and no VMO), the
+files and names it made in a memory filesystem, descriptors in flight in a
+Unix socket's queue, and the sockets, pipes and event files a descriptor
+holds, which `RLIMIT_NOFILE` and the task limit bounded only as a product.
+All of it was bounded by the machine's memory, and running out of it was
+reported, not fatal (F-23) -- but not bounded per job, and the load's own
+allocations, which share the heap, stop the machine when it is gone (V-05).
 
-All of it is bounded by the machine's memory, and running out of it is
-reported, not fatal (F-23). What is not bounded is one job's share of it.
-Linux charges the same things to a memory cgroup as kernel memory, which is
-what would close this: a charge on those allocations to the running task's
-job, as `object::quota`'s tokens already do for native objects. V-05 in
-[VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) is the attack path.
+*Now:* the job's memory counter is in bytes, and the kernel heap its
+programs hold is charged to it beside their frames, against the one limit
+-- as cgroup v2 folds `kmem` into `memory.max`. A charge is a token from
+`libs/kmem` made where the allocation is, to the job of the task whose call
+made it, and kept inside what it pays for, so every path that frees the
+object frees the charge. A job at its limit is refused the object with
+`ENOMEM` before anything changes. An audit of every allocation in the load
+ring and its libraries that a program can make and keep found thirteen
+kinds, and each is charged:
 
-*Closes when* the regions, inodes and in-flight descriptors a job makes are
-charged to it as objects or as memory, with a boot check that a job at its
-limit is refused one while a sibling is not.
+* open file descriptions; dentries, including cached misses; the location
+  and mount of each pipe, socket or event file; mounts;
+* tmpfs inodes, names, symbolic links and instances, and a file's page
+  store (its pages are frames, charged to whoever writes them, as before);
+* pipes and their buffers as they grow; `AF_UNIX` sockets, their backlogs,
+  and each message in a queue -- a message carrying descriptors is its
+  sender's, as Linux charges it, and each descriptor stays its opener's
+  however long it is in flight;
+* epoll sets and registrations; eventfds, timerfds and signalfds;
+* descriptor tables as they grow, so `dup2` far up is charged to there;
+* regions of an address space, to the job that made the space, and each
+  name a space gives an object -- what bounds a shared mapping of a file;
+* record locks, any number of which one description could set;
+* `/proc`, sysfs and cgroupfs snapshots, rendered at open;
+* internet sockets, a TCP connection's queues and reassembly (to the job
+  that made it, or its listener's), and datagram, packet and netlink
+  queues. What arrives for a job at its limit is dropped, as at a full
+  queue.
+
+Five things the audit found were not missing charges but leaks or missing
+checks, and were fixed: a closed TCP listener leaked the connections it had
+not accepted; a process's task list was never pruned; netlink changed
+routes and addresses without privilege; an empty datagram counted nothing
+against its socket's capacity; and a btrfs root held changed tree nodes
+uncounted until the commit interval.
+
+*Argued rather than charged,* each with what bounds it: one per task and so
+bounded by the task limit -- a kernel stack, a futex waiter, signal state, a
+process's recorded program and arguments (at most 256 KiB); fixed by the
+machine and shared by every job -- 256 pseudoterminal pairs, the neighbour
+and IP reassembly caches, the routing tables (now root's alone), a btrfs
+transaction's changed nodes (at most the commit threshold); a few dozen
+bytes of bookkeeping per charged 4 KiB frame; and one whole-file lock holder
+per charged open description. The dentry cache keeps up to 4,096 dentries
+nobody holds, charged to whoever looked them up; a job whose limit they take
+is refused where Linux would reclaim them, which is M1's rest
+(`docs/CGROUPS.md`).
+
+*Evidence:* every boot's `kmem` line fills a job at a 32 KiB limit with each
+kind in turn until it is refused, sees a sibling at the same limit make one,
+and requires every byte back: *"at a 32 KiB memory limit a job made 34
+files, 14 pipes, 5 socket pairs, 70 descriptors in flight, 128 epoll
+registrations, 31 eventfds, 255 regions of one mapping and 454 record locks,
+and was refused one more of each -- ENOMEM, ENOLCK for a lock -- while a
+sibling made one; every byte of heap charged came back"* (x86-64,
+2026-09-26); FX-0906 otherwise. `test-vfs` command 21 fills `/tmp` from a
+shell whose `memory.max` leaves it 256 KiB and reads `memory.current`,
+`memory.stat` and `memory.events` as a program would. The libraries' host
+tests require the same of each kind against a recording account. Four
+negative controls, scratch, each stop the boot by its own message (W-15).
+Cost under KVM: an open and close 60 ns (1.5%) dearer in the root job and
+136 ns (3.4%) in a limited one; a 64-byte pipe write and read unchanged; a
+tmpfs create, 4 KiB write and unlink 4.0% and 4.8% dearer.
 
 ### F-22 — no safety case
 **Closed at the element level 2026-09-25** by
@@ -964,9 +1019,10 @@ two calls run to make a process and a thread -- `signal.rs`, `thread.rs` and
 `process.rs` -- finds a `Default` that allocates in any kernel file and flags
 a call of it, flags a derived `Clone` over an owned heap field, and knows the
 turbofish and `default`/`make_mut` forms; each in its self-test, and together
-they flag the old `signal.rs` at nine sites. It reads 14 unmarked, all in
+they flag the old `signal.rs` at nine sites. It read 14 unmarked, all in
 `process.rs` and recorded in the baseline as debt that may only fall: fork's
-copies, the task and thread lists, the program name. What else those calls
+copies, the task and thread lists, the program name. It reads 13 since
+F-37's audit put the task list's two pushes behind one that prunes it. What else those calls
 reach in the load, and what still stops the kernel there, is listed in
 [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) §1.3. F-23 stays closed for what
 it measured, the item's own source; the claim that no allocation a program
@@ -982,7 +1038,8 @@ served from a reserve; 80 pages decommitted with none"*, the same on all three
 architectures.
 
 *What it does not claim.* No bound on what the item allocates: a program
-still drives the kernel heap, and V-05 stands for the paths with no quota. No
+still drives the kernel heap, and V-05 stood for the paths with no quota,
+until F-37 charged them to the job. No
 recovery for the load: its allocations still stop the machine (AoU-5).
 
 The gate's docstring lists what it cannot see, and each was checked by other

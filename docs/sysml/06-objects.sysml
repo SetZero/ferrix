@@ -151,15 +151,20 @@ package FerrixObjects {
              * limit even briefly. Charged: the job's tasks (fork, clone,
              * process_create; uncharged at reap), its programs' frames and
              * page tables (at allocation, to the running task's job; at every
-             * free), and the native objects they make (a token in each). The
+             * free), the native objects they make (a token in each), and the
+             * kernel heap the Linux personality and its libraries hold for
+             * them (a libs/kmem token in each object, charged as memory in
+             * bytes against the same limit, as cgroup v2 folds kmem into
+             * memory.max; certification finding F-37, work order W-15). The
              * processor is a weight, not a limit: each task runs at its own
              * weight times its job's weight over its job's load. cgroupfs's
-             * pids, memory and cpu files are a view of it. Not charged: the
-             * heap the Linux personality allocates for a job (F-37). */
+             * pids, memory and cpu files are a view of it, memory.stat's
+             * kernel line the heap alone. */
         attribute tasksUsed : Natural;
         attribute tasksLimit : Natural[0..1];
-        attribute memoryPagesUsed : Natural;
-        attribute memoryPagesLimit : Natural[0..1];
+        attribute memoryBytesUsed : Natural;
+        attribute memoryBytesLimit : Natural[0..1];
+        attribute kernelBytesUsed : Natural;
         attribute objectsUsed : Natural;
         attribute objectsLimit : Natural[0..1];
         attribute cpuWeight : Natural;

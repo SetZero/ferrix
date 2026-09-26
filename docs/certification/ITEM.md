@@ -42,12 +42,12 @@ three nested rings. A file in no ring fails the build.
 
 | Ring | Product lines | In-kernel test lines | Carries |
 |---|---:|---:|---|
-| `core` | 48,954 | 12,714 | EAL6+, ASIL D, SIL 3/4, DAL B — *aspirational* |
-| `item` | 8,668 | 1,351 | EAL5+, DAL C, Class C, SIL 2 — *the present claim* |
-| `load` | 48,425 | 24,567 | nothing |
+| `core` | 49,529 | 12,733 | EAL6+, ASIL D, SIL 3/4, DAL B — *aspirational* |
+| `item` | 8,708 | 1,351 | EAL5+, DAL C, Class C, SIL 2 — *the present claim* |
+| `load` | 49,043 | 25,179 | nothing |
 
-**The certified item is `core` + `item`: 57,622 lines of product code**, against
-48,425 lines of uncertified load. The item is 54.3% of the kernel's product
+**The certified item is `core` + `item`: 58,237 lines of product code**, against
+49,043 lines of uncertified load. The item is 54.3% of the kernel's product
 code. (Measured 2026-09-26, after W-5 moved the Linux dispatcher's routing and
 five of the personality's files out of the `item` ring, see below, and after
 F-23 made the item's allocations fallible. That added 2,711 lines, most of
@@ -59,7 +59,15 @@ fix, 109 to the load, beside the coverage work's checks. Re-measured after
 F-35's job quotas, which added 1,275 lines to `core` -- `object/quota.rs`
 and the charging at each site -- 129 to `item`, the native calls that set and
 read them and the boot's `quota` line, and 102 to the load: cgroupfs's
-controllers and the personality's calls at fork, thread and reap.)
+controllers and the personality's calls at fork, thread and reap.
+Re-measured after F-37 charged the Linux personality's heap to the job:
+the tree stood at 58,054 item lines -- 49,376 of them `core` -- and 48,596 of
+load before it, the vDSO and the other work since F-35 included. F-37 added
+153 lines to `core` -- `object/quota.rs`'s bytes and kernel-heap account,
+and the charges on a VMO's mappers -- 30 to `item`, the boot's `kmem` line
+and the quota line's heap, and 447 to the load, the charge at each of its
+sites; and 445 lines of self-test. The charging in the libraries the load
+calls, `libs/kmem` among them, is outside the kernel and not counted here.)
 
 ### `core` — the minimal trusted base
 
@@ -124,11 +132,12 @@ register, in bring-up order, with a boot check that it did.
 **`main.rs` is in the item, and it is the composition root.** The manifest
 puts it in the `item` ring as bring-up, and nothing about that is changed
 here. But it is also where the load is put together with the item. Since
-2026-09-26 the gate reads its calls into the load -- 37 modules -- and
+2026-09-26 the gate reads its calls into the load -- 38 modules -- and
 records them under `composition_root` in the manifest rather than in the
-debt register: ratcheted the same way, filed against no finding. Of the 37,
-20 are the load's own boot self-checks (`fs::check`, `net::check`,
-`syscall::check` and seventeen more verification files), and 17 are product
+debt register: ratcheted the same way, filed against no finding. Of the 38,
+21 are the load's own boot self-checks (`fs::check`, `net::check`,
+`syscall::check` and eighteen more verification files, `fs::kmem_check`
+since F-37), and 17 are product
 modules: registration (`syscall::launch`, `syscall::linux`,
 `syscall::deliver`, `stm32mp1`, `fs`, and since W-5 `block_ring`,
 `net_ring`, `render` and `input`), the load's subsystems brought up in order
@@ -139,7 +148,7 @@ the pieces `main.rs`'s own boot checks drive a program through
 That is a judgement an assessor has to accept, and it is only as good as the
 claim that those edges carry composition and no item logic. It is plausible
 from the list; it is not checked, because the exemption covers the file, and
-`main.rs` is 2,897 lines. Making it checkable means reducing the root to
+`main.rs` is 3,399 lines. Making it checkable means reducing the root to
 composition, with bring-up logic in item-ring modules that name nothing above
 them, and the boot checks that drive the load in verification files.
 
@@ -190,7 +199,7 @@ visible instead of letting "Ferrix is certified" absorb it.
 
 The boundary above is a claim about dependencies, so the gate measures it.
 Today the item contains **no upward references** -- no place where a ring
-names something in a ring above it -- beside the composition root's 37 (§2).
+names something in a ring above it -- beside the composition root's 38 (§2).
 When the audit began it had 94, in 28 files, by today's measure; each was
 recorded in the manifest against a finding id and analysed in
 [FINDINGS.md](FINDINGS.md), and each finding closed when the build said so.

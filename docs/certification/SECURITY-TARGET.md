@@ -61,9 +61,9 @@ outside the TOE; it is covered by A.FIRMWARE in §3.3.
   handed to a new owner.
 * **Resource bounding.** Jobs are where the TOE's quotas attach: a job and
   the jobs beneath it are bounded in the tasks, the memory of their programs
-  and the kernel objects they hold at once, and share a contended processor
-  by weight, not by task count. The kernel heap the Linux personality holds
-  for a job is not bounded per job (§9.7, F-37).
+  -- their frames, and the kernel heap the Linux personality holds for them
+  -- and the kernel objects they hold at once, and share a contended
+  processor by weight, not by task count (§9.7).
 
 ---
 
@@ -213,13 +213,18 @@ when shared with the TSF.
 
 **FRU_RSA.1** Maximum quotas. The TSF shall enforce maximum quotas of the
 following resources: **the physical memory of a job's programs -- the frames
-of their address spaces and those spaces' page tables; the kernel objects its
-programs make -- VMOs, channel ends, ports and jobs; and its tasks** that **a
-job, together with every job beneath it,** can use **simultaneously**.
+of their address spaces and those spaces' page tables, and the kernel memory
+the TOE's Linux personality holds for them; the kernel objects its programs
+make -- VMOs, channel ends, ports and jobs; and its tasks** that **a job,
+together with every job beneath it,** can use **simultaneously**.
 
-*Refinement.* "Physical memory" is refined to the memory of a job's programs;
-the kernel heap the Linux personality holds for a job is outside the quota
-(§9.7). "CPU time", which the claim named until 2026-09-26, is not quota'd as
+*Refinement.* "Physical memory" is refined to the memory of a job's
+programs: their frames, and -- since 2026-09-26 (F-37) -- the kernel heap
+the Linux personality holds for them, counted in bytes against the same
+limit, as Linux counts kernel memory against a memory cgroup's. Kernel
+memory held once per task (a kernel stack, a futex waiter) is bounded through
+the task quota, and a few tables the machine shares carry fixed bounds of
+their own (§9.7). "CPU time", which the claim named until 2026-09-26, is not quota'd as
 a maximum: the TSF shares a contended processor between jobs in proportion to
 a weight each job carries, whatever the number of tasks in it, and an idle
 processor is given to whichever job can use it. A share bounds what one job
@@ -254,7 +259,7 @@ How the TOE meets each objective, with the evidence that exists today.
 | O.CAPABILITY | `kernel/src/object/`: handle tables, rights masks, transfer only over channels. | `object/check.rs`, 3,318 lines; *"18 refusals as specified"* |
 | O.DMA | `kernel/src/iommu/{vtd,smmuv3}.rs`; a driver receives an `IoMapping` and a domain. | `iommu/gate.rs`; `scripts/check-device-access.py` holds the seam at build time |
 | O.SCRUB | `mm::zero_frame` on every frame handed to a VMO. | `kernel/src/mm.rs:1140`, called from `user/vmo.rs` at three sites |
-| O.QUOTA | A quota slot per job in `kernel/src/object/quota.rs`, charged hierarchically at every task, frame and native object a job's programs make and uncharged wherever each goes (the frame record keeps its slot); a per-job weight applied to each task's in `sched`. Set by `job_set_limit` or cgroupfs. The Linux personality's heap is not charged (§9.7, F-37). | `object/quota_check.rs`, every boot: *"a fork loop refused at its job's 8 tasks; faults refused at 48 pages (3 of them page tables) while a sibling job faulted in 48; objects refused at 5; one task alone in its job kept 50.0% of a processor against eight in another; every counter back to zero and every quota slot given back"* (x86-64, 2026-09-26); four negative controls |
+| O.QUOTA | A quota slot per job in `kernel/src/object/quota.rs`, charged hierarchically at every task, frame and native object a job's programs make and uncharged wherever each goes (the frame record keeps its slot); the kernel heap the Linux personality holds for its programs charged as memory, in bytes, by a `libs/kmem` token kept in each object (F-37); a per-job weight applied to each task's in `sched`. Set by `job_set_limit` or cgroupfs. What is bounded otherwise is in §9.7. | `object/quota_check.rs`, every boot: *"a fork loop refused at its job's 8 tasks; faults refused at 47 pages (3 of them page tables, beside 512 bytes of its regions' heap) while a sibling job faulted in 48; objects refused at 5; one task alone in its job kept 50.0% of a processor against eight in another; every counter back to zero and every quota slot given back"*; `fs/kmem_check.rs`, every boot: *"at a 32 KiB memory limit a job made 34 files, 14 pipes, 5 socket pairs, 70 descriptors in flight, 128 epoll registrations, 31 eventfds, 255 regions of one mapping and 454 record locks, and was refused one more of each -- ENOMEM, ENOLCK for a lock -- while a sibling made one; every byte of heap charged came back"* (x86-64, 2026-09-26); eight negative controls (W-13, W-15) |
 | O.VALIDATE | `kernel/src/syscall/uaccess.rs`, backed on x86-64 by SMEP and SMAP since 2026-09-25, and on AArch64 by PAN where the CPU has it. The reference `cortex-a72` does not, and ARMv7-A cannot (V-01). | `syscall/check.rs`, 9,537 lines, 427 refusal assertions; the boot reports *SMEP on, SMAP on* |
 | O.FAILSAFE | `kernel/src/panic.rs` with a catalogue of explanations. | `scripts/check-panic-audit.py`; `gen-panic-catalog.py --check` |
 
@@ -358,18 +363,26 @@ names, so a load-ring value reaching the TOE through a trait object or a
 function pointer -- which is exactly how every registration above works -- is
 not an edge to it; the interfaces are the TOE's types, but what runs behind
 them is not the TOE's code. The crate root, `main.rs`, composes the load with
-the TOE and is exempt by file, with 37 edges argued in ITEM.md §2 rather than
+the TOE and is exempt by file, with 38 edges argued in ITEM.md §2 rather than
 checked. And the load ring runs in ring 0, in the same address space and heap:
 the boundary is one of dependency and assurance, not of protection, which is
 why A.ADMIN and the SAFETY-MANUAL's assumptions of use carry the rest.
 
 ### 9.7 What FRU_RSA.1 does not bound
 Until 2026-09-26 this read that the quotas FRU_RSA.1 claims were not built
-(F-35); they are, and the claim is refined in §5 to what they bound. Two
-things an evaluator would still press on. The kernel heap the Linux
-personality allocates for a job -- the regions of its address spaces, the
-inodes of files it makes in a memory filesystem, descriptors in flight in a
-socket's queue -- is charged to no job, so one job can take that heap from the
-others (V-05, F-37); Linux charges it to a memory cgroup as kernel memory. And
-the processor is shared by weight, not capped: a job alone on an idle machine
-may use all of it, which is a choice, stated in §5, rather than a gap.
+(F-35); they are, and the claim is refined in §5 to what they bound. The
+kernel heap the Linux personality allocates for a job -- the regions of its
+address spaces, the inodes and names of files it makes in a memory
+filesystem, descriptors in flight in a socket's queue, and the rest F-37's
+audit found -- was charged to no job until the same day, and is now charged
+to the job's memory quota (F-37, W-15). What an evaluator would still press
+on: kernel memory held once per task, which only the task quota bounds; the
+machine-wide tables with fixed bounds rather than per-job shares -- 256
+pseudoterminals, the neighbour and reassembly caches, the routing tables,
+which only root may change, and a btrfs transaction's changed tree nodes
+(V-05, low); the dentry cache, whose unused entries stay charged to whoever
+looked them up until evicted, where Linux would reclaim them; and a job with
+no limit above it, which the TOE bounds by nothing but the machine (A.ADMIN,
+AoU-5). And the processor is shared by weight, not capped: a job alone on an
+idle machine may use all of it, which is a choice, stated in §5, rather than
+a gap.

@@ -332,12 +332,12 @@ follow, as `docs/BACKLOG.md` decided.
 | G4 | done, 2026-09-24 | 410aef15 |
 | G5 | done, 2026-09-24 | "Wait for a cgroup to empty through a native job handle" |
 | P1 | done, 2026-09-26, with the certification's F-35 | "Charge each job for its tasks, memory, objects and processor share"; "Show the job quotas as cgroup2's cpu, memory and pids controllers" |
-| M1 | charging, `memory.max`, `memory.current` and `memory.events` done, 2026-09-26; `memory.stat` and the scoped OOM kill not | the same two |
+| M1 | charging, `memory.max`, `memory.current` and `memory.events` done, 2026-09-26; kernel memory in `memory.current` and `memory.stat`'s `kernel` line the same day, with the certification's F-37; the scoped OOM kill and `memory.stat`'s other keys not | the same two; "Charge the kernel heap a job drives through the Linux personality (F-37)" |
 | S1 | done differently, 2026-09-26: a weight per job applied to each task's, not a group entity | the same two |
 | M2, F1, S2, B1 | not started | |
 
-What is left of the controllers is M1's `memory.stat` and scoped OOM kill,
-M2's reclaim, F1, S2 and B1. Init's L5 writes `TasksMax=` and `MemoryMax=`
+What is left of the controllers is M1's scoped OOM kill and the rest of
+`memory.stat`, M2's reclaim, F1, S2 and B1. Init's L5 writes `TasksMax=` and `MemoryMax=`
 to `pids.max` and `memory.max`, which exist since 2026-09-26.
 
 **P1, M1's charging and S1, as built (2026-09-26).** The certification's
@@ -361,6 +361,23 @@ against eight in another at boot. `BUILT` is `cpu memory pids`, so the
 no-internal-process rule is reachable, and its host tests have a boot path.
 The `cgroups` boot line drives the files, and `test-vfs` command 19 forks
 until `pids.max` 10 refuses.
+
+**Kernel memory in `memory.current` (2026-09-26).** The certification's
+F-37 (work order W-15) charges the kernel heap the Linux personality holds
+for a cgroup's programs to the same counter, in bytes, as cgroup v2 folds
+`kmem` into it: open files, dentries, tmpfs inodes and names, pipe and
+socket buffers, messages in flight, epoll registrations, regions, record
+locks and network queues, each at the size class the heap serves it from.
+`memory.max` limits frames and heap together, a charge past it is refused
+`ENOMEM` from the call that would have made the object, and
+`memory.events`' `max` counts it. `memory.stat` exists, and prints the one
+key Ferrix counts apart, `kernel`: the heap part of `memory.current`. An
+object made in one cgroup stays charged there until it goes, wherever it is
+passed, as Linux's `obj_cgroup` keeps it. Without reclaim, the dentries a
+cgroup's lookups left in the cache stay charged to it until evicted, where
+Linux would reclaim them under pressure -- M2's to fix. `test-vfs` command
+21 fills `/tmp` from a shell 256 KiB under its `memory.max` and reads the
+three files.
 
 **G3, as built (3 points).** §4 says what it is. The `cgroups` boot check
 (`kernel/src/fs/cgroupfs/events_check.rs`) gives a cgroup two members, reads
@@ -435,8 +452,9 @@ there.
   turned internal after `cgroup_target` looked.
 * **M1, `memory` charging** (13 points), after P1: §6, and §8's warning
   about the seven allocation sites. Charging, `memory.max`,
-  `memory.current` and `memory.events` done 2026-09-26; `memory.stat`
-  and the scoped OOM kill are what is left of it.
+  `memory.current` and `memory.events` done 2026-09-26, and kernel
+  memory with `memory.stat`'s `kernel` line the same day (F-37); the
+  scoped OOM kill and `memory.stat`'s other keys are what is left of it.
 
 **How a landing was gated today, and what to keep.** The customer's rule
 since 2026-09-23: `cargo xtask check` plus only the rows the change

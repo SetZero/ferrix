@@ -132,12 +132,16 @@ process and its first thread (MEMORY-AND-TIMING.md §1.3 lists it).
 
 Since 2026-09-26 the element bounds what a partition's programs hold, when
 the partition is a job with limits set: the frames of their memory and their
-page tables, the native objects they make and their tasks, each refused at
-its limit while the other partitions go on (F-35, `FRU_RSA.1`). It does not
-bound its own working set, nor the heap the Linux personality allocates for a
-partition's programs (F-37, V-05). The integrator shall put each partition in
-a job of its own, with memory, object and task limits whose sum the machine
-can hold, shall provision the heap so that exhaustion does not occur in
+page tables, the kernel heap the Linux personality holds for them (counted
+against the same memory limit since F-37), the native objects they make and
+their tasks, each refused at its limit while the other partitions go on
+(F-35, F-37, `FRU_RSA.1`). It does not bound its own working set, kernel
+memory held once per task beyond what the task limit implies, nor a few
+machine-wide tables with fixed bounds of their own (V-05, low). The
+integrator shall put each partition in a job of its own, with memory,
+object and task limits whose sum -- heap and frames together, with the
+per-task kernel stacks the task limits imply -- the machine can hold, shall
+provision the heap so that exhaustion does not occur in
 normal operation, and shall treat FX-0007 and FX-0008 as transitions to the
 safe state. An application that runs on the element shall handle `NO_MEMORY`
 and `ENOMEM` as an outcome of any call that allocates, and of a job at its
@@ -219,7 +223,7 @@ cause.
 | FM-4 | A device writes outside its granted region | ASR-4 violated, arbitrary corruption | IOMMU fault | VT-d / SMMUv3 domains; a domain's emptied tables are freed only after the unit's invalidation completes (F-36) | no IOMMU on ARMv7-A (AoU-6) |
 | FM-5 | A frame is reused without being cleared | ASR-5 violated, data disclosure | none at runtime | zeroed on allocation | zeroing is on allocation, not free (V-04) |
 | FM-6 | The element continues in a corrupt state | any ASR may be violated silently | invariant checks | safe state on detection | detection is not exhaustive |
-| FM-7 | A partition exhausts memory | calls that allocate fail with `NO_MEMORY` or `ENOMEM` for every partition; the safe state if the load's allocation fails | allocation failure, reported at every site in the element (gate and boot check) | a job's memory, object and task limits, refused at the limit while other jobs go on (`quota` boot line); job limits on depth and descendants; capped queues | the Linux personality's heap is not charged to a job (F-37, V-05); the load's allocations are fatal (AoU-5) |
+| FM-7 | A partition exhausts memory | calls that allocate fail with `NO_MEMORY` or `ENOMEM` for every partition; the safe state if the load's allocation fails | allocation failure, reported at every site in the element (gate and boot check) | a job's memory, object and task limits, refused at the limit while other jobs go on (`quota` boot line), the Linux personality's heap within the memory limit (`kmem` boot line, F-37); job limits on depth and descendants; capped queues | a partition in no limited job; per-task kernel memory and machine-wide tables with fixed bounds (V-05, low); the load's allocations are fatal (AoU-5) |
 | FM-8 | A partition is starved of processor time | ASR-8 violated | none at runtime; the `quota` boot line checks one job's share against another's | EEVDF eligibility, EDF admission; a job's share of a contended processor is its weight's, whatever its task count | no WCET, so no bound is provable (AoU-4) |
 | FM-9 | Kernel stack overflow | page fault at the instruction that overflowed | **guard page below every kernel stack**, and a boot check that the guard is unmapped | `vmap` reserves an unmapped page on each side of every allocation; no recursion in the element | the loader-provided boot stack is not guarded (early boot only) |
 | FM-10 | A processor stops answering a TLB shootdown or grace period (x86-64) | none while the wait lasts: nothing is freed and no narrowed permission relied on until every processor answers; then the safe state (FX-0001, FX-0002, FX-0003) | `smp::wait_for` and `take_turn`: a wall-clock floor (1 s, 5 s) **and** a count of the waiter's own polls, which stretches with the emulator's slowness | the count is in guest units, so a slow machine is not called stuck; a stuck processor answers no count and is still found (negative control: 1.8 s under KVM, 5.1 s under `tcg`, 32 s under the coverage plugin) | a host that stops running one virtual processor and keeps running the waiter can still end the wait early: availability lost, never integrity |

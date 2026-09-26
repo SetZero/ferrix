@@ -329,12 +329,13 @@ and the scratch negative control in W-14 must still stop it.
 
 ### 4.5 Job quotas — **F-35**
 **Done 2026-09-26** (IMPLEMENTATION.md W-13). F-35 is closed, with
-`FRU_RSA.1` refined to what the quotas bound; what they leave out is F-37.
+`FRU_RSA.1` refined to what the quotas bound; what they left out was F-37,
+closed the same day (§4.6).
 
 To re-audit: read the `quota` line of a boot on each architecture. It must
-say a fork loop was refused at its job's 8 tasks, faults at exactly 48 pages
-(some of them page tables: 3 on the 64-bit pair, 2 on ARMv7-A) while a
-sibling faulted in 48, objects at 5, one task alone in its job kept about
+say a fork loop was refused at its job's 8 tasks, faults at the job's 48
+pages less what its space's regions hold of the heap -- 47 on x86-64, some
+of them page tables -- while a sibling faulted in 48, objects at 5, one task alone in its job kept about
 half a processor against eight in another, and every counter and slot came
 back. Read the `cgroups` line, which must name the controllers enabled and a
 fork refused at `pids.max`, and `test-vfs` command 19. Then grep for
@@ -350,13 +351,26 @@ with one task at 111 per mille); and have `Process::new` charge nothing (the
 `cgroups` check again).
 
 ### 4.6 The Linux personality's heap per job — **F-37**
-**Open**, found 2026-09-26 as F-35 closed. To re-audit: list the heap the
-personality allocates for a program that no `quota::Charge` covers -- a
-region of a shared file mapping (`AddressSpace::map_file` with `shared`), an
-inode of a memory filesystem, a descriptor in flight in `fs/socket.rs`. F-37
-closes when each is charged to the running task's job, with a boot check that
-a job at its limit is refused one while a sibling is not; then re-judge
-T.EXHAUST and V-05.
+**Done 2026-09-26** (IMPLEMENTATION.md W-15). F-37 is closed; T.EXHAUST is
+re-judged resisted and V-05 low.
+
+To re-audit: read the `kmem` line of a boot on each architecture. It must say
+a job at a 32 KiB limit made some of each kind -- files, pipes, socket
+pairs, descriptors in flight, epoll registrations, eventfds, regions of one
+mapping, record locks -- was refused one more of each, a sibling made one,
+and every byte came back. Read `test-vfs` command 21, and `memory.stat` in
+any cgroup. Then look for heap the load keeps past a call that carries no
+`ferrix_kmem::Charge`: grep the load ring and its libraries for `Arc::new`,
+`Box::new`, `push`, `push_back`, `insert` and `extend` on a structure that
+outlives the call, and check each is inside something charged, or is one of
+the argued kinds FINDINGS.md F-37 lists. As negative controls (scratch), each
+of which must stop the boot: drop the uncharge from `Charge`'s `Drop` (the
+`quota` check: *"address spaces gone and the heap of their regions still
+charged"*); let `quota::charge_kernel` pass the limit (*"kmem: a job made
+more than its limit could hold"*, on files); have the kernel's account
+release no slot (*"the checks' jobs are gone and their quota slots are
+not"*); and have `Pipe::new` forget its charge (*"kmem: objects gone and
+their heap still charged to their job"*, on pipes).
 
 ## 5. Tools
 

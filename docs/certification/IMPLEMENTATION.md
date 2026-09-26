@@ -535,7 +535,8 @@ no SMAP, SMEP or PAN was enabled, which F-32 then fixed on x86-64 and AArch64.
 The attack tests per threat below remain worth writing as regression tests.
 Corrected 2026-09-26: its T.EXHAUST paths credited job quotas that are not
 built, and the verdict was *not resisted* but for CPU per task (F-35) until
-W-13 built them the same day; it is now *partially resisted* (F-37).
+W-13 built them the same day, and *partially resisted* until W-15 charged
+the Linux personality's heap to the job; it is now *resisted* (F-37).
 
 **Closes:** F-21a. **Size:** medium. Last EAL5 gap that is engineering.
 
@@ -645,8 +646,9 @@ item that is not argued at the site. So in the item:
 what `object/alloc_check.rs` drives, and the quickest way to test a new path.
 Room already reserved is never failed by it.
 
-**What is left, and where it is filed.** No bound on the heap and no heap
-quota (V-05). The load's allocations are infallible (AoU-5): converting a
+**What is left, and where it is filed.** No bound on the heap as a whole;
+per job, since W-13 and W-15, a quota on the heap a job's programs make the
+kernel hold (V-05, low). The load's allocations are infallible (AoU-5): converting a
 load module the same way is mechanical, but it is outside the item. The gate
 cannot see `.clone()`, conversions, or allocation in a callee; the 18 clones
 were audited by hand, and the libraries on the item's paths were converted
@@ -848,8 +850,8 @@ past pids.max"*).
 **Verify:** the `quota` and `cgroups` lines of any boot, `test-vfs` command
 19, and `cat /sys/fs/cgroup/cgroup.controllers` listing `cpu memory pids`.
 
-**What is left:** F-37, the heap the Linux personality allocates for a job;
-`cpu.max` (S2), a bandwidth cap, which the ST no longer claims; `memory`'s
+**What is left:** F-37, the heap the Linux personality allocates for a job,
+done the same day as W-15; `cpu.max` (S2), a bandwidth cap, which the ST no longer claims; `memory`'s
 reclaim and scoped OOM kill (M1's rest and M2 in `docs/CGROUPS.md`), without
 which a job at `memory.max` is refused rather than reclaimed from.
 
@@ -881,8 +883,9 @@ shootdown"*.
 
 ## W-15 — The Linux personality's heap, charged to the job
 
-**Open.** Closes F-37. What follows is the design as argued before the code;
-an "As built" section follows once it is.
+**Done 2026-09-26.** F-37 is closed; T.EXHAUST is resisted and V-05 is low.
+What follows is the design as argued before the code, and then what was
+built and where it differs.
 
 W-13 charges a job for its programs' frames and page tables, their native
 objects and their tasks. What it leaves out is the kernel heap a program
@@ -1004,16 +1007,84 @@ refused, reads `memory.current` and `memory.stat` against it, removes what
 it made and sees the charge go. Negative controls in scratch. Cost timed
 under KVM: open and close, a pipe write and read, a tmpfs create and write.
 
+### As built
+
+Eight commits on `cert-f37-heap-quota`: this design; `libs/kmem`; the five
+fixes the audit found, in four commits -- a btrfs transaction committed once
+its changed nodes pass the threshold, a process's task list pruned, netlink
+changes refused without privilege, a closed listener's connections reaped
+and its handshakes bounded (the empty datagram's accounting went in with
+the charging, whose code it shares); the charging and its checks; and the
+record-lock kind of the boot check. Where it differs from the design:
+
+* **The account is installed as the first job is made**, not at a point in
+  bring-up: until a job below the root exists there is no slot a charge
+  could go to, and the one line in `main.rs` would have made the scheduler's
+  bring-up function longer than the complexity ratchet allows.
+* **A buffer's growth is charged to its object's job, but a socket queue's
+  places are charged to the writer**, with each segment: the queue is one
+  allocation the maker would otherwise pay for, so a writer in another job
+  could fill it at the maker's expense. Each segment pays for four places,
+  and a queue under a quarter full gives most of its room back, so it never
+  holds more than that beside a floor of four the socket pays for. An
+  object's list of mappers does the same, for the same reason.
+* **A new process's first descriptors are charged to nobody**
+  (`quota::charging_nobody`): `fd::standard_streams` stops the kernel if it
+  cannot make them, and a job at its limit must not be able to cause that.
+  The table is charged, room and all, to the first job that grows it.
+* **The kernel's tmpfs instances** -- the root, `/tmp` and `/dev/shm` as
+  boot mounts them, the memfd filesystem -- are `Tmpfs::for_kernel`, charged
+  to nobody, since whoever touches one first would otherwise pay for it
+  forever. `mount -t tmpfs` charges its instance to the mounter.
+* **Objects the network stack makes for a job** carry the job's slot, not
+  the running task: a TCP connection a listener accepts is charged to the
+  listener's job in the input path, and what arrives for a job at its limit
+  is dropped as at a full queue. A stream write that its queue cannot grow
+  for is `ENOBUFS`, the stack's existing answer for no memory, rather than
+  a wait that could not end.
+* **Descriptor tables** were not in the design's first list; `dup2` far
+  below `RLIMIT_NOFILE` grew one to there in one call, so they are charged.
+  So are `/proc`, sysfs and cgroupfs snapshots, one per open, and a file's
+  page store, which the object limit does not count for a tmpfs file.
+* **Record locks** are refused `ENOLCK`, as Linux refuses a lock it has no
+  memory for, rather than `ENOMEM`.
+
+Measured under KVM, x86-64, best of seven within a boot, three boots each
+alternated with `main` (d8cae5a5), a static C program as init, in the root
+cgroup and in a child with `memory.max` 1 GiB: an open and close 4,104 ns
+against 4,044 in the root (1.5%) and 4,139 against 4,003 in the child
+(3.4%); a 64-byte pipe write and read 1,860 against 1,872 and 1,881 against
+1,856, within the spread; a tmpfs create, 4 KiB write, close and unlink
+12.7 µs against 12.2 (4.0%) and 13.9 against 13.2 (4.8%). The root's cost is
+a look at the running task's job at each site; a limited job's is the
+compare-and-swap up its tree.
+
+Negative controls, scratch, each stopping the boot by its own message:
+`Charge`'s drop uncharging nothing (the `quota` check: *"address spaces gone
+and the heap of their regions still charged"*); `quota::charge_kernel`
+ignoring the limit (*"kmem: a job made more than its limit could hold"*, on
+the files, after 100,000); the kernel's account releasing no slot (*"the
+checks' jobs are gone and their quota slots are not"*); `Pipe::new`
+forgetting its charge (*"kmem: objects gone and their heap still charged to
+their job"*, pipes, 7,168 bytes). The first and third are caught by the
+`quota` line before the `kmem` line runs, which is the order they run in.
+
+**Verify:** the `kmem` line of any boot, `test-vfs` command 21, and
+`memory.stat` in any cgroup.
+
+**What is left:** reclaim (M2 in `docs/CGROUPS.md`): a job at its limit is
+refused, including for dentries its lookups left in the cache, where Linux
+would reclaim them. The argued kinds in FINDINGS.md F-37 stay as argued.
+
 ---
 
 ## Suggested order
 
 **Done:** order zero, W-3, W-2, W-6, W-9, W-4 (with F-08), W-1, W-5 (with
 F-09 and F-33), W-7's measurement and ratchet, W-11, W-12 (F-23), W-14
-(F-36), and W-13 (F-35).
+(F-36), W-13 (F-35) and W-15 (F-37).
 **Remaining:** F-10's tests, by module from COVERAGE-WORKLIST.md → W-8
-(largest), with W-10 in parallel whenever someone can answer step 1. F-37,
-the Linux personality's heap per job, is independent of all three.
+(largest), with W-10 in parallel whenever someone can answer step 1.
 
 W-1 landed as a split rather than a move, and took the boundary from 36
 references to 29 by the gate's count of the day. What it leaves is F-09's:

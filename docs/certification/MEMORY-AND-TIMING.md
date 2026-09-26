@@ -183,7 +183,7 @@ report failure:
 
 | Where | What |
 |---|---|
-| `syscall/process.rs` | the program name and arguments recorded (`record_exec`), the thread and task lists a start pushes onto -- among the 14 the gate records |
+| `syscall/process.rs` | the program name and arguments recorded (`record_exec`), the thread and task lists a start pushes onto -- among the 13 the gate records |
 | `syscall/registry.rs` | the `Arc` the new process is registered in |
 | `syscall/fd.rs` | `standard_streams`, which stops the kernel explicitly (`CONSOLE_DESCRIPTORS`) if the console's descriptors cannot be made |
 | `syscall/load.rs`, `syscall/exec.rs` | the ELF loader's lists |
@@ -226,14 +226,15 @@ it.
    drives would still be unbounded.
 2. **A quota on the whole heap.** Since 2026-09-26 a job is charged for
    the frames of its programs' memory and page tables, the native objects
-   they make and their tasks, each against a limit (F-35, §1.6), so a job's
-   native objects, handle tables and descriptor tables are bounded by its
-   object and task limits. What is still charged to no job is the heap the
-   Linux personality allocates for a program -- mapping regions, a memory
-   filesystem's inodes, descriptors in flight -- and a program that drives
-   one of those in a loop meets `ENOMEM` with the machine running, and
-   denies that heap to everything else: V-05 in
-   [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md), F-37.
+   they make and their tasks, each against a limit (F-35, §1.6), and for
+   the kernel heap the Linux personality holds for its programs -- open
+   files, dentries, tmpfs inodes and names, pipe and socket buffers,
+   messages and descriptors in flight, epoll registrations, regions, locks
+   -- against the same memory limit (F-37, §1.6). What stays charged to no
+   job is argued in §1.6: what one task holds, which the task limit bounds,
+   and a few tables the machine shares, each with a fixed bound. A job
+   without a limit still drives the heap as far as the machine's memory,
+   and that is AoU-5's to configure.
 3. **The load.** Converting the load ring the same way would take AoU-5's
    second half away. It is outside the item and not attempted.
 4. **Preallocation.** What a SIL 4 or DAL A item would do, and incompatible
@@ -245,12 +246,13 @@ calls still run load code whose allocations are fatal (§1.3), which the
 closure did not claim and the first version of this section implied. The bound it also names is
 not claimed, and is exported to the integrator as AoU-5.
 
-### 1.6 Job quotas — F-35
+### 1.6 Job quotas — F-35 and F-37
 
 What a job's programs hold at once is charged to the job and limited there
-(`kernel/src/object/quota.rs`; the design is IMPLEMENTATION.md W-13). A job
-below the tree's root has a slot of atomics -- use, limit and refusals for
-memory, objects and tasks -- and a charge walks the slots from the job up,
+(`kernel/src/object/quota.rs`; the design is IMPLEMENTATION.md W-13, and
+W-15 for the kernel heap). A job below the tree's root has a slot of
+atomics -- use, limit and refusals for memory (in bytes), objects and
+tasks, and the part of memory that is kernel heap -- and a charge walks the slots from the job up,
 with a compare-and-swap at each, so no use passes a limit anywhere above it,
 even for an instant, and a refused charge takes nothing.
 
@@ -263,6 +265,21 @@ even for an instant, and a refused charge takes nothing.
   `deallocate_frames` take the charge back wherever the frame is freed, with
   no lookup and no lock -- the deferred page-table frees of F-36 included. A
   refusal is an allocation failure, which §1.2 made an answer everywhere.
+* **Kernel heap** the Linux personality and its libraries hold for a
+  program is charged as memory too, against the same limit, as cgroup v2
+  folds `kmem` into `memory.max` (F-37). A token from `libs/kmem` is made
+  where the allocation is -- to the job of the task whose call made it, at
+  the size class the heap serves it from -- and kept inside the object, so
+  every free path uncharges it. A buffer that grows is charged before it
+  grows, to its object's job; a message in a socket's queue to its writer;
+  a descriptor in flight stays its opener's. A refusal is `ENOMEM` from the
+  call, before anything changed. The kinds, and what is argued rather than
+  charged, are in FINDINGS.md F-37: a kernel stack, a futex waiter and a
+  process's recorded arguments are one per task, which the task limit
+  bounds; 256 pseudoterminals, the neighbour and IP reassembly caches, the
+  routing tables and a btrfs transaction's changed nodes are the machine's,
+  each with a fixed bound; a VMO's page list is a few dozen bytes per
+  charged frame. `memory.stat`'s `kernel` line reads the heap alone.
 * **Objects** carry a token that uncharges as the object drops.
 * **Tasks** are charged as a process is made and a thread's id chosen, and
   given back at reap.
@@ -270,7 +287,15 @@ even for an instant, and a refused charge takes nothing.
 The tree's root has no slot, so a machine with no limits set charges
 nothing: under KVM a fault costs 848 ns against 832 without the quotas, and
 a fork of 256 resident pages 79 µs against 77, within the spread of the runs.
-Every boot's `quota` line drives each limit to its refusal and back to zero.
+The heap's charges cost a program in the root job a look at the running
+task's job at each site: an open and close 4,104 ns against 4,044 on
+`main`, a tmpfs create, 4 KiB write and unlink 12.7 µs against 12.2, and a
+64-byte pipe write and read nothing measurable; in a limited job 4,139 ns
+against 4,003 and 13.9 µs against 13.2 (best of seven, three boots each,
+alternated, under KVM). Every boot's `quota` line drives each limit to its
+refusal and back to zero, and its `kmem` line fills a limited job with each
+kind of heap in turn until `ENOMEM`, with a sibling unrefused and every
+byte given back.
 
 ---
 

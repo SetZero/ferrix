@@ -102,7 +102,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1669 elements, 198 relations. Model digest `f354641f399148b2`.
+13 files, 16 packages, 1670 elements, 198 relations. Model digest `76da9eb2699b4fda`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -1924,14 +1924,15 @@ A container of processes, where resource limits and kill authority live. A wedge
 
 `#implemented`  ·  stage 13
 
-What a job and every job beneath it may hold at once, and hold now: the Security Target's FRU_RSA.1 (certification finding F-35, work order W-13). kernel/src/object/quota.rs: a slot in a table of atomics, named by a u32 so a frame freed under any lock finds its charge from the frame record alone. A charge walks the slots from the job up with a compare-and-swap at each, so a limit anywhere above refuses and no use passes a limit even briefly. Charged: the job's tasks (fork, clone, process_create; uncharged at reap), its programs' frames and page tables (at allocation, to the running task's job; at every free), and the native objects they make (a token in each). The processor is a weight, not a limit: each task runs at its own weight times its job's weight over its job's load. cgroupfs's pids, memory and cpu files are a view of it. Not charged: the heap the Linux personality allocates for a job (F-37).
+What a job and every job beneath it may hold at once, and hold now: the Security Target's FRU_RSA.1 (certification finding F-35, work order W-13). kernel/src/object/quota.rs: a slot in a table of atomics, named by a u32 so a frame freed under any lock finds its charge from the frame record alone. A charge walks the slots from the job up with a compare-and-swap at each, so a limit anywhere above refuses and no use passes a limit even briefly. Charged: the job's tasks (fork, clone, process_create; uncharged at reap), its programs' frames and page tables (at allocation, to the running task's job; at every free), the native objects they make (a token in each), and the kernel heap the Linux personality and its libraries hold for them (a libs/kmem token in each object, charged as memory in bytes against the same limit, as cgroup v2 folds kmem into memory.max; certification finding F-37, work order W-15). The processor is a weight, not a limit: each task runs at its own weight times its job's weight over its job's load. cgroupfs's pids, memory and cpu files are a view of it, memory.stat's kernel line the heap alone.
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
 | `tasksUsed` | attribute | `Natural` |  |  |
 | `tasksLimit` | attribute | `Natural` |  |  |
-| `memoryPagesUsed` | attribute | `Natural` |  |  |
-| `memoryPagesLimit` | attribute | `Natural` |  |  |
+| `memoryBytesUsed` | attribute | `Natural` |  |  |
+| `memoryBytesLimit` | attribute | `Natural` |  |  |
+| `kernelBytesUsed` | attribute | `Natural` |  |  |
 | `objectsUsed` | attribute | `Natural` |  |  |
 | `objectsLimit` | attribute | `Natural` |  |  |
 | `cpuWeight` | attribute | `Natural` |  |  |
