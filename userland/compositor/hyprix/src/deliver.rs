@@ -167,6 +167,33 @@ impl Focus {
         self.follow(wanted, slots, held, modifiers);
     }
 
+    /// The layer surface that asks for the keyboard, if one does: the
+    /// topmost mapped surface on the top or overlay layer whose
+    /// `keyboard_interactivity` is not `none`, and of those on one layer the
+    /// one made last.
+    ///
+    /// wlr-layer-shell gives an `exclusive` surface above the windows every
+    /// key while it is mapped -- that is how a launcher such as fuzzel is
+    /// typed into at all -- and Hyprland gives an `on_demand` one the
+    /// keyboard when it maps, as a click on it would. Taking it back from an
+    /// `on_demand` surface when another window is clicked is not done here:
+    /// the keyboard stays with the surface until it goes.
+    #[must_use]
+    pub fn interactive_layer(slots: &[Slot]) -> Option<(usize, ObjectId)> {
+        let mut best: Option<(compositor_server::Layer, usize, ObjectId)> = None;
+        for (index, slot) in slots.iter().enumerate() {
+            for (_, layer) in slot.client().layer_surfaces() {
+                let wants = layer.keyboard_interactivity != 0
+                    && layer.committed
+                    && layer.layer.above_windows();
+                if wants && best.as_ref().is_none_or(|(on, ..)| layer.layer >= *on) {
+                    best = Some((layer.layer, index, layer.surface));
+                }
+            }
+        }
+        best.map(|(_, client, surface)| (client, surface))
+    }
+
     /// Give the keyboard to `wanted`, or to nothing.
     ///
     /// The layout says what that is in the ordinary case; a locked session
