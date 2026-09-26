@@ -83,6 +83,32 @@ extern "C" fn main(device_tree: u64) -> ! {
     entry::wait_for_watchdog()
 }
 
+/// A guest's kernel command line: [`GUEST_CMDLINE`], then every `ferrix.*`
+/// word of crosvm's `bootargs`, as many as `buffer` holds.
+fn guest_cmdline<'a>(tree: &Fdt<'_>, buffer: &'a mut [u8]) -> &'a str {
+    let mut used = 0;
+    let words = core::iter::once(GUEST_CMDLINE).chain(
+        tree.bootargs()
+            .unwrap_or("")
+            .split_whitespace()
+            .filter(|word| word.starts_with("ferrix.")),
+    );
+    for word in words {
+        let space = usize::from(used > 0);
+        let Some(room) = buffer.get_mut(used..used + space + word.len()) else {
+            break;
+        };
+        let (gap, text) = room.split_at_mut(space);
+        gap.fill(b' ');
+        text.copy_from_slice(word.as_bytes());
+        used += space + word.len();
+    }
+    buffer
+        .get(..used)
+        .and_then(|line| core::str::from_utf8(line).ok())
+        .unwrap_or(GUEST_CMDLINE)
+}
+
 /// Whether the device tree at `device_tree` is crosvm's: its `stdout-path`
 /// an `ns16550a` at [`board::GUEST_UART`], which is where the log goes from
 /// here on.
@@ -143,15 +169,18 @@ fn start(device_tree: u64, framebuffer: Framebuffer) -> Result<(), &'static str>
         }
     );
     let randomness = kaslr::gather(&tree);
+    let mut guest_line = [0_u8; 1024];
+    let cmdline = if board::is_guest() {
+        guest_cmdline(&tree, &mut guest_line)
+    } else {
+        CMDLINE
+    };
+    say!("  kernel command line: {cmdline}");
     load::boot(
         &mut memory,
         load::Carried {
             device_tree: blob,
-            cmdline: if board::is_guest() {
-                GUEST_CMDLINE
-            } else {
-                CMDLINE
-            },
+            cmdline,
             loader,
             framebuffer,
             seed,

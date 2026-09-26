@@ -34,6 +34,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo::rerun-if-changed={}", script.display());
     println!("cargo::rerun-if-changed=build.rs");
 
+    // Words appended to the phone's kernel command line, `board::CMDLINE`.
+    println!("cargo::rerun-if-env-changed=FERRIX_PIXEL7_CMDLINE_EXTRA");
+    let extra = std::env::var("FERRIX_PIXEL7_CMDLINE_EXTRA").unwrap_or_default();
+    let extra = extra.trim();
+    if extra.contains(['\n', '\r']) {
+        return Err("FERRIX_PIXEL7_CMDLINE_EXTRA must be one line".into());
+    }
+    let spaced = if extra.is_empty() {
+        String::new()
+    } else {
+        format!(" {extra}")
+    };
+    println!("cargo::rustc-env=PIXEL7_CMDLINE_EXTRA={spaced}");
+
     println!("cargo::rustc-check-cfg=cfg(payload)");
     println!("cargo::rerun-if-env-changed=FERRIX_PIXEL7_KERNEL");
     println!("cargo::rerun-if-env-changed=FERRIX_PIXEL7_INITRD");

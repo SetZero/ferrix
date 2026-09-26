@@ -23,7 +23,14 @@ pub(crate) const RAMOOPS_CONSOLE_SIZE: u64 = 0x20_0000;
 ///
 /// No `nosmp`: all eight cores start, at EL2 through TF-A's PSCI, and the
 /// kernel's secondary entry drops each to EL1.
-pub(crate) const CMDLINE: &str = "console=ramoops,0xfd3ff000,0x200000 ferrix.fbcon";
+///
+/// Anything in `FERRIX_PIXEL7_CMDLINE_EXTRA` when the loader was built is
+/// appended (`build.rs`): ABL's own `bootargs` are Android's, so this is how a
+/// phone run is given, say, `ferrix.init=/sbin/ferrix-statd`.
+pub(crate) const CMDLINE: &str = concat!(
+    "console=ramoops,0xfd3ff000,0x200000 ferrix.fbcon",
+    env!("PIXEL7_CMDLINE_EXTRA")
+);
 
 /// The 16550 a guest of the phone's own crosvm gets as its console, which
 /// the kernel is told to use in place of `ramoops`: see [`GUEST_CMDLINE`].
@@ -32,6 +39,9 @@ pub(crate) const GUEST_UART: u64 = 0x3f8;
 /// The kernel command line in a guest of crosvm, on the Pixel's own KVM.
 /// There is no screen, so no `ferrix.fbcon`, and no `ramoops` region either:
 /// the console is crosvm's 16550, which crosvm connects to its own output.
+/// Every `ferrix.*` word of crosvm's own `bootargs`, which `crosvm run -p`
+/// adds to, is appended to it (`main.rs`), so each guest can be given its
+/// own.
 pub(crate) const GUEST_CMDLINE: &str = "console=uart8250,mmio,0x3f8";
 
 /// Whether the loader runs as a guest of crosvm rather than on the phone.
