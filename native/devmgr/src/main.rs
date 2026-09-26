@@ -25,8 +25,8 @@ use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::rights::Requested;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::{
-    CHANNEL_MAX_HANDLES, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceInfo, TREE_STM32_GPU,
-    TREE_STM32_HDMI, TREE_STM32_USBH,
+    CHANNEL_MAX_HANDLES, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceInfo, TREE_GS201_DWC3,
+    TREE_STM32_GPU, TREE_STM32_HDMI, TREE_STM32_USBH,
 };
 use ferrix_netring::control::{
     CONTROL_RIGHTS as NET_CONTROL_RIGHTS, DEVICE_RIGHTS as NET_DEVICE_RIGHTS, MAX_MESSAGE,
@@ -101,6 +101,12 @@ enum Kind {
     /// subsystem serves yet. Handed its device and START as a port's driver
     /// is; it publishes nothing, so it is started and taken at its word.
     Engine,
+    /// `docs/PIXEL7-USB-HANDOVER.md`: a USB device controller, which
+    /// presents a function to whatever it is plugged into -- the Pixel 7's
+    /// serial port. Handed its device and START as a port's driver is; what
+    /// it serves comes from the kernel's log through its own device's
+    /// capability, so it publishes nothing and is taken at its word.
+    Gadget,
 }
 
 /// A driver about to be started: its kind, carrying what only that kind
@@ -126,6 +132,8 @@ enum Plan {
     Host,
     /// A rendering engine, which publishes nowhere yet.
     Engine,
+    /// A USB device controller's function.
+    Gadget,
 }
 
 /// The table: which driver, by name in the initramfs, drives which device,
@@ -147,10 +155,14 @@ const DRIVERS: [(u16, &[u16], &[u8], Kind); 6] = [
 ///
 /// Its GPU, a Vivante GC400T, is an engine, driven by `gc400`
 /// (`docs/GPU.md` §6.3).
-const TREE_DRIVERS: [(u16, &[u8], Kind); 3] = [
+///
+/// The Pixel 7's USB device controller is a gadget, driven by `usbdev`
+/// (`docs/PIXEL7-USB-HANDOVER.md`).
+const TREE_DRIVERS: [(u16, &[u8], Kind); 4] = [
     (TREE_STM32_HDMI, b"ltdc", Kind::Display),
     (TREE_STM32_USBH, b"usbhid", Kind::Host),
     (TREE_STM32_GPU, b"gc400", Kind::Engine),
+    (TREE_GS201_DWC3, b"usbdev", Kind::Gadget),
 ];
 
 /// Where devmgr gave up, as the exit status.
@@ -301,6 +313,7 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
             Kind::Port => Plan::Port,
             Kind::Host => Plan::Host,
             Kind::Engine => Plan::Engine,
+            Kind::Gadget => Plan::Gadget,
         };
         let Some(slot) = started.get_mut(count as usize) else {
             failed += 1;
@@ -324,11 +337,12 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
                 // waiting for any of them would wait for ever and the kill
                 // below would count a working driver failed. It is started
                 // and taken at its word.
-                let published = if matches!(kind, Kind::Port | Kind::Host | Kind::Engine) {
-                    true
-                } else {
-                    await_published(channel, &port, info.location, u64::from(count), &mut inbox)
-                };
+                let published =
+                    if matches!(kind, Kind::Port | Kind::Host | Kind::Engine | Kind::Gadget) {
+                        true
+                    } else {
+                        await_published(channel, &port, info.location, u64::from(count), &mut inbox)
+                    };
                 if published {
                     let _ = channel.write(
                         &Message::Bound {
@@ -834,7 +848,7 @@ fn launch_again(
     entry.process = process;
     entry.dead = false;
     entry.quiesced = false;
-    let published = matches!(entry.kind, Kind::Port | Kind::Host)
+    let published = matches!(entry.kind, Kind::Port | Kind::Host | Kind::Gadget)
         || await_published(channel, port, entry.location, key, inbox);
     if published {
         entry.published = true;
@@ -917,6 +931,7 @@ fn start(
         Plan::Port => start_plain(job, device, image, info, port, key, "vport"),
         Plan::Host => start_plain(job, device, image, info, port, key, "usbhid"),
         Plan::Engine => start_plain(job, device, image, info, port, key, "gc400"),
+        Plan::Gadget => start_plain(job, device, image, info, port, key, "usbdev"),
     }
 }
 
