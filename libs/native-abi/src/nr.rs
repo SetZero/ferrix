@@ -73,6 +73,8 @@ pub const PROCESS_START: usize = 0x1031;
 pub const PROCESS_GIVE: usize = 0x1032;
 /// [`NativeCall::ProcessBootstrap`].
 pub const PROCESS_BOOTSTRAP: usize = 0x1033;
+/// [`NativeCall::ProcessStatus`].
+pub const PROCESS_STATUS: usize = 0x1034;
 
 /// [`NativeCall::InterruptCreate`].
 pub const INTERRUPT_CREATE: usize = 0x1038;
@@ -108,8 +110,8 @@ pub const PROCESS_NAME_MAX: usize = 32;
 
 /// A native system call.
 ///
-/// `0x1034..=0x1037` is left for the calls that act on a process beyond
-/// making, starting and giving it its bootstrap.
+/// `0x1035..=0x1037` is left for the calls that act on a process beyond
+/// making, starting, giving it its bootstrap and reading how it ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NativeCall {
     /// `(handle)`. Close a handle. The object lives on if anything else holds it.
@@ -247,6 +249,17 @@ pub enum NativeCall {
     /// the handle is kept for a later call. Callable from any process, a
     /// Linux one by `syscall(0x1033)`.
     ProcessBootstrap,
+    /// `(process, out: *ProcessStatus)`. Write how the process the handle
+    /// names ended, or that it has not (`docs/INIT.md` §11, K6): a
+    /// [`crate::types::ProcessStatus`] whose `state` is
+    /// [`crate::types::PROCESS_RUNNING`], [`crate::types::PROCESS_EXITED`]
+    /// with the exit code, or [`crate::types::PROCESS_KILLED`] with the
+    /// signal that ended it. Ended means ended: the answer changes from
+    /// running at the moment the process starts to end, which is before the
+    /// handle asserts `TERMINATED`, so a waiter woken by `TERMINATED` always
+    /// reads an end. Needs `WAIT`; `WRONG_TYPE` for a handle to anything but
+    /// a process, `FAULT` for `out`.
+    ProcessStatus,
     /// `(resource, vector)` → handle. Claim a hardware interrupt.
     InterruptCreate,
     /// `(interrupt, port, key: *u64)`. Deliver the interrupt to a port as
@@ -302,7 +315,7 @@ pub enum NativeCall {
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 40] = [
+pub const ALL: [NativeCall; 41] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -330,6 +343,7 @@ pub const ALL: [NativeCall; 40] = [
     NativeCall::ProcessStart,
     NativeCall::ProcessGive,
     NativeCall::ProcessBootstrap,
+    NativeCall::ProcessStatus,
     NativeCall::InterruptCreate,
     NativeCall::InterruptBind,
     NativeCall::InterruptAck,
@@ -385,6 +399,7 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         PROCESS_START => NativeCall::ProcessStart,
         PROCESS_GIVE => NativeCall::ProcessGive,
         PROCESS_BOOTSTRAP => NativeCall::ProcessBootstrap,
+        PROCESS_STATUS => NativeCall::ProcessStatus,
         INTERRUPT_CREATE => NativeCall::InterruptCreate,
         INTERRUPT_BIND => NativeCall::InterruptBind,
         INTERRUPT_ACK => NativeCall::InterruptAck,
@@ -434,6 +449,7 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::ProcessStart => PROCESS_START,
         NativeCall::ProcessGive => PROCESS_GIVE,
         NativeCall::ProcessBootstrap => PROCESS_BOOTSTRAP,
+        NativeCall::ProcessStatus => PROCESS_STATUS,
         NativeCall::InterruptCreate => INTERRUPT_CREATE,
         NativeCall::InterruptBind => INTERRUPT_BIND,
         NativeCall::InterruptAck => INTERRUPT_ACK,

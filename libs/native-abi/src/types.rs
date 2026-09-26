@@ -177,6 +177,29 @@ pub const TREE_STM32_GPU: u16 = 3;
 /// How many input control channels one USB host's node may hold at once.
 pub const USB_INPUT_FUNCTIONS: usize = 8;
 
+/// What `process_status` writes: whether the process has ended, and how.
+/// Eight bytes, the same on every target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(C)]
+pub struct ProcessStatus {
+    /// [`PROCESS_RUNNING`], [`PROCESS_EXITED`] or [`PROCESS_KILLED`].
+    pub state: u32,
+    /// Zero while it runs; the exit code, 0 to 255, once it has exited; the
+    /// signal's number once one has killed it.
+    pub value: u32,
+}
+
+/// [`ProcessStatus::state`]: it has not ended. It may not have started.
+pub const PROCESS_RUNNING: u32 = 0;
+/// [`ProcessStatus::state`]: it ended by `exit` or `exit_group`, or its last
+/// thread's `exit`, and [`ProcessStatus::value`] is the code, as `wait4`'s
+/// `WEXITSTATUS` would read it.
+pub const PROCESS_EXITED: u32 = 1;
+/// [`ProcessStatus::state`]: a signal ended it -- one sent to it, its own
+/// fault, or a kill of its job, which is `SIGKILL` -- and
+/// [`ProcessStatus::value`] is the signal, as `WTERMSIG` would read it.
+pub const PROCESS_KILLED: u32 = 2;
+
 /// The aperture an `io_mapping_create` claims.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(C)]

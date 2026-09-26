@@ -12,7 +12,10 @@ use crate::nr::{self, ALL, FIRST, LAST, NativeCall};
 use crate::rights::{Requested, Rights, SAME_RIGHTS};
 use crate::signals::Signals;
 use crate::status;
-use crate::types::{IoMappingSpec, PortPacket, ReadActual};
+use crate::types::{
+    IoMappingSpec, PROCESS_EXITED, PROCESS_KILLED, PROCESS_RUNNING, PortPacket, ProcessStatus,
+    ReadActual,
+};
 
 #[test]
 fn no_native_number_is_a_linux_number_on_any_architecture() {
@@ -78,7 +81,8 @@ fn process_creation_opens_its_block() {
     assert_eq!(nr::decode(0x1031), Some(NativeCall::ProcessStart));
     assert_eq!(nr::decode(0x1032), Some(NativeCall::ProcessGive));
     assert_eq!(nr::decode(0x1033), Some(NativeCall::ProcessBootstrap));
-    for number in 0x1034..=0x1037 {
+    assert_eq!(nr::decode(0x1034), Some(NativeCall::ProcessStatus));
+    for number in 0x1035..=0x1037 {
         assert_eq!(nr::decode(number), None, "{number:#x} was assigned");
     }
     assert_eq!(
@@ -218,6 +222,24 @@ fn layouts_have_no_padding_and_match_on_every_target() {
     assert_eq!(offset_of!(IoMappingSpec, len), 8, "len");
 
     assert_eq!(size_of::<Handle>(), 4, "Handle");
+
+    assert_eq!(size_of::<ProcessStatus>(), 8, "ProcessStatus");
+    assert_eq!(offset_of!(ProcessStatus, value), 4, "value");
+}
+
+#[test]
+fn a_process_status_says_running_exited_or_killed_and_nothing_else() {
+    assert_eq!(
+        ProcessStatus::default().state,
+        PROCESS_RUNNING,
+        "a zeroed status reads as running"
+    );
+    let states = [PROCESS_RUNNING, PROCESS_EXITED, PROCESS_KILLED];
+    for (i, a) in states.iter().enumerate() {
+        for b in states.iter().skip(i + 1) {
+            assert_ne!(a, b, "two states share {a}");
+        }
+    }
 }
 
 #[test]

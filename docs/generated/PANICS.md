@@ -2111,34 +2111,42 @@ See: kernel/src/power.rs finish; kernel/src/init.rs run; docs/INIT.md §8.3.
 given as `exec::run_init` gives it, must hold exactly one message for
 `process_bootstrap` to find -- the 8-byte hello `FXIN` version 1 with no handle
 -- with the kernel's end open, and a program given it must take it by number,
-close it and exit 0, the kernel's end hearing the close. K3: `process_give`
-(0x1032) must move a handle out of the caller's table into its own child's
-bootstrap slot, and `process_bootstrap` (0x1033) must answer that handle once,
-with its rights, and zero after and in a process given nothing. A give must be
-refused with NOT_CHILD into another's child, NO_PROCESS for a pid naming
-nothing, ACCESS_DENIED without TRANSFER, BAD_HANDLE for handle zero,
-ALREADY_BOUND a second time, and BAD_STATE to a child that completed an execve
-with nothing given or that has ended, each leaving the handle with the caller. A
-handle given before an execve must be there after it, and one never taken must
-be closed when the child ends. Then a fork of a loaded program, given a channel
-end, must execve /tmp/k3-exec, take its bootstrap by number, close it and exit
-0, the kept end hearing the close; its parent, given nothing, must exit with the
-close's EBADF (247).
+close it and exit 0, the kernel's end hearing the close. K6: `process_status`
+(0x1034) must read a process nothing ended as running, one a SIGTERM ended as
+killed by 15, one its job's kill ended as killed by 9, and a program that exited
+42 as exited with 42; and refuse a handle without WAIT (ACCESS_DENIED), a
+channel (WRONG_TYPE) and an unmapped answer (FAULT). K3: `process_give` (0x1032)
+must move a handle out of the caller's table into its own child's bootstrap
+slot, and `process_bootstrap` (0x1033) must answer that handle once, with its
+rights, and zero after and in a process given nothing. A give must be refused
+with NOT_CHILD into another's child, NO_PROCESS for a pid naming nothing,
+ACCESS_DENIED without TRANSFER, BAD_HANDLE for handle zero, ALREADY_BOUND a
+second time, and BAD_STATE to a child that completed an execve with nothing
+given or that has ended, each leaving the handle with the caller. A handle given
+before an execve must be there after it, and one never taken must be closed when
+the child ends. Then a fork of a loaded program, given a channel end, must
+execve /tmp/k3-exec, take its bootstrap by number, close it and exit 0, the kept
+end hearing the close; its parent, given nothing, must exit with the close's
+EBADF (247).
 
-1. `init::bootstrap_channel` no longer writes the hello from `libs/native-abi`'s
+1. `process_status` (`syscall/native.rs`) read the status without the signal the
+   personality records beside it (`Exit::record`), so a killed process reads as
+   exited with 128 plus the signal, or it reads an exit before the process
+   ended.
+2. `init::bootstrap_channel` no longer writes the hello from `libs/native-abi`'s
    `bootstrap` module, or writes more than one message, or
    `exec::give_bootstrap` does not put the program's end in the new process's
    slot.
-2. `process_give` (`syscall/launch.rs`) judged the parent by something other
+3. `process_give` (`syscall/launch.rs`) judged the parent by something other
    than the child's own parent pointer, or `give_bootstrap`
    (`syscall/native.rs`) copied the handle rather than removing it, or moved it
    before checking the slot.
-3. `execve` did not seal the slot (`Process::mark_execed` calling
+4. `execve` did not seal the slot (`Process::mark_execed` calling
    `seal_bootstrap`), or sealed a slot already holding a handle, which the new
    program then cannot take.
-4. A process's release does not dispose of an untaken bootstrap
+5. A process's release does not dispose of an untaken bootstrap
    (`close_bootstrap`), so the peer never hears PEER_CLOSED.
-5. The program's machine code (`arch::USER_BOOTSTRAP_PROGRAM`) does not make the
+6. The program's machine code (`arch::USER_BOOTSTRAP_PROGRAM`) does not make the
    calls by the numbers `libs/native-abi` gives, or the dispatcher does not
    route a native number from a Linux program.
 

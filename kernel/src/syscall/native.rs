@@ -43,9 +43,9 @@
 //!
 //! # What is not here yet
 //!
-//! The calls that act on a process beyond making, starting and giving it its
-//! bootstrap, in `0x1034..=0x1037`. Those numbers do not decode yet, and
-//! answer `ENOSYS`.
+//! The calls that act on a process beyond making, starting, giving it its
+//! bootstrap and reading how it ended, in `0x1035..=0x1037`. Those numbers do
+//! not decode yet, and answer `ENOSYS`.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -59,7 +59,7 @@ use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
 use ferrix_native_abi::types::{
     self, CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, DEVICE_INFO_BYTES, DeviceInfo, MAP_READ,
-    MAP_WRITE, PortPacket, ReadActual,
+    MAP_WRITE, PortPacket, ProcessStatus, ReadActual,
 };
 use ferrix_objects::message::Message;
 use ferrix_objects::reach::Reach;
@@ -390,6 +390,7 @@ pub(crate) fn dispatch(args: &SyscallArgs, caller: Option<&dyn Host>) -> Result<
         | NativeCall::JobForCgroup
         | NativeCall::ProcessGive => served(call, caller, &a),
         NativeCall::ProcessBootstrap => process_bootstrap(process),
+        NativeCall::ProcessStatus => process_status(process, handle(a[0]), a[1]),
         NativeCall::DeviceInfo => device_info(process, handle(a[0]), a[1]),
         NativeCall::DeviceQuiesce => device_quiesce(process, handle(a[0])),
         NativeCall::DeviceClock => device_clock(process, handle(a[0]), a[1], a[2]),
@@ -1482,6 +1483,51 @@ fn process_bootstrap(process: &Process) -> Result<usize, Errno> {
             Err(why)
         }
     }
+}
+
+/// `process_status`: how the process a handle names ended, or that it has
+/// not, as a [`ProcessStatus`] (K6).
+///
+/// Read from the handle's [`crate::object::process::Exit`], which the
+/// personality records once, the signal before the status before the flag
+/// that says it ended, so a reader that sees the end sees both. A status the
+/// personality recorded with a signal is that signal's death; any other is an
+/// exit, of which a program's code is the low byte, as `exit_group` keeps it.
+fn process_status(process: &Process, target: Handle, out: u64) -> Result<usize, Errno> {
+    let ended = process.with_handles(|table| {
+        let (object, rights) = table.get(target).map_err(table_error)?;
+        let Object::Process(ended) = object else {
+            return Err(status::WRONG_TYPE);
+        };
+        if !rights.contains(Rights::WAIT) {
+            return Err(status::ACCESS_DENIED);
+        }
+        Ok(ended.clone())
+    })?;
+    let exit = ended.exit();
+    let answer = match (exit.status(), exit.signal()) {
+        (None, _) => ProcessStatus {
+            state: types::PROCESS_RUNNING,
+            value: 0,
+        },
+        (Some(_), Some(signal)) => ProcessStatus {
+            state: types::PROCESS_KILLED,
+            value: signal,
+        },
+        (Some(code), None) => ProcessStatus {
+            state: types::PROCESS_EXITED,
+            value: code.cast_unsigned() & 0xFF,
+        },
+    };
+    // Through `dispose`, outside the table's lock: a handle closed meanwhile
+    // can make this the last reference to an unstarted process, whose drop
+    // ends it.
+    object::dispose([Object::Process(ended)]);
+    let [s0, s1, s2, s3] = answer.state.to_ne_bytes();
+    let [v0, v1, v2, v3] = answer.value.to_ne_bytes();
+    uaccess::copy_to_user(process.space(), out, &[s0, s1, s2, s3, v0, v1, v2, v3])
+        .map_err(fault)?;
+    Ok(0)
 }
 
 /// The device node a handle names, if it carries `needed`.

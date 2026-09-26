@@ -11,6 +11,12 @@
 //! loaded program, the program must take it by number and close it, and the
 //! kernel's end must hear the close.
 //!
+//! **K6.** `process_status` by number on handles to processes: running
+//! before anything ends it, then killed by the signal a kill named, `SIGKILL`
+//! for a job's kill, and exited with the code a program exited with; and
+//! refused for a handle without `WAIT`, one that is not a process, and an
+//! answer nobody can write.
+//!
 //! **K3, the calls.** Driven through [`native::dispatch`] by number, between a
 //! process and a fork of it, as the object checks drive the native calls. A
 //! give moves the handle, not a copy of it: the parent's number names nothing
@@ -41,12 +47,14 @@ use ferrix_native_abi::nr;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
+use ferrix_native_abi::types::{PROCESS_EXITED, PROCESS_KILLED, PROCESS_RUNNING};
 use ferrix_vfs::OpenFlags;
 
 use crate::arch;
 use crate::init;
 use crate::object::channel::Endpoint;
 use crate::object::check::{SCRATCH, Side};
+use crate::object::process::ProcessRef;
 use crate::object::{self, Object};
 use crate::syscall::process::{self, Process};
 use crate::syscall::{exec, image, native};
@@ -81,6 +89,8 @@ pub(crate) struct Report {
     pub(crate) from_a_program: bool,
     /// The version of the hello read from init's bootstrap channel.
     pub(crate) hello: u32,
+    /// Ends read back through process handles.
+    pub(crate) statuses: u32,
 }
 
 /// Run every check.
@@ -94,6 +104,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         ..Report::default()
     };
     check_init_takes_its_channel()?;
+    check_process_status(&mut report)?;
     check_give_and_take(&mut report)?;
     report.from_a_program = check_a_program_takes_it_after_execve()?;
     Ok(report)
@@ -223,6 +234,121 @@ fn check_init_takes_its_channel() -> Result<(), &'static str> {
     if !kernel_end.signals().intersects(Signals::PEER_CLOSED) {
         return Err("the kernel's end of init's channel did not hear the program close its end");
     }
+    Ok(())
+}
+
+/// Where `process_status` writes, in a [`Side`]'s scratch region.
+const STATUS_AT: u64 = SCRATCH + 0x900;
+
+/// A user address nothing maps: the scratch region is two pages.
+const UNMAPPED: u64 = SCRATCH + 0x10_0000;
+
+/// K6: how a process ended, read through a handle to it.
+fn check_process_status(report: &mut Report) -> Result<(), &'static str> {
+    let side = Side::new()?;
+    let outcome = process_statuses(&side, report);
+    side.close_everything();
+    outcome
+}
+
+/// A handle in `side` to `process`, with `rights`.
+fn process_handle(side: &Side, process: &Process, rights: Rights) -> Result<Handle, &'static str> {
+    side.process
+        .with_handles(|table| table.insert(Object::Process(ProcessRef::new(process)), rights))
+        .map_err(|_| "no room for a handle to a process")
+}
+
+/// `process_status` on `handle` in `side`: the state and the value.
+fn status_of(side: &Side, handle: Handle) -> Result<(u32, u32), &'static str> {
+    side.put(STATUS_AT, &[0xA5; 8])?;
+    if side.call(nr::PROCESS_STATUS, &[reg(handle), STATUS_AT]) != Ok(0) {
+        return Err("process_status on a handle to a process was refused");
+    }
+    Ok((side.get_u32(STATUS_AT)?, side.get_u32(STATUS_AT + 4)?))
+}
+
+/// The body of [`check_process_status`].
+fn process_statuses(side: &Side, report: &mut Report) -> Result<(), &'static str> {
+    let signalled = process::new_for_check().map_err(|_| "could not make a process")?;
+    let jobbed = process::new_for_check().map_err(|_| "could not make a process")?;
+    let on_signal = process_handle(side, &signalled, Rights::PROCESS)?;
+    let on_job = process_handle(side, &jobbed, Rights::PROCESS)?;
+    let blind = process_handle(side, &signalled, Rights::DUPLICATE)?;
+
+    if status_of(side, on_signal)? != (PROCESS_RUNNING, 0) {
+        return Err("process_status of a process nothing has ended did not say running");
+    }
+    let sigterm = ferrix_linux_abi::types::SIGTERM;
+    process::kill(&signalled, 128 + sigterm as i32);
+    process::kill(&jobbed, object::job::KILLED_STATUS);
+    let killed = status_of(side, on_signal)?;
+    if killed != (PROCESS_KILLED, sigterm) {
+        crate::console::println!(
+            "  initcall a process ended by SIGTERM read as state {} value {}",
+            killed.0,
+            killed.1
+        );
+        return Err("process_status of a process a signal ended did not say killed, by it");
+    }
+    if status_of(side, on_job)? != (PROCESS_KILLED, ferrix_linux_abi::types::SIGKILL) {
+        return Err("process_status of a process its job's kill ended did not say SIGKILL");
+    }
+    report.statuses += 2;
+
+    let (channel, ..) = channel_in(&side.process, Rights::CHANNEL)?;
+    for (result, wanted, what) in [
+        (
+            side.call(nr::PROCESS_STATUS, &[reg(blind), STATUS_AT]),
+            status::ACCESS_DENIED,
+            "process_status through a handle without WAIT was not refused with ACCESS_DENIED",
+        ),
+        (
+            side.call(nr::PROCESS_STATUS, &[reg(channel), STATUS_AT]),
+            status::WRONG_TYPE,
+            "process_status on a channel was not refused with WRONG_TYPE",
+        ),
+        (
+            side.call(nr::PROCESS_STATUS, &[reg(on_signal), UNMAPPED]),
+            status::FAULT,
+            "process_status into memory nobody maps was not refused with FAULT",
+        ),
+    ] {
+        refused(result, wanted, what, report)?;
+    }
+
+    if arch::USER_TEST_PROGRAM.is_empty() {
+        return Ok(());
+    }
+    let class = if size_of::<usize>() == 8 {
+        ferrix_elf::Class::Elf64
+    } else {
+        ferrix_elf::Class::Elf32
+    };
+    let program = image::build_with(
+        class,
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        arch::USER_TEST_PROGRAM,
+    );
+    let exiting = exec::load(
+        &program,
+        &[b"/exits"],
+        &[],
+        [0x4d; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "a program that exits could not be loaded")?;
+    let on_exit = process_handle(side, &exiting, Rights::PROCESS)?;
+    let code = run_to_its_end(&exiting)?;
+    let exited = status_of(side, on_exit)?;
+    if exited != (PROCESS_EXITED, code.cast_unsigned()) {
+        crate::console::println!(
+            "  initcall a program that exited with {code} read as state {} value {}",
+            exited.0,
+            exited.1
+        );
+        return Err("process_status of a program that exited did not say exited, with its code");
+    }
+    report.statuses += 1;
     Ok(())
 }
 
