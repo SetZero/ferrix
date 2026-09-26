@@ -1767,12 +1767,19 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // desktop where nothing else does.
         let overlay_wait = overlay_was.then(|| overlay.wait(Instant::now()));
         let rescan_wait = rescan.map(|due| due.saturating_duration_since(Instant::now()));
+        // What a virtual device injected this pass is carried out on the
+        // next, which must then come at once: waiting for some other
+        // descriptor to wake the loop left `ydotool`'s motion unseen until
+        // the next frame or client message, which on a quiet desktop is
+        // never.
+        let injected_wait = (!injected.is_empty()).then_some(Duration::ZERO);
         let timeout = [
             frame_wait,
             idle_wait,
             deadline_wait,
             overlay_wait,
             rescan_wait,
+            injected_wait,
         ]
         .into_iter()
         .flatten()
