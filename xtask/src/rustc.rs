@@ -4,7 +4,7 @@
 //! The compiler is the rust-lang.org release and not one built here: a
 //! position-independent glibc program whose LLVM is a 190 MiB shared library
 //! of its own, run by Debian's `ld-linux`. It links the way it does on any
-//! Linux machine, through `cc` -- Debian's gcc 14 driver -- which runs
+//! Linux machine, through `cc` -- gcc 15's driver -- which runs
 //! `collect2`, which runs the `ld.lld` rustc points it at, which runs
 //! `rust-lld`. So one compile is five programs nobody here wrote, four
 //! `execve`s deep, over some 350 MiB of shared libraries mapped from btrfs;
@@ -43,11 +43,19 @@ cargo -V || exit 6
 echo 'fn main() { println!("rustc-gate: hello from rustc on Ferrix"); }' > hello.rs
 rustc hello.rs || exit 4
 ./hello || exit 5
+echo '#include <stdio.h>' > hello.c
+echo 'int main(void) { puts("rustc-gate: hello from gcc on Ferrix"); return 0; }' >> hello.c
+cc hello.c -o hello-c || exit 7
+./hello-c || exit 8
 exit 16
 "#;
 
 /// What the program rustc made must print.
 const HELLO: &str = "rustc-gate: hello from rustc on Ferrix";
+
+/// What the program gcc made must print: `cc` compiles C as well as links,
+/// which a volume without `cc1` could not, although rustc passed.
+const C_HELLO: &str = "rustc-gate: hello from gcc on Ferrix";
 
 /// What `rustc -vV` prints first, which says the compiler ran.
 const VERSION: &str = "rustc 1.97.1";
@@ -69,13 +77,16 @@ pub(crate) const LINKS: &[(&str, &str)] = &[
 
 /// Normal boots also carry ports under `/usr/libexec`, so only gcc's child
 /// directory can be linked there. Put the compiler and its C driver on the
-/// shell's `/bin` PATH; the gate sets its own PATH instead.
+/// shell's `/bin` PATH; the gate sets its own PATH instead. glibc's and the
+/// kernel's headers are the volume's `/usr/include`, where gcc looks: without
+/// them `cc hello.c` stops at `stdio.h`.
 pub(crate) const DEFAULT_LINKS: &[(&str, &str)] = &[
     ("lib64", "/data/usr/lib64"),
     ("lib/x86_64-linux-gnu", "/data/usr/lib/x86_64-linux-gnu"),
     ("usr/lib/x86_64-linux-gnu", "/data/usr/lib/x86_64-linux-gnu"),
     ("usr/lib/gcc", "/data/usr/lib/gcc"),
     ("usr/libexec/gcc", "/data/usr/libexec/gcc"),
+    ("usr/include", "/data/usr/include"),
     ("bin/rustc", "/data/rust/bin/rustc"),
     ("bin/cargo", "/data/rust/bin/cargo"),
     ("bin/cc", "/data/usr/bin/cc"),
@@ -155,11 +166,31 @@ pub(crate) fn prepare_default(arch: Arch, args: &mut Args) -> Result<()> {
         }
     };
     println!("  rustc from {} in the default system", image.display());
+    if let Some(missing) = missing_compiler() {
+        println!(
+            "  warning: the volume's gcc has no {missing}, so no C program compiles on it; \
+             it is from before the script fetched gcc 15 -- run \
+             scripts/fetch/fetch-rustc-sysroot.sh again"
+        );
+    }
     args.data_image = Some(image);
     if !args.memory_given {
         args.memory = MEMORY;
     }
     Ok(())
+}
+
+/// What the script fetches since 2026-09-24 and a volume made before then
+/// lacks: gcc 14's driver came without `cpp-14`, whose package holds `cc1`,
+/// so `cc hello.c` failed on Ferrix although rustc, which only links through
+/// gcc, worked.
+const COMPILER: &str = "usr/libexec/gcc/x86_64-linux-gnu/15/cc1";
+
+/// [`COMPILER`], when the tree beside the volume shows the volume lacks it.
+/// A volume whose tree is gone cannot be judged, and is taken as it is.
+fn missing_compiler() -> Option<&'static str> {
+    let tree = directory().ok()?.join("tree");
+    (tree.is_dir() && !tree.join(COMPILER).exists()).then_some(COMPILER)
 }
 
 /// Links in the initramfs (and persistent root) for the attached compiler.
@@ -213,7 +244,10 @@ pub(crate) fn test_rustc(args: &Args) -> Result<()> {
     let natives = native::build(arch, args.release)?;
     let bytes = std::fs::read(&shell)
         .map_err(|error| Error::new(format!("reading {}: {error}", shell.display())))?;
-    let links = files(LINKS);
+    // `selfhost` links the headers beside [`LINKS`] itself, so they are
+    // this gate's own addition, for its hello.c.
+    let mut links = files(LINKS);
+    links.extend(files(&[("usr/include", "/data/usr/include")]));
     // zinc alone: the script is builtins, and every program it runs is on
     // the volume.
     let archive = initramfs::build(None, &natives, Some(&bytes), &links)?;
@@ -230,7 +264,8 @@ pub(crate) fn test_rustc(args: &Args) -> Result<()> {
 }
 
 /// Whether the transcript is a compiler and Cargo that ran, a program rustc
-/// made that printed its line, and a script that got to its end.
+/// made and one gcc made that printed their lines, and a script that got to
+/// its end.
 fn judge(arch: Arch, lines: &[String]) -> Result<()> {
     let after_boot = lines
         .iter()
@@ -246,9 +281,13 @@ fn judge(arch: Arch, lines: &[String]) -> Result<()> {
         .iter()
         .any(|line| line.starts_with(CARGO_VERSION));
     let said = after_boot.iter().any(|line| line.trim_end() == HELLO);
+    let c_said = after_boot.iter().any(|line| line.trim_end() == C_HELLO);
     match exited {
-        Some(status) if status == STATUS.to_string() && ran && cargo_ran && said => {
-            println!("  {arch}: rustc compiled hello.rs on Ferrix, Cargo started, and it ran");
+        Some(status) if status == STATUS.to_string() && ran && cargo_ran && said && c_said => {
+            println!(
+                "  {arch}: rustc compiled hello.rs on Ferrix, Cargo started, gcc compiled \
+                 hello.c, and both ran"
+            );
             Ok(())
         }
         Some("3") => Err(Error::new(format!("{arch}: `rustc -vV` failed"))),
@@ -259,8 +298,15 @@ fn judge(arch: Arch, lines: &[String]) -> Result<()> {
         Some("5") => Err(Error::new(format!(
             "{arch}: rustc made a program, and it did not run"
         ))),
+        Some("7") => Err(Error::new(format!(
+            "{arch}: gcc did not compile hello.c (a volume without cc1: run \
+             scripts/fetch/fetch-rustc-sysroot.sh again)"
+        ))),
+        Some("8") => Err(Error::new(format!(
+            "{arch}: gcc made a program, and it did not run"
+        ))),
         Some(status) => Err(Error::new(format!(
-            "{arch}: the script exited with {status}; rustc version {ran}, cargo version {cargo_ran}, hello line {said}"
+            "{arch}: the script exited with {status}; rustc version {ran}, cargo version {cargo_ran}, hello line {said}, gcc's hello line {c_said}"
         ))),
         None => Err(Error::new(format!("{arch}: the shell never exited"))),
     }
@@ -281,6 +327,7 @@ mod tests {
         assert!(links.iter().any(|file| file.path == "bin/cargo"));
         assert!(links.iter().any(|file| file.path == "bin/cc"));
         assert!(links.iter().any(|file| file.path == "usr/libexec/gcc"));
+        assert!(links.iter().any(|file| file.path == "usr/include"));
         assert!(!links.iter().any(|file| file.path == "usr/libexec"));
         assert!(default_links(&Args::default()).is_empty());
     }
@@ -332,9 +379,23 @@ mod tests {
             "rustc 1.97.1 (8bab26f4f 2026-07-14)",
             "cargo 1.97.1 (test build)",
             HELLO,
+            C_HELLO,
             "  init     the shell exited with 16",
         ]);
         assert!(judge(Arch::X86_64, &lines).is_ok());
+    }
+
+    /// The Rust half alone is not a pass: a volume without `cc1` gave that.
+    #[test]
+    fn a_c_compile_is_needed_too() {
+        let lines = transcript(&[
+            qemu::SUCCESS_MARKER,
+            "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+            "cargo 1.97.1 (test build)",
+            HELLO,
+            "  init     the shell exited with 16",
+        ]);
+        assert!(judge(Arch::X86_64, &lines).is_err());
     }
 
     #[test]
@@ -356,6 +417,8 @@ mod tests {
             ("4", "link"),
             ("5", "did not run"),
             ("6", "cargo -V"),
+            ("7", "cc1"),
+            ("8", "gcc made a program"),
         ] {
             let exit = format!("  init     the shell exited with {status}");
             let lines = transcript(&[qemu::SUCCESS_MARKER, &exit]);
