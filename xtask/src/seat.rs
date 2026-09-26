@@ -82,9 +82,29 @@ const BTN_LEFT: u32 = 272;
 /// a socket and a page flip in an emulated machine.
 const PATIENCE: Duration = Duration::from_secs(25);
 
-/// How long to let a frame settle: a client has to draw and commit, the
-/// compositor has to compose, and the flip is queued after that.
-const SETTLE: Duration = Duration::from_secs(4);
+/// How long to wait for the screen to show what was asked of it: a client
+/// has to draw and commit, the compositor has to compose, and the flip is
+/// queued after that.
+///
+/// A bound on a wait for the picture, not a pause: the screen is asked again
+/// and again until it shows it, so a fast machine goes on at once and a slow
+/// one is given what it takes. It used to be a pause of four seconds, then
+/// one screendump, and under QEMU's coverage plugin a frame can take longer
+/// than that on its own (`test-compositor` measured 19 s, 2026-09-26): the key
+/// reached the client and the screendump was taken before its frame.
+const SCREEN_PATIENCE: Duration = Duration::from_secs(90);
+
+/// How often to ask for the screen while waiting for it.
+const SCREEN_EVERY: Duration = Duration::from_millis(250);
+
+/// The checkerboard's two greys, `compositor/render`'s `Pattern::LIGHT` and
+/// `Pattern::DARK`: what the client draws first.
+const CHECKERBOARD: [[u8; 3]; 2] = [[0xE0, 0xE0, 0xE0], [0x30, 0x30, 0x30]];
+
+/// More colours than this in the middle of the screen is the gradient, the
+/// pattern the client draws after a key: it steps every sixteen pixels, so
+/// the middle half of any screen this runs on holds dozens.
+const GRADIENT_COLOURS: usize = 16;
 
 /// Build one of the compositor's programs for `arch`, and say where it is.
 fn build(arch: Arch, package: &str, binary: &str) -> Result<PathBuf> {
@@ -147,6 +167,91 @@ fn screen(qmp: &mut Qmp, dump: &Path) -> Result<Image> {
     parse_ppm(&bytes)
 }
 
+/// What the client is showing, read from the middle of the screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Showing {
+    /// Its first pattern, and nothing else, in the middle of the screen.
+    Checkerboard,
+    /// The pattern a key turns it into.
+    Gradient,
+    /// Neither: the background, a window part-drawn, or something else.
+    Other,
+}
+
+/// Where the cursor's tip is: the test puts the pointer in the middle of the
+/// screen, and the compositor draws a [`CURSOR`]-square arrow down and to the
+/// right of it.
+fn tip(screen: &Image) -> (usize, usize) {
+    (screen.width / 2, screen.height / 2)
+}
+
+/// What the middle half of `screen` shows, leaving out the cursor and a
+/// pixel's margin round it. The only window is tiled over the whole screen,
+/// so its middle is the client's and nothing else's.
+fn showing(screen: &Image) -> Showing {
+    let tip = tip(screen);
+    let cursor = |x: usize, y: usize| {
+        (tip.0.saturating_sub(2)..tip.0 + CURSOR + 2).contains(&x)
+            && (tip.1.saturating_sub(2)..tip.1 + CURSOR + 2).contains(&y)
+    };
+    let (columns, rows) = (
+        screen.width / 4..screen.width * 3 / 4,
+        screen.height / 4..screen.height * 3 / 4,
+    );
+    let mut colours = std::collections::BTreeSet::new();
+    for (index, pixel) in screen.pixels.chunks_exact(3).enumerate() {
+        let (x, y) = (index % screen.width.max(1), index / screen.width.max(1));
+        if !columns.contains(&x) || !rows.contains(&y) || cursor(x, y) {
+            continue;
+        }
+        if let [red, green, blue] = *pixel {
+            let _ = colours.insert([red, green, blue]);
+        }
+        if colours.len() > GRADIENT_COLOURS {
+            return Showing::Gradient;
+        }
+    }
+    if colours.len() == CHECKERBOARD.len() && CHECKERBOARD.iter().all(|c| colours.contains(c)) {
+        Showing::Checkerboard
+    } else {
+        Showing::Other
+    }
+}
+
+/// Up to four pixels of `screen` that are neither the compositor's
+/// background nor the cursor: what a screen the keybind cleared has none of.
+fn stray(screen: &Image) -> (Vec<(usize, usize, [u8; 3])>, usize) {
+    let tip = tip(screen);
+    let (found, wrong) = mismatches(screen, BACKGROUND, usize::MAX);
+    let stray = found
+        .iter()
+        .filter(|(x, y, _)| x.saturating_sub(tip.0) >= CURSOR || y.saturating_sub(tip.1) >= CURSOR)
+        .take(4)
+        .copied()
+        .collect::<Vec<_>>();
+    (stray, wrong)
+}
+
+/// Take screendumps until one passes `wanted`, or [`SCREEN_PATIENCE`] is up,
+/// and give back the last with whether it passed.
+fn screen_until(
+    qmp: &mut Qmp,
+    dump: &Path,
+    wanted: impl Fn(&Image) -> bool,
+) -> Result<(Image, bool)> {
+    let deadline = Instant::now() + SCREEN_PATIENCE;
+    loop {
+        let shown = screen(qmp, dump)?;
+        if wanted(&shown) {
+            return Ok((shown, true));
+        }
+        if Instant::now() >= deadline {
+            return Ok((shown, false));
+        }
+        std::thread::sleep(SCREEN_EVERY);
+    }
+}
+
 /// Boot the compositor with a client and a keybind, and type into it.
 fn boot_and_type(arch: Arch, program: &Path, client: &Path, args: &Args) -> Result<Seen> {
     let loader = crate::cargo::build_loader(arch, args.release)?;
@@ -196,9 +301,17 @@ fn boot_and_type(arch: Arch, program: &Path, client: &Path, args: &Args) -> Resu
         // 1 and 2: the client has a keymap, and focus reached it.
         wait_for(watching, "pattern: keymap format 1", arch)?;
         wait_for(watching, "pattern: keyboard enter", arch)?;
-        // The first frame, once the client has drawn into it.
-        std::thread::sleep(SETTLE);
-        let before = screen(&mut qmp, &dump)?;
+        // The first frame, once the client has drawn into it and it is on
+        // the card.
+        let (before, drawn) = screen_until(&mut qmp, &dump, |shown| {
+            showing(shown) == Showing::Checkerboard
+        })?;
+        if !drawn {
+            return Err(Error::new(format!(
+                "{arch}: the client's checkerboard never reached the screen within {}s",
+                SCREEN_PATIENCE.as_secs()
+            )));
+        }
 
         // The pointer, on the way past: somewhere inside the only window,
         // then a click.
@@ -216,8 +329,11 @@ fn boot_and_type(arch: Arch, program: &Path, client: &Path, args: &Args) -> Resu
         qmp.input_send_event(&[key("a", true)])?;
         wait_for(watching, &format!("pattern: key {KEY_A} state 1"), arch)?;
         qmp.input_send_event(&[key("a", false)])?;
-        std::thread::sleep(SETTLE);
-        let after = screen(&mut qmp, &dump)?;
+        // The client draws its other pattern on a key: wait until that is
+        // what the card shows. A screen that never shows it is judged below,
+        // as the picture it stopped at.
+        let (after, _) =
+            screen_until(&mut qmp, &dump, |shown| showing(shown) == Showing::Gradient)?;
 
         // 4: the keybind, and the window it closed.
         qmp.input_send_event(&[key("meta_l", true)])?;
@@ -233,8 +349,7 @@ fn boot_and_type(arch: Arch, program: &Path, client: &Path, args: &Args) -> Resu
         )?;
         qmp.input_send_event(&[key("q", false)])?;
         qmp.input_send_event(&[key("meta_l", false)])?;
-        std::thread::sleep(SETTLE);
-        let closed = screen(&mut qmp, &dump)?;
+        let (closed, _) = screen_until(&mut qmp, &dump, |shown| stray(shown).0.is_empty())?;
 
         seen = Some(Seen {
             lines: watching
@@ -333,8 +448,16 @@ pub(crate) fn test_seat(args: &Args) -> Result<()> {
         let changed = differences(before, after);
         if changed == 0 {
             return Err(Error::new(format!(
-                "{arch}: the key reached the client and the screen did not change; \
-                 the client redraws on a key, so nothing it drew reached the card"
+                "{arch}: the key reached the client and the screen did not change within {}s; \
+                 the client redraws on a key, so nothing it drew reached the card",
+                SCREEN_PATIENCE.as_secs()
+            )));
+        }
+        if showing(after) != Showing::Gradient {
+            return Err(Error::new(format!(
+                "{arch}: the key reached the client and the screen changed, but never to the \
+                 gradient the client redraws to on a key within {}s",
+                SCREEN_PATIENCE.as_secs()
             )));
         }
         println!(
@@ -348,16 +471,8 @@ pub(crate) fn test_seat(args: &Args) -> Result<()> {
         // `cursor`), down and to the right of it. That is what is left, and
         // a check that asked for the background *everywhere* was written
         // before the cursor was drawn at all.
-        let tip = (closed.width / 2, closed.height / 2);
-        let (found, wrong) = mismatches(closed, BACKGROUND, usize::MAX);
-        let stray = found
-            .iter()
-            .filter(|(x, y, _)| {
-                x.saturating_sub(tip.0) >= CURSOR || y.saturating_sub(tip.1) >= CURSOR
-            })
-            .take(4)
-            .copied()
-            .collect::<Vec<_>>();
+        let tip = tip(closed);
+        let (stray, wrong) = stray(closed);
         if !stray.is_empty() {
             return Err(Error::new(format!(
                 "{arch}: `SUPER, Q, killactive` did not clear the screen; {} of {pixels} \
@@ -374,8 +489,74 @@ pub(crate) fn test_seat(args: &Args) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CONFIG, absolute, button, differences, key};
+    use super::{
+        BACKGROUND, CHECKERBOARD, CONFIG, Showing, absolute, button, differences, key, showing,
+        stray,
+    };
     use crate::display::Image;
+
+    /// A 64x64 screen whose every pixel is `paint(x, y)`.
+    fn painted(paint: impl Fn(usize, usize) -> [u8; 3]) -> Image {
+        let (width, height) = (64, 64);
+        let pixels = (0..width * height)
+            .flat_map(|index| paint(index % width, index / width))
+            .collect();
+        Image {
+            width,
+            height,
+            pixels,
+        }
+    }
+
+    /// The cursor's arrow, down and to the right of the middle.
+    fn with_cursor(x: usize, y: usize, under: [u8; 3]) -> [u8; 3] {
+        if (32..40).contains(&x) && (32..40).contains(&y) {
+            [0xFF, 0xFF, 0xFF]
+        } else {
+            under
+        }
+    }
+
+    #[test]
+    fn the_middle_of_the_screen_says_which_pattern_the_client_shows() {
+        let [light, dark] = CHECKERBOARD;
+        let checkerboard = |x: usize, y: usize| {
+            if (x / 16 + y / 16).is_multiple_of(2) {
+                light
+            } else {
+                dark
+            }
+        };
+        let gradient = |x: usize, y: usize| [(x / 2 * 8) as u8, (y / 16 * 8) as u8, 0xC0];
+        assert_eq!(showing(&painted(checkerboard)), Showing::Checkerboard);
+        // The cursor over it is left out.
+        assert_eq!(
+            showing(&painted(|x, y| with_cursor(x, y, checkerboard(x, y)))),
+            Showing::Checkerboard
+        );
+        assert_eq!(showing(&painted(gradient)), Showing::Gradient);
+        // The background alone, or one grey alone, is neither: a window not
+        // drawn yet is not the checkerboard.
+        assert_eq!(showing(&painted(|_, _| BACKGROUND)), Showing::Other);
+        assert_eq!(showing(&painted(|_, _| light)), Showing::Other);
+    }
+
+    #[test]
+    fn a_cleared_screen_is_the_background_but_the_cursor() {
+        let cleared = painted(|x, y| with_cursor(x, y, BACKGROUND));
+        let (found, wrong) = stray(&cleared);
+        assert!(found.is_empty());
+        assert_eq!(wrong, 64);
+        let [light, _] = CHECKERBOARD;
+        let left = painted(|x, y| {
+            if x < 8 {
+                light
+            } else {
+                with_cursor(x, y, BACKGROUND)
+            }
+        });
+        assert_eq!(stray(&left).0.len(), 4);
+    }
 
     #[test]
     fn an_event_is_the_json_qmp_takes() {
