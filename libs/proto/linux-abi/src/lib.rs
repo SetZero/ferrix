@@ -48,6 +48,7 @@ pub mod nr;
 pub mod socket;
 pub mod sound;
 pub mod types;
+pub mod user_desc;
 pub mod virtgpu;
 mod wire;
 

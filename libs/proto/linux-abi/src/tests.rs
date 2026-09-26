@@ -3300,8 +3300,17 @@ fn the_i386_numbers_are_the_headers_and_mean_what_arm_means() {
         assert!(from_i386(constant).is_some(), "{constant} translates");
         assert_eq!(from_i386(constant), from_arm(on_arm), "i386 {constant}");
     }
+    // The two thread-area calls exist only here, so ARMv7-A has nothing to
+    // compare them with; their numbers are the header's.
+    assert_eq!((i386::SET_THREAD_AREA, i386::GET_THREAD_AREA), (243, 244));
+    assert_eq!(from_i386(243), Some(Syscall::SetThreadArea));
+    assert_eq!(from_i386(244), Some(Syscall::GetThreadArea));
     let translated = (0..I386_END).filter(|&nr| from_i386(nr).is_some()).count();
-    assert_eq!(translated, table.len(), "no i386 number is mapped unread");
+    assert_eq!(
+        translated,
+        table.len() + 2,
+        "no i386 number is mapped unread"
+    );
     // The numbers x86-64 gives these calls are other calls, or none, on
     // i386: `int $0x80` from a 64-bit program is an i386 call, so the two
     // tables must never be confused.
@@ -3311,4 +3320,107 @@ fn the_i386_numbers_are_the_headers_and_mean_what_arm_means() {
         "x86-64's write is i386's exit"
     );
     assert_eq!(from_i386(39), None, "x86-64's getpid is i386's mkdir");
+}
+
+// -- struct user_desc ---------------------------------------------------------
+
+/// musl's own request, from `src/thread/i386/__set_thread_area.s`: entry -1,
+/// its thread block as the base, limit 0xfffff, flags 0x51. The descriptor
+/// is `fill_ldt`'s, worked by hand: access 0xf3 (present, ring 3, data,
+/// writable, accessed), flags 0xd (page-granular, 32-bit, available).
+#[test]
+fn musls_thread_segment_encodes_as_linux_encodes_it() {
+    use crate::user_desc::{ANY_ENTRY, UserDesc};
+    let mut bytes = [0_u8; 16];
+    bytes[0..4].copy_from_slice(&u32::MAX.to_le_bytes());
+    bytes[4..8].copy_from_slice(&0x1234_5678_u32.to_le_bytes());
+    bytes[8..12].copy_from_slice(&0x000f_ffff_u32.to_le_bytes());
+    bytes[12..16].copy_from_slice(&0x51_u32.to_le_bytes());
+    let desc = UserDesc::from_bytes(&bytes).unwrap();
+    assert_eq!(desc.entry_number, ANY_ENTRY);
+    assert!(desc.seg_32bit && desc.limit_in_pages && desc.useable);
+    assert!(!desc.read_exec_only && !desc.seg_not_present && desc.contents == 0);
+    assert!(!desc.clears());
+    let descriptor = desc.to_descriptor().unwrap();
+    assert_eq!(descriptor, 0x12df_f334_5678_ffff);
+    // And back, as get_thread_area reads it.
+    let read = UserDesc::from_descriptor(12, descriptor);
+    assert_eq!(
+        read,
+        UserDesc {
+            entry_number: 12,
+            ..desc
+        }
+    );
+    let mut expected = bytes;
+    expected[0..4].copy_from_slice(&12_u32.to_le_bytes());
+    assert_eq!(read.to_bytes(), expected);
+    // `lm`, bit 7, is a 32-bit program's garbage and changes nothing.
+    bytes[12] |= 0x80;
+    assert_eq!(UserDesc::from_bytes(&bytes).unwrap(), desc);
+}
+
+/// `tls_desc_okay`'s refusals, its two ways of emptying an entry, and an
+/// empty entry reading back in the shape that empties one.
+#[test]
+fn thread_area_descriptors_are_refused_and_cleared_as_linux_does() {
+    use crate::user_desc::{Refused, UserDesc, tls_index};
+    let data = UserDesc {
+        entry_number: 13,
+        base_addr: 0x4000,
+        limit: 0xfffff,
+        seg_32bit: true,
+        contents: 0,
+        read_exec_only: false,
+        limit_in_pages: true,
+        seg_not_present: false,
+        useable: false,
+    };
+    assert!(data.to_descriptor().is_ok());
+    for refused in [
+        UserDesc {
+            seg_32bit: false,
+            ..data
+        },
+        UserDesc {
+            contents: 2,
+            ..data
+        },
+        UserDesc {
+            contents: 3,
+            ..data
+        },
+        UserDesc {
+            seg_not_present: true,
+            ..data
+        },
+    ] {
+        assert_eq!(refused.to_descriptor(), Err(Refused), "{refused:?}");
+    }
+    // Expand-down data is data, and allowed.
+    assert!(
+        UserDesc {
+            contents: 1,
+            ..data
+        }
+        .to_descriptor()
+        .is_ok()
+    );
+
+    let zero = UserDesc::from_bytes(&[0; 16]).unwrap();
+    assert!(zero.clears());
+    assert_eq!(zero.to_descriptor(), Ok(0));
+    let empty = UserDesc::from_descriptor(14, 0);
+    assert!(empty.read_exec_only && empty.seg_not_present && !empty.seg_32bit);
+    assert!(
+        empty.clears(),
+        "an emptied entry reads back as a request to empty one"
+    );
+
+    assert_eq!(UserDesc::from_bytes(&[0; 15]), None);
+    assert_eq!(
+        (tls_index(11), tls_index(12), tls_index(14), tls_index(15)),
+        (None, Some(0), Some(2), None)
+    );
+    assert_eq!(tls_index(u32::MAX), None);
 }

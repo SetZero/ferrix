@@ -1650,6 +1650,10 @@ pub mod i386 {
     pub const GETEGID32: usize = 202;
     /// Return the calling thread's identifier.
     pub const GETTID: usize = 224;
+    /// Install a thread-local segment descriptor.
+    pub const SET_THREAD_AREA: usize = 243;
+    /// Read a thread-local segment descriptor back.
+    pub const GET_THREAD_AREA: usize = 244;
     /// Terminate every thread in the process.
     pub const EXIT_GROUP: usize = 252;
     /// Duplicate a file descriptor onto a chosen number, with flags.
@@ -2177,6 +2181,13 @@ pub enum Syscall {
     /// write the register itself, so setting up thread-local storage is a call
     /// into the kernel.
     ArmSetTls,
+    /// Install one of the calling thread's three thread-local segment
+    /// descriptors from a `struct user_desc`. i386 only: its thread pointer
+    /// is a segment (`docs/I386.md` §3.5).
+    SetThreadArea,
+    /// Read one of the calling thread's thread-local segment descriptors back
+    /// as a `struct user_desc`. i386 only.
+    GetThreadArea,
     /// Make a range of memory coherent between the data and instruction caches.
     /// ARMv7-A only. Unlike x86-64 and AArch64, a 32-bit ARM userspace cannot
     /// reach the cache maintenance operations, so anything that writes code — a
@@ -3349,6 +3360,8 @@ pub fn from_i386(nr: usize) -> Option<Syscall> {
         i386::GETEUID32 => Syscall::Geteuid,
         i386::GETEGID32 => Syscall::Getegid,
         i386::GETTID => Syscall::Gettid,
+        i386::SET_THREAD_AREA => Syscall::SetThreadArea,
+        i386::GET_THREAD_AREA => Syscall::GetThreadArea,
         i386::EXIT_GROUP => Syscall::ExitGroup,
         i386::DUP3 => Syscall::Dup3,
         _ => return None,
