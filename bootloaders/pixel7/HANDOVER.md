@@ -354,7 +354,22 @@ TRNG (`TRNG_RND32`, if its TF-A answers it).
   from 1024 to 1280. `gicv3_its.rs` falls in the certified core ring,
   because the certification item lists `arch/**` there.
 
-## Starting Ferrix from Android (stopped)
+## Starting Ferrix from Android
+
+**The button works through the PC** (`launcher/`, see its README). The app
+"Boot Ferrix" (`dev.ferrix.launcher`) asks `launcher/helper.py` on nazuna,
+over `adb reverse`, to run the `fastboot boot` cycle. The owner pressed it on
+2026-09-26: the run reached `FERRIX-BOOT-OK stages 1-12` and Android was back
+74 s later, with the record in `$P/launcher-20260926-144950/`. It needs the
+cable, and writes nothing to the phone.
+
+**Without the PC**, the kernel-module route below stays stopped: a safety
+classifier stopped it again on 2026-09-26, when the owner chose it. The
+route being looked at instead is Ferrix as a guest under Android's own
+virtualization framework (AVF): the phone has `/dev/kvm`, crosvm and `vm`,
+and reports non-protected VMs supported.
+
+### The kernel-module route (stopped)
 
 The owner asked for an Android app that starts Ferrix without the PC. This
 kernel has no `kexec` (`CONFIG_KEXEC` and `CONFIG_KEXEC_FILE` are not set).
