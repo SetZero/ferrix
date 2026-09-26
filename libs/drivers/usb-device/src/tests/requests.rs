@@ -345,8 +345,13 @@ fn get_status() {
     );
     assert_eq!(
         ask(&mut port, 0x81, 0, 0, 2, 2),
+        Got::In(vec![0, 0]),
+        "interface 2, adb's"
+    );
+    assert_eq!(
+        ask(&mut port, 0x81, 0, 0, 3, 2),
         Got::Stall,
-        "no interface 2"
+        "no interface 3"
     );
     assert_eq!(
         ask(&mut port, 0x82, 0, 0, 0x00, 2),
@@ -360,8 +365,13 @@ fn get_status() {
     );
     assert_eq!(
         ask(&mut port, 0x82, 0, 0, 0x83, 2),
+        Got::In(vec![0, 0]),
+        "adb's bulk IN"
+    );
+    assert_eq!(
+        ask(&mut port, 0x82, 0, 0, 0x84, 2),
         Got::Stall,
-        "no endpoint 0x83"
+        "no endpoint 0x84"
     );
     let mut port = addressed();
     assert_eq!(
@@ -441,8 +451,13 @@ fn interfaces() {
     );
     assert_eq!(
         ask(&mut port, 0x81, 10, 0, 2, 1),
+        Got::In(vec![0]),
+        "GET_INTERFACE 2, adb's"
+    );
+    assert_eq!(
+        ask(&mut port, 0x81, 10, 0, 3, 1),
         Got::Stall,
-        "no interface 2"
+        "no interface 3"
     );
     assert_eq!(
         ask(&mut port, 0x01, 11, 0, 1, 0),

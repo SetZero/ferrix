@@ -1,6 +1,6 @@
 //! Where everything the controller reads or writes lives in the DMA area.
 //!
-//! Seven pages, [`AREA_BYTES`]. Nothing crosses a page, so a pin that gives
+//! Nine pages, [`AREA_BYTES`]. Nothing crosses a page, so a pin that gives
 //! the area a page at a time, wherever each page is, is all the controller
 //! needs:
 //!
@@ -13,7 +13,7 @@
 //! * page 2: the SETUP packet, in a line of its own because the controller
 //!   writes it while the processor may be writing the data buffer, and
 //!   endpoint 0's data buffer;
-//! * pages 3 to 6: a page for each of [`MAX_ENDPOINTS`] other endpoints --
+//! * pages 3 to 8: a page for each of [`MAX_ENDPOINTS`] other endpoints --
 //!   a ring of bytes waiting to go for an IN endpoint, the packet being
 //!   received for an OUT one.
 
@@ -24,8 +24,9 @@ pub const PAGE: usize = 4096;
 /// The processor's cache line, for the Cortex-A55, A76 and X1 alike. Every
 /// piece the controller writes starts on one and fills whole ones.
 pub const CACHE_LINE: usize = 64;
-/// How many endpoints besides endpoint 0 there are places for.
-pub const MAX_ENDPOINTS: usize = 4;
+/// How many endpoints besides endpoint 0 there are places for: the serial
+/// port's three and adb's two, and one to spare.
+pub const MAX_ENDPOINTS: usize = 6;
 
 /// The event buffer.
 pub const EVENTS: usize = 0;

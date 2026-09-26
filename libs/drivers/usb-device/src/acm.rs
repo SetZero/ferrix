@@ -67,6 +67,14 @@ pub const NOTIFY_IN: u8 = 0x81;
 pub const DATA_OUT: u8 = 0x02;
 /// The data endpoint the host reads from: bulk IN 2.
 pub const DATA_IN: u8 = 0x82;
+/// The adb interface: the third, beside the serial port's two
+/// (`docs/ADB.md` §4, step 3). The host's `adb` finds it by its class,
+/// whatever the vendor.
+pub const ADB_INTERFACE: u8 = 2;
+/// adb's bulk OUT endpoint: the host's messages.
+pub const ADB_OUT: u8 = 0x03;
+/// adb's bulk IN endpoint: the device's.
+pub const ADB_IN: u8 = 0x83;
 
 /// The control endpoint's packet size, at both speeds.
 pub const CONTROL_PACKET: u8 = 64;
@@ -104,6 +112,11 @@ const SUBCLASS_ACM: u8 = 0x02;
 const PROTOCOL_V250: u8 = 0x01;
 /// The data interface class.
 const CLASS_DATA: u8 = 0x0A;
+/// adb's interface: vendor-specific class, subclass `0x42`, protocol 1, as
+/// AOSP's `ADB_CLASS`, `ADB_SUBCLASS` and `ADB_PROTOCOL` are.
+const CLASS_VENDOR: u8 = 0xFF;
+const SUBCLASS_ADB: u8 = 0x42;
+const PROTOCOL_ADB: u8 = 0x01;
 /// ACM's capabilities: line coding and control line state requests, and the
 /// serial state notification (PSTN 1.2 table 4).
 const ACM_CAPABILITIES: u8 = 0x02;
@@ -113,7 +126,7 @@ pub const DEVICE_BYTES: usize = 18;
 /// The device qualifier's.
 pub const QUALIFIER_BYTES: usize = 10;
 /// The configuration descriptor's, with everything under it.
-pub const CONFIGURATION_BYTES: usize = 75;
+pub const CONFIGURATION_BYTES: usize = 98;
 
 /// The device descriptor.
 pub const DEVICE: [u8; DEVICE_BYTES] = {
@@ -164,26 +177,74 @@ pub const FULL_SPEED_CONFIGURATION: [u8; CONFIGURATION_BYTES] =
     configuration(FULL_SPEED_BULK, FULL_SPEED_NOTIFY_INTERVAL);
 
 /// The endpoints the configuration enables at high speed.
-pub const HIGH_SPEED_ENDPOINTS: [EndpointInfo; 3] =
+pub const HIGH_SPEED_ENDPOINTS: [EndpointInfo; 5] =
     endpoints(HIGH_SPEED_BULK, HIGH_SPEED_NOTIFY_INTERVAL);
 /// The same at full speed.
-pub const FULL_SPEED_ENDPOINTS: [EndpointInfo; 3] =
+pub const FULL_SPEED_ENDPOINTS: [EndpointInfo; 5] =
     endpoints(FULL_SPEED_BULK, FULL_SPEED_NOTIFY_INTERVAL);
 
 /// The configuration, with bulk packets of `bulk` bytes and notifications
-/// every `interval`.
+/// every `interval`: the serial port's descriptors, then adb's.
 const fn configuration(bulk: u16, interval: u8) -> [u8; CONFIGURATION_BYTES] {
+    let serial = serial_function(bulk, interval);
+    let adb = adb_function(bulk);
+    let mut whole = [0; CONFIGURATION_BYTES];
+    let (head, tail) = whole.split_at_mut(SERIAL_FUNCTION_BYTES);
+    head.copy_from_slice(&serial);
+    tail.copy_from_slice(&adb);
+    whole
+}
+
+/// The serial port's share of the configuration: the configuration
+/// descriptor itself, and the ACM function under it.
+const SERIAL_FUNCTION_BYTES: usize = 75;
+/// adb's share: an interface and its two endpoints.
+const ADB_FUNCTION_BYTES: usize = CONFIGURATION_BYTES - SERIAL_FUNCTION_BYTES;
+
+/// adb's interface and endpoints, with bulk packets of `bulk` bytes.
+const fn adb_function(bulk: u16) -> [u8; ADB_FUNCTION_BYTES] {
+    let [bulk_low, bulk_high] = bulk.to_le_bytes();
+    [
+        // Interface 2: adb, two bulk endpoints.
+        9,
+        crate::setup::INTERFACE,
+        ADB_INTERFACE,
+        0,
+        2,
+        CLASS_VENDOR,
+        SUBCLASS_ADB,
+        PROTOCOL_ADB,
+        0,
+        7,
+        crate::setup::ENDPOINT,
+        ADB_OUT,
+        0x02,
+        bulk_low,
+        bulk_high,
+        0,
+        7,
+        crate::setup::ENDPOINT,
+        ADB_IN,
+        0x02,
+        bulk_low,
+        bulk_high,
+        0,
+    ]
+}
+
+/// The configuration descriptor and the serial port's function.
+const fn serial_function(bulk: u16, interval: u8) -> [u8; SERIAL_FUNCTION_BYTES] {
     let [bulk_low, bulk_high] = bulk.to_le_bytes();
     let [notify_low, notify_high] = NOTIFY_PACKET.to_le_bytes();
     let [total_low, total_high] = (CONFIGURATION_BYTES as u16).to_le_bytes();
     [
-        // Configuration 1: two interfaces, self-powered (the phone has its
-        // battery), 2 mA from the bus.
+        // Configuration 1: three interfaces, self-powered (the phone has
+        // its battery), 2 mA from the bus.
         9,
         crate::setup::CONFIGURATION,
         total_low,
         total_high,
-        2,
+        3,
         1,
         0,
         0xC0,
@@ -267,7 +328,7 @@ const fn configuration(bulk: u16, interval: u8) -> [u8; CONFIGURATION_BYTES] {
     ]
 }
 
-const fn endpoints(bulk: u16, interval: u8) -> [EndpointInfo; 3] {
+const fn endpoints(bulk: u16, interval: u8) -> [EndpointInfo; 5] {
     [
         EndpointInfo {
             address: NOTIFY_IN,
@@ -283,6 +344,18 @@ const fn endpoints(bulk: u16, interval: u8) -> [EndpointInfo; 3] {
         },
         EndpointInfo {
             address: DATA_IN,
+            kind: TransferKind::Bulk,
+            max_packet: bulk,
+            interval: 0,
+        },
+        EndpointInfo {
+            address: ADB_OUT,
+            kind: TransferKind::Bulk,
+            max_packet: bulk,
+            interval: 0,
+        },
+        EndpointInfo {
+            address: ADB_IN,
             kind: TransferKind::Bulk,
             max_packet: bulk,
             interval: 0,

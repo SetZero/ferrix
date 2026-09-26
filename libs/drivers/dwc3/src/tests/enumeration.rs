@@ -86,8 +86,8 @@ fn enumerates_like_linux() {
     );
     let active = Regs(rig.model.clone()).read32(DALEPENA);
     assert_eq!(
-        active, 0b11_1011,
-        "endpoint 0 both ways, 0x81, 0x02 and 0x82"
+        active, 0b1111_1011,
+        "endpoint 0 both ways, 0x81, 0x02 and 0x82, and adb's 0x03 and 0x83"
     );
 }
 

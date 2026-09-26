@@ -63,7 +63,7 @@ use crate::{Clock, Dma, MILLISECOND, Registers};
 /// Where each page of the area is, as the controller sees it: scattered,
 /// out of order, and some above 4 GiB, so both halves of every pointer
 /// matter.
-pub(super) const PAGES: [u64; 7] = [
+pub(super) const PAGES: [u64; 9] = [
     0x9700_2000,
     0x1_0004_0000,
     0x9700_0000,
@@ -71,6 +71,8 @@ pub(super) const PAGES: [u64; 7] = [
     0x9700_5000,
     0x1_0000_1000,
     0x9700_7000,
+    0x3_0000_9000,
+    0x9700_c000,
 ];
 
 /// The core's ID: `DWC_usb31`, as the phone's `GSNPSID` reads.

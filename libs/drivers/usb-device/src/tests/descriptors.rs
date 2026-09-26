@@ -4,8 +4,8 @@ use std::vec::Vec;
 
 use crate::TransferKind;
 use crate::acm::{
-    CONFIGURATION_BYTES, DATA_IN, DATA_OUT, DEVICE, FULL_SPEED_CONFIGURATION, FULL_SPEED_ENDPOINTS,
-    HIGH_SPEED_CONFIGURATION, HIGH_SPEED_ENDPOINTS, NOTIFY_IN, QUALIFIER,
+    ADB_IN, ADB_OUT, CONFIGURATION_BYTES, DATA_IN, DATA_OUT, DEVICE, FULL_SPEED_CONFIGURATION,
+    FULL_SPEED_ENDPOINTS, HIGH_SPEED_CONFIGURATION, HIGH_SPEED_ENDPOINTS, NOTIFY_IN, QUALIFIER,
 };
 
 /// A configuration split at each descriptor's `bLength`.
@@ -78,13 +78,16 @@ fn check_configuration(configuration: &[u8], bulk: u16, interval: u8) {
             (9, 4),
             (7, 5),
             (7, 5),
+            (9, 4),
+            (7, 5),
+            (7, 5),
         ],
         "the descriptors in order"
     );
 
     let c = parts[0];
     assert_eq!(usize::from(word(c, 2)), CONFIGURATION_BYTES, "wTotalLength");
-    assert_eq!(c[4], 2, "bNumInterfaces");
+    assert_eq!(c[4], 3, "bNumInterfaces: the serial port's two and adb's");
     assert_eq!(c[5], 1, "bConfigurationValue");
     assert_eq!(c[6], 0, "iConfiguration");
     assert_eq!(c[7], 0xC0, "bmAttributes: reserved bit 7, self-powered");
@@ -116,7 +119,18 @@ fn check_configuration(configuration: &[u8], bulk: u16, interval: u8) {
         [1, 0, 2, 0x0A, 0, 0, 0],
         "interface 1, data class"
     );
-    for (part, address) in [(parts[9], DATA_OUT), (parts[10], DATA_IN)] {
+    let adb = parts[11];
+    assert_eq!(
+        &adb[2..],
+        [2, 0, 2, 0xFF, 0x42, 0x01, 0],
+        "interface 2, adb's class, subclass and protocol, as AOSP's"
+    );
+    for (part, address) in [
+        (parts[9], DATA_OUT),
+        (parts[10], DATA_IN),
+        (parts[12], ADB_OUT),
+        (parts[13], ADB_IN),
+    ] {
         assert_eq!(part[2], address, "bEndpointAddress");
         assert_eq!(part[3], 2, "bulk");
         assert_eq!(word(part, 4), bulk, "wMaxPacketSize");
