@@ -26,6 +26,8 @@
 //! into anything but a pipe, `sendfile` from a pipe, a socket, a terminal or an
 //! anonymous object is `EINVAL`, and into a pipe, where Linux splices without
 //! that rule, from a pipe or an anonymous object, which have no `splice_read`.
+//! Nor do `/dev/null`, the DRM and event devices, or most of a process's
+//! procfs files, and those are `EINVAL` into anything (`splices_out`).
 //!
 //! ARMv7-A numbers only `sendfile64`, whose offset is a 64-bit `loff_t` like
 //! the 64-bit architectures' `off_t`, so every offset read here is eight bytes.
@@ -207,14 +209,33 @@ fn transfer(
 /// Ferrix used to copy from all of them, and to lose what a short write left
 /// of a pipe's bytes.
 ///
-/// Not matched: `/dev/null`, which Linux refuses into a pipe and for a count
-/// above zero into anything, having no `splice_read`, is sent from here as the
-/// empty stream it reads as.
+/// A file with no `splice_read` of its own ([`splices_out`]) is refused the
+/// same way into anything, for a count above zero: `/dev/null`, whose read is
+/// end of file, and the procfs files Linux reads through `seq_read`, which
+/// used to be sent from here as the files they read as.
 fn refuses_input(input: &OpenFile, output: &OpenFile, count: u64) -> bool {
-    if !fs::pipe::is_pipe(output) {
-        return !input.takes_offsets();
+    if !fs::pipe::is_pipe(output) && !input.takes_offsets() {
+        return true;
     }
-    count > 0 && (fs::pipe::is_pipe(input) || (input.is_stream() && fs::anon::holds(input)))
+    count > 0 && !splices_out(input)
+}
+
+/// Whether Linux's file for `input` has a `splice_read`, which `sendfile`
+/// and `splice` read through: a pipe and a stream on the anonymous
+/// filesystem have none, and an object says for itself
+/// ([`ferrix_vfs::Inode::splices_out`]). Measured on a 7.0 host, `sendfile`
+/// of five bytes from each of these is `EINVAL` into a file, a pipe and a
+/// Unix socket, and a count of zero is 0: `/dev/null`, a DRM render node and
+/// card, an event device, `/proc/net/{arp,dev,route,tcp,udp,tcp6,udp6}`,
+/// and `/proc/self/{status,stat,comm,cmdline,maps,cgroup,oom_score_adj}`
+/// and a thread's `status`, `stat` and `comm`. `/proc/self/mounts`, every
+/// other top-level `/proc` file, every value under `/proc/sys`, and sysfs and
+/// cgroupfs files send five, as `/dev/zero`, `full`, `random` and `urandom`
+/// do. `splice` into a pipe answers the same.
+fn splices_out(input: &OpenFile) -> bool {
+    !fs::pipe::is_pipe(input)
+        && !(input.is_stream() && fs::anon::holds(input))
+        && input.io().splices_out()
 }
 
 /// Move up to `count` bytes, a chunk at a time, stopping at end of file, at a
@@ -287,7 +308,8 @@ fn partial(done: usize, errno: Errno) -> Result<usize, Errno> {
 /// (`ESPIPE`), the offsets' memory (`EFAULT`), and each end's access mode
 /// (`EBADF`). Two ends of one pipe, two descriptors neither of which is a
 /// pipe, an offset on a stream, a negative offset, an output under
-/// `O_APPEND` and a directory as input are `EINVAL`.
+/// `O_APPEND`, a directory as input, and an input Linux cannot splice from
+/// ([`splices_out`]) are `EINVAL`.
 ///
 /// `SPLICE_F_NONBLOCK` makes the pipe side not wait, and so does
 /// `O_NONBLOCK` on the other descriptor, as Linux's `do_splice` has it; the
@@ -342,7 +364,7 @@ pub(crate) fn sys_splice(
         }
         (false, true) => {
             let mut at = position(&input, in_start)?;
-            if input.kind() == FileType::Directory {
+            if input.kind() == FileType::Directory || !splices_out(&input) {
                 return Err(Errno::EINVAL);
             }
             let nonblock = nonblock || input.status().nonblock;

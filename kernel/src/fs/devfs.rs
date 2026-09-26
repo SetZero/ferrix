@@ -840,6 +840,16 @@ impl Inode for Node {
         self.ignores_position()
     }
 
+    /// All but `/dev/null`, which Linux's `null_fops` give no `splice_read`,
+    /// so `sendfile` and `splice` from it are `EINVAL` for a count above
+    /// zero where a `read` is end of file. The nodes that open an object of
+    /// their own -- a card, a render node, an event device, a terminal --
+    /// answer through it.
+    fn splices_out(&self) -> bool {
+        self.device()
+            .is_none_or(|device| device.behaviour != Behaviour::Null)
+    }
+
     /// Disks are registered and dropped without the VFS being told, so a miss
     /// must not be remembered; the module's documentation says why this
     /// rather than invalidating.

@@ -636,6 +636,7 @@ impl Node {
     fn snapshot(&self) -> Result<Option<Snapshot>> {
         let metadata = self.metadata();
         let refusal = self.place.refusal();
+        let splices = self.splices();
         match self.place {
             Place::Top(tree) => match tree.entry().map(|(entry, _)| &entry.content) {
                 Some(Content::File { render, write }) => Ok(Some(Snapshot {
@@ -643,6 +644,7 @@ impl Node {
                     bytes: render(&())?,
                     write: write.map(|write| -> Writer { Box::new(move |data| write(&(), data)) }),
                     refusal,
+                    splices,
                 })),
                 _ => Ok(None),
             },
@@ -655,6 +657,7 @@ impl Node {
                         write: write
                             .map(|write| -> Writer { Box::new(move |data| write(&process, data)) }),
                         refusal,
+                        splices,
                     }))
                 }
                 _ => Ok(None),
@@ -670,12 +673,32 @@ impl Node {
                             write: write
                                 .map(|write| -> Writer { Box::new(move |data| write(&of, data)) }),
                             refusal,
+                            splices,
                         }))
                     }
                     _ => Ok(None),
                 }
             }
             _ => Ok(None),
+        }
+    }
+
+    /// Whether `sendfile` and `splice` may read an open of this file
+    /// ([`Inode::splices_out`]), as they may read Linux's where its file has
+    /// a `splice_read`. Measured on a 7.0 host: every top-level file and
+    /// every value under `/proc/sys` sends but those of `/proc/net`, which
+    /// are `EINVAL`; of a process's files only `mounts` sends, and of a
+    /// thread's none. Linux reads the ones that do not through `seq_read`,
+    /// which has no `read_iter` to splice from.
+    fn splices(&self) -> bool {
+        match self.place {
+            Place::Top(tree) => tree
+                .entry()
+                .is_some_and(|(entry, _)| !NET.iter().any(|net| core::ptr::eq(net, entry))),
+            Place::Entry(_, index) => PER_PROCESS
+                .get(index)
+                .is_some_and(|entry| entry.name == b"mounts"),
+            _ => false,
         }
     }
 
@@ -1132,6 +1155,8 @@ pub(crate) fn snapshot(
         bytes,
         write,
         refusal,
+        // kernfs gives every sysfs and cgroupfs file a `splice_read`.
+        splices: true,
     })
 }
 
@@ -1145,6 +1170,8 @@ struct Snapshot {
     write: Option<Writer>,
     /// What a write is refused with, for a file that takes none.
     refusal: Errno,
+    /// Whether `sendfile` and `splice` may read it, as `Node::splices` says.
+    splices: bool,
 }
 
 impl fmt::Debug for Snapshot {
@@ -1186,6 +1213,10 @@ impl Inode for Snapshot {
         let write = self.write.as_ref().ok_or(self.refusal)?;
         let count = write(data)?;
         Ok((count, offset.saturating_add(count as u64)))
+    }
+
+    fn splices_out(&self) -> bool {
+        self.splices
     }
 }
 

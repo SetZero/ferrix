@@ -15,6 +15,7 @@
 //! devtmpfs` go in by syscall number, as an init script's do, and are read
 //! through, listed in `/proc/mounts` and unmounted again.
 
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -2242,8 +2243,133 @@ fn check_proc_and_devtmpfs_mount(process: &Process, page: u64) -> Result<(), &'s
         )?;
     }
     check_a_second_procfs(process, page)?;
+    check_sendfile_takes_procfs_files_as_linux_does(process, page)?;
     check_a_second_devtmpfs(process, page)?;
     check_both_are_listed_and_unmount(process, page)
+}
+
+/// `sendfile` sends from the procfs files Linux's sends from, and refuses
+/// the rest and `/dev/null` for having no `splice_read`, as `splice` into a
+/// pipe does; measured on a 7.0 host (`syscall::pipe`'s `splices_out`).
+/// Through the second procfs: `version` and the check process's `mounts`
+/// send five bytes into a pipe and into a socket; its `status`, `net/dev`
+/// and the root's `/dev/null` are `EINVAL` into both and from `splice`, and
+/// 0 for a count of zero. These used to be sent from, `/dev/null` as the
+/// empty stream it reads as.
+fn check_sendfile_takes_procfs_files_as_linux_does(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    answers(
+        pipe::sys_pipe2(process, page + AT_FDS, O_NONBLOCK),
+        0,
+        "pipe2 for sendfile from procfs was refused",
+    )?;
+    let (reader, writer) = pair(process, page)?;
+    let (one, other) = stream_socket_pair(process, page)?;
+    let pid = process.pid();
+    let inputs = [
+        (String::from("/tmp/stage8-proc/version\0"), true),
+        (alloc::format!("/tmp/stage8-proc/{pid}/mounts\0"), true),
+        (alloc::format!("/tmp/stage8-proc/{pid}/status\0"), false),
+        (String::from("/tmp/stage8-proc/net/dev\0"), false),
+        (String::from("/dev/null\0"), false),
+    ];
+    let mut outcome = Ok(());
+    for (path, sends) in &inputs {
+        outcome = sendfile_from_a_generated_file(
+            process,
+            page,
+            path,
+            *sends,
+            [reader, writer, one, other],
+        );
+        if outcome.is_err() {
+            break;
+        }
+    }
+    for fd in [reader, writer, one, other] {
+        let _ = fd::sys_close(process, fd);
+    }
+    outcome
+}
+
+/// One input of [`check_sendfile_takes_procfs_files_as_linux_does`]: `path`
+/// sends five bytes into the pipe and the socket `fds` holds, or is refused
+/// into both.
+fn sendfile_from_a_generated_file(
+    process: &Process,
+    page: u64,
+    path: &str,
+    sends: bool,
+    fds: [i32; 4],
+) -> Result<(), &'static str> {
+    let [reader, writer, one, other] = fds;
+    uaccess::copy_to_user(process.space(), page + AT_STAT, path.as_bytes())
+        .map_err(|_| "could not stage a file to sendfile from")?;
+    let input = descriptor(
+        fd::sys_openat(process, AT_FDCWD, page + AT_STAT, O_RDONLY, 0),
+        "a procfs file or /dev/null would not open for sendfile",
+    )?;
+    let judged = if sends {
+        answers(
+            pipe::sys_sendfile(process, writer, input, 0, 5),
+            5,
+            "sendfile from /proc/version or /proc/<pid>/mounts into a pipe did not send",
+        )
+        .and_then(|()| {
+            answers(
+                file::sys_read(process, reader, page + AT_LISTING, 64),
+                5,
+                "sendfile from procfs into a pipe did not queue what it sent",
+            )
+        })
+        .and_then(|()| {
+            answers(
+                pipe::sys_sendfile(process, one, input, 0, 5),
+                5,
+                "sendfile from /proc/version or /proc/<pid>/mounts into a socket did not send",
+            )
+        })
+        .and_then(|()| {
+            answers(
+                file::sys_read(process, other, page + AT_LISTING, 64),
+                5,
+                "sendfile from procfs into a socket did not queue what it sent",
+            )
+        })
+    } else {
+        refuses(
+            pipe::sys_sendfile(process, writer, input, 0, 5),
+            Errno::EINVAL,
+            "sendfile from /proc/<pid>/status, /proc/net/dev or /dev/null into a pipe was not EINVAL",
+        )
+        .and_then(|()| {
+            refuses(
+                pipe::sys_sendfile(process, one, input, 0, 5),
+                Errno::EINVAL,
+                "sendfile from /proc/<pid>/status, /proc/net/dev or /dev/null into a socket was not \
+                 EINVAL",
+            )
+        })
+        .and_then(|()| {
+            refuses(
+                pipe::sys_splice(process, input, 0, writer, 0, 5, 0),
+                Errno::EINVAL,
+                "splice from /proc/<pid>/status, /proc/net/dev or /dev/null into a pipe was not \
+                 EINVAL",
+            )
+        })
+        .and_then(|()| {
+            answers(
+                pipe::sys_sendfile(process, writer, input, 0, 0),
+                0,
+                "sendfile of nothing from a file with no splice_read was not 0",
+            )
+        })
+    };
+    let _ = fd::sys_close(process, input);
+    judged
 }
 
 /// `mount -t proc` with the flags and an option: `self` in it answers as

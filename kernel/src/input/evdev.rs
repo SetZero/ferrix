@@ -95,6 +95,12 @@ impl Inode for EventFile {
         self
     }
 
+    /// Linux's event device has no `splice_read`: `sendfile` and `splice`
+    /// from it are `EINVAL`, into a pipe as into anything.
+    fn splices_out(&self) -> bool {
+        false
+    }
+
     fn is_stream(&self) -> bool {
         true
     }

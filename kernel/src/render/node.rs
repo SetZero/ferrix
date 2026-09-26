@@ -349,6 +349,12 @@ impl Inode for RenderFile {
         self
     }
 
+    /// Linux's DRM files have no `splice_read`: `sendfile` and `splice`
+    /// from one are `EINVAL`, into a pipe as into anything.
+    fn splices_out(&self) -> bool {
+        false
+    }
+
     fn is_stream(&self) -> bool {
         true
     }

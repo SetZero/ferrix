@@ -530,6 +530,22 @@ pub trait Inode: Send + Sync + fmt::Debug {
         self.ignores_position()
     }
 
+    /// Whether `sendfile` and `splice` may take bytes out of this object:
+    /// whether Linux's file for it has a `splice_read`, without which both
+    /// calls are `EINVAL` for any count above zero, whatever the output.
+    ///
+    /// Most files have one, and the default says so. Measured on a 7.0 host,
+    /// these do not: `/dev/null`; the event and DRM device nodes; the files
+    /// of `/proc/net`; and every file of `/proc/<pid>` and
+    /// `/proc/<pid>/task/<tid>` but `mounts` -- `status`, `stat`, `comm`,
+    /// `cmdline`, `maps`, `cgroup`, `oom_score_adj` -- which read through
+    /// `seq_read` rather than a `read_iter`. The rest of `/proc`, `/proc/sys`,
+    /// sysfs and cgroupfs send. A pipe and the anonymous objects have none
+    /// either; `sendfile` asks those by kind.
+    fn splices_out(&self) -> bool {
+        true
+    }
+
     /// Called when the inode is opened. `Some` replaces the object that reads
     /// and writes go to for the life of that open file, while `stat` keeps
     /// reporting this inode.
