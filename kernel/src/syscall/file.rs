@@ -161,7 +161,9 @@ pub(crate) fn sys_writev(
 ) -> Result<usize, Errno> {
     let file = fd::file(process, fd)?;
     let segments = read_iovecs(process, iov, entries)?;
-    if segments.is_empty() {
+    // Nothing to write asks nothing of the file, as Linux's `writev` does not:
+    // empty segments on /dev/full are 0, where `write` of nothing is ENOSPC.
+    if segments.iter().all(|&(_, len)| len == 0) {
         return if file.writable() {
             Ok(0)
         } else {
@@ -277,7 +279,14 @@ fn write_from(
     };
     let len = len.min(MAX_RW_COUNT);
     if len == 0 {
-        return empty_write(file, position);
+        empty_write(file, position)?;
+        // A memory device is asked, as Linux asks every file: /dev/full
+        // refuses even nothing, ENOSPC, and the others take it. It has no
+        // offset for `O_APPEND` to move, which is why no other file is.
+        if file.is_stream() && file.io().ignores_position() {
+            return write(0, &[]).map(|_| 0);
+        }
+        return Ok(0);
     }
     let mut buffer = bounce(len)?;
     let mut done = 0_u64;
@@ -306,15 +315,23 @@ fn write_from(
 
 /// A write of nothing: the checks a real write makes, and no call into the
 /// file, because under `O_APPEND` even an empty write would move the offset to
-/// the end, which Linux's does not.
-fn empty_write(file: &OpenFile, position: Position) -> Result<u64, Errno> {
+/// the end, which Linux's does not; and a pipe whose reader has gone would
+/// answer `EPIPE`, where Linux's answers 0.
+///
+/// Linux does ask the file, and each of its own answers for nothing. What
+/// those are was measured on this host's 7.0 for `write(fd, "", 0)` and
+/// `pwrite(fd, "", 0, 0)` alike: 0 on a regular file, with `O_APPEND` too,
+/// on a pipe and on one with no reader, on /dev/null and /dev/zero; ENOSPC
+/// on /dev/full; and `pwrite` on a pipe ESPIPE. `write_from` asks the memory
+/// devices, for /dev/full's answer.
+fn empty_write(file: &OpenFile, position: Position) -> Result<(), Errno> {
     if !file.writable() {
         return Err(Errno::EBADF);
     }
     if matches!(position, Position::At(_)) && !file.takes_offsets() {
         return Err(Errno::ESPIPE);
     }
-    Ok(0)
+    Ok(())
 }
 
 /// Read and check a program's `iovec` array: at most `IOV_MAX` entries, and a

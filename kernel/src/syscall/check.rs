@@ -4994,6 +4994,7 @@ mod paths {
                  node as a file with a position rather than as the device's stream",
             );
         }
+        check_a_write_of_nothing_asks_a_memory_device(p)?;
 
         for node in &UNANSWERED_NODES {
             let name = p.path(node.path)?;
@@ -5053,6 +5054,45 @@ mod paths {
             return Err("close of a device node's descriptor was refused");
         }
         took.map_err(|_| "readv of a character device was refused")
+    }
+
+    /// A write of nothing reaches a memory device, as it does on Linux, where
+    /// the device answers for itself: `write` and `pwrite64` of nothing are
+    /// ENOSPC on /dev/full and 0 on a node numbered as /dev/null, and
+    /// `writev` of an empty segment asks no file, so is 0 on /dev/full too.
+    /// Measured on a Linux 7.0 host.
+    fn check_a_write_of_nothing_asks_a_memory_device(
+        p: &mut Paths<'_>,
+    ) -> Result<(), &'static str> {
+        let word = size_of::<usize>() as u64;
+        let array = p.out + PAGE_SIZE / 2;
+        super::write_word(p.process, array, p.out)?;
+        super::write_word(p.process, array + word, 0)?;
+        for (path, answer) in [
+            (&b"/dev/full"[..], Err(Errno::ENOSPC)),
+            (NULL_NODE.path, Ok(0)),
+        ] {
+            let name = p.path(path)?;
+            let fd = p
+                .call(Syscall::Openat, [CWD, name, u64::from(O_WRONLY), 0, 0, 0])
+                .map_err(|_| "a memory device did not open for writing")?
+                as u64;
+            let wrote = p.call(Syscall::Write, [fd, p.out, 0, 0, 0, 0]);
+            let placed = p.call(Syscall::Pwrite64, [fd, p.out, 0, 0, 0, 0]);
+            let gathered = p.call(Syscall::Writev, [fd, array, 1, 0, 0, 0]);
+            if p.call(Syscall::Close, [fd, 0, 0, 0, 0, 0]) != Ok(0) {
+                return Err("close of a memory device's descriptor was refused");
+            }
+            if wrote != answer || placed != answer {
+                return Err(
+                    "a write of nothing to a memory device did not answer as the device does",
+                );
+            }
+            if gathered != Ok(0) {
+                return Err("writev of an empty segment to a memory device was not 0");
+            }
+        }
+        Ok(())
     }
 
     /// `unlinkat` removes names, with and without `AT_REMOVEDIR`, and refuses
