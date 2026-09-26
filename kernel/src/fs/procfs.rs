@@ -59,6 +59,7 @@
 //! is promised, as nothing is on Linux.
 
 pub(crate) mod check;
+pub(crate) mod loadavg;
 mod render;
 
 /// The kernel command line, kept at boot for `/proc/cmdline`: the loader's
@@ -269,7 +270,7 @@ static NET: [Entry<Kernel>; 7] = [
 ];
 
 /// `/proc`, less the process directories that follow these in a listing.
-pub(crate) static TOP: [Entry<Kernel>; 13] = [
+pub(crate) static TOP: [Entry<Kernel>; 14] = [
     Entry {
         name: b"self",
         permissions: 0o777,
@@ -278,6 +279,7 @@ pub(crate) static TOP: [Entry<Kernel>; 13] = [
     file(b"cmdline", render::cmdline_file),
     file(b"cpuinfo", render::cpuinfo),
     file(b"filesystems", render::filesystems),
+    file(b"loadavg", render::loadavg),
     file(b"meminfo", render::meminfo),
     file(b"mounts", render::mounts),
     reporting_directory(b"net", &NET),

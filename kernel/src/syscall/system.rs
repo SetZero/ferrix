@@ -246,10 +246,15 @@ const _: () = assert!(
 
 /// Where each field of `struct sysinfo` is, in native words, from the same
 /// `offsetof` check: `procs` at 80 or 40, `mem_unit` at 104 or 52.
+/// Fractional bits in `sysinfo`'s loads: Linux's `SI_LOAD_SHIFT`.
+const SI_LOAD_SHIFT: u32 = 16;
+
 pub(crate) mod sysinfo_at {
     use super::WORD;
     /// `uptime`.
     pub(crate) const UPTIME: usize = 0;
+    /// `loads[3]`, three words.
+    pub(crate) const LOADS: usize = WORD;
     /// `totalram`.
     pub(crate) const TOTALRAM: usize = WORD * 4;
     /// `freeram`.
@@ -263,7 +268,9 @@ pub(crate) mod sysinfo_at {
 /// `sysinfo`.
 ///
 /// The memory counts are the frame allocator's, which is what `free` prints.
-/// Load averages, shared and buffer memory, swap and high memory are zero
+/// The load averages are `/proc/loadavg`'s, in sixteen fractional bits
+/// (`SI_LOAD_SHIFT`) rather than its eleven, which is what `getloadavg`
+/// divides by. Shared and buffer memory, swap and high memory are zero
 /// because none of them exists here.
 ///
 /// `mem_unit` is chosen as `kernel/sys.c`'s `do_sysinfo` chooses it: bytes
@@ -312,6 +319,14 @@ pub(crate) fn sys_sysinfo(process: &Process, at: u64) -> Result<usize, Errno> {
         sysinfo_at::FREERAM,
         word(free).get(..WORD).unwrap_or_default(),
     );
+    let (_, loads) = crate::fs::procfs::loadavg::now();
+    for (index, load) in loads.into_iter().enumerate() {
+        let shifted = load << (SI_LOAD_SHIFT - ferrix_procfs::loadavg::FSHIFT);
+        put(
+            sysinfo_at::LOADS + index * WORD,
+            word(shifted).get(..WORD).unwrap_or_default(),
+        );
+    }
     put(sysinfo_at::PROCS, &procs.to_le_bytes());
     put(sysinfo_at::MEM_UNIT, &unit.to_le_bytes());
     uaccess::copy_to_user(process.space(), at, buffer).map_err(|_| Errno::EFAULT)?;

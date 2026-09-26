@@ -7546,14 +7546,19 @@ fn all_are(bytes: &[u8], from: usize, to: usize, value: u8) -> bool {
 }
 
 /// `sysinfo` writes exactly `struct sysinfo`, its memory counts are the frame
-/// allocator's in the unit it names, and every field it has nothing for is
-/// zero rather than whatever the buffer held.
+/// allocator's in the unit it names, its loads are the load average's, and
+/// every field it has nothing for is zero rather than whatever the buffer
+/// held.
 fn check_sysinfo_describes_the_machine(process: &Process, page: u64) -> Result<(), &'static str> {
     use crate::syscall::system::{SYSINFO_SIZE, sysinfo_at};
     const WORD: usize = size_of::<usize>();
 
     poison_user(process, page, 128)?;
+    // The averages on either side of the call: a fold falls between them
+    // at most once, every five seconds.
+    let (_, before) = crate::fs::procfs::loadavg::now();
     answers(system::sys_sysinfo(process, page), 0, "sysinfo was refused")?;
+    let (_, after) = crate::fs::procfs::loadavg::now();
     let out: [u8; 128] = read_user(process, page)?;
 
     let unit = le_at(&out, sysinfo_at::MEM_UNIT, 4);
@@ -7574,10 +7579,22 @@ fn check_sysinfo_describes_the_machine(process: &Process, page: u64) -> Result<(
     if le_at(&out, sysinfo_at::PROCS, 2) == 0 {
         return Err("sysinfo counted no processes while this one is registered");
     }
-    // Loads; shared, buffer and swap; the padding after procs; high memory;
-    // and the tail after mem_unit. All zero, and all written.
+    // The loads, in sixteen fractional bits where the averages have eleven.
+    let shift = 16 - ferrix_procfs::loadavg::FSHIFT;
+    let loads = |averages: [u64; 3]| {
+        (0..3).all(|index| {
+            let word = le_at(&out, sysinfo_at::LOADS + index * WORD, WORD);
+            averages
+                .get(index)
+                .is_some_and(|&load| word == load << shift)
+        })
+    };
+    if !loads(before) && !loads(after) {
+        return Err("sysinfo's loads are not the load average's");
+    }
+    // Shared, buffer and swap; the padding after procs; high memory; and the
+    // tail after mem_unit. All zero, and all written.
     let zero = [
-        (WORD, WORD * 4),
         (WORD * 6, WORD * 10),
         (sysinfo_at::PROCS + 2, WORD * 11),
         (WORD * 11, WORD * 13),

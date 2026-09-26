@@ -14,6 +14,7 @@ use ferrix_bootinfo::{Arch, PAGE_SIZE};
 use ferrix_net::IpAddress;
 use ferrix_procfs::filesystems::{self, Filesystem};
 use ferrix_procfs::kstat::{self, CpuTimes, Kstat};
+use ferrix_procfs::loadavg::{self as loadavg_text, Loadavg};
 use ferrix_procfs::maps::{self, Mapping, Width};
 use ferrix_procfs::meminfo::{self, Meminfo};
 use ferrix_procfs::mounts::{self, Mount};
@@ -121,6 +122,27 @@ pub(super) fn filesystems(_: &Kernel) -> Result<Vec<u8>> {
     ] {
         filesystems::render(&mut out, &Filesystem { name, nodev });
     }
+    Ok(out)
+}
+
+/// `/proc/loadavg`: the averages (`super::loadavg`), the runnable tasks,
+/// the live processes -- Linux counts threads there, and a process is what
+/// this kernel keeps a count of -- and the last task number made.
+pub(super) fn loadavg(_: &Kernel) -> Result<Vec<u8>> {
+    let (running, loads) = super::loadavg::now();
+    let total = crate::object::process::live()
+        .map(|live| live.len() as u64)
+        .map_err(|_| Errno::ENOMEM)?;
+    let mut out = Vec::new();
+    loadavg_text::render(
+        &mut out,
+        &Loadavg {
+            loads,
+            running,
+            total,
+            last: sched::tasks_made(),
+        },
+    );
     Ok(out)
 }
 

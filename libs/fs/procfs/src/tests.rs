@@ -10,6 +10,7 @@ use alloc::vec::Vec;
 
 use crate::filesystems::{self, Filesystem};
 use crate::kstat::{self, CpuTimes, Kstat};
+use crate::loadavg::{self, Averages, FIXED_1, Loadavg};
 use crate::maps::{self, Mapping, Width};
 use crate::meminfo::{self, Meminfo};
 use crate::mounts::{self, Mount};
@@ -932,4 +933,50 @@ fn a_file_with_no_rows_is_its_header_and_nothing_else() {
     assert_eq!(net_text(|out| tcp(out, no_sockets)).lines().count(), 1);
     assert_eq!(net_text(|out| udp(out, no_sockets)).lines().count(), 1);
     assert_eq!(net_text(|out| arp(out, no_neighbours)).lines().count(), 1);
+}
+
+/// `fs/proc/loadavg.c`'s line, derived: the averages are the ones btop showed
+/// for nazuna on 2026-09-27, and the fixed-point loads are the ones that
+/// print as them.
+#[test]
+fn loadavg_is_linuxs_line() {
+    let line = b"46.49 41.04 37.76 3/2104 3474930\n";
+    // 46.49 is 95211/2048 once `hundredths` adds its rounding.
+    let loads = [95_211, 84_050, 77_332];
+    let got = rendered(|out| {
+        loadavg::render(
+            out,
+            &Loadavg {
+                loads,
+                running: 3,
+                total: 2104,
+                last: 3_474_930,
+            },
+        );
+    });
+    assert_eq!(show(&got), show(line));
+}
+
+/// One task always runnable is a load of one, the one-minute average
+/// reaching `1 - 1/e` after a minute; an idle machine decays to nothing.
+#[test]
+fn loadavg_folds_as_linux_does() {
+    let mut averages = Averages::START;
+    let minute = 60 * 1_000_000_000;
+    averages.advance(minute, 1);
+    assert_eq!(loadavg::hundredths(averages.loads[0]), (0, 63));
+    averages.advance(3600 * 1_000_000_000, 1);
+    assert!(
+        averages
+            .loads
+            .iter()
+            .all(|&load| loadavg::hundredths(load) == (1, 0))
+    );
+    // Nothing is due before the next five seconds: no fold, no change.
+    let before = averages;
+    averages.advance(averages.due - 1, 9);
+    assert_eq!(averages, before);
+    averages.advance(3 * 3600 * 1_000_000_000, 0);
+    assert_eq!(averages.loads, [0; 3]);
+    assert_eq!(loadavg::hundredths(FIXED_1 * 3 / 2), (1, 50));
 }

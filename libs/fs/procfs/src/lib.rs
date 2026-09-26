@@ -27,6 +27,7 @@
 //! * [`mounts`] — `/proc/mounts`, with the octal escapes a mount point with a
 //!   space in it needs.
 //! * [`filesystems`] — `/proc/filesystems`, the types `mount -t` takes.
+//! * [`loadavg`] — `/proc/loadavg`, and the load average's arithmetic.
 //! * [`net`] — `/proc/net`: `dev`, `route`, `tcp`, `udp` and `arp`, which
 //!   `route`, `netstat` and `ifconfig` read with `sscanf` and fixed columns.
 //! * [`partitions`] — `/proc/partitions`.
@@ -40,6 +41,7 @@ extern crate alloc;
 
 pub mod filesystems;
 pub mod kstat;
+pub mod loadavg;
 pub mod maps;
 pub mod meminfo;
 pub mod mounts;
