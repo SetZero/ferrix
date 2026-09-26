@@ -1120,7 +1120,13 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             // The layer surfaces first: their exclusive zones decide how
             // much of the monitor is left for the windows to tile in, so a
             // bar has to be placed before a window is told its size.
-            placed_layers = place_layers(&mut slots, &mut state, &screens, &layer_rules);
+            // `monitor = NAME, addreserved, ...` lines, the file's and
+            // `hyprctl keyword`'s since, which reserve strips beside the
+            // layer surfaces' zones.
+            let added = compositor_config::AddedReserved::read_all(
+                config.monitors.iter().map(|raw| raw.value.as_str()),
+            );
+            placed_layers = place_layers(&mut slots, &mut state, &screens, &layer_rules, &added);
             reconfigure(&mut slots, &state);
         }
         // The popups, which are drawn over the windows like a layer surface
@@ -5547,6 +5553,7 @@ fn place_layers(
     state: &mut State,
     screens: &[Screen],
     rules: &[compositor_config::LayerRule],
+    added: &[compositor_config::AddedReserved],
 ) -> Vec<crate::frame::Placed> {
     // Everything that has been given a role, with what it asked for and
     // which screen it asked for it on.
@@ -5637,7 +5644,17 @@ fn place_layers(
         here.sort_by_key(|(.., rules, _)| rules.order);
         let requests: Vec<compositor_layout::layers::Request> =
             here.iter().map(|(.., request)| *request).collect();
-        let (placements, reserved) = compositor_layout::layers::place(screen.rect, &requests);
+        let (placements, zones) = compositor_layout::layers::place(screen.rect, &requests);
+        // What `addreserved` keeps free is added to the zones, as Hyprland
+        // adds its `m_reservedArea` to what the layers ask for.
+        let extra =
+            compositor_config::AddedReserved::for_monitor(added, &screen.name, &screen.description);
+        let reserved = compositor_config::Gaps {
+            top: zones.top + extra.top,
+            right: zones.right + extra.right,
+            bottom: zones.bottom + extra.bottom,
+            left: zones.left + extra.left,
+        };
         let _ = state.set_reserved(screen.monitor, reserved);
         for ((index, id, surface, above, _, rules, _), placement) in
             here.into_iter().zip(placements)

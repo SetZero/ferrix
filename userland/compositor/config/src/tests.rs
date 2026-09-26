@@ -889,7 +889,7 @@ fn the_example_configuration() {
 // monitor no other rule names.
 // ---------------------------------------------------------------------------
 
-use crate::{Mode, MonitorRule, Position, Scale, Transform};
+use crate::{AddedReserved, Mode, MonitorRule, Position, Scale, Transform};
 
 #[test]
 fn a_monitor_line_is_a_name_a_mode_a_place_and_a_scale() {
@@ -1090,6 +1090,58 @@ fn a_transform_line_turns_an_earlier_rule() {
     ));
     // Read as a rule of its own, the short form says what it is.
     assert!(MonitorRule::parse("DP-1, transform, 3").is_err());
+}
+
+/// `monitor = NAME, addreserved, TOP, BOTTOM, LEFT, RIGHT` is no rule of
+/// its own: it keeps strips of the monitor free, the last line for a
+/// monitor wins, and zeros give them back -- which is how the Pixel 7's VM
+/// follows Android's keyboard up and down.
+#[test]
+fn addreserved_keeps_strips_free_and_the_last_line_wins() {
+    let lines = [
+        ", 1080x2400, auto, 2",
+        "Virtual-1, addreserved, 0, 400, 0, 0",
+        "DP-1, addreserved, 30, 0, 0, 0",
+        "Virtual-1, addreserved, 0, 350, 0, 0",
+        "Virtual-1, addreserved, 0, -1, 0, 0",
+        "Virtual-1, addreserved, 0, 1",
+    ];
+    let (rules, refused) = MonitorRule::read_all(lines);
+    assert_eq!(rules.len(), 1, "only the first line is a rule: {rules:?}");
+    assert_eq!(
+        refused.iter().map(|(line, _)| *line).collect::<Vec<_>>(),
+        [
+            "Virtual-1, addreserved, 0, -1, 0, 0",
+            "Virtual-1, addreserved, 0, 1"
+        ],
+        "a negative strip and a short line are said"
+    );
+
+    let added = AddedReserved::read_all(lines);
+    assert_eq!(added.len(), 3, "{added:?}");
+    assert_eq!(
+        AddedReserved::for_monitor(&added, "Virtual-1", ""),
+        Gaps {
+            top: 0,
+            right: 0,
+            bottom: 350,
+            left: 0
+        },
+        "the later line"
+    );
+    assert_eq!(AddedReserved::for_monitor(&added, "DP-1", "").top, 30);
+    assert_eq!(
+        AddedReserved::for_monitor(&added, "HDMI-A-1", ""),
+        Gaps::all(0),
+        "a monitor no line names"
+    );
+
+    let back = AddedReserved::read_all(lines.into_iter().chain(["Virtual-1,addreserved,0,0,0,0"]));
+    assert_eq!(
+        AddedReserved::for_monitor(&back, "Virtual-1", ""),
+        Gaps::all(0),
+        "hyprctl's form, without spaces, gives them back"
+    );
 }
 
 // ---------------------------------------------------------------------------
