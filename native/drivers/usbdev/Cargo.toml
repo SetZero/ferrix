@@ -16,6 +16,7 @@ bench = false
 [dependencies]
 ferrix-blkring.workspace = true
 ferrix-dwc3.workspace = true
+ferrix-logctl.workspace = true
 ferrix-native-abi.workspace = true
 ferrix-rt.workspace = true
 

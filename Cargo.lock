@@ -499,6 +499,7 @@ version = "0.1.0"
 dependencies = [
  "ferrix-blkring",
  "ferrix-dwc3",
+ "ferrix-logctl",
  "ferrix-native-abi",
  "ferrix-rt",
 ]

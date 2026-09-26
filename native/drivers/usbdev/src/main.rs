@@ -15,12 +15,20 @@
 //!    need on such memory is a barrier, which orders the processor's writes
 //!    before the register write that hands them over, and a register read
 //!    before the memory reads it announced.
-//! 3. One port carries the controller's interrupt. The wait on it ends at
-//!    the next tick, when the heartbeat is due.
-//! 4. What the port carries, for now: what the host sends is sent back, and
-//!    while a program on the host has the port open, a heartbeat line a
-//!    second. That proves the controller's path on the phone by itself; the
-//!    kernel's log follows once its reader lands (phase 4).
+//! 3. One port carries the controller's interrupt and the log channel's
+//!    signals. The wait on it ends at the next tick at the latest, when
+//!    the port's state is looked at again: a host opening or closing it
+//!    changes DTR without anything for the loop to wait on.
+//! 4. The port carries the kernel's log: every byte the console has sent,
+//!    the boot's lines and pid 1's output alike, read over a log control
+//!    channel (`ferrix-logctl`) that only this controller's node may open.
+//!    It is read only while a program on the host has the port open (DTR),
+//!    and the next READ goes only once the last DATA is all in the
+//!    controller's ring, so a host that is slow or absent holds the log
+//!    back in the kernel's ring rather than losing it here. A host that
+//!    opens the port late still gets the boot, as far as that ring reaches
+//!    back; what it had already dropped is said in a line of its own.
+//!    What the host sends is read and dropped.
 //!
 //! What it does is said on standard error, which is the console.
 //!
@@ -36,10 +44,11 @@ use ferrix_blkring::control::{Message as StartMessage, START_BYTES, Start};
 use ferrix_dwc3::layout::AREA_BYTES;
 use ferrix_dwc3::usb_device::acm::{DATA_IN, DATA_OUT, SerialPort};
 use ferrix_dwc3::{Clock, Controller, Dma, Error as UsbError, Parts, Registers};
+use ferrix_logctl::message::{MAX_BYTES, MAX_DATA, Message as LogMessage};
 use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::signals::Signals;
-use ferrix_native_abi::types::{IoMappingSpec, PACKET_INTERRUPT, TREE_GS201_DWC3};
-use ferrix_rt::native::channel::Channel;
+use ferrix_native_abi::types::{IoMappingSpec, PACKET_INTERRUPT, PACKET_SIGNAL, TREE_GS201_DWC3};
+use ferrix_rt::native::channel::{Channel, ReadError};
 use ferrix_rt::native::device::{Device, Interrupt, IoMapping};
 use ferrix_rt::native::error::Error;
 use ferrix_rt::native::handle::{Deadline, Object, OwnedHandle};
@@ -56,11 +65,13 @@ const PAGE: usize = 4096;
 /// The controller's memory, in pages.
 const AREA_PAGES: usize = AREA_BYTES.div_ceil(PAGE);
 
-/// The port key the interrupt is bound under.
+/// The port keys: the interrupt, and the log channel's signals.
 const KEY_INTERRUPT: u64 = 1;
+const KEY_LOG: u64 = 2;
 
-/// How often the loop wakes when nothing happens: the heartbeat's period.
-const TICK_NANOS: u64 = 1_000_000_000;
+/// How often the loop wakes when nothing happens, to see whether a host
+/// opened the port.
+const TICK_NANOS: u64 = 100_000_000;
 
 /// The serial number the port reports.
 const SERIAL: &str = "ferrix-pixel7";
@@ -372,13 +383,17 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
         Err((error, parts)) => return Err(refused(error, parts)),
     };
     say(format_args!("usbdev: DWC3 running, waiting for a host"));
+    let log = open_log(&device, &port);
     let mut driver = Driver {
         usb,
         serial: SerialPort::new(SERIAL),
         port,
         interrupt,
-        beats: 0,
-        next_beat: 0,
+        log,
+        reading: false,
+        backlog: [0; MAX_DATA],
+        taken: 0,
+        filled: 0,
     };
     let ended = driver.serve();
     let Driver { mut usb, .. } = driver;
@@ -410,25 +425,44 @@ fn refused(error: UsbError, parts: Parts<Window, Area, Time>) -> Step {
     }
 }
 
+/// The kernel's log, over the channel this controller's node may open, its
+/// signals waited for on `port`. `None` when it cannot be had: the port
+/// still comes up, and carries nothing.
+fn open_log(device: &Device<Kernel>, port: &Port<Kernel>) -> Option<Channel<Kernel>> {
+    let log = match device.log_control() {
+        Ok(log) => log,
+        Err(error) => {
+            say(format_args!("usbdev: no kernel log to send: {error:?}"));
+            return None;
+        }
+    };
+    log.wait_async(port, Signals::READABLE | Signals::PEER_CLOSED, KEY_LOG)
+        .ok()?;
+    Some(log)
+}
+
 struct Driver {
     usb: Usb,
     serial: SerialPort,
     port: Port<Kernel>,
     interrupt: Interrupt<Kernel>,
-    /// Heartbeats sent.
-    beats: u64,
-    /// When the next is due.
-    next_beat: u64,
+    /// The kernel's log, while it can be read.
+    log: Option<Channel<Kernel>>,
+    /// Whether a READ is out and its DATA not yet come.
+    reading: bool,
+    /// The last DATA's bytes: `taken..filled` are still to go to the host.
+    backlog: [u8; MAX_DATA],
+    taken: usize,
+    filled: usize,
 }
 
 impl Driver {
-    /// Serve interrupts and the heartbeat for as long as the controller
-    /// runs.
+    /// Serve interrupts and the log for as long as the controller runs.
     fn serve(&mut self) -> Result<(), Step> {
         loop {
+            self.pump()?;
             let now = self.usb.clock().now_nanos();
-            let deadline = Deadline::At(self.next_beat.max(now.saturating_add(1)));
-            match self.port.wait(deadline) {
+            match self.port.wait(Deadline::At(now.saturating_add(TICK_NANOS))) {
                 Ok(packet) if packet.kind == PACKET_INTERRUPT && packet.key == KEY_INTERRUPT => {
                     let serviced = self.usb.on_interrupt(&mut self.serial);
                     let _ = self.interrupt.ack();
@@ -440,8 +474,10 @@ impl Driver {
                         }
                     }
                 }
-                Ok(_) => {}
-                Err(Error::TimedOut) => self.beat()?,
+                Ok(packet) if packet.kind == PACKET_SIGNAL && packet.key == KEY_LOG => {
+                    self.take_log();
+                }
+                Ok(_) | Err(Error::TimedOut) => {}
                 Err(_) => return Err(Step::Events),
             }
         }
@@ -466,60 +502,125 @@ impl Driver {
             say(format_args!("usbdev: the host went away"));
         }
         if notice.received {
-            self.echo()?;
-        }
-        Ok(())
-    }
-
-    /// Send back what the host sent.
-    fn echo(&mut self) -> Result<(), Step> {
-        let mut bytes = [0_u8; 512];
-        let count = self
-            .usb
-            .read(DATA_OUT, &mut bytes)
-            .map_err(|_| Step::Faulted)?;
-        if let Some(received) = bytes.get(..count)
-            && !received.is_empty()
-        {
-            // What does not fit in the ring is dropped: an echo is best
-            // effort, and a host that sends faster than it reads loses it.
-            let _taken = self
+            // What the host types goes nowhere yet: read so the endpoint
+            // keeps taking it.
+            let mut bytes = [0_u8; 512];
+            let _dropped = self
                 .usb
-                .write(DATA_IN, received)
+                .read(DATA_OUT, &mut bytes)
                 .map_err(|_| Step::Faulted)?;
         }
         Ok(())
     }
 
-    /// Once a second, a line while a program on the host has the port open;
-    /// what waits to go is dropped while none has.
-    fn beat(&mut self) -> Result<(), Step> {
-        let now = self.usb.clock().now_nanos();
-        if now < self.next_beat {
+    /// Move the log towards the host: what is left of the last DATA into
+    /// the controller's ring, and once that is empty, the next READ. Only
+    /// while a program on the host has the port open.
+    fn pump(&mut self) -> Result<(), Step> {
+        if !self.serial.is_configured() || !self.serial.dtr() {
             return Ok(());
         }
-        self.next_beat = now.saturating_add(TICK_NANOS);
-        if !self.serial.is_configured() {
+        if let Some(rest) = self.backlog.get(self.taken..self.filled)
+            && !rest.is_empty()
+        {
+            let taken = self.usb.write(DATA_IN, rest).map_err(|_| Step::Faulted)?;
+            self.taken += taken;
+        }
+        if self.taken < self.filled || self.reading {
             return Ok(());
         }
-        if !self.serial.dtr() {
-            self.usb.discard(DATA_IN);
+        let Some(log) = &self.log else {
             return Ok(());
+        };
+        let mut bytes = [0_u8; 16];
+        let read = LogMessage::Read {
+            max: MAX_DATA as u32,
+        };
+        let sent = read
+            .encode_into(&mut bytes)
+            .ok()
+            .and_then(|len| bytes.get(..len))
+            .is_some_and(|message| log.write(message).is_ok());
+        if sent {
+            self.reading = true;
+        } else {
+            self.lose_log("the log channel refused a READ");
         }
-        self.beats += 1;
-        let mut line = Line::default();
-        let _ = write!(
-            line,
-            "usbdev: heartbeat {} at {} ms\r\n",
-            self.beats,
-            now / 1_000_000
-        );
-        // A heartbeat that does not fit is dropped: the next one says how
-        // many came before it.
-        let _taken = self
-            .usb
-            .write(DATA_IN, line.as_bytes())
-            .map_err(|_| Step::Faulted)?;
         Ok(())
+    }
+
+    /// Take what the log channel says: DATA into the backlog, anything
+    /// else, or its closing, the end of the log.
+    fn take_log(&mut self) {
+        let Some(log) = &self.log else {
+            return;
+        };
+        let mut bytes = [0_u8; MAX_BYTES];
+        let mut handles = [Handle::INVALID; 1];
+        let received = match log.read(&mut bytes, &mut handles) {
+            Ok(received) => received,
+            Err(ReadError::Failed(Error::ShouldWait)) => {
+                self.rearm();
+                return;
+            }
+            Err(_) => {
+                self.lose_log("the kernel closed the log channel");
+                return;
+            }
+        };
+        match LogMessage::decode(bytes.get(..received.bytes).unwrap_or_default()) {
+            Ok(LogMessage::Data { lost, bytes: data }) => {
+                let count = data.len().min(self.backlog.len());
+                if let (Some(into), Some(from)) = (self.backlog.get_mut(..count), data.get(..count))
+                {
+                    into.copy_from_slice(from);
+                }
+                self.taken = 0;
+                self.filled = count;
+                self.reading = false;
+                if lost > 0 {
+                    self.tell_lost(lost);
+                }
+                self.rearm();
+            }
+            _ => self.lose_log("the kernel refused the log's reader"),
+        }
+    }
+
+    /// Say on the port how much of the log went before it could be sent.
+    fn tell_lost(&mut self, lost: u64) {
+        let mut line = Line::default();
+        let _ = writeln!(
+            line,
+            "usbdev: {lost} bytes of the log were lost before this"
+        );
+        // Best effort: if the ring has no room, the gap goes unsaid here,
+        // and the console record still has the lines.
+        let _taken = self.usb.write(DATA_IN, line.as_bytes());
+    }
+
+    /// Wait for the log channel's next signal.
+    fn rearm(&mut self) {
+        let armed = self.log.as_ref().is_some_and(|log| {
+            log.wait_async(
+                &self.port,
+                Signals::READABLE | Signals::PEER_CLOSED,
+                KEY_LOG,
+            )
+            .is_ok()
+        });
+        if !armed {
+            self.lose_log("the log channel could not be waited on");
+        }
+    }
+
+    /// Stop reading the log, saying why; the port stays up.
+    fn lose_log(&mut self, why: &str) {
+        if self.log.take().is_some() {
+            say(format_args!(
+                "usbdev: {why}; the port carries no more of the log"
+            ));
+        }
+        self.reading = false;
     }
 }
