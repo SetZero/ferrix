@@ -162,10 +162,10 @@ refuses a new ring for it (`ALREADY_BOUND`). `devmgr`:
    when the driver's handles close, which queues `PEER_CLOSED` for the ring's
    task but does not wait for it, so the quiesce may arrive before the ring
    has ended: the kernel then waits, bounded, for the ring to let the device
-   go, since the driver's end of the channel is provably closed. The display
-   and render cores are waited for the same way (`kernel/src/claim.rs`), so a
-   quiesced device has no claim left on it and a driver started again gets its
-   channel. Only a driver still holding its end gets `BAD_STATE`, which
+   go, since the driver's end of the channel is provably closed. The net
+   ring, display, render, input and sound cores are waited for the same way
+   (`kernel/src/claim.rs`), so a quiesced device has no claim left on it and
+   a driver started again gets its channel. Only a driver still holding its end gets `BAD_STATE`, which
    `devmgr` never retries; a core that has not let go within the kernel's
    patience answers `TIMED_OUT`, which `devmgr` retries until it succeeds,
    since the device must not stay on;
@@ -210,10 +210,14 @@ RESTARTED devmgr -> kernel, 16 bytes
 Every other kind is not started again. A dead disk driver is a dead disk,
 said on the console, and the device stays quiesced: what a mounted
 filesystem should do with a disk that went and came back is its own
-decision. The net, input and serial cores do not yet wait for a dead
-driver's claim in the quiesce, so a driver started again would be refused
-its channel; each can be added to `restarted` in `native/devmgr` once its core
-does.
+decision. The net and input cores wait for a dead driver's claim in the
+quiesce, and are ready for a driver started again: a net interface is parked
+with its index, name and addresses until the next driver's HELLO takes it up
+(`docs/NET-RING.md`), and an input device comes back as the `event<N>` it
+was. They are not in `restarted` yet, and neither is a disk: a device can
+still write through a dead driver's DMA mappings into frames freed for
+someone else until the kernel's pin quarantine lands (`docs/BACKLOG.md`).
+The serial port (`vport`) has no core to wait for.
 
 It began as a bug. With no restart, `kill -9` of the `gpu` driver under the
 desktop took the card away for good, the compositor ended on `ENODEV`, and

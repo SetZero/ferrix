@@ -205,16 +205,17 @@ The item defines three interfaces and the load registers into them from
   own start all use it; the job, the rights and the handle move stay in the
   item.
 * **`native::Server`s**, which a quiesce waits out and releases in the order
-  registered: the block ring, the display and the renderer.
+  registered: the block ring, the net ring, the display, the renderer, input
+  and audio, at most eight.
 
 The dispatcher finds its caller through the scheduler's `UserThread` and hands
 handlers the core's `Process`, and the table's the caller as a `Host`.
 
 *The guarantee the `match` gave.* It was exhaustive, so an unanswered call did
-not compile. It still is, for every call the item answers. The six it leaves
+not compile. It still is, for every call the item answers. The ones it leaves
 to the table are checked at boot instead, on every boot: `main.rs` stops with
-FX-0006 if any has no handler, and says what it found (*"6 native calls
-answered above the item, 3 subsystems a quiesce waits out"*). The table is
+FX-0006 if any has no handler, and says what it found (*"10 native calls
+answered above the item, 6 subsystems a quiesce waits out"*). The table is
 searched by the decoded call, never indexed by a program's number, so F-31's
 clamp in `decode` is still the only bound a misprediction could cross.
 
