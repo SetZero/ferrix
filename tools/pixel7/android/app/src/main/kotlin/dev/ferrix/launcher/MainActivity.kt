@@ -170,8 +170,13 @@ private const val MOUSE = "$VM_DIR/mouse.sock"
  * compositor (`cargo xtask flash --compositor`, wrapped by the loader), and
  * otherwise `ferrix.Image`, the helper's console image. `chromium.img` beside
  * it, `scripts/fetch/fetch-chromium-arm64.sh`'s volume, becomes the guest's
- * disk, which Ferrix mounts at `/data`: a desktop built with `--chrome`
- * starts Chromium from it.
+ * fourth disk, `vdd`, which Ferrix mounts at `/data`: a desktop built with
+ * `--chrome` starts Chromium from it. Ferrix takes a data disk only from
+ * `vdd` on, since `vda` to `vdc` are the boot checks' fixtures under QEMU,
+ * so three blank megabytes stand in for them here. The desktop boots with
+ * `ferrix.checks=skip`, as every board's desktop does (xtask's
+ * `DESKTOP_DEFAULTS`, which the Pixel loader does not read): its self-checks
+ * would look for xtask's test disk on `vda` and stop the boot (FX-1005).
  */
 private fun guestCommand(apk: String, uid: Int, token: String, size: IntSize): String {
     val (w, h) = size.width to size.height
@@ -188,7 +193,11 @@ private fun guestCommand(apk: String, uid: Int, token: String, size: IntSize): S
         "--input 'single-touch[path=$TOUCH,width=$w,height=$h]' --input 'keyboard[path=$KEYBOARD]' " +
         "--input 'mouse[path=$MOUSE]'; " +
         "else echo 'FERRIX-VM-BRIDGE did not start: no screen'; set --; fi; " +
-        "[ ! -f $VM_DIR/chromium.img ] || set -- \"\$@\" --block path=$VM_DIR/chromium.img; " +
+        "if [ -f $VM_DIR/chromium.img ]; then for b in a b c; do " +
+        "[ -f $VM_DIR/blank-\$b.img ] || truncate -s 1M $VM_DIR/blank-\$b.img; " +
+        "set -- \"\$@\" --block path=$VM_DIR/blank-\$b.img; done; " +
+        "set -- \"\$@\" --block path=$VM_DIR/chromium.img; fi; " +
+        "[ \$I != desktop.Image ] || set -- \"\$@\" -p ferrix.checks=skip; " +
         "exec $CROSVM run --disable-sandbox -m 4096 --cpus 8 -s $SOCKET --serial type=stdout,num=1,stdin " +
         "\"\$@\" \$I 2>/dev/null"
 }
