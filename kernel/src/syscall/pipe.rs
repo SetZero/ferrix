@@ -163,7 +163,7 @@ fn transfer(
     if !input.readable() {
         return Err(Errno::EBADF);
     }
-    if start.is_some() && input.is_stream() {
+    if start.is_some() && !input.takes_offsets() {
         return Err(Errno::ESPIPE);
     }
     let mut position = start
@@ -418,13 +418,14 @@ fn write_offset(process: &Process, at: u64, end: Option<u64>) -> Result<(), Errn
 }
 
 /// Where `splice` reads or writes the file that is not a pipe: at the offset
-/// given, which a stream cannot take and which must not be negative, or else
-/// at the file's own position.
+/// given, which a stream cannot take -- but for `/dev/zero` and the other
+/// memory devices, whose position never moves -- and which must not be
+/// negative, or else at the file's own position.
 fn position(file: &OpenFile, start: Option<i64>) -> Result<Option<u64>, Errno> {
     let Some(at) = start else {
         return Ok(None);
     };
-    if file.is_stream() {
+    if !file.takes_offsets() {
         return Err(Errno::EINVAL);
     }
     u64::try_from(at).map(Some).map_err(|_| Errno::EINVAL)

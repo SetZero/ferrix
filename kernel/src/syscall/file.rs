@@ -307,7 +307,7 @@ fn empty_write(file: &OpenFile, position: Position) -> Result<u64, Errno> {
     if !file.writable() {
         return Err(Errno::EBADF);
     }
-    if matches!(position, Position::At(_)) && file.inode().is_stream() {
+    if matches!(position, Position::At(_)) && !file.takes_offsets() {
         return Err(Errno::ESPIPE);
     }
     Ok(0)

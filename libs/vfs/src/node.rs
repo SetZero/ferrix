@@ -461,8 +461,24 @@ pub trait Inode: Send + Sync + fmt::Debug {
     }
 
     /// Whether this object has no position: a terminal, a pipe. Offsets passed
-    /// to it are ignored and `lseek` on it is `ESPIPE`.
+    /// to it are ignored and `lseek` on it is `ESPIPE`, unless
+    /// [`Inode::ignores_position`] says otherwise.
     fn is_stream(&self) -> bool {
+        false
+    }
+
+    /// Whether this stream has a position that never moves, as Linux's
+    /// memory devices have: `/dev/null`, `zero`, `full`, `random` and
+    /// `urandom`. Their reads and writes are still a stream's, but `lseek`
+    /// answers 0 for any offset and every whence, and `pread64` and
+    /// `pwrite64` are an ordinary read and write, as they are on Linux
+    /// (`null_lseek` and `noop_llseek` in `drivers/char/`). A program uses
+    /// that: busybox `dd of=/dev/null seek=1` seeks its output and dies if
+    /// the seek is refused.
+    ///
+    /// Meaningful only where [`Inode::is_stream`] is true. The default --
+    /// no, `ESPIPE` -- is a pipe's, a socket's and a terminal's.
+    fn ignores_position(&self) -> bool {
         false
     }
 

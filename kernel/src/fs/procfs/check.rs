@@ -220,8 +220,8 @@ fn check_devices() -> Result<u32, &'static str> {
     if null.read(&mut buf) != Ok(0) {
         return Err("/dev/null did not read as end of file");
     }
-    if null.seek(0, Whence::Set) != Err(Errno::ESPIPE) {
-        return Err("/dev/null could be seeked, but devices here are streams");
+    for path in MEMORY_DEVICES {
+        check_seeks_to_zero(&*open(path)?)?;
     }
 
     if open(b"/dev/full")?.write(b"x") != Err(Errno::ENOSPC) {
@@ -248,6 +248,49 @@ fn check_devices() -> Result<u32, &'static str> {
         }
     }
     Ok(NUMBERS.len() as u32)
+}
+
+/// The memory devices, which `lseek`, `pread64` and `pwrite64` reach as on
+/// Linux rather than being refused as a pipe's are.
+const MEMORY_DEVICES: [&[u8]; 5] = [
+    b"/dev/null",
+    b"/dev/zero",
+    b"/dev/full",
+    b"/dev/random",
+    b"/dev/urandom",
+];
+
+/// A memory device is at 0 whatever `lseek` asks, a read between two seeks
+/// included, and a positioned read or write does what a plain one does:
+/// what a Linux 7.0 host answered, measured (`kernel/src/fs/devfs.rs`).
+/// busybox `dd of=/dev/null seek=1` dies if the first of these is refused.
+fn check_seeks_to_zero(device: &OpenFile) -> Result<(), &'static str> {
+    let seeks = [
+        (100, Whence::Set),
+        (-10, Whence::Set),
+        (5, Whence::Current),
+        (-5, Whence::Current),
+        (10, Whence::End),
+        (3, Whence::Data),
+        (3, Whence::Hole),
+    ];
+    for (offset, whence) in seeks {
+        if device.seek(offset, whence) != Ok(0) {
+            return Err("a /dev memory device did not seek to 0, as Linux's does");
+        }
+    }
+    let mut buf = [0xA5_u8; 16];
+    let read = device
+        .read(&mut buf)
+        .map_err(|_| "a /dev memory device refused a read")?;
+    if device.seek(0, Whence::Current) != Ok(0) {
+        return Err("a read moved a /dev memory device's position from 0");
+    }
+    let plain_write = device.write(b"x");
+    if device.read_at(1000, &mut buf) != Ok(read) || device.write_at(1000, b"x") != plain_write {
+        return Err("pread or pwrite on a /dev memory device did not do what read and write do");
+    }
+    Ok(())
 }
 
 /// `/proc/stat`, read twice across a sleep: each read parses back, has a

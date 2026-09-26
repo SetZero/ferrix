@@ -242,6 +242,15 @@ impl OpenFile {
         self.io.is_stream()
     }
 
+    /// Whether `pread64`, `pwrite64` and an offset given to `sendfile` or
+    /// `splice` are taken: by a file with a position, and by a stream whose
+    /// position never moves ([`Inode::ignores_position`]), which reads and
+    /// writes as it would with none. Everything else is `ESPIPE`.
+    #[must_use]
+    pub fn takes_offsets(&self) -> bool {
+        !self.io.is_stream() || self.io.ignores_position()
+    }
+
     /// `fallocate` without `FALLOC_FL_KEEP_SIZE`: make the file at least `len`
     /// bytes long, and never shorter.
     ///
@@ -327,11 +336,16 @@ impl OpenFile {
     ///
     /// # Errors
     ///
-    /// As [`OpenFile::read`], and `ESPIPE` for a stream.
+    /// As [`OpenFile::read`], and `ESPIPE` for a stream, but for one that
+    /// [ignores its position](Inode::ignores_position), which reads as
+    /// `read` would.
     pub fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize> {
         self.check_io(self.read)?;
         if self.io.is_stream() {
-            return Err(Errno::ESPIPE);
+            if !self.io.ignores_position() {
+                return Err(Errno::ESPIPE);
+            }
+            return self.io.read_stream(buf, self.status().nonblock);
         }
         self.io.read_at(offset, buf)
     }
@@ -363,11 +377,16 @@ impl OpenFile {
     ///
     /// # Errors
     ///
-    /// As [`OpenFile::write`], and `ESPIPE` for a stream.
+    /// As [`OpenFile::write`], and `ESPIPE` for a stream, but for one that
+    /// [ignores its position](Inode::ignores_position), which writes as
+    /// `write` would.
     pub fn write_at(&self, offset: u64, data: &[u8]) -> Result<usize> {
         self.check_io(self.write)?;
         if self.io.is_stream() {
-            return Err(Errno::ESPIPE);
+            if !self.io.ignores_position() {
+                return Err(Errno::ESPIPE);
+            }
+            return self.io.write_stream(data, self.status().nonblock);
         }
         let append = self.status().append;
         self.io
@@ -431,11 +450,19 @@ impl OpenFile {
     /// `ESPIPE` for a stream, `EINVAL` for a result before the start or
     /// `SEEK_END` on a directory, `ENXIO` for `SEEK_DATA`/`SEEK_HOLE` at or
     /// past the end.
+    ///
+    /// A stream that [ignores its position](Inode::ignores_position) is at 0
+    /// whatever it is asked: Linux's `null_lseek` sets the position to 0 and
+    /// its `noop_llseek` reports one no read ever moved, and neither looks
+    /// at the offset or the whence.
     pub fn seek(&self, offset: i64, whence: Whence) -> Result<u64> {
         if self.path_only {
             return Err(Errno::EBADF);
         }
         if self.io.is_stream() {
+            if self.io.ignores_position() {
+                return Ok(0);
+            }
             return Err(Errno::ESPIPE);
         }
         let size = self.io.metadata().size;

@@ -101,9 +101,20 @@
 //! # Streams
 //!
 //! Every node reports [`Inode::is_stream`], so the VFS passes no offsets and
-//! `lseek` is `ESPIPE`. Linux lets a program seek `/dev/null` to a position
-//! that means nothing; refusing is the answer every character device here can
-//! give alike, including the console, which cannot seek on Linux either.
+//! reads and writes take no position. What `lseek` answers is Linux's, device
+//! by device, because programs seek these and die if refused: busybox
+//! `dd of=/dev/null seek=1` seeks its output before it writes.
+//!
+//! - The five memory devices -- `null`, `zero`, `full`, `random`, `urandom`
+//!   -- report [`Inode::ignores_position`]. `lseek` answers 0 for every
+//!   offset and whence, as Linux's `null_lseek` (`null`, `zero`, `full`) and
+//!   `noop_llseek` over a position no read moves (`random`, `urandom`) do,
+//!   and `pread64` and `pwrite64` are a plain read and write. Measured on a
+//!   Linux 7.0 host: `SEEK_SET` 100, `SEEK_CUR` -5, `SEEK_END` 10, a
+//!   negative `SEEK_SET`, `SEEK_DATA` and `SEEK_HOLE` all answer 0, and a
+//!   `pread` at 1000 reads.
+//! - The terminals -- `tty`, `console`, `ptmx` and what it opens, the
+//!   `pts` slaves -- are `ESPIPE`, as they are on Linux.
 
 pub(crate) mod check;
 
@@ -804,6 +815,17 @@ impl Inode for Node {
             self.place,
             Place::Root | Place::Dri | Place::Input | Place::Pts | Place::Shm
         )
+    }
+
+    /// The memory devices, whose position is always 0: see the module's
+    /// documentation. The terminals are not among them.
+    fn ignores_position(&self) -> bool {
+        self.device().is_some_and(|device| {
+            matches!(
+                device.behaviour,
+                Behaviour::Null | Behaviour::Zero | Behaviour::Full | Behaviour::Random
+            )
+        })
     }
 
     /// Disks are registered and dropped without the VFS being told, so a miss

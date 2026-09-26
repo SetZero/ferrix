@@ -1485,6 +1485,78 @@ fn a_stream_is_told_whether_its_open_file_may_wait() {
     assert_eq!(console.write(b"out"), Ok(3));
 }
 
+/// A stream whose position never moves, as `/dev/zero`'s does: zeros to
+/// every read, positioned or not, and every write taken.
+#[derive(Debug)]
+struct Zeros;
+
+impl crate::Inode for Zeros {
+    fn metadata(&self) -> crate::Metadata {
+        crate::Metadata {
+            kind: FileType::CharDevice,
+            ..stream_metadata()
+        }
+    }
+    fn into_any(self: Arc<Self>) -> Arc<dyn core::any::Any + Send + Sync> {
+        self
+    }
+    fn is_stream(&self) -> bool {
+        true
+    }
+    fn ignores_position(&self) -> bool {
+        true
+    }
+    fn read_stream(&self, buf: &mut [u8], _nonblock: bool) -> Result<usize, Errno> {
+        buf.fill(0);
+        Ok(buf.len())
+    }
+    fn write_stream(&self, data: &[u8], _nonblock: bool) -> Result<usize, Errno> {
+        Ok(data.len())
+    }
+}
+
+#[test]
+fn a_stream_that_ignores_its_position_seeks_to_zero_and_takes_offsets() {
+    let at = Location::detached(
+        Arc::new(Pipes),
+        Arc::new(Zeros),
+        b"zero",
+        Arc::new(SpinParker),
+    );
+    let zero = OpenFile::new(at, &READ_WRITE).unwrap();
+    assert!(zero.is_stream() && zero.takes_offsets());
+    for (offset, whence) in [
+        (100, Whence::Set),
+        (-10, Whence::Set),
+        (-5, Whence::Current),
+        (10, Whence::End),
+        (3, Whence::Data),
+        (3, Whence::Hole),
+    ] {
+        assert_eq!(zero.seek(offset, whence), Ok(0), "{offset} {whence:?}");
+    }
+    let mut buf = [0xA5_u8; 4];
+    assert_eq!(zero.read(&mut buf), Ok(4));
+    assert_eq!(zero.seek(0, Whence::Current), Ok(0), "a read moves nothing");
+    buf.fill(0xA5);
+    assert_eq!(zero.read_at(1000, &mut buf), Ok(4));
+    assert_eq!(buf, [0; 4]);
+    assert_eq!(zero.write_at(1000, b"xy"), Ok(2));
+
+    // A pipe still refuses all three.
+    let at = Location::detached(
+        Arc::new(Pipes),
+        Arc::new(Recorder::default()),
+        b"pipe:[7]",
+        Arc::new(SpinParker),
+    );
+    let pipe = OpenFile::new(at, &READ_WRITE).unwrap();
+    assert!(!pipe.takes_offsets());
+    assert_eq!(pipe.seek(0, Whence::Set), Err(Errno::ESPIPE));
+    assert_eq!(pipe.read_at(0, &mut buf), Err(Errno::ESPIPE));
+    assert_eq!(pipe.write_at(0, b"x"), Err(Errno::ESPIPE));
+}
+
 #[test]
 fn a_detached_location_opens_and_names_itself_without_a_tree() {
     let (ns, ctx) = fresh();
