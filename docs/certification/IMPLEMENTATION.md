@@ -340,7 +340,11 @@ actually runs, and here it runs on every boot.
 
 ## W-6 — Complexity and recursion gate
 
-**Done 2026-09-25.** See F-25.
+**Done 2026-09-25.** See F-25. **Corrected 2026-09-26:** the gate's string
+stripping mis-paired quotes after a `\`-newline continuation and left 328 of
+the item's 1,887 functions unmeasured. It now reads code through
+`scripts/rustlex.py`, shared with the boundary gate, and the baseline was
+re-recorded at 47 entries.
 
 **Closes:** F-25. **Size:** medium. No kernel changes.
 

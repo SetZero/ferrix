@@ -60,6 +60,10 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import rustlex  # noqa: E402  (after the path insert)
+
 ROOT = Path(__file__).resolve().parent.parent
 KERNEL_SRC = ROOT / "kernel" / "src"
 BASELINE = ROOT / "scripts" / "complexity-baseline.json"
@@ -68,15 +72,6 @@ BASELINE = ROOT / "scripts" / "complexity-baseline.json"
 # interesting and a baseline listing every small function would be unreadable.
 COMPLEXITY_FLOOR = 15
 LINES_FLOOR = 60
-
-LINE_COMMENT = re.compile(r"//.*$", re.MULTILINE)
-BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
-STRING_LIT = re.compile(r'"(?:[^"\\]|\\.)*"')
-# Raw strings, including the `r#"..."#` that every `naked_asm!` block in
-# `arch/*/switch.rs` uses. Missing these made the assembly label `ferrix_switch:`
-# inside `fn ferrix_switch` look like a recursive call.
-RAW_STRING = re.compile(r'r(#*)".*?"\1', re.DOTALL)
-CHAR_LIT = re.compile(r"'(?:[^'\\]|\\.)'")
 
 FN = re.compile(
     r"^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?(?:default[ \t]+)?(?:const[ \t]+)?"
@@ -91,12 +86,15 @@ BRANCH = re.compile(
 
 
 def strip(source: str) -> str:
-    """Source with comments and literals removed, length roughly preserved."""
-    source = RAW_STRING.sub(lambda m: "\n" * m.group().count("\n"), source)
-    source = BLOCK_COMMENT.sub(lambda m: "\n" * m.group().count("\n"), source)
-    source = LINE_COMMENT.sub("", source)
-    source = STRING_LIT.sub('""', source)
-    return CHAR_LIT.sub("' '", source)
+    """Source with comments and literal contents blanked, length preserved.
+
+    `scripts/rustlex.py` does the work, and why it has to is its docstring:
+    the regular expressions this function used before mis-paired quotes after
+    a `\\`-newline continuation, so `main.rs::say_booted` scored 102 lines
+    and swallowed `register_load`, and the word "for" in a panic message
+    counted as a loop.
+    """
+    return rustlex.mask(source)
 
 
 def body_of(text: str, start: int) -> tuple[str, int] | None:
@@ -143,7 +141,12 @@ def body_of(text: str, start: int) -> tuple[str, int] | None:
 
 def measure(path: Path) -> list[dict]:
     """Every function in `path`, with its three scores."""
-    text = strip(path.read_text(encoding="utf-8", errors="replace"))
+    return measure_source(path.read_text(encoding="utf-8", errors="replace"))
+
+
+def measure_source(source: str) -> list[dict]:
+    """Every function in `source`, with its three scores."""
+    text = strip(source)
     found: list[dict] = []
 
     for match in FN.finditer(text):
@@ -243,11 +246,82 @@ def report(functions: list[dict]) -> None:
           f"20-29: {buckets[2]}, 30+: {buckets[3]}")
 
 
+# The shapes that measured wrong before the lexer was shared: a `\\`-newline
+# continuation in a message (`say_booted`, whose mis-paired quotes hid the
+# function after it), a char literal holding a double quote, loop words inside
+# strings, and an assembly label in a raw string named like its function.
+_SELF_TEST = r"""
+fn say_booted() {
+    if checks::run() {
+        println!("{SUCCESS_MARKER} stages 1-12");
+    } else {
+        println!(
+            "{UNCHECKED_MARKER} stages 1-12 brought up, the self-checks of 2 to 12 skipped as \
+             ferrix.checks=skip asks for while loop if"
+        );
+    }
+}
+
+fn register_load(view: &BootView<'_>) {
+    let quote = '"';
+    if a && b {
+        panic!("for while loop if && || ?");
+    }
+}
+
+extern "C" {
+    fn ferrix_switch();
+}
+
+fn ferrix_switch_body() {
+    naked_asm!(r#"
+    ferrix_switch_body:
+        ret "for" if
+    "#);
+}
+"""
+
+_SELF_EXPECT = {
+    # name: (complexity, lines, recursive)
+    "say_booted": (2, 7, False),
+    "register_load": (3, 3, False),
+    "ferrix_switch_body": (1, 2, False),
+}
+
+
+def self_test() -> list[str]:
+    failures = [f"lexer: {f}" for f in rustlex.self_test()]
+    got = {
+        fn["name"]: (fn["complexity"], fn["lines"], fn["recursive"])
+        for fn in measure_source(_SELF_TEST)
+    }
+    for name, want in _SELF_EXPECT.items():
+        if got.get(name) != want:
+            failures.append(f"measure: {name} is {got.get(name)}, expected {want}")
+    if "ferrix_switch" in got:
+        failures.append("measure: an extern declaration was measured as a function")
+    return failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", action="store_true")
     parser.add_argument("--record", action="store_true")
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="run the lexer's and the measure's cases and nothing else",
+    )
     args = parser.parse_args()
+
+    failures = self_test()
+    if failures:
+        for failure in failures:
+            print(f"complexity: self-test: {failure}", file=sys.stderr)
+        return 1
+    if args.self_test:
+        print("complexity: lexer and measure self-tests pass")
+        return 0
 
     functions = item_functions()
 

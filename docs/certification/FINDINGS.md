@@ -543,8 +543,8 @@ ring, with no recursion anywhere, it is at least conceivable.
 ### F-25 — no complexity, unit-size or recursion limits
 **Closed 2026-09-25** by `scripts/check-complexity.py`, a ratchet over
 `scripts/complexity-baseline.json` in the shape the item-boundary gate uses:
-35 functions in the item sit above a floor, and the gate fails when one gets
-worse, when a new one appears, or when a stale entry is left behind.
+47 of the item's 1,887 functions sit above a floor, and the gate fails when one
+gets worse, when a new one appears, or when a stale entry is left behind.
 
 The measurement that matters: **no function in the certified item is directly
 recursive.** For a kernel with no guard page under its stack that is worth
@@ -557,6 +557,24 @@ names itself. `drop(x)` inside a `Drop::drop` body is `core::mem::drop`. And
 taking the next `{` after a signature gave every `extern "C"` declaration the
 *following* item's body, which is how the assembly symbol `ferrix_switch` came
 out recursive with borrowed complexity and length scores.
+
+A fourth was found on 2026-09-26, and it was the largest. The pattern that
+stripped string literals could not cross a `\`-newline continuation, so after
+the first one in a file it paired every quote with the wrong partner and read
+code as string from there on. **It measured 1,559 functions of 1,887: 328
+of the item's functions, 17%, were not measured at all** -- 73 of `sched/mod.rs`'s 89
+functions and 71 of `main.rs`'s 76 among them. `main.rs::say_booted` scored
+102 lines because it had swallowed everything up to the next string that
+happened to pair; it has seven. The gate now reads source through
+`scripts/rustlex.py`, a lexer shared with the item-boundary gate that knows
+nested comments, raw, byte and C strings, continuations, and a char literal
+from a lifetime, and every run starts with its self-test. Re-measured, the
+baseline went from 34 entries to 47: twelve functions that were always over a
+floor and were never seen, two that were scored just under one, three whose
+scores were understated (`devmgr.rs::start` by six lines), and `say_booted`
+gone. No function in the item became more complex; the
+measurement became less wrong, which is the one reason the baseline may rise.
+The no-recursion result holds over all 1,887.
 
 Complexity is an approximation — branch tokens, not a control-flow graph — and
 the script's docstring says so, along with the two kinds of recursion it cannot

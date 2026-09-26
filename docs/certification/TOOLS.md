@@ -72,6 +72,8 @@ output is used to *satisfy* an objective rather than to find defects.
 |---|---|---|
 | `xtask` | build driver and boot-test harness; 242 own tests | T2 |
 | `check-item-boundary.py` | the item boundary — this scheme's own scope | T2 |
+| `check-complexity.py` | complexity, length and recursion in the item | T2 |
+| `rustlex.py` | tells code from comments and literals for the two above; self-tested on every run | T2 |
 | `check-unsafe-audit.py` | every `unsafe` block documented, one operation | T2 |
 | `check-panic-audit.py` | every panic-lint exemption justified | T2 |
 | `check-asm-budget.py` | the assembly allow-list and budget | T2 |

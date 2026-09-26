@@ -14,9 +14,19 @@
   "complexity_floor": 15,
   "lines_floor": 60,
   "functions": {
+    "arch/aarch64/gic.rs::layout": {
+      "complexity": 15,
+      "lines": 40,
+      "recursive": false
+    },
     "arch/aarch64/signal.rs::setup_signal_frame": {
       "complexity": 23,
       "lines": 43,
+      "recursive": false
+    },
+    "arch/aarch64/trap.rs::class_name": {
+      "complexity": 15,
+      "lines": 15,
       "recursive": false
     },
     "arch/armv7a/signal.rs::setup_signal_frame": {
@@ -30,13 +40,48 @@
       "recursive": false
     },
     "arch/x86_64/trap.rs::vector_name": {
-      "complexity": 21,
-      "lines": 21,
+      "complexity": 22,
+      "lines": 22,
+      "recursive": false
+    },
+    "device.rs::check_node": {
+      "complexity": 16,
+      "lines": 54,
+      "recursive": false
+    },
+    "devmgr.rs::request": {
+      "complexity": 24,
+      "lines": 71,
       "recursive": false
     },
     "devmgr.rs::start": {
       "complexity": 24,
-      "lines": 65,
+      "lines": 71,
+      "recursive": false
+    },
+    "main.rs::bring_up_processors": {
+      "complexity": 9,
+      "lines": 64,
+      "recursive": false
+    },
+    "main.rs::check_filesystems": {
+      "complexity": 13,
+      "lines": 88,
+      "recursive": false
+    },
+    "main.rs::check_loader_allocations": {
+      "complexity": 5,
+      "lines": 66,
+      "recursive": false
+    },
+    "main.rs::check_syscalls": {
+      "complexity": 15,
+      "lines": 88,
+      "recursive": false
+    },
+    "main.rs::check_vmap": {
+      "complexity": 19,
+      "lines": 31,
       "recursive": false
     },
     "main.rs::kmain": {
@@ -44,9 +89,9 @@
       "lines": 73,
       "recursive": false
     },
-    "main.rs::say_booted": {
-      "complexity": 19,
-      "lines": 102,
+    "main.rs::start_scheduler": {
+      "complexity": 8,
+      "lines": 83,
       "recursive": false
     },
     "pci.rs::check_function": {
@@ -59,9 +104,24 @@
       "lines": 90,
       "recursive": false
     },
+    "pci/virtio.rs::entropy": {
+      "complexity": 16,
+      "lines": 88,
+      "recursive": false
+    },
     "pci/virtio.rs::probe_out_of_domain": {
-      "complexity": 28,
-      "lines": 62,
+      "complexity": 27,
+      "lines": 66,
+      "recursive": false
+    },
+    "sched/mod.rs::init": {
+      "complexity": 16,
+      "lines": 32,
+      "recursive": false
+    },
+    "smp.rs::flush_tlb_pages": {
+      "complexity": 21,
+      "lines": 82,
       "recursive": false
     },
     "syscall/futex.rs::sys_futex": {
@@ -177,6 +237,11 @@
     "user/space.rs::protect": {
       "complexity": 15,
       "lines": 34,
+      "recursive": false
+    },
+    "user/space.rs::remap": {
+      "complexity": 19,
+      "lines": 81,
       "recursive": false
     },
     "user/space.rs::resolve": {
