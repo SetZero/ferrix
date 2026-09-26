@@ -316,6 +316,24 @@ const SUITE: &[Gate] = &[
     Gate::new("test-boot", "boot-single", false)
         .only(Arch::X86_64)
         .with_args(&["--smp", "1"]),
+    // The options a boot reads that no other gate gives it: the boot console
+    // drawn on the framebuffer, which the Pixel 7 asks for; a pid 1 named on
+    // the command line that the image does not have, which is said and falls
+    // back to the built-in program; a `ferrix.onexit` the kernel does not
+    // understand, which is said and powers off as the default does; and
+    // `nokaslr`, the layout a debugger asks for, which every other boot moves.
+    // ARMv7-A's `virt` has no framebuffer, so there the console finds none to
+    // draw on.
+    Gate::new("test-boot", "boot-options", false).with_args(&[
+        "--kernel-option",
+        "ferrix.fbcon",
+        "--kernel-option",
+        "ferrix.init=/sbin/no-such-init",
+        "--kernel-option",
+        "ferrix.onexit=halt",
+        "--kernel-option",
+        "nokaslr",
+    ]),
     Gate::new("test-shell", "shell", true),
     Gate::new("test-vfs", "vfs", true).only(Arch::X86_64),
     Gate::new("test-net", "net", true),
