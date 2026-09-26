@@ -907,9 +907,16 @@ pub(crate) const fn deliverable(process: &Signals, thread: &ThreadSignals) -> u6
 }
 
 /// Whether the way back to user mode has anything to do for a thread: a signal
-/// to deliver, or a mask `rt_sigsuspend` left to put back.
+/// to deliver, a mask `rt_sigsuspend` left to put back, or a call to restart.
+///
+/// The last even with no signal left: a process-directed signal wakes a
+/// thread's wait, and another thread may take it before this one gets back.
+/// Without it the way back was skipped and the call's restart code reached
+/// the program -- glibc's `pthread_join` under a 1 ms timer saw `-512` and
+/// aborted with "The futex facility returned an unexpected error code"
+/// (ferrix-ea, ARMv7-A, 2026-09-27).
 pub(crate) const fn needs_attention(process: &Signals, thread: &ThreadSignals) -> bool {
-    deliverable(process, thread) != 0 || thread.saved_mask.is_some()
+    deliverable(process, thread) != 0 || thread.saved_mask.is_some() || thread.restart.is_some()
 }
 
 /// Raise `signal` on `thread` for a fault it cannot be allowed to ignore: a
