@@ -51,7 +51,7 @@ use crate::regs::{
     DEPCMD_CMDACT, DEPCMD_CMDIOC, DEPCMD_DEPSTARTCFG, DEPCMD_ENDTRANSFER, DEPCMD_SETEPCONFIG,
     DEPCMD_SETSTALL, DEPCMD_SETTRANSFRESOURCE, DEPCMD_STARTTRANSFER, DEVTEN, DSTS, DSTS_DEVCTRLHLT,
     GCTL, GCTL_PRTCAP_DEVICE, GCTL_PRTCAPDIR_MASK, GEVNTADRHI, GEVNTADRLO, GEVNTCOUNT, GEVNTSIZ,
-    GFLADJ, GFLADJ_30MHZ_MASK, GFLADJ_30MHZ_SDBND_SEL, GSNPSID, GUSB2PHYCFG, GUSB2PHYCFG_SUSPHY,
+    GFLADJ, GFLADJ_30MHZ_MASK, GSNPSID, GSTS, GUSB2PHYCFG, GUSB2PHYCFG_SUSPHY,
     GUSB2PHYCFG_U2_FREECLK_EXISTS,
 };
 use crate::trb::{
@@ -73,8 +73,12 @@ pub(super) const PAGES: [u64; 7] = [
     0x9700_7000,
 ];
 
-/// The core's ID: `DWC_usb31`, release 1.90a as `GSNPSID` gives it.
+/// The core's ID: `DWC_usb31`, as the phone's `GSNPSID` reads.
 pub(super) const DWC31: u32 = 0x3331_0000;
+/// The phone's, whole.
+pub(super) const PHONE_GSNPSID: u32 = 0x3331_3130;
+/// Where ABL's event buffer is: memory that is not the area.
+pub(super) const ABL_EVENTS: u64 = 0xF8CD_D000;
 
 /// The event codes the model writes.
 const XFER_COMPLETE: u32 = 1;
@@ -173,6 +177,7 @@ pub(super) struct Model {
     pub(super) now: u64,
 
     pub(super) gsnpsid: u32,
+    pub(super) gsts: u32,
     gctl: u32,
     gusb2phycfg: u32,
     gfladj: u32,
@@ -181,7 +186,7 @@ pub(super) struct Model {
     event_count: u32,
     event_write: usize,
     dcfg: u32,
-    dctl: u32,
+    pub(super) dctl: u32,
     devten: u32,
     dalepena: u32,
     reset_until: Option<u64>,
@@ -191,6 +196,10 @@ pub(super) struct Model {
     pub(super) wedged_reset: bool,
     /// Endpoint commands never finish.
     pub(super) wedged_command: bool,
+    /// The controller has not finished halting.
+    pub(super) halting: bool,
+    /// Register writes so far.
+    pub(super) writes: usize,
     /// The processor's clean and invalidate do nothing, as a driver that
     /// forgot them.
     pub(super) skip_clean: bool,
@@ -223,25 +232,30 @@ impl Model {
             lines: vec![Line::EMPTY; AREA_BYTES / CACHE_LINE],
             violations: Vec::new(),
             now: 0,
-            gsnpsid: DWC31 | 0x190A,
-            // What a boot loader running fastboot may leave: an OTG port,
-            // the PHY's reset defaults, SuperSpeedPlus with LPM, running.
-            gctl: 3 << 12,
-            gusb2phycfg: GUSB2PHYCFG_U2_FREECLK_EXISTS | (1 << 8) | GUSB2PHYCFG_SUSPHY,
-            gfladj: 0x0C80_0000,
-            event_address: 0,
-            gevntsiz: 0,
+            // What the phone's ABL leaves after fastboot, as surveyed on
+            // 2026-09-26: device mode with a register timeout flagged,
+            // stopped and halted, SuperSpeed at address 121, its own event
+            // buffer still programmed, endpoint 0 active.
+            gsnpsid: PHONE_GSNPSID,
+            gsts: 0x7E80_0020,
+            gctl: 0x0001_2004,
+            gusb2phycfg: 0x0010_2400,
+            gfladj: 0x0A87_F020,
+            event_address: ABL_EVENTS,
+            gevntsiz: 0x200,
             event_count: 0,
             event_write: 0,
-            dcfg: DCFG_LPM_CAP | 5 | (9 << DCFG_DEVADDR_SHIFT),
-            dctl: DCTL_RUN_STOP | DCTL_U1_U2,
-            devten: 0,
-            dalepena: 0,
+            dcfg: 0x0020_0BCC,
+            dctl: 0x00F0_0000,
+            devten: 0x7,
+            dalepena: 0x3,
             reset_until: None,
             endpoints: [Physical::default(); 8],
             started_config: false,
             wedged_reset: false,
             wedged_command: false,
+            halting: false,
+            writes: 0,
             skip_clean: false,
             skip_invalidate: false,
             skip_clean_in: None,
@@ -441,13 +455,14 @@ impl Model {
     }
 
     fn halted(&self) -> bool {
-        self.dctl & DCTL_RUN_STOP == 0 && self.event_count == 0
+        self.dctl & DCTL_RUN_STOP == 0 && self.event_count == 0 && !self.halting
     }
 
     fn read(&mut self, offset: u32) -> u32 {
         self.settle();
         match offset {
             GSNPSID => self.gsnpsid,
+            GSTS => self.gsts,
             GCTL => self.gctl,
             GUSB2PHYCFG => self.gusb2phycfg,
             GEVNTADRLO => self.event_address as u32,
@@ -478,7 +493,11 @@ impl Model {
 
     fn write(&mut self, offset: u32, value: u32) {
         self.settle();
+        self.writes += 1;
         match offset {
+            // The bus error address valid and register timeout bits are
+            // written one to clear; the rest read only.
+            GSTS => self.gsts &= !(value & 0x30),
             GCTL => self.gctl = value,
             GUSB2PHYCFG => self.gusb2phycfg = value,
             GEVNTADRLO => {
@@ -569,6 +588,7 @@ impl Model {
     fn check_run(&mut self) {
         let checks = [
             (self.dctl & DCTL_CSFTRST == 0, "run during the soft reset"),
+            (self.gsts & 0x20 == 0, "GSTS.CSR_TIMEOUT still set"),
             (
                 self.gctl & GCTL_PRTCAPDIR_MASK == GCTL_PRTCAP_DEVICE,
                 "the port is not a device",
@@ -583,8 +603,7 @@ impl Model {
                 "GUSB2PHYCFG keeps the free clock or PHY suspend",
             ),
             (
-                self.gfladj & (GFLADJ_30MHZ_MASK | GFLADJ_30MHZ_SDBND_SEL)
-                    == 0x20 | GFLADJ_30MHZ_SDBND_SEL,
+                self.gfladj & GFLADJ_30MHZ_MASK == 0x20,
                 "the frame length adjustment is not 0x20",
             ),
             (self.dctl & DCTL_U1_U2 == 0, "U1 or U2 entry is enabled"),

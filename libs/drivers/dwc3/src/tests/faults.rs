@@ -3,9 +3,10 @@
 
 use ferrix_usb_device::acm::DATA_IN;
 
-use super::model::{DWC31, Memory, Model, Regs, Time};
+use super::model::{DWC31, Memory, Model, Regs, Shared, Time};
 use super::rig::{Rig, parts};
 use crate::layout::{AREA_BYTES, ENDPOINT_BYTES, endpoint_buffer};
+use crate::regs::{DCTL, DSTS, GSTS};
 use crate::{Controller, Error, MILLISECOND, Parts};
 
 #[test]
@@ -16,7 +17,62 @@ fn not_a_dwc3() {
         .map(|_| ())
         .map_err(|(error, _)| error);
     assert_eq!(error, Err(Error::NotDwc3(0x4F54_300A)), "refused");
-    assert!(model.borrow().commands.is_empty(), "untouched");
+    assert_eq!(model.borrow().writes, 0, "untouched");
+}
+
+fn start(model: &Shared) -> Result<(), Error> {
+    Controller::start(parts(model))
+        .map(|_| ())
+        .map_err(|(error, _)| error)
+}
+
+#[test]
+fn refuses_a_controller_in_host_mode_then_takes_it_in_device_mode() {
+    let model = Model::new();
+    model.borrow_mut().gsts = 0x7E80_0021;
+    assert_eq!(
+        start(&model),
+        Err(Error::Refused {
+            register: GSTS,
+            value: 0x7E80_0021
+        }),
+        "GSTS says host"
+    );
+    assert_eq!(model.borrow().writes, 0, "nothing written");
+    model.borrow_mut().gsts = 0x7E80_0020;
+    assert_eq!(start(&model), Ok(()), "device mode, as ABL leaves it");
+    assert_eq!(model.borrow().gsts & 0x20, 0, "CSR_TIMEOUT cleared");
+}
+
+#[test]
+fn refuses_a_running_controller_then_takes_it_stopped() {
+    let model = Model::new();
+    model.borrow_mut().dctl = 0x80F0_0000;
+    assert_eq!(
+        start(&model),
+        Err(Error::Refused {
+            register: DCTL,
+            value: 0x80F0_0000
+        }),
+        "run bit set: someone else is driving it"
+    );
+    assert_eq!(model.borrow().writes, 0, "nothing written");
+    model.borrow_mut().dctl = 0x00F0_0000;
+    assert_eq!(start(&model), Ok(()), "stopped");
+}
+
+#[test]
+fn refuses_a_controller_still_halting_then_takes_it_halted() {
+    let model = Model::new();
+    model.borrow_mut().halting = true;
+    let refused = start(&model);
+    assert!(
+        matches!(refused, Err(Error::Refused { register: DSTS, value }) if value & (1 << 22) == 0),
+        "DEVCTRLHLT clear: {refused:?}"
+    );
+    assert_eq!(model.borrow().writes, 0, "nothing written");
+    model.borrow_mut().halting = false;
+    assert_eq!(start(&model), Ok(()), "halted");
 }
 
 #[test]

@@ -4,6 +4,8 @@
 
 /// `GCTL`: global configuration.
 pub(crate) const GCTL: u32 = 0xC110;
+/// `GSTS`: global status.
+pub(crate) const GSTS: u32 = 0xC118;
 /// `GSNPSID`: which core, and which release of it.
 pub(crate) const GSNPSID: u32 = 0xC120;
 /// `GUSB2PHYCFG(0)`: the USB 2.0 PHY's interface.
@@ -50,6 +52,15 @@ pub(crate) const ID_DWC3: u32 = 0x5533;
 pub(crate) const ID_DWC31: u32 = 0x3331;
 /// `DWC_usb32`.
 pub(crate) const ID_DWC32: u32 = 0x3332;
+
+// GSTS.
+/// The mode the core is in.
+pub(crate) const GSTS_CURMOD_MASK: u32 = 3;
+/// Device mode.
+pub(crate) const GSTS_CURMOD_DEVICE: u32 = 0;
+/// A register access timed out, written one to clear. The phone's ABL
+/// leaves it set.
+pub(crate) const GSTS_CSR_TIMEOUT: u32 = 1 << 5;
 
 // GCTL.
 /// The port capability direction field.

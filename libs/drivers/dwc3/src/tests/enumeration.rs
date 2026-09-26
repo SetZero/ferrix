@@ -8,10 +8,13 @@ use ferrix_usb_device::acm::{
 };
 use ferrix_usb_device::{EndpointInfo, Function, Reply, Setup, Speed, Status};
 
-use super::model::{HostError, Regs};
+use super::model::{ABL_EVENTS, HostError, PAGES, Regs};
 use super::rig::{ADDRESS, Rig};
 use crate::Registers;
-use crate::regs::{DALEPENA, DCFG, DEPCMD_DEPSTARTCFG, DEPCMD_STARTTRANSFER};
+use crate::regs::{
+    DALEPENA, DCFG, DEPCMD_DEPSTARTCFG, DEPCMD_STARTTRANSFER, GEVNTADRHI, GEVNTADRLO, GEVNTSIZ,
+    GSTS,
+};
 
 #[test]
 fn starts_as_the_tree_says() {
@@ -33,6 +36,20 @@ fn starts_as_the_tree_says() {
         Some(&(0, DEPCMD_STARTTRANSFER)),
         "a SETUP TRB last"
     );
+}
+
+#[test]
+fn replaces_what_abl_left() {
+    let rig = Rig::new();
+    let registers = Regs(rig.model.clone());
+    let events =
+        u64::from(registers.read32(GEVNTADRLO)) | (u64::from(registers.read32(GEVNTADRHI)) << 32);
+    assert_ne!(events, ABL_EVENTS, "not ABL's event buffer");
+    assert_eq!(events, PAGES[0], "the area's first page");
+    assert_eq!(registers.read32(GEVNTSIZ), 4096, "a page, unmasked");
+    assert_eq!(registers.read32(GSTS) & 0x20, 0, "CSR_TIMEOUT cleared");
+    assert_eq!(registers.read32(DCFG) & 0x3FF, 0, "high speed, address 0");
+    rig.assert_clean();
 }
 
 #[test]

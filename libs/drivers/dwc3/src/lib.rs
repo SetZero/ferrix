@@ -174,6 +174,15 @@ pub enum Error {
     Memory,
     /// `GSNPSID` names no DWC3: the value read.
     NotDwc3(u32),
+    /// The controller is not as a boot loader that ran fastboot on it and
+    /// stopped leaves it -- in device mode, run bit clear, halted -- so
+    /// nothing was written: the register, by offset, and what it read.
+    Refused {
+        /// The register's offset.
+        register: u32,
+        /// What it read.
+        value: u32,
+    },
     /// The core's soft reset did not finish.
     Reset,
     /// The controller did not start or halt when told to.

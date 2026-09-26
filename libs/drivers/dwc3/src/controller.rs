@@ -3,12 +3,20 @@
 //!
 //! # Bring-up
 //!
-//! In the order Linux's `dwc3_core_init` and `__dwc3_gadget_start` take
-//! it: the core's soft reset (`DCTL.CSFTRST`, which clears itself); the
-//! port capability set to device; the quirks the phone's device tree names
-//! for the core (no free-running USB 2.0 PHY clock, frame length
-//! adjustment 0x20, LPM and U1/U2 off); `DCFG` held at high speed; the
-//! event buffer's address and size; `DEPSTARTCFG`, then `DEPCFG` and
+//! First, before anything is written, what the controller must be for
+//! this driver to take it over: a DWC3 (`GSNPSID`), in device mode
+//! (`GSTS`), with the run bit clear and halted (`DCTL`, `DSTS`) -- which is
+//! how the phone's ABL leaves it after fastboot, with its own event buffer
+//! still programmed at memory that is now Ferrix's. Anything else is
+//! refused untouched: another agent may be driving it.
+//!
+//! Then, in the order Linux's `dwc3_core_init` and `__dwc3_gadget_start`
+//! take it: the core's soft reset (`DCTL.CSFTRST`, which clears itself);
+//! `GSTS.CSR_TIMEOUT` cleared, which ABL leaves set; the port capability
+//! set to device; the quirks the phone's device tree names for the core
+//! (no free-running USB 2.0 PHY clock, frame length adjustment 0x20, LPM
+//! and U1/U2 off); `DCFG` held at high speed; the event buffer's address
+//! and size, replacing ABL's; `DEPSTARTCFG`, then `DEPCFG` and
 //! `DEPXFERCFG` for both directions of endpoint 0, physical endpoints 0
 //! and 1, and both in `DALEPENA`; a SETUP TRB started; `DEVTEN`; and last
 //! `DCTL`'s run bit, which connects the pull-up, with a bounded wait for
@@ -52,8 +60,9 @@ use crate::regs::{
     DSTS_CONNECTSPD, DSTS_DEVCTRLHLT, DSTS_FULLSPEED, DSTS_HIGHSPEED, EP_TYPE_CONTROL,
     FRAME_LENGTH_ADJUSTMENT, GCTL, GCTL_PRTCAP_DEVICE, GCTL_PRTCAPDIR_MASK, GEVNTADRHI, GEVNTADRLO,
     GEVNTCOUNT, GEVNTCOUNT_MASK, GEVNTSIZ, GFLADJ, GFLADJ_30MHZ_MASK, GFLADJ_30MHZ_SDBND_SEL,
-    GSNPSID, GUSB2PHYCFG, GUSB2PHYCFG_ENBLSLPM, GUSB2PHYCFG_SUSPHY, GUSB2PHYCFG_U2_FREECLK_EXISTS,
-    ID_DWC3, ID_DWC31, ID_DWC32, depcmd_base,
+    GSNPSID, GSTS, GSTS_CSR_TIMEOUT, GSTS_CURMOD_DEVICE, GSTS_CURMOD_MASK, GUSB2PHYCFG,
+    GUSB2PHYCFG_ENBLSLPM, GUSB2PHYCFG_SUSPHY, GUSB2PHYCFG_U2_FREECLK_EXISTS, ID_DWC3, ID_DWC31,
+    ID_DWC32, depcmd_base,
 };
 use crate::{Clock, Dma, Error, MICROSECOND, MILLISECOND, Parts, Registers, wait_for};
 
@@ -131,8 +140,9 @@ impl<R: Registers, D: Dma, C: Clock> Controller<R, D, C> {
     ///
     /// The error and the parts. The memory is the controller's to write for
     /// as long as it may be running, and it may be after any error but
-    /// [`Error::Memory`] and [`Error::NotDwc3`]; the memory must then be
-    /// kept.
+    /// [`Error::Memory`], [`Error::NotDwc3`] and [`Error::Refused`], which
+    /// are found before anything is written; after the others the memory
+    /// must be kept.
     pub fn start(parts: Parts<R, D, C>) -> Result<Self, (Error, Parts<R, D, C>)> {
         let Parts {
             registers,
@@ -181,7 +191,9 @@ impl<R: Registers, D: Dma, C: Clock> Controller<R, D, C> {
         if !matches!(id >> 16, ID_DWC3 | ID_DWC31 | ID_DWC32) {
             return Err(Error::NotDwc3(id));
         }
+        self.check_state()?;
         self.soft_reset()?;
+        self.store(GSTS, GSTS_CSR_TIMEOUT);
         self.configure_core();
         self.clear_memory();
         self.setup_event_buffer()?;
@@ -203,6 +215,33 @@ impl<R: Registers, D: Dma, C: Clock> Controller<R, D, C> {
         };
         if self.memory.len() < AREA_BYTES || !(0..AREA_BYTES).step_by(PAGE).all(aligned) {
             return Err(Error::Memory);
+        }
+        Ok(())
+    }
+
+    /// Refuse, having written nothing, a controller that is not in device
+    /// mode, stopped and halted.
+    fn check_state(&self) -> Result<(), Error> {
+        let status = self.load(GSTS);
+        if status & GSTS_CURMOD_MASK != GSTS_CURMOD_DEVICE {
+            return Err(Error::Refused {
+                register: GSTS,
+                value: status,
+            });
+        }
+        let control = self.load(DCTL);
+        if control & DCTL_RUN_STOP != 0 {
+            return Err(Error::Refused {
+                register: DCTL,
+                value: control,
+            });
+        }
+        let device_status = self.load(DSTS);
+        if device_status & DSTS_DEVCTRLHLT == 0 {
+            return Err(Error::Refused {
+                register: DSTS,
+                value: device_status,
+            });
         }
         Ok(())
     }
