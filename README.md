@@ -83,7 +83,8 @@ public commit is dated 2026-09-11. `rustc` ran on Ferrix on 2026-09-22, and
 Ferrix built its own image the day after.
 
 Nothing about the process is hidden. A change lands only when its gate
-passes, and every gate boots the whole system. The rules the fleet works by,
+passes, and every change to what the image holds boots the whole system on
+all three architectures before it lands. The rules the fleet works by,
 and the incidents behind each one, are in [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
 The [roadmap](docs/roadmap/README.md) and [backlog](docs/BACKLOG.md) show
 what each session owns and what is left.
