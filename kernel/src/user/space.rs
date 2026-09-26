@@ -432,7 +432,7 @@ fn copy_on_write(
     index: u64,
     shared: Frame,
 ) -> Result<(Frame, Option<Retired>), SpaceError> {
-    let copy = mm::allocate_frames(0).ok_or(SpaceError::OutOfMemory)?;
+    let copy = mm::allocate_user_frame().ok_or(SpaceError::OutOfMemory)?;
     mm::copy_frame(copy, shared);
     match vmo.take_page(index, copy) {
         Ok(retired) => Ok((copy, Some(retired))),
@@ -1100,7 +1100,7 @@ impl AddressSpace {
                 let frame = commit_page(&file, index, true, address)?;
                 return self.install_page(inner, placed(frame), user_page(false, execute), false);
             }
-            let frame = mm::allocate_frames(0).ok_or(SpaceError::OutOfMemory)?;
+            let frame = mm::allocate_user_frame().ok_or(SpaceError::OutOfMemory)?;
             // A snapshot. The file's page is read through the direct map
             // without its object's lock, so a write to the file landing
             // meanwhile may be partly in the copy -- which is Linux's
@@ -1192,7 +1192,7 @@ impl AddressSpace {
         at: Placement,
         execute: bool,
     ) -> Result<(), SpaceError> {
-        let copy = mm::allocate_frames(0).ok_or(SpaceError::OutOfMemory)?;
+        let copy = mm::allocate_user_frame().ok_or(SpaceError::OutOfMemory)?;
         mm::copy_frame(copy, at.frame);
         let (frame, retired) = match shadow.take_page(at.index, copy) {
             Ok(retired) => (copy, Some(retired)),

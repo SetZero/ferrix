@@ -31,6 +31,8 @@ pub(crate) mod job;
 pub(crate) mod pin;
 pub(crate) mod port;
 pub(crate) mod process;
+pub(crate) mod quota;
+pub(crate) mod quota_check;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;

@@ -416,21 +416,11 @@ fn clone_with(
     // whole or not at all.
     // A child asked into a cgroup is counted there from the start, and never
     // in its parent's: its first instruction already runs in it.
-    let child = parent
-        .fork_memory(|space| {
-            Process::forked_into(
-                parent,
-                space,
-                flags & CLONE_FILES != 0,
-                flags & CLONE_FS != 0,
-                into.clone(),
-            )
-        })
-        .map_err(|_| Errno::ENOMEM)?
-        .map(Arc::new)
-        .map_err(|_| Errno::ENOMEM)?;
+    let child = fork_into(parent, flags, into.as_ref())?;
     let pid = child.pid();
-    if pid == 0 {
+    // No pid left, or the job's task limit (`pids.max`) reached: Linux's
+    // `EAGAIN` for both. The child charged nothing, and goes unstarted.
+    if pid == 0 || child.over_quota() {
         return Err(Errno::EAGAIN);
     }
     child.set_exit_signal((flags & CSIGNAL) as u32);
@@ -504,6 +494,39 @@ fn clone_with(
         child.wait_vfork_release(parent);
     }
     Ok(pid as usize)
+}
+
+/// Copy `parent` for a child in `into`, or in the parent's job: the copy is
+/// charged to the job the child will be in (`object::quota`).
+///
+/// # Errors
+///
+/// `ENOMEM`, for memory or for that job's limits.
+fn fork_into(
+    parent: &Arc<Process>,
+    flags: u64,
+    into: Option<&Arc<Job>>,
+) -> Result<Arc<Process>, Errno> {
+    let own = crate::sched::running_group();
+    if let Some(into) = into {
+        crate::sched::set_current_group(into.quota_index());
+    }
+    let forked = parent.fork_memory(|space| {
+        Process::forked_into(
+            parent,
+            space,
+            flags & CLONE_FILES != 0,
+            flags & CLONE_FS != 0,
+            into.cloned(),
+        )
+    });
+    if into.is_some() {
+        crate::sched::set_current_group(own);
+    }
+    forked
+        .map_err(|_| Errno::ENOMEM)?
+        .map(Arc::new)
+        .map_err(|_| Errno::ENOMEM)
 }
 
 /// Make a thread of `parent`'s process beside the calling thread: what `clone`

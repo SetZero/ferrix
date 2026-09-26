@@ -1422,10 +1422,13 @@ impl Process {
     }
 
     /// Let `child` go from its list of children, if it is there.
+    ///
+    /// Reaped, so its tasks leave its job's `pids` count now.
     pub(crate) fn disown(&self, child: &Process) {
         self.children
             .lock()
             .retain(|held| !core::ptr::eq(Arc::as_ptr(held), child));
+        child.uncharge_tasks();
     }
 
     /// Whether `pid` is one of its children, ended or not.
@@ -1459,7 +1462,13 @@ impl Process {
             }
         }
         match ended {
-            Some(at) if remove => Ok(Some(children.remove(at))),
+            Some(at) if remove => {
+                let reaped = children.remove(at);
+                // Reaped: its tasks leave its job's `pids` count here, as
+                // Linux's `release_task` uncharges them.
+                reaped.uncharge_tasks();
+                Ok(Some(reaped))
+            }
             Some(at) => Ok(children.get(at).map(Arc::clone)),
             None if any => Ok(None),
             None => Err(Errno::ECHILD),

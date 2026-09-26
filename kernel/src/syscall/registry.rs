@@ -53,7 +53,13 @@ pub(crate) fn publish_forked(child: &Arc<Process>, thread: &Arc<Thread>) {
 /// pids are one space, as on Linux, so `kill` or `prlimit` given a thread's
 /// id reach its process. `None` if every number is in use.
 pub(crate) fn allocate_thread(process: &Arc<Process>) -> Option<u32> {
-    let tid = table::allocate()?;
+    // A thread is a task its job's `pids.max` counts, charged before its id
+    // is chosen and given back with the id.
+    process.charge_thread().ok()?;
+    let Some(tid) = table::allocate() else {
+        process.uncharge_thread();
+        return None;
+    };
     // Reserved just above, so naming it adds no entry and cannot fail.
     let _ = table::name(tid, weak(process));
     Some(tid)
@@ -63,6 +69,7 @@ pub(crate) fn allocate_thread(process: &Arc<Process>) -> Option<u32> {
 /// Called by a thread other than its process's first as it is dropped.
 pub(crate) fn release_thread(tid: u32, process: &Process) {
     table::release_naming(tid, process);
+    process.uncharge_thread();
 }
 
 /// How many numbers name `process`: its pid, and one for each of its threads

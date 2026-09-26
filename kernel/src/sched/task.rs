@@ -25,6 +25,7 @@ use ferrix_sched::{CpuSet, EntityState, Slot};
 use crate::arch;
 use crate::fallible::{self, AllocError};
 use crate::object::process::Host;
+use crate::object::quota;
 use crate::sync::SpinLock;
 use crate::user::space::AddressSpace;
 use crate::vmap::Stack;
@@ -96,8 +97,20 @@ pub(crate) struct Task {
     /// Whether it may be moved to another CPU.
     /// The processors it may run on.
     affinity: CpuSet,
-    /// Its share of a CPU.
+    /// Its share of a CPU, as the run queue has it: [`Task::base_weight`]
+    /// scaled by its job's processor weight (`object::quota::effective`).
     weight: AtomicU32,
+    /// Its own weight, from its nice value, before its job's share is applied.
+    base_weight: AtomicU32,
+    /// The job whose processor share it runs in, and the weight it adds to
+    /// that job's load while runnable: the quota slot in the high half, the
+    /// weight in the low, zero while not runnable. One word, so that a task
+    /// joining, leaving and changing job at once always takes out exactly
+    /// what it put in, from where it put it.
+    group: AtomicU64,
+    /// How many moves between jobs it had seen when it last looked at its
+    /// process's job (`crate::sched::regroup_current`).
+    seen_moves: AtomicU64,
     /// The lag it left its last queue with.
     vlag: AtomicI64,
     /// Real nanoseconds it has run for, mirrored out of the queue so that a
@@ -150,6 +163,38 @@ fn slots() -> Result<(TaskSlot, TaskSlot), AllocError> {
 // run queue that owns the task at that moment — so the accesses are ordered by
 // that lock and never overlap.
 unsafe impl Sync for Task {}
+
+impl Drop for Task {
+    /// Let go of the job it ran in. Its weight left the job's load when it
+    /// died, so only the hold is left.
+    fn drop(&mut self) {
+        let word = *self.group.get_mut();
+        if counted_of(word) != 0 {
+            quota::adjust(group_of(word), -i64::from(counted_of(word)));
+        }
+        quota::release_group(group_of(word));
+    }
+}
+
+/// A task's group word with no job and nothing counted.
+const fn ungrouped() -> u64 {
+    pack(quota::NONE, 0)
+}
+
+/// A group word: `index` in the high half, `counted` in the low.
+const fn pack(index: u32, counted: u32) -> u64 {
+    ((index as u64) << 32) | counted as u64
+}
+
+/// The job a group word names.
+const fn group_of(word: u64) -> u32 {
+    (word >> 32) as u32
+}
+
+/// The weight a group word counts.
+const fn counted_of(word: u64) -> u32 {
+    (word & 0xFFFF_FFFF) as u32
+}
 
 /// Everything a new task needs, which is more than a function should take as
 /// loose arguments: nine of them, four of which are integers, is a call whose
@@ -237,6 +282,9 @@ impl Task {
             thread,
             user,
             weight: AtomicU32::new(weight),
+            base_weight: AtomicU32::new(weight),
+            group: AtomicU64::new(ungrouped()),
+            seen_moves: AtomicU64::new(0),
             vlag: AtomicI64::new(0),
             sum_exec: AtomicU64::new(0),
             baseline: AtomicU64::new(0),
@@ -285,6 +333,9 @@ impl Task {
             thread: None,
             user: None,
             weight: AtomicU32::new(weight),
+            base_weight: AtomicU32::new(weight),
+            group: AtomicU64::new(ungrouped()),
+            seen_moves: AtomicU64::new(0),
             vlag: AtomicI64::new(0),
             sum_exec: AtomicU64::new(0),
             baseline: AtomicU64::new(0),
@@ -357,9 +408,108 @@ impl Task {
         self.state.load(Ordering::Acquire)
     }
 
-    /// Say what it is doing.
+    /// Say what it is doing: and, as it becomes runnable or stops being, add
+    /// its weight to its job's processor load or take it out.
     pub(crate) fn set_state(&self, state: u8) {
-        self.state.store(state, Ordering::Release);
+        let before = self.state.swap(state, Ordering::AcqRel);
+        if before != RUNNABLE && state == RUNNABLE {
+            self.join_group();
+        } else if before == RUNNABLE && state != RUNNABLE {
+            self.leave_group();
+        }
+    }
+
+    /// The job whose processor share it runs in, or `quota::NONE`.
+    pub(crate) fn group(&self) -> u32 {
+        group_of(self.group.load(Ordering::Acquire))
+    }
+
+    /// Run in `index`'s share from now on, taking its weight out of the job
+    /// it was in and into the new one if it is runnable.
+    ///
+    /// For a task not running, or the running task on its own processor
+    /// (`crate::sched::set_current_group`, which says so where charges look):
+    /// a processor running a task keeps the group it switched to it with as
+    /// the one its charges go to.
+    pub(crate) fn set_group(&self, index: u32) {
+        quota::hold_group(index);
+        let swapped = self
+            .group
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |word| {
+                Some(pack(index, counted_of(word)))
+            });
+        let Ok(was) = swapped else {
+            quota::release_group(index);
+            return;
+        };
+        let (old, counted) = (group_of(was), counted_of(was));
+        if counted != 0 {
+            quota::adjust(old, -i64::from(counted));
+            quota::adjust(index, i64::from(counted));
+        }
+        quota::release_group(old);
+        // A runnable task not counted anywhere -- one with no job until now
+        // -- is counted in its new one at once, not at its next wake.
+        self.join_group();
+    }
+
+    /// Count its weight in its job's load, once, if it is runnable.
+    pub(crate) fn join_group(&self) {
+        if self.state() != RUNNABLE {
+            return;
+        }
+        let base = self.base_weight.load(Ordering::Relaxed);
+        let joined = self
+            .group
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |word| {
+                (counted_of(word) == 0 && group_of(word) != quota::NONE)
+                    .then(|| pack(group_of(word), base))
+            });
+        if let Ok(word) = joined {
+            quota::adjust(group_of(word), i64::from(base));
+        }
+    }
+
+    /// Take its weight out of its job's load, if it is counted there.
+    fn leave_group(&self) {
+        let left = self
+            .group
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |word| {
+                (counted_of(word) != 0).then(|| pack(group_of(word), 0))
+            });
+        if let Ok(word) = left {
+            quota::adjust(group_of(word), -i64::from(counted_of(word)));
+        }
+    }
+
+    /// Whether it has already looked at its job since the `moves`th move,
+    /// recording that it now has.
+    pub(crate) fn seen_moves(&self, moves: u64) -> bool {
+        self.seen_moves.swap(moves, Ordering::AcqRel) == moves
+    }
+
+    /// How many moves it had seen when it last looked.
+    pub(crate) fn moves_seen(&self) -> u64 {
+        self.seen_moves.load(Ordering::Acquire)
+    }
+
+    /// Its own weight, before its job's share.
+    pub(crate) fn base_weight(&self) -> u32 {
+        self.base_weight.load(Ordering::Relaxed)
+    }
+
+    /// Give it a new weight of its own: a nice value's.
+    pub(crate) fn set_base_weight(&self, weight: u32) {
+        self.base_weight.store(weight, Ordering::Relaxed);
+    }
+
+    /// The weight it should run at now: its own, scaled by its job's share.
+    pub(crate) fn effective_weight(&self) -> u32 {
+        let base = self.base_weight();
+        match self.group() {
+            quota::NONE => base,
+            group => quota::effective(group, base),
+        }
     }
 
     /// Whether it may be moved to another CPU.

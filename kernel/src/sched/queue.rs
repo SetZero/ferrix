@@ -286,9 +286,32 @@ impl CpuQueue {
                 self.stats.overrun_total = self.stats.overrun_total.saturating_add(overrun);
             }
         }
+        self.follow_group_share();
         if self.stats.measuring {
             self.measure();
         }
+    }
+
+    /// Give the running task the weight its job's share says it should have
+    /// now, if that has moved by more than an eighth: the other tasks of its
+    /// job came and went since it was queued (`object::quota::effective`).
+    /// A task in no job other than the root never changes here.
+    fn follow_group_share(&mut self) {
+        let Some(task) = self.fair.current() else {
+            return;
+        };
+        if task.group() == crate::object::quota::NONE {
+            return;
+        }
+        let (id, now) = (task.id, task.entity_state().weight);
+        let due = task.effective_weight();
+        if now.abs_diff(due) <= now / 8 {
+            return;
+        }
+        task.set_weight(due);
+        // The only refusal is a weight of zero, which `effective` never
+        // answers.
+        let _ = self.fair.set_weight(id, due);
     }
 
     /// Busy and idle nanoseconds up to `now`, charging nothing.
@@ -399,6 +422,11 @@ impl CpuQueue {
         if self.current.is_some() {
             self.account(crate::timer::now_nanos());
         }
+        // A task new to any queue is counted in its job's load here, once;
+        // one woken was counted as it became runnable. Its weight is its
+        // job's share of it as things stand now.
+        task.join_group();
+        task.set_weight(task.effective_weight());
         if let Err(refused) =
             self.fair
                 .enqueue(task.id, Arc::clone(task), task.entity_state(), slot)

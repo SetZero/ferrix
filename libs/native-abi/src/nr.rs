@@ -60,6 +60,10 @@ pub const JOB_CREATE: usize = 0x1028;
 pub const JOB_KILL: usize = 0x1029;
 /// [`NativeCall::JobForCgroup`].
 pub const JOB_FOR_CGROUP: usize = 0x102A;
+/// [`NativeCall::JobSetLimit`].
+pub const JOB_SET_LIMIT: usize = 0x102B;
+/// [`NativeCall::JobGetQuota`].
+pub const JOB_GET_QUOTA: usize = 0x102C;
 
 /// [`NativeCall::ProcessCreate`].
 pub const PROCESS_CREATE: usize = 0x1030;
@@ -183,6 +187,25 @@ pub enum NativeCall {
     /// `ACCESS_DENIED` for rights past the caller's access, `BAD_STATE` for a
     /// cgroup `rmdir` removed.
     JobForCgroup,
+    /// `(job, resource, limit: *u64)`. Limit what the job and every job
+    /// inside it may hold at once of `resource`, one of
+    /// [`crate::types::JOB_MEMORY`] (bytes, rounded down to pages),
+    /// [`crate::types::JOB_OBJECTS`] and [`crate::types::JOB_TASKS`], or set
+    /// its processor weight, [`crate::types::JOB_CPU_WEIGHT`] (1 to 10,000;
+    /// 100 is a task's). [`crate::types::UNLIMITED`] lifts a limit. A limit
+    /// below what the job holds takes nothing away and refuses every charge
+    /// until it holds less. A charge past a limit is refused with `NO_MEMORY`
+    /// for memory and objects and `SHOULD_WAIT` for tasks. `INVALID_ARGS` for
+    /// another resource or a weight out of range, `BAD_STATE` for the root
+    /// job, which nothing limits. Needs `MANAGE`; a program is bounded by a
+    /// limit on a job above any it holds a handle to.
+    JobSetLimit,
+    /// `(job, resource, out: *[u64; 3])`. What the job and every job inside
+    /// it hold of `resource` now, its limit, and how many charges that limit
+    /// has refused, in that order; for [`crate::types::JOB_CPU_WEIGHT`], zero,
+    /// the weight and zero. The root job holds nothing and has no limit.
+    /// Needs `WAIT`.
+    JobGetQuota,
     /// `(job, image, name, name_len)` → handle. Make a process in `job` from
     /// the ELF image the VMO holds, not yet running: the image is read out of
     /// the VMO and loaded as the process's own memory, with nothing on its
@@ -253,7 +276,7 @@ pub enum NativeCall {
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 36] = [
+pub const ALL: [NativeCall; 38] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -275,6 +298,8 @@ pub const ALL: [NativeCall; 36] = [
     NativeCall::JobCreate,
     NativeCall::JobKill,
     NativeCall::JobForCgroup,
+    NativeCall::JobSetLimit,
+    NativeCall::JobGetQuota,
     NativeCall::ProcessCreate,
     NativeCall::ProcessStart,
     NativeCall::InterruptCreate,
@@ -326,6 +351,8 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         JOB_CREATE => NativeCall::JobCreate,
         JOB_KILL => NativeCall::JobKill,
         JOB_FOR_CGROUP => NativeCall::JobForCgroup,
+        JOB_SET_LIMIT => NativeCall::JobSetLimit,
+        JOB_GET_QUOTA => NativeCall::JobGetQuota,
         PROCESS_CREATE => NativeCall::ProcessCreate,
         PROCESS_START => NativeCall::ProcessStart,
         INTERRUPT_CREATE => NativeCall::InterruptCreate,
@@ -371,6 +398,8 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::JobCreate => JOB_CREATE,
         NativeCall::JobKill => JOB_KILL,
         NativeCall::JobForCgroup => JOB_FOR_CGROUP,
+        NativeCall::JobSetLimit => JOB_SET_LIMIT,
+        NativeCall::JobGetQuota => JOB_GET_QUOTA,
         NativeCall::ProcessCreate => PROCESS_CREATE,
         NativeCall::ProcessStart => PROCESS_START,
         NativeCall::InterruptCreate => INTERRUPT_CREATE,

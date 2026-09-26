@@ -309,6 +309,33 @@ pub(crate) static SERVICES: Explanation = Explanation {
           kernel/src/devmgr.rs; kernel/src/iommu/check.rs; kernel/src/iommu/gate.rs",
 };
 
+/// For `check_quotas` in `main.rs`.
+pub(crate) static STAGE9_QUOTAS: Explanation = Explanation {
+    code: "FX-0905",
+    title: "a job quota did not bound what it claims to",
+    meaning: "`object::quota_check::run` drives the quotas the Security Target claims as \
+              FRU_RSA.1 through the paths a program's use takes: a fork loop in a job with a \
+              task limit, a user space faulted in as a task of a job with a memory limit, \
+              objects made in a job with an object limit, and spinning tasks in two jobs on \
+              one processor. Each limit must refuse at exactly its value, anywhere above the \
+              job, while a sibling job goes on; one task alone in its job must keep about \
+              half a processor against eight in another; and every counter must read zero \
+              and every quota slot be given back once the jobs are empty and gone. A kernel \
+              failing this lets one job take memory, tasks, objects or processor time from \
+              the rest (T.EXHAUST).",
+    causes: &[
+        "A charge site stopped charging, or a free path stopped uncharging: a frame, a task \
+         or an object freed without `object::quota` hearing of it.",
+        "A charge walked up the tree wrongly, so a limit above the job did not refuse, or a \
+         refused charge left part of itself counted.",
+        "A task's weight stopped following its job's share (`quota::effective`, \
+         `CpuQueue::follow_group_share`), or its job's load was not kept as it came and went.",
+        "A slot was not given back as its last hold went, or was freed while still held.",
+    ],
+    see: "kernel/src/object/quota.rs; kernel/src/object/quota_check.rs; kernel/src/mm.rs; \
+          docs/certification/IMPLEMENTATION.md",
+};
+
 /// For `kmain` in `main.rs`, when `self_check` fails.
 pub(crate) static STAGE1_HANDOFF: Explanation = Explanation {
     code: "FX-0101",
@@ -2192,6 +2219,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE9_ALLOCATION,
     &STAGE9_REFUSALS,
     &SERVICES,
+    &STAGE9_QUOTAS,
     &STAGE10_PCI,
     &STAGE10_DEVICES,
     &STAGE10_IOMMU,

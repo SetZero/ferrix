@@ -73,6 +73,7 @@ Causes are listed most likely first.
 | [FX-0902](#fx-0902) | an allocation failure was not survived |
 | [FX-0903](#fx-0903) | a native call accepted what the ABI says it refuses |
 | [FX-0904](#fx-0904) | a service the item leans on failed its self-check |
+| [FX-0905](#fx-0905) | a job quota did not bound what it claims to |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
 | [FX-1003](#fx-1003) | an IOMMU domain gave a device the wrong addresses |
@@ -1586,6 +1587,34 @@ with.
 
 See: kernel/src/service_check.rs; kernel/src/hooks.rs; kernel/src/claim.rs;
 kernel/src/devmgr.rs; kernel/src/iommu/check.rs; kernel/src/iommu/gate.rs.
+
+<a id="fx-0905"></a>
+
+## FX-0905 — a job quota did not bound what it claims to
+
+`object::quota_check::run` drives the quotas the Security Target claims as
+FRU_RSA.1 through the paths a program's use takes: a fork loop in a job with a
+task limit, a user space faulted in as a task of a job with a memory limit,
+objects made in a job with an object limit, and spinning tasks in two jobs on
+one processor. Each limit must refuse at exactly its value, anywhere above the
+job, while a sibling job goes on; one task alone in its job must keep about half
+a processor against eight in another; and every counter must read zero and every
+quota slot be given back once the jobs are empty and gone. A kernel failing this
+lets one job take memory, tasks, objects or processor time from the rest
+(T.EXHAUST).
+
+1. A charge site stopped charging, or a free path stopped uncharging: a frame, a
+   task or an object freed without `object::quota` hearing of it.
+2. A charge walked up the tree wrongly, so a limit above the job did not refuse,
+   or a refused charge left part of itself counted.
+3. A task's weight stopped following its job's share (`quota::effective`,
+   `CpuQueue::follow_group_share`), or its job's load was not kept as it came
+   and went.
+4. A slot was not given back as its last hold went, or was freed while still
+   held.
+
+See: kernel/src/object/quota.rs; kernel/src/object/quota_check.rs;
+kernel/src/mm.rs; docs/certification/IMPLEMENTATION.md.
 
 <a id="fx-1001"></a>
 

@@ -81,6 +81,7 @@ use ferrix_frame::Frame;
 use ferrix_sched::CpuSet;
 
 use crate::mm;
+use crate::object::quota::{Charge, Resource};
 use crate::smp::{self, TlbPages};
 use crate::user::space::AddressSpace;
 
@@ -198,6 +199,14 @@ pub(crate) struct Vmo {
     /// bypasses them, and the kernel copies nothing in or out through its own
     /// cached view. Set once, by [`Vmo::make_coherent`], and never cleared.
     coherent: AtomicBool,
+    /// The kernel object it is, charged to the job that made it for as long
+    /// as it exists (`object::quota`). Nothing for a file's page cache, which
+    /// is the file's; its pages are charged as memory all the same.
+    #[expect(
+        dead_code,
+        reason = "AUDIT: held for its drop, which uncharges the job"
+    )]
+    charge: Charge,
 }
 
 /// How an address space maps an object.
@@ -347,7 +356,10 @@ impl Vmo {
     ///
     /// [`AllocError`] when memory has run out.
     pub(crate) fn new_anonymous(pages: u64) -> Result<Arc<Vmo>, AllocError> {
-        Vmo::new_filled(pages, None)
+        // An object the running task's program made, which its job's
+        // object limit counts.
+        let charge = Charge::running(Resource::Objects, 1).map_err(|_| AllocError)?;
+        crate::fallible::try_arc(Vmo::unfilled(pages, None, charge))
     }
 
     /// An object of `pages` pages holding a file's contents, whose absent
@@ -360,11 +372,15 @@ impl Vmo {
         pages: u64,
         filler: Option<Arc<dyn Filler>>,
     ) -> Result<Arc<Vmo>, AllocError> {
-        crate::fallible::try_arc(Vmo::unfilled(pages, filler))
+        crate::fallible::try_arc(Vmo::unfilled(
+            pages,
+            filler,
+            Charge::none(Resource::Objects),
+        ))
     }
 
     /// The object [`Vmo::new_filled`] allocates.
-    fn unfilled(pages: u64, filler: Option<Arc<dyn Filler>>) -> Vmo {
+    fn unfilled(pages: u64, filler: Option<Arc<dyn Filler>>, charge: Charge) -> Vmo {
         Vmo {
             pages: SpinLock::new(Pages::default()),
             len: AtomicU64::new(pages),
@@ -374,6 +390,7 @@ impl Vmo {
             mapped_written: AtomicBool::new(false),
             filler,
             coherent: AtomicBool::new(false),
+            charge,
         }
     }
 
@@ -543,12 +560,15 @@ impl Vmo {
     /// the references and copies taken so far are given back, so a failed
     /// fork costs nothing.
     pub(crate) fn fork(&self) -> Result<Arc<Vmo>, VmoError> {
+        // A second object, the forking program's to pay for, as a page cache
+        // object's fork -- a private file mapping's shadow -- is too.
+        let charge = Charge::running(Resource::Objects, 1).map_err(|_| VmoError::OutOfMemory)?;
         let pages = self.pages.lock();
 
         let mut frames = BTreeMap::new();
         for (&index, &frame) in &pages.frames {
             let given = if pages.held.contains_key(&index) {
-                mm::allocate_frames(0).inspect(|&copy| mm::copy_frame(copy, frame))
+                mm::allocate_user_frame().inspect(|&copy| mm::copy_frame(copy, frame))
             } else {
                 mm::share_frame(frame).map(|_| frame)
             };
@@ -588,6 +608,7 @@ impl Vmo {
             // Forked for a private mapping, which a coherent object never
             // has: `vmo_map` maps it shared. The copy is the process's own.
             coherent: AtomicBool::new(false),
+            charge,
         })
         .map_err(|_| VmoError::OutOfMemory)
     }
@@ -618,7 +639,7 @@ impl Vmo {
         // Room to record the page before the frame is taken, so a refusal
         // leaves nothing to give back.
         let held = crate::fallible::reserve().map_err(|_| VmoError::OutOfMemory)?;
-        let frame = mm::allocate_frames(0).ok_or(VmoError::OutOfMemory)?;
+        let frame = mm::allocate_user_frame().ok_or(VmoError::OutOfMemory)?;
         mm::zero_frame(frame);
         let _ = crate::fallible::insert_held(&held, &mut pages.frames, index, frame);
         Ok(frame)
@@ -736,7 +757,7 @@ impl Vmo {
         }
 
         let held = crate::fallible::reserve().map_err(|_| VmoError::OutOfMemory)?;
-        let frame = mm::allocate_frames(0).ok_or(VmoError::OutOfMemory)?;
+        let frame = mm::allocate_user_frame().ok_or(VmoError::OutOfMemory)?;
         mm::zero_frame(frame);
         let _ = crate::fallible::insert_held(&held, &mut pages.frames, index, frame);
         Ok(Some(frame))
@@ -1498,7 +1519,7 @@ impl Pages {
     fn exclusive(&mut self, index: u64) -> Result<(Frame, Option<Frame>), VmoError> {
         // The section first, so that the frame is not had and then lost.
         let held = crate::fallible::reserve().map_err(|_| VmoError::OutOfMemory)?;
-        let fresh = mm::allocate_frames(0).ok_or(VmoError::OutOfMemory)?;
+        let fresh = mm::allocate_user_frame().ok_or(VmoError::OutOfMemory)?;
         match crate::fallible::insert_held(&held, &mut self.frames, index, fresh) {
             Some(shared) => {
                 mm::copy_frame(fresh, shared);

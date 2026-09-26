@@ -145,6 +145,13 @@ pub(crate) fn dispatch(frame: &mut arch::TrapFrame) {
         }
     }
 
+    // A process moved to another job runs and is charged there from its
+    // next way back to user mode (`object::quota`): one word read when
+    // nothing has moved.
+    if frame.came_from_user() {
+        crate::sched::regroup_current();
+    }
+
     // On the way back to a program, which is where a program killed from
     // outside finds out and a signal is delivered: a task spinning in user
     // mode reaches here on its next tick, and one that was preempted reaches
@@ -230,10 +237,16 @@ pub(crate) fn set_syscall_entry(entry: SyscallEntry) {
 /// with no dispatcher above its core can honestly say, and never a panic: the
 /// caller is a trap vector with a program waiting on it.
 pub(crate) fn system_call(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Outcome {
-    match SYSCALL_ENTRY.get() {
+    let outcome = match SYSCALL_ENTRY.get() {
         Some(entry) => entry(args, regs),
         None => Outcome::Return(Errno::ENOSYS.as_return_value()),
+    };
+    // As on the way back from a trap: a call that moved its own process
+    // (`echo $$ > cgroup.procs`) runs in the new job from here.
+    if regs.is_some() {
+        crate::sched::regroup_current();
     }
+    outcome
 }
 
 /// What the way back to user mode does before the program runs again.

@@ -228,6 +228,8 @@ impl Drop for Thread {
         let tid = *self.tid.get_mut();
         if tid != 0 && tid != self.process.pid() {
             pids::release_naming(tid, &*self.process);
+            // The task `allocate_thread` charged with the id.
+            self.process.uncharge_thread();
         }
     }
 }

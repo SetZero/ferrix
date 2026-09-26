@@ -397,6 +397,10 @@ fn check_programs() {
     // Finding F-23's negative control: allocations made to fail under the
     // native calls stage 9 just proved, and the kernel required to carry on.
     check_allocation_failure();
+
+    // Finding F-35: the job quotas FRU_RSA.1 claims, each driven to its
+    // limit through the path a program's use takes.
+    check_quotas();
 }
 
 /// The registration lists, a device's claim and number, the boot-mode word,
@@ -1153,6 +1157,30 @@ fn check_allocation_failure() {
          NO_MEMORY, the rest succeeded, nothing leaked; {} allocations served from a reserve; \
          {} pages decommitted with none",
         report.calls, report.injected, report.refused, report.drawn, report.torn_down,
+    );
+}
+
+/// Finding F-35: the job quotas, refused at exactly their limits with a
+/// sibling untouched, and empty again after.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_quotas() {
+    let report = match object::quota_check::run() {
+        Ok(report) => report,
+        Err(problem) => fatal!(catalog::STAGE9_QUOTAS, "quota self-check failed: {problem}"),
+    };
+    println!(
+        "  quota    a fork loop refused at its job's {} tasks; faults refused at {} pages ({} \
+         of them page tables) while a sibling job faulted in {}; objects refused at {}; one \
+         task alone in its job kept {}.{}% of a processor against eight in another; every \
+         counter back to zero and every quota slot given back",
+        report.tasks,
+        report.pages,
+        report.tables,
+        report.sibling_pages,
+        report.objects,
+        report.alone_share / 10,
+        report.alone_share % 10,
     );
 }
 

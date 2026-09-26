@@ -16,7 +16,8 @@
 //! - the pid, which is how anything outside the process names it;
 //! - when it was made;
 //! - the native ABI's [`HandleTable`], which is its capabilities;
-//! - its [`Job`], which is where kill authority over it lives;
+//! - its [`Job`], which is where kill authority over it lives, and the
+//!   tasks it has charged there (`object::quota`);
 //! - how it ended ([`Exit`]), which is what a handle to it holds.
 //!
 //! # How the personality's half is reached
@@ -52,13 +53,14 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::any::Any;
 use core::fmt;
-use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 
 use ferrix_native_abi::signals::Signals as ObjectSignals;
 
 use crate::fallible::{self, AllocError};
 use crate::object::job::{self, Job, JobError};
 use crate::object::port::{self, Observer, Observers, PortError};
+use crate::object::quota::{self, Resource};
 use crate::object::{self as objects, HandleTable};
 use crate::sched::WaitQueue;
 use crate::sync::SpinLock;
@@ -87,6 +89,17 @@ pub(crate) struct Process {
     /// Whether it is counted among its job's live members: from when it is
     /// made until it leaves. Changed only under `membership`.
     counted: AtomicBool,
+    /// How many tasks it has charged to its job's quota: itself, and each
+    /// thread beside its first. Moved with it; changed only under
+    /// `membership`.
+    tasks: AtomicU64,
+    /// Its job's quota slot, read without the membership lock: what the
+    /// scheduler files its threads under. Written only under `membership`.
+    slot: AtomicU32,
+    /// Whether its job's task limit refused it as it was made. Such a
+    /// process charged nothing and is never started: `fork` answers
+    /// `EAGAIN`, as it does for a process that got no pid.
+    over_quota: bool,
     /// How it ended, and who is waiting to hear. Apart from the process,
     /// because a handle to the process holds it: see [`Exit`].
     exit: Arc<Exit>,
@@ -106,6 +119,10 @@ impl Process {
         job: Arc<Job>,
     ) -> Result<Process, AllocError> {
         let exit = fallible::try_arc(Exit::new())?;
+        let slot = job.quota_index();
+        // Charged before it is counted, and never started if refused: the
+        // limit is on tasks that exist, not on tasks that run.
+        let over_quota = quota::charge(slot, Resource::Tasks, 1).is_err();
         let mut flipped = job::Flipped::new();
         job.count_in(&mut flipped);
         job::notify(flipped);
@@ -116,8 +133,62 @@ impl Process {
             handles: SpinLock::new(HandleTable::new(objects::HANDLE_LIMIT)),
             membership: SpinLock::new(job),
             counted: AtomicBool::new(true),
+            tasks: AtomicU64::new(u64::from(!over_quota)),
+            slot: AtomicU32::new(slot),
+            over_quota,
             exit,
         })
+    }
+
+    /// Whether its job's task limit refused it as it was made: a process
+    /// that must not be started.
+    pub(crate) fn over_quota(&self) -> bool {
+        self.over_quota
+    }
+
+    /// Its job's quota slot, read without a lock.
+    pub(crate) fn quota_slot(&self) -> u32 {
+        self.slot.load(Ordering::Acquire)
+    }
+
+    /// Charge a thread beside its first to its job, before the thread's id
+    /// is chosen.
+    ///
+    /// # Errors
+    ///
+    /// [`quota::Exceeded`] when the job, or one above it, is at its task
+    /// limit.
+    pub(crate) fn charge_thread(&self) -> Result<(), quota::Exceeded> {
+        let membership = self.membership.lock();
+        quota::charge(membership.quota_index(), Resource::Tasks, 1)?;
+        let _ = self.tasks.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+
+    /// Take back every task it charged, once it has been reaped: Linux's
+    /// `release_task`, where `pids` uncharges. A zombie keeps its charge, as
+    /// it keeps its pid, so a loop of forks nobody waits for is bounded too;
+    /// a reaped one gives it back at once, not when the last reference to it
+    /// goes, which a task not yet freed may still hold. Nothing on a second
+    /// call, nor for a thread's charge let go after.
+    pub(crate) fn uncharge_tasks(&self) {
+        let membership = self.membership.lock();
+        let charged = self.tasks.swap(0, Ordering::AcqRel);
+        quota::uncharge(membership.quota_index(), Resource::Tasks, charged);
+    }
+
+    /// Take back what [`Process::charge_thread`] charged, as the thread's id
+    /// is given back.
+    pub(crate) fn uncharge_thread(&self) {
+        let membership = self.membership.lock();
+        let charged = self
+            .tasks
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |tasks| {
+                tasks.checked_sub(1)
+            });
+        if charged.is_ok() {
+            quota::uncharge(membership.quota_index(), Resource::Tasks, 1);
+        }
     }
 
     /// What it can see.
@@ -159,6 +230,25 @@ impl Process {
     /// [`JobError::Removed`] if `rmdir` took it; [`JobError::Internal`] if
     /// the no-internal-process rule keeps processes out of it.
     pub(crate) fn move_to(&self, to: &Arc<Job>) -> Result<(), JobError> {
+        self.move_charged(to, false)
+    }
+
+    /// [`Process::move_to`] for a process being made, which a task limit at
+    /// `to` refuses as it would refuse the process made there: native
+    /// `process_create`, whose child is built in the root job and then put
+    /// in its own. A move of a running process is not refused for it, as
+    /// Linux's is not.
+    ///
+    /// # Errors
+    ///
+    /// As [`Process::move_to`], and [`JobError::Limited`] for the limit.
+    pub(crate) fn move_new_to(&self, to: &Arc<Job>) -> Result<(), JobError> {
+        self.move_charged(to, true)
+    }
+
+    /// Move it, and the tasks it charged, into `to`; with `checked`, only if
+    /// `to`'s task limits allow them.
+    fn move_charged(&self, to: &Arc<Job>, checked: bool) -> Result<(), JobError> {
         let mut flipped = job::Flipped::new();
         let left = {
             let mut membership = self.membership.lock();
@@ -168,17 +258,35 @@ impl Process {
             if Arc::ptr_eq(&membership, to) {
                 return Ok(());
             }
-            if self.counted.load(Ordering::Acquire) {
-                to.count_in_checked(&mut flipped)?;
-                membership.count_out(&mut flipped);
-            } else {
-                to.admits()?;
+            let tasks = self.tasks.load(Ordering::Acquire);
+            if checked {
+                quota::charge(to.quota_index(), Resource::Tasks, tasks)
+                    .map_err(|_| JobError::Limited)?;
             }
+            let counted = if self.counted.load(Ordering::Acquire) {
+                to.count_in_checked(&mut flipped).map(|()| {
+                    membership.count_out(&mut flipped);
+                })
+            } else {
+                to.admits()
+            };
+            if let Err(why) = counted {
+                if checked {
+                    quota::uncharge(to.quota_index(), Resource::Tasks, tasks);
+                }
+                return Err(why);
+            }
+            if !checked {
+                quota::charge_regardless(to.quota_index(), Resource::Tasks, tasks);
+            }
+            quota::uncharge(membership.quota_index(), Resource::Tasks, tasks);
+            self.slot.store(to.quota_index(), Ordering::Release);
             core::mem::replace(&mut *membership, Arc::clone(to))
         };
         // Outside the lock: it may be the last reference to that job.
         drop(left);
         job::notify(flipped);
+        crate::sched::note_moved();
         Ok(())
     }
 
@@ -234,6 +342,12 @@ impl Drop for Process {
     /// wakes anything from here.
     fn drop(&mut self) {
         self.leave_job();
+        let charged = core::mem::take(self.tasks.get_mut());
+        quota::uncharge(
+            self.membership.get_mut().quota_index(),
+            Resource::Tasks,
+            charged,
+        );
         if self.pid != 0 {
             release(self.pid);
         }

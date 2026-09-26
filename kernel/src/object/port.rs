@@ -51,6 +51,7 @@ use ferrix_sync::IrqSpinLock;
 
 use crate::arch;
 use crate::fallible::{self, AllocError};
+use crate::object::quota::{Charge, Resource};
 use crate::sched::WaitQueue;
 
 /// The most user packets a port holds unread.
@@ -82,6 +83,13 @@ pub(crate) struct Port {
     queue: IrqSpinLock<Queue, arch::Irq>,
     /// Woken when a packet is queued.
     waiters: WaitQueue,
+    /// The kernel object it is, charged to the job that made it
+    /// (`object::quota`).
+    #[expect(
+        dead_code,
+        reason = "AUDIT: held for its drop, which uncharges the job"
+    )]
+    charge: Charge,
 }
 
 /// A port's packets and the room reserved for them.
@@ -125,6 +133,7 @@ impl Port {
     ///
     /// [`AllocError`] when the port or its queue could not be allocated.
     pub(crate) fn new() -> Result<Arc<Port>, AllocError> {
+        let charge = Charge::running(Resource::Objects, 1).map_err(|_| AllocError)?;
         let packets = fallible::try_deque_with_capacity(PORT_CAPACITY)?;
         fallible::try_arc(Port {
             queue: IrqSpinLock::new(Queue {
@@ -134,6 +143,7 @@ impl Port {
                 lost: 0,
             }),
             waiters: WaitQueue::new(),
+            charge,
         })
     }
 

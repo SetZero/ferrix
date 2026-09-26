@@ -21,6 +21,7 @@ use ferrix_native_abi::nr;
 use ferrix_native_abi::rights::{Requested, Rights, SAME_RIGHTS};
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
+use ferrix_native_abi::types;
 use ferrix_native_abi::types::{
     DEVICE_INFO_BYTES, DEVICE_VIRTIO_PCI, DeviceBlock, IoMappingSpec, PACKET_SIGNAL, PACKET_USER,
     PIN_READ_ONLY, PortPacket,
@@ -631,6 +632,47 @@ fn job_calls_name_the_job() {
 }
 
 #[test]
+fn a_job_is_limited_and_read_back_through_pointers() {
+    let sys = Recorder::default();
+    let job = Job::from_owned(owned(&sys, 0x94));
+    sys.answer(|raw| {
+        let [_, resource, at, ..] = raw.args();
+        assert_eq!(resource as u64, types::JOB_TASKS);
+        assert_eq!(read_u64(raw, at), 10, "the limit, through a pointer");
+        0
+    });
+    job.set_limit(job::Resource::Tasks, 10).unwrap();
+    sys.answer(|raw| {
+        let [_, resource, out, ..] = raw.args();
+        assert_eq!(resource as u64, types::JOB_MEMORY);
+        let mut words = [0u8; 24];
+        for (chunk, value) in words.chunks_exact_mut(8).zip([4096u64, 8192, 3]) {
+            chunk.copy_from_slice(&value.to_ne_bytes());
+        }
+        write(raw, out, &words);
+        0
+    });
+    assert_eq!(
+        job.quota(job::Resource::Memory).unwrap(),
+        job::Quota {
+            used: 4096,
+            limit: 8192,
+            refused: 3
+        }
+    );
+    sys.fails(status::INVALID_ARGS);
+    assert_eq!(
+        job.set_limit(job::Resource::CpuWeight, 0).unwrap_err(),
+        Error::InvalidArgs
+    );
+    let numbers = sys.numbers();
+    assert_eq!(
+        numbers,
+        [nr::JOB_SET_LIMIT, nr::JOB_GET_QUOTA, nr::JOB_SET_LIMIT]
+    );
+}
+
+#[test]
 fn a_job_is_had_for_a_cgroup_by_its_descriptor() {
     let sys = Recorder::default();
     sys.returns(0x93);
@@ -747,11 +789,7 @@ fn device_info_reads_the_kernel_bytes_back_and_quiesce_takes_the_handle() {
         calls[1],
         made(
             nr::DEVICE_CLOCK,
-            &[
-                0xA7,
-                49_500_000,
-                ferrix_native_abi::types::CLOCK_SET as usize
-            ]
+            &[0xA7, 49_500_000, types::CLOCK_SET as usize]
         ),
         "set"
     );
@@ -942,6 +980,8 @@ fn every_call_in_the_native_table_has_a_wrapper() {
     let _ = job.create_child();
     let _ = job.kill();
     let _ = job::for_cgroup(&sys, 0, Requested::Same);
+    let _ = job.set_limit(job::Resource::Tasks, 1);
+    let _ = job.quota(job::Resource::Tasks);
     let _ = device.interrupt(0);
     let _ = device.block_ring();
     let _ = device.net_ring();

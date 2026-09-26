@@ -972,3 +972,68 @@ fn a_freed_frame_is_claimed_back_exactly_even_after_it_merged() {
     assert_eq!(frames.free_frames(), 32);
     assert_eq!(frames.claim(base + 64), None);
 }
+
+#[test]
+fn a_frame_is_charged_to_nobody_until_it_is_told_otherwise() {
+    let (mut entries, base, count) = arena(0, 64);
+    let mut frames = frames!(entries, base, count);
+    let frame = frames.allocate(0).unwrap();
+    assert_eq!(frames.owner(frame), NO_OWNER);
+    frames.set_owner(frame, 7).unwrap();
+    assert_eq!(frames.owner(frame), 7);
+    // A second reference keeps it, and the last one's release frees it.
+    assert_eq!(frames.share(frame), Ok(2));
+    assert_eq!(frames.release(frame), Ok(Released::Shared(1)));
+    assert_eq!(frames.owner(frame), 7);
+    assert_eq!(frames.release(frame), Ok(Released::Freed));
+    assert_eq!(frames.owner(frame), NO_OWNER);
+    // Allocated again, it is nobody's.
+    let again = frames.claim(frame).unwrap();
+    assert_eq!(frames.owner(again), NO_OWNER);
+}
+
+#[test]
+fn only_an_allocated_single_frame_takes_an_owner() {
+    let (mut entries, base, count) = arena(0, 64);
+    let mut frames = frames!(entries, base, count);
+    let block = frames.allocate(2).unwrap();
+    assert_eq!(
+        frames.set_owner(block, 1),
+        Err(FrameError::WrongOrder(block))
+    );
+    assert_eq!(
+        frames.set_owner(block + 1, 1),
+        Err(FrameError::InsideBlock(block + 1))
+    );
+    assert_eq!(frames.owner(block), NO_OWNER);
+    let free = block + 4;
+    assert!(frames.set_owner(free, 1).is_err());
+}
+
+#[test]
+fn no_frame_comes_out_of_a_split_or_a_claim_with_an_owner() {
+    // Every frame's link is dirtied by free lists first, so a stale link read
+    // as an owner would show.
+    let (mut entries, base, count) = arena(0, 64);
+    let mut frames = frames!(entries, base, count);
+    let singles: Vec<Frame> = (0..16).map(|_| frames.allocate(0).unwrap()).collect();
+    for &frame in singles.iter().rev() {
+        frames.deallocate(frame, 0).unwrap();
+    }
+    let block = frames.allocate(3).unwrap();
+    frames.split(block, 3).unwrap();
+    for frame in block..block + 8 {
+        assert_eq!(
+            frames.owner(frame),
+            NO_OWNER,
+            "frame {frame} of a split block"
+        );
+    }
+    for frame in block..block + 8 {
+        let _ = frames.release(frame).unwrap();
+    }
+    for frame in [5, 9, 30] {
+        let claimed = frames.claim(frame).unwrap();
+        assert_eq!(frames.owner(claimed), NO_OWNER, "claimed frame {frame}");
+    }
+}

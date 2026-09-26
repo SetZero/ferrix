@@ -68,6 +68,7 @@ use ferrix_sync::Once;
 
 use super::port::{Observer, Observers, PortError, deliver, register, trigger};
 use super::process::{self, Process};
+use super::quota::{self, Charge, Quota, Resource, Usage};
 use crate::fallible::{self, AllocError};
 use crate::sched::WaitQueue;
 
@@ -128,7 +129,7 @@ pub(crate) fn root() -> &'static Arc<Job> {
     ROOT.call_once(|| {
         // FATAL-ALLOC: the root job is made once, during bring-up, before any
         // program exists to be told memory ran out.
-        Job::new_root().unwrap_or_else(|_| {
+        Job::new_tree_root().unwrap_or_else(|_| {
             crate::panic::fatal!(
                 crate::panic::catalog::BOOT_OUT_OF_MEMORY,
                 "no memory for the root job"
@@ -165,6 +166,14 @@ pub(crate) struct Job {
     /// because a directory there is a view made afresh at every lookup, and
     /// the job is what lasts. A node not listed has cgroupfs's defaults.
     nodes: SpinLock<Vec<(u64, NodeAttributes)>>,
+    /// What it and everything beneath it may hold, and hold now
+    /// (`object::quota`, `FRU_RSA.1`). `None` for the tree's root, which
+    /// nothing is charged to and nothing limits.
+    quota: Option<Quota>,
+    /// The kernel object it is, charged to the job of whoever made it: a
+    /// program's `job_create` or `mkdir` counts against its own job's object
+    /// limit, not the new job's. Held for its drop, which uncharges it.
+    charge: Charge,
 }
 
 /// Who owns one node of a job's cgroupfs directory, and its mode: what
@@ -334,11 +343,22 @@ impl Job {
     ///
     /// [`AllocError`].
     pub(crate) fn new_root() -> Result<Arc<Job>, AllocError> {
-        fallible::try_arc(Job::bare(None, None)?)
+        let quota = Quota::new(None)?;
+        fallible::try_arc(Job::bare(None, None, Some(quota))?)
+    }
+
+    /// The tree's root: a job with no parent and no quota, since nothing is
+    /// charged at the top of the tree every process is in.
+    fn new_tree_root() -> Result<Arc<Job>, AllocError> {
+        fallible::try_arc(Job::bare(None, None, None)?)
     }
 
     /// A job inside `parent`, or none, not yet listed anywhere.
-    fn bare(parent: Option<Arc<Job>>, name: Option<Box<str>>) -> Result<Job, AllocError> {
+    fn bare(
+        parent: Option<Arc<Job>>,
+        name: Option<Box<str>>,
+        quota: Option<Quota>,
+    ) -> Result<Job, AllocError> {
         Ok(Job {
             parent,
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
@@ -347,7 +367,18 @@ impl Job {
             waiters: WaitQueue::new(),
             events: fallible::try_arc(WaitQueue::new())?,
             nodes: SpinLock::new(Vec::new()),
+            quota,
+            charge: Charge::none(Resource::Objects),
         })
+    }
+
+    /// A job inside this one, with a quota inside this one's.
+    fn bare_child(self: &Arc<Job>, name: Option<Box<str>>) -> Result<Arc<Job>, AllocError> {
+        let charge = Charge::running(Resource::Objects, 1).map_err(|_| AllocError)?;
+        let quota = Quota::new(self.quota.as_ref())?;
+        let mut child = Job::bare(Some(Arc::clone(self)), name, Some(quota))?;
+        child.charge = charge;
+        fallible::try_arc(child)
     }
 
     /// A new anonymous job inside this one.
@@ -356,7 +387,7 @@ impl Job {
     ///
     /// [`JobError::Killed`], [`JobError::NoMemory`].
     pub(crate) fn new_child(self: &Arc<Job>) -> Result<Arc<Job>, JobError> {
-        let child = fallible::try_arc(Job::bare(Some(Arc::clone(self)), None)?)?;
+        let child = self.bare_child(None)?;
         let mut members = self.state.lock();
         if members.killed {
             return Err(JobError::Killed);
@@ -380,7 +411,7 @@ impl Job {
     pub(crate) fn new_named_child(self: &Arc<Job>, name: &str) -> Result<Arc<Job>, JobError> {
         self.room_for_a_child()?;
         let name_held = fallible::try_boxed_str(name)?;
-        let child = fallible::try_arc(Job::bare(Some(Arc::clone(self)), Some(name_held))?)?;
+        let child = self.bare_child(Some(name_held))?;
         let mut members = self.state.lock();
         if members.killed {
             return Err(JobError::Killed);
@@ -393,6 +424,42 @@ impl Job {
         }
         fallible::try_push(&mut members.named, Arc::clone(&child))?;
         Ok(child)
+    }
+
+    /// Its quota slot, or [`quota::NONE`] for the tree's root: what a charge
+    /// made on its behalf names.
+    pub(crate) fn quota_index(&self) -> u32 {
+        self.quota.as_ref().map_or(quota::NONE, Quota::index)
+    }
+
+    /// What it holds of `resource`, its limit and its refusals; `None` for
+    /// the tree's root, which is charged nothing.
+    pub(crate) fn usage(&self, resource: Resource) -> Option<Usage> {
+        self.quota.as_ref().map(|quota| quota.usage(resource))
+    }
+
+    /// Limit what it and everything beneath it may hold of `resource`.
+    /// Whether it could be: the tree's root takes no limit.
+    pub(crate) fn set_limit(&self, resource: Resource, limit: u64) -> bool {
+        self.quota
+            .as_ref()
+            .map(|quota| quota.set_limit(resource, limit))
+            .is_some()
+    }
+
+    /// Its `cpu.weight`: [`quota::DEFAULT_WEIGHT`] for the tree's root.
+    pub(crate) fn cpu_weight(&self) -> u32 {
+        self.quota
+            .as_ref()
+            .map_or(quota::DEFAULT_WEIGHT, Quota::weight)
+    }
+
+    /// Set its `cpu.weight`. Whether it could be: the tree's root has none.
+    pub(crate) fn set_cpu_weight(&self, weight: u32) -> bool {
+        self.quota
+            .as_ref()
+            .map(|quota| quota.set_weight(weight))
+            .is_some()
     }
 
     /// Its name, if it has one.

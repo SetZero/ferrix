@@ -248,7 +248,7 @@ impl Fill {
         let mut frames: Vec<Frame> = Vec::new();
         frames.try_reserve_exact(count).map_err(|_| Errno::ENOMEM)?;
         for _ in 0..count {
-            let Some(frame) = mm::allocate_frames(0) else {
+            let Some(frame) = mm::allocate_user_frame() else {
                 release_all(frames);
                 return Err(Errno::ENOMEM);
             };

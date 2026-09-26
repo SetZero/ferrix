@@ -64,6 +64,7 @@ use ferrix_objects::reach::{Reach, reaches};
 use super::port::{Observer, Observers, PortError, deliver, register, trigger};
 use super::{Object, Transfer, dispose};
 use crate::fallible::{self, AllocError};
+use crate::object::quota::{Charge, Resource};
 use crate::sched::WaitQueue;
 
 /// The most messages an endpoint holds unread.
@@ -189,6 +190,15 @@ struct Channel {
     first: Half,
     /// The second end's.
     second: Half,
+    /// Its two ends, charged as two kernel objects to the job that made them
+    /// for as long as either exists, wherever it went: an end parked in
+    /// another channel's queue is counted as one in a handle table is
+    /// (`object::quota`).
+    #[expect(
+        dead_code,
+        reason = "AUDIT: held for its drop, which uncharges the job"
+    )]
+    charge: Charge,
 }
 
 impl Channel {
@@ -218,9 +228,11 @@ impl Endpoint {
     /// [`AllocError`] when the channel or either end could not be allocated
     /// (finding F-23).
     pub(crate) fn pair() -> Result<(Arc<Endpoint>, Arc<Endpoint>), AllocError> {
+        let charge = Charge::running(Resource::Objects, 2).map_err(|_| AllocError)?;
         let channel = fallible::try_arc(Channel {
             first: Half::new(),
             second: Half::new(),
+            charge,
         })?;
         let first = fallible::try_arc(Endpoint {
             channel: Arc::clone(&channel),

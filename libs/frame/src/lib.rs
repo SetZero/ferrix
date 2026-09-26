@@ -54,6 +54,10 @@ pub const ORDERS: usize = MAX_ORDER as usize + 1;
 /// Sentinel for "no frame", since 0 is a perfectly good frame number.
 const NONE: u32 = u32::MAX;
 
+/// The owner of a frame nobody is charged for: what [`Frames::owner`] answers
+/// for every frame [`Frames::set_owner`] was not called on.
+pub const NO_OWNER: u32 = NONE;
+
 /// A physical frame number: a physical address divided by the page size.
 ///
 /// Frame numbers rather than addresses because the allocator never needs the
@@ -107,7 +111,8 @@ pub enum State {
 pub struct PageEntry {
     /// Next frame on the same free list, or [`NONE`].
     next: u32,
-    /// Previous frame on the same free list, or [`NONE`].
+    /// Previous frame on the same free list, or [`NONE`]; for an allocated
+    /// single frame, whoever it is charged to ([`Frames::set_owner`]).
     previous: u32,
     /// How many references exist to this frame, once it is allocated.
     ///
@@ -502,6 +507,7 @@ impl<'a> Frames<'a> {
             entry.state = State::Allocated;
             entry.order = order;
             entry.refcount = 1;
+            entry.previous = NONE;
         }
         self.free -= frames;
         frame
@@ -554,6 +560,9 @@ impl<'a> Frames<'a> {
                 entry.state = State::Allocated;
                 entry.order = 0;
                 entry.refcount = 1;
+                // A tail's link is whatever its last free list left there,
+                // and an allocated frame's link is its owner.
+                entry.previous = NONE;
             }
         }
         Ok(())
@@ -602,6 +611,7 @@ impl<'a> Frames<'a> {
             entry.state = State::Allocated;
             entry.order = 0;
             entry.refcount = 1;
+            entry.previous = NONE;
         }
         self.free -= 1;
         Some(frame)
@@ -722,6 +732,34 @@ impl<'a> Frames<'a> {
 
         self.deallocate(frame, 0)?;
         Ok(Released::Freed)
+    }
+
+    /// Charge an allocated single frame to `owner`: a number the caller
+    /// chooses, kept in the link an allocated frame does not use, and handed
+    /// back by [`Frames::owner`] until the frame is freed.
+    ///
+    /// The kernel's job quotas are why: a frame is freed under whatever lock
+    /// its last holder had, and has to find what to uncharge from the frame
+    /// alone. Only single frames, for the reason [`Frames::share`] gives.
+    ///
+    /// # Errors
+    ///
+    /// The refusals of [`Frames::share`] for a frame that is not an allocated
+    /// single frame.
+    pub fn set_owner(&mut self, frame: Frame, owner: u32) -> Result<(), FrameError> {
+        self.allocated_head(frame, 0)?;
+        let entry = self.entry_mut(frame).ok_or(FrameError::OutOfRange(frame))?;
+        entry.previous = owner;
+        Ok(())
+    }
+
+    /// Who an allocated single frame is charged to, or [`NO_OWNER`]: for a
+    /// frame never charged, a free one, or a block.
+    #[must_use]
+    pub fn owner(&self, frame: Frame) -> u32 {
+        self.entry(frame)
+            .filter(|entry| entry.state == State::Allocated && entry.order == 0)
+            .map_or(NONE, |entry| entry.previous)
     }
 
     /// Merge upwards while the buddy is a free block of the same order.

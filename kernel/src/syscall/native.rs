@@ -57,8 +57,8 @@ use ferrix_native_abi::rights::{Requested, Rights};
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
 use ferrix_native_abi::types::{
-    CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, DEVICE_INFO_BYTES, DeviceInfo, MAP_READ, MAP_WRITE,
-    PortPacket, ReadActual,
+    self, CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, DEVICE_INFO_BYTES, DeviceInfo, MAP_READ,
+    MAP_WRITE, PortPacket, ReadActual,
 };
 use ferrix_objects::message::Message;
 use ferrix_objects::reach::Reach;
@@ -77,6 +77,7 @@ use crate::object::io_mapping::{IoMapping, IoMappingError};
 use crate::object::job::{self, Job};
 use crate::object::port::{Observer, Port, PortError};
 use crate::object::process::{Host, Process, ProcessRef};
+use crate::object::quota::{self, Resource, Usage};
 use crate::object::{self, HandleTable, Object};
 use crate::syscall::uaccess::{self, UserError};
 use crate::trap::SyscallArgs;
@@ -369,18 +370,12 @@ pub(crate) fn dispatch(args: &SyscallArgs, caller: Option<&dyn Host>) -> Result<
         ),
         NativeCall::VmoGetSize => vmo_get_size(process, handle(a[0]), a[1]),
         NativeCall::ObjectWaitOne => object_wait_one(caller, handle(a[0]), a[1], a[2], a[3]),
-        NativeCall::JobCreate => job_create(process, handle(a[0])),
-        NativeCall::JobKill => job_kill(process, handle(a[0])),
-        NativeCall::ProcessCreate => process_create(
-            process,
-            handle(a[0]),
-            handle(a[1]),
-            Buffer {
-                at: a[2],
-                count: a[3],
-            },
-        ),
-        NativeCall::ProcessStart => process_start(process, handle(a[0]), handle(a[1])),
+        NativeCall::JobCreate
+        | NativeCall::JobKill
+        | NativeCall::JobSetLimit
+        | NativeCall::JobGetQuota
+        | NativeCall::ProcessCreate
+        | NativeCall::ProcessStart => job_call(call, process, &a),
         NativeCall::InterruptCreate => interrupt_create(process, handle(a[0]), a[1]),
         NativeCall::InterruptAck => interrupt_ack(process, handle(a[0])),
         NativeCall::InterruptBind => interrupt_bind(process, handle(a[0]), handle(a[1]), a[2]),
@@ -1157,6 +1152,29 @@ fn job_in(process: &Process, job: Handle, needed: Rights) -> Result<Arc<Job>, Er
     })
 }
 
+/// The calls on a job and on the processes made in one, which `dispatch`
+/// hands on as one.
+fn job_call(call: NativeCall, process: &Process, a: &[u64; 6]) -> Result<usize, Errno> {
+    let [first, second, third, fourth, ..] = *a;
+    match call {
+        NativeCall::JobCreate => job_create(process, handle(first)),
+        NativeCall::JobKill => job_kill(process, handle(first)),
+        NativeCall::JobSetLimit => job_set_limit(process, handle(first), second, third),
+        NativeCall::JobGetQuota => job_get_quota(process, handle(first), second, third),
+        NativeCall::ProcessCreate => process_create(
+            process,
+            handle(first),
+            handle(second),
+            Buffer {
+                at: third,
+                count: fourth,
+            },
+        ),
+        NativeCall::ProcessStart => process_start(process, handle(first), handle(second)),
+        _ => Err(Errno::ENOSYS),
+    }
+}
+
 /// `job_create`.
 fn job_create(process: &Process, parent: Handle) -> Result<usize, Errno> {
     let parent = job_in(process, parent, Rights::MANAGE)?;
@@ -1177,6 +1195,77 @@ fn job_kill(process: &Process, job: Handle) -> Result<usize, Errno> {
     let _ended = job
         .kill(job::KILLED_STATUS)
         .map_err(|_| status::NO_MEMORY)?;
+    Ok(0)
+}
+
+/// What `job_set_limit` and `job_get_quota` name by `resource`: a quota, or
+/// the processor weight.
+enum Limited {
+    /// A resource the job is charged for.
+    Quota(Resource),
+    /// `cpu.weight`.
+    Weight,
+}
+
+/// The resource a register names.
+fn limited(resource: u64) -> Result<Limited, Errno> {
+    match resource {
+        types::JOB_MEMORY => Ok(Limited::Quota(Resource::Memory)),
+        types::JOB_OBJECTS => Ok(Limited::Quota(Resource::Objects)),
+        types::JOB_TASKS => Ok(Limited::Quota(Resource::Tasks)),
+        types::JOB_CPU_WEIGHT => Ok(Limited::Weight),
+        _ => Err(status::INVALID_ARGS),
+    }
+}
+
+/// `job_set_limit`.
+fn job_set_limit(process: &Process, job: Handle, resource: u64, at: u64) -> Result<usize, Errno> {
+    let job = job_in(process, job, Rights::MANAGE)?;
+    let limit = read_u64(process, at)?;
+    let set = match limited(resource)? {
+        Limited::Quota(Resource::Memory) => job.set_limit(
+            Resource::Memory,
+            if limit == types::UNLIMITED {
+                quota::UNLIMITED
+            } else {
+                limit / PAGE_SIZE
+            },
+        ),
+        Limited::Quota(resource) => job.set_limit(resource, limit),
+        Limited::Weight => {
+            let weight = u32::try_from(limit)
+                .ok()
+                .filter(|weight| (quota::MIN_WEIGHT..=quota::MAX_WEIGHT).contains(weight))
+                .ok_or(status::INVALID_ARGS)?;
+            job.set_cpu_weight(weight)
+        }
+    };
+    if set { Ok(0) } else { Err(status::BAD_STATE) }
+}
+
+/// `job_get_quota`.
+fn job_get_quota(process: &Process, job: Handle, resource: u64, out: u64) -> Result<usize, Errno> {
+    let job = job_in(process, job, Rights::WAIT)?;
+    let [used, limit, refused] = match limited(resource)? {
+        Limited::Weight => [0, u64::from(job.cpu_weight()), 0],
+        Limited::Quota(resource) => {
+            let usage = job.usage(resource).unwrap_or(Usage {
+                used: 0,
+                limit: quota::UNLIMITED,
+                refused: 0,
+            });
+            let bytes = |pages: u64| match resource {
+                Resource::Memory if pages != quota::UNLIMITED => pages.saturating_mul(PAGE_SIZE),
+                _ => pages,
+            };
+            [bytes(usage.used), bytes(usage.limit), usage.refused]
+        }
+    };
+    let mut bytes = [0u8; 24];
+    for (chunk, value) in bytes.chunks_exact_mut(8).zip([used, limit, refused]) {
+        chunk.copy_from_slice(&value.to_ne_bytes());
+    }
+    uaccess::copy_to_user(process.space(), out, &bytes).map_err(fault)?;
     Ok(0)
 }
 
@@ -1205,13 +1294,23 @@ fn process_create(
     let name = copy_in(process, name.at, name_len)?;
     let processes = processes().ok_or(Errno::ENOSYS)?;
     let image = image_bytes(&vmo)?;
-    let child = (processes.load)(&image, &name)?;
+    // The child's first memory is its job's, not the caller's: loaded as a
+    // task of that job, so a limit there bounds it (`object::quota`).
+    let own = crate::sched::running_group();
+    crate::sched::set_current_group(job.quota_index());
+    let loaded = (processes.load)(&image, &name);
+    crate::sched::set_current_group(own);
+    let child = loaded?;
     drop(image);
-    if job.adopt(child.core()).is_err() {
-        // A killed job takes nothing new. What was made is ended here, in the
-        // caller's task, where a kill may run.
+    if let Err(why) = child.core().move_new_to(&job) {
+        // A killed job takes nothing new, and one at its task limit no more
+        // tasks. What was made is ended here, in the caller's task, where a
+        // kill may run.
         child.kill(job::KILLED_STATUS);
-        return Err(status::BAD_STATE);
+        return Err(match why {
+            job::JobError::Limited => status::SHOULD_WAIT,
+            _ => status::BAD_STATE,
+        });
     }
     let created = ProcessRef::created(child).map_err(|_| status::NO_MEMORY)?;
     insert_new(process, Object::Process(created), Rights::PROCESS)

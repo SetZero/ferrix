@@ -74,6 +74,21 @@ pub const PIN_COHERENT: u64 = 2;
 /// would be.
 pub const CLOCK_SET: u64 = 1;
 
+/// `job_set_limit` and `job_get_quota`'s resource: physical memory, in bytes.
+pub const JOB_MEMORY: u64 = 0;
+/// `job_set_limit` and `job_get_quota`'s resource: kernel objects a program
+/// made -- VMOs, channel ends, ports, jobs.
+pub const JOB_OBJECTS: u64 = 1;
+/// `job_set_limit` and `job_get_quota`'s resource: tasks, a process and each
+/// thread beside its first.
+pub const JOB_TASKS: u64 = 2;
+/// `job_set_limit` and `job_get_quota`'s resource: the job's processor
+/// weight, 1 to 10,000.
+pub const JOB_CPU_WEIGHT: u64 = 3;
+/// `job_set_limit`'s limit that is no limit, and what `job_get_quota` reads
+/// for one.
+pub const UNLIMITED: u64 = u64::MAX;
+
 /// Where one of a device's virtio register blocks lies, as `device_info`
 /// reports it and a driver's START carries it: the page-aligned physical
 /// start of the pages holding it, inside one of the device's apertures, the

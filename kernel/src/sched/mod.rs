@@ -53,6 +53,7 @@ use ferrix_sync::{IrqControl, IrqSpinLock, Once, SpinLock};
 
 use crate::arch;
 use crate::fallible;
+use crate::object::quota;
 use crate::smp::Topology;
 use queue::CpuQueue;
 use task::{DEAD, RUNNABLE};
@@ -324,19 +325,126 @@ fn preempt_count(cpu: usize) -> u32 {
 /// runs one.
 static RUNNING: Once<Vec<AtomicU64>> = Once::new();
 
-/// Make the per-processor words [`NEXT_BALANCE`] and [`RUNNING`].
+/// The job whose quota the task each processor runs is charged to, by slot,
+/// for a charge made without the run queue's lock: [`running_group`].
+/// `quota::NONE` for a kernel thread and for the root job.
+static RUNNING_GROUP: Once<Vec<AtomicU32>> = Once::new();
+
+/// How many moves between jobs the task each processor runs had seen when it
+/// last looked: what lets [`regroup_current`] answer from one word on every
+/// way back to user mode.
+static RUNNING_SEEN: Once<Vec<AtomicU64>> = Once::new();
+
+/// Make the per-processor words [`NEXT_BALANCE`], [`RUNNING`] and
+/// [`RUNNING_GROUP`].
 fn per_cpu_words(online: usize) {
     // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
     let _ = NEXT_BALANCE.call_once(|| (0..online).map(|_| AtomicU64::new(0)).collect());
     // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
     let _ = RUNNING.call_once(|| (0..online).map(|_| AtomicU64::new(0)).collect());
+    // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
+    let _ = RUNNING_GROUP.call_once(|| (0..online).map(|_| AtomicU32::new(quota::NONE)).collect());
+    // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
+    let _ = RUNNING_SEEN.call_once(|| (0..online).map(|_| AtomicU64::new(0)).collect());
 }
 
-/// Record that `cpu` now runs task `id`.
-fn note_running(cpu: usize, id: TaskId) {
+/// Record that `cpu` now runs task `id`, charged to `group`, which had seen
+/// `seen` moves between jobs.
+fn note_running(cpu: usize, id: TaskId, group: u32, seen: u64) {
     if let Some(slot) = RUNNING.get().and_then(|running| running.get(cpu)) {
         slot.store(id, Ordering::Release);
     }
+    if let Some(slot) = RUNNING_GROUP.get().and_then(|running| running.get(cpu)) {
+        slot.store(group, Ordering::Release);
+    }
+    if let Some(slot) = RUNNING_SEEN.get().and_then(|running| running.get(cpu)) {
+        slot.store(seen, Ordering::Release);
+    }
+}
+
+/// The quota slot of the job the running task is charged to, read without a
+/// lock: `quota::NONE` for a kernel thread, the root job, or before the
+/// scheduler runs.
+///
+/// Stable for as long as the caller runs: only the task itself changes its
+/// group ([`regroup_current`], [`set_current_group`]), and the task holds the
+/// slot while it names it, so a charge made to the answer is to a live slot.
+pub(crate) fn running_group() -> u32 {
+    let saved = <arch::Irq as IrqControl>::disable();
+    let group = this_cpu()
+        .and_then(|cpu| RUNNING_GROUP.get()?.get(cpu))
+        .map_or(quota::NONE, |slot| slot.load(Ordering::Acquire));
+    <arch::Irq as IrqControl>::restore(saved);
+    group
+}
+
+/// Moves of a process between jobs, ever: what a task compares with the
+/// count it last saw, to follow its process at its next way back to user
+/// mode without taking a lock on every one ([`regroup_current`]).
+static MOVES: AtomicU64 = AtomicU64::new(0);
+
+/// A process moved to another job: every running task looks again.
+pub(crate) fn note_moved() {
+    let _ = MOVES.fetch_add(1, Ordering::AcqRel);
+    regroup_current();
+}
+
+/// Have the running task run, and charge, in its process's job, if a move
+/// since it last looked changed that. Called on the way back to user mode,
+/// where the task holds no lock.
+pub(crate) fn regroup_current() {
+    let moves = MOVES.load(Ordering::Acquire);
+    let saved = <arch::Irq as IrqControl>::disable();
+    let cpu = this_cpu();
+    // The one word most returns read: nothing moved since this task looked.
+    let seen = cpu
+        .and_then(|cpu| RUNNING_SEEN.get()?.get(cpu))
+        .is_none_or(|seen| seen.swap(moves, Ordering::AcqRel) == moves);
+    let task = if seen {
+        None
+    } else {
+        cpu.and_then(queue_of)
+            .and_then(|lock| lock.lock().current.clone())
+    };
+    <arch::Irq as IrqControl>::restore(saved);
+    let Some(task) = task else {
+        return;
+    };
+    if task.seen_moves(moves) {
+        return;
+    }
+    let Some(thread) = task.thread() else {
+        return;
+    };
+    let slot = thread.process().core().quota_slot();
+    if slot != task.group() {
+        set_task_group(&task, slot);
+    }
+    // Only its own drop gives the last reference back, in task context.
+    drop(task);
+}
+
+/// Run the calling task in `index`'s share, and charge what it does to it:
+/// for a check that acts as a program in a job would.
+pub(crate) fn set_current_group(index: u32) {
+    let saved = <arch::Irq as IrqControl>::disable();
+    let task = this_cpu()
+        .and_then(queue_of)
+        .and_then(|lock| lock.lock().current.clone());
+    <arch::Irq as IrqControl>::restore(saved);
+    if let Some(task) = task {
+        set_task_group(&task, index);
+    }
+}
+
+/// Move `task`, the running one, to `index`, and say so where charges look.
+fn set_task_group(task: &Arc<Task>, index: u32) {
+    task.set_group(index);
+    let saved = <arch::Irq as IrqControl>::disable();
+    if let Some(slot) = this_cpu().and_then(|cpu| RUNNING_GROUP.get()?.get(cpu)) {
+        slot.store(index, Ordering::Release);
+    }
+    <arch::Irq as IrqControl>::restore(saved);
 }
 
 /// The identifier of the task running on this processor, read without a lock.
@@ -716,7 +824,7 @@ fn adopt_boot_task() -> Result<(), &'static str> {
         // already on the processor.
         let _ = queue.fair.pick_next();
         queue.exec_start = crate::timer::now_nanos();
-        note_running(0, boot.id);
+        note_running(0, boot.id, quota::NONE, 0);
         queue.current = Some(boot);
     }
     <arch::Irq as IrqControl>::restore(saved);
@@ -773,7 +881,7 @@ pub(crate) fn enter_idle() -> ! {
         {
             let mut queue = lock.lock();
             queue.idle = Some(Arc::clone(&idle));
-            note_running(cpu, idle.id);
+            note_running(cpu, idle.id, quota::NONE, 0);
             queue.current = Some(idle);
             queue.exec_start = crate::timer::now_nanos();
         }
@@ -999,6 +1107,38 @@ pub(crate) fn spawn_on_in(
     )
 }
 
+/// Start a kernel thread on `cpu` alone, run and charged as a task of the job
+/// whose quota slot is `group`: for the checks of a job's processor share.
+/// The group is set before any queue sees the task, so no processor ever
+/// runs it charged elsewhere.
+///
+/// # Errors
+///
+/// If there is no stack for it, or `cpu` has no run queue.
+pub(crate) fn spawn_in_group(
+    name: &'static str,
+    entry: fn(usize),
+    argument: usize,
+    cpu: usize,
+    group: u32,
+) -> Result<Arc<Task>, &'static str> {
+    let queue = queue_of(cpu).ok_or("no such processor")?;
+    let task = make_task(
+        name,
+        entry,
+        argument,
+        NICE_0_WEIGHT,
+        cpu,
+        CpuSet::of(cpu),
+        None,
+        None,
+        None,
+    )?;
+    task.set_group(group);
+    enqueue(&task, cpu, queue);
+    Ok(task)
+}
+
 /// Start the task that runs `process`'s code: a thread in its address space,
 /// whose entry point `entry` drops to user mode.
 ///
@@ -1060,6 +1200,9 @@ pub(crate) fn prepare_user(
         state,
     )
     .inspect_err(|_| thread.process().thread_gone(false))?;
+    // Its process's job, for its share of the processor and for what it
+    // charges; set before any queue can see it.
+    task.set_group(thread.process().core().quota_slot());
     Ok(PreparedTask {
         task,
         cpu,
@@ -1479,6 +1622,9 @@ pub(crate) fn interrupt(task: &Arc<Task>) {
 /// it; a task on no queue still has its own record set, and is enqueued with
 /// it next time.
 pub(crate) fn set_weight(task: &Arc<Task>, weight: u32) {
+    // The task's own weight; its job's share scales what the queue is told.
+    task.set_base_weight(weight);
+    let weight = task.effective_weight();
     let saved = <arch::Irq as IrqControl>::disable();
     let mut kick_cpu = None;
     loop {
@@ -1765,7 +1911,7 @@ fn choose_next(
     }
     queue.previous = Some(Arc::clone(&previous));
     queue.current = Some(Arc::clone(&next));
-    note_running(cpu, next.id);
+    note_running(cpu, next.id, next.group(), next.moves_seen());
     queue.exec_start = now;
     queue.arm_timer(now);
     next.note_switch(cpu);

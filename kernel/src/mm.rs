@@ -321,6 +321,32 @@ pub(crate) fn allocate_frames(order: u8) -> Option<Frame> {
     Some(frame)
 }
 
+/// Take one frame of a program's memory, charged to the job the running task
+/// is in (`object::quota`, `FRU_RSA.1`): refused, as if memory had run out,
+/// when that job or one above it is at its memory limit.
+///
+/// The charge is the job of whoever caused the frame, as Linux charges the
+/// first toucher, and stays there until the frame is freed, by whoever and
+/// under whatever lock: the frame record keeps the job's slot, and
+/// [`release_frame`] and [`deallocate_frames`] take the charge back from it.
+pub(crate) fn allocate_user_frame() -> Option<Frame> {
+    let owner = crate::sched::running_group();
+    crate::object::quota::charge_frame(owner).ok()?;
+    let frame = allocate_frames(0).and_then(|frame| {
+        with_frames(|frames| frames.set_owner(frame, owner))
+            .and_then(Result::ok)
+            .map(|()| frame)
+            .or_else(|| {
+                deallocate_frames(frame, 0);
+                None
+            })
+    });
+    if frame.is_none() {
+        crate::object::quota::uncharge_frame(owner);
+    }
+    frame
+}
+
 /// Take `blocks` blocks of `2^MAX_ORDER` frames lying back to back, for
 /// memory that has to be one run longer than a block: the first frame, each
 /// block given back or split on its own as one from [`allocate_frames`]
@@ -369,7 +395,15 @@ pub(crate) fn split_frames(frame: Frame, order: u8) -> bool {
 /// Give back frames taken with [`allocate_frames`].
 pub(crate) fn deallocate_frames(frame: Frame, order: u8) {
     count(Route::Freed, 1 << order);
-    let _ = with_frames(|frames| frames.deallocate(frame, order));
+    let owner = with_frames(|frames| {
+        let owner = frames.owner(frame);
+        frames.deallocate(frame, order).map(|()| owner).ok()
+    });
+    // After the allocator's lock: an uncharge is atomics, but nothing needs
+    // the two held together.
+    if let Some(Some(owner)) = owner {
+        crate::object::quota::uncharge_frame(owner);
+    }
 }
 
 /// Record another reference to a frame, for a page two address spaces share.
@@ -391,13 +425,18 @@ pub(crate) fn share_frame(frame: Frame) -> Option<u32> {
 pub(crate) fn release_frame(frame: Frame) -> bool {
     // Qualified: `Released` is already `ferrix_paging`'s in this module, and
     // the two mean different things -- a page table given back versus a frame.
-    let freed =
-        with_frames(|frames| matches!(frames.release(frame), Ok(ferrix_frame::Released::Freed)))
-            .unwrap_or(false);
-    if freed {
+    let freed = with_frames(|frames| {
+        let owner = frames.owner(frame);
+        matches!(frames.release(frame), Ok(ferrix_frame::Released::Freed)).then_some(owner)
+    })
+    .flatten();
+    if let Some(owner) = freed {
         count(Route::Released, 1);
+        // The job the frame was charged to, as it goes back: under whatever
+        // lock the caller holds, which is why the charge is atomics only.
+        crate::object::quota::uncharge_frame(owner);
     }
-    freed
+    freed.is_some()
 }
 
 /// How many references there are to a frame.
@@ -601,6 +640,54 @@ unsafe impl PhysMem for KernelPhysMem {
     }
 }
 
+/// A program's page tables: [`KernelPhysMem`], with every table it makes
+/// charged to the job the running task is in, as [`allocate_user_frame`]
+/// charges a page (`object::quota`). A table is freed through
+/// [`deallocate_frames`], which takes the charge back wherever that happens.
+struct ChargedTables {
+    /// The job's quota slot, or `quota::NONE`.
+    owner: u32,
+}
+
+// SAFETY: every descriptor access is `KernelPhysMem`'s, whose argument this
+// inherits; `allocate_table` returns a frame the buddy allocator handed out
+// once, page aligned, zeroed before it is returned, and charged besides.
+unsafe impl PhysMem for ChargedTables {
+    fn read(&self, at: PhysAddr) -> u64 {
+        KernelPhysMem.read(at)
+    }
+
+    fn write(&mut self, at: PhysAddr, value: u64) {
+        KernelPhysMem.write(at, value);
+    }
+
+    fn allocate_table(&mut self) -> Option<PhysAddr> {
+        if self.owner == crate::object::quota::NONE {
+            return KernelPhysMem.allocate_table();
+        }
+        crate::object::quota::charge_frame(self.owner).ok()?;
+        let table = KernelPhysMem.allocate_table();
+        let owned = table.and_then(|table| {
+            with_frames(|frames| frames.set_owner(table.0 / PAGE_SIZE, self.owner))
+                .and_then(Result::ok)
+                .map(|()| table)
+        });
+        match (table, owned) {
+            (_, Some(table)) => Some(table),
+            (Some(table), None) => {
+                // Not tagged, so this uncharges nothing; the charge goes below.
+                deallocate_frames(table.0 / PAGE_SIZE, 0);
+                crate::object::quota::uncharge_frame(self.owner);
+                None
+            }
+            (None, None) => {
+                crate::object::quota::uncharge_frame(self.owner);
+                None
+            }
+        }
+    }
+}
+
 /// Map `len` bytes of kernel address space at `virt` onto `phys`.
 pub(crate) fn map_kernel(
     virt: u64,
@@ -703,8 +790,15 @@ pub(crate) fn map_in(
         crate::arch::sync_instructions(direct_map(phys), len.next_multiple_of(PAGE_SIZE));
     }
     let mapper: Mapper<crate::arch::PageEncoding> = Mapper::new(PhysAddr(root));
+    // A program's tables are charged to its job, which a user mapping always
+    // is: the running task's, whoever's space it is (`object::quota`).
+    let owner = if flags.user {
+        crate::sched::running_group()
+    } else {
+        crate::object::quota::NONE
+    };
     mapper.map_range(
-        &mut KernelPhysMem,
+        &mut ChargedTables { owner },
         VirtAddr(virt),
         PhysAddr(phys),
         len.next_multiple_of(PAGE_SIZE),

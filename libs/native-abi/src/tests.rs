@@ -214,3 +214,13 @@ fn layouts_have_no_padding_and_match_on_every_target() {
 
     assert_eq!(size_of::<Handle>(), 4, "Handle");
 }
+
+#[test]
+fn quotas_follow_the_job_calls() {
+    assert_eq!(nr::decode(0x102A), Some(NativeCall::JobForCgroup));
+    assert_eq!(nr::decode(0x102B), Some(NativeCall::JobSetLimit));
+    assert_eq!(nr::decode(0x102C), Some(NativeCall::JobGetQuota));
+    for number in 0x102D..=0x102F {
+        assert_eq!(nr::decode(number), None, "{number:#x} was assigned");
+    }
+}
