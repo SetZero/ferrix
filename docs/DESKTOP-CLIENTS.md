@@ -235,6 +235,16 @@ shell says it does, and the program reports it.
   and a following block are one instance). image renders all fifteen of the
   user's waybar icons on nazuna (an ignored probe test); JPEG decodes with
   zune-jpeg's SIMD off, so it forbids unsafe and is slower than it could be.
-* `userland/compositor/text` is written on `clients-base` and lands next.
+* **`userland/compositor/text` is on `main`** (2026-09-26). 29 host tests on
+  the tree's own Liberation and Inter; an ignored probe of the host's fonts
+  (`cargo test -p compositor-text -- --ignored`) found 419 faces in about
+  200 ms, instanced the variable Ubuntu file at wght 300 for "Ubuntu Light",
+  and measured `line_height='2.0'` on Ubuntu at 15pt as 11.2 pixels above and
+  below, which is the user's own measurement of their waybar tooltips. Not
+  done: colour glyphs (Noto Color Emoji draws nothing), bidi reordering,
+  instancing on axes other than `wght`, and a font cache on disk
+  (`Fonts::system()` scans every time).
+* Next: the xtask slice -- `run-compositor --config` carrying the user's
+  dotfiles and fonts, `DESKTOP_CLIENTS`, and the `caption` boot.
 * Not yet: the xtask flag that carries the user's dotfiles and fonts, and the
   boot check of a toolkit client drawing text in the user's font.
