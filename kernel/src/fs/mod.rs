@@ -236,6 +236,11 @@ pub(crate) fn read_file(
 /// no symbolic link on the way from `dir` to it: `openat2`'s
 /// `RESOLVE_NO_SYMLINKS`, which Ferrix has no call for.
 ///
+/// The read for any name a user or a command line had a hand in: anything
+/// the kernel reads whole from a name it did not choose itself should read
+/// it through here, beneath the one directory it may come from, rather than
+/// through [`read_file`], which follows links anywhere.
+///
 /// What the display core reads `drm.edid_firmware`'s file with. The name has
 /// already been refused if it is absolute or climbs through `..`
 /// (`ferrix_displayctl::edid::confined`), so a walk one component at a time
