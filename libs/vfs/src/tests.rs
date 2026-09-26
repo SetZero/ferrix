@@ -2975,32 +2975,64 @@ fn shrinking_a_socket_buffer_blocks_writes_until_it_drains() {
     );
 }
 
+/// A read runs on through plain bytes into bytes that bring descriptors,
+/// takes them, and stops at the end of those bytes. Measured on a 7.0 host:
+/// a socketpair holding 100 plain bytes, 100 sent with a descriptor and 100
+/// plain reads as 200 and then 100 -- by `read`, by `recvmsg` with a control
+/// buffer and without one, and by `MSG_PEEK` -- and 100 plain, 100 with a
+/// descriptor and 100 with another reads as 200, then 100.
 #[test]
-fn a_stream_read_stops_at_ancillary_data_from_either_side() {
+fn a_stream_read_runs_into_ancillary_data_and_stops_after_it() {
     let mut buf = SocketBuffer::<u32>::new(Kind::Stream, SOCKET_CAP);
     assert_eq!(buf.write(b"plain", &mut None), SocketWrite::Wrote(5));
     assert_eq!(buf.write(b"rights", &mut Some(1)), SocketWrite::Wrote(6));
     assert_eq!(buf.write(b"after", &mut None), SocketWrite::Wrote(5));
     assert_eq!(buf.write(b"more", &mut Some(2)), SocketWrite::Wrote(4));
+    assert_eq!(buf.write(b"most", &mut Some(3)), SocketWrite::Wrote(4));
     assert_eq!(
         read_all(&mut buf, false),
-        (got(5, 5, None), b"plain".to_vec()),
-        "a read must not run on into bytes that bring descriptors"
+        (got(11, 11, Some(1)), b"plainrights".to_vec()),
+        "a read runs on into bytes that bring descriptors, and not past them"
     );
     assert_eq!(
         read_all(&mut buf, false),
-        (got(6, 6, Some(1)), b"rights".to_vec()),
-        "a read must not run on past the bytes that brought them"
+        (got(9, 9, Some(2)), b"aftermore".to_vec())
     );
     assert_eq!(
         read_all(&mut buf, false),
-        (got(5, 5, None), b"after".to_vec())
-    );
-    assert_eq!(
-        read_all(&mut buf, false),
-        (got(4, 4, Some(2)), b"more".to_vec())
+        (got(4, 4, Some(3)), b"most".to_vec()),
+        "one set of descriptors per read"
     );
     assert_eq!(buf.read(&mut [0_u8; 8], false), SocketRead::WouldBlock);
+}
+
+/// Ancillary data a caller picks with `stopping_before` is a boundary on
+/// both sides: a read that has taken bytes stops before it, and one that
+/// starts on it takes it.
+#[test]
+fn a_stream_read_stops_before_what_the_caller_picks() {
+    let mut buf =
+        SocketBuffer::<u32>::new(Kind::Stream, SOCKET_CAP).stopping_before(|&stamp| stamp >= 100);
+    assert_eq!(buf.write(b"plain", &mut None), SocketWrite::Wrote(5));
+    assert_eq!(buf.write(b"stamped", &mut Some(100)), SocketWrite::Wrote(7));
+    assert_eq!(buf.write(b"rights", &mut Some(1)), SocketWrite::Wrote(6));
+    assert_eq!(
+        read_all(&mut buf, true),
+        (got(5, 5, None), b"plain".to_vec())
+    );
+    let mut three = [0_u8; 3];
+    assert_eq!(buf.read(&mut three, false), got(3, 3, None));
+    assert_eq!(buf.read_on(&mut three), (2, None));
+    assert_eq!(buf.read_on(&mut three), (0, None), "not into the stamp");
+    assert_eq!(
+        read_all(&mut buf, false),
+        (got(7, 7, Some(100)), b"stamped".to_vec()),
+        "a read that starts on it takes it"
+    );
+    assert_eq!(
+        read_all(&mut buf, false),
+        (got(6, 6, Some(1)), b"rights".to_vec())
+    );
 }
 
 #[test]
@@ -3022,6 +3054,21 @@ fn ancillary_data_comes_with_the_first_byte_of_a_segment_read_in_pieces() {
         (got(8, 8, None), b"ghtstail".to_vec()),
         "once its data is taken the rest is ordinary bytes"
     );
+
+    // And a read that ends inside the bytes that brought descriptors after
+    // plain ones takes the descriptors with it. Measured on a 7.0 host:
+    // 100 plain, 100 with a descriptor, 100 plain, read for 150 is 150 with
+    // the descriptor, then 150.
+    assert_eq!(buf.write(b"ab", &mut None), SocketWrite::Wrote(2));
+    assert_eq!(buf.write(b"cd", &mut Some(2)), SocketWrite::Wrote(2));
+    assert_eq!(buf.write(b"ef", &mut None), SocketWrite::Wrote(2));
+    let mut three = [0_u8; 3];
+    assert_eq!(buf.read(&mut three, false), got(3, 3, Some(2)));
+    assert_eq!(&three, b"abc");
+    assert_eq!(
+        read_all(&mut buf, false),
+        (got(3, 3, None), b"def".to_vec())
+    );
 }
 
 /// A read that goes on in pieces takes what one read into a larger buffer
@@ -3035,18 +3082,26 @@ fn a_stream_read_goes_on_in_pieces_up_to_the_boundaries_one_read_keeps() {
     assert_eq!(buf.write(b"abcdef", &mut None), SocketWrite::Wrote(6));
     let mut four = [0_u8; 4];
     assert_eq!(buf.read(&mut four, false), got(4, 4, None));
-    assert_eq!(buf.read_on(&mut four), 2, "the rest of what is there");
+    assert_eq!(
+        buf.read_on(&mut four),
+        (2, None),
+        "the rest of what is there"
+    );
     assert_eq!(&four[..2], b"ef");
-    assert_eq!(buf.read_on(&mut four), 0, "and nothing is waited for");
+    assert_eq!(
+        buf.read_on(&mut four),
+        (0, None),
+        "and nothing is waited for"
+    );
 
     // Plain writes run on into each other.
     for chunk in [&b"ab"[..], b"cd", b"ef"] {
         assert_eq!(buf.write(chunk, &mut None), SocketWrite::Wrote(2));
     }
     assert_eq!(buf.read(&mut four[..1], false), got(1, 1, None));
-    assert_eq!(buf.read_on(&mut four), 4);
+    assert_eq!(buf.read_on(&mut four), (4, None));
     assert_eq!(&four, b"bcde");
-    assert_eq!(buf.read_on(&mut four), 1);
+    assert_eq!(buf.read_on(&mut four), (1, None));
     assert_eq!(buf.queued(), 0);
 
     // Bytes that brought a descriptor are read to their end and no further,
@@ -3055,33 +3110,43 @@ fn a_stream_read_goes_on_in_pieces_up_to_the_boundaries_one_read_keeps() {
     assert_eq!(buf.write(b"after", &mut None), SocketWrite::Wrote(5));
     let mut two = [0_u8; 2];
     assert_eq!(buf.read(&mut two, false), got(2, 2, Some(1)));
-    assert_eq!(buf.read_on(&mut four), 4);
+    assert_eq!(buf.read_on(&mut four), (4, None));
     assert_eq!(&four, b"ghts");
-    assert_eq!(buf.read_on(&mut four), 2, "the last of the segment");
+    assert_eq!(buf.read_on(&mut four), (2, None), "the last of the segment");
     assert_eq!(&four[..2], b"xx");
-    assert_eq!(buf.read_on(&mut four), 0, "and not into what came after");
+    assert_eq!(
+        buf.read_on(&mut four),
+        (0, None),
+        "and not into what came after"
+    );
     assert_eq!(
         read_all(&mut buf, false),
         (got(5, 5, None), b"after".to_vec()),
         "which the next read takes"
     );
 
-    // Nor into bytes that bring descriptors, after plain ones.
+    // Into bytes that bring descriptors after plain ones, taking them, and
+    // not past them: a `read` has nowhere to put them, and its caller drops
+    // them.
     assert_eq!(buf.write(b"plain", &mut None), SocketWrite::Wrote(5));
-    assert_eq!(buf.write(b"fd", &mut Some(2)), SocketWrite::Wrote(2));
+    assert_eq!(buf.write(b"fdfd", &mut Some(2)), SocketWrite::Wrote(4));
+    assert_eq!(buf.write(b"next", &mut None), SocketWrite::Wrote(4));
     assert_eq!(buf.read(&mut four, false), got(4, 4, None));
-    assert_eq!(buf.read_on(&mut four), 1);
-    assert_eq!(buf.read_on(&mut four), 0);
+    assert_eq!(buf.read_on(&mut four[..2]), (2, Some(2)));
+    assert_eq!(&four[..2], b"nf");
+    assert_eq!(buf.read_on(&mut four), (3, None), "the rest of those bytes");
+    assert_eq!(&four[..3], b"dfd");
+    assert_eq!(buf.read_on(&mut four), (0, None), "and not past them");
     assert_eq!(
         read_all(&mut buf, false),
-        (got(2, 2, Some(2)), b"fd".to_vec())
+        (got(4, 4, None), b"next".to_vec())
     );
 
     // A read of a whole segment with its descriptor ends there too.
     assert_eq!(buf.write(b"fd", &mut Some(3)), SocketWrite::Wrote(2));
     assert_eq!(buf.write(b"next", &mut None), SocketWrite::Wrote(4));
     assert_eq!(buf.read(&mut four, false), got(2, 2, Some(3)));
-    assert_eq!(buf.read_on(&mut four), 0);
+    assert_eq!(buf.read_on(&mut four), (0, None));
     assert_eq!(buf.read(&mut four, false), got(4, 4, None));
 
     // A buffer of records is never read on: one read is one record.
@@ -3089,7 +3154,7 @@ fn a_stream_read_goes_on_in_pieces_up_to_the_boundaries_one_read_keeps() {
     assert_eq!(records.write(b"one", &mut None), SocketWrite::Wrote(3));
     assert_eq!(records.write(b"two", &mut None), SocketWrite::Wrote(3));
     assert_eq!(records.read(&mut four, false), got(3, 3, None));
-    assert_eq!(records.read_on(&mut four), 0);
+    assert_eq!(records.read_on(&mut four), (0, None));
     assert_eq!(records.queued(), 3);
 }
 
@@ -3201,25 +3266,22 @@ fn a_peek_copies_what_a_read_would_take_and_takes_nothing() {
     let mut stream = SocketBuffer::<u32>::new(Kind::Stream, SOCKET_CAP);
     assert_eq!(stream.write(b"plain", &mut None), SocketWrite::Wrote(5));
     assert_eq!(stream.write(b"rights", &mut Some(3)), SocketWrite::Wrote(6));
+    assert_eq!(stream.write(b"after", &mut None), SocketWrite::Wrote(5));
     for _ in 0..2 {
         assert_eq!(
             read_all(&mut stream, true),
-            (got(5, 5, None), b"plain".to_vec())
+            (got(11, 11, None), b"plainrights".to_vec()),
+            "a peek returns no ancillary data"
         );
     }
     assert_eq!(
         read_all(&mut stream, false),
-        (got(5, 5, None), b"plain".to_vec())
+        (got(11, 11, Some(3)), b"plainrights".to_vec()),
+        "and leaves it for the read"
     );
     assert_eq!(
         read_all(&mut stream, true),
-        (got(6, 6, None), b"rights".to_vec()),
-        "a peek returns no ancillary data"
-    );
-    assert_eq!(
-        read_all(&mut stream, false),
-        (got(6, 6, Some(3)), b"rights".to_vec()),
-        "and leaves it for the read"
+        (got(5, 5, None), b"after".to_vec())
     );
 
     let mut record = SocketBuffer::<u32>::new(Kind::Record, SOCKET_CAP);
@@ -3339,20 +3401,19 @@ fn a_stream_delivers_bytes_and_ancillary_data_in_order_against_a_model() {
             }
         } else {
             let peek = state & 2 != 0;
-            // What Linux's rule says the read takes: across writes, but not
-            // into bytes that bring ancillary data, and not past the write
-            // whose ancillary data it took.
+            // What Linux's rule says the read takes: across writes, into
+            // bytes that bring ancillary data, and not past the write whose
+            // ancillary data it took.
             let mut expected = Vec::new();
             let mut taken = None;
-            for (i, &(byte, write, carried)) in model.iter().enumerate() {
-                if expected.len() == len
-                    || (i > 0 && carried.is_some())
-                    || (taken.is_some() && write != model[0].1)
-                {
+            let mut taken_from = None;
+            for &(byte, write, carried) in &model {
+                if expected.len() == len || taken_from.is_some_and(|from| write != from) {
                     break;
                 }
-                if i == 0 {
+                if carried.is_some() {
                     taken = carried;
+                    taken_from = Some(write);
                 }
                 expected.push(byte);
             }

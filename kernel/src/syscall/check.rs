@@ -8031,6 +8031,7 @@ fn check_unix_sockets(process: &Process, page: u64) -> Result<(), &'static str> 
         .and_then(|()| check_shutdown_ends_one_direction(process, page))
         .and_then(|()| check_a_socket_reports_itself(process, page))
         .and_then(|()| check_a_message_scatters_and_gathers(process, page))
+        .and_then(|()| check_a_stream_read_runs_into_descriptors(process, page))
         .and_then(|()| check_a_name_carries_a_connection(process, page))
         .and_then(|()| check_a_path_carries_a_connection(process, page))
         .and_then(|()| check_what_a_name_refuses(process, page))?;
@@ -9247,6 +9248,119 @@ fn check_descriptors_travel_with_a_message(
         .and_then(|()| what_passing_descriptors_refuses(process, page, one));
     let _ = fd::sys_close(process, sent_fd);
     outcome
+}
+
+/// What a stream read that stops before the bytes bringing a descriptor
+/// fails with, which the negative control requires by name.
+const STOPPED_BEFORE_DESCRIPTOR: &str =
+    "a stream read stopped before the bytes that brought a descriptor";
+
+/// On a stream, a read runs on through plain bytes into the bytes that bring
+/// a descriptor, and stops after them, as Linux's `unix_stream_read_generic`
+/// does. Measured on a 7.0 host: 100 plain bytes, 100 sent with a descriptor
+/// and 100 plain read as 200 and then 100 -- by `read`, by `recvmsg` with a
+/// control buffer, which installs the descriptor, and without one, which
+/// flags `MSG_CTRUNC` and closes the file -- and a peek sees the same 200.
+///
+/// Here three, one and three bytes: `recvmsg` with room takes four and
+/// installs the descriptor, then three; a peek sees four and takes nothing;
+/// `recvmsg` with no room takes four, flags `MSG_CTRUNC` and closes the file,
+/// which the pipe it is the write end of sees as a hangup; then three.
+fn check_a_stream_read_runs_into_descriptors(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    let (reader, writer) =
+        crate::fs::pipe::new_pipe(true, (0, 0)).map_err(|_| "could not make a pipe to pass")?;
+    // Bound on its own, so the table's lock is gone before the calls below
+    // take it.
+    let sent_fd = process
+        .files()
+        .lock()
+        .insert(writer, false)
+        .map_err(|_| "could not give the check a pipe's write end")?;
+    let pair = socket_pair(process, page, SOCK_STREAM);
+    let outcome =
+        pair.and_then(|pair| stream_runs_into_descriptors(process, page, pair, sent_fd, &reader));
+    if let Ok(pair) = pair {
+        close_socket_pair(process, pair);
+    } else {
+        let _ = fd::sys_close(process, sent_fd);
+    }
+    outcome
+}
+
+/// Queue three plain bytes, one that brings `fd`, and three plain on `one`,
+/// and close `fd`, whose file the queue then keeps open alone.
+fn queue_around_a_descriptor(
+    process: &Process,
+    page: u64,
+    one: i32,
+    fd: i32,
+) -> Result<(), &'static str> {
+    let sent = socket_send(process, page, one, b"abc", 0)
+        .and_then(|_| message_with_control(process, page, one, SCM_RIGHTS, &rights(&[fd]), None));
+    let _ = fd::sys_close(process, fd);
+    answers(
+        sent,
+        1,
+        "a descriptor could not be sent after plain bytes on a stream",
+    )?;
+    answers(
+        socket_send(process, page, one, b"xyz", 0),
+        3,
+        "plain bytes could not follow a descriptor on a stream",
+    )
+}
+
+/// [`check_a_stream_read_runs_into_descriptors`]'s two rounds, passing
+/// `sent_fd`, the write end of the pipe `reader` reads.
+fn stream_runs_into_descriptors(
+    process: &Process,
+    page: u64,
+    (one, other): (i32, i32),
+    sent_fd: i32,
+    reader: &Arc<ferrix_vfs::OpenFile>,
+) -> Result<(), &'static str> {
+    queue_around_a_descriptor(process, page, one, sent_fd)?;
+    let (count, flags, _, control) =
+        receive_with_control(process, page, other, cmsg_space(4, width()))?;
+    let installed = installed_descriptor(&control).ok_or(STOPPED_BEFORE_DESCRIPTOR)?;
+    if count != 4 {
+        let _ = fd::sys_close(process, installed);
+        return Err(STOPPED_BEFORE_DESCRIPTOR);
+    }
+    if flags & MSG_CTRUNC != 0 {
+        let _ = fd::sys_close(process, installed);
+        return Err("a descriptor a stream read ran into was flagged MSG_CTRUNC");
+    }
+    answers(
+        socket_recv(process, page, other, 8, 0),
+        3,
+        "a stream read ran on past the bytes that brought a descriptor",
+    )?;
+
+    queue_around_a_descriptor(process, page, one, installed)?;
+    answers(
+        socket_recv(process, page, other, 8, MSG_PEEK),
+        4,
+        "a peek of a stream stopped before the bytes that brought a descriptor",
+    )?;
+    if reader.poll().hangup {
+        return Err("a peek closed a descriptor it ran into");
+    }
+    let (count, flags, control_len, _) = receive_with_control(process, page, other, 0)?;
+    if count != 4 || control_len != 0 || flags & MSG_CTRUNC == 0 {
+        return Err("a stream read with no room for a descriptor it ran into was not MSG_CTRUNC");
+    }
+    if !reader.poll().hangup {
+        return Err("a descriptor a stream read ran into with no room for it was not closed");
+    }
+    answers(
+        socket_recv(process, page, other, 8, 0),
+        3,
+        "a stream read with no room for a descriptor ran on past its bytes",
+    )
 }
 
 /// The bytes of an `SCM_RIGHTS` message naming `fds`.

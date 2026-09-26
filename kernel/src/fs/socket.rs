@@ -192,6 +192,12 @@ impl Passed {
         self.credentials
     }
 
+    /// Whether it names its sender: a stream read that has taken bytes stops
+    /// before it ([`SocketBuffer::stopping_before`]).
+    fn names_its_sender(&self) -> bool {
+        self.credentials.is_some()
+    }
+
     /// Whether any of them is an `AF_UNIX` socket.
     fn carries_sockets(&self) -> bool {
         self.sockets > 0
@@ -307,7 +313,10 @@ impl Channel {
     /// An empty direction of a socket of `kind`, at the default buffer size.
     fn new(kind: SocketType) -> Arc<Channel> {
         Arc::new(Channel {
-            buffer: SpinLock::new(SocketBuffer::new(kind.buffer_kind(), SOCKET_BUFFER_DEFAULT)),
+            buffer: SpinLock::new(
+                SocketBuffer::new(kind.buffer_kind(), SOCKET_BUFFER_DEFAULT)
+                    .stopping_before(Passed::names_its_sender),
+            ),
             readable: Arc::new(WaitQueue::new()),
             writable: Arc::new(WaitQueue::new()),
             refused: AtomicBool::new(false),
@@ -1046,10 +1055,13 @@ impl Socket {
 
     /// [`Socket::recv`], handing back the files that came with the bytes.
     ///
-    /// A receive hands back at most one message's files: a stream stops after
-    /// the bytes that brought some, as Linux's `unix_stream_read_generic`
-    /// stops, even under `MSG_WAITALL`. A peek hands back none, which is where
-    /// this differs from Linux, whose peek installs duplicates.
+    /// A receive hands back at most one message's files: a stream runs on
+    /// through plain bytes into the bytes that brought some, and stops after
+    /// them, as Linux's `unix_stream_read_generic` stops, even under
+    /// `MSG_WAITALL`. A peek hands back none, which is where this differs
+    /// from Linux, whose peek installs duplicates: measured on a 7.0 host, a
+    /// peek of 100 plain bytes, 100 with a descriptor and 100 plain is 200
+    /// with the descriptor, twice, and the read after it the same.
     ///
     /// # Errors
     ///
@@ -1503,13 +1515,19 @@ impl Inode for Socket {
 
     /// The rest of a stream read, up to the ancillary boundaries one read
     /// into the whole buffer would have stopped at
-    /// ([`SocketBuffer::read_on`]). It never takes ancillary data, so
-    /// nothing is dropped here, and never waits.
+    /// ([`SocketBuffer::read_on`]), and never waiting. What came with bytes it
+    /// ran into is dropped here, with no buffer locked, closing the files, as
+    /// the `read` it goes on does and as Linux's `read` of a socket does.
     fn read_on(&self, buf: &mut [u8]) -> ferrix_vfs::Result<usize> {
-        let taken = self.receive.buffer.lock().read_on(buf);
+        // The guard goes at the end of this statement, before `passed` does.
+        let (taken, passed) = self.receive.buffer.lock().read_on(buf);
+        if passed.as_ref().is_some_and(Passed::carries_sockets) {
+            moved_in_flight();
+        }
         if taken > 0 {
             self.receive.writable.wake_all();
         }
+        drop(passed);
         Ok(taken)
     }
 
