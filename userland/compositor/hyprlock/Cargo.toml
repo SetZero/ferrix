@@ -7,6 +7,16 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[[bin]]
+name = "hyprlock"
+path = "src/main.rs"
+
+# The gate boot's hyprlock: one fixed hash instead of an authentication
+# service (src/bin/gate.rs says why). Only that boot's image carries it.
+[[bin]]
+name = "hyprlock-gate"
+path = "src/bin/gate.rs"
+
 [lib]
 name = "compositor_hyprlock"
 path = "src/lib.rs"
@@ -15,11 +25,19 @@ path = "src/lib.rs"
 compositor-anim = { path = "../anim" }
 compositor-config = { path = "../config" }
 compositor-hyprlang = { path = "../hyprlang" }
+compositor-image = { path = "../image" }
+compositor-text = { path = "../text" }
+compositor-toolkit = { path = "../toolkit" }
 # Declarations only: getuid(2).
 libc = "0.2.189"
 # The rasteriser the widgets are drawn with, at the version the workspace
 # pins (userland/compositor/render/Cargo.toml says why exactly); no new crates.
 tiny-skia = { version = "=0.12.0", default-features = false, features = ["std", "simd"] }
+
+[dev-dependencies]
+# The expected images' format and the compositor's own compositing, which is
+# what makes a lock surface the guest's screen.
+compositor-render = { path = "../render" }
 
 [lints]
 workspace = true
