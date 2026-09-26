@@ -174,9 +174,14 @@ the configuration directory's siblings -- `~/.config/{hypr,waybar,fuzzel}`,
 found as the directories beside the one `--config` is in -- into the
 image's `$HOME/.config`, and the fonts those files name, resolved on the
 host with `fc-match` and copied into `/usr/share/fonts/host/` at
-image-build time (host fonts are never committed). `HOME` on the desktop
-is `/`: the compositor is init, and init's environment is `HOME=/`
-(`kernel/src/init.rs`), which every `exec-once` inherits. The four
+image-build time (host fonts are never committed). The home they go into
+is `/`: since init L10 the compositor is `hyprix.service` under
+`/sbin/init`, and its unit gives it `HOME=/` (5fa34300, which puts back
+the environment hyprix had as pid 1),
+which every client it starts inherits with its own `app.slice` scope.
+`XDG_RUNTIME_DIR` stays unset on purpose: hyprix's sockets are under the
+temporary directory, and the clients fall back to the same place.
+The four
 programs are carried as `/bin/waybar`, `/bin/fuzzel`, `/bin/hyprlock`,
 `/bin/hypridle` by one line each in `xtask/src/compositor.rs`'s
 `DESKTOP_CLIENTS`.

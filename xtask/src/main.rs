@@ -70,6 +70,7 @@ mod compositor;
 mod console;
 mod coverage;
 mod display;
+mod dotfiles;
 mod dma_faults;
 mod everything;
 mod fat;
@@ -240,6 +241,8 @@ OPTIONS:
                                          test-net turns it on whether or not it is given;
                                          run-compositor has one unless --no-net
     --no-net                             run-compositor: no network device and no gateway
+    --no-dotfiles                        run-compositor: carry --config's file alone, without the
+                                         directories and fonts beside it
     --chrome                             run-compositor: Chrome on the desktop, from the volume
                                          scripts/fetch/fetch-chrome.sh makes; SUPER+B opens another
     --everything                         run-compositor: all of it at once -- --gl, --release,
@@ -282,7 +285,12 @@ OPTIONS:
                                          first whose driver is not NVIDIA's proprietary one otherwise;
                                          other boots leave it to QEMU, which on a machine with two GPUs
                                          is a guess. A window's GL goes to the host display's GPU regardless
-    --config <PATH>                      run-compositor: the hyprland.conf the guest is given;
+    --config <PATH>                      run-compositor: the hyprland.conf the guest is given,
+                                         and the user's dotfiles beside it: the directories
+                                         hypr, waybar and fuzzel next to the one PATH is in go
+                                         to the guest's $HOME/.config (HOME is /), and the font
+                                         families they name, resolved here with fc-match, to
+                                         /usr/share/fonts/host (xtask/src/dotfiles.rs);
                                          remote-desktop: the file of answers to read instead of
                                          the ones searched [or $FERRIX_REMOTE]
     --host <DESTINATION>                 remote-desktop: the machine to boot on, as `ssh` names

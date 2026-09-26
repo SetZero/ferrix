@@ -115,6 +115,15 @@ const LOGINCTL_PATH: &str = "bin/loginctl";
 const REBOOT_PATH: &str = "bin/reboot";
 const CONFIG_PATH: &str = "etc/hyprland.conf";
 
+/// The desktop's own clients, written for Ferrix from waybar, fuzzel,
+/// hyprlock and hypridle (`docs/DESKTOP-CLIENTS.md`): each `(package,
+/// binary)` is built and carried as `/bin/<binary>` on every desktop a person
+/// uses (`run-compositor`, `flash --compositor`), so the user's own
+/// `exec-once = waybar` and `bind = …, exec, hyprlock` find it. One line a
+/// program, added by its stream when it lands. A judged boot carries none,
+/// so its archive stays the bytes it was.
+const DESKTOP_CLIENTS: &[(&str, &str)] = &[];
+
 /// Where `run-compositor` puts the wallpaper it carries.
 const WALLPAPER_PATH: &str = "etc/wallpaper.fxwall";
 
@@ -2305,6 +2314,25 @@ fn desktop(
 ) -> Result<(String, Carried)> {
     let config = with_network(with_layout(config, args), args);
     let mut carried = Carried::wanted(arch, args)?;
+    for (package, binary) in DESKTOP_CLIENTS {
+        let program = build(arch, package, binary)?;
+        let bytes = std::fs::read(&program)
+            .map_err(|error| Error::new(format!("reading {}: {error}", program.display())))?;
+        carried.ports.push(crate::ports::File {
+            path: format!("bin/{binary}"),
+            mode: 0o755,
+            content: crate::ports::Content::Bytes(bytes),
+        });
+    }
+    // The user's dotfiles and the fonts they name, from beside a real
+    // `hyprland.conf`: `crate::dotfiles` says which and where.
+    if let Some(path) = &args.config
+        && !args.no_dotfiles
+    {
+        carried
+            .ports
+            .extend(crate::dotfiles::carried(Path::new(path))?);
+    }
     if args.chrome {
         let mut links = chrome_links(&carried.ports);
         if crate::chrome::on_ferrousli(args) {
