@@ -103,10 +103,25 @@ fn build_tone(arch: Arch, flavour: Flavour) -> Result<PathBuf> {
 /// Boot tone with a virtio-snd card whose far end writes `wav`, and give the
 /// lines tone printed.
 fn boot_and_play(arch: Arch, program: &Path, wav: &Path, args: &Args) -> Result<Vec<String>> {
+    boot_and_record(arch, program, "", &[], wav, args)
+}
+
+/// Boot `init`, running `script` if it is a shell, with `files` in the
+/// initramfs and a virtio-snd card whose far end writes `wav`, and give what
+/// the guest said once a line of tone's -- or of a script that says the same
+/// -- has ended it.
+fn boot_and_record(
+    arch: Arch,
+    init: &Path,
+    script: &str,
+    files: &[crate::ports::File],
+    wav: &Path,
+    args: &Args,
+) -> Result<Vec<String>> {
     let loader = crate::cargo::build_loader(arch, args.release)?;
-    let kernel = crate::cargo::build_kernel_with_init(arch, args.release, program, "")?;
+    let kernel = crate::cargo::build_kernel_with_init(arch, args.release, init, script)?;
     let natives = crate::native::build(arch, args.release)?;
-    let initramfs = crate::initramfs::build(None, &natives, None, &[])?;
+    let initramfs = crate::initramfs::build(None, &natives, None, files)?;
     let image = crate::fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
     if wav.exists() {
         std::fs::remove_file(wav)
@@ -236,8 +251,83 @@ pub(crate) fn test_audio(args: &Args) -> Result<()> {
              answered EBADFD each time, devmgr started the driver again, and the third one's \
              card played all {FRAMES} frames whole"
         );
+        test_aplay(arch, &wav, args)?;
     }
     Ok(())
+}
+
+/// Where the aplay boot's counter is on the guest.
+const COUNTER_WAV: &str = "usr/share/ferrix/counter.wav";
+
+/// What the aplay boot's shell runs: ferrousli's aplay, through alsa-lib's
+/// `default` device and so its configuration and `plug`, playing the same
+/// second tone plays. It says so in tone's words, for [`played_whole`].
+const APLAY_SCRIPT: &str = "aplay -D default /usr/share/ferrix/counter.wav \
+    && echo 'tone: done' || echo \"tone: failed: aplay exited $?\"";
+
+/// The fourth boot, on x86-64, where the ports are built (`docs/AUDIO.md`,
+/// U1): ferrousli's busybox as the shell, alsa-lib and aplay built against
+/// ferrousli (`cargo xtask ports`), and a WAV file of the counter, played
+/// through `/dev/snd` and held to the same check as tone's. Skipped, saying
+/// so, when the ports or ferrousli's busybox are not built here.
+fn test_aplay(arch: Arch, wav: &Path, args: &Args) -> Result<()> {
+    if arch != Arch::X86_64 {
+        return Ok(());
+    }
+    let mut files = crate::ports::installed_port(arch, "alsa-utils")?;
+    let config = crate::ports::installed_port(arch, "alsa-lib")?;
+    let Some(shell) = crate::busybox::installed_program(arch) else {
+        println!("  {arch}: ferrousli's busybox is not built here, so aplay's boot is skipped");
+        return Ok(());
+    };
+    if files.is_empty() || config.is_empty() {
+        println!(
+            "  {arch}: alsa-lib and aplay are not built here (`cargo xtask ports`), so aplay's \
+             boot is skipped"
+        );
+        return Ok(());
+    }
+    files.extend(config);
+    files.push(crate::ports::File {
+        path: COUNTER_WAV.to_owned(),
+        mode: 0o644,
+        content: crate::ports::Content::Bytes(counter_wav()),
+    });
+    let lines = boot_and_record(arch, &shell, APLAY_SCRIPT, &files, wav, args)?;
+    played_whole(arch, &lines, wav)?;
+    println!(
+        "  {arch}: ferrousli's aplay played all {FRAMES} frames of the counter through \
+         alsa-lib's default device, whole and in order"
+    );
+    Ok(())
+}
+
+/// The second tone plays, as a WAV file: `S16_LE`, two channels, 48 kHz,
+/// frame `n` holding `n` on the left and its complement on the right.
+fn counter_wav() -> Vec<u8> {
+    const CHANNELS: u16 = 2;
+    const RATE: u32 = 48_000;
+    const BYTES_PER_FRAME: u16 = CHANNELS * 2;
+    let data = FRAMES * u32::from(BYTES_PER_FRAME);
+    let mut out = Vec::with_capacity(44 + data as usize);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&CHANNELS.to_le_bytes());
+    out.extend_from_slice(&RATE.to_le_bytes());
+    out.extend_from_slice(&(RATE * u32::from(BYTES_PER_FRAME)).to_le_bytes());
+    out.extend_from_slice(&BYTES_PER_FRAME.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data.to_le_bytes());
+    for n in 1..=FRAMES {
+        let value = n as u16;
+        out.extend_from_slice(&value.to_le_bytes());
+        out.extend_from_slice(&(!value).to_le_bytes());
+    }
+    out
 }
 
 /// What devmgr's word of a driver started again says, printed by the kernel.
@@ -315,6 +405,13 @@ fn played_whole(arch: Arch, lines: &[String], wav: &Path) -> Result<()> {
 mod tests {
     use super::{FRAMES, PERIOD, first_wrong, frames, quarantined};
     use crate::paths::Arch;
+
+    #[test]
+    fn the_counters_wav_file_reads_back_as_the_counter() {
+        let wav = super::counter_wav();
+        assert_eq!(wav.len(), 44 + FRAMES as usize * 4);
+        assert_eq!(first_wrong(&frames(&wav).unwrap()), None);
+    }
 
     #[test]
     fn the_quarantine_must_have_caught_a_late_write_where_a_unit_translates() {

@@ -461,14 +461,28 @@ it.
 
 | # | Landing | Points |
 |---|---|---|
-| U1 | alsa-lib 1.2.16.1 built on ferrousli (static first, shared when a client wants it), `alsa.conf` and its includes on the image, alsa-utils' `aplay` and `speaker-test`; `test-audio` gains a boot that plays through `default`, which is `plug:hw` | 3 |
-| U2 | A sound server: PipeWire with pipewire-pulse on ferrousli, or a Rust server speaking the PulseAudio native protocol (§6, decision 5) | unsized |
+| U1 | alsa-lib 1.2.16.1 built on ferrousli (static first, shared when a client wants it), `alsa.conf` and its includes on the image, alsa-utils' `aplay` and `speaker-test`; `test-audio` gains a boot that plays through `default`, which is `plug:hw`. **Done 2026-09-27** (§8) | 3 |
+| U2 | A Rust server speaking the PulseAudio native protocol (§6, decision 5), in the four slices below | 18 |
 | U3 | SDL, Chromium and a game through it, and whatever they find missing | found by running |
 
 The roadmap prices all three parts at 30. This breakdown puts the first two
 at 27 and leaves 3 for the server, which is not credible: PipeWire alone is
 a daemon, a session manager and a protocol server. The customer
 re-baselines once U2's first attempt has sized it.
+
+**U2, sized 2026-09-27**, before any of its code, at the customer's order
+(U1, then U2). It lives in `userland/media/`, beside the `pcm` and
+`resample` crates Bad Apple!! plays through, which it uses rather than
+repeats. Each slice lands on its own:
+
+| # | Slice | Exit | Points |
+|---|---|---|---|
+| U2a | `pulse-server`, the protocol state machine, on `pulseaudio` at the pinned revision: `AUTH` at protocol 35 with shared memory and memfd both refused, so samples come inline; the client's name; the server's, sink's and source's information and lists (one sink, the card's 48 kHz S16_LE stereo); `CREATE_PLAYBACK_STREAM` and `DELETE_PLAYBACK_STREAM` with the buffer attributes, and requests accounted as `pa_memblockq` does (`tlength`, `minreq`, `prebuf`); `CORK`, `FLUSH`, `DRAIN`, `GET_PLAYBACK_LATENCY`. One stream, no mixing | Host tests replay command sequences `patrace` recorded between the host's `paplay` or Chrome and its server, and each answer matches in kind and field | 4 |
+| U2b | `pulsed`, the daemon: `$XDG_RUNTIME_DIR/pulse/native`, one stream written through `media/pcm` to `/dev/snd` and clocked by the card; `pa-tone`, a Rust client that sends tone's counter over the protocol | `test-audio`'s fifth boot, `pulsed` and `pa-tone`, frame for frame, with a negative control | 4 |
+| U2c | Mixing: any number of streams summed with saturation into the card's one format, each resampled from its own rate by `media/resample` and its channels mapped (mono to stereo), per-stream volume and mute, an underrun filled with silence | Host tests of the mix against a model; a boot of two `pa-tone`s at 44.1 and 48 kHz whose sum the file holds within the resampler's bound | 5 |
+| U2d | The desktop: `pulsed` as an init unit of the session, Debian's `libpulse0` and what it links on Chrome's volume, Chrome through Pulse rather than ALSA (it prefers Pulse once `libpulse.so.0` loads) | `test-chrome-audio` through `pulsed`; `run-compositor --everything` plays a video's sound through it | 5 |
+
+U3's SDL and games then find what is missing by running.
 
 ## 6. Decisions and open questions
 
@@ -721,8 +735,23 @@ Three things are still open:
   10.2.1: `~/.local/bin` on nazuna links it ahead of `/usr/local/bin`'s
   9.2.4, and it is the one that has `pipewire` and `pa`. §6's decision 8 is
   answered by that link for x86-64. AArch64 runs 9.2.4's, and passed.
-* **ARMv7-A is not run yet.** The card is attached without
+* **ARMv7-A has run since 2026-09-26**, in every audio landing's gate at
+  two processors, the restart boot included. The card is attached without
   `iommu_platform=on` there, as input's devices are.
-* **The server is not written.** U1 and U2 remain, and §6 decision 5's
-  proposal is unchanged.
+* **The server is not written.** U2 remains, and §6 decision 5's proposal
+  is unchanged; the customer chose U1 first, then U2 (2026-09-27).
+
+U1 is done (2026-09-27): alsa-lib 1.2.16.1 and alsa-utils 1.2.16's `aplay`
+and `speaker-test` are ferrousli ports (`userland/ferrousli/tools/ports/
+alsa-lib`, `alsa-utils`), static, built by `cargo xtask ports` on x86-64.
+Both linked against ferrousli with nothing undefined on the first try.
+alsa-lib is static, so every PCM and control plugin is built in and nothing
+is `dlopen`ed. Its configuration is at `/usr/share/ferrousli/alsa`, not
+`/usr/share/alsa`: that path is Chrome's, where Debian's alsa-lib finds
+Debian's configuration on the volume. `test-audio` gains a fourth boot on
+x86-64: ferrousli's busybox runs `aplay -D default` on a WAV file of tone's
+counter, which goes through alsa-lib's configuration and `plug` to
+`/dev/snd`, and QEMU's file must hold the counter frame for frame. It did,
+on its first run. With one frame of the WAV file changed, the check failed
+at exactly that frame. Shared libraries wait for a client that wants them.
 

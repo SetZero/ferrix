@@ -76,8 +76,9 @@ staged until now.
   playing through them, which `test-audio` and `test-chrome-audio` gate.
   A driver that dies is started again by devmgr and the card comes back as
   `C0`, a dead driver's DMA pins kept by the kernel until the next driver has
-  reset the device (F-38, 2026-09-26). What stage 22 still needs of it is the
-  server. As it was written: Ferrix had no audio at all: a `virtio-snd` driver in ring 3,
+  reset the device (F-38, 2026-09-26). alsa-lib and `aplay` are built on
+  ferrousli and play through it (U1, 2026-09-27). What stage 22 still needs
+  of it is the server. As it was written: Ferrix had no audio at all: a `virtio-snd` driver in ring 3,
   an audio core with a `/dev/snd` shaped enough for a client library, and a
   server speaking the PulseAudio or PipeWire protocol over a Unix socket,
   which is what Steam and every game link against. 30 points as a first

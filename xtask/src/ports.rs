@@ -34,9 +34,20 @@ use crate::{Error, Result};
 /// `foot` is the Wayland terminal `docs/CHROME.md` starts from, built with
 /// every library it links and the one font it draws with. `vkgears` is
 /// Vulkan's gears with Mesa's Venus driver linked into it (`docs/GPU.md`
-/// §6.1), and links libcxx's runtime.
+/// §6.1), and links libcxx's runtime. `alsa-lib` is ALSA's client library,
+/// static, and `alsa-utils` the aplay and speaker-test built on it
+/// (`docs/AUDIO.md`, U1).
 const PORTS: &[&str] = &[
-    "curl", "libcxx", "btop", "zlib", "git", "sshdt", "foot", "vkgears",
+    "curl",
+    "libcxx",
+    "btop",
+    "zlib",
+    "git",
+    "sshdt",
+    "foot",
+    "vkgears",
+    "alsa-lib",
+    "alsa-utils",
 ];
 
 /// The ports AArch64 and ARMv7-A build, in order: git and what it links.
@@ -175,6 +186,31 @@ pub(crate) const FILES: &[Installed] = &[
         mode: 0o755,
         kind: Kind::File,
         port: "vkgears",
+    },
+    Installed {
+        path: "bin/aplay",
+        mode: 0o755,
+        kind: Kind::File,
+        port: "alsa-utils",
+    },
+    Installed {
+        path: "bin/arecord",
+        mode: 0o755,
+        kind: Kind::File,
+        port: "alsa-utils",
+    },
+    Installed {
+        path: "bin/speaker-test",
+        mode: 0o755,
+        kind: Kind::File,
+        port: "alsa-utils",
+    },
+    // alsa-lib's configuration, where the ports' alsa-lib looks for it.
+    Installed {
+        path: "usr/share/ferrousli/alsa",
+        mode: 0o755,
+        kind: Kind::Tree,
+        port: "alsa-lib",
     },
 ];
 

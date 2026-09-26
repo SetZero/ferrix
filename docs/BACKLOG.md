@@ -194,7 +194,7 @@ session's name in its owner cell in your first landing.
 | ferrix-55b | T0 of the live kernel update plan (customer, 2026-09-26). **Wound down** 2026-09-26 after T0's kernel side (cf265506) and init's L11 (debe8998) landed; the last step, kinds joining `restarted()` after the pin quarantine, is ferrix-90's |
 | ferrix-c7 | Chrome and `rustc` on ferrousli's loader (the customer's ask, 2026-09-26): the loader and library fixes and `test-rustc` on ferrousli landing, then `run-compositor --chrome` and `--everything` on ferrousli; then **winding down** |
 | ferrix-41 | Stage 22's 32-bit x86 ABI (`docs/I386.md`): I1 and I2a, the thread pointer, on main; I2b, fork, clone and signal frames, on branch `i386-i2b`; then I3 (13), I4 (8) |
-| ferrix-90 | Audio (`docs/AUDIO.md`): L1 to L7 done 2026-09-26, Chrome plays through `/dev/snd`; next ARMv7-A's run, then the sound server (U1 alsa-lib, U2 the Pulse server, waiting on the customer) |
+| ferrix-90 | Audio (`docs/AUDIO.md`): L1 to L7 done 2026-09-26, Chrome plays through `/dev/snd`, a dead driver restarted (F-38's quarantine); U1, alsa-lib and aplay on ferrousli, done 2026-09-27; next U2, the PulseAudio-protocol server in Rust, sized in `docs/AUDIO.md` §5 before its first landing (the customer's order, 2026-09-27) |
 | ferrix-d5 | The Rust desktop clients (`docs/DESKTOP-CLIENTS.md`: the clients-base crates, waybar, fuzzel, hyprlock, hypridle), the EDID override, `docs/AUTH.md` and its phase 1; at most three streams running at once |
 | ferrix-55 | Standing certification consultant (reviews item changes before they land; keeps `docs/certification/` current). Its last engineering landing, the combined coverage evidence, is on branch `cov-d-evidence` |
 | ferrix-e1 | The repository relayout (`docs/LAYOUT.md`), landed 2026-09-26 as 26303ad5. **Winding down** after its post-landing rows and cleanup |
@@ -213,7 +213,7 @@ gates that fail on `main` itself, not flakes, and come before any row below.
 
 | Item | Owner |
 |---|---|
-| None known on 2026-09-26: `dispatchers` was closed by c05bab84, and the driver-restart boot by hyprix saying a card's loss on every path that finds it | -- |
+| `cargo xtask ports` fails on x86-64 at the git port since 4da0f1e7 (2026-09-26), which gave ferrousli the obstack calls Chrome's libraries import (`userland/ferrousli/src/obstack.rs`): git links its own `compat/obstack.o`, and every static link of git's programs dies on `multiple definition of _obstack_begin` (and `_obstack_begin_1`, `_obstack_memory_used`, `obstack_free`). The row's loop stops there, so no port after git is built by it. Found gating U1 (alsa-ports); log `~/.local/share/ferrix/ports/ferrousli/git/build.log` lines 654-673 on nazuna. The same gate found `foot` failing too, built on its own: fontconfig's configure finds `random_r` and `initstate_r` in ferrousli (exported since 5b512da6, 2026-09-24) and uses them, but ferrousli's headers declare neither them nor `struct random_data` (`fccompat.c:179`, "storage size of 'fcrandbuf' isn't known"); log `~/.local/share/ferrix/ports/ferrousli/foot/fontconfig-build.log`. sshdt, vkgears, alsa-lib and alsa-utils built clean | ferrix-c7 |
 
 ## The path to the goal, in order
 
