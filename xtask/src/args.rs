@@ -8,6 +8,34 @@
 use crate::paths::Arch;
 use crate::{Error, Result};
 
+/// `--mitigations`: the kernel's one build setting.
+///
+/// `On` is the certified reference configuration and the default; `Off` is the
+/// explicit opt-out, for measuring what the defences cost and for machines
+/// whose owner has decided they do not need them. See
+/// `docs/certification/SPECULATION.md`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mitigations {
+    /// Every side-channel defence the processor needs and offers.
+    #[default]
+    On,
+    /// None: the kernel is built with `--cfg ferrix_mitigations_off`.
+    Off,
+}
+
+impl Mitigations {
+    /// `on` or `off`, and nothing else.
+    fn parse(value: &str) -> Result<Mitigations> {
+        match value {
+            "on" => Ok(Mitigations::On),
+            "off" => Ok(Mitigations::Off),
+            other => Err(Error::new(format!(
+                "--mitigations takes `on` or `off`, not `{other}`"
+            ))),
+        }
+    }
+}
+
 /// Parsed command line.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Args {
@@ -17,6 +45,9 @@ pub(crate) struct Args {
     pub(crate) arch: Option<String>,
     /// `--release`.
     pub(crate) release: bool,
+    /// `--mitigations`: whether the kernel is built with its side-channel
+    /// defences, which it is unless told `off`.
+    pub(crate) mitigations: Mitigations,
     /// `--gdb`: stop and wait for a debugger before the first instruction.
     pub(crate) gdb: bool,
     /// `--fast`: skip the slow half of `check`.
@@ -309,6 +340,12 @@ impl Args {
         self.clipboard = true;
     }
 
+    /// `--mitigations on|off`.
+    fn mitigations(&mut self, items: &mut impl Iterator<Item = String>) -> Result<()> {
+        self.mitigations = Mitigations::parse(&value(items, "--mitigations")?)?;
+        Ok(())
+    }
+
     /// `--reset-root`, `--tmpfs-root` and `--btrfs-root`: where `/` is for
     /// the boot, and whether it starts over.
     fn root(&mut self, flag: &str) {
@@ -336,6 +373,7 @@ impl Args {
             match item.as_str() {
                 "-h" | "--help" => args.help = true,
                 "--release" => args.release = true,
+                "--mitigations" => args.mitigations(&mut items)?,
                 "--gdb" => args.gdb = true,
                 "--fast" => args.fast = true,
                 "--ferrousli" => args.ferrousli = true,
@@ -614,6 +652,26 @@ mod tests {
                 "a command needing one architecture must refuse several"
             );
         }
+    }
+
+    #[test]
+    fn mitigations_default_on_and_take_on_or_off_only() {
+        use super::Mitigations;
+        assert_eq!(parse(&["build"]).unwrap().mitigations, Mitigations::On);
+        assert_eq!(
+            parse(&["build", "--mitigations", "off"])
+                .unwrap()
+                .mitigations,
+            Mitigations::Off
+        );
+        assert_eq!(
+            parse(&["build", "--mitigations", "on"])
+                .unwrap()
+                .mitigations,
+            Mitigations::On
+        );
+        assert!(parse(&["build", "--mitigations", "auto"]).is_err());
+        assert!(parse(&["build", "--mitigations"]).is_err());
     }
 
     #[test]

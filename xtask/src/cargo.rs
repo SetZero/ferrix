@@ -6,7 +6,9 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::args::Mitigations;
 use crate::builds::Build;
 use crate::paths::{self, Arch};
 use crate::{Error, Result};
@@ -43,12 +45,55 @@ pub(crate) fn build_loader(arch: Arch, release: bool) -> Result<PathBuf> {
     Ok(efi)
 }
 
+/// Whether this run builds its kernels with `--mitigations off`.
+static MITIGATIONS_OFF: AtomicBool = AtomicBool::new(false);
+
+/// Say how every kernel this run builds is to be built: `main` calls it once,
+/// with what `--mitigations` said.
+pub(crate) fn set_mitigations(setting: Mitigations) {
+    MITIGATIONS_OFF.store(setting == Mitigations::Off, Ordering::Relaxed);
+}
+
+/// The `--config` that builds the kernel for `target` without its
+/// side-channel defences.
+///
+/// A `--config` array is *appended* to the one in `.cargo/config.toml`, so the
+/// per-target flags [`refuse_inherited_rustflags`] protects are kept and the
+/// `cfg` is added -- where `RUSTFLAGS` would have replaced them. It reaches
+/// every crate built for the target, the libraries' clamps included
+/// (`ferrix_sync::nospec`).
+pub(crate) fn mitigations_off_config(target: &str) -> String {
+    format!("target.{target}.rustflags=[\"--cfg\",\"ferrix_mitigations_off\"]")
+}
+
+/// Where a kernel without its defences is built: a target directory of its
+/// own, so that building one setting does not throw away the other's cache.
+pub(crate) fn mitigations_off_target_dir() -> PathBuf {
+    paths::target_dir().join("mitigations-off")
+}
+
+/// `cargo build -p ferrix-kernel` for `arch`, with the setting
+/// [`set_mitigations`] chose, and where the ELF it makes will be.
+fn kernel(arch: Arch, release: bool) -> Result<(Build, PathBuf)> {
+    let target = arch.kernel_target();
+    let build = build("ferrix-kernel", target, release)?;
+    if !MITIGATIONS_OFF.load(Ordering::Relaxed) {
+        return Ok((build, output(target, release, "ferrix-kernel")));
+    }
+    println!("  with --mitigations off: no side-channel defences");
+    let directory = mitigations_off_target_dir();
+    let profile = if release { "release" } else { "debug" };
+    let made = directory.join(target).join(profile).join("ferrix-kernel");
+    let build = build
+        .args(["--config", &mitigations_off_config(target)])
+        .args([std::ffi::OsStr::new("--target-dir"), directory.as_os_str()]);
+    Ok((build, made))
+}
+
 /// Build the kernel for `arch` and return the ELF it produced.
 pub(crate) fn build_kernel(arch: Arch, release: bool) -> Result<PathBuf> {
-    let made = output(arch.kernel_target(), release, "ferrix-kernel");
-    build("ferrix-kernel", arch.kernel_target(), release)?
-        .output(&made)
-        .run()?;
+    let (build, made) = kernel(arch, release)?;
+    build.output(&made).run()?;
     artifact(made)
 }
 
@@ -89,8 +134,8 @@ pub(crate) fn build_kernel_with_init(
     init: &Path,
     script: &str,
 ) -> Result<PathBuf> {
-    let made = output(arch.kernel_target(), release, "ferrix-kernel");
-    build("ferrix-kernel", arch.kernel_target(), release)?
+    let (build, made) = kernel(arch, release)?;
+    build
         .input("FERRIX_INIT", init)
         .env("FERRIX_INIT_SCRIPT", script)
         .output(&made)
@@ -108,8 +153,8 @@ pub(crate) fn build_kernel_with_commands(
     release: bool,
     commands: &Path,
 ) -> Result<PathBuf> {
-    let made = output(arch.kernel_target(), release, "ferrix-kernel");
-    build("ferrix-kernel", arch.kernel_target(), release)?
+    let (build, made) = kernel(arch, release)?;
+    build
         .input("FERRIX_INIT_COMMANDS", commands)
         .output(&made)
         .run()?;

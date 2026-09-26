@@ -179,6 +179,10 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         step(&format!("clippy (kernel, {arch})"), || {
             clippy(&["-p", "ferrix-kernel", "--target", arch.kernel_target()])
         })?;
+        step(
+            &format!("clippy (kernel, {arch}, --mitigations off)"),
+            || kernel_clippy_mitigations_off(arch),
+        )?;
         step(&format!("clippy (loader, {arch})"), || {
             clippy(&["-p", "ferrix-boot", "--target", arch.loader_target()])
         })?;
@@ -562,6 +566,28 @@ fn miri(package: &str) -> Result<()> {
 fn step(name: &str, body: impl FnOnce() -> Result<()>) -> Result<()> {
     println!("\n== {name}");
     body()
+}
+
+/// `cargo clippy` over the kernel for `arch` built `--mitigations off`.
+///
+/// The kernel's one build setting, the other way: it compiles out every
+/// side-channel defence, and code only one setting builds rots in the other.
+/// In the target directory `cargo::kernel` builds that setting into, so
+/// neither setting's cache is thrown away for the other's.
+fn kernel_clippy_mitigations_off(arch: Arch) -> Result<()> {
+    let config = cargo::mitigations_off_config(arch.kernel_target());
+    let directory = cargo::mitigations_off_target_dir();
+    let directory = directory.to_string_lossy();
+    clippy(&[
+        "-p",
+        "ferrix-kernel",
+        "--target",
+        arch.kernel_target(),
+        "--config",
+        &config,
+        "--target-dir",
+        &directory,
+    ])
 }
 
 /// `cargo clippy ... -- -D warnings`.

@@ -1138,6 +1138,24 @@ fn accelerator_arguments(accelerator: &str) -> Result<Vec<String>> {
     Ok(arguments)
 }
 
+/// The CPU model `q35` emulates, under `accelerator`.
+///
+/// Under a hypervisor the guest's speculation controls are the host
+/// processor's, and `qemu64` passes on none of them unless asked: the kernel's
+/// side-channel defences would find nothing to turn on, and the code that turns
+/// them on would never run. So the hypervisor is asked for them --
+/// `IA32_SPEC_CTRL` with IBRS, STIBP and SSBD, `IA32_ARCH_CAPABILITIES`, and
+/// AMD's automatic IBRS -- and passes on whichever the host has, warning about
+/// the rest. Not under TCG, which emulates no speculation to control and
+/// would warn about every one. `docs/certification/SPECULATION.md`.
+fn x86_cpu(accelerator: &str) -> String {
+    let base = "qemu64,+pdpe1gb,+smep,+smap,+rdrand,+rdseed";
+    if accelerator == "tcg" {
+        return base.to_owned();
+    }
+    format!("{base},+spec-ctrl,+stibp,+ssbd,+arch-capabilities,+auto-ibrs")
+}
+
 /// Which CPU model the `virt` machine emulates for an Arm architecture.
 ///
 /// `cortex-a72` is ARMv8.0 and so has no PAN -- the feature the kernel uses to
@@ -1231,8 +1249,10 @@ fn qemu_command(
                 // keep ring 0 out of user pages, so emulate a CPU that has them.
                 // RDRAND and RDSEED too, which the kernel seeds its random
                 // generator from beside firmware's bytes, so that path runs.
+                // Under a hypervisor, the speculation controls as well; see
+                // `x86_cpu`.
                 "-cpu",
-                "qemu64,+pdpe1gb,+smep,+smap,+rdrand,+rdseed",
+                &x86_cpu(&accelerator),
                 // A controlled way for the guest to end the test: writing 0x10
                 // to port 0xF4 exits QEMU with status 33.
                 "-device",

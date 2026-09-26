@@ -199,6 +199,11 @@ COMMANDS:
 OPTIONS:
     --arch <x86_64|aarch64|armv7a|all>   Target architecture   [default: host]
     --release                            Build with optimisations
+    --mitigations <on|off>               The kernel's side-channel defences [default: on, the
+                                         certified setting]. off builds with
+                                         --cfg ferrix_mitigations_off into target/mitigations-off:
+                                         no index clamps, no speculation controls, no barriers
+                                         (docs/certification/SPECULATION.md)
     --smp <N>                            Virtual CPUs          [default: 4; 1 under whpx]
     --memory <MiB>                       Guest memory          [default: 512]
     --timeout <SECONDS>                  test-boot patience    [default: 120]
@@ -337,6 +342,9 @@ fn main() -> ExitCode {
 
 fn run() -> Result<()> {
     let args = Args::parse(std::env::args().skip(1))?;
+    // Every kernel this run builds, whichever command builds it: set once,
+    // here, rather than threaded through each of them.
+    cargo::set_mitigations(args.mitigations);
 
     if args.help {
         println!("{USAGE}");
