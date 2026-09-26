@@ -79,6 +79,27 @@ fn the_ring_wraps_and_fills() {
 }
 
 #[test]
+fn a_write_into_an_empty_ring_is_one_transfer() {
+    // adb's host reads a message a part at a time, so a part split at the
+    // ring's end would be taken for the whole of it (run adbusb2).
+    let mut rig = enumerated(true);
+    assert_eq!(rig.controller.write(DATA_IN, &counting(3000)), Ok(3000));
+    rig.pump();
+    assert_eq!(rig.controller.pending(DATA_IN), 0, "all gone");
+    let part = counting(2000);
+    assert_eq!(rig.controller.write(DATA_IN, &part), Ok(2000));
+    rig.pump();
+    let transfers = reads(&rig, IN);
+    assert_eq!(
+        transfers.last().map(Vec::len),
+        Some(2000),
+        "one transfer of 2000, not 1096 and 904: {:?}",
+        transfers.iter().map(Vec::len).collect::<Vec<_>>()
+    );
+    rig.assert_clean();
+}
+
+#[test]
 fn bytes_from_the_host() {
     let mut rig = enumerated(true);
     rig.model.borrow_mut().host_write(OUT, b"ls -l\n", 512);

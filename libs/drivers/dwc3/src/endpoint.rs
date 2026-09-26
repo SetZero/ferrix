@@ -162,6 +162,15 @@ impl<R: Registers, D: Dma, C: Clock> Controller<R, D, C> {
         if message && (endpoint.fill != 0 || bytes.len() > capacity || bytes.is_empty()) {
             return Ok(0);
         }
+        // An empty ring starts again at its beginning. Nothing is in flight
+        // when it is empty (`fill` counts what the controller has not
+        // finished), and it keeps a write that fits the ring in one
+        // transfer: one that ran past the ring's end would go as two, and a
+        // host reading a message a part at a time, as adb's does, would take
+        // the first as all of it.
+        if endpoint.fill == 0 {
+            endpoint.start = 0;
+        }
         let taken = bytes.len().min(capacity - endpoint.fill);
         let (bytes, _) = bytes.split_at(taken);
         let at = (endpoint.start + endpoint.fill) % capacity;
