@@ -31,7 +31,7 @@ crosvm and needs no PC, the helper also keeps the raw loader `Image` from the
 same run directory at /data/local/tmp/ferrix-vm/ferrix.Image, pushing it
 whenever the phone's copy differs: an ordinary file, as an app's data is.
 
-Usage:  python3 bootloaders/pixel7/launcher/helper.py [--image boot.img]
+Usage:  python3 tools/pixel7/helper.py [--image boot.img]
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ PORT = 47707
 SERIAL = "28171FDH2001RC"
 RUNS = pathlib.Path.home() / ".local/share/ferrix/pixel7"
 HERE = pathlib.Path(__file__).resolve().parent
-MKBOOTIMG = HERE.parent / "mkbootimg.py"
+MKBOOTIMG = HERE.parent.parent / "bootloaders" / "pixel7" / "mkbootimg.py"
 AVBTOOL = RUNS / "avbtool.py"
 VM_DIR = "/data/local/tmp/ferrix-vm"
 VM_IMAGE = f"{VM_DIR}/ferrix.Image"

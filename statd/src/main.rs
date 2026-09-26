@@ -10,7 +10,7 @@
 //! ```
 //!
 //! The console is a crosvm guest's 16550, or on the phone the `ramoops`
-//! record Android reads back after the run, so `tools/pixel7-monitor` graphs
+//! record Android reads back after the run, so `tools/pixel7/monitor` graphs
 //! a guest live and a native boot afterwards. Ferrix's boot console draws only
 //! the kernel's own lines, so the screen is not filled with these.
 //!

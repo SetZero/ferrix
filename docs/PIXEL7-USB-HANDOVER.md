@@ -12,7 +12,7 @@ When the Pixel 7 boots Ferrix natively (`fastboot boot` from nazuna), nothing
 reaches the PC until the run is over. Android is gone, Ferrix has no USB, and
 so the phone is off USB for the whole run. Ferrix's console and the stat
 service's samples (`statd/`, `ferrix-statd`) go to the `ramoops` record in RAM,
-which Android reads back after the watchdog reset. `tools/pixel7-monitor` then
+which Android reads back after the watchdog reset. `tools/pixel7/monitor` then
 loads the record and fills its graphs after the fact. The owner wants them
 live.
 
@@ -160,7 +160,7 @@ Each phase ends with something run on the phone and written down here.
    records to a ring-3 reader (`sys_syslog` returns nothing today)? A tty
    the driver serves, which statd opens? Or both? Then send the boot's lines
    and statd's.
-5. **The monitor.** `tools/pixel7-monitor` reads `/dev/ttyACM*` while the
+5. **The monitor.** `tools/pixel7/monitor` reads `/dev/ttyACM*` while the
    phone is in Ferrix and feeds the same parser it uses for a guest
    (`vm-line`). The owner is in `dialout`, and `cdc_acm` loads on demand.
 
@@ -179,7 +179,7 @@ model (phase 3) and the phone.
   vendor_boot.img`, `fastboot boot`, waits for Android, and saves the
   `ramoops` record as `$P/<name>/run.log`. Nothing is flashed.
 
-The launcher's helper (`bootloaders/pixel7/launcher/helper.py`) does the same
+The launcher's helper (`tools/pixel7/helper.py`) does the same
 cycle over HTTP, with `POST /boot?stats=N` for the stat service. The monitor
 drives it.
 

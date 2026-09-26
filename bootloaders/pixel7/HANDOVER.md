@@ -360,8 +360,8 @@ TF-A answers it).
 
 ## Starting Ferrix from Android
 
-**The button works through the PC** (`launcher/`, see its README). The app
-"Boot Ferrix" (`dev.ferrix.launcher`) asks `launcher/helper.py` on nazuna,
+**The button works through the PC** (`tools/pixel7/`, see its README). The app
+"Boot Ferrix" (`dev.ferrix.launcher`) asks `tools/pixel7/helper.py` on nazuna,
 over `adb reverse`, to run the `fastboot boot` cycle. The owner pressed it on
 2026-09-26: the run reached `FERRIX-BOOT-OK stages 1-12` and Android was back
 74 s later, with the record in `$P/launcher-20260926-144950/`. It needs the
@@ -381,7 +381,7 @@ behind crosvm's `pci-host-cam-generic`, which Ferrix does not read; and
 console input.
 
 **Ferrix's own stats**: `statd/` is Ferrix's stat service, `ferrix-statd`,
-and `tools/pixel7-monitor` graphs it. `build-run.sh` images carry it. A VM
+and `tools/pixel7/monitor` graphs it. `build-run.sh` images carry it. A VM
 run starts it with crosvm's `-p ferrix.init=/sbin/ferrix-statd`, which the
 monitor's "Stats" choice does, and a native boot needs it built in with
 `FERRIX_PIXEL7_CMDLINE_EXTRA="ferrix.init=/sbin/ferrix-statd

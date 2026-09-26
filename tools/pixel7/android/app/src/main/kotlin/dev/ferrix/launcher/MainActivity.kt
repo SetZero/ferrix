@@ -96,7 +96,7 @@ import org.json.JSONObject
  *
  * **Boot Ferrix** reboots the phone into it. The phone cannot start Ferrix by
  * itself, so the button asks the helper on the PC
- * (`bootloaders/pixel7/launcher/helper.py`), which adb reverse makes reachable
+ * (`tools/pixel7/helper.py`), which adb reverse makes reachable
  * at 127.0.0.1 over the USB cable. The helper runs `fastboot boot`: nothing is
  * written to the phone's partitions, and Ferrix's watchdog brings Android back
  * about 75 seconds later.
@@ -314,7 +314,7 @@ private fun ConnectionCard(helper: Helper) {
         is Helper.Unreachable -> Triple(
             MaterialTheme.colorScheme.error,
             "PC helper not reachable",
-            "Plug the phone into the PC and run bootloaders/pixel7/launcher/helper.py there.",
+            "Plug the phone into the PC and run tools/pixel7/helper.py there.",
         )
         is Helper.Reachable -> Triple(
             Color(0xFF3DDC84),

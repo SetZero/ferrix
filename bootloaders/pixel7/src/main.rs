@@ -64,7 +64,7 @@ extern "C" fn early(device_tree: u64, current_el: u64, loaded_at: u64) {
 /// Called from the entry sequence at EL1: load Ferrix and start it.
 extern "C" fn main(device_tree: u64) -> ! {
     // The count as well as the rate: Ferrix's clock is this counter, and
-    // tools/pixel7-monitor places the stat service's samples in the PC's time
+    // tools/pixel7/monitor places the stat service's samples in the PC's time
     // from this line, the loader starting as the phone leaves USB.
     let (count, frequency) = entry::counter();
     let millis = count
@@ -97,7 +97,7 @@ extern "C" fn main(device_tree: u64) -> ! {
 ///
 /// In a guest, `bootargs` is crosvm's, which `crosvm run -p` adds to. On the
 /// phone it is ABL's: Android's own, and the boot image header's command
-/// line, which `launcher/helper.py` fills for a run that asks for Ferrix's
+/// line, which `tools/pixel7/helper.py` fills for a run that asks for Ferrix's
 /// stat service. Either way only `ferrix.*` words are taken.
 fn command_line<'a>(base: &'a str, tree: &Fdt<'_>, buffer: &'a mut [u8]) -> &'a str {
     let mut used = 0;

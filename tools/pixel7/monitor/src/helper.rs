@@ -1,4 +1,4 @@
-//! The launcher's helper, `bootloaders/pixel7/launcher/helper.py`, which
+//! The launcher's helper, `tools/pixel7/helper.py`, which
 //! boots the phone into Ferrix with `fastboot boot`: asked over its HTTP port,
 //! and started by this app when it is not running.
 
@@ -50,7 +50,7 @@ pub fn boot(stats: Option<u32>) -> Result<serde_json::Value, String> {
 
 /// The helper's script, in the checkout this app was built from.
 fn script() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../bootloaders/pixel7/launcher/helper.py")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../helper.py")
 }
 
 /// Start the helper as this app's child, booting `image` or the newest run's.
