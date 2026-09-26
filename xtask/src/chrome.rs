@@ -47,9 +47,14 @@
 //! `test-chrome-window` takes the same two flags, for the full browser and
 //! the eighty objects it loads.
 //!
-//! # Why x86-64 only
+//! # On AArch64: Debian's Chromium
 //!
-//! Chrome for Testing publishes linux64 only.
+//! Chrome for Testing publishes linux64 only, so on AArch64 the browser is
+//! Debian 13's Chromium 154.0.8037.57 for arm64 -- the same version -- on a
+//! volume `scripts/fetch/fetch-chromium-arm64.sh` makes the same way, with
+//! Debian's arm64 glibc and loader. Its headless mode is the full browser's
+//! `--headless`, since Debian builds no `chrome-headless-shell`, and the
+//! three steps are the same. The Pixel 7's VM is the machine it is for.
 
 use crate::args::Args;
 use crate::paths::Arch;
@@ -102,6 +107,66 @@ pub(crate) const LINKS: &[(&str, &str)] = &[
     // sound goes through alsa-lib to `/dev/snd` (docs/AUDIO.md §3.5).
     ("usr/share/alsa", "/data/usr/share/alsa"),
 ];
+
+/// [`LINKS`] for AArch64's Chromium volume: its loader where the program's
+/// `PT_INTERP` names it, and glibc's directory, the fonts and alsa-lib's
+/// configuration where they are looked for.
+pub(crate) const ARM64_LINKS: &[(&str, &str)] = &[
+    (
+        "lib/ld-linux-aarch64.so.1",
+        "/data/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1",
+    ),
+    ("lib/aarch64-linux-gnu", "/data/usr/lib/aarch64-linux-gnu"),
+    (
+        "usr/lib/aarch64-linux-gnu",
+        "/data/usr/lib/aarch64-linux-gnu",
+    ),
+    ("etc/fonts", "/data/etc/fonts"),
+    ("usr/share/fonts", "/data/usr/share/fonts"),
+    ("usr/share/fontconfig", "/data/usr/share/fontconfig"),
+    ("usr/share/alsa", "/data/usr/share/alsa"),
+];
+
+/// What Debian's Chromium says to `--version`.
+const ARM64_VERSION: &str = "Chromium 154.0.8037.57";
+
+/// How long Chromium on AArch64 is given: QEMU emulates every instruction
+/// of it on an x86-64 host, several times slower than x86-64 under KVM.
+const ARM64_TIMEOUT: u64 = 3600;
+
+/// [`SCRIPT`] for Chromium: the full browser in its `--headless` mode.
+const ARM64_SCRIPT: &str = r#"export PATH=/bin HOME=/tmp
+cd /tmp
+chrome=/data/usr/lib/chromium/chromium
+$chrome --version || exit 3
+$chrome --headless --no-sandbox --disable-gpu --dump-dom 'PAGE' || exit 4
+$chrome --headless --no-sandbox --disable-gpu --screenshot=/tmp/shot.png --window-size=640,360 'PICTURE' || exit 5
+[ -s /tmp/shot.png ] || exit 6
+echo chrome-gate: screenshot written
+exit 16
+"#;
+
+/// Where `scripts/fetch/fetch-chromium-arm64.sh` writes, unless
+/// `FERRIX_CHROMIUM_VOLUME` names another directory.
+pub(crate) fn arm64_volume() -> Result<std::path::PathBuf> {
+    let directory = match std::env::var_os("FERRIX_CHROMIUM_VOLUME") {
+        Some(directory) => std::path::PathBuf::from(directory),
+        None => {
+            let home = std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .ok_or_else(|| Error::new("neither HOME nor USERPROFILE is set"))?;
+            std::path::PathBuf::from(home).join(".local/share/ferrix/chromium-arm64")
+        }
+    };
+    let image = directory.join("chromium.img");
+    if !image.is_file() {
+        return Err(Error::new(format!(
+            "{} is not there: scripts/fetch/fetch-chromium-arm64.sh makes it",
+            image.display()
+        )));
+    }
+    Ok(image)
+}
 
 /// The search path that finds ferrousli's `libc.so.6` in `/lib` before the
 /// volume's libraries.
@@ -295,13 +360,53 @@ pub(crate) fn window_files() -> Vec<crate::ports::File> {
 /// the card's 20 ms period; and `--autoplay-policy=no-user-gesture-required`
 /// lets a page start sound without a click, as a test's must.
 pub(crate) fn window_command(page: &str) -> String {
+    window_command_for(Arch::X86_64, page)
+}
+
+/// [`window_command`] for the browser `arch`'s volume holds: Chrome for
+/// Testing's on x86-64, Debian's Chromium on AArch64. Chromium keeps its own
+/// user agent, which says `aarch64` truly; [`USER_AGENT`] says x86-64.
+pub(crate) fn window_command_for(arch: Arch, page: &str) -> String {
+    let (program, agent) = if arch == Arch::AArch64 {
+        ("/data/usr/lib/chromium/chromium", String::new())
+    } else {
+        (
+            "/data/chrome-window/chrome",
+            format!(" '--user-agent={USER_AGENT}'"),
+        )
+    };
     format!(
-        "/data/chrome-window/chrome --no-sandbox --ozone-platform=wayland \
+        "{program} --no-sandbox --ozone-platform=wayland \
          --user-data-dir=/dev/shm/chrome --no-first-run --disable-gpu --disable-crash-reporter \
          --disable-breakpad --enable-logging=stderr --disable-infobars \
          --alsa-output-device=default --audio-buffer-size=960 \
-         --autoplay-policy=no-user-gesture-required '--user-agent={USER_AGENT}' {page}"
+         --autoplay-policy=no-user-gesture-required{agent} {page}"
     )
+}
+
+/// The links the image carries into the volume `arch`'s browser is on.
+pub(crate) const fn links(arch: Arch) -> &'static [(&'static str, &'static str)] {
+    if matches!(arch, Arch::AArch64) {
+        ARM64_LINKS
+    } else {
+        LINKS
+    }
+}
+
+/// The volume `arch`'s browser is on: [`volume`] on x86-64, [`arm64_volume`]
+/// on AArch64.
+///
+/// # Errors
+///
+/// As those two, and for an architecture with neither.
+pub(crate) fn volume_for(arch: Arch) -> Result<std::path::PathBuf> {
+    match arch {
+        Arch::X86_64 => volume(),
+        Arch::AArch64 => arm64_volume(),
+        Arch::Armv7a => Err(Error::new(
+            "--chrome has no ARMv7-A browser: docs/CHROME.md §10 says what one would take",
+        )),
+    }
 }
 
 /// The environment the compositor gives Chrome, as `env =` lines: a home in
@@ -387,12 +492,16 @@ pub(crate) fn run(command: &str, args: &Args) -> Result<()> {
 /// When the volume is missing, the image cannot be built, the boot fails, or
 /// any step of the script does not do what it must.
 pub(crate) fn test_chrome(args: &Args) -> Result<()> {
-    let arch = Arch::X86_64;
-    if args.arches()?.iter().any(|&asked| asked != arch) {
-        return Err(Error::new(
-            "test-chrome runs on x86-64 only: Chrome for Testing publishes linux64 alone",
-        ));
-    }
+    let arch = match args.arches()?.as_slice() {
+        [Arch::AArch64] => return test_chromium(args),
+        [Arch::X86_64] => Arch::X86_64,
+        _ => {
+            return Err(Error::new(
+                "test-chrome runs on x86-64, with Chrome for Testing, or on AArch64, with \
+                 Debian's Chromium: one at a time",
+            ));
+        }
+    };
     let mut args = args.clone();
     let volume = volume()?;
     args.data_image = Some(volume.clone());
@@ -428,12 +537,55 @@ pub(crate) fn test_chrome(args: &Args) -> Result<()> {
         args.memory, args.timeout
     );
     let lines = qemu::watch_then(arch, &image, &kernel, &args, shell::EXITED, |_| Ok(()))?;
-    judge(arch, &lines)
+    judge(arch, VERSION, &lines)
+}
+
+/// [`test_chrome`] on AArch64: Debian's Chromium from its arm64 volume, on
+/// Debian's glibc. ferrousli has no AArch64 build to stand in for it.
+///
+/// # Errors
+///
+/// As [`test_chrome`].
+fn test_chromium(args: &Args) -> Result<()> {
+    let arch = Arch::AArch64;
+    if on_ferrousli(args) {
+        return Err(Error::new(
+            "test-chrome on AArch64 runs on Debian's glibc: ferrousli is built for x86-64",
+        ));
+    }
+    let mut args = args.clone();
+    args.data_image = Some(arm64_volume()?);
+    if !args.memory_given {
+        args.memory = MEMORY;
+    }
+    if !args.timeout_given {
+        args.timeout = ARM64_TIMEOUT;
+    }
+    let shell =
+        zinc::built(arch)?.ok_or_else(|| Error::new("zinc could not be built for AArch64"))?;
+    println!("  {arch}: building an image whose shell runs headless Chromium on glibc");
+    let script = ARM64_SCRIPT
+        .replace("PAGE", PAGE)
+        .replace("PICTURE", PICTURE);
+    let loader = cargo::build_loader(arch, args.release)?;
+    let kernel = cargo::build_kernel_with_init(arch, args.release, &shell, &script)?;
+    let natives = native::build(arch, args.release)?;
+    let bytes = std::fs::read(&shell)
+        .map_err(|error| Error::new(format!("reading {}: {error}", shell.display())))?;
+    let links = rustc::files(ARM64_LINKS);
+    let archive = initramfs::build(None, &natives, Some(&bytes), &links)?;
+    let image = fat::write_image_with(arch, &loader, &kernel, &archive, None)?;
+    println!(
+        "  {arch}: running Chromium on Ferrix with {} MiB (timeout {}s)",
+        args.memory, args.timeout
+    );
+    let lines = qemu::watch_then(arch, &image, &kernel, &args, shell::EXITED, |_| Ok(()))?;
+    judge(arch, ARM64_VERSION, &lines)
 }
 
 /// Whether the transcript is a Chrome that loaded, ran a page's script,
 /// drew a picture, and a script that got to its end.
-fn judge(arch: Arch, lines: &[String]) -> Result<()> {
+fn judge(arch: Arch, version: &str, lines: &[String]) -> Result<()> {
     let after_boot = lines
         .iter()
         .position(|line| line.contains(qemu::SUCCESS_MARKER))
@@ -443,13 +595,13 @@ fn judge(arch: Arch, lines: &[String]) -> Result<()> {
         .iter()
         .find_map(|line| line.trim().strip_prefix(shell::EXITED))
         .map(str::trim);
-    let loaded = after_boot.iter().any(|line| line.contains(VERSION));
+    let loaded = after_boot.iter().any(|line| line.contains(version));
     let computed = after_boot.iter().any(|line| line.contains(COMPUTED));
     let drew = after_boot.iter().any(|line| line.trim_end() == SHOT);
     match exited {
         Some(status) if status == STATUS.to_string() && loaded && computed && drew => {
             println!(
-                "  {arch}: Chrome {VERSION} loaded, ran a page's script and drew a screenshot \
+                "  {arch}: {version} loaded, ran a page's script and drew a screenshot \
                  on Ferrix"
             );
             Ok(())
@@ -526,7 +678,7 @@ mod tests {
             SHOT,
             "  init     the shell exited with 16",
         ]);
-        assert!(judge(Arch::X86_64, &lines).is_ok());
+        assert!(judge(Arch::X86_64, VERSION, &lines).is_ok());
     }
 
     #[test]
@@ -539,7 +691,7 @@ mod tests {
             SHOT,
             "  init     the shell exited with 16",
         ]);
-        assert!(judge(Arch::X86_64, &lines).is_err());
+        assert!(judge(Arch::X86_64, VERSION, &lines).is_err());
     }
 
     #[test]
@@ -552,7 +704,9 @@ mod tests {
         ] {
             let exit = format!("  init     the shell exited with {status}");
             let lines = transcript(&[qemu::SUCCESS_MARKER, &exit]);
-            let error = judge(Arch::X86_64, &lines).unwrap_err().to_string();
+            let error = judge(Arch::X86_64, VERSION, &lines)
+                .unwrap_err()
+                .to_string();
             assert!(error.contains(words), "{status}: {error}");
         }
     }

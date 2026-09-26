@@ -1069,7 +1069,12 @@ fn check_syscalls() {
 /// each line only when its check ran on this architecture and processor
 /// count.
 fn print_threads(report: &syscall::check::Report) {
-    if let Some(answered) = report.vdso {
+    if report.vdso == Some(syscall::vdso_check::SIGRETURN_ONLY) {
+        println!(
+            "  vdso     the signal return trampoline exported where its code is, and found by a \
+             space it is mapped into; the pages refused writes"
+        );
+    } else if let Some(answered) = report.vdso {
         println!(
             "  vdso     a program called clock_gettime for seven clocks, gettimeofday and time through \
              AT_SYSINFO_EHDR, each answered by {answered} between two system calls; the pages \

@@ -328,5 +328,7 @@ fn device_info(bytes: &[u8; DEVICE_INFO_BYTES]) -> DeviceInfo {
         device_id: half(86),
         msix_table_size: half(88),
         virtio: half(90),
+        subsystem_vendor_id: half(92),
+        subsystem_id: half(94),
     }
 }

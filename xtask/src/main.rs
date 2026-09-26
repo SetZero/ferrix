@@ -318,6 +318,7 @@ OPTIONS:
                                          name, or `none`; one of them, another each run, otherwise
     --from <WHERE>                       wallpapers: where the pictures are, a directory here or
                                          <host>:<directory> for one `ssh` reaches
+    --scale <N>                          run-compositor, flash --compositor: the monitor's scale, 1 by default
     --size <W>x<H>                       run-compositor: the guest's screen; wallpapers: the screen
                                          to cut pictures for (1920x1080 for both)
     --fps <N>                            wallpapers: frames a second kept of a video

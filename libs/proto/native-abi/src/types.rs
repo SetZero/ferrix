@@ -146,6 +146,13 @@ pub struct DeviceInfo {
     /// transport, [`DEVICE_TREE_BLOCKS`] when they are a device tree node's
     /// registers, else zero and the blocks are zero.
     pub virtio: u16,
+    /// The PCI subsystem vendor identifier; zero for a device tree node or a
+    /// bridge. Which machine made a virtio device is told by this pair:
+    /// QEMU's are subsystem `0x1af4:0x1100`, crosvm's repeat the device's
+    /// own identifier.
+    pub subsystem_vendor_id: u16,
+    /// The PCI subsystem identifier; zero for a device tree node or a bridge.
+    pub subsystem_id: u16,
 }
 
 /// Bytes `device_info` writes: a [`DeviceInfo`], padded to its alignment.

@@ -10,6 +10,14 @@
 //! `XxY`, the scale as `auto` or a number, and the `transform, N` pair after
 //! them. `mirror`, `bitdepth`, `vrr` and the rest are not done, and a line
 //! that carries one says so rather than being read as if it were not there.
+//!
+//! `monitor = NAME, addreserved, TOP, BOTTOM, LEFT, RIGHT` is not a rule for
+//! the monitor but strips of it kept free of windows, beside what the layer
+//! surfaces reserve: [`AddedReserved`]. The Pixel 7's VM sets it while
+//! Android's keyboard covers the bottom of the screen, so the windows are
+//! laid out above it as on a shorter screen.
+
+use crate::Gaps;
 
 /// What a `monitor =` line asks for.
 #[derive(Debug, Clone, PartialEq)]
@@ -172,6 +180,89 @@ const NOT_DONE: [&str; 7] = [
     "icc",
 ];
 
+/// `monitor = NAME, addreserved, TOP, BOTTOM, LEFT, RIGHT`: strips of a
+/// monitor, in logical pixels, that windows are not tiled into, added to
+/// what the layer surfaces' exclusive zones reserve. `hyprctl keyword
+/// monitor NAME,addreserved,0,0,0,0` gives them back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddedReserved {
+    /// The monitor, named as a [`MonitorRule`] names one; empty for every
+    /// monitor.
+    pub name: String,
+    /// The strips.
+    pub reserved: Gaps,
+}
+
+impl AddedReserved {
+    /// Every `addreserved` line among the `monitor =` values, in the order
+    /// the file and the `hyprctl keyword`s after it have them. Lines that
+    /// are not `addreserved`, or whose numbers cannot be read, are skipped:
+    /// [`MonitorRule::read_all`] is what says why.
+    #[must_use]
+    pub fn read_all<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<Self> {
+        values
+            .into_iter()
+            .filter_map(|value| {
+                let fields: Vec<&str> = value.split(',').map(str::trim).collect();
+                match fields.as_slice() {
+                    [name, "addreserved", rest @ ..] => Some(Self {
+                        name: (*name).to_owned(),
+                        reserved: parse_reserved(rest).ok()?,
+                    }),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    /// What the last of `added` that names this monitor reserves, as a
+    /// later line wins; nothing when none does.
+    #[must_use]
+    pub fn for_monitor(added: &[Self], name: &str, description: &str) -> Gaps {
+        added
+            .iter()
+            .rev()
+            .find(|added| names(&added.name, name, description))
+            .map_or(Gaps::all(0), |added| added.reserved)
+    }
+}
+
+/// Whether a line's `named` monitor is the one called `name`, described as
+/// `description`: every monitor when it is empty, by description after
+/// `desc:`, and by connector otherwise.
+fn names(named: &str, name: &str, description: &str) -> bool {
+    if named.is_empty() {
+        return true;
+    }
+    match named.strip_prefix("desc:") {
+        Some(wanted) => {
+            let wanted = wanted.trim();
+            !wanted.is_empty() && description.starts_with(wanted)
+        }
+        None => named == name,
+    }
+}
+
+/// `TOP, BOTTOM, LEFT, RIGHT`, each a number of logical pixels from 0.
+fn parse_reserved(fields: &[&str]) -> Result<Gaps, String> {
+    let [top, bottom, left, right] = fields else {
+        return Err("addreserved wants four numbers: top, bottom, left, right".to_owned());
+    };
+    let side = |field: &str| {
+        field
+            .parse::<i64>()
+            .ok()
+            .filter(|pixels| *pixels >= 0)
+            .ok_or_else(|| format!("addreserved: `{field}` is not a number of pixels"))
+    };
+    Ok(Gaps {
+        top: side(top)?,
+        right: side(right)?,
+        bottom: side(bottom)?,
+        left: side(left)?,
+    })
+}
+
 impl MonitorRule {
     /// Read every `monitor =` line's value, in the order the file has them:
     /// the rules, and each line that could not be read with why.
@@ -192,6 +283,7 @@ impl MonitorRule {
             let fields: Vec<&str> = value.split(',').map(str::trim).collect();
             let read = match fields.as_slice() {
                 [name, "transform", rest @ ..] => Self::turned_again(&rules, name, rest),
+                [_, "addreserved", rest @ ..] => parse_reserved(rest).map(|_| None),
                 _ => Self::parse(value).map(Some),
             };
             match read {
@@ -293,16 +385,7 @@ impl MonitorRule {
     /// one.
     #[must_use]
     pub fn matches(&self, name: &str, description: &str) -> bool {
-        if self.name.is_empty() {
-            return true;
-        }
-        match self.name.strip_prefix("desc:") {
-            Some(wanted) => {
-                let wanted = wanted.trim();
-                !wanted.is_empty() && description.starts_with(wanted)
-            }
-            None => self.name == name,
-        }
+        names(&self.name, name, description)
     }
 
     /// The scale as a number: `auto` is 1, and a scale at or below zero is

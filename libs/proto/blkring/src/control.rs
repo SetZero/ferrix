@@ -17,11 +17,12 @@
 //!   8 reason u32, a Refusal
 //! STOP     kernel -> driver, 8 bytes
 //! STOPPED  driver -> kernel, 8 bytes
-//! START    devmgr -> driver, 92 bytes, handles [device, control channel]
+//! START    devmgr -> driver, 96 bytes, handles [device, control channel]
 //!   8 common Block   24 notify Block   40 isr Block   56 device Block
 //!     (a Block: 0 phys u64, 8 offset u32, 12 length u32)
 //!   72 notify_off_multiplier u32   76 msix_table_size u16
 //!   78 pci_device_id u16   80 location u32   84 name [u8; 8]
+//!   92 pci_subsystem_vendor_id u16   94 pci_subsystem_id u16
 //! ```
 //!
 //! START is the first and only message on a driver's bootstrap channel: the
@@ -62,7 +63,7 @@ pub const HELLO_BYTES: usize = 72;
 /// Bytes of REFUSED.
 pub const REFUSED_BYTES: usize = 12;
 /// Bytes of START.
-pub const START_BYTES: usize = 92;
+pub const START_BYTES: usize = 96;
 /// Bytes of the longest message.
 pub const MAX_BYTES: usize = START_BYTES;
 
@@ -146,6 +147,11 @@ pub mod start {
     pub const LOCATION: usize = 80;
     /// `name`, 8 bytes, NUL-padded: the node name `devmgr` chose.
     pub const NAME: usize = 84;
+    /// `pci_subsystem_vendor_id`, `u16`.
+    pub const PCI_SUBSYSTEM_VENDOR_ID: usize = 92;
+    /// `pci_subsystem_id`, `u16`: which machine made the device, where the
+    /// device's own identifier cannot say (`DeviceInfo::subsystem_id`).
+    pub const PCI_SUBSYSTEM_ID: usize = 94;
 
     /// A `Block`'s `phys`, `u64`.
     pub const BLOCK_PHYS: usize = 0;
@@ -375,6 +381,13 @@ pub struct Start {
     pub location: u32,
     /// The node name `devmgr` chose, NUL-padded: what HELLO must carry back.
     pub name: [u8; NAME_BYTES],
+    /// The PCI subsystem vendor identifier, as `device_info` gave it.
+    pub pci_subsystem_vendor_id: u16,
+    /// The PCI subsystem identifier: which machine made a virtio device,
+    /// where [`Start::pci_device_id`] cannot say. crosvm's GPU reads a 2D
+    /// transfer's offset differently from QEMU's, and its driver has to know
+    /// which it has.
+    pub pci_subsystem_id: u16,
 }
 
 /// Why a START is not one a driver may act on.
@@ -598,6 +611,16 @@ fn encode_start(bytes: &mut [u8], message: &Start) {
     );
     put(bytes, start::LOCATION, &message.location.to_le_bytes());
     put(bytes, start::NAME, &message.name);
+    put(
+        bytes,
+        start::PCI_SUBSYSTEM_VENDOR_ID,
+        &message.pci_subsystem_vendor_id.to_le_bytes(),
+    );
+    put(
+        bytes,
+        start::PCI_SUBSYSTEM_ID,
+        &message.pci_subsystem_id.to_le_bytes(),
+    );
 }
 
 /// A [`Block`] at `at`.
@@ -638,6 +661,8 @@ fn decode_body(kind: u32, bytes: &[u8]) -> Option<Message> {
             pci_device_id: u16_at(bytes, start::PCI_DEVICE_ID)?,
             location: u32_at(bytes, start::LOCATION)?,
             name: array_at(bytes, start::NAME)?,
+            pci_subsystem_vendor_id: u16_at(bytes, start::PCI_SUBSYSTEM_VENDOR_ID)?,
+            pci_subsystem_id: u16_at(bytes, start::PCI_SUBSYSTEM_ID)?,
         }),
         _ => return None,
     })

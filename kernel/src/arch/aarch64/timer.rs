@@ -64,6 +64,8 @@ fn finish(described: Option<u32>) -> Result<(), &'static str> {
     if cpu::read_cntfrq() == 0 {
         return Err("firmware left CNTFRQ_EL0 at zero, so the counter has no frequency");
     }
+    // The boot processor's; each secondary sets its own as it starts.
+    cpu::allow_user_counter();
     disarm();
     Ok(())
 }

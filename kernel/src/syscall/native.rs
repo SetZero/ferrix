@@ -1684,6 +1684,8 @@ fn info_bytes(info: &DeviceInfo) -> [u8; DEVICE_INFO_BYTES] {
     put(&info.device_id.to_ne_bytes());
     put(&info.msix_table_size.to_ne_bytes());
     put(&info.virtio.to_ne_bytes());
+    put(&info.subsystem_vendor_id.to_ne_bytes());
+    put(&info.subsystem_id.to_ne_bytes());
     bytes
 }
 

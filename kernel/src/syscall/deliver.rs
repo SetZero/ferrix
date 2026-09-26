@@ -54,7 +54,7 @@
 
 use ferrix_bootinfo::is_user_address;
 use ferrix_linux_abi::errno::Errno;
-use ferrix_linux_abi::types::{SA_RESTART, SIG_DFL, SIG_IGN, SIGSEGV};
+use ferrix_linux_abi::types::{SA_RESTART, SA_RESTORER, SIG_DFL, SIG_IGN, SIGSEGV};
 
 use crate::arch;
 use crate::console::println;
@@ -382,12 +382,21 @@ fn run_handler(
     }
     let sp = context.stack_pointer();
     let (mask, altstack, stack) = enter_handler_for(thread, taken, sp);
+    // A handler with no restorer of its own goes back through the vDSO's
+    // trampoline where the architecture's has one, as Linux's AArch64 does:
+    // glibc there sets no `SA_RESTORER`, having no trampoline of its own.
+    let (flags, restorer) = match super::vdso::sigreturn(thread.process().space()) {
+        Some(trampoline) if taken.action.flags & SA_RESTORER == 0 => {
+            (taken.action.flags | SA_RESTORER, trampoline)
+        }
+        _ => (taken.action.flags, taken.action.restorer),
+    };
     let request = FrameRequest {
         signal: taken.signal,
         info: taken.origin.encode(taken.signal),
         handler: taken.action.handler,
-        flags: taken.action.flags,
-        restorer: taken.action.restorer,
+        flags,
+        restorer,
         mask,
         stack,
         altstack,
