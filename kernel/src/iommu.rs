@@ -1,5 +1,5 @@
-//! Stage 10: where the IOMMUs are, and which one each PCI function's DMA
-//! arrives at.
+//! Stage 10: where the IOMMUs are, which one each PCI function's DMA arrives
+//! at, and the domains that confine it there.
 //!
 //! Each firmware describes this its own way:
 //!
@@ -12,9 +12,8 @@
 //! * **The device tree**, on ARMv7-A: `arm,smmu-v3` nodes, and each ECAM host's
 //!   `iommu-map` from requester IDs to a phandle and a stream ID.
 //!
-//! Nothing here programs a unit. What it finds is what a domain is built on;
-//! until one is, the registers are only kept out of every driver's apertures,
-//! and every function's DMA still reaches physical memory directly.
+//! Every unit's registers are kept out of every driver's apertures, whether
+//! or not the kernel programs it.
 //!
 //! # What cannot be followed is said, not guessed
 //!
@@ -28,12 +27,30 @@
 //!
 //! A [`Domain`] is the memory one device's DMA may reach, and the device
 //! addresses it reaches it by: a driver pins pages into its device's domain
-//! and gives the device the addresses the pin returns. Every domain is
-//! untranslated for now — no unit is programmed, so a device address is the
-//! physical address and a device can reach all of memory, which is the
+//! and gives the device the addresses the pin returns.
+//!
+//! [`bring_up`] turns translation on, before any device is given DMA, for
+//! every VT-d unit the DMAR describes and, under ACPI, every `SMMUv3` the IORT
+//! does. A function behind one of those gets a translated domain
+//! ([`domain_for`]): its unit lets it reach only the pages pinned into it,
+//! each at its own physical address, and stops everything else, as it stops
+//! every access of a function behind it that has no domain. `vtd` and
+//! `smmuv3` program the units and their tables; [`Domain::pin`] and
+//! [`Domain::unpin`] are the same for both.
+//!
+//! A domain is untranslated -- a device address is the physical address and
+//! the device can reach all of memory -- for a function behind no unit, behind
+//! one that would not come up, or behind an SMMU only a device tree describes,
+//! as ARMv7-A's is, which is left alone (see `bring_up_smmu`). That is the
 //! degraded trusted mode `docs/ARCHITECTURE.md` §7 requires the kernel to
-//! announce, and the first pin does. The VT-d and `SMMUv3` domains replace
-//! what [`Domain::pin`] does behind the same signature.
+//! announce, and the first pin into such a domain does.
+//!
+//! # Faults
+//!
+//! A unit that refuses an access records it. [`audit_faults`] reads every
+//! translating unit's records last in the boot and fails it (FX-1007) on any
+//! fault no check provoked; the out-of-domain probe in `pci/virtio.rs`
+//! registers the one fault it provokes with [`Domain::provoke`].
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
