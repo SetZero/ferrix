@@ -31,12 +31,21 @@
 //! Dropping the last reference to a channel endpoint wakes its peer, which
 //! takes other locks; the kernel holds this table under its process's lock,
 //! and must be able to let that lock go before the object dies.
+//!
+//! # A handle is a program's index
+//!
+//! Every lookup clamps the slot index with [`nospec::bounded`] before it
+//! indexes, so a handle value past the table cannot steer a mispredicted
+//! bounds check into memory beyond it (Spectre variant 1). A handle is the
+//! one integer every native call takes from a program and uses as an array
+//! index, which is why this table is where that defence has to be.
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
 use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::rights::{Requested, Rights};
+use ferrix_sync::nospec;
 
 /// Bits of a handle value that hold the generation.
 const GENERATION_BITS: u32 = 12;
@@ -191,6 +200,7 @@ impl<T> HandleTable<T> {
     /// [`TableError::BadHandle`].
     pub fn get(&self, handle: Handle) -> Result<(&T, Rights), TableError> {
         let (index, wanted) = decode(handle);
+        let index = nospec::bounded(index, self.slots.len()).ok_or(TableError::BadHandle)?;
         match self.slots.get(index) {
             Some(Slot::Occupied {
                 generation,
@@ -223,6 +233,7 @@ impl<T> HandleTable<T> {
     /// [`TableError::BadHandle`].
     pub fn remove(&mut self, handle: Handle) -> Result<(T, Rights), TableError> {
         let (index, wanted) = decode(handle);
+        let index = nospec::bounded(index, self.slots.len()).ok_or(TableError::BadHandle)?;
         let Some(slot) = self.slots.get_mut(index) else {
             return Err(TableError::BadHandle);
         };
@@ -283,6 +294,7 @@ impl<T> HandleTable<T> {
         let (_, held) = self.get(handle)?;
         let rights = requested.resolve(held).ok_or(TableError::AccessDenied)?;
         let (index, generation) = decode(handle);
+        let index = nospec::bounded(index, self.slots.len()).ok_or(TableError::BadHandle)?;
 
         if generation < MAX_GENERATION {
             // The common case, in place: the slot's next generation is the

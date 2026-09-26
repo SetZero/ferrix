@@ -184,6 +184,11 @@ unused_results = "deny"
 missing_debug_implementations = "deny"
 unused_qualifications = "warn"
 unreachable_pub = "warn"
+# The one configuration switch the kernel has: `cargo xtask --mitigations off`
+# builds with `--cfg ferrix_mitigations_off`, which takes out every
+# side-channel defence (docs/certification/SPECULATION.md). Declared here so a
+# misspelt `cfg` is a warning, and so the switch is visibly the only one.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ferrix_mitigations_off)"] }
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"

@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 ferrix-native-abi = { workspace = true }
+ferrix-sync = { workspace = true }
 
 [lints]
 workspace = true

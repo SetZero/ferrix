@@ -49,6 +49,8 @@
 //! * [`SpinLockedCell`] — a global that is filled in at boot and read after.
 //! * [`SleepLock`] — mutual exclusion whose waiters sleep, on a [`Parking`] the
 //!   kernel lends through a [`Parker`]; the one lock a holder may block under.
+//! * [`nospec::bounded`] — an index check a mispredicted branch cannot see
+//!   past, for the tables in these libraries a program indexes.
 //!
 //! ```
 //! use ferrix_sync::SpinLock;
@@ -62,6 +64,8 @@
 #![no_std]
 
 extern crate alloc;
+
+pub mod nospec;
 
 #[cfg(test)]
 mod tests;

@@ -34,6 +34,7 @@
 use alloc::vec::Vec;
 
 use ferrix_linux_abi::errno::Errno;
+use ferrix_sync::nospec;
 
 use crate::Result;
 
@@ -151,6 +152,7 @@ impl<T> FdTable<T> {
     /// The live slot `fd` names; a reserved one names nothing yet.
     fn slot_mut(&mut self, fd: i32) -> Result<&mut Slot<T>> {
         let index = usize::try_from(fd).map_err(|_| Errno::EBADF)?;
+        let index = nospec::bounded(index, self.slots.len()).ok_or(Errno::EBADF)?;
         self.slots
             .get_mut(index)
             .and_then(Option::as_mut)
@@ -160,6 +162,7 @@ impl<T> FdTable<T> {
 
     fn slot(&self, fd: i32) -> Result<&Slot<T>> {
         let index = usize::try_from(fd).map_err(|_| Errno::EBADF)?;
+        let index = nospec::bounded(index, self.slots.len()).ok_or(Errno::EBADF)?;
         self.slots
             .get(index)
             .and_then(Option::as_ref)
@@ -309,6 +312,7 @@ impl<T> FdTable<T> {
         if self.slots.len() <= index {
             self.slots.resize_with(index.saturating_add(1), || None);
         }
+        let index = nospec::bounded(index, self.slots.len()).ok_or(Errno::EBADF)?;
         let slot = self.slots.get_mut(index).ok_or(Errno::EBADF)?;
         match slot {
             Some(held) if held.item.is_none() => Err(Errno::EBUSY),
@@ -336,6 +340,7 @@ impl<T> FdTable<T> {
         let item = self.slot_mut(fd)?.item.take().ok_or(Errno::EBADF)?;
         if let Some(slot) = usize::try_from(fd)
             .ok()
+            .and_then(|index| nospec::bounded(index, self.slots.len()))
             .and_then(|index| self.slots.get_mut(index))
         {
             *slot = None;

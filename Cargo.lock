@@ -353,6 +353,7 @@ name = "ferrix-objects"
 version = "0.1.0"
 dependencies = [
  "ferrix-native-abi",
+ "ferrix-sync",
 ]
 
 [[package]]
