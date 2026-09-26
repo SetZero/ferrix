@@ -106,7 +106,7 @@ const SHOT_PATH: &str = "bin/shot";
 const LOCK_PATH: &str = "bin/lock";
 const VKBD_PATH: &str = "bin/vkbd";
 /// The gate's hyprlock, carried by the hyprlock boot alone: one fixed secret
-/// instead of an authentication service (`compositor/hyprlock/src/bin/gate.rs`).
+/// instead of an authentication service (`userland/compositor/hyprlock/src/bin/gate.rs`).
 const HYPRLOCK_GATE_PATH: &str = "bin/hyprlock-gate";
 /// `reboot`, with the word for the firmware busybox's cannot pass; it takes
 /// the name, which busybox then does not link.
@@ -3732,23 +3732,23 @@ bind = , L, exec, /bin/hyprlock-gate -c /etc/hypr/hyprlock.conf
 const HYPRLOCK_EXPECTED: [(&str, &str); 5] = [
     (
         "tiled",
-        "compositor/render/tests/data/dwindle-two-clients.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
     (
         "locked by hyprlock, its field empty",
-        "compositor/hyprlock/tests/data/hyprlock-locked.xrle",
+        "userland/compositor/hyprlock/tests/data/hyprlock-locked.xrle",
     ),
     (
         "five characters typed, five dots",
-        "compositor/hyprlock/tests/data/hyprlock-dots.xrle",
+        "userland/compositor/hyprlock/tests/data/hyprlock-dots.xrle",
     ),
     (
         "a wrong password refused, the field in fail_color",
-        "compositor/hyprlock/tests/data/hyprlock-failed.xrle",
+        "userland/compositor/hyprlock/tests/data/hyprlock-failed.xrle",
     ),
     (
         "the windows again, once the right password let the lock go",
-        "compositor/render/tests/data/dwindle-two-clients.xrle",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
     ),
 ];
 
@@ -3775,10 +3775,10 @@ const HYPRLOCK_BINDS: [(&str, &[&str]); 4] = [
 /// yet and no image may carry a password policy meanwhile; when it is, the
 /// boot seeds a real store entry instead (§4.4). The configuration and the
 /// secret are the crate's own test data; the pictures are drawn from them on the host by
-/// `compositor/hyprlock/tests/gate.rs`, with the same code, and composited
+/// `userland/compositor/hyprlock/tests/gate.rs`, with the same code, and composited
 /// as hyprix composites a lock surface.
 fn test_hyprlock(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
-    let data = paths::workspace_root().join("compositor/hyprlock/tests/data");
+    let data = paths::workspace_root().join("userland/compositor/hyprlock/tests/data");
     let read = |path: &Path| -> Result<Vec<u8>> {
         std::fs::read(path)
             .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))
@@ -3788,7 +3788,7 @@ fn test_hyprlock(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
         mode,
         content: crate::ports::Content::Bytes(bytes),
     };
-    let fonts = paths::workspace_root().join("fonts/liberation");
+    let fonts = paths::workspace_root().join("assets/fonts/liberation");
     let carried = Carried {
         ports: vec![
             file(HYPRLOCK_GATE_PATH, 0o755, read(&programs.hyprlock_gate)?),

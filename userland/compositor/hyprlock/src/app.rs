@@ -1,4 +1,4 @@
-//! The program: `CHyprlock::run`, on `compositor/toolkit`.
+//! The program: `CHyprlock::run`, on `userland/compositor/toolkit`.
 //!
 //! Connect; take a picture of every screen first if the fade or a
 //! `path = screenshot` background needs one; take the lock and put a lock

@@ -211,7 +211,7 @@ match it pixel for pixel on `x86_64` (within 2 a channel elsewhere).
 
 ## 5. hyprlock
 
-`compositor/hyprlock` is hyprlock 0.9.6 (`/var/cache/hyprland-build/src/
+`userland/compositor/hyprlock` is hyprlock 0.9.6 (`/var/cache/hyprland-build/src/
 hyprlock`) for Ferrix, installed as `/bin/hyprlock`. It reads
 `~/.config/hypr/hyprlock.conf` unchanged, or the file `-c` names, found
 as upstream's `findConfig` finds it (`$XDG_CONFIG_HOME`, `$HOME/.config`,
@@ -238,7 +238,7 @@ as upstream's `findConfig` finds it (`$XDG_CONFIG_HOME`, `$HOME/.config`,
   `cmd[update:N(:force)]`, which runs through `/bin/sh -c` and shows the
   output, trimmed as `general:text_trim` says. A text is Pango markup in a
   Pango font description at a point size (96 dpi), drawn by
-  `compositor/text` to its logical rectangle, which is what upstream's
+  `userland/compositor/text` to its logical rectangle, which is what upstream's
   label texture is. The clock is UTC: Ferrix's image has no `TZ` and no
   `/etc/localtime`, which is when upstream falls back to UTC too.
 * **The input field**: dots of `dots_size`, `dots_spacing`, `dots_center`,
@@ -247,7 +247,7 @@ as upstream's `findConfig` finds it (`$XDG_CONFIG_HOME`, `$HOME/.config`,
   placeholder; `fade_on_empty` and `fade_timeout`; `outer_color`,
   `inner_color`, `font_color`, `check_color`, `fail_color`, the Caps Lock
   and Num Lock colours with their fallbacks; `swap_font_color`.
-* **Keys** through `compositor/xkb` as the compositor's keymap has them, so
+* **Keys** through `userland/compositor/xkb` as the compositor's keymap has them, so
   `input:kb_layout = de` with `nodeadkeys` types German: text is appended,
   `BackSpace`/`Delete` remove a character and are the only keys that
   repeat, `Escape`, `Ctrl+U`, `Ctrl+A` and `Ctrl+BackSpace` clear, `Return`
@@ -257,9 +257,9 @@ as upstream's `findConfig` finds it (`$XDG_CONFIG_HOME`, `$HOME/.config`,
   hyprlock's own tree (`global`, `fade`, `fadeIn`, `fadeOut`, `inputField`,
   `inputFieldColors`, `inputFieldFade`, `inputFieldWidth`,
   `inputFieldDots`), a speed of N being N tenths of a second, over
-  `compositor/anim`'s curves.
+  `userland/compositor/anim`'s curves.
 * **Backgrounds**: `color`, `path` (PNG, JPEG, SVG through
-  `compositor/image`; upstream also reads WebP, JPEG XL and BMP),
+  `userland/compositor/image`; upstream also reads WebP, JPEG XL and BMP),
   `path = screenshot` through `zwlr_screencopy_v1`, `blur_size`,
   `blur_passes`, `noise`, `contrast`, `brightness`, `vibrancy`,
   `vibrancy_darkness` (the dual-Kawase blur of `blurFB`, `blur.rs`), and
@@ -328,7 +328,7 @@ zeroed when dropped.
 2026-09-26, branch `hyprlock`, on top of `clients-base` (unlanded):
 configuration model, layout, formatting, the session and auth, blur and
 every widget are written and host-tested (42 tests); the program is
-written on `compositor/toolkit`'s interface and builds, but cannot run
+written on `userland/compositor/toolkit`'s interface and builds, but cannot run
 until the foundation's bodies land (they are `todo!()` today). The
 customer's real file reads with no diagnostic and no unsupported line
 (`cargo run -p compositor-hyprlock --example probe`). Next: the

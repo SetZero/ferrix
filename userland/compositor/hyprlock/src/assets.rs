@@ -2,10 +2,10 @@
 //! crates: hyprgraphics' `CTextResource` and `CImageResource`.
 //!
 //! A text is Pango markup in a Pango font description at a point size, laid
-//! out and drawn by `compositor/text` into a pixmap the size of its
+//! out and drawn by `userland/compositor/text` into a pixmap the size of its
 //! logical rectangle -- what upstream's label texture is. Markup that does
 //! not parse is drawn as the plain text it is, as upstream falls back when
-//! `pango_parse_markup` refuses it. Pictures are `compositor/image`'s:
+//! `pango_parse_markup` refuses it. Pictures are `userland/compositor/image`'s:
 //! PNG, JPEG and SVG, where upstream also reads WebP, JPEG XL and BMP.
 
 use std::collections::HashMap;

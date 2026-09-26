@@ -1,7 +1,7 @@
 //! The pictures `cargo xtask test-compositor --boot hyprlock` requires of
 //! the guest's screen, drawn here from `tests/data/gate.conf` by the same
 //! code the guest runs, and composited onto a black frame by
-//! `compositor/render` as hyprix composites a lock surface.
+//! `userland/compositor/render` as hyprix composites a lock surface.
 //!
 //! Bless with `COMPOSITOR_RENDER_BLESS=1` after a change that is meant to
 //! move a pixel, look at what was written, and commit it.
@@ -37,7 +37,7 @@ fn config() -> Config {
 }
 
 fn assets() -> System {
-    let fonts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fonts/liberation");
+    let fonts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../assets/fonts/liberation");
     System::with_font_dirs(&[&fonts])
 }
 
