@@ -14,7 +14,8 @@
 //! Before this, the one program the boot ended by a fault wrote through a
 //! null pointer (`object/check.rs`), so an undefined instruction, a `bkpt`
 //! and an alignment fault a program raises itself had never been taken from
-//! USR mode.
+//! USR mode. The last program installs a signal handler without a restorer,
+//! whose frame nothing else builds.
 
 use ferrix_linux_abi::types::{SIGBUS, SIGILL, SIGTRAP};
 
@@ -49,6 +50,32 @@ const BREAKPOINT: &[u8] = &[
 const MISALIGNED: &[u8] = &[
     0x0d, 0x00, 0xa0, 0xe1, 0x01, 0x00, 0x80, 0xe2, 0x02, 0x00, 0x90, 0xe8, 0xf8, 0x70, 0xa0, 0xe3,
     0x61, 0x00, 0xa0, 0xe3, 0x00, 0x00, 0x00, 0xef,
+];
+
+/// A handler installed without `SA_RESTORER`, which the frame then returns
+/// into through the copy of the return sequence it carries on the stack
+/// (`super::super::signal`): the handler is entered, and exits with 55.
+///
+/// ```text
+///   sub sp, sp, #24 ; adr r0, handler ; str r0, [sp]       ; sa_handler
+///   mov r0, #0 ; str r0, [sp, #4..#16]                      ; no flags, no restorer, empty mask
+///   rt_sigaction(SIGUSR1, sp, 0, 8) ; bne fail
+///   kill(getpid(), SIGUSR1)
+/// fail: exit_group(97)
+/// handler: exit_group(55)
+/// ```
+///
+/// Assembled by GNU `as` for ARMv7-A and read back out of the object file.
+/// musl, and every program the images carry, installs its handlers with a
+/// restorer, so no other program takes this frame.
+const NO_RESTORER: &[u8] = &[
+    0x18, 0xd0, 0x4d, 0xe2, 0x54, 0x00, 0x8f, 0xe2, 0x00, 0x00, 0x8d, 0xe5, 0x00, 0x00, 0xa0, 0xe3,
+    0x04, 0x00, 0x8d, 0xe5, 0x08, 0x00, 0x8d, 0xe5, 0x0c, 0x00, 0x8d, 0xe5, 0x10, 0x00, 0x8d, 0xe5,
+    0x0a, 0x00, 0xa0, 0xe3, 0x0d, 0x10, 0xa0, 0xe1, 0x00, 0x20, 0xa0, 0xe3, 0x08, 0x30, 0xa0, 0xe3,
+    0xae, 0x70, 0xa0, 0xe3, 0x00, 0x00, 0x00, 0xef, 0x00, 0x00, 0x50, 0xe3, 0x04, 0x00, 0x00, 0x1a,
+    0x14, 0x70, 0xa0, 0xe3, 0x00, 0x00, 0x00, 0xef, 0x0a, 0x10, 0xa0, 0xe3, 0x25, 0x70, 0xa0, 0xe3,
+    0x00, 0x00, 0x00, 0xef, 0x61, 0x00, 0xa0, 0xe3, 0xf8, 0x70, 0xa0, 0xe3, 0x00, 0x00, 0x00, 0xef,
+    0x37, 0x00, 0xa0, 0xe3, 0xf8, 0x70, 0xa0, 0xe3, 0x00, 0x00, 0x00, 0xef,
 ];
 
 /// The status of a program a signal ended, as `wait4` reports it to a shell.
@@ -96,6 +123,13 @@ pub(crate) fn run() -> Result<(), &'static str> {
         "  fault    a program's undefined instruction, own breakpoint and misaligned \
          load-multiple ended it with SIGILL, SIGTRAP and SIGBUS"
     );
+
+    let status = run_program(b"/no-restorer", NO_RESTORER)?;
+    if status != 55 {
+        println!("  signal   /no-restorer ended with {status}, not 55");
+        return Err("a handler installed without a restorer was not entered");
+    }
+    println!("  signal   a handler installed without SA_RESTORER was entered from its frame");
     Ok(())
 }
 
