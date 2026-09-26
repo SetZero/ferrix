@@ -486,7 +486,10 @@ static IN_SCHEDULER: AtomicU64 = AtomicU64::new(0);
 /// The next task identifier. Never reused.
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// One bit per processor whose idle task is looking for work or asleep.
+/// One bit per processor whose idle task is looking for work or asleep: set
+/// by the idle loop before it looks, and by a switch to the idle task;
+/// cleared by the idle loop when it finds work, and by a switch to any other
+/// task, before that task runs (`choose_next`).
 ///
 /// Read by [`wake_idle_processors`], so that a spawn does not interrupt
 /// every processor on the machine when none of them is idle: a thousand
@@ -988,6 +991,18 @@ fn idle_loop() -> ! {
             set_idle(cpu, false);
         }
     }
+}
+
+/// Whether this processor reads as idle to the rest of the machine: its bit
+/// in [`IDLE`]. For the check that a processor running a task never does.
+pub(super) fn this_cpu_reads_as_idle() -> bool {
+    let saved = <arch::Irq as IrqControl>::disable();
+    let bit = this_cpu()
+        .filter(|cpu| *cpu < 64)
+        .map_or(0, |cpu| 1u64 << cpu);
+    let idle = IDLE.load(Ordering::SeqCst) & bit != 0;
+    <arch::Irq as IrqControl>::restore(saved);
+    idle
 }
 
 /// Whether every processor that has a run queue is in its idle loop.
@@ -1941,6 +1956,22 @@ fn choose_next(
     queue.previous = Some(Arc::clone(&previous));
     queue.current = Some(Arc::clone(&next));
     note_running(cpu, next.id, next.group(), next.moves_seen());
+    // Idle to the rest of the machine exactly while the idle task is what
+    // runs: cleared here, before any other task can, and set again when the
+    // idle task comes back. The idle loop's own clear came too late for the
+    // commonest wake -- an interrupt ending the halt and switching straight to
+    // the task it woke, the idle task preempted before its next line -- and
+    // the processor read as idle for as long as that task ran. Set again on
+    // the way back because the idle task may have been preempted after
+    // setting the mark and before its look, and would otherwise halt
+    // unmarked, where a spawn's interrupt never reaches it. See `IDLE`.
+    set_idle(
+        Some(cpu),
+        queue
+            .idle
+            .as_ref()
+            .is_some_and(|idle| Arc::ptr_eq(idle, &next)),
+    );
     queue.exec_start = now;
     queue.arm_timer(now);
     next.note_switch(cpu);

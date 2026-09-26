@@ -971,6 +971,9 @@ pub(crate) static STAGE5_SCHEDULER: Explanation = Explanation {
          processor served inside the window, but a sleep twenty times late fails regardless.",
         "Stealing, placement or balancing moved nothing between processors, or a task ran \
          on a processor its affinity excluded.",
+        "A processor running a task read as idle: `choose_next` does not clear `IDLE` for a \
+         switch away from the idle task, so an idle task preempted on its way out of a halt \
+         leaves its processor marked idle while another task runs.",
     ],
     see: "kernel/src/sched/check.rs run; kernel/src/sched/mod.rs; docs/ROADMAP.md stage 5",
 };

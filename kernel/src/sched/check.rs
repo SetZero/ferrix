@@ -59,6 +59,12 @@ const WINDOW_NANOS: u64 = 150_000_000;
 /// How long the sleep check sleeps.
 const SLEEP_NANOS: u64 = 20_000_000;
 
+/// How many times [`a_running_processor_is_not_idle`] sleeps and looks.
+const IDLE_LOOKS: u32 = 20;
+
+/// How long each of those sleeps is: long enough that the processor halts.
+const IDLE_LOOK_SLEEP_NANOS: u64 = 1_000_000;
+
 /// How long to watch confined tasks for a processor they should never reach.
 const AFFINITY_WATCH_NANOS: u64 = 60_000_000;
 
@@ -202,6 +208,7 @@ pub(crate) fn run(topology: &Topology) -> Result<Report, &'static str> {
     made_runnable_here_runs_without_another_interrupt()?;
     mark!(0);
     sleeping(&mut report)?;
+    a_running_processor_is_not_idle()?;
     mark!(1);
     many_tasks(topology, &mut report)?;
     mark!(2);
@@ -950,6 +957,23 @@ fn sleeping(report: &mut Report) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// A processor running a task does not read as idle, however the task got
+/// there. The common way is the one that used to miss: the processor halts in
+/// its idle loop, a timer interrupt wakes a sleeper, and the interrupt's exit
+/// switches straight to it -- so the idle task, preempted on its way out of
+/// the halt, never cleared its mark. Other processors then took the machine
+/// for quiet and reaped early, which made a reaper check flaky. Each of these
+/// sleeps ends that way whenever nothing else is runnable here.
+fn a_running_processor_is_not_idle() -> Result<(), &'static str> {
+    for _ in 0..IDLE_LOOKS {
+        super::sleep_for(IDLE_LOOK_SLEEP_NANOS);
+        if super::this_cpu_reads_as_idle() {
+            return Err("a processor running a task read as idle to the rest of the machine");
+        }
+    }
+    Ok(())
+}
+
 /// A thousand threads, started from one processor, run to completion — and
 /// every stack comes back.
 fn many_tasks(topology: &Topology, report: &mut Report) -> Result<(), &'static str> {
@@ -1266,8 +1290,10 @@ fn describes_itself() -> Result<(), &'static str> {
 ///
 /// No idle loop may reap the dead tasks first, and one reaps whenever it
 /// believes every processor idle -- which a processor whose idle task was
-/// preempted on its way out of a halt still claims to be. So no idle loop
-/// runs at all while the tasks die: every other processor holds a spinning
+/// preempted on its way out of a halt used to claim to be, until the switch
+/// cleared the mark ([`a_running_processor_is_not_idle`]), and which every
+/// processor with nothing to run truly is. So no idle loop runs at all while
+/// the tasks die: every other processor holds a spinning
 /// task of this check's, and the two tasks that die are pinned here, where
 /// this task stays runnable between them. The reap is then made with every
 /// allocation of this task failing.

@@ -822,6 +822,9 @@ user process included, is scheduled by the code this measures.
    times late fails regardless.
 4. Stealing, placement or balancing moved nothing between processors, or a task
    ran on a processor its affinity excluded.
+5. A processor running a task read as idle: `choose_next` does not clear `IDLE`
+   for a switch away from the idle task, so an idle task preempted on its way
+   out of a halt leaves its processor marked idle while another task runs.
 
 See: kernel/src/sched/check.rs run; kernel/src/sched/mod.rs; docs/ROADMAP.md
 stage 5.
