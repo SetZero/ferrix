@@ -520,20 +520,20 @@ package FerrixRoadmap {
              * per service, a getty on the console, shutdown by SIGTERM; the
              * same day svc and its control socket, readiness, socket
              * activation and resource limits (L5 to L7, L9) and the
-             * directory with native services (L8). Verified by
-             * initSession. Left: the images booting it (L10), built on a
-             * branch on 2026-09-26 and not yet on main.
+             * directory with native services (L8), and the images booting
+             * it with the compositor as its service (L10). Verified by
+             * initSession. Later by design: L11 to L13.
              *
              * Next: authentication (docs/AUTH.md, approved by the customer
              * on 2026-09-26): authd, passwords checked by Argon2id, passwd,
              * authctl and a real hyprlock, phase 1, 27 points, not started;
              * its P0, process_create giving a child root's credentials
-             * rather than its creator's, 2 points, being fixed.
+             * rather than its creator's, 2 points, fixed.
              *
              * Designed on 2026-09-23 in docs/INIT.md: pid 1 and a service
              * manager, systemd-shaped units, a cgroup per service, a pure
              * manager in libs/init/svc behind backends a microkernel could
-             * serve. 67 points to L10, 61 of them spent; the stage 13
+             * serve. 67 points to L10, all spent; the stage 13
              * cgroups its first boot needs landed on 2026-09-24. */
     }
 
@@ -836,11 +836,12 @@ package FerrixRoadmap {
     }
 
     verification def JobsSession {
-        doc /* cargo xtask test-jobs: boot zinc as init on x86-64 with no
-             * script, so the kernel starts sh -i, and type a session at the
-             * serial port through QEMU's stdin -- sleep 30 &, jobs, kill %1,
-             * a pipeline, Ctrl-Z, bg, fg, Ctrl-C, exit -- requiring the
-             * answer to each keystroke. The only gate here that types
+        doc /* cargo xtask test-jobs: boot /sbin/init on x86-64 and type a
+             * session at the zinc its getty gives on the serial port,
+             * through QEMU's stdin -- sleep 30 &, jobs, kill %1, a
+             * pipeline, Ctrl-Z, bg, fg, Ctrl-C, exit -- requiring the
+             * answer to each keystroke, and after exit a new session from
+             * the getty init respawned. The only gate here that types
              * rather than reading what the guest said. x86-64 only: sleep is
              * uutils', which is built for x86-64 alone. */
         subject os : Ferrix;

@@ -811,7 +811,7 @@ cgroup half is what §0 asks for first.
 | L7 | `notify` readiness; `forking`. **Done 2026-09-26** (§16) | L4 | host tests + `test-init` | 3 |
 | L8 | K2, K3, K4, K6; `Type=native` in the cgroup's job; the directory (§6). **Done 2026-09-26** (§16) | L5, C8 | `test-init` stage five | 16 |
 | L9 | `.socket` units. **Done 2026-09-26** (§16), sshd aside | L4 | `test-init`: sshd activated on connect | 5 |
-| L10 | Move the images over: `cargo xtask run` and `run-compositor` boot init with `multi-user.target` / `graphical.target`; hyprix stops being pid 1 and makes a scope per client | L5, L6 | `test-compositor` under init | 6 |
+| L10 | Move the images over: `cargo xtask run` and `run-compositor` boot init with `multi-user.target` / `graphical.target`; hyprix stops being pid 1 and makes a scope per client. **Done 2026-09-26** (§16) | L5, L6 | `test-compositor` under init | 6 |
 | L11 | `devmgr` shares the restart policy | L2 | `test-restart` | 2 |
 | L12 | *later*: the kernel starts init alone and init starts `devmgr` (§7.3) | L8 | `test-boot` on all three architectures | 8 |
 | L13 | *after the rest of stage 13*: `PrivateTmp=`, `ProtectSystem=`, `PrivateNetwork=`, `SystemCallFilter=`, `NoNewPrivileges=` | L4, stage 13 | `test-init` stage six | 8 |
@@ -888,9 +888,12 @@ the system people will actually use.
 | L4 | done, 2026-09-26 | "Add /sbin/init, getty and the getty generator around libs/init/svc's manager" |
 | L5, L6, L7, L9 | done, 2026-09-26 | "Give the manager reload, a readiness status, and socket units"; "Add libs/init/svc-proto: svc's control records and readiness lines"; "Give init svc, the log, readiness, sockets and resources" |
 | L8 | done, 2026-09-26: the kernel half (K2, K3, K4, K6), then init's | "Let a parent hand its child a bootstrap handle across execve" and the five after it; "Route the directory's OPENs, and start Type=native services" |
-| L10 to L13 | not started | |
+| L10 | done, 2026-09-26 | "Boot the images through init, and the compositor as its service" |
+| L11 to L13 | not started, and later by design (§13) | |
 
-6 of L1 to L10's 67 points are left: L10's.
+All of L1 to L10's 67 points are spent. L11 to L13, 18 more, come later:
+`devmgr` sharing the restart policy, init starting `devmgr` (the microkernel
+step), and the sandboxing keys, which wait for the rest of stage 13.
 
 **L1, as built (5 points).** `libs/init/svc` is on `main`: `no_std` with
 `alloc`, `forbid(unsafe_code)`, 52 host tests, a Miri step in CI and in
@@ -1424,7 +1427,36 @@ sent before the end closes, or the client sees only the close.
 **Not done.** `devmgr` still reports 137 for every death; K6 is there for
 it to use. Linux services' own OFFERs are kept but no gate offers one yet.
 
-**What the next session does first.** L10: `cargo xtask run` and
-`run-compositor` boot init with `multi-user.target` and `graphical.target`,
-hyprix stops being pid 1 and makes a scope per client, and `test-jobs`
-moves onto a getty.
+**L10, as built (6 points).** The images a person boots now boot init.
+
+* **`cargo xtask run`**, with no program named, builds a kernel with
+  nothing in it and an initramfs with `/sbin/init`, its units, zinc, the
+  utilities and the ports, and `ferrix.init=/sbin/init` on the command line:
+  the console gets a getty and a zinc session, and `svc` drives the machine.
+  `--init <program>` still makes that program pid 1, as it asks.
+* **The desktop** -- every `test-compositor` boot, `run-compositor`, and a
+  board's card -- is built the same way by `compositor::build_parts`: init
+  is pid 1, and `/etc/ferrix/units` in the image adds `hyprix.service`
+  (`Restart=on-failure`, its output on the console), links it into a shipped
+  `graphical.target`, and points `default.target` at it. An image with no
+  shell masks the getty, which would only fail. A card gets
+  `ferrix.init=/sbin/init` in `FERRIX/DEFAULTS.TXT`, beside
+  `ferrix.checks=skip`, since its `CMDLINE.TXT` is its owner's.
+* **hyprix** asks init for a scope for each program it starts, on a thread
+  of its own with a two-second limit: `app.slice/app-<name>-<pid>.scope`
+  (`userland/compositor/hyprix/src/scope.rs`). With no init, there is no socket, and
+  the program stays where it started.
+* **The compositor gates** count `hyprix.service` failing or being
+  restarted as the compositor ending, where they counted pid 1's exit: a
+  restart would otherwise hand a test a second compositor's pictures. The
+  `desktop` boot also requires that the kernel started `/sbin/init`, that
+  `hyprix.service` became active, and that both clients came up in scopes of
+  their own.
+* **`test-jobs`** types its session at the getty's shell, and ends it with
+  `exit`, after which init must give the console a new session.
+
+**What the next session does first.** L11 to L13, which §13 put later by
+design: `devmgr` sharing `libs/init/svc`'s restart policy (and reading how a
+driver died through K6, where it reports 137 today), init starting
+`devmgr`, and the sandboxing keys once stage 13's namespaces and seccomp are
+in.

@@ -115,6 +115,11 @@ cargo xtask test-boot --accel auto            # ...on the real MMU, where it can
 cargo xtask check                             # every gate CI runs
 ```
 
+`run` boots the system: `/sbin/init` is pid 1, a getty gives the serial
+console a zinc session, and `svc` drives it -- `svc status`, `svc list`,
+`svc log <unit>`, `svc poweroff` ([`docs/INIT.md`](docs/INIT.md)). Given
+`--init <program>`, that program is pid 1 instead, as it asks.
+
 `--accel auto` boots on the host processor instead of QEMU's interpreter —
 `whpx` on Windows, `kvm` on Linux, `hvf` on macOS, and `tcg` when there is
 none or when the guest is not the host's architecture. Worth running before
@@ -333,8 +338,10 @@ cargo xtask run-compositor --arch x86_64 --gl        # the same, on the 3D card
 cargo xtask run-compositor --arch x86_64 --no-gl     # the same, drawn in software
 ```
 
-`run-compositor` boots [`userland/compositor/hyprix`](userland/compositor/README.md) as init on
-a virtio-gpu card: the compositor reads a `hyprland.conf`, listens on a
+`run-compositor` boots `/sbin/init`, which starts
+[`userland/compositor/hyprix`](userland/compositor/README.md) as `hyprix.service` of
+`graphical.target`, on a virtio-gpu card, and puts each program it starts
+in a scope of its own (`svc list` shows them as `app-*.scope`): the compositor reads a `hyprland.conf`, listens on a
 Wayland socket, tiles what connects to it and puts the frame on the screen.
 The configuration it writes into the initramfs starts a terminal first --
 `exec-once = /bin/term /bin/zinc` -- so the boot ends at a shell prompt rather

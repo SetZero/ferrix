@@ -386,8 +386,9 @@ package FerrixStructure {
                  * MemoryMax=, TasksMax= and OOMPolicy= over the scoped OOM
                  * kill. It gives services bootstrap channels, starts native
                  * ones in their cgroup's job, and routes the directory's
-                 * OPENs. Only cargo xtask test-init boots it; the images still
-                 * start their program as pid 1 until L10. */
+                 * OPENs. It is pid 1 of cargo xtask run and of every desktop
+                 * image, where the compositor is hyprix.service and each
+                 * program it starts is in a scope of its own (L10). */
         }
         #implemented part shell : UserProcess {
             doc /* busybox sh was the first foreign binary to run on Ferrix:
