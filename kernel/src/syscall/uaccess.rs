@@ -54,8 +54,10 @@
 //! a process has one thread, and `vfork` copies the space rather than sharing
 //! it -- but `clone(CLONE_VM)` will, and nothing about the copy would say so.
 
-use ferrix_bootinfo::{PAGE_SIZE, is_user_address};
+use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END, is_user_address};
 use ferrix_linux_abi::errno::Errno;
+
+use crate::arch;
 
 use crate::user::space::{Access, AddressSpace, SpaceError};
 
@@ -129,10 +131,19 @@ fn resolve<R>(
     access: Access,
     touch: impl FnOnce(u64) -> R,
 ) -> Result<R, UserError> {
-    if !is_user_address(at) {
-        return Err(UserError::NotUserRange);
-    }
-    Ok(space.with_page(at, access, touch)?)
+    Ok(space.with_page(user_address(at)?, access, touch)?)
+}
+
+/// `at`, if it is a user address, clamped so that a mispredicted check cannot
+/// hand the table walk after it a kernel address.
+///
+/// The walk that follows reads the space's tables -- whose upper half, on
+/// x86-64, is the kernel's -- and then the frame they lead to through the
+/// direct map, which is a Spectre variant 1 gadget if a processor predicts the
+/// check passed. On that path the address is zero instead. See
+/// `crate::arch::nospec_below`.
+fn user_address(at: u64) -> Result<u64, UserError> {
+    arch::nospec_below(at, USER_VIRT_END).ok_or(UserError::NotUserRange)
 }
 
 /// Copy `out.len()` bytes out of the program's memory at `from`.
@@ -206,10 +217,10 @@ fn copy_from_user_through(
         match through {
             Through::Faulting => resolve(space, at, Access::READ, read)?,
             Through::Present => {
-                if !is_user_address(at) {
-                    return Err(UserError::NotUserRange);
-                }
-                if space.with_present_page(at, Access::READ, read)?.is_none() {
+                if space
+                    .with_present_page(user_address(at)?, Access::READ, read)?
+                    .is_none()
+                {
                     return Ok(false);
                 }
             }
@@ -301,10 +312,10 @@ fn copy_to_user_through(
         match through {
             Through::Faulting => resolve(space, at, Access::WRITE, write)?,
             Through::Present => {
-                if !is_user_address(at) {
-                    return Err(UserError::NotUserRange);
-                }
-                if space.with_present_page(at, Access::WRITE, write)?.is_none() {
+                if space
+                    .with_present_page(user_address(at)?, Access::WRITE, write)?
+                    .is_none()
+                {
                     return Ok(false);
                 }
             }
@@ -332,7 +343,7 @@ pub(crate) fn fault_in_for_write(
     let end = at.checked_add(len).ok_or(UserError::Overflow)?;
     let mut page = at;
     while page < end {
-        space.fault(page, Access::WRITE)?;
+        space.fault(user_address(page)?, Access::WRITE)?;
         page = (page - page % PAGE_SIZE).saturating_add(PAGE_SIZE);
     }
     Ok(())

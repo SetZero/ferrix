@@ -35,6 +35,7 @@ Causes are listed most likely first.
 | [FX-0304](#fx-0304) | the timer's interrupt could not be registered |
 | [FX-0305](#fx-0305) | console input could not be set up |
 | [FX-0306](#fx-0306) | the random number generator repeated itself |
+| [FX-0307](#fx-0307) | the side-channel defences did not hold |
 | [FX-0401](#fx-0401) | the processor list could not be read |
 | [FX-0402](#fx-0402) | a secondary processor could not be started |
 | [FX-0403](#fx-0403) | a secondary processor could not build its GDT |
@@ -477,6 +478,32 @@ stack canary and every TLS session the same key.
    generator, so two reads copied one state.
 
 See: kernel/src/random.rs; libs/crng.
+
+<a id="fx-0307"></a>
+
+## FX-0307 — the side-channel defences did not hold
+
+`arch::check_speculation` runs after stage 7's programs and requires the clamp
+that bounds a program-chosen index to return an index inside its bound unchanged
+and one outside it as zero (unchanged in a build made with `--mitigations off`),
+every running processor to have recorded what it applied, nothing written to a
+processor -- `IA32_SPEC_CTRL`, `EFER`, `SCTLR_EL1` -- to have failed to read
+back, and a switch barrier to have been issued where the plan has one, since
+programs in different address spaces have run by then. The defences stand
+between a program and a speculative read of another's memory or the kernel's.
+
+1. A hypervisor that advertises a speculation control in `CPUID` and drops
+   writes to it, which is what a read-back failure on one processor usually is.
+2. A secondary start path that stopped calling the architecture's
+   `apply_this_cpu`, so a processor runs programs without the boot processor's
+   defences.
+3. A change to `install_user_root` that stopped calling
+   `speculation::entered_space`, which is where every switch barrier is issued.
+4. A change to an architecture's `clamp_index` that lets an out-of-bound index
+   through.
+
+See: kernel/src/arch/speculation.rs; kernel/src/arch/speculation_check.rs;
+docs/certification/SPECULATION.md.
 
 <a id="fx-0401"></a>
 

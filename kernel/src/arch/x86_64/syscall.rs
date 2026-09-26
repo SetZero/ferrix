@@ -159,6 +159,21 @@ pub(crate) struct SyscallFrame {
 
 core::arch::global_asm!(
     r#"
+// On a processor MDS reaches, clear the buffers it reads on the way out to
+// ring 3, after the last load of anything the kernel holds: `VERW` of a data
+// selector does it where microcode says `MD_CLEAR`. A byte decides at run
+// time, because only the processor can say whether it needs it; the flags it
+// clobbers are about to be replaced from R11 or the interrupt frame. Used by
+// every return to ring 3, here and in `super::trap`. See `super::speculation`.
+.macro FERRIX_CLEAR_BUFFERS
+.if {hardened}
+    testb $1, {clear}(%rip)
+    jz 3f
+    verw {selector}(%rip)
+3:
+.endif
+.endm
+
 .section .text
 .globl ferrix_syscall_stub
 .align 16
@@ -188,6 +203,27 @@ ferrix_syscall_stub:
     pushq %r14
     pushq %r15
 
+    // Nothing a program chose reaches the kernel's code in a register: every
+    // value is in the frame now, and a register still holding one is an
+    // operand a mispredicted branch in the handler could use (Spectre v1).
+    // RBP too, which also ends the backtrace's frame chain here.
+.if {hardened}
+    xorl %eax, %eax
+    xorl %ecx, %ecx
+    xorl %edx, %edx
+    xorl %esi, %esi
+    xorl %r8d, %r8d
+    xorl %r9d, %r9d
+    xorl %r10d, %r10d
+    xorl %r11d, %r11d
+    xorl %ebx, %ebx
+    xorl %ebp, %ebp
+    xorl %r12d, %r12d
+    xorl %r13d, %r13d
+    xorl %r14d, %r14d
+    xorl %r15d, %r15d
+.endif
+
     cld
     movq %rsp, %rdi
     callq ferrix_syscall_entry
@@ -209,6 +245,7 @@ ferrix_syscall_stub:
     popq %rcx             // user rip, back where SYSRET wants it
     popq %rsp             // user stack, straight into RSP
 
+    FERRIX_CLEAR_BUFFERS
     swapgs
     // Named for the boot check that breaks here: ring 0, the program's stack
     // and GS, which only the paranoid entry survives. See `super::paranoid`.
@@ -257,6 +294,7 @@ ferrix_enter_user:
     xorq %r14, %r14
     xorq %r15, %r15
 
+    FERRIX_CLEAR_BUFFERS
     swapgs
     sysretq
 
@@ -285,9 +323,13 @@ ferrix_resume_user:
     popq %r11
     popq %rcx
     popq %rsp
+    FERRIX_CLEAR_BUFFERS
     swapgs
     sysretq
 "#,
+    hardened = const super::speculation::ENTRY_HARDENING,
+    clear = sym super::speculation::CLEAR_CPU_BUFFERS,
+    selector = sym super::speculation::VERW_SELECTOR,
     options(att_syntax)
 );
 

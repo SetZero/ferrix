@@ -48,6 +48,7 @@ use ferrix_objects::table::TableError;
 use ferrix_vfs::access::{MAY_READ, MAY_WRITE};
 use ferrix_vma::VmaFlags;
 
+use crate::arch;
 use crate::block_ring;
 use crate::device::DeviceNode;
 use crate::net_ring;
@@ -86,6 +87,17 @@ struct Buffer {
     count: u64,
 }
 
+/// The call a native number names, or `None` for one outside the range or in
+/// a gap.
+///
+/// Clamped into the range before the table is asked, for the reason
+/// `arch::decode_syscall` gives: the table is a `match` the compiler makes a
+/// jump table of, and the number is the program's (Spectre variant 1).
+fn decode(number: usize) -> Option<NativeCall> {
+    let offset = arch::nospec_index(number.wrapping_sub(nr::FIRST), nr::LAST - nr::FIRST + 1)?;
+    nr::decode(nr::FIRST + offset)
+}
+
 /// Answer one native system call.
 ///
 /// # Errors
@@ -93,7 +105,7 @@ struct Buffer {
 /// `ENOSYS` for a gap in the range or a call not built yet; `ESRCH` with no
 /// process, as the Linux half answers; otherwise the call's own status.
 pub(crate) fn dispatch(args: &SyscallArgs, process: Option<&Process>) -> Result<usize, Errno> {
-    let call = nr::decode(args.number).ok_or(Errno::ENOSYS)?;
+    let call = decode(args.number).ok_or(Errno::ENOSYS)?;
     let process = process.ok_or(Errno::ESRCH)?;
     let a = args.args;
     match call {
@@ -1357,7 +1369,7 @@ fn vmo_pin(
             return Err(status::BAD_STATE);
         }
         for frame in held.frames() {
-            crate::arch::flush_for_device(crate::mm::direct_map(*frame * page), page);
+            arch::flush_for_device(crate::mm::direct_map(*frame * page), page);
         }
     }
     let flags = if read_only {

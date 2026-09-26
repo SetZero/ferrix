@@ -136,7 +136,36 @@ ferrix_trap_common:
     testb $3, 144(%rsp)
     jz 1f
     swapgs
+ferrix_trap_from_user:
+    // From ring 3, the registers are the program's: every one of them is in
+    // the frame, none is anything the handler needs, and a register left
+    // holding a value the program chose is an operand a mispredicted branch
+    // in the handler could use (Spectre v1). Cleared as the `SYSCALL` stub
+    // clears them. Not from ring 0, where RBP is the interrupted function's
+    // frame and the panic backtrace climbs through it.
+.if {hardened}
+    xorl %eax, %eax
+    xorl %ebx, %ebx
+    xorl %ecx, %ecx
+    xorl %edx, %edx
+    xorl %esi, %esi
+    xorl %ebp, %ebp
+    xorl %r8d, %r8d
+    xorl %r9d, %r9d
+    xorl %r10d, %r10d
+    xorl %r11d, %r11d
+    xorl %r12d, %r12d
+    xorl %r13d, %r13d
+    xorl %r14d, %r14d
+    xorl %r15d, %r15d
+.endif
 1:
+    // Both ways out of the test above, a fence: a processor that mispredicts
+    // it runs the handler's first GS-relative loads with the wrong GS, which
+    // is the SWAPGS variant of Spectre v1. See `super::speculation`.
+.if {hardened}
+    lfence
+.endif
 ferrix_trap_dispatch:
     movq %rsp, %rdi
     callq ferrix_trap_entry
@@ -165,6 +194,16 @@ ferrix_trap_restore:
     popq %rbx
     popq %rax
     addq $16, %rsp
+    // On the way back to ring 3 only, the buffer clearing the `SYSCALL`
+    // stub's exits do: CS is the second word of what `iretq` takes.
+.if {hardened}
+    testb $3, 8(%rsp)
+    jz 7f
+    testb $1, {clear}(%rip)
+    jz 7f
+    verw {selector}(%rip)
+7:
+.endif
     iretq
 
 // Resume ring 3 from a whole frame, as `rt_sigreturn` must: every register,
@@ -273,8 +312,11 @@ ferrix_paranoid_common:
     movl $22, %ecx
     rep movsq
     movq %rbx, %rsp
-    jmp ferrix_trap_dispatch
+    jmp ferrix_trap_from_user
 "#,
+    hardened = const super::speculation::ENTRY_HARDENING,
+    clear = sym super::speculation::CLEAR_CPU_BUFFERS,
+    selector = sym super::speculation::VERW_SELECTOR,
     options(att_syntax)
 );
 

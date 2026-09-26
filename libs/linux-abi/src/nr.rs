@@ -2224,6 +2224,28 @@ pub enum Syscall {
     Syncfs,
 }
 
+/// One past the highest number [`from_x86_64`] translates.
+///
+/// A number at or above it is `ENOSYS` without asking the table. The kernel
+/// bounds a program's number by it *before* the table is asked, and clamps it
+/// so that a mispredicted bound cannot steer the table's own lookup -- a jump
+/// table indexed by the number, once the compiler is done with the match --
+/// past its end (Spectre variant 1). A host test holds it to the table: no
+/// number at or above it translates, and the one below it does.
+pub const X86_64_END: usize = 442;
+
+/// One past the highest number [`from_aarch64`] translates. As
+/// [`X86_64_END`].
+pub const AARCH64_END: usize = 442;
+
+/// One past the highest number [`from_arm`] translates in the shared EABI
+/// table. The ARM-private calls above [`arm::ARM_PRIVATE_BASE`] are bounded
+/// by [`ARM_PRIVATE_END`] instead. As [`X86_64_END`].
+pub const ARM_END: usize = 442;
+
+/// One past the highest ARM-private number [`from_arm`] translates.
+pub const ARM_PRIVATE_END: usize = arm::ARM_SET_TLS + 1;
+
 /// Translate an x86-64 system call number.
 ///
 /// Returns [`None`] for a number this crate does not know, which the caller

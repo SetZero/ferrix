@@ -209,7 +209,7 @@ const _: () = assert!(
 
 /// How PSCI is reached on this machine.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Conduit {
+pub(super) enum Conduit {
     /// A hypervisor call: the machine has a hypervisor, or PSCI lives in one.
     Hvc,
     /// A secure monitor call: PSCI lives in EL3 firmware.
@@ -351,7 +351,7 @@ impl CpuStarter {
 
 /// How firmware says PSCI is reached: the FADT's boot flags under ACPI, the
 /// `/psci` node's `method` otherwise.
-fn psci_conduit(view: &BootView<'_>) -> Result<Conduit, &'static str> {
+pub(super) fn psci_conduit(view: &BootView<'_>) -> Result<Conduit, &'static str> {
     if view.raw().rsdp == 0 {
         let tree = crate::fdt::open(view)?;
         return match tree.psci_conduit() {
@@ -409,5 +409,8 @@ extern "C" fn secondary_start(record: u64) -> ! {
     unsafe { super::trap::init() };
     super::gic::init_this_cpu();
     crate::smp::install_secondary_record(record);
+    // The boot core's side-channel defences, before this one can run a
+    // program: after the record, which is where it says what it applied.
+    super::speculation::apply_this_cpu();
     crate::smp::secondary_main(record)
 }

@@ -469,6 +469,31 @@ pub(crate) static RANDOM_GENERATOR: Explanation = Explanation {
     see: "kernel/src/random.rs; libs/crng",
 };
 
+/// For `check_speculation` in `main.rs`, when `arch::check_speculation` fails.
+pub(crate) static SPECULATION_DEFENCES: Explanation = Explanation {
+    code: "FX-0307",
+    title: "the side-channel defences did not hold",
+    meaning: "`arch::check_speculation` runs after stage 7's programs and requires the clamp \
+              that bounds a program-chosen index to return an index inside its bound unchanged \
+              and one outside it as zero (unchanged in a build made with `--mitigations off`), \
+              every running processor to have recorded what it applied, nothing written to a \
+              processor -- `IA32_SPEC_CTRL`, `EFER`, `SCTLR_EL1` -- to have failed to read back, \
+              and a switch barrier to have been issued where the plan has one, since programs \
+              in different address spaces have run by then. The defences stand between a \
+              program and a speculative read of another's memory or the kernel's.",
+    causes: &[
+        "A hypervisor that advertises a speculation control in `CPUID` and drops writes to it, \
+         which is what a read-back failure on one processor usually is.",
+        "A secondary start path that stopped calling the architecture's `apply_this_cpu`, so \
+         a processor runs programs without the boot processor's defences.",
+        "A change to `install_user_root` that stopped calling `speculation::entered_space`, \
+         which is where every switch barrier is issued.",
+        "A change to an architecture's `clamp_index` that lets an out-of-bound index through.",
+    ],
+    see: "kernel/src/arch/speculation.rs; kernel/src/arch/speculation_check.rs; \
+          docs/certification/SPECULATION.md",
+};
+
 /// For `bring_up_processors` in `main.rs`, when `smp::discover` fails.
 pub(crate) static PROCESSOR_DISCOVERY: Explanation = Explanation {
     code: "FX-0401",
@@ -1932,6 +1957,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &TIMER_REGISTRATION,
     &CONSOLE_INPUT,
     &RANDOM_GENERATOR,
+    &SPECULATION_DEFENCES,
     &PROCESSOR_DISCOVERY,
     &SECONDARY_START,
     &SECONDARY_GDT,

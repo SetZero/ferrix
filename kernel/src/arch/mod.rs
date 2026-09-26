@@ -13,6 +13,20 @@ mod armv7a;
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
 
+// Side-channel defences: what every architecture shares, its boot check, and
+// each architecture's own half, which the shared part reaches by one name.
+// `docs/certification/SPECULATION.md`.
+mod speculation;
+mod speculation_check;
+#[cfg(target_arch = "aarch64")]
+use aarch64::speculation as machine_speculation;
+#[cfg(target_arch = "arm")]
+use armv7a::speculation as machine_speculation;
+pub(crate) use speculation::{nospec_below, nospec_index};
+pub(crate) use speculation_check::check as check_speculation;
+#[cfg(target_arch = "x86_64")]
+use x86_64::speculation as machine_speculation;
+
 /// Which `struct stat` this architecture's stat calls fill in.
 ///
 /// The choice is an architecture's, so it is stated here beside the other ABI
@@ -152,6 +166,14 @@ pub(crate) use aarch64::{USER_RMAP_PROGRAM, flush_tlb_page, send_ipi_to};
 pub(crate) use armv7a::{USER_RMAP_PROGRAM, flush_tlb_page, send_ipi_to};
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::{USER_RMAP_PROGRAM, flush_tlb_page, send_ipi_to};
+
+// Deciding and applying the side-channel defences, on the boot processor.
+#[cfg(target_arch = "aarch64")]
+pub(crate) use aarch64::init_speculation;
+#[cfg(target_arch = "arm")]
+pub(crate) use armv7a::init_speculation;
+#[cfg(target_arch = "x86_64")]
+pub(crate) use x86_64::init_speculation;
 
 // The boot check for exceptions that arrive wherever the processor is.
 #[cfg(target_arch = "aarch64")]

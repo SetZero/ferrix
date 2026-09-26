@@ -13,8 +13,43 @@ use std::collections::HashSet;
 use std::vec::Vec;
 
 use crate::errno::{Errno, encode};
-use crate::nr::{Syscall, aarch64, arm, from_aarch64, from_arm, from_x86_64, x86_64};
+use crate::nr::{
+    AARCH64_END, ARM_END, ARM_PRIVATE_END, Syscall, X86_64_END, aarch64, arm, from_aarch64,
+    from_arm, from_x86_64, x86_64,
+};
 use crate::types;
+
+/// The bounds the kernel clamps a number to are the tables' own: nothing at or
+/// past one translates, and the number just below it does, so a bound left
+/// behind by a table that grew fails here rather than refusing a real call.
+#[test]
+fn each_table_ends_exactly_at_its_bound() {
+    type Translate = fn(usize) -> Option<Syscall>;
+    let tables: [(Translate, usize); 3] = [
+        (from_x86_64, X86_64_END),
+        (from_aarch64, AARCH64_END),
+        (from_arm, ARM_END),
+    ];
+    for (translate, end) in tables {
+        assert!(translate(end - 1).is_some(), "the last number below {end}");
+        for number in end..end + 4096 {
+            assert!(translate(number).is_none(), "{number} is past {end}");
+        }
+    }
+    for number in ARM_END..arm::ARM_PRIVATE_BASE {
+        assert!(
+            from_arm(number).is_none(),
+            "{number} is between the ARM tables"
+        );
+    }
+    assert!(from_arm(ARM_PRIVATE_END - 1).is_some());
+    for number in ARM_PRIVATE_END..ARM_PRIVATE_END + 0x1_0000 {
+        assert!(
+            from_arm(number).is_none(),
+            "{number} is past the ARM-private calls"
+        );
+    }
+}
 
 /// Calls whose number this crate knows on x86-64 but which the generic table
 /// never had, because musl reaches the same effect through an `*at` form or a

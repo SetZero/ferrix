@@ -67,6 +67,11 @@
       "reason": "The secondary core entry. PSCI CPU_ON starts a core at a physical address with its MMU off, and everything the kernel runs on is in the upper half: the first instructions have to install MAIR/TCR/TTBR0/TTBR1 and turn the MMU on while executing at an address only an identity map makes meaningful, then branch to a virtual one. The loader's switch again, once per core, and no Rust function can be entered with the MMU off and no stack."
     },
     {
+      "file": "kernel/src/arch/aarch64/speculation.rs",
+      "max_lines": 16,
+      "reason": "The side-channel defences' primitives (docs/certification/SPECULATION.md). The Spectre v1 clamp is `cmp`, `csel` and `csdb`: its whole point is that the bound is enforced by a data dependency the processor cannot predict rather than by a branch, and `csdb` -- which forbids the processor to use a predicted result of the select -- has no Rust spelling; written in Rust, the compiler folds the clamp into the bounds check it follows and it disappears. Also the ID register reads the plan is made from (`MIDR_EL1`, `ID_AA64PFR1_EL1`, `ID_AA64MMFR1_EL1`), the `SCTLR_EL1` write that clears `DSSBS`, and `MSR SSBS`, each a system register access with no Rust spelling."
+    },
+    {
       "file": "kernel/src/arch/aarch64/switch.rs",
       "max_lines": 30,
       "reason": "The same, in AAPCS registers: x19-x28, the frame pointer and the link register, saved in pairs. No floating-point state, because the kernel is built softfloat and never touches the SIMD registers."
@@ -87,6 +92,11 @@
       "reason": "The secondary core entry: AArch64's, in coprocessor 15's spelling. PSCI CPU_ON starts a core in SVC mode at a physical address, with its MMU off and no stack, and everything the kernel runs on is in the upper half: the first instructions check the processor mode, load MAIR0/MAIR1, TTBCR and the two 64-bit TTBRs, and turn the MMU on while executing at an address only an identity map makes meaningful, then branch to a virtual one. No Rust function can be entered with the MMU off and no stack."
     },
     {
+      "file": "kernel/src/arch/armv7a/speculation.rs",
+      "max_lines": 16,
+      "reason": "AArch64's clamp in coprocessor 15's world: `cmp`, `movhs` and `csdb` for an index, and `subs`/`sbcs` with two `movhs` for a 64-bit user address held in two registers, for the reason the AArch64 entry gives. Also the `MIDR` read the plan is made from, and `BPIALL` and `ICIALLU`, the branch predictor invalidations the cores Arm lists as affected by Spectre v2 need at a switch of address space; each is a coprocessor 15 transfer."
+    },
+    {
       "file": "kernel/src/arch/armv7a/switch.rs",
       "max_lines": 30,
       "reason": "The same again, and with one thing particular to this architecture: every exception is taken into a mode with its own banked stack pointer, and the trap path keeps everything on the SVC-mode stack -- so a task's context *is* its SVC stack pointer. A ninth register rides along with r4-r11 and the link register as padding, because nine words would leave the stack four-byte aligned where the ABI requires eight at a call."
@@ -105,6 +115,11 @@
       "file": "kernel/src/arch/x86_64/smp.rs",
       "max_lines": 40,
       "reason": "The AP trampoline, and the only 16-bit code in the project. INIT-SIPI-SIPI starts a processor in real mode at the start of a page below 1 MiB, with no stack and nothing but its reset state: there is no 16-bit Rust target, and the sequence that takes it to long mode -- control registers, EFER, a GDT, a far jump into a 64-bit segment -- is defined entirely by what the processor does to its registers along the way."
+    },
+    {
+      "file": "kernel/src/arch/x86_64/speculation.rs",
+      "max_lines": 16,
+      "reason": "The side-channel defences' primitives (docs/certification/SPECULATION.md). The Spectre v1 clamp is `cmp` and `sbb`: the bound enforced by the carry flag as data rather than by a branch the processor can mispredict, which the compiler would otherwise fold into the bounds check it follows. The return stack refill is thirty-two `call`s whose return addresses are left in the predictor and taken off the stack, which is a side effect on a predictor, not a value. `VERW` of a memory operand clears the processor's buffers on an MDS-exposed part only as a side effect of that form. None has a Rust spelling."
     },
     {
       "file": "kernel/src/arch/x86_64/switch.rs",

@@ -104,6 +104,30 @@ core::arch::global_asm!(
     b    ferrix_trap_save
 .endm
 
+// The same, for an entry from EL0, with the Spectre-BHB loop first on a core
+// Arm lists: that many taken branches overwrite the branch history a program
+// left, so no indirect branch in the kernel is predicted from it, and the
+// barrier keeps anything after from running before they have. The count is
+// the largest any core needs, zero for none; see `super::speculation`.
+.macro FERRIX_VECTOR_EL0 index
+.align 7
+    sub  sp, sp, #304
+    stp  x0, x1, [sp, #0]
+.if {hardened}
+    adrp x0, {bhb_loops}
+    ldr  x0, [x0, :lo12:{bhb_loops}]
+    cbz  x0, 2f
+1:  b    3f
+3:  subs x0, x0, #1
+    b.ne 1b
+    dsb  nsh
+    isb
+2:
+.endif
+    mov  x0, #\index
+    b    ferrix_trap_save
+.endm
+
 .globl ferrix_vectors
 .align 11
 ferrix_vectors:
@@ -115,14 +139,14 @@ ferrix_vectors:
     FERRIX_VECTOR 5    // current EL, SP_ELx: IRQ
     FERRIX_VECTOR 6    // current EL, SP_ELx: FIQ
     FERRIX_VECTOR 7    // current EL, SP_ELx: SError
-    FERRIX_VECTOR 8    // lower EL, AArch64: synchronous
-    FERRIX_VECTOR 9    // lower EL, AArch64: IRQ
-    FERRIX_VECTOR 10   // lower EL, AArch64: FIQ
-    FERRIX_VECTOR 11   // lower EL, AArch64: SError
-    FERRIX_VECTOR 12   // lower EL, AArch32: synchronous
-    FERRIX_VECTOR 13   // lower EL, AArch32: IRQ
-    FERRIX_VECTOR 14   // lower EL, AArch32: FIQ
-    FERRIX_VECTOR 15   // lower EL, AArch32: SError
+    FERRIX_VECTOR_EL0 8    // lower EL, AArch64: synchronous
+    FERRIX_VECTOR_EL0 9    // lower EL, AArch64: IRQ
+    FERRIX_VECTOR_EL0 10   // lower EL, AArch64: FIQ
+    FERRIX_VECTOR_EL0 11   // lower EL, AArch64: SError
+    FERRIX_VECTOR_EL0 12   // lower EL, AArch32: synchronous
+    FERRIX_VECTOR_EL0 13   // lower EL, AArch32: IRQ
+    FERRIX_VECTOR_EL0 14   // lower EL, AArch32: FIQ
+    FERRIX_VECTOR_EL0 15   // lower EL, AArch32: SError
 
 ferrix_trap_save:
     stp  x2, x3, [sp, #16]
@@ -176,7 +200,9 @@ ferrix_trap_restore:
     ldp  x0, x1, [sp, #0]
     add  sp, sp, #304
     eret
-"#
+"#,
+    hardened = const super::speculation::ENTRY_HARDENING,
+    bhb_loops = sym super::speculation::BHB_LOOPS,
 );
 
 // Entering EL0.

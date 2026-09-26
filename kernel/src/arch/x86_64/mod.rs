@@ -9,6 +9,7 @@ mod msi;
 mod paranoid;
 mod signal;
 mod smp;
+pub(super) mod speculation;
 mod switch;
 mod syscall;
 mod trap;
@@ -158,6 +159,14 @@ pub(crate) unsafe fn init_traps() {
     );
 }
 
+/// Decide which side-channel defences this machine gets, apply them on the
+/// boot processor, and say so. Every secondary applies the same as it starts.
+///
+/// Before the second processor starts and before the first program.
+pub(crate) fn init_speculation(_view: &BootView<'_>) {
+    speculation::init();
+}
+
 /// Permit this processor to touch user pages until [`forbid_user_access`].
 ///
 /// SMAP's `EFLAGS.AC` window. `cpu::permit_user_access` explains why almost
@@ -288,8 +297,13 @@ const ROOT_SLOTS: usize = 512;
 /// architecture added after 2011 uses, so `read` is 0 here and 63 on AArch64.
 /// This is the only place in the kernel that knows which of the three tables
 /// applies; `crate::syscall` dispatches on the answer.
+///
+/// The number is a program's, and the table is a `match` the compiler makes a
+/// jump table of, so it is bounded and clamped first: a processor that
+/// mispredicts the table's own bounds check then jumps through slot zero
+/// rather than through whatever lies past the table (Spectre variant 1).
 pub(crate) fn decode_syscall(number: usize) -> Option<Syscall> {
-    nr::from_x86_64(number)
+    nr::from_x86_64(super::nospec_index(number, nr::X86_64_END)?)
 }
 
 /// The `open` flag bits that differ between architectures, as this one
@@ -1088,6 +1102,7 @@ pub(crate) const fn system_call(_frame: &mut TrapFrame) -> Result<(), &'static s
 /// space without any of them being walked.
 pub(crate) fn prepare_user_root(root: u64) {
     crate::mm::share_kernel_slots(root, UPPER_HALF_SLOT..ROOT_SLOTS);
+    crate::arch::speculation::forget_root(root);
 }
 
 /// Translate this processor's user half through the tables at `root`.
@@ -1114,6 +1129,9 @@ pub(crate) unsafe fn install_user_root(root: u64) {
     // SAFETY: the caller guarantees the root carries the kernel's half, which
     // is what maps the code and stack this returns onto.
     unsafe { cpu::write_cr3(root) };
+    // `IBPB` and a return stack refill, if this is another program's space
+    // than the one this processor last ran. See `speculation`.
+    crate::arch::speculation::entered_space(root);
 }
 
 /// Go back to translating nothing but the kernel's own tables.

@@ -390,6 +390,9 @@ extern "C" fn secondary_start(record: u64) -> ! {
     // by the boot processor, so without this it would follow `GS` as reset left
     // it: a load from address zero, which the identity map still covers.
     crate::smp::install_secondary_record(record);
+    // The boot processor's side-channel defences, before this one can run a
+    // program: after the record, which is where it says what it applied.
+    super::speculation::apply_this_cpu();
 
     // SAFETY: once, on this processor, with interrupts masked.
     if let Err(problem) = unsafe { super::gdt::init_secondary() } {

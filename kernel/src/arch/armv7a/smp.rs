@@ -547,5 +547,8 @@ extern "C" fn secondary_start(record: u32) -> ! {
     gicv2::init_this_cpu();
     note_coherency();
     crate::smp::install_secondary_record(u64::from(record));
+    // The boot core's side-channel defences, before this one can run a
+    // program: after the record, which is where it says what it applied.
+    super::speculation::apply_this_cpu();
     crate::smp::secondary_main(u64::from(record))
 }

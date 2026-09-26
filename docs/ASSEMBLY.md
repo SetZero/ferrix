@@ -81,6 +81,7 @@ Each entry names why Rust cannot express it. Entries are added to
 |---|---|
 | Context switch | Saves and restores the callee-saved set and the stack pointer *between two different stacks*. The function returns onto a stack that belongs to another task; Rust has no way to say that. |
 | CPU primitives | Single instructions with no Rust spelling: reading a control or system register (`mrs`, or `mrc`/`mrrc` on `cp15`), invalidating a TLB entry, memory barriers, `wfi`/`hlt`, `sti`/`msr daifclr`/`cpsie`, `rdtsc` and the generic timer's comparator, `cpuid`, and the `hvc`/`smc` a PSCI call is made with. Each is one instruction, or one short fixed sequence, wrapped in one `#[inline]` function. |
+| Side-channel primitives (`speculation.rs`) | The Spectre v1 clamp: a compare and a conditional select (`sbb` on x86-64, `csel` or `movhs` then `csdb` on the Arm pair) that bounds a program's index by a data dependency rather than a branch. Written in Rust the compiler folds it into the bounds check it follows and nothing is left; `csdb` has no Rust spelling at all. Beside it, the predictor barriers a switch of address space issues (x86-64's return stack refill, ARMv7-A's `BPIALL`/`ICIALLU`), x86-64's `VERW`, and the Arm ID and control register accesses the plan is made from. `docs/certification/SPECULATION.md`. |
 
 ### x86-64
 

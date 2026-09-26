@@ -12,6 +12,7 @@ pub(crate) mod console;
 mod cpu;
 mod signal;
 mod smp;
+pub(super) mod speculation;
 mod switch;
 mod timer;
 
@@ -121,6 +122,14 @@ pub(crate) unsafe fn init_traps() {
     unsafe { trap::init() };
 }
 
+/// Decide which side-channel defences this machine gets, apply them on the
+/// boot core, and say so. Every secondary applies the same as it starts.
+///
+/// Before the second core starts and before the first program.
+pub(crate) fn init_speculation(_view: &BootView<'_>) {
+    speculation::init();
+}
+
 /// Publish page table writes and invalidate the whole TLB — every core's.
 pub(crate) fn flush_tlb() {
     cpu::flush_tlb();
@@ -197,7 +206,19 @@ pub(crate) const USER_RMAP_PROGRAM: &[u8] = &[
 /// `0x0f0000`, which is why a valid number here is *not* bounded by the size
 /// of the shared table. This is the only place in the kernel that knows which
 /// of the three tables applies; `crate::syscall` dispatches on the answer.
+///
+/// The number is a program's, and the table is a `match` the compiler makes a
+/// jump table of, so it is bounded and clamped first: a processor that
+/// mispredicts the table's own bounds check then jumps through slot zero
+/// rather than through whatever lies past the table (Spectre variant 1).
+/// Each of the two ranges is bounded by its own end, and a misprediction of
+/// which range the number is in lands on the start of the other.
 pub(crate) fn decode_syscall(number: usize) -> Option<Syscall> {
+    let base = nr::arm::ARM_PRIVATE_BASE;
+    let number = match number.checked_sub(base) {
+        Some(private) => base + super::nospec_index(private, nr::ARM_PRIVATE_END - base)?,
+        None => super::nospec_index(number, nr::ARM_END)?,
+    };
     nr::from_arm(number)
 }
 
@@ -984,15 +1005,16 @@ pub(crate) const fn user_platform() -> Option<&'static [u8]> {
 
 /// Make a freshly allocated user root usable.
 ///
-/// Nothing to do: the kernel's half is reached through `TTBR1` and a user root is
-/// only ever installed in `TTBR0`, so the two never share a tree and a user
-/// root has nothing of the kernel's to be given. x86-64, which keeps both
-/// halves in one root, is the architecture this exists for.
-#[expect(
-    clippy::missing_const_for_fn,
-    reason = "one architecture's version of this does real work"
-)]
-pub(crate) fn prepare_user_root(_root: u64) {}
+/// Nothing to do to the tables: the kernel's half is reached through `TTBR1` and
+/// a user root is only ever installed in `TTBR0`, so the two never share a
+/// tree and a user root has nothing of the kernel's to be given. x86-64, which
+/// keeps both halves in one root, is the architecture that exists for. What is
+/// done is forget the root in every core's record of the space it last ran,
+/// since a root reused for a new space is a new program; see
+/// `crate::arch::speculation::forget_root`.
+pub(crate) fn prepare_user_root(root: u64) {
+    crate::arch::speculation::forget_root(root);
+}
 
 /// Translate this processor's lower half through the tables at `root`.
 ///
@@ -1012,6 +1034,9 @@ pub(crate) unsafe fn install_user_root(root: u64) {
     // SAFETY: the caller guarantees the tables are live.
     unsafe { cpu::write_ttbr0(root) };
     cpu::flush_user_tlb();
+    // The branch predictor invalidated, if this is another program's space
+    // than the one this core last ran and the core is one that needs it.
+    crate::arch::speculation::entered_space(root);
 }
 
 /// Stop translating the lower half at all.

@@ -796,6 +796,40 @@ fn check_trap_flag_entry() {
 fn check_entry_paths() {
     check_trap_flag_entry();
     check_exception_entry();
+    check_speculation();
+}
+
+/// The side-channel defences every processor applied, read back, and the
+/// barriers issued at the switches stage 7's programs made.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_speculation() {
+    let report = match arch::check_speculation() {
+        Ok(report) => report,
+        Err(problem) => fatal!(
+            catalog::SPECULATION_DEFENCES,
+            "side-channel defence self-check failed: {problem}"
+        ),
+    };
+    if !report.hardened {
+        println!(
+            "  cpu      speculation defences off on {} processors, as built",
+            report.processors
+        );
+        return;
+    }
+    println!(
+        "  cpu      speculation defences read back on {} processors, {} switch barriers",
+        report.processors, report.barriers,
+    );
+    // A big.LITTLE machine's little cores may need less than its big ones.
+    if report.differing > 0 {
+        println!(
+            "  cpu      {} processors applied other than the boot processor's {}",
+            report.differing,
+            report.boot.names()
+        );
+    }
 }
 
 /// The exceptions nothing masks come back from wherever they land.
@@ -1502,6 +1536,11 @@ fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>, reserved: &d
 /// here has its own message, because "stage 4 failed" says
 /// nothing about which of a dozen processors, or which of the checks, did.
 fn bring_up_processors(view: &BootView<'_>) -> &'static smp::Topology {
+    // The side-channel defences, decided and applied on this processor before
+    // another is started, because each applies what this one decided as it
+    // starts; and long before the first program.
+    arch::init_speculation(view);
+
     // Counting first, starting nothing.
     let cpus = match smp::discover(view) {
         Ok(topology) => topology,
