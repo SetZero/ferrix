@@ -11,6 +11,13 @@
 //! writes. ABL loads only one image, so the kernel and its archive have to be
 //! inside it. Without the variables the loader is built with nothing to load,
 //! which is what linting it needs, and says so when run.
+//!
+//! Beside each goes `<VARIABLE>_DIGEST`, the file's SHA-256, because the
+//! file's mtime cannot be trusted to say it changed: cargo reruns this script
+//! only for a file newer than its last run, and a kernel put back at the same
+//! path with an older mtime would leave the old one embedded, to be booted on
+//! the phone without anyone noticing. The kernel's own `build.rs` does the
+//! same for its init.
 
 #![allow(
     clippy::print_stdout,
@@ -37,8 +44,23 @@ fn main() -> Result<(), Box<dyn Error>> {
             let path = Path::new(path).canonicalize()?;
             println!("cargo::rerun-if-changed={}", path.display());
             println!("cargo::rustc-env={name}={}", path.display());
+            content_named(&format!("FERRIX_{name}"));
         }
         println!("cargo::rustc-cfg=payload");
     }
     Ok(())
+}
+
+/// Declare `<variable>_DIGEST`, the SHA-256 of the file `variable` names, as
+/// what reruns this script, and warn when it was not given: without it an
+/// older file put back at the same path is not embedded.
+fn content_named(variable: &str) {
+    let digest = format!("{variable}_DIGEST");
+    println!("cargo::rerun-if-env-changed={digest}");
+    if std::env::var_os(&digest).is_none_or(|value| value.is_empty()) {
+        println!(
+            "cargo::warning={variable} is set without {digest}, the file's SHA-256: \
+             an older file put back at the same path will not be embedded"
+        );
+    }
 }

@@ -18,7 +18,9 @@ screen has been seen on the phone.
 
 ```
 cargo xtask flash --arch aarch64 --release --stage <dir>     # KERNEL.ELF, INITRD.IMG
-FERRIX_PIXEL7_KERNEL=<dir>/FERRIX/KERNEL.ELF FERRIX_PIXEL7_INITRD=<dir>/FERRIX/INITRD.IMG \
+K=<dir>/FERRIX/KERNEL.ELF I=<dir>/FERRIX/INITRD.IMG
+FERRIX_PIXEL7_KERNEL=$K FERRIX_PIXEL7_KERNEL_DIGEST=$(sha256sum "$K" | cut -d' ' -f1) \
+FERRIX_PIXEL7_INITRD=$I FERRIX_PIXEL7_INITRD_DIGEST=$(sha256sum "$I" | cut -d' ' -f1) \
     cargo build -p ferrix-boot-pixel7 --target aarch64-unknown-none-softfloat --release
 llvm-objcopy -O binary target/aarch64-unknown-none-softfloat/release/ferrix-boot-pixel7 Image
 python3 bootloaders/pixel7/mkbootimg.py Image boot.img
@@ -26,7 +28,9 @@ avbtool add_hash_footer --image boot.img --partition_size 67108864 \
         --partition_name boot --algorithm NONE
 ```
 
-`llvm-objcopy` is in the toolchain's `llvm-tools` component; `avbtool` is
+The two `_DIGEST` variables are what makes a changed kernel or archive
+rebuild the loader: without them `build.rs` warns, and a file put back
+with an older mtime is not embedded. `llvm-objcopy` is in the toolchain's `llvm-tools` component; `avbtool` is
 AOSP's `external/avb/avbtool.py`, which needs `/dev/urandom` and so runs under
 WSL on Windows. Then, from ABL's fastboot mode:
 

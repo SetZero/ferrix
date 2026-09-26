@@ -149,8 +149,9 @@ Tooling on nazuna, all without sudo:
 ```sh
 P=~/.local/share/ferrix/pixel7
 cargo xtask flash --arch aarch64 --release --stage "$P/stage"      # ~2 min
-FERRIX_PIXEL7_KERNEL="$P/stage/FERRIX/KERNEL.ELF" \
-FERRIX_PIXEL7_INITRD="$P/stage/FERRIX/INITRD.IMG" \
+K="$P/stage/FERRIX/KERNEL.ELF" I="$P/stage/FERRIX/INITRD.IMG"
+FERRIX_PIXEL7_KERNEL="$K" FERRIX_PIXEL7_KERNEL_DIGEST="$(sha256sum "$K" | cut -d' ' -f1)" \
+FERRIX_PIXEL7_INITRD="$I" FERRIX_PIXEL7_INITRD_DIGEST="$(sha256sum "$I" | cut -d' ' -f1)" \
     cargo build -p ferrix-boot-pixel7 --target aarch64-unknown-none-softfloat --release
 "$(rustc --print sysroot)"/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-objcopy \
     -O binary target/aarch64-unknown-none-softfloat/release/ferrix-boot-pixel7 "$P/Image"
