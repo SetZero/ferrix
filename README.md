@@ -443,8 +443,9 @@ machine `ssh` reaches, converts them with `ffmpeg` -- scaled until it covers
 the screen -- and keeps the rows under
 `~/.local/share/ferrix/wallpapers`, or `$FERRIX_WALLPAPERS`. A run reads that
 directory and opens no connection of its own; with nothing in it the
-background is plain and a line says how to change that. `--wallpaper <NAME>`
-picks one by part of its name.
+desktop shows *ember*, Ferrix's own picture, drawn by xtask rather than kept,
+and a line says how to change that. `--wallpaper <NAME>` picks one by part of
+its name, and `--wallpaper none` is a plain background.
 
 A video in that directory becomes a wallpaper that moves, which on a Linux
 desktop is `exec-once = mpvpaper ALL <file>` and here is the same
@@ -705,7 +706,7 @@ the last three being the ones not in the line:
 | `--rendernode` | which GPU, on a machine with more than one, as `/dev/dri/renderD128`. Only `egl-headless` takes it -- a served screen and the headless `test-*` boots. `run-compositor` takes the first node not driven by NVIDIA's proprietary driver when nothing says; other boots leave it to QEMU, whose pick is a guess by device number rather than by which card can do the work |
 | `--smp`, `--memory` | 4 and 512 MiB by default. A desktop with a video wallpaper is the one workload here that notices more of either |
 | `--release` | builds the loader and kernel with optimisations. Worth it for a desktop somebody is going to use rather than watch boot |
-| `--wallpaper` | matches part of the name of one kept by `cargo xtask wallpapers`. Leave it out and a run picks one of them, a different one each time; `--wallpaper none` for a plain background. A **video** in that directory becomes a wallpaper that moves, which is the most expensive thing this desktop does -- about a frame a second on a machine that has to emulate |
+| `--wallpaper` | matches part of the name of one kept by `cargo xtask wallpapers`. Leave it out and a run picks one of them, a different one each time, or shows *ember*, Ferrix's own, when none is kept; `--wallpaper none` for a plain background. A **video** in that directory becomes a wallpaper that moves, which is the most expensive thing this desktop does -- about a frame a second on a machine that has to emulate |
 | `--vnc :0` | instead of a window, for a machine reached over `ssh`. `--gl` still works: the frames are drawn off screen and copied out. [Watching a desktop on another machine](#watching-a-desktop-on-another-machine) is the whole of it -- the tunnel, the viewer, and what a served screen does not carry |
 | `--screens 2` | two cards, so two monitors, which the compositor tiles across and `test-compositor`'s monitor boot judges. Accepted by `run-compositor` too, though the boots that are gated are the headless ones |
 | `--no-net` | the one thing in that command that is on by default and can only be turned *off* |

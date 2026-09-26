@@ -19,9 +19,9 @@
 //! * `run-compositor` reads **this machine's** wallpapers directory --
 //!   `$FERRIX_WALLPAPERS`, or `~/.local/share/ferrix/wallpapers` -- and
 //!   nothing else. It names no host and opens no connection, so it does the
-//!   same thing on a train as at a desk; with nothing there the background
-//!   is plain and a line says how to change that. None of it can fail a
-//!   boot.
+//!   same thing on a train as at a desk; with nothing there it draws
+//!   [`ember`], a picture of its own, and a line says how to change that.
+//!   None of it can fail a boot.
 //! * `cargo xtask wallpapers --from <where>` fills that directory, and is
 //!   the only thing here that may reach another machine -- the one its
 //!   argument names, which nothing in this file does. `<where>` is a
@@ -83,8 +83,10 @@ const KINDS: [&str; 9] = [
 /// one from run to run. One cut for a screen of `size` where there is one,
 /// since the client copies that and scales any other.
 ///
-/// `None`, having said why, when there is to be none: `--wallpaper none`, or
-/// nothing kept and none asked for.
+/// `None` only for `--wallpaper none`. With nothing kept and none asked for
+/// it is [`ember`], having said why: a desktop shown to somebody for the
+/// first time should not be a grey one, and every picture people had kept
+/// is somebody else's art that cannot be shown in public.
 ///
 /// A name comes from `--wallpaper`, or from `name =` in the settings file
 /// where the flag is not given.
@@ -163,7 +165,7 @@ fn pick(args: &Args, size: (u32, u32), stills_only: bool) -> Result<Option<Chose
         return Ok(None);
     }
     let Some(dir) = kept_dir() else {
-        return refuse_or_none(asked, "there is nowhere wallpapers are kept");
+        return refuse_or_none(asked, size, "there is nowhere wallpapers are kept");
     };
     let mut kept: Vec<String> = std::fs::read_dir(&dir)
         .ok()
@@ -186,6 +188,7 @@ fn pick(args: &Args, size: (u32, u32), stills_only: bool) -> Result<Option<Chose
     let Some(name) = choose(&kept, asked.map(|asked| asked.name)) else {
         return refuse_or_none(
             asked,
+            size,
             &format!(
                 "{} holds none; `cargo xtask wallpapers --from <directory>`, or \
                  `--from <host>:<directory>`, puts some there",
@@ -198,7 +201,11 @@ fn pick(args: &Args, size: (u32, u32), stills_only: bool) -> Result<Option<Chose
         Some(Chosen::Still(_)) => println!("  wallpaper {name}"),
         Some(Chosen::Moving(_)) => println!("  wallpaper {name}, which moves"),
         None => {
-            return refuse_or_none(asked, &format!("{name} is not a picture `wallpapers` made"));
+            return refuse_or_none(
+                asked,
+                size,
+                &format!("{name} is not a picture `wallpapers` made"),
+            );
         }
     }
     Ok(chosen)
@@ -441,18 +448,92 @@ struct Asked<'a> {
     source: &'a str,
 }
 
-/// What a run with no wallpaper to show does: stop when one was asked for
-/// by name, and carry on, having said `why`, when none was.
-fn refuse_or_none(asked: Option<Asked<'_>>, why: &str) -> Result<Option<Chosen>> {
+/// What a run with no kept wallpaper to show does: stop when one was asked
+/// for by name, and show [`ember`] cut for `size`, having said `why`, when
+/// none was.
+fn refuse_or_none(asked: Option<Asked<'_>>, size: (u32, u32), why: &str) -> Result<Option<Chosen>> {
     match asked {
         Some(Asked { name, source }) => Err(Error::new(format!(
             "{source} {name}: no wallpaper is called anything like it, and {why}"
         ))),
         None => {
-            println!("  no wallpaper: {why}");
-            Ok(None)
+            println!("  wallpaper ember, Ferrix's own: {why}");
+            Ok(Some(Chosen::Still(ember(size))))
         }
     }
+}
+
+/// Ferrix's own wallpaper, drawn here rather than kept, so that it belongs
+/// to the project and costs the tree no picture: the brand's dark iron
+/// (`docs/brand/BRAND.md`) under a rust-coloured glow rising from the
+/// lower left, a fainter one at the upper right, and a cool navy one at
+/// the lower right. A kept picture's
+/// bytes -- [`MAGIC`], the width and height, then `bgr0` rows -- so the
+/// client shows it as it shows any other.
+///
+/// A smooth gradient over a whole screen bands in eight bits a channel, and
+/// the bands are what the eye sees first; a hash of the position dithers
+/// each channel by under one step, which hides them and draws the same
+/// picture every time.
+pub(crate) fn ember(size: (u32, u32)) -> Vec<u8> {
+    let (width, height) = (size.0.max(1), size.1.max(1));
+    let pixels = u64::from(width) * u64::from(height);
+    let mut bytes = Vec::with_capacity(MAGIC.len() + 8 + usize::try_from(pixels * 4).unwrap_or(0));
+    bytes.extend_from_slice(MAGIC);
+    bytes.extend_from_slice(&width.to_le_bytes());
+    bytes.extend_from_slice(&height.to_le_bytes());
+    // Distances are measured in the screen's shorter side, so a portrait
+    // board's desktop has the same glow as a landscape one.
+    let unit = f64::from(width.min(height));
+    let (w, h) = (f64::from(width), f64::from(height));
+    // Each colour as its red, green and blue, from 0 to 1.
+    let base_top = (0.051, 0.059, 0.071); // #0d0f12
+    let base_bottom = (0.071, 0.082, 0.114); // #12151d
+    let rust = (1.0, 0.478, 0.169); // #ff7a2b
+    let ember = (1.0, 0.710, 0.278); // #ffb547
+    let navy = (0.165, 0.243, 0.478); // #2a3e7a
+    for y in 0..height {
+        let fy = f64::from(y);
+        let down = fy / h;
+        for x in 0..width {
+            let fx = f64::from(x);
+            let glow = |cx: f64, cy: f64, radius: f64| {
+                let d = ((fx - cx).powi(2) + (fy - cy).powi(2)).sqrt() / (radius * unit);
+                (1.0 - d).clamp(0.0, 1.0).powi(2)
+            };
+            let low = glow(0.10 * w, 1.12 * h, 1.15);
+            let core = glow(0.08 * w, 1.10 * h, 0.55);
+            let high = glow(0.95 * w, -0.15 * h, 0.80);
+            let cool = glow(0.85 * w, 1.05 * h, 1.10);
+            // One channel: the base gradient, then each glow in its colour.
+            let mix = |top: f64, bottom: f64, rust: f64, ember: f64, navy: f64| {
+                top + (bottom - top) * down
+                    + rust * (0.55 * low + 0.10 * high)
+                    + ember * 0.30 * core
+                    + navy * 0.35 * cool
+            };
+            let red = mix(base_top.0, base_bottom.0, rust.0, ember.0, navy.0);
+            let green = mix(base_top.1, base_bottom.1, rust.1, ember.1, navy.1);
+            let blue = mix(base_top.2, base_bottom.2, rust.2, ember.2, navy.2);
+            let noise = dither(x, y);
+            let channel = |value: f64, salt: u32| -> u8 {
+                let jitter = f64::from((noise >> salt) & 0xff) / 255.0 - 0.5;
+                (value * 255.0 + jitter).round().clamp(0.0, 255.0) as u8
+            };
+            bytes.extend_from_slice(&[channel(blue, 0), channel(green, 8), channel(red, 16), 0]);
+        }
+    }
+    bytes
+}
+
+/// A well-mixed 32-bit hash of a pixel's position, for [`ember`]'s dither.
+fn dither(x: u32, y: u32) -> u32 {
+    let mut v = x.wrapping_mul(0x9e37_79b1) ^ y.wrapping_mul(0x85eb_ca77);
+    v ^= v >> 15;
+    v = v.wrapping_mul(0x2c1b_3c6d);
+    v ^= v >> 12;
+    v = v.wrapping_mul(0x297a_2d39);
+    v ^ (v >> 15)
 }
 
 /// Whether `name` ends in one of [`KINDS`].
@@ -770,7 +851,7 @@ mod tests {
     }
 
     /// A name that was asked for and cannot be met stops the run; asked for
-    /// nothing, the same emptiness is only a plain background.
+    /// nothing, the same emptiness shows Ferrix's own picture.
     ///
     /// The difference is the whole of the rule: a boot told to show a
     /// particular wallpaper and showing none is a different scene, and
@@ -781,7 +862,7 @@ mod tests {
             name: "amiya",
             source: "--wallpaper",
         };
-        let refused = refuse_or_none(Some(flag), "nothing is kept");
+        let refused = refuse_or_none(Some(flag), (64, 36), "nothing is kept");
         let message = refused
             .expect_err("a name that matches nothing stops")
             .to_string();
@@ -801,7 +882,7 @@ mod tests {
             name: "amiya",
             source: "`name` in /home/u/.config/ferrix/wallpaper.toml",
         };
-        let message = refuse_or_none(Some(written), "nothing is kept")
+        let message = refuse_or_none(Some(written), (64, 36), "nothing is kept")
             .expect_err("a stale name in the file stops the same way")
             .to_string();
         assert!(
@@ -809,11 +890,53 @@ mod tests {
             "it sends the person to the file: {message}"
         );
 
-        let quiet = refuse_or_none(None, "nothing is kept");
+        let quiet = refuse_or_none(None, (64, 36), "nothing is kept");
         assert!(
-            matches!(quiet, Ok(None)),
-            "asked for nothing, an empty directory is a plain background"
+            matches!(&quiet, Ok(Some(Chosen::Still(bytes))) if picture_size(bytes) == Some((64, 36))),
+            "asked for nothing, an empty directory shows ember at the screen's size"
         );
+    }
+
+    /// Ember is a whole picture the client accepts, the same every time,
+    /// dark where the desktop's text sits and warm where the glow is -- and
+    /// with no run of equal pixels long enough to show as a band.
+    #[test]
+    fn ember_is_a_whole_picture_and_does_not_band() {
+        let (width, height) = (320u32, 180u32);
+        let bytes = ember((width, height));
+        assert_eq!(bytes.len(), MAGIC.len() + 8 + 320 * 180 * 4);
+        assert_eq!(picture_size(&bytes), Some((width, height)));
+        assert_eq!(bytes, ember((width, height)), "drawn the same every time");
+
+        let pixel = |x: u32, y: u32| -> [u8; 3] {
+            let at = MAGIC.len() + 8 + ((y * width + x) * 4) as usize;
+            [bytes[at + 2], bytes[at + 1], bytes[at]]
+        };
+        let [r, g, b] = pixel(width / 2, height / 3);
+        assert!(
+            r < 40 && g < 40 && b < 50,
+            "the middle is dark: {r} {g} {b}"
+        );
+        let [r, g, b] = pixel(8, height - 4);
+        assert!(
+            r > g && g > b && r > 60,
+            "the lower left glows rust: {r} {g} {b}"
+        );
+
+        // Along a row where the gradient is slow, the dither must break it
+        // up: no more than a few neighbours in a row may be identical.
+        let row = height / 2;
+        let mut longest = 0;
+        let mut run = 0;
+        for x in 1..width {
+            run = if pixel(x, row) == pixel(x - 1, row) {
+                run + 1
+            } else {
+                0
+            };
+            longest = longest.max(run);
+        }
+        assert!(longest < 12, "a band of {longest} equal pixels");
     }
 
     /// A kept picture is named for what it is of and the screen it was cut
