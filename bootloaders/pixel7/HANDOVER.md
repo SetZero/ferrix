@@ -8,9 +8,10 @@ you touch the phone.
 
 ## State at a glance
 
-**Update, 2026-09-26 night (ferrix-0a): items 1, 3 and 4 are on `main`,
-and the boot console has been seen on the phone. Item 2, cores 1-7, waits
-for run 5.** None of it is pushed.
+**Update, 2026-09-27 early (ferrix-0a): all eight cores boot the phone to
+`FERRIX-BOOT-OK`, and what that took is on `main`. One commit, the one that
+drops `nosmp`, waits for the side-channel check to allow mixed cores.**
+None of it is pushed.
 
 * **The GICv3 ITS** (`c21ce40f..a8680955`) landed after a rebase and a
   re-gate: `cargo xtask check` passed, and `test-boot` reached
@@ -35,9 +36,49 @@ for run 5.** None of it is pushed.
   others are the same to the millisecond. The framebuffer is likely
   mapped as device memory, so every glyph pixel is an uncached store.
   Mapping it write-combining would be the fix, and nothing needs it yet.
-* **`pixel7-next`** (worktree `.claude/worktrees/pixel7-next`) is one commit
-  on `main` now: the EL2 secondaries, gated with the other two. It lands
-  after run 5, the same image without `nosmp`.
+* **Cores 1-7.** Run 5 (`$P/run-fbcon5-smp.log`, no `nosmp`) proved the
+  EL2 secondary entry: `cpus 8 described by firmware, 8 online`, and stages
+  4 and 5 passed across 8 processors. Stage 6 then failed with FX-0602, and
+  run 6 failed in stage 7 after `pid 156 ended by signal 4 ...
+  IllegalInstruction`. Two bugs QEMU on an x86 host cannot show, both now
+  on `main`:
+  * **No instruction-cache maintenance for user code** (`5fd317ff`).
+    Android's log says the phone has IDC but not DIC, so instruction caches
+    must be invalidated. `mm::map_in` now calls `arch::sync_instructions`
+    for every user executable mapping: `clean_to_poc`, then `IC IALLUIS`
+    (the A55s' VIPT instruction caches rule out `IC IVAU` by the direct
+    map's address). ARMv7-A got the same, untested on the DK1.
+    `scripts/asm-allowlist.json` raised ARMv7-A `cpu.rs` from 100 to 102
+    lines for it, after the three `CTR` reads there became one. **The
+    owner should confirm that raise.**
+  * **The reverse-map check's user program had no barriers**
+    (`9489aab4`). A diagnostic build (run 7) showed the kernel's side
+    right and the parent reading page 0 before the child's marker was
+    visible. Both Arm programs now have `dmb ish` after reading a command
+    and before writing an answer. The same source without them assembles
+    to the old bytes exactly.
+  With both, runs 8, 8-2 and 8-3 (`$P/run8-dmb*/`) reached
+  `FERRIX-BOOT-OK stages 1-12` on 8 cores, 88 s each. The gate passed on
+  all three commits: `cargo xtask check`, and `test-boot` on x86_64,
+  armv7a, armv7a `--smp 2`, aarch64, aarch64 `--smp 2`, and GICv3
+  `--smp 2 --kernel-option ferrix.fbcon`.
+* **What still keeps `nosmp` on.** `pixel7-next` holds one commit, "Start
+  all eight of the Pixel 7's cores", which drops `nosmp`. Run 9
+  (`$P/run9-final/`), built from it on today's `main`, failed after stage 7
+  with FX-0307: `the branch history loop's count disagrees with the plan`.
+  The side-channel defences that landed on `main` tonight decide the plan
+  on the boot core, an A55 needing no Spectre-BHB loop, and
+  `apply_this_cpu` only ever takes defences away. `apply` still raises the
+  global `BHB_LOOPS` to 32 on the A78s and X1s. The loop does run on every
+  core, but the plan and the per-core records disagree, and the check says
+  so. That code belongs to the certification session, which has been told.
+  Once it allows mixed cores, rebuild and boot with `$P/build-run.sh` and
+  `$P/boot-run.sh`, and land the commit.
+* **Running the phone with nobody there.** `$P/build-run.sh <name>` builds
+  `pixel7-next` into `$P/<name>/`, keeping the tree's diff and a debug
+  kernel. `$P/boot-run.sh <name>` boots it and saves the record. Neither
+  overwrites an existing run. adb and `su` work while the phone is locked,
+  so a run needs nobody at the phone, only the screen does.
 
 * **On `main`**, merged 2026-09-26 by fast-forward after the whole gate row
   for "anything the image contains" passed on nazuna. **Not pushed**: pushes
@@ -187,6 +228,13 @@ them). Check any new one against the phone before you rely on it.
   power-on reset with no log at all. QEMU never showed it, because the flag
   is off there. Anything drawn early needs a QEMU run with the flag on
   before a phone run.
+* **QEMU on an x86 host hides Arm's caches and weak ordering.** It keeps
+  stores in order and models no caches, so all of the eight-core failures
+  passed every QEMU gate. On the phone they moved between runs: FX-0602
+  once, FX-0701 after an illegal instruction the next time. A failure that
+  moves like that on real Arm is a missing barrier or missing cache
+  maintenance before it is anything else. A user program that hands data
+  to another core through shared memory needs `dmb ish` on both sides.
 * **Ask the owner to watch in a question, right before the run.** A line
   in a message saying "watch the screen" was missed, and a run's picture
   was lost.
@@ -218,21 +266,12 @@ them). Check any new one against the phone before you rely on it.
 
 ## What to do next, most important first
 
-1. **Cores 1-7** (`pixel7-next`). Written: `ferrix_secondary_entry` in
-   `smp.rs` checks `CurrentEL`, and at EL2 sets EL1 up as
-   `bootloaders/pixel7/src/entry.rs` does and `eret`s to it. It touches
-   `ICC_SRE_EL2` only when `ID_AA64PFR0_EL1.GIC` says the CPU has GIC system
-   registers. QEMU `--smp 2` passes, but that is only the EL1 path. The asm
-   allowlist entry's reason was extended. Its budget did not need raising,
-   because `check-asm-budget.py` counts a raw-string `global_asm!` as 2
-   lines, a hole worth closing. On the phone it is **unproven**. Run 1 had
-   it together with the broken boot console, and ABL's PSCI breadcrumbs
-   showed activity on cores 3, 4, 5 and 7, so CPU_ON calls went out.
-   Next: run 5, with `nosmp` taken out of `board::CMDLINE` for the build
-   only and `ferrix.fbcon` kept, so the owner can watch. Watch whether the
-   ramoops record survives with other cores writing it (it is a device
-   mapping, so it should). If the run is good, take `nosmp` out for good
-   in the same landing.
+1. **Cores 1-7: drop `nosmp`** (`pixel7-next`, one commit). Everything
+   the cores need is on `main`, and three runs passed on 8 cores. What is
+   left is FX-0307 on mixed cores, described in "State at a glance"; after
+   that, one run with `$P/build-run.sh`/`$P/boot-run.sh`, then land. The
+   asm budget still counts a raw-string `global_asm!` as 2 lines, a hole
+   worth closing.
 2. **Entropy beyond 64 bits.** ABL gives 8 bytes, and the kernel credits
    them (`BootInfo.firmware_seed_len`), so the phone boots
    `NOT SEEDED: 64 of 256 bits`. The rest would have to come from the SoC's
