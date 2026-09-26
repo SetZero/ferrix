@@ -1557,6 +1557,65 @@ fn a_stream_that_ignores_its_position_seeks_to_zero_and_takes_offsets() {
     assert_eq!(pipe.write_at(0, b"x"), Err(Errno::ESPIPE));
 }
 
+/// A stream whose `lseek` does nothing, as an eventfd's does.
+#[derive(Debug)]
+struct Counter;
+
+impl crate::Inode for Counter {
+    fn metadata(&self) -> crate::Metadata {
+        stream_metadata()
+    }
+    fn into_any(self: Arc<Self>) -> Arc<dyn core::any::Any + Send + Sync> {
+        self
+    }
+    fn is_stream(&self) -> bool {
+        true
+    }
+    fn seek_is_noop(&self) -> bool {
+        true
+    }
+    fn read_stream(&self, buf: &mut [u8], _nonblock: bool) -> Result<usize, Errno> {
+        buf.fill(1);
+        Ok(buf.len())
+    }
+}
+
+#[test]
+fn a_stream_whose_seek_does_nothing_seeks_to_zero_and_refuses_offsets() {
+    let at = Location::detached(
+        Arc::new(Pipes),
+        Arc::new(Counter),
+        b"anon_inode:[eventfd]",
+        Arc::new(SpinParker),
+    );
+    let counter = OpenFile::new(at, &READ_WRITE).unwrap();
+    assert!(counter.is_stream() && !counter.takes_offsets());
+    for (offset, whence) in [
+        (100, Whence::Set),
+        (-10, Whence::Set),
+        (5, Whence::Current),
+        (10, Whence::End),
+        (0, Whence::Data),
+        (0, Whence::Hole),
+    ] {
+        assert_eq!(counter.seek(offset, whence), Ok(0), "{offset} {whence:?}");
+    }
+    let mut buf = [0_u8; 8];
+    assert_eq!(counter.read(&mut buf), Ok(8));
+    assert_eq!(
+        counter.seek(0, Whence::Current),
+        Ok(0),
+        "a read moves nothing"
+    );
+    assert_eq!(counter.read_at(0, &mut buf), Err(Errno::ESPIPE));
+    assert_eq!(counter.write_at(0, b"x"), Err(Errno::ESPIPE));
+
+    // And a stream that ignores its position has a seek that does nothing,
+    // without saying so twice.
+    assert!(crate::Inode::seek_is_noop(&Zeros));
+    assert!(!crate::Inode::seek_is_noop(&Recorder::default()));
+}
+
 #[test]
 fn a_detached_location_opens_and_names_itself_without_a_tree() {
     let (ns, ctx) = fresh();

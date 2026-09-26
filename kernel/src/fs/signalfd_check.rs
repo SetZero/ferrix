@@ -17,8 +17,9 @@
 //! waiter coming back must stay under [`LATE_LIMIT_NANOS`], a quarter of that
 //! recheck.
 //!
-//! Refused as Linux refuses: a read into fewer than 128 bytes, a write, and
-//! `lseek`. The run is done twice and must keep no frame.
+//! Refused as Linux refuses: a read into fewer than 128 bytes, a write, and a
+//! read at an offset. `lseek` answers 0, as Linux's `noop_llseek` does. The run
+//! is done twice and must keep no frame.
 
 use alloc::sync::Arc;
 
@@ -26,7 +27,7 @@ use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{
     EPOLL_CTL_ADD, EPOLLIN, F_GETFD, F_GETFL, FD_CLOEXEC, MAP_ANONYMOUS, MAP_PRIVATE, O_NONBLOCK,
-    PROT_READ, PROT_WRITE, SEEK_CUR, SFD_CLOEXEC, SFD_NONBLOCK, SIGALRM, SIGKILL,
+    PROT_READ, PROT_WRITE, SEEK_CUR, SEEK_SET, SFD_CLOEXEC, SFD_NONBLOCK, SIGALRM, SIGKILL,
     SIGNALFD_SIGINFO_BYTES, SIGSTOP, SIGUSR1, SIGUSR2,
 };
 use ferrix_vfs::{Errno, OpenFile};
@@ -296,10 +297,18 @@ fn check_file_refusals(
         "a signalfd could be written",
         counts,
     )?;
+    // `lseek` is Linux's `noop_llseek`: 0, whatever it is asked. A read at an
+    // offset is still refused, as Linux refuses it.
+    if [(100, SEEK_SET), (-5, SEEK_CUR)]
+        .into_iter()
+        .any(|(offset, whence)| fd::sys_lseek(process, made, offset, whence) != Ok(0))
+    {
+        return Err("lseek on a signalfd did not answer 0, as Linux's does");
+    }
     refused(
-        fd::sys_lseek(process, made, 0, SEEK_CUR),
+        file::sys_pread64(process, made, page + AT_INFO, 128, 0),
         Errno::ESPIPE,
-        "a signalfd could be sought",
+        "a signalfd could be read at an offset",
         counts,
     )
 }

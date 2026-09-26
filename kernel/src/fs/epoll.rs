@@ -542,6 +542,12 @@ impl Inode for Epoll {
         true
     }
 
+    /// `lseek` on an epoll set is 0, as Linux's `noop_llseek` answers, while
+    /// `pread64` and `pwrite64` stay `ESPIPE`.
+    fn seek_is_noop(&self) -> bool {
+        true
+    }
+
     /// Readable when a wait would report something, as `ep_eventpoll_poll`
     /// answers. Never writable: Linux's answer has only `EPOLLIN`.
     fn poll(&self) -> Readiness {

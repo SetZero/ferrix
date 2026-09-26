@@ -20,8 +20,9 @@
 //! a quarter of that recheck.
 //!
 //! Refused as Linux refuses: a read into fewer than eight bytes, a write, and
-//! `lseek`. The run is done twice and must keep no frame, the thread's stack
-//! included: with nothing armed it exits by itself.
+//! a read at an offset. `lseek` answers 0, as Linux's `noop_llseek` does. The
+//! run is done twice and must keep no frame, the thread's stack included: with
+//! nothing armed it exits by itself.
 
 use alloc::sync::Arc;
 
@@ -30,7 +31,8 @@ use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{
     CLOCK_BOOTTIME, CLOCK_MONOTONIC, CLOCK_PROCESS_CPUTIME_ID, CLOCK_REALTIME, EPOLL_CTL_ADD,
     EPOLLIN, F_GETFD, F_GETFL, FD_CLOEXEC, MAP_ANONYMOUS, MAP_PRIVATE, O_NONBLOCK, PROT_READ,
-    PROT_WRITE, SEEK_CUR, TFD_CLOEXEC, TFD_NONBLOCK, TFD_TIMER_ABSTIME, TFD_TIMER_CANCEL_ON_SET,
+    PROT_WRITE, SEEK_CUR, SEEK_SET, TFD_CLOEXEC, TFD_NONBLOCK, TFD_TIMER_ABSTIME,
+    TFD_TIMER_CANCEL_ON_SET,
 };
 use ferrix_vfs::{Errno, OpenFile};
 
@@ -278,10 +280,18 @@ fn check_file_refusals(
         "a timerfd could be written",
         counts,
     )?;
+    // `lseek` is Linux's `noop_llseek`: 0, whatever it is asked. A read at an
+    // offset is still refused, as Linux refuses it.
+    if [(100, SEEK_SET), (-5, SEEK_CUR)]
+        .into_iter()
+        .any(|(offset, whence)| fd::sys_lseek(process, timer, offset, whence) != Ok(0))
+    {
+        return Err("lseek on a timerfd did not answer 0, as Linux's does");
+    }
     refused(
-        fd::sys_lseek(process, timer, 0, SEEK_CUR),
+        file::sys_pread64(process, timer, page + AT_VALUE, 8, 0),
         Errno::ESPIPE,
-        "a timerfd could be sought",
+        "a timerfd could be read at an offset",
         counts,
     )
 }

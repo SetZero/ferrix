@@ -18,9 +18,10 @@
 //! sets is `ELOOP` where five are not.
 //!
 //! And the refusals, each as Linux answers it: flags `epoll_create1` does not
-//! take, a size `epoll_create` does not take, `EEXIST`, `ENOENT`, `EPERM` for a
-//! directory, `EINVAL` for a descriptor that is not a set, an unknown
-//! operation and `EPOLLEXCLUSIVE` misused, `EBADF`, `EFAULT` for an event that
+//! take, a size `epoll_create` does not take, a read at an offset (where
+//! `lseek` answers 0, as Linux's `noop_llseek` does), `EEXIST`, `ENOENT`,
+//! `EPERM` for a directory, `EINVAL` for a descriptor that is not a set, an
+//! unknown operation and `EPOLLEXCLUSIVE` misused, `EBADF`, `EFAULT` for an event that
 //! cannot be read but not for `EPOLL_CTL_DEL`, which reads none, and for the
 //! wait: `maxevents` before the buffer, the buffer before the descriptor, and a
 //! signal set of the wrong size before anything. It runs twice and counts
@@ -33,7 +34,7 @@ use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{
     AT_FDCWD, EPOLL_CLOEXEC, EPOLL_CTL_ADD, EPOLL_CTL_DEL, EPOLL_CTL_MOD, EPOLLET, EPOLLEXCLUSIVE,
     EPOLLIN, EPOLLONESHOT, EPOLLOUT, F_GETFD, FD_CLOEXEC, MAP_ANONYMOUS, MAP_PRIVATE, O_DIRECTORY,
-    O_RDONLY, PROT_READ, PROT_WRITE,
+    O_RDONLY, PROT_READ, PROT_WRITE, SEEK_CUR, SEEK_SET,
 };
 use ferrix_vfs::Errno;
 
@@ -185,6 +186,20 @@ fn check_creation(process: &Process, page: u64, counts: &mut Counts) -> Result<(
     if u64::from(u32::from_le_bytes(magic)) != fs::anon::ANON_INODE_FS_MAGIC {
         return Err("fstatfs on an epoll set did not report ANON_INODE_FS_MAGIC");
     }
+    // `lseek` is Linux's `noop_llseek`: 0, whatever it is asked. A read at an
+    // offset is still refused, as Linux refuses it.
+    if [(100, SEEK_SET), (-5, SEEK_CUR)]
+        .into_iter()
+        .any(|(offset, whence)| fd::sys_lseek(process, set, offset, whence) != Ok(0))
+    {
+        return Err("lseek on an epoll set did not answer 0, as Linux's does");
+    }
+    refused(
+        file::sys_pread64(process, set, page + AT_EVENTS, 8, 0),
+        Errno::ESPIPE,
+        "an epoll set could be read at an offset",
+        counts,
+    )?;
     for opened in [set, plain, sized] {
         closed(process, opened)?;
     }

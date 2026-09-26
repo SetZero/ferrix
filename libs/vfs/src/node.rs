@@ -462,7 +462,7 @@ pub trait Inode: Send + Sync + fmt::Debug {
 
     /// Whether this object has no position: a terminal, a pipe. Offsets passed
     /// to it are ignored and `lseek` on it is `ESPIPE`, unless
-    /// [`Inode::ignores_position`] says otherwise.
+    /// [`Inode::ignores_position`] or [`Inode::seek_is_noop`] says otherwise.
     fn is_stream(&self) -> bool {
         false
     }
@@ -480,6 +480,21 @@ pub trait Inode: Send + Sync + fmt::Debug {
     /// no, `ESPIPE` -- is a pipe's, a socket's and a terminal's.
     fn ignores_position(&self) -> bool {
         false
+    }
+
+    /// Whether `lseek` on this stream answers 0, whatever it is asked, rather
+    /// than `ESPIPE`: Linux's `noop_llseek`, which its eventfd, timerfd,
+    /// signalfd, epoll and inotify files have. Measured on a 7.0 host,
+    /// `lseek` on each is 0 for every offset and whence, a read between
+    /// included, while `pread64` and `pwrite64` on them stay `ESPIPE`. So
+    /// unlike [`Inode::ignores_position`] this says nothing about the offsets
+    /// reads and writes are given.
+    ///
+    /// Meaningful only where [`Inode::is_stream`] is true. The default is
+    /// [`Inode::ignores_position`]'s answer: a stream whose position never
+    /// moves is at 0 too.
+    fn seek_is_noop(&self) -> bool {
+        self.ignores_position()
     }
 
     /// Called when the inode is opened. `Some` replaces the object that reads

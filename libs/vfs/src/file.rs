@@ -451,16 +451,17 @@ impl OpenFile {
     /// `SEEK_END` on a directory, `ENXIO` for `SEEK_DATA`/`SEEK_HOLE` at or
     /// past the end.
     ///
-    /// A stream that [ignores its position](Inode::ignores_position) is at 0
-    /// whatever it is asked: Linux's `null_lseek` sets the position to 0 and
-    /// its `noop_llseek` reports one no read ever moved, and neither looks
-    /// at the offset or the whence.
+    /// A stream that [ignores its position](Inode::ignores_position), or
+    /// whose [seek does nothing](Inode::seek_is_noop), is at 0 whatever it is
+    /// asked: Linux's `null_lseek` sets the position to 0 and its
+    /// `noop_llseek` reports one no read ever moved, and neither looks at the
+    /// offset or the whence.
     pub fn seek(&self, offset: i64, whence: Whence) -> Result<u64> {
         if self.path_only {
             return Err(Errno::EBADF);
         }
         if self.io.is_stream() {
-            if self.io.ignores_position() {
+            if self.io.seek_is_noop() {
                 return Ok(0);
             }
             return Err(Errno::ESPIPE);

@@ -200,6 +200,12 @@ impl Inode for SignalFd {
         true
     }
 
+    /// `lseek` on a signalfd is 0, as Linux's `noop_llseek` answers, while
+    /// `pread64` and `pwrite64` stay `ESPIPE`.
+    fn seek_is_noop(&self) -> bool {
+        true
+    }
+
     fn poll(&self) -> Readiness {
         Readiness {
             readable: self.reader().is_some_and(|reader| self.pending(&reader)),

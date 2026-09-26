@@ -11,8 +11,9 @@
 //! wake count at work, the way an event loop is woken by another thread.
 //!
 //! Refused as Linux refuses: a flag `eventfd2` does not take, a read or write
-//! buffer shorter than eight bytes, a write of `u64::MAX`, and `lseek`. The run
-//! is done twice and must keep no frame.
+//! buffer shorter than eight bytes, a write of `u64::MAX`, and a read at an
+//! offset. `lseek` answers 0, as Linux's `noop_llseek` does. The run is done
+//! twice and must keep no frame.
 
 use alloc::sync::Arc;
 
@@ -20,7 +21,7 @@ use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{
     EFD_CLOEXEC, EFD_NONBLOCK, EFD_SEMAPHORE, EPOLL_CTL_ADD, EPOLLET, EPOLLIN, F_GETFD, F_GETFL,
-    FD_CLOEXEC, MAP_ANONYMOUS, MAP_PRIVATE, O_NONBLOCK, PROT_READ, PROT_WRITE, SEEK_CUR,
+    FD_CLOEXEC, MAP_ANONYMOUS, MAP_PRIVATE, O_NONBLOCK, PROT_READ, PROT_WRITE, SEEK_CUR, SEEK_SET,
 };
 use ferrix_vfs::{Errno, OpenFile};
 
@@ -205,10 +206,18 @@ fn check_counting(process: &Process, page: u64, counts: &mut Counts) -> Result<(
         "a write of u64::MAX was not EINVAL",
         counts,
     )?;
+    // `lseek` is Linux's `noop_llseek`: 0, whatever it is asked. A read at an
+    // offset is still refused, as Linux refuses it.
+    if [(100, SEEK_SET), (-5, SEEK_CUR)]
+        .into_iter()
+        .any(|(offset, whence)| fd::sys_lseek(process, counter, offset, whence) != Ok(0))
+    {
+        return Err("lseek on an eventfd did not answer 0, as Linux's does");
+    }
     refused(
-        fd::sys_lseek(process, counter, 0, SEEK_CUR),
+        file::sys_pread64(process, counter, page + AT_VALUE, 8, 0),
         Errno::ESPIPE,
-        "an eventfd could be sought",
+        "an eventfd could be read at an offset",
         counts,
     )?;
     refused(
