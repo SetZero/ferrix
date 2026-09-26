@@ -3,7 +3,11 @@
 //! For each `console=` on the kernel command line it writes the link
 //! `DIR/multi-user.target.wants/getty@NAME.service`, the name without the
 //! option's speed (`console=ttyS0,115200` is `ttyS0`); with none, or with no
-//! `/proc/cmdline` to read, it writes one for `console`. Only the link's
+//! `/proc/cmdline` to read, it writes one for `console`. Linux's form for a
+//! serial port by its address, `console=uart8250,mmio,<address>` (and
+//! `uart`), names no terminal in `/dev`: it is the port the kernel prints
+//! on, which Ferrix serves as `console`, so it is that getty. crosvm gives
+//! its guests that form. Only the link's
 //! name is read, so a link that cannot be made is written as an empty file
 //! of that name instead.
 
@@ -24,6 +28,11 @@ fn consoles(command_line: &str) -> Vec<String> {
         };
         let name = value.split(',').next().unwrap_or(value);
         let name = name.strip_prefix("/dev/").unwrap_or(name);
+        let name = if matches!(name, "uart" | "uart8250") {
+            "console"
+        } else {
+            name
+        };
         if !name.is_empty() && !name.contains('/') && !names.iter().any(|n| n == name) {
             names.push(name.to_owned());
         }
@@ -111,6 +120,15 @@ mod tests {
     fn no_console_option_is_the_console() {
         assert_eq!(consoles("ferrix.init=/sbin/init"), ["console"]);
         assert_eq!(consoles(""), ["console"]);
+    }
+
+    #[test]
+    fn a_port_named_by_its_address_is_the_console() {
+        assert_eq!(consoles("console=uart8250,mmio,0x3f8"), ["console"]);
+        assert_eq!(
+            consoles("console=uart,io,0x3f8 console=uart8250,mmio32,0x1000"),
+            ["console"]
+        );
     }
 
     #[test]
