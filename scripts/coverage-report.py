@@ -185,7 +185,21 @@ def trace_slide(trace: Path, given: int | None) -> int:
 
 
 def read_line_table(elf: Path) -> dict[str, dict[int, list[int]]]:
-    """{source path: {line: [addresses]}} for every statement row."""
+    """{source path: {line: [addresses]}} for every statement row the image
+    holds.
+
+    A row outside the image's loadable span is not a statement of this image.
+    The linker drops every function nothing calls out of line -- at
+    `opt-level = 1` that is most small wrappers, whose every caller inlined
+    them -- but leaves the function's line-table rows behind with the
+    address relocated against a discarded section, which reads as a small
+    offset from zero. Those rows name a line that has no instruction in the
+    kernel, so no run can reach it; until 2026-09-26 they were counted as
+    statements nobody reached, about a quarter of every architecture's
+    residual. A line whose inlined copies are in the image keeps those rows
+    and is still counted, once.
+    """
+    low, high = elf_text_range(elf)
     output = subprocess.run(
         ["objdump", "--dwarf=decodedline", str(elf)],
         capture_output=True,
@@ -213,7 +227,10 @@ def read_line_table(elf: Path) -> dict[str, dict[int, list[int]]]:
         # a row without it is a continuation of a statement already counted.
         if line == 0 or row.group(4) != "x":
             continue
-        table[current][line].append(int(row.group(2), 16))
+        address = int(row.group(2), 16)
+        if not low <= address < high:
+            continue
+        table[current][line].append(address)
 
     return table
 
