@@ -1790,7 +1790,8 @@ fn qemu_virt_describes_one_ecam_host_above_four_gibibytes() {
             },
             segment: None,
             start_bus: 0,
-            end_bus: 0xff
+            end_bus: 0xff,
+            cam: false,
         }],
         "the window QEMU's virt machine puts in highmem"
     );
@@ -1863,9 +1864,10 @@ fn an_ecam_host_that_cannot_be_used_is_skipped() {
         ecam_node(b, 0x5000_0000, 1 << 28, |b| {
             b.prop_u32("linux,pci-domain", 0x1_0000);
         });
+        // CAM, but smaller than its one bus of 64 KiB.
         b.begin("pcie@60000000");
-        b.prop_str("compatible", "pci-host-cam-generic");
-        b.prop_cells("reg", &[0, 0x6000_0000, 0, 0x100_0000]);
+        b.prop_str("compatible", PCI_HOST_CAM_COMPATIBLE);
+        b.prop_cells("reg", &[0, 0x6000_0000, 0, 0x8000]);
         b.end();
         b.begin("pcie@70000000");
         b.prop_str("compatible", PCI_HOST_ECAM_COMPATIBLE);
@@ -2671,4 +2673,122 @@ fn a_host_bridge_without_ranges_forwards_nothing() {
         windows(&blob).is_empty(),
         "no ranges is no window, not an open one"
     );
+}
+
+/// crosvm's AArch64 PCI host, as its `--dump-device-tree-blob` wrote it on a
+/// Pixel 7 (2026-09-26): CAM at 0x10000, one bus, and an `interrupt-map`
+/// giving slots 1 to 5 SPIs 4 to 8, level high, through a GICv3 whose
+/// `#address-cells` is 2.
+fn crosvm_pci(b: &mut Builder) {
+    b.begin("intc");
+    b.prop_str("compatible", GICV3_COMPATIBLE);
+    b.prop("interrupt-controller", &[]);
+    b.prop_u32("#interrupt-cells", 3);
+    b.prop_u32("#address-cells", 2);
+    b.prop_u32("#size-cells", 2);
+    b.prop_u32("phandle", 1);
+    b.end();
+
+    b.begin("pci");
+    b.prop_str("compatible", PCI_HOST_CAM_COMPATIBLE);
+    b.prop_str("device_type", "pci");
+    b.prop_cells("bus-range", &[0, 0]);
+    b.prop_u32("#address-cells", 3);
+    b.prop_u32("#size-cells", 2);
+    b.prop_cells("reg", &[0, 0x10000, 0, 0x100_0000]);
+    b.prop_u32("#interrupt-cells", 1);
+    let mut map = Vec::new();
+    for slot in 1..=5_u32 {
+        map.extend([slot << 11, 0, 0, 1, 1, 0, 0, 0, slot + 3, 4]);
+    }
+    b.prop_cells("interrupt-map", &map);
+    b.prop_cells("interrupt-map-mask", &[0xf800, 0, 0, 7]);
+    b.end();
+}
+
+#[test]
+fn crosvm_describes_one_cam_host_of_one_bus() {
+    let blob = tree(crosvm_pci);
+    assert_eq!(
+        hosts(&blob),
+        vec![EcamHost {
+            window: Region {
+                address: 0x10000,
+                size: 0x100_0000
+            },
+            segment: None,
+            start_bus: 0,
+            end_bus: 0,
+            cam: true,
+        }],
+        "crosvm's CAM window, cut to its bus-range"
+    );
+}
+
+#[test]
+fn a_cam_host_window_holds_a_bus_every_64_kib() {
+    let blob = tree(|b| {
+        b.begin("pci");
+        b.prop_str("compatible", PCI_HOST_CAM_COMPATIBLE);
+        b.prop_u32("#address-cells", 3);
+        b.prop_u32("#size-cells", 2);
+        b.prop_cells("reg", &[0, 0x10000, 0, 0x3_0000]);
+        b.end();
+    });
+    let found = hosts(&blob);
+    assert_eq!(found.len(), 1, "one host");
+    assert_eq!(found[0].end_bus, 2, "three buses of 64 KiB, not a megabyte");
+    assert!(found[0].cam, "laid out as CAM");
+}
+
+#[test]
+fn crosvm_routes_each_slots_inta_to_its_own_spi() {
+    let blob = tree(crosvm_pci);
+    let fdt = parse(&blob);
+    let host = fdt.ecam_hosts().next().unwrap();
+    for slot in 1..=5_u8 {
+        assert_eq!(
+            fdt.ecam_intx(&host, 0, slot, 0, 1),
+            Some(GicInterrupt {
+                id: 32 + 3 + u32::from(slot),
+                trigger: Some(Trigger::LevelHigh),
+            }),
+            "slot {slot}"
+        );
+    }
+    assert_eq!(
+        fdt.ecam_intx(&host, 0, 2, 3, 1),
+        Some(GicInterrupt {
+            id: 37,
+            trigger: Some(Trigger::LevelHigh),
+        }),
+        "the mask ignores the function"
+    );
+    assert_eq!(fdt.ecam_intx(&host, 0, 6, 0, 1), None, "an unmapped slot");
+    assert_eq!(fdt.ecam_intx(&host, 0, 1, 0, 2), None, "INTB, unmapped");
+    assert_eq!(fdt.ecam_intx(&host, 0, 1, 0, 0), None, "no pin");
+}
+
+#[test]
+fn an_interrupt_map_to_anything_but_a_gic_is_not_followed() {
+    let blob = tree(|b| {
+        b.begin("other");
+        b.prop_str("compatible", "vendor,not-a-gic");
+        b.prop("interrupt-controller", &[]);
+        b.prop_u32("#interrupt-cells", 3);
+        b.prop_u32("phandle", 2);
+        b.end();
+        b.begin("pci");
+        b.prop_str("compatible", PCI_HOST_CAM_COMPATIBLE);
+        b.prop_u32("#address-cells", 3);
+        b.prop_u32("#size-cells", 2);
+        b.prop_cells("reg", &[0, 0x10000, 0, 0x1_0000]);
+        b.prop_u32("#interrupt-cells", 1);
+        b.prop_cells("interrupt-map", &[0x800, 0, 0, 1, 2, 0, 4, 4]);
+        b.prop_cells("interrupt-map-mask", &[0xf800, 0, 0, 7]);
+        b.end();
+    });
+    let fdt = parse(&blob);
+    let host = fdt.ecam_hosts().next().unwrap();
+    assert_eq!(fdt.ecam_intx(&host, 0, 1, 0, 1), None, "not a GIC");
 }

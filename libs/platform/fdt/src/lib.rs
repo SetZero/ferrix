@@ -1583,10 +1583,19 @@ mod tests;
 /// which is what QEMU's `virt` machine describes.
 pub const PCI_HOST_ECAM_COMPATIBLE: &str = "pci-host-ecam-generic";
 
+/// The binding for a host bridge whose configuration space is conventional
+/// PCI's memory-mapped CAM: 256 bytes a function, 64 KiB a bus. crosvm's
+/// AArch64 machine describes this one.
+pub const PCI_HOST_CAM_COMPATIBLE: &str = "pci-host-cam-generic";
+
 /// Bytes of ECAM window one bus occupies.
 const ECAM_BYTES_PER_BUS: u64 = 1 << 20;
 
-/// A PCI host bridge whose configuration space is an ECAM window.
+/// Bytes of CAM window one bus occupies.
+const CAM_BYTES_PER_BUS: u64 = 1 << 16;
+
+/// A PCI host bridge whose configuration space is an ECAM window, or a CAM
+/// one when [`EcamHost::cam`] says so.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct EcamHost {
     /// The window: the first region of `reg`. Its address is bus
@@ -1602,9 +1611,13 @@ pub struct EcamHost {
     /// The last bus the window really reaches: `bus-range`'s last, or 255,
     /// cut down to what [`EcamHost::window`] is large enough to hold.
     pub end_bus: u8,
+    /// Whether the window is laid out as CAM, a `pci-host-cam-generic`
+    /// node, rather than ECAM.
+    pub cam: bool,
 }
 
-/// Every `pci-host-ecam-generic` node that can be used, in tree order.
+/// Every `pci-host-ecam-generic` and `pci-host-cam-generic` node that can be
+/// used, in tree order.
 ///
 /// A node is skipped if its `status` is anything but `okay`, if it has no
 /// `reg`, if its window is smaller than one bus, or if `bus-range` or
@@ -1633,7 +1646,8 @@ impl Iterator for EcamHosts<'_> {
 
 /// Decode `node` as an ECAM host bridge, if it is a usable one.
 fn ecam_host(node: &Node<'_>) -> Option<EcamHost> {
-    if !node.is_compatible(PCI_HOST_ECAM_COMPATIBLE) {
+    let cam = node.is_compatible(PCI_HOST_CAM_COMPATIBLE);
+    if !cam && !node.is_compatible(PCI_HOST_ECAM_COMPATIBLE) {
         return None;
     }
     if !node.is_enabled() {
@@ -1659,7 +1673,12 @@ fn ecam_host(node: &Node<'_>) -> Option<EcamHost> {
         None => None,
         Some(domain) => Some(u16::try_from(domain.as_u32()?).ok()?),
     };
-    let buses = window.size / ECAM_BYTES_PER_BUS;
+    let per_bus = if cam {
+        CAM_BYTES_PER_BUS
+    } else {
+        ECAM_BYTES_PER_BUS
+    };
+    let buses = window.size / per_bus;
     let last_held = u64::from(start_bus).checked_add(buses.checked_sub(1)?)?;
     let end_bus = u8::try_from(last_held).map_or(last_bus, |held| held.min(last_bus));
     Some(EcamHost {
@@ -1667,6 +1686,7 @@ fn ecam_host(node: &Node<'_>) -> Option<EcamHost> {
         segment,
         start_bus,
         end_bus,
+        cam,
     })
 }
 
@@ -2129,6 +2149,78 @@ impl<'a> Fdt<'a> {
             Some(mask) => mask.as_u32()?,
         };
         Some(IdMap { map, mask })
+    }
+
+    /// The GIC interrupt a function's legacy INTx `pin` (1 for INTA to 4
+    /// for INTD) reaches through `host`'s `interrupt-map`.
+    ///
+    /// The function is matched by its unit address, `bus << 16 | device <<
+    /// 11 | function << 8` in the first cell, and the pin, each masked by
+    /// `interrupt-map-mask` as the binding says. Only a map whose parent is
+    /// a GIC taking three cells is followed: that is what crosvm writes, a
+    /// line per slot on bus zero. A function behind a bridge is not
+    /// swizzled here, so a caller should ask only for functions on the
+    /// host's root bus. `None` when the host has no map, the pin is zero,
+    /// or no entry matches.
+    #[must_use]
+    pub fn ecam_intx(
+        &self,
+        host: &EcamHost,
+        bus: u8,
+        device: u8,
+        function: u8,
+        pin: u8,
+    ) -> Option<GicInterrupt> {
+        if pin == 0 {
+            return None;
+        }
+        let node = self
+            .nodes()
+            .find(|node| ecam_host(node).as_ref() == Some(host))?;
+        let address_cells = node.property("#address-cells")?.as_u32()?;
+        let interrupt_cells = node.property("#interrupt-cells")?.as_u32()?;
+        // A PCI unit address is three cells and a pin one: nothing else is
+        // a PCI host's map.
+        if address_cells != 3 || interrupt_cells != 1 {
+            return None;
+        }
+        let unit = (u32::from(bus) << 16) | (u32::from(device) << 11) | (u32::from(function) << 8);
+        let wanted = [unit, 0, 0, u32::from(pin)];
+        let mut mask = [u32::MAX; 4];
+        if let Some(given) = node.property("interrupt-map-mask") {
+            let mut cells = given.cells();
+            for cell in &mut mask {
+                *cell = cells.next()?;
+            }
+        }
+        let mut cells = node.property("interrupt-map")?.cells();
+        loop {
+            let mut child = [0_u32; 4];
+            for cell in &mut child {
+                *cell = cells.next()?;
+            }
+            let parent = self.node_by_phandle(cells.next()?)?;
+            let parent_address = match parent.property("#address-cells") {
+                None => 0,
+                Some(cells) => cells.as_u32()?,
+            };
+            for _ in 0..parent_address {
+                let _ = cells.next()?;
+            }
+            let width = parent.property("#interrupt-cells")?.as_u32()?;
+            if !is_gic(&parent) || width != 3 {
+                return None;
+            }
+            let (kind, number, flags) = (cells.next()?, cells.next()?, cells.next()?);
+            let matches = child
+                .iter()
+                .zip(wanted.iter())
+                .zip(mask.iter())
+                .all(|((have, want), mask)| have & mask == want & mask);
+            if matches {
+                return gic_interrupt(kind, number, flags);
+            }
+        }
     }
 }
 
