@@ -252,7 +252,48 @@ pub struct Pipeline {
     current: Option<Op>,
     buffers: [Option<Geometry>; MAX_BUFFERS],
     refused_scanouts: u64,
+    transfer_offset: TransferOffset,
 }
+
+/// How the device reads a 2D transfer's `offset`, which the two machines
+/// Ferrix's GPU runs under disagree about.
+///
+/// virtio 1.2 §5.7.6.8 makes it the offset into the resource's backing, and
+/// QEMU and Linux's driver read it as where the rectangle starts there:
+/// `y * stride + x * 4`. crosvm adds the rectangle's origin to it again
+/// (`transfer_2d` in `rutabaga_2d.rs`), so the same transfer copies from
+/// `x` and `y` further on, and every partial update lands shifted up and
+/// left by its own origin -- 20 pixels on the Pixel 7's VM, the
+/// compositor's gap (2026-09-26). crosvm's reading needs an offset of 0.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum TransferOffset {
+    /// Where the rectangle starts in the backing: the specification's,
+    /// QEMU's and Linux's.
+    #[default]
+    RectangleStart,
+    /// The backing's start, with the device adding the rectangle's origin
+    /// itself: crosvm's.
+    BackingStart,
+}
+
+impl TransferOffset {
+    /// crosvm's virtio devices carry their own device identifier again as
+    /// their PCI subsystem, `0x1af4:0x1050` for the GPU; QEMU's carry
+    /// `0x1af4:0x1100`. So a GPU whose subsystem repeats its identifier is
+    /// crosvm's, and any other reads the offset as the specification says.
+    #[must_use]
+    pub const fn for_device(device_id: u16, subsystem_vendor: u16, subsystem: u16) -> Self {
+        if subsystem_vendor == VIRTIO_VENDOR && subsystem == device_id {
+            TransferOffset::BackingStart
+        } else {
+            TransferOffset::RectangleStart
+        }
+    }
+}
+
+/// The PCI vendor every virtio device carries, and crosvm as its subsystem
+/// vendor.
+const VIRTIO_VENDOR: u16 = 0x1af4;
 
 impl Default for Pipeline {
     fn default() -> Self {
@@ -288,7 +329,17 @@ impl Pipeline {
             current: None,
             buffers: [None; MAX_BUFFERS],
             refused_scanouts: 0,
+            transfer_offset: TransferOffset::RectangleStart,
         }
+    }
+
+    /// An empty pipeline for a device that reads a transfer's offset as
+    /// `transfer_offset` says.
+    #[must_use]
+    pub const fn for_device(transfer_offset: TransferOffset) -> Self {
+        let mut pipeline = Self::new();
+        pipeline.transfer_offset = transfer_offset;
+        pipeline
     }
 
     /// How many `SET_SCANOUT` commands the device refused, which have no reply
@@ -562,8 +613,13 @@ impl Pipeline {
                     .map_or(0, |geometry| geometry.stride);
                 Command::TransferToHost2d {
                     rect: rect(area),
-                    offset: u64::from(area.y) * u64::from(stride)
-                        + u64::from(area.x) * u64::from(BYTES_PER_PIXEL),
+                    offset: match self.transfer_offset {
+                        TransferOffset::RectangleStart => {
+                            u64::from(area.y) * u64::from(stride)
+                                + u64::from(area.x) * u64::from(BYTES_PER_PIXEL)
+                        }
+                        TransferOffset::BackingStart => 0,
+                    },
                     resource_id,
                 }
             }
