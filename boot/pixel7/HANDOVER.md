@@ -14,6 +14,12 @@ direct map and the vmap arena moved by KASLR, and the boot console drawn in
 74 s a boot. "What to do next" is empty; each item is under "Done".**
 None of it is pushed.
 
+* **The loader surveys the USB controller** (ferrix-9c, 2026-09-26,
+  `src/usb.rs`), reading only, after the display: the PMU's PHY isolation
+  words, `pd-hsi0`, and, when that reads on, the DWC3's registers and the
+  PHY's first words. The S2MPU is not read (a security block). Run
+  `usb-survey2` found everything left on by ABL; `docs/PIXEL7-USB-HANDOVER.md`
+  §8 has the values. It adds about 60 lines to every record.
 * **The GICv3 ITS** (`c21ce40f..a8680955`) landed after a rebase and a
   re-gate: `cargo xtask check` passed, and `test-boot` reached
   `FERRIX-BOOT-OK stages 1-12` on x86_64, armv7a, armv7a `--smp 2`,

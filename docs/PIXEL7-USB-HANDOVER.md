@@ -1,10 +1,18 @@
 # Pixel 7 USB device driver: handover
 
-**Status, 2026-09-26: not started.** Nothing of this is written. This document
-is the brief for whoever takes it up: why it is wanted, what the hardware is,
-what Ferrix already has to build it from, the rules that bound it, and the
-order to do it in. Read `boot/pixel7/HANDOVER.md` first; it is the
-phone's own state, and its rules apply here unchanged.
+**Status, 2026-09-26 evening (ferrix-9c): phases 1, 2 and 5 are done on
+branch `pixel7-usb`, phase 1 run on the phone; phases 3 and 4 are being
+written.** §8 is where it stands and what the phone said. The rest of this
+document is the brief as it was written: why it is wanted, what the
+hardware is, what Ferrix already has to build it from, the rules that bound
+it, and the order to do it in. Read `boot/pixel7/HANDOVER.md` first;
+it is the phone's own state, and its rules apply here unchanged.
+
+**Who decides what, since 2026-09-26:** hardware use is the product owner
+session's (`ferrix-2c`) alone, as the owner said. Each boot needs its OK on
+an address list checked against `panther.dts`; each phase that writes a
+register needs a new one. A power-domain or PHY isolation write would need
+the owner's own word, which the survey shows is not needed.
 
 ## 1. Why, and what done looks like
 
@@ -191,6 +199,78 @@ with the log kept.
 ## 7. Before starting
 
 * This is a new roadmap item. It needs a `docs/BACKLOG.md` entry, and the
-  product owner session (`ferrix-32`) has the say on where it goes.
+  product owner session (`ferrix-32`) has the say on where it goes. (Done:
+  the P2 row, owner ferrix-9c; the PO is now `ferrix-2c`.)
 * Tell the owner before phase 1's first boot, which is read-only. Ask the
   owner before any power-domain write.
+
+## 8. Where it stands
+
+### What the phone said (phase 1, run `usb-survey2`, 2026-09-26 18:24)
+
+One RAM boot of the loader's survey (`bootloaders/pixel7/src/usb.rs`),
+approved by the PO with the S2MPU struck from the list (a security block:
+it is not read at all). Back in Android after 77 s, `FERRIX-BOOT-OK`. The
+record is `~/.local/share/ferrix/pixel7/usb-survey2/run.log`.
+
+**ABL leaves everything on.** The HSI0 domain is up, the PHY is out of
+isolation, the clocks run, and the controller answers, in device mode and
+halted. So the driver needs no power-domain, isolation, clock or PHY write:
+only the DWC3's own registers, which are volatile.
+
+| Register | Value | What it says |
+|---|---|---|
+| PMU `0x1806_3EB0` (USB PHY) | `0x3` | bit 0 set: out of isolation, Samsung's `ENABLE` |
+| PMU `0x1806_3EB4` (DP) | `0x1` | |
+| `pd-hsi0` `+0..+0x10` | `1 1 0x10 0 1` | configured on, status on (as `pd-disp` reads) |
+| `GSNPSID` | `0x3331_3130` | `DWC_usb31` |
+| `GHWPARAMS0` | `0x4020_400A` | dual-role, AXI, 64-bit data and addresses |
+| `GHWPARAMS3` | `0x1042_0086` | SuperSpeed Gen2 PHY, UTMI high-speed PHY, 32 endpoints of which 16 IN |
+| `GCTL` | `0x0001_2004` | port capability device |
+| `GSTS` | `0x7E80_0020` | current mode device; **`CSR_TIMEOUT` set** (bit 5), left by ABL: clear it |
+| `GUSB2PHYCFG(0)` | `0x0010_2400` | `U2_FREECLK_EXISTS` clear, `SUSPHY` clear |
+| `GFLADJ` | `0x0A87_F020` | 30 MHz adjustment `0x20`, as the tree's quirk asks |
+| `GEVNTADRLO/HI(0)`, `GEVNTSIZ(0)`, `GEVNTCOUNT(0)` | `0xF8CD_D000`, 0, `0x200`, 0 | **ABL's event buffer, 512 bytes in RAM Ferrix now owns**: the driver must point it at its own before running |
+| `GTXFIFOSIZ(0..3)`, `GRXFIFOSIZ(0)` | `0x43`, `0x0043_0493`, `0x04D6_0493`, `0x0969_0493`; `0x413` | ABL's FIFO layout |
+| `DCFG` | `0x0020_0BCC` | SuperSpeed, address 121 (the PC's, for fastboot), 16 `NUMP`, no LPM |
+| `DCTL` | `0x00F0_0000` | **run/stop clear**: ABL stopped the controller |
+| `DEVTEN` | `0x7` | disconnect, reset, connect done |
+| `DSTS` | `0x00D2_C1A4` | halted and idle, link `SS.Disabled`, last connected at SuperSpeed |
+| `DALEPENA` | `0x3` | endpoint 0's two directions still enabled |
+
+The PHY windows' first words read `0x0302_0241 ...` (link), `0x6 ...`
+(combo) and `0x0009_0606 ...` (high-speed); none is decoded yet, and none
+needs to be written.
+
+The kernel binding (phase 2) was in the same image and published its node:
+`usb      DWC3 0x33313130 at 0x11210000, left on by ABL`, one aperture and
+one vector. devmgr started nothing, since `usbdev` was not yet built in.
+
+### What is on the branch
+
+* Phase 1: the survey, kept in the loader as `display.rs`'s report is.
+* Phase 2: `kernel/src/gs201_usb.rs`, `TREE_GS201_DWC3 = 4` (agreed with
+  ferrix-d4, whose DECON binding would be 5). It turns nothing on, and it
+  publishes only when `pd-hsi0` reads on and `GSNPSID` names a DWC3.
+* devmgr: a `Gadget` kind, `TREE_GS201_DWC3 -> usbdev`, taken at its word.
+* Phase 5: the monitor finds the port by `1209:0001` "Ferrix console" in
+  sysfs, streams it through the guest's `appendLine`, and keeps a
+  `usb-<time>` record. Untried against a real port.
+* Phase 4's design, chosen with the certification agent (ferrix-55): a
+  kernel log ring (static, 128 KiB, lock-free) of every console byte, with
+  the KASLR slide and kernel addresses kept out; read by capability, over a
+  log-control channel only the DWC3's node may open (`LOG_CONTROL_CREATE`),
+  and by `syslog(2)`, now privileged for every action. Being written on
+  `pixel7-usb-log`.
+* Phase 3's libraries (`libs/usb-device`, `libs/dwc3`) are being written on
+  `pixel7-usb-libs`; `user/usbdev` follows.
+
+### Still open
+
+* **The S2MPU.** Whether HSI0's DMA reaches the pages Ferrix pins is
+  unknown, since the S2MPU is not read. ABL's own event buffer was at
+  `0xF8CD_D000`. The first driver run answers it: if no event ever arrives,
+  suspect the S2MPU first.
+* **The first writing boot** needs the PO's OK on the DWC3 write list, each
+  write guarded on the state recorded above (device mode, halted).
+
