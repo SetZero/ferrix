@@ -280,6 +280,11 @@ pub(crate) struct Args {
     /// shows, by any part of its name, or `none` for a plain background.
     /// Given nothing it shows one of them, another each run.
     pub(crate) wallpaper: Option<String>,
+    /// `--edid <DESCRIPTION>`: the monitor of this machine whose EDID
+    /// `run-compositor` gives the guest's screen, by the start of its
+    /// description, or `none` for no EDID. Given nothing it looks for
+    /// `crate::edid::DEFAULT_MONITOR`.
+    pub(crate) edid: Option<String>,
     /// `--from <WHERE>`: where `wallpapers` finds pictures to convert, a
     /// directory of this machine's or `host:directory`.
     pub(crate) from: Option<String>,
@@ -480,6 +485,7 @@ impl Args {
                 "--layout" => args.layout = Some(value(&mut items, "--layout")?),
                 "--variant" => args.variant = Some(value(&mut items, "--variant")?),
                 "--wallpaper" => args.wallpaper = Some(value(&mut items, "--wallpaper")?),
+                "--edid" => args.edid = Some(value(&mut items, "--edid")?),
                 "--from" => args.from = Some(value(&mut items, "--from")?),
                 "--plan" => args.plan = Some(value(&mut items, "--plan")?),
                 "--size" => args.size = Some(dimensions(&value(&mut items, "--size")?, "--size")?),

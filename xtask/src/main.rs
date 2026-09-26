@@ -78,6 +78,7 @@ mod coverage;
 mod display;
 mod dma_faults;
 mod dotfiles;
+mod edid;
 mod everything;
 mod fat;
 mod ferrousli;
@@ -336,6 +337,15 @@ OPTIONS:
                                          takes them: `nodeadkeys,` is one for the first layout only
     --wallpaper <NAME>                   run-compositor: which kept wallpaper to show, by part of its
                                          name, or `none`; one of them, another each run, otherwise
+    --edid <DESCRIPTION>                 run-compositor: give the screen the EDID of this machine's
+                                         monitor whose description starts so, as Linux's
+                                         drm.edid_firmware= does, so `monitor = desc:` and waybar
+                                         `output` find it; `none` for no EDID [default: Lenovo Group
+                                         Limited R27qe Gen2]. Found by reading every
+                                         /sys/class/drm/card*-*/edid; carries /usr/share/hwdata/pnp.ids
+                                         too, without which the make is the three-letter code (LEN).
+                                         A machine without the monitor says so and the screen has
+                                         none, its description then only its name, Virtual-1
     --from <WHERE>                       wallpapers: where the pictures are, a directory here or
                                          <host>:<directory> for one `ssh` reaches
     --scale <N>                          run-compositor, flash --compositor: the monitor's scale, 1 by default

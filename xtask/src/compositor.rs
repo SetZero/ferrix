@@ -1077,7 +1077,52 @@ fn boot_and_dump(
     binds: &[(&str, &[&str])],
     args: &Args,
 ) -> Result<(Vec<Image>, Vec<String>)> {
-    let (image, kernel) = build_image(arch, programs, &undithered(config), Carried::none(), args)?;
+    boot_and_dump_carrying(
+        arch,
+        programs,
+        config,
+        (Carried::none(), None),
+        wanted,
+        binds,
+        args,
+    )
+}
+
+/// A judged boot's image and kernel: `config` undithered, `carried` beside
+/// the programs, and a command line of init's own, as `build_image` gives
+/// every boot, with `words` after it.
+fn judged_image(
+    arch: Arch,
+    programs: &Programs,
+    config: &str,
+    carried: Carried,
+    words: Option<&str>,
+    args: &Args,
+) -> Result<(PathBuf, PathBuf)> {
+    let (loader, kernel, initramfs) =
+        build_parts(arch, programs, &undithered(config), carried, args)?;
+    let init = crate::init::command_line();
+    let command_line = match words {
+        Some(words) => format!("{} {words}\n", init.trim_end()),
+        None => init,
+    };
+    let image =
+        crate::fat::write_image_with(arch, &loader, &kernel, &initramfs, Some(&command_line))?;
+    Ok((image, kernel))
+}
+
+/// [`boot_and_dump`], with files carried beside the programs and words for
+/// the kernel's command line after init's, as the EDID boot needs.
+fn boot_and_dump_carrying(
+    arch: Arch,
+    programs: &Programs,
+    config: &str,
+    (carried, cmdline): (Carried, Option<&str>),
+    wanted: &Wanted<'_>,
+    binds: &[(&str, &[&str])],
+    args: &Args,
+) -> Result<(Vec<Image>, Vec<String>)> {
+    let (image, kernel) = judged_image(arch, programs, config, carried, cmdline, args)?;
 
     let port = free_port()?;
     let mut qemu_args = args.clone();
@@ -1284,15 +1329,17 @@ fn build_image(
     Ok((image, kernel))
 }
 
-/// [`build_image`] for a desktop: the same image, carrying
-/// [`DESKTOP_DEFAULTS`] as `FERRIX/DEFAULTS.TXT`, so that the kernel skips its
-/// self-checks as a board's desktop does.
+/// [`build_image`] for a desktop: the same image, carrying `defaults` --
+/// [`DESKTOP_DEFAULTS`], and whatever `run-compositor` adds to them -- as
+/// `FERRIX/DEFAULTS.TXT`, so that the kernel skips its self-checks as a
+/// board's desktop does.
 fn build_desktop_image(
     arch: Arch,
     programs: &Programs,
     config: &str,
     carried_too: Carried,
     args: &Args,
+    defaults: &str,
 ) -> Result<(PathBuf, PathBuf)> {
     let (loader, kernel, initramfs) = build_parts(arch, programs, config, carried_too, args)?;
     let command_line = crate::init::command_line();
@@ -1302,7 +1349,7 @@ fn build_desktop_image(
         &kernel,
         &initramfs,
         Some(&command_line),
-        Some(DESKTOP_DEFAULTS),
+        Some(defaults),
     )?;
     Ok((image, kernel))
 }
@@ -2160,11 +2207,22 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
     // window). A screen nobody resizes stays the size QEMU was given.
     // `--size` pins it.
     let follow = args.size.is_none();
-    let (config, carried) = desktop(arch, config, size, follow, Backdrop::Any, args)?;
+    let (config, mut carried) = desktop(arch, config, size, follow, Backdrop::Any, args)?;
+    // A monitor of this machine's for the screen, so that a configuration
+    // naming its monitors by description finds this one (`crate::edid`).
+    // Only the EDID's name for itself is taken: the screen keeps the modes
+    // the card offers, so it still follows its window (`docs/DISPLAY.md` §7).
+    let defaults = match crate::edid::for_run(args.edid.as_deref())? {
+        Some(edid) => {
+            carried.ports.extend(edid.files);
+            format!("{} {}\n", DESKTOP_DEFAULTS.trim_end(), edid.argument)
+        }
+        None => DESKTOP_DEFAULTS.to_owned(),
+    };
     // The desktop a person watches boots as a board's does: with its
     // self-checks skipped, which only the `desktop` boot of the judged ones
     // is.
-    let (image, _) = build_desktop_image(arch, &programs, &config, carried, args)?;
+    let (image, _) = build_desktop_image(arch, &programs, &config, carried, args, &defaults)?;
     // The host's GPU behind the card where it can be had: `window::watched_gl`
     // says when, and why it is the default for a desktop somebody watches.
     let args = crate::window::watched_gl(arch, args)?;
@@ -2569,7 +2627,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are twenty of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 27] = [
+const BOOTS: [(&str, Boot); 28] = [
     ("restart", test_driver_restart),
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
@@ -2593,6 +2651,7 @@ const BOOTS: [(&str, Boot); 27] = [
     ("mode", test_mode),
     ("transform", test_transform),
     ("typing", test_typing),
+    ("edid", test_edid),
     ("desktop", test_desktop),
     ("idle", idle::test_idle),
     ("idle-user", idle::test_idle_user),
@@ -2803,6 +2862,129 @@ fn caption_differences(screen: &Image, want: &Image, tolerance: u8) -> (usize, O
 /// its `MARGIN`.
 const CAPTION_MARGIN: i32 = 40;
 
+/// The EDID boot's configuration for a monitor that describes itself as
+/// `description`: the lines a configuration written for several monitors
+/// has -- this one by its description at `2560x0`, as the customer's middle
+/// monitor is, then a catch-all -- and the pointer boot's windows and
+/// software pointer, with the two `hyprctl` binds every boot presses.
+fn edid_config(description: &str) -> String {
+    format!(
+        "\
+# Carried into the initramfs by `cargo xtask test-compositor --boot edid`.
+monitor = desc:{description}, preferred, 2560x0, 1
+monitor = , preferred, auto, 1
+cursor:no_hardware_cursors = 1
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two --after one
+bind = SUPER, C, exec, /bin/hyprctl --batch monitors ; clients
+bind = SUPER, W, exec, /bin/hyprctl activewindow
+"
+    )
+}
+
+/// The key the EDID boot presses between its two pictures: the monitors,
+/// asked for while the pointer is still unused.
+const EDID_BINDS: [(&str, &[&str]); 1] = [("SUPER C", &["meta_l", "c"])];
+
+/// A boot with a monitor's EDID on the screen: `drm.edid_firmware=`
+/// (`docs/DISPLAY.md` §7).
+///
+/// The monitor is `run-compositor`'s default, read from this machine as
+/// `run-compositor` reads it, or where this machine has no such monitor a
+/// stand-in EDID `crate::edid` makes, so the boot runs anywhere. What is
+/// required: the kernel read the file for `Virtual-1`; `hyprctl monitors`
+/// gives the screen the monitor's description, and the position the
+/// `monitor = desc:` line gives it rather than the catch-all's after it; and
+/// on that screen, 2560 pixels from the layout's corner with nothing left of
+/// it, the pointer boot's two pictures to the pixel -- the windows tiled,
+/// then the arrow where the tablet put it, which a pointer mapped over the
+/// empty space left of the screen would have put somewhere else.
+fn test_edid(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let registry = std::fs::read_to_string(crate::edid::REGISTRY).ok();
+    let found = crate::edid::find(
+        Path::new(crate::edid::SYSFS_DRM),
+        crate::edid::DEFAULT_MONITOR,
+        registry.as_deref(),
+    )?;
+    let monitor = match found {
+        Some(monitor) => {
+            println!(
+                "  {arch}: the EDID of this machine's {} ({})",
+                monitor.description, monitor.connector
+            );
+            monitor
+        }
+        None => {
+            let mut monitor = crate::edid::stand_in();
+            // Described with the registry the guest is given, as the
+            // compositor will describe it.
+            if let Some(described) = crate::edid::describe(&monitor.bytes, registry.as_deref()) {
+                monitor.description = described;
+            }
+            println!(
+                "  {arch}: no \"{}\" on this machine; a stand-in EDID, {}",
+                crate::edid::DEFAULT_MONITOR,
+                monitor.description
+            );
+            monitor
+        }
+    };
+    let edid = crate::edid::carry(&monitor, registry);
+    let carried = Carried {
+        ports: edid.files,
+        ..Carried::none()
+    };
+    let (_, said) = boot_and_dump_carrying(
+        arch,
+        programs,
+        &edid_config(&edid.description),
+        (carried, Some(&edid.argument)),
+        &Wanted {
+            states: &POINTER_EXPECTED,
+            others: &[],
+            moving: None,
+            pointer: Some(POINTER_AT),
+            awaiting: &[],
+        },
+        &EDID_BINDS,
+        args,
+    )?;
+    judge_edid(arch, &said, &edid.description)
+}
+
+/// What [`test_edid`] requires of what the guest said.
+fn judge_edid(arch: Arch, said: &[String], description: &str) -> Result<()> {
+    let has = |wanted: &str| said.iter().any(|line| line.contains(wanted));
+    let described = format!("description: {description}");
+    for (wanted, what) in [
+        (
+            "card0 Virtual-1: EDID from",
+            "the kernel never said it read the EDID",
+        ),
+        (
+            "Monitor Virtual-1 (ID 0)",
+            "`hyprctl monitors` never named the screen",
+        ),
+        (
+            described.as_str(),
+            "`hyprctl monitors` did not give the monitor's description",
+        ),
+        (
+            " at 2560x0",
+            "the screen is not where its `monitor = desc:` line puts it",
+        ),
+    ] {
+        if !has(wanted) {
+            return Err(Error::new(format!("{arch}: {what}: no `{wanted}`")));
+        }
+    }
+    println!(
+        "  {arch}: the screen is \"{description} (Virtual-1)\" at 2560x0, as its \
+         `monitor = desc:` line has it, and the pointer lands where the tablet puts it there"
+    );
+    Ok(())
+}
+
 /// The desktop boot's configuration: the two windows `dispatchers` tiles
 /// first, and nothing to press.
 const DESKTOP_CONFIG: &str = "\
@@ -2837,6 +3019,7 @@ fn test_desktop(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
         &undithered(DESKTOP_CONFIG),
         Carried::none(),
         args,
+        DESKTOP_DEFAULTS,
     )?;
     let port = free_port()?;
     let mut qemu_args = args.clone();
