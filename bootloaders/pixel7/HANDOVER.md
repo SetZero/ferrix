@@ -48,8 +48,8 @@ None of it is pushed.
     (the A55s' VIPT instruction caches rule out `IC IVAU` by the direct
     map's address). ARMv7-A got the same, untested on the DK1.
     `scripts/asm-allowlist.json` raised ARMv7-A `cpu.rs` from 100 to 102
-    lines for it, after the three `CTR` reads there became one. **The
-    owner should confirm that raise.**
+    lines for it, after the three `CTR` reads there became one. The owner
+    allowed the raise on 2026-09-27.
   * **The reverse-map check's user program had no barriers**
     (`9489aab4`). A diagnostic build (run 7) showed the kernel's side
     right and the parent reading page 0 before the child's marker was
@@ -274,8 +274,7 @@ them). Check any new one against the phone before you rely on it.
 ## What to do next, most important first
 
 1. **Close the asm budget's hole:** `check-asm-budget.py` counts a
-   raw-string `global_asm!` as 2 lines. And the owner has yet to confirm
-   ARMv7-A `cpu.rs` going from 100 to 102.
+   raw-string `global_asm!` as 2 lines.
 2. **Entropy beyond 64 bits.** ABL gives 8 bytes, and the kernel credits
    them (`BootInfo.firmware_seed_len`), so the phone boots
    `NOT SEEDED: 64 of 256 bits`. The rest would have to come from the SoC's
