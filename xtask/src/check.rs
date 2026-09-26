@@ -172,6 +172,15 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         return Ok(());
     }
 
+    cross_target_clippy()?;
+
+    println!("\nchecked");
+    Ok(())
+}
+
+/// The freestanding halves and the Pixel 7's loader, linted for their own
+/// targets: what `--fast` skips.
+fn cross_target_clippy() -> Result<()> {
     // The freestanding halves, once per target. A lint pass for x86-64 cannot
     // see Arm code at all, so skipping these means two thirds of the kernel go
     // unlinted until CI.
@@ -191,8 +200,18 @@ pub(crate) fn run(args: &Args) -> Result<()> {
             || native_clippy(arch),
         )?;
     }
-
-    println!("\nchecked");
+    // The Pixel 7's loader is a binary of its own for one target, outside
+    // the per-architecture loop. Linted without a payload, which is how it
+    // builds when FERRIX_PIXEL7_KERNEL is unset. It went unlinted until an
+    // unsafe block with two operations in it was found by hand.
+    step("clippy (Pixel 7 loader, aarch64)", || {
+        clippy(&[
+            "-p",
+            "ferrix-boot-pixel7",
+            "--target",
+            Arch::AArch64.kernel_target(),
+        ])
+    })?;
     Ok(())
 }
 
