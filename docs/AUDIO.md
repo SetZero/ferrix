@@ -557,5 +557,17 @@ offsets. It added one thing this document had not said: on ARMv7-A
 `appl_ptr`, where 64-bit has it at 80. The crate gained `wide_layout!` for
 structures with a layout per width.
 
+L2 is done (2026-09-26): `libs/virtio::snd` is the device protocol. It
+covers the queues, the configuration block bounded to QEMU's ten streams,
+the `PCM_INFO`, `SET_PARAMS` and four stream commands, the transfer header
+and status, and the events. §3.3's five quirks are written into its module
+comment. Its tests build QEMU 9.2.4's own answers by hand from
+`virtio_snd.h` and then hostile ones: a short or not-OK response, fewer
+entries than asked, a direction that does not exist, an empty channel
+range, and a transmit completion that wrote anything but its status. The
+`virtio_snd` fuzz target ran 223,434,735 inputs in five minutes on nazuna
+without a failure.
+
 The rest of this document is design, with §2's calls read from source and
-§3.3's device read from QEMU 9.2.4's, and none of it run yet. L2 is next.
+§3.3's device read from QEMU 9.2.4's, and none of it run yet. L3,
+`libs/sndctl`, is next.

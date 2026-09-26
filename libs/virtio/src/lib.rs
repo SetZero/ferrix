@@ -82,6 +82,7 @@ pub mod gpu;
 pub mod input;
 pub mod net;
 pub mod pci;
+pub mod snd;
 
 /// The size of the pages a pin returns one device address for.
 ///
