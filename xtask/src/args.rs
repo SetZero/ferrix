@@ -90,6 +90,10 @@ pub(crate) struct Args {
     /// expects a machine that can reach the network, so that boot asks for
     /// it unasked, and this is how they say they would rather it did not.
     pub(crate) no_net: bool,
+    /// `--no-dotfiles`: `run-compositor --config` without the user's
+    /// configuration directories and fonts beside the file
+    /// (`crate::dotfiles`).
+    pub(crate) no_dotfiles: bool,
     /// `--chrome`: `run-compositor` with Google's Chrome on the desktop,
     /// from the volume `scripts/fetch/fetch-chrome.sh` makes, in place of the
     /// rustc volume, and a keybind for another window.
@@ -409,6 +413,7 @@ impl Args {
                 "--reset-root" | "--tmpfs-root" | "--btrfs-root" => args.root(&item),
                 "--net" => args.net = true,
                 "--no-net" => args.no_net = true,
+                "--no-dotfiles" => args.no_dotfiles = true,
                 "--chrome" => args.chrome = true,
                 "--everything" => args.everything(),
                 "--forward" => {
