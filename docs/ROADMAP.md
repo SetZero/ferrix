@@ -7114,6 +7114,14 @@ and one for the foundation they share -- `userland/compositor/toolkit` (a Waylan
 client runtime), `userland/compositor/text` (fonts, shaping, layout, Pango markup),
 `userland/compositor/hyprlang` and `userland/compositor/image`. `docs/DESKTOP-CLIENTS.md`.
 
+**hypridle (2026-09-26).** `/bin/hypridle` reads the user's
+`hypridle.conf` unchanged over `ext-idle-notify-v1` and
+`hyprland-lock-notify-v1`, and `/bin/loginctl lock-session` reaches its
+`lock_cmd` over a socket in place of logind. The `idle` and `idle-user`
+boots of `test-compositor` show a listener blacking the screen with `dpms
+off`, a key bringing it back, and the lock chain
+(`docs/DESKTOP-CLIENTS.md` §6).
+
 **What this stage still owes** is the desktop's speed as a person watching
 it feels it (`docs/GPU.md` §3.9) -- a client's own pages as its texture's
 backing, so its pixels are not copied in the guest (8), the device queue

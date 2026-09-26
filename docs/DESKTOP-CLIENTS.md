@@ -304,9 +304,117 @@ on the host with GTK before blessing a golden image.
 
 ## 6. hypridle
 
+`userland/compositor/hypridle` is upstream hypridle 0.1.8
+(`/var/cache/hyprland-build/src/hypridle`) in Rust: `/bin/hypridle`, with
+`-c`/`--config`, `-q`, `-v`, `-V` and `-h` as upstream's `main.cpp` has
+them, and the file looked for where `Hyprutils::Path::findConfig` looks
+(`$XDG_CONFIG_HOME/hypr/`, `~/.config/hypr/`, `$XDG_CONFIG_DIRS`,
+`/etc/xdg/hypr/`). Its log lines are upstream's, `[LOG]`/`[WARN]`/`[ERR]`
+on the standard output, which is how the boots below read what it did.
+
+**The options.** Every one `ConfigManager.cpp` declares, with its default:
+`general { lock_cmd unlock_cmd on_lock_cmd on_unlock_cmd before_sleep_cmd
+after_sleep_cmd ignore_dbus_inhibit ignore_systemd_inhibit
+ignore_wayland_inhibit inhibit_sleep=2 }` and any number of `listener {
+timeout on-timeout on-resume ignore_inhibit condition_cmd condition_retry
+}`. A listener without `timeout` is left out ("Category has a missing
+timeout setting"). No listener at all is "No rules configured", and the
+program runs anyway, as upstream does. `condition_cmd` holds `on-timeout` off
+while it exits nonzero and is asked again every `condition_retry` seconds.
+Any input ends every listener's retry. An `on-resume` runs only after its
+`on-timeout` ran. Commands go to `/bin/sh -c` and are reaped.
+
+**Idle.** One `ext_idle_notification_v1` per listener, made with
+`get_input_idle_notification` when `ignore_wayland_inhibit` or the
+listener's `ignore_inhibit` is set and `get_idle_notification` otherwise,
+as upstream's `run()` does. hyprix offers `ext_idle_notifier_v1` version 2
+and answers both requests (`server/src/client/desktop.rs`); against a
+version-1 notifier hypridle falls back to the inhibitable request and says
+so. `hyprland_lock_notifier_v1` drives `on_lock_cmd` and `on_unlock_cmd`.
+The idle notifications are hypridle's own wire-level client, like
+`lswt`'s, not `compositor/toolkit`'s: a daemon with no surface needs none
+of the runtime.
+
+**`loginctl lock-session` -- the decision.** Upstream runs `lock_cmd` when
+logind emits `org.freedesktop.login1.Session.Lock`, which `loginctl
+lock-session` causes. The user's file uses exactly that: the 10-minute
+listener's `on-timeout` is `loginctl lock-session`, and the lock itself is
+`lock_cmd`. Ferrix has no logind and no D-Bus. So the crate also builds a
+`/bin/loginctl` that does logind's part of that one job: `lock-session`,
+`unlock-session`, `lock-sessions` and `unlock-sessions` send one line to
+`$XDG_RUNTIME_DIR/hypridle.sock` (the temporary directory when the variable
+is unset, as hyprix and `hyprctl` fall back), hypridle runs `lock_cmd` or
+`unlock_cmd` and answers `ok`. Why this and not the alternatives:
+rewriting the command in the user's file breaks the fidelity rule.
+Running `lock_cmd` straight from the listener would skip the `lock_cmd`
+indirection the user wrote. A logind-and-D-Bus stand-in would be most of a
+session manager for one signal. With nothing listening, `loginctl` says
+"nothing is listening for lock-session at … is hypridle running?" and exits
+1. systemd's `loginctl` succeeds at nothing there, but a lock that silently
+did not happen is the one failure a screen locker must not have. Every
+other verb is refused by name: "Ferrix has no logind". A second hypridle
+finds the socket answered and runs without it ("Is hypridle already
+running?").
+
+**What cannot work, said once at start as a `[WARN]` naming the option.**
+`before_sleep_cmd` and `after_sleep_cmd`: Ferrix has no suspend and no
+logind to announce one (`PrepareForSleep`), so they never run.
+`inhibit_sleep`: there is no sleep to delay. `ignore_dbus_inhibit` and
+`ignore_systemd_inhibit`: no program can ask over
+`org.freedesktop.ScreenSaver` or `systemd-inhibit` not to idle. Wayland's
+`zwp_idle_inhibitor_v1` is still honoured, by the compositor, and upstream's
+D-Bus inhibit counter (`onInhibit`) is left out because nothing could raise
+it. Upstream exits when the system bus is missing. This one does not.
+
+**The user's file on Ferrix** (`idle-user` boot, 2026-09-26, x86_64 and
+aarch64: F
+pressed for `hyprctl dispatch forceidle 901`, then N):
+
+* The three `[WARN]`s: `before_sleep_cmd`, `after_sleep_cmd`,
+  `ignore_dbus_inhibit = false`.
+* 600 s listener: `loginctl lock-session` reached hypridle, which ran
+  `lock_cmd = pidof hyprlock || hyprlock`. busybox's `pidof` found none
+  (`/proc` is mounted), and then `/bin/sh: hyprlock: not found`: the
+  hyprlock stream has not landed. Once `/bin/hyprlock` is in the image this
+  line locks.
+* 900 s listener: `hyprctl dispatch dpms off` turned the screen black
+  (every pixel, by screendump), and the first key's `on-resume`, `hyprctl
+  dispatch dpms on`, brought the tiled windows back pixel for pixel.
+
+On the host, a headless hyprix with the same file does the same. hyprix
+now tells idle notifications at once when `forceidle` changes. Before,
+nothing woke the loop until the next input, so a `forceidle` fired
+hypridle's listeners only at the next keypress.
+
+**Tests.** 27 host tests (`hypridle/src/tests.rs`): the file's shape,
+hyprlang's line rules and sentences, defaults, the listener, condition and
+lock rules, the socket's lines, the log format. Two `test-compositor`
+boots (`xtask/src/compositor/idle.rs`):
+
+* `idle`: hypridle's own config, with 5 s and 20 s listeners. Waits for
+  the natural 5 s `on-timeout` and for the 20 s `dpms off` (black screen),
+  then presses L (`bind = , L, exec, /bin/loginctl lock-session`). It
+  requires the resume lines, `dpms on`, `lock_cmd = pidof lock || lock 3`
+  locking, `on_lock_cmd` and `on_unlock_cmd` from hyprland-lock-notify,
+  and the tiled picture again.
+* `idle-user`: the user's `~/.config/hypr/hypridle.conf`, read at build
+  time and carried unchanged (never committed). It is skipped where the
+  file is absent.
+
+Both carry the gates' busybox for `/bin/sh` and `pidof`, and skip without
+it.
+
 ### Where it stands
 
-(The hypridle stream's to fill.)
+Built and passing: the host tests, `idle` and `idle-user` on x86_64 and
+aarch64, and every other `test-compositor` boot on x86_64. Until `compositor/hyprlang` lands,
+`hypridle/src/conf.rs` is a private reader of the hyprlang it needs. It is
+the one file that changes when hypridle switches to that crate (BACKLOG
+row), and the fleet rule is that hypridle lands only on top of the
+foundation, so the switch comes before the landing. Left out on purpose: `# hyprlang` directives and `{{ }}`
+expressions, each reported by name, and both come with the switch. Left for
+Ferrix to grow: suspend (`before_sleep_cmd`, `after_sleep_cmd`,
+`inhibit_sleep`) and a D-Bus `ScreenSaver.Inhibit`.
 
 ## 7. What cannot work on Ferrix, and what each such line does instead
 
