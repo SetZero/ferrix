@@ -1106,8 +1106,9 @@ devmgr now counts 8 drivers.
   (0x198) and cleared in `RCC_AHB6RSTCLRR` (0x19C) 10 µs later. Every offset
   and bit is Linux's `clk-stm32mp1.c` (`K_MGATE(G_GPU, RCC_AHB6ENSETR, 5, 0)`,
   `pll2_q` gated by `RCC_PLL2CR` bit 5) and `stm32mp1-resets.h` (`GPU_R` =
-  3269 = 0x198 × 8 + 5). `device.rs`'s `gpu_node` publishes the node as
-  binding `TREE_STM32_GPU` (3): the registers a page, the interrupt as vector
+  3269 = 0x198 × 8 + 5). `stm32mp1_gpu.rs` registers the GPU with the device
+  registry at bring-up, and `device.rs` publishes the node as binding
+  `TREE_STM32_GPU` (3): the registers a page, the interrupt as vector
   0, and a `DmaShape` that is contiguous and not coherent, as the LTDC's is.
   Anything off -- no PLL2, its Q output off, a node elsewhere -- is said on
   a `gpu` line and no node is published.

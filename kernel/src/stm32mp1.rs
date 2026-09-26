@@ -52,16 +52,77 @@
 //! asks for are slower than high speed, the ceiling is the rate firmware
 //! left, which the boot check has just found to be 74.25 MHz.
 
+use alloc::format;
 use alloc::vec::Vec;
 use core::fmt;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use ferrix_bootinfo::PAGE_SIZE;
+use ferrix_bootinfo::{BootView, PAGE_SIZE};
 use ferrix_fdt::{Fdt, GicInterrupt, Node};
+use ferrix_native_abi::types::TREE_STM32_HDMI;
 use ferrix_sync::Once;
 
+use crate::device::{self, BoardBinding, BoardDevice, DmaShape};
+use crate::hooks::Full;
 use crate::mmio::Mmio;
-use crate::{timer, vmap};
+use crate::{power, timer, vmap};
+
+/// Tell the item what this board has, once, at bring-up: the display, the
+/// USB host and the GPU to the device registry, in the order their nodes are
+/// published, and where the firmware keeps its boot mode to power.
+///
+/// Called from `main.rs` before device enumeration and before any program
+/// can call `reboot(2)`. The item names none of this module: it holds only
+/// what is registered here. On a machine that is not an STM32MP15 board each
+/// binding finds nothing in the tree and publishes nothing, and the boot mode
+/// says the machine keeps none, so the registration is made on every machine
+/// rather than guessed at.
+///
+/// # Errors
+///
+/// [`Full`] when the device registry has no room for another binding.
+pub(crate) fn install(view: &BootView<'_>) -> Result<(), Full> {
+    device::register_board(&DISPLAY)?;
+    device::register_board(&crate::stm32mp1_usb::BINDING)?;
+    device::register_board(&crate::stm32mp1_gpu::BINDING)?;
+    if let Ok(tree) = crate::fdt::open(view) {
+        note_boot_context(&tree);
+    }
+    power::register_boot_mode(request_boot_mode);
+    Ok(())
+}
+
+/// The HDMI output, as the device registry is told about it. Its one clock a
+/// driver may set is the pixel clock ([`pixel_clock`]).
+static DISPLAY: BoardBinding = BoardBinding {
+    binding: TREE_STM32_HDMI,
+    label: "display",
+    device: "the board's HDMI output",
+    prepare: board_device,
+    clock: Some(pixel_clock),
+};
+
+/// [`prepare`], as the registry asks for it.
+///
+/// Its registers are minted a page each, which is how RM0436's memory map
+/// places every peripheral on the chip, though the tree's `reg` says 0x400:
+/// nothing else lives in either page.
+fn board_device(tree: &Fdt<'_>) -> Result<Option<BoardDevice>, &'static str> {
+    let Some(prepared) = prepare(tree)? else {
+        return Ok(None);
+    };
+    Ok(Some(BoardDevice {
+        registers: alloc::vec![prepared.ltdc, prepared.i2c],
+        interrupt: prepared.interrupt,
+        // The LTDC scans out one run of addresses and does not snoop the
+        // caches.
+        dma: DmaShape {
+            contiguous: true,
+            coherent: false,
+        },
+        summary: format!("{prepared}"),
+    }))
+}
 
 /// The LTDC's `compatible`.
 pub(crate) const LTDC_COMPATIBLE: &str = "st,stm32-ltdc";
@@ -719,7 +780,7 @@ static BOOT_CONTEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU
 
 /// Note where the forced boot mode is kept, once at boot: at a reboot the
 /// tree may be out of reach.
-pub(crate) fn note_boot_context(tree: &Fdt<'_>) {
+fn note_boot_context(tree: &Fdt<'_>) {
     let Some(region) = tree
         .compatible_nodes(TAMP_COMPATIBLE)
         .find(Node::is_enabled)
@@ -737,7 +798,7 @@ pub(crate) fn note_boot_context(tree: &Fdt<'_>) {
 /// nothing will change: a machine with no TAMP, or a word U-Boot has no mode
 /// for, restarts as it would have without it, as Linux restarts with a word
 /// no reboot-mode driver knows.
-pub(crate) fn request_boot_mode(word: &str) -> Result<&'static str, &'static str> {
+fn request_boot_mode(word: &str) -> Result<&'static str, &'static str> {
     let at = BOOT_CONTEXT.load(Ordering::Relaxed);
     if at == 0 {
         return Err("this machine keeps no boot mode");

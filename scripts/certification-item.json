@@ -84,6 +84,7 @@
         "device.rs",
         "early.rs",
         "fdt.rs",
+        "hooks.rs",
         "iommu.rs",
         "iommu/**",
         "irq.rs",
@@ -308,48 +309,6 @@
         "from_ring": "item",
         "to_ring": "load",
         "finding": "F-01"
-      },
-      {
-        "file": "device.rs",
-        "references": "stm32mp1",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-04"
-      },
-      {
-        "file": "device.rs",
-        "references": "stm32mp1_gpu",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-04"
-      },
-      {
-        "file": "device.rs",
-        "references": "stm32mp1_usb",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-04"
-      },
-      {
-        "file": "power.rs",
-        "references": "stm32mp1",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-04"
-      },
-      {
-        "file": "syscall/native.rs",
-        "references": "stm32mp1",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-04"
-      },
-      {
-        "file": "syscall/system.rs",
-        "references": "stm32mp1",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-04"
       },
       {
         "file": "object/job.rs",

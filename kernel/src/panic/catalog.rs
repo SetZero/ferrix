@@ -155,6 +155,25 @@ pub(crate) static PRIVATE_OBJECT_SHARED: Explanation = Explanation {
           docs/ROADMAP.md stage 6",
 };
 
+/// For `register_load` in `main.rs`, when the load ring did not register
+/// what the certified item reaches it through.
+pub(crate) static LOAD_REGISTRATION: Explanation = Explanation {
+    code: "FX-0006",
+    title: "the load ring did not register what the item needs from it",
+    meaning: "The certified item may not name what is above it (`docs/certification/ITEM.md`), so \
+              board support registers what the item must reach at bring-up: its device \
+              bindings and its boot mode. A registration missing here is a machine that would \
+              publish no board devices, which would pass unnoticed until a driver never \
+              started, so the kernel stops at the first line that can say so.",
+    causes: &[
+        "An `install` call was removed from `register_load` in `main.rs`.",
+        "A registration list is full: another registration was added without raising the \
+         bound its list declares (`device::BOARD`).",
+    ],
+    see: "kernel/src/main.rs register_load; kernel/src/hooks.rs; kernel/src/device.rs; \
+          docs/certification/FINDINGS.md F-04",
+};
+
 /// For `kmain` in `main.rs`, when `self_check` fails.
 pub(crate) static STAGE1_HANDOFF: Explanation = Explanation {
     code: "FX-0101",
@@ -1867,6 +1886,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &SHOOTDOWN_TURN_TIMEOUT,
     &SPACE_SET_WITHOUT_RECORD,
     &PRIVATE_OBJECT_SHARED,
+    &LOAD_REGISTRATION,
     &STAGE1_HANDOFF,
     &MEMORY_BRING_UP,
     &VMAP_ARENA_BRING_UP,

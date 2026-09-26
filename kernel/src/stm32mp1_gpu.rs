@@ -30,13 +30,44 @@
 //! registers, minted a page as RM0436's memory map places it though the
 //! tree's `reg` says 0x800, and its interrupt.
 
+use alloc::format;
 use core::fmt;
 
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_fdt::{Fdt, GicInterrupt, Node};
+use ferrix_native_abi::types::TREE_STM32_GPU;
 
+use crate::device::{BoardBinding, BoardDevice, DmaShape};
 use crate::mmio::Mmio;
 use crate::{timer, vmap};
+
+/// The GPU, as the device registry is told about it
+/// (`crate::stm32mp1::install`).
+pub(crate) static BINDING: BoardBinding = BoardBinding {
+    binding: TREE_STM32_GPU,
+    label: "gpu",
+    device: "the board's GPU",
+    prepare: board_device,
+    clock: None,
+};
+
+/// [`prepare`], as the registry asks for it.
+fn board_device(tree: &Fdt<'_>) -> Result<Option<BoardDevice>, &'static str> {
+    let Some(prepared) = prepare(tree)? else {
+        return Ok(None);
+    };
+    Ok(Some(BoardDevice {
+        registers: alloc::vec![prepared.registers],
+        interrupt: prepared.interrupt,
+        // The core does not snoop the caches, and with its MMU off its front
+        // end reads one run of physical addresses, as the LTDC scans one out.
+        dma: DmaShape {
+            contiguous: true,
+            coherent: false,
+        },
+        summary: format!("{prepared}"),
+    }))
+}
 
 /// The GPU's `compatible`.
 const GPU_COMPATIBLE: &str = "vivante,gc";

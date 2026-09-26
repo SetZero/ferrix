@@ -23,6 +23,7 @@ Causes are listed most likely first.
 | [FX-0003](#fx-0003) | a TLB shootdown never got its turn |
 | [FX-0004](#fx-0004) | an address space was switched on a processor that cannot name itself |
 | [FX-0005](#fx-0005) | a private region's object was mapped by more than one address space |
+| [FX-0006](#fx-0006) | the load ring did not register what the item needs from it |
 | [FX-0101](#fx-0101) | the loader's hand-off is not what the kernel needs |
 | [FX-0201](#fx-0201) | the frame allocator could not be built |
 | [FX-0202](#fx-0202) | the kernel address arena could not be created |
@@ -192,6 +193,23 @@ the allocator, so the kernel stops before anything moves.
 
 See: kernel/src/user/space.rs remap; kernel/src/user/vmo.rs attach;
 docs/ROADMAP.md stage 6.
+
+<a id="fx-0006"></a>
+
+## FX-0006 — the load ring did not register what the item needs from it
+
+The certified item may not name what is above it (`docs/certification/ITEM.md`),
+so board support registers what the item must reach at bring-up: its device
+bindings and its boot mode. A registration missing here is a machine that would
+publish no board devices, which would pass unnoticed until a driver never
+started, so the kernel stops at the first line that can say so.
+
+1. An `install` call was removed from `register_load` in `main.rs`.
+2. A registration list is full: another registration was added without raising
+   the bound its list declares (`device::BOARD`).
+
+See: kernel/src/main.rs register_load; kernel/src/hooks.rs;
+kernel/src/device.rs; docs/certification/FINDINGS.md F-04.
 
 <a id="fx-0101"></a>
 

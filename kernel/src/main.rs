@@ -31,6 +31,7 @@ mod display;
 mod early;
 mod fdt;
 mod fs;
+mod hooks;
 mod init;
 mod input;
 mod iommu;
@@ -1983,8 +1984,49 @@ fn report_clock_and_random(info: &BootInfo) {
     }
 }
 
+/// Register the load ring's side of every interface the certified item
+/// reaches it through, and check that each was registered.
+///
+/// The item may not name what is above it (`docs/certification/ITEM.md`):
+/// device enumeration asks whatever board bindings were registered, and
+/// `reboot(2)`'s word goes to whatever boot mode was. This file is the crate
+/// root and declares every module, so it is where the load ring is told to
+/// register, explicitly and in order, rather than by a link-time table whose
+/// order nobody can read.
+///
+/// The check is not gated by `ferrix.checks`: it costs nothing, and a boot
+/// that lost a registration would publish no board devices, which on a board
+/// is not something to find out from a driver that never starts.
+fn register_load(view: &BootView<'_>) {
+    if let Err(hooks::Full) = stm32mp1::install(view) {
+        fatal!(
+            catalog::LOAD_REGISTRATION,
+            "a registration list is full: the load ring registers more than the item expects"
+        );
+    }
+    let boards = device::board_bindings();
+    let missing = if boards == 0 {
+        Some("no board support registered a device binding")
+    } else if !power::has_boot_mode() {
+        Some("no board support registered where reboot's word goes")
+    } else {
+        None
+    };
+    if let Some(missing) = missing {
+        fatal!(
+            catalog::LOAD_REGISTRATION,
+            "a registration is missing: {missing}"
+        );
+    }
+    println!("  hooks    {boards} board bindings and the boot mode registered");
+}
+
 fn report_clocks_and_power(view: &BootView<'_>, clocks: &irq::Report) {
     report_clocks(clocks);
+    // What the item reaches above it through, registered by what is above it,
+    // here in bring-up order: before device enumeration asks board support for
+    // its peripherals, and long before a program can call `reboot(2)`.
+    register_load(view);
     power::init(view);
     fs::btrfs_powerfail::init(view);
     fs::root_disk::init(view);

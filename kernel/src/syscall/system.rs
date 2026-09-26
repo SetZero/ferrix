@@ -483,8 +483,8 @@ pub(crate) fn sys_reboot(
             let word = core::str::from_utf8(&word).unwrap_or("");
             println!("reboot: Restarting system with command '{word}'");
             // Where the firmware reads a word, on the one machine that has
-            // one: a DK board's U-Boot (`crate::stm32mp1`).
-            match crate::stm32mp1::request_boot_mode(word) {
+            // one: a DK board's U-Boot, whose support registers with power.
+            match crate::power::request_boot_mode(word) {
                 Ok(what) => println!("reboot: {what}"),
                 Err(why) => println!("reboot: '{word}' changes nothing: {why}"),
             }

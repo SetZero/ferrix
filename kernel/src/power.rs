@@ -17,14 +17,50 @@
 //! device tree may be unreachable for reasons that have nothing to do with it,
 //! and a typo is better reported at the start of a log than discovered at the
 //! end of one.
+//!
+//! # What power reaches without naming
+//!
+//! A board whose firmware keeps a boot mode registers a [`BootMode`], which
+//! `reboot(2)`'s RESTART2 word goes to, at bring-up from `main.rs`; power
+//! does not name the board.
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use ferrix_bootinfo::{BootView, option_in};
+use ferrix_sync::Once;
 
 use crate::arch;
 use crate::console::println;
 use crate::panic::{catalog, fatal};
+
+/// Ask the firmware to come back up as a `reboot(2)` word says, at the next
+/// reset: what it will do, or why nothing changes.
+pub(crate) type BootMode = fn(&str) -> Result<&'static str, &'static str>;
+
+/// The board's [`BootMode`], if its support registered one.
+static BOOT_MODE: Once<BootMode> = Once::new();
+
+/// Send `reboot(2)`'s words to `set`. The first registration stands.
+pub(crate) fn register_boot_mode(set: BootMode) {
+    let _ = BOOT_MODE.call_once(|| set);
+}
+
+/// Whether a board registered a [`BootMode`].
+pub(crate) fn has_boot_mode() -> bool {
+    BOOT_MODE.get().is_some()
+}
+
+/// Pass `word` to the registered [`BootMode`].
+///
+/// # Errors
+///
+/// Why the next reset will be as it would have been without the word: a
+/// machine with no board support that keeps a boot mode, or whatever the
+/// board's own says.
+pub(crate) fn request_boot_mode(word: &str) -> Result<&'static str, &'static str> {
+    let set = BOOT_MODE.get().ok_or("this machine keeps no boot mode")?;
+    set(word)
+}
 
 /// The command-line option, and the values of it that are honoured.
 const OPTION: &str = "ferrix.onexit";
@@ -46,9 +82,7 @@ const PANIC_ON_EXIT: u8 = 2;
 /// for.
 pub(crate) fn init(view: &BootView<'_>) {
     let tree = crate::fdt::open(view).ok();
-    // Where a board keeps the boot mode `reboot(2)`'s word sets.
     if let Some(tree) = &tree {
-        crate::stm32mp1::note_boot_context(tree);
         arch::init_watchdogs(tree);
     }
     let value = view.option(OPTION).or_else(|| {

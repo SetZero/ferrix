@@ -20,6 +20,12 @@
 //! interrupt controller, the timer — and a node for one of them would let a
 //! driver map the kernel's own registers.
 //!
+//! The rest of the allowlist is board support's: a peripheral a board has to
+//! clock and take out of reset before a driver can have it, prepared by a
+//! [`BoardBinding`] the board registered at bring-up. The registry does not
+//! name any board -- board support is outside the certified item -- and mints
+//! what a binding hands back under the same rules as any other node.
+//!
 //! # What an aperture may not overlap
 //!
 //! A BAR's address is whatever the register holds, and a device tree's `reg`
@@ -53,16 +59,17 @@
 //! is. It takes no lock: an interrupt handler calls it.
 
 use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_bootinfo::{BootView, MemKind, PAGE_SIZE};
-use ferrix_fdt::{Trigger as TreeTrigger, VIRTIO_MMIO_COMPATIBLE};
+use ferrix_fdt::{Fdt, GicInterrupt, Trigger as TreeTrigger, VIRTIO_MMIO_COMPATIBLE};
 use ferrix_native_abi::types::{
-    DEVICE_NOT_PCI, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceBlock, DeviceInfo, TREE_STM32_GPU,
-    TREE_STM32_HDMI, TREE_STM32_USBH, USB_INPUT_FUNCTIONS,
+    DEVICE_NOT_PCI, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceBlock, DeviceInfo,
+    TREE_STM32_USBH, USB_INPUT_FUNCTIONS,
 };
 use ferrix_pci::Address;
 use ferrix_pci::bar::{Bar, Region};
@@ -75,8 +82,9 @@ use ferrix_pci::msix::{
 use ferrix_pci::virtio::{Location as VirtioLocation, SharedMemory, Transport};
 use ferrix_sync::{IrqSpinLock, Once};
 
+use crate::hooks::{Full, Hooks};
 use crate::mmio::Mmio;
-use crate::{acpi, arch, fdt, iommu, irq, stm32mp1, stm32mp1_gpu, stm32mp1_usb, vmap};
+use crate::{acpi, arch, fdt, iommu, irq, vmap};
 
 /// GIC interrupt identifiers below this are software-generated or private to
 /// one core, and neither is a device's line.
@@ -1059,154 +1067,127 @@ fn tree_nodes(view: &BootView<'_>, reserved: &Reserved) -> Vec<DeviceNode> {
         }
         nodes.push(node);
     }
-    if let Some(node) = display_node(&tree, reserved, &mut held) {
-        nodes.push(node);
-    }
-    if let Some(node) = usb_node(&tree, reserved, &mut held) {
-        nodes.push(node);
-    }
-    if let Some(node) = gpu_node(&tree, reserved, &mut held) {
-        nodes.push(node);
+    for board in BOARD.iter() {
+        if let Some(node) = board_node(&tree, board, reserved, &mut held) {
+            nodes.push(node);
+        }
     }
     nodes
 }
 
-/// The STM32MP15 board's USB host, when there is one: the EHCI controller's
-/// registers and interrupt, once [`stm32mp1_usb::prepare`] has clocked it,
-/// released it from reset and started its PHY.
-fn usb_node(
-    tree: &ferrix_fdt::Fdt<'_>,
-    reserved: &Reserved,
-    held: &mut BTreeSet<u32>,
-) -> Option<DeviceNode> {
-    let prepared = match stm32mp1_usb::prepare(tree) {
-        Ok(found) => found?,
-        Err(why) => {
-            crate::console::println!("  usb      the board's USB host is left alone: {why}");
-            return None;
-        }
-    };
-    let mut node = DeviceNode::empty(Location::Tree(prepared.ehci.0));
-    node.binding = TREE_STM32_USBH;
-    // EHCI walks lists of descriptors a page at a time, and does not snoop.
-    node.dma = DmaShape {
-        contiguous: false,
-        coherent: false,
-    };
-    node.mint(prepared.ehci.0, prepared.ehci.1, false, reserved);
-    if node.apertures.len() != 1 {
-        crate::console::println!(
-            "  usb      the board's USB host is left alone: its registers overlap memory the kernel uses"
-        );
-        return None;
-    }
-    let interrupt = prepared.interrupt;
-    let usable = interrupt.id >= FIRST_SHARED_INTERRUPT
-        && !irq::is_registered(interrupt.id)
-        && held.insert(interrupt.id);
-    if !usable {
-        crate::console::println!(
-            "  usb      the board's USB host is left alone: interrupt {} is taken",
-            interrupt.id
-        );
-        return None;
-    }
-    node.vectors.push(Vector {
-        number: interrupt.id,
-        trigger: interrupt.trigger.map(|trigger| match trigger {
-            TreeTrigger::EdgeRising | TreeTrigger::EdgeFalling => Trigger::Edge,
-            TreeTrigger::LevelHigh | TreeTrigger::LevelLow => Trigger::Level,
-        }),
-        masking: Masking::Controller,
-    });
-    crate::console::println!("  usb      {prepared}");
-    Some(node)
+/// A peripheral a board's support found in the device tree and made ready
+/// for a driver: what a [`BoardBinding`]'s `prepare` hands back.
+#[derive(Debug)]
+pub(crate) struct BoardDevice {
+    /// Its register ranges, `(phys, len)`, in the order its driver maps
+    /// them. Each must become an aperture, or the device is left alone.
+    pub(crate) registers: Vec<(u64, u64)>,
+    /// Its interrupt, as the tree gives it.
+    pub(crate) interrupt: GicInterrupt,
+    /// How it reaches memory.
+    pub(crate) dma: DmaShape,
+    /// What preparing it did, for the boot log.
+    pub(crate) summary: String,
 }
 
-/// The STM32MP157's GPU, when there is one: the Vivante GC400T's registers
-/// and interrupt, once [`stm32mp1_gpu::prepare`] has clocked it and pulsed
-/// its reset (`docs/GPU.md` §6.2).
-fn gpu_node(
-    tree: &ferrix_fdt::Fdt<'_>,
-    reserved: &Reserved,
-    held: &mut BTreeSet<u32>,
-) -> Option<DeviceNode> {
-    let prepared = match stm32mp1_gpu::prepare(tree) {
-        Ok(found) => found?,
-        Err(why) => {
-            crate::console::println!("  gpu      the board's GPU is left alone: {why}");
-            return None;
-        }
-    };
-    let mut node = DeviceNode::empty(Location::Tree(prepared.registers.0));
-    node.binding = TREE_STM32_GPU;
-    // The core does not snoop the caches, and with its MMU off its front end
-    // reads one run of physical addresses, as the LTDC scans one out.
-    node.dma = DmaShape {
-        contiguous: true,
-        coherent: false,
-    };
-    node.mint(prepared.registers.0, prepared.registers.1, false, reserved);
-    if node.apertures.len() != 1 {
-        crate::console::println!(
-            "  gpu      the board's GPU is left alone: its registers overlap memory the kernel uses"
-        );
-        return None;
-    }
-    let interrupt = prepared.interrupt;
-    let usable = interrupt.id >= FIRST_SHARED_INTERRUPT
-        && !irq::is_registered(interrupt.id)
-        && held.insert(interrupt.id);
-    if !usable {
-        crate::console::println!(
-            "  gpu      the board's GPU is left alone: interrupt {} is taken",
-            interrupt.id
-        );
-        return None;
-    }
-    node.vectors.push(Vector {
-        number: interrupt.id,
-        trigger: interrupt.trigger.map(|trigger| match trigger {
-            TreeTrigger::EdgeRising | TreeTrigger::EdgeFalling => Trigger::Edge,
-            TreeTrigger::LevelHigh | TreeTrigger::LevelLow => Trigger::Level,
-        }),
-        masking: Masking::Controller,
-    });
-    crate::console::println!("  gpu      {prepared}");
-    Some(node)
-}
+/// What preparing a board's peripheral for a driver is: find it in the
+/// tree, clock it and take it out of reset, and say where it is. `Ok(None)`
+/// on a machine that does not have it; `Err` says what stopped it.
+pub(crate) type Prepare = fn(&Fdt<'_>) -> Result<Option<BoardDevice>, &'static str>;
 
-/// The STM32MP15 DK board's HDMI output, when there is one: the LTDC's and
-/// the bridge's I2C controller's registers, and the LTDC's interrupt, once
-/// [`stm32mp1::prepare`] has clocked and muxed them.
+/// The one clock of a board's peripheral a driver may ask for: the rate
+/// wanted, and whether to set it or only ask what it would be. The rate it
+/// is, or would be.
+pub(crate) type Clock = fn(u64, bool) -> Result<u64, &'static str>;
+
+/// A board's support for one device-tree binding the kernel knows, which
+/// the board registers at bring-up with [`register_board`].
 ///
-/// Its registers are minted a page each, which is how RM0436's memory map
-/// places every peripheral on the chip, though the tree's `reg` says 0x400:
-/// nothing else lives in either page.
-fn display_node(
-    tree: &ferrix_fdt::Fdt<'_>,
+/// The core cannot name the board: board support is uncertified load, and a
+/// registry that called into it would have put it in the core. So the board
+/// hands the registry this instead, and the registry mints the node's
+/// apertures and vector from what `prepare` says, under the same rules as
+/// every other node's.
+#[derive(Debug)]
+pub(crate) struct BoardBinding {
+    /// Which binding it is: `TREE_STM32_HDMI` and the rest.
+    pub(crate) binding: u16,
+    /// What the boot log's lines about it start with: `display`, `usb`.
+    pub(crate) label: &'static str,
+    /// What is left alone when it cannot be handed over, in a sentence:
+    /// "the board's USB host".
+    pub(crate) device: &'static str,
+    /// Find it and make it ready.
+    pub(crate) prepare: Prepare,
+    /// Its clock a driver may set, if it has one: `device_clock`.
+    pub(crate) clock: Option<Clock>,
+}
+
+/// Every registered [`BoardBinding`], in the order their nodes are published.
+/// Eight is five more than the one board Ferrix knows registers.
+static BOARD: Hooks<BoardBinding, 8> = Hooks::new();
+
+/// Publish a node for `binding`'s peripheral whenever the tree has it,
+/// after every binding registered before it.
+///
+/// Registered before [`publish`] runs, which `main.rs`'s bring-up order
+/// makes so; a binding registered after it is never asked.
+///
+/// # Errors
+///
+/// [`Full`] when the list is.
+pub(crate) fn register_board(binding: &'static BoardBinding) -> Result<(), Full> {
+    BOARD.register(binding)
+}
+
+/// How many board bindings are registered, for the boot's check that board
+/// support registered before enumeration.
+pub(crate) fn board_bindings() -> usize {
+    BOARD.len()
+}
+
+/// Ask for `node`'s clock at `hz`, setting it when `set` is: `None` when the
+/// node's binding has no clock a driver may ask for.
+pub(crate) fn board_clock(
+    node: &DeviceNode,
+    hz: u64,
+    set: bool,
+) -> Option<Result<u64, &'static str>> {
+    let binding = node.tree_binding()?;
+    let clock = BOARD
+        .iter()
+        .find(|registered| registered.binding == binding)?
+        .clock?;
+    Some(clock(hz, set))
+}
+
+/// A registered board binding's peripheral, when the tree has one: its
+/// registers and interrupt, once the board's `prepare` has made it ready.
+fn board_node(
+    tree: &Fdt<'_>,
+    board: &BoardBinding,
     reserved: &Reserved,
     held: &mut BTreeSet<u32>,
 ) -> Option<DeviceNode> {
-    let prepared = match stm32mp1::prepare(tree) {
+    let label = board.label;
+    let device = board.device;
+    let prepared = match (board.prepare)(tree) {
         Ok(found) => found?,
         Err(why) => {
-            crate::console::println!("  display  the board's HDMI output is left alone: {why}");
+            crate::console::println!("  {label:<8} {device} is left alone: {why}");
             return None;
         }
     };
-    let mut node = DeviceNode::empty(Location::Tree(prepared.ltdc.0));
-    node.binding = TREE_STM32_HDMI;
-    // The LTDC scans out one run of addresses and does not snoop the caches.
-    node.dma = DmaShape {
-        contiguous: true,
-        coherent: false,
-    };
-    node.mint(prepared.ltdc.0, prepared.ltdc.1, false, reserved);
-    node.mint(prepared.i2c.0, prepared.i2c.1, false, reserved);
-    if node.apertures.len() != 2 {
+    let first = prepared.registers.first()?;
+    let mut node = DeviceNode::empty(Location::Tree(first.0));
+    node.binding = board.binding;
+    node.dma = prepared.dma;
+    for &(phys, len) in &prepared.registers {
+        node.mint(phys, len, false, reserved);
+    }
+    if node.apertures.len() != prepared.registers.len() {
         crate::console::println!(
-            "  display  the board's HDMI output is left alone: its registers overlap memory the kernel uses"
+            "  {label:<8} {device} is left alone: its registers overlap memory the kernel uses"
         );
         return None;
     }
@@ -1216,7 +1197,7 @@ fn display_node(
         && held.insert(interrupt.id);
     if !usable {
         crate::console::println!(
-            "  display  the board's HDMI output is left alone: interrupt {} is taken",
+            "  {label:<8} {device} is left alone: interrupt {} is taken",
             interrupt.id
         );
         return None;
@@ -1229,7 +1210,7 @@ fn display_node(
         }),
         masking: Masking::Controller,
     });
-    crate::console::println!("  display  {prepared}");
+    crate::console::println!("  {label:<8} {}", prepared.summary);
     Some(node)
 }
 

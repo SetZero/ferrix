@@ -27,13 +27,44 @@
 //! What the driver then gets is a node with one aperture, the EHCI
 //! controller's registers, and its interrupt.
 
+use alloc::format;
 use core::fmt;
 
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_fdt::{Fdt, GicInterrupt, Node};
+use ferrix_native_abi::types::TREE_STM32_USBH;
 
+use crate::device::{BoardBinding, BoardDevice, DmaShape};
 use crate::mmio::Mmio;
 use crate::{timer, vmap};
+
+/// The USB host, as the device registry is told about it
+/// (`crate::stm32mp1::install`).
+pub(crate) static BINDING: BoardBinding = BoardBinding {
+    binding: TREE_STM32_USBH,
+    label: "usb",
+    device: "the board's USB host",
+    prepare: board_device,
+    clock: None,
+};
+
+/// [`prepare`], as the registry asks for it.
+fn board_device(tree: &Fdt<'_>) -> Result<Option<BoardDevice>, &'static str> {
+    let Some(prepared) = prepare(tree)? else {
+        return Ok(None);
+    };
+    Ok(Some(BoardDevice {
+        registers: alloc::vec![prepared.ehci],
+        interrupt: prepared.interrupt,
+        // EHCI walks lists of descriptors a page at a time, and does not
+        // snoop.
+        dma: DmaShape {
+            contiguous: false,
+            coherent: false,
+        },
+        summary: format!("{prepared}"),
+    }))
+}
 
 /// The EHCI controller's `compatible`.
 const EHCI_COMPATIBLE: &str = "generic-ehci";

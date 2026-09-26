@@ -1287,19 +1287,18 @@ fn device_quiesce(process: &Process, device: Handle) -> Result<usize, Errno> {
 /// The one clock a driver needs changed that lives in a controller every
 /// peripheral shares: an STM32MP15 DK board's pixel clock, which is PLL4's Q
 /// output in the RCC. The kernel does the rounding and the setting, and
-/// refuses while anything else runs from that output
-/// ([`crate::stm32mp1::pixel_clock`]); the driver says only the rate it
-/// wants. Any other device has no clock here: `WRONG_TYPE`.
+/// refuses while anything else runs from that output; the driver says only
+/// the rate it wants. Which device has such a clock is the board's to say,
+/// when it registers the device's binding (`device::board_clock`). Any
+/// other device has no clock here: `WRONG_TYPE`.
 fn device_clock(process: &Process, device: Handle, hz: u64, options: u64) -> Result<usize, Errno> {
-    use ferrix_native_abi::types::{CLOCK_SET, TREE_STM32_HDMI};
+    use ferrix_native_abi::types::CLOCK_SET;
     if options & !CLOCK_SET != 0 || hz == 0 {
         return Err(status::INVALID_ARGS);
     }
     let node = device_in(process, device, Rights::MANAGE)?;
-    if node.tree_binding() != Some(TREE_STM32_HDMI) {
-        return Err(status::WRONG_TYPE);
-    }
-    let rate = crate::stm32mp1::pixel_clock(hz, options & CLOCK_SET != 0)
+    let rate = crate::device::board_clock(&node, hz, options & CLOCK_SET != 0)
+        .ok_or(status::WRONG_TYPE)?
         .map_err(|_| status::BAD_STATE)?;
     usize::try_from(rate).map_err(|_| status::BAD_STATE)
 }
