@@ -306,7 +306,7 @@ static SYS_KERNEL: [Entry<Kernel>; 6] = [
 ];
 
 /// `/proc/<pid>`.
-pub(crate) static PER_PROCESS: [Entry<Process>; 12] = [
+pub(crate) static PER_PROCESS: [Entry<Process>; 13] = [
     Entry {
         name: b"fd",
         permissions: 0o500,
@@ -324,6 +324,14 @@ pub(crate) static PER_PROCESS: [Entry<Process>; 12] = [
     file(b"maps", render::maps),
     file(b"mounts", render::process_mounts),
     file(b"cgroup", render::cgroup),
+    Entry {
+        name: b"oom_score_adj",
+        permissions: 0o644,
+        content: Content::File {
+            render: render::oom_score_adj,
+            write: Some(render::set_oom_score_adj),
+        },
+    },
     Entry {
         name: b"cwd",
         permissions: 0o777,

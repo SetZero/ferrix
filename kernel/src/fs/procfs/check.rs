@@ -471,6 +471,7 @@ fn check_proc(process: &Arc<Process>, layout: &Layout) -> Found {
     if read_all(ns, &ctx, b"/proc/self/comm", 64)? != b"procfs-check\n" {
         return Err("/proc/self/comm is not the last component of that path");
     }
+    check_oom_score_adj(ns, &ctx)?;
 
     // The heap is the check's user memory: `getcwd` and `uname` write into
     // it as they would into a program's buffer.
@@ -727,6 +728,33 @@ fn check_host_name_reaches_uname(
     }
     if read_all(ns, ctx, HOSTNAME, 64)? != b"procfs-check\n" {
         return Err("/proc/sys/kernel/hostname does not read back the name written to it");
+    }
+    Ok(())
+}
+
+/// `/proc/self/oom_score_adj` starts at 0, keeps what is written to it, and
+/// refuses a value out of range with `EINVAL`, keeping the one it had.
+fn check_oom_score_adj(ns: &Namespace, ctx: &Context) -> Result<(), &'static str> {
+    const PATH: &[u8] = b"/proc/self/oom_score_adj";
+    if read_all(ns, ctx, PATH, 16)? != b"0\n" {
+        return Err("/proc/self/oom_score_adj does not start at 0");
+    }
+    write_value(ns, ctx, PATH, b"300\n")?;
+    if read_all(ns, ctx, PATH, 16)? != b"300\n" {
+        return Err("/proc/self/oom_score_adj does not read back what was written to it");
+    }
+    let flags = OpenFlags {
+        write: true,
+        ..OpenFlags::default()
+    };
+    let file = ns
+        .open(ctx, None, PATH, &flags, 0)
+        .map_err(|_| "/proc/self/oom_score_adj did not open for writing")?;
+    if file.write(b"2000\n") != Err(Errno::EINVAL) {
+        return Err("/proc/self/oom_score_adj took a value past 1000");
+    }
+    if read_all(ns, ctx, PATH, 16)? != b"300\n" {
+        return Err("a refused write changed /proc/self/oom_score_adj");
     }
     Ok(())
 }

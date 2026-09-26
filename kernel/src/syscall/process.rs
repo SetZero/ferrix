@@ -91,6 +91,11 @@ pub(crate) struct Process {
     /// state lock, because `umask` is a swap and nothing reads it together
     /// with anything else.
     umask: AtomicU32,
+    /// `/proc/<pid>/oom_score_adj`: how much sooner, from -1000 to 1000, an
+    /// out-of-memory killer should pick it. There is no such killer yet, so
+    /// the value is kept and reported and changes nothing; Chrome sets one
+    /// for each renderer and says so in its log when it cannot.
+    oom_score_adj: AtomicI32,
     /// What it was started as, which only `/proc` reads.
     identity: SpinLock<Identity>,
     /// Its file descriptors, and the open file descriptions they name.
@@ -285,6 +290,7 @@ impl Process {
         Process {
             core: object::process::Process::new(space, pid, job),
             umask: AtomicU32::new(DEFAULT_UMASK),
+            oom_score_adj: AtomicI32::new(0),
             identity: SpinLock::new(Identity::default()),
             files: Arc::new(SpinLock::new(fd::standard_streams())),
             fs: Arc::new(SpinLock::new(fs::root_disk::process_context())),
@@ -330,8 +336,9 @@ impl Process {
     /// What is copied is what Linux copies: the file descriptor table and the
     /// working directory and root (or the same ones, shared, when `clone` asks
     /// for `CLONE_FILES` or `CLONE_FS`), the heap and the signal dispositions,
-    /// the process group and session, the umask, the user and group ids and
-    /// supplementary groups, the program's start and what it was started as
+    /// the process group and session, the umask, `oom_score_adj`, the user
+    /// and group ids and supplementary groups, the program's start and what
+    /// it was started as
     /// -- `/proc/<pid>/exe` and `cmdline` -- and its job, which is its
     /// cgroup. What is not is what belongs to the parent alone: its pid, its
     /// children, its threads, and its handles, which the native ABI passes on
@@ -381,6 +388,7 @@ impl Process {
         child.pgid = AtomicU32::new(parent.pgid());
         child.sid = AtomicU32::new(parent.sid());
         child.umask = AtomicU32::new(parent.umask());
+        child.oom_score_adj = AtomicI32::new(parent.oom_score_adj());
         child.credentials = SpinLock::new(parent.credentials.lock().clone());
         child.identity = SpinLock::new(parent.identity.lock().clone());
         child
@@ -634,6 +642,16 @@ impl Process {
     /// the old one.
     pub(crate) fn set_umask(&self, mask: u32) -> u32 {
         self.umask.swap(mask & 0o777, Ordering::Relaxed)
+    }
+
+    /// What `/proc/<pid>/oom_score_adj` says: see the field.
+    pub(crate) fn oom_score_adj(&self) -> i32 {
+        self.oom_score_adj.load(Ordering::Relaxed)
+    }
+
+    /// Set `oom_score_adj`, which the caller has checked is in range.
+    pub(crate) fn set_oom_score_adj(&self, value: i32) {
+        self.oom_score_adj.store(value, Ordering::Relaxed);
     }
 
     /// Its user and group ids and supplementary groups, under their lock:

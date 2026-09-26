@@ -419,6 +419,26 @@ pub(super) fn set_domainname(_: &Kernel, data: &[u8]) -> Result<usize> {
     Ok(data.len())
 }
 
+/// `/proc/<pid>/oom_score_adj`: see `Process::oom_score_adj`.
+pub(super) fn oom_score_adj(process: &Process) -> Result<Vec<u8>> {
+    let mut out = alloc::format!("{}", process.oom_score_adj()).into_bytes();
+    out.push(b'\n');
+    Ok(out)
+}
+
+/// A write to `/proc/<pid>/oom_score_adj`: a decimal from -1000 to 1000,
+/// with the newline `echo` gives it, or `EINVAL`, as `oom_score_adj_write`
+/// answers.
+pub(super) fn set_oom_score_adj(process: &Process, data: &[u8]) -> Result<usize> {
+    let value = core::str::from_utf8(data)
+        .ok()
+        .and_then(|text| text.trim().parse::<i32>().ok())
+        .filter(|value| (-1000..=1000).contains(value))
+        .ok_or(Errno::EINVAL)?;
+    process.set_oom_score_adj(value);
+    Ok(data.len())
+}
+
 /// `kernel/pid_max`: one past the highest pid the registry hands out.
 pub(super) fn pid_max(_: &Kernel) -> Result<Vec<u8>> {
     Ok(number(u64::from(PID_MAX)))
