@@ -750,12 +750,24 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             if !added.is_empty() {
                 report(&format!("hyprix: seat found [{}]", added.join(", ")));
             }
-            let now_has = seat_capabilities(&devices);
+            let now_has = seat_capabilities(&devices) | virtual_capabilities(&slots);
             if now_has != capabilities {
                 capabilities = now_has;
                 for slot in &mut slots {
                     slot.client_mut().change_seat_capabilities(capabilities);
                 }
+            }
+        }
+        // A virtual pointer is a pointer device while it lives, as Hyprland
+        // adds one for it: without the capability no client has a
+        // `wl_pointer`, and what the virtual pointer moves reaches nobody --
+        // which is every headless compositor's case, whose real devices are
+        // none.
+        let wanted = seat_capabilities(&devices) | virtual_capabilities(&slots);
+        if wanted != capabilities {
+            capabilities = wanted;
+            for slot in &mut slots {
+                slot.client_mut().change_seat_capabilities(capabilities);
             }
         }
         let inputs = match ready.as_deref() {
@@ -2943,6 +2955,15 @@ fn rescan_period(running: Duration) -> Duration {
         RESCAN_EARLY
     } else {
         RESCAN_LATER
+    }
+}
+
+/// The capability a live `zwlr_virtual_pointer_v1` gives the seat.
+fn virtual_capabilities(slots: &[Slot]) -> u32 {
+    if slots.iter().any(|slot| slot.client().has_virtual_pointer()) {
+        core::wl_seat::capability::POINTER
+    } else {
+        0
     }
 }
 

@@ -1059,6 +1059,13 @@ impl Client {
         self.capabilities = capabilities;
     }
 
+    /// Whether this client has made a `zwlr_virtual_pointer_v1`: a pointer
+    /// device the seat has while it lives, as a mouse is one.
+    #[must_use]
+    pub fn has_virtual_pointer(&self) -> bool {
+        !self.virtual_pointers.is_empty()
+    }
+
     /// Say what the seat has now, to a client that may have bound it
     /// already: a keyboard plugged in after the client started, or found
     /// only after the compositor did.
