@@ -203,6 +203,19 @@ a thread, which is the same bytes on one thread as on sixteen (the blur 85
 ms to 20, the terminal 7.0 to 1.1, the video 5.8 to 1.1). A frame that owes
 a whole blur is 22 ms, which is a 30 fps video kept up with.
 
+**Done — the screen under QEMU is the customer's monitor (2026-09-26).**
+`run-compositor` reads the host's R27qe EDID by its description, carries it
+to `/lib/firmware/edid/` with the host's `pnp.ids`, and names it with
+`drm.edid_firmware=`, which the display core reads as Linux's DRM core does
+and serves as the connector's `EDID` property and `GETPROPBLOB` blob. The
+screen is then `Lenovo Group Limited R27qe Gen2 UTP03KBB (Virtual-1)`, so
+the customer's `monitor = desc:` line and waybar's `"output"` find it.
+hyprix now picks a monitor's rule as Hyprland does -- a named rule over the
+catch-all below it -- and moves the pointer over a lone screen at `2560x0`
+rather than the empty space left of it. `test-compositor --boot edid` is the
+gate; `docs/DISPLAY.md` §7 has the decision (kernel, not driver) and what is
+left.
+
 **Done — the frame stopped mapping its memory every time (2026-09-19).**
 In the guest -- KVM, four processors, the video wallpaper behind a
 translucent terminal -- the frame that owes a whole blur was 77 ms where the
