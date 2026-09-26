@@ -198,6 +198,7 @@ COMMANDS:
     test-chrome-window  The same volume, and require Chrome in a window on the compositor, its page on the screen
     test-chrome-audio   The same window on a page playing 440 Hz, and require the tone in QEMU's wav file of the virtio-snd card
     bench-chrome  Chrome in a window, left alone, scrolled and pointed at: processor time, frames and memory per phase
+    bench-chrome-video  Chrome playing a video with its sound: processor time, frames shown and dropped, underruns, and gaps in what the card played
     test-selfhost  Run `cargo xtask build` on Ferrix from that toolchain and this checkout, and boot the image it made;
                   with --plan DIR, have Ferrix make every build a FERRIX_BUILDS=record:DIR run wrote down
     builds-execute  Make every build in --plan DIR here, keeping the outputs in DIR/store (see xtask/src/builds.rs)
@@ -426,6 +427,7 @@ fn run() -> Result<()> {
         "test-rustc" => rustc::test_rustc(&args),
         "test-chrome" | "test-chrome-window" | "test-chrome-audio" => chrome::run(command, &args),
         "bench-chrome" => compositor::bench_chrome(&args),
+        "bench-chrome-video" => compositor::bench_chrome_video(&args),
         "test-selfhost" => selfhost::test_selfhost(&args),
         "builds-execute" => {
             let plan = args
