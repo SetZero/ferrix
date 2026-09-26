@@ -1,0 +1,16 @@
+[package]
+name = "ferrix-virtio-snd"
+description = "A virtio-snd driver, as logic over a transport and DMA memory it is handed"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license.workspace = true
+publish = false
+
+[dependencies]
+ferrix-linux-abi = { workspace = true }
+ferrix-sndctl = { workspace = true }
+ferrix-virtio = { workspace = true }
+
+[lints]
+workspace = true

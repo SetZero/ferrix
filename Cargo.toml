@@ -50,6 +50,7 @@ members = [
     "libs/virtio-console",
     "libs/virtio-gpu",
     "libs/virtio-input",
+    "libs/virtio-snd",
     "libs/virtio-net",
     "libs/vma",
     "libs/paging",
@@ -148,6 +149,7 @@ ferrix-virtio-gpu = { path = "libs/virtio-gpu" }
 ferrix-virtio-console = { path = "libs/virtio-console" }
 ferrix-vport = { path = "user/vport" }
 ferrix-virtio-input = { path = "libs/virtio-input" }
+ferrix-virtio-snd = { path = "libs/virtio-snd" }
 ferrix-virtio-net = { path = "libs/virtio-net" }
 ferrix-vma = { path = "libs/vma" }
 ferrix-qr = { path = "libs/qr" }

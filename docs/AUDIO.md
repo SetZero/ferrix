@@ -601,6 +601,32 @@ mixing requests, completions and lies, without breaking a property.
  `ferrix-linux-abi` gained `EBADFD` and
 `ESTRPIPE`.
 
+L4 is done (2026-09-26): `libs/virtio-snd` is the driver's logic over a
+transport, its own scratch memory and the core's buffer. §3.3 decided most
+of it. Writing it settled three things the design had not:
+
+* **`DRIVER_OK` is set before HELLO**, unlike input's driver. A sound
+  device describes its streams only through its control queue, which
+  virtio 1.2 §3.1.1 opens only after `DRIVER_OK`.
+* **Control requests are made one at a time and waited for** by polling,
+  with a hook the process may yield in. QEMU answers them as the doorbell
+  rings.
+* **A halt is `STOP` if started, then `RELEASE`.** QEMU answers `RELEASE`
+  only once it has completed every buffer, with status OK
+  (`virtio_snd_handle_pcm_release`, as virtio 1.2 §5.14.6.6.5.1 requires).
+  So every buffer in flight comes back as an ordinary ELAPSED, which the
+  core takes as void. HALTED then counts nothing unplayed, and the stream
+  is prepared again.
+
+Its 13 tests run it against a device doing what QEMU 9.2.4's does, and
+compare the samples the device read with the ones submitted. They cover a
+submission across two pages that are apart in device memory, completions
+out of order held back until they are in order again, and a halt's
+requests in order. They also cover what a hostile device and a hostile
+core are refused. It is not fuzzed yet: virtio-input's driver fuzz target
+builds its own device, and this crate's device lives in its tests.
+
 The rest of this document is design, with §2's calls read from source and
-§3.3's device read from QEMU 9.2.4's, and none of it run on Ferrix yet. L4,
-`libs/virtio-snd`, is next.
+§3.3's device read from QEMU 9.2.4's, and none of it run on Ferrix yet. L5
+is next: `user/snd`, devmgr's entry, `SOUND_CONTROL_CREATE` and the
+kernel's core task. It is the first landing that changes the image.

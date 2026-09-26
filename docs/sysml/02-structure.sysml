@@ -1124,6 +1124,21 @@ package FerrixStructure {
                  * request and no unpin without a pin. Since stage 19 it takes
                  * the features 3D needs when asked. */
         }
+        #implemented part virtioSnd : LibraryCrate {
+            attribute :>> path = "libs/virtio-snd";
+            attribute :>> hostTests = 13;
+            doc /* The virtio-snd driver logic, written ahead of the driver
+                 * process for the audio iteration (docs/AUDIO.md L4): bring-up
+                 * with DRIVER_OK before HELLO, since a sound device describes
+                 * its streams only through its control queue; READY into
+                 * SET_PARAMS and PREPARE; one transmit chain per SUBMIT, the
+                 * header and status from the driver's scratch memory and the
+                 * samples from the core's buffer pinned read-only; completions
+                 * back to the core oldest first; a halt as STOP, RELEASE and a
+                 * fresh prepare. Tested against a device doing what QEMU
+                 * 9.2.4's does, with the samples the device read compared to
+                 * those submitted. */
+        }
         #implemented part virtioInput : LibraryCrate {
             attribute :>> path = "libs/virtio-input";
             attribute :>> hostTests = 28;
@@ -1475,6 +1490,7 @@ package FerrixStructure {
         dependency from virtioConsole to virtio;
         dependency from virtioGpu to displayctl, virtio;
         dependency from virtioInput to inputctl, linuxAbi, virtio;
+        dependency from virtioSnd to linuxAbi, sndctl, virtio;
         dependency from virtioNet to virtio;
 
         // Build targets.

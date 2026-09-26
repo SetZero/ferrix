@@ -534,6 +534,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-virtio-snd"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
+ "ferrix-sndctl",
+ "ferrix-virtio",
+]
+
+[[package]]
 name = "ferrix-vma"
 version = "0.1.0"
 dependencies = [
