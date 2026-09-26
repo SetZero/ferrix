@@ -232,6 +232,54 @@ pub(crate) fn read_file(
     Ok(contents)
 }
 
+/// Read a whole regular file `name` beneath the directory `dir`, following
+/// no symbolic link on the way from `dir` to it: `openat2`'s
+/// `RESOLVE_NO_SYMLINKS`, which Ferrix has no call for.
+///
+/// What the display core reads `drm.edid_firmware`'s file with. The name has
+/// already been refused if it is absolute or climbs through `..`
+/// (`ferrix_displayctl::edid::confined`), so a walk one component at a time
+/// that never follows a link cannot leave `dir`: a link planted under
+/// `/lib/firmware` that leads to `/etc/shadow` is `ELOOP`, and what every
+/// program that opens the card can read stays a file that is there. `dir`
+/// itself is resolved as any path is.
+///
+/// # Errors
+///
+/// `ELOOP` for a symbolic link anywhere after `dir`; `EINVAL` for an empty
+/// or absolute name or a `..` component; otherwise [`read_file`]'s.
+pub(crate) fn read_file_beneath(ctx: &Context, dir: &[u8], name: &[u8]) -> Result<Vec<u8>, Errno> {
+    if name.first() == Some(&b'/') {
+        return Err(Errno::EINVAL);
+    }
+    let ns = namespace();
+    let mut at = ns.resolve(ctx, None, dir, true)?;
+    let mut any = false;
+    for component in name
+        .split(|&byte| byte == b'/')
+        .filter(|part| !part.is_empty())
+    {
+        if component == b".." {
+            return Err(Errno::EINVAL);
+        }
+        at = ns.resolve(ctx, Some(&at), component, false)?;
+        if ns.stat(&at)?.metadata.kind == FileType::Symlink {
+            return Err(Errno::ELOOP);
+        }
+        any = true;
+    }
+    if !any {
+        return Err(Errno::EINVAL);
+    }
+    let buffer = read_location(at)?;
+    let mut contents = Vec::new();
+    contents
+        .try_reserve_exact(buffer.len())
+        .map_err(|_| Errno::ENOMEM)?;
+    contents.extend_from_slice(&buffer);
+    Ok(contents)
+}
+
 /// Open a program: the file, with its headers read and nothing else, and the
 /// absolute path of the file, symbolic links resolved.
 ///

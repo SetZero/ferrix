@@ -80,10 +80,27 @@ pub(crate) fn load(card: u32, kind: u32, heads: usize) -> Vec<Option<Vec<u8>>> {
 }
 
 /// Read `/lib/firmware/<file>` and check it, or say why not.
+///
+/// The name must stay beneath `/lib/firmware` (`edid::confined`), and the
+/// read follows no symbolic link there (`fs::read_file_beneath`): what is
+/// read is handed to every program that opens the card, so it must be the
+/// file the name names and no other (the certification consultant's
+/// condition, 2026-09-26).
 fn read(file: &str) -> Result<(Vec<u8>, edid::Checked), String> {
-    let path = format!("{FIRMWARE_DIR}{file}");
-    let mut bytes = fs::read_file(&fs::namespace().context(), None, path.as_bytes())
-        .map_err(|error| format!("which cannot be read (err=-{})", error.0))?;
+    let name = edid::confined(file)
+        .map_err(|why| format!("which is not a file under {FIRMWARE_DIR}: {why}"))?;
+    let mut bytes = fs::read_file_beneath(
+        &fs::namespace().context(),
+        FIRMWARE_DIR.trim_end_matches('/').as_bytes(),
+        name.as_bytes(),
+    )
+    .map_err(|error| {
+        if error == ferrix_linux_abi::errno::Errno::ELOOP {
+            String::from("which is a symbolic link or under one, and is not followed (err=-40)")
+        } else {
+            format!("which cannot be read (err=-{})", error.0)
+        }
+    })?;
     let checked = edid::check(&mut bytes).map_err(|why| format!("which is not an EDID: {why}"))?;
     bytes.truncate(checked.len);
     Ok((bytes, checked))

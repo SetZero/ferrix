@@ -170,6 +170,18 @@ fn check_the_archive_unpacked_intact() -> Result<(), &'static str> {
     if fs::read_file(&ctx, None, b"/etc/ferrix") != Err(Errno::EISDIR) {
         return Err("reading a directory as a whole file was not refused");
     }
+    // And the read that must stay beneath a directory -- the display core's
+    // of `drm.edid_firmware`'s file under `/lib/firmware` -- reads a file
+    // there, and follows no link, not even one that stays inside.
+    if fs::read_file_beneath(&ctx, b"/etc", b"ferrix/initramfs").as_deref() != Ok(MARKER) {
+        return Err("a whole-file read beneath a directory did not give the marker");
+    }
+    if fs::read_file_beneath(&ctx, b"/etc", b"ferrix/initramfs.symlink") != Err(Errno::ELOOP) {
+        return Err("a whole-file read beneath a directory followed a symbolic link");
+    }
+    if fs::read_file_beneath(&ctx, b"/etc/ferrix", b"../ferrix/initramfs") != Err(Errno::EINVAL) {
+        return Err("a whole-file read beneath a directory climbed out through `..`");
+    }
     Ok(())
 }
 

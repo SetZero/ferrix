@@ -95,6 +95,57 @@ pub fn firmware_for<'a>(setting: &'a str, connector: &str) -> Option<&'a str> {
     Some(name.strip_suffix('\n').unwrap_or(name))
 }
 
+/// Why a name `drm.edid_firmware` gives is not a file under
+/// [`FIRMWARE_DIR`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BadName {
+    /// There is no name.
+    Empty,
+    /// It begins with `/`, which would name a file anywhere.
+    Absolute,
+    /// It holds a `..` component, which would climb out.
+    Parent,
+    /// It holds a NUL, which ends a path early.
+    Nul,
+}
+
+impl core::fmt::Display for BadName {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::Empty => "it is empty",
+            Self::Absolute => "it is an absolute path",
+            Self::Parent => "it climbs out through `..`",
+            Self::Nul => "it holds a NUL",
+        })
+    }
+}
+
+/// `name`, if it names a file beneath [`FIRMWARE_DIR`]: not empty, not
+/// absolute, with no `..` component and no NUL.
+///
+/// The command line is trusted, but what the file holds is handed to every
+/// program that opens the card, so a name that could reach another file --
+/// `../etc/shadow`, `/etc/shadow` -- is refused before anything is read. A
+/// symbolic link under `/lib/firmware` could reach one too; the kernel's read
+/// refuses to follow any (`fs::read_file_beneath`). Linux's firmware loader
+/// is laxer: it joins the name to each of its search directories as it
+/// stands.
+pub fn confined(name: &str) -> Result<&str, BadName> {
+    if name.is_empty() {
+        return Err(BadName::Empty);
+    }
+    if name.starts_with('/') {
+        return Err(BadName::Absolute);
+    }
+    if name.contains('\0') {
+        return Err(BadName::Nul);
+    }
+    if name.split('/').any(|component| component == "..") {
+        return Err(BadName::Parent);
+    }
+    Ok(name)
+}
+
 /// Why a file is not an EDID a connector can carry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unusable {

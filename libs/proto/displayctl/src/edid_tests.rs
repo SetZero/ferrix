@@ -113,6 +113,29 @@ fn a_trailing_newline_on_the_name_is_cut() {
 }
 
 #[test]
+fn a_name_that_could_reach_another_file_is_refused() {
+    assert_eq!(
+        confined("edid/LEN-R27qe-Gen2.bin"),
+        Ok("edid/LEN-R27qe-Gen2.bin")
+    );
+    assert_eq!(confined("r27qe.bin"), Ok("r27qe.bin"));
+    // `..` inside a name is only a name.
+    assert_eq!(confined("edid/a..b.bin"), Ok("edid/a..b.bin"));
+    assert_eq!(confined("../etc/shadow"), Err(BadName::Parent));
+    assert_eq!(confined("edid/../../etc/shadow"), Err(BadName::Parent));
+    assert_eq!(confined("edid/.."), Err(BadName::Parent));
+    assert_eq!(confined("/etc/shadow"), Err(BadName::Absolute));
+    assert_eq!(confined(""), Err(BadName::Empty));
+    assert_eq!(confined("edid/a\0.bin"), Err(BadName::Nul));
+    // What the grammar hands on is checked as it stands: a connector's
+    // entry naming `/etc/shadow` is refused, not read.
+    let chosen = firmware_for("Virtual-1:/etc/shadow", "Virtual-1").unwrap();
+    assert_eq!(confined(chosen), Err(BadName::Absolute));
+    let chosen = firmware_for("../etc/shadow", "Virtual-1").unwrap();
+    assert_eq!(confined(chosen), Err(BadName::Parent));
+}
+
+#[test]
 fn a_whole_edid_is_kept_as_it_is() {
     let mut bytes = base(2);
     bytes.extend(extension(0x02, 0x05));
