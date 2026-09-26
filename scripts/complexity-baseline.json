@@ -129,11 +129,6 @@
       "lines": 61,
       "recursive": false
     },
-    "syscall/futex.rs::wait": {
-      "complexity": 15,
-      "lines": 37,
-      "recursive": false
-    },
     "syscall/limits.rs::dispatch": {
       "complexity": 15,
       "lines": 19,

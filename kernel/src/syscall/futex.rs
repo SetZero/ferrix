@@ -173,6 +173,11 @@ struct Entry {
     sleeper: Arc<Sleeper>,
 }
 
+/// How long a futex wait sleeps between looks of its own: a second, the
+/// recheck `fs::wake` gives a wait whose every queue is trusted, since every
+/// way a futex wait ends wakes it by name.
+const TRUSTED_RECHECK_NANOS: u64 = 1_000_000_000;
+
 /// Every waiter, oldest first, so that a wake rouses in arrival order as
 /// Linux's does.
 static TABLE: SpinLock<Vec<Entry>> = SpinLock::new(Vec::new());
@@ -305,6 +310,24 @@ fn read_present_word(process: &Process, address: u64) -> Result<Option<u32>, Err
     Ok(read.then(|| u32::from_le_bytes(bytes)))
 }
 
+/// Block until `sleeper` is woken, the caller has a signal to take -- which
+/// ends the wait with `EINTR`, as it ends every wait -- or `deadline` passes.
+///
+/// Trusting its wakes, as `poll` trusts a file's queues: a wake rouses the
+/// sleeper's task by name, a signal wakes the thread it is for, and an ending
+/// or stopping process wakes all of its own. The few milliseconds a wait
+/// queue sleeps between looks of its own were every blocked thread woken two
+/// hundred times a second for nothing -- a browser's hundred and fifty of
+/// them, four processors kept busy doing it.
+fn sleep(sleeper: &Sleeper, process: &dyn Host, deadline: u64) {
+    let _ = WaitQueue::wait_on_any(
+        &[&SLEEP],
+        || sleeper.woken.load(Ordering::Acquire) || process.wait_interrupted(),
+        deadline,
+        TRUSTED_RECHECK_NANOS,
+    );
+}
+
 /// Sleep on `address` if it holds `expected`, until a wake whose bitset
 /// shares a bit with `bitset`, the caller is ended, or `deadline` passes.
 /// `shared` is whether the call left out `FUTEX_PRIVATE_FLAG`.
@@ -351,11 +374,7 @@ fn wait(
             }
         }
 
-        let _ = SLEEP.wait_until_deadline(
-            // A pending signal ends the wait with `EINTR`, as it ends every wait.
-            || sleeper.woken.load(Ordering::Acquire) || process.wait_interrupted(),
-            deadline,
-        );
+        sleep(&sleeper, process, deadline);
 
         // Off the table however it left, and under the lock, so that a waker
         // which found it has finished rousing it before this returns. The
