@@ -99,14 +99,7 @@ impl Manager {
         }
         match config_kind {
             UnitType::Service => self.service_start(id, unit),
-            UnitType::Socket => {
-                let line = format!(
-                    "{}: socket units are version 2 (landing L9); not started",
-                    self.display(unit)
-                );
-                self.log(Some(unit), line);
-                self.finish(id, OpResult::Failed);
-            }
+            UnitType::Socket => self.socket_start(unit),
             UnitType::Mount => self.mount_start(unit),
             UnitType::Scope => self.scope_start(id, unit),
             UnitType::Slice => self.slice_start(unit),
@@ -138,7 +131,8 @@ impl Manager {
             UnitType::Mount => self.mount_stop(unit),
             UnitType::Scope => self.scope_stop(unit),
             UnitType::Slice => self.slice_stop(unit),
-            UnitType::Target | UnitType::Builtin | UnitType::Socket => {
+            UnitType::Socket => self.socket_stop(unit),
+            UnitType::Target | UnitType::Builtin => {
                 self.set_state(unit, ActiveState::Inactive, Sub::Dead);
             }
         }
@@ -213,8 +207,12 @@ impl Manager {
         slot.active = active;
         slot.sub = sub;
         let op = slot.op;
+        let service = slot.name.unit_type() == UnitType::Service;
         if was != active {
             self.announce(unit, was, active);
+            if service && matches!(active, ActiveState::Inactive | ActiveState::Failed) {
+                self.socket_service_down(unit);
+            }
         }
         let answered = op.and_then(|id| self.ops.get(&id).map(|o| (id, o.kind, o.running)));
         match answered {

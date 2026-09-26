@@ -25,6 +25,7 @@ mod service;
 mod socket;
 
 use alloc::boxed::Box;
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
@@ -112,6 +113,10 @@ pub const INIT_SCOPE: &str = "init.scope";
 pub const DRIVERS_SLICE: &str = "drivers.slice";
 /// What services are after by default.
 pub const SYSINIT: &str = "sysinit.target";
+/// What services are after by default, besides [`SYSINIT`].
+pub const BASIC: &str = "basic.target";
+/// What sockets are before by default, and `basic.target` wants.
+pub const SOCKETS: &str = "sockets.target";
 /// What every unit with default dependencies conflicts with, so that
 /// shutdown stops it.
 pub const SHUTDOWN: &str = "shutdown.target";
@@ -389,7 +394,9 @@ impl Kind for service::ServiceKind {
     }
 
     /// A service is in its slice, `system.slice` if it names none; by
-    /// default it is after `sysinit.target` and stops at shutdown.
+    /// default it is after `sysinit.target` and `basic.target`, as under
+    /// systemd, and stops at shutdown -- before `basic.target` does, which
+    /// is what the second `After=` gives it.
     fn implied(&self, unit: &Unit, _: &dyn Fn(&UnitName) -> bool) -> Edges {
         let mut edges = Edges::new();
         let named = match &unit.config {
@@ -399,6 +406,7 @@ impl Kind for service::ServiceKind {
         within(&mut edges, named.unwrap_or(SYSTEM_SLICE));
         if unit.unit.default_dependencies {
             edge(&mut edges, Dependency::After, SYSINIT);
+            edge(&mut edges, Dependency::After, BASIC);
             stopped_at_shutdown(&mut edges);
         }
         edges
@@ -427,11 +435,29 @@ impl Kind for socket::SocketKind {
         socket::parse(name, section, warnings)
     }
 
-    /// As a service's defaults; what it activates is landing L9's.
-    fn implied(&self, unit: &Unit, _: &dyn Fn(&UnitName) -> bool) -> Edges {
+    /// Before the service it activates, as systemd orders them, so the
+    /// sockets exist when it starts; and with default dependencies, after
+    /// `sysinit.target`, before `sockets.target`, and stopped at shutdown.
+    fn implied(&self, unit: &Unit, exists: &dyn Fn(&UnitName) -> bool) -> Edges {
         let mut edges = Edges::new();
+        if let Config::Socket(socket) = &unit.config
+            && !socket.accept
+        {
+            let service = match &socket.service {
+                Some(service) => Some(service.clone()),
+                None => unit
+                    .name
+                    .as_str()
+                    .strip_suffix(".socket")
+                    .and_then(|stem| UnitName::parse(&format!("{stem}.service")).ok()),
+            };
+            if let Some(service) = service.filter(|name| exists(name)) {
+                edges.push((Dependency::Before, service));
+            }
+        }
         if unit.unit.default_dependencies {
             edge(&mut edges, Dependency::After, SYSINIT);
+            edge(&mut edges, Dependency::Before, SOCKETS);
             stopped_at_shutdown(&mut edges);
         }
         edges

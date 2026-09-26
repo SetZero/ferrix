@@ -11,7 +11,7 @@ use core::time::Duration;
 use super::rig::{Paths, Rig};
 use crate::Options;
 use crate::event::{
-    Action, ActiveState, Event, Name, OpResult, Pid, PowerAction, Reply, Request, Token,
+    Action, ActiveState, Event, Name, OpResult, Pid, PowerAction, Reply, Request, Token, UnitId,
 };
 use crate::limits::{Memory, Tasks};
 use crate::restart::Ended;
@@ -969,6 +969,450 @@ fn a_units_warnings_are_logged_as_it_loads() {
         !again.iter().any(|line| line.contains("NoSuchKey")),
         "a unit's warnings are said once, when it loads: {again:?}"
     );
+}
+
+#[test]
+fn reload_runs_exec_reload_while_the_service_stays_up() {
+    let mut rig = Rig::new(&[
+        (
+            "d.service",
+            "[Service]\nExecStart=/bin/d\nExecReload=/bin/kick one\nExecReload=/bin/kick two\n",
+        ),
+        ("plain.service", "[Service]\nExecStart=/bin/plain\n"),
+    ]);
+    let _ = rig.request(Request::start("d.service"));
+    let (main, _) = rig.spawned("d.service");
+    let _ = rig.request(Request::start("plain.service"));
+    let _ = rig.spawned("plain.service");
+
+    let asked = rig.request(Request::Reload(String::from("d.service")));
+    assert_eq!(Rig::argvs(&asked), [["/bin/kick", "one"]]);
+    assert_eq!(
+        (rig.state("d.service"), rig.sub("d.service")),
+        (ActiveState::Active, "reload")
+    );
+    let (first, next) = rig.spawned("d.service");
+    assert!(Rig::argvs(&next).is_empty());
+    let second = rig.exit(first, 0);
+    assert_eq!(Rig::argvs(&second), [["/bin/kick", "two"]]);
+    let (last, _) = rig.spawned("d.service");
+    let done = rig.exit(last, 0);
+    assert_eq!(Rig::replies(&done), [Reply::Done(OpResult::Done)]);
+    assert_eq!(rig.sub("d.service"), "running");
+
+    let failing = rig.request(Request::Reload(String::from("d.service")));
+    assert_eq!(Rig::argvs(&failing).len(), 1);
+    let (kick, _) = rig.spawned("d.service");
+    let failed = rig.exit(kick, 3);
+    assert_eq!(Rig::replies(&failed), [Reply::Done(OpResult::Failed)]);
+    assert_eq!(
+        rig.sub("d.service"),
+        "running",
+        "a failed reload leaves it up"
+    );
+    assert_eq!(rig.state("d.service"), ActiveState::Active);
+
+    let refused = rig.request(Request::Reload(String::from("plain.service")));
+    assert!(matches!(
+        Rig::replies(&refused).as_slice(),
+        [Reply::Refused(_)]
+    ));
+    let _ = rig.request(Request::stop("d.service"));
+    let _ = rig.exit(main, 0);
+    let _ = rig.emptied("d.service");
+    let stopped = rig.request(Request::Reload(String::from("d.service")));
+    assert!(matches!(
+        Rig::replies(&stopped).as_slice(),
+        [Reply::Refused(_)]
+    ));
+}
+
+#[test]
+fn a_notify_status_alone_is_shown_and_is_not_readiness() {
+    let mut rig = Rig::new(&[(
+        "n.service",
+        "[Service]\nType=notify\nNotifyFd=3\nExecStart=/bin/n\n",
+    )]);
+    let _ = rig.request(Request::start("n.service"));
+    let _ = rig.spawned("n.service");
+    let unit = rig.id("n.service");
+    let _ = rig.step(Event::Status {
+        unit,
+        status: String::from("warming up"),
+    });
+    assert_eq!(rig.state("n.service"), ActiveState::Activating);
+    let shown = rig.manager.status(unit).and_then(|s| s.status);
+    assert_eq!(shown.as_deref(), Some("warming up"));
+    let _ = rig.step(Event::Ready { unit, status: None });
+    assert_eq!(rig.state("n.service"), ActiveState::Active);
+}
+
+/// The socket-unit actions in `actions`, as short words.
+fn socket_actions(rig: &Rig, actions: &[Action]) -> Vec<String> {
+    actions
+        .iter()
+        .filter_map(|action| match action {
+            Action::Listen { unit, .. } => Some(alloc::format!("listen {}", rig.name(*unit))),
+            Action::Unlisten { unit } => Some(alloc::format!("unlisten {}", rig.name(*unit))),
+            Action::Watch { unit } => Some(alloc::format!("watch {}", rig.name(*unit))),
+            Action::Close { connection } => Some(alloc::format!("close {}", connection.0)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The sockets and connection each spawn in `actions` is given.
+fn handed(actions: &[Action]) -> Vec<(Vec<UnitId>, Option<Token>)> {
+    actions
+        .iter()
+        .filter_map(|action| match action {
+            Action::Spawn { spec, .. } => Some((spec.sockets.clone(), spec.connection)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_connection_on_a_socket_starts_its_service_with_the_listening_socket() {
+    let mut rig = Rig::new(&[
+        ("web.socket", "[Socket]\nListenStream=8080\n"),
+        ("web.service", "[Service]\nExecStart=/bin/web\n"),
+        ("sockets.target", "[Unit]\n"),
+    ]);
+    let started = rig.request(Request::start("web.socket"));
+    assert_eq!(socket_actions(&rig, &started), ["listen web.socket"]);
+    assert_eq!(rig.state("web.socket"), ActiveState::Activating);
+    let socket = rig.id("web.socket");
+    let up = rig.step(Event::Listening {
+        unit: socket,
+        result: Ok(()),
+    });
+    assert_eq!(socket_actions(&rig, &up), ["watch web.socket"]);
+    assert_eq!(
+        (rig.state("web.socket"), rig.sub("web.socket")),
+        (ActiveState::Active, "listening")
+    );
+    assert!(
+        rig.spawns(&up).is_empty(),
+        "nothing starts before a connection"
+    );
+
+    let incoming = rig.step(Event::Incoming { unit: socket });
+    assert_eq!(rig.spawns(&incoming), ["web.service"]);
+    assert_eq!(handed(&incoming), [(alloc::vec![socket], None)]);
+    assert_eq!(rig.sub("web.socket"), "running");
+    assert!(
+        socket_actions(&rig, &incoming).is_empty(),
+        "the service accepts now"
+    );
+
+    let (web, _) = rig.spawned("web.service");
+    let _ = rig.exit(web, 0);
+    let down = rig.emptied("web.service");
+    assert_eq!(socket_actions(&rig, &down), ["watch web.socket"]);
+    assert_eq!(rig.sub("web.socket"), "listening");
+
+    let stopped = rig.request(Request::stop("web.socket"));
+    assert_eq!(socket_actions(&rig, &stopped), ["unlisten web.socket"]);
+    assert_eq!(rig.state("web.socket"), ActiveState::Inactive);
+}
+
+#[test]
+fn a_socket_neither_listens_again_at_shutdown_nor_spins_on_a_refused_start() {
+    let mut rig = Rig::new(&[
+        ("web.socket", "[Socket]\nListenStream=8080\n"),
+        ("web.service", "[Service]\nExecStart=/bin/web\n"),
+        ("multi-user.target.wants/web.socket", "->web.socket"),
+    ]);
+    let _ = rig.boot();
+    let socket = rig.id("web.socket");
+    let _ = rig.step(Event::Listening {
+        unit: socket,
+        result: Ok(()),
+    });
+    let _ = rig.step(Event::Incoming { unit: socket });
+    let (web, _) = rig.spawned("web.service");
+
+    let down = rig.request(Request::Poweroff);
+    let _ = rig.exit(web, 0);
+    let stopped = rig.emptied("web.service");
+    let watched = socket_actions(&rig, &down)
+        .into_iter()
+        .chain(socket_actions(&rig, &stopped))
+        .filter(|action| action.starts_with("watch"))
+        .count();
+    assert_eq!(watched, 0, "nothing listens again once shutdown has begun");
+
+    let late = rig.step(Event::Incoming { unit: socket });
+    assert!(rig.spawns(&late).is_empty());
+    assert!(
+        !socket_actions(&rig, &late)
+            .iter()
+            .any(|a| a.starts_with("watch")),
+        "a connection during shutdown does not re-arm the socket"
+    );
+}
+
+#[test]
+fn shutdown_stops_a_socket_its_service_and_what_is_after_them() {
+    let mut rig = Rig::new(&[
+        ("web.socket", "[Socket]\nListenStream=8080\n"),
+        ("web.service", "[Service]\nExecStart=/bin/web\n"),
+        ("echo.socket", "[Socket]\nListenStream=7\nAccept=yes\n"),
+        (
+            "echo@.service",
+            "[Service]\nExecStart=/bin/echo\nStandardInput=socket\n",
+        ),
+        ("sockets.target", "[Unit]\n"),
+        (
+            "getty@.service",
+            "[Unit]\nAfter=basic.target\n[Service]\nExecStart=/bin/getty %i\nRestart=always\n\
+             RestartSec=0\nSendSIGHUP=yes\nTimeoutStopSec=5s\n",
+        ),
+        ("multi-user.target.wants/web.socket", "->web.socket"),
+        ("multi-user.target.wants/echo.socket", "->echo.socket"),
+        (
+            "multi-user.target.wants/getty@console.service",
+            "->getty@.service",
+        ),
+        ("test.slice", "[Slice]\nTasksMax=64\n"),
+        (
+            "hog.service",
+            "[Service]\nSlice=test.slice\nExecStart=/bin/hog\n",
+        ),
+        ("multi-user.target.wants/hog.service", "->hog.service"),
+    ]);
+    let _ = rig.boot();
+    let (hog, _) = rig.spawned("hog.service");
+    let hog_unit = rig.id("hog.service");
+    let _ = rig.step(Event::OomKilled { unit: hog_unit });
+    let _ = rig.killed(hog, Signal::KILL);
+    let _ = rig.emptied("hog.service");
+    assert_eq!(rig.state("hog.service"), ActiveState::Failed);
+    let _ = rig.request(Request::Scope {
+        unit: String::from("probe.scope"),
+        slice: None,
+        pids: alloc::vec![Pid(4242)],
+    });
+    for name in ["web.socket", "echo.socket"] {
+        let unit = rig.id(name);
+        let _ = rig.step(Event::Listening {
+            unit,
+            result: Ok(()),
+        });
+    }
+    let (getty, _) = rig.spawned("getty@console.service");
+    let web_socket = rig.id("web.socket");
+    let _ = rig.step(Event::Incoming { unit: web_socket });
+    let (web, _) = rig.spawned("web.service");
+    let echo_socket = rig.id("echo.socket");
+    let _ = rig.step(Event::Accepted {
+        unit: echo_socket,
+        connection: Token(3),
+    });
+    let (echo, _) = rig.spawned("echo@1.service");
+    let _ = rig.exit(echo, 0);
+    let _ = rig.emptied("echo@1.service");
+    assert_eq!(rig.state("multi-user.target"), ActiveState::Active);
+    rig.reload();
+
+    let _ = rig.request(Request::Poweroff);
+    let _ = rig.exit(web, 0);
+    let _ = rig.emptied("web.service");
+    let _ = rig.exit(getty, 0);
+    let _ = rig.emptied("getty@console.service");
+    let _ = rig.emptied("probe.scope");
+    for name in [
+        "web.socket",
+        "echo.socket",
+        "getty@console.service",
+        "probe.scope",
+        "basic.target",
+    ] {
+        assert_eq!(
+            rig.state(name),
+            ActiveState::Inactive,
+            "{name} was not stopped"
+        );
+    }
+}
+
+#[test]
+fn shutdown_ends_a_unit_a_reload_masked_while_it_ran() {
+    let units = [
+        (
+            "getty.service",
+            "[Unit]\nAfter=basic.target\n[Service]\nExecStart=/bin/getty\n",
+        ),
+        ("multi-user.target.wants/getty.service", "->getty.service"),
+    ];
+    let mut rig = Rig::new(&units);
+    let _ = rig.boot();
+    let (getty, _) = rig.spawned("getty.service");
+    assert_eq!(rig.state("multi-user.target"), ActiveState::Active);
+
+    let mut masked = crate::source::Source::new();
+    for (path, text) in super::rig::TARGETS {
+        let entry = crate::source::Entry::File(text.as_bytes().to_vec());
+        assert!(masked.add(crate::source::Layer::Image, path, entry).is_ok());
+    }
+    let alias = crate::source::Entry::Alias(String::from("multi-user.target"));
+    assert!(
+        masked
+            .add(crate::source::Layer::Admin, "default.target", alias)
+            .is_ok()
+    );
+    assert!(
+        masked
+            .add(
+                crate::source::Layer::Admin,
+                "getty.service",
+                crate::source::Entry::Masked
+            )
+            .is_ok()
+    );
+    rig.manager.reload(masked);
+    assert_eq!(
+        rig.state("getty.service"),
+        ActiveState::Active,
+        "a reload stops nothing"
+    );
+
+    let down = rig.request(Request::Poweroff);
+    let mut actions = down;
+    actions.extend(rig.exit(getty, 0));
+    actions.extend(rig.emptied("getty.service"));
+    for name in ["getty.service", "basic.target"] {
+        assert_eq!(
+            rig.state(name),
+            ActiveState::Inactive,
+            "{name} was not stopped"
+        );
+    }
+    assert!(
+        actions
+            .iter()
+            .any(|action| matches!(action, Action::Power(_))),
+        "the machine went down"
+    );
+}
+
+#[test]
+fn a_socket_whose_service_cannot_start_fails_rather_than_listening_on() {
+    let mut rig = Rig::new(&[
+        ("web.socket", "[Socket]\nListenStream=8080\n"),
+        (
+            "web.service",
+            "[Unit]\nRequires=missing.service\n[Service]\nExecStart=/bin/web\n",
+        ),
+    ]);
+    let _ = rig.request(Request::start("web.socket"));
+    let socket = rig.id("web.socket");
+    let _ = rig.step(Event::Listening {
+        unit: socket,
+        result: Ok(()),
+    });
+    let refused = rig.step(Event::Incoming { unit: socket });
+    assert_eq!(socket_actions(&rig, &refused), ["unlisten web.socket"]);
+    assert_eq!(rig.state("web.socket"), ActiveState::Failed);
+}
+
+#[test]
+fn an_accepting_socket_starts_an_instance_per_connection() {
+    let mut rig = Rig::new(&[
+        ("echo.socket", "[Socket]\nListenStream=7\nAccept=yes\n"),
+        (
+            "echo@.service",
+            "[Service]\nExecStart=/bin/echoer %i\nStandardInput=socket\n",
+        ),
+    ]);
+    let _ = rig.request(Request::start("echo.socket"));
+    let socket = rig.id("echo.socket");
+    let _ = rig.step(Event::Listening {
+        unit: socket,
+        result: Ok(()),
+    });
+
+    let first = rig.step(Event::Accepted {
+        unit: socket,
+        connection: Token(7),
+    });
+    assert_eq!(rig.spawns(&first), ["echo@1.service"]);
+    assert_eq!(handed(&first), [(Vec::new(), Some(Token(7)))]);
+    assert_eq!(Rig::argvs(&first), [["/bin/echoer", "1"]]);
+    assert_eq!(
+        socket_actions(&rig, &first),
+        ["watch echo.socket"],
+        "it listens on at once"
+    );
+
+    let second = rig.step(Event::Accepted {
+        unit: socket,
+        connection: Token(8),
+    });
+    assert_eq!(rig.spawns(&second), ["echo@2.service"]);
+    let (one, _) = rig.spawned("echo@1.service");
+    let _ = rig.exit(one, 0);
+    let gone = rig.emptied("echo@1.service");
+    assert!(
+        socket_actions(&rig, &gone).is_empty(),
+        "the connection went with its process"
+    );
+
+    let _ = rig.request(Request::stop("echo.socket"));
+    let late = rig.step(Event::Accepted {
+        unit: socket,
+        connection: Token(9),
+    });
+    assert_eq!(
+        socket_actions(&rig, &late),
+        ["close 9"],
+        "a stopped socket takes nothing"
+    );
+}
+
+#[test]
+fn a_socket_that_cannot_listen_fails() {
+    let mut rig = Rig::new(&[
+        ("bad.socket", "[Socket]\nListenStream=/nope/bad.sock\n"),
+        ("bad.service", "[Service]\nExecStart=/bin/bad\n"),
+    ]);
+    let _ = rig.request(Request::start("bad.socket"));
+    let socket = rig.id("bad.socket");
+    let failed = rig.step(Event::Listening {
+        unit: socket,
+        result: Err(crate::event::Errno(2)),
+    });
+    assert_eq!(socket_actions(&rig, &failed), ["unlisten bad.socket"]);
+    assert_eq!(rig.state("bad.socket"), ActiveState::Failed);
+    assert!(
+        Rig::lines(&failed)
+            .iter()
+            .any(|line| line.contains("could not listen (errno 2)"))
+    );
+}
+
+#[test]
+fn a_socket_listens_before_its_service_starts() {
+    let mut rig = Rig::new(&[
+        ("web.socket", "[Socket]\nListenStream=8080\n"),
+        ("web.service", "[Service]\nExecStart=/bin/web\n"),
+        ("multi-user.target.wants/web.socket", "->web.socket"),
+        ("multi-user.target.wants/web.service", "->web.service"),
+    ]);
+    let boot = rig.boot();
+    assert_eq!(socket_actions(&rig, &boot), ["listen web.socket"]);
+    assert!(
+        rig.spawns(&boot).is_empty(),
+        "web.service waits for its socket"
+    );
+    let socket = rig.id("web.socket");
+    let up = rig.step(Event::Listening {
+        unit: socket,
+        result: Ok(()),
+    });
+    assert_eq!(rig.spawns(&up), ["web.service"]);
+    assert_eq!(handed(&up), [(alloc::vec![socket], None)]);
 }
 
 #[test]

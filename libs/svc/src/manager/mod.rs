@@ -18,10 +18,12 @@ mod kinds;
 mod lifecycle;
 mod ops;
 mod service;
+mod socket;
 mod transaction;
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
@@ -122,6 +124,10 @@ enum Sub {
     Start,
     /// Running `ExecStartPost=`.
     StartPost,
+    /// Running `ExecReload=`, and up meanwhile.
+    Reload,
+    /// A socket, waiting for a connection.
+    Listening,
     /// Up, with a main process or a populated cgroup.
     Running,
     /// Up with nothing running: `RemainAfterExit=`.
@@ -153,6 +159,8 @@ impl Sub {
             Sub::StartPre => "start-pre",
             Sub::Start => "start",
             Sub::StartPost => "start-post",
+            Sub::Reload => "reload",
+            Sub::Listening => "listening",
             Sub::Running => "running",
             Sub::Exited => "exited",
             Sub::Stop => "stop",
@@ -209,6 +217,11 @@ struct Slot {
     stopping: bool,
     /// The processes a scope is made with.
     scope_pids: Vec<Pid>,
+    /// The clients waiting for a reload to end.
+    reloading: Vec<ClientId>,
+    /// The connection an `Accept=yes` socket took for this instance, until
+    /// its main process is started with it.
+    connection: Option<Token>,
 }
 
 /// An OPEN waiting for its provider to start.
@@ -256,6 +269,19 @@ pub struct Manager {
     shutdown: Option<Shutdown>,
     now: Instant,
     out: Actions,
+    /// How many `Accept=yes` instances have been made: the next one's
+    /// number.
+    instances: u64,
+}
+
+/// systemd's name for why a unit did not load.
+fn load_state(why: &LoadError) -> &'static str {
+    match why {
+        LoadError::NotFound => "not-found",
+        LoadError::Masked => "masked",
+        LoadError::Refused(_) => "bad-setting",
+        _ => "error",
+    }
 }
 
 impl fmt::Debug for Manager {
@@ -289,6 +315,7 @@ impl Manager {
             shutdown: None,
             now: Instant::ZERO,
             out: Vec::new(),
+            instances: 0,
         }
     }
 
@@ -306,11 +333,19 @@ impl Manager {
             Event::OomKilled { unit } => self.oom_killed(unit),
             Event::Ready { unit, status } => self.ready(unit, status),
             Event::MainPid { unit, pid } => self.main_pid(unit, pid),
+            Event::Status { unit, status } => {
+                if let Some(slot) = self.slot_mut(unit) {
+                    slot.status = Some(status);
+                }
+            }
             Event::Timer => self.timer(),
             Event::Request { client, request } => self.request(client, request),
             Event::Open { from, name, end } => self.open(from, name, end),
             Event::Mounted { unit, result } => self.mounted(unit, result),
             Event::Unmounted { unit, result } => self.unmounted(unit, result),
+            Event::Listening { unit, result } => self.listening(unit, result),
+            Event::Incoming { unit } => self.incoming(unit),
+            Event::Accepted { unit, connection } => self.accepted(unit, connection),
         }
         self.dispatch();
         core::mem::take(&mut self.out)
@@ -336,7 +371,22 @@ impl Manager {
                 continue;
             };
             let loaded = self.source.load(name.as_str());
-            if let Some(slot) = self.slot_mut(id) {
+            let Some(slot) = self.slot_mut(id) else {
+                continue;
+            };
+            // A unit that no longer loads -- masked, its file gone -- while
+            // it runs keeps what it was loaded with until it stops, as
+            // systemd can still stop a running unit it has since masked:
+            // without its settings nothing could stop it, and shutdown
+            // would wait on it for ever.
+            let running = !matches!(slot.active, ActiveState::Inactive | ActiveState::Failed);
+            if let (Err(why), true, true) = (&loaded, running, slot.loaded.is_ok()) {
+                let line = format!(
+                    "{name}: {} now; kept as it was loaded until it stops",
+                    load_state(why)
+                );
+                self.log(Some(id), line);
+            } else {
                 slot.loaded = loaded;
             }
             self.unresolved.push(id);
@@ -364,10 +414,7 @@ impl Manager {
         let slot = self.slot(unit)?;
         let load = match &slot.loaded {
             Ok(_) => "loaded",
-            Err(LoadError::NotFound) => "not-found",
-            Err(LoadError::Masked) => "masked",
-            Err(LoadError::Refused(_)) => "bad-setting",
-            Err(_) => "error",
+            Err(why) => load_state(why),
         };
         Some(Status {
             unit,
@@ -423,6 +470,7 @@ impl Manager {
                 self.request_op(client, &name, OpKind::Restart, mode);
             }
             Request::Isolate(name) => self.request_op(client, &name, OpKind::Start, Mode::Isolate),
+            Request::Reload(name) => self.reload_service(client, &name),
             Request::ResetFailed(name) => self.reset_failed(client, name.as_deref()),
             Request::Status(name) => {
                 let statuses = match name {

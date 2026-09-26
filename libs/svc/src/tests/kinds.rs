@@ -147,7 +147,7 @@ fn bad_values_warn_and_keep_the_previous_value() {
     let (s, warnings) = service(
         "[Service]\nExecStart=/a\nRestart=sometimes\nRestartSec=soon\nKillSignal=SIGNOPE\n\
          CPUWeight=0\nIOWeight=10001\nMemoryMax=lots\nCPUQuota=0%\nSlice=system.service\n\
-         Type=dbus\nWorkingDirectory=relative\nStandardOutput=socket\nOffers=a/b\nNotifyFd=1\n",
+         Type=dbus\nWorkingDirectory=relative\nStandardOutput=fd:3\nOffers=a/b\nNotifyFd=1\n",
     );
     assert_eq!(warnings.len(), 13, "{warnings:?}");
     assert!(warnings[0].starts_with("Failed to parse Restart= value 'sometimes'"));

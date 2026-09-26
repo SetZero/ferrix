@@ -179,6 +179,8 @@ pub enum Input {
     TtyFail,
     /// `file:path`.
     File(String),
+    /// `socket`: the connection a `.socket` unit with `Accept=yes` took.
+    Socket,
 }
 
 /// `StandardOutput=` and `StandardError=`.
@@ -203,6 +205,8 @@ pub enum Output {
     Append(String),
     /// `truncate:path`.
     Truncate(String),
+    /// `socket`: the connection a `.socket` unit with `Accept=yes` took.
+    Socket,
 }
 
 /// `WorkingDirectory=`.
@@ -600,6 +604,7 @@ fn input(text: &str) -> Result<Input, ValueError> {
         "tty" => Input::Tty,
         "tty-force" => Input::TtyForce,
         "tty-fail" => Input::TtyFail,
+        "socket" => Input::Socket,
         _ => return Err(ValueError::Invalid),
     })
 }
@@ -626,6 +631,7 @@ fn output(text: &str) -> Result<Output, ValueError> {
         "tty" => Output::Tty,
         "console" => Output::Console,
         "log" | "journal" | "kmsg" | "journal+console" | "kmsg+console" => Output::Log,
+        "socket" => Output::Socket,
         _ => return Err(ValueError::Invalid),
     })
 }

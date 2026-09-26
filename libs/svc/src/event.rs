@@ -14,7 +14,7 @@ use core::fmt;
 
 use crate::Mode;
 use crate::exec::Command;
-use crate::kind::{Input, Output, ServiceType, WorkingDirectory};
+use crate::kind::{Input, Listen, Output, ServiceType, WorkingDirectory};
 use crate::limits::Limits;
 use crate::restart::Ended;
 use crate::value::Signal;
@@ -156,6 +156,14 @@ pub enum Event {
         /// Its `STATUS=` line, if it gave one.
         status: Option<String>,
     },
+    /// A `notify` service wrote `STATUS=` without `READY=1`: what `svc
+    /// status` shows, and not readiness.
+    Status {
+        /// The unit.
+        unit: UnitId,
+        /// The text.
+        status: String,
+    },
     /// A `forking` service's main process, found in its `PIDFile=` or as the
     /// one process left in its cgroup.
     MainPid {
@@ -196,6 +204,28 @@ pub enum Event {
         /// How.
         result: Result<(), Errno>,
     },
+    /// A [`Action::Listen`] finished.
+    Listening {
+        /// The socket unit.
+        unit: UnitId,
+        /// How.
+        result: Result<(), Errno>,
+    },
+    /// A connection waits on a socket with `Accept=no`, which the socket's
+    /// service is to accept: start it. Said once per [`Action::Watch`].
+    Incoming {
+        /// The socket unit.
+        unit: UnitId,
+    },
+    /// The backend accepted a connection on a socket with `Accept=yes`:
+    /// start an instance of its service with it. Said once per
+    /// [`Action::Watch`].
+    Accepted {
+        /// The socket unit.
+        unit: UnitId,
+        /// The connection, which the backend holds.
+        connection: Token,
+    },
 }
 
 /// What a control client can ask for.
@@ -208,6 +238,9 @@ pub enum Request {
     Stop(String, Mode),
     /// `svc restart`.
     Restart(String, Mode),
+    /// `svc reload`: run a running service's `ExecReload=`, answered when
+    /// it has run.
+    Reload(String),
     /// `svc isolate`: start a target and stop everything it does not need.
     Isolate(String),
     /// `svc reset-failed`, for one unit or every one.
@@ -399,9 +432,27 @@ pub struct SpawnSpec {
     pub tty: Option<String>,
     /// `NotifyFd=`.
     pub notify_fd: Option<u32>,
+    /// The listening sockets of the `.socket` units that activate this
+    /// service, passed on as descriptors 3 and up with `LISTEN_FDS`.
+    pub sockets: Vec<UnitId>,
+    /// The connection an `Accept=yes` socket took, for `socket` streams.
+    pub connection: Option<Token>,
     /// Whether the unit uses or offers directory names, and so gets a
     /// bootstrap channel (§6).
     pub bootstrap: bool,
+}
+
+/// Everything the backend needs to listen for one `.socket` unit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListenSpec {
+    /// What to listen on, in order: `LISTEN_FDS` passes them in this order.
+    pub listen: Vec<Listen>,
+    /// `Accept=`.
+    pub accept: bool,
+    /// `SocketMode=`, for a socket in the file system.
+    pub mode: u32,
+    /// `Backlog=`.
+    pub backlog: u32,
 }
 
 /// Everything the Filesystem backend needs to mount one unit.
@@ -494,6 +545,30 @@ pub enum Action {
     Unmount {
         /// The unit.
         unit: UnitId,
+    },
+    /// Make a `.socket` unit's sockets; answered by [`Event::Listening`].
+    Listen {
+        /// The socket unit.
+        unit: UnitId,
+        /// What to listen on.
+        spec: ListenSpec,
+    },
+    /// Close a `.socket` unit's sockets, and remove one in the file system.
+    Unlisten {
+        /// The socket unit.
+        unit: UnitId,
+    },
+    /// Watch a socket unit's sockets for a connection, and say
+    /// [`Event::Incoming`] or [`Event::Accepted`] once for it; stop watching
+    /// until asked again.
+    Watch {
+        /// The socket unit.
+        unit: UnitId,
+    },
+    /// Close a connection nothing took.
+    Close {
+        /// The connection.
+        connection: Token,
     },
     /// Forward the client end of a channel to the unit that offers a name
     /// (§6): CONNECT.

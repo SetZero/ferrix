@@ -35,7 +35,7 @@ const UNITS: [(&str, &str); 9] = [
     ("rescue.target", "[Unit]\nAllowIsolate=yes\n"),
     ("shutdown.target", "[Unit]\nDefaultDependencies=no\n"),
     ("poweroff.target", "[Unit]\nDefaultDependencies=no\n"),
-    ("a.service", "[Service]\nExecStart=/bin/a\nRestart=always\nRestartSec=1\n"),
+    ("a.service", "[Service]\nExecStart=/bin/a\nExecReload=/bin/kick\nRestart=always\nRestartSec=1\n"),
     ("b.service", "[Unit]\nAfter=a.service\nBindsTo=a.service\n[Service]\nType=oneshot\nExecStart=/bin/b\nRemainAfterExit=yes\n"),
     ("c.service", "[Unit]\nWants=fuzz.service\n[Service]\nType=forking\nExecStart=/bin/c\nKillMode=mixed\nSlice=user-1.slice\n"),
 ];
@@ -87,7 +87,7 @@ fuzz_target!(|data: &[u8]| {
             _ => break,
         };
         let unit = manager.unit(NAMES[usize::from(arg) % NAMES.len()]);
-        let event = match (op % 12, unit) {
+        let event = match (op % 13, unit) {
             (0, Some(unit)) => {
                 let pid = Pid(next_pid);
                 next_pid += 1;
@@ -113,6 +113,10 @@ fuzz_target!(|data: &[u8]| {
             (11, _) => Event::Request {
                 client: ClientId(1),
                 request: Request::Scope { unit: format!("s-{arg}.scope"), slice: None, pids: vec![Pid(9000 + u32::from(arg))] },
+            },
+            (12, _) => Event::Request {
+                client: ClientId(1),
+                request: Request::Reload(String::from(NAMES[usize::from(arg) % NAMES.len()])),
             },
             _ => continue,
         };

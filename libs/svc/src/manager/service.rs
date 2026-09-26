@@ -19,7 +19,7 @@ use alloc::string::String;
 
 use super::{Manager, OpId, OpKind, Sub};
 use crate::event::{
-    Action, ActiveState, Errno, Exit, OpResult, Pid, Role, SpawnSpec, UnitId, Whom,
+    Action, ActiveState, ClientId, Errno, Exit, OpResult, Pid, Reply, Role, SpawnSpec, UnitId, Whom,
 };
 use crate::exec::Command;
 use crate::kind::{Config, KillMode, OomPolicy, Service, ServiceType};
@@ -32,6 +32,7 @@ enum List {
     StartPre,
     Start,
     StartPost,
+    Reload,
     Stop,
     StopPost,
 }
@@ -148,6 +149,7 @@ impl Manager {
             List::StartPre => &service.exec_start_pre,
             List::Start => &service.exec_start,
             List::StartPost => &service.exec_start_post,
+            List::Reload => &service.exec_reload,
             List::Stop => &service.exec_stop,
             List::StopPost => &service.exec_stop_post,
         };
@@ -160,6 +162,7 @@ impl Manager {
             List::StartPre => (ActiveState::Activating, Sub::StartPre),
             List::Start => (ActiveState::Activating, Sub::Start),
             List::StartPost => (ActiveState::Activating, Sub::StartPost),
+            List::Reload => (ActiveState::Active, Sub::Reload),
             List::Stop => (ActiveState::Deactivating, Sub::Stop),
             List::StopPost => (ActiveState::Deactivating, Sub::StopPost),
         };
@@ -188,6 +191,7 @@ impl Manager {
                 self.run_list(unit, service, List::StartPost, 0);
             }
             List::StartPost => self.running(unit, service),
+            List::Reload => self.reloaded(unit, OpResult::Done),
             List::Stop => self.sigterm(unit, service),
             List::StopPost => self.stopped(unit),
         }
@@ -207,6 +211,16 @@ impl Manager {
         if let Some(main) = slot.main {
             environment.push((String::from("MAINPID"), format!("{}", main.0)));
         }
+        // Only the main process takes the sockets and the connection, as
+        // under systemd.
+        let connection = match role {
+            Role::Main => slot.connection.take(),
+            Role::Control => None,
+        };
+        let sockets = match role {
+            Role::Main => self.sockets_for(unit),
+            Role::Control => alloc::vec::Vec::new(),
+        };
         let spec = SpawnSpec {
             command,
             role,
@@ -223,6 +237,8 @@ impl Manager {
             stderr: service.standard_error.clone(),
             tty: service.tty().map(String::from),
             notify_fd: service.notify_fd,
+            sockets,
+            connection,
             bootstrap: !service.uses.is_empty() || !service.offers.is_empty(),
         };
         self.emit(Action::Spawn {
@@ -346,6 +362,7 @@ impl Manager {
             Sub::StartPre => &service.exec_start_pre,
             Sub::Start => &service.exec_start,
             Sub::StartPost => &service.exec_start_post,
+            Sub::Reload => &service.exec_reload,
             Sub::Stop => &service.exec_stop,
             Sub::StopPost => &service.exec_stop_post,
             _ => &service.exec_start,
@@ -375,6 +392,12 @@ impl Manager {
             Sub::StartPre | Sub::StartPost if ended != Ended::Success => {
                 self.fail(unit, service, ended);
             }
+            Sub::Reload if ended != Ended::Success => {
+                let line = format!("{}: reload failed ({})", self.display(unit), ended.name());
+                self.log(Some(unit), line);
+                self.reloaded(unit, OpResult::Failed);
+            }
+            Sub::Reload => self.run_list(unit, service, List::Reload, step + 1),
             Sub::StartPre => self.run_list(unit, service, List::StartPre, step + 1),
             Sub::StartPost => self.run_list(unit, service, List::StartPost, step + 1),
             Sub::Stop => self.run_list(unit, service, List::Stop, step + 1),
@@ -406,7 +429,8 @@ impl Manager {
                 _ => self.fail(unit, service, ended),
             },
             Sub::StartPost => self.record(unit, ended),
-            Sub::Running => {
+            Sub::Running | Sub::Reload => {
+                self.reloaded(unit, OpResult::Failed);
                 self.record(unit, ended);
                 if service.remain_after_exit && ended == Ended::Success {
                     self.set_state(unit, ActiveState::Active, Sub::Exited);
@@ -435,6 +459,54 @@ impl Manager {
             Sub::StopSigterm | Sub::StopSigkill => self.check_stopped(unit, &service),
             Sub::Dead | Sub::Failed => self.remove_group(unit),
             _ => {}
+        }
+    }
+
+    /// `svc reload`: run `ExecReload=` of a service that is up.
+    pub(super) fn reload_service(&mut self, client: ClientId, name: &str) {
+        let Some(unit) = self.ensure(name) else {
+            self.reply(client, Reply::Refused(format!("{name}: not a unit name")));
+            return;
+        };
+        let Some(service) = self.service(unit) else {
+            self.reply(
+                client,
+                Reply::Refused(format!("{name}: only a service reloads")),
+            );
+            return;
+        };
+        let Some(slot) = self.slot_mut(unit) else {
+            return;
+        };
+        match slot.sub {
+            Sub::Reload => slot.reloading.push(client),
+            Sub::Running | Sub::Exited if service.exec_reload.is_empty() => {
+                self.reply(client, Reply::Refused(format!("{name} has no ExecReload=")));
+            }
+            Sub::Running | Sub::Exited => {
+                slot.reloading.push(client);
+                self.run_list(unit, &service, List::Reload, 0);
+            }
+            _ => self.reply(client, Reply::Refused(format!("{name} is not running"))),
+        }
+    }
+
+    /// A reload ended: back to running, and answer who asked.
+    fn reloaded(&mut self, unit: UnitId, result: OpResult) {
+        let Some(slot) = self.slot_mut(unit) else {
+            return;
+        };
+        let clients = core::mem::take(&mut slot.reloading);
+        if slot.sub == Sub::Reload {
+            let sub = if slot.main.is_some() || slot.populated {
+                Sub::Running
+            } else {
+                Sub::Exited
+            };
+            self.set_state(unit, ActiveState::Active, sub);
+        }
+        for client in clients {
+            self.reply(client, Reply::Done(result));
         }
     }
 
@@ -480,6 +552,7 @@ impl Manager {
         let Some(service) = self.service(unit) else {
             return;
         };
+        self.reloaded(unit, OpResult::Canceled);
         let Some(slot) = self.slot_mut(unit) else {
             return;
         };

@@ -47,6 +47,8 @@ impl Probe for Paths {
 /// The manager, the clock, and the pids handed out.
 pub(super) struct Rig {
     pub manager: Manager,
+    /// The units it was made with, for [`Rig::reload`].
+    source: Source,
     pub now: Instant,
     next_pid: u32,
     /// Everything the manager asked for, in order.
@@ -76,11 +78,17 @@ impl Rig {
             assert!(source.add(Layer::Admin, "default.target", entry).is_ok());
         }
         Rig {
-            manager: Manager::new(source, probe, options),
+            manager: Manager::new(source.clone(), probe, options),
+            source,
             now: Instant::ZERO,
             next_pid: 100,
             log: Vec::new(),
         }
+    }
+
+    /// `svc daemon-reload`, over the same units.
+    pub(super) fn reload(&mut self) {
+        self.manager.reload(self.source.clone());
     }
 
     /// Feed one event now.

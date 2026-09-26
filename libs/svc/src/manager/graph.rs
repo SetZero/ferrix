@@ -310,6 +310,8 @@ impl Slot {
             started: false,
             stopping: false,
             scope_pids: Vec::new(),
+            reloading: Vec::new(),
+            connection: None,
         }
     }
 }
