@@ -1456,6 +1456,12 @@ pub(crate) fn flush_for_device(start: u64, len: u64) {
     let _ = (start, len);
 }
 
+/// Nothing to do: an x86 processor's instruction fetch is coherent with every
+/// processor's stores, so code written is code fetched.
+pub(crate) fn sync_instructions(start: u64, len: u64) {
+    let _ = (start, len);
+}
+
 /// No board this architecture boots leaves a watchdog running.
 pub(crate) const fn init_watchdogs(_tree: &ferrix_fdt::Fdt<'_>) {}
 

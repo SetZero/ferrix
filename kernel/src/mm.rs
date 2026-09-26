@@ -649,6 +649,11 @@ pub(crate) fn map_in(
     len: u64,
     flags: MapFlags,
 ) -> Result<(), ferrix_paging::MapError> {
+    // Code a program will run: what the kernel wrote there, a file's pages or
+    // a copy, has to be what every processor fetches before any can reach it.
+    if flags.user && flags.execute {
+        crate::arch::sync_instructions(direct_map(phys), len.next_multiple_of(PAGE_SIZE));
+    }
     let mapper: Mapper<crate::arch::PageEncoding> = Mapper::new(PhysAddr(root));
     mapper.map_range(
         &mut KernelPhysMem,

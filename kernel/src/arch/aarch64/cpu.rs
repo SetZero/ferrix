@@ -345,20 +345,24 @@ pub(crate) fn forbid_user_access() {
     }
 }
 
+/// The smallest data cache line in bytes, from `CTR_EL0`'s `DminLine`, which
+/// is log2 of it in words.
+fn data_line() -> u64 {
+    let cache_type: u64;
+    // SAFETY: reading `CTR_EL0` has no side effects.
+    unsafe {
+        asm!("mrs {}, ctr_el0", out(reg) cache_type, options(nomem, nostack, preserves_flags));
+    }
+    4u64 << ((cache_type >> 16) & 0xF)
+}
+
 /// Write the data cache lines covering `start..start + len` back to the
 /// point of coherency.
 ///
 /// For memory a core with its caches off is about to read: it reads RAM, and
 /// a line still dirty in this core's cache is a line it does not see.
 pub(crate) fn clean_to_poc(start: u64, len: u64) {
-    let cache_type: u64;
-    // SAFETY: reading `CTR_EL0` has no side effects.
-    unsafe {
-        asm!("mrs {}, ctr_el0", out(reg) cache_type, options(nomem, nostack, preserves_flags));
-    }
-    // `DminLine` is log2 of the smallest line in words.
-    let line = 4u64 << ((cache_type >> 16) & 0xF);
-
+    let line = data_line();
     let mut at = start - start % line;
     let end = start.saturating_add(len);
     while at < end {
@@ -376,6 +380,40 @@ pub(crate) fn clean_to_poc(start: u64, len: u64) {
     }
 }
 
+/// Make the instructions in `start..start + len`, written through the data
+/// side, the ones every core fetches from that memory.
+///
+/// For a page about to be mapped executable in user mode. Without it a core
+/// can run what its instruction cache kept of whatever that frame held
+/// before, or miss what is still only in a data cache: on the Pixel 7's eight
+/// cores that was a program ending on an illegal instruction, and checks
+/// failing one run in one place and the next run in another. QEMU models
+/// neither cache, so it never showed there.
+///
+/// The data lines go to the point of coherency, by [`clean_to_poc`], which is
+/// past the point of unification where fetches meet them and ends with the
+/// barrier that completes it; then every instruction cache in the inner
+/// shareable domain is emptied.
+/// `IC IALLUIS` rather than `IC IVAU` by address: the Pixel's Cortex-A55s have
+/// VIPT instruction caches, which a user address can index differently from
+/// the direct map's. Neither step is skipped on `CTR_EL0`'s `IDC` or `DIC`,
+/// because on a machine of three core types the one mapping the page is not
+/// the one that runs it, and a page's worth of maintenance is cheap beside a
+/// fault.
+pub(crate) fn sync_instructions(start: u64, len: u64) {
+    clean_to_poc(start, len);
+    // SAFETY: barriers and cache maintenance change no data. The second `dsb`
+    // completes the invalidate on every core before the page can be mapped.
+    unsafe {
+        asm!(
+            "ic ialluis",
+            "dsb ish",
+            "isb",
+            options(nostack, preserves_flags)
+        );
+    }
+}
+
 /// Write the data cache lines covering `start..start + len` back to the
 /// point of coherency and drop them.
 ///
@@ -383,13 +421,7 @@ pub(crate) fn clean_to_poc(start: u64, len: u64) {
 /// a mapping that bypasses the caches: a dirty line left behind could be
 /// evicted later, over whatever the device wrote since.
 pub(crate) fn clean_invalidate_to_poc(start: u64, len: u64) {
-    let cache_type: u64;
-    // SAFETY: reading `CTR_EL0` has no side effects.
-    unsafe {
-        asm!("mrs {}, ctr_el0", out(reg) cache_type, options(nomem, nostack, preserves_flags));
-    }
-    let line = 4u64 << ((cache_type >> 16) & 0xF);
-
+    let line = data_line();
     let mut at = start - start % line;
     let end = start.saturating_add(len);
     while at < end {

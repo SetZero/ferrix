@@ -204,3 +204,14 @@ pub(crate) use aarch64::flush_for_device;
 pub(crate) use armv7a::flush_for_device;
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::flush_for_device;
+
+// Instructions the kernel wrote into memory, made the ones every processor
+// fetches there: for a page about to be mapped executable in user mode. An
+// Arm core's instruction cache does not see what its data side wrote, nor
+// what another core's did, until it is told to.
+#[cfg(target_arch = "aarch64")]
+pub(crate) use aarch64::sync_instructions;
+#[cfg(target_arch = "arm")]
+pub(crate) use armv7a::sync_instructions;
+#[cfg(target_arch = "x86_64")]
+pub(crate) use x86_64::sync_instructions;

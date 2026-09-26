@@ -633,20 +633,24 @@ pub(crate) fn read_sctlr() -> u32 {
     value
 }
 
+/// The smallest data cache line in bytes, from `CTR`'s `DminLine`, which is
+/// log2 of it in words.
+fn data_line() -> u64 {
+    let cache_type: u32;
+    // SAFETY: reading `CTR` has no side effects.
+    unsafe {
+        asm!("mrc p15, 0, {}, c0, c0, 1", out(reg) cache_type, options(nomem, nostack, preserves_flags));
+    }
+    4u64 << ((cache_type >> 16) & 0xF)
+}
+
 /// Write the data cache lines covering `start..start + len` back to the point
 /// of coherency.
 ///
 /// For memory a core with its caches off is about to read: it reads RAM, and
 /// a line still dirty in this core's cache is a line it does not see.
 pub(crate) fn clean_to_poc(start: u64, len: u64) {
-    let cache_type: u32;
-    // SAFETY: reading `CTR` has no side effects.
-    unsafe {
-        asm!("mrc p15, 0, {}, c0, c0, 1", out(reg) cache_type, options(nomem, nostack, preserves_flags));
-    }
-    // `DminLine` is log2 of the smallest data cache line in words.
-    let line = 4u64 << ((cache_type >> 16) & 0xF);
-
+    let line = data_line();
     let mut at = start - start % line;
     let end = start.saturating_add(len);
     while at < end {
@@ -665,6 +669,31 @@ pub(crate) fn clean_to_poc(start: u64, len: u64) {
     }
 }
 
+/// Make the instructions in `start..start + len`, written through the data
+/// side, the ones every core fetches from that memory: AArch64's
+/// `sync_instructions`, for the same reasons, with this architecture's
+/// operations. The lines are cleaned to the point of coherency, which is
+/// past the point of unification where fetches meet them, by
+/// [`clean_to_poc`], whose last barrier completes it. Then `ICIALLUIS`
+/// empties every instruction cache in the inner shareable domain and
+/// `BPIALLIS` every branch predictor, whose targets can point into what was
+/// there before.
+pub(crate) fn sync_instructions(start: u64, len: u64) {
+    clean_to_poc(start, len);
+    // SAFETY: barriers and cache and predictor maintenance change no data;
+    // the register the two invalidates take is ignored.
+    unsafe {
+        asm!(
+            "mcr p15, 0, {zero}, c7, c1, 0",
+            "mcr p15, 0, {zero}, c7, c1, 6",
+            "dsb",
+            "isb",
+            zero = in(reg) 0_u32,
+            options(nostack, preserves_flags)
+        );
+    }
+}
+
 /// Write the data cache lines covering `start..start + len` back to the point
 /// of coherency and drop them.
 ///
@@ -673,13 +702,7 @@ pub(crate) fn clean_to_poc(start: u64, len: u64) {
 /// evicted later, over whatever the device wrote since, and a clean one
 /// would be read in place of it by the next cached access.
 pub(crate) fn clean_invalidate_to_poc(start: u64, len: u64) {
-    let cache_type: u32;
-    // SAFETY: reading `CTR` has no side effects.
-    unsafe {
-        asm!("mrc p15, 0, {}, c0, c0, 1", out(reg) cache_type, options(nomem, nostack, preserves_flags));
-    }
-    let line = 4u64 << ((cache_type >> 16) & 0xF);
-
+    let line = data_line();
     let mut at = start - start % line;
     let end = start.saturating_add(len);
     while at < end {

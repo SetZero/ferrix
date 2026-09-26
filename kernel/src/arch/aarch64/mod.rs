@@ -20,6 +20,7 @@ pub(crate) use cpu::clean_invalidate_to_poc as flush_for_device;
 /// it (see [`crate::arch::clean_for_device`]).
 pub(crate) use cpu::clean_to_poc as clean_for_device;
 pub(crate) use cpu::hardware_random;
+pub(crate) use cpu::sync_instructions;
 pub(crate) use signal::{SIGNAL_RED_ZONE, UserContext, restore_signal_frame, setup_signal_frame};
 
 use core::sync::atomic::{AtomicBool, Ordering};
