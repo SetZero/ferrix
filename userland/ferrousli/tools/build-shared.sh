@@ -233,6 +233,9 @@ else
         -z now -z relro -z max-page-size=4096 --hash-style=gnu --no-undefined
 fi
 cp "$target_dir/$loader_target/release/ld-ferrousli" "$out/ld.so"
+# A shared object to a linker, as glibc's ld-linux is: GNU ld refuses a PIE
+# as input, and libc.so's linker script names the loader.
+python3 "$here/tools/clear-pie-flag.py" "$out/ld.so"
 
 # Every name the version script exports, and every older alias, must be in
 # the dynamic symbol table. One that is not was hidden by a definition the
