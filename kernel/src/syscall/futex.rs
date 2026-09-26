@@ -54,17 +54,29 @@
 //! `sched::wait`'s comments describe, a sleep cut short by a wake meant for an
 //! earlier one.
 //!
-//! # One table
+//! # Buckets
 //!
-//! Linux hashes keys into buckets, each with its own lock. There is one bucket
-//! here, because nothing yet makes enough futex calls at once to contend for
-//! it, and one bucket makes a requeue between two keys a single lock rather
-//! than an ordering rule. Splitting it is a change to [`TABLE`] and the three
-//! functions that lock it.
+//! Linux hashes keys into buckets, each with its own lock, and so does this:
+//! [`TABLE`] is [`BUCKETS`] of them, and a key's bucket is its hash. Until
+//! 2026-09-26 it was one bucket, because nothing had made enough futex calls
+//! at once to contend for it. Chrome playing a video did: its renderer made
+//! about 4,500 calls a second, every one scanning a list that held all of the
+//! browser's hundred and fifty parked threads, and one processor in five was
+//! spent spinning for the lock (`bench-chrome-video`, `docs/AUDIO.md` §8).
+//! Under KVM a holder's virtual processor can also be descheduled by the
+//! host, and every other caller then spins until it runs again.
+//!
+//! Everything a lock guarded before, a bucket's lock guards now for the keys
+//! that hash to it: a waiter is listed, and its word read, under its key's
+//! bucket, and a waker looks under the same one. A requeue between two keys
+//! takes both buckets' locks, the lower-numbered first, and a waiter records
+//! which bucket its entry is in ([`Sleeper::bucket`]), changed only with both
+//! locks held. A waiter leaving takes the lock of the bucket it reads there
+//! and looks again: if the entry was moved in between, it follows it.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::sync::SpinLock;
 use ferrix_linux_abi::errno::Errno;
@@ -127,6 +139,18 @@ impl PartialEq for Key {
 impl Eq for Key {}
 
 impl Key {
+    /// The bucket of [`TABLE`] this key's waiters are listed in: the space
+    /// or object and the word's place in it, mixed by a Fibonacci hash, whose
+    /// top bits are the index.
+    fn bucket(&self) -> usize {
+        let (base, at) = match self {
+            Key::Private { space, address } => (*space as u64, *address),
+            Key::Shared { object, offset } => (Arc::as_ptr(object).addr() as u64, *offset),
+        };
+        let mixed = (base.rotate_left(29) ^ at).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        (mixed >> (u64::BITS - BUCKET_BITS)) as usize
+    }
+
     /// The key for `address` in `space`: shared if `shared` asks for one and
     /// a shared region holds the word, private otherwise. Takes the space's
     /// lock, so never with [`TABLE`] held.
@@ -149,6 +173,9 @@ struct Sleeper {
     task: Option<Arc<Task>>,
     /// Set by the wake that took it off the table.
     woken: AtomicBool,
+    /// The bucket of [`TABLE`] its entry is in, or was in last. Changed only
+    /// by a requeue, holding both the old bucket's lock and the new one's.
+    bucket: AtomicUsize,
 }
 
 impl Sleeper {
@@ -178,9 +205,23 @@ struct Entry {
 /// way a futex wait ends wakes it by name.
 const TRUSTED_RECHECK_NANOS: u64 = 1_000_000_000;
 
-/// Every waiter, oldest first, so that a wake rouses in arrival order as
-/// Linux's does.
-static TABLE: SpinLock<Vec<Entry>> = SpinLock::new(Vec::new());
+/// Bits of a key's hash that pick its bucket.
+const BUCKET_BITS: u32 = 8;
+
+/// Buckets in [`TABLE`].
+const BUCKETS: usize = 1 << BUCKET_BITS;
+
+/// Every waiter, by its key's bucket ([`Key::bucket`]), each bucket oldest
+/// first, so that a wake rouses in arrival order as Linux's does.
+static TABLE: [SpinLock<Vec<Entry>>; BUCKETS] = [const { SpinLock::new(Vec::new()) }; BUCKETS];
+
+/// Bucket `index` of [`TABLE`]. [`Key::bucket`] is the top [`BUCKET_BITS`]
+/// of a hash, so every index is in range and the first bucket is never
+/// answered in another's place; it is there because a lookup has to answer
+/// something.
+fn bucket_lock(index: usize) -> &'static SpinLock<Vec<Entry>> {
+    TABLE.get(index).unwrap_or(&TABLE[0])
+}
 
 /// What waiters block on. Nobody wakes it as a whole: a wake rouses its
 /// waiters' tasks one by one, and this is only the blocking mechanism.
@@ -349,9 +390,11 @@ fn wait(
     deadline: Option<u64>,
 ) -> Result<usize, Errno> {
     let key = key(process.core(), address, shared)?;
+    let bucket = key.bucket();
     let sleeper = Arc::new(Sleeper {
         task: sched::current(),
         woken: AtomicBool::new(false),
+        bucket: AtomicUsize::new(bucket),
     });
     let deadline = deadline.unwrap_or(u64::MAX);
     loop {
@@ -359,11 +402,12 @@ fn wait(
             // Faulted in here, outside the lock, and read again under it
             // without a fault. Round again if the page went in between.
             let _ = read_word(process.core(), address)?;
-            let mut table = TABLE.lock();
+            let mut table = bucket_lock(bucket).lock();
             match read_present_word(process.core(), address)? {
                 None => {}
                 Some(word) if word != expected => return Err(Errno::EAGAIN),
                 Some(_) => {
+                    sleeper.bucket.store(bucket, Ordering::Relaxed);
                     table.push(Entry {
                         key: key.clone(),
                         bitset,
@@ -379,13 +423,7 @@ fn wait(
         // Off the table however it left, and under the lock, so that a waker
         // which found it has finished rousing it before this returns. The
         // entry goes after the lock, with the key it holds.
-        let mut table = TABLE.lock();
-        let mine = table
-            .iter()
-            .position(|entry| Arc::ptr_eq(&entry.sleeper, &sleeper))
-            .map(|index| table.remove(index));
-        drop(table);
-        drop(mine);
+        drop(unlist(&sleeper));
         // Woken wins over the other two: a wake that took this waiter off the
         // table counted it, and reporting a timeout would lose that wake for
         // whoever the waker meant it for.
@@ -401,6 +439,26 @@ fn wait(
         if crate::timer::now_nanos() >= deadline {
             return Err(Errno::ETIMEDOUT);
         }
+    }
+}
+
+/// Take `sleeper`'s entry off the table if it is still there, holding the
+/// lock of the bucket it is in. A requeue may move it while this waits for
+/// that lock, so the bucket is read again once the lock is held, and if it
+/// changed, the lock of the one it names is taken instead.
+fn unlist(sleeper: &Arc<Sleeper>) -> Option<Entry> {
+    loop {
+        let bucket = sleeper.bucket.load(Ordering::Acquire);
+        let mut table = bucket_lock(bucket).lock();
+        if sleeper.bucket.load(Ordering::Acquire) != bucket {
+            continue;
+        }
+        let mine = table
+            .iter()
+            .position(|entry| Arc::ptr_eq(&entry.sleeper, sleeper))
+            .map(|index| table.remove(index));
+        drop(table);
+        return mine;
     }
 }
 
@@ -424,23 +482,38 @@ fn wake(
 /// it counts a waiter before comparing against the limit. What is taken is
 /// dropped after the lock, since a key may hold the last reference to its
 /// object.
+///
+/// Keys in different buckets are taken bucket by bucket, in the order of
+/// `keys`: oldest first holds within a bucket, which is all a single key
+/// needs. Only the self-checks pass more than one.
 fn rouse(keys: &[Key], count: i32, bitset: u32, with: fn(&Sleeper)) -> usize {
     let limit = usize::try_from(count.max(1)).unwrap_or(1);
     let mut taken = Vec::new();
-    let mut table = TABLE.lock();
-    let mut index = 0;
-    while taken.len() < limit
-        && let Some(entry) = table.get(index)
-    {
-        if !keys.contains(&entry.key) || entry.bitset & bitset == 0 {
-            index += 1;
+    for (at, key) in keys.iter().enumerate() {
+        let bucket = key.bucket();
+        // A bucket an earlier key shares has been looked through already.
+        if keys
+            .iter()
+            .take(at)
+            .any(|earlier| earlier.bucket() == bucket)
+        {
             continue;
         }
-        let entry = table.remove(index);
-        with(&entry.sleeper);
-        taken.push(entry);
+        let mut table = bucket_lock(bucket).lock();
+        let mut index = 0;
+        while taken.len() < limit
+            && let Some(entry) = table.get(index)
+        {
+            if !keys.contains(&entry.key) || entry.bitset & bitset == 0 {
+                index += 1;
+                continue;
+            }
+            let entry = table.remove(index);
+            with(&entry.sleeper);
+            taken.push(entry);
+        }
+        drop(table);
     }
-    drop(table);
     taken.len()
 }
 
@@ -462,43 +535,62 @@ fn requeue(
     };
     let source = key(process.core(), from, shared)?;
     let target = key(process.core(), to, shared)?;
+    let (from_bucket, to_bucket) = (source.bucket(), target.bucket());
+    // Both buckets' locks, the lower-numbered first, so that two requeues
+    // the opposite ways cannot each hold the lock the other waits for; one
+    // lock when both keys hash to the same bucket.
+    let lock_both = || {
+        let first = bucket_lock(from_bucket.min(to_bucket)).lock();
+        let second =
+            (from_bucket != to_bucket).then(|| bucket_lock(from_bucket.max(to_bucket)).lock());
+        (first, second)
+    };
     // As `wait` reads its word: faulted in outside the lock, then read under
     // it without a fault, round again if the page went in between.
-    let mut table = loop {
+    let (mut first, mut second) = loop {
         let Some(expected) = expected else {
-            break TABLE.lock();
+            break lock_both();
         };
         let _ = read_word(process.core(), from)?;
-        let table = TABLE.lock();
+        let locked = lock_both();
         match read_present_word(process.core(), from)? {
             None => {}
             Some(word) if word != expected => return Err(Errno::EAGAIN),
-            Some(_) => break table,
+            Some(_) => break locked,
         }
+    };
+    let (source_table, target_table) = match second.as_mut() {
+        None => (&mut *first, None),
+        Some(higher) if from_bucket < to_bucket => (&mut *first, Some(&mut **higher)),
+        Some(higher) => (&mut **higher, Some(&mut *first)),
     };
     let mut taken = 0_usize;
     let mut moved = Vec::new();
     // The keys that leave the table, dropped after the lock.
     let mut gone = Vec::new();
     let mut index = 0;
-    while let Some(entry) = table.get(index) {
+    while let Some(entry) = source_table.get(index) {
         if entry.key != source || taken >= wake_count.saturating_add(move_count) {
             index += 1;
             continue;
         }
         taken += 1;
-        let mut entry = table.remove(index);
+        let mut entry = source_table.remove(index);
         if taken <= wake_count {
             entry.sleeper.rouse();
             gone.push(entry.key);
         } else {
             gone.push(core::mem::replace(&mut entry.key, target.clone()));
+            // Both locks are held: a waiter leaving reads this after taking
+            // the old bucket's lock and follows it to the new one.
+            entry.sleeper.bucket.store(to_bucket, Ordering::Release);
             moved.push(entry);
         }
     }
     // Onto the end of the queue, behind anything already waiting on `to`.
-    table.extend(moved);
-    drop(table);
+    target_table.unwrap_or(source_table).extend(moved);
+    drop(second);
+    drop(first);
     drop(gone);
     Ok(taken)
 }
@@ -534,12 +626,17 @@ fn either_key(space: &Arc<AddressSpace>, address: u64) -> [Key; 2] {
 /// tell a wake that works from one that arrived first.
 pub(crate) fn waiters_on(process: &Process, address: u64) -> usize {
     let keys = either_key(process.space(), address);
-    let table = TABLE.lock();
-    let count = table
-        .iter()
-        .filter(|entry| keys.contains(&entry.key))
-        .count();
-    drop(table);
+    let mut buckets: Vec<usize> = keys.iter().map(Key::bucket).collect();
+    buckets.dedup();
+    let mut count = 0;
+    for bucket in buckets {
+        let table = bucket_lock(bucket).lock();
+        count += table
+            .iter()
+            .filter(|entry| keys.contains(&entry.key))
+            .count();
+        drop(table);
+    }
     count
 }
 
@@ -556,6 +653,34 @@ pub(crate) fn forget_waiters(process: &Process, address: u64, count: i32) -> usi
         FUTEX_BITSET_MATCH_ANY,
         |_| {},
     )
+}
+
+/// The bucket of [`TABLE`] a private wait on `address` in `process`'s space
+/// is listed in: for the self-check, which needs two words in different
+/// buckets.
+pub(crate) fn bucket_of(process: &Process, address: u64) -> usize {
+    Key::new(process.space(), address, false).bucket()
+}
+
+/// A private requeue of every waiter on `from` to `to` with the one bug a
+/// table in buckets invites: each entry's key is changed where it lies, and
+/// the entry is left in `from`'s bucket, where a wake on `to` never looks.
+/// Answers how many it re-keyed.
+///
+/// Exists for the self-check's negative control, which must show that the
+/// requeue check fails a requeue like this one.
+pub(crate) fn requeue_without_moving(process: &Process, from: u64, to: u64) -> usize {
+    let source = Key::new(process.space(), from, false);
+    let target = Key::new(process.space(), to, false);
+    let mut gone = Vec::new();
+    let mut table = bucket_lock(source.bucket()).lock();
+    for entry in table.iter_mut().filter(|entry| entry.key == source) {
+        gone.push(core::mem::replace(&mut entry.key, target.clone()));
+    }
+    drop(table);
+    let count = gone.len();
+    drop(gone);
+    count
 }
 
 /// Read a `struct timespec` of `width` as nanoseconds, by `ppoll`'s rules.

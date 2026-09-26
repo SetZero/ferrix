@@ -228,6 +228,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     mark!(7);
     let started_with = check_a_program_is_handed_its_start_argument()?;
     let futex_woken = check_futexes()?;
+    a_requeue_crosses_buckets()?;
     check_brk_and_fork_wait_for_the_heap_lock()?;
     mark!(8);
     let _ = at;
@@ -7025,6 +7026,146 @@ fn check_futexes() -> Result<usize, &'static str> {
     let _ = memory::sys_munmap(&process, page, PAGE_SIZE).map_err(|_| "munmap was refused")?;
     woken += a_shared_futex_crosses_a_fork()?;
     Ok(woken)
+}
+
+/// Bytes the bucket check maps: four pages, a word in which is all but
+/// certain to hash to another bucket than the first word's.
+const BUCKET_CHECK_BYTES: u64 = 4 * PAGE_SIZE;
+
+/// Where the bucket check's words start, past the timeout at 16.
+const BUCKET_CHECK_FIRST: u64 = 64;
+
+/// The first word after `word`, in the pages the bucket check maps, whose
+/// private key hashes to another bucket of the futex table than `word`'s.
+fn a_word_in_another_bucket(process: &Process, word: u64) -> Option<u64> {
+    let bucket = futex::bucket_of(process, word);
+    (word + 4..word - BUCKET_CHECK_FIRST + BUCKET_CHECK_BYTES)
+        .step_by(4)
+        .find(|&other| futex::bucket_of(process, other) != bucket)
+}
+
+/// `FUTEX_CMP_REQUEUE` of one private waiter from `word` to `target`.
+fn requeue_one(process: &Process, word: u64, target: u64) -> Result<usize, Errno> {
+    let requeue = u64::from(FUTEX_CMP_REQUEUE | FUTEX_PRIVATE_FLAG);
+    futex_call(
+        process,
+        [word, requeue, 0, 1, target, u64::from(FUTEX_WORD)],
+    )
+}
+
+/// A private `FUTEX_WAKE` of one waiter on `word`.
+fn wake_one(process: &Process, word: u64) -> Result<usize, Errno> {
+    futex_call(
+        process,
+        [word, u64::from(FUTEX_WAKE | FUTEX_PRIVATE_FLAG), 1, 0, 0, 0],
+    )
+}
+
+/// The futex table is in buckets by key, and a requeue between two words in
+/// different buckets must move its waiter into the other one: a wake on the
+/// second word then rouses it, and neither word has anyone left on it. A
+/// waiter requeued and then left to time out must take its entry out of the
+/// bucket it was moved to, not look for it in the one it started in. The
+/// negative control requeues by changing the key and leaving the entry where
+/// it was -- the bug a table in buckets invites -- and the wake on the second
+/// word must be caught missing its waiter.
+fn a_requeue_crosses_buckets() -> Result<(), &'static str> {
+    let process = process::new_for_check()
+        .map_err(|_| "could not make a process for the futex bucket check")?;
+    let page = map_rw(&process, BUCKET_CHECK_BYTES)?;
+    let word = page + BUCKET_CHECK_FIRST;
+    let timeout = page + 16;
+    let target = a_word_in_another_bucket(&process, word)
+        .ok_or("no futex word in four pages hashed to another bucket than the first")?;
+    for at in [word, target] {
+        uaccess::copy_to_user(process.space(), at, &FUTEX_WORD.to_le_bytes())
+            .map_err(|_| "could not stage the futex bucket check's words")?;
+    }
+    let (from, to) = (
+        futex::bucket_of(&process, word),
+        futex::bucket_of(&process, target),
+    );
+
+    let _ = wait_then_wake(
+        &process,
+        word,
+        timeout,
+        (FUTEX_LONG_SECONDS, 0),
+        |process, word| {
+            let Some(target) = a_word_in_another_bucket(process, word) else {
+                return Ok(0);
+            };
+            let moved = requeue_one(process, word, target)?;
+            if moved != 1
+                || futex::waiters_on(process, word) != 0
+                || futex::waiters_on(process, target) != 1
+            {
+                return Ok(0);
+            }
+            wake_one(process, target)
+        },
+    )?;
+    if futex::waiters_on(&process, word) != 0 || futex::waiters_on(&process, target) != 0 {
+        return Err("a waiter requeued to another futex bucket and woken there left an entry");
+    }
+
+    match wait_then_wake(
+        &process,
+        word,
+        timeout,
+        (0, FUTEX_FORGOTTEN_NANOS),
+        |process, word| match a_word_in_another_bucket(process, word) {
+            Some(target) => requeue_one(process, word, target),
+            None => Ok(0),
+        },
+    ) {
+        Err(problem) if problem == SLEPT_THROUGH_WAKE => {}
+        Err(_) => {
+            return Err("a futex waiter requeued and left to time out failed for another reason");
+        }
+        Ok(_) => return Err("a futex waiter requeued and never woken came back woken"),
+    }
+    if futex::waiters_on(&process, word) != 0 || futex::waiters_on(&process, target) != 0 {
+        return Err(
+            "a futex waiter requeued to another bucket and timed out left its entry behind",
+        );
+    }
+
+    match wait_then_wake(
+        &process,
+        word,
+        timeout,
+        (0, FUTEX_FORGOTTEN_NANOS),
+        |process, word| {
+            let Some(target) = a_word_in_another_bucket(process, word) else {
+                return Ok(0);
+            };
+            if futex::requeue_without_moving(process, word, target) != 1 {
+                return Ok(0);
+            }
+            wake_one(process, target)
+        },
+    ) {
+        Err(problem) if problem == WAKE_MISSED_ITS_WAITER => {}
+        Err(_) => {
+            return Err(
+                "the futex bucket check failed a requeue left in place, for another reason",
+            );
+        }
+        Ok(_) => return Err("the futex bucket check passed a requeue that never moved its waiter"),
+    }
+    if futex::waiters_on(&process, word) != 0 || futex::waiters_on(&process, target) != 0 {
+        return Err("the negative control's waiter left an entry on the futex table");
+    }
+
+    let _ =
+        memory::sys_munmap(&process, page, BUCKET_CHECK_BYTES).map_err(|_| "munmap was refused")?;
+    println!(
+        "  futex    a waiter requeued from bucket {from} to bucket {to} was woken there, one \
+         left to time out took its entry out of bucket {to}, and a requeue that left its waiter \
+         in bucket {from} was caught"
+    );
+    Ok(())
 }
 
 /// A futex in `MAP_SHARED` memory is one futex on both sides of a `fork`: a
