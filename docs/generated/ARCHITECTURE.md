@@ -94,7 +94,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixBoot` | `03-boot.sysml` | The hand-off ABI, the two address layouts, the loader's sequence, the kernel's bring-up with every stage's self-check to stage 12, and the trap path. All of this runs today on all three architectures. |
 | `FerrixMemory` | `04-memory.sysml` | docs/ARCHITECTURE.md §4. The physical allocator, the heap, the page-table arithmetic and the kernel arena since stage 2; VMOs, process address spaces, demand paging and copy-on-write since stage 6, file mappings since stage 8. Reclaim is stage 13's and not built. |
 | `FerrixScheduling` | `05-scheduling.sysml` | Stages 3 to 5 run today: interrupts, a clock, every processor online, IPIs, TLB shootdown, grace periods, fair locks, and tasks scheduled by EEVDF in one Throughput domain. Stage 14's real-time domains are designed here (docs/ARCHITECTURE.md §5) and not yet written. |
-| `FerrixObjects` | `06-objects.sysml` | docs/ARCHITECTURE.md §2 and §3. The constants for the Linux half are in libs/linux-abi and for the native half in libs/native-abi. The objects a handle can name exist in kernel/src/object; processes and threads in kernel/src/syscall. No handle names an address space or a thread yet. |
+| `FerrixObjects` | `06-objects.sysml` | docs/ARCHITECTURE.md §2 and §3. The constants for the Linux half are in libs/linux-abi and for the native half in libs/native-abi. The objects a handle can name exist in kernel/src/object, the core half of a process among them; the POSIX half and threads in kernel/src/syscall. No handle names an address space or a thread yet. |
 | `FerrixIsolation` | `07-isolation.sysml` | docs/ARCHITECTURE.md §6: namespaces, cgroups v2, seccomp, credentials. Stage 13, designed in from the start so that no global table has to be found later. Only the credentials exist, since stage 7; namespaces, cgroups and seccomp are not built, and unshare and setns answer as a Linux built without namespaces does. |
 | `FerrixDrivers` | `08-drivers.sysml` | docs/ARCHITECTURE.md §7. The kernel enumerates buses because that needs ACPI or a device tree and privileged access; it does not drive devices. Everything from the device node outward is stage 10, which is done: the drivers are processes devmgr starts. What it still owes is named on the part that owes it. |
 | `FerrixStorage` | `09-storage.sysml` | docs/ARCHITECTURE.md §8. Block core, VFS, the small in-kernel filesystems and btrfs in three stages. What exists today is marked on each part. |
@@ -102,11 +102,11 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1647 elements, 198 relations. Model digest `adb373edc46b4b35`.
+13 files, 16 packages, 1655 elements, 198 relations. Model digest `5ee39de2ed1545b7`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
-| `#implemented` | 264 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
+| `#implemented` | 267 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
 | `#inProgress` | 9 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 3 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
 | `#planned` | 39 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
@@ -277,6 +277,7 @@ kernel : Kernel
       stack : KernelStack
       cpu : PerCpu
       addressSpace : FerrixMemory::ProcessAddressSpace
+      thread : UserThread
     waitQueues : WaitQueue
   sched : Scheduler  [implemented]
     domains : SchedulingDomain
@@ -1505,10 +1506,21 @@ kernel/src/sched/task.rs: a kernel thread — a guard-paged stack, a saved stack
 | `stack` | part | `KernelStack` |  |  |
 | `cpu` | part | `PerCpu` |  |  |
 | `addressSpace` | part | `FerrixMemory::ProcessAddressSpace` |  | The address space its user half is translated through, absent for a kernel thread. |
+| `thread` | part | `UserThread` |  | The user thread it runs, absent for a kernel thread. |
 | `schedClass` | attribute | `SchedClass` | `#planned` |  |
 | `policy` | attribute | `LinuxPolicy` | `#planned` |  |
 | `priority` | attribute | `Natural` | `#planned` | 1 to 99 for FIFO/RR. |
 | `bandwidth` | attribute | `Natural` | `#planned` | CBS reservation for EDF. |
+
+#### UserThread
+
+`#implemented`  ·  stage 6
+
+A line of execution through a program, as the scheduler sees it: kernel/src/sched/task.rs's UserThread trait. The thread itself is the personality's -- its id, its signals, the address to clear when it ends are none of the scheduler's business -- so the scheduler asks it one thing, the process it runs in, to count the thread starting and gone.
+
+| Feature | Kind | Type | Maturity | Note |
+| --- | --- | --- | --- | --- |
+| `process` | part | `FerrixObjects::Process` |  |  |
 
 #### Tasks
 
@@ -1749,7 +1761,7 @@ kernel/src/syscall/futex.rs: wait, wake and requeue, plain and with a bitset, wi
 
 ### Kernel objects and the two ABIs
 
-docs/ARCHITECTURE.md §2 and §3. The constants for the Linux half are in libs/linux-abi and for the native half in libs/native-abi. The objects a handle can name exist in kernel/src/object; processes and threads in kernel/src/syscall. No handle names an address space or a thread yet.
+docs/ARCHITECTURE.md §2 and §3. The constants for the Linux half are in libs/linux-abi and for the native half in libs/native-abi. The objects a handle can name exist in kernel/src/object, the core half of a process among them; the POSIX half and threads in kernel/src/syscall. No handle names an address space or a thread yet.
 
 ```mermaid
 flowchart TB
@@ -1849,26 +1861,47 @@ An MMIO aperture, mappable into a driver's address space, with its IOMMU domain.
 
 `#planned`  ·  stage 5  ·  specialises `KernelObject, Task`
 
-Threads exist (kernel/src/syscall/thread.rs), each running on a task of its own, but no native handle names one.
+Threads exist (Thread below), each running on a task of its own, but no native handle names one.
 
 #### Process
 
 `#implemented`  ·  stage 6  ·  specialises `KernelObject`
 
-A group of tasks sharing an address space, fd table, fs context and signal dispositions. Precisely a particular sharing arrangement of independently shareable objects, composed by clone flags as Linux composes them, within what Clone below refuses. kernel/src/syscall/process.rs; a native handle to one names only how it ended, so a handle kept past its end keeps nothing else it owned alive. No namespace set until stage 13: every process shares the one of everything.
+The process as the core enforces and reports it, and nothing a personality adds: kernel/src/object/process.rs. Its address space, its pid, when it was made, its handle table, its job, and how it ended -- which is all a native handle to one names, so a handle kept past its end keeps nothing else it owned alive. The pid table is here too, weak, so a job kill finds its members without naming the personality. Split from the POSIX process by certification work order W-1: the core has no field leading back to PosixProcess, and where it must hold a process whole it holds a Host, the personality's object seen through the few questions the core asks of it -- kill, a thread starting or gone, whether a wait must end.
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
-| `tasks` | part | `TaskObject` |  |  |
 | `space` | part | `AddressSpaceObject` |  |  |
+| `handles` | part | `HandleTable` |  |  |
+| `job` | part | `Job` |  |  |
+| `pid` | attribute | `Natural` |  | Meaningless without saying in which pid namespace. |
+| `exitStatus` | attribute | `Integer` |  |  |
+| `kill` | action |  |  |  |
+
+#### PosixProcess
+
+`#implemented`  ·  stage 6  ·  specialises `Process`
+
+A group of threads sharing an address space, fd table, fs context and signal dispositions. Precisely a particular sharing arrangement of independently shareable objects, composed by clone flags as Linux composes them, within what Clone below refuses. kernel/src/syscall/process.rs, in the uncertified load ring: it contains the core Process and derefs to it, and decides how a process ends -- descriptors closed, orphans handed on, the parent told. No namespace set until stage 13: every process shares the one of everything.
+
+| Feature | Kind | Type | Maturity | Note |
+| --- | --- | --- | --- | --- |
+| `threads` | part | `Thread` |  |  |
 | `fdTable` | part | `FdTable` |  |  |
 | `fsContext` | part | `FsContext` |  |  |
 | `sigHandlers` | part | `SignalDispositions` |  |  |
 | `namespaces` | part | `FerrixIsolation::NsSet` |  |  |
-| `handles` | part | `HandleTable` |  |  |
 | `credentials` | attribute | `FerrixIsolation::Credentials` |  |  |
-| `job` | part | `Job` |  |  |
-| `pid` | attribute | `Natural` |  | Meaningless without saying in which pid namespace. |
+
+#### Thread
+
+`#implemented`  ·  stage 7  ·  specialises `FerrixScheduling::UserThread`
+
+One line of execution through a PosixProcess: kernel/src/syscall/thread.rs. Its thread id from the pid space, its own signal mask and queue, the address to clear when it ends. The task that runs it holds it only as a UserThread, and the personality has it back by downcast.
+
+| Feature | Kind | Type | Maturity | Note |
+| --- | --- | --- | --- | --- |
+| `process` | part | `PosixProcess` |  |  |
 
 #### Job
 
@@ -3747,9 +3780,12 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 6 | `FerrixMemory::VirtualMemory` | part | `#implemented` |
 | 6 | `FerrixMemory::UserElfLoader` | part | `#implemented` |
 | 6 | `FerrixScheduling::Task::addressSpace` | part | — |
+| 6 | `FerrixScheduling::Task::thread` | part | — |
+| 6 | `FerrixScheduling::UserThread` | part | `#implemented` |
 | 6 | `FerrixScheduling::Tasks::spawnInAddressSpace` | action | — |
 | 6 | `FerrixScheduling::Tasks::swapAddressSpace` | action | — |
 | 6 | `FerrixObjects::Process` | part | `#implemented` |
+| 6 | `FerrixObjects::PosixProcess` | part | `#implemented` |
 | 6 | `FerrixAssurance::AssemblyBudget::syscallEntrySites` | attribute | `#implemented` |
 | 7 | `FerrixStructure::Workspace::linuxAbi` | part | `#implemented` |
 | 7 | `FerrixStructure::Workspace::ustack` | part | `#implemented` |
@@ -3762,6 +3798,7 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 7 | `FerrixScheduling::Task::policy` | attribute | `#planned` |
 | 7 | `FerrixScheduling::Scheduler::setScheduler` | action | `#inProgress` |
 | 7 | `FerrixScheduling::Futex` | part | `#implemented` |
+| 7 | `FerrixObjects::Thread` | part | `#implemented` |
 | 7 | `FerrixObjects::Clone` | action | `#implemented` |
 | 7 | `FerrixObjects::LinuxSyscallLayer` | part | `#implemented` |
 | 7 | `FerrixObjects::Signals` | part | `#implemented` |
@@ -3866,7 +3903,7 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 19 | `FerrixDrivers::Gc400Driver` | part | `#inProgress` |
 | 19 | `FerrixAssurance::VideoTest` | verification | `#implemented` |
 
-180 elements across 18 stages.
+184 elements across 18 stages.
 
 ## Figures
 

@@ -191,10 +191,27 @@ package FerrixScheduling {
                  * way into the task, and this reference is the only thing
                  * between those tables and the frame allocator. */
         }
+        ref part thread : UserThread[0..1] {
+            @stage { number = 6; }
+            doc /* The user thread it runs, absent for a kernel thread. Holding
+                 * it is what keeps the thread, and through it the process,
+                 * alive while the task is. */
+        }
         #planned attribute schedClass : SchedClass { @stage { number = 14; } }
         #planned attribute policy : LinuxPolicy { @stage { number = 7; } }
         #planned attribute priority : Natural { @stage { number = 14; } doc /* 1 to 99 for FIFO/RR. */ }
         #planned attribute bandwidth : Natural { @stage { number = 14; } doc /* CBS reservation for EDF. */ }
+    }
+
+    #implemented part def UserThread {
+        @stage { number = 6; }
+        doc /* A line of execution through a program, as the scheduler sees
+             * it: kernel/src/sched/task.rs's UserThread trait. The thread
+             * itself is the personality's -- its id, its signals, the address
+             * to clear when it ends are none of the scheduler's business --
+             * so the scheduler asks it one thing, the process it runs in, to
+             * count the thread starting and gone. */
+        ref part process : FerrixObjects::Process;
     }
 
     #implemented part def Tasks {

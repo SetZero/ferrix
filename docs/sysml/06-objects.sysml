@@ -3,8 +3,9 @@
  *
  * docs/ARCHITECTURE.md §2 and §3. The constants for the Linux half are in
  * libs/linux-abi and for the native half in libs/native-abi. The objects a
- * handle can name exist in kernel/src/object; processes and threads in
- * kernel/src/syscall. No handle names an address space or a thread yet.
+ * handle can name exist in kernel/src/object, the core half of a process
+ * among them; the POSIX half and threads in kernel/src/syscall. No handle
+ * names an address space or a thread yet.
  */
 package FerrixObjects {
     private import ScalarValues::*;
@@ -67,32 +68,61 @@ package FerrixObjects {
 
     #planned part def TaskObject :> KernelObject, Task {
         @stage { number = 5; }
-        doc /* Threads exist (kernel/src/syscall/thread.rs), each running on
-             * a task of its own, but no native handle names one. */
+        doc /* Threads exist (Thread below), each running on a task of its
+             * own, but no native handle names one. */
     }
 
     #implemented part def Process :> KernelObject {
         @stage { number = 6; }
-        doc /* A group of tasks sharing an address space, fd table, fs context
-             * and signal dispositions. Precisely a particular sharing
-             * arrangement of independently shareable objects, composed by
-             * clone flags as Linux composes them, within what Clone below
-             * refuses. kernel/src/syscall/process.rs; a native handle to one
-             * names only how it ended, so a handle kept past its end keeps
-             * nothing else it owned alive. No namespace set until stage
-             * 13: every process shares the one of everything. */
-        part tasks : TaskObject[1..*];
+        doc /* The process as the core enforces and reports it, and nothing a
+             * personality adds: kernel/src/object/process.rs. Its address
+             * space, its pid, when it was made, its handle table, its job,
+             * and how it ended -- which is all a native handle to one names,
+             * so a handle kept past its end keeps nothing else it owned
+             * alive. The pid table is here too, weak, so a job kill finds
+             * its members without naming the personality. Split from the
+             * POSIX process by certification work order W-1: the core has no
+             * field leading back to PosixProcess, and where it must hold a
+             * process whole it holds a Host, the personality's object seen
+             * through the few questions the core asks of it -- kill, a
+             * thread starting or gone, whether a wait must end. */
         ref part space : AddressSpaceObject;
-        ref part fdTable : FdTable;
-        ref part fsContext : FsContext;
-        ref part sigHandlers : SignalDispositions;
-        ref part namespaces : FerrixIsolation::NsSet;
         part handles : HandleTable;
-        attribute credentials : FerrixIsolation::Credentials;
         ref part job : Job;
         attribute pid : Natural {
             doc /* Meaningless without saying in which pid namespace. */
         }
+        attribute exitStatus : Integer[0..1];
+        action kill;
+    }
+
+    #implemented part def PosixProcess :> Process {
+        @stage { number = 6; }
+        doc /* A group of threads sharing an address space, fd table, fs
+             * context and signal dispositions. Precisely a particular sharing
+             * arrangement of independently shareable objects, composed by
+             * clone flags as Linux composes them, within what Clone below
+             * refuses. kernel/src/syscall/process.rs, in the uncertified
+             * load ring: it contains the core Process and derefs to it, and
+             * decides how a process ends -- descriptors closed, orphans
+             * handed on, the parent told. No namespace set until stage 13:
+             * every process shares the one of everything. */
+        part threads : Thread[1..*];
+        ref part fdTable : FdTable;
+        ref part fsContext : FsContext;
+        ref part sigHandlers : SignalDispositions;
+        ref part namespaces : FerrixIsolation::NsSet;
+        attribute credentials : FerrixIsolation::Credentials;
+    }
+
+    #implemented part def Thread :> FerrixScheduling::UserThread {
+        @stage { number = 7; }
+        doc /* One line of execution through a PosixProcess:
+             * kernel/src/syscall/thread.rs. Its thread id from the pid space,
+             * its own signal mask and queue, the address to clear when it
+             * ends. The task that runs it holds it only as a UserThread, and
+             * the personality has it back by downcast. */
+        ref part process : PosixProcess;
     }
 
     #implemented part def Job :> KernelObject {
@@ -147,7 +177,7 @@ package FerrixObjects {
              * with a descriptor table or directories of its own. vfork
              * copies rather than lends, and the parent still waits. */
         in share : Shareable[0..*];
-        out child : Process;
+        out child : PosixProcess;
     }
 
     // -----------------------------------------------------------------------
