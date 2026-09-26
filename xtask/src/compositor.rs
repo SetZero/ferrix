@@ -4800,7 +4800,11 @@ fn rustc_links(carried: &[crate::ports::File]) -> Vec<crate::ports::File> {
 }
 
 /// The page `run-compositor --chrome` opens with.
-const CHROME_WELCOME_PAGE: &str = "data:text/html,<body%20style=font-family:sans-serif;background:%23fc0><h1>Chrome%20on%20Ferrix</h1><p>Type%20an%20address%20above.</p>";
+///
+/// Its button plays a tone through the page's `AudioContext` and stops it
+/// again: sound from Chrome, through `/dev/snd`, to the host's speakers under
+/// `--audio pipewire` (`docs/AUDIO.md` §4).
+const CHROME_WELCOME_PAGE: &str = "data:text/html,<body%20style=font-family:sans-serif;background:%23fc0><h1>Chrome%20on%20Ferrix</h1><p>Type%20an%20address%20above.</p><button%20style=font-size:2em%20onclick=tone()>Play%20a%20tone</button><script>var%20c,o;function%20tone(){if(o){o.stop();o=null;return}c=c||new%20AudioContext();o=c.createOscillator();g=c.createGain();g.gain.value=0.2;o.connect(g).connect(c.destination);o.start()}</script>";
 
 /// What `run-compositor --chrome` adds to the desktop's configuration:
 /// Chrome's environment, a window as the desktop starts, and SUPER+B for
@@ -4924,6 +4928,135 @@ pub(crate) fn test_chrome_window(args: &Args) -> Result<()> {
     };
     let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
     judge_chrome_window(arch, &said, best.as_ref(), after_input.as_ref(), &dump)
+}
+
+/// The page `test-chrome-audio` opens: a tone of [`CHROME_TONE_HZ`], started
+/// as the page loads, which `--autoplay-policy=no-user-gesture-required`
+/// lets it do without a click.
+const CHROME_TONE_PAGE: &str = "data:text/html,<body%20style=background:%23fc0><h1>tone</h1><script>c=new%20AudioContext();o=c.createOscillator();o.frequency.value=440;g=c.createGain();g.gain.value=0.2;o.connect(g).connect(c.destination);o.start();document.title=c.state</script>";
+
+/// The tone's pitch.
+const CHROME_TONE_HZ: f64 = 440.0;
+
+/// Frames of tone the file must hold: a second's worth, at the card's rate.
+const CHROME_TONE_FRAMES: usize = 48_000;
+
+/// `test-chrome-audio`: Google's Chrome in a window on the compositor, on
+/// Ferrix, playing a page's `AudioContext` through `/dev/snd`.
+///
+/// The window of `test-chrome-window`, on a page that plays 440 Hz as it
+/// loads, with a virtio-snd card whose far end is QEMU's `wav` backend
+/// (`docs/AUDIO.md` §4). Chrome's audio service opens alsa-lib's `default`,
+/// which is `plug` over the card, and writes through the ALSA ioctls to the
+/// kernel's audio core; what the device consumes is in the file. What is
+/// required is a second of it that is not silence, with the tone's pitch:
+/// its zero crossings, counted over what was played, give the frequency.
+///
+/// # Errors
+///
+/// When the volume is missing, the boot fails, or the file holds no second
+/// of a 440 Hz tone.
+pub(crate) fn test_chrome_audio(args: &Args) -> Result<()> {
+    let arch = Arch::X86_64;
+    if args.arches()?.iter().any(|&asked| asked != arch) {
+        return Err(Error::new(
+            "test-chrome-audio runs on x86-64 only: Chrome for Testing publishes linux64 alone",
+        ));
+    }
+    let mut args = args.clone();
+    args.data_image = Some(crate::chrome::volume()?);
+    if !args.memory_given {
+        args.memory = crate::chrome::MEMORY;
+    }
+    let programs = Programs::build(arch)?;
+    let mut ports = crate::rustc::files(crate::chrome::LINKS);
+    ports.extend(crate::chrome::window_files());
+    let carried = Carried {
+        ports,
+        ..Carried::none()
+    };
+    let config = format!(
+        "# Carried into the initramfs by `cargo xtask test-chrome-audio`.\n{}exec-once = {}\n",
+        crate::chrome::WINDOW_ENV,
+        crate::chrome::window_command(CHROME_TONE_PAGE)
+    );
+    let (image, kernel) = build_image(arch, &programs, &undithered(&config), carried, &args)?;
+    let wav = paths::build_dir(arch).join("chrome-audio.wav");
+    if wav.exists() {
+        std::fs::remove_file(&wav)
+            .map_err(|error| Error::new(format!("{}: {error}", wav.display())))?;
+    }
+    let mut qemu_args = args;
+    qemu_args.display = true;
+    qemu_args.audio = Some(format!("wav:{}", wav.display()));
+    let mut heard = None;
+    let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        let deadline = Instant::now() + CHROME_WINDOW_PATIENCE;
+        loop {
+            if let Some(tone) = std::fs::read(&wav).ok().and_then(|bytes| tone_in(&bytes)) {
+                heard = Some(tone);
+                if tone.0 >= CHROME_TONE_FRAMES {
+                    break;
+                }
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            let _ = watching.read_more(Instant::now() + Duration::from_secs(2), |_| false)?;
+        }
+        Ok(())
+    };
+    let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
+    match heard {
+        Some((frames, hz)) if frames >= CHROME_TONE_FRAMES => {
+            if (hz - CHROME_TONE_HZ).abs() > CHROME_TONE_HZ * 0.02 {
+                return Err(Error::new(format!(
+                    "{arch}: Chrome played {frames} frames, but at {hz:.1} Hz, not \
+                     {CHROME_TONE_HZ} Hz; {}",
+                    wav.display()
+                )));
+            }
+            println!(
+                "  {arch}: Chrome played {:.2} s of a {hz:.1} Hz tone through /dev/snd",
+                frames as f64 / 48_000.0
+            );
+            Ok(())
+        }
+        Some((frames, _)) => Err(Error::new(format!(
+            "{arch}: Chrome played only {frames} frames that were not silence; {}",
+            wav.display()
+        ))),
+        None => Err(Error::new(format!(
+            "{arch}: nothing Chrome played reached the card's file {}",
+            wav.display()
+        ))),
+    }
+}
+
+/// The frames of a WAV file's S16 stereo data that are not silence, and the
+/// pitch of their left channel by its zero crossings, or `None` when there
+/// is no data yet.
+fn tone_in(wav: &[u8]) -> Option<(usize, f64)> {
+    let data = wav.windows(4).position(|window| window == b"data")?;
+    let (whole, _) = wav.get(data + 8..)?.as_chunks::<4>();
+    let samples: Vec<i16> = whole
+        .iter()
+        .map(|&[a, b, _, _]| i16::from_le_bytes([a, b]))
+        .collect();
+    let start = samples
+        .iter()
+        .position(|sample| sample.unsigned_abs() > 64)?;
+    let end = samples
+        .iter()
+        .rposition(|sample| sample.unsigned_abs() > 64)?
+        + 1;
+    let heard = samples.get(start..end)?;
+    let crossings = heard
+        .windows(2)
+        .filter(|pair| matches!(pair, [a, b] if (*a < 0) != (*b < 0)))
+        .count();
+    let seconds = heard.len() as f64 / 48_000.0;
+    Some((heard.len(), crossings as f64 / 2.0 / seconds.max(1e-9)))
 }
 
 /// Click into Chrome's page and type three letters, as a person does, and

@@ -1495,7 +1495,7 @@ fn qemu_command(
 
     attach_rng(&mut command, arch);
     attach_display(&mut command, arch, args, &binary);
-    attach_clipboard(&mut command, arch, args);
+    attach_asked_for(&mut command, arch, args);
     attach_test_disk(&mut command, arch)?;
     attach_btrfs_disk(&mut command, arch)?;
     attach_root_disk(&mut command, arch, args)?;
@@ -1583,6 +1583,40 @@ fn attach_clipboard(command: &mut Command, arch: Arch, args: &Args) {
         "virtserialport,bus=vdagent-bus.0,chardev=vdagent,name=com.redhat.spice.0",
     ]);
     println!("  {arch}: clipboard over virtio-serial, port com.redhat.spice.0");
+}
+
+/// The devices a flag asks for and nothing else brings: the clipboard's
+/// virtio-serial port and the sound card.
+fn attach_asked_for(command: &mut Command, arch: Arch, args: &Args) {
+    attach_clipboard(command, arch, args);
+    attach_audio(command, arch, args);
+}
+
+/// A virtio-snd card (`docs/AUDIO.md` §4), when `--audio` names a backend.
+///
+/// `wav:PATH` writes what the guest plays to `PATH` with QEMU's mixing
+/// engine off, so the file holds the stream's own frames, neither resampled
+/// nor scaled; any other backend is passed to `-audiodev` as named, for a
+/// person to hear. Through the IOMMU but on ARMv7-A, as every virtio device.
+fn attach_audio(command: &mut Command, arch: Arch, args: &Args) {
+    let Some(backend) = &args.audio else {
+        return;
+    };
+    let audiodev = match backend.strip_prefix("wav:") {
+        Some(path) => format!("wav,id=snd0,path={path},out.mixing-engine=off"),
+        None => format!("{backend},id=snd0"),
+    };
+    let flags = if arch == Arch::Armv7a {
+        "disable-legacy=on"
+    } else {
+        "disable-legacy=on,iommu_platform=on"
+    };
+    let _ = command.args(["-audiodev", &audiodev]);
+    let _ = command.args([
+        "-device",
+        &format!("virtio-sound-pci,audiodev=snd0,{flags}"),
+    ]);
+    println!("  {arch}: sound over virtio-snd, backend {backend}");
 }
 
 /// The display of iteration 1 (`docs/DISPLAY.md` §3), when `--display` or

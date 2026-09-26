@@ -56,6 +56,7 @@
 )]
 
 mod args;
+mod audio;
 mod btrfs_check;
 mod btrfs_disk;
 mod builds;
@@ -175,6 +176,7 @@ COMMANDS:
     test-compositor  Boot compositor/hyprix as init with a virtio-gpu, and require its background on every pixel
     test-video    Boot a wallpaper that moves and require the screen to show its frames in turn
     test-input    Boot compositor/evecho as init with virtio-input, send a key and a touch over QMP, and require them back
+    test-audio    Boot compositor/tone as init with virtio-snd, play a second of a counter, and require every frame back from QEMU's wav file
     test-seat     Boot the compositor with a client, type into it over QMP, and require the key and the keybind to land
     test-pty      Boot compositor/term as init, run a program on a pseudoterminal, and require its output back
     test-foot     Boot the compositor with foot, the ported Wayland terminal, and require its font and its text on screen
@@ -188,6 +190,7 @@ COMMANDS:
     test-rustc    Attach the rustc volume scripts/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
     test-chrome   Attach the volume scripts/fetch-chrome.sh makes, and require headless Chrome to run a page's script and draw it
     test-chrome-window  The same volume, and require Chrome in a window on the compositor, its page on the screen
+    test-chrome-audio   The same window on a page playing 440 Hz, and require the tone in QEMU's wav file of the virtio-snd card
     bench-chrome  Chrome in a window, left alone, scrolled and pointed at: processor time, frames and memory per phase
     test-selfhost  Run `cargo xtask build` on Ferrix from that toolchain and this checkout, and boot the image it made;
                   with --plan DIR, have Ferrix make every build a FERRIX_BUILDS=record:DIR run wrote down
@@ -260,6 +263,9 @@ OPTIONS:
                                          clipboard shared with whoever is watching. The device only:
                                          no guest driver or agent exists yet, so nothing is shared
                                          today (docs/CLIPBOARD.md §8)
+    --audio <BACKEND>                    run, run-compositor: a virtio-snd card whose far end is
+                                         QEMU's audio backend BACKEND: `pipewire` or `pa` to hear
+                                         it, `wav:PATH` to write what plays to a file (docs/AUDIO.md §4)
     --vnc <DISPLAY>                      run --display, run-compositor: serve the screen over VNC
                                          at e.g. `:0` (127.0.0.1) rather than in a window of this host's
     --rendernode <PATH>                  --gl on a served or headless screen: which GPU egl-headless
@@ -395,6 +401,7 @@ fn run() -> Result<()> {
         "test-foot" => compositor::test_foot(&args),
         "test-vkgears" => compositor::test_vkgears(&args),
         "test-input" => input::test_input(&args),
+        "test-audio" => audio::test_audio(&args),
         "test-seat" => seat::test_seat(&args),
         "test-pty" => pty::test_pty(&args),
         "test-jobs" => jobs::test_jobs(&args),
@@ -404,7 +411,7 @@ fn run() -> Result<()> {
         "test-threads" => threads::test_threads(&args),
         "coverage" => coverage::run(&args),
         "test-rustc" => rustc::test_rustc(&args),
-        "test-chrome" | "test-chrome-window" => chrome::run(command, &args),
+        "test-chrome" | "test-chrome-window" | "test-chrome-audio" => chrome::run(command, &args),
         "bench-chrome" => compositor::bench_chrome(&args),
         "test-selfhost" => selfhost::test_selfhost(&args),
         "builds-execute" => {

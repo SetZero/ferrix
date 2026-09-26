@@ -96,6 +96,9 @@ pub(crate) const LINKS: &[(&str, &str)] = &[
     ("etc/fonts", "/data/etc/fonts"),
     ("usr/share/fonts", "/data/usr/share/fonts"),
     ("usr/share/fontconfig", "/data/usr/share/fontconfig"),
+    // alsa-lib's configuration, which it reads from this path: Chrome's
+    // sound goes through alsa-lib to `/dev/snd` (docs/AUDIO.md §3.5).
+    ("usr/share/alsa", "/data/usr/share/alsa"),
 ];
 
 /// Guest memory unless `--memory` says otherwise: Chrome wants about two
@@ -223,12 +226,21 @@ pub(crate) fn window_files() -> Vec<crate::ports::File> {
 /// takes away the bar Chrome for Testing shows under the toolbar, saying it
 /// is for automated testing only. [`USER_AGENT`] says Ferrix where Chrome
 /// says Linux.
+///
+/// Sound goes through ALSA, since there is no `PulseAudio` server and no
+/// `libpulse` on the volume: `--alsa-output-device=default` opens alsa-lib's
+/// `default`, which is `plug` over the card (`docs/AUDIO.md` §2.2), without
+/// the enumeration of name hints Chrome would otherwise need to believe a
+/// card is there; `--audio-buffer-size=960` makes each packet Chrome writes
+/// the card's 20 ms period; and `--autoplay-policy=no-user-gesture-required`
+/// lets a page start sound without a click, as a test's must.
 pub(crate) fn window_command(page: &str) -> String {
     format!(
         "/data/chrome-window/chrome --no-sandbox --ozone-platform=wayland \
          --user-data-dir=/dev/shm/chrome --no-first-run --disable-gpu --disable-crash-reporter \
          --disable-breakpad --enable-logging=stderr --disable-infobars \
-         '--user-agent={USER_AGENT}' {page}"
+         --alsa-output-device=default --audio-buffer-size=960 \
+         --autoplay-policy=no-user-gesture-required '--user-agent={USER_AGENT}' {page}"
     )
 }
 
@@ -300,6 +312,8 @@ fn program_on_host(volume: &std::path::Path) -> Result<std::path::PathBuf> {
 pub(crate) fn run(command: &str, args: &Args) -> Result<()> {
     if command == "test-chrome-window" {
         crate::compositor::test_chrome_window(args)
+    } else if command == "test-chrome-audio" {
+        crate::compositor::test_chrome_audio(args)
     } else {
         test_chrome(args)
     }

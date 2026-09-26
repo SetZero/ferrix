@@ -50,6 +50,9 @@ debs=(
     "main/g/gcc-14/libatomic1_14.2.0-19_amd64.deb 212b399aae2f7299203d261a57e49372e09565a9a5ea971905f94a3960366c05"
     "main/z/zlib/zlib1g_1.3.dfsg+really1.3.1-1+b1_amd64.deb 015be740d6236ad114582dea500c1d907f29e16d6db00566ca32fb68d71ac90d"
     "main/a/alsa-lib/libasound2t64_1.2.14-1+deb13u1_amd64.deb 5495496142d57e5ad6d581ac5456ec3c87f872c109a2bfb815d154b673eebc67"
+    # alsa-lib's configuration, without which it opens no device at all:
+    # even `hw:0,0` is defined in its alsa.conf (docs/AUDIO.md §3.5).
+    "main/a/alsa-lib/libasound2-data_1.2.14-1+deb13u1_all.deb 04688afdff3769c0f685541daed7b2f6f0cb946799ddf1d5847ddf11fe245559"
     "main/a/at-spi2-core/libatk-bridge2.0-0t64_2.56.2-1+deb13u2_amd64.deb c0fe87ea1bdca2f938eaa8286af5ad38ecd15cf18c6cfb5961d7d46ac3192325"
     "main/a/at-spi2-core/libatk1.0-0t64_2.56.2-1+deb13u2_amd64.deb 24786bc90e3ff80c4d1d8bdb5ec18bb5f06df9081a5233eb080f3202fcf6a1c3"
     "main/a/at-spi2-core/libatspi2.0-0t64_2.56.2-1+deb13u2_amd64.deb 65e9c9ecbd820fba2d04104cddd0bad33d256cbdfe0d1cb5365f10e363df2315"

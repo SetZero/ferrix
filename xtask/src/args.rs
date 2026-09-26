@@ -215,6 +215,11 @@ pub(crate) struct Args {
     /// the reason `net` gives: it puts another device on the bus, and the bus
     /// a check enumerates should be the bus it has always enumerated.
     pub(crate) clipboard: bool,
+    /// `--audio BACKEND`: a virtio-snd card on the bus, its far end QEMU's
+    /// audio backend `BACKEND` -- `pipewire` or `pa` to hear it on a Linux
+    /// host, `wav:PATH` to write what the guest plays to a file
+    /// (`docs/AUDIO.md` §4). `test-audio` sets a `wav` one of its own.
+    pub(crate) audio: Option<String>,
     /// `--input`: a virtio keyboard and a virtio tablet on the bus, which
     /// QMP's `input-send-event` drives. `test-input` turns it on, and
     /// `--display` brings them as well.
@@ -425,6 +430,7 @@ impl Args {
                 "--no-gl" => args.no_gl = true,
                 "--clipboard" => args.clipboard = true,
                 "--input" => args.input = true,
+                "--audio" => args.audio = Some(value(&mut items, "--audio")?),
                 "--screens" => args.screens = number(&mut items, "--screens")?,
                 "--arch" => args.arch = Some(value(&mut items, "--arch")?),
                 "--smp" | "--memory" | "--timeout" => args.machine(&item, &mut items)?,

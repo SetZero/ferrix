@@ -274,6 +274,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-tone"
+version = "0.1.0"
+dependencies = [
+ "compositor-evecho",
+ "ferrix-linux-abi",
+ "libc",
+]
+
+[[package]]
 name = "compositor-virgl"
 version = "0.1.0"
 
