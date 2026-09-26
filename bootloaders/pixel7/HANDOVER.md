@@ -8,8 +8,8 @@ you touch the phone.
 
 ## State at a glance
 
-**Update, 2026-09-26 evening (ferrix-0a): item 4 is on `main`, and item 1
-has booted under QEMU.**
+**Update, 2026-09-26 evening (ferrix-0a): item 4 is on `main`. Items 1-3
+are gated as three commits, and wait for phone runs 4 and 5.**
 
 * **The GICv3 ITS** (`c21ce40f..a8680955`) landed on `main` by fast-forward
   after a rebase and a re-gate on nazuna: `cargo xtask check` passed, and
@@ -20,18 +20,27 @@ has booted under QEMU.**
 * **`--kernel-option WORD`** (xtask) puts any word in the image's
   `CMDLINE.TXT`, once for each time it is given. It is on `main` with this
   update.
-* **`pixel7-next`** (worktree `.claude/worktrees/pixel7-next`, the WIP commit
-  on top of `main`): items 1-3. **Still not gated, and not yet seen working
-  on the phone. Do not land it as it stands.** The boot console now passes
-  `test-boot --arch aarch64 --kernel-option ferrix.fbcon` at one and two
-  cores, and draws on `ramfb` (screendumps below, under item 1).
+* **`pixel7-next`** (worktree `.claude/worktrees/pixel7-next`) is now three
+  commits on `main`, one for each of items 3, 1 and 2, in that order:
+  `cad1db68` the seed, `da9545b9` the boot console, `704756ab` the EL2
+  secondaries. **Gated on nazuna, and not yet seen working on the phone.**
+  `cargo xtask check` passed on the three as rebased. `test-boot` reached
+  `FERRIX-BOOT-OK` on x86_64, armv7a, armv7a `--smp 2` and aarch64, and on
+  aarch64 `--smp 2 --kernel-option ferrix.fbcon`, on GICv2 and GICv3. Those
+  boots ran just before a rebase onto three commits that change only gate
+  scripts and the compositor. Land the first two after run 4 is good, and the
+  third after run 5.
 * **Run 4 is built and waiting for the phone:**
-  `~/.local/share/ferrix/pixel7/run4/boot.img` (SHA-256 `d6e6b0ff…`), from
-  `pixel7-next` with `board::CMDLINE` as committed
-  (`ferrix.fbcon nosmp`). It was not booted, because the session
-  `phone-link-9f` held the phone for an app test and asked for no reset.
-  Boot it with "One run, end to end" from `adb reboot bootloader` on, with
-  `$P/run4/boot.img` in place of `$P/boot.img`.
+  `~/.local/share/ferrix/pixel7/run4b/boot.img` (SHA-256 `36ae3ddc…`),
+  from `704756ab` with `board::CMDLINE` as committed (`ferrix.fbcon nosmp`).
+  `run4/` is an older build: it has the boot console but not the seed
+  count. Neither has been booted, because the session `phone-link-9f`
+  held the phone for an app test and asked for no reset. Boot it with
+  "One run, end to end" from `adb reboot bootloader` on, with
+  `$P/run4b/boot.img` in place of `$P/boot.img`. What to look for: boot
+  text on the screen for a few seconds; in the record, `FERRIX-BOOT-OK`,
+  the loader's `/chosen holds 8 random bytes, passed on to the kernel's
+  seed`, and the kernel's `random   NOT SEEDED: 64 of 256 bits`.
 
 * **On `main`**, merged 2026-09-26 by fast-forward after the whole gate row
   for "anything the image contains" passed on nazuna. **Not pushed**: pushes
@@ -236,9 +245,8 @@ them). Check any new one against the phone before you rely on it.
    wrapped back to the top with blank rows under the newest line. Next:
    run 4 on the phone, whose image is built (see "State at a glance").
    The owner should see boot text at double size for a few seconds before
-   the reset. `docs/ARCHITECTURE.md` §1 still says the framebuffer is drawn
-   on only by a panic. It needs the owner's word and an edit before this
-   lands.
+   the reset. The owner agreed to amend `docs/ARCHITECTURE.md` §1 for it,
+   and `da9545b9` does.
 2. **Cores 1-7** (`pixel7-next`). Written: `ferrix_secondary_entry` in
    `smp.rs` checks `CurrentEL`, and at EL2 sets EL1 up as
    `bootloaders/pixel7/src/entry.rs` does and `eret`s to it. It touches
@@ -254,13 +262,15 @@ them). Check any new one against the phone before you rely on it.
    should).
 3. **Entropy** (`pixel7-next`). Written: `bootloaders/pixel7/src/seed.rs`
    folds `/chosen`'s `rng-seed` and `kaslr-seed` into `firmware_seed` and
-   NOPs both out of the kernel's copy of the tree. It sets
-   `FIRMWARE_SEED` only for 32 bytes or more. ABL gives 8, so the phone is
-   still `NOT SEEDED` (run 3, `run-seed-nosmp.log`, a normal boot to
-   `FERRIX-BOOT-OK`). The owner has to choose: credit 64 bits for the 8
-   bytes (a `BootInfo` change: a byte count beside the flag), or the SoC's
-   TRNG, which is a security block and so under "Never write anything that
-   survives a reset" needs the owner's word before anyone reads it.
+   NOPs both out of the kernel's copy of the tree (run 3,
+   `run-seed-nosmp.log`, a normal boot to `FERRIX-BOOT-OK`). ABL gives 8
+   bytes. The owner chose to credit them rather than read the SoC's TRNG,
+   so `cad1db68` makes `BootInfo` version 6, with `firmware_seed_len`
+   beside the flag. The kernel credits 8 bits a byte, up to 256. That is 64
+   bits on the phone, which has no `RNDR`, so it still boots `NOT SEEDED`,
+   and the boot line says `64 of 256 bits`. The TRNG is a security block,
+   so under "Never write anything that survives a reset" it needs the
+   owner's word again before anyone reads it.
 4. **A GICv3 ITS driver**: on `main`, see "State at a glance". Choices
    the owner may still want to review: DeviceID is the PCI requester ID, identity, as QEMU's
    IORT and `msi-map` are, and neither is read yet. One collection, on the
