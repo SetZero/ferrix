@@ -743,7 +743,8 @@ fn probe_out_of_domain(
                 // said what the record held, and it is how a recurrence would
                 // be read rather than deduced again.
                 crate::console::println!(
-                    "  pci      the unit's record holds stream {:#x}, page {:#x}, {}; the probe                      is stream {:#x}, page {:#x}, a write",
+                    "  pci      the unit's record holds stream {:#x}, page {:#x}, {}; the probe \
+                     is stream {:#x}, page {:#x}, a write",
                     fault.stream,
                     fault.page,
                     if fault.write { "a write" } else { "a read" },
