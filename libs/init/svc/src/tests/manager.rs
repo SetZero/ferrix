@@ -972,6 +972,28 @@ fn a_units_warnings_are_logged_as_it_loads() {
 }
 
 #[test]
+fn a_refused_unit_says_why_once() {
+    let mut rig = Rig::new(&[(
+        "n.service",
+        "[Service]\nType=native\nExecStart=/sbin/n\nUser=ferrix\n",
+    )]);
+    let mut lines = Rig::lines(&rig.boot());
+    lines.extend(Rig::lines(
+        &rig.request(Request::Status(Some(String::from("n.service")))),
+    ));
+    let said: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.contains("n.service: ") && line.contains("Type=native"))
+        .collect();
+    assert_eq!(said.len(), 1, "{lines:?}");
+    let again = Rig::lines(&rig.request(Request::start("n.service")));
+    assert!(
+        !again.iter().any(|line| line.contains("Type=native")),
+        "said once, when it loads: {again:?}"
+    );
+}
+
+#[test]
 fn reload_runs_exec_reload_while_the_service_stays_up() {
     let mut rig = Rig::new(&[
         (

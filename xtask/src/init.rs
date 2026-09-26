@@ -261,6 +261,16 @@ const TEST_UNITS: &[(&str, &str)] = &[
          Offers=ferrix.test\n",
     ),
     (
+        "pong-as-user.service",
+        "[Unit]\n\
+         Description=A native service that asks to run as a user, refused\n\
+         \n\
+         [Service]\n\
+         Type=native\n\
+         ExecStart=/sbin/pong\n\
+         User=ferrix\n",
+    ),
+    (
         "asker.service",
         "[Unit]\n\
          Description=Opens ferrix.test, which it declares\n\
@@ -734,7 +744,8 @@ fn session(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
 /// bootstrap channel; `asker.service`, which declares `Uses=ferrix.test`,
 /// opened it and was answered by `pong.service`, a native service started
 /// by that OPEN in its own cgroup; `rogue.service`, which does not declare
-/// it, was REFUSED.
+/// it, was REFUSED; and `pong-as-user.service`, `Type=native` with `User=`,
+/// which init cannot honour and would run as root, did not load.
 fn directory(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
     if !has(
         &everything(at),
@@ -783,6 +794,12 @@ fn directory(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
         (main, listed) => failures.push(format!(
             "pong.service's native process is not the one in its cgroup: main {main:?}, \
              cgroup.procs {listed:?}"
+        )),
+    }
+    match ask(at, "svc status pong-as-user.service\n", "Loaded: ")? {
+        Some(line) if line.trim() == "Loaded: bad-setting" => {}
+        other => failures.push(format!(
+            "pong-as-user.service, Type=native with User=, was not refused at load: {other:?}"
         )),
     }
     Ok(())

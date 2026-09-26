@@ -179,6 +179,27 @@ fn what_service_verify_refuses() {
 }
 
 #[test]
+fn a_native_service_that_asks_for_a_user_is_refused() {
+    for asks in ["User=ferrix", "Group=ferrix", "SupplementaryGroups=wheel"] {
+        let text = format!("[Service]\nType=native\nExecStart=/a\n{asks}\n");
+        match load("t.service", &text) {
+            Err(LoadError::Refused(error)) => {
+                assert!(
+                    error.message.contains("Type=native"),
+                    "{asks}: {}",
+                    error.message
+                );
+            }
+            other => panic!("{asks}: {other:?}"),
+        }
+    }
+    let (native, _) = service("[Service]\nType=native\nExecStart=/a\n");
+    assert_eq!(native.service_type, ServiceType::Native);
+    let (simple, _) = service("[Service]\nExecStart=/a\nUser=ferrix\n");
+    assert_eq!(simple.user.as_deref(), Some("ferrix"));
+}
+
+#[test]
 fn unit_section_dependencies_conditions_and_limits() {
     let unit = load(
         "t.service",

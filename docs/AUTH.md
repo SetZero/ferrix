@@ -798,7 +798,7 @@ negative control that must be seen to fire, per the repository's rule.
 | | Slice | Owner | Gate | Points |
 |---|---|---|---|---|
 | P0 | `process_create` gives the child its creator's credentials, as `fork` does. A boot check makes a native process as uid 1000 in a delegated job and requires `getuid` in it to be 1000. Its negative control is the old `Credentials::root()`, which must fail that line. | ferrix-15 (was: kernel, native ABI) | the kernel row of the gate table; `test-init --arch all` | 2 |
-| P0a | Init refuses `User=` and `Group=` on a `Type=native` unit, failing closed. Init makes a native service's process itself, so today such a unit runs as root and the keys are silently ignored (found by ferrix-15 beside P0). | ferrix-15 | `test-init --arch all` | with P0 |
+| P0a | Init refuses `User=` and `Group=` on a `Type=native` unit, failing closed. Init makes a native service's process itself, so such a unit ran as root and the keys were silently ignored (found by ferrix-15 beside P0). **Done 2026-09-26**: the unit, `SupplementaryGroups=` too, loads as `bad-setting`, and `test-init` requires it of `pong-as-user.service`. | ferrix-15 | `test-init --arch all` | with P0 |
 | P0b | With init's L11, a native service's process is made by a forked child that has already become the unit's user, so `process_create` (after P0) gives it that user's credentials. | ferrix-15 | `test-init --arch all` | with L11 |
 
 ### Phase 1: `authd`, passwords, and a real hyprlock (27 points)

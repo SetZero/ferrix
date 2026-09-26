@@ -12,7 +12,7 @@ use crate::event::{ActiveState, GroupPath, UnitId};
 use crate::kind::Config;
 use crate::name::UnitType;
 use crate::restart::Policy;
-use crate::source::Unit;
+use crate::source::{LoadError, Unit};
 use crate::unit::Dependency;
 
 pub(super) use crate::kind::{DRIVERS_SLICE, INIT_SCOPE, ROOT_SLICE, SHUTDOWN, SYSTEM_SLICE};
@@ -71,17 +71,20 @@ impl Manager {
         // What systemd logs as it loads a unit: a key it does not know, a
         // value that does not parse, a specifier it refuses. The unit loads
         // without them, so without a line nobody learns they were dropped.
-        let warned: Vec<String> = loaded.as_ref().map_or_else(
-            |_| Vec::new(),
-            |loaded| {
-                loaded
-                    .warnings
-                    .list()
-                    .iter()
-                    .map(|warning| alloc::format!("{warning}"))
-                    .collect()
-            },
-        );
+        // A unit refused whole says why, once, as systemd's `bad-setting`
+        // does: `svc status` shows only the state.
+        let warned: Vec<String> = match &loaded {
+            Ok(loaded) => loaded
+                .warnings
+                .list()
+                .iter()
+                .map(|warning| alloc::format!("{warning}"))
+                .collect(),
+            Err(LoadError::Refused(why)) => {
+                alloc::vec![alloc::format!("{}: {}", canonical.as_str(), why.message)]
+            }
+            Err(_) => Vec::new(),
+        };
         for line in warned {
             self.log(Some(unit), line);
         }
@@ -286,7 +289,7 @@ fn slice_path(slice: &UnitName) -> GroupPath {
 
 impl Slot {
     /// A slot for a unit just loaded, or not.
-    fn new(name: UnitName, loaded: Result<Unit, crate::source::LoadError>) -> Self {
+    fn new(name: UnitName, loaded: Result<Unit, LoadError>) -> Self {
         Self {
             name,
             loaded,
