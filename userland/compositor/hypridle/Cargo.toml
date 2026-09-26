@@ -23,6 +23,7 @@ name = "compositor_hypridle"
 path = "src/lib.rs"
 
 [dependencies]
+compositor-hyprlang = { path = "../hyprlang" }
 compositor-toolkit = { path = "../toolkit" }
 
 [lints]

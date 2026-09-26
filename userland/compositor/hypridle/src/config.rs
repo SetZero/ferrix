@@ -182,8 +182,15 @@ pub fn find(
 }
 
 /// Read `path` and build the configuration from it.
-pub fn load(path: &Path, environment: &[(String, String)], files: &mut dyn conf::Files) -> Config {
-    from_read(conf::read(path, environment, files))
+#[must_use]
+pub fn load(path: &Path, environment: &[(String, String)]) -> Config {
+    from_read(conf::read(path, environment))
+}
+
+/// The same, from `text` standing for the file `path`.
+#[must_use]
+pub fn load_text(text: &str, path: &Path, environment: &[(String, String)]) -> Config {
+    from_read(conf::read_text(text, path, environment))
 }
 
 /// The configuration the entries describe.

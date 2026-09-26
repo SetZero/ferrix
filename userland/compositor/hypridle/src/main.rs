@@ -4,7 +4,6 @@
 use std::path::{Path, PathBuf};
 
 use compositor_hypridle::client::{self, Runner};
-use compositor_hypridle::conf::Disk;
 use compositor_hypridle::config;
 use compositor_hypridle::idle::Idle;
 use compositor_hypridle::log::{Level, Log};
@@ -94,10 +93,7 @@ fn run() -> i32 {
     );
 
     let environment: Vec<(String, String)> = std::env::vars().collect();
-    let mut disk = Disk {
-        home: std::env::var_os("HOME").map(PathBuf::from),
-    };
-    let loaded = config::load(&found, &environment, &mut disk);
+    let loaded = config::load(&found, &environment);
     if !loaded.errors.is_empty() {
         log.say(
             Level::Err,

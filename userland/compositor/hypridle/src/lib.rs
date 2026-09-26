@@ -14,7 +14,7 @@
 //! is played by a socket of hypridle's own, which Ferrix's `loginctl`
 //! writes to ([`session`]).
 
-/// Reading hyprlang.
+/// The file, read through `compositor/hyprlang`.
 pub mod conf;
 
 /// The options and their defaults.

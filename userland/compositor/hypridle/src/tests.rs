@@ -4,76 +4,26 @@
 //! user's own `hypridle.conf` uses; the file itself is read only by the
 //! host-side probe, never committed.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::conf::{self, Files};
 use crate::config::{self, Config};
 use crate::idle::{Idle, Run};
 use crate::log::{Level, Log};
 use crate::session::Request;
 
-/// Files held in memory.
-#[derive(Default)]
-struct Memory {
-    files: BTreeMap<PathBuf, String>,
-}
-
-impl Memory {
-    fn with(files: &[(&str, &str)]) -> Self {
-        Self {
-            files: files
-                .iter()
-                .map(|(path, text)| (PathBuf::from(path), (*text).to_owned()))
-                .collect(),
-        }
-    }
-}
-
-impl Files for Memory {
-    fn read(&mut self, path: &Path) -> Result<String, String> {
-        self.files
-            .get(path)
-            .cloned()
-            .ok_or_else(|| format!("{}: not found", path.display()))
-    }
-
-    fn resolve(&mut self, value: &str, directory: &Path) -> Result<Vec<PathBuf>, String> {
-        let path = conf::absolute(value, directory, Some(Path::new("/home/u")));
-        let name = path.file_name().unwrap().to_str().unwrap().to_owned();
-        if !name.contains('*') {
-            return Ok(vec![path]);
-        }
-        let parent = path.parent().unwrap().to_path_buf();
-        let found: Vec<PathBuf> = self
-            .files
-            .keys()
-            .filter(|held| {
-                held.parent() == Some(parent.as_path())
-                    && conf::glob_matches(&name, held.file_name().unwrap().to_str().unwrap())
-            })
-            .cloned()
-            .collect();
-        if found.is_empty() {
-            return Err("source= globbing error: found no match".to_owned());
-        }
-        Ok(found)
-    }
-}
-
 const MAIN: &str = "/home/u/.config/hypr/hypridle.conf";
 
 fn load(text: &str) -> Config {
-    load_with(&[(MAIN, text)], &[])
+    load_with(text, &[])
 }
 
-fn load_with(files: &[(&str, &str)], environment: &[(&str, &str)]) -> Config {
+fn load_with(text: &str, environment: &[(&str, &str)]) -> Config {
     let environment: Vec<(String, String)> = environment
         .iter()
         .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
         .collect();
-    config::load(Path::new(MAIN), &environment, &mut Memory::with(files))
+    config::load_text(text, Path::new(MAIN), &environment)
 }
 
 /// The shape of the user's file: comments after values, a `general`
@@ -215,11 +165,8 @@ fn bad_lines_are_hyprlangs_sentences() {
 #[test]
 fn variables_and_the_environment_are_expanded() {
     let config = load_with(
-        &[(
-            MAIN,
-            "$lock = hyprlock --immediate\n$lockfull = no\ngeneral:lock_cmd = $lock\n\
-             general:unlock_cmd = $lockfull\nlistener:timeout = 1\nlistener:on-timeout = echo $HOME\n",
-        )],
+        "$lock = hyprlock --immediate\n$lockfull = no\ngeneral:lock_cmd = $lock\n\
+         general:unlock_cmd = $lockfull\nlistener:timeout = 1\nlistener:on-timeout = echo $HOME\n",
         &[("HOME", "/home/u")],
     );
     assert_eq!(config.general.lock_cmd, "hyprlock --immediate");
@@ -233,25 +180,51 @@ fn a_backslash_joins_the_next_line() {
     assert_eq!(config.general.lock_cmd, "one two");
 }
 
+/// A directory of files for `source`, removed when dropped.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(files: &[(&str, &str)]) -> Self {
+        let root = std::env::temp_dir().join(format!("hypridle-test-{}", std::process::id()));
+        for (path, text) in files {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        Self(root)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn source_reads_another_file_in_place() {
-    let config = load_with(
-        &[
-            (MAIN, "source = ./idle.d/*.conf\nsource = ~/extra.conf\n"),
-            (
-                "/home/u/.config/hypr/idle.d/a.conf",
-                "listener {\n timeout = 1\n}\n",
-            ),
-            (
-                "/home/u/.config/hypr/idle.d/b.conf",
-                "listener {\n timeout = 2\n}\n",
-            ),
-            (
-                "/home/u/extra.conf",
-                "general:lock_cmd = x\nsource = ~/extra.conf\n",
-            ),
-        ],
-        &[],
+    let scratch = Scratch::new(&[
+        (
+            ".config/hypr/hypridle.conf",
+            "source = ./idle.d/*.conf\nsource = ~/extra.conf\n",
+        ),
+        (
+            ".config/hypr/idle.d/a.conf",
+            "listener {\n timeout = 1\n}\n",
+        ),
+        (
+            ".config/hypr/idle.d/b.conf",
+            "listener {\n timeout = 2\n}\n",
+        ),
+        (
+            "extra.conf",
+            "general:lock_cmd = x\nsource = ~/extra.conf\n",
+        ),
+    ]);
+    let home = scratch.0.to_string_lossy().into_owned();
+    let config = config::load(
+        &scratch.0.join(".config/hypr/hypridle.conf"),
+        &[("HOME".to_owned(), home)],
     );
     assert_eq!(config.errors, Vec::<String>::new());
     assert_eq!(
@@ -267,22 +240,27 @@ fn source_reads_another_file_in_place() {
 
 #[test]
 fn a_missing_source_is_said() {
-    let config = load("source = ~/nothing.conf\nlistener:timeout = 1\n");
-    assert_eq!(
-        config.errors,
-        vec![format!(
-            "Config error in file {MAIN} at line 1: source file /home/u/nothing.conf doesn't exist!"
-        )]
+    let config = load_with(
+        "source = ~/nothing.conf\nlistener:timeout = 1\n",
+        &[("HOME", "/nonexistent-hypridle-home")],
     );
+    assert_eq!(config.errors.len(), 1, "{:#?}", config.errors);
+    assert!(
+        config.errors[0].starts_with(&format!("Config error in file {MAIN} at line 1: source")),
+        "{:#?}",
+        config.errors
+    );
+    assert_eq!(config.rules.len(), 1);
 }
 
 #[test]
-fn directives_and_expressions_are_said_not_skipped() {
-    let config = load("# hyprlang noerror true\nlistener {\n timeout = {{ 5 * 60 }}\n}\n");
-    assert_eq!(config.errors.len(), 3, "{:#?}", config.errors);
-    assert!(config.errors[0].contains("directives are not carried out yet"));
-    assert!(config.errors[1].contains("expressions are not carried out yet"));
-    assert_eq!(config.errors[2], "No rules configured");
+fn expressions_and_directives_are_hyprlangs() {
+    let config = load(
+        "$minutes = 5\nlistener {\n timeout = {{ $minutes * 60 }}\n}\n\
+         # hyprlang noerror true\nnonsense = 1\n# hyprlang noerror false\n",
+    );
+    assert_eq!(config.errors, Vec::<String>::new());
+    assert_eq!(config.rules[0].timeout, 300);
 }
 
 #[test]
@@ -325,14 +303,6 @@ fn the_file_is_looked_for_where_upstream_looks() {
         );
     }
     assert_eq!(config::find(&environment, &|_| false), None);
-}
-
-#[test]
-fn globs_match_as_glob_does() {
-    assert!(conf::glob_matches("*.conf", "a.conf"));
-    assert!(!conf::glob_matches("*.conf", ".hidden.conf"));
-    assert!(conf::glob_matches("a?[0-9].conf", "ab7.conf"));
-    assert!(!conf::glob_matches("a[!0-9]", "a7"));
 }
 
 /// What was run and said.

@@ -390,7 +390,7 @@ now tells idle notifications at once when `forceidle` changes. Before,
 nothing woke the loop until the next input, so a `forceidle` fired
 hypridle's listeners only at the next keypress.
 
-**Tests.** 27 host tests (`hypridle/src/tests.rs`): the file's shape,
+**Tests.** 26 host tests (`hypridle/src/tests.rs`): the file's shape,
 hyprlang's line rules and sentences, defaults, the listener, condition and
 lock rules, the socket's lines, the log format. Two `test-compositor`
 boots (`xtask/src/compositor/idle.rs`):
@@ -411,14 +411,14 @@ it.
 ### Where it stands
 
 Built and passing: the host tests, `idle` and `idle-user` on x86_64 and
-aarch64, and every other `test-compositor` boot on x86_64. Until `userland/compositor/hyprlang` lands,
-`hypridle/src/conf.rs` is a private reader of the hyprlang it needs. It is
-the one file that changes when hypridle switches to that crate (BACKLOG
-row), and the fleet rule is that hypridle lands only on top of the
-foundation, so the switch comes before the landing. Left out on purpose: `# hyprlang` directives and `{{ }}`
-expressions, each reported by name, and both come with the switch. Left for
-Ferrix to grow: suspend (`before_sleep_cmd`, `after_sleep_cmd`,
-`inhibit_sleep`) and a D-Bus `ScreenSaver.Inhibit`.
+aarch64, and every other `test-compositor` boot on x86_64. The file is read
+through `userland/compositor/hyprlang` (`hypridle/src/conf.rs` is the
+schema and the adapter into the model), and Wayland is spoken through
+`userland/compositor/toolkit`, so hypridle carries no copy of either. Left
+for Ferrix to grow: a suspend (`before_sleep_cmd`, `after_sleep_cmd`,
+`inhibit_sleep`) and a D-Bus `ScreenSaver.Inhibit`. The user's `lock_cmd`
+locks as soon as `/bin/hyprlock` is in the image. Until then it says
+`hyprlock: not found`.
 
 ## 7. What cannot work on Ferrix, and what each such line does instead
 
