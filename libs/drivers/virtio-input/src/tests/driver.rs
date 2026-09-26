@@ -120,6 +120,13 @@ fn bring_up_stops_at_hello_and_the_device_discards_events() {
     assert_eq!(status & STATUS_DRIVER_OK, 0, "DRIVER_OK waits for READY");
     assert_eq!(rig.device.borrow_mut().buffers(), 0, "nothing posted yet");
     assert_eq!(*rig.doorbells.borrow(), 0);
+    // The status queue is enabled too, which crosvm requires, one
+    // descriptor long; the fake refuses one that overlaps the event queue.
+    assert_eq!(
+        rig.device.borrow().status_queue.map(|(size, _)| size),
+        Some(1),
+        "the status queue, empty"
+    );
 
     let hello = rig.driver.hello(0x0000_0800);
     assert_eq!(hello.location, 0x0000_0800);

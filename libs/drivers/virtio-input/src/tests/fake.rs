@@ -286,6 +286,11 @@ pub(super) struct Device {
     queue_vector: u16,
     addresses: [u64; 3],
     ring: Option<SplitQueueDevice<RingView>>,
+    status_size: u16,
+    status_addresses: [u64; 3],
+    /// The status queue as enabled: its size and its three addresses. The
+    /// device takes nothing from it, since nothing is ever posted there.
+    pub(super) status_queue: Option<(u16, [u64; 3])>,
     answers: Vec<Answer>,
     block: Vec<u8>,
     active: bool,
@@ -323,6 +328,9 @@ impl Device {
             queue_vector: NO_VECTOR,
             addresses: [0; 3],
             ring: None,
+            status_size: 64,
+            status_addresses: [0; 3],
+            status_queue: None,
             answers,
             block: vec![0; longest + 8],
             active: false,
@@ -360,9 +368,11 @@ impl Device {
                     }
             }
             QUEUE_SELECT => u32::from(self.queue_select),
+            QUEUE_SIZE if self.queue_select == 1 => u32::from(self.status_size),
             QUEUE_SIZE if selected => u32::from(self.queue_size),
             QUEUE_MSIX_VECTOR if self.queue_select == 0 => u32::from(self.queue_vector),
             QUEUE_ENABLE if self.queue_select == 0 => u32::from(self.ring.is_some()),
+            QUEUE_ENABLE if self.queue_select == 1 => u32::from(self.status_queue.is_some()),
             QUEUE_NOTIFY_OFF => 5,
             _ => 0,
         }
@@ -373,6 +383,8 @@ impl Device {
             self.status = 0;
         }
         self.ring = None;
+        self.status_queue = None;
+        self.status_size = 64;
         self.active = false;
         self.held.clear();
         self.pending.clear();
@@ -400,6 +412,7 @@ impl Device {
             }
             QUEUE_SELECT => self.queue_select = value as u16,
             QUEUE_SIZE if self.queue_select == 0 => self.queue_size = value as u16,
+            QUEUE_SIZE if self.queue_select == 1 => self.status_size = value as u16,
             QUEUE_MSIX_VECTOR if self.queue_select == 0 && !self.misbehave.drop_vector => {
                 self.queue_vector = value as u16;
             }
@@ -409,12 +422,16 @@ impl Device {
                     .into_iter()
                     .enumerate()
                 {
+                    let addresses = match self.queue_select {
+                        0 => &mut self.addresses,
+                        1 => &mut self.status_addresses,
+                        _ => continue,
+                    };
                     if offset == base {
-                        self.addresses[index] =
-                            (self.addresses[index] & !0xFFFF_FFFF) | u64::from(value);
+                        addresses[index] = (addresses[index] & !0xFFFF_FFFF) | u64::from(value);
                     } else if offset == base + 4 {
-                        self.addresses[index] =
-                            (self.addresses[index] & 0xFFFF_FFFF) | u64::from(value) << 32;
+                        addresses[index] =
+                            (addresses[index] & 0xFFFF_FFFF) | u64::from(value) << 32;
                     }
                 }
             }
@@ -422,9 +439,13 @@ impl Device {
     }
 
     fn enable(&mut self) {
+        if self.queue_select == 1 {
+            self.enable_status();
+            return;
+        }
         if self.queue_select != 0 {
             self.protocol_errors
-                .push("a queue other than the event queue enabled");
+                .push("a queue past the status queue enabled");
             return;
         }
         if self.status & STATUS_FEATURES_OK == 0 {
@@ -442,6 +463,52 @@ impl Device {
                 device: self.addresses[2],
             },
         ));
+    }
+
+    /// The status queue, as crosvm requires it enabled: after `FEATURES_OK`,
+    /// a power of two long, and in memory clear of the event queue's rings.
+    fn enable_status(&mut self) {
+        if self.status & STATUS_FEATURES_OK == 0 {
+            self.protocol_errors
+                .push("a queue enabled before FEATURES_OK");
+        }
+        if !self.status_size.is_power_of_two() {
+            self.protocol_errors.push("a status queue of no valid size");
+            return;
+        }
+        let layout = Layout::for_size(self.status_size).expect("a valid size");
+        let status = [
+            (self.status_addresses[0], layout.available_ring),
+            (
+                self.status_addresses[1],
+                layout.used_ring - layout.available_ring,
+            ),
+            (
+                self.status_addresses[2],
+                layout.total_size - layout.used_ring,
+            ),
+        ];
+        if let Some(event) = self.ring.as_ref().map(|_| self.addresses) {
+            let event_layout = Layout::for_size(self.queue_size).expect("a valid size");
+            let event = [
+                (event[0], event_layout.available_ring),
+                (
+                    event[1],
+                    event_layout.used_ring - event_layout.available_ring,
+                ),
+                (event[2], event_layout.total_size - event_layout.used_ring),
+            ];
+            let overlaps = status.iter().any(|&(at, len)| {
+                event.iter().any(|&(other, other_len)| {
+                    at < other + other_len as u64 && other < at + len as u64
+                })
+            });
+            if overlaps {
+                self.protocol_errors
+                    .push("the status queue overlaps the event queue");
+            }
+        }
+        self.status_queue = Some((self.status_size, self.status_addresses));
     }
 
     /// `virtio_input_set_config` then `virtio_input_get_config`: the block

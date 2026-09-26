@@ -32,8 +32,12 @@
 //! `DRIVER_OK`, then posts a buffer in every descriptor and rings the
 //! doorbell. A device the core refuses never sees `DRIVER_OK`.
 //!
-//! The status queue is left disabled: nothing writes to the device in this
-//! iteration (§6, decision 3), and QEMU's device serves an empty one.
+//! Nothing writes to the device in this iteration (§6, decision 3), so the
+//! status queue is enabled empty: one descriptor, in the queue pages past the
+//! event queue's rings, never posted to. QEMU's device serves a disabled one,
+//! but crosvm's refuses to activate at `DRIVER_OK` unless every queue is
+//! enabled, "expected 2 queues, got 1" (the Pixel 7's VM, 2026-09-26), as
+//! Linux's driver enables both.
 //!
 //! # The event queue stays full
 //!
@@ -480,6 +484,39 @@ fn ring_addresses(layout: &Layout, pages: &[u64]) -> Option<QueueAddresses> {
     })
 }
 
+/// Where an empty status queue of one descriptor goes in `pages`: past the
+/// event queue `event`, on the 16 bytes a descriptor table is aligned to.
+fn status_addresses(event: &Layout, pages: &[u64]) -> Option<QueueAddresses> {
+    let one = Layout::for_size(1).ok()?;
+    let base = event.total_size.checked_next_multiple_of(16)?;
+    ring_addresses(
+        &Layout {
+            queue_size: one.queue_size,
+            descriptor_table: base + one.descriptor_table,
+            available_ring: base + one.available_ring,
+            used_ring: base + one.used_ring,
+            total_size: base + one.total_size,
+        },
+        pages,
+    )
+}
+
+/// Enable the status queue at `addresses`, one descriptor long and with no
+/// vector: nothing is ever posted to it, so the device finds it empty. A
+/// device with no status queue, whose largest size is 0, is left alone.
+fn enable_status<T: Transport>(
+    transport: &mut T,
+    addresses: QueueAddresses,
+) -> Result<(), InitError> {
+    let max = pci::queue_max_size(transport, input::STATUS_QUEUE).map_err(InitError::Transport)?;
+    if max == 0 {
+        return Ok(());
+    }
+    pci::activate_queue(transport, input::STATUS_QUEUE, 1, addresses, pci::NO_VECTOR)
+        .map(drop)
+        .map_err(InitError::Transport)
+}
+
 /// The largest power of two at most `max`, which is not zero.
 const fn power_of_two_below(max: u16) -> u16 {
     1 << (15 - max.leading_zeros())
@@ -572,13 +609,15 @@ where
                 let layout = Layout::for_size(size).map_err(|_| InitError::NoRoom)?;
                 let addresses =
                     ring_addresses(&layout, rings.device_pages()).ok_or(InitError::NoRoom)?;
+                let status =
+                    status_addresses(&layout, rings.device_pages()).ok_or(InitError::NoRoom)?;
                 if slots_fit(area.device_pages(), size) {
-                    Ok((layout, addresses))
+                    Ok((layout, addresses, status))
                 } else {
                     Err(InitError::NoRoom)
                 }
             });
-        let (layout, addresses) = match plan {
+        let (layout, addresses, status) = match plan {
             Ok(plan) => plan,
             Err(error) => return fail(transport, Rings::Unused(rings), area, error),
         };
@@ -603,6 +642,9 @@ where
             Ok(active) => active,
             Err(error) => return fail(transport, Rings::Queue(queue), area, error),
         };
+        if let Err(error) = enable_status(&mut transport, status) {
+            return fail(transport, Rings::Queue(queue), area, error);
+        }
 
         Ok(Self {
             transport,
