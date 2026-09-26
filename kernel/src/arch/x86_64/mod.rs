@@ -1485,3 +1485,8 @@ pub(crate) const fn init_watchdogs(_tree: &ferrix_fdt::Fdt<'_>) {}
 
 /// Nothing to feed: see [`init_watchdogs`].
 pub(crate) const fn start_watchdogs() {}
+
+// The vDSO's code and the program that checks it. Declared last, so that the
+// lines above keep the numbers the coverage arguments cite them by.
+mod vdso;
+pub(crate) use vdso::{USER_VDSO_PROGRAM, vdso_can_read_counter, vdso_spec};

@@ -1417,3 +1417,17 @@ pub(crate) const fn init_watchdogs(_tree: &ferrix_fdt::Fdt<'_>) {}
 
 /// Nothing to feed: see [`init_watchdogs`].
 pub(crate) const fn start_watchdogs() {}
+
+/// No vDSO here: nothing has written its code for this architecture yet, so a
+/// program is started without `AT_SYSINFO_EHDR` and makes the system call.
+pub(crate) fn vdso_spec() -> Option<ferrix_vdso::Spec<'static>> {
+    None
+}
+
+/// With no vDSO, nothing in a program reads the counter.
+pub(crate) fn vdso_can_read_counter() -> bool {
+    false
+}
+
+/// No program to check a vDSO with, since there is none.
+pub(crate) const USER_VDSO_PROGRAM: &[u8] = &[];

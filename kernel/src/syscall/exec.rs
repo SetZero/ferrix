@@ -22,7 +22,8 @@ use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
     AT_BASE, AT_CLKTCK, AT_EGID, AT_EMPTY_PATH, AT_ENTRY, AT_EUID, AT_FDCWD, AT_GID, AT_HWCAP,
-    AT_HWCAP2, AT_PAGESZ, AT_PHDR, AT_PHENT, AT_PHNUM, AT_SECURE, AT_SYMLINK_NOFOLLOW, AT_UID,
+    AT_HWCAP2, AT_PAGESZ, AT_PHDR, AT_PHENT, AT_PHNUM, AT_SECURE, AT_SYMLINK_NOFOLLOW,
+    AT_SYSINFO_EHDR, AT_UID,
 };
 use ferrix_ustack::{Spec, Width};
 use ferrix_vfs::access::MAY_EXEC;
@@ -186,6 +187,7 @@ pub(crate) fn load_native(image: &[u8], name: &[u8]) -> Result<Arc<Process>, Exe
         entry: loaded.loaded.start,
         stack: loaded.stack_top,
         argument: 0,
+        vdso: 0,
     });
     Ok(registry::register(process))
 }
@@ -338,7 +340,12 @@ fn populate(
         let secure = credentials.exec(program.set_ids.uid, program.set_ids.gid);
         (credentials.user, credentials.group, secure)
     });
+    // The vDSO, where there is one: `AT_SYSINFO_EHDR` is how the C library
+    // finds it, and a program started without the entry makes the system
+    // calls the vDSO would have answered.
+    let vdso = super::vdso::map_into(space);
     let auxv = [
+        (AT_SYSINFO_EHDR, vdso.unwrap_or(0)),
         (AT_HWCAP, hwcap),
         (AT_HWCAP2, hwcap2),
         (AT_PAGESZ, PAGE_SIZE),
@@ -362,7 +369,7 @@ fn populate(
     let spec = Spec {
         args,
         env,
-        auxv: &auxv,
+        auxv: auxv.get(usize::from(vdso.is_none())..).unwrap_or_default(),
         random,
         exec_fn,
         platform: arch::user_platform(),
@@ -382,6 +389,7 @@ fn populate(
         entry: loaded.start,
         stack: startup.sp,
         argument: 0,
+        vdso: vdso.unwrap_or(0),
     })
 }
 

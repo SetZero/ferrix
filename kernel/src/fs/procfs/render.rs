@@ -584,12 +584,15 @@ fn located(at: &Location, root: &Location) -> Vec<u8> {
 /// there would describe a mapping that does not exist. So a segment shows as
 /// its file's pages with an anonymous page or two either side, where Linux,
 /// which maps the partial pages from the file too, shows one run. The
-/// anonymous names are the two the process knows — `[heap]` for the regions
+/// anonymous names are the ones the process knows — `[heap]` for the regions
 /// `brk` made, `[stack]` for the one holding the stack pointer it was started
-/// with.
+/// with, and `[vdso]` and `[vvar]` for the vDSO's image and the data page
+/// below it.
 pub(super) fn maps(process: &Process) -> Result<Vec<u8>> {
     let heap = process.heap_range();
     let stack = start_stack(process);
+    let vdso = process.startup().map_or(0, |startup| startup.vdso);
+    let vvar = vdso.saturating_sub(PAGE_SIZE);
     let root = process.fs_context().lock().root.clone();
     let mut out = Vec::new();
     let regions = process.space().regions().map_err(|_| Errno::ENOMEM)?;
@@ -618,6 +621,8 @@ pub(super) fn maps(process: &Process) -> Result<Vec<u8>> {
                 (0, 0, 0, Some(b"[heap]"))
             }
             None if holds(&region, stack) => (0, 0, 0, Some(b"[stack]")),
+            None if vdso != 0 && region.start == vdso => (0, 0, 0, Some(b"[vdso]")),
+            None if vdso != 0 && region.start == vvar => (0, 0, 0, Some(b"[vvar]")),
             None => (0, 0, 0, None),
         };
         let mapping = Mapping {

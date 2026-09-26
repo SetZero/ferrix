@@ -227,7 +227,9 @@
         "syscall/thread.rs",
         "syscall/time.rs",
         "syscall/timerfd.rs",
-        "syscall/tty.rs"
+        "syscall/tty.rs",
+        "syscall/vdso.rs",
+        "syscall/vdso_check.rs"
       ]
     }
   },

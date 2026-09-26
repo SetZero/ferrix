@@ -209,6 +209,16 @@ pub(crate) use armv7a::check_exception_entry;
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::check_exception_entry;
 
+// The vDSO's code, whether it can read the counter itself, and the program
+// the boot check holds it to: none of the three on an architecture whose
+// vDSO nobody has written.
+#[cfg(target_arch = "aarch64")]
+pub(crate) use aarch64::{USER_VDSO_PROGRAM, vdso_can_read_counter, vdso_spec};
+#[cfg(target_arch = "arm")]
+pub(crate) use armv7a::{USER_VDSO_PROGRAM, vdso_can_read_counter, vdso_spec};
+#[cfg(target_arch = "x86_64")]
+pub(crate) use x86_64::{USER_VDSO_PROGRAM, vdso_can_read_counter, vdso_spec};
+
 // Cache maintenance for a device that does not snoop the caches: the
 // DK board's display controller reads a framebuffer straight from memory, so
 // whatever a program drew has to be written back from the caches to the point

@@ -118,6 +118,9 @@ pub(crate) struct Report {
     /// Futex waiters a wake, a requeue and a wake across a `fork` roused: 3
     /// when right.
     pub(crate) futex_woken: usize,
+    /// How the vDSO answered a program's clock -- by reading the TSC or by
+    /// making the system call -- or `None` on an architecture without one.
+    pub(crate) vdso: Option<&'static str>,
     /// Guest milliseconds each group of checks took, in order: the dispatch
     /// table, the handler checks with their leak window, and then each of the
     /// program checks.
@@ -220,6 +223,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let unmap_waited =
         crate::syscall::unmap_check::check_an_unmap_waits_for_a_copy_holding_its_page()?;
     let execed = check_execve_replaces_the_program()?;
+    let vdso = crate::syscall::vdso_check::check_the_vdso()?;
     mark!(7);
     let started_with = check_a_program_is_handed_its_start_argument()?;
     let futex_woken = check_futexes()?;
@@ -252,6 +256,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         pids,
         unmap_waited,
         futex_woken,
+        vdso,
         spent_ms: spent,
     })
 }

@@ -88,7 +88,7 @@ pub(crate) fn realtime_offset() -> i64 {
 
 /// Put back an offset [`realtime_offset`] reported.
 pub(crate) fn restore_realtime_offset(offset: i64) {
-    REALTIME_OFFSET.store(offset, Ordering::Relaxed);
+    super::vdso::publish_realtime_offset(|| REALTIME_OFFSET.store(offset, Ordering::Relaxed));
 }
 
 /// Set `CLOCK_REALTIME` to `target` nanoseconds since the epoch.
@@ -107,7 +107,8 @@ pub(crate) fn set_boot_time(info: &ferrix_bootinfo::BootInfo) -> Option<u64> {
 fn set_realtime(target: u64) {
     let offset = i128::from(target) - i128::from(now_nanos());
     let offset = i64::try_from(offset).unwrap_or(if offset < 0 { i64::MIN } else { i64::MAX });
-    REALTIME_OFFSET.store(offset, Ordering::Relaxed);
+    // With the vDSO's copy, which programs read the clock through.
+    super::vdso::publish_realtime_offset(|| REALTIME_OFFSET.store(offset, Ordering::Relaxed));
 }
 
 /// Answer the sleeps and `restart_syscall`, or `None` for any other call.

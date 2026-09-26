@@ -1028,9 +1028,17 @@ fn check_syscalls() {
     println!("  heap     a brk waited for a fork holding the heap lock, and a fork for a brk");
 }
 
-/// Stage 7's thread checks, as `check_syscalls` reports them: each line only
-/// when its check ran on this architecture and processor count.
+/// Stage 7's thread checks, and the vDSO's, as `check_syscalls` reports them:
+/// each line only when its check ran on this architecture and processor
+/// count.
 fn print_threads(report: &syscall::check::Report) {
+    if let Some(answered) = report.vdso {
+        println!(
+            "  vdso     a program called clock_gettime for seven clocks, gettimeofday and time through \
+             AT_SYSINFO_EHDR, each answered by {answered} between two system calls; the pages \
+             refused writes"
+        );
+    }
     if report.unmap_waited {
         println!(
             "  unmap    an unmap on one processor waited for a copy on another to let go of its page"

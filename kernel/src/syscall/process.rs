@@ -222,6 +222,9 @@ pub(crate) struct Startup {
     /// program, whose startup image is on its stack, and a native process's
     /// bootstrap handle.
     pub(crate) argument: u64,
+    /// Where its vDSO's image is, the page above its data page, or zero
+    /// for none: what names `[vdso]` and `[vvar]`.
+    pub(crate) vdso: u64,
 }
 
 /// The parts of a process the lock protects.
@@ -1938,6 +1941,7 @@ pub(crate) fn run_program(_argument: usize) {
         entry,
         stack,
         argument,
+        ..
     }) = startup
     else {
         leave_current();

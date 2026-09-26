@@ -13,9 +13,10 @@
 //! | 312 | `struct siginfo`, 128 bytes |
 //!
 //! and below it, 64-byte aligned, the 512-byte `FXSAVE` area `uc_mcontext.fpstate`
-//! points at. There is no vDSO, and x86-64 has no other way back from a
-//! handler, so a handler installed without `SA_RESTORER` cannot be entered:
-//! Linux refuses the frame, and so does this. Every libc sets it.
+//! points at. The vDSO holds no way back from a handler -- Linux's x86-64 one
+//! holds none either -- and there is no other, so a handler installed without
+//! `SA_RESTORER` cannot be entered: Linux refuses the frame, and so does this.
+//! Every libc sets it.
 //!
 //! # Why `rt_sigreturn` does not leave through `SYSRET`
 //!

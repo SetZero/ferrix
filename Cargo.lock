@@ -267,6 +267,7 @@ dependencies = [
  "ferrix-sync",
  "ferrix-sysfs",
  "ferrix-ustack",
+ "ferrix-vdso",
  "ferrix-vfs",
  "ferrix-virtio",
  "ferrix-vma",

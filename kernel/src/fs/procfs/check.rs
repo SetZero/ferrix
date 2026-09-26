@@ -437,6 +437,7 @@ fn lay_out(process: &Process) -> Result<Layout, &'static str> {
         entry: IMAGE,
         stack: top - 64,
         argument: 0,
+        vdso: 0,
     });
     process.record_exec(
         b"/sbin/procfs-check",

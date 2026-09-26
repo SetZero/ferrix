@@ -38,7 +38,7 @@ what is left:
 | `execve` of a binary past 64 MiB, mapped from the file on demand | **done** 2026-09-24, on all three architectures, with `execve("/proc/self/exe")` from a fork (§2.2) |
 | `timerfd` | **done** 2026-09-24, on all three architectures, the first kernel row of §6's foot (§3) |
 | `madvise` and `signalfd` | **done** 2026-09-24, on all three architectures (§2.3, §3) |
-| A vDSO | not started (§3); what is left of the ≈ 10 points the three were sized at |
+| A vDSO | **done** 2026-09-26, x86-64: `clock_gettime`, `gettimeofday` and `time` read the TSC in the program (§3, §9) |
 | libwayland-client, libxkbcommon, fontconfig with freetype and expat, a font | **done** 2026-09-24, built against ferrousli with foot (§3, §6) |
 | foot, a Wayland terminal nobody here wrote, drawing on the compositor on Ferrix | **done** 2026-09-24, x86-64, `cargo xtask test-foot` (§6) |
 | Headless Chrome on Ferrix: `--dump-dom` and `--screenshot`, multi-process, with `--no-sandbox` (and `--no-zygote` until 2026-09-26) | **done** 2026-09-24, x86-64, `cargo xtask test-chrome` (§8) |
@@ -275,11 +275,15 @@ that a program which asks for isolation now finds out it cannot have it.
 
 ## 3. The smaller things, each of which would bite
 
-* **No vDSO.** `AT_SYSINFO_EHDR` is deliberately absent, so every
-  `clock_gettime` is a trap. Chrome calls it per task, per timer and per trace
-  point. **Still open, 2026-09-24:** of the three kernel rows §5 sized
-  together -- `madvise`, a vDSO and `signalfd` -- this is the one that
-  remains.
+* ~~**No vDSO.**~~ **Done, 2026-09-26, on x86-64.** `AT_SYSINFO_EHDR` was
+  absent, so every `clock_gettime` was a trap, and Chrome calls it per task,
+  per timer and per trace point: forty thousand times a second. Every
+  program now gets Linux's shape of vDSO, `linux-vdso.so.1` with
+  `__vdso_clock_gettime`, `__vdso_gettimeofday` and `__vdso_time` at
+  `LINUX_2.6`, over a data page holding the TSC's frequency and the
+  real-time offset (`libs/vdso`, `kernel/src/syscall/vdso.rs`). Under an
+  emulator, whose clock is the HPET, the functions make the system call.
+  AArch64 and ARMv7-A have none yet.
 * ~~**No `madvise`.**~~ **Done, 2026-09-24.** The number decoded and nothing
   answered it, so PartitionAlloc and V8 (§2.3) could hand memory back and
   never get it. `MADV_DONTNEED` and `MADV_FREE` now drop a range's pages and
@@ -444,7 +448,7 @@ separately for that reason.
 | ~~**Already planned:** stage 12, btrfs write~~ *landed 2026-09-21* | ~~≈ 60~~ |
 | **Already planned, only if the sandbox is wanted:** stage 13 | ≈ 60 |
 | Demand-paged file-backed `execve`, and binaries past 64 MiB | 13 |
-| A vDSO; `madvise` and `signalfd` were sized with it, and are done (`/dev/shm` 2026-09-19, `timerfd`, `madvise` and `signalfd` 2026-09-24) | what is left of ≈ 10 |
+| ~~A vDSO; `madvise` and `signalfd` were sized with it~~ *done: `/dev/shm` 2026-09-19, `timerfd`, `madvise` and `signalfd` 2026-09-24, the vDSO on x86-64 2026-09-26* | ~~≈ 10~~ |
 | ~~libwayland-client, libxkbcommon, fontconfig with freetype and expat, a font~~ *built with foot, 2026-09-24* | ~~13~~ |
 | The Chromium cross-build against ferrousli, with Alpine's musl patches rebased | 40+, mostly unknown |
 | What running it finds missing | unsized, ≥ 40 |
@@ -821,8 +825,20 @@ the driver's own user samples.
 | scrolled | 29% | 10% | 60.8 | 5.7 |
 | pointed at | 26% | 10% | 60.4 | 4.3 |
 
-What is left is Chrome's own work and its forty thousand `clock_gettime`
-calls a second, which a vDSO would answer without entering the kernel.
+What was left then was Chrome's own work and its forty thousand
+`clock_gettime` calls a second. **A vDSO, the same day**, answers them in the
+program: glibc finds `__vdso_clock_gettime` through `AT_SYSINFO_EHDR`, reads
+the TSC and scales it by the frequency on a data page the kernel keeps. The
+calls went from about 45 000 a second to none -- all system calls together
+from about 56 000 a second to 8 000 -- and the boot check holds a program's
+call through the vDSO between two system calls, reading the TSC under KVM.
+
+| phase | Chrome's processor time | machine busy | frames a second | ms a frame |
+|---|---|---|---|---|
+| left alone | 13% | 5% | 60.4 | 4.1 |
+| scrolled | 27% | 10% | 60.3 | 4.8 |
+| pointed at | 22% | 8% | 60.5 | 4.8 |
+
 Memory has not moved: 521 MiB is in use, and most of that is page cache
 for Chrome's 294 MB program. `/proc/meminfo` counts the cache as used,
 because it reports `Cached` as 0. A trial kernel, not landed, reported

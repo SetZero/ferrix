@@ -85,6 +85,8 @@ pub(crate) mod timerfd;
 pub(crate) mod tty;
 pub(crate) mod uaccess;
 pub(crate) mod unmap_check;
+pub(crate) mod vdso;
+pub(crate) mod vdso_check;
 
 use core::sync::atomic::{AtomicU32, Ordering};
 

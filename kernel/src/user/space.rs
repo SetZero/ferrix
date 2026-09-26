@@ -2627,6 +2627,77 @@ impl AddressSpace {
         Ok(at)
     }
 
+    /// Map the two pages of `vmo` wherever there is room: the first to be
+    /// read, the second to be read and run. What the Linux personality maps
+    /// its vDSO with, a data page and the code that reads it. Returns where
+    /// the second page went.
+    ///
+    /// The object is the kernel's, one for every process, so the region may
+    /// never be written through: it is shared, so `fork` shares it rather
+    /// than copying, and counted with the objects `vmo_map` puts here, which
+    /// `mprotect` and `mremap` refuse and `madvise` takes no page out of. A
+    /// program may unmap it, and loses only its own view.
+    ///
+    /// # Errors
+    ///
+    /// [`SpaceError::BadRange`] for an object that is not two pages, and
+    /// [`SpaceError::OutOfMemory`] if there is no room.
+    pub(crate) fn map_shared_code(&self, vmo: Arc<Vmo>) -> Result<u64, SpaceError> {
+        let len = 2 * PAGE_SIZE;
+        if vmo.len_bytes() != len {
+            return Err(SpaceError::BadRange);
+        }
+        let mut inner = self.inner.lock();
+        let at = inner
+            .map
+            .find_free(len, PAGE_SIZE, None)
+            .ok_or(SpaceError::OutOfMemory)?;
+        if !is_user_address(at) || at.checked_add(len).is_none_or(|end| end > USER_VIRT_END) {
+            return Err(SpaceError::NotUserRange(at));
+        }
+        let data = PageRange::from_len(at, PAGE_SIZE).map_err(|_| SpaceError::BadRange)?;
+        let code =
+            PageRange::from_len(at + PAGE_SIZE, PAGE_SIZE).map_err(|_| SpaceError::BadRange)?;
+        let shared = VmaFlags {
+            shared: true,
+            ..VmaFlags::READ
+        };
+        let id = inner.next_id;
+        inner.next_id = inner.next_id.saturating_add(1);
+        self.add_region(
+            &mut inner,
+            NewRegion {
+                id,
+                range: data,
+                flags: shared,
+                backing: Backing::Anonymous { id, offset: 0 },
+                sharing: Sharing::Shared,
+            },
+            vmo,
+        )?;
+        let runnable = VmaFlags {
+            execute: true,
+            ..shared
+        };
+        // FALLIBLE: the map's insert refuses with `VmaError::NoMemory`.
+        let inserted = inner.map.insert(
+            code,
+            runnable,
+            Backing::Anonymous {
+                id,
+                offset: PAGE_SIZE,
+            },
+        );
+        if inserted.is_err() || fallible::insert_into_set(&mut inner.native, id).is_err() {
+            if inserted.is_ok() {
+                let _ = inner.map.remove_quietly(code);
+            }
+            self.abandon_region(&mut inner, id, data);
+            return Err(SpaceError::OutOfMemory);
+        }
+        Ok(at + PAGE_SIZE)
+    }
+
     /// Map `len` bytes of `vmo`, a file's object, from byte `offset` of it.
     /// Shared, the region shows the file's own pages, and a write through it
     /// is a write to the file. Private, it shows the same pages until it

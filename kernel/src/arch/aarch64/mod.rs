@@ -1374,3 +1374,17 @@ pub(crate) fn permit_user_access() {
 pub(crate) fn forbid_user_access() {
     cpu::forbid_user_access();
 }
+
+/// No vDSO here: nothing has written its code for this architecture yet, so a
+/// program is started without `AT_SYSINFO_EHDR` and makes the system call.
+pub(crate) fn vdso_spec() -> Option<ferrix_vdso::Spec<'static>> {
+    None
+}
+
+/// With no vDSO, nothing in a program reads the counter.
+pub(crate) fn vdso_can_read_counter() -> bool {
+    false
+}
+
+/// No program to check a vDSO with, since there is none.
+pub(crate) const USER_VDSO_PROGRAM: &[u8] = &[];

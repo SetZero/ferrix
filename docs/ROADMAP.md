@@ -3594,7 +3594,8 @@ Three parts, in the order they can be tested:
   file-backed `mmap` with `MAP_FIXED` and `PROT_EXEC`, and `mprotect`s its
   `PT_GNU_RELRO` — now covered in the same pattern a real `ld.so` uses.
   `AT_SYSINFO_EHDR` stays absent: there is no vDSO, and glibc
-  and musl both fall back to the real call.
+  and musl both fall back to the real call. (Since 2026-09-26 x86-64 has
+  one, and passes it: `docs/CHROME.md` §3.)
 
   **What landed on 2026-09-20.** Both images are placed — the program at
   `PIE_BASE`, the linker at a new `INTERP_BASE` a third of the way up the user
@@ -4218,7 +4219,8 @@ page on the screen from a fresh btrfs root (`docs/CHROME.md` §9).
   `PT_INTERP`.
 * Why the GPU process's fallback path stops at the sandbox's
   `proc_util.cc:115` with `ENOENT` on Ferrix (`docs/CHROME.md` §8, item 8).
-* A vDSO, `inotify`, and the GPU: Chrome draws in software.
+* `inotify`, and the GPU: Chrome draws in software. (The vDSO landed on
+  x86-64 on 2026-09-26: `docs/CHROME.md` §3.)
 * **The STM32MP157D-DK1**, sized on 2026-09-24 (`docs/CHROME.md` §10), about
   45 to 55 points: an armhf browser, Debian 13's Chromium 150, on the same
   kind of volume (3); a ring-3 SDMMC driver so the volume can live on the
@@ -5021,7 +5023,7 @@ its pages the boot panics with "madvise did not give the frames of the
 pages it dropped back to the allocator". Not as Linux: `MADV_DONTFORK` is
 accepted and not honoured, a page held for a device keeps its frame and
 contents, and `MADV_WILLNEED` reads nothing ahead. Still to do for Chrome:
-the vDSO.
+the vDSO -- done on x86-64 on 2026-09-26 (`docs/CHROME.md` §3).
 
 ---
 
