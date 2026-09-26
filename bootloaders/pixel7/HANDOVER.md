@@ -363,7 +363,7 @@ over `adb reverse`, to run the `fastboot boot` cycle. The owner pressed it on
 74 s later, with the record in `$P/launcher-20260926-144950/`. It needs the
 cable, and writes nothing to the phone.
 
-**Without the PC, as a VM** (`a8801ad8`, `a84d61e1`). The app's "Run in a
+**Without the PC, as a VM** (`9df3769b`, `164515a7`). The app's "Run in a
 VM" card runs Ferrix as a guest of the phone's own KVM, through AVF's
 `crosvm`, started with `su`. The loader recognises crosvm (EL1 entry, and
 an `ns16550a` at `0x3f8` as `stdout-path`) and sends both logs to that

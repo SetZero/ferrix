@@ -69,8 +69,16 @@ cd /data/local/tmp/ferrix-vm && /apex/com.android.virt/bin/crosvm run \
 `ferrix.Image` is the raw loader `Image` from the helper's run directory, the
 same loader and kernel `fastboot boot` gets, which the helper pushes whenever
 the phone's copy differs. It needs to have been built with guest support
-(`a8801ad8` or later). The loader finds it is a guest, entered at EL1 with
+(`9df3769b` or later). The loader finds it is a guest, entered at EL1 with
 crosvm's 16550 as `stdout-path`, and sends its log and the kernel's there.
 crosvm's machine has 2 to 8 vCPUs, GICv3, PSCI through `hvc`, and RAM at
 `0x8000_0000`, with no screen and no virtio devices yet. The guest powers off
 at the end of its run, and crosvm exits.
+
+Starting a VM opens it full screen: one bar, with the run's state and a menu
+to pause or resume it, stop it, run it again, or go back, and the console
+under it. The console follows the newest line while the reader is within ten
+lines of the end. Pause and stop go to crosvm's control socket
+(`crosvm suspend|resume|stop /data/local/tmp/ferrix-vm/crosvm.sock`). A
+paused guest's counter keeps running, so pausing during the boot's
+self-checks can fail a timing check, as it did once in stage 3 (FX-0302).

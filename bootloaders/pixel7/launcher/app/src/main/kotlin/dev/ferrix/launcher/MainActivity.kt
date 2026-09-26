@@ -1,7 +1,11 @@
 package dev.ferrix.launcher
 
+import android.app.Activity
 import android.os.Bundle
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
@@ -25,26 +29,37 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -52,11 +67,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -101,17 +118,27 @@ private const val HELPER = "http://127.0.0.1:47707"
 private const val VM_DIR = "/data/local/tmp/ferrix-vm"
 private const val CROSVM = "/apex/com.android.virt/bin/crosvm"
 
-/** The guest: 8 vCPUs and 4 GiB, its 16550 on crosvm's standard output. */
+private const val SOCKET = "$VM_DIR/crosvm.sock"
+
+/**
+ * The guest: 8 vCPUs and 4 GiB, its 16550 on crosvm's standard output, and a
+ * control socket that `suspend`, `resume` and `stop` go to.
+ */
 private const val GUEST_COMMAND =
     "cd $VM_DIR && [ -f ferrix.Image ] || { echo 'FERRIX-VM no image in $VM_DIR'; exit 3; }; " +
-        "echo FERRIX-VM-PID $$; exec $CROSVM run --disable-sandbox -m 4096 --cpus 8 " +
-        "--serial type=stdout,num=1 ferrix.Image 2>/dev/null"
+        "rm -f $SOCKET; echo FERRIX-VM-PID $$; exec $CROSVM run --disable-sandbox " +
+        "-m 4096 --cpus 8 -s $SOCKET --serial type=stdout,num=1 ferrix.Image 2>/dev/null"
 
 /** How the guest is doing. */
 private sealed interface Guest {
     data object Idle : Guest
-    data class Running(val pid: Int?) : Guest
+    data class Running(val pid: Int?, val paused: Boolean = false, val began: Long = System.nanoTime()) : Guest
     data class Ended(val result: String, val seconds: Long, val booted: Boolean) : Guest
+}
+
+/** Ask the running guest's crosvm, through its control socket, to `command`. */
+private fun control(command: String) {
+    ProcessBuilder("su", "-c", "$CROSVM $command $SOCKET").start().waitFor()
 }
 
 /** What the helper last said, or why it could not be asked. */
@@ -145,8 +172,28 @@ private fun Launcher() {
     var confirming by remember { mutableStateOf(false) }
     var refusal by remember { mutableStateOf<String?>(null) }
     var guest by remember { mutableStateOf<Guest>(Guest.Idle) }
+    var fullScreen by remember { mutableStateOf(false) }
     val console = remember { mutableStateListOf<String>() }
     val scope = rememberCoroutineScope()
+    val run: () -> Unit = {
+        console.clear()
+        guest = Guest.Running(null)
+        fullScreen = true
+        scope.launch {
+            guest = runGuest(console) { pid -> (guest as? Guest.Running)?.let { guest = it.copy(pid = pid) } }
+        }
+    }
+    val stop: () -> Unit = {
+        if (guest is Guest.Running) scope.launch(Dispatchers.IO) { control("stop") }
+    }
+    val pause: () -> Unit = {
+        (guest as? Guest.Running)?.let { running ->
+            scope.launch {
+                withContext(Dispatchers.IO) { control(if (running.paused) "resume" else "suspend") }
+                (guest as? Guest.Running)?.let { guest = it.copy(paused = !running.paused) }
+            }
+        }
+    }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
 
     LaunchedEffect(lifecycle) {
@@ -156,6 +203,18 @@ private fun Launcher() {
                 delay(2000)
             }
         }
+    }
+
+    if (fullScreen) {
+        VmScreen(
+            guest = guest,
+            console = console,
+            onBack = { fullScreen = false },
+            onPause = pause,
+            onStop = stop,
+            onRunAgain = run,
+        )
+        return
     }
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
@@ -184,19 +243,9 @@ private fun Launcher() {
             GuestCard(
                 guest = guest,
                 console = console,
-                onRun = {
-                    console.clear()
-                    guest = Guest.Running(null)
-                    scope.launch { guest = runGuest(console) { pid -> guest = Guest.Running(pid) } }
-                },
-                onStop = {
-                    val running = guest as? Guest.Running
-                    running?.pid?.let { pid ->
-                        scope.launch(Dispatchers.IO) {
-                            ProcessBuilder("su", "-c", "kill $pid").start().waitFor()
-                        }
-                    }
-                },
+                onRun = run,
+                onStop = stop,
+                onFullScreen = { fullScreen = true },
             )
             Spacer(Modifier.height(8.dp))
             Text(
@@ -376,6 +425,7 @@ private fun GuestCard(
     console: List<String>,
     onRun: () -> Unit,
     onStop: () -> Unit,
+    onFullScreen: () -> Unit,
 ) {
     Card(
         shape = RoundedCornerShape(24.dp),
@@ -416,19 +466,150 @@ private fun GuestCard(
                     if (guest.booted) Color(0xFF3DDC84) else MaterialTheme.colorScheme.error,
                 )
             }
-            if (console.isNotEmpty()) ConsolePane(console)
+            if (console.isNotEmpty()) {
+                ConsolePane(console, Modifier.fillMaxWidth().height(320.dp))
+                TextButton(onClick = onFullScreen, modifier = Modifier.align(Alignment.End)) {
+                    Text("Full screen")
+                }
+            }
         }
     }
 }
 
+/**
+ * The guest's console across the whole screen, under one bar: its state, and
+ * a menu to pause or resume it, stop it, run it again, or go back. The phone's
+ * own bars are hidden meanwhile, and a swipe brings them back for a moment.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ConsolePane(lines: List<String>) {
+private fun VmScreen(
+    guest: Guest,
+    console: List<String>,
+    onBack: () -> Unit,
+    onPause: () -> Unit,
+    onStop: () -> Unit,
+    onRunAgain: () -> Unit,
+) {
+    BackHandler(onBack = onBack)
+    val window = (LocalContext.current as Activity).window
+    DisposableEffect(window) {
+        val bars = window.insetsController
+        bars?.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        bars?.hide(WindowInsets.Type.systemBars())
+        onDispose { bars?.show(WindowInsets.Type.systemBars()) }
+    }
+    var menu by remember { mutableStateOf(false) }
+    var now by remember { mutableStateOf(System.nanoTime()) }
+    LaunchedEffect(guest) {
+        while (guest is Guest.Running) {
+            now = System.nanoTime()
+            delay(500)
+        }
+    }
+    val state = when (guest) {
+        Guest.Idle -> "not started"
+        is Guest.Running -> {
+            val seconds = (now - guest.began) / 1_000_000_000
+            if (guest.pid == null) "starting…" else if (guest.paused) "paused · $seconds s" else "running · $seconds s"
+        }
+        is Guest.Ended -> "${guest.result} · ${guest.seconds} s"
+    }
+    Column(Modifier.fillMaxSize().background(Color(0xFF0B0B10))) {
+        TopAppBar(
+            title = {
+                Column {
+                    Text("Ferrix VM", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        state,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = when {
+                            guest is Guest.Ended && guest.booted -> Color(0xFF3DDC84)
+                            guest is Guest.Ended -> MaterialTheme.colorScheme.error
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+            },
+            actions = {
+                Box {
+                    IconButton(onClick = { menu = true }) {
+                        Icon(Icons.Rounded.Menu, contentDescription = "Menu")
+                    }
+                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        if (guest is Guest.Running) {
+                            DropdownMenuItem(
+                                text = { Text(if (guest.paused) "Resume" else "Pause") },
+                                leadingIcon = if (guest.paused) {
+                                    { Icon(Icons.Rounded.PlayArrow, null) }
+                                } else {
+                                    null
+                                },
+                                enabled = guest.pid != null,
+                                onClick = { menu = false; onPause() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Stop") },
+                                leadingIcon = { Icon(Icons.Rounded.Close, null) },
+                                enabled = guest.pid != null,
+                                onClick = { menu = false; onStop() },
+                            )
+                        } else {
+                            DropdownMenuItem(
+                                text = { Text("Run again") },
+                                leadingIcon = { Icon(Icons.Rounded.Refresh, null) },
+                                onClick = { menu = false; onRunAgain() },
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text("Back to main page") },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Rounded.ArrowBack, null) },
+                            onClick = { menu = false; onBack() },
+                        )
+                    }
+                }
+            },
+            colors = TopAppBarDefaults.topAppBarColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            ),
+        )
+        if (guest is Guest.Running && guest.pid != null && !guest.paused) {
+            LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
+        }
+        ConsolePane(console, Modifier.fillMaxSize(), fontSize = 12)
+    }
+}
+
+/** How near the end, in lines, the reader has to be for the console to follow. */
+private const val FOLLOW_LINES = 10
+
+/**
+ * The guest's console, following its newest line while the reader is within
+ * [FOLLOW_LINES] of the end. Scrolled further up, it stays put, so a line can
+ * be read while the boot goes on; scrolled back down near the end, it follows
+ * again.
+ *
+ * Each jump to the end is its own job: a finger on the pane cancels the jump
+ * under way, and must not cancel the following itself.
+ */
+@Composable
+private fun ConsolePane(lines: List<String>, modifier: Modifier, fontSize: Int = 11) {
     val scroll = rememberScrollState()
-    LaunchedEffect(lines.size) { scroll.animateScrollTo(scroll.maxValue) }
+    val near = with(LocalDensity.current) { (fontSize + 3).sp.toPx() } * FOLLOW_LINES
+    LaunchedEffect(scroll, near) {
+        var following = true
+        var lastEnd = scroll.maxValue
+        snapshotFlow { scroll.value to scroll.maxValue }.collect { (at, end) ->
+            if (end != lastEnd) {
+                lastEnd = end
+                if (following) launch { scroll.scrollTo(end) }
+            } else {
+                following = end - at <= near
+            }
+        }
+    }
     Box(
-        Modifier
-            .fillMaxWidth()
-            .height(320.dp)
+        modifier
             .background(Color(0xFF0B0B10), RoundedCornerShape(16.dp))
             .padding(12.dp)
             .verticalScroll(scroll),
@@ -436,8 +617,8 @@ private fun ConsolePane(lines: List<String>) {
         Text(
             lines.joinToString("\n"),
             fontFamily = FontFamily.Monospace,
-            fontSize = 11.sp,
-            lineHeight = 14.sp,
+            fontSize = fontSize.sp,
+            lineHeight = (fontSize + 3).sp,
             color = Color(0xFFC8C8D2),
         )
     }
