@@ -1,0 +1,409 @@
+//! Structural coverage of the kernel: where each boot's trace goes, and
+//! `cargo xtask coverage`, the suite whose union is the certified item's
+//! statement coverage on one architecture (`docs/certification/
+//! VERIFICATION.md` §3).
+//!
+//! The measurement is QEMU's `drcov` TCG plugin, named by
+//! `FERRIX_QEMU_PLUGIN`, and `scripts/coverage-report.py`, which reads the
+//! trace against the kernel's DWARF line table. Two things about a suite of
+//! gates make that harder than one boot:
+//!
+//! * **A gate may boot more than once**, and the plugin truncates the file it
+//!   is given every time QEMU starts. `test-shell` boots four times, and
+//!   `test-powerfail` twice per seed; each used to leave only its last
+//!   boot's trace. Every boot after the first in one run of this program
+//!   therefore writes a numbered file beside the first: `shell.drcov`,
+//!   `shell.2.drcov`, `shell.3.drcov`.
+//! * **Gates build different kernels.** `test-shell` builds its program in,
+//!   `test-vfs` and `test-net` their command lists, and an address in one
+//!   build is not the same statement in another. So each trace is kept with
+//!   the ELF its boot ran: a copy named by its content, shared by every trace
+//!   of the same build, and a `<trace>.kernel` file naming it, which the
+//!   report reads.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use crate::args::Args;
+use crate::paths::{self, Arch};
+use crate::{Error, Result};
+
+/// Boots started by this process with a plugin, which numbers their traces.
+static BOOTS: AtomicU32 = AtomicU32::new(0);
+
+/// The `-plugin` value the latest boot was given, numbered trace and all.
+static LATEST: Mutex<Option<String>> = Mutex::new(None);
+
+/// The `-plugin` value for the next boot: `plugin` with its trace numbered,
+/// and the kernel it runs kept beside the trace.
+///
+/// # Errors
+///
+/// When the kernel cannot be read or kept.
+pub(crate) fn plugin_for_boot(plugin: &str, kernel: Option<&Path>) -> Result<String> {
+    let boot = BOOTS.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+    let (numbered, trace) = numbered(plugin, boot);
+    if let Some(trace) = &trace {
+        let sidecar = sidecar(trace);
+        match kernel {
+            Some(kernel) => {
+                let kept = keep_kernel(trace, kernel)?;
+                std::fs::write(&sidecar, format!("{kept}\n"))?;
+            }
+            // A stale one would pair this boot's trace with another build.
+            None => {
+                let _ = std::fs::remove_file(&sidecar);
+            }
+        }
+        println!("  coverage: this boot's trace is {}", trace.display());
+    }
+    if let Ok(mut latest) = LATEST.lock() {
+        *latest = Some(numbered.clone());
+    }
+    Ok(numbered)
+}
+
+/// The `-plugin` value the latest boot was given, if it was given one: what
+/// `crate::kaslr::record_coverage_slide` writes the boot's slide beside. Not
+/// `FERRIX_QEMU_PLUGIN` itself, which names only the first boot's trace.
+pub(crate) fn latest_plugin() -> Option<String> {
+    LATEST.lock().ok().and_then(|latest| latest.clone())
+}
+
+/// `plugin` with the trace of boot `boot` numbered, and that trace's path.
+///
+/// The first boot keeps the name it was given, so a single boot's trace is
+/// where the person running it said; the `n`th puts `.n` before the
+/// extension. A plugin with no `filename=` writes where its own default says,
+/// and is passed on unchanged.
+fn numbered(plugin: &str, boot: u32) -> (String, Option<PathBuf>) {
+    let mut trace = None;
+    let parts: Vec<String> = plugin
+        .split(',')
+        .map(|part| {
+            let Some(name) = part.strip_prefix("filename=") else {
+                return part.to_owned();
+            };
+            let path = numbered_path(Path::new(name), boot);
+            let rewritten = format!("filename={}", path.display());
+            trace = Some(path);
+            rewritten
+        })
+        .collect();
+    (parts.join(","), trace)
+}
+
+/// `path` for boot `boot`: unchanged for the first, `stem.n.ext` after.
+fn numbered_path(path: &Path, boot: u32) -> PathBuf {
+    if boot <= 1 {
+        return path.to_path_buf();
+    }
+    let stem = path
+        .file_stem()
+        .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned());
+    let name = match path.extension() {
+        Some(extension) => format!("{stem}.{boot}.{}", extension.to_string_lossy()),
+        None => format!("{stem}.{boot}"),
+    };
+    path.with_file_name(name)
+}
+
+/// Where the name of a trace's kernel is written.
+fn sidecar(trace: &Path) -> PathBuf {
+    let mut name = trace.as_os_str().to_owned();
+    name.push(".kernel");
+    PathBuf::from(name)
+}
+
+/// Copy `kernel` beside `trace` under a name made from its content, unless a
+/// trace of the same build already did, and answer that name.
+fn keep_kernel(trace: &Path, kernel: &Path) -> Result<String> {
+    let bytes = std::fs::read(kernel)
+        .map_err(|error| Error::new(format!("reading {}: {error}", kernel.display())))?;
+    let digest = crate::sha256::hex(&bytes);
+    let name = format!("ferrix-kernel-{}.elf", digest.get(..16).unwrap_or(&digest));
+    let directory = trace.parent().unwrap_or_else(|| Path::new("."));
+    let kept = directory.join(&name);
+    if !kept.is_file() {
+        std::fs::create_dir_all(directory)?;
+        std::fs::write(&kept, &bytes)?;
+    }
+    Ok(name)
+}
+
+/// One gate of the suite.
+#[derive(Debug)]
+struct Gate {
+    /// The xtask command.
+    command: &'static str,
+    /// Whether it needs `--init`, a static busybox.
+    userland: bool,
+    /// Whether it counts on x86-64 alone: the gate refuses the others, or
+    /// fails on them for a reason [`SUITE`] gives.
+    x86_64_only: bool,
+}
+
+impl Gate {
+    const fn new(command: &'static str, userland: bool, x86_64_only: bool) -> Gate {
+        Gate {
+            command,
+            userland,
+            x86_64_only,
+        }
+    }
+}
+
+/// Every boot gate that exercises the item, passes under the plugin, and
+/// ends with a trace.
+///
+/// `test-boot` first: its kernel is the plain build, and the report counts
+/// statements against it. Left out, and why:
+///
+/// * `test-vfs` off x86-64: its permissions command expects uutils' wording
+///   (`cat: /tmp/dac-private: Permission denied`) and the Arm images carry
+///   busybox's (`cat: can't open ...`), so it fails there with or without the
+///   plugin. Add the Arm architectures back when the expectation is fixed.
+/// * `test-seat` and `test-compositor`: the plugin slows TCG enough that the
+///   first misses its redraw and the second trips the TLB shootdown's bound
+///   (`FERRIX-PANIC processor 0 never flushed its TLB for a shootdown`).
+///   Both pass under TCG without it. A failing run is not coverage evidence.
+/// * `test-foot`, `test-video`, `test-vkgears`, `test-rustc`, `test-chrome`
+///   and `test-selfhost`: a GL host, ports or volumes fetched from outside
+///   the tree.
+const SUITE: &[Gate] = &[
+    Gate::new("test-boot", false, false),
+    Gate::new("test-shell", true, false),
+    Gate::new("test-vfs", true, true),
+    Gate::new("test-net", true, false),
+    Gate::new("test-threads", false, false),
+    Gate::new("test-pty", false, false),
+    Gate::new("test-btrfs", false, false),
+    Gate::new("test-powerfail", false, false),
+    Gate::new("test-display", false, false),
+    Gate::new("test-input", false, false),
+    Gate::new("test-jobs", false, true),
+    Gate::new("test-restart", false, true),
+    Gate::new("test-sysfs", false, true),
+];
+
+/// Where the floor each architecture's coverage may not fall below is kept.
+const FLOOR: &str = "docs/certification/coverage-floor.json";
+
+/// `cargo xtask coverage`: run [`SUITE`] under the plugin on each
+/// architecture asked for, report the union, and fail below the recorded
+/// floor.
+///
+/// The plugin is `FERRIX_DRCOV`, the path of QEMU's `libdrcov.so`, which
+/// QEMU builds in `contrib/plugins/` and distributions do not package.
+/// Traces go to `--to DIR`, or `build/coverage/<arch>`.
+///
+/// # Errors
+///
+/// No plugin, no `--init`, a gate that failed, or coverage below the floor.
+pub(crate) fn run(args: &Args) -> Result<()> {
+    let plugin = std::env::var("FERRIX_DRCOV").map_err(|_| {
+        Error::new(
+            "coverage needs FERRIX_DRCOV, the path of QEMU's drcov plugin \
+             (contrib/plugins/libdrcov.so in a QEMU build tree)",
+        )
+    })?;
+    let init = args.init.as_deref().ok_or_else(|| {
+        Error::new(
+            "coverage needs --init PATH, a static busybox for each architecture; \
+             `{arch}` in the path is replaced by the architecture's name",
+        )
+    })?;
+    let mut failed = Vec::new();
+    for arch in args.arches()? {
+        let directory = match args.to.as_deref() {
+            Some(to) => PathBuf::from(to).join(arch.name()),
+            None => paths::workspace_root()
+                .join("build")
+                .join("coverage")
+                .join(arch.name()),
+        };
+        clear(&directory)?;
+        for gate in SUITE {
+            if gate.x86_64_only && arch != Arch::X86_64 {
+                continue;
+            }
+            if let Err(error) = run_gate(arch, gate, &plugin, init, &directory, args) {
+                eprintln!("\n  {error}");
+                failed.push(format!("{} on {arch}", gate.command));
+            }
+        }
+        if let Err(error) = report(arch, &directory) {
+            eprintln!("\n  {error}");
+            failed.push(format!("the coverage of {arch}"));
+        }
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::new(format!(
+            "coverage: failed: {}",
+            failed.join(", ")
+        )))
+    }
+}
+
+/// Remove what an earlier run left in `directory`: its traces, their
+/// kernel and slide sidecars and the kernels they named.
+fn clear(directory: &Path) -> Result<()> {
+    std::fs::create_dir_all(directory)?;
+    for entry in std::fs::read_dir(directory)? {
+        let path = entry?.path();
+        let name = path
+            .file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+        let ours = name.ends_with(".drcov")
+            || name.ends_with(".drcov.kernel")
+            || name.ends_with(".drcov.slide")
+            || (name.starts_with("ferrix-kernel-") && name.ends_with(".elf"));
+        if ours {
+            std::fs::remove_file(&path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Run one gate as a child of this program, its boots traced into
+/// `directory`.
+fn run_gate(
+    arch: Arch,
+    gate: &Gate,
+    plugin: &str,
+    init: &str,
+    directory: &Path,
+    args: &Args,
+) -> Result<()> {
+    let trace = directory.join(format!(
+        "{}.drcov",
+        gate.command.trim_start_matches("test-")
+    ));
+    let program = std::env::current_exe()?;
+    let mut command = Command::new(program);
+    let _ = command
+        .current_dir(paths::workspace_root())
+        .env(
+            "FERRIX_QEMU_PLUGIN",
+            format!("{plugin},filename={}", trace.display()),
+        )
+        .args([gate.command, "--arch", arch.name(), "--accel", "tcg"]);
+    // Two processors on ARMv7-A, the board's count: QEMU's default of four
+    // hides the failures only two show.
+    if arch == Arch::Armv7a {
+        let _ = command.args(["--smp", "2"]);
+    }
+    if gate.userland {
+        let _ = command.args(["--init", init]);
+    }
+    if args.release {
+        let _ = command.arg("--release");
+    }
+    if args.timeout_given {
+        let _ = command.args(["--timeout", &args.timeout.to_string()]);
+    }
+    println!("\n  coverage: {arch}: {}", gate.command);
+    crate::cargo::run(command, &format!("{} on {arch}", gate.command))
+}
+
+/// Run the report over every trace in `directory`, against the recorded
+/// floor.
+fn report(arch: Arch, directory: &Path) -> Result<()> {
+    let mut traces = Vec::new();
+    for entry in std::fs::read_dir(directory)? {
+        let path = entry?.path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "drcov")
+        {
+            traces.push(path);
+        }
+    }
+    traces.sort();
+    // A trace of a QEMU that was killed, not stopped, is empty: said, and
+    // left out. `test-powerfail`'s cuts are the ones that are meant to be.
+    traces.retain(|trace| {
+        let empty = std::fs::metadata(trace).map_or(true, |meta| meta.len() == 0);
+        if empty {
+            println!(
+                "  coverage: {} is empty: its QEMU was killed, not stopped",
+                trace.display()
+            );
+        }
+        !empty
+    });
+    let boot = directory.join("boot.drcov");
+    let reference = std::fs::read_to_string(sidecar(&boot)).map_err(|error| {
+        Error::new(format!(
+            "{arch}: no kernel recorded for {}: {error}; test-boot has to have run",
+            boot.display()
+        ))
+    })?;
+    let elf = directory.join(reference.trim());
+
+    let mut arguments = vec![
+        "--arch".to_owned(),
+        arch.name().to_owned(),
+        "--floor".to_owned(),
+        FLOOR.to_owned(),
+        "--elf".to_owned(),
+        elf.display().to_string(),
+        "--drcov".to_owned(),
+    ];
+    arguments.extend(traces.iter().map(|trace| trace.display().to_string()));
+    println!(
+        "\n  coverage: {arch}: python3 scripts/coverage-report.py {}",
+        arguments.join(" ")
+    );
+    let borrowed: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    crate::check::python_with("scripts/coverage-report.py", &borrowed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_first_boot_keeps_its_name_and_later_ones_are_numbered() {
+        let plugin = "/q/libdrcov.so,filename=/c/shell.drcov";
+        assert_eq!(
+            numbered(plugin, 1),
+            (plugin.to_owned(), Some(PathBuf::from("/c/shell.drcov")))
+        );
+        assert_eq!(
+            numbered(plugin, 3),
+            (
+                "/q/libdrcov.so,filename=/c/shell.3.drcov".to_owned(),
+                Some(PathBuf::from("/c/shell.3.drcov"))
+            )
+        );
+    }
+
+    #[test]
+    fn a_plugin_without_a_filename_is_passed_on() {
+        assert_eq!(
+            numbered("/q/libdrcov.so", 2),
+            ("/q/libdrcov.so".to_owned(), None)
+        );
+    }
+
+    #[test]
+    fn a_trace_without_an_extension_is_numbered_at_the_end() {
+        assert_eq!(
+            numbered_path(Path::new("/c/trace"), 2),
+            PathBuf::from("/c/trace.2")
+        );
+    }
+
+    #[test]
+    fn the_sidecar_is_the_trace_with_kernel_added() {
+        assert_eq!(
+            sidecar(Path::new("/c/shell.2.drcov")),
+            PathBuf::from("/c/shell.2.drcov.kernel")
+        );
+    }
+}

@@ -66,7 +66,7 @@ const DEBUG_EXIT_SUCCESS: i32 = 33;
 /// [`crate::console`] says what the difference is for.
 pub(crate) fn run(arch: Arch, image: &Path, args: &Args) -> Result<()> {
     let console = console::open()?;
-    let (mut command, network) = qemu_command(arch, image, args, &console)?;
+    let (mut command, network) = qemu_command(arch, image, None, args, &console)?;
     if args.gdb {
         let _ = command.args(["-s", "-S"]);
         println!("  waiting for a debugger on localhost:1234");
@@ -852,7 +852,7 @@ fn watch_hooked(
     at_marker: Option<AtMarker<'_>>,
 ) -> Result<Watched> {
     let symbols = Symbolizer::open(kernel);
-    let (mut command, network) = qemu_command(arch, image, args, &Console::Owned)?;
+    let (mut command, network) = qemu_command(arch, image, Some(kernel), args, &Console::Owned)?;
     // Every DMA fault the machine's IOMMU records, which the run is judged by
     // below; `crate::dma_faults` says why QEMU's own remarks are not enough.
     let _ = command.args(dma_faults::trace_args(arch));
@@ -1236,7 +1236,11 @@ fn judged_vnc(args: &Args, card: Option<&str>) -> Vec<String> {
 /// translate is refused here rather than producing a boot's worth of coverage
 /// that reads as zero. A silent zero is indistinguishable from a kernel that
 /// nothing exercised, which is the worst of the available failures.
-fn accelerator_arguments(accelerator: &str) -> Result<Vec<String>> {
+///
+/// `kernel` is the ELF the boot runs, which a coverage run keeps beside its
+/// trace: gates build different kernels, and a trace means nothing read
+/// against another one's addresses ([`crate::coverage::plugin_for_boot`]).
+fn accelerator_arguments(accelerator: &str, kernel: Option<&Path>) -> Result<Vec<String>> {
     let mut arguments = vec!["-accel".to_owned(), accelerator.to_owned()];
 
     if let Ok(plugin) = std::env::var("FERRIX_QEMU_PLUGIN") {
@@ -1249,7 +1253,7 @@ fn accelerator_arguments(accelerator: &str) -> Result<Vec<String>> {
             )));
         }
         arguments.push("-plugin".to_owned());
-        arguments.push(plugin);
+        arguments.push(crate::coverage::plugin_for_boot(&plugin, kernel)?);
     }
 
     Ok(arguments)
@@ -1309,6 +1313,7 @@ fn arm_cpu(arch: Arch) -> String {
 fn qemu_command(
     arch: Arch,
     image: &Path,
+    kernel: Option<&Path>,
     args: &Args,
     console: &Console,
 ) -> Result<(Command, Network)> {
@@ -1330,7 +1335,7 @@ fn qemu_command(
     let mut command = Command::new(&binary);
     let _ = command.current_dir(paths::workspace_root());
 
-    let _ = command.args(accelerator_arguments(&accelerator)?);
+    let _ = command.args(accelerator_arguments(&accelerator, kernel)?);
     let _ = command.args([
         "-m",
         &args.memory.to_string(),

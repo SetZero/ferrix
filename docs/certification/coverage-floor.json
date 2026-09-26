@@ -1,0 +1,16 @@
+{
+  "//": [
+    "The ratchet on the certified item's statement coverage, per architecture:",
+    "`cargo xtask coverage` fails when the union of its suite falls below the",
+    "figure here. Each is the committed coverage-<arch>.json less one point,",
+    "rounded down to a half: the suite's timing moves which contended and",
+    "retried paths a run takes, and a ratchet that fails on that is ignored.",
+    "Raise a figure when the committed evidence rises; lowering one is a",
+    "decision to argue in the commit that makes it."
+  ],
+  "item": {
+    "x86_64": 75.5,
+    "aarch64": 72.5,
+    "armv7a": 71.5
+  }
+}

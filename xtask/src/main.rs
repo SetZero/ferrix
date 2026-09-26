@@ -65,6 +65,7 @@ mod check;
 mod chrome;
 mod compositor;
 mod console;
+mod coverage;
 mod display;
 mod dma_faults;
 mod everything;
@@ -187,6 +188,8 @@ COMMANDS:
     test-selfhost  Run `cargo xtask build` on Ferrix from that toolchain and this checkout, and boot the image it made;
                   with --plan DIR, have Ferrix make every build a FERRIX_BUILDS=record:DIR run wrote down
     builds-execute  Make every build in --plan DIR here, keeping the outputs in DIR/store (see xtask/src/builds.rs)
+    coverage      Run every boot gate under QEMU's drcov plugin (FERRIX_DRCOV) with --init, and
+                  require the certified item's statement coverage to hold its recorded floor
     check         Run every quality gate (fmt, clippy, layering, audits, tests, docs)
     host-clippy   check's host clippy step alone, as CI runs it
     host-test     check's host test step alone, as CI runs it
@@ -393,6 +396,7 @@ fn run() -> Result<()> {
         "test-restart" => restart::test_restart(&args),
         "test-sysfs" => sysfs::test_sysfs(&args),
         "test-threads" => threads::test_threads(&args),
+        "coverage" => coverage::run(&args),
         "test-rustc" => rustc::test_rustc(&args),
         "test-chrome" | "test-chrome-window" => chrome::run(command, &args),
         "bench-chrome" => compositor::bench_chrome(&args),

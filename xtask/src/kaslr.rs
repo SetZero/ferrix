@@ -132,13 +132,15 @@ pub(crate) fn record_slide(plugin: &str, lines: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// [`record_slide`] for the plugin `FERRIX_QEMU_PLUGIN` gave this run, if it
-/// gave one: a coverage trace records the addresses the kernel ran at, which
-/// KASLR moved, and its report needs this boot's slide to look them up.
+/// [`record_slide`] for the plugin this boot was given, if it was given one:
+/// a coverage trace records the addresses the kernel ran at, which KASLR
+/// moved, and its report needs this boot's slide to look them up. The boot's
+/// own trace, which after a gate's first boot is a numbered one
+/// ([`crate::coverage::plugin_for_boot`]).
 pub(crate) fn record_coverage_slide(lines: &[String]) -> Result<()> {
-    match std::env::var("FERRIX_QEMU_PLUGIN") {
-        Ok(plugin) => record_slide(&plugin, lines),
-        Err(_) => Ok(()),
+    match crate::coverage::latest_plugin() {
+        Some(plugin) => record_slide(&plugin, lines),
+        None => Ok(()),
     }
 }
 

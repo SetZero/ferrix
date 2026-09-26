@@ -631,7 +631,7 @@ fn python(script: &str) -> Result<()> {
 }
 
 /// Run one of the gate scripts, passing it arguments.
-fn python_with(script: &str, arguments: &[&str]) -> Result<()> {
+pub(crate) fn python_with(script: &str, arguments: &[&str]) -> Result<()> {
     let interpreter = python_interpreter().ok_or_else(|| {
         Error::new("no working Python interpreter on PATH (tried python3, python)")
     })?;
