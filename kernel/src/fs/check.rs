@@ -30,7 +30,7 @@ use ferrix_linux_abi::types::{
     MS_NOSUID, MS_RELATIME, O_APPEND, O_CLOEXEC, O_CREAT, O_NONBLOCK, O_RDONLY, O_RDWR, O_TRUNC,
     O_WRONLY, PROT_READ, PROT_WRITE, SEEK_CUR, SPLICE_F_NONBLOCK,
 };
-use ferrix_vfs::pipe::PIPEFS_MAGIC;
+use ferrix_vfs::pipe::{PIPE_CAPACITY, PIPEFS_MAGIC};
 use ferrix_vfs::tmpfs::{PageSource, Pages, Storage, TMPFS_MAGIC};
 use ferrix_vfs::{Errno, FileType, Namespace, NewNode, OpenFlags, RenameMode};
 use ferrix_vma::VmaFlags;
@@ -1630,7 +1630,104 @@ fn check_sendfile_copies_a_file(process: &Process, page: u64) -> Result<u64, &'s
         "sendfile's copy is not as long as what it sent",
     )?;
     check_sendfile_takes_the_inputs_linux_does(process, page)?;
+    check_sendfile_keeps_what_a_pipe_has_no_room_for(process, page)?;
     Ok(17_990)
+}
+
+/// `sendfile` from a socket into a pipe with less room than the socket
+/// holds sends what fits and leaves the rest in the socket, in order.
+/// Measured on a 7.0 host: 10000 bytes in a Unix stream socket, into a pipe
+/// with one page free, send 1808 and the socket still reads the other 8192;
+/// into a full non-blocking pipe `EAGAIN`, all 10000 still there. A socket
+/// cannot un-read, and `sendfile` read it for as much as it was asked and
+/// then lost what a non-blocking pipe did not take. Here the pipe is filled
+/// from `/dev/zero` to ten bytes short, and the socket holds fifteen.
+fn check_sendfile_keeps_what_a_pipe_has_no_room_for(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    const ROOM: usize = 10;
+    const AF_UNIX: u64 = 1;
+    const SOCK_STREAM: u64 = 1;
+    answers(
+        pipe::sys_pipe2(process, page + AT_FDS, O_NONBLOCK),
+        0,
+        "pipe2 for sendfile from a socket was refused",
+    )?;
+    let (reader, writer) = pair(process, page)?;
+    // Non-blocking, so that a socket emptied by the bug fails the read
+    // below rather than waiting on it.
+    let nonblocking = u64::from(O_NONBLOCK);
+    answers(
+        by_number(
+            process,
+            Syscall::Socketpair,
+            [AF_UNIX, SOCK_STREAM | nonblocking, 0, page + AT_FDS, 0, 0],
+        ),
+        0,
+        "socketpair for sendfile into a full pipe was refused",
+    )?;
+    let (one, other) = pair(process, page)?;
+    uaccess::copy_to_user(process.space(), page + AT_BACK, b"/dev/zero\0")
+        .map_err(|_| "could not stage /dev/zero's name")?;
+    let zero = descriptor(
+        fd::sys_openat(process, AT_FDCWD, page + AT_BACK, O_RDONLY, 0),
+        "/dev/zero would not open to fill a pipe",
+    )?;
+    let null = descriptor(
+        fd::sys_openat(process, AT_FDCWD, page + AT_DEV_NULL, O_WRONLY, 0),
+        "/dev/null would not open to drain a pipe",
+    )?;
+    let fill = PIPE_CAPACITY - ROOM;
+    let held = DATA.len();
+
+    answers(
+        pipe::sys_sendfile(process, writer, zero, 0, fill as u64),
+        fill,
+        "sendfile from /dev/zero did not fill a pipe to what it had room for",
+    )?;
+    answers(
+        file::sys_write(process, other, page + AT_DATA, held as u64),
+        held,
+        "a write into a socket came back short",
+    )?;
+    // What was left in the socket is judged before what the call answered,
+    // since losing it is what this is about.
+    let sent = pipe::sys_sendfile(process, writer, one, 0, held as u64);
+    answers(
+        file::sys_read(process, one, page + AT_BACK, 64),
+        held - ROOM,
+        "sendfile from a socket into a pipe lost what the pipe had no room for",
+    )?;
+    answers(
+        sent,
+        ROOM,
+        "sendfile from a socket into a pipe did not send what the pipe had room for",
+    )?;
+    if read_back(process, page + AT_BACK, held - ROOM)? != DATA.get(ROOM..).unwrap_or_default() {
+        return Err("what sendfile left in a socket is not what the pipe had no room for");
+    }
+    answers(
+        pipe::sys_splice(process, reader, 0, null, 0, fill as u64, 0),
+        fill,
+        "splice did not drain a filled pipe into /dev/null",
+    )?;
+    answers(
+        file::sys_read(process, reader, page + AT_BACK, 64),
+        ROOM,
+        "sendfile from a socket did not queue what it sent",
+    )?;
+    if read_back(process, page + AT_BACK, ROOM)? != DATA.get(..ROOM).unwrap_or_default() {
+        return Err("sendfile from a socket queued different bytes than the socket held");
+    }
+    for fd in [reader, writer, one, other, zero, null] {
+        answers(
+            fd::sys_close(process, fd),
+            0,
+            "a descriptor the full-pipe sendfile check used would not close",
+        )?;
+    }
+    Ok(())
 }
 
 /// `sendfile` reads only what Linux's does, measured on a 7.0 host: from a

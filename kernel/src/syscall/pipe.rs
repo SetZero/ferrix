@@ -18,7 +18,9 @@
 //! [`SENDFILE_CHUNK`]: `read` and `write` through a bounce buffer, with no copy
 //! to the program in between. A short write to the output puts the input's
 //! position back over what the output did not take, where the input has a
-//! position.
+//! position. Into a pipe it is one `splice` into a pipe, as Linux's is: the
+//! input is read for no more than the pipe has room for, so a socket or a
+//! terminal, which cannot be put back, gives only what the pipe will take.
 //!
 //! An input with no position has nowhere to put them back, and Linux does not
 //! take one: its `splice_direct_to_actor` requires an input that can seek, "as
@@ -188,7 +190,14 @@ fn transfer(
         return Err(Errno::EINVAL);
     }
     let count = usize::try_from(count.min(MAX_RW_COUNT)).unwrap_or(SENDFILE_CHUNK);
-    let sent = copy(&input, &output, position.as_mut(), count)?;
+    let sent = if fs::pipe::is_pipe(&output) {
+        // Linux's `splice_file_to_pipe`: wait for room unless the pipe is
+        // non-blocking, then read no more than it has room for.
+        let nonblock = output.status().nonblock;
+        into_a_pipe(&input, &output, position.as_mut(), count, nonblock)?
+    } else {
+        copy(&input, &output, position.as_mut(), count)?
+    };
     Ok((sent, position))
 }
 
@@ -539,10 +548,18 @@ fn out_of_a_pipe(
     }
 }
 
-/// One `splice` into a pipe: no more than the pipe has room for, so the call
-/// never waits on itself, read from `input` at `at` or its position and
-/// queued. What the pipe did not take goes back to the input's position,
-/// where it has one.
+/// One `splice` into a pipe, and a `sendfile` into one: no more than the
+/// pipe has room for, so the call never waits on itself and a stream is never
+/// read for more than can be put down, read from `input` at `at` or its
+/// position and queued. A stream is read without waiting under `nonblock`,
+/// as Linux's socket reads for a splice under `SPLICE_F_NONBLOCK`.
+///
+/// What the pipe did not take goes back to the input's position, where it
+/// has one. A stream has none -- a socket or a terminal cannot un-read -- so
+/// what it gave is put down whatever that waits for ([`keep`]). The room is
+/// measured first, so that takes a second writer to the same pipe filling it
+/// in between; Linux holds the pipe's lock across the read, which this pipe,
+/// a spin lock, cannot be held across.
 fn into_a_pipe(
     input: &OpenFile,
     output: &OpenFile,
@@ -554,26 +571,55 @@ fn into_a_pipe(
     let mut buffer = vec![0_u8; len.min(room).min(SENDFILE_CHUNK)];
     let got = match at.as_deref() {
         Some(&start) => input.read_at(start, &mut buffer)?,
+        None if input.is_stream() => input
+            .io()
+            .read_stream(&mut buffer, nonblock || input.status().nonblock)?,
         None => input.read(&mut buffer)?,
     };
     let chunk = buffer.get(..got).ok_or(Errno::EIO)?;
     if chunk.is_empty() {
         return Ok(0);
     }
-    let wrote = match fs::pipe::write(output, chunk, nonblock) {
+    let unreadable = at.is_none() && !input.takes_offsets();
+    let first = fs::pipe::write(output, chunk, nonblock);
+    let wrote = match first {
         Ok(wrote) => wrote,
-        Err(errno) => {
+        Err(errno) if !unreadable || errno == Errno::EPIPE => {
             give_back(input, at.is_some(), got);
             return Err(errno);
         }
+        Err(_) => 0,
     };
-    if wrote < got {
-        give_back(input, at.is_some(), got - wrote);
+    let wrote = if wrote < got && unreadable {
+        wrote + keep(output, chunk.get(wrote..).unwrap_or_default())
+    } else {
+        if wrote < got {
+            give_back(input, at.is_some(), got - wrote);
+        }
+        wrote
+    };
+    if let (0, Err(errno)) = (wrote, first) {
+        return Err(errno);
     }
     if let Some(at) = at {
         *at = at.saturating_add(wrote as u64);
     }
     Ok(wrote)
+}
+
+/// Put `rest` in the pipe `output` is, waiting for room: what a stream gave
+/// and cannot take back. Answers how much went in, all of it unless the last
+/// reader left or the caller was interrupted, where what is left has nowhere
+/// to go.
+fn keep(output: &OpenFile, rest: &[u8]) -> usize {
+    let mut put = 0;
+    while let Some(left) = rest.get(put..).filter(|left| !left.is_empty()) {
+        match fs::pipe::write(output, left, false) {
+            Ok(0) | Err(_) => break,
+            Ok(wrote) => put += wrote,
+        }
+    }
+    put
 }
 
 /// Whether two open files are one file: the same inode on the same
