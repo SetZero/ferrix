@@ -29,6 +29,22 @@
 //! nothing. A pointer moving is then not a frame, and a host that shows the
 //! screen to a viewer can hand the viewer the image to draw where its own
 //! mouse is (`docs/GPU.md` §3.9).
+//!
+//! # Offsets
+//!
+//! The open card is a stream: events, no position. Linux's `drm_read`
+//! never looks at the offset it is handed and the DRM core never marks a
+//! card a stream, so `pread64` on a card is a `read`, whatever the offset
+//! -- measured on a Linux 7.0 host, `pread` of 4096 at 0 and at 1000 and
+//! `preadv` at 5 on `card1` (amdgpu) and `renderD128` answered `EAGAIN`
+//! under `O_NONBLOCK`, as `read` did, and `pwrite` and a zero-length
+//! `write` `EINVAL`. The card here does the same:
+//! [`Inode::ignores_position`] is yes. `lseek`, though, is the driver's
+//! own on Linux: amdgpu's file operations have none, so it is `ESPIPE`;
+//! the drivers built on `DEFINE_DRM_GEM_FOPS`, virtio-gpu's among them,
+//! and nvidia's answer 0 (`card2` on the same host). No program seeks a
+//! DRM descriptor, so the card keeps the `ESPIPE` it had, amdgpu's answer:
+//! [`Inode::seek_is_noop`] is no.
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::Arc;
@@ -255,6 +271,17 @@ impl Inode for CardFile {
 
     fn is_stream(&self) -> bool {
         true
+    }
+
+    /// `pread64` reads events as `read` does, the offset ignored: see the
+    /// module's documentation on offsets.
+    fn ignores_position(&self) -> bool {
+        true
+    }
+
+    /// And `lseek` stays `ESPIPE`: see the module's documentation.
+    fn seek_is_noop(&self) -> bool {
+        false
     }
 
     fn read_at(&self, _offset: u64, buf: &mut [u8]) -> VfsResult<usize> {

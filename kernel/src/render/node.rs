@@ -353,6 +353,18 @@ impl Inode for RenderFile {
         true
     }
 
+    /// `pread64` is a `read`, and `lseek` `ESPIPE`, as on a card: see
+    /// `crate::display::drm`'s documentation on offsets, which measured
+    /// both kinds of node.
+    fn ignores_position(&self) -> bool {
+        true
+    }
+
+    /// See `ignores_position`, above.
+    fn seek_is_noop(&self) -> bool {
+        false
+    }
+
     /// A render node carries no byte stream: everything it does is an
     /// ioctl, and Linux answers a read of one with `EINVAL`.
     fn read_at(&self, _offset: u64, _buf: &mut [u8]) -> VfsResult<usize> {

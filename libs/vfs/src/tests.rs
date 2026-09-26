@@ -1641,6 +1641,62 @@ fn a_stream_whose_seek_does_nothing_seeks_to_zero_and_refuses_offsets() {
     assert!(!crate::Inode::seek_is_noop(&Recorder::default()));
 }
 
+/// A stream that reads the same at any offset but cannot be sought, as a
+/// DRM card is on Linux: `pread64` is a `read`, `lseek` is `ESPIPE`.
+#[derive(Debug)]
+struct Events;
+
+impl crate::Inode for Events {
+    fn metadata(&self) -> crate::Metadata {
+        crate::Metadata {
+            kind: FileType::CharDevice,
+            ..stream_metadata()
+        }
+    }
+    fn into_any(self: Arc<Self>) -> Arc<dyn core::any::Any + Send + Sync> {
+        self
+    }
+    fn is_stream(&self) -> bool {
+        true
+    }
+    fn ignores_position(&self) -> bool {
+        true
+    }
+    fn seek_is_noop(&self) -> bool {
+        false
+    }
+    fn read_stream(&self, _buf: &mut [u8], nonblock: bool) -> Result<usize, Errno> {
+        // Opened O_NONBLOCK: a read told it may wait is the test's mistake.
+        if !nonblock {
+            return Err(Errno::EDEADLK);
+        }
+        Err(Errno::EAGAIN)
+    }
+}
+
+#[test]
+fn a_stream_that_takes_offsets_may_still_refuse_lseek() {
+    let at = Location::detached(
+        Arc::new(Pipes),
+        Arc::new(Events),
+        b"card0",
+        Arc::new(SpinParker),
+    );
+    let flags = OpenFlags {
+        nonblock: true,
+        ..READ_WRITE
+    };
+    let card = OpenFile::new(at, &flags).unwrap();
+    assert!(card.takes_offsets());
+    assert_eq!(card.seek(0, Whence::Set), Err(Errno::ESPIPE));
+    assert_eq!(card.seek(0, Whence::Current), Err(Errno::ESPIPE));
+    let mut buf = [0_u8; 64];
+    assert_eq!(card.read_at(1000, &mut buf), Err(Errno::EAGAIN));
+    assert_eq!(card.read(&mut buf), Err(Errno::EAGAIN));
+    // Written to as a card is, which has no write: EINVAL, not ESPIPE.
+    assert_eq!(card.write_at(0, b"x"), Err(Errno::EINVAL));
+}
+
 /// A stream that fills reads, as a pipe does, holding `left` bytes: a read
 /// that would wait counts itself and is refused as a blocking pipe's would
 /// hang.

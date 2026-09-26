@@ -117,6 +117,9 @@
 //!   of `zero` into two segments of eight is 16.
 //! - The terminals -- `tty`, `console`, `ptmx` and what it opens, the
 //!   `pts` slaves -- are `ESPIPE`, as they are on Linux.
+//! - The DRM nodes, `dri/card<N>` and `dri/renderD<N>`, are `ESPIPE` to
+//!   `lseek` but take `pread64` as a `read`, as Linux's do on this host:
+//!   what their open files answer, and why, is in `crate::display::drm`.
 
 pub(crate) mod check;
 
