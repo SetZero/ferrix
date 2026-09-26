@@ -15,7 +15,7 @@ that does not exist.
 
 | Target | Standard | Verdict |
 |---|---|---|
-| EAL5+ | Common Criteria (ISO/IEC 15408) | **Not met.** Security Target and vulnerability analysis written; blocked on design evidence at module granularity, the boundary's 29 upward references, and an accredited laboratory. |
+| EAL5+ | Common Criteria (ISO/IEC 15408) | **Not met.** Security Target and vulnerability analysis written; blocked on design evidence at module granularity, the boundary's 56 upward references, and an accredited laboratory. |
 | DAL C | DO-178C / ED-12C | **Not met.** Coverage is measured, at 81.9%; planning data, requirements traceability and the 1,054 statements that still need a test are not done. |
 | Class C | IEC 62304 | **Closest of the four.** No SOUP in the item; element-level safety analysis written. Blocked on a QMS and the integrator's risk file. |
 | SIL 2 | EN 50716:2023 | **Reachable.** Most of Annex A satisfied; generic software argument and application conditions written. Blocked on independent assessment. |
@@ -27,7 +27,7 @@ specific, measured, and mostly documents rather than code.
 * [TODO.md](TODO.md) — start here to re-audit: what to re-measure, and what not to write
 * [SAFETY-MANUAL.md](SAFETY-MANUAL.md) — the out-of-context argument: assumed requirements, safe state, ten assumptions of use, element failure analysis
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
-* [FINDINGS.md](FINDINGS.md) — the audit register, 19 open findings and 18 closed
+* [FINDINGS.md](FINDINGS.md) — the audit register, 20 open findings and 18 closed
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
 * [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) — AVA_VAN.4 over the seven threats; five residual vulnerabilities
 * [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) — what the item allocates, and what it promises about time
@@ -78,9 +78,9 @@ boundary.
 | Unreached statements | 1,278 — **103 argued, 1,054 need a test** |
 | SOUP in the item | **0** |
 | External crates, host-side | 21 |
-| Upward boundary references | **29**, from 62 at the start of the work |
+| Upward boundary references | **56**, from 94 at the start of the work (29 and 62 before the gate could resolve module paths) |
 | `unsafe` blocks, all documented | 662 |
-| Directly recursive functions in the item | **0** |
+| Directly recursive functions in the item | **0**, of 1,863 |
 | SMEP + SMAP (x86-64) | **on** |
 | PAN (AArch64) | **implemented**; absent from the reference CPU |
 | Assembly | 303 lines, 19 allow-listed sites |
@@ -123,8 +123,8 @@ for AArch64. The reference `cortex-a72` is ARMv8.0 and lacks PAN, and ARMv7-A
 cannot have it at all, so V-01 still stands on Arm (AoU-6).
 
 *Missing:* Design evidence at module granularity for `ADV_TDS.3`; the SysML model
-describes Ferrix, not the TOE (F-15). The TSF still has 29 upward references into the load ring
-(`ADV_INT.2`, F-07 and F-09); the clearest counter-example, the core
+describes Ferrix, not the TOE (F-15). The TSF still has 56 upward references into the load ring
+(`ADV_INT.2`, F-07, F-09 and F-33), 21 of them from the Linux dispatcher; the clearest counter-example, the core
 naming the Linux personality's process type (F-01), is gone. There are no side-channel defences and no layout
 randomisation (F-31). And the TOE claims neither audit nor
 authentication (F-21b), which is defensible for an isolation kernel and is why
@@ -214,16 +214,19 @@ In order of value per unit of effort:
    holds of the personality (F-07, F-09).** Board support, bring-up and power
    now register with the item instead of being named by it (F-04, F-08), and
    the core no longer names the personality's process or thread (F-01, F-06).
-   What is left is the dispatcher, and six Linux-personality syscall files in
-   the item ring that name the POSIX process for its state; for each, the
-   question is whether the item should hold it at all.
+   What is left is the native dispatcher; six Linux-personality syscall files
+   in the item ring that name the POSIX process for its state; and the Linux
+   dispatcher, `syscall/mod.rs`, which names 21 personality modules -- the
+   largest single item in the register, invisible until the gate learned to
+   resolve module paths. For each, the question is whether the item should
+   hold it at all.
 
 Done since the audit began: the vulnerability analysis (F-21a), SMEP, SMAP and
 PAN (F-32), the release profile and both Arm architectures measured (F-11,
 F-12), the complexity and recursion gate (F-25), board support, bring-up
 and power registering with the item (F-04, F-08), and the split of `Process`
 into a core object and a POSIX extension (F-01, F-06, W-1), which took the
-boundary from 36 references to 29 and left `object/` and `sched/` naming
+boundary from 36 references to 29 by the gate's count of the day and left `object/` and `sched/` naming
 nothing above the core.
 
 ## 5. What cannot be fixed from here

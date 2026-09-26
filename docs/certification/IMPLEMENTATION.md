@@ -115,7 +115,8 @@ produce a process's last reference and dropping a process takes that lock.
 ### What is left, and where it is filed
 
 `check-item-boundary.py` went from 36 references to 29 (48 to 41 when first
-measured, before F-04 and F-08 closed): seven removed (both
+measured, before F-04 and F-08 closed; all four are the gate's counts of the
+day, which were lower bounds -- FINDINGS.md §A): seven removed (both
 core references to `syscall::process`, all three of F-06, `futex.rs`'s, and
 `registry.rs`'s by the ring move). Six item-ring files still name
 `syscall::process`, and they do so for POSIX *state*, not for the core
@@ -323,11 +324,20 @@ finding of its own.
 
 ## W-5 — A registration table for the native dispatcher
 
-**Closes:** F-07 (9 references). **Size:** medium.
+**Closes:** F-07 (12 references: 10 in `syscall/native.rs`, 2 in `devmgr.rs`).
+**Size:** medium.
 
 `syscall/native.rs:98` is a `match call { … }` naming ten load-ring modules.
 Replace with a table subsystems register handlers into, so the item's exported
-interface can be analysed without the whole load ring.
+interface can be analysed without the whole load ring. `devmgr.rs` names
+`syscall::exec` and `syscall::process` to create the native process it starts
+(`exec::load_native`, as `native.rs`'s process creation does), so whatever
+owns process creation in the table can serve it too.
+
+The count is the resolving gate's (2026-09-26). The one before it saw neither
+`devmgr.rs`'s nested `use` group nor any bare-name path; re-run
+`python3 scripts/check-item-boundary.py --report` before starting and after
+each step, since it now reports what a file names by any route.
 
 **Pitfall:** the current `match` is exhaustive over the call enum, so the
 compiler catches an unhandled call. A table loses that. Keep the guarantee: a
@@ -484,8 +494,12 @@ W-7.
 whenever someone can answer step 1.
 
 W-1 landed as a split rather than a move, and took the boundary from 36
-references to 29. What it leaves is F-09's: six Linux-personality syscall
-files in the item ring that name the POSIX process for its state. W-5 reads
+references to 29 by the gate's count of the day. What it leaves is F-09's:
+six Linux-personality syscall files in the item ring that name the POSIX
+process for its state. Since the gate learned to resolve module paths
+(2026-09-26) the register reads 56, not 29 -- F-09 at 39, 21 of them the Linux
+dispatcher's; F-07 at 12; and a new F-33, 5, a core boot check that is small
+to move -- and W-5 should be sized against those numbers. W-5 reads
 better now that process creation is the one thing the native dispatcher
 still needs the personality for.
 

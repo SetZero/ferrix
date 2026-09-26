@@ -80,9 +80,34 @@ from one, device enumeration asks board support what it prepared -- the item
 defines the interface and the load registers into it
 (`kernel/src/hooks.rs`). `main.rs` is the crate root: it declares every
 module, and its `register_load` is the one place the load is told to
-register, in bring-up order, with a boot check that it did. Those calls are
-the composition root's edges into the load, and the gate does not read them;
-FINDINGS.md F-08 says what else it cannot see.
+register, in bring-up order, with a boot check that it did.
+
+**`main.rs` is in the item, and it is the composition root.** The manifest
+puts it in the `item` ring as bring-up, and nothing about that is changed
+here. But it is also where the load is put together with the item. Since
+2026-09-26 the gate reads its calls into the load -- 32 modules -- and
+records them under `composition_root` in the manifest rather than in the
+debt register: ratcheted the same way, filed against no finding. Of the 32,
+20 are the load's own boot self-checks (`fs::check`, `net::check`,
+`syscall::check` and seventeen more verification files), and 12 are product
+modules: registration (`syscall::launch`, `stm32mp1`, `fs`), the load's
+subsystems brought up in order (`fs::root_disk`, `fs::data_disk`, `net`,
+`syscall::deliver`, `syscall::time`, `display`), and the pieces `main.rs`'s
+own boot checks drive a program through (`syscall::image`, `syscall::exec`,
+`fs::cgroupfs`).
+
+That is a judgement an assessor has to accept, and it is only as good as the
+claim that those edges carry composition and no item logic. It is plausible
+from the list; it is not checked, because the exemption covers the file, and
+`main.rs` is 2,897 lines. Making it checkable means reducing the root to
+composition, with bring-up logic in item-ring modules that name nothing above
+them, and the boot checks that drive the load in verification files.
+
+A `mod` declaration is not counted as an edge anywhere. A parent declaring
+its child says where the child sits in the module tree, not that the parent's
+code runs it: `main.rs` declares 10 load-ring modules and `syscall/mod.rs`
+declares 30. What either file's *code* then does with them is resolved and
+counted like any other reference.
 
 ### `load` — everything it runs and does not vouch for
 
@@ -123,24 +148,41 @@ visible instead of letting "Ferrix is certified" absorb it.
 ## 4. What the measurement found
 
 The boundary above is a claim about dependencies, so the gate measures it.
-Today the item contains **29 upward references** (62 when the audit began) — places where a
-ring names something in a ring above it. They are recorded in the manifest
-against finding ids and analysed in [FINDINGS.md](FINDINGS.md).
+Today the item contains **56 upward references in 12 files** — places where a
+ring names something in a ring above it — plus the composition root's 32
+(§2). They are recorded in the manifest against finding ids and analysed in
+[FINDINGS.md](FINDINGS.md).
+
+**The counts this section gave before 2026-09-26 — 29, and 62 when the audit
+began — were lower bounds.** The gate matched only the literal text
+`crate::a::b`, so it missed nested `use` groups, paths through a name bound by
+`use` or declared by `mod`, and every path in code its string pattern had taken
+for a literal. It now resolves names as the compiler does
+(`scripts/check-item-boundary.py`, whose docstring says how, and what it still
+cannot see: an edge that is a type flowing through a value rather than a name
+written in the file). Re-measured, today's tree has 56 where 29 were
+reported, and the audit's starting tree has 94 where 62 were.
 
 They are not a reason to move the boundary. They are the reason the boundary is
 worth having: each one is a specific, addressable piece of coupling that was
-invisible while the architecture was described in prose. Thirty-three have
-been paid down since the audit began — F-02, F-02a, F-03, F-04, F-05 and F-08,
-and F-01 and F-06 by splitting the process (W-1) — and the two that remain
-worth naming are structural rather than incidental:
+invisible while the architecture was described in prose. Thirty-eight have
+been paid down since the audit began, by today's measure — F-02, F-02a, F-03,
+F-04, F-05 and F-08, and F-01 and F-06 by splitting the process (W-1) — and
+of the three that remain, two are structural rather than incidental:
 
 * **F-07** — `syscall/native.rs`, the native ABI dispatcher, names ten
-  modules in the load ring. Expected of a dispatcher, and still a dependency.
+  modules in the load ring, and `devmgr.rs` two more for the process it
+  starts. Expected of a dispatcher, and still a dependency.
 * **F-09** — Linux-personality syscalls sitting in the item ring: `brk`,
-  rlimits, the Linux dispatcher, the POSIX thread. Since W-1 split the core
-  process out of the POSIX one (`kernel/src/object/process.rs`), what these
-  files want from the personality is its state, not the process concept, and
-  the open question for each is whether the item should hold it at all.
+  rlimits, the Linux dispatcher, the POSIX thread. The Linux dispatcher,
+  `syscall/mod.rs`, accounts for 21 of its 39 references. Since W-1 split the
+  core process out of the POSIX one (`kernel/src/object/process.rs`), what
+  these files want from the personality is its state, not the process
+  concept, and the open question for each is whether the item should hold it
+  at all.
+* **F-33** — the x86-64 paranoid entry's boot check, in the core, loads and
+  starts a Linux program. Incidental: it is verification code in a product
+  file.
 
 `object/` and `sched/` name nothing above the core since W-1: a task holds a
 `sched::UserThread` and the core holds a process whole only as an

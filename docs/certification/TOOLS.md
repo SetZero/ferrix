@@ -95,6 +95,15 @@ known biases are documented in its own docstring and in F-11: it measures the
 profile actually booted, and a basic block credits every statement inside it,
 which errs optimistically.
 
+The two ratchets share the failure mode. A boundary or complexity gate that
+under-reports passes, and a pass is indistinguishable from a correct one. Both
+did until 2026-09-26: `check-item-boundary.py` saw 29 of 56 upward references
+and `check-complexity.py` measured 1,559 of 1,887 functions, because they
+found strings with a pattern that mis-paired quotes and the boundary gate read
+only the literal text `crate::a::b` (FINDINGS.md §A, F-25). Both now read code
+through `rustlex.py` and run their own self-tests before every measurement,
+so a lexer or resolver regression fails the build instead of shrinking a count.
+
 QEMU is also the *execution platform* for all boot evidence, not merely an
 observer of it. Every claim in [VERIFICATION.md](VERIFICATION.md) except the
 host unit tests is a claim about the item's behaviour under emulation, and the

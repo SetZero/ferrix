@@ -312,8 +312,10 @@ modules. `docs/sysml/` is the right notation and describes Ferrix rather than
 the TOE, at system granularity (F-15).
 
 ### 9.5 The TSF is not free of upward dependencies
-29 references reach from the TOE into the uncertified load ring (F-07 and
-F-09), down from 62. The trap return path no longer reaches the load ring
+56 references reach from the TOE into the uncertified load ring (F-07, F-09
+and F-33), down from 94 by the same measure. (The 29 and 62 given here before
+2026-09-26 were lower bounds; the gate could not resolve module-relative paths
+or nested `use` groups. FINDINGS.md §A.) The trap return path no longer reaches the load ring
 (F-02, F-02a), board support, bring-up and power register with the item rather
 than being named by it (F-04, F-08), and the core no longer names the Linux
 personality's process or thread (F-01, F-06);

@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-19 findings are open and 18 are closed, of 37. F-10 advanced from 71.4% to 81.9%. No finding here is closed by argument:
+20 findings are open and 18 are closed, of 38. F-10 advanced from 71.4% to 81.9%. No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 2 | 7 | 9 | 0 | 1 |
+| Open | 2 | 7 | 10 | 0 | 1 |
 
 Blocking: F-27 and F-28 — independent assessment and a quality management
 system. Both need an organisation; neither is a defect in the code.
@@ -29,10 +29,38 @@ of use, which is how every general-purpose certified kernel handles them.
 
 ## A. Boundary integrity
 
-Measured by `scripts/check-item-boundary.py`; 29 upward references in 10 files,
-from 62 in 27 when the audit began.
-These are recorded in `scripts/certification-item.json` as a debt register that
-may shrink freely and may not grow.
+Measured by `scripts/check-item-boundary.py`; **56 upward references in 12
+files**, from 94 in 28 when the audit began. These are recorded in
+`scripts/certification-item.json` as a debt register that may shrink freely and
+may not grow. `main.rs`'s 32 edges into the load are recorded beside it, not in
+it: they are the composition root's ([ITEM.md](ITEM.md) §2).
+
+**Every count this section gave before 2026-09-26 was a lower bound** -- the
+29, and the 62 the audit started from. The gate matched the text
+`crate::a::b` and nothing else, in source whose strings it found with a
+pattern that mis-paired quotes after a `\`-newline continuation. Three kinds of
+edge were invisible to it:
+
+* **a nested `use` group.** `use crate::syscall::{exec, process}` was read as
+  `crate::syscall`, the item's own dispatcher; `devmgr.rs` has exactly that;
+* **a path through a name.** `syscall/mod.rs` declares `mod exec;` and calls
+  `exec::sys_execveat`, and a file that writes `use crate::syscall::fd;`
+  and then `fd::arg(..)` names `fd` either way. The old gate saw the second
+  kind only at the `use`, and the first not at all: `syscall/mod.rs` was
+  measured as naming one load module, and it names 21;
+* **code read as a string.** After the first continuation in a file, the
+  string pattern took code for literal text. All five of
+  `arch/x86_64/paranoid.rs`'s references were in such a stretch.
+
+The gate now resolves names the way the compiler does, short of type
+checking: every `use` tree however nested, `crate`, `self` and `super`, names
+bound by `use` or declared by `mod`, and `pub use` re-exports followed to the
+module that defines the item. Re-measured on the same tree the register went
+from 29 to 56 -- 20 more under F-09, 2 under F-07 and 5 under a new F-33 --
+and none of them is new coupling. The audit's own starting tree, re-measured
+the same way, has 94, not 62; the 38 paid down since are real, and F-01 to
+F-08's closures stand, since each removed edges the old gate could see and the
+new one confirms are gone.
 
 ### F-01 — the `Process` type is a core concept living in the Linux personality
 **Closed 2026-09-26** by W-1, as a split rather than a move.
@@ -154,9 +182,12 @@ POSIX. Inner-ring only, so no present rating moved; it is the ratchet's path
 to an EAL6+/ASIL D `core`, and `object/` and `sched/` now name nothing above it.
 
 ### F-07 — the native ABI dispatcher fans out across the load ring
-**Major.** 10 references from `syscall/native.rs` into `block_ring`, `net_ring`,
-`fs::cgroupfs`, `display`, `render`, `input` and four personality syscall
-modules. `stm32mp1`, once one of them, was F-04's and went with it. The fourth
+**Major.** 12 references: 10 from `syscall/native.rs` into `block_ring`,
+`net_ring`, `fs::cgroupfs`, `display`, `render`, `input` and four personality
+syscall modules, and 2 from `devmgr.rs` into `syscall::exec` and
+`syscall::process`, for the native process creation `devmgr` is started with
+and the `Process` type. The last two were always there; the gate could not see
+a nested `use` group until 2026-09-26. `stm32mp1`, once one of them, was F-04's and went with it. The fourth
 personality module, `syscall::process`, was filed under F-01 until W-1: what
 the dispatcher still wants of it is process creation through the Linux loader
 and the POSIX wait check, which is this finding's fan-out, not the core
@@ -191,37 +222,69 @@ load ring registers into it from `main.rs` before the first use:
 `main.rs` checks, on every boot and before anything uses them, that a flush,
 the launcher and the reader are registered (FX-0006).
 
-*What the gate does not see.* Two kinds of edge from the item into the load
-ring are invisible to `check-item-boundary.py`, and closing this finding does
-not claim them. A `use crate::syscall::{exec, process}` nests its brace below
-`crate::`, which the gate's expansion does not reach: `devmgr.rs` still has
-one, for the native process creation `devmgr` is started with and for the
-`Process` type, which are F-07's ground (the second was F-01's until W-1
-split the core process out). And `main.rs`, the crate
-root, calls the load ring by bare module paths (`fs::install`,
-`syscall::launch::install`, `stm32mp1::install`, and long before this change
-`fs::init` and `fs::root_disk::init`). Those are the composition root's
-edges and how registration is meant to happen, but the gate cannot tell them
-from a dependency either.
+*What the gate did not see.* When this closed, two kinds of edge from the item
+into the load ring were invisible to `check-item-boundary.py`, and closing
+this finding did not claim them. Both are measured since 2026-09-26. The
+`use crate::syscall::{exec, process}` in `devmgr.rs` is F-07's, where its two
+edges are now filed. And `main.rs`, the crate root, calls the load ring by
+bare module paths (`fs::install`, `syscall::launch::install`,
+`stm32mp1::install`, `fs::init`, `fs::root_disk::init`): those are the
+composition root's 32 edges, listed in the manifest apart from the debt
+register ([ITEM.md](ITEM.md) §2). None of it was F-08's: `init.rs` and
+`power.rs` name nothing in the load by any route.
 
 ### F-09 — item-ring syscalls reach personality modules
-**Moderate.** 19 references: from `syscall/{futex,limits,memory,mod,system,
+**Moderate.** 39 references: 15 from `syscall/{futex,limits,memory,system,
 thread}.rs` into `syscall::{process,time,poll,fd,attributes,credentials,
-signal}` and `render::node`, and from the three `arch` trap entries into
-`syscall`.
+signal}` and `render::node`, 21 from the Linux dispatcher `syscall/mod.rs` into
+personality modules, and 3 from the `arch` trap entries into `syscall`.
+
+**Twenty of the 39 were measured for the first time on 2026-09-26.**
+`syscall/mod.rs` declares its personality modules with `mod` and calls them by
+their bare names -- `exec::sys_execveat`, `poll::sys_poll`, `epoll::`,
+`sockets::dispatch`, `kill::dispatch` -- which the gate could not resolve, so it
+reported one reference (`syscall::process`, through a `use`) where there are 21.
+Nothing was added to the file; the dispatcher always named the whole
+personality, and the question below was always this big for it.
 
 This used to read "the consequence of F-01 mostly". W-1 answered that part --
 the core process exists, and `futex.rs` needs nothing POSIX any more -- and
 what is left is plainer. These are Linux-personality syscalls sitting in the
 item ring: `brk`, rlimits, `sethostname`'s privilege check, the dispatcher,
-the POSIX thread. Five of the 19 are the references to `syscall::process`
+the POSIX thread. Five of the 19 it counted before 2026-09-26 are the references to `syscall::process`
 that W-1 refiled here from F-01, because each is to POSIX state rather than to
 the core concept; the count went up by relabelling, not by new coupling. The
 fourteen this entry had before are all still here.
 
 *Closes when:* each file either stops needing POSIX state or is judged to be
 the personality's and leaves the item. `syscall/thread.rs` is the first
-candidate: after W-1 only the Linux dispatcher needs it.
+candidate: after W-1 only the Linux dispatcher needs it. `syscall/mod.rs` is
+the largest: 21 of the 39 are its, and a Linux dispatcher that names most of
+the personality's modules is the personality's entry point rather than the
+item's.
+
+### F-33 — a core self-check loads a Linux program
+**Moderate**, found 2026-09-26. 5 references from `arch/x86_64/paranoid.rs`, in
+the core, into `syscall::exec`, `syscall::image`, `syscall::load`,
+`syscall::process` and `fs`.
+
+`paranoid.rs` is the x86-64 NMI and `#DB` entry, and it carries its own boot
+check: `run_with_window_breakpoints` builds an ELF with `syscall::image`,
+loads it through the Linux loader, and starts it with `syscall::process::
+start_on`, to prove a breakpoint in the system call window fires and returns.
+The check is sound; where it sits is not. It is product code by the
+manifest's rules -- the file matches no test pattern -- so the core, which may
+name nothing above it, names the Linux personality and the filesystem's
+`SetIds`.
+
+The old gate never reported it. All five references sit after a message
+continued with `\`-newline, where the string pattern had lost its pairing and
+was reading code as literal text.
+
+*Closes when:* the check moves to a verification file (an
+`arch/x86_64/paranoid_check.rs` matches `*_check.rs`, so the manifest counts it
+as the test it is), or starts its program through an interface the core
+defines, as init does with its `Launcher`.
 
 ---
 

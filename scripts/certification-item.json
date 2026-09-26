@@ -238,7 +238,14 @@
       "list grows or if an entry goes stale.",
       "",
       "Populated by running the gate. An empty list here on a tree that has",
-      "never been measured would be a lie told by omission."
+      "never been measured would be a lie told by omission.",
+      "",
+      "Until 2026-09-26 the gate saw only paths written `crate::a::b` in",
+      "source whose strings it could not always find, so every count it gave,",
+      "from the audit's 62 to the 29 before this note, was a lower bound. The",
+      "27 entries added that day were there all along: nested `use` groups,",
+      "paths through `use` and sibling `mod` names, and code the old string",
+      "pattern had read as a literal (docs/certification/FINDINGS.md, A)."
     ],
     "entries": [
       {
@@ -443,7 +450,246 @@
         "from_ring": "item",
         "to_ring": "load",
         "finding": "F-09"
+      },
+      {
+        "file": "arch/x86_64/paranoid.rs",
+        "references": "fs",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-33"
+      },
+      {
+        "file": "arch/x86_64/paranoid.rs",
+        "references": "syscall::exec",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-33"
+      },
+      {
+        "file": "arch/x86_64/paranoid.rs",
+        "references": "syscall::image",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-33"
+      },
+      {
+        "file": "arch/x86_64/paranoid.rs",
+        "references": "syscall::load",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-33"
+      },
+      {
+        "file": "arch/x86_64/paranoid.rs",
+        "references": "syscall::process",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-33"
+      },
+      {
+        "file": "devmgr.rs",
+        "references": "syscall::exec",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-07"
+      },
+      {
+        "file": "devmgr.rs",
+        "references": "syscall::process",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-07"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::attributes",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::credentials",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::epoll",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::eventfd",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::exec",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::family",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::fd",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::file",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::flock",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::fsctl",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::kill",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::memfd",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::namespace",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::path",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::poll",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::signal",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::signalfd",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::sockets",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::time",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::timerfd",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
       }
+    ]
+  },
+  "composition_root": {
+    "//": [
+      "The crate root is in the item ring -- it is bring-up -- and it is also",
+      "where the load ring is composed with the item: it declares every",
+      "module, tells the load to register into the item's interfaces",
+      "(register_load), brings the load's subsystems up in order, and runs",
+      "their boot self-checks. Its references into the load are that",
+      "composition, which the item's design asks for, so they are not filed",
+      "against a finding. They are listed rather than allowed, and ratcheted",
+      "like the debt register: the list may shrink freely, and the gate fails",
+      "on a new module or a stale one. What an assessor has to accept is that",
+      "these edges carry no item logic; docs/certification/ITEM.md section 2",
+      "says why that is plausible and what would make it checkable."
+    ],
+    "file": "main.rs",
+    "load_modules": [
+      "block_ring::check",
+      "block_ring::driver_check",
+      "display",
+      "fs",
+      "fs::btrfs_check",
+      "fs::btrfs_powerfail",
+      "fs::btrfs_write_check",
+      "fs::cgroupfs",
+      "fs::check",
+      "fs::data_disk",
+      "fs::epoll_check",
+      "fs::eventfd_check",
+      "fs::exec_check",
+      "fs::memfd_check",
+      "fs::mmap_check",
+      "fs::procfs::check",
+      "fs::root_disk",
+      "fs::signalfd_check",
+      "fs::sysfs::check",
+      "fs::timerfd_check",
+      "net",
+      "net::check",
+      "net::netlink::check",
+      "net_ring::check",
+      "stm32mp1",
+      "syscall::check",
+      "syscall::check::paths",
+      "syscall::deliver",
+      "syscall::exec",
+      "syscall::image",
+      "syscall::launch",
+      "syscall::time"
     ]
   }
 }

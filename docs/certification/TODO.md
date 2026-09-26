@@ -48,9 +48,16 @@ python3 scripts/check-item-boundary.py --report
 
 ## 1. Boundary — the cheapest real wins
 
-The debt register in `scripts/certification-item.json` holds 29 upward
-references, down from 62 when the audit began. It may shrink freely; it may not grow. After each fix, delete the
+The debt register in `scripts/certification-item.json` holds 56 upward
+references, down from 94 when the audit began. It may shrink freely; it may not grow. After each fix, delete the
 entries it retires — the gate fails on stale entries, so it will tell you which.
+
+Until 2026-09-26 the gate reported 29 and 62: it saw only the literal text
+`crate::a::b`. **When re-auditing, check the gate before trusting its count.**
+`python3 scripts/check-item-boundary.py --self-test` runs the lexer's and the
+resolver's cases; every normal run runs them first too. The things it still
+cannot see are listed in its docstring -- chiefly a load-ring type reaching an
+item file through a value, with no name written.
 
 ### 1.1 Split `Process` into a core object and a POSIX extension — **F-01, 10 references; F-06, 3**
 **Done 2026-09-26** (IMPLEMENTATION.md W-1). F-01 and F-06 are closed: the
@@ -101,8 +108,9 @@ should define a hook the personality registers into at init.
 most trusted path in the system, and while it stands the core cannot be built
 or analysed without the personality present.
 
-### 1.5 A registration table for the native dispatcher — **F-07, 10 references**
-`syscall/native.rs` names ten load-ring modules. Subsystems should register
+### 1.5 A registration table for the native dispatcher — **F-07, 12 references**
+`syscall/native.rs` names ten load-ring modules, and `devmgr.rs` names
+`syscall::exec` and `syscall::process` for the process it starts. Subsystems should register
 handlers in a table the dispatcher walks. One of the ten, `syscall::process`,
 was F-01's until W-1; it is process creation through the Linux loader, which
 a table entry can own like any other subsystem.
@@ -112,12 +120,19 @@ a table entry can own like any other subsystem.
 with a registered `Launcher`, and `devmgr` reads with a registered
 `ReadFile`; `main.rs` checks all three are there before anything uses them.
 
-*To re-audit:* the gate is blind to two kinds of edge, so "no F-08 entries"
-is not the whole answer. Grep the item's files for `use crate::<module>::{`
--- a brace below `crate::` is not expanded, and `devmgr.rs` still reaches
-`syscall::exec` and `syscall::process` that way -- and read `main.rs`'s
-bare-path calls into `fs`, `syscall` and `stm32mp1`, which are the
-composition root's and which the gate does not read at all.
+*To re-audit:* the two kinds of edge the gate was blind to when this closed
+are measured now. `devmgr.rs`'s nested `use crate::syscall::{exec, process}`
+is filed under F-07. `main.rs`'s bare-path calls into the load are the
+composition root's, listed under `composition_root` in the manifest (ITEM.md
+§2); read that list, since it is ratcheted but not filed against a finding,
+and check each new entry is composition rather than item logic.
+
+### 1.7 The paranoid entry's boot check — **F-33, 5 references**
+`arch/x86_64/paranoid.rs` builds, loads and starts a Linux program to prove a
+breakpoint in the system call window fires. Move the check to
+`arch/x86_64/paranoid_check.rs`, which the manifest counts as verification,
+or start the program through an interface the core defines. Small, and the
+only file in the core that names the load ring.
 
 ---
 
