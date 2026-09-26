@@ -412,9 +412,16 @@ fn composed<P: Painter>(
         .map(|placed| LayerFrame {
             rect: scale_rect(placed.rect, origin, scale),
             above: placed.above,
-            surface: clients
-                .get(placed.client)
-                .and_then(|slot| pixels(slot, placed.surface)),
+            // A popup, without the shadow its client drew around it, as a
+            // window is; a layer surface has no xdg geometry and is whole.
+            surface: clients.get(placed.client).and_then(|slot| {
+                let surface = pixels(slot, placed.surface)?;
+                Some(
+                    window_crop(slot.client(), placed.surface)
+                        .and_then(|crop| crop.of(&surface))
+                        .unwrap_or(surface),
+                )
+            }),
             dim_around: placed.rules.dim_around,
             blur: placed.rules.blur,
             xray: placed.rules.xray,
@@ -667,14 +674,16 @@ pub(crate) fn local(rect: Rect, origin: (i64, i64), scale: f64) -> Rect {
     )
 }
 
-/// The part of a toplevel's buffer that is its window, as the client said
-/// with `xdg_surface.set_window_geometry`, in the buffer's own pixels.
+/// The part of a toplevel's or a popup's buffer that is its window, as the
+/// client said with `xdg_surface.set_window_geometry`, in the buffer's own
+/// pixels.
 ///
 /// Chrome's surface is its window and 10 pixels of shadow all round. Drawn
 /// whole into its tile, the window came out a little smaller than it is and
 /// its text resampled, and the pointer had to be scaled back through the
 /// squeeze; Hyprland draws the window geometry into the tile, and so does
-/// this. `None` -- the whole buffer is the window -- for a surface that
+/// this, for a menu's shadow as for a window's. `None` -- the whole buffer is
+/// the window -- for a surface that
 /// never said, one scaled or turned by a viewport or a transform, where the
 /// geometry and the buffer's pixels are not one scale apart, and a geometry
 /// that is the whole buffer or does not fit inside it.

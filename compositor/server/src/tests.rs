@@ -5041,3 +5041,84 @@ fn a_pool_made_under_a_destroyed_pools_id_is_another_pool() {
     assert!(client.pool_in_use(first), "its buffer keeps the first pool");
     assert!(!client.pool_in_use(second));
 }
+
+/// A popup's `set_window_geometry` is its menu, inside the shadow its client
+/// draws around it, as a toplevel's is its window: Chrome's menu said
+/// `(24, 12, 406, 667)`, and drawn whole its rows sat 24 pixels right of and
+/// 12 below where the positioner had put them. A surface with no xdg role
+/// has no geometry.
+#[test]
+fn a_toplevel_and_a_popup_each_say_where_their_window_is() {
+    let mut client = drawing_client();
+    let geometry = |xdg: u32, x: i32, y: i32, width: i32, height: i32| {
+        request(
+            xdg,
+            xdg_shell::xdg_surface::request::SET_WINDOW_GEOMETRY,
+            &[ArgType::Int, ArgType::Int, ArgType::Int, ArgType::Int],
+            &[Arg::Int(x), Arg::Int(y), Arg::Int(width), Arg::Int(height)],
+        )
+    };
+    let xdg_surface = |id: u32, surface: u32| {
+        request(
+            6,
+            xdg_shell::xdg_wm_base::request::GET_XDG_SURFACE,
+            &[ArgType::NewId, ArgType::Object { nullable: false }],
+            &[Arg::NewId(ObjectId(id)), Arg::Object(ObjectId(surface))],
+        )
+    };
+    let mut bytes = bind(2, 4, "xdg_wm_base", 6, 6);
+    bytes.extend(create_surface(3));
+    bytes.extend(xdg_surface(7, 3));
+    bytes.extend(request(
+        7,
+        xdg_shell::xdg_surface::request::GET_TOPLEVEL,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(8))],
+    ));
+    bytes.extend(geometry(7, 10, 10, 100, 100));
+    bytes.extend(create_surface(9));
+    bytes.extend(xdg_surface(10, 9));
+    bytes.extend(request(
+        6,
+        xdg_shell::xdg_wm_base::request::CREATE_POSITIONER,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(11))],
+    ));
+    bytes.extend(request(
+        11,
+        xdg_shell::xdg_positioner::request::SET_SIZE,
+        &[ArgType::Int, ArgType::Int],
+        &[Arg::Int(50), Arg::Int(20)],
+    ));
+    bytes.extend(request(
+        11,
+        xdg_shell::xdg_positioner::request::SET_ANCHOR_RECT,
+        &[ArgType::Int, ArgType::Int, ArgType::Int, ArgType::Int],
+        &[Arg::Int(0), Arg::Int(0), Arg::Int(1), Arg::Int(1)],
+    ));
+    bytes.extend(request(
+        10,
+        xdg_shell::xdg_surface::request::GET_POPUP,
+        &[
+            ArgType::NewId,
+            ArgType::Object { nullable: true },
+            ArgType::Object { nullable: false },
+        ],
+        &[
+            Arg::NewId(ObjectId(12)),
+            Arg::Object(ObjectId(7)),
+            Arg::Object(ObjectId(11)),
+        ],
+    ));
+    bytes.extend(geometry(10, 24, 12, 50, 20));
+    bytes.extend(create_surface(13));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    assert_eq!(
+        client.window_geometry(ObjectId(3)),
+        Some((10, 10, 100, 100))
+    );
+    assert_eq!(client.window_geometry(ObjectId(9)), Some((24, 12, 50, 20)));
+    assert_eq!(client.window_geometry(ObjectId(13)), None, "no xdg role");
+}

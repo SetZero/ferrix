@@ -4941,7 +4941,7 @@ fn activate(
 /// windows, with no border and no gaps, at the rectangle the compositor
 /// configured it to. A submenu is a popup on a popup, and its coordinates
 /// are its parent's, so the walk up is the same one that placed it.
-fn placed_popups(
+pub(crate) fn placed_popups(
     slots: &[Slot],
     state: &State,
     sources: &BTreeMap<WindowId, Source>,

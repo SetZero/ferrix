@@ -32,7 +32,8 @@ use crate::state::Slot;
 /// Where a window is on the screen, and which client's surface it is.
 #[derive(Clone, Copy, Debug)]
 struct Placement {
-    window: WindowId,
+    /// The layout's window, or `None` for a popup, which is no window.
+    window: Option<WindowId>,
     client: usize,
     surface: ObjectId,
     rect: (i64, i64, i64, i64),
@@ -316,7 +317,7 @@ pub fn deliver(
     follow_mouse: bool,
     dragging: bool,
 ) -> Done {
-    let placements = placements(state, sources);
+    let placements = with_popups(placements(state, sources), slots, state, sources);
     let mut done = Done::default();
     for action in actions {
         match action {
@@ -387,7 +388,7 @@ pub fn deliver(
                     && let Some(window) = placements
                         .iter()
                         .find(|placed| placed.contains(*x, *y))
-                        .map(|placed| placed.window)
+                        .and_then(|placed| placed.window)
                     && state.focused_window() != Some(window)
                 {
                     done.focus = Some(window);
@@ -429,7 +430,7 @@ fn placements(state: &State, sources: &BTreeMap<WindowId, Source>) -> Vec<Placem
                 continue;
             };
             out.push(Placement {
-                window: placed.window,
+                window: Some(placed.window),
                 client: source.client,
                 surface: source.surface,
                 rect: (
@@ -495,6 +496,39 @@ fn window_part(slot: &Slot, surface: ObjectId) -> Option<(f64, f64, f64, f64)> {
     ))
 }
 
+/// The popups -- menus, dropdowns, tooltips -- in front of `windows`, the
+/// newest first, since that is the order they are drawn in from the top.
+///
+/// A popup is a surface of its own over its window, and a click on a menu
+/// item belongs to the menu: sent to the window under it, at the window's
+/// coordinates, it was a click outside the menu, which closed it and did
+/// nothing else, or clicked whatever was beneath. Chrome's menus, its
+/// address bar's suggestions and its dropdowns are all popups.
+fn with_popups(
+    windows: Vec<Placement>,
+    slots: &[Slot],
+    state: &State,
+    sources: &BTreeMap<WindowId, Source>,
+) -> Vec<Placement> {
+    let mut out: Vec<Placement> = crate::state::placed_popups(slots, state, sources)
+        .into_iter()
+        .rev()
+        .map(|popup| Placement {
+            window: None,
+            client: popup.client,
+            surface: popup.surface,
+            rect: (
+                popup.rect.x,
+                popup.rect.y,
+                popup.rect.width,
+                popup.rect.height,
+            ),
+        })
+        .collect();
+    out.extend(windows);
+    out
+}
+
 /// A pixel position as Wayland's 24.8 fixed point.
 fn fixed(value: f64) -> Fixed {
     Fixed::from_f64(value)
@@ -554,7 +588,7 @@ mod tests {
     fn a_point_is_on_a_window_from_its_corner_to_before_its_far_edges() {
         // The DK1's portrait terminal, as `hyprctl clients` reported it.
         let terminal = Placement {
-            window: WindowId(1),
+            window: Some(WindowId(1)),
             client: 0,
             surface: ObjectId(3),
             rect: (21, 21, 678, 613),
