@@ -42,6 +42,7 @@ members = [
     "libs/drivers/stm32-display",
     "libs/drivers/usb-host",
     "libs/drivers/usb-device",
+    "libs/drivers/dwc3",
     "libs/drivers/gc400",
     "libs/kernel/sync",
     "libs/kernel/ustack",
@@ -136,6 +137,7 @@ ferrix-native = { path = "libs/proto/native" }
 ferrix-stm32-display = { path = "libs/drivers/stm32-display" }
 ferrix-usb-host = { path = "libs/drivers/usb-host" }
 ferrix-usb-device = { path = "libs/drivers/usb-device" }
+ferrix-dwc3 = { path = "libs/drivers/dwc3" }
 ferrix-gc400 = { path = "libs/drivers/gc400" }
 ferrix-netwire = { path = "libs/network/netwire" }
 ferrix-nettcp = { path = "libs/network/nettcp" }

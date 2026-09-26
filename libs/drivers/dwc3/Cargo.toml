@@ -1,0 +1,14 @@
+[package]
+name = "ferrix-dwc3"
+description = "A Synopsys DWC3 USB controller in device mode, as logic over registers and DMA memory"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license.workspace = true
+publish = false
+
+[dependencies]
+ferrix-usb-device = { workspace = true }
+
+[lints]
+workspace = true

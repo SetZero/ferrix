@@ -155,6 +155,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-dwc3"
+version = "0.1.0"
+dependencies = [
+ "ferrix-usb-device",
+]
+
+[[package]]
 name = "ferrix-elf"
 version = "0.1.0"
 
