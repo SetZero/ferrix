@@ -56,6 +56,8 @@ pub(crate) struct Report {
     pub(crate) eventfds: usize,
     /// Regions one mapping was split into by `mprotect`.
     pub(crate) regions: usize,
+    /// Record locks one open file description holds, on every other byte.
+    pub(crate) locks: usize,
 }
 
 /// Run every kind.
@@ -79,6 +81,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         report.registrations = registrations(&tree)?;
         report.eventfds = kind(&tree, "eventfds", |_| fs::eventfd::create(0, false, true))?;
         report.regions = regions(&tree)?;
+        report.locks = locks(&tree)?;
         if Resource::ALL
             .iter()
             .any(|&resource| tree.usage(resource).is_none_or(|usage| usage.used != 0))
@@ -293,6 +296,30 @@ fn registrations(tree: &Arc<Job>) -> Result<usize, &'static str> {
     );
     drop((epoll, set, watched));
     made
+}
+
+/// Record locks on every other byte of one file, by one open description:
+/// each a record the job that set it pays for, refused `ENOLCK` as Linux
+/// refuses a lock it has no memory for.
+fn locks(tree: &Arc<Job>) -> Result<usize, &'static str> {
+    let file = fs::eventfd::create(0, false, true).map_err(|_| "kmem: no file to lock")?;
+    let made = fill_and_empty(
+        tree,
+        "record locks",
+        |at| {
+            crate::syscall::flock::check::lock_byte(&file, at).map_err(|errno| {
+                // What a job at its limit is told, and the check's ENOMEM.
+                if errno == Errno::ENOLCK {
+                    Errno::ENOMEM
+                } else {
+                    errno
+                }
+            })
+        },
+        |_| crate::syscall::flock::check::unlock_all(&file),
+    )?;
+    drop(file);
+    Ok(made)
 }
 
 /// One mapping split into a region a page by `mprotect` of every other page,

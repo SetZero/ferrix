@@ -79,6 +79,8 @@ use ferrix_vfs::{OpenFile, Whence};
 use crate::sched::WaitQueue;
 use crate::sync::SpinLock;
 use crate::syscall::fd;
+
+pub(crate) mod check;
 use crate::syscall::process::Process;
 use crate::syscall::uaccess;
 

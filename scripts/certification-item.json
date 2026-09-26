@@ -203,6 +203,7 @@
         "syscall/fd.rs",
         "syscall/file.rs",
         "syscall/flock.rs",
+        "syscall/flock/**",
         "syscall/fsctl.rs",
         "syscall/futex.rs",
         "syscall/image.rs",

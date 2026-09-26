@@ -1212,9 +1212,9 @@ fn check_kernel_memory() {
     };
     println!(
         "  kmem     at a {} KiB memory limit a job made {} files, {} pipes, {} socket pairs, \
-         {} descriptors in flight, {} epoll registrations, {} eventfds and {} regions of one \
-         mapping, and was refused one more of each with ENOMEM while a sibling made one; \
-         every byte of heap charged came back",
+         {} descriptors in flight, {} epoll registrations, {} eventfds, {} regions of one \
+         mapping and {} record locks, and was refused one more of each -- ENOMEM, ENOLCK for \
+         a lock -- while a sibling made one; every byte of heap charged came back",
         fs::kmem_check::LIMIT / 1024,
         report.files,
         report.pipes,
@@ -1223,6 +1223,7 @@ fn check_kernel_memory() {
         report.registrations,
         report.eventfds,
         2 * report.regions + 1,
+        report.locks,
     );
 }
 
