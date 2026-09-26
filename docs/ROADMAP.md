@@ -7042,6 +7042,13 @@ libwayland's own, a program in `compositor/` that speaks it with no screen,
 a host test against the image the renderer blesses, and a boot of `cargo
 xtask test-compositor` that does it on Ferrix.
 
+**Begun -- the desktop's own clients, in Rust (2026-09-26).** The
+customer asked for waybar, fuzzel, hyprlock and hypridle, written for
+Ferrix and reading their own files unchanged: five streams, one a program
+and one for the foundation they share -- `compositor/toolkit` (a Wayland
+client runtime), `compositor/text` (fonts, shaping, layout, Pango markup),
+`compositor/hyprlang` and `compositor/image`. `docs/DESKTOP-CLIENTS.md`.
+
 **What this stage still owes** is the desktop's speed as a person watching
 it feels it (`docs/GPU.md` §3.9) -- a client's own pages as its texture's
 backing, so its pixels are not copied in the guest (8), the device queue
