@@ -40,7 +40,7 @@ pub(crate) fn run() -> Result<(), &'static str> {
         rcx: 0x40_1000,
         user_rsp: 0x7fff_e000,
     };
-    let child = UserRegs(frame).for_child();
+    let child = UserRegs::Syscall(frame).for_child();
     if child.stack_pointer() != frame.user_rsp {
         return Err("a fork child's registers do not keep the parent's stack pointer");
     }
@@ -64,7 +64,7 @@ pub(crate) fn run() -> Result<(), &'static str> {
         "rcx: 4198400,",
         "user_rsp: 2147475456 ",
     ];
-    if !printed.starts_with("UserRegs(SyscallFrame { ") {
+    if !printed.starts_with("Syscall(SyscallFrame { ") {
         return Err("a thread's saved registers do not print as its frame");
     }
     if expected.iter().any(|field| !printed.contains(field)) {

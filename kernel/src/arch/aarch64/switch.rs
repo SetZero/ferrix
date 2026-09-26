@@ -165,6 +165,12 @@ impl UserState {
         self.thread_pointer = pointer;
     }
 
+    /// A 32-bit x86 program's thread-local segment: there are none on this
+    /// architecture, and no table here maps a call that asks for one.
+    pub(crate) const fn set_thread_area(&mut self, _index: usize, _descriptor: u64) -> bool {
+        false
+    }
+
     /// A program's state before it has run: no thread pointer, rounding to
     /// nearest, no floating-point exceptions trapped, every register zero.
     pub(crate) const fn new() -> UserState {

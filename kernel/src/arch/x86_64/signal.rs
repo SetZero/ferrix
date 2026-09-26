@@ -27,6 +27,8 @@
 //! from one leaves through the trap stub's `IRETQ` path instead, which restores
 //! all sixteen. Linux does the same.
 
+mod compat;
+
 use ferrix_bootinfo::is_user_address;
 use ferrix_linux_abi::types::SA_RESTORER;
 
@@ -196,6 +198,21 @@ impl UserContext {
         })
     }
 
+    /// The same registers with only what ring 3 may hold in the selectors and
+    /// flags: user code (64- or 32-bit, as they were) and user data, and the
+    /// flags a frame may give back (certification review, T.ESCALATE path 8).
+    /// For a fork child resumed from its parent's trap frame, which the
+    /// processor saved and so already holds nothing else; checked all the
+    /// same, as a frame read back from a program is.
+    pub(super) const fn sanitised(mut self) -> UserContext {
+        if self.0.cs != USER_CS {
+            self.0.cs = USER_CS32;
+        }
+        self.0.ss = USER_SS;
+        self.0.rflags = self.0.rflags & FLAGS_RESTORABLE | FLAGS_ALWAYS;
+        self
+    }
+
     /// True if these registers are a 32-bit program's: its code selector is
     /// compatibility mode's.
     pub(crate) const fn is_compat(&self) -> bool {
@@ -327,17 +344,25 @@ fn write_fp_area(space: &AddressSpace, fpstate: u64) -> Result<(), BadFrame> {
     area.write(space, fpstate)
 }
 
-/// Whether this file can build the frame `request` asks for: the handler
-/// must name a restorer, because x86-64 has no default one to return through,
-/// and the program must be a 64-bit one. A 32-bit program's handler needs an
-/// i386 frame, which is not built yet (`docs/I386.md` §3.4, I2): refused,
-/// which ends the program with `SIGSEGV` as Linux ends one whose frame it
-/// cannot build, rather than entering its 32-bit handler in 64-bit mode.
-const fn frame_is_buildable(context: &UserContext, request: &FrameRequest) -> Result<(), BadFrame> {
-    if request.flags & SA_RESTORER == 0 || context.is_compat() {
+/// Whether a frame can be built for `request`: the handler must name a
+/// restorer, because neither mode has a default one to return through here
+/// -- there is no vDSO holding one -- and every libc gives one.
+const fn frame_is_buildable(request: &FrameRequest) -> Result<(), BadFrame> {
+    if request.flags & SA_RESTORER == 0 {
         return Err(BadFrame);
     }
     Ok(())
+}
+
+/// Where the `FXSAVE` area and the frame go below `stack`: the area 64-byte
+/// aligned, and the frame below it aligned so that on entry
+/// `(sp + 8) % 16 == 0`, which is what a function expects just after a
+/// `call` pushed its return address. Answers both addresses.
+fn place(stack: u64) -> Result<(u64, u64), BadFrame> {
+    let fpstate = stack.checked_sub(FXSAVE_BYTES as u64).ok_or(BadFrame)? & !63;
+    let below = fpstate.checked_sub(FRAME_BYTES as u64).ok_or(BadFrame)?;
+    let frame_at = ((below + 8) & !15).checked_sub(8).ok_or(BadFrame)?;
+    Ok((fpstate, frame_at))
 }
 
 /// Write `request`'s frame below its stack and point `context` at the handler:
@@ -348,18 +373,12 @@ pub(crate) fn setup_signal_frame(
     context: &mut UserContext,
     request: &FrameRequest,
 ) -> Result<(), BadFrame> {
-    frame_is_buildable(context, request)?;
-    let fpstate = request
-        .stack
-        .checked_sub(FXSAVE_BYTES as u64)
-        .ok_or(BadFrame)?
-        & !63;
-    // Aligned so that on entry `(sp + 8) % 16 == 0`, which is what a function
-    // expects just after a `call` pushed its return address.
-    let frame_at = ((fpstate.checked_sub(FRAME_BYTES as u64).ok_or(BadFrame)? + 8) & !15)
-        .checked_sub(8)
-        .ok_or(BadFrame)?;
-
+    frame_is_buildable(request)?;
+    // A 32-bit program's handler is entered on an i386 frame, in its mode.
+    if context.is_compat() {
+        return compat::setup(space, context, request);
+    }
+    let (fpstate, frame_at) = place(request.stack)?;
     write_fp_area(space, fpstate)?;
 
     let mut frame = FrameBytes::zeroed(FRAME_BYTES)?;
@@ -403,6 +422,10 @@ pub(crate) fn restore_signal_frame(
     context: &mut UserContext,
     rt: bool,
 ) -> Result<Restored, BadFrame> {
+    // A 32-bit program returns through an i386 frame, of the kind `rt` says.
+    if context.is_compat() {
+        return compat::restore(space, context, rt);
+    }
     let _ = rt;
     let frame_at = context.0.rsp.checked_sub(8).ok_or(BadFrame)?;
     let frame = FrameBytes::read(space, frame_at, INFO)?;
@@ -418,7 +441,7 @@ pub(crate) fn restore_signal_frame(
     let fpstate = frame.u64_at(MCONTEXT + FPSTATE)?;
     let restored = Restored {
         mask: frame.u64_at(UC_SIGMASK)?,
-        altstack: frame.stack_at(UC_STACK)?,
+        altstack: Some(frame.stack_at(UC_STACK)?),
     };
     if fpstate != 0 {
         restore_fpu(space, fpstate)?;

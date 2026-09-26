@@ -398,16 +398,33 @@ unsafe extern "C" {
 /// moment it asked, with the return register changed. Opaque outside this
 /// architecture, because every architecture keeps a different set and the
 /// system call layer only ever copies one and asks for two changes to it.
+///
+/// Two shapes, because there are two ways in: `SYSCALL`'s frame, which
+/// `SYSRET` resumes, and a trap frame from `int $0x80`, which only `IRETQ`
+/// can resume -- a 32-bit program's, whose child has to come back in
+/// compatibility mode with every register, `RCX` and `R11` included
+/// (`docs/I386.md` I2b).
 #[derive(Debug, Clone, Copy)]
-#[repr(transparent)]
-pub(crate) struct UserRegs(SyscallFrame);
+pub(crate) enum UserRegs {
+    /// Saved by `SYSCALL`'s trampoline.
+    Syscall(SyscallFrame),
+    /// Saved by the trap stub: a system call through `int $0x80`.
+    Trap(super::trap::TrapFrame),
+}
 
 impl UserRegs {
     /// The same registers, as a child sees them: the call returned zero.
     pub(crate) const fn for_child(&self) -> UserRegs {
-        let mut frame = self.0;
-        frame.rax = 0;
-        UserRegs(frame)
+        match *self {
+            UserRegs::Syscall(mut frame) => {
+                frame.rax = 0;
+                UserRegs::Syscall(frame)
+            }
+            UserRegs::Trap(mut frame) => {
+                frame.rax = 0;
+                UserRegs::Trap(frame)
+            }
+        }
     }
 
     /// Start on `stack` instead, as `clone` with a stack argument asks. The
@@ -415,12 +432,18 @@ impl UserRegs {
     /// untouched.
     pub(crate) const fn set_stack(&mut self, state: &mut super::UserState, stack: u64) {
         let _ = state;
-        self.0.user_rsp = stack;
+        match self {
+            UserRegs::Syscall(frame) => frame.user_rsp = stack,
+            UserRegs::Trap(frame) => frame.rsp = stack,
+        }
     }
 
     /// The stack pointer the program made the call with.
     pub(crate) const fn stack_pointer(&self) -> u64 {
-        self.0.user_rsp
+        match self {
+            UserRegs::Syscall(frame) => frame.user_rsp,
+            UserRegs::Trap(frame) => frame.rsp,
+        }
     }
 }
 
@@ -429,13 +452,21 @@ impl UserRegs {
 ///
 /// # Safety
 ///
-/// Must be called by a user task with its address space installed and its user
-/// state loaded, and `regs` must be a frame a system call from that address
-/// space saved.
+/// Must be called by a user task with its address space installed and its
+/// user state loaded, and `regs` must be a frame a system call from that
+/// address space saved.
 pub(crate) unsafe fn resume_user(regs: &UserRegs) -> ! {
-    // SAFETY: the caller's guarantee is the assembly's contract; the frame is
-    // read before anything is pushed below it.
-    unsafe { ferrix_resume_user(core::ptr::from_ref(&regs.0)) }
+    match regs {
+        // SAFETY: the caller's guarantee is the assembly's contract; the frame
+        // is read before anything is pushed below it.
+        UserRegs::Syscall(frame) => unsafe { ferrix_resume_user(core::ptr::from_ref(frame)) },
+        UserRegs::Trap(frame) => {
+            let context = super::signal::UserContext::from_trap(frame).sanitised();
+            // SAFETY: the caller's guarantee; a trap frame from ring 3, whose
+            // selectors and addresses the processor itself saved.
+            unsafe { super::signal::resume_context(&context) }
+        }
+    }
 }
 
 /// Where the assembly hands a system call to the rest of the kernel.
@@ -499,7 +530,7 @@ extern "C" fn ferrix_syscall_entry(frame: &mut SyscallFrame) {
     // `SFMASK` closed them on entry, and they are closed again before the
     // frame is restored, because the way out swaps `GS` on a live stack.
     super::enable_interrupts();
-    let regs = UserRegs(*frame);
+    let regs = UserRegs::Syscall(*frame);
     let outcome = crate::trap::system_call(&args, Some(&regs));
     super::disable_interrupts();
 

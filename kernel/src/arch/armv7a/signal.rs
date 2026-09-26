@@ -276,7 +276,7 @@ pub(crate) fn restore_signal_frame(
     }
     let restored = Restored {
         mask: frame.u64_at(uc + UC_SIGMASK)?,
-        altstack: frame.stack_at(uc + UC_STACK)?,
+        altstack: Some(frame.stack_at(uc + UC_STACK)?),
     };
     restore_vfp(&frame, uc + REGSPACE)?;
     context.frame.r = r;

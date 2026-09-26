@@ -189,6 +189,12 @@ impl UserState {
         self.thread_pointer = pointer as u32;
     }
 
+    /// A 32-bit x86 program's thread-local segment: there are none on this
+    /// architecture, and no table here maps a call that asks for one.
+    pub(crate) const fn set_thread_area(&mut self, _index: usize, _descriptor: u64) -> bool {
+        false
+    }
+
     /// Give the program `stack` as its USR stack pointer.
     pub(crate) const fn set_user_stack(&mut self, stack: u32) {
         self.user_sp = stack;

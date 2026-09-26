@@ -45,7 +45,8 @@ use crate::fs::cgroupfs;
 use crate::object::job::{self, Job};
 use crate::syscall::process::{self, Process};
 use crate::syscall::thread::{self, Thread};
-use crate::syscall::{fd, registry, uaccess};
+use crate::syscall::{fd, registry, thread_area, uaccess};
+use crate::trap::Abi;
 
 /// The low byte of `clone`'s flags: the signal the parent is told with.
 const CSIGNAL: u64 = 0xFF;
@@ -162,6 +163,10 @@ struct CloneRequest {
     child_tid: u64,
     /// The thread pointer `CLONE_SETTLS` gives the child.
     tls: u64,
+    /// For a 32-bit program, what `CLONE_SETTLS`'s `tls` named instead: a
+    /// `user_desc`, read and checked, as the thread-local slot and the
+    /// descriptor to put in it (`docs/I386.md` §3.5).
+    thread_area: Option<(usize, u64)>,
     /// `clone3`'s `CLONE_INTO_CGROUP`: the descriptor of the cgroup
     /// directory the child starts in.
     cgroup: Option<i32>,
@@ -181,6 +186,7 @@ pub(crate) fn sys_clone(
     call: Syscall,
     a: &[u64; 6],
     regs: &arch::UserRegs,
+    abi: Abi,
 ) -> Result<usize, Errno> {
     let request = match call {
         Syscall::Fork => CloneRequest {
@@ -192,25 +198,27 @@ pub(crate) fn sys_clone(
             ..CloneRequest::default()
         },
         Syscall::Clone3 => clone3_request(parent, a[0], a[1])?,
-        // `CONFIG_CLONE_BACKWARDS` on both Arm architectures puts the thread
-        // pointer before the child's id pointer; x86-64 has them the other way.
-        // The flags are an `unsigned long` Linux narrows to 32 bits, so a
-        // 64-bit caller cannot reach `clone3`'s flags through here.
-        _ => match arch::ARCH {
-            Arch::X86_64 => CloneRequest {
+        // `CONFIG_CLONE_BACKWARDS` on both Arm architectures and on i386 puts
+        // the thread pointer before the child's id pointer; x86-64 has them
+        // the other way. The flags are an `unsigned long` Linux narrows to 32
+        // bits, so a 64-bit caller cannot reach `clone3`'s flags through here.
+        _ => match (arch::ARCH, abi) {
+            (Arch::X86_64, Abi::Native) => CloneRequest {
                 flags: a[0] & CLONE_LEGACY_FLAGS,
                 stack: a[1],
                 parent_tid: a[2],
                 child_tid: a[3],
                 tls: a[4],
+                thread_area: None,
                 cgroup: None,
             },
-            Arch::AArch64 | Arch::Armv7a => CloneRequest {
+            _ => CloneRequest {
                 flags: a[0] & CLONE_LEGACY_FLAGS,
                 stack: a[1],
                 parent_tid: a[2],
                 tls: a[3],
                 child_tid: a[4],
+                thread_area: None,
                 cgroup: None,
             },
         },
@@ -226,6 +234,16 @@ pub(crate) fn sys_clone(
     {
         return Err(Errno::EPERM);
     }
+    // A 32-bit program's `tls` is a `struct user_desc` for the child's
+    // thread-local segment, read and refused here, before anything is made.
+    let request = if request.flags & CLONE_SETTLS != 0 && abi == Abi::Compat {
+        CloneRequest {
+            thread_area: Some(thread_area::clone_descriptor(parent, request.tls)?),
+            ..request
+        }
+    } else {
+        request
+    };
     // So is a stack that is not in the user half: the system call returns on
     // it, and on x86-64 the kernel briefly runs on the stack pointer it is
     // given. `clone3`'s stack was checked as it was read.
@@ -347,6 +365,7 @@ fn clone3_request(parent: &Process, at: u64, size: u64) -> Result<CloneRequest, 
         parent_tid,
         child_tid,
         tls,
+        thread_area: None,
         cgroup,
     })
 }
@@ -365,6 +384,18 @@ fn cgroup_target(parent: &Process, descriptor: i32, thread: bool) -> Result<Arc<
     Ok(to)
 }
 
+/// Give a child `CLONE_SETTLS`'s thread pointer: a base, or for a 32-bit
+/// program the thread-local descriptor its `user_desc` described, which the
+/// child's `%gs`, its parent's selector, then reads through.
+fn give_thread_pointer(state: &mut arch::UserState, tls: u64, thread_area: Option<(usize, u64)>) {
+    match thread_area {
+        Some((index, descriptor)) => {
+            let _ = state.set_thread_area(index, descriptor);
+        }
+        None => state.set_thread_pointer(tls),
+    }
+}
+
 /// Make the process `request` asks for. See [`sys_clone`].
 fn clone_with(
     parent: &Arc<Process>,
@@ -377,6 +408,7 @@ fn clone_with(
         parent_tid,
         child_tid,
         tls,
+        thread_area,
         cgroup,
     } = *request;
     // A namespace asked for is a namespace that has to exist. Ignoring the
@@ -482,7 +514,7 @@ fn clone_with(
     // are the parent's.
     let mut state = unsafe { arch::UserState::capture() };
     if flags & CLONE_SETTLS != 0 {
-        state.set_thread_pointer(tls);
+        give_thread_pointer(&mut state, tls, thread_area);
     }
     let mut child_regs = regs.for_child();
     if stack != 0 {
@@ -566,6 +598,7 @@ fn clone_thread(
         parent_tid,
         child_tid,
         tls,
+        thread_area,
         ..
     } = *request;
     if flags & (CLONE_FILES | CLONE_FS) != CLONE_FILES | CLONE_FS
@@ -599,7 +632,7 @@ fn clone_thread(
     // are the caller's.
     let mut state = unsafe { arch::UserState::capture() };
     if flags & CLONE_SETTLS != 0 {
-        state.set_thread_pointer(tls);
+        give_thread_pointer(&mut state, tls, thread_area);
     }
     let mut thread_regs = regs.for_child();
     if stack != 0 {
@@ -703,6 +736,7 @@ pub(crate) fn sys_wait4(
     wstatus: u64,
     options: u32,
     rusage: u64,
+    abi: Abi,
 ) -> Result<usize, Errno> {
     if options & !(WNOHANG | WUNTRACED | WCONTINUED | WAIT_THREAD_BITS) != 0 {
         return Err(Errno::EINVAL);
@@ -725,7 +759,7 @@ pub(crate) fn sys_wait4(
             .map_err(|_| Errno::EFAULT)?;
     }
     if rusage != 0 {
-        zero_rusage(process, rusage)?;
+        zero_rusage(process, rusage, super::signal::word_of(abi))?;
     }
     Ok(child.pid() as usize)
 }
@@ -808,7 +842,7 @@ pub(crate) fn sys_waitid(
         uaccess::copy_to_user(process.space(), infop, &info).map_err(|_| Errno::EFAULT)?;
     }
     if rusage != 0 {
-        zero_rusage(process, rusage)?;
+        zero_rusage(process, rusage, size_of::<usize>())?;
     }
     Ok(0)
 }
@@ -822,12 +856,13 @@ fn put_i32(buffer: &mut [u8], at: usize, value: i32) -> Result<(), Errno> {
     Ok(())
 }
 
-/// Write an empty `struct rusage`: eighteen native words. Nothing accounts a
-/// process's resource use yet, and zero is what a process that used none would
-/// be told.
-fn zero_rusage(process: &Process, at: u64) -> Result<(), Errno> {
+/// Write an empty `struct rusage`: eighteen words of `word` bytes -- two
+/// `timeval`s of two words and fourteen `long`s, so a 32-bit program's is
+/// eighteen 4-byte ones. Nothing accounts a process's resource use yet, and
+/// zero is what a process that used none would be told.
+fn zero_rusage(process: &Process, at: u64, word: usize) -> Result<(), Errno> {
     let bytes = [0_u8; 18 * 8];
-    let size = 18 * size_of::<usize>();
+    let size = 18 * word;
     uaccess::copy_to_user(process.space(), at, bytes.get(..size).ok_or(Errno::EINVAL)?)
         .map_err(|_| Errno::EFAULT)
 }

@@ -1577,7 +1577,7 @@ fn check_a_signal_disposition_reads_back_as_it_was_set(
     // The first call reports the default, into a poisoned buffer.
     uaccess::copy_to_user(process.space(), old, &[0xAA_u8; 32])
         .map_err(|_| "could not poison oldact")?;
-    if signal::sys_rt_sigaction(process, SIGINT, at, old, set) != Ok(0) {
+    if signal::sys_rt_sigaction(process, SIGINT, at, old, set, crate::trap::Abi::Native) != Ok(0) {
         return Err("rt_sigaction refused a valid handler");
     }
     let mut back = [0_u8; 32];
@@ -1594,7 +1594,7 @@ fn check_a_signal_disposition_reads_back_as_it_was_set(
     }
 
     // The second reports the first, with SIGKILL taken out of the mask.
-    if signal::sys_rt_sigaction(process, SIGINT, 0, old, set) != Ok(0) {
+    if signal::sys_rt_sigaction(process, SIGINT, 0, old, set, crate::trap::Abi::Native) != Ok(0) {
         return Err("rt_sigaction refused a query");
     }
     uaccess::copy_from_user(process.space(), old, &mut back)
@@ -1609,22 +1609,38 @@ fn check_a_signal_disposition_reads_back_as_it_was_set(
     }
 
     // What Linux refuses.
-    if signal::sys_rt_sigaction(process, SIGINT, at, 0, 16) != Err(Errno::EINVAL) {
+    if signal::sys_rt_sigaction(process, SIGINT, at, 0, 16, crate::trap::Abi::Native)
+        != Err(Errno::EINVAL)
+    {
         return Err("a sigsetsize other than 8 was accepted");
     }
-    if signal::sys_rt_sigaction(process, 0, 0, old, set) != Err(Errno::EINVAL) {
+    if signal::sys_rt_sigaction(process, 0, 0, old, set, crate::trap::Abi::Native)
+        != Err(Errno::EINVAL)
+    {
         return Err("signal 0 was accepted");
     }
-    if signal::sys_rt_sigaction(process, 65, 0, old, set) != Err(Errno::EINVAL) {
+    if signal::sys_rt_sigaction(process, 65, 0, old, set, crate::trap::Abi::Native)
+        != Err(Errno::EINVAL)
+    {
         return Err("signal 65 was accepted");
     }
-    if signal::sys_rt_sigaction(process, SIGKILL, at, 0, set) != Err(Errno::EINVAL) {
+    if signal::sys_rt_sigaction(process, SIGKILL, at, 0, set, crate::trap::Abi::Native)
+        != Err(Errno::EINVAL)
+    {
         return Err("a handler for SIGKILL was accepted");
     }
-    if signal::sys_rt_sigaction(process, SIGKILL, 0, old, set) != Ok(0) {
+    if signal::sys_rt_sigaction(process, SIGKILL, 0, old, set, crate::trap::Abi::Native) != Ok(0) {
         return Err("asking what SIGKILL does was refused");
     }
-    if signal::sys_rt_sigaction(process, SIGINT, KERNEL_HALF_BASE, 0, set) != Err(Errno::EFAULT) {
+    if signal::sys_rt_sigaction(
+        process,
+        SIGINT,
+        KERNEL_HALF_BASE,
+        0,
+        set,
+        crate::trap::Abi::Native,
+    ) != Err(Errno::EFAULT)
+    {
         return Err("an action at a kernel address was not EFAULT");
     }
 
@@ -1756,28 +1772,30 @@ fn check_an_alternate_stack_is_recorded_and_refused_when_small(
     };
 
     let thread = check_thread(process)?;
-    if signal::sys_sigaltstack(&thread, 0, old, 0) != Ok(0) || read_old()? != (0, SS_DISABLE, 0) {
+    if signal::sys_sigaltstack(&thread, 0, old, 0, crate::trap::Abi::Native) != Ok(0)
+        || read_old()? != (0, SS_DISABLE, 0)
+    {
         return Err("with no alternate stack, sigaltstack did not report SS_DISABLE");
     }
     stage(0x0001_0000, 0, 1024)?;
-    if signal::sys_sigaltstack(&thread, at, 0, 0) != Err(Errno::ENOMEM) {
+    if signal::sys_sigaltstack(&thread, at, 0, 0, crate::trap::Abi::Native) != Err(Errno::ENOMEM) {
         return Err("an alternate stack below MINSIGSTKSZ was accepted");
     }
     stage(0x0001_0000, 5, 65536)?;
-    if signal::sys_sigaltstack(&thread, at, 0, 0) != Err(Errno::EINVAL) {
+    if signal::sys_sigaltstack(&thread, at, 0, 0, crate::trap::Abi::Native) != Err(Errno::EINVAL) {
         return Err("a nonsense ss_flags was accepted");
     }
     stage(0x0001_0000, 0, 65536)?;
-    if signal::sys_sigaltstack(&thread, at, 0, 0) != Ok(0) {
+    if signal::sys_sigaltstack(&thread, at, 0, 0, crate::trap::Abi::Native) != Ok(0) {
         return Err("a valid alternate stack was refused");
     }
-    if signal::sys_sigaltstack(&thread, 0, old, 0) != Ok(0)
+    if signal::sys_sigaltstack(&thread, 0, old, 0, crate::trap::Abi::Native) != Ok(0)
         || read_old()? != (0x0001_0000, 0, 65536)
     {
         return Err("the installed alternate stack did not read back");
     }
     stage(0, SS_DISABLE, 0)?;
-    if signal::sys_sigaltstack(&thread, at, old, 0) != Ok(0)
+    if signal::sys_sigaltstack(&thread, at, old, 0, crate::trap::Abi::Native) != Ok(0)
         || read_old()? != (0x0001_0000, 0, 65536)
     {
         return Err("disabling did not report the stack it replaced");
@@ -6084,7 +6102,7 @@ fn check_a_childs_end_reaches_a_sigchld_handler_and_still_reaps() -> Result<(), 
     if taken.signal != SIGCHLD || taken.action.handler != CHECK_HANDLER {
         return Err("a child's end delivered the wrong signal, or not to the handler");
     }
-    let reaped = family::sys_wait4(&parent, child_pid as i32, 0, 0, 0)
+    let reaped = family::sys_wait4(&parent, child_pid as i32, 0, 0, 0, crate::trap::Abi::Native)
         .map_err(|_| "wait4 refused to reap a child whose SIGCHLD had a handler")?;
     if reaped != child_pid as usize {
         return Err("wait4 did not reap the child SIGCHLD announced");
@@ -6518,7 +6536,7 @@ fn check_a_signal_blocked_after_it_was_sent_is_handed_on() -> Result<(), &'stati
     crate::syscall::deliver::leave_handler(
         &first,
         signal::bit(SIGUSR1),
-        crate::signal_frame::StackRecord::default(),
+        Some(crate::signal_frame::StackRecord::default()),
         0,
     );
     if process.take_handed_to() != tid {

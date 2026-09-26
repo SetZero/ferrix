@@ -433,8 +433,9 @@ pub(crate) fn restore_saved_mask(thread: &Thread) {
 /// Leave a handler as `rt_sigreturn` does: put back the mask and alternate
 /// stack its frame saved, through [`signal::change_blocked`], so that a signal
 /// the restored mask blocks while it is pending for the process is handed on.
-/// Apart from `sigreturn` so that a boot check can drive it.
-pub(crate) fn leave_handler(thread: &Thread, mask: u64, altstack: StackRecord, sp: u64) {
+/// A frame that saved no alternate stack leaves it as it is. Apart from
+/// `sigreturn` so that a boot check can drive it.
+pub(crate) fn leave_handler(thread: &Thread, mask: u64, altstack: Option<StackRecord>, sp: u64) {
     signal::change_blocked(thread, |_, own| own.leave_handler(mask, altstack, sp));
 }
 

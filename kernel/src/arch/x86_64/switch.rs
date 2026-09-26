@@ -170,6 +170,18 @@ impl UserState {
         self.thread_pointer = pointer;
     }
 
+    /// Put `descriptor` in thread-local slot `index` of this saved state: a
+    /// 32-bit program's `CLONE_SETTLS`, which names a `user_desc` for the
+    /// child rather than a base (`docs/I386.md` §3.5). The child's `%gs`
+    /// keeps its parent's selector and so reads through the new descriptor.
+    /// False for an `index` past the three.
+    pub(crate) fn set_thread_area(&mut self, index: usize, descriptor: u64) -> bool {
+        self.tls
+            .get_mut(index)
+            .map(|slot| *slot = descriptor)
+            .is_some()
+    }
+
     /// A program's state before it has run: no thread pointer, and the x87 and
     /// SSE control words a processor has at reset.
     ///
@@ -346,6 +358,22 @@ unsafe fn load_selectors(
         // the kernel runs.
         unsafe { super::syscall::set_program_gs_base(gs_base) };
     }
+}
+
+/// Load `selectors` -- `DS`, `ES`, `FS`, `GS` -- as a program's own, each
+/// checked against this processor's thread-local slots, which are the
+/// running thread's: what a 32-bit program's signal handler is entered with
+/// and what its return from one puts back.
+pub(crate) fn load_program_selectors(selectors: [u16; 4]) {
+    with_interrupts_masked(|| {
+        // SAFETY: interrupts masked, so these are the running thread's.
+        let tls = unsafe { gdt::read_tls() };
+        let [ds, es, fs, gs] = selectors.map(|selector| gdt::loadable(selector, &tls));
+        // SAFETY: each checked loadable against the live slots.
+        unsafe { cpu::load_data_selectors(ds, es, fs) };
+        // SAFETY: as above.
+        unsafe { cpu::load_user_gs(gs) };
+    });
 }
 
 /// Give a 32-bit program user data in `DS` and `ES` as it is entered, from

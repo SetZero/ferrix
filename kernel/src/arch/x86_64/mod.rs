@@ -1145,10 +1145,10 @@ pub(crate) unsafe fn enter_user(entry: u64, stack: u64, argument: u64, abi: crat
 /// entry reads its registers; the upper halves are whatever the processor
 /// kept from 64-bit mode, which the program did not choose to pass.
 ///
-/// There are no saved registers to hand a fork child yet (`docs/I386.md`
-/// I2), so the dispatcher is given none, as for a kernel caller: `fork`,
-/// `clone` and the like are refused rather than started with registers that
-/// would return the child into 64-bit mode.
+/// The dispatcher is handed the trap frame as the caller's registers, which a
+/// `fork` or `clone` child resumes from by `IRETQ` in the caller's mode.
+/// `sigreturn` and `rt_sigreturn` are answered here rather than dispatched:
+/// they replace the whole frame, and have no result to write into it.
 ///
 /// # Errors
 ///
@@ -1173,10 +1173,29 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
         ],
     };
 
+    // `sigreturn` for a handler without `SA_SIGINFO`, `rt_sigreturn` for one
+    // with: an i386 program has both frames (`signal::compat`).
+    let returning = match decode_compat_syscall(args.number) {
+        Some(Syscall::RtSigreturn) => Some(true),
+        Some(Syscall::Sigreturn) => Some(false),
+        _ => None,
+    };
+    if let Some(rt) = returning {
+        let mut context = UserContext::from_trap(frame);
+        enable_interrupts();
+        if let Some(path) = crate::trap::return_path() {
+            (path.sigreturn)(&mut context, rt);
+        }
+        disable_interrupts();
+        context.store_trap(frame);
+        return Ok(());
+    }
+
     // Open while the call is served, as `SYSCALL`'s path opens them: the
     // gate closed them on entry.
+    let regs = UserRegs::Trap(*frame);
     enable_interrupts();
-    let outcome = crate::trap::system_call(&args, None);
+    let outcome = crate::trap::system_call(&args, Some(&regs));
     disable_interrupts();
 
     match outcome {

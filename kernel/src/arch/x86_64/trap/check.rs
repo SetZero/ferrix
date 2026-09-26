@@ -342,6 +342,95 @@ const TLS_I386_HIGH: &[u8] = &[
     0x00, 0x00, 0x00, 0xcd, 0x80,
 ];
 
+/// An i386 program's signals and `fork` (`docs/I386.md` I2b), each checked by
+/// what the program sees. It installs an `SA_SIGINFO` handler for `SIGUSR1`
+/// and a plain one for `SIGUSR2`, each with its own restorer as musl gives
+/// one, and sends itself both. The first handler checks `sig` and the
+/// `siginfo`'s `si_signo` and `si_pid`, and writes 0x77 into the saved `EAX`
+/// in its `ucontext`; the second writes 0x88 into its `sigcontext`'s. After
+/// `rt_sigreturn` and `sigreturn` each `kill` must have "returned" that
+/// value, and `ESI` must have come through. Then it forks: the child exits
+/// with 23, and `wait4` must reap it with that status. Exits 42, or 50 to 59
+/// for the step that failed.
+///
+/// ```text
+///   rt_sigaction(10, {rt_handler, SA_SIGINFO|SA_RESTORER, rt_restorer}, 0, 8)
+///   rt_sigaction(12, {plain_handler, SA_RESTORER, plain_restorer}, 0, 8)
+///   %ebp = getpid() ; %esi = 0x5eed ; kill(%ebp, 10) == 0x77 ; %esi == 0x5eed
+///   kill(%ebp, 12) == 0x88
+///   fork() == 0 ? exit_group(23) : wait4(pid, &status, 0, 0) == pid,
+///   (status >> 8) & 0xff == 23 ; exit_group(42)
+/// rt_handler: 4(%esp) == 10 ; pinfo->si_signo == 10 ; pinfo[12] == %ebp
+///   puc->uc_mcontext.ax (puc + 64) = 0x77 ; ret
+/// rt_restorer: movl $173, %eax ; int $0x80
+/// plain_handler: 4(%esp) == 12 ; sc.ax (52(%esp)) = 0x88 ; ret
+/// plain_restorer: popl %eax ; movl $119, %eax ; int $0x80
+/// ```
+///
+/// Assembled by GNU `as --32`, linked at the image's entry, read back with
+/// `objdump -m i386`.
+const SIGNALS_I386: &[u8] = &[
+    0x83, 0xec, 0x20, 0xc7, 0x04, 0x24, 0x2e, 0x02, 0x40, 0x00, 0xc7, 0x44, 0x24, 0x04, 0x04, 0x00,
+    0x00, 0x04, 0xc7, 0x44, 0x24, 0x08, 0x5b, 0x02, 0x40, 0x00, 0xc7, 0x44, 0x24, 0x0c, 0x00, 0x00,
+    0x00, 0x00, 0xc7, 0x44, 0x24, 0x10, 0x00, 0x00, 0x00, 0x00, 0xb8, 0xae, 0x00, 0x00, 0x00, 0xbb,
+    0x0a, 0x00, 0x00, 0x00, 0x89, 0xe1, 0x31, 0xd2, 0xbe, 0x08, 0x00, 0x00, 0x00, 0xcd, 0x80, 0xbf,
+    0x32, 0x00, 0x00, 0x00, 0x85, 0xc0, 0x0f, 0x85, 0xd9, 0x00, 0x00, 0x00, 0xc7, 0x04, 0x24, 0x62,
+    0x02, 0x40, 0x00, 0xc7, 0x44, 0x24, 0x04, 0x00, 0x00, 0x00, 0x04, 0xc7, 0x44, 0x24, 0x08, 0x7e,
+    0x02, 0x40, 0x00, 0xb8, 0xae, 0x00, 0x00, 0x00, 0xbb, 0x0c, 0x00, 0x00, 0x00, 0x89, 0xe1, 0x31,
+    0xd2, 0xbe, 0x08, 0x00, 0x00, 0x00, 0xcd, 0x80, 0xbf, 0x33, 0x00, 0x00, 0x00, 0x85, 0xc0, 0x0f,
+    0x85, 0xa0, 0x00, 0x00, 0x00, 0xb8, 0x14, 0x00, 0x00, 0x00, 0xcd, 0x80, 0x89, 0xc5, 0x89, 0xc3,
+    0xb9, 0x0a, 0x00, 0x00, 0x00, 0xbe, 0xed, 0x5e, 0x00, 0x00, 0xb8, 0x25, 0x00, 0x00, 0x00, 0xcd,
+    0x80, 0xbf, 0x34, 0x00, 0x00, 0x00, 0x83, 0xf8, 0x77, 0x75, 0x7a, 0xbf, 0x35, 0x00, 0x00, 0x00,
+    0x81, 0xfe, 0xed, 0x5e, 0x00, 0x00, 0x75, 0x6d, 0x89, 0xeb, 0xb9, 0x0c, 0x00, 0x00, 0x00, 0xb8,
+    0x25, 0x00, 0x00, 0x00, 0xcd, 0x80, 0xbf, 0x36, 0x00, 0x00, 0x00, 0x3d, 0x88, 0x00, 0x00, 0x00,
+    0x75, 0x53, 0xb8, 0x02, 0x00, 0x00, 0x00, 0xcd, 0x80, 0x85, 0xc0, 0x75, 0x0c, 0xb8, 0xfc, 0x00,
+    0x00, 0x00, 0xbb, 0x17, 0x00, 0x00, 0x00, 0xcd, 0x80, 0xbf, 0x37, 0x00, 0x00, 0x00, 0x78, 0x35,
+    0x89, 0xc3, 0x8d, 0x4c, 0x24, 0x14, 0x31, 0xd2, 0x31, 0xf6, 0xb8, 0x72, 0x00, 0x00, 0x00, 0xcd,
+    0x80, 0xbf, 0x38, 0x00, 0x00, 0x00, 0x39, 0xd8, 0x75, 0x1b, 0x8b, 0x44, 0x24, 0x14, 0xc1, 0xe8,
+    0x08, 0x25, 0xff, 0x00, 0x00, 0x00, 0xbf, 0x39, 0x00, 0x00, 0x00, 0x83, 0xf8, 0x17, 0x75, 0x05,
+    0xbf, 0x2a, 0x00, 0x00, 0x00, 0x89, 0xfb, 0xb8, 0xfc, 0x00, 0x00, 0x00, 0xcd, 0x80, 0x83, 0x7c,
+    0x24, 0x04, 0x0a, 0x75, 0x1a, 0x8b, 0x44, 0x24, 0x08, 0x83, 0x38, 0x0a, 0x75, 0x11, 0x39, 0x68,
+    0x0c, 0x75, 0x0c, 0x8b, 0x44, 0x24, 0x0c, 0xc7, 0x40, 0x40, 0x77, 0x00, 0x00, 0x00, 0xc3, 0xb8,
+    0xfc, 0x00, 0x00, 0x00, 0xbb, 0x3a, 0x00, 0x00, 0x00, 0xcd, 0x80, 0xb8, 0xad, 0x00, 0x00, 0x00,
+    0xcd, 0x80, 0x83, 0x7c, 0x24, 0x04, 0x0c, 0x75, 0x09, 0xc7, 0x44, 0x24, 0x34, 0x88, 0x00, 0x00,
+    0x00, 0xc3, 0xb8, 0xfc, 0x00, 0x00, 0x00, 0xbb, 0x3b, 0x00, 0x00, 0x00, 0xcd, 0x80, 0x58, 0xb8,
+    0x77, 0x00, 0x00, 0x00, 0xcd, 0x80,
+];
+
+/// An i386 program whose `SA_SIGINFO` handler forges one field of its own
+/// saved context before returning through `rt_sigreturn` (certification
+/// review, T.ESCALATE path 8). The handler's `movl $VALUE, FIELD(%eax)`, with
+/// `%eax` the `ucontext`, is patched per case at [`FORGE_FIELD_AT`] and
+/// [`FORGE_VALUE_AT`]; a forged frame must end the program with `SIGSEGV`,
+/// and a frame changed only in `ax` must return and let it exit 42.
+///
+/// ```text
+///   rt_sigaction(10, {handler, SA_SIGINFO|SA_RESTORER, restorer}, 0, 8)
+///   kill(getpid(), 10) ; exit_group(42)
+/// handler: movl 12(%esp), %eax ; movl $0x11223344, 0x7f(%eax) ; ret
+/// restorer: movl $173, %eax ; int $0x80
+/// ```
+///
+/// Assembled by GNU `as --32` with those placeholders, linked at the image's
+/// entry, and read back with `objdump -m i386`.
+const FORGE_I386: &[u8] = &[
+    0x83, 0xec, 0x20, 0xc7, 0x04, 0x24, 0x60, 0x01, 0x40, 0x00, 0xc7, 0x44, 0x24, 0x04, 0x04, 0x00,
+    0x00, 0x04, 0xc7, 0x44, 0x24, 0x08, 0x6c, 0x01, 0x40, 0x00, 0xc7, 0x44, 0x24, 0x0c, 0x00, 0x00,
+    0x00, 0x00, 0xc7, 0x44, 0x24, 0x10, 0x00, 0x00, 0x00, 0x00, 0xb8, 0xae, 0x00, 0x00, 0x00, 0xbb,
+    0x0a, 0x00, 0x00, 0x00, 0x89, 0xe1, 0x31, 0xd2, 0xbe, 0x08, 0x00, 0x00, 0x00, 0xcd, 0x80, 0xb8,
+    0x14, 0x00, 0x00, 0x00, 0xcd, 0x80, 0x89, 0xc3, 0xb9, 0x0a, 0x00, 0x00, 0x00, 0xb8, 0x25, 0x00,
+    0x00, 0x00, 0xcd, 0x80, 0xbb, 0x2a, 0x00, 0x00, 0x00, 0xb8, 0xfc, 0x00, 0x00, 0x00, 0xcd, 0x80,
+    0x8b, 0x44, 0x24, 0x0c, 0xc7, 0x40, 0x7f, 0x44, 0x33, 0x22, 0x11, 0xc3, 0xb8, 0xad, 0x00, 0x00,
+    0x00, 0xcd, 0x80,
+];
+
+/// Where [`FORGE_I386`]'s handler keeps the field's offset in the `ucontext`,
+/// the `0x7f` placeholder.
+const FORGE_FIELD_AT: usize = 102;
+
+/// Where it keeps the value it writes there, the `0x11223344` placeholder.
+const FORGE_VALUE_AT: usize = 103;
+
 /// `CR0.NE`: x87 exceptions are reported as `#MF`, not through the legacy
 /// `FERR#` line to an interrupt controller.
 const CR0_NE: u64 = 1 << 5;
@@ -488,6 +577,8 @@ fn check_compat() -> Result<(), &'static str> {
     }
 
     let tls = check_thread_areas()?;
+    check_signals_and_fork()?;
+    let forged = check_forged_frames()?;
 
     let syscall_ended = run_program(b"/cstar", COMPAT_SYSCALL)?;
     let syscall_how = match syscall_ended {
@@ -507,12 +598,135 @@ fn check_compat() -> Result<(), &'static str> {
          {sysenter_how}"
     );
     println!(
+        "  i386     rt_sigreturn ended {forged} programs whose frames forged a kernel or 64-bit \
+         code selector, a kernel stack selector, IOPL or virtual-8086 flags, or a data segment \
+         naming a kernel slot, the LDT or the TSS, with SIGSEGV, and took an honest change"
+    );
+    println!(
         "  i386     2 programs on one processor each read their own thread-local segment \
          through %gs {tls} times across sched_yield, set_thread_area chose entries 12 to 14, \
          refused code, conforming, absent and 16-bit segments and took lm without the L bit, \
          and get_thread_area read the base back"
     );
     Ok(())
+}
+
+/// [`FORGE_I386`], once for each forgery an i386 `rt_sigreturn` must refuse
+/// and once for a frame it must take. Answers how many were refused.
+fn check_forged_frames() -> Result<u32, &'static str> {
+    use ferrix_linux_abi::sigframe32::sigcontext;
+    // `uc_mcontext` is 20 bytes into the `ucontext`, and each field is
+    // `sigcontext_32`'s offset past that.
+    let mcontext = |field: usize| (20 + field) as u8;
+    let forgeries: [(u8, u32, &'static str); 8] = [
+        (
+            mcontext(sigcontext::CS),
+            0x10,
+            "a code selector naming the kernel's code",
+        ),
+        (
+            mcontext(sigcontext::CS),
+            0x33,
+            "a code selector naming 64-bit user code",
+        ),
+        (
+            mcontext(sigcontext::SS),
+            0x18,
+            "a stack selector naming the kernel's data",
+        ),
+        (mcontext(sigcontext::FLAGS), 0x3202, "IOPL 3 in the flags"),
+        (
+            mcontext(sigcontext::FLAGS),
+            0x2_0202,
+            "virtual-8086 mode in the flags",
+        ),
+        (
+            mcontext(sigcontext::GS),
+            0x10,
+            "GS naming the kernel's code",
+        ),
+        (mcontext(sigcontext::FS), 0x07, "FS naming the LDT"),
+        (mcontext(sigcontext::DS), 0x43, "DS naming the TSS"),
+    ];
+    let run = |field: u8, value: u32| -> Result<i32, &'static str> {
+        let mut code = FORGE_I386.to_vec();
+        let field_at = code
+            .get_mut(FORGE_FIELD_AT)
+            .ok_or("the forged program is too short")?;
+        if *field_at != 0x7f {
+            return Err("the forged program's field placeholder is not where it was assembled");
+        }
+        *field_at = field;
+        code.get_mut(FORGE_VALUE_AT..FORGE_VALUE_AT + 4)
+            .ok_or("the forged program is too short")?
+            .copy_from_slice(&value.to_le_bytes());
+        let file = crate::syscall::image::build_with(
+            ferrix_elf::Class::Elf32,
+            EM_386,
+            crate::syscall::image::Shape::Good,
+            &code,
+        );
+        crate::syscall::exec::run(
+            &file,
+            &[b"/forged"],
+            &[],
+            [0x7e; ferrix_ustack::RANDOM_BYTES],
+        )
+        .map_err(|_| "the forged-frame program could not be started")
+    };
+    // The control first: a frame changed only where a handler may change it
+    // returns, or the refusals below would prove nothing.
+    if run(mcontext(sigcontext::AX), 0x99)? != HELLO_I386_STATUS {
+        return Err("an i386 frame changed only in its saved EAX did not return");
+    }
+    let mut refused = 0;
+    for (field, value, what) in forgeries {
+        let status = run(field, value)?;
+        if status != killed_by(SIGSEGV) {
+            println!("  i386     a frame with {what} ended the program with {status}");
+            return Err("rt_sigreturn took a forged i386 frame");
+        }
+        refused += 1;
+    }
+    Ok(refused)
+}
+
+/// [`SIGNALS_I386`]: both i386 frames and their returns, and a fork.
+fn check_signals_and_fork() -> Result<(), &'static str> {
+    let file = crate::syscall::image::build_with(
+        ferrix_elf::Class::Elf32,
+        EM_386,
+        crate::syscall::image::Shape::Good,
+        SIGNALS_I386,
+    );
+    let status = crate::syscall::exec::run(
+        &file,
+        &[b"/signals"],
+        &[],
+        [0x7e; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "the i386 signal program could not be started")?;
+    let failed = match status {
+        HELLO_I386_STATUS => {
+            println!(
+                "  i386     a 32-bit program's SA_SIGINFO and plain handlers each changed a saved \
+                 register through their frames and returned through rt_sigreturn and sigreturn, \
+                 and its fork child exited 23 to wait4"
+            );
+            return Ok(());
+        }
+        50 | 51 => "rt_sigaction refused a 32-bit program's struct sigaction",
+        52 => "an rt_sigframe's saved EAX did not come back through rt_sigreturn",
+        53 => "a register the handler did not touch did not survive rt_sigreturn",
+        54 => "a sigframe's saved EAX did not come back through sigreturn",
+        55 => "fork from a 32-bit program failed",
+        56 | 57 => "wait4 did not reap a 32-bit program's fork child with its status",
+        58 => "an SA_SIGINFO handler was entered with the wrong signal or siginfo",
+        59 => "a plain handler was entered with the wrong signal",
+        _ => "the i386 signal program ended some other way",
+    };
+    println!("  i386     the signal program ended with {status}");
+    Err(failed)
 }
 
 /// [`TLS_I386_LOW`] and [`TLS_I386_HIGH`] at once, pinned to this processor

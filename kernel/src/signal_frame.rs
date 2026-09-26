@@ -62,8 +62,10 @@ pub(crate) struct FrameRequest {
 pub(crate) struct Restored {
     /// The mask the frame saved.
     pub(crate) mask: u64,
-    /// The alternate stack the frame recorded.
-    pub(crate) altstack: StackRecord,
+    /// The alternate stack the frame recorded, or `None` for a frame that
+    /// records none -- i386's `sigframe`, whose `sigreturn` leaves the
+    /// alternate stack as it is, as Linux's does.
+    pub(crate) altstack: Option<StackRecord>,
 }
 
 /// A frame's bytes while they are built or read: offsets checked, so an

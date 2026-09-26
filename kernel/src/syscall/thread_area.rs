@@ -67,3 +67,21 @@ pub(crate) fn sys_get_thread_area(process: &Process, u_info: u64) -> Result<usiz
     uaccess::copy_to_user(process.space(), u_info, &desc.to_bytes()).map_err(|_| Errno::EFAULT)?;
     Ok(0)
 }
+
+/// The thread-local slot and descriptor a 32-bit program's `clone` with
+/// `CLONE_SETTLS` asks its child to start with: the `struct user_desc` at
+/// `u_info`, which must name its entry -- Linux's `do_set_thread_area` for a
+/// new task may not allocate one, so entry -1 is `EINVAL` there as here.
+///
+/// # Errors
+///
+/// `EFAULT` for an unreadable `u_info`, and `EINVAL` for a descriptor
+/// `tls_desc_okay` refuses or an entry that is not one of the three.
+pub(crate) fn clone_descriptor(process: &Process, u_info: u64) -> Result<(usize, u64), Errno> {
+    let mut bytes = [0_u8; UserDesc::SIZE];
+    uaccess::copy_from_user(process.space(), u_info, &mut bytes).map_err(|_| Errno::EFAULT)?;
+    let desc = UserDesc::from_bytes(&bytes).ok_or(Errno::EFAULT)?;
+    let descriptor = desc.to_descriptor().map_err(|_| Errno::EINVAL)?;
+    let index = tls_index(desc.entry_number).ok_or(Errno::EINVAL)?;
+    Ok((index, descriptor))
+}

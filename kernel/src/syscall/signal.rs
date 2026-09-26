@@ -61,6 +61,7 @@ use crate::syscall::process::Process;
 use crate::syscall::thread::Thread;
 use crate::syscall::time::{self, TimeWidth};
 use crate::syscall::{epoll, poll, uaccess};
+use crate::trap::Abi;
 
 /// The only `sigsetsize` the kernel accepts: one 64-bit word.
 ///
@@ -77,11 +78,16 @@ const SS_AUTODISARM: i32 = i32::MIN;
 /// Bytes in a native word.
 const WORD: usize = size_of::<usize>();
 
-/// Bytes in the kernel's `struct sigaction` on this architecture.
-const SIGACTION_BYTES: usize = WORD * 3 + 8;
-
-/// Bytes in `stack_t` on this architecture.
-const STACK_BYTES: usize = WORD * 3;
+/// Bytes in a word of the program that made a call in `abi`: the native word,
+/// or four for a 32-bit program on a 64-bit kernel, whose `struct sigaction`
+/// and `stack_t` are Linux's `compat_sigaction` and `compat_stack_t` --
+/// the same fields, each as wide as its pointers (`docs/I386.md` §3.2).
+pub(crate) const fn word_of(abi: Abi) -> usize {
+    match abi {
+        Abi::Native => WORD,
+        Abi::Compat => 4,
+    }
+}
 
 /// The two signals nothing may catch, block or ignore.
 pub(crate) const UNBLOCKABLE: u64 = bit(SIGKILL) | bit(SIGSTOP);
@@ -207,7 +213,7 @@ impl Origin {
                 code
             }
             Origin::Fault { code, address } => {
-                let _ = put_word(&mut info, union, address);
+                let _ = put_word(&mut info, union, address, WORD);
                 code
             }
         };
@@ -735,9 +741,11 @@ impl ThreadSignals {
     /// Leave a handler, as `rt_sigreturn` does: the mask its frame saved comes
     /// back, and so does the alternate stack, if that is still a stack
     /// `sigaltstack` would accept from a program whose stack pointer is `sp`.
-    fn leave_handler(&mut self, mask: u64, stack: StackRecord, sp: u64) {
+    fn leave_handler(&mut self, mask: u64, stack: Option<StackRecord>, sp: u64) {
         self.blocked = mask & !UNBLOCKABLE;
-        let _ = self.install_alt_stack((stack.sp, stack.flags, stack.size), sp);
+        if let Some(stack) = stack {
+            let _ = self.install_alt_stack((stack.sp, stack.flags, stack.size), sp);
+        }
     }
 
     /// Put back the mask `rt_sigsuspend` replaced, if no handler's frame took
@@ -870,7 +878,7 @@ impl Blocking<'_> {
 
     /// Put back a handler frame's mask and alternate stack, as `rt_sigreturn`
     /// does, for a program whose stack pointer is `sp`.
-    pub(crate) fn leave_handler(&mut self, mask: u64, stack: StackRecord, sp: u64) {
+    pub(crate) fn leave_handler(&mut self, mask: u64, stack: Option<StackRecord>, sp: u64) {
         self.0.leave_handler(mask, stack, sp);
     }
 }
@@ -1142,6 +1150,7 @@ pub(crate) fn dispatch(
     a: &[u64; 6],
     thread: Option<&Thread>,
     sp: u64,
+    abi: Abi,
 ) -> Option<Result<usize, Errno>> {
     if !acts_on_a_thread(call) {
         return None;
@@ -1157,7 +1166,7 @@ pub(crate) fn dispatch(
     };
     Some(match call {
         Syscall::RtSigprocmask => sys_rt_sigprocmask(thread, a[0] as u32, a[1], a[2], a[3]),
-        Syscall::Sigaltstack => sys_sigaltstack(thread, a[0], a[1], sp),
+        Syscall::Sigaltstack => sys_sigaltstack(thread, a[0], a[1], sp, abi),
         Syscall::RtSigsuspend => deliver::sys_rt_sigsuspend(thread, a[0], a[1]),
         Syscall::RtSigpending => deliver::sys_rt_sigpending(thread, a[0], a[1]),
         Syscall::RtSigtimedwait | Syscall::RtSigtimedwaitTime64 => {
@@ -1189,6 +1198,7 @@ pub(crate) fn sys_rt_sigaction(
     act: u64,
     old: u64,
     sigsetsize: u64,
+    abi: Abi,
 ) -> Result<usize, Errno> {
     if sigsetsize != SIGSET_SIZE {
         return Err(Errno::EINVAL);
@@ -1199,7 +1209,7 @@ pub(crate) fn sys_rt_sigaction(
     } else if signal == SIGKILL || signal == SIGSTOP {
         return Err(Errno::EINVAL);
     } else {
-        Some(read_sigaction(process, act)?)
+        Some(read_sigaction(process, act, word_of(abi))?)
     };
 
     let (previous, ignored) = process.with_signals(|signals| {
@@ -1228,7 +1238,7 @@ pub(crate) fn sys_rt_sigaction(
     }
 
     if old != 0 {
-        write_sigaction(process, old, previous)?;
+        write_sigaction(process, old, previous, word_of(abi))?;
     }
     Ok(0)
 }
@@ -1286,12 +1296,18 @@ pub(crate) fn sys_rt_sigprocmask(
 /// Linux's order. A program running on its alternate stack sees `SS_ONSTACK`
 /// in the old flags and may not change the stack: `EPERM`. The boot
 /// self-check, which has no stack pointer, passes zero, which is on no stack.
-pub(crate) fn sys_sigaltstack(thread: &Thread, ss: u64, old: u64, sp: u64) -> Result<usize, Errno> {
+pub(crate) fn sys_sigaltstack(
+    thread: &Thread,
+    ss: u64,
+    old: u64,
+    sp: u64,
+    abi: Abi,
+) -> Result<usize, Errno> {
     let process = thread.process();
     let request = if ss == 0 {
         None
     } else {
-        Some(read_stack(process, ss)?)
+        Some(read_stack(process, ss, word_of(abi))?)
     };
 
     let (previous, on_stack) = thread.with_own_signals(|signals| {
@@ -1309,7 +1325,14 @@ pub(crate) fn sys_sigaltstack(thread: &Thread, ss: u64, old: u64, sp: u64) -> Re
         if on_stack {
             flags = SS_ONSTACK;
         }
-        write_stack(process, old, previous.sp, flags, previous.size)?;
+        write_stack(
+            process,
+            old,
+            previous.sp,
+            flags,
+            previous.size,
+            word_of(abi),
+        )?;
     }
     Ok(0)
 }
@@ -1332,79 +1355,95 @@ fn index_of(signal: u32) -> Result<usize, Errno> {
     usize::try_from(signal - 1).map_err(|_| Errno::EINVAL)
 }
 
-/// Read a `struct sigaction` from the program.
-fn read_sigaction(process: &Process, at: u64) -> Result<Disposition, Errno> {
+/// Read a `struct sigaction` from the program, whose words are `word` bytes:
+/// handler, flags, restorer, then the 64-bit mask.
+fn read_sigaction(process: &Process, at: u64, word: usize) -> Result<Disposition, Errno> {
     let mut buffer = [0_u8; 32];
-    let bytes = buffer.get_mut(..SIGACTION_BYTES).ok_or(Errno::EINVAL)?;
+    let bytes = buffer.get_mut(..word * 3 + 8).ok_or(Errno::EINVAL)?;
     uaccess::copy_from_user(process.space(), at, bytes).map_err(|_| Errno::EFAULT)?;
     let mut mask = [0_u8; 8];
-    mask.copy_from_slice(bytes.get(WORD * 3..).ok_or(Errno::EINVAL)?);
+    mask.copy_from_slice(bytes.get(word * 3..).ok_or(Errno::EINVAL)?);
     Ok(Disposition {
-        handler: word_at(bytes, 0)?,
-        flags: word_at(bytes, WORD)?,
-        restorer: word_at(bytes, WORD * 2)?,
+        handler: word_at(bytes, 0, word)?,
+        flags: word_at(bytes, word, word)?,
+        restorer: word_at(bytes, word * 2, word)?,
         mask: u64::from_le_bytes(mask),
     })
 }
 
-/// Write a `struct sigaction` to the program.
-fn write_sigaction(process: &Process, at: u64, action: Disposition) -> Result<(), Errno> {
+/// Write a `struct sigaction` to the program, as [`read_sigaction`] reads one.
+fn write_sigaction(
+    process: &Process,
+    at: u64,
+    action: Disposition,
+    word: usize,
+) -> Result<(), Errno> {
     let mut buffer = [0_u8; 32];
-    let bytes = buffer.get_mut(..SIGACTION_BYTES).ok_or(Errno::EINVAL)?;
-    put_word(bytes, 0, action.handler)?;
-    put_word(bytes, WORD, action.flags)?;
-    put_word(bytes, WORD * 2, action.restorer)?;
+    let bytes = buffer.get_mut(..word * 3 + 8).ok_or(Errno::EINVAL)?;
+    put_word(bytes, 0, action.handler, word)?;
+    put_word(bytes, word, action.flags, word)?;
+    put_word(bytes, word * 2, action.restorer, word)?;
     bytes
-        .get_mut(WORD * 3..)
+        .get_mut(word * 3..)
         .ok_or(Errno::EINVAL)?
         .copy_from_slice(&action.mask.to_le_bytes());
     uaccess::copy_to_user(process.space(), at, bytes).map_err(|_| Errno::EFAULT)
 }
 
-/// Read a `stack_t` from the program: pointer, flags, size.
-fn read_stack(process: &Process, at: u64) -> Result<(u64, i32, u64), Errno> {
+/// Read a `stack_t` from the program, whose words are `word` bytes: pointer,
+/// flags, size.
+fn read_stack(process: &Process, at: u64, word: usize) -> Result<(u64, i32, u64), Errno> {
     let mut buffer = [0_u8; 24];
-    let bytes = buffer.get_mut(..STACK_BYTES).ok_or(Errno::EINVAL)?;
+    let bytes = buffer.get_mut(..word * 3).ok_or(Errno::EINVAL)?;
     uaccess::copy_from_user(process.space(), at, bytes).map_err(|_| Errno::EFAULT)?;
     let mut flags = [0_u8; 4];
-    flags.copy_from_slice(bytes.get(WORD..WORD + 4).ok_or(Errno::EINVAL)?);
+    flags.copy_from_slice(bytes.get(word..word + 4).ok_or(Errno::EINVAL)?);
     Ok((
-        word_at(bytes, 0)?,
+        word_at(bytes, 0, word)?,
         i32::from_le_bytes(flags),
-        word_at(bytes, WORD * 2)?,
+        word_at(bytes, word * 2, word)?,
     ))
 }
 
-/// Write a `stack_t` to the program. Padding goes out as zero.
-fn write_stack(process: &Process, at: u64, sp: u64, flags: i32, size: u64) -> Result<(), Errno> {
+/// Write a `stack_t` to the program, as [`read_stack`] reads one. Padding
+/// goes out as zero.
+fn write_stack(
+    process: &Process,
+    at: u64,
+    sp: u64,
+    flags: i32,
+    size: u64,
+    word: usize,
+) -> Result<(), Errno> {
     let mut buffer = [0_u8; 24];
-    let bytes = buffer.get_mut(..STACK_BYTES).ok_or(Errno::EINVAL)?;
-    put_word(bytes, 0, sp)?;
+    let bytes = buffer.get_mut(..word * 3).ok_or(Errno::EINVAL)?;
+    put_word(bytes, 0, sp, word)?;
     bytes
-        .get_mut(WORD..WORD + 4)
+        .get_mut(word..word + 4)
         .ok_or(Errno::EINVAL)?
         .copy_from_slice(&flags.to_le_bytes());
-    put_word(bytes, WORD * 2, size)?;
+    put_word(bytes, word * 2, size, word)?;
     uaccess::copy_to_user(process.space(), at, bytes).map_err(|_| Errno::EFAULT)
 }
 
-/// The native word at `offset`, zero-extended.
-fn word_at(bytes: &[u8], offset: usize) -> Result<u64, Errno> {
-    let end = offset.checked_add(WORD).ok_or(Errno::EINVAL)?;
+/// The `width`-byte word at `offset`, zero-extended.
+fn word_at(bytes: &[u8], offset: usize, width: usize) -> Result<u64, Errno> {
+    let end = offset.checked_add(width).ok_or(Errno::EINVAL)?;
     let mut word = [0_u8; 8];
-    word.get_mut(..WORD)
+    word.get_mut(..width)
         .ok_or(Errno::EINVAL)?
         .copy_from_slice(bytes.get(offset..end).ok_or(Errno::EINVAL)?);
     Ok(u64::from_le_bytes(word))
 }
 
-/// Put `value` at `offset` as a native word. On a 32-bit machine every value
-/// written here came from a 32-bit read, so the truncation drops nothing.
-fn put_word(bytes: &mut [u8], offset: usize, value: u64) -> Result<(), Errno> {
-    let end = offset.checked_add(WORD).ok_or(Errno::EINVAL)?;
+/// Put `value` at `offset` as a `width`-byte word. For a 32-bit program every
+/// value written here came from a 32-bit read, so the truncation drops
+/// nothing.
+fn put_word(bytes: &mut [u8], offset: usize, value: u64, width: usize) -> Result<(), Errno> {
+    let end = offset.checked_add(width).ok_or(Errno::EINVAL)?;
     bytes
         .get_mut(offset..end)
         .ok_or(Errno::EINVAL)?
-        .copy_from_slice(value.to_le_bytes().get(..WORD).ok_or(Errno::EINVAL)?);
+        .copy_from_slice(value.to_le_bytes().get(..width).ok_or(Errno::EINVAL)?);
     Ok(())
 }

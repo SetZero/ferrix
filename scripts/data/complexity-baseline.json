@@ -35,8 +35,8 @@
       "recursive": false
     },
     "arch/x86_64/signal.rs::setup_signal_frame": {
-      "complexity": 20,
-      "lines": 36,
+      "complexity": 19,
+      "lines": 30,
       "recursive": false
     },
     "arch/x86_64/trap.rs::vector_name": {
@@ -90,8 +90,8 @@
       "recursive": false
     },
     "pci.rs::check_function": {
-      "complexity": 32,
-      "lines": 69,
+      "complexity": 31,
+      "lines": 67,
       "recursive": false
     },
     "pci/virtio.rs::drive": {
@@ -125,7 +125,7 @@
       "recursive": false
     },
     "syscall/native.rs::dispatch": {
-      "complexity": 34,
+      "complexity": 33,
       "lines": 88,
       "recursive": false
     },

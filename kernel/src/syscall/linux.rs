@@ -94,7 +94,7 @@ fn dispatch(call: Syscall, args: &SyscallArgs, regs: Option<&arch::UserRegs>) ->
             return Outcome::Return(Errno::ESRCH.as_return_value());
         };
         return Outcome::Return(errno::encode(family::sys_clone(
-            parent, call, &args.args, regs,
+            parent, call, &args.args, regs, args.abi,
         )));
     }
 
@@ -126,7 +126,7 @@ fn dispatch(call: Syscall, args: &SyscallArgs, regs: Option<&arch::UserRegs>) ->
     // caller, with no registers, passes zero, which is on no stack.
     let thread = thread::current();
     let sp = regs.map_or(0, arch::UserRegs::stack_pointer);
-    let answer = match signal::dispatch(call, &args.args, thread.as_deref(), sp) {
+    let answer = match signal::dispatch(call, &args.args, thread.as_deref(), sp, args.abi) {
         Some(answer) => answer,
         None => handle(call, args, process.as_deref()),
     };
@@ -290,7 +290,9 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::Uname => system::sys_uname(process, a[0]),
         Syscall::Poll => poll::sys_poll(process, a[0], a[1], a[2] as i32),
         Syscall::Select => poll::sys_select(process, a[0] as i32, [a[1], a[2], a[3]], a[4]),
-        Syscall::Wait4 => family::sys_wait4(process, a[0] as i32, a[1], truncate(a[2]), a[3]),
+        Syscall::Wait4 => {
+            family::sys_wait4(process, a[0] as i32, a[1], truncate(a[2]), a[3], args.abi)
+        }
         Syscall::Waitid => family::sys_waitid(
             process,
             truncate(a[0]),
@@ -307,7 +309,9 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::Setsid => family::sys_setsid(process),
         Syscall::Futex => futex::sys_futex(process, &a, time::TimeWidth::Native),
         Syscall::FutexTime64 => futex::sys_futex(process, &a, time::TimeWidth::Wide),
-        Syscall::RtSigaction => signal::sys_rt_sigaction(process, truncate(a[0]), a[1], a[2], a[3]),
+        Syscall::RtSigaction => {
+            signal::sys_rt_sigaction(process, truncate(a[0]), a[1], a[2], a[3], args.abi)
+        }
         _ => Err(Errno::ENOSYS),
     }
 }

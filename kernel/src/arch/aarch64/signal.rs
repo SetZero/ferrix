@@ -220,7 +220,7 @@ pub(crate) fn restore_signal_frame(
     }
     let restored = Restored {
         mask: frame.u64_at(UC_SIGMASK)?,
-        altstack: frame.stack_at(UC_STACK)?,
+        altstack: Some(frame.stack_at(UC_STACK)?),
     };
     let mut vectors = [0_u8; 512];
     vectors.copy_from_slice(frame.get(fpsimd + 16, 512)?);
