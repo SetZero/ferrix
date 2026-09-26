@@ -159,6 +159,22 @@ pub fn close(fd: usize) -> Result<usize, Errno> {
     decode(unsafe { arch::linux(nr::CLOSE, [fd, 0, 0, 0, 0, 0]) })
 }
 
+/// `reboot(LINUX_REBOOT_CMD_RESTART)`: restart the machine, after the kernel
+/// has committed its disks. Returns only when it did not.
+///
+/// # Errors
+///
+/// `EPERM` for a process without the privilege, and whatever else the
+/// kernel answers.
+pub fn reboot_restart() -> Result<usize, Errno> {
+    // `linux/reboot.h`: the two magic numbers, and `LINUX_REBOOT_CMD_RESTART`.
+    const MAGIC1: usize = 0xFEE1_DEAD;
+    const MAGIC2: usize = 0x2812_1969;
+    const RESTART: usize = 0x0123_4567;
+    // SAFETY: no pointer arguments.
+    decode(unsafe { arch::linux(nr::REBOOT, [MAGIC1, MAGIC2, RESTART, 0, 0, 0]) })
+}
+
 /// `fcntl(fd, command, argument)`.
 ///
 /// # Errors

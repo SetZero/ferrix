@@ -28,7 +28,11 @@
 //!    back in the kernel's ring rather than losing it here. A host that
 //!    opens the port late still gets the boot, as far as that ring reaches
 //!    back; what it had already dropped is said in a line of its own.
-//!    What the host sends is read and dropped.
+//!    What the host sends is read and dropped, but for one line: [`REBOOT`],
+//!    which restarts the machine -- on the phone, the watchdog reset every
+//!    run ends with, which brings Android back. It is the monitor's "Boot
+//!    Android" button, until adb gives the host a proper way in
+//!    (`docs/ADB.md`).
 //!
 //! What it does is said on standard error, which is the console.
 //!
@@ -73,6 +77,13 @@ const KEY_LOG: u64 = 2;
 /// How often the loop wakes when nothing happens, to see whether a host
 /// opened the port.
 const TICK_NANOS: u64 = 100_000_000;
+
+/// The line that asks for a restart, as the monitor's button sends it. Only
+/// a whole line equal to it counts, so bytes typed by accident do nothing.
+const REBOOT: &[u8] = b"ferrix-usbdev: reboot";
+
+/// The longest line of the host's input kept while waiting for a newline.
+const TYPED_BYTES: usize = 64;
 
 /// The serial number the port reports.
 const SERIAL: &str = "ferrix-pixel7";
@@ -421,6 +432,8 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
         backlog: [0; MAX_DATA],
         taken: 0,
         filled: 0,
+        typed: [0; TYPED_BYTES],
+        typed_len: 0,
     };
     let ended = driver.serve();
     let Driver { mut usb, .. } = driver;
@@ -481,6 +494,9 @@ struct Driver {
     backlog: [u8; MAX_DATA],
     taken: usize,
     filled: usize,
+    /// The line the host is typing, up to [`TYPED_BYTES`] of it.
+    typed: [u8; TYPED_BYTES],
+    typed_len: usize,
 }
 
 impl Driver {
@@ -529,15 +545,40 @@ impl Driver {
             say(format_args!("usbdev: the host went away"));
         }
         if notice.received {
-            // What the host types goes nowhere yet: read so the endpoint
-            // keeps taking it.
             let mut bytes = [0_u8; 512];
-            let _dropped = self
+            let count = self
                 .usb
                 .read(DATA_OUT, &mut bytes)
                 .map_err(|_| Step::Faulted)?;
+            if self.typed(bytes.get(..count).unwrap_or_default()) {
+                say(format_args!("usbdev: the host asked for a restart"));
+                // Returns only if the kernel refused: the port stays up.
+                if let Err(error) = ferrix_rt::linux::reboot_restart() {
+                    say(format_args!("usbdev: the restart was refused: {error:?}"));
+                }
+            }
         }
         Ok(())
+    }
+
+    /// Take what the host typed, a line at a time, and say whether a line
+    /// was [`REBOOT`]. Everything else goes nowhere.
+    fn typed(&mut self, bytes: &[u8]) -> bool {
+        let mut asked = false;
+        for &byte in bytes {
+            if byte == b'\n' {
+                let line = self.typed.get(..self.typed_len).unwrap_or_default();
+                let line = line.strip_suffix(b"\r").unwrap_or(line);
+                asked |= line == REBOOT;
+                self.typed_len = 0;
+            } else if let Some(slot) = self.typed.get_mut(self.typed_len) {
+                *slot = byte;
+                self.typed_len += 1;
+            }
+            // Past TYPED_BYTES the rest of the line is dropped: a line that
+            // long cannot be the command.
+        }
+        asked
     }
 
     /// Move the log towards the host: what is left of the last DATA into
