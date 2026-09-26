@@ -332,6 +332,14 @@ The log core's REFUSED once went missing on an aarch64 boot; that is a
 row too, and its boot check prints `logctl   SIGHTING: ...` each time it
 happens again.
 
+**The "Boot Android" line.** Since 2026-09-26 `usbdev` restarts Ferrix
+when the serial port's host sends the line `ferrix-usbdev: reboot`, which
+is the monitor's "Boot Android" button. On the phone that is the watchdog
+reset every run ends with, so no register access changed. It is an
+unauthenticated reboot for anyone with a USB cable to the phone, acceptable
+for a debug console, and it goes when adb's `reboot:` replaces it
+(`docs/ADB.md`).
+
 ### Next agent: start here
 
 ferrix-9c wound down on 2026-09-26 at 6f5090f6, with nothing unlanded
