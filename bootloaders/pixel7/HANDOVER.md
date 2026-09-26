@@ -284,16 +284,20 @@ them). Check any new one against the phone before you rely on it.
 3. **A faster boot console**, if anything comes to need one: map the
    framebuffer write-combining rather than as device memory (run 4 lost
    about 28 s to drawing).
-4. **The kernel is a PIE now, untried on the phone** (KASLR,
+4. **The kernel is a PIE now, and boots on the phone** (KASLR,
    `docs/certification/SPECULATION.md` §6.1, 2026-09-26). `boot/` moves it
    each boot; this loader does not. It places the kernel at its link address
    and applies its `R_AARCH64_RELATIVE` fixups there (`load.rs`
    `apply_fixups`, aligned volatile stores, as everything here is written with
    the caches off). The log says `kaslr    not offered by this loader`, and
-   the kernel reports `NOT randomised: this loader does not randomise`. If
-   the next run stops before the kernel's first line, suspect this first.
-   Moving the kernel here needs a randomness source ABL's 8 bytes cannot
-   spare, and a run to try it.
+   the kernel reports `NOT randomised: this loader does not randomise`. Run
+   12 (`$P/run12-kaslr/`, `main` at `5ddb4cdd`) printed both, passed stage
+   1's FX-0101 layout check, and reached `FERRIX-BOOT-OK` on 8 cores in 90
+   s. The kernel the loader embeds is stripped with `llvm-objcopy
+   --strip-all`, which keeps AArch64's `.rela.dyn`. ARMv7-A would need
+   `--strip-debug`, since its fixups come from `--emit-relocs` sections.
+   What is left is moving the kernel here, which needs a randomness source
+   ABL's 8 bytes cannot spare, and a run to try it.
 
 ### Done, for the record
 
