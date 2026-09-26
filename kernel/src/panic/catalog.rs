@@ -1857,9 +1857,10 @@ pub(crate) static STAGE8_EVENTFD: Explanation = Explanation {
               each write although it stays readable. A flag eventfd2 does not take, a buffer \
               shorter than eight bytes, a write of u64::MAX and lseek are refused as Linux refuses \
               them. A poll and an epoll_wait waiting on an eventfd in tasks of their own must be \
-              ended by a write's wake, and a 120 ms poll on a quiet eventfd must look at most 12 \
-              times, sleeping on its queues rather than looking every 5 ms. The run is done twice \
-              and must leave no frame behind.",
+              ended by a write's wake -- the blocking read, the poll and the epoll_wait each on \
+              one of three attempts, every miss printed -- and a 120 ms poll on a quiet eventfd \
+              must look at most 12 times, sleeping on its queues rather than looking every 5 ms. \
+              The run is done twice and must leave no frame behind.",
     causes: &[
         "A pollable inode's `poll_queues` names a queue other than the one its changes wake, or \
          `WaitQueue::wait_on_any` does not put the task on every queue, so a poll or an \
@@ -1873,6 +1874,10 @@ pub(crate) static STAGE8_EVENTFD: Explanation = Explanation {
          limit than a write does.",
         "`sys_eventfd2` takes a flag Linux refuses, or does not pass EFD_NONBLOCK to the open \
          file.",
+        "The host stopped the emulator for about the one-second recheck just before the write, \
+         in all three attempts: on resuming, the recheck's overdue timer races the write and \
+         can end the wait first. One stop spoils one attempt, and the attempt lines say which \
+         wait each time.",
     ],
     see: "kernel/src/fs/eventfd_check.rs; kernel/src/fs/eventfd.rs; kernel/src/fs/wake.rs; \
           kernel/src/sched/wait.rs; kernel/src/syscall/eventfd.rs; \
@@ -1934,7 +1939,9 @@ pub(crate) static STAGE8_SIGNALFD: Explanation = Explanation {
               pending until signalfd4 gives the descriptor a mask holding it. A blocked read, a \
               poll and an epoll_wait, each waiting before the signal is sent, must be ended by \
               the wake its arrival makes and come back within a quarter of the one-second \
-              recheck. The run is done twice and must leave no frame behind.",
+              recheck, on one of three attempts each: each attempt that misses prints a line \
+              saying how late it was and what ended it. The run is done twice and must leave no \
+              frame behind.",
     causes: &[
         "`Process::notify_signal` or `notify_signal_to` does not wake `signal_arrived`, so a \
          waiter on a signal it blocks is ended by its recheck a second late.",
@@ -1943,6 +1950,10 @@ pub(crate) static STAGE8_SIGNALFD: Explanation = Explanation {
         "`Origin::encode_signalfd` puts a field at the wrong offset of `signalfd_siginfo`.",
         "`sys_signalfd4` checks the flags before it reads the mask, or makes a new descriptor \
          when it was handed one to change.",
+        "The host stopped the emulator between the send and the waiter's return in all three \
+         attempts: the guest's clock runs on while it is stopped, so the waiter comes back as \
+         late as the stop was long. One stop spoils one attempt, and the attempt lines show the \
+         lateness each time.",
     ],
     see: "kernel/src/fs/signalfd_check.rs; kernel/src/fs/signalfd.rs; \
           kernel/src/syscall/signalfd.rs; kernel/src/syscall/signal.rs; \

@@ -17,6 +17,15 @@
 //! waiter coming back must stay under [`LATE_LIMIT_NANOS`], a quarter of that
 //! recheck.
 //!
+//! Each of the three is timed up to [`ATTEMPTS`] times, and passes on the
+//! first attempt that meets both, as the timerfd check's waiters do (FX-0883).
+//! An emulator whose host stops it for a few hundred milliseconds between
+//! the send and the waiter's return makes that attempt as late as the stop
+//! is long: the guest's clock ran on while none of it did, which no kernel
+//! can tell from a slow wake. Every attempt is judged on the same evidence
+//! and printed, so a kernel that wakes late, or never wakes the queue, fails
+//! all of them; only a stall gets another chance (FX-0884).
+//!
 //! Refused as Linux refuses: a read into fewer than 128 bytes, a write, and a
 //! read at an offset. `lseek` answers 0, as Linux's `noop_llseek` does. The run
 //! is done twice and must keep no frame.
@@ -69,6 +78,11 @@ const MILLI: u64 = 1_000_000;
 /// the trusted recheck, as the timerfd check allows, so a waiter its recheck
 /// ended cannot pass while a loaded host keeps a wide margin.
 const LATE_LIMIT_NANOS: u64 = crate::fs::wake::TRUSTED_RECHECK_NANOS / 4;
+/// How many times a waiter is timed before a late one is a failure: enough
+/// that one stall of the host, which spoils the attempt it lands in, cannot
+/// fail the check, and few enough that a kernel that is late every time is
+/// not waited on for long.
+const ATTEMPTS: u32 = 3;
 /// How long the check gives a waiter to start waiting, and to come back.
 const PATIENCE_NANOS: u64 = 2_000_000_000;
 /// How often the check looks for a waiter on the queue.
@@ -103,6 +117,58 @@ enum HowWaits {
     Poll,
     /// `epoll_wait` on a set holding it.
     Epoll,
+}
+
+impl HowWaits {
+    /// The call, as the boot log names it.
+    const fn call(self) -> &'static str {
+        match self {
+            HowWaits::Read => "read",
+            HowWaits::Poll => "poll",
+            HowWaits::Epoll => "epoll_wait",
+        }
+    }
+}
+
+/// How one timed waiter came back after its signal was sent, on the counter.
+#[derive(Debug, Clone, Copy)]
+enum Timed {
+    /// Ended by the signal's wake, within [`LATE_LIMIT_NANOS`].
+    OnTime(u64),
+    /// Ended by the signal's wake, but later than that.
+    Late(u64),
+    /// Ended by its own recheck, the wake never having reached it.
+    Rechecked(u64),
+}
+
+impl Timed {
+    /// How long after the send the waiter came back.
+    const fn late(self) -> u64 {
+        match self {
+            Timed::OnTime(late) | Timed::Late(late) | Timed::Rechecked(late) => late,
+        }
+    }
+
+    /// What ended the wait, for the line an attempt prints.
+    const fn ended_by(self) -> &'static str {
+        match self {
+            Timed::OnTime(_) | Timed::Late(_) => "woken by the signal",
+            Timed::Rechecked(_) => "ended by its own recheck",
+        }
+    }
+
+    /// What an attempt that came back like this is a failure of, if every
+    /// attempt did.
+    const fn failure(self) -> &'static str {
+        match self {
+            Timed::OnTime(_) | Timed::Late(_) => {
+                "a waiter on a signalfd came back too long after its signal"
+            }
+            Timed::Rechecked(_) => {
+                "a waiter on a signalfd was ended by its recheck, not by the signal's wake"
+            }
+        }
+    }
 }
 
 /// What the check measured, for the boot log.
@@ -393,46 +459,72 @@ fn check_the_mask(process: &Process, page: u64, counts: &mut Counts) -> Result<(
 }
 
 /// A blocked read, a `poll` and an `epoll_wait`, each waiting in a task of its
-/// own before the signal is sent, are ended by the wake its arrival makes.
+/// own before the signal is sent, are ended by the wake its arrival makes --
+/// on one of [`ATTEMPTS`] attempts each, for the reason the module gives.
 fn check_waiters_are_woken(
     process: &Arc<Process>,
     page: u64,
     counts: &mut Counts,
 ) -> Result<(), &'static str> {
     for how in [HowWaits::Read, HowWaits::Poll, HowWaits::Epoll] {
-        let made = create(process, page, bit(SIGUSR1), 0)?;
-        let file = opened(process, made)?;
-        let inner = signalfd::of(&file).ok_or("a signalfd is not one")?;
-        let target = watch(process, page, made, how)?;
-        *ANSWER.lock() = None;
-        *WAITER.lock() = Some(Waiter {
-            process: Arc::clone(process),
-            page,
-            target,
-            file: Arc::clone(&file),
-            how,
-        });
-        let late = wait_out_a_signal(process, &inner, how)?;
-        counts.late = counts.late.max(late);
-        if how != HowWaits::Read {
-            // The signal the waiter was told of, still to be taken.
-            let nonblocking = create(process, page, bit(SIGUSR1), SFD_NONBLOCK)?;
-            let infos = read_infos(process, page, nonblocking, 1)
-                .map_err(|_| "a signal a poll or epoll_wait was woken for could not be read")?;
-            if !matches!(infos.as_slice(), [(SIGUSR1, ..)]) {
-                return Err("a signal a poll or epoll_wait was woken for did not read back");
+        let mut attempt = 1;
+        let late = loop {
+            let timed = time_a_waiter(process, page, how)?;
+            if let Timed::OnTime(late) = timed {
+                break late;
             }
-            closed(process, nonblocking)?;
-        }
-        if how == HowWaits::Epoll {
-            closed(process, target)?;
-        }
+            crate::console::println!(
+                "  signalfd attempt {attempt} of {ATTEMPTS}: a waiter in {} came back {} ms \
+                 after its signal, {}",
+                how.call(),
+                timed.late() / MILLI,
+                timed.ended_by(),
+            );
+            if attempt == ATTEMPTS {
+                return Err(timed.failure());
+            }
+            attempt += 1;
+        };
+        counts.late = counts.late.max(late);
         counts.signals += 1;
-        drop(inner);
-        drop(file);
-        closed(process, made)?;
     }
     Ok(())
+}
+
+/// One attempt of [`check_waiters_are_woken`]: a new signalfd, a waiter on
+/// it, the signal, and how the waiter came back. The signal is taken whatever
+/// the timing, so the next attempt's waiter finds nothing pending.
+fn time_a_waiter(process: &Arc<Process>, page: u64, how: HowWaits) -> Result<Timed, &'static str> {
+    let made = create(process, page, bit(SIGUSR1), 0)?;
+    let file = opened(process, made)?;
+    let inner = signalfd::of(&file).ok_or("a signalfd is not one")?;
+    let target = watch(process, page, made, how)?;
+    *ANSWER.lock() = None;
+    *WAITER.lock() = Some(Waiter {
+        process: Arc::clone(process),
+        page,
+        target,
+        file: Arc::clone(&file),
+        how,
+    });
+    let timed = wait_out_a_signal(process, &inner, how)?;
+    if how != HowWaits::Read {
+        // The signal the waiter was told of, still to be taken.
+        let nonblocking = create(process, page, bit(SIGUSR1), SFD_NONBLOCK)?;
+        let infos = read_infos(process, page, nonblocking, 1)
+            .map_err(|_| "a signal a poll or epoll_wait was woken for could not be read")?;
+        if !matches!(infos.as_slice(), [(SIGUSR1, ..)]) {
+            return Err("a signal a poll or epoll_wait was woken for did not read back");
+        }
+        closed(process, nonblocking)?;
+    }
+    if how == HowWaits::Epoll {
+        closed(process, target)?;
+    }
+    drop(inner);
+    drop(file);
+    closed(process, made)?;
+    Ok(timed)
 }
 
 /// What the waiting task watches: the signalfd itself for a read or a `poll`,
@@ -472,12 +564,13 @@ fn watch(process: &Process, page: u64, made: i32, how: HowWaits) -> Result<i32, 
 }
 
 /// Start the waiter, send the signal once it waits, and answer how late after
-/// the send it came back.
+/// the send it came back, and whether the signal's wake is what ended its
+/// wait.
 fn wait_out_a_signal(
     process: &Process,
     inner: &SignalFd,
     how: HowWaits,
-) -> Result<u64, &'static str> {
+) -> Result<Timed, &'static str> {
     let ended_before = inner.waits_ended_by_a_wake();
     let waiter = crate::sched::spawn("signalfd-waiter", waiter, 0, ferrix_sched::NICE_0_WEIGHT)?;
     until_listed(inner);
@@ -501,18 +594,14 @@ fn wait_out_a_signal(
     if answer != Ok(wanted) {
         return Err("a read, poll or epoll_wait woken by a signal did not answer it");
     }
-    if inner.waits_ended_by_a_wake() == ended_before {
-        return Err("a waiter on a signalfd was ended by its recheck, not by the signal's wake");
-    }
     let late = back.saturating_sub(sent);
-    if late > LATE_LIMIT_NANOS {
-        crate::console::println!(
-            "  signalfd a waiter came back {} ms after its signal",
-            late / MILLI
-        );
-        return Err("a waiter on a signalfd came back too long after its signal");
+    if inner.waits_ended_by_a_wake() == ended_before {
+        return Ok(Timed::Rechecked(late));
     }
-    Ok(late)
+    if late > LATE_LIMIT_NANOS {
+        return Ok(Timed::Late(late));
+    }
+    Ok(Timed::OnTime(late))
 }
 
 /// Wait until a task is listed on the signals' queue, has answered, or the

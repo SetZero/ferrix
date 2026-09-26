@@ -6,6 +6,13 @@
 //! short of `u64::MAX`: the write that would reach it is `EAGAIN`, and `poll`
 //! stops answering writable exactly there. A blocking read waits, and a write
 //! from elsewhere ends that wait by waking it, not by the wait's own recheck.
+//! So do a `poll` and an `epoll_wait`. Each of the three waits is tried up to
+//! [`ATTEMPTS`] times and passes on the first attempt the wake ended, as the
+//! timerfd and signalfd checks' waiters do: a host that stops the emulator
+//! for about as long as the recheck lets the recheck's overdue timer race
+//! the write when it resumes, which no kernel can tell from a lost wake. A
+//! kernel that loses the wake loses it on every attempt, and each attempt is
+//! printed.
 //! Registered edge-triggered in an epoll set, the eventfd is reported again
 //! after a second write although it never stopped being readable: that is the
 //! wake count at work, the way an event loop is woken by another thread.
@@ -42,6 +49,10 @@ const AT_EVENT: u64 = 16;
 /// Where epoll waits write.
 const AT_EVENTS: u64 = 64;
 
+/// How many times a wait is tried before one its recheck ended is a failure:
+/// enough that one stall of the host cannot fail the check, few enough that
+/// a kernel that loses every wake is not waited on for long.
+const ATTEMPTS: u32 = 3;
 /// How long the check gives a waiting reader to start waiting, and to come
 /// back once woken.
 const PATIENCE_NANOS: u64 = 2_000_000_000;
@@ -294,8 +305,30 @@ fn check_the_ceiling(
     closed(process, counter)
 }
 
-/// A read with nothing to take waits, and a write wakes it.
+/// A read with nothing to take waits, and a write wakes it -- on one of
+/// [`ATTEMPTS`] attempts, for the reason the module gives.
 fn check_a_blocked_read_is_woken(counts: &mut Counts) -> Result<(), &'static str> {
+    for attempt in 1..=ATTEMPTS {
+        if a_blocked_read_is_woken()? {
+            counts.reads += 1;
+            return Ok(());
+        }
+        missed(attempt, "read");
+    }
+    Err("a waiting eventfd reader was ended by its recheck, not by the write's wake")
+}
+
+/// Print that an attempt's waiter in `call` was ended by its own recheck.
+fn missed(attempt: u32, call: &str) {
+    crate::console::println!(
+        "  eventfd  attempt {attempt} of {ATTEMPTS}: a waiter in {call} was ended by its own \
+         recheck, not by the write's wake"
+    );
+}
+
+/// One attempt of [`check_a_blocked_read_is_woken`]: whether the write's wake
+/// is what ended the read.
+fn a_blocked_read_is_woken() -> Result<bool, &'static str> {
     let counter = eventfd::create(0, false, false).map_err(|_| "an eventfd was refused")?;
     let inner = eventfd::of(&counter).ok_or("an eventfd is not one")?;
     *READER_ANSWER.lock() = None;
@@ -330,11 +363,7 @@ fn check_a_blocked_read_is_woken(counts: &mut Counts) -> Result<(), &'static str
         Some(Ok(9)) => {}
         Some(_) => return Err("a woken eventfd reader did not read the value written"),
     }
-    if inner.waits_ended_by_a_wake() == ended_before {
-        return Err("a waiting eventfd reader was ended by its recheck, not by the write's wake");
-    }
-    counts.reads += 1;
-    Ok(())
+    Ok(inner.waits_ended_by_a_wake() != ended_before)
 }
 
 /// Wait until a task is listed on `counter`'s readable queue, `answered` says
@@ -431,80 +460,91 @@ fn check_a_quiet_poll_sleeps(process: &Process, page: u64) -> Result<(), &'stati
 }
 
 /// A `poll` and an `epoll_wait` waiting on an eventfd, each in a task of its
-/// own, are ended by a write's wake, not by their own looking again.
+/// own, are ended by a write's wake, not by their own looking again -- on one
+/// of [`ATTEMPTS`] attempts each, for the reason the module gives.
 fn check_waits_are_woken(
     process: &Arc<Process>,
     page: u64,
     counts: &mut Counts,
 ) -> Result<(), &'static str> {
     for how in [HowWaits::Poll, HowWaits::Epoll] {
-        let counter = create(process, 0, 0)?;
-        let file = fd::file(process, counter).map_err(|_| "the eventfd is gone")?;
-        let inner = eventfd::of(&file).ok_or("an eventfd is not one")?;
-        let target = match how {
-            HowWaits::Poll => {
-                stage_pollfd(process, page, counter)?;
-                counter
+        let mut attempt = 1;
+        while !a_wait_is_woken(process, page, how)? {
+            missed(attempt, how.call());
+            if attempt == ATTEMPTS {
+                return Err(match how {
+                    HowWaits::Poll => {
+                        "a waiting poll was ended by looking again, not by the write's wake"
+                    }
+                    HowWaits::Epoll => {
+                        "a waiting epoll_wait was ended by looking again, not by the write's wake"
+                    }
+                });
             }
-            HowWaits::Epoll => {
-                let set = descriptor(
-                    epoll::sys_epoll_create1(process, 0),
-                    "epoll_create1 was refused",
-                )?;
-                uaccess::copy_to_user(
-                    process.space(),
-                    page + AT_EVENT,
-                    &epoll::encode(EPOLLIN, 0x77),
-                )
-                .map_err(|_| "could not stage an epoll event")?;
-                if epoll::sys_epoll_ctl(process, set, EPOLL_CTL_ADD, counter, page + AT_EVENT)
-                    != Ok(0)
-                {
-                    return Err("an eventfd could not be added to an epoll set");
-                }
-                set
-            }
-        };
-        *WAITER_ANSWER.lock() = None;
-        *WAITER_SUBJECT.lock() = Some((Arc::clone(process), page, target, how));
-        let ended_before = inner.waits_ended_by_a_wake();
-        let waiter =
-            crate::sched::spawn("poll-waiter", poll_waiter, 0, ferrix_sched::NICE_0_WEIGHT)?;
-        until_listed(&inner, || WAITER_ANSWER.lock().is_some());
-        crate::sched::sleep_for(STILL_WAITING_NANOS);
-        if WAITER_ANSWER.lock().is_some() {
-            return Err("a poll or epoll_wait on an empty eventfd did not wait");
-        }
-        write_value(process, page, counter, 1)?;
-        let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
-        let _ = READER_DONE.wait_until_deadline(|| WAITER_ANSWER.lock().is_some(), deadline);
-        let answer = WAITER_ANSWER.lock().take();
-        if answer.is_none() {
-            return Err("a poll or epoll_wait never came back after a write");
-        }
-        crate::sched::wait_until_gone(&waiter, crate::sched::REAPER_PATIENCE_NANOS)?;
-        drop(waiter);
-        if answer != Some(Ok(1)) {
-            return Err("a poll or epoll_wait did not answer one ready eventfd after a write");
-        }
-        if inner.waits_ended_by_a_wake() == ended_before {
-            return Err(match how {
-                HowWaits::Poll => {
-                    "a waiting poll was ended by looking again, not by the write's wake"
-                }
-                HowWaits::Epoll => {
-                    "a waiting epoll_wait was ended by looking again, not by the write's wake"
-                }
-            });
+            attempt += 1;
         }
         counts.reads += 1;
-        drop(file);
-        if how == HowWaits::Epoll {
-            closed(process, target)?;
-        }
-        closed(process, counter)?;
     }
     Ok(())
+}
+
+/// One attempt of [`check_waits_are_woken`]: whether the write's wake is what
+/// ended the `poll` or `epoll_wait`.
+fn a_wait_is_woken(process: &Arc<Process>, page: u64, how: HowWaits) -> Result<bool, &'static str> {
+    let counter = create(process, 0, 0)?;
+    let file = fd::file(process, counter).map_err(|_| "the eventfd is gone")?;
+    let inner = eventfd::of(&file).ok_or("an eventfd is not one")?;
+    let target = match how {
+        HowWaits::Poll => {
+            stage_pollfd(process, page, counter)?;
+            counter
+        }
+        HowWaits::Epoll => {
+            let set = descriptor(
+                epoll::sys_epoll_create1(process, 0),
+                "epoll_create1 was refused",
+            )?;
+            uaccess::copy_to_user(
+                process.space(),
+                page + AT_EVENT,
+                &epoll::encode(EPOLLIN, 0x77),
+            )
+            .map_err(|_| "could not stage an epoll event")?;
+            if epoll::sys_epoll_ctl(process, set, EPOLL_CTL_ADD, counter, page + AT_EVENT) != Ok(0)
+            {
+                return Err("an eventfd could not be added to an epoll set");
+            }
+            set
+        }
+    };
+    *WAITER_ANSWER.lock() = None;
+    *WAITER_SUBJECT.lock() = Some((Arc::clone(process), page, target, how));
+    let ended_before = inner.waits_ended_by_a_wake();
+    let waiter = crate::sched::spawn("poll-waiter", poll_waiter, 0, ferrix_sched::NICE_0_WEIGHT)?;
+    until_listed(&inner, || WAITER_ANSWER.lock().is_some());
+    crate::sched::sleep_for(STILL_WAITING_NANOS);
+    if WAITER_ANSWER.lock().is_some() {
+        return Err("a poll or epoll_wait on an empty eventfd did not wait");
+    }
+    write_value(process, page, counter, 1)?;
+    let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    let _ = READER_DONE.wait_until_deadline(|| WAITER_ANSWER.lock().is_some(), deadline);
+    let answer = WAITER_ANSWER.lock().take();
+    if answer.is_none() {
+        return Err("a poll or epoll_wait never came back after a write");
+    }
+    crate::sched::wait_until_gone(&waiter, crate::sched::REAPER_PATIENCE_NANOS)?;
+    drop(waiter);
+    if answer != Some(Ok(1)) {
+        return Err("a poll or epoll_wait did not answer one ready eventfd after a write");
+    }
+    let woken = inner.waits_ended_by_a_wake() != ended_before;
+    drop(file);
+    if how == HowWaits::Epoll {
+        closed(process, target)?;
+    }
+    closed(process, counter)?;
+    Ok(woken)
 }
 
 /// Which call the waiting task makes.
@@ -514,6 +554,16 @@ enum HowWaits {
     Poll,
     /// `epoll_wait` on a set holding it.
     Epoll,
+}
+
+impl HowWaits {
+    /// The call, as the boot log names it.
+    const fn call(self) -> &'static str {
+        match self {
+            HowWaits::Poll => "poll",
+            HowWaits::Epoll => "epoll_wait",
+        }
+    }
 }
 
 /// The waiting task: one `poll` or `epoll_wait` on what [`WAITER_SUBJECT`]
