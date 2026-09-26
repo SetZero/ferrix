@@ -1216,6 +1216,15 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 seat.keyboard().pressed(),
                 seat.keyboard().modifiers(),
             );
+        } else if let Some(layer) = Focus::interactive_layer(&slots) {
+            // A launcher or a menu on a layer above the windows that asked
+            // for the keyboard has it while it is up.
+            focus.follow(
+                Some(layer),
+                &mut slots,
+                seat.keyboard().pressed(),
+                seat.keyboard().modifiers(),
+            );
         } else {
             focus.follow_layout(
                 &state,
