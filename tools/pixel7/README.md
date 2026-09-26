@@ -80,10 +80,17 @@ bridge (below):
 ```sh
 cd /data/local/tmp/ferrix-vm && /apex/com.android.virt/bin/crosvm run \
     --disable-sandbox -m 4096 --cpus 8 -s crosvm.sock --serial type=stdout,num=1,stdin \
-    --gpu 'backend=2d,displays=[[mode=windowed[1080,2400]]]' --android-display-service ferrix \
+    --gpu 'backend=2d,displays=[[mode=windowed[1080,2400]]]' --android-display-service cid:70000 \
     --input 'single-touch[path=touch.sock,width=1080,height=2400]' \
     --input 'keyboard[path=keyboard.sock]' --input 'mouse[path=mouse.sock]' ferrix.Image
 ```
+
+With `desktop.Image` beside it, the app boots that instead, with
+`-p ferrix.checks=skip`; with `chromium.img` too
+(`scripts/fetch/fetch-chromium-arm64.sh`, pushed by
+`build-desktop.sh --chrome --push`), it adds three blank 1 MiB disks and then
+the volume, so that the volume is `vdd`, the first disk Ferrix mounts at
+`/data`.
 
 The 16550 takes crosvm's standard input too, the su process's, which the app
 keeps open for the run: a line it writes there reaches the guest's shell on
@@ -123,18 +130,24 @@ The guest's display is the phone's, upright: its full size in pixels
 (1080×2400 on this Pixel 7), measured when the VM starts. Once it is there,
 the VM opens on it, with the menu floating in a corner, and the menu switches
 between the screen and the console. How it gets there, all of it tried on
-this phone (Android 17, Magisk):
+this phone (Android 17 CP3A.260905.009, Magisk):
 
-1. With `--gpu … --android-display-service ferrix`, crosvm makes a binder,
-   `android.crosvm.ICrosvmAndroidDisplayService`, and gives it to
-   `android.system.virtualizationservice` (`setDisplayService`), which hands
-   it on to root only.
+1. With `--gpu … --android-display-service cid:70000`, crosvm makes a
+   binder, `android.crosvm.ICrosvmAndroidDisplayService`, and gives it to
+   `android.system.virtualizationservice` (`setDisplayService`) under that
+   cid, and virtualizationservice hands it on to root only. Before
+   CP3A.260905.009 the name was free and the service kept one binder for
+   everyone; now crosvm refuses a name without `cid:`. 70000 is above the
+   cids virtualizationservice gives its own VMs.
 2. So a root process fetches it: the app's own `Bridge` class, run by the su
-   script as `CLASSPATH=<this APK>:<the Terminal app's APK> app_process
-   /system/bin dev.ferrix.launcher.Bridge …`. The Terminal app's APK carries
-   `IVirtualizationServiceInternal`'s generated classes. virtualizationservice
+   script as `CLASSPATH=<this APK> app_process /system/bin
+   dev.ferrix.launcher.Bridge …`, which calls
+   `IVirtualizationServiceInternal.waitDisplayService(70000)` by its
+   transaction code, 17, the one the Terminal app's own inlined call uses
+   (the Terminal app's APK no longer carries callable stubs). The service
    keeps the last binder it was given even after that crosvm died, so the
-   bridge asks until the one it gets answers a ping.
+   bridge takes only one that answers a ping and is not the one held
+   before this run's crosvm started.
 3. The bridge hands it to the app through the app's exported provider
    (`GuestLink`, which takes calls from root only and for the current run's
    token), by the activity manager's `getContentProviderExternal` and the

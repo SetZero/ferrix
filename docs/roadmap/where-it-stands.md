@@ -119,8 +119,9 @@ Stage 21 is bare metal with a card of Ferrix's own, and stage 22 is Steam,
 whose 32-bit x86 ABI is under way (`docs/I386.md`): I1, a 32-bit program
 through `int $0x80`, is on `main`. Ferrix also boots on the customer's Pixel
 7: natively on all eight cores to `FERRIX-BOOT-OK stages 1-12`, and as a guest
-of the phone's own crosvm from a launcher app. A desktop in that VM and a USB
-device driver for the native boot are under way. The kernel's certification
+of the phone's own crosvm from a launcher app, which shows a desktop in that
+VM with Chromium on it (2026-09-27); during a native boot a USB serial port
+streams the kernel log (2026-09-26). The kernel's certification
 set (`docs/certification/`) closed F-23, F-31 and F-35 on 2026-09-26: fallible
 allocation, side-channel defences with KASLR, and job quotas.
 
