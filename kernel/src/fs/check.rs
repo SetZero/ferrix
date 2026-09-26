@@ -772,6 +772,7 @@ fn check_the_calls(process: &Process) -> Result<u64, &'static str> {
         .and_then(|bytes| check_a_new_file_is_dated_now().map(|()| bytes))
         .and_then(|bytes| check_sendfile_copies_a_file(process, page).map(|sent| bytes + sent))
         .and_then(|bytes| check_splice_moves_bytes(process, page).map(|moved| bytes + moved))
+        .and_then(|bytes| check_splice_keeps_what_the_output_refused(process, page).map(|()| bytes))
         .and_then(|bytes| {
             check_copy_file_range_copies_a_file(process, page).map(|copied| bytes + copied)
         })
@@ -1784,6 +1785,96 @@ fn check_splice_refuses(process: &Process, page: u64, fds: Spliced) -> Result<()
         Errno::EINVAL,
         "splice took a flag it does not know",
     )
+}
+
+/// `splice` out of a pipe leaves in the pipe what the output refused, as
+/// Linux does -- measured on a 7.0 host: into a full non-blocking socket it
+/// is `EAGAIN` and the pipe still holds all six bytes. Then into the same
+/// socket with room for two: what the socket did not take is still at the
+/// pipe's front, in order. Linux would take all six there: it charges a
+/// socket by its buffers rather than its bytes, and into a full socket
+/// whose peer had read 20000 bytes it spliced all 60006 a pipe held. So
+/// what is checked is that the socket took some and not all, so that the
+/// path ran, and that no byte was lost or moved.
+fn check_splice_keeps_what_the_output_refused(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    // Non-blocking, so a pipe that lost its bytes answers the read below
+    // with EAGAIN rather than hanging the boot.
+    answers(
+        pipe::sys_pipe2(process, page + AT_FDS, O_NONBLOCK),
+        0,
+        "pipe2 was refused",
+    )?;
+    let (reader, writer) = pair(process, page)?;
+    let (one, other) = stream_socket_pair(process, page)?;
+    uaccess::copy_to_user(process.space(), page + AT_OFFSET, &1_u32.to_le_bytes())
+        .map_err(|_| "could not stage FIONBIO's argument")?;
+    answers(
+        fd::sys_ioctl(process, one, FIONBIO, page + AT_OFFSET),
+        0,
+        "FIONBIO on a socket was refused",
+    )?;
+    let mut full = false;
+    for _ in 0..1024 {
+        if file::sys_write(process, one, page, PAGE_SIZE) == Err(Errno::EAGAIN) {
+            full = true;
+            break;
+        }
+    }
+    if !full {
+        return Err("a non-blocking socket never filled");
+    }
+    answers(
+        file::sys_write(process, writer, page + AT_DATA, 6),
+        6,
+        "a write into a pipe came back short",
+    )?;
+    refuses(
+        pipe::sys_splice(process, reader, 0, one, 0, 6, 0),
+        Errno::EAGAIN,
+        "splice from a pipe into a full non-blocking socket was not EAGAIN",
+    )?;
+    answers(
+        file::sys_read(process, reader, page + AT_BACK, 64),
+        6,
+        "splice into a socket that took nothing lost bytes from the pipe",
+    )?;
+    if read_back(process, page + AT_BACK, 6)? != DATA.get(..6).unwrap_or_default() {
+        return Err("splice into a socket that took nothing changed what the pipe held");
+    }
+    answers(
+        file::sys_write(process, writer, page + AT_DATA, 6),
+        6,
+        "a write into a pipe came back short",
+    )?;
+    answers(
+        file::sys_read(process, other, page + AT_BACK, 2),
+        2,
+        "a full socket's peer would not read",
+    )?;
+    let taken = pipe::sys_splice(process, reader, 0, one, 0, 6, 0)
+        .map_err(|_| "splice from a pipe into a socket with room for part was refused")?;
+    if taken == 0 || taken >= 6 {
+        return Err("splice into a socket with room for part did not take part");
+    }
+    answers(
+        file::sys_read(process, reader, page + AT_BACK, 64),
+        6 - taken,
+        "splice into a socket that took part lost the rest from the pipe",
+    )?;
+    if read_back(process, page + AT_BACK, 6 - taken)? != DATA.get(taken..6).unwrap_or_default() {
+        return Err("splice into a socket that took part left the rest out of order");
+    }
+    for fd in [reader, writer, one, other] {
+        answers(
+            fd::sys_close(process, fd),
+            0,
+            "a descriptor the splice check used would not close",
+        )?;
+    }
+    Ok(())
 }
 
 /// `copy_file_range` copies a file as `sendfile` does, with and without an

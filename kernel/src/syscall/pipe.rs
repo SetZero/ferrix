@@ -30,8 +30,9 @@
 //! Both go through a kernel buffer as `sendfile` does. Between two pipes
 //! `splice` moves bytes under both pipes' locks, so none is ever out of both;
 //! into a pipe it reads no more than the pipe has room for, so a call never
-//! waits on itself; out of a pipe it reads what is there once, and loses what
-//! an output refuses part-way, as `sendfile` from a pipe does. GNU grep is why
+//! waits on itself; out of a pipe it reads what is there once, and puts back
+//! at the pipe's front what the output refuses, as Linux leaves it in the
+//! pipe. GNU grep is why
 //! `splice` is here: writing to `/dev/null` from a pipe, it drains the rest of
 //! its input with `splice` and falls back to `read` only on `EINVAL`, so an
 //! `ENOSYS` was an error, and curl's `configure` concluded there was no grep.
@@ -434,9 +435,14 @@ fn position(file: &OpenFile, start: Option<i64>) -> Result<Option<u64>, Errno> {
 /// One `splice` out of a pipe: what the pipe holds now, up to `len` and a
 /// chunk, read once and written to `output` at `at` or its position.
 ///
-/// If the output refuses part-way, the bytes it did not take are lost, where
-/// Linux would have left them in the pipe; the pipe is read once per call,
-/// so that is at most one chunk, and only when the output fails.
+/// What the output does not take goes back to the front of the pipe
+/// (`Inode::unread_stream`), as Linux leaves it there -- measured on a 7.0
+/// host: a splice of six bytes into a full non-blocking socket is `EAGAIN`
+/// and the pipe still holds six, and of 200 bytes into a file that
+/// `RLIMIT_FSIZE` holds to 100 is 100, the pipe still holding the other
+/// 100, and the next splice `EFBIG` with them still there. This used to lose
+/// them. The pipe cannot keep the order if a second reader of it takes
+/// bytes in between, which Linux's pipe lock would prevent.
 fn out_of_a_pipe(
     input: &OpenFile,
     output: &OpenFile,
@@ -448,6 +454,7 @@ fn out_of_a_pipe(
     let got = fs::pipe::read(input, &mut buffer, nonblock)?;
     let chunk = buffer.get(..got).ok_or(Errno::EIO)?;
     let mut put = 0;
+    let mut refused = None;
     while put < chunk.len() {
         let rest = chunk.get(put..).unwrap_or_default();
         let wrote = match at.as_deref() {
@@ -457,13 +464,22 @@ fn out_of_a_pipe(
         match wrote {
             Ok(0) => break,
             Ok(wrote) => put += wrote,
-            Err(errno) => return partial(put, errno),
+            Err(errno) => {
+                refused = Some(errno);
+                break;
+            }
         }
     }
+    input
+        .io()
+        .unread_stream(chunk.get(put..).unwrap_or_default());
     if let Some(at) = at {
         *at = at.saturating_add(put as u64);
     }
-    Ok(put)
+    match refused {
+        Some(errno) => partial(put, errno),
+        None => Ok(put),
+    }
 }
 
 /// One `splice` into a pipe: no more than the pipe has room for, so the call
