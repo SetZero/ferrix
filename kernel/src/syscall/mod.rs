@@ -9,7 +9,7 @@
 //! One function, [`dispatch`], agreed with the stage 6 owner so that neither
 //! side has to know the other's job. Their trap vector saves registers, fills
 //! a [`SyscallArgs`] from the frame, and calls `crate::trap::system_call`,
-//! which `main.rs` points here. It returns an [`Outcome`] which their code
+//! which `main.rs` points at [`dispatch_with`]. It returns an [`Outcome`] which their code
 //! applies. That puts every register convention on their side of the line and
 //! every ABI decision on this one. Both types are the core's
 //! (`crate::trap`), and the core reaches this function only through what was
@@ -35,9 +35,9 @@
 //! range sent to the native ABI ([`native`]), and a Linux number decoded
 //! onto its [`Syscall`] with the clamp that keeps a mispredicted bound from
 //! reaching past the table. What a decoded Linux call does is the Linux
-//! personality's, which is above the item; it registers its dispatcher here
-//! as a [`Personality`] (`linux.rs`), and this file names none of its
-//! modules. Without one registered every Linux call is `ENOSYS`.
+//! personality's, which is above the item: `main.rs` composes it with
+//! [`dispatch_with`] as a [`Personality`] (`linux.rs`), and this file names
+//! none of its modules.
 //!
 //! The `mod` declarations below are where the personality's modules sit in
 //! the tree, not calls into them: `scripts/check-item-boundary.py` counts
@@ -88,7 +88,6 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use ferrix_linux_abi::errno::{self, Errno};
 use ferrix_linux_abi::nr::Syscall;
-use ferrix_sync::Once;
 
 use crate::arch;
 use crate::console::println;
@@ -99,7 +98,7 @@ use crate::sched;
 /// where they always have.
 pub(crate) use crate::trap::{Outcome, SyscallArgs};
 
-/// Answer one system call.
+/// Answer one system call, with `P` answering the Linux calls.
 ///
 /// `regs` is the caller's saved user registers, which a fork child resumes
 /// from; `None` from a kernel caller, which cannot fork.
@@ -108,7 +107,15 @@ pub(crate) use crate::trap::{Outcome, SyscallArgs};
 /// same as Linux. There is nothing above this to catch a failure — the caller
 /// is a trap vector with a program waiting on it — so every path here has to
 /// end in a value.
-pub(crate) fn dispatch(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Outcome {
+///
+/// Generic over the personality rather than holding it in a pointer: `main.rs`
+/// registers `dispatch_with::<Linux>` as the core's entry, so the item's code
+/// names no module of the personality, and a Linux call pays the one indirect
+/// call the core's entry costs and no second one.
+pub(crate) fn dispatch_with<P: Personality>(
+    args: &SyscallArgs,
+    regs: Option<&arch::UserRegs>,
+) -> Outcome {
     // The native ABI first, by range, before any Linux table is asked: the
     // two ABIs never have to agree about a number, and `arch::decode_syscall`
     // never sees one of Ferrix's own. See `native`.
@@ -119,11 +126,14 @@ pub(crate) fn dispatch(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Out
         unanswered(None, args.number);
         return Outcome::Return(Errno::ENOSYS.as_return_value());
     };
-    let Some(personality) = PERSONALITY.get() else {
-        unanswered(Some(call), args.number);
-        return Outcome::Return(Errno::ENOSYS.as_return_value());
-    };
-    personality(call, args, regs)
+    P::answer(call, args, regs)
+}
+
+/// Answer one system call as a program's is answered: through the entry the
+/// core holds (`crate::trap::system_call`), which is what the boot
+/// self-checks call so that they go the way a program's call goes.
+pub(crate) fn dispatch(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Outcome {
+    crate::trap::system_call(args, regs)
 }
 
 /// Answer a native call for the running task.
@@ -172,31 +182,16 @@ pub(crate) fn unanswered(call: Option<Syscall>, number: usize) {
 }
 
 /// What answers a Linux system call, once the item has decoded its number:
-/// the Linux personality's dispatcher, registered with
-/// [`register_personality`].
+/// the Linux personality, composed with [`dispatch_with`] by `main.rs`.
 ///
-/// `regs` as [`dispatch`] has them. The personality is above the certified
-/// item -- a compatibility obligation, the largest body of code in the kernel,
-/// none of which has to be correct for isolation to hold
-/// (`docs/certification/ITEM.md`) -- so the item keeps the way in, the
-/// decoding of the number and its Spectre clamp, and hands the decoded call
-/// on through this, rather than naming the personality's modules
-/// (`docs/certification/FINDINGS.md`, F-09).
-pub(crate) type Personality = fn(Syscall, &SyscallArgs, Option<&arch::UserRegs>) -> Outcome;
-
-/// The registered [`Personality`]. A [`Once`] rather than a lock, as the
-/// core's entry is: read on every Linux call.
-static PERSONALITY: Once<Personality> = Once::new();
-
-/// Answer the Linux calls with `personality` from now on. The first
-/// registration stands; `main.rs` makes it before anything can enter user
-/// mode.
-pub(crate) fn register_personality(personality: Personality) {
-    let _ = PERSONALITY.call_once(|| personality);
-}
-
-/// Whether a Linux personality is registered: the boot's check before the
-/// first program.
-pub(crate) fn has_personality() -> bool {
-    PERSONALITY.get().is_some()
+/// The personality is above the certified item -- a compatibility obligation,
+/// the largest body of code in the kernel, none of which has to be correct for
+/// isolation to hold (`docs/certification/ITEM.md`) -- so the item keeps the
+/// way in, the decoding of the number and its Spectre clamp, and hands the
+/// decoded call on through this trait, rather than naming the personality's
+/// modules (`docs/certification/FINDINGS.md`, F-09).
+pub(crate) trait Personality {
+    /// Answer `call`, which the item decoded from `args`; `regs` as
+    /// [`dispatch_with`] has them.
+    fn answer(call: Syscall, args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Outcome;
 }

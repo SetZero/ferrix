@@ -143,9 +143,9 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     syscall::deliver::install();
     // The way in likewise: the core's system call path answers through
     // whatever is registered with it, and the dispatcher is the item's. What
-    // a Linux call does is the personality's, registered with the item.
-    trap::set_syscall_entry(syscall::dispatch);
-    syscall::linux::install();
+    // a Linux call does is the personality's, composed with the dispatcher
+    // here, at compile time, so that it costs no second indirect call.
+    trap::set_syscall_entry(syscall::dispatch_with::<syscall::linux::Linux>);
     println!("  traps    vectors installed");
 
     let stats = bring_up_memory(view);
@@ -2083,8 +2083,6 @@ fn register_load(view: &BootView<'_>) {
         Some("no board support registered a device binding")
     } else if !power::has_boot_mode() {
         Some("no board support registered where reboot's word goes")
-    } else if !syscall::has_personality() {
-        Some("no personality registered to answer Linux's system calls")
     } else if syscall::native::processes().is_none() {
         Some("nothing registered to make and start a native process")
     } else {
@@ -2109,7 +2107,7 @@ fn register_load(view: &BootView<'_>) {
         "  hooks    {flushes} commits before power-off, {boards} board bindings, init's launcher, devmgr's reader and the boot mode registered"
     );
     println!(
-        "  hooks    {} native calls answered above the item, {} subsystems a quiesce waits out; Linux calls answered and native processes made by the personality",
+        "  hooks    {} native calls answered above the item, {} subsystems a quiesce waits out, native processes made by the personality",
         syscall::native::served_count(),
         syscall::native::server_count()
     );

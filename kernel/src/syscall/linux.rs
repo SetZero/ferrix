@@ -4,15 +4,16 @@
 //! core's trap path, sends the native range to the native ABI, and decodes
 //! the rest with `arch::decode_syscall` -- the architecture's table, with the
 //! Spectre clamp in front of it. What the decoded call then means is Linux's,
-//! and it is answered here: registered with the item as its
-//! [`Personality`](super::Personality) by [`install`], from `main.rs`, before
-//! anything can reach user mode.
+//! and it is answered here: [`Linux`] is the item's
+//! [`Personality`](super::Personality), composed with its dispatcher by
+//! `main.rs` at compile time, so the personality costs no indirect call of
+//! its own.
 //!
 //! Here rather than in the item because this is the personality's entry
 //! point: it names most of the personality's modules, and a dispatcher that
 //! does is the personality's, not the item's
 //! (`docs/certification/FINDINGS.md`, F-09). The item's interface to it is
-//! one function pointer.
+//! one trait with one function.
 //!
 //! # What answers today
 //!
@@ -29,9 +30,9 @@ use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{AT_FDCWD, O_CREAT, O_TRUNC, O_WRONLY};
 
 use super::{
-    attributes, credentials, epoll, eventfd, exec, family, fd, file, flock, fsctl, futex, kill,
-    limits, memfd, memory, namespace, path, poll, process, signal, signalfd, sockets, system,
-    thread, time, timerfd, unanswered,
+    Personality, attributes, credentials, epoll, eventfd, exec, family, fd, file, flock, fsctl,
+    futex, kill, limits, memfd, memory, namespace, path, poll, process, signal, signalfd, sockets,
+    system, thread, time, timerfd, unanswered,
 };
 use crate::arch;
 use crate::sched;
@@ -43,12 +44,14 @@ use crate::trap::{Outcome, SyscallArgs};
 /// in `fs/open.c`.
 const CREAT_FLAGS: u32 = O_CREAT | O_WRONLY | O_TRUNC;
 
-/// Answer Linux's system calls from now on.
-///
-/// Called once from `main.rs`, before the first program, beside the
-/// personality's own return path.
-pub(crate) fn install() {
-    super::register_personality(dispatch);
+/// The Linux personality, as the item's dispatcher is composed with it:
+/// `main.rs` registers `syscall::dispatch_with::<Linux>` as the core's entry.
+pub(crate) struct Linux;
+
+impl Personality for Linux {
+    fn answer(call: Syscall, args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Outcome {
+        dispatch(call, args, regs)
+    }
 }
 
 /// Answer one Linux system call, `call`, as the item decoded it from `args`.
