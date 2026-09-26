@@ -433,13 +433,15 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 .unwrap_or_else(std::env::temp_dir);
             let control = crate::control::Control::bind(&runtime, instance)
                 .map_err(|error| format!("hyprctl's socket: {error}"))?;
-            // The event socket beside it. A bar is the only thing that reads
-            // it, so a compositor that cannot bind it still works for
-            // everything else; the reason is said and the loop goes on.
-            match crate::control::Events::bind(control.directory()) {
-                Ok(socket) => events = Some(socket),
-                Err(error) => report(&format!("hyprix: no event socket: {error}")),
-            }
+            // The event socket beside it, refused the way the request socket
+            // is. `.socket2.sock` is a byte longer than `.socket.sock`, so an
+            // instance directory can take the one and not the other; said
+            // only in the compositor's report, that was a bar that got no
+            // events and a test that failed as if the machine were slow.
+            events = Some(
+                crate::control::Events::bind(control.directory())
+                    .map_err(|error| format!("hyprctl's event socket: {error}"))?,
+            );
             Some(control)
         }
         None => None,

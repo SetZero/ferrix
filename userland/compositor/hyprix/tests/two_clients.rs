@@ -2472,3 +2472,47 @@ fn a_small_commit_redraws_a_small_part_of_the_screen() {
          {report}"
     );
 }
+
+/// An instance directory whose `.socket.sock` just fits in `sun_path` and
+/// whose `.socket2.sock` does not -- 107 bytes and 108 -- is refused whole,
+/// as a request socket that does not fit is: a compositor that ran without
+/// its event socket gave every bar no events and said so only in its own
+/// report, which read like a test failing on a slow machine.
+#[test]
+fn an_event_socket_too_long_for_sun_path_is_refused_as_the_request_socket_is() {
+    let base = PathBuf::from("/tmp").join(format!("hyprix-sunlen-{}", std::process::id()));
+    std::fs::create_dir_all(&base).expect("a directory to work in");
+    // `<base>/<padding>/.socket2.sock` at 108 bytes, one past what fits.
+    let fixed = base.to_string_lossy().len() + "/".len() + "/.socket2.sock".len();
+    let padding = "x".repeat(108 - fixed);
+    let instance = base.join(padding);
+    assert_eq!(
+        instance
+            .join(compositor_ipc::EVENT_SOCKET)
+            .to_string_lossy()
+            .len(),
+        108
+    );
+    assert_eq!(
+        instance
+            .join(compositor_ipc::REQUEST_SOCKET)
+            .to_string_lossy()
+            .len(),
+        107,
+        "the request socket's path fits"
+    );
+    let options = Options {
+        display: base.join("wayland").to_string_lossy().into_owned(),
+        headless: Some((64, 48)),
+        deadline: Some(200),
+        instance: Some(instance.to_string_lossy().into_owned()),
+        ..Options::default()
+    };
+    let said = hyprix::run(&options);
+    let _ = std::fs::remove_dir_all(&base);
+    let error = said.expect_err("a compositor whose event socket cannot be bound does not run");
+    assert!(
+        error.contains("hyprctl's event socket") && error.contains("SUN_LEN"),
+        "{error}"
+    );
+}
