@@ -353,10 +353,22 @@ const ANIMATED_MOVING: Moving<'static> = Moving {
 /// nazuna, 2026-09-23), and whose slowest reached 5.25 s there with the
 /// host's load average near 11: a bound the 64-bit machines keep a margin
 /// under would fail it on load alone.
+///
+/// Ten times that under a TCG plugin (`FERRIX_QEMU_PLUGIN`), which slows the
+/// guest again: the coverage plugin takes one process-wide lock for every
+/// translated block it runs, and x86-64's slowest frame under it came to
+/// 8.4, 10.0 and 19.1 s in three runs on 2026-09-26, where plain `tcg` stays
+/// under the 5 s. What the bound is for -- a compositor that stopped drawing,
+/// or frames of minutes -- still fails.
 fn frame_bound(arch: Arch) -> u128 {
-    match arch {
+    let bound = match arch {
         Arch::Armv7a => 10_000_000,
         Arch::X86_64 | Arch::AArch64 => 5_000_000,
+    };
+    if std::env::var_os("FERRIX_QEMU_PLUGIN").is_some() {
+        bound * 10
+    } else {
+        bound
     }
 }
 
