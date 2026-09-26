@@ -85,6 +85,7 @@ mod native;
 mod net;
 mod noise;
 mod omz;
+mod orphans;
 mod paths;
 mod pe;
 mod ports;
@@ -353,6 +354,7 @@ OPTIONS:
 ";
 
 fn main() -> ExitCode {
+    orphans::install();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
