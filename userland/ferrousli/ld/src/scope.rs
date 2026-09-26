@@ -25,6 +25,7 @@ use crate::map;
 use crate::object::{MAX_OBJECTS, Object};
 use crate::report::Error;
 use crate::sym::{self, Found};
+use crate::sys::{self, nr};
 
 /// The longest path the loader will build for a library.
 const PATH_MAX: usize = 1024;
@@ -78,6 +79,9 @@ pub(crate) struct Scope {
     library_path: *const c_char,
     /// The copy of it [`Self::library_path`] points at.
     library_path_copy: [u8; LIBRARY_PATH_MAX],
+    /// Whether the program runs with privileges it was not started with,
+    /// which `$ORIGIN` is then not expanded for.
+    secure: bool,
     /// Bytes below the initial thread pointer occupied by static TLS, and
     /// [`TLS_SURPLUS`] kept for libraries `dlopen` brings later.
     tls_size: usize,
@@ -104,6 +108,7 @@ impl Scope {
             count: 0,
             library_path: core::ptr::null(),
             library_path_copy: [0; LIBRARY_PATH_MAX],
+            secure: false,
             tls_size: 0,
             tls_used: 0,
             tls_align: 1,
@@ -135,6 +140,12 @@ impl Scope {
             copy.copy_from_slice(value);
             self.library_path = copy.as_ptr().cast();
         }
+    }
+
+    /// Say that the program runs with privileges it was not started with
+    /// (`AT_SECURE`).
+    pub(crate) fn set_secure(&mut self, secure: bool) {
+        self.secure = secure;
     }
 
     /// How many objects are loaded.
@@ -325,6 +336,19 @@ impl Scope {
         Ok(())
     }
 
+    /// The index of the object that answers the `DT_NEEDED` `name`: the one
+    /// loaded as it, or `libc.so.6` for a name that is part of it.
+    #[must_use]
+    pub(crate) fn dependency(&self, name: *const c_char) -> Option<usize> {
+        self.find(name).or_else(|| {
+            PART_OF_LIBC
+                .iter()
+                .any(|part| same(part.as_ptr(), name))
+                .then(|| self.find(LIBC.as_ptr()))
+                .flatten()
+        })
+    }
+
     /// Whether an object with this `DT_SONAME` or load name is already here.
     #[must_use]
     fn already_loaded(&self, name: *const c_char) -> bool {
@@ -394,7 +418,7 @@ impl Scope {
         if let Some(index) = self.find(name) {
             return Ok(index);
         }
-        self.load_one(name, core::ptr::null(), page_size)?;
+        self.load_one(name, core::ptr::null(), &[], page_size)?;
         // One of glibc's split-off names is answered by `libc.so.6`, which
         // then is what was opened.
         let index = self
@@ -492,8 +516,16 @@ impl Scope {
         // walked, which is what makes this breadth-first without a queue of
         // its own.
         let mut at = 0;
+        let mut origin = [0_u8; PATH_MAX];
         while at < self.count {
             let object = *self.objects.get(at).ok_or(Error::TooManyObjects)?;
+            // Where the object's file is, for `$ORIGIN` in its run path;
+            // empty when that is not known, or not to be trusted.
+            let origin_len = if object.runpath == 0 || self.secure {
+                0
+            } else {
+                self.origin_of(at, &mut origin)
+            };
             for slot in 0..object.needed_count {
                 let offset = *object.needed.get(slot).ok_or(Error::TooManyObjects)?;
                 let name = object.name(offset).ok_or(Error::MalformedObject(
@@ -507,7 +539,12 @@ impl Scope {
                 } else {
                     object.name(object.runpath).unwrap_or(core::ptr::null())
                 };
-                self.load_one(name, runpath, page_size)?;
+                self.load_one(
+                    name,
+                    runpath,
+                    origin.get(..origin_len).unwrap_or_default(),
+                    page_size,
+                )?;
             }
             at += 1;
         }
@@ -519,6 +556,7 @@ impl Scope {
         &mut self,
         name: *const c_char,
         runpath: *const c_char,
+        origin: &[u8],
         page_size: usize,
     ) -> Result<(), Error> {
         // A name with a slash is a path and is used as it is; one without is
@@ -531,15 +569,15 @@ impl Scope {
             if self.already_loaded(LIBC.as_ptr()) {
                 return Ok(());
             }
-            return self.load_one(LIBC.as_ptr(), runpath, page_size);
+            return self.load_one(LIBC.as_ptr(), runpath, origin, page_size);
         }
         // `DT_RUNPATH` of the object that asked, then `LD_LIBRARY_PATH`,
         // then the defaults.
         let mut buffer = [0_u8; PATH_MAX];
-        if let Some(mapped) = self.search(runpath, name, &mut buffer, page_size) {
+        if let Some(mapped) = self.search(runpath, name, &mut buffer, origin, page_size) {
             return self.add_found(name, &buffer, mapped);
         }
-        if let Some(mapped) = self.search(self.library_path, name, &mut buffer, page_size) {
+        if let Some(mapped) = self.search(self.library_path, name, &mut buffer, &[], page_size) {
             return self.add_found(name, &buffer, mapped);
         }
         for directory in DEFAULT_PATHS {
@@ -557,23 +595,28 @@ impl Scope {
     }
 
     /// Look for `name` in each directory of a colon-separated list, leaving
-    /// the path it was found at in `buffer`.
+    /// the path it was found at in `buffer`. A directory that starts with
+    /// `$ORIGIN` or `${ORIGIN}` starts with `origin` instead, and is skipped
+    /// when `origin` is empty.
     fn search(
         &self,
         list: *const c_char,
         name: *const c_char,
         buffer: &mut [u8; PATH_MAX],
+        origin: &[u8],
         page_size: usize,
     ) -> Option<map::Mapped> {
         if list.is_null() {
             return None;
         }
         let mut directory = [0_u8; PATH_MAX];
+        let mut expanded = [0_u8; PATH_MAX];
         let mut at = list;
         loop {
             let (len, next) = next_directory(at, &mut directory)?;
             if len > 0
                 && let Some(text) = directory.get(..len)
+                && let Some(text) = with_origin(text, origin, &mut expanded)
                 && let Some(path) = join(buffer, text, name)
                 && let Ok(mapped) = map::object(path, page_size)
             {
@@ -581,6 +624,50 @@ impl Scope {
             }
             at = next?;
         }
+    }
+
+    /// Copy the directory of object `index`'s file into `into`, and answer
+    /// its length, or 0 when it is not known.
+    ///
+    /// The program's is where `/proc/self/exe` leads, links followed, as
+    /// glibc finds it: `rustc` is run through `/bin/rustc`, a link to where
+    /// its libraries are beside it. A library's is the path it was found at.
+    fn origin_of(&self, index: usize, into: &mut [u8; PATH_MAX]) -> usize {
+        let len = if index == 0 {
+            const AT_FDCWD: usize = -100_isize as usize;
+            // SAFETY: the path is NUL-terminated, and `into` is writable for
+            // its length.
+            let read = unsafe {
+                sys::syscall4(
+                    nr::READLINKAT,
+                    AT_FDCWD,
+                    c"/proc/self/exe".as_ptr() as usize,
+                    into.as_mut_ptr() as usize,
+                    into.len(),
+                )
+            };
+            match usize::try_from(read) {
+                // A link as long as the buffer may have been cut short.
+                Ok(read) if read < into.len() => read,
+                _ => return 0,
+            }
+        } else {
+            let path = self.name_at(index);
+            let mut len = 0;
+            // SAFETY: the name is NUL-terminated, and this stops at the NUL.
+            while !path.is_null() && unsafe { path.wrapping_add(len).read() } != 0 {
+                let Some(slot) = into.get_mut(len) else {
+                    return 0;
+                };
+                // SAFETY: as above.
+                *slot = unsafe { path.wrapping_add(len).read() } as u8;
+                len += 1;
+            }
+            len
+        };
+        into.get(..len)
+            .and_then(|path| path.iter().rposition(|&byte| byte == b'/'))
+            .map_or(0, |slash| slash.max(1))
     }
 
     /// Map `path` and add it under `name`.
@@ -816,6 +903,33 @@ fn join(
         // The byte read was not the terminator.
         from = from.wrapping_add(1);
     }
+}
+
+/// `directory` with a leading `$ORIGIN` or `${ORIGIN}` replaced by `origin`,
+/// built in `into`; `directory` itself when it has neither; and `None` when
+/// it has one and `origin` is empty or the result does not fit.
+fn with_origin<'a>(
+    directory: &'a [u8],
+    origin: &[u8],
+    into: &'a mut [u8; PATH_MAX],
+) -> Option<&'a [u8]> {
+    let rest = [b"$ORIGIN".as_slice(), b"${ORIGIN}".as_slice()]
+        .iter()
+        .find_map(|token| {
+            directory
+                .strip_prefix(*token)
+                .filter(|rest| rest.is_empty() || rest.first() == Some(&b'/'))
+        });
+    let Some(rest) = rest else {
+        return Some(directory);
+    };
+    if origin.is_empty() {
+        return None;
+    }
+    let len = origin.len().checked_add(rest.len())?;
+    into.get_mut(..origin.len())?.copy_from_slice(origin);
+    into.get_mut(origin.len()..len)?.copy_from_slice(rest);
+    into.get(..len)
 }
 
 /// Copy the next colon-separated directory out of `list` into `into`.

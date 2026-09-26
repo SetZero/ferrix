@@ -61,6 +61,11 @@ const HEAD_BYTES: usize = 4096;
 /// The largest `e_phnum` this loader reads, which bounds the buffer above.
 const MAX_PHNUM: usize = 64;
 
+/// Words of the buffer a program header table is read into when it is not
+/// in [`HEAD_BYTES`]: room for [`MAX_PHNUM`] headers, in words so that the
+/// buffer is aligned for them.
+const FAR_WORDS: usize = MAX_PHNUM * size_of::<Phdr>() / size_of::<u64>();
+
 /// A mapped object: where it went, and the two segments the loader needs to
 /// find again.
 #[derive(Debug, Clone, Copy)]
@@ -116,9 +121,32 @@ fn map_opened(path: *const c_char, fd: c_int, page_size: usize) -> Result<Mapped
     if elf_head.phnum > MAX_PHNUM {
         return Err(Error::NotAnObject(path));
     }
-    let headers = elf_head
-        .program_headers(&head)
-        .ok_or(Error::NotAnObject(path))?;
+    // The table usually follows the header, but need not: BOLT rewrites an
+    // object and puts its table past everything else, 88 MB into rustc's
+    // librustc_driver. Then it is read from where `e_phoff` says.
+    let mut far = [0_u64; FAR_WORDS];
+    let headers = match elf_head.program_headers(&head) {
+        Some(headers) => headers,
+        None => {
+            let bytes = elf_head
+                .phnum
+                .checked_mul(size_of::<Phdr>())
+                .ok_or(Error::NotAnObject(path))?;
+            // SAFETY: `far` is live, and its bytes are its words' bytes.
+            let buffer = unsafe {
+                core::slice::from_raw_parts_mut(far.as_mut_ptr().cast::<u8>(), size_of_val(&far))
+            };
+            let table = buffer.get_mut(..bytes).ok_or(Error::NotAnObject(path))?;
+            let read = pread(fd, table, elf_head.phoff);
+            if read < 0 {
+                return Err(Error::CannotMap(path, read));
+            }
+            if read.unsigned_abs() != bytes {
+                return Err(Error::NotAnObject(path));
+            }
+            elf_head.table(table).ok_or(Error::NotAnObject(path))?
+        }
+    };
 
     let (low, high) = span(headers, page_size).ok_or(Error::NotAnObject(path))?;
 
@@ -408,7 +436,14 @@ impl ElfHead {
     fn program_headers<'a>(&self, head: &'a [u8]) -> Option<&'a [Phdr]> {
         let bytes = self.phnum.checked_mul(size_of::<Phdr>())?;
         let end = self.phoff.checked_add(bytes)?;
-        let table = head.get(self.phoff..end)?;
+        self.table(head.get(self.phoff..end)?)
+    }
+
+    /// The program header table, read on its own into `table`.
+    fn table<'a>(&self, table: &'a [u8]) -> Option<&'a [Phdr]> {
+        if table.len() != self.phnum.checked_mul(size_of::<Phdr>())? {
+            return None;
+        }
         if !table.as_ptr().cast::<Phdr>().is_aligned() {
             return None;
         }

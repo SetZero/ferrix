@@ -262,6 +262,240 @@ fn a_program_finds_a_library_through_its_runpath() {
     );
 }
 
+/// `$ORIGIN` in a `DT_RUNPATH` is the directory of the program's file, links
+/// followed: the program is run through a link in another directory, as
+/// `rustc` is run through `/bin/rustc`, and finds its library only if the
+/// loader expands `$ORIGIN` to where `/proc/self/exe` leads.
+#[test]
+fn origin_in_a_runpath_is_where_the_programs_file_is() {
+    let loader = loader();
+    let dir = scratch().join("ld-origin");
+    let libraries = dir.join("real/lib");
+    let elsewhere = dir.join("elsewhere");
+    std::fs::create_dir_all(&libraries).expect("make the library directory");
+    std::fs::create_dir_all(&elsewhere).expect("make the link's directory");
+
+    compile(&[
+        "-shared",
+        "-Wl,-soname,libgreet.so",
+        "-o",
+        libraries.join("libgreet.so").to_str().expect("a path"),
+        manifest().join("tests/c/greet.c").to_str().expect("a path"),
+    ]);
+    let program = dir.join("real/prog");
+    compile(&[
+        "-pie",
+        "-o",
+        program.to_str().expect("a path"),
+        manifest().join("tests/c/prog.c").to_str().expect("a path"),
+        "-L",
+        libraries.to_str().expect("a path"),
+        "-lgreet",
+        "-Wl,-rpath,$ORIGIN/lib",
+        "-Wl,--enable-new-dtags",
+        &format!("-Wl,--dynamic-linker={}", loader.display()),
+        "-Wl,-e,_start",
+    ]);
+    let link = elsewhere.join("prog");
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(&program, &link).expect("link the program");
+
+    let status = Command::new(&link)
+        .env_remove("LD_LIBRARY_PATH")
+        .status()
+        .expect("run the program");
+    assert_eq!(
+        status.code(),
+        Some(EXPECTED),
+        "a program run through a link did not find its library through $ORIGIN; \
+         127 is the loader not finding it"
+    );
+}
+
+/// A library whose program header table is not in its first page, as BOLT
+/// leaves `rustc`'s `librustc_driver` -- 88 MB in -- is loaded from where
+/// `e_phoff` says. The fixture moves the table to the end of the file and
+/// fills the old one with `0xff`, so a loader that read it from the first
+/// page would find no loadable segment in it.
+#[test]
+fn a_library_with_its_program_headers_at_the_end_is_loaded() {
+    let loader = loader();
+    let dir = scratch().join("ld-far-headers");
+    std::fs::create_dir_all(&dir).expect("make the scratch directory");
+
+    let library = dir.join("libgreet.so");
+    compile(&[
+        "-shared",
+        "-o",
+        library.to_str().expect("a path"),
+        manifest().join("tests/c/greet.c").to_str().expect("a path"),
+    ]);
+    let program = dir.join("prog");
+    compile(&[
+        "-pie",
+        "-o",
+        program.to_str().expect("a path"),
+        manifest().join("tests/c/prog.c").to_str().expect("a path"),
+        library.to_str().expect("a path"),
+        &format!("-Wl,--dynamic-linker={}", loader.display()),
+        "-Wl,-e,_start",
+    ]);
+
+    let mut bytes = std::fs::read(&library).expect("read the library");
+    let read = |bytes: &[u8], at: usize, len: usize| {
+        let mut value = 0_u64;
+        for (index, byte) in bytes[at..at + len].iter().enumerate() {
+            value |= u64::from(*byte) << (8 * index);
+        }
+        usize::try_from(value).expect("a size")
+    };
+    let phoff = read(&bytes, 0x20, 8);
+    let phentsize = read(&bytes, 0x36, 2);
+    let phnum = read(&bytes, 0x38, 2);
+    let table = bytes[phoff..phoff + phentsize * phnum].to_vec();
+    while !bytes.len().is_multiple_of(8) {
+        bytes.push(0);
+    }
+    let far = bytes.len();
+    bytes.extend_from_slice(&table);
+    bytes[0x20..0x28].copy_from_slice(&(far as u64).to_le_bytes());
+    bytes[phoff..phoff + table.len()].fill(0xff);
+    std::fs::write(&library, &bytes).expect("rewrite the library");
+
+    let status = Command::new(&program).status().expect("run the program");
+    assert_eq!(
+        status.code(),
+        Some(EXPECTED),
+        "a library with its program headers at the end of the file was not \
+         loaded; 127 is the loader refusing it"
+    );
+}
+
+/// A library's constructor runs after those of the libraries it needs, even
+/// when the program names one of those first and it is loaded first.
+#[test]
+fn constructors_run_dependencies_first_whatever_the_load_order() {
+    let loader = loader();
+    let dir = scratch().join("ld-order");
+    std::fs::create_dir_all(&dir).expect("make the scratch directory");
+
+    let first = dir.join("liborder_first.so");
+    compile(&[
+        "-shared",
+        "-Wl,-soname,liborder_first.so",
+        "-o",
+        first.to_str().expect("a path"),
+        manifest()
+            .join("tests/c/order_first.c")
+            .to_str()
+            .expect("a path"),
+    ]);
+    let second = dir.join("liborder_second.so");
+    compile(&[
+        "-shared",
+        "-Wl,-soname,liborder_second.so",
+        "-o",
+        second.to_str().expect("a path"),
+        manifest()
+            .join("tests/c/order_second.c")
+            .to_str()
+            .expect("a path"),
+        "-L",
+        dir.to_str().expect("a path"),
+        "-lorder_first",
+    ]);
+    let program = dir.join("prog");
+    compile(&[
+        "-pie",
+        "-o",
+        program.to_str().expect("a path"),
+        manifest()
+            .join("tests/c/order_prog.c")
+            .to_str()
+            .expect("a path"),
+        "-L",
+        dir.to_str().expect("a path"),
+        "-Wl,--no-as-needed",
+        "-lorder_first",
+        "-lorder_second",
+        &format!("-Wl,-rpath,{}", dir.display()),
+        "-Wl,--enable-new-dtags",
+        &format!("-Wl,--dynamic-linker={}", loader.display()),
+        "-Wl,-e,_start",
+    ]);
+
+    let status = Command::new(&program)
+        .env_remove("LD_LIBRARY_PATH")
+        .status()
+        .expect("run the program");
+    assert_eq!(
+        status.code(),
+        Some(EXPECTED),
+        "constructors did not run dependencies first: 94 is a library's \
+         constructor running before that of the library it needs"
+    );
+}
+
+/// A program's copy of a versioned library variable is the variable: the
+/// library's own references to it bind to the program's copy, as glibc
+/// binds `__environ`'s. The copy carries the index of the version the
+/// program needs, not one it defines.
+#[test]
+fn a_programs_copy_of_a_versioned_variable_is_the_one_the_library_uses() {
+    let loader = loader();
+    let dir = scratch().join("ld-copy");
+    std::fs::create_dir_all(&dir).expect("make the scratch directory");
+
+    let script = dir.join("copy.map");
+    std::fs::write(
+        &script,
+        "COPY_1 { global: shared_word; read_word; local: *; };\n",
+    )
+    .expect("write the version script");
+    let library = dir.join("libcopy.so");
+    compile(&[
+        "-shared",
+        &format!("-Wl,--version-script={}", script.display()),
+        "-o",
+        library.to_str().expect("a path"),
+        manifest()
+            .join("tests/c/copy_lib.c")
+            .to_str()
+            .expect("a path"),
+    ]);
+    let program = dir.join("prog");
+    compile(&[
+        "-pie",
+        "-fPIE",
+        "-o",
+        program.to_str().expect("a path"),
+        manifest()
+            .join("tests/c/copy_prog.c")
+            .to_str()
+            .expect("a path"),
+        library.to_str().expect("a path"),
+        &format!("-Wl,--dynamic-linker={}", loader.display()),
+        "-Wl,-e,_start",
+    ]);
+    let relocations = Command::new("readelf")
+        .args(["-rW"])
+        .arg(&program)
+        .output()
+        .expect("run readelf");
+    assert!(
+        String::from_utf8_lossy(&relocations.stdout).contains("R_X86_64_COPY"),
+        "the fixture needs the program to copy the variable"
+    );
+
+    let status = Command::new(&program).status().expect("run the program");
+    assert_eq!(
+        status.code(),
+        Some(EXPECTED),
+        "the library did not use the program's copy of its versioned \
+         variable: 95 is it reading its own"
+    );
+}
+
 /// `PT_TLS` images are copied before the program starts, and x86-64's
 /// initial-exec `R_X86_64_TPOFF64` points a library at its own block.
 ///

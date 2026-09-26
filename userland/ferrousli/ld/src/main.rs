@@ -165,6 +165,9 @@ unsafe fn link(stack: &auxv::Stack) -> Result<usize, report::Error> {
     // program that honoured the variable would load a library of the
     // caller's choosing as its owner -- which is the oldest hole there is.
     let secure = stack.get(auxv::AT_SECURE).unwrap_or(0) != 0;
+    // `$ORIGIN` in a run path too: it names where the program's file is,
+    // and such a program is not the caller's to place.
+    scope.set_secure(secure);
     if !secure {
         // SAFETY: `envp` is this process's environment.
         if let Some(path) = unsafe { environment(stack, b"LD_LIBRARY_PATH") } {
@@ -317,10 +320,13 @@ pub(crate) type Arguments = (c_int, *mut *mut c_char, *mut *mut c_char);
 
 /// Run every library's initialisers, dependencies first.
 ///
-/// The order is the reverse of the order they were loaded, which is what puts
-/// a library's initialiser before that of whatever needed it. A constructor
-/// that calls into a library it depends on is the reason this order is not
-/// arbitrary.
+/// Each object's run after every object it needs, as glibc's
+/// `_dl_sort_maps` orders them ([`init_order`]). A constructor that calls
+/// into a library it depends on is the reason this order is not arbitrary:
+/// LLVM's allocator calls `pthread_setspecific` from `rustc`'s constructors,
+/// which needs `libc.so.6` started, and `libc.so.6` is a dependency the
+/// program names first and so is loaded before LLVM -- the reverse of load
+/// order, which this was, ran it last.
 ///
 /// The program's own are not run here but by its C library, which is not
 /// started yet and which they may use: see [`interface`]. So `first` is 1
@@ -343,9 +349,9 @@ pub(crate) unsafe fn run_initialisers(first: usize, args: Arguments) {
 ///
 /// As [`run_initialisers`].
 pub(crate) unsafe fn run_range(first: usize, end: usize, args: Arguments) {
-    let mut index = end;
-    while index > first {
-        index -= 1;
+    let mut order = [0_usize; object::MAX_OBJECTS];
+    let count = dl::with_scope(|scope| init_order(scope, first, end, &mut order));
+    for &index in order.get(..count).unwrap_or_default() {
         let object = dl::with_scope(|scope| scope.get(index).copied());
         let Some(object) = object.filter(|object| !object.is_loader) else {
             continue;
@@ -354,6 +360,73 @@ pub(crate) unsafe fn run_range(first: usize, end: usize, args: Arguments) {
         // the process's own.
         unsafe { run_object_init(&object, args.0, args.1, args.2) };
     }
+}
+
+/// The objects in `first..end` in the order their initialisers run, written
+/// to `order`, and how many: each after every object in the range it needs,
+/// depth first from each in load order. An object outside the range was
+/// initialised before it; a cycle is broken where the walk first comes back
+/// to an object, as glibc breaks one.
+fn init_order(
+    scope: &scope::Scope,
+    first: usize,
+    end: usize,
+    order: &mut [usize; object::MAX_OBJECTS],
+) -> usize {
+    // One bit per object: seen by the walk.
+    let mut seen = [0_u64; object::MAX_OBJECTS.div_ceil(64)];
+    let mut mark = |index: usize| -> bool {
+        let Some(word) = seen.get_mut(index / 64) else {
+            return false;
+        };
+        let bit = 1 << (index % 64);
+        let fresh = *word & bit == 0;
+        *word |= bit;
+        fresh
+    };
+    // The walk's stack: an object, and the next of its `DT_NEEDED` to visit.
+    let mut stack = [(0_usize, 0_usize); object::MAX_OBJECTS];
+    let mut count = 0;
+    for root in first..end {
+        if !mark(root) {
+            continue;
+        }
+        let mut depth = 0;
+        if let Some(slot) = stack.get_mut(depth) {
+            *slot = (root, 0);
+            depth = 1;
+        }
+        while depth > 0 {
+            let Some(&(index, next)) = stack.get(depth - 1) else {
+                break;
+            };
+            let object = scope.get(index);
+            let needed = object.map_or(0, |object| object.needed_count);
+            if next < needed {
+                if let Some(frame) = stack.get_mut(depth - 1) {
+                    frame.1 = next + 1;
+                }
+                let dependency = object
+                    .and_then(|object| object.needed.get(next).and_then(|&at| object.name(at)))
+                    .and_then(|name| scope.dependency(name))
+                    .filter(|&dependency| (first..end).contains(&dependency));
+                if let Some(dependency) = dependency
+                    && mark(dependency)
+                    && let Some(slot) = stack.get_mut(depth)
+                {
+                    *slot = (dependency, 0);
+                    depth += 1;
+                }
+                continue;
+            }
+            depth -= 1;
+            if let Some(slot) = order.get_mut(count) {
+                *slot = index;
+                count += 1;
+            }
+        }
+    }
+    count
 }
 
 /// Run one object's `DT_INIT` and then its `DT_INIT_ARRAY`.

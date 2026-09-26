@@ -410,6 +410,21 @@ impl Object {
         if wanted == VER_NDX_LOCAL || wanted == VER_NDX_GLOBAL {
             return None;
         }
+        if let Some(name) = self.verneed_name(wanted) {
+            return Some(name);
+        }
+        // A reference to a symbol this object defines itself -- libgcc_s's
+        // constructor to its own `__cpu_indicator_init@GCC_4.8.0` -- carries
+        // the index of one of its own definitions instead.
+        match self.verdef_name(wanted)? {
+            VerdefName::Named(name) => Some(name),
+            VerdefName::Unnamed => None,
+        }
+    }
+
+    /// The name of the version this object needs whose index is `number`, or
+    /// `None` when it needs none of that number.
+    fn verneed_name(&self, number: u16) -> Option<*const c_char> {
         let (mut at, mut left) = self.verneed;
         while at != 0 && left > 0 {
             // SAFETY: `DT_VERNEED` is a chain of `Verneed` records, each
@@ -420,7 +435,7 @@ impl Object {
             for _ in 0..need.vn_cnt {
                 // SAFETY: as above, for the `Vernaux` records of one file.
                 let aux = unsafe { (aux_at as *const Vernaux).read_unaligned() };
-                if aux.vna_other == wanted {
+                if aux.vna_other == number {
                     return self.name(aux.vna_name);
                 }
                 if aux.vna_next == 0 {
@@ -434,13 +449,7 @@ impl Object {
             at = at.wrapping_add(need.vn_next as usize);
             left -= 1;
         }
-        // A reference to a symbol this object defines itself -- libgcc_s's
-        // constructor to its own `__cpu_indicator_init@GCC_4.8.0` -- carries
-        // the index of one of its own definitions instead.
-        match self.verdef_name(wanted)? {
-            VerdefName::Named(name) => Some(name),
-            VerdefName::Unnamed => None,
-        }
+        None
     }
 
     /// The name of this object's version definition `number`, or `None`
@@ -487,10 +496,21 @@ impl Object {
         }
         match self.verdef_name(number) {
             Some(VerdefName::Named(name)) => Defined::Named { name, hidden },
-            // A version index with no definition behind it, or one with no
-            // name, is a malformed object; treating the symbol as local keeps
-            // it from answering anything, which is the safe way to be wrong.
-            Some(VerdefName::Unnamed) | None => Defined::Local,
+            Some(VerdefName::Unnamed) => Defined::Local,
+            // A program's copy of a library's variable -- `__environ`, which a
+            // program built against glibc copies in -- is its definition, and
+            // carries the index of the version it needs, not of one it
+            // defines. glibc numbers both kinds in one table, so the copy
+            // answers `__environ@GLIBC_2.2.5`, and the library then reads and
+            // writes the program's copy. Without this the library kept its
+            // own, and a glibc program's `environ` was null.
+            None => match self.verneed_name(number) {
+                Some(name) => Defined::Named { name, hidden },
+                // An index behind which there is nothing is a malformed
+                // object; treating the symbol as local keeps it from
+                // answering anything, which is the safe way to be wrong.
+                None => Defined::Local,
+            },
         }
     }
 }
