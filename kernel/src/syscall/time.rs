@@ -237,7 +237,7 @@ pub(crate) fn sys_clock_getres(
 /// Linux: a thread that has ended takes its time with it, where Linux keeps
 /// it in the process's sum, so the clock can step back when one ends.
 /// Chrome's `ThreadTicks` reads the thread clock, which is exact.
-fn process_runtime(process: &Process) -> u64 {
+pub(crate) fn process_runtime(process: &Process) -> u64 {
     let _ = sched::current_runtime();
     process
         .tasks()

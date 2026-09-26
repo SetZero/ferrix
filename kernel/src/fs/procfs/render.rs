@@ -769,6 +769,26 @@ pub(super) fn thread_stat(of: &ThreadOf) -> Result<Vec<u8>> {
     stat_of(&of.process, of.tid)
 }
 
+/// The processor time a `stat` file reports, in clock ticks: the whole
+/// process's for `/proc/<pid>/stat`, where `tid` is the process's own id,
+/// and the one thread's for `/proc/<pid>/task/<tid>/stat`, as Linux's are.
+/// Until it was counted here, `top` and `ps` said every process was idle.
+fn cpu_ticks(process: &Process, tid: u32) -> u64 {
+    let nanos = if tid == process.pid() {
+        time::process_runtime(process)
+    } else {
+        process
+            .tasks()
+            .iter()
+            .filter(|task| {
+                crate::syscall::thread::of_task(task).is_some_and(|thread| thread.tid() == tid)
+            })
+            .map(|task| task.runtime())
+            .fold(0, u64::saturating_add)
+    };
+    nanos / (NANOS / CLOCK_TICKS)
+}
+
 /// A stat file, for the thread numbered `tid` of `process`.
 fn stat_of(process: &Process, tid: u32) -> Result<Vec<u8>> {
     let memory = Memory::of(process);
@@ -788,8 +808,10 @@ fn stat_of(process: &Process, tid: u32) -> Result<Vec<u8>> {
         // No `PF_*` flag applies: in particular `PF_RANDOMIZE` is clear,
         // because nothing randomizes the layout.
         flags: 0,
-        // No CPU time is accounted per process yet.
-        utime: 0,
+        // The time its threads have run, all of it as user time: the
+        // scheduler charges a task for its whole time on a processor and
+        // does not split what it spent in the kernel.
+        utime: cpu_ticks(process, tid),
         stime: 0,
         priority: 20,
         nice: 0,
