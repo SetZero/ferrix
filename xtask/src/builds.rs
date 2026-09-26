@@ -189,9 +189,23 @@ impl Build {
         }
         for (key, file) in &self.inputs {
             let _ = command.env(key, file);
+            // And what the file holds, for a build script to declare with
+            // `rerun-if-env-changed`. Cargo judges a `rerun-if-changed` file
+            // by its mtime against the script's last run, and an input's mtime
+            // can go backwards: cargo hands back an older build's artifact,
+            // with that build's mtime, when a feature is switched back. A
+            // variable cargo compares by value cannot be fooled that way.
+            let _ = command.env(digest_variable(key), digest_of(file)?);
         }
         crate::cargo::run(command, &self.what)
     }
+}
+
+/// The variable [`Build::make`] sets beside the input `key`: the SHA-256 of
+/// the file's bytes, in hex. Not part of a build's key, which hashes the
+/// bytes already.
+pub(crate) fn digest_variable(key: &str) -> String {
+    format!("{key}_DIGEST")
 }
 
 /// Whether builds are being recorded or replayed, so that a caller that

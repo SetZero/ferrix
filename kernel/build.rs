@@ -92,11 +92,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     // reproducible — `xtask build` promises the same image byte for byte, and
     // two machines do not have the same `/usr/bin`. With the variable unset the
     // kernel embeds an empty file and boots exactly as it did before.
+    //
+    // A different init must rebuild the kernel, and the file's mtime cannot
+    // be trusted to say so: cargo reruns this script only for a file newer
+    // than its last run, and `cargo xtask test-input` switches between two
+    // flavours of one program at one path, which cargo restores with the
+    // older build's mtime. So xtask passes the file's SHA-256 beside its path
+    // (`builds::Build::make`), and a variable is compared by value.
     println!("cargo::rerun-if-env-changed=FERRIX_INIT");
     let init = match std::env::var_os("FERRIX_INIT") {
         Some(path) => {
             let path = PathBuf::from(path);
             println!("cargo::rerun-if-changed={}", path.display());
+            content_named("FERRIX_INIT");
             path
         }
         None => {
@@ -143,6 +151,7 @@ fn init_commands() -> Result<(), Box<dyn Error>> {
         Some(path) => {
             let path = PathBuf::from(path);
             println!("cargo::rerun-if-changed={}", path.display());
+            content_named("FERRIX_INIT_COMMANDS");
             let list = std::fs::read(&path)?;
             // Checked here so that a list cut short fails the build rather
             // than losing its last command silently at boot.
@@ -166,4 +175,23 @@ fn init_commands() -> Result<(), Box<dyn Error>> {
         commands.display()
     );
     Ok(())
+}
+
+/// Declare `<variable>_DIGEST`, the SHA-256 of the file `variable` names, as
+/// what reruns this script, and warn when it was not given.
+///
+/// A kernel built around the wrong init boots and runs it: `test-input`'s
+/// negative control once booted the plain program and passed the check it
+/// exists to fail. xtask always sets both variables together. A build by hand
+/// that sets only the path is warned rather than refused, and falls back to
+/// the file's mtime, which is right unless the file was put back older.
+fn content_named(variable: &str) {
+    let digest = format!("{variable}_DIGEST");
+    println!("cargo::rerun-if-env-changed={digest}");
+    if std::env::var_os(&digest).is_none_or(|value| value.is_empty()) {
+        println!(
+            "cargo::warning={variable} is set without {digest}, the file's SHA-256: \
+             an older file put back at the same path will not rebuild the kernel"
+        );
+    }
 }
