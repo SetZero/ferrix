@@ -1408,10 +1408,16 @@ fn clone_for_fork_merges_regions_that_marking_made_identical() {
     check(&parent);
 
     map(&mut parent, 0x12_000, 0x14_000, VmaFlags::READ_WRITE);
+    check(&parent);
     assert_eq!(
-        parent.region_count(),
-        2,
-        "a fresh mapping is not copy-on-write, so it is not a continuation of the old one"
+        extents(&parent),
+        vec![(0x10_000, 0x14_000)],
+        "a fresh mapping continuing a marked one joins it: the mark is only ever safe to keep"
+    );
+    assert!(
+        parent.find(0x13_000).is_some_and(|region| region.cow),
+        "the joined region keeps the mark, and the fresh half's first write takes its page in \
+         place, since nobody else holds it"
     );
 
     let second_child = parent.clone_for_fork().unwrap();
@@ -1420,7 +1426,39 @@ fn clone_for_fork_merges_regions_that_marking_made_identical() {
     assert_eq!(
         extents(&parent),
         vec![(0x10_000, 0x14_000)],
-        "once both are marked they differ in nothing, and leaving them apart would leak a region"
+        "a second fork leaves one region"
+    );
+}
+
+/// A private region read-only at a fork is not marked, and a later
+/// `mprotect` making it writable must mark it: its frames may be the other
+/// space's too, and without the mark the first write lands in them. glibc's
+/// RELRO page on AArch64, holding the stack guard, is one.
+#[test]
+fn protect_making_a_private_region_writable_marks_it_copy_on_write() {
+    let mut parent = space();
+    map(&mut parent, 0x10_000, 0x12_000, VmaFlags::READ);
+    let mut child = parent.clone_for_fork().unwrap();
+    assert!(
+        child.find(0x10_000).is_some_and(|region| !region.cow),
+        "read-only at the fork, so not marked by it"
+    );
+    child
+        .protect(range(0x10_000, 0x11_000), VmaFlags::READ_WRITE)
+        .unwrap();
+    check(&child);
+    assert!(
+        child.find(0x10_000).is_some_and(|region| region.cow),
+        "made writable, so its first write copies a frame the parent still holds"
+    );
+    child
+        .protect(range(0x10_000, 0x11_000), VmaFlags::READ)
+        .unwrap();
+    check(&child);
+    assert_eq!(
+        extents(&child),
+        vec![(0x10_000, 0x12_000)],
+        "and back to read-only it merges with its neighbour again"
     );
 }
 
