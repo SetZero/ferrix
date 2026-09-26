@@ -46,6 +46,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 mod idle;
+mod stall;
 
 use crate::args::Args;
 use crate::display::{DEVICE_ID, Image, Qmp, free_port, mismatches, parse_ppm};
@@ -352,6 +353,13 @@ const ANIMATED_MOVING: Moving<'static> = Moving {
 /// the guest reports are around 1.5 seconds a frame, and what this catches
 /// is a compositor that stopped drawing or a frame that became minutes
 /// rather than seconds.
+///
+/// It is held against what is left of a frame once the time the host kept
+/// QEMU's virtual processors waiting on its run queues, inside that frame's
+/// own stretch, is taken off (`stall`): a loaded host is not a slow
+/// compositor. Contention the run queues do not show -- a busy sibling
+/// hyperthread, a lower clock -- is not taken off, and `docs/BACKLOG.md` has
+/// the row for it.
 ///
 /// Twice that on ARMv7-A, whose frames under `tcg` take about twice
 /// AArch64's in the same runs (1.3 to 2 s against 0.6 to 0.8 s on a loaded
@@ -1063,6 +1071,35 @@ fn boot_and_dump(
     binds: &[(&str, &[&str])],
     args: &Args,
 ) -> Result<(Vec<Image>, Vec<String>)> {
+    boot_and_time(arch, programs, config, wanted, binds, args).map(|(taken, said, _)| (taken, said))
+}
+
+/// What a boot with a window sliding learned about its frames, besides what
+/// the compositor said of them.
+#[derive(Debug, Default)]
+struct Timing {
+    /// How long the host kept the virtual processors waiting, read through
+    /// the boot; `None` where the host cannot say (`stall`).
+    readings: Option<Vec<stall::Reading>>,
+    /// How many of the transcript's lines the frames are judged on: the
+    /// negative control's come after them.
+    judged: Option<usize>,
+    /// When each of the transcript's lines reached xtask, by its place.
+    arrived: Vec<Option<Instant>>,
+    /// What the negative control showed, or why there was none.
+    control: Option<Result<String>>,
+}
+
+/// [`boot_and_dump`], and for a boot with a window sliding, the host's waits
+/// and the negative control that frames are judged with (`stall`).
+fn boot_and_time(
+    arch: Arch,
+    programs: &Programs,
+    config: &str,
+    wanted: &Wanted<'_>,
+    binds: &[(&str, &[&str])],
+    args: &Args,
+) -> Result<(Vec<Image>, Vec<String>, Timing)> {
     let (image, kernel) = build_image(arch, programs, &undithered(config), Carried::none(), args)?;
 
     let port = free_port()?;
@@ -1073,8 +1110,10 @@ fn boot_and_dump(
     let dump = paths::build_dir(arch).join("compositor.ppm");
     let mut taken = Vec::new();
     let mut said = Vec::new();
+    let mut timing = Timing::default();
     let hook = |watching: &mut Watching<'_>| -> Result<()> {
         let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
+        let sampler = wanted.moving.and_then(|_| sample_the_host(&mut qmp, arch));
         if let Some(line) = watching
             .lines()
             .iter()
@@ -1132,14 +1171,14 @@ fn boot_and_dump(
                 kept.len()
             );
             taken.append(&mut kept);
-            // The compositor says how long its frames took while it draws,
-            // and a boot with no keybinds to press asks the serial port for
-            // nothing else: read what it said, so the caller can judge it.
-            let _ = watching.read_more(Instant::now() + SETTLE, |lines| {
-                lines
-                    .iter()
-                    .any(|line| line.contains("slowest of the last"))
-            })?;
+            after_the_slide(
+                &mut qmp,
+                watching,
+                arch,
+                moving,
+                sampler.as_ref(),
+                &mut timing,
+            )?;
         }
 
         // The screens after the first, once the states have been reached:
@@ -1168,11 +1207,10 @@ fn boot_and_dump(
         // against the transcript is what the boot actually printed rather
         // than what had been read when the last picture matched.
         let _ = watching.read_more(Instant::now() + Duration::from_secs(2), |_| false)?;
-        said = watching
-            .lines()
-            .iter()
-            .chain(watching.after())
-            .cloned()
+        said = transcript(watching);
+        timing.readings = sampler.as_ref().map(stall::Sampler::readings);
+        timing.arrived = (0..said.len())
+            .map(|index| watching.arrived(index))
             .collect();
         Ok(())
     };
@@ -1184,7 +1222,7 @@ fn boot_and_dump(
     // the night the compositor first drew on several threads, before a
     // fourth stopped early enough to spoil its picture.
     judge_still_running(arch, &said)?;
-    Ok((taken, said))
+    Ok((taken, said, timing))
 }
 
 /// That neither the kernel nor the compositor stopped during a boot whose
@@ -1213,6 +1251,198 @@ fn compositor_ended(line: &str) -> bool {
     line.contains(crate::shell::EXITED)
         || (line.contains("hyprix.service: ")
             && (line.contains("failed") || line.contains("restarting")))
+}
+
+/// Every line the guest said, before the marker and since.
+fn transcript(watching: &Watching<'_>) -> Vec<String> {
+    watching
+        .lines()
+        .iter()
+        .chain(watching.after())
+        .cloned()
+        .collect()
+}
+
+/// The host's waits for this boot's virtual processors, read from before
+/// the compositor draws its first frame until the boot is judged: only a
+/// boot whose frames are judged needs them. `None` where the host cannot
+/// say (`stall`).
+fn sample_the_host(qmp: &mut Qmp, arch: Arch) -> Option<stall::Sampler> {
+    let reply = qmp.execute("query-cpus-fast", None).ok()?;
+    let threads = stall::vcpu_threads(&reply);
+    let sampler = stall::Sampler::start(threads.clone());
+    match &sampler {
+        Some(sampler) => println!(
+            "  {arch}: reading how long the host keeps QEMU {} waiting, for its {} virtual \
+             processor threads",
+            sampler.process,
+            threads.len()
+        ),
+        None => println!(
+            "  {arch}: this host cannot say how long QEMU waits to run ({} threads named): no \
+             frame will have any of its time excused",
+            threads.len()
+        ),
+    }
+    sampler
+}
+
+/// Once a slide has ended: read everything it still had to say, which is
+/// what its frames are judged on, and then run the negative control, whose
+/// frames are not.
+fn after_the_slide(
+    qmp: &mut Qmp,
+    watching: &mut Watching<'_>,
+    arch: Arch,
+    moving: Moving<'_>,
+    sampler: Option<&stall::Sampler>,
+    timing: &mut Timing,
+) -> Result<()> {
+    // The compositor says how long its frames took while it draws, and a
+    // boot with no keybinds to press asks the serial port for nothing else:
+    // read what it said, so the caller can judge it.
+    let _ = watching.read_more(Instant::now() + SETTLE, |lines| {
+        lines
+            .iter()
+            .any(|line| line.contains("slowest of the last"))
+    })?;
+    let _ = watching.read_more(Instant::now() + Duration::from_secs(2), |_| false)?;
+    timing.judged = Some(watching.lines().len() + watching.after().len());
+    timing.control = Some(match sampler {
+        Some(_) if std::env::var_os("FERRIX_QEMU_PLUGIN").is_some() => Err(Error::new(
+            "no negative control under a TCG plugin, whose bound is ten times the frame's",
+        )),
+        Some(sampler) => stop_mid_slide(qmp, watching, arch, moving, sampler),
+        None => Err(Error::new(
+            "no negative control: this host cannot say how long QEMU waited to run, so no \
+             frame had any of its time excused",
+        )),
+    });
+    Ok(())
+}
+
+/// How many times the negative control presses the slide and stops QEMU
+/// before it gives up on catching a frame across the stop.
+///
+/// Under `tcg` a frame takes a second or more and the slide is drawn back to
+/// back, so the first stop lands in one; under KVM a frame is milliseconds
+/// and most of a slide's time is between frames.
+const CONTROL_ATTEMPTS: u32 = 5;
+
+/// The negative control: slide the window back, stop QEMU for longer than a
+/// frame may take, and require the frame it stopped in to fail the bound.
+///
+/// A stopped process is not runnable, so the host's run queues count none of
+/// the stop as waiting, and the guest's clock -- the host's -- has moved on by
+/// all of it when QEMU continues: to the compositor, a frame that took the
+/// stop and more, which nothing the host did explains. That is what a frame
+/// that is slow for the guest's own reasons looks like to the check, and the
+/// check must still catch it with every excuse the host's waits give.
+///
+/// Ferrix's own watchdogs count polls as well as time (`kernel/src/smp.rs`,
+/// `patience`), so a clock that jumped while nothing ran does not trip them.
+fn stop_mid_slide(
+    qmp: &mut Qmp,
+    watching: &mut Watching<'_>,
+    arch: Arch,
+    moving: Moving<'_>,
+    sampler: &stall::Sampler,
+) -> Result<String> {
+    let bound = frame_bound(arch);
+    let stop_for = Duration::from_micros(u64::try_from(bound).unwrap_or(u64::MAX))
+        .saturating_add(Duration::from_secs(2));
+    let process = sampler.process.to_string();
+    for attempt in 1..=CONTROL_ATTEMPTS {
+        let from = watching.after().len();
+        press(qmp, moving.keys)?;
+        std::thread::sleep(Duration::from_millis(300));
+        let stopped = Stopped::new(&process)?;
+        std::thread::sleep(stop_for);
+        stopped.resume()?;
+        // Until a frame the stop could have made -- one longer than the
+        // bound before anything is taken off it -- then judged as the slide's
+        // frames are, on its own stretch of the host's waits.
+        let _ = watching.read_more(Instant::now() + SETTLE, |lines| {
+            frame_reports(lines.get(from..).unwrap_or_default())
+                .iter()
+                .any(|&took| took > bound)
+        })?;
+        let first = watching.lines().len() + from;
+        let every: Vec<&String> = watching.lines().iter().chain(watching.after()).collect();
+        let reports: Vec<(u128, Option<Instant>)> = every
+            .iter()
+            .enumerate()
+            .skip(first)
+            .filter_map(|(index, line)| Some((frame_report(line)?, watching.arrived(index))))
+            .collect();
+        let caught = least_excused(&reports, &sampler.readings())
+            .filter(|(took, waited)| took.saturating_sub(*waited) > bound);
+        if let Some((took, waited)) = caught {
+            return Ok(format!(
+                "the negative control stopped QEMU for {} ms mid-slide, and the frame it stopped \
+                 in took {took} us, {waited} us of it waiting on the host: {} us past the bound, \
+                 as a frame slow for the guest's own reasons must be",
+                stop_for.as_millis(),
+                took.saturating_sub(waited).saturating_sub(bound)
+            ));
+        }
+        println!("  {arch}: negative control, try {attempt}: the stop fell between frames");
+    }
+    Err(Error::new(format!(
+        "{arch}: the negative control stopped QEMU {CONTROL_ATTEMPTS} times mid-slide and no \
+         frame failed the bound: it proves nothing about the check"
+    )))
+}
+
+/// This boot's QEMU, stopped, until it is resumed or dropped.
+///
+/// The process is the one whose virtual processors this boot's own QMP
+/// socket named (`stall::Sampler`), never one found by name: the host runs
+/// other sessions' guests and its owner's. And it is continued however the
+/// control ends -- an error, a panic -- since a QEMU left stopped holds its
+/// disk images locked for whoever boots next.
+struct Stopped<'a> {
+    process: &'a str,
+    resumed: bool,
+}
+
+impl<'a> Stopped<'a> {
+    fn new(process: &'a str) -> Result<Self> {
+        signal("-STOP", process)?;
+        Ok(Self {
+            process,
+            resumed: false,
+        })
+    }
+
+    fn resume(mut self) -> Result<()> {
+        signal("-CONT", self.process)?;
+        self.resumed = true;
+        Ok(())
+    }
+}
+
+impl Drop for Stopped<'_> {
+    fn drop(&mut self) {
+        if !self.resumed {
+            let _ = signal("-CONT", self.process);
+        }
+    }
+}
+
+/// Send `signal` to `process`, with `kill`: the one host this runs on is a
+/// Linux one, since only a Linux host can say how long QEMU waited.
+fn signal(signal: &str, process: &str) -> Result<()> {
+    let status = std::process::Command::new("kill")
+        .args([signal, process])
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(Error::new(format!(
+            "kill {signal} {process} exited with {status}"
+        )))
+    }
 }
 
 /// Read the guest until every line in `awaiting` has been said, or the time
@@ -4040,7 +4270,7 @@ fn test_terminal(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
 /// keybind, every distinct picture until the windows have changed places,
 /// and the compositor's own frame times from the same boot.
 fn test_animation(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
-    let (screens, said) = boot_and_dump(
+    let (screens, said, timing) = boot_and_time(
         arch,
         programs,
         ANIMATED_CONFIG,
@@ -4087,41 +4317,115 @@ fn test_animation(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
          places neither layout put it, ending in the one the renderer blesses",
         sliding.len()
     );
-    frames_were_inside_the_bound(arch, &said)
+    frames_were_inside_the_bound(arch, &said, &timing)
 }
 
-/// What the compositor said about its own frames, against the bound.
-fn frames_were_inside_the_bound(arch: Arch, said: &[String]) -> Result<()> {
-    let mut slowest = 0u128;
-    for line in said {
-        // `hyprix: frames <n> slowest of the last <m> <us> us`.
-        let Some(rest) = line.split("slowest of the last ").nth(1) else {
-            continue;
-        };
-        let mut words = rest.split_whitespace();
-        let (Some(_count), Some(number)) = (words.next(), words.next()) else {
-            continue;
-        };
-        if let Ok(micros) = number.parse::<u128>() {
-            slowest = slowest.max(micros);
-        }
-    }
-    if slowest == 0 {
+/// The slowest frame of a report of the compositor's, in microseconds:
+/// `hyprix: frames <n> slowest of the last <m> <us> us`.
+fn frame_report(line: &str) -> Option<u128> {
+    let rest = line.split("slowest of the last ").nth(1)?;
+    let mut words = rest.split_whitespace();
+    let _count = words.next()?;
+    words.next()?.parse().ok()
+}
+
+/// The slowest frame of each report in `said`, in microseconds.
+fn frame_reports(said: &[String]) -> Vec<u128> {
+    said.iter().filter_map(|line| frame_report(line)).collect()
+}
+
+/// How much earlier than its report's arrival a frame may have ended.
+///
+/// A report goes out as its frame ends and reaches xtask down the serial
+/// line, QEMU's character device and a pipe: milliseconds, unless the host
+/// was not running QEMU's threads either, in which case that is the wait
+/// this is looking for. A second is generous, and what it lets in is waiting
+/// the host did around the frame, not the guest's own time.
+const REPORT_LATENCY: Duration = Duration::from_secs(1);
+
+/// The report whose frame is furthest past what the host explains: how long
+/// it took and the most the host can have kept it waiting, both in
+/// microseconds. `None` for no reports.
+///
+/// A report says when it arrived, and its frame ended before that and began
+/// its length earlier still: only the host's waiting in that stretch is taken
+/// off, so a frame is not excused by the host's worst moment elsewhere in the
+/// boot. A report whose arrival is not known is excused nothing.
+fn least_excused(
+    reports: &[(u128, Option<Instant>)],
+    readings: &[stall::Reading],
+) -> Option<(u128, u128)> {
+    reports
+        .iter()
+        .map(|&(took, arrived)| {
+            let span = Duration::from_micros(u64::try_from(took).unwrap_or(u64::MAX))
+                .saturating_add(REPORT_LATENCY);
+            let waited = arrived.map_or(Duration::ZERO, |to| {
+                let from = to.checked_sub(span).unwrap_or(to);
+                stall::wait_between(readings, from, to)
+            });
+            (took, waited.as_micros().min(took))
+        })
+        .max_by_key(|(took, waited)| took.saturating_sub(*waited))
+}
+
+/// What the compositor said about its own frames, against the bound, less
+/// what the host kept each of them waiting (`stall`); and the negative
+/// control that shows a frame slow for the guest's own reasons still fails.
+fn frames_were_inside_the_bound(arch: Arch, said: &[String], timing: &Timing) -> Result<()> {
+    let judged = said
+        .get(..timing.judged.unwrap_or(said.len()))
+        .unwrap_or(said);
+    let readings = timing.readings.as_deref().unwrap_or_default();
+    let reports: Vec<(u128, Option<Instant>)> = judged
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            Some((
+                frame_report(line)?,
+                timing.arrived.get(index).copied().flatten(),
+            ))
+        })
+        .collect();
+    let Some((took, waited)) = least_excused(&reports, readings) else {
         return Err(Error::new(format!(
             "{arch}: the compositor never said how long its frames took"
         )));
-    }
+    };
     let bound = frame_bound(arch);
-    if slowest > bound {
+    let own = took.saturating_sub(waited);
+    if own > bound {
+        // How much the host kept QEMU waiting over the whole boot, beside
+        // what it did in the frame's own stretch: a frame the host explains
+        // badly on a host that kept QEMU waiting a lot is one to look at the
+        // stretch of, not the guest.
+        let (whole, over) = match (readings.first(), readings.last()) {
+            (Some(first), Some(last)) => (
+                stall::wait_between(readings, first.at, last.at).as_millis(),
+                last.at.duration_since(first.at).as_millis(),
+            ),
+            _ => (0, 0),
+        };
         return Err(Error::new(format!(
-            "{arch}: the slowest frame took {slowest} us, past the {bound} us a frame under \
-             emulation is allowed"
+            "{arch}: a frame took {took} us, of which the host kept the guest's processors \
+             waiting at most {waited} us; the other {own} us are past the {bound} us a frame \
+             under emulation is allowed (over the whole boot the most-kept processor waited \
+             {whole} ms of {over} ms)"
         )));
     }
     println!(
-        "  {arch}: the slowest frame the guest drew took {slowest} us, under emulation; the \
-         renderer's own bound is checked in release by `userland/compositor/render`"
+        "  {arch}: the slowest frame the guest drew took {took} us under emulation, {waited} us \
+         of it waiting on the host; the renderer's own bound is checked in release by \
+         `userland/compositor/render`"
     );
+    match &timing.control {
+        Some(Ok(showed)) => println!("  {arch}: {showed}"),
+        Some(Err(error)) if error.to_string().starts_with("no negative control") => {
+            println!("  {arch}: {error}");
+        }
+        Some(Err(error)) => return Err(Error::new(error.to_string())),
+        None => {}
+    }
     Ok(())
 }
 

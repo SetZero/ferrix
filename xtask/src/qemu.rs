@@ -8,7 +8,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::args::Args;
@@ -750,6 +750,9 @@ type AtMarker<'a> = &'a mut dyn FnMut(&mut Watching<'_>) -> Result<()>;
 pub(crate) struct Watching<'a> {
     lines: &'a [String],
     receiver: &'a mpsc::Receiver<String>,
+    /// When each line reached xtask, in the order the lines came: what
+    /// [`Watching::arrived`] answers.
+    arrivals: &'a Mutex<Vec<Instant>>,
     log: &'a mut std::fs::File,
     started: Instant,
     after: Vec<String>,
@@ -786,6 +789,16 @@ impl Watching<'_> {
     /// The lines read since, by [`Watching::read_more`].
     pub(crate) fn after(&self) -> &[String] {
         &self.after
+    }
+
+    /// When line `index` of [`Watching::lines`] and then [`Watching::after`]
+    /// reached xtask: the moment the reader thread took it from QEMU, which
+    /// the stamp in the transcript is not (see [`Watching::read_more`]).
+    pub(crate) fn arrived(&self, index: usize) -> Option<Instant> {
+        self.arrivals
+            .lock()
+            .ok()
+            .and_then(|arrivals| arrivals.get(index).copied())
     }
 
     /// Type `keys` at the guest's console, as a person at the terminal
@@ -901,7 +914,7 @@ fn watch_hooked(
     // A reader thread and a channel, rather than a non-blocking read: the guest
     // may say nothing for seconds at a time, and the timeout has to apply to
     // the boot as a whole rather than to each line.
-    let (receiver, reader) = read_lines(stdout);
+    let (receiver, arrivals, reader) = read_lines(stdout);
 
     let log_path = paths::build_dir(arch).join("serial.log");
     let mut log = std::fs::File::create(&log_path)?;
@@ -973,7 +986,7 @@ fn watch_hooked(
         at_marker,
         verdict,
         &mut lines,
-        &receiver,
+        (&receiver, &arrivals),
         &mut log,
         started,
         keyboard.as_mut(),
@@ -1026,20 +1039,34 @@ fn finish_watching(
     })
 }
 
-/// Read `stdout` a line at a time on a thread of its own, into a channel.
+/// When each line arrived, in the order they did.
+type Arrivals = Arc<Mutex<Vec<Instant>>>;
+
+/// Read `stdout` a line at a time on a thread of its own, into a channel,
+/// noting when each arrived: the time a line is received from the channel is
+/// whenever the watcher came back for it.
 fn read_lines(
     stdout: std::process::ChildStdout,
-) -> (mpsc::Receiver<String>, std::thread::JoinHandle<()>) {
+) -> (
+    mpsc::Receiver<String>,
+    Arrivals,
+    std::thread::JoinHandle<()>,
+) {
     let (sender, receiver) = mpsc::channel();
+    let arrivals = Arrivals::default();
+    let noted = Arc::clone(&arrivals);
     let reader = std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
+            if let Ok(mut noted) = noted.lock() {
+                noted.push(Instant::now());
+            }
             if sender.send(line).is_err() {
                 break;
             }
         }
     });
-    (receiver, reader)
+    (receiver, arrivals, reader)
 }
 
 /// The error for a boot that was waited on for [`SUCCESS_MARKER`] and printed
@@ -1077,7 +1104,7 @@ fn run_hook(
     at_marker: Option<AtMarker<'_>>,
     verdict: Verdict,
     lines: &mut Vec<String>,
-    receiver: &mpsc::Receiver<String>,
+    (receiver, arrivals): (&mpsc::Receiver<String>, &Arrivals),
     log: &mut std::fs::File,
     started: Instant,
     keyboard: Option<&mut std::process::ChildStdin>,
@@ -1091,6 +1118,7 @@ fn run_hook(
     let mut watching = Watching {
         lines,
         receiver,
+        arrivals,
         log,
         started,
         after: Vec::new(),

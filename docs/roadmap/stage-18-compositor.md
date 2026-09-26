@@ -566,6 +566,12 @@ nazuna a full 1024x768 frame took 1.3 to 2 s there, about twice AArch64's
 `test-compositor` allows ARMv7-A 10 s a frame under emulation where the
 64-bit machines get 5: fine for a pixel test and nowhere near interactive.
 The board's own numbers wait on its display driver.
+Since 2026-09-26 a frame is held to that bound only after the time the
+host kept QEMU's virtual processors waiting on its run queues, inside the
+frame's own stretch, is taken off: at a load of 21 on nazuna that was 1.1 s
+of a 1.6 s x86-64 frame. The same boot then stops QEMU for longer than the
+bound mid-slide, as a negative control, and requires the frame it stopped
+in to fail.
 
 This stage's exit criterion is met in full, and its 96 points are spent.
 The visible iterations the customer ordered on 2026-09-16 -- a blank screen
