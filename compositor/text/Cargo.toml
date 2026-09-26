@@ -1,0 +1,34 @@
+[package]
+name = "compositor-text"
+description = "Text for the desktop clients: font discovery, shaping, antialiased glyphs on tiny-skia, layout, and a Pango-markup subset"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "compositor_text"
+path = "src/lib.rs"
+
+[dependencies]
+# The font file itself: cmap, metrics, the name table, glyph outlines
+# (TrueType quadratics and CFF cubics), variable-font axes. Pure Rust, no
+# unsafe in its parsing and no dependencies of its own with the defaults off;
+# `std` and `opentype-layout` (GSUB/GPOS tables, which rustybuzz reads) and
+# `variable-fonts` (Inter, the tree's own sans-serif, is one) are all that is
+# turned on.
+ttf-parser = { version = "0.25.1", default-features = false, features = ["std", "opentype-layout", "variable-fonts", "apple-layout"] }
+# Shaping: HarfBuzz's algorithm in pure Rust, over ttf-parser. It is what
+# applies GPOS kerning and GSUB ligatures the way Pango (HarfBuzz) does for
+# waybar and hyprlock upstream, so a line is as wide here as it is there --
+# which decides where a bar's modules sit and where fuzzel ellipsizes. Its
+# dependencies are pure Rust tables: bitflags, bytemuck, core_maths, log,
+# smallvec and four unicode-* property crates.
+rustybuzz = { version = "0.20.1", default-features = false, features = ["std"] }
+# The rasteriser: a glyph's outline is a path filled with antialiasing into
+# an alpha mask. The same exact pin as compositor-render.
+tiny-skia = { version = "=0.12.0", default-features = false, features = ["std", "simd"] }
+
+[lints]
+workspace = true
