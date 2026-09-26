@@ -477,7 +477,7 @@ repeats. Each slice lands on its own:
 
 | # | Slice | Exit | Points |
 |---|---|---|---|
-| U2a | `pulse-server`, the protocol state machine, on `pulseaudio` at the pinned revision: `AUTH` at protocol 35 with shared memory and memfd both refused, so samples come inline; the client's name; the server's, sink's and source's information and lists (one sink, the card's 48 kHz S16_LE stereo); `CREATE_PLAYBACK_STREAM` and `DELETE_PLAYBACK_STREAM` with the buffer attributes, and requests accounted as `pa_memblockq` does (`tlength`, `minreq`, `prebuf`); `CORK`, `FLUSH`, `DRAIN`, `GET_PLAYBACK_LATENCY`. One stream, no mixing | Host tests replay command sequences `patrace` recorded between the host's `paplay` or Chrome and its server, and each answer matches in kind and field | 4 |
+| U2a | **Done 2026-09-27.** `pulse-server`, the protocol state machine, on `pulseaudio` at the pinned revision: `AUTH` at protocol 35 with shared memory and memfd both refused, so samples come inline; the client's name; the server's, sink's and source's information and lists (one sink, the card's 48 kHz S16_LE stereo); `CREATE_PLAYBACK_STREAM` and `DELETE_PLAYBACK_STREAM` with the buffer attributes, and requests accounted as `pa_memblockq` does (`tlength`, `minreq`, `prebuf`); `CORK`, `FLUSH`, `DRAIN`, `GET_PLAYBACK_LATENCY`. One stream, no mixing | Host tests replay command sequences `patrace` recorded between the host's `paplay` or Chrome and its server, and each answer matches in kind and field | 4 |
 | U2b | `pulsed`, the daemon: `$XDG_RUNTIME_DIR/pulse/native`, one stream written through `media/pcm` to `/dev/snd` and clocked by the card; `pa-tone`, a Rust client that sends tone's counter over the protocol | `test-audio`'s fifth boot, `pulsed` and `pa-tone`, frame for frame, with a negative control | 4 |
 | U2c | Mixing: any number of streams summed with saturation into the card's one format, each resampled from its own rate by `media/resample` and its channels mapped (mono to stereo), per-stream volume and mute, an underrun filled with silence | Host tests of the mix against a model; a boot of two `pa-tone`s at 44.1 and 48 kHz whose sum the file holds within the resampler's bound | 5 |
 | U2d | The desktop: `pulsed` as an init unit of the session, Debian's `libpulse0` and what it links on Chrome's volume, Chrome through Pulse rather than ALSA (it prefers Pulse once `libpulse.so.0` loads) | `test-chrome-audio` through `pulsed`; `run-compositor --everything` plays a video's sound through it | 5 |
@@ -754,4 +754,17 @@ counter, which goes through alsa-lib's configuration and `plug` to
 `/dev/snd`, and QEMU's file must hold the counter frame for frame. It did,
 on its first run. With one frame of the WAV file changed, the check failed
 at exactly that frame. Shared libraries wait for a client that wants them.
+
+U2a is done (2026-09-27): `userland/media/pulse-server` is the protocol's
+server side as a state machine with no I/O, on `pulseaudio` at 3c0325f.
+Its 12 host tests drive it as libpulse does, with the crate's own encoders,
+through sequences `patrace` recorded between mpv or ffmpeg and PipeWire's
+server on the host. Recording them settled two things §5 had not said. mpv
+names its format only in the format list, with the sample specification
+left invalid and the values JSON-quoted. And a client polls
+`GET_PLAYBACK_LATENCY` far more than anything else: 72 of mpv's commands in
+one second of silence. The latency reply's `write_offset` and `read_offset`
+are what it keeps time by. The buffer attributes a client leaves to the
+server are PulseAudio's rules with a `tlength` of 250 ms rather than 2 s,
+since the card has 320 ms of its own.
 

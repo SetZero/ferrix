@@ -1,4 +1,5 @@
-# Media on Ferrix: a video player and the pieces a game's sound needs.
+# Media on Ferrix: a video player, the pieces a game's sound needs, and the
+# PulseAudio-protocol server (docs/AUDIO.md, U2).
 #
 # A workspace of its own, as the compositor and zinc are: Linux user programs
 # built with std, speaking only the Linux ABI, cross-built for the initramfs
@@ -7,7 +8,7 @@
 # (`pcm`) builds only for Linux.
 [workspace]
 resolver = "3"
-members = ["badapple", "bav", "pcm", "resample"]
+members = ["badapple", "bav", "pcm", "pulse-server", "resample"]
 
 [workspace.package]
 version = "0.1.0"

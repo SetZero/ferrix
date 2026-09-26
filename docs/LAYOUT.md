@@ -91,7 +91,7 @@ directory:
 | `userland/init/` | `/sbin/init`, getty and the unit files. |
 | `userland/zinc/` | The zsh-compatible shell. |
 | `userland/statd/` | The stat service. |
-| `userland/media/` | Bad Apple!!: its video format and the host's converter, a resampler, playback through `/dev/snd`, and the player (`docs/MEDIA.md`). |
+| `userland/media/` | Bad Apple!!'s player, its video format and the host's converter (`docs/MEDIA.md`); the resampler and the playback through `/dev/snd` it and the sound server share; and the PulseAudio-protocol server and its client (`docs/AUDIO.md`, U2). ferrix-90's since 2026-09-27, when Bad Apple's author stopped. |
 | `userland/ferrousli/` | The C library written in Rust, its dynamic linker, and the ports built against it (`tools/ports/`). |
 
 ## `tests/`

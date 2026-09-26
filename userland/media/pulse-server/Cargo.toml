@@ -1,0 +1,22 @@
+[package]
+name = "media-pulse-server"
+description = "The PulseAudio native protocol's server side, as a state machine with no I/O: clients, playback streams and what they are owed"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "media_pulse_server"
+path = "src/lib.rs"
+
+[dependencies]
+# The protocol's messages, typed in both directions (MIT). A git revision
+# rather than 0.3.1: 3c0325f fixes CREATE_PLAYBACK_STREAM's flags past
+# protocol 21, which every current libpulse sends, and is in no release yet
+# (docs/AUDIO.md §6, decision 5).
+pulseaudio = { git = "https://github.com/colinmarc/pulseaudio-rs", rev = "3c0325feceb35c8356dfb1e0da5ede6e85aa409c" }
+
+[lints]
+workspace = true
