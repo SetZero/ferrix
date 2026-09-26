@@ -71,6 +71,9 @@ pub(crate) fn dispatch(
     let flag = |at: usize| word(at) as u32;
     let answer = match call {
         Syscall::Kill => sys_kill(process, int(0), flag(1)),
+        Syscall::PidfdSendSignal => {
+            sys_pidfd_send_signal(process, int(0), flag(1), word(2), flag(3))
+        }
         Syscall::Tkill => sys_tkill(process, int(0), flag(1)),
         Syscall::Tgkill => sys_tgkill(process, int(0), int(1), flag(2)),
         Syscall::Pause => deliver::sys_pause(process),
@@ -176,6 +179,45 @@ pub(crate) fn sys_kill(process: &Process, pid: i32, signal: u32) -> Result<usize
     if !sent {
         return Err(Errno::EPERM);
     }
+    Ok(0)
+}
+
+/// `pidfd_send_signal`'s flag for the whole process, as no flag is.
+const PIDFD_SIGNAL_THREAD_GROUP: u32 = 1 << 1;
+
+/// `pidfd_send_signal`: `kill` for the one process a pidfd names, which a
+/// pid reused since cannot redirect. A process that has ended and not been
+/// reaped takes the call and ignores the signal, as `kill` on it does; once
+/// reaped, its pid is gone and the call is `ESRCH`.
+///
+/// # Errors
+///
+/// `EBADF` for a descriptor that is not a pidfd; `EINVAL` for a flag other
+/// than `PIDFD_SIGNAL_THREAD_GROUP`, for a
+/// `siginfo_t` (not taken yet: the call with none is `kill`'s) or a signal
+/// past 64; `ESRCH` once the process is reaped; `EPERM` as `kill`.
+pub(crate) fn sys_pidfd_send_signal(
+    process: &Process,
+    pidfd: i32,
+    signal: u32,
+    info: u64,
+    flags: u32,
+) -> Result<usize, Errno> {
+    let file = crate::syscall::fd::file(process, pidfd)?;
+    let pidfd = crate::fs::pidfd::of(&file).ok_or(Errno::EBADF)?;
+    // `PIDFD_SIGNAL_THREAD_GROUP` names what no flag does for a process's
+    // pidfd; the thread and process-group forms are not taken yet.
+    if flags & !PIDFD_SIGNAL_THREAD_GROUP != 0 || info != 0 || signal > NSIG {
+        return Err(Errno::EINVAL);
+    }
+    let target = pidfd.process();
+    if target.is_reaped() {
+        return Err(Errno::ESRCH);
+    }
+    if !may_signal(process, target, signal) {
+        return Err(Errno::EPERM);
+    }
+    send(target, signal, Origin::User { pid: process.pid() });
     Ok(0)
 }
 

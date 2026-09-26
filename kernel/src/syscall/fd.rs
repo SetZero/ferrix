@@ -227,6 +227,13 @@ pub(crate) fn sys_openat(
     // filesystems, and `chdir` on another thread must not wait for it. It
     // carries the caller's identity, which the walk and the open check.
     let context = crate::syscall::path::context(process);
+    // Whether this open makes the file, for inotify's `IN_CREATE`: asked
+    // only while something is watched.
+    let creating = flags.create
+        && fs::inotify::watching()
+        && fs::namespace()
+            .resolve(&context, start.as_ref(), &path, !flags.nofollow)
+            .is_err();
     let opened = fs::namespace()
         .open(
             &context,
@@ -250,6 +257,10 @@ pub(crate) fn sys_openat(
             return Err(errno);
         }
     };
+    if creating {
+        fs::inotify::node_event(file.location(), fs::inotify::IN_CREATE);
+    }
+    fs::inotify::opened(&file);
     // The guard is a temporary of this statement: a file handed back by a
     // failed fill is dropped with the lock released, as the module requires.
     let filled = process.files().lock().fill(reserved, file);
@@ -266,8 +277,14 @@ pub(crate) fn sys_openat(
 /// classic record locks `process` holds on the file go, as Linux's
 /// `locks_remove_posix` takes them on every close, whichever descriptor set
 /// them.
-pub(crate) fn closed(process: &Process, file: &OpenFile) {
+///
+/// The last one to end also reports the file's close to inotify: the
+/// caller's hold is then the only one left.
+pub(crate) fn closed(process: &Process, file: &Arc<OpenFile>) {
     crate::syscall::flock::closed(process, file);
+    if Arc::strong_count(file) == 1 {
+        fs::inotify::closed(file);
+    }
 }
 
 /// `close`.
@@ -454,7 +471,9 @@ pub(crate) fn sys_llseek(
 /// Linux.
 pub(crate) fn sys_ftruncate(process: &Process, fd: i32, length: i64) -> Result<usize, Errno> {
     let length = u64::try_from(length).map_err(|_| Errno::EINVAL)?;
-    file(process, fd)?.set_len(length)?;
+    let file = file(process, fd)?;
+    file.set_len(length)?;
+    fs::inotify::node_event(file.location(), fs::inotify::IN_MODIFY);
     Ok(0)
 }
 
@@ -529,6 +548,18 @@ pub(crate) fn sys_ioctl(
     }
     if let Some(slave) = fs::pty::slave_of(file.io()) {
         return tty::slave_ioctl(process, &slave, request, arg);
+    }
+    // An inotify instance answers what is queued to read.
+    if let Some(instance) = fs::inotify::of(&file) {
+        return match request {
+            ferrix_linux_abi::types::FIONREAD => {
+                let queued = u32::try_from(instance.queued_bytes()).unwrap_or(u32::MAX);
+                uaccess::copy_to_user(process.space(), arg, &queued.to_ne_bytes())
+                    .map_err(|_| Errno::EFAULT)?;
+                Ok(0)
+            }
+            _ => Err(Errno::ENOTTY),
+        };
     }
     // The two socket requests, which ask a socket what is queued each way.
     let answered = if let Some(socket) = fs::socket::of(&file) {

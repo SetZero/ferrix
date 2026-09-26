@@ -196,6 +196,9 @@ pub(crate) struct Process {
     /// on to the queues it sleeps on; and a queue of its own, so that every
     /// wake it counts is a signal's arrival.
     signal_arrived: Arc<WaitQueue>,
+    /// Woken as it is released, for a pidfd's `poll`: made by the first
+    /// `pidfd_open` of it, so a process nobody holds a pidfd for has none.
+    pidfd_queue: SpinLock<Option<Arc<WaitQueue>>>,
     /// The signal that stopped it, or zero while it runs.
     stopped: AtomicU32,
     /// A stop its parent has not yet been told of by `wait4`, or zero.
@@ -364,6 +367,7 @@ impl Process {
             vfork_done: WaitQueue::new(),
             signalled: WaitQueue::new(),
             signal_arrived: fallible::try_arc(WaitQueue::new())?,
+            pidfd_queue: SpinLock::new(None),
             stopped: AtomicU32::new(0),
             stop_report: AtomicU32::new(0),
             continue_report: AtomicBool::new(false),
@@ -1050,6 +1054,10 @@ impl Process {
         // to do, and the queue woken again for the waiters that wait for this.
         self.release_finished.store(true, Ordering::Release);
         self.exited().wake_all();
+        let pidfds = self.pidfd_queue.lock().clone();
+        if let Some(queue) = pidfds {
+            queue.wake_all();
+        }
         // Its parent is told -- woken, and sent the signal it was created with,
         // `SIGCHLD` for a fork. It stays in the parent's list, ended, until
         // `wait4` takes it.
@@ -1097,6 +1105,25 @@ impl Process {
     /// threads: a signalfd's.
     pub(crate) fn signal_arrived(&self) -> &Arc<WaitQueue> {
         &self.signal_arrived
+    }
+
+    /// Make the queue a pidfd for it waits on, unless there is one.
+    ///
+    /// # Errors
+    ///
+    /// When the queue cannot be allocated.
+    pub(crate) fn make_pidfd_queue(&self) -> Result<(), AllocError> {
+        let mut queue = self.pidfd_queue.lock();
+        if queue.is_none() {
+            *queue = Some(fallible::try_arc(WaitQueue::new())?);
+        }
+        Ok(())
+    }
+
+    /// The queue a pidfd for it waits on, once [`Process::make_pidfd_queue`]
+    /// has made it: woken as it is released.
+    pub(crate) fn pidfd_queue(&self) -> Option<Arc<WaitQueue>> {
+        self.pidfd_queue.lock().clone()
     }
 
     /// Whether a wait it is in should end: it has ended, or a signal the
@@ -1464,6 +1491,20 @@ impl Process {
     /// Whether `pid` is one of its children, ended or not.
     pub(crate) fn has_child(&self, pid: u32) -> bool {
         self.children.lock().iter().any(|child| child.pid() == pid)
+    }
+
+    /// Whether it has been reaped: released, and in no parent's list of
+    /// children, so no wait can take it any more. Asked by identity, not by
+    /// pid, since its pid may already name another process.
+    pub(crate) fn is_reaped(&self) -> bool {
+        self.is_released()
+            && !self.parent().is_some_and(|parent| {
+                parent
+                    .children
+                    .lock()
+                    .iter()
+                    .any(|child| core::ptr::eq(Arc::as_ptr(child), self))
+            })
     }
 
     /// A child `select` accepts that has ended, taken out of the list when

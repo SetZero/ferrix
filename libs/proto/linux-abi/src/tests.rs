@@ -82,6 +82,7 @@ const X86_64_ONLY: &[Syscall] = &[
     Syscall::Mknod,
     Syscall::ArchPrctl,
     Syscall::EpollCreate,
+    Syscall::InotifyInit,
     Syscall::Eventfd,
     Syscall::Signalfd,
     Syscall::EpollWait,
@@ -181,6 +182,27 @@ const SHARED: &[(usize, usize, Syscall)] = &[
     ),
     (x86_64::RSEQ, aarch64::RSEQ, Syscall::Rseq),
     (x86_64::MEMBARRIER, aarch64::MEMBARRIER, Syscall::Membarrier),
+    (
+        x86_64::INOTIFY_INIT1,
+        aarch64::INOTIFY_INIT1,
+        Syscall::InotifyInit1,
+    ),
+    (
+        x86_64::INOTIFY_ADD_WATCH,
+        aarch64::INOTIFY_ADD_WATCH,
+        Syscall::InotifyAddWatch,
+    ),
+    (
+        x86_64::INOTIFY_RM_WATCH,
+        aarch64::INOTIFY_RM_WATCH,
+        Syscall::InotifyRmWatch,
+    ),
+    (x86_64::PIDFD_OPEN, aarch64::PIDFD_OPEN, Syscall::PidfdOpen),
+    (
+        x86_64::PIDFD_SEND_SIGNAL,
+        aarch64::PIDFD_SEND_SIGNAL,
+        Syscall::PidfdSendSignal,
+    ),
     (x86_64::SOCKETPAIR, aarch64::SOCKETPAIR, Syscall::Socketpair),
     (x86_64::BIND, aarch64::BIND, Syscall::Bind),
     (x86_64::LISTEN, aarch64::LISTEN, Syscall::Listen),
@@ -1650,7 +1672,6 @@ fn unknown_numbers_map_to_none_without_panicking() {
         149,
         300,
         400,
-        434,
         436,
         438,
         440,
@@ -1674,8 +1695,6 @@ fn unknown_numbers_map_to_none_without_panicking() {
         3,
         4,
         18,
-        26,
-        27,
         42,
         60,
         70,
@@ -1686,7 +1705,6 @@ fn unknown_numbers_map_to_none_without_panicking() {
         250,
         300,
         400,
-        434,
         436,
         438,
         440,
@@ -1764,13 +1782,13 @@ fn table_sizes_are_stable() {
     // `socket` being unreachable on AArch64.
     assert_eq!(
         mapped(from_x86_64).len(),
-        246,
-        "the x86-64 table maps 246 calls"
+        252,
+        "the x86-64 table maps 252 calls"
     );
     assert_eq!(
         mapped(from_aarch64).len(),
-        215,
-        "the AArch64 table maps 215 calls"
+        220,
+        "the AArch64 table maps 220 calls"
     );
 }
 /// Calls only ARMv7-A has, because it is the only 32-bit target.
@@ -2006,6 +2024,9 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (312, Syscall::Semtimedop),               // semtimedop
     (314, Syscall::IoprioSet),                // ioprio_set
     (315, Syscall::IoprioGet),                // ioprio_get
+    (316, Syscall::InotifyInit),              // inotify_init
+    (317, Syscall::InotifyAddWatch),          // inotify_add_watch
+    (318, Syscall::InotifyRmWatch),           // inotify_rm_watch
     (322, Syscall::Openat),                   // openat
     (323, Syscall::Mkdirat),                  // mkdirat
     (324, Syscall::Mknodat),                  // mknodat
@@ -2037,6 +2058,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (357, Syscall::EpollCreate1),             // epoll_create1
     (358, Syscall::Dup3),                     // dup3
     (359, Syscall::Pipe2),                    // pipe2
+    (360, Syscall::InotifyInit1),             // inotify_init1
     (366, Syscall::Accept4),                  // accept4
     (369, Syscall::Prlimit64),                // prlimit64
     (372, Syscall::ClockAdjtime),             // clock_adjtime
@@ -2064,6 +2086,8 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (421, Syscall::RtSigtimedwaitTime64),     // rt_sigtimedwait_time64
     (422, Syscall::FutexTime64),              // futex_time64
     (423, Syscall::SchedRrGetIntervalTime64), // sched_rr_get_interval_time64
+    (424, Syscall::PidfdSendSignal),          // pidfd_send_signal
+    (434, Syscall::PidfdOpen),                // pidfd_open
     (435, Syscall::Clone3),                   // clone3
     (437, Syscall::Openat2),                  // openat2
     (439, Syscall::Faccessat2),               // faccessat2
@@ -2271,7 +2295,7 @@ fn arm_covers_the_calls_musl_startup_makes() {
 #[test]
 fn arm_table_size_is_stable() {
     // A canary, as for the other two tables.
-    assert_eq!(mapped_arm().len(), 264, "the ARMv7-A table maps 264 calls");
+    assert_eq!(mapped_arm().len(), 270, "the ARMv7-A table maps 270 calls");
 }
 
 /// The filesystem-control and extended-attribute calls, against the numbers in

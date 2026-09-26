@@ -139,6 +139,10 @@ const P_ALL: u32 = 0;
 const P_PID: u32 = 1;
 /// `waitid`'s `idtype`: any child in this process group.
 const P_PGID: u32 = 2;
+/// `waitid`'s `idtype`: the child a pidfd names.
+const P_PIDFD: u32 = 3;
+/// `pidfd_open`'s one flag, `O_NONBLOCK` under another name.
+const PIDFD_NONBLOCK: u32 = ferrix_linux_abi::types::O_NONBLOCK;
 
 use crate::syscall::kill::{CLD_CONTINUED, CLD_EXITED, CLD_KILLED, CLD_STOPPED};
 
@@ -726,6 +730,23 @@ pub(crate) fn sys_wait4(
     Ok(child.pid() as usize)
 }
 
+/// `pidfd_open`: a descriptor for process `pid`, close-on-exec as Linux
+/// always makes it, readable once the process has ended.
+///
+/// # Errors
+///
+/// `EINVAL` for a pid below one or a flag other than `PIDFD_NONBLOCK`;
+/// `ESRCH` for no such process; `EMFILE` for a full table.
+pub(crate) fn sys_pidfd_open(process: &Process, pid: i32, flags: u32) -> Result<usize, Errno> {
+    if pid <= 0 || flags & !PIDFD_NONBLOCK != 0 {
+        return Err(Errno::EINVAL);
+    }
+    let target = registry::find(pid.unsigned_abs()).ok_or(Errno::ESRCH)?;
+    let file = crate::fs::pidfd::create(target, flags & PIDFD_NONBLOCK != 0)?;
+    let fd = process.files().lock().insert(file, true)?;
+    usize::try_from(fd).map_err(|_| Errno::EMFILE)
+}
+
 /// `waitid`.
 ///
 /// # Errors
@@ -745,15 +766,24 @@ pub(crate) fn sys_waitid(
     {
         return Err(Errno::EINVAL);
     }
-    let select = move |child: &Process| match idtype {
-        P_ALL => true,
-        P_PID => child.pid() == id,
-        P_PGID => child.pgid() == id,
-        _ => false,
-    };
-    if !matches!(idtype, P_ALL | P_PID | P_PGID) {
+    if !matches!(idtype, P_ALL | P_PID | P_PGID | P_PIDFD) {
         return Err(Errno::EINVAL);
     }
+    // A pidfd's process, by its pid: a child is in the caller's list until
+    // it is reaped, so the pid cannot have been given to another child yet.
+    let named = if idtype == P_PIDFD {
+        let file = fd::file(process, fd::arg(u64::from(id)))?;
+        let pidfd = crate::fs::pidfd::of(&file).ok_or(Errno::EBADF)?;
+        pidfd.process().pid()
+    } else {
+        id
+    };
+    let select = move |child: &Process| match idtype {
+        P_ALL => true,
+        P_PID | P_PIDFD => child.pid() == named,
+        P_PGID => child.pgid() == named,
+        _ => false,
+    };
     let found = wait_for_child(process, &select, options, options & WNOWAIT == 0)?;
     if infop != 0 {
         let mut info = [0_u8; SIGINFO_BYTES];

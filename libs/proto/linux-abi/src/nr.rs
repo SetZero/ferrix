@@ -422,6 +422,12 @@ pub mod x86_64 {
     pub const IOPRIO_SET: usize = 251;
     /// Read a process's I/O scheduling class and priority.
     pub const IOPRIO_GET: usize = 252;
+    /// Make an inotify instance, with no flags. x86-64 and ARMv7-A only.
+    pub const INOTIFY_INIT: usize = 253;
+    /// Watch a path on an inotify instance.
+    pub const INOTIFY_ADD_WATCH: usize = 254;
+    /// Remove a watch from an inotify instance.
+    pub const INOTIFY_RM_WATCH: usize = 255;
     /// Open a file relative to a directory file descriptor.
     pub const OPENAT: usize = 257;
     /// Create a directory relative to a directory file descriptor.
@@ -485,6 +491,8 @@ pub mod x86_64 {
     pub const DUP3: usize = 292;
     /// Create a pipe with flags.
     pub const PIPE2: usize = 293;
+    /// Make an inotify instance, with flags.
+    pub const INOTIFY_INIT1: usize = 294;
     /// Read and set a resource limit of any process in one call.
     pub const PRLIMIT64: usize = 302;
     /// Read or tune a chosen clock's discipline.
@@ -511,6 +519,10 @@ pub mod x86_64 {
     pub const STATX: usize = 332;
     /// Register a restartable sequence area.
     pub const RSEQ: usize = 334;
+    /// Send a signal to the process a pidfd refers to.
+    pub const PIDFD_SEND_SIGNAL: usize = 424;
+    /// Make a pidfd: a descriptor for a process, readable once it has ended.
+    pub const PIDFD_OPEN: usize = 434;
     /// Create a process or thread from a versioned argument structure.
     pub const CLONE3: usize = 435;
     /// Open a file from a versioned argument structure.
@@ -585,6 +597,12 @@ pub mod aarch64 {
     pub const DUP3: usize = 24;
     /// Manipulate a file descriptor's flags and locks.
     pub const FCNTL: usize = 25;
+    /// Make an inotify instance, with flags.
+    pub const INOTIFY_INIT1: usize = 26;
+    /// Watch a path on an inotify instance.
+    pub const INOTIFY_ADD_WATCH: usize = 27;
+    /// Remove a watch from an inotify instance.
+    pub const INOTIFY_RM_WATCH: usize = 28;
     /// Device-specific control operation on a file descriptor.
     pub const IOCTL: usize = 29;
     /// Set a process's I/O scheduling class and priority.
@@ -961,6 +979,10 @@ pub mod aarch64 {
     pub const STATX: usize = 291;
     /// Register a restartable sequence area.
     pub const RSEQ: usize = 293;
+    /// Send a signal to the process a pidfd refers to.
+    pub const PIDFD_SEND_SIGNAL: usize = 424;
+    /// Make a pidfd: a descriptor for a process, readable once it has ended.
+    pub const PIDFD_OPEN: usize = 434;
     /// Create a process or thread from a versioned argument structure.
     ///
     /// Numbers assigned after the generic table was frozen are the same on both
@@ -1415,6 +1437,12 @@ pub mod arm {
     pub const IOPRIO_SET: usize = 314;
     /// Read a process's I/O scheduling class and priority.
     pub const IOPRIO_GET: usize = 315;
+    /// Make an inotify instance, with no flags.
+    pub const INOTIFY_INIT: usize = 316;
+    /// Watch a path on an inotify instance.
+    pub const INOTIFY_ADD_WATCH: usize = 317;
+    /// Remove a watch from an inotify instance.
+    pub const INOTIFY_RM_WATCH: usize = 318;
     /// Open a file relative to a directory file descriptor.
     pub const OPENAT: usize = 322;
     /// Create a directory relative to a directory file descriptor.
@@ -1484,6 +1512,8 @@ pub mod arm {
     pub const DUP3: usize = 358;
     /// Create a pipe with flags.
     pub const PIPE2: usize = 359;
+    /// Make an inotify instance, with flags.
+    pub const INOTIFY_INIT1: usize = 360;
     /// Accept a connection, with flags for the new descriptor.
     pub const ACCEPT4: usize = 366;
     /// Read and set a resource limit of any process in one call.
@@ -1548,6 +1578,10 @@ pub mod arm {
     /// Report a thread's round-robin time slice into a 64-bit `timespec`.
     /// ARMv7-A only.
     pub const SCHED_RR_GET_INTERVAL_TIME64: usize = 423;
+    /// Send a signal to the process a pidfd refers to.
+    pub const PIDFD_SEND_SIGNAL: usize = 424;
+    /// Make a pidfd: a descriptor for a process, readable once it has ended.
+    pub const PIDFD_OPEN: usize = 434;
     /// Create a process or thread from a versioned argument structure.
     pub const CLONE3: usize = 435;
     /// Open a file from a versioned argument structure.
@@ -2222,6 +2256,18 @@ pub enum Syscall {
     /// Create a signalfd, or change one's mask, with no flags. x86-64 and
     /// ARMv7-A only.
     Signalfd,
+    /// Make an inotify instance, with no flags. x86-64 and ARMv7-A only.
+    InotifyInit,
+    /// Make an inotify instance, with flags.
+    InotifyInit1,
+    /// Watch a path on an inotify instance.
+    InotifyAddWatch,
+    /// Remove a watch from an inotify instance.
+    InotifyRmWatch,
+    /// Make a pidfd for a process.
+    PidfdOpen,
+    /// Send a signal through a pidfd.
+    PidfdSendSignal,
     /// Create a timer that expires into a descriptor.
     TimerfdCreate,
     /// Arm or disarm a timerfd, from native-width `itimerspec`s.
@@ -2520,6 +2566,12 @@ fn x86_64_at_family(nr: usize) -> Option<Syscall> {
 /// x86-64 numbers from 350 up: calls added after the number spaces converged.
 fn x86_64_recent(nr: usize) -> Option<Syscall> {
     let call = match nr {
+        x86_64::INOTIFY_INIT => Syscall::InotifyInit,
+        x86_64::INOTIFY_INIT1 => Syscall::InotifyInit1,
+        x86_64::INOTIFY_ADD_WATCH => Syscall::InotifyAddWatch,
+        x86_64::INOTIFY_RM_WATCH => Syscall::InotifyRmWatch,
+        x86_64::PIDFD_OPEN => Syscall::PidfdOpen,
+        x86_64::PIDFD_SEND_SIGNAL => Syscall::PidfdSendSignal,
         x86_64::CLONE3 => Syscall::Clone3,
         x86_64::OPENAT2 => Syscall::Openat2,
         x86_64::FACCESSAT2 => Syscall::Faccessat2,
@@ -2833,6 +2885,11 @@ fn aarch64_memory_and_process(nr: usize) -> Option<Syscall> {
 /// AArch64 numbers from 300 up: calls added after the number spaces converged.
 fn aarch64_recent(nr: usize) -> Option<Syscall> {
     let call = match nr {
+        aarch64::INOTIFY_INIT1 => Syscall::InotifyInit1,
+        aarch64::INOTIFY_ADD_WATCH => Syscall::InotifyAddWatch,
+        aarch64::INOTIFY_RM_WATCH => Syscall::InotifyRmWatch,
+        aarch64::PIDFD_OPEN => Syscall::PidfdOpen,
+        aarch64::PIDFD_SEND_SIGNAL => Syscall::PidfdSendSignal,
         aarch64::CLONE3 => Syscall::Clone3,
         aarch64::OPENAT2 => Syscall::Openat2,
         aarch64::FACCESSAT2 => Syscall::Faccessat2,
@@ -3178,6 +3235,12 @@ fn arm_recent(nr: usize) -> Option<Syscall> {
         arm::UTIMENSAT_TIME64 => Syscall::UtimensatTime64,
         arm::PPOLL_TIME64 => Syscall::PpollTime64,
         arm::FUTEX_TIME64 => Syscall::FutexTime64,
+        arm::INOTIFY_INIT => Syscall::InotifyInit,
+        arm::INOTIFY_INIT1 => Syscall::InotifyInit1,
+        arm::INOTIFY_ADD_WATCH => Syscall::InotifyAddWatch,
+        arm::INOTIFY_RM_WATCH => Syscall::InotifyRmWatch,
+        arm::PIDFD_OPEN => Syscall::PidfdOpen,
+        arm::PIDFD_SEND_SIGNAL => Syscall::PidfdSendSignal,
         arm::CLONE3 => Syscall::Clone3,
         arm::OPENAT2 => Syscall::Openat2,
         arm::FACCESSAT2 => Syscall::Faccessat2,

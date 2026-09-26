@@ -49,6 +49,7 @@ use ferrix_vfs::{
 };
 
 use crate::fs;
+use crate::fs::inotify;
 use crate::syscall::credentials;
 use crate::syscall::fd::{self, arg as int, file as open_file, user_path};
 use crate::syscall::process::Process;
@@ -91,6 +92,7 @@ fn describe(call: Syscall, a: &[u64; 6], process: &Process) -> Option<Result<usi
         }
         Syscall::Readlink => sys_readlinkat(process, AT_FDCWD, a[0], a[1], a[2]),
         Syscall::Readlinkat => sys_readlinkat(process, int(a[0]), a[1], a[2], a[3]),
+        Syscall::InotifyAddWatch => sys_inotify_add_watch(process, int(a[0]), a[1], word(a[2])),
         Syscall::Getcwd => sys_getcwd(process, a[0], a[1]),
         _ => return None,
     };
@@ -292,8 +294,39 @@ fn sys_mkdirat(process: &Process, dirfd: i32, at: u64, mode: u32) -> Result<usiz
     let named = named_at(process, dirfd, at)?;
     // Linux's `vfs_mkdir` keeps the sticky bit and drops the set-id bits.
     let permissions = mode & 0o1777 & !process.umask();
+    let watched = watched_name(&named);
     fs::namespace().mkdir(&named.ctx, named.start(), &named.path, permissions)?;
+    made(watched, true);
     Ok(0)
+}
+
+/// The directory `named`'s last component is in, and that component: where
+/// an inotify event about the name goes. `None` while nothing is watched,
+/// and for a path whose last component is no name (`/`, `.`, `..`).
+///
+/// Looked up again beside the call it reports on, which is racy against a
+/// rename of the directory in between; Linux reports from inside the call.
+fn watched_name(named: &Named) -> Option<(Location, Vec<u8>)> {
+    if !inotify::watching() {
+        return None;
+    }
+    let (dir, name) = ferrix_vfs::path::split_last(&named.path);
+    if name.is_empty() || name == b"." || name == b".." || name == b"/" {
+        return None;
+    }
+    let dir: &[u8] = if dir.is_empty() { b"." } else { dir };
+    let at = fs::namespace()
+        .resolve(&named.ctx, named.start(), dir, true)
+        .ok()?;
+    Some((at, name.to_vec()))
+}
+
+/// `IN_CREATE` for a name a call made in the directory [`watched_name`]
+/// found.
+fn made(watched: Option<(Location, Vec<u8>)>, is_dir: bool) {
+    if let Some((dir, name)) = watched {
+        inotify::dir_event(&dir, &name, inotify::IN_CREATE, 0, is_dir);
+    }
 }
 
 /// `mknodat` and `mknod`.
@@ -331,7 +364,9 @@ fn sys_mknodat(
         credentials::require_privilege(process)?;
     }
     let permissions = mode & 0o7777 & !process.umask();
+    let watched = watched_name(&named);
     fs::namespace().mknod(&named.ctx, named.start(), &named.path, node, permissions)?;
+    made(watched, false);
     Ok(0)
 }
 
@@ -357,10 +392,28 @@ fn sys_unlinkat(process: &Process, dirfd: i32, at: u64, flags: u32) -> Result<us
     }
     let named = named_at(process, dirfd, at)?;
     let ns = fs::namespace();
+    let watched = watched_name(&named).and_then(|(dir, name)| {
+        let node = ns
+            .resolve(&named.ctx, named.start(), &named.path, false)
+            .ok()?;
+        let last = ns.stat(&node).ok()?.metadata.nlink <= 1;
+        Some((dir, name, inotify::key_of(&node)?, last))
+    });
     if flags & AT_REMOVEDIR != 0 {
         ns.rmdir(&named.ctx, named.start(), &named.path)?;
     } else {
         ns.unlink(&named.ctx, named.start(), &named.path)?;
+    }
+    if let Some((dir, name, (key, is_dir), last)) = watched {
+        inotify::dir_event(&dir, &name, inotify::IN_DELETE, 0, is_dir);
+        // Its last name gone, the node is; another name left, its count of
+        // them changed.
+        let what = if is_dir || last {
+            inotify::IN_DELETE_SELF
+        } else {
+            inotify::IN_ATTRIB
+        };
+        inotify::self_event(key, what, is_dir);
     }
     Ok(0)
 }
@@ -389,12 +442,40 @@ fn sys_renameat2(
     };
     let from = named_at(process, old.0, old.1)?;
     let to = named_at(process, new.0, new.1)?;
-    fs::namespace().rename(
+    let ns = fs::namespace();
+    let watched = watched_name(&from)
+        .zip(watched_name(&to))
+        .and_then(|(source, dest)| {
+            let moving = ns
+                .resolve(&from.ctx, from.start(), &from.path, false)
+                .ok()?;
+            let replaced = ns
+                .resolve(&to.ctx, to.start(), &to.path, false)
+                .ok()
+                .and_then(|there| inotify::key_of(&there));
+            Some((source, dest, inotify::key_of(&moving)?, replaced))
+        });
+    ns.rename(
         &from.ctx,
         (from.start(), &from.path),
         (to.start(), &to.path),
         mode,
     )?;
+    if let Some(((from_dir, from_name), (to_dir, to_name), (key, is_dir), replaced)) = watched {
+        let cookie = inotify::next_cookie();
+        inotify::dir_event(
+            &from_dir,
+            &from_name,
+            inotify::IN_MOVED_FROM,
+            cookie,
+            is_dir,
+        );
+        inotify::dir_event(&to_dir, &to_name, inotify::IN_MOVED_TO, cookie, is_dir);
+        inotify::self_event(key, inotify::IN_MOVE_SELF, is_dir);
+        if let Some((gone, gone_dir)) = replaced.filter(|(gone, _)| *gone != key) {
+            inotify::self_event(gone, inotify::IN_DELETE_SELF, gone_dir);
+        }
+    }
     Ok(0)
 }
 
@@ -405,7 +486,9 @@ fn sys_renameat2(
 fn sys_symlinkat(process: &Process, target: u64, dirfd: i32, at: u64) -> Result<usize, Errno> {
     let target = user_path(process, target)?;
     let named = named_at(process, dirfd, at)?;
+    let watched = watched_name(&named);
     fs::namespace().symlink(&named.ctx, named.start(), &named.path, &target)?;
+    made(watched, false);
     Ok(0)
 }
 
@@ -426,13 +509,48 @@ fn sys_linkat(
     }
     let from = named_at(process, old.0, old.1)?;
     let to = named_at(process, new.0, new.1)?;
+    let follow = flags & AT_SYMLINK_FOLLOW != 0;
+    let watched = watched_name(&to);
     fs::namespace().link(
         &from.ctx,
         (from.start(), &from.path),
-        flags & AT_SYMLINK_FOLLOW != 0,
+        follow,
         (to.start(), &to.path),
     )?;
+    if watched.is_some() {
+        // One more name for the node: its link count changed.
+        if let Ok(node) = fs::namespace().resolve(&from.ctx, from.start(), &from.path, follow) {
+            inotify::node_event(&node, inotify::IN_ATTRIB);
+        }
+    }
+    made(watched, false);
     Ok(0)
+}
+
+/// `inotify_add_watch`: watch what `at` names, from the working directory,
+/// following a final link unless the mask says not to.
+///
+/// # Errors
+///
+/// `EBADF` for a closed descriptor and `EINVAL` for one that is not an
+/// inotify instance; the walk's errors; `EACCES` without read permission on
+/// the node, as Linux asks; and `inotify::add_watch`'s.
+fn sys_inotify_add_watch(process: &Process, fd: i32, at: u64, mask: u32) -> Result<usize, Errno> {
+    let file = open_file(process, fd)?;
+    let instance = inotify::of(&file).ok_or(Errno::EINVAL)?;
+    let named = named_at(process, AT_FDCWD, at)?;
+    let node = fs::namespace().resolve(
+        &named.ctx,
+        named.start(),
+        &named.path,
+        inotify::follows(mask),
+    )?;
+    named
+        .ctx
+        .who
+        .require(&node.inode()?.metadata(), ferrix_vfs::access::MAY_READ)?;
+    let wd = inotify::add_watch(&instance, &node, mask)?;
+    usize::try_from(wd).map_err(|_| Errno::EINVAL)
 }
 
 /// `readlinkat` and `readlink`.
@@ -543,6 +661,7 @@ fn set(process: &Process, target: &Target, change: &SetAttributes) -> Result<usi
     let metadata = target.stat()?.metadata;
     let change = context(process).who.check_change(&metadata, change)?;
     fs::namespace().set_attributes(target.location(), &change)?;
+    inotify::node_event(target.location(), inotify::IN_ATTRIB);
     Ok(0)
 }
 

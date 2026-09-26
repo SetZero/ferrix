@@ -318,6 +318,7 @@ pub(crate) fn sys_truncate(process: &Process, at: u64, length: i64) -> Result<us
         path::context(process).who.require(&metadata, MAY_WRITE)?;
     }
     fs::namespace().truncate(target.location(), length)?;
+    fs::inotify::node_event(target.location(), fs::inotify::IN_MODIFY);
     Ok(0)
 }
 

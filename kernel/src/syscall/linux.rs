@@ -298,6 +298,7 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
             truncate(a[3]),
             a[4],
         ),
+        Syscall::PidfdOpen => family::sys_pidfd_open(process, a[0] as i32, truncate(a[1])),
         Syscall::Setpgid => family::sys_setpgid(process, a[0] as i32, a[1] as i32),
         Syscall::Getpgid => family::sys_getpgid(process, a[0] as i32),
         Syscall::Getpgrp => family::sys_getpgid(process, 0),
@@ -344,6 +345,11 @@ fn descriptors(call: Syscall, a: &[u64; 6], process: &Process) -> Option<Result<
         Syscall::MemfdCreate => memfd::sys_memfd_create(process, a[0], truncate(a[1])),
         Syscall::Eventfd2 => eventfd::sys_eventfd2(process, truncate(a[0]), truncate(a[1])),
         Syscall::Eventfd => eventfd::sys_eventfd(process, truncate(a[0])),
+        Syscall::InotifyInit1 => crate::fs::inotify::sys_inotify_init1(process, truncate(a[0])),
+        Syscall::InotifyInit => crate::fs::inotify::sys_inotify_init1(process, 0),
+        Syscall::InotifyRmWatch => {
+            crate::fs::inotify::sys_inotify_rm_watch(process, fd, a[1] as i32)
+        }
         Syscall::Signalfd4 => signalfd::sys_signalfd4(process, fd, a[1], a[2], truncate(a[3])),
         Syscall::Signalfd => signalfd::sys_signalfd(process, fd, a[1], a[2]),
         Syscall::TimerfdCreate => {

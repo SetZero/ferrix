@@ -293,6 +293,9 @@ fn read_into(
             break;
         }
     }
+    if done > 0 {
+        crate::fs::inotify::node_event(file.location(), crate::fs::inotify::IN_ACCESS);
+    }
     Ok(done)
 }
 
@@ -353,6 +356,9 @@ fn write_from(
         if wrote < want {
             break;
         }
+    }
+    if done > 0 {
+        crate::fs::inotify::node_event(file.location(), crate::fs::inotify::IN_MODIFY);
     }
     Ok(done)
 }
