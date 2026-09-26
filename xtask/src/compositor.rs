@@ -2077,6 +2077,21 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
         if !args.memory_given {
             args.memory = crate::chrome::MEMORY;
         }
+        // Chrome, and with `--everything` the compiler, run on ferrousli's
+        // loader and `libc.so.6` unless `--interpreter glibc` asks for the
+        // volume's own: the customer's choice of 2026-09-26.
+        if args.interpreter.as_deref() == Some(GLIBC) {
+            args.interpreter = None;
+            args.libraries.clear();
+        } else if !crate::chrome::on_ferrousli(&args) {
+            args.interpreter = Some(crate::shell::FERROUSLI.to_owned());
+            args.libraries = vec![crate::shell::FERROUSLI.to_owned()];
+        }
+    } else if crate::chrome::on_ferrousli(&args) {
+        return Err(Error::new(
+            "--interpreter and --library need --chrome here: they put Chrome, and with \
+             --everything rustc, on ferrousli",
+        ));
     } else {
         crate::rustc::prepare_default(arch, &mut args)?;
     }
@@ -2291,7 +2306,20 @@ fn desktop(
     let config = with_network(with_layout(config, args), args);
     let mut carried = Carried::wanted(arch, args)?;
     if args.chrome {
-        let links = chrome_links(&carried.ports);
+        let mut links = chrome_links(&carried.ports);
+        if crate::chrome::on_ferrousli(args) {
+            // ferrousli's loader takes `/lib64`'s place, so every program
+            // on the volume runs on it -- Chrome, and with `--everything`
+            // the compiler in the desktop's terminals too.
+            println!("  {arch}: Chrome on ferrousli's loader and libc.so.6");
+            links.retain(|file| file.path != "lib64");
+            links.extend(crate::chrome::ferrousli_loader(
+                arch,
+                &crate::chrome::volume()?,
+                crate::chrome::WINDOW_PROGRAM,
+                args,
+            )?);
+        }
         carried.ports.extend(links);
         carried.ports.extend(crate::chrome::window_files());
         if args.everything {
@@ -4874,15 +4902,28 @@ fn chrome_links(carried: &[crate::ports::File]) -> Vec<crate::ports::File> {
 
 /// The compiler's links for `--everything`, less any path Chrome's links
 /// have already made: the two volumes' glibc is one Debian's, so where both
-/// name a path they name the same place on `/data`.
+/// name a path they name the same place on `/data`. Nor a path the archive
+/// already has files under, as `/lib64` when ferrousli's loader is in it.
 fn rustc_links(carried: &[crate::ports::File]) -> Vec<crate::ports::File> {
     let links: Vec<(&str, &str)> = crate::rustc::DEFAULT_LINKS
         .iter()
         .copied()
-        .filter(|(path, _)| !carried.iter().any(|file| file.path == *path))
+        .filter(|(path, _)| {
+            !carried.iter().any(|file| {
+                file.path == *path
+                    || file
+                        .path
+                        .strip_prefix(path)
+                        .is_some_and(|rest| rest.starts_with('/'))
+            })
+        })
         .collect();
     crate::rustc::files(&links)
 }
+
+/// What `--interpreter` takes on `run-compositor --chrome` for the volume's
+/// own glibc, which ferrousli otherwise stands in for.
+const GLIBC: &str = "glibc";
 
 /// The page `run-compositor --chrome` opens with.
 ///
@@ -4900,9 +4941,10 @@ fn with_chrome(config: String, args: &Args) -> String {
     }
     let command = crate::chrome::window_command(CHROME_WELCOME_PAGE);
     format!(
-        "{config}\n# Added by `cargo xtask run-compositor --chrome`.\n{}exec-once = {command}\n\
+        "{config}\n# Added by `cargo xtask run-compositor --chrome`.\n{}{}exec-once = {command}\n\
          bind = SUPER, B, exec, {command}\n",
-        crate::chrome::WINDOW_ENV
+        crate::chrome::WINDOW_ENV,
+        crate::chrome::window_library_path(crate::chrome::on_ferrousli(args))
     )
 }
 
@@ -6040,6 +6082,19 @@ fn judge_chrome_window(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_compilers_links_leave_out_a_path_the_archive_has_files_under() {
+        // ferrousli's loader in `/lib64`: a link there would be refused.
+        let carried = vec![crate::ports::File {
+            path: "lib64/ld-linux-x86-64.so.2".to_owned(),
+            mode: 0o755,
+            content: crate::ports::Content::Bytes(Vec::new()),
+        }];
+        let links = super::rustc_links(&carried);
+        assert!(!links.iter().any(|file| file.path == "lib64"));
+        assert!(links.iter().any(|file| file.path == "bin/rustc"));
+    }
 
     /// A monitor turned a quarter lays its desktop out the other way up; a
     /// half turn, none, or a line for no monitor at all leaves it be; and the

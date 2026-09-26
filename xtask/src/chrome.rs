@@ -131,12 +131,24 @@ pub(crate) fn ferrousli_files(
         .filter(|(path, _)| *path != "lib64")
         .collect();
     let mut files = rustc::files(&kept);
-    files.extend(shell::carried_for(
-        arch,
-        &program_on_host(volume, name)?,
-        args,
-    )?);
+    files.extend(ferrousli_loader(arch, volume, name, args)?);
     Ok(files)
+}
+
+/// ferrousli's loader at the path the program `name` beside the volume
+/// names, and `libc.so.6` in `/lib`: [`ferrousli_files`] without the links,
+/// for a desktop that makes its own.
+///
+/// # Errors
+///
+/// As [`shell::carried_for`], and when the program is not beside the volume.
+pub(crate) fn ferrousli_loader(
+    arch: Arch,
+    volume: &std::path::Path,
+    name: &str,
+    args: &Args,
+) -> Result<Vec<crate::ports::File>> {
+    shell::carried_for(arch, &program_on_host(volume, name)?, args)
 }
 
 /// The `env =` line that gives what the compositor starts ferrousli's search
