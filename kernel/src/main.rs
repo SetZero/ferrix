@@ -143,14 +143,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     syscall::deliver::install();
     println!("  traps    vectors installed");
 
-    let stats = match mm::init(view) {
-        Ok(stats) => stats,
-        Err(problem) => fatal!(
-            catalog::MEMORY_BRING_UP,
-            "could not bring up memory: {problem}"
-        ),
-    };
-    report_memory(&stats);
+    let stats = bring_up_memory(view);
 
     if let Err(problem) = vmap::init() {
         fatal!(
@@ -2218,6 +2211,23 @@ fn timer_check() -> Result<u64, &'static str> {
 }
 
 /// Print what the allocators came up with.
+/// Bring up memory management and report it, then start the boot console if
+/// the command line asks for one. That is the first moment the framebuffer's
+/// mapping can be checked: the kernel's root table is known, and a fault has a
+/// handler to go to.
+fn bring_up_memory(view: &BootView<'_>) -> mm::Stats {
+    let stats = match mm::init(view) {
+        Ok(stats) => stats,
+        Err(problem) => fatal!(
+            catalog::MEMORY_BRING_UP,
+            "could not bring up memory: {problem}"
+        ),
+    };
+    report_memory(&stats);
+    console::screen::start(view);
+    stats
+}
+
 fn report_memory(stats: &mm::Stats) {
     println!(
         "  frames   {} MiB managed, {} MiB free, {} entries at {:#x} ({} KiB)",

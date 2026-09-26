@@ -4,7 +4,8 @@
 //! `docs/ARCHITECTURE.md` §1 names both as the exceptions they are: every other
 //! device is driven from userspace. The other is the framebuffer a panic is
 //! drawn on (`panic/screen.rs`), which draws what this module keeps of its
-//! recent output. It exists because a panic before `devmgr` starts has to say
+//! recent output, and which [`screen`] draws these lines on as they are
+//! printed when the command line asks for it. It exists because a panic before `devmgr` starts has to say
 //! something, and because a boot test with no serial output cannot tell a
 //! kernel that hung from one that never ran.
 //!
@@ -31,6 +32,7 @@
 
 pub(crate) mod input;
 pub(crate) mod output;
+pub(crate) mod screen;
 
 use core::fmt::{self, Write};
 use core::hint::spin_loop;
@@ -145,6 +147,7 @@ impl<'port> Writer<'port> {
             self.put(byte);
             if self.remembered {
                 remember(byte);
+                screen::put(byte);
             }
         }
     }

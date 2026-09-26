@@ -62,9 +62,14 @@ the code that pokes a PCIe BAR does not.
 The kernel drives two output devices of its own, both write-only, and both named
 as exceptions here so that they stay the only ones. The serial port writer
 carries early boot and panic output, when no userspace exists to talk to. The
-firmware's framebuffer is drawn on only by a panic, once, with the same text the
-serial port carried, for a machine that has a screen and no cable. Neither is
-ever read, and neither is configured beyond what firmware left.
+firmware's framebuffer is drawn on by a panic, once, with the same text the
+serial port carried, for a machine that has a screen and no cable. When the
+command line asks for it with `ferrix.fbcon`, the kernel's own console lines are
+drawn there as they are printed too, for a machine whose only log is read back
+after a reset, like the Pixel 7. That boot console stops for good when a panic
+draws or a display driver takes the screen, and it never draws a program's
+output. Neither device is ever read, and neither is configured beyond what
+firmware left.
 
 ---
 

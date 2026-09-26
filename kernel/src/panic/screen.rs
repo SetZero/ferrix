@@ -20,8 +20,10 @@
 //! and never the headline.
 //!
 //! This is the kernel's second output device after the serial port, and it is
-//! the same kind of exception `docs/ARCHITECTURE.md` makes for that one: used
-//! for panic output only, written once, never read.
+//! the same kind of exception `docs/ARCHITECTURE.md` makes for that one:
+//! written, never read, and configured no further than firmware left it. A
+//! panic draws on it once; the boot console (`console::screen`) draws the
+//! kernel's lines on it before that, only when the command line asks.
 
 use core::cell::UnsafeCell;
 use core::fmt::Write;
@@ -139,17 +141,46 @@ pub(crate) fn install(framebuffer: &Framebuffer, virt: u64, mapped: u64) {
 /// report: what is drawn is the console's recent output, which by then ends
 /// with that report.
 pub(crate) fn draw() {
+    // The boot console may be part way through a line on this screen; it
+    // draws nothing from here on.
+    console::screen::stop();
+    // SAFETY: nothing else writes the framebuffer during a panic: the other
+    // processors have been asked to stop, the boot console has just stopped,
+    // and this is the only report that draws.
+    let Some(mut surface) = (unsafe { surface() }) else {
+        return;
+    };
+    // SAFETY: the one accessor, as the `Sync` impl for `ScratchCell` argues.
+    let scratch = unsafe { &mut *SCRATCH.0.get() };
+    let count = console::recent(&mut scratch.text);
+    let text = scratch.text.get(..count).unwrap_or_default();
+    paint(&mut surface, text, &mut scratch.modules, &mut scratch.work);
+}
+
+/// The framebuffer [`install`] recorded, as a surface to draw on: `None` if
+/// there is none, it is in a format this kernel cannot draw in, or it is no
+/// longer mapped where boot left it.
+///
+/// # Safety
+///
+/// Nothing else may write the framebuffer while the surface lives. There are
+/// two callers: [`draw`], during the one panic that draws, and the boot
+/// console (`console::screen`), which [`draw`] stops first.
+pub(crate) unsafe fn surface() -> Option<Surface<'static>> {
     let order = match FORMAT.load(Ordering::Acquire) {
         format if format == PixelFormat::Bgrx8888 as u32 => PixelOrder::Bgrx,
         format if format == PixelFormat::Rgbx8888 as u32 => PixelOrder::Rgbx,
-        _ => return,
+        _ => return None,
     };
     let virt = VIRT.load(Ordering::Relaxed);
     // Still mapped where boot left it, and to the same memory. Nothing since
     // has had a reason to change that, and a panic is not the moment to
-    // assume it.
-    if mm::translate_in(mm::root_table(), virt) != Some(PHYS.load(Ordering::Relaxed)) {
-        return;
+    // assume it. Before `mm::init` the root table is not known, and a walk
+    // from zero would fault with nowhere to go; that early, there is no
+    // screen.
+    let root = mm::root_table();
+    if root == 0 || mm::translate_in(root, virt) != Some(PHYS.load(Ordering::Relaxed)) {
+        return None;
     }
     let (Ok(address), Ok(len), Ok(width), Ok(height), Ok(stride)) = (
         usize::try_from(virt),
@@ -158,22 +189,14 @@ pub(crate) fn draw() {
         usize::try_from(HEIGHT.load(Ordering::Relaxed)),
         usize::try_from(STRIDE.load(Ordering::Relaxed)),
     ) else {
-        return;
+        return None;
     };
 
     // SAFETY: `install` recorded `len` bytes mapped at `address`, and the
-    // check above shows the mapping still stands. Nothing else writes the
-    // framebuffer during a panic: the other processors have been asked to
-    // stop, and this is the only report that draws.
+    // check above shows the mapping still stands; the caller is the only
+    // writer.
     let pixels = unsafe { core::slice::from_raw_parts_mut(address as *mut u8, len) };
-    let Some(mut surface) = Surface::new(pixels, width, height, stride, order) else {
-        return;
-    };
-    // SAFETY: the one accessor, as the `Sync` impl for `ScratchCell` argues.
-    let scratch = unsafe { &mut *SCRATCH.0.get() };
-    let count = console::recent(&mut scratch.text);
-    let text = scratch.text.get(..count).unwrap_or_default();
-    paint(&mut surface, text, &mut scratch.modules, &mut scratch.work);
+    Surface::new(pixels, width, height, stride, order)
 }
 
 /// Paint the banner, the QR code of the report at the right, and as much of

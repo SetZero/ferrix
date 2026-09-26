@@ -1044,6 +1044,9 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
         return Err(Refusal::Malformed);
     }
 
+    // The driver owns what is on the screen now, and the boot console, if it
+    // was drawing on the firmware's framebuffer, stops.
+    crate::console::screen::stop();
     CARDS.lock().push(Arc::clone(&card));
     announce(&card, &hello);
     Ok(card)
