@@ -178,6 +178,13 @@ whose first gibibyte is flash and device registers — and `BootInfo` says where
 `libs/bootinfo` holds both layouts and checks both at compile time on every
 build, whichever the build is for.
 
+These are regions, not addresses. Built `--mitigations on`, the default, the
+loader puts the kernel image, the direct map and the top of the vmap arena
+somewhere new in its region each boot (KASLR), and `BootInfo` says where;
+the image's link address is the bottom of its region, where it runs only
+built `off` or told `nokaslr`.
+`docs/certification/SPECULATION.md` §6.1 has the steps and the entropy.
+
 **Address spaces.** A red-black interval tree of `Vma`s, each naming a VMO, an
 offset, a protection and a share mode. `mmap` inserts, `munmap` splits,
 `mprotect` splits and re-permissions. Anonymous memory is lazy; `fork` marks

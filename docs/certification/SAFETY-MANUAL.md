@@ -172,7 +172,14 @@ must not learn each other's cache access patterns shall not share a cache: no
 cache is partitioned (V-06). QEMU's TCG, on which most gates run, offers no
 speculation controls and executes no speculation, so its log lines are not a
 counter-example; the gate under KVM is where the controls are exercised.
-(Finding F-31.)
+For KASLR the integrator shall provide firmware offering `EFI_RNG_PROTOCOL`,
+or on x86-64 a processor with `RDRAND`. The boot line `kaslr    image, direct
+map and arena moved` must name one of the two, not the cycle counter. On
+x86-64 the processor shall offer UMIP (`UMIP on`), without which `SIDT` reads
+the image's slide. The integrator shall not rely on KASLR for separation: without
+KPTI a program with a timer can locate the kernel, and no ASR rests on it; and
+shall treat a program that can read the framebuffer the boot console drew on
+as able to read the slide the log printed there. (Finding F-31.)
 
 ---
 

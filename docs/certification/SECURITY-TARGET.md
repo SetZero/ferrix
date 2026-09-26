@@ -316,14 +316,17 @@ centralised; on Arm it still has no hardware defence in depth.
 modules. `docs/sysml/` is the right notation and describes Ferrix rather than
 the TOE, at system granularity (F-15).
 
-### 9.5 The TSF does not randomise its layout or partition caches
+### 9.5 The TSF randomises its layout but neither hides nor partitions
 The side-channel defences (F-31, [SPECULATION.md](SPECULATION.md)) stop a
-program steering a speculative read, on processors A.PROCESSOR admits. They do
-not randomise where the kernel is (no KASLR), do not unmap the kernel from a
-program's tables (no KPTI — not needed on the reference processors), and do
-not partition a cache, so two processes sharing one can time each other
-(V-06). An evaluator at `AVA_VAN.4` would accept the first two as argued and
-press on the third for any deployment where processes share a cache.
+program steering a speculative read, on processors A.PROCESSOR admits. KASLR
+(§6.1 there) moves the kernel image, the direct map and the vmap arena each
+boot, so an exploit needs a disclosure as well as a corruption. The TSF does
+not unmap the kernel from a program's tables (no KPTI — not needed on the
+reference processors against Meltdown), so a program with a timer can still
+find the kernel, and it does not partition a cache, so two processes sharing
+one can time each other (V-06). No security objective rests on KASLR. An
+evaluator at `AVA_VAN.4` would accept KPTI's absence as argued and press on
+the cache for any deployment where processes share one.
 
 ### 9.6 The TSF's independence of the load is checked by name, not by type
 No reference reaches by name from the TOE into the uncertified load ring, down

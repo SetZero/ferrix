@@ -274,11 +274,15 @@ what is missing is an analysis structured by threat with a documented verdict
 per attack path.
 
 ### 4.2 Side-channel defences and layout randomisation — **F-31**
-**Side-channel half done 2026-09-26** by [SPECULATION.md](SPECULATION.md),
-behind the one build switch `--mitigations on|off`. KASLR is not started.
+**Done 2026-09-26**, both halves, by [SPECULATION.md](SPECULATION.md), behind
+the one build switch `--mitigations on|off`. F-31 is closed; what the defences
+do not reach is V-06.
 
 To re-audit: boot `x86_64 --accel kvm` and read the two `cpu      speculation`
 lines — under KVM the processor's controls are real, under TCG there are none.
+For KASLR, run `cargo xtask test-kaslr --arch all`, which boots each image
+twice and prints both layouts, and read the `kaslr` lines of any boot: the
+loader's say where and from what, the kernel's how many bits.
 Re-measure the cost with both settings under KVM before quoting it; the
 figures in SPECULATION.md §8 are medians of eight boots on a loaded host.
 Check that `cargo xtask check` still has its `--mitigations off` clippy steps,

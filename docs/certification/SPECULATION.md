@@ -1,9 +1,9 @@
 # Side-channel defences
 
-The argument for F-31's side-channel half: which speculative-execution
-defences the item carries, per architecture, why that set and not another, how
-one build switch takes all of them out, and what they cost. The layout
-randomisation half of F-31 (KASLR) is §6, and is not built.
+The argument for F-31: which speculative-execution defences the item carries,
+per architecture, why that set and not another, how one build switch takes all
+of them out, and what they cost; and the layout randomisation (KASLR) that the
+same switch turns on, in §6.
 
 The item's claim is isolation between mutually distrusting processes
 ([SECURITY-TARGET.md](SECURITY-TARGET.md) T.MEMORY). A processor that runs
@@ -36,7 +36,8 @@ default, is a configuration an evaluator can enumerate in a sentence.
 
 | Where | What the switch does |
 |---|---|
-| `xtask/src/cargo.rs` | `--mitigations off` adds `--config target.<triple>.rustflags=["--cfg","ferrix_mitigations_off"]` to every kernel build, and builds into `target/mitigations-off` so neither setting's cache is thrown away for the other's. A `--config` array is appended to `.cargo/config.toml`'s, where `RUSTFLAGS` would have replaced the linker flags the image needs. |
+| `xtask/src/cargo.rs` | `--mitigations off` adds `--config target.<triple>.rustflags=["--cfg","ferrix_mitigations_off","-C","relocation-model=static"]` to every kernel build, and builds into `target/mitigations-off` so neither setting's cache is thrown away for the other's. A `--config` array is appended to `.cargo/config.toml`'s, where `RUSTFLAGS` would have replaced the linker flags the image needs. |
+| `kernel/build.rs` | links the kernel so the loader can move it (§6) unless the `cfg` is set: a static PIE on x86-64 and AArch64, `--emit-relocs` on ARMv7-A. Built `off`, it is the static fixed-address image it always was. |
 | `xtask/src/check.rs` | `cargo xtask check` runs clippy over the kernel for all three architectures in both settings, so code only one setting compiles cannot rot in the other. |
 | `Cargo.toml` | declares the `cfg` to `unexpected_cfgs`, so a misspelt one is a warning. |
 | `kernel/src/arch/speculation.rs` | `HARDENED`, the one constant every defence tests. |
@@ -44,12 +45,17 @@ default, is a configuration an evaluator can enumerate in a sentence.
 
 **What `off` removes:** every clamp (they become the identity after the
 ordinary bounds check), every write to a speculation control, every switch
-barrier, and the extra instructions on the entry and exit paths, which the
-assembler leaves out (`.if` on a constant). **What it keeps:** SMEP, SMAP and
+barrier, the extra instructions on the entry and exit paths, which the
+assembler leaves out (`.if` on a constant), KASLR — the kernel is linked at
+its fixed address with the static relocation model, and the loader leaves the
+image, the direct map and the vmap arena where they are — and x86-64's UMIP,
+which only KASLR needs. **What it keeps:** SMEP, SMAP and
 PAN, which are memory protection rather than side-channel defences (F-32), and
 every architectural bounds check. The boot log says which build it is:
 
 ```
+  kaslr    NOT randomised: the kernel is a fixed-address image (--mitigations off); kernel at its link address 0xffffffff80000000
+  cpu      descriptor table addresses kept from ring 3: UMIP off, as built
   cpu      speculation defences off: built with --mitigations off
   cpu      speculation defences off on 4 processors, as built
 ```
@@ -235,7 +241,195 @@ cores is not handled.
 
 ---
 
-## 6. KPTI and KASLR: evaluated, not built
+## 6. KASLR, built; KPTI, evaluated and not built
+
+### 6.1 KASLR
+
+**What it is for.** An exploit that ends in a kernel write or a return into
+kernel code needs an address: of a function, of a table, of the data it means
+to change. With the kernel at the same address every boot, the address is in
+the ELF anyone can read. KASLR puts the kernel somewhere new each boot, so the
+exploit needs a second bug first, one that discloses where. It does not stop
+the first bug; it makes one bug not enough.
+
+**What moves, and how far.** The loader (`boot/src/kaslr.rs`) moves three
+regions, each from its own random word, so that learning one gives away one:
+
+| Region | Step | Candidates (512 MiB of RAM) | Bits, x86-64 / AArch64 | Bits, ARMv7-A |
+|---|---|---|---:|---:|
+| the kernel image, above its link address in its region, never at it | a page (64 KiB on ARMv7-A, see below) | top 2 GiB less the image and a 2 MiB guard; ARMv7-A's top 256 MiB, the same way | **18** | **11** |
+| the direct map, anywhere in its region | 1 GiB (2 MiB on ARMv7-A) | 127 TiB region; ARMv7-A's 1.25 GiB | **16** | **8** |
+| the top of the vmap arena, where its top-down search starts | 64 KiB | the arena's top 8 GiB; ARMv7-A's top 32 MiB | **17** | **9** |
+
+The bits are the base-two logarithm of the number of places, rounded down
+(`ferrix_bootinfo::Slots::bits`), as the boot log prints them; a machine with
+more RAM has a larger direct map and a few fewer places for it. For
+comparison, Linux on x86-64 moves its image in 2 MiB steps within 1 GiB: 9
+bits.
+
+*Why the direct map moves.* It maps every byte of RAM, the kernel's own image
+included, and firmware allocates the image at the same physical address every
+boot. A direct map that stayed where it was would give the image's data a
+fixed address — writable, since the direct map is `KERNEL_DATA` — whatever the
+image's own slide. A gibibyte is the step on the 64-bit pair so that the
+loader's block mappings keep the shape they had.
+
+*Why the arena moves.* Kernel stacks and device windows are allocated from its
+top down; a fixed top gave the first stacks of every boot the same addresses.
+The fixed windows below the arena, reserved for early boot's console,
+framebuffer and on-demand mapping, do not move. They hold device registers
+and pixels, not kernel pointers.
+
+*ARMv7-A's step.* Its precompiled `core` builds addresses with `movw`/`movt`
+pairs. A bias that is a multiple of 64 KiB leaves every `movw` as it is and adds
+its top half to every `movt`, which is the only way to move those
+instructions without decoding their pairing.
+
+**How the image is made movable.** On `--mitigations on`, `kernel/build.rs`
+links:
+
+* **x86-64: a static PIE.** Code built for the static relocation model
+  addresses the kernel with sign-extended 32-bit absolutes, which no dynamic
+  relocation can move, and lld refuses the PIE link. So `.cargo/config.toml`
+  builds every x86-64 crate for the PIC model. That is a target-wide flag, so
+  it also says `-no-pie`, and only the kernel's build script says `-pie` after
+  it: the native programs stay the fixed-address executables the kernel's ELF
+  loader takes. 8,947 `R_X86_64_RELATIVE` fixups, 210 KiB of `.rela.dyn`.
+* **AArch64: a static PIE, from static-model code.** On AArch64 the static
+  model already addresses everything relative to the program counter
+  (`adrp`/`add`). Only the words that hold addresses need moving, and lld
+  writes them as `R_AARCH64_RELATIVE`. Some are in read-only data, hence
+  `-z notext`: the loader patches the image before it maps it. 7,809 fixups,
+  183 KiB.
+* **ARMv7-A: a fixed-address image with `--emit-relocs`.** It cannot be a PIE.
+  The target's prebuilt `core` is compiled for the static model and uses
+  `movw`/`movt`, which no dynamic relocation expresses, and the PIE link fails
+  (`docs/arm32.md` tried every combination). So the image keeps every
+  relocation the linker resolved, in sections beside the ones they patch. The
+  loader applies the absolute ones, against a symbol that is an address:
+  13,239 `R_ARM_ABS32` and 30,924 `movw`/`movt` pairs. Place-relative ones
+  (`CALL`, `JUMP24`, ...) are right wherever the image goes. A relocation
+  against an absolute, undefined or null symbol is a number and stays.
+
+`ferrix_elf::Elf::fixups` reads both forms into one stream and refuses
+anything it does not know, rather than skipping it: a missed fixup is a
+pointer that was never moved. The linker script loads `.rela.dyn` in the
+read-only segment, where lld puts every allocated section, and declares no
+`PT_DYNAMIC`; the loader finds the table by section header. `flash` strips the
+card's ARMv7-A kernel with `--strip-debug`, which keeps the relocations, not
+`--strip-all`, which would take them with the symbol table they index.
+
+**Where the randomness comes from.** In order:
+
+1. **`EFI_RNG_PROTOCOL`**, 24 bytes asked for separately from the 32 the
+   kernel's generator is seeded with, so a leaked layout says nothing about the
+   seed. Every QEMU machine here offers it (xtask attaches virtio-rng), and so
+   does U-Boot on a board with a driver for its generator. The STM32MP157 has
+   one; whether the DK1's U-Boot build offers it has not been seen in a boot
+   log in this work.
+2. **`RDRAND`**, on x86-64, where CPUID says so. AArch64's `RNDR` is ARMv8.5,
+   which the reference Cortex-A72 lacks; ARMv7-A has no such instruction.
+3. **A cycle counter**: the TSC, or the generic timer's virtual count, where
+   an ARMv7-A core has one. This is **not KASLR**. Anyone who can estimate
+   how long firmware took can narrow it to a few bits. The loader says so
+   (`from the cycle counter, which is guessable and so not KASLR`), and the
+   kernel reports the layout as `NOT randomised against a local attacker`.
+
+With none of them, or with `nokaslr` on the command line (`CMDLINE.TXT`, or
+`cargo xtask run --gdb`, which adds it so that a debugger's symbols are where
+the kernel runs), everything stays at its fixed address and the log says
+why. A kernel with no fixups — built `off`, or a copy stripped of them — stays
+too. The Pixel 7 loader (`bootloaders/pixel7`) applies a PIE's fixups at the
+link address and says it does not randomise. It has no tested source of
+randomness on the phone, and moving the kernel there has not been tried
+without a device session. `nokaslr` is safe to honour: whoever writes the boot
+volume can replace the kernel.
+
+**What is printed, and why that is not a leak.** The loader prints, on
+firmware's console:
+
+```
+  kaslr    kernel at 0xffffffffa3912000, slide 0x23912000, 18 bits from EFI_RNG
+  kaslr    direct map at 0xffff9b9900000000, 16 bits; vmap arena top at 0xffffffed57140000, 17 bits
+```
+
+and a panic prints `kaslr     slide 0x…` before its backtrace, which is how
+`xtask`'s symboliser and `scripts/coverage-report.py` take run-time addresses
+back to link-time ones. The attacker in [SECURITY-TARGET.md](SECURITY-TARGET.md)
+is a program. The console is not something a program reads back. The
+kernel keeps no log (`sys_syslog` returns nothing, `/proc` exposes no kernel
+address: `wchan`, `kstkeip` and `kstkesp` are zero), and output to the
+console goes to the serial line and the screen, not into anything a program
+can read. Who sees the slide is who sits at the serial port or the screen,
+and that person could as well write `nokaslr` into `CMDLINE.TXT`. The one path
+that crosses is a program that can read the framebuffer the boot console
+drew on. That is the display server, which the integrator places, and AoU-11
+says so. Linux takes the same position: it prints the offset on a panic.
+
+**What the boot checks.** Stage 1 (`check_layout`, FX-0101):
+
+* the image runs where the loader says. `__kernel_start` as the code computes
+  it is `BootInfo::kernel_virt`, which after the fixups is where the image
+  really is;
+* a loader that says it moved the image did move it. The link address is
+  never a slot, so a moved image is never where it was linked;
+* a kernel built `on` that arrived as a fixed-address image lost its fixups
+  on the way, and is refused;
+* every other reason not to move is reported, not failed.
+
+`BootInfo::validate` holds each region to the places the layout allows. Every
+`test-boot` requires `moved … from EFI_RNG`, a slide that is not zero and the
+kernel's confirmation on `on`. On `off` it requires the fixed image, and with
+`nokaslr` the loader's refusal. **`cargo xtask test-kaslr`** boots one image
+twice and requires two layouts. The image's slide alone repeats once in 2^18
+pairs of boots (2^11 on ARMv7-A), so that is reported, not failed; all three
+regions coming back the same fails.
+
+**x86-64: UMIP, or `SIDT` gives it away.** The IDT is a static in the image,
+and a program can execute `SIDT` to read its address unless `CR4.UMIP` is set.
+`SGDT` likewise. So on `on` the boot processor sets UMIP where CPUID offers it
+(secondaries inherit it). `SIDT`, `SGDT`, `SLDT`, `SMSW` and `STR` then fault
+in ring 3, as on Linux. xtask asks QEMU for `+umip`, which TCG emulates. A
+processor without UMIP is logged as one where SIDT gives the slide away, and
+AoU-11 excludes it. The Arm architectures have no equivalent: `VBAR` cannot be
+read below EL1 or PL1.
+
+**What KASLR does not do.**
+
+* **It does not withstand a local timing attacker.** Without KPTI (§6.2) the
+  kernel is mapped, supervisor-only, in every program's tables. A program can
+  find it by timing: prefetch (Gruss et al., CCS 2016), TLB and page-walk
+  timing (Hund et al., S&P 2013; Jang et al., DrK, CCS 2016), and on Intel
+  even through KPTI's trampoline (EntryBleed, CVE-2022-4543). So KASLR here
+  turns a single memory-corruption bug into a need for a disclosure as well.
+  It does not hide the layout from a program with a timer. That is why it is
+  not part of ASR-1's separation argument and appears in no AoU as a
+  condition of it.
+* **The physical placement is fixed.** The direct map's slide is independent
+  of the image's. A program that learns a direct-map address and knows the
+  machine's firmware can still compute the image's alias in the direct map.
+  That alias is writable, since the direct map is `KERNEL_DATA`, the image's
+  text included. Moving the image in physical memory too (Linux's
+  `efi_random_alloc`), or mapping the text's alias read-only, would close
+  this. Neither is built.
+* **ARMv7-A's 11, 8 and 9 bits are few.** A guess at the image costs the
+  attacker a kernel fault, which is a reboot, 2,048 times on average for the
+  image alone.
+* **No exhaustive audit** of every value the kernel copies out for kernel
+  addresses. Handles and descriptors are indices; the `/proc` fields named
+  above are zero. Nothing else was searched for.
+
+**What it costs.** At boot, the fixups: 8,947 on x86-64, 7,809 on AArch64 and
+75,087 on ARMv7-A, in the loader, before the kernel runs. In memory, the
+x86-64 and AArch64 relocation tables stay loaded: 210 and 183 KiB of read-only
+data nothing reads after boot. On AArch64 and ARMv7-A the code is the same code:
+both settings build for the static model. On x86-64 the PIC model makes `.text`
+0.9% larger than `off`'s static model (3,739,332 bytes against 3,707,252,
+debug profile, which includes the side-channel defences' own instructions).
+Its addresses are `rip`-relative where the static model's were 32-bit
+absolutes, which costs no instructions. §8 has the timings.
+
+### 6.2 KPTI
 
 **KPTI** — a user page table with the kernel unmapped but for an entry
 trampoline — is the defence against Meltdown and L1TF. It is needed only on
@@ -244,8 +438,9 @@ is in the reference configuration: QEMU's `qemu64` reports AMD, the KVM gate
 runs on an AMD host, and Arm lists the Cortex-A72 and A7 as unaffected. So
 KPTI is not the most fitting defence for the reference CPUs, and it is not
 built. A processor that needs it says so at boot — *"Meltdown EXPOSED: no
-RDCL_NO, and KPTI is not built (AoU-11)"* — and AoU-11 excludes it. Building
-it would need, in order:
+RDCL_NO, and KPTI is not built (AoU-11)"* — and AoU-11 excludes it. It would
+also blunt the timing attacks on KASLR above, though EntryBleed shows not
+entirely. Building it would need, in order:
 
 1. a second root per address space on x86-64 holding the user half, the entry
    and exit trampolines, the IDT, GDT, TSS and per-CPU entry stacks, and nothing
@@ -258,32 +453,12 @@ it would need, in order:
 4. the `user/check.rs` walks and the W^X sweep taught that the user root no
    longer maps the kernel.
 
-**KASLR** — the kernel at a random virtual address each boot — would turn a
-kernel pointer leak from an address into a guess. It is not built, and nothing
-of it is half built. What it needs:
-
-1. the kernel linked position-independent (`-C relocation-model=pie`) rather
-   than static, which `.cargo/config.toml` pins today, and
-   `kernel/linker/kernel.ld`'s fixed `KERNEL_VIRT_BASE` made a default;
-2. each loader in `boot/` choosing a slot from the firmware RNG
-   (`EFI_RNG_PROTOCOL` where offered), mapping the kernel there, and applying
-   its `R_*_RELATIVE` relocations before the jump. The loaders are themselves
-   relocated by firmware — the ARMv7-A one is a static PIE whose relocations
-   `xtask/src/pe.rs` turns into PE base relocations — and the kernel is not;
-3. `BootInfo` carrying the chosen slide, and every consumer of the fixed
-   address — `KERNEL_VIRT_BASE` in `libs/bootinfo`, the loader's check of the
-   image against it, the backtrace's image bounds, the symboliser in
-   `xtask/src/symbolize` — reading it;
-4. the direct map and the vmap arena randomised too, or a leak of either gives
-   the kernel's slide away.
-
-Both are recorded in F-31 as what remains.
-
 ---
 
 ## 7. What the boot says and checks
 
-Once, on the boot processor, before the second processor starts:
+KASLR is checked first, at stage 1, and §6.1 says how. Then, once, on the boot
+processor, before the second processor starts:
 
 ```
   cpu      speculation defences: clamped indices, SWAPGS fence, entry registers cleared, AutoIBRS, STIBP, SSBD, predictor barrier on switch, RSB fill on switch
@@ -378,7 +553,9 @@ instructions per clamp.
 
 ## 9. What this does not cover
 
-* **KPTI and KASLR** (§6).
+* **KPTI** (§6.2), and so **KASLR against a local timing attacker**, the
+  **fixed physical placement** of the image and the writable alias of its text
+  in the direct map, and ARMv7-A's few bits (§6.1).
 * **CET** — neither indirect branch tracking nor shadow stacks. Both need
   compiler support (`-Z cf-protection`, nightly) and loader cooperation.
 * **Cache timing between processes.** Two programs that share a cache can

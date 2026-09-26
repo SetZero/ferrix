@@ -239,8 +239,9 @@ A certificate attaches to a configuration, not to a repository.
 | Unstable features | none in `kernel/` or `boot/` |
 | Cargo features | 7 in the workspace, **0** in `kernel/` or `boot/` |
 | Build settings | **one**, `cargo xtask --mitigations on\|off`; the reference is `on`, the default |
+| Kernel link (`on`) | a static PIE on x86-64 (PIC code model, every x86-64 crate) and AArch64 (static code model, `-pie -z notext`); on ARMv7-A a fixed-address link that keeps its relocations (`--emit-relocs`). The loader moves it each boot (KASLR). `off`: the static fixed-address image |
 | External crates | 21, listed in [SOUP.md](SOUP.md) |
-| Assembly | 492 lines across 22 allow-listed sites outside the Pixel 7 loader, ~99.76% Rust (`check-asm-budget.py`) |
+| Assembly | 500 lines across 22 allow-listed sites outside the Pixel 7 loader, ~99.76% Rust (`check-asm-budget.py`) |
 
 The feature count is the line worth pausing on. A certified item must be one
 configuration with all dead and deactivated code justified; Linux's ~18,000
@@ -248,9 +249,10 @@ Kconfig symbols are why that objective is unmeetable there at any budget. Here
 the configuration space is three architectures and one switch with two
 settings, which is most of why this item is analysable at all.
 
-The switch is the side-channel defences ([SPECULATION.md](SPECULATION.md)).
-`off` builds with `--cfg ferrix_mitigations_off`, set only by `xtask`, and
-compiles every defence out; it exists to measure what they cost and for owners
+The switch is the side-channel defences and KASLR
+([SPECULATION.md](SPECULATION.md)). `off` builds with
+`--cfg ferrix_mitigations_off` and the static relocation model, set only by
+`xtask`, compiles every defence out and links the kernel at its fixed address; it exists to measure what they cost and for owners
 who have decided they need none. It is not a Cargo feature, and the claims
 here are made of `on` alone (SAFETY-MANUAL AoU-8). `cargo xtask check` builds
 the kernel in both settings on all three architectures so that `off` cannot

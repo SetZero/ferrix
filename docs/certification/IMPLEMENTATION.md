@@ -548,7 +548,13 @@ engineering — **answer step 1 before planning anything that depends on it.**
 
 ## W-11 — Side-channel defences, and layout randomisation
 
-**Advanced 2026-09-26: the side-channel half is done.** See F-31 and
+**Done 2026-09-26: both halves.** KASLR followed the side-channel defences the
+same day: the loader moves the kernel image, the direct map and the vmap
+arena's top each boot from `EFI_RNG_PROTOCOL` (18/16/17 bits on the 64-bit
+pair, 11/8/9 on ARMv7-A), the 64-bit kernels are static PIEs and the ARMv7-A
+kernel keeps its relocations (`--emit-relocs`), stage 1 checks the move, and
+`cargo xtask test-kaslr` requires two boots to get two layouts
+(SPECULATION.md §6.1). F-31 is closed. See F-31 and
 [SPECULATION.md](SPECULATION.md). One build switch, `cargo xtask --mitigations
 on|off`, `on` the default and the reference; `on` clamps every program-chosen
 index at the system call boundary and applies each processor's speculation
@@ -559,11 +565,11 @@ system calls, +2.8% on fork-exec-wait.
 **Closes:** F-31, with the steps below. **Size:** large for KASLR, small for
 each of the rest.
 
-1. **KASLR.** SPECULATION.md §6's four steps, in order: a position-independent
-   kernel, the loaders choosing a slot from the firmware RNG and applying the
-   kernel's relocations, the slide in `BootInfo` and every fixed-address
-   consumer reading it, then the direct map and vmap arena randomised. Start in
-   `boot/`; the kernel half is mechanical once the loaders relocate.
+1. **KASLR — done.** As planned, with two departures. ARMv7-A could not be a
+   PIE, since its prebuilt `core` uses `movw`/`movt`, so it is a fixed link
+   with `--emit-relocs` and a 64 KiB step. And x86-64 needed UMIP, or `SIDT`
+   reads the image's slide. Left open: moving the image in physical memory too,
+   and the Pixel 7 loader, which keeps the fixed layout and says so.
 2. **KPTI**, only if a Meltdown-affected processor enters the reference
    configuration: SPECULATION.md §6 lists the four pieces. Today AoU-11 excludes
    such a processor and the boot log names it.
@@ -579,7 +585,7 @@ each of the rest.
 ## Suggested order
 
 **Done:** order zero, W-3, W-2, W-6, W-9, W-4 (with F-08), W-1, W-5 (with
-F-09 and F-33), most of W-7, and W-11's side-channel half.
+F-09 and F-33), most of W-7, and W-11.
 **Remaining:** W-7's last gates → W-8 (largest), with W-10 in parallel
 whenever someone can answer step 1.
 

@@ -27,7 +27,7 @@ specific, measured, and mostly documents rather than code.
 * [TODO.md](TODO.md) — start here to re-audit: what to re-measure, and what not to write
 * [SAFETY-MANUAL.md](SAFETY-MANUAL.md) — the out-of-context argument: assumed requirements, safe state, eleven assumptions of use, element failure analysis
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
-* [FINDINGS.md](FINDINGS.md) — the audit register, 17 open findings and 21 closed
+* [FINDINGS.md](FINDINGS.md) — the audit register, 16 open findings and 22 closed
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
 * [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) — AVA_VAN.4 over the seven threats; six residual vulnerabilities
 * [SPECULATION.md](SPECULATION.md) — the side-channel defences, per architecture, behind one build switch, and what they cost
@@ -85,7 +85,8 @@ boundary.
 | SMEP + SMAP (x86-64) | **on** |
 | PAN (AArch64) | **implemented**; absent from the reference CPU |
 | Side-channel defences | **on** by default, per processor; one switch, `--mitigations off`, takes them out |
-| Assembly | 492 lines, 22 allow-listed sites |
+| KASLR | kernel image, direct map and vmap arena **moved every boot**: 18, 16 and 17 bits on the 64-bit pair, 11, 8 and 9 on ARMv7-A; off with the same switch |
+| Assembly | 500 lines, 22 allow-listed sites, outside the Pixel 7 loader |
 | Cargo features in `kernel/`/`boot/` | 0 |
 
 The coverage rows were measured over the item as it stood before W-5 moved the
@@ -132,9 +133,9 @@ cannot have it at all, so V-01 still stands on Arm (AoU-6).
 *Missing:* Design evidence at module granularity for `ADV_TDS.3`; the SysML model
 describes Ferrix, not the TOE (F-15). The TSF no longer names the load ring anywhere
 (`ADV_INT.2`; F-07, F-09 and F-33 closed), but the gate reads names, not types, and
-the crate root is exempt by file (SECURITY-TARGET §9.6). The side-channel defences are built and on by
-default, but there is no layout randomisation and no cache partitioning (F-31,
-V-06). And the TOE claims neither audit nor
+the crate root is exempt by file (SECURITY-TARGET §9.6). The side-channel defences and KASLR are built and on by
+default (F-31, closed), but there is no cache partitioning and no KPTI, so a
+program with a timer can still find the kernel and time a neighbour (V-06). And the TOE claims neither audit nor
 authentication (F-21b), which is defensible for an isolation kernel and is why
 no Protection Profile is claimed.
 
@@ -229,9 +230,8 @@ boundary from 36 references to 29 by the gate's count of the day and left `objec
 nothing above the core; the native ABI's subsystems and the Linux dispatcher
 registering with the item, and the rest of the personality moved out of it
 (F-07, F-09, F-33, W-5), which left the boundary with no upward reference by
-the resolving gate's count, from 56; and the side-channel defences behind one build switch
-(F-31's first half, [SPECULATION.md](SPECULATION.md)). KASLR is F-31's second
-half and is not started.
+the resolving gate's count, from 56; and the side-channel defences and KASLR
+behind one build switch (F-31, [SPECULATION.md](SPECULATION.md)).
 
 ## 5. What cannot be fixed from here
 

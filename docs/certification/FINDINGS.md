@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-17 findings are open and 21 are closed, of 38. F-10 advanced from 71.4% to 81.9%, F-31's side-channel half was built, and F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference (2026-09-26). No finding here is closed by argument:
+16 findings are open and 22 are closed, of 38. F-10 advanced from 71.4% to 81.9%, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, and F-31 closed when its layout half, KASLR, was built after its side-channel half (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 2 | 6 | 8 | 0 | 1 |
+| Open | 2 | 6 | 7 | 0 | 1 |
 
 Blocking: F-27 and F-28 — independent assessment and a quality management
 system. Both need an organisation; neither is a defect in the code.
@@ -573,14 +573,15 @@ analysis checked the registers.
 the copy, and PAN on AArch64.
 
 ### F-31 — no side-channel or layout-randomisation defences
-**Moderate, advanced 2026-09-26** by [SPECULATION.md](SPECULATION.md). Not
-closed: the layout-randomisation half is untouched.
+**Closed 2026-09-26**, both halves built behind the kernel's one build switch,
+and checked by every boot. What they do not reach is carried as V-06 and in
+[SPECULATION.md](SPECULATION.md) §9, not argued away.
 
 *Was:* no Spectre, Meltdown or cache-timing analysis, and no mitigation — no
 retpolines, no KPTI, no IBT or shadow stacks, no ASLR or KASLR.
 
-*Now:* the speculative-execution half is analysed per architecture and built,
-behind the kernel's one build switch. `cargo xtask --mitigations on`, the
+*Now, the side-channel half:* analysed per architecture and built, behind the
+kernel's one build switch. `cargo xtask --mitigations on`, the
 default and the reference configuration, gives every program-chosen index at
 the system call boundary a clamp a misprediction cannot see past (syscall
 numbers, handles, descriptors, user addresses), and applies what each
@@ -597,20 +598,44 @@ names what is covered and what is not, on AArch64 for each kind of core. `--miti
 out, and `cargo xtask check` builds both settings. Measured cost under KVM: +1.0%
 on two million system calls, +2.8% on a thousand fork-exec-waits.
 
+*Now, the layout half* ([SPECULATION.md](SPECULATION.md) §6.1): the loader moves
+the kernel image, the direct map and the top of the vmap arena each boot, each
+from its own word of `EFI_RNG_PROTOCOL`. That is 18, 16 and 17 bits on x86-64
+and AArch64, and 11, 8 and 9 on ARMv7-A. The kernel is linked as a static PIE
+on the 64-bit pair. On ARMv7-A, whose prebuilt `core` rules a PIE out, it is
+linked with `--emit-relocs`, and the loader applies the fixups
+`ferrix_elf::Elf::fixups` reads. Stage 1 refuses a kernel that is not where
+the loader says, a claimed move that did not happen, and a kernel built to
+move that arrived without its fixups (FX-0101). Every `test-boot` requires the
+move on `on` and the fixed image on `off`. `cargo xtask test-kaslr` requires
+two boots to get two layouts. x86-64 sets UMIP, without which `SIDT` would
+read the IDT's address out of the image. `--mitigations off` links the fixed
+static image it always was, and moves nothing.
+
 What a processor needs and the build cannot give it — a Meltdown-affected part,
-or one with no IBRS form, no `IBPB`, no `SSBD` — is excluded by the new AoU-11
-rather than mitigated. Retpolines were evaluated and rejected: the pinned
+one with no IBRS form, no `IBPB`, no `SSBD`, or on x86-64 no UMIP — is excluded
+by AoU-11 rather than mitigated. Retpolines were evaluated and rejected: the pinned
 compiler has them only through a deprecated target feature scheduled to become
 an error, and not in the precompiled `core` and `alloc`.
 
-*Closes when:* KASLR exists (SPECULATION.md §6 lists the four steps, loaders
-first); IBT and shadow stacks are either built or argued out; and the
-residuals SPECULATION.md §9 lists — cache timing between processes, KPTI for
-an affected CPU if one enters the reference configuration, the libraries'
-clamps without `csdb`, the tables deeper than the system call boundary — are
-each built or argued. At `AVA_VAN.4`'s moderate attack potential the half that
-is done was the half that mattered more: without it, isolation between
-processes held only against programs that did not time their loads.
+*The criterion, clause by clause.* KASLR exists, on all three architectures,
+and the build checks it. IBT and shadow stacks are argued out: both need a
+nightly compiler flag (§9). The residuals §9 lists are each built, argued or
+carried:
+
+* KPTI is argued, as not needed on the reference processors and excluded by
+  AoU-11 on those that need it.
+* Cache timing between processes is exported, as partitioning to the
+  integrator (AoU-11).
+* The libraries' clamps without `csdb`, and the tables below the system call
+  boundary, are **carried** as V-06, not argued away.
+* So is KASLR's own limit. Without KPTI a program with a timer can find the
+  kernel, so KASLR makes an exploit need a disclosure. It does not keep the
+  layout from a local timing attacker, and ASR-1 does not rest on it.
+
+At `AVA_VAN.4`'s moderate attack potential the half built first was the half
+that mattered more. Without it, isolation between processes held only
+against programs that did not time their loads.
 
 ### F-21b — the TOE claims no audit and no authentication
 **Moderate.** There is no FAU family at all, and FIA lives in the uncertified
