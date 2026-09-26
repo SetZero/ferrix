@@ -7,6 +7,7 @@
 
 pub(crate) mod alloc_check;
 pub(crate) mod check;
+pub(crate) mod edge_check;
 pub(crate) mod madvise_check;
 pub(crate) mod rmap_check;
 pub(crate) mod space;

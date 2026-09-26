@@ -91,6 +91,12 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     check_a_shared_region_survives_fork_as_one_object()?;
     let copied = check_fork_shares_pages_and_a_write_copies_one()?;
     let swapped = check_two_tasks_keep_their_own_address_spaces()?;
+    let refused = crate::user::edge_check::run()?;
+    crate::console::println!(
+        "  edges    {refused} refusals of an address space, an object and the kernel arena, each \
+         as specified; a window, an in-place growth, a held page and a shared page's copy as \
+         they must be"
+    );
 
     // Everything above dropped its objects before returning, so the allocator
     // must be exactly where it started. Signed, because a check that somehow
