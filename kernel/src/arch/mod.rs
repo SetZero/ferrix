@@ -241,6 +241,14 @@ pub(crate) use armv7a::flush_for_device;
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::flush_for_device;
 
+// Full-entropy bytes firmware hands out, where it has a TRNG to ask.
+#[cfg(target_arch = "aarch64")]
+pub(crate) use aarch64::firmware_entropy;
+#[cfg(target_arch = "arm")]
+pub(crate) use armv7a::firmware_entropy;
+#[cfg(target_arch = "x86_64")]
+pub(crate) use x86_64::firmware_entropy;
+
 // Instructions the kernel wrote into memory, made the ones every processor
 // fetches there: for a page about to be mapped executable in user mode. An
 // Arm core's instruction cache does not see what its data side wrote, nor

@@ -448,22 +448,8 @@ pub(crate) fn clean_invalidate_to_poc(start: u64, len: u64) {
 /// does must be what the caller intends: `CPU_ON` starts a core executing at
 /// an address the caller chose.
 pub(crate) unsafe fn hvc_call(function: u64, a: u64, b: u64, c: u64) -> u64 {
-    let result: u64;
-    // SAFETY: the caller guarantees the function and its arguments. The SMC
-    // calling convention lets the callee corrupt every register the C ABI
-    // does, which is what the clobber says.
-    unsafe {
-        asm!(
-            "hvc #0",
-            inlateout("x0") function => result,
-            in("x1") a,
-            in("x2") b,
-            in("x3") c,
-            clobber_abi("C"),
-            options(nostack),
-        );
-    }
-    result
+    // SAFETY: the caller's guarantee, passed on.
+    unsafe { hvc_call_x0_x3(function, a, b, c)[0] }
 }
 
 /// A PSCI call through the secure monitor conduit.
@@ -472,15 +458,51 @@ pub(crate) unsafe fn hvc_call(function: u64, a: u64, b: u64, c: u64) -> u64 {
 ///
 /// As [`hvc_call`].
 pub(crate) unsafe fn smc_call(function: u64, a: u64, b: u64, c: u64) -> u64 {
-    let result: u64;
-    // SAFETY: as `hvc_call`.
+    // SAFETY: the caller's guarantee, passed on.
+    unsafe { smc_call_x0_x3(function, a, b, c)[0] }
+}
+
+/// An SMCCC call through the hypervisor conduit, with all four result
+/// registers: SMCCC 1.1 returns up to `x0`-`x3`, and `TRNG_RND64` puts its
+/// bits in `x1`-`x3`.
+///
+/// # Safety
+///
+/// As [`hvc_call`].
+pub(crate) unsafe fn hvc_call_x0_x3(function: u64, a: u64, b: u64, c: u64) -> [u64; 4] {
+    let mut result = [function, a, b, c];
+    // SAFETY: the caller guarantees the function and its arguments. The SMC
+    // calling convention lets the callee corrupt every register the C ABI
+    // does, which is what the clobber says.
+    unsafe {
+        asm!(
+            "hvc #0",
+            inlateout("x0") result[0],
+            inlateout("x1") result[1],
+            inlateout("x2") result[2],
+            inlateout("x3") result[3],
+            clobber_abi("C"),
+            options(nostack),
+        );
+    }
+    result
+}
+
+/// [`hvc_call_x0_x3`] through the secure monitor conduit.
+///
+/// # Safety
+///
+/// As [`hvc_call`].
+pub(crate) unsafe fn smc_call_x0_x3(function: u64, a: u64, b: u64, c: u64) -> [u64; 4] {
+    let mut result = [function, a, b, c];
+    // SAFETY: as `hvc_call_x0_x3`.
     unsafe {
         asm!(
             "smc #0",
-            inlateout("x0") function => result,
-            in("x1") a,
-            in("x2") b,
-            in("x3") c,
+            inlateout("x0") result[0],
+            inlateout("x1") result[1],
+            inlateout("x2") result[2],
+            inlateout("x3") result[3],
             clobber_abi("C"),
             options(nostack),
         );

@@ -192,7 +192,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     start_console_input(view);
     arch::enable_interrupts();
 
-    check_timer_and_start_clocks(view.raw());
+    check_timer_and_start_clocks(view);
 
     // Stage 4. It has to be here: after interrupt bring-up, which maps the
     // local APIC x86-64 reads its own identifier from, and before
@@ -302,9 +302,9 @@ fn check_allocators_and_traps(stats: &mm::Stats) {
 /// Stage 3's timer check, when the checks run, and then the realtime clock
 /// and the random generator, which are bring-up and started either way --
 /// without the check, from a counter nobody has measured this boot.
-fn check_timer_and_start_clocks(info: &BootInfo) {
+fn check_timer_and_start_clocks(view: &BootView<'_>) {
     if !checks::run() {
-        report_clock_and_random(info);
+        report_clock_and_random(view);
         return;
     }
     let measured = match timer_check() {
@@ -314,7 +314,7 @@ fn check_timer_and_start_clocks(info: &BootInfo) {
             "stage 3 self-check failed: {problem}"
         ),
     };
-    report_stage3(measured, info);
+    report_stage3(measured, view);
     // With the interrupt controller up, because part of it is the
     // controller's masking.
     if let Err(problem) = arch::check_machine() {
@@ -2158,7 +2158,7 @@ fn spin_nanos(nanos: u64) {
 /// clocks, as it always has.
 /// Say what stage 3 proved, then start the clock and the random generator,
 /// which both read the counter it has just proved.
-fn report_stage3(measured: u64, info: &BootInfo) {
+fn report_stage3(measured: u64, view: &BootView<'_>) {
     println!(
         "  stage 3  {} breakpoints, {} page faults, {} ticks at {} Hz",
         trap::breakpoint_count(),
@@ -2166,29 +2166,32 @@ fn report_stage3(measured: u64, info: &BootInfo) {
         timer::ticks(),
         measured,
     );
-    report_clock_and_random(info);
+    report_clock_and_random(view);
 }
 
 /// Start the realtime clock and seed the random generator from what firmware
 /// handed over, and say what each had to go on. After stage 3, because both
 /// read the counter the timer check has just proved.
-fn report_clock_and_random(info: &BootInfo) {
+fn report_clock_and_random(view: &BootView<'_>) {
+    let info = view.raw();
     match syscall::time::set_boot_time(info) {
         Some(seconds) => {
             println!("  clock    {seconds} seconds since the epoch, from firmware's clock");
         }
         None => println!("  clock    firmware has no clock: CLOCK_REALTIME starts at the epoch"),
     }
-    let seeding = random::init(info);
-    let firmware = seeding.firmware_bytes;
+    let mut trng = [0_u8; 48];
+    let trng_bytes = arch::firmware_entropy(view, &mut trng);
+    let seeding = random::init(info, trng.get(..trng_bytes).unwrap_or(&[]));
+    let (firmware, trng_bytes) = (seeding.firmware_bytes, seeding.trng_bytes);
     if seeding.seeded {
         println!(
-            "  random   seeded with {} bits: {firmware} bytes from firmware, {} words from the CPU, timer jitter",
+            "  random   seeded with {} bits: {firmware} bytes from firmware, {trng_bytes} from its TRNG, {} words from the CPU, timer jitter",
             seeding.credited, seeding.cpu_words
         );
     } else {
         println!(
-            "  random   NOT SEEDED: {} of {} bits, from {firmware} bytes from firmware and {} words from the CPU, and timer jitter; keys made on this boot are guessable",
+            "  random   NOT SEEDED: {} of {} bits, from {firmware} bytes from firmware, {trng_bytes} from its TRNG and {} words from the CPU, and timer jitter; keys made on this boot are guessable",
             seeding.credited,
             ferrix_crng::SEEDED_BITS,
             seeding.cpu_words

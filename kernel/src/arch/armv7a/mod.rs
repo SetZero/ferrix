@@ -984,6 +984,12 @@ pub(crate) fn hardware_random() -> Option<u64> {
     None
 }
 
+/// Entropy from firmware's TRNG: none yet on this architecture, though
+/// SMCCC defines `TRNG_RND32` for it; the DK1's TF-A has not been asked.
+pub(crate) fn firmware_entropy(_view: &BootView<'_>, _out: &mut [u8]) -> usize {
+    0
+}
+
 /// `AT_HWCAP` and `AT_HWCAP2` for a program started on this machine: what the
 /// core's identification registers say it has, in the bits
 /// `arch/arm/include/uapi/asm/hwcap.h` numbers. See `ferrix_linux_abi::hwcap`.

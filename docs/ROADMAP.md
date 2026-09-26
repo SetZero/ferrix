@@ -3401,14 +3401,17 @@ function checked against RFC 8439's vector and OpenSSL's keystream. Every
 64-byte block replaces the key with its first half and hands out the second.
 `kernel/src/random.rs` seeds it from firmware's bytes, credited 256 bits, and
 from the CPU's `RDSEED` or `RDRAND` on x86-64, or `RNDR` on AArch64, at 32 bits
-a word. It also mixes in timer jitter, credited nothing, and mixes the counter
+a word. On AArch64 it also asks firmware's True Random Number Generator
+through SMCCC (`TRNG_RND64`, Arm DEN0098) for 48 bytes, credited in full, once
+PSCI and SMCCC 1.1 say it is safe to ask (`kernel/src/arch/aarch64/trng.rs`).
+It also mixes in timer jitter, credited nothing, and mixes the counter
 into every read. `getrandom`, `/dev/random`, `/dev/urandom` and `AT_RANDOM` all
 read it. A boot says what it had:
 
 ```
   firmware clock read, random number protocol read
   clock    1789590336 seconds since the epoch, from firmware's clock
-  random   seeded with 512 bits: 32 bytes from firmware, 8 words from the CPU, timer jitter
+  random   seeded with 512 bits: 32 bytes from firmware, 0 from its TRNG, 8 words from the CPU, timer jitter
 ```
 
 That was OVMF with RDRAND turned on in `xtask`'s QEMU CPU. AAVMF, and U-Boot's
@@ -3417,8 +3420,11 @@ firmware protocol and no CPU instruction boots `NOT SEEDED`, in capitals, and
 `getrandom` answers anyway. Linux would block instead, but that wait never ends
 on a machine with nothing to wait for. `BootInfo` version 6 adds how many bytes
 firmware gave, and the kernel credits 8 bits for each, up to 256. The Pixel 7's
-loader passes on the 8 bytes ABL leaves in `/chosen`, so the phone boots
-`NOT SEEDED: 64 of 256 bits`, since its cores have no `RNDR`. The boot check
+loader passes on the 8 bytes ABL leaves in `/chosen`, and its cores have no
+`RNDR`, so the phone booted `NOT SEEDED: 64 of 256 bits` until its TF-A was
+asked: it answers `TRNG_RND64`, as Android's `smccc_trng` driver reads it,
+and the phone now boots `seeded with 448 bits: 8 bytes from firmware, 48 from
+its TRNG`. QEMU's firmware has no TRNG and answers 0. The boot check
 reads the generator twice and panics as FX-0306 if the two reads match. Its negative control, not
 committed, on x86-64: with the second read replaced by a copy of the first, the
 boot printed `FERRIX-PANIC random generator check failed: two reads of the

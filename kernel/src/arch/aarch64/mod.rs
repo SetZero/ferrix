@@ -13,6 +13,7 @@ pub(super) mod speculation;
 mod switch;
 mod timer;
 mod trap;
+mod trng;
 
 /// Clean and drop a buffer's lines, for memory about to be shared with such a
 /// device through a mapping that bypasses the caches.
@@ -124,6 +125,12 @@ pub(crate) unsafe fn init_traps() {
         "  cpu      EL1 kept out of user pages: PAN {}",
         if pan { "on" } else { "unavailable" },
     );
+}
+
+/// Fill `out` with full-entropy bytes from firmware's TRNG, through SMCCC,
+/// and say how many: 0 where firmware offers none. See `trng.rs`.
+pub(crate) fn firmware_entropy(view: &BootView<'_>, out: &mut [u8]) -> usize {
+    trng::fill(view, out)
 }
 
 /// Decide which side-channel defences this machine gets, apply them on the

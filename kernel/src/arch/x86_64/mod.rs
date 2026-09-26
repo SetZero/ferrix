@@ -1480,6 +1480,12 @@ pub(crate) fn sync_instructions(start: u64, len: u64) {
     let _ = (start, len);
 }
 
+/// Entropy from firmware's TRNG: none, since a PC has no SMCCC. The CPU's
+/// `RDSEED` is [`hardware_random`].
+pub(crate) fn firmware_entropy(_view: &BootView<'_>, _out: &mut [u8]) -> usize {
+    0
+}
+
 /// No board this architecture boots leaves a watchdog running.
 pub(crate) const fn init_watchdogs(_tree: &ferrix_fdt::Fdt<'_>) {}
 

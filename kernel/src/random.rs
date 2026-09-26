@@ -58,14 +58,18 @@ pub(crate) struct Seeding {
     pub(crate) firmware_bytes: u64,
     /// How many words the CPU gave.
     pub(crate) cpu_words: usize,
+    /// How many full-entropy bytes firmware's TRNG gave.
+    pub(crate) trng_bytes: usize,
     /// Bits credited in all.
     pub(crate) credited: u32,
     /// Whether that is enough to call the generator seeded.
     pub(crate) seeded: bool,
 }
 
-/// Seed the generator from what the loader handed over, the CPU and jitter.
-pub(crate) fn init(info: &BootInfo) -> Seeding {
+/// Seed the generator from what the loader handed over, the bytes firmware's
+/// TRNG gave (`trng`, full entropy, credited a bit for each bit), the CPU and
+/// jitter.
+pub(crate) fn init(info: &BootInfo, trng: &[u8]) -> Seeding {
     let mut rng = RNG.lock();
 
     let firmware_bytes = if info.firmware_flags & FIRMWARE_SEED == 0 {
@@ -77,6 +81,11 @@ pub(crate) fn init(info: &BootInfo) -> Seeding {
         rng.mix(&info.firmware_seed);
         let credited = firmware_bytes.min(info.firmware_seed.len() as u64) * 8;
         rng.credit(u32::try_from(credited).unwrap_or(u32::MAX));
+    }
+
+    if !trng.is_empty() {
+        rng.mix(trng);
+        rng.credit(u32::try_from(trng.len() * 8).unwrap_or(u32::MAX));
     }
 
     let mut cpu_words = 0;
@@ -106,6 +115,7 @@ pub(crate) fn init(info: &BootInfo) -> Seeding {
     Seeding {
         firmware_bytes,
         cpu_words,
+        trng_bytes: trng.len(),
         credited: rng.credited(),
         seeded: rng.seeded(),
     }
