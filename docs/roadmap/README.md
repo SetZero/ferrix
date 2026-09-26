@@ -78,10 +78,12 @@ architectures, since ferrousli itself was ported to AArch64 and ARMv7-A on
 `/sbin/init` runs services in cgroups of their own over `libs/init/svc`'s manager,
 with `svc` to drive it, readiness, socket activation and resource limits,
 gives the console a getty, and powers the machine off, on all three
-architectures (`cargo xtask test-init`). The images do not boot it yet; that
-is L10 of `docs/INIT.md`, built on a branch and not yet on `main`. Stage
+architectures (`cargo xtask test-init`). `run` and the desktop boot it, and
+the compositor is its service. Stage
 15's next is authentication (`docs/AUTH.md`, approved by the customer on
-2026-09-26): `authd`, passwords and a real hyprlock, 27 points. Stage 13 is
+2026-09-26): its kernel fix, P0, is in (a native process runs as the one
+that made it), and phase 1 is `authd`, passwords and a real hyprlock, 27
+points. Stage 13 is
 under way, cgroups first because init needs them: cgroup2 with `pids`,
 `memory` and its scoped OOM kill, and `cpu.weight` (2026-09-26); reclaim,
 freezing, `cpu.max`, `io`, namespaces and seccomp are left.
@@ -178,7 +180,7 @@ sizes them.
 | Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51; sound re-sized by `docs/AUDIO.md` as 24 for the driver, the core and a gate, spent, then alsa-lib 3 (U1) and a server unsized (U2), so 24 of the 51 left sized | sound under way: playback done 2026-09-26 -- a ring-3 virtio-snd driver, the audio core, `/dev/snd`, `test-audio`, Chrome playing through it, and `run-compositor --everything` bringing the card; U1 and U2 left; bubblewrap and Venus not started |
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess; `docs/I386.md` sizes I1 to I4 at 42, I5 unsized | under way: I1, a 32-bit program through `int $0x80`, done and on `main` 2026-09-26 (8 of 42); I2, threads and signals, next |
 | Stage 14, real-time domains | *month* ≈ 40 | not started |
-| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, of which 61 are spent (L1 to L9), and 18 later; authentication (`docs/AUTH.md`, approved 2026-09-26): a kernel fix first (P0) 2, phase 1 27, phase 2 31 and phase 3 about 32 later | partially complete: `/sbin/init`, `getty`, `svc`, readiness, socket activation, resource limits and the directory over `libs/init/svc` landed by 2026-09-26, gated by `test-init` on all three architectures; L10 (the images booting it) is built on branch `init-l10`, not yet on `main`; authentication's P0 -- `process_create` gave a child root's credentials -- is being fixed, and phase 1 is not started |
+| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, of which all 67 of L1 to L10 are spent, and 18 later; authentication (`docs/AUTH.md`, approved 2026-09-26): a kernel fix first (P0) 2, spent, phase 1 27, phase 2 31 and phase 3 about 32 later | init done (L1 to L10, 2026-09-26): `run` and every desktop image boot `/sbin/init`, with `getty`, `svc`, readiness, socket activation, resource limits and the directory over `libs/init/svc`; L11 to L13 are later by design; authentication's P0 -- `process_create` gave a child root's credentials -- is fixed (2026-09-26), and phase 1 is not started |
 | ~~Stage 16, `rustc`~~ *exit met 2026-09-22* | ~~*the goal* ≈ 40~~ 8 spent | done |
 | Stage 20, self-hosting | *longer*, unsized | in progress: the x86-64 image builds on Ferrix and boots (2026-09-23); every build of the matrix recorded, Ferrix making them stops on FX-0001 (2026-09-24) |
 | Stage 21, bare metal and a GPU of Ferrix's own | over 100, unsized | planned when bare-metal work is requested |

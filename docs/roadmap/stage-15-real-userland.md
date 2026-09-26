@@ -125,9 +125,16 @@ OPEN to the unit that offers the name -- starting it first -- or refuses one
 the asker did not declare. `test-init` shows a native service started by the
 first OPEN and answering down the routed channel, and a refusal.
 
-**Still to do:** L10: no image boots the init yet -- `cargo xtask run` and
-every gate but `test-init` start a program as pid 1 themselves -- and hyprix
-is still pid 1 on the desktop.
+**Done -- L10, the images boot init (2026-09-26, 6 points).** `cargo xtask
+run` boots `/sbin/init` with a getty and zinc on the console, and every
+desktop image -- `run-compositor`, the compositor's gates and a board's card
+-- boots init with hyprix as `hyprix.service` under `graphical.target`,
+each program it starts in a scope of its own. `test-jobs` types its session
+at the getty's shell.
+
+**Still to do:** nothing of L1 to L10. L11 to L13 of `docs/INIT.md` are
+later by design: `devmgr` on `libs/init/svc`'s restart policy, init starting
+`devmgr`, and the sandboxing keys after the rest of stage 13.
 
 **Designed (2026-09-23): `docs/INIT.md`.** `/sbin/init` is pid 1 and a
 service manager in one program. Its units are in systemd's syntax, with
@@ -139,17 +146,16 @@ native services between them.
 
 Init waited on stage 13's cgroups, which the customer put first; what its
 first boot needs of them (C1 to C5 and C7) landed on 2026-09-24. Its landings
-come to 67 points up to hyprix no longer being pid 1, 61 of them spent on
-L1 to L9: six kernel items of 11 points besides stage 13, two of them
+come to 67 points up to hyprix no longer being pid 1, all of them spent
+(L1 to L10): six kernel items of 11 points besides stage 13, two of them
 (K0, K7) built, and `cargo xtask test-init` growing a stage per landing. Its
 first two landings, the unit parser and the dependency engine, were
 host-only and were built while stage 13 was.
 
-**Where it stands.** The init is a service manager a person drives, with
-the directory native services are reached through (L1 to L9), gated by
-`cargo xtask test-init` on all three architectures. What is left is L10,
-which moves the images onto it; it is built on branch `init-l10` and not
-yet on `main` (2026-09-26). The
+**Where it stands.** Init is pid 1 of every image a person boots, and a
+service manager they drive, with the directory native services are reached
+through (L1 to L10), gated by `cargo xtask test-init` on all three
+architectures, `test-compositor` and `test-jobs`. The
 stage's exit has been met by `test-jobs` since 2026-09-19; the images still
 start their own pid 1 until L10.
 
@@ -159,9 +165,11 @@ that checks a person's password with Argon2id, throttles and audits, with
 `passwd`, `authctl` and hyprlock's real backend on it: phase 1, 27 points,
 not started. Phase 2 moves the desktop off root (31, and L10) and phase 3
 adds PAM for ferrousli's programs, TOTP, ssh passwords and privilege
-prompts (about 32). Its P0 is a kernel hole it names:
+prompts (about 32). Its P0 was a kernel hole it named:
 `process_create` gave the process it made root's credentials instead of
-its creator's (2 points, being fixed).
+its creator's. Fixed on 2026-09-26: the child takes a copy of its
+creator's ids, and the `creator` boot line proves it for a uid-1000 service
+in its delegated cgroup (2 points, spent).
 
 `test-jobs` is x86-64 only, because `sleep` is uutils' and uutils is built
 for x86-64 alone (`docs/UUTILS.md` D3).
