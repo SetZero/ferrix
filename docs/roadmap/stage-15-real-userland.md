@@ -141,8 +141,8 @@ each driver died through K6.
 **The init is done: L1 to L11 (the customer, 2026-09-26).** The stage stays
 in progress until authentication's phase 1 lands.
 
-**Still to do for the init,** in the customer's order: **L12** next, after
-`docs/AUTH.md`'s P0b -- the kernel starts only init, and init starts
+**Still to do for the init,** in the customer's order: **L12** next -- the
+kernel starts only init, and init starts
 `devmgr` (about 8 points). Then `sshd` with `LISTEN_FDS` (the sshdt port,
 x86-64 only), so L9's gate runs real `sshd` socket activation where it runs
 `nc` today. **L13**, the sandboxing keys, is parked until stage 13's
@@ -180,10 +180,11 @@ prompts (about 32). Its P0 was a kernel hole it named:
 `process_create` gave the process it made root's credentials instead of
 its creator's. Fixed on 2026-09-26: the child takes a copy of its
 creator's ids, and the `creator` boot line proves it for a uid-1000 service
-in its delegated cgroup (2 points, spent). Beside it: P0a, a `Type=native`
-unit with `User=` refused at load rather than run as root, and F-40, a
-delegated cgroup lifting its own limits, closed by a `SET_LIMIT` right and
-the `limits` boot line.
+in its delegated cgroup (2 points, spent). Beside it: P0b, a `Type=native`
+service with `User=` made by a helper that has become the user, so it runs
+as the user (P0a refused such a unit until then), and F-40, a delegated
+cgroup lifting its own limits, closed by a `SET_LIMIT` right and the
+`limits` boot line.
 
 `test-jobs` is x86-64 only, because `sleep` is uutils' and uutils is built
 for x86-64 alone (`docs/UUTILS.md` D3).

@@ -681,8 +681,7 @@ pub(super) fn parse(
     Ok(Config::Service(Box::new(service)))
 }
 
-/// What systemd's `service_verify` refuses, and what a native service cannot
-/// honour yet.
+/// What systemd's `service_verify` refuses.
 fn check(service: &Service) -> Result<(), UnitError> {
     let oneshot = service.service_type == ServiceType::Oneshot;
     if service.exec_start.is_empty() && service.exec_stop.is_empty() {
@@ -706,20 +705,6 @@ fn check(service: &Service) -> Result<(), UnitError> {
         return Err(UnitError::new(
             "Service has Restart= set to either always or on-success, which isn't allowed \
              for Type=oneshot services. Refusing.",
-        ));
-    }
-    // A native process runs as the process that made it, and init makes a
-    // native service's itself, so it would run as root whatever the unit
-    // asked (docs/INIT.md §5.2). Refused rather than run as someone else,
-    // until init makes it from a child that has become the user.
-    if service.service_type == ServiceType::Native
-        && (service.user.is_some()
-            || service.group.is_some()
-            || !service.supplementary_groups.is_empty())
-    {
-        return Err(UnitError::new(
-            "Service has User=, Group= or SupplementaryGroups= with Type=native, which \
-             cannot run as anyone but init yet. Refusing.",
         ));
     }
     Ok(())

@@ -145,7 +145,7 @@ pub(crate) struct Prepared {
     tty: Option<(CString, bool)>,
     streams: [Stream; 3],
     directory: Option<(CString, bool)>,
-    user: Option<(u32, u32, Vec<u32>)>,
+    user: Option<Ids>,
     /// For `Type=notify`: the descriptor its readiness pipe goes on
     /// (`NotifyFd=`, 3 when the unit names none).
     notify: Option<libc::c_int>,
@@ -251,24 +251,7 @@ pub(crate) fn prepare(
 
     let argv = arguments(&spec.command, &environment);
     let path = find(&spec.command.path)?;
-    let group_ids = match (&spec.group_name, &user) {
-        (Some(name), _) => lookup_group(name)?,
-        (None, Some(account)) => account.gid,
-        (None, None) => 0,
-    };
-    let supplementary = spec
-        .supplementary_groups
-        .iter()
-        .map(|name| lookup_group(name))
-        .collect::<Result<Vec<u32>, Unprepared>>()?;
-    let user_ids = user
-        .as_ref()
-        .map(|account| (account.uid, group_ids, supplementary.clone()))
-        .or_else(|| {
-            spec.group_name
-                .as_ref()
-                .map(|_| (0, group_ids, supplementary))
-        });
+    let user_ids = ids(spec, user.as_ref())?;
 
     let tty = match &spec.tty {
         Some(path) => {
@@ -483,6 +466,42 @@ fn lookup_user(user: &str) -> Result<Account, Unprepared> {
             format!("User={user} is not in /etc/passwd"),
         )),
     }
+}
+
+/// The ids a unit's processes run as: `User=`'s uid, `Group=`'s gid or else
+/// the user's own, and `SupplementaryGroups=`. `None` when the unit names
+/// neither a user nor a group, and runs as init does.
+fn ids(spec: &SpawnSpec, user: Option<&Account>) -> Result<Option<Ids>, Unprepared> {
+    let group_ids = match (&spec.group_name, user) {
+        (Some(name), _) => lookup_group(name)?,
+        (None, Some(account)) => account.gid,
+        (None, None) => 0,
+    };
+    let supplementary = spec
+        .supplementary_groups
+        .iter()
+        .map(|name| lookup_group(name))
+        .collect::<Result<Vec<u32>, Unprepared>>()?;
+    Ok(user
+        .map(|account| (account.uid, group_ids, supplementary.clone()))
+        .or_else(|| {
+            spec.group_name
+                .as_ref()
+                .map(|_| (0, group_ids, supplementary))
+        }))
+}
+
+/// A uid, a gid and the supplementary groups.
+pub(crate) type Ids = (u32, u32, Vec<u32>);
+
+/// [`ids`] for a unit whose process init does not `execve` itself: a
+/// `Type=native` service, which a helper that has become these ids makes.
+pub(crate) fn identity(spec: &SpawnSpec) -> Result<Option<Ids>, Unprepared> {
+    let user = match &spec.user {
+        Some(name) => Some(lookup_user(name)?),
+        None => None,
+    };
+    ids(spec, user.as_ref())
 }
 
 /// The uid and gid of `User=`, for `Delegate=`.

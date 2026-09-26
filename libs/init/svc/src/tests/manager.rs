@@ -975,7 +975,7 @@ fn a_units_warnings_are_logged_as_it_loads() {
 fn a_refused_unit_says_why_once() {
     let mut rig = Rig::new(&[(
         "n.service",
-        "[Service]\nType=native\nExecStart=/sbin/n\nUser=ferrix\n",
+        "[Service]\nType=simple\nExecStart=/a\nExecStart=/b\n",
     )]);
     let mut lines = Rig::lines(&rig.boot());
     lines.extend(Rig::lines(
@@ -983,12 +983,12 @@ fn a_refused_unit_says_why_once() {
     ));
     let said: Vec<&String> = lines
         .iter()
-        .filter(|line| line.contains("n.service: ") && line.contains("Type=native"))
+        .filter(|line| line.contains("n.service: ") && line.contains("more than one ExecStart="))
         .collect();
     assert_eq!(said.len(), 1, "{lines:?}");
     let again = Rig::lines(&rig.request(Request::start("n.service")));
     assert!(
-        !again.iter().any(|line| line.contains("Type=native")),
+        !again.iter().any(|line| line.contains("ExecStart=")),
         "said once, when it loads: {again:?}"
     );
 }

@@ -423,7 +423,8 @@ pub(crate) fn fork_into(cgroup: BorrowedFd<'_>) -> io::Result<Forked> {
     }
 }
 
-/// `fork(2)`, for a generator, which runs before any cgroup is made.
+/// `fork(2)`, for a generator, which runs before any cgroup is made, and for
+/// the helper that makes a native service as its user.
 pub(crate) fn fork() -> io::Result<Forked> {
     // SAFETY: init has one thread, so the child's copy holds no lock.
     match unsafe { libc::fork() } {

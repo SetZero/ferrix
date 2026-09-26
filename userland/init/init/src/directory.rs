@@ -41,7 +41,8 @@ use ferrix_native_abi::types::{PACKET_SIGNAL, PROCESS_EXITED, PROCESS_KILLED};
 use ferrix_svc::event::{Event, Exit, Name, Pid, Token, UnitId};
 use ferrix_svc::value::Signal;
 
-use crate::sys::Native;
+use crate::spawn::Ids;
+use crate::sys::{self, Forked, Native};
 
 /// What a port key stands for.
 #[derive(Debug)]
@@ -155,36 +156,28 @@ impl Directory {
     /// Start `program` as `unit`'s native main process, in the job behind
     /// the cgroup `cgroup` is open on, with `end` as its bootstrap channel.
     /// Returns its key, for the pid the caller finds in the cgroup.
+    ///
+    /// A native process runs as the process that made it (`docs/AUTH.md` §7,
+    /// P0), so a unit with `ids` -- a `User=`, `Group=` or
+    /// `SupplementaryGroups=` -- has its process made by a helper that has
+    /// become them ([`made_by_helper`]); one without is made by init, and is
+    /// root's.
     pub(crate) fn start_native(
         &mut self,
         unit: UnitId,
         cgroup: BorrowedFd<'_>,
         program: &str,
         end: Channel<Native>,
+        ids: Option<&Ids>,
     ) -> Result<u64, String> {
-        use std::os::fd::AsRawFd as _;
-        let image =
-            std::fs::read(program).map_err(|error| format!("reading {program}: {error}"))?;
-        let job: Job<Native> =
-            job::for_cgroup(Native, cgroup.as_raw_fd(), Requested::Exactly(Rights::JOB))
-                .map_err(|error| format!("job_for_cgroup: {error:?}"))?;
-        let elf =
-            vmo::create(Native, image.len()).map_err(|error| format!("vmo_create: {error:?}"))?;
-        elf.write(&image, 0)
-            .map_err(|error| format!("vmo_write: {error:?}"))?;
-        let name = program.rsplit('/').next().unwrap_or(program);
-        let name = name
-            .get(..name.len().min(ferrix_native_abi::nr::PROCESS_NAME_MAX))
-            .unwrap_or(name);
-        let process = pending::create_process(&job, &elf, name)
-            .map_err(|error| format!("process_create: {error:?}"))?;
+        let process = match ids {
+            Some(ids) => made_by_helper(cgroup, program, end, ids)?,
+            None => make_native(cgroup, program, end)?,
+        };
         let key = self.key();
         process
             .notify_on_exit(&self.port, key)
             .map_err(|error| format!("waiting for its end: {error:?}"))?;
-        process
-            .start(end.into_owned())
-            .map_err(|(error, _)| format!("process_start: {error:?}"))?;
         let _ = self.watched.insert(key, Watched::Process(unit, 0, process));
         Ok(key)
     }
@@ -373,5 +366,143 @@ fn discard(channel: &Channel<Native>) {
     };
     for handle in handles.iter().take(got.handles) {
         drop(OwnedHandle::from_raw(Native, *handle));
+    }
+}
+
+/// How long init waits for a helper to make and start a native service
+/// (§5.2): reading the image as the user and loading it, on a loaded
+/// emulator.
+const HELPER_PATIENCE_NANOS: u64 = 10_000_000_000;
+
+/// The helper's answer when the process was made and started: the process
+/// handle comes with it. Anything else it writes is why it could not.
+const STARTED: &[u8] = b"started";
+
+/// Make and start `program` in the job behind `cgroup`, with `end` as its
+/// bootstrap channel, as the caller runs: `job_for_cgroup` for `MANAGE`,
+/// the image read into a VMO, `process_create` and `process_start`.
+fn make_native(
+    cgroup: BorrowedFd<'_>,
+    program: &str,
+    end: Channel<Native>,
+) -> Result<Process<Native>, String> {
+    use std::os::fd::AsRawFd as _;
+    let image = std::fs::read(program).map_err(|error| format!("reading {program}: {error}"))?;
+    let job: Job<Native> = job::for_cgroup(
+        Native,
+        cgroup.as_raw_fd(),
+        Requested::Exactly(Rights::MANAGE),
+    )
+    .map_err(|error| format!("job_for_cgroup: {error:?}"))?;
+    let elf = vmo::create(Native, image.len()).map_err(|error| format!("vmo_create: {error:?}"))?;
+    elf.write(&image, 0)
+        .map_err(|error| format!("vmo_write: {error:?}"))?;
+    let name = program.rsplit('/').next().unwrap_or(program);
+    let name = name
+        .get(..name.len().min(ferrix_native_abi::nr::PROCESS_NAME_MAX))
+        .unwrap_or(name);
+    let process = pending::create_process(&job, &elf, name)
+        .map_err(|error| format!("process_create: {error:?}"))?;
+    process
+        .start(end.into_owned())
+        .map_err(|(error, _)| format!("process_start: {error:?}"))?;
+    Ok(process)
+}
+
+/// [`make_native`] as `ids`: in a forked helper that becomes them first, so
+/// the process it makes runs as them (P0).
+///
+/// Init makes a channel, writes `end` into its own side, and gives the
+/// other to the helper with `process_give` (K3) before a pipe lets the
+/// helper on, as it does for a Linux service's bootstrap. The helper takes
+/// it, becomes the unit's user, reads `end`, makes and starts the process,
+/// and writes a handle to it back, or why it could not; init waits up to
+/// [`HELPER_PATIENCE_NANOS`] for that, and reaps the helper. The helper
+/// gets `MANAGE` on the job through the cgroup's `cgroup.procs`, which the
+/// caller has made the user's for the start.
+fn made_by_helper(
+    cgroup: BorrowedFd<'_>,
+    program: &str,
+    end: Channel<Native>,
+    ids: &Ids,
+) -> Result<Process<Native>, String> {
+    let (ours, theirs) =
+        channel::create(Native).map_err(|error| format!("a helper's channel: {error:?}"))?;
+    ours.write_with(b"end", [end.into_owned()])
+        .map_err(|(error, _)| format!("handing the helper the service's channel: {error:?}"))?;
+    let (go_read, go_write) = sys::pipe().map_err(|error| format!("a helper's pipe: {error}"))?;
+    let pid = match sys::fork().map_err(|error| format!("forking a helper: {error}"))? {
+        Forked::Child => {
+            drop(go_write);
+            sys::wait_readable(std::os::fd::AsRawFd::as_raw_fd(&go_read));
+            let status = helper(cgroup, program, ids);
+            // SAFETY: `_exit` ends the helper without running the drops of
+            // init's handles, whose numbers name nothing in its own table.
+            unsafe { libc::_exit(status) }
+        }
+        Forked::Parent(pid) => pid,
+    };
+    drop(go_read);
+    let given = pending::give_bootstrap(Native, pid, theirs.into_owned())
+        .map_err(|(error, _)| format!("giving the helper its channel: {error:?}"));
+    drop(go_write);
+    let answer = given.and_then(|()| {
+        let deadline = sys::monotonic().saturating_add(HELPER_PATIENCE_NANOS);
+        let _ = ours
+            .wait_one(
+                Signals::READABLE | Signals::PEER_CLOSED,
+                Deadline::At(deadline),
+            )
+            .map_err(|error| format!("the helper did not answer: {error:?}"))?;
+        read_answer(&ours)
+    });
+    if answer.is_err() {
+        let _ = sys::kill(pid, libc::SIGKILL);
+    }
+    let _ = sys::wait_for(pid, 500);
+    answer
+}
+
+/// The helper's side of [`made_by_helper`]; its exit status.
+fn helper(cgroup: BorrowedFd<'_>, program: &str, ids: &Ids) -> i32 {
+    let Ok(Some(handle)) = pending::take_bootstrap(Native) else {
+        return 2;
+    };
+    let reply = Channel::from_owned(handle);
+    let (uid, gid, groups) = ids;
+    let made = sys::become_user(*uid, *gid, groups)
+        .map_err(|error| format!("becoming {uid}:{gid}: {error}"))
+        .and_then(|()| {
+            let mut bytes = [0_u8; 8];
+            let mut handles = [Handle(0); 1];
+            let got = reply
+                .read(&mut bytes, &mut handles)
+                .map_err(|error| format!("reading the service's channel: {error:?}"))?;
+            if got.handles != 1 {
+                return Err("init sent no channel for the service".to_owned());
+            }
+            let end = Channel::from_owned(OwnedHandle::from_raw(Native, handles[0]));
+            make_native(cgroup, program, end)
+        });
+    let sent = match made {
+        Ok(process) => reply.write_with(STARTED, [process.into_owned()]).is_ok(),
+        Err(why) => reply.write(why.as_bytes()).is_ok(),
+    };
+    i32::from(!sent)
+}
+
+/// What a helper wrote back: the process it started, or why it did not.
+fn read_answer(ours: &Channel<Native>) -> Result<Process<Native>, String> {
+    let mut bytes = [0_u8; 256];
+    let mut handles = [Handle(0); 1];
+    let got = ours
+        .read(&mut bytes, &mut handles)
+        .map_err(|error| format!("the helper ended without an answer: {error:?}"))?;
+    let said = bytes.get(..got.bytes).unwrap_or_default();
+    match (said == STARTED, got.handles) {
+        (true, 1) => Ok(Process::from_owned(OwnedHandle::from_raw(
+            Native, handles[0],
+        ))),
+        _ => Err(String::from_utf8_lossy(said).into_owned()),
     }
 }

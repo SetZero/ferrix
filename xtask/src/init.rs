@@ -263,7 +263,7 @@ const TEST_UNITS: &[(&str, &str)] = &[
     (
         "pong-as-user.service",
         "[Unit]\n\
-         Description=A native service that asks to run as a user, refused\n\
+         Description=A native service run as ferrix, by a helper that became it\n\
          \n\
          [Service]\n\
          Type=native\n\
@@ -747,8 +747,9 @@ fn session(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
 /// bootstrap channel; `asker.service`, which declares `Uses=ferrix.test`,
 /// opened it and was answered by `pong.service`, a native service started
 /// by that OPEN in its own cgroup; `rogue.service`, which does not declare
-/// it, was REFUSED; and `pong-as-user.service`, `Type=native` with `User=`,
-/// which init cannot honour and would run as root, did not load.
+/// it, was REFUSED; and `pong-as-user.service`, `Type=native` with
+/// `User=ferrix`, runs as uid and gid 1000 in every role: made by a helper
+/// that became the user, since a native process runs as its maker (P0b).
 fn directory(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
     if !has(
         &everything(at),
@@ -799,11 +800,25 @@ fn directory(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
              cgroup.procs {listed:?}"
         )),
     }
-    match ask(at, "svc status pong-as-user.service\n", "Loaded: ")? {
-        Some(line) if line.trim() == "Loaded: bad-setting" => {}
-        other => failures.push(format!(
-            "pong-as-user.service, Type=native with User=, was not refused at load: {other:?}"
-        )),
+    let _ = ask(
+        at,
+        "svc start pong-as-user.service; m=started; echo \"$m-as\"\n",
+        "started-as",
+    )?;
+    for (field, name) in [("Uid:", "uid"), ("Gid:", "gid")] {
+        let asked = format!(
+            "read p < /sys/fs/cgroup/system.slice/pong-as-user.service/cgroup.procs; \
+             m={name}; while read k r e s f; do [ \"$k\" = {field} ] && \
+             echo \"$m-of $r $e $s $f\"; done < /proc/$p/status\n"
+        );
+        let answer = format!("{name}-of ");
+        match ask(at, &asked, &answer)? {
+            Some(line) if line.trim() == format!("{name}-of 1000 1000 1000 1000") => {}
+            other => failures.push(format!(
+                "pong-as-user.service, Type=native with User=ferrix, does not run as 1000 in \
+                 every {name} role: {other:?}"
+            )),
+        }
     }
     Ok(())
 }

@@ -186,6 +186,19 @@ impl Groups {
         Ok(())
     }
 
+    /// Give `unit`'s `cgroup.procs` to `uid` and `gid`, and nothing else of
+    /// its cgroup: what a helper making a `Type=native` service as its
+    /// `User=` needs for `job_for_cgroup` to answer `MANAGE` (P0b), which it
+    /// has to make the process in the job. Init takes it back once the
+    /// process is made, unless the unit is delegated.
+    pub(crate) fn lend_procs(&self, unit: UnitId, uid: u32, gid: u32) -> io::Result<()> {
+        let Some(group) = self.groups.get(&unit) else {
+            return Ok(());
+        };
+        let procs = self.root.join(group.path.as_str()).join("cgroup.procs");
+        std::os::unix::fs::chown(procs, Some(uid), Some(gid))
+    }
+
     /// The units whose `memory.events` counted an OOM kill since it was
     /// last read, each read from its start, which clears its `EPOLLPRI`.
     pub(crate) fn oom_killed(&mut self) -> Vec<UnitId> {

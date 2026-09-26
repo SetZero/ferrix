@@ -398,10 +398,16 @@ A native service is `job_for_cgroup` on the directory (C8), then
 That is exactly what `devmgr` does for a driver, so a native service is in
 the service's cgroup just as a Linux one is.
 A native process runs as the process that made it, as a fork child does
-(`docs/AUTH.md` §7, P0), so a native service init starts is root's.
-A `Type=native` unit with `User=`, `Group=` or `SupplementaryGroups=` is
-refused at load rather than run as root; accepting them needs init to make
-the process from a child that has already become that user (with L11).
+(`docs/AUTH.md` §7, P0), so a native service init makes itself is root's.
+One with `User=`, `Group=` or `SupplementaryGroups=` is made by a helper
+instead (P0b): init forks it, gives it a channel with `process_give` (K3)
+carrying the service's bootstrap end, and lends it the cgroup's
+`cgroup.procs` alone, so that `job_for_cgroup` answers it `MANAGE`. The
+helper becomes the unit's ids, reads the image as them, makes and starts
+the process, and writes a handle to it back; init watches that handle as it
+watches one it made, takes `cgroup.procs` back (unless the unit is
+delegated) and reaps the helper. The process runs as the unit's ids in
+every role.
 
 To stop a service, init runs `ExecStop=` if the unit has one. Then it sends
 `KillSignal=` (`SIGTERM` by default) as `KillMode=` says: to the main process
@@ -896,14 +902,14 @@ the system people will actually use.
 | L8 | done, 2026-09-26: the kernel half (K2, K3, K4, K6), then init's | "Let a parent hand its child a bootstrap handle across execve" and the five after it; "Route the directory's OPENs, and start Type=native services" |
 | L10 | done, 2026-09-26 | "Boot the images through init, and the compositor as its service" |
 | L11 | done, 2026-09-26, by ferrix-55b with T0 | "Give the restart policy a crate of its own that allocates nothing"; "Restart drivers by the service manager's policy, and report how they died" |
-| L12 | not started; next, after `docs/AUTH.md`'s P0b (the customer, 2026-09-26) | |
+| L12 | not started; next (the customer, 2026-09-26) | |
 | L13 | parked until stage 13's namespaces and seccomp exist (the customer, 2026-09-26) | |
 
 All of L1 to L11's 69 points are spent. L11 put `devmgr` on the restart
 policy, which moved into `libs/init/restart` because `devmgr` has no
 allocator; its start limit became systemd's fixed window. The customer
 counts the init done at L11 (2026-09-26). L12, init starting `devmgr` (the
-microkernel step), is next after `docs/AUTH.md`'s P0b; then `sshd` with
+microkernel step), is next, `docs/AUTH.md`'s P0b being done; then `sshd` with
 `LISTEN_FDS`, so L9's gate runs real socket activation in place of `nc`.
 L13, the sandboxing keys, is parked until stage 13's namespaces and seccomp
 exist.
@@ -1469,7 +1475,8 @@ it to use. Linux services' own OFFERs are kept but no gate offers one yet.
 * **`test-jobs`** types its session at the getty's shell, and ends it with
   `exit`, after which init must give the console a new session.
 
-**What the next session does first.** `docs/AUTH.md`'s P0b (a `Type=native`
-service made by a child that has already become its `User=`), then L12,
-init starting `devmgr` (§7.3), then `sshd` with `LISTEN_FDS` for L9's gate.
-L13 waits for stage 13's namespaces and seccomp.
+**What the next session does first.** L12, init starting `devmgr` (§7.3),
+then `sshd` with `LISTEN_FDS` for L9's gate. L13 waits for stage 13's
+namespaces and seccomp. `docs/AUTH.md`'s P0 to P0c are done: a native
+process runs as its maker, a native service as its `User=`, and a
+delegated cgroup's limits stay its delegator's.

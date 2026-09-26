@@ -717,13 +717,32 @@ impl Init {
             Ok(given) => given,
             Err(error) => return fail(self, format!("no bootstrap channel: {error:?}")),
         };
+        // As its User=, Group= and SupplementaryGroups= (P0b): a helper
+        // that has become them makes the process, and needs the cgroup's
+        // cgroup.procs for the length of the start, unless the unit is
+        // delegated and has it already.
+        let ids = match spawn::identity(spec) {
+            Ok(ids) => ids,
+            Err(unprepared) => return fail(self, unprepared.why),
+        };
+        let lent = ids.is_some() && !self.delegated(unit);
+        if let (true, Some((uid, gid, _))) = (lent, &ids)
+            && let Err(error) = self.groups.lend_procs(unit, *uid, *gid)
+        {
+            return fail(self, format!("lending its cgroup.procs: {error}"));
+        }
         let Some(cgroup) = self.groups.dir(&spec.group) else {
             return fail(self, format!("its cgroup {} was never made", spec.group));
         };
         let Some(directory) = self.directory.as_mut() else {
             return;
         };
-        let key = match directory.start_native(unit, cgroup, &spec.command.path, given.end) {
+        let started =
+            directory.start_native(unit, cgroup, &spec.command.path, given.end, ids.as_ref());
+        if lent && let Err(error) = self.groups.lend_procs(unit, 0, 0) {
+            say(&format!("{name}: taking back its cgroup.procs: {error}"));
+        }
+        let key = match started {
             Ok(key) => key,
             Err(why) => return fail(self, why),
         };
@@ -761,6 +780,18 @@ impl Init {
         match self.source.load(name.as_str()).map(|loaded| loaded.config) {
             Ok(Config::Service(service)) => service.offers,
             _ => Vec::new(),
+        }
+    }
+
+    /// Whether `unit` is a service or scope with `Delegate=yes`.
+    fn delegated(&self, unit: UnitId) -> bool {
+        let Some(name) = self.manager.name(unit) else {
+            return false;
+        };
+        match self.source.load(name.as_str()).map(|loaded| loaded.config) {
+            Ok(Config::Service(service)) => service.delegate,
+            Ok(Config::Scope(scope)) => scope.delegate,
+            _ => false,
         }
     }
 

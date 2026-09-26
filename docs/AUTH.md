@@ -821,9 +821,9 @@ negative control that must be seen to fire, per the repository's rule.
 | | Slice | Owner | Gate | Points |
 |---|---|---|---|---|
 | P0 | `process_create` gives the child its creator's credentials, as `fork` does. A boot check makes a native process as uid 1000 in a delegated job and requires `getuid` in it to be 1000. Its negative control is the old `Credentials::root()`, which must fail that line. | ferrix-15 (was: kernel, native ABI) | the kernel row of the gate table; `test-init --arch all` | 2 |
-| P0a | Init refuses `User=` and `Group=` on a `Type=native` unit, failing closed. Init makes a native service's process itself, so such a unit ran as root and the keys were silently ignored (found by ferrix-15 beside P0). **Done 2026-09-26**: the unit, `SupplementaryGroups=` too, loads as `bad-setting`, and `test-init` requires it of `pong-as-user.service`. | ferrix-15 | `test-init --arch all` | with P0 |
-| P0b | With init's L11, a native service's process is made by a forked child that has already become the unit's user, so `process_create` (after P0) gives it that user's credentials. | ferrix-15 | `test-init --arch all` | with L11 |
-| P0c | A `Delegate=yes` unit with `User=1000` gets `MANAGE` on its own job through `job_for_cgroup` (`kernel/src/fs/cgroupfs.rs:356-357`), and native `job_set_limit` (`kernel/src/syscall/native.rs:1244`) asks for `MANAGE` alone, so the unit can lift its own `MemoryMax=` or `TasksMax=` to unlimited. Ancestor slices still bound it. The fix: a `SET_LIMIT` job right, granted only to a caller that may write `memory.max`. Found by ferrix-15 and confirmed by ferrix-2c in the code; after ferrix-55's OK. | ferrix-15 | `test-init --arch all` | 2 |
+| P0a | Init refuses `User=` and `Group=` on a `Type=native` unit, failing closed. Init makes a native service's process itself, so such a unit ran as root and the keys were silently ignored (found by ferrix-15 beside P0). **Done 2026-09-26**: the unit, `SupplementaryGroups=` too, loaded as `bad-setting`; P0b replaced the refusal the same day. | ferrix-15 | `test-init --arch all` | with P0 |
+| P0b | With init's L11, a native service's process is made by a forked child that has already become the unit's user, so `process_create` (after P0) gives it that user's credentials. **Done 2026-09-26**: `test-init` runs `pong-as-user.service` (`User=ferrix`) and reads uid and gid 1000 in every role from its `/proc/<pid>/status`; the helper left root reads 0. | ferrix-15 | `test-init --arch all` | with L11 |
+| P0c | A `Delegate=yes` unit with `User=1000` gets `MANAGE` on its own job through `job_for_cgroup` (`kernel/src/fs/cgroupfs.rs:356-357`), and native `job_set_limit` (`kernel/src/syscall/native.rs:1244`) asks for `MANAGE` alone, so the unit can lift its own `MemoryMax=` or `TasksMax=` to unlimited. Ancestor slices still bound it. The fix: a `SET_LIMIT` job right, granted only to a caller that may write `memory.max`. Found by ferrix-15 and confirmed by ferrix-2c in the code; after ferrix-55's OK. **Done 2026-09-26** (`54cba422`, F-40 closed): the `limits` boot line. | ferrix-15 | `test-init --arch all` | 2 |
 
 P0 and P0c have one shape: `MANAGE` on a job is too coarse a right. A
 delegated user holds it for its own subtree, as it must to move its own
@@ -1026,7 +1026,7 @@ it was put to the customer.
 | Slice | State |
 |---|---|
 | P0 | on `main` as `f84a8d3c` (ferrix-15): a native process runs as the process that made it, checked in every `test-init` boot |
-| P0a, P0b | ferrix-15's, after its L10 and with L11 |
+| P0a, P0b, P0c | done 2026-09-26 (ferrix-15): P0a refused `User=` on a native unit until P0b made it run as that user; P0c is `54cba422`, the `SET_LIMIT` right |
 | P1.1 `libs/crypto/argon2` | on `main` with this section: RFC 9106's vector and five RustCrypto ones, Miri in CI, the `argon2_phc` fuzz target, the timings of §5.1 |
 | P1.2 `libs/proto/auth-proto` | on `main` with this section: the records of §3.3, `Secret`, the `auth_proto` fuzz target |
 | P1.3 `authd`, P1.4 `passwd` and `authctl` | written on branch `auth-authd` (`userland/auth/`), with host tests over a root of their own and one over a real socket |
