@@ -282,6 +282,29 @@ stage 7's `handlers` 103 → 104 ms, `procs` 13 → 13, `fork` 177 → 178, `exe
 37 → 38 (medians), and time to `FERRIX-BOOT-OK` varied more between boots of
 one setting than between settings.
 
+**Timing, and FX-1004.** Stage 10's block-ring check failed three times with
+FX-1004 *"quiescing the instant a driver died was refused: its channel was
+still open"* in the first `test-shell` runs of this work, which is more than
+that race's background rate, so an alternating control was run on x86-64 TCG
+(2026-09-26, logs in `~/ferrix-logs/f31/fx1004-ctl/`):
+
+| | `test-boot` | `test-shell` (four boots a run) |
+|---|---:|---:|
+| main at 74e1ea46 | 0 of 20 | 0 of 20 runs |
+| this branch, `on` | 0 of 20 | 1 of 20 runs |
+| this branch, `off` | 0 of 20 | — |
+| this branch with the kernel half of 6afa79fc (row 238's fix) | — | 0 of 6 runs |
+
+Each branch also hit FX-0884, the signalfd check, once in its twenty
+`test-shell` runs. One in twenty against none is not a difference the control
+can distinguish from chance, and every FX-1004 seen is the refusal
+`docs/BACKLOG.md` row 238 describes — the driver's end still referenced by
+`Endpoint::write` while it wakes the reader — on a path this work does not
+touch: nothing here changes `object/`, `claim.rs` or `block_ring/`. What `on`
+does add is a little time at every switch of address space and every entry,
+which can widen that window without being a cause of its own. Row 238's fix
+is being landed separately.
+
 Under TCG — the default gates, and every Arm figure — the controls do not
 exist and nothing speculates, so a timing there measures QEMU. What `on` adds
 there is instructions: on x86-64 two per clamp, fourteen `xor`s and an `lfence`
