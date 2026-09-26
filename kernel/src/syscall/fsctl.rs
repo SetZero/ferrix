@@ -474,10 +474,16 @@ pub(crate) fn sys_mount(
 ///
 /// Every unmount here is what `MNT_DETACH` asks for: the mount leaves the tree
 /// at once and goes when the last open file on it closes. So a busy mount is
-/// not `EBUSY`, and `MNT_FORCE`, which exists to make a busy one go, has
-/// nothing further to do. `MNT_EXPIRE` marks a mount for a later call to
-/// remove if nobody used it in between, and there is no use count to decide
-/// that by, so it is `EINVAL`.
+/// not `EBUSY`. `MNT_EXPIRE` marks a mount for a later call to remove if
+/// nobody used it in between, and there is no use count to decide that by,
+/// so it is `EINVAL`.
+///
+/// The filesystem is written out first, as Linux's unmount does before it
+/// lets a superblock go. It was not: a btrfs volume unmounted without a
+/// `sync` came back without what was written since its last commit -- files,
+/// directories, renames, a 40 MiB file cut to 32 MiB (ferrix-ea's black-box
+/// pass, 2026-09-26). A write-out that fails keeps the mount, with the
+/// error, so nothing is lost silently; `MNT_FORCE` unmounts it anyway.
 pub(crate) fn sys_umount2(process: &Process, target: u64, flags: u32) -> Result<usize, Errno> {
     if flags & !(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW) != 0
         || flags & MNT_EXPIRE != 0
@@ -494,6 +500,11 @@ pub(crate) fn sys_umount2(process: &Process, target: u64, flags: u32) -> Result<
     let place = path::target(process, AT_FDCWD, target, follow)?
         .location()
         .clone();
+    if let Err(error) = place.mount.filesystem().sync()
+        && flags & MNT_FORCE == 0
+    {
+        return Err(error);
+    }
     fs::namespace().unmount(&place)?;
     Ok(0)
 }
