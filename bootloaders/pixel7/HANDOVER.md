@@ -8,39 +8,36 @@ you touch the phone.
 
 ## State at a glance
 
-**Update, 2026-09-26 evening (ferrix-0a): item 4 is on `main`. Items 1-3
-are gated as three commits, and wait for phone runs 4 and 5.**
+**Update, 2026-09-26 night (ferrix-0a): items 1, 3 and 4 are on `main`,
+and the boot console has been seen on the phone. Item 2, cores 1-7, waits
+for run 5.** None of it is pushed.
 
-* **The GICv3 ITS** (`c21ce40f..a8680955`) landed on `main` by fast-forward
-  after a rebase and a re-gate on nazuna: `cargo xtask check` passed, and
-  `test-boot` reached `FERRIX-BOOT-OK stages 1-12` on x86_64, armv7a,
-  armv7a `--smp 2`, aarch64, and aarch64 with
-  `FERRIX_ARM_MACHINE=gic-version=3` at `--smp 1` and `--smp 2`. **Not
-  pushed.**
+* **The GICv3 ITS** (`c21ce40f..a8680955`) landed after a rebase and a
+  re-gate: `cargo xtask check` passed, and `test-boot` reached
+  `FERRIX-BOOT-OK stages 1-12` on x86_64, armv7a, armv7a `--smp 2`,
+  aarch64, and aarch64 with `FERRIX_ARM_MACHINE=gic-version=3` at `--smp 1`
+  and `--smp 2`.
 * **`--kernel-option WORD`** (xtask) puts any word in the image's
-  `CMDLINE.TXT`, once for each time it is given. It is on `main` with this
-  update.
-* **`pixel7-next`** (worktree `.claude/worktrees/pixel7-next`) is now three
-  commits on `main`, one for each of items 3, 1 and 2, in that order:
-  `cad1db68` the seed, `da9545b9` the boot console, `704756ab` the EL2
-  secondaries. **Gated on nazuna, and not yet seen working on the phone.**
-  `cargo xtask check` passed on the three as rebased. `test-boot` reached
+  `CMDLINE.TXT`, once for each time it is given, so a QEMU boot can ask for
+  `ferrix.fbcon`.
+* **The seed** (`dc9d44d5`) and **the boot console** (`534178cf`) landed
+  after run 4. `cargo xtask check` passed on them, and `test-boot` reached
   `FERRIX-BOOT-OK` on x86_64, armv7a, armv7a `--smp 2` and aarch64, and on
-  aarch64 `--smp 2 --kernel-option ferrix.fbcon`, on GICv2 and GICv3. Those
-  boots ran just before a rebase onto three commits that change only gate
-  scripts and the compositor. Land the first two after run 4 is good, and the
-  third after run 5.
-* **Run 4 is built and waiting for the phone:**
-  `~/.local/share/ferrix/pixel7/run4b/boot.img` (SHA-256 `36ae3ddc…`),
-  from `704756ab` with `board::CMDLINE` as committed (`ferrix.fbcon nosmp`).
-  `run4/` is an older build: it has the boot console but not the seed
-  count. Neither has been booted, because the session `phone-link-9f`
-  held the phone for an app test and asked for no reset. Boot it with
-  "One run, end to end" from `adb reboot bootloader` on, with
-  `$P/run4b/boot.img` in place of `$P/boot.img`. What to look for: boot
-  text on the screen for a few seconds; in the record, `FERRIX-BOOT-OK`,
-  the loader's `/chosen holds 8 random bytes, passed on to the kernel's
-  seed`, and the kernel's `random   NOT SEEDED: 64 of 256 bits`.
+  aarch64 `--smp 2 --kernel-option ferrix.fbcon` on GICv2 and GICv3.
+* **Run 4** (`$P/run4b/boot.img`, `$P/run-fbcon4-nosmp.log`), with
+  `ferrix.fbcon nosmp`: **the owner saw Ferrix's boot text on the screen.**
+  The record has the loader's `/chosen holds 8 random bytes, passed on to
+  the kernel's seed`, the kernel's `random   NOT SEEDED: 64 of 256 bits`,
+  and `FERRIX-BOOT-OK stages 1-12`. Android was back 80 s after
+  `fastboot boot`, not 52. Drawing costs that time: the checks that print
+  most got slower (stage 6's `handlers` 94 to 2027 ms, `signals` 70 to
+  719, `fork` 168 to 479, `execve` 5 to 327 against run 3), and the
+  others are the same to the millisecond. The framebuffer is likely
+  mapped as device memory, so every glyph pixel is an uncached store.
+  Mapping it write-combining would be the fix, and nothing needs it yet.
+* **`pixel7-next`** (worktree `.claude/worktrees/pixel7-next`) is one commit
+  on `main` now: the EL2 secondaries, gated with the other two. It lands
+  after run 5, the same image without `nosmp`.
 
 * **On `main`**, merged 2026-09-26 by fast-forward after the whole gate row
   for "anything the image contains" passed on nazuna. **Not pushed**: pushes
@@ -199,8 +196,10 @@ them). Check any new one against the phone before you rely on it.
   types the PIN. Take turns: message the other session between runs, and
   don't boot while it holds the phone. Session names change when sessions
   restart: on 2026-09-26 evening it was `phone-link-9f`, testing an app on
-  the Pixel and a Poco F2 Pro together over adb. `adb devices` listing the
-  phone does not mean it is free, so list the peer sessions and ask.
+  the Pixel and a Poco F2 Pro together over adb. Its app, `dev.phonelink`,
+  stays installed: don't uninstall it or clear its data. `adb devices`
+  listing the phone does not mean it is free, so list the peer sessions and
+  ask.
 * **The permission classifier refused `cargo xtask flash --stage "$P/stage"`**
   (it overwrites the previous stage) and then the whole rebuild. What
   worked before the second refusal, and deletes nothing: `cargo xtask build
@@ -219,64 +218,61 @@ them). Check any new one against the phone before you rely on it.
 
 ## What to do next, most important first
 
-1. **The boot console on screen** (`pixel7-next`). Written:
-   `kernel/src/console/screen.rs`. With `ferrix.fbcon` on the command line,
-   the kernel's own lines (the bytes `console::recent` keeps, not programs'
-   output) are drawn on the firmware framebuffer as they are printed. It
-   picks the largest glyph scale that leaves 60 columns (double size on the
-   phone), keeps a top inset of a twentieth of the height for the camera,
-   wraps to the top without scrolling or reading back, and keeps the row
-   after the newest line blank. It stops when a panic draws
-   (`panic::screen::draw` calls `console::screen::stop`) or when the display
-   core publishes a card. `panic::screen::surface()` is now shared by both
-   and refuses while the root table is 0. The console starts right after
-   `mm::init`. The stage-1 version is what hung runs 1 and 2
-   (`run-fbcon-smp.log`, `run-fbcon-nosmp.log`, both empty of Ferrix text).
-   **The fix boots under QEMU:** `test-boot --arch aarch64 --kernel-option
-   ferrix.fbcon` reached `FERRIX-BOOT-OK` on one and two cores (11.6 s,
-   against 11.5 s without it), and so did the Pixel's own path,
-   `FERRIX_ARM_MACHINE=gic-version=3,acpi=off`. That run's `test-boot`
-   still exits 1, because with no ACPI the SMMU is not found and the check
-   that an out-of-domain DMA write faults sees none. That is not the
-   console. Screendumps from a boot with QMP (`$P/fbcon_shots.py`, which
-   boots `pixel7-next`'s `build/aarch64/ferrix.img`) are in
-   `$P/qemu-fbcon-mid.png` and `$P/qemu-fbcon-wrapped.png`. They show
-   the text in the panic screen's colours, at scale 1 on 800 x 600, and
-   wrapped back to the top with blank rows under the newest line. Next:
-   run 4 on the phone, whose image is built (see "State at a glance").
-   The owner should see boot text at double size for a few seconds before
-   the reset. The owner agreed to amend `docs/ARCHITECTURE.md` §1 for it,
-   and `da9545b9` does.
-2. **Cores 1-7** (`pixel7-next`). Written: `ferrix_secondary_entry` in
+1. **Cores 1-7** (`pixel7-next`). Written: `ferrix_secondary_entry` in
    `smp.rs` checks `CurrentEL`, and at EL2 sets EL1 up as
    `bootloaders/pixel7/src/entry.rs` does and `eret`s to it. It touches
    `ICC_SRE_EL2` only when `ID_AA64PFR0_EL1.GIC` says the CPU has GIC system
-   registers. QEMU `--smp 2` passes (the EL1 path). The asm allowlist entry's
-   reason was extended. Its budget did not need raising, because
-   `check-asm-budget.py` counts a raw-string `global_asm!` as 2 lines, a
-   hole worth closing. On the phone it is **unproven**. Run 1 had it
-   together with the broken boot console, and ABL's PSCI breadcrumbs showed
-   activity on cores 3, 4, 5 and 7, so CPU_ON calls went out. Next: run 5,
-   with `nosmp` removed once run 4 is good. Watch whether the ramoops record
-   survives with other cores writing it (it is a device mapping, so it
-   should).
-3. **Entropy** (`pixel7-next`). Written: `bootloaders/pixel7/src/seed.rs`
-   folds `/chosen`'s `rng-seed` and `kaslr-seed` into `firmware_seed` and
-   NOPs both out of the kernel's copy of the tree (run 3,
-   `run-seed-nosmp.log`, a normal boot to `FERRIX-BOOT-OK`). ABL gives 8
-   bytes. The owner chose to credit them rather than read the SoC's TRNG,
-   so `cad1db68` makes `BootInfo` version 6, with `firmware_seed_len`
-   beside the flag. The kernel credits 8 bits a byte, up to 256. That is 64
-   bits on the phone, which has no `RNDR`, so it still boots `NOT SEEDED`,
-   and the boot line says `64 of 256 bits`. The TRNG is a security block,
-   so under "Never write anything that survives a reset" it needs the
-   owner's word again before anyone reads it.
-4. **A GICv3 ITS driver**: on `main`, see "State at a glance". Choices
-   the owner may still want to review: DeviceID is the PCI requester ID, identity, as QEMU's
-   IORT and `msi-map` are, and neither is read yet. One collection, on the
-   boot core. LPI 8192+k is kernel interrupt 1024+k, and `irq::SLOTS` went
-   from 1024 to 1280. `gicv3_its.rs` falls in the certified core ring,
-   because the certification item lists `arch/**` there.
+   registers. QEMU `--smp 2` passes, but that is only the EL1 path. The asm
+   allowlist entry's reason was extended. Its budget did not need raising,
+   because `check-asm-budget.py` counts a raw-string `global_asm!` as 2
+   lines, a hole worth closing. On the phone it is **unproven**. Run 1 had
+   it together with the broken boot console, and ABL's PSCI breadcrumbs
+   showed activity on cores 3, 4, 5 and 7, so CPU_ON calls went out.
+   Next: run 5, with `nosmp` taken out of `board::CMDLINE` for the build
+   only and `ferrix.fbcon` kept, so the owner can watch. Watch whether the
+   ramoops record survives with other cores writing it (it is a device
+   mapping, so it should). If the run is good, take `nosmp` out for good
+   in the same landing.
+2. **Entropy beyond 64 bits.** ABL gives 8 bytes, and the kernel credits
+   them (`BootInfo.firmware_seed_len`), so the phone boots
+   `NOT SEEDED: 64 of 256 bits`. The rest would have to come from the SoC's
+   TRNG. That is a security block, so under "Never write anything that
+   survives a reset" it needs the owner's word before anyone reads it.
+3. **A faster boot console**, if anything comes to need one: map the
+   framebuffer write-combining rather than as device memory (run 4 lost
+   about 28 s to drawing).
+
+### Done, for the record
+
+* **The boot console** (`kernel/src/console/screen.rs`). With
+  `ferrix.fbcon` on the command line, the kernel's own lines (the bytes
+  `console::recent` keeps, not programs' output) are drawn on the firmware
+  framebuffer as they are printed. It picks the largest glyph scale that
+  leaves 60 columns (double size on the phone), keeps a twentieth of the
+  height clear at the top for the camera, wraps to the top without
+  scrolling or reading back, and keeps the row after the newest line blank.
+  It stops when a panic draws or when the display core publishes a card.
+  It starts right after `mm::init`, and `panic::screen::surface()`, which
+  the panic and the console share, refuses while the root table is 0. The
+  stage-1 version hung runs 1 and 2 (`run-fbcon-smp.log`,
+  `run-fbcon-nosmp.log`, both empty of Ferrix text). Under QEMU,
+  `FERRIX_ARM_MACHINE=gic-version=3,acpi=off` (the Pixel's path) also
+  boots it. That `test-boot` exits 1 anyway, because with no ACPI the SMMU
+  is not found, and the check that an out-of-domain DMA write faults sees
+  none. That is not the console. Screendumps from a QMP boot
+  (`$P/fbcon_shots.py`) are `$P/qemu-fbcon-mid.png` and
+  `$P/qemu-fbcon-wrapped.png`. The owner agreed to the amendment of
+  `docs/ARCHITECTURE.md` §1 that allows it. Run 4 showed it on the phone.
+* **The seed** (`bootloaders/pixel7/src/seed.rs`) folds `/chosen`'s
+  `rng-seed` and `kaslr-seed` into `firmware_seed` and NOPs both out of the
+  kernel's copy of the tree. The owner chose to credit ABL's 8 bytes rather
+  than read the TRNG, so `BootInfo` version 6 carries the count.
+* **The GICv3 ITS driver.** Choices the owner may still want to review:
+  DeviceID is the PCI requester ID, identity, as QEMU's IORT and `msi-map`
+  are, and neither is read yet. One collection, on the
+  boot core. LPI 8192+k is kernel interrupt 1024+k, and `irq::SLOTS` went
+  from 1024 to 1280. `gicv3_its.rs` falls in the certified core ring,
+  because the certification item lists `arch/**` there.
 
 ## Starting Ferrix from Android (stopped)
 
