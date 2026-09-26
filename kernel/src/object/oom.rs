@@ -37,7 +37,7 @@
 //! process, chosen by its resident pages alone.
 
 use alloc::sync::Arc;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END};
 
@@ -69,6 +69,14 @@ const PAUSE_NANOS: u64 = 1_000_000;
 /// (`crate::sync::SpinLock`), and a fault that finds it set waits and
 /// tries again.
 static CHOOSING: AtomicBool = AtomicBool::new(false);
+
+/// Processes the scoped OOM kill has ended since boot, for the check.
+static KILLS: AtomicU64 = AtomicU64::new(0);
+
+/// How many processes the scoped OOM kill has ended since boot.
+pub(crate) fn kills() -> u64 {
+    KILLS.load(Ordering::Relaxed)
+}
 
 /// Whether a fault failed the way a refused charge fails it: no frame for
 /// the page, its copy, or a table.
@@ -227,6 +235,7 @@ fn kill_within(space: &AddressSpace, full: u32) -> (Answer, bool) {
     );
     victim.kill(KILLED_STATUS);
     core.job().count_oom(true);
+    let _ = KILLS.fetch_add(1, Ordering::Relaxed);
     if ours(victim) {
         (Answer::Victim, false)
     } else {

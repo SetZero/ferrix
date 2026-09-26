@@ -34,7 +34,7 @@ const COOKIE: u64 = 0xC6_0E_7E;
 
 /// How long the check waits for the waiter to get onto the job's queue, and
 /// to come back after the release.
-const PATIENCE_NANOS: u64 = 5_000_000_000;
+pub(super) const PATIENCE_NANOS: u64 = 5_000_000_000;
 /// How long the waiter waits in all: longer than the check's patience, so a
 /// failed check's waiter still goes.
 const WAITER_DEADLINE_NANOS: u64 = 2 * PATIENCE_NANOS;
@@ -42,15 +42,15 @@ const WAITER_DEADLINE_NANOS: u64 = 2 * PATIENCE_NANOS;
 /// cgroup populated.
 const STILL_WAITING_NANOS: u64 = 20_000_000;
 /// How often the check looks for the waiter on the queue.
-const LISTED_LOOK_NANOS: u64 = 1_000_000;
+pub(super) const LISTED_LOOK_NANOS: u64 = 1_000_000;
 
-/// The epoll set the waiter waits on.
-static WAITER_SET: SpinLock<Option<Arc<OpenFile>>> = SpinLock::new(None);
+/// The epoll set the waiter waits on; the OOM check's waiter's too.
+pub(super) static WAITER_SET: SpinLock<Option<Arc<OpenFile>>> = SpinLock::new(None);
 /// What the waiter's wait delivered: the first event's bits and cookie, or
 /// `None` if it gave up.
-static WAITER_ANSWER: SpinLock<Option<Option<(u32, u64)>>> = SpinLock::new(None);
+pub(super) static WAITER_ANSWER: SpinLock<Option<Option<(u32, u64)>>> = SpinLock::new(None);
 /// Woken when the waiter has answered.
-static WAITER_DONE: WaitQueue = WaitQueue::new();
+pub(super) static WAITER_DONE: WaitQueue = WaitQueue::new();
 
 /// The check. Answers how many waits on `cgroup.events` a release's wake
 /// ended: one.
@@ -201,7 +201,7 @@ fn wait_through_the_releases(
 
 /// The waiting task: `epoll_wait`'s loop on [`WAITER_SET`], with no process
 /// behind it, until an event or its deadline.
-fn waiter(_argument: usize) {
+pub(super) fn waiter(_argument: usize) {
     // Bound first: a guard in the expression below would live through the
     // wait, and a task that sleeps must hold no spin lock.
     let subject = WAITER_SET.lock().clone();

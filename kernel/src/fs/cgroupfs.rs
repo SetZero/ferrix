@@ -72,6 +72,7 @@ mod controllers_check;
 mod delegation_check;
 mod events_check;
 mod native_check;
+mod oom_check;
 
 /// The result every operation here returns.
 type Result<T> = core::result::Result<T, Errno>;
@@ -926,6 +927,8 @@ pub(crate) struct Report {
     pub(crate) emptied: u32,
     /// Writes to the controllers' files refused as Linux refuses them.
     pub(crate) controlled: u32,
+    /// Processes the scoped OOM kill ended at a `memory.max`.
+    pub(crate) oom_killed: u64,
 }
 
 /// Where [`check`] mounts its cgroupfs: under `/tmp`, and gone afterwards.
@@ -1078,6 +1081,7 @@ pub(crate) fn check() -> Checked<Report> {
     harness.report.cloned = delegated.cloned;
     harness.report.emptied = native_check::run(&mut harness)?;
     harness.report.controlled = controllers_check::run(&mut harness, &process)?;
+    harness.report.oom_killed = oom_check::run(&mut harness)?;
 
     let root = ns
         .resolve(&harness.ctx, None, CHECK_AT, true)

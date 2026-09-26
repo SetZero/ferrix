@@ -138,13 +138,13 @@ pub(crate) use aarch64::{init_watchdogs, start_watchdogs};
 pub(crate) use armv7a::{init_watchdogs, start_watchdogs};
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::{init_watchdogs, start_watchdogs};
-// The program stage 13's `CLONE_INTO_CGROUP` check runs.
+// The programs stage 13's `CLONE_INTO_CGROUP` and scoped OOM kill checks run.
 #[cfg(target_arch = "aarch64")]
-pub(crate) use aarch64::USER_INTO_CGROUP_PROGRAM;
+pub(crate) use aarch64::{USER_INTO_CGROUP_PROGRAM, USER_OOM_PROGRAM};
 #[cfg(target_arch = "arm")]
-pub(crate) use armv7a::USER_INTO_CGROUP_PROGRAM;
+pub(crate) use armv7a::{USER_INTO_CGROUP_PROGRAM, USER_OOM_PROGRAM};
 #[cfg(target_arch = "x86_64")]
-pub(crate) use x86_64::USER_INTO_CGROUP_PROGRAM;
+pub(crate) use x86_64::{USER_INTO_CGROUP_PROGRAM, USER_OOM_PROGRAM};
 // Signal delivery: the register context the way back to user mode loads, the
 // architecture's signal frame, and the signal a user-mode fault becomes.
 #[cfg(target_arch = "aarch64")]
