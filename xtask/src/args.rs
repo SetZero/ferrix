@@ -114,6 +114,10 @@ pub(crate) struct Args {
     /// `ferrix.init=<PATH>` in `CMDLINE.TXT`. Absolute, and one word, since
     /// the command line is split at white space.
     pub(crate) init_path: Option<String>,
+    /// `--kernel-option`, each a word added to `CMDLINE.TXT` as it is, for a
+    /// kernel option no flag here names: `ferrix.fbcon`, which the Pixel 7's
+    /// loader passes, is one a QEMU boot has to be able to ask for too.
+    pub(crate) kernel_options: Vec<String>,
     /// `--interpreter`, a dynamic linker `test-shell` carries in the initramfs
     /// at the path `--init`'s `PT_INTERP` names. `{arch}` is replaced as it is
     /// in `--init`.
@@ -384,6 +388,7 @@ impl Args {
                 "--port" => args.port = Some(value(&mut items, "--port")?),
                 "--init" => args.init = Some(value(&mut items, "--init")?),
                 "--init-path" => args.init_path = Some(init_path(&mut items)?),
+                "--kernel-option" => args.kernel_options.push(kernel_option(&mut items)?),
                 "--interpreter" => args.interpreter = Some(value(&mut items, "--interpreter")?),
                 "--library" => args.libraries.push(value(&mut items, "--library")?),
                 "--boot" => args.boot = Some(value(&mut items, "--boot")?),
@@ -476,6 +481,18 @@ fn init_path(items: &mut impl Iterator<Item = String>) -> Result<String> {
         )));
     }
     Ok(path)
+}
+
+/// Take `--kernel-option`'s value: one word, since the command line is split
+/// at white space.
+fn kernel_option(items: &mut impl Iterator<Item = String>) -> Result<String> {
+    let option = value(items, "--kernel-option")?;
+    if option.is_empty() || option.contains(char::is_whitespace) {
+        return Err(Error::new(format!(
+            "--kernel-option wants one word, not `{option}`; give the flag once for each"
+        )));
+    }
+    Ok(option)
 }
 
 /// Take the value following a `--key`.
@@ -670,6 +687,21 @@ mod tests {
     fn reset_is_off_unless_asked_for() {
         assert!(!parse(&["test-boot"]).unwrap().reset);
         assert!(parse(&["test-boot", "--reset"]).unwrap().reset);
+    }
+
+    #[test]
+    fn kernel_options_are_kept_in_order_and_one_word_each() {
+        assert!(parse(&["test-boot"]).unwrap().kernel_options.is_empty());
+        let args = parse(&[
+            "test-boot",
+            "--kernel-option",
+            "ferrix.fbcon",
+            "--kernel-option",
+            "nosmp",
+        ]);
+        assert_eq!(args.unwrap().kernel_options, ["ferrix.fbcon", "nosmp"]);
+        assert!(parse(&["test-boot", "--kernel-option", "a b"]).is_err());
+        assert!(parse(&["test-boot", "--kernel-option", ""]).is_err());
     }
 
     #[test]

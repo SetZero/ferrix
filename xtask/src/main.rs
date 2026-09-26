@@ -313,6 +313,8 @@ OPTIONS:
     --init-path <PATH>                   build, run, test-boot: ferrix.init=PATH in CMDLINE.TXT, so the
                                          kernel starts pid 1 from that file in the image, and the
                                          program built in only if it will not start
+    --kernel-option <WORD>               build, run, test-boot: add WORD to CMDLINE.TXT, e.g. ferrix.fbcon;
+                                         give it once for each word
     --interpreter <PATH|ferrousli>       test-shell: a dynamic linker, carried at --init's PT_INTERP path; {arch} is replaced;
                                          test-chrome: at Chrome's
                                          `ferrousli`: ferrousli's ld-ferrousli, built from this tree
@@ -598,8 +600,8 @@ fn test_net(args: &Args) -> Result<()> {
 
 /// The command line an image carries: `ferrix.onexit=reset` under `--reset`, so
 /// the machine resets when boot ends and `test-boot` can require that it did,
-/// and `ferrix.init=<PATH>` under `--init-path`, so pid 1 is started from
-/// that file in the image.
+/// `ferrix.init=<PATH>` under `--init-path`, so pid 1 is started from
+/// that file in the image, and each `--kernel-option` after those.
 fn image_cmdline(args: &Args) -> Option<String> {
     let mut options = Vec::new();
     if args.reset {
@@ -608,6 +610,7 @@ fn image_cmdline(args: &Args) -> Option<String> {
     if let Some(path) = &args.init_path {
         options.push(qemu::init_option(path));
     }
+    options.extend(args.kernel_options.iter().cloned());
     (!options.is_empty()).then(|| format!("{}\n", options.join(" ")))
 }
 
