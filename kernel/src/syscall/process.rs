@@ -1236,6 +1236,16 @@ impl Process {
             .find(|thread| thread.tid() == tid)
     }
 
+    /// List `task` as running its code, forgetting the tasks that have gone
+    /// first, as [`Process::add_thread`] forgets threads: a process that
+    /// starts and joins threads in a loop would otherwise keep a reference,
+    /// and with it the task's allocation, for every thread it ever ran.
+    fn add_task(&self, task: &Arc<Task>) {
+        let mut tasks = self.tasks.lock();
+        tasks.retain(|listed| listed.strong_count() > 0);
+        tasks.push(Arc::downgrade(task));
+    }
+
     /// List `thread` as one of its own, if it is not already: before the
     /// thread can run, and for a fork child before the child is published.
     pub(crate) fn add_thread(&self, thread: &Arc<Thread>) {
@@ -1748,7 +1758,7 @@ impl PreparedStart {
     fn launch(self) -> Arc<Task> {
         let PreparedStart { task, mut claim } = self;
         let task = task.launch();
-        claim.process.tasks.lock().push(Arc::downgrade(&task));
+        claim.process.add_task(&task);
         // An end requested between the launch and the push found no task to
         // wake or interrupt; it is told now, rather than running on in user
         // mode until it happens to make a call.
@@ -1808,7 +1818,7 @@ pub(crate) fn start_thread(
     }
     process.add_thread(&thread);
     let task = sched::spawn_user("thread", run_program, thread, None, Some(state))?;
-    process.tasks.lock().push(Arc::downgrade(&task));
+    process.add_task(&task);
     // At the weight the rest of the process runs at, not at nice 0: a program
     // that was reniced and then started a thread would otherwise take back
     // with every thread what the renice gave away. Linux copies the nice
