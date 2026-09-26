@@ -112,17 +112,19 @@ object Bridge {
     }
 
     /**
-     * A function asking virtualizationservice for crosvm's display service,
-     * after forgetting whichever one it held.
+     * A function asking virtualizationservice for this run's crosvm's display
+     * service, or null while it holds none or only the one it held before.
      *
      * virtualizationservice keeps the last display service set, and a crosvm
      * sets its own only once its GPU is made, after the input sockets are
      * connected. A crosvm still running from an earlier run -- one whose app
      * was reinstalled under it -- answers pings, so waiting for "a live one"
      * handed the app that VM's screen while its keys went to the new VM, and
-     * nothing typed ever showed (2026-09-26). Cleared here, before the
-     * sockets exist and so before crosvm starts, the one waited for is this
-     * run's.
+     * nothing typed ever showed (2026-09-26). So the one held when this is
+     * made, before the sockets exist and so before crosvm starts, is never
+     * taken: proxies of one remote object are one object. The Terminal app's
+     * stubs have no `clearDisplayService` to forget it with; its build keeps
+     * only the methods it calls.
      */
     private fun displayServiceGetter(): () -> IBinder? {
         val manager = Class.forName("android.os.ServiceManager")
@@ -132,9 +134,23 @@ object Bridge {
             "android.system.virtualizationservice_internal.IVirtualizationServiceInternal\$Stub",
         )
         val service = stub.getMethod("asInterface", IBinder::class.java).invoke(null, binder)
-        service.javaClass.getMethod("clearDisplayService").invoke(service)
         val wait = service.javaClass.getMethod("waitDisplayService")
-        return { wait.invoke(service) as IBinder? }
+        val before = holding(service, wait)
+        return { (wait.invoke(service) as IBinder?)?.takeIf { it != before } }
+    }
+
+    /**
+     * The display service virtualizationservice holds now, if it holds one:
+     * `waitDisplayService` blocks while it holds none, so it is asked on a
+     * thread given a moment to answer.
+     */
+    private fun holding(service: Any, wait: java.lang.reflect.Method): IBinder? {
+        var held: IBinder? = null
+        val asking = Thread { held = runCatching { wait.invoke(service) as IBinder? }.getOrNull() }
+        asking.isDaemon = true
+        asking.start()
+        asking.join(1000)
+        return held
     }
 
     /** Hand both binders to the app, through its provider, as the activity manager lets root. */
