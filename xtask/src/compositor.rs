@@ -105,6 +105,9 @@ const LSWT_PATH: &str = "bin/lswt";
 const SHOT_PATH: &str = "bin/shot";
 const LOCK_PATH: &str = "bin/lock";
 const VKBD_PATH: &str = "bin/vkbd";
+/// The gate's hyprlock, carried by the hyprlock boot alone: one fixed secret
+/// instead of an authentication service (`compositor/hyprlock/src/bin/gate.rs`).
+const HYPRLOCK_GATE_PATH: &str = "bin/hyprlock-gate";
 /// `reboot`, with the word for the firmware busybox's cannot pass; it takes
 /// the name, which busybox then does not link.
 const REBOOT_PATH: &str = "bin/reboot";
@@ -117,7 +120,7 @@ const CONFIG_PATH: &str = "etc/hyprland.conf";
 /// `exec-once = waybar` and `bind = …, exec, hyprlock` find it. One line a
 /// program, added by its stream when it lands. A judged boot carries none,
 /// so its archive stays the bytes it was.
-const DESKTOP_CLIENTS: &[(&str, &str)] = &[];
+const DESKTOP_CLIENTS: &[(&str, &str)] = &[("compositor-hyprlock", "hyprlock")];
 
 /// Where `run-compositor` puts the wallpaper it carries.
 const WALLPAPER_PATH: &str = "etc/wallpaper.fxwall";
@@ -895,6 +898,8 @@ struct Programs {
     lock: PathBuf,
     /// `vkbd`, which types as `wtype` does.
     vkbd: PathBuf,
+    /// The gate's hyprlock, which only the hyprlock boot carries.
+    hyprlock_gate: PathBuf,
     /// `reboot`, which asks the firmware to come back up somewhere.
     reboot: PathBuf,
 }
@@ -913,6 +918,7 @@ impl Programs {
             shot: build(arch, "compositor-shot", "shot")?,
             lock: build(arch, "compositor-lock", "lock")?,
             vkbd: build(arch, "compositor-vkbd", "vkbd")?,
+            hyprlock_gate: build(arch, "compositor-hyprlock", "hyprlock-gate")?,
             reboot: build(arch, "compositor-reboot", "reboot")?,
         })
     }
@@ -1043,7 +1049,20 @@ fn boot_and_dump(
     binds: &[(&str, &[&str])],
     args: &Args,
 ) -> Result<(Vec<Image>, Vec<String>)> {
-    let (image, kernel) = build_image(arch, programs, &undithered(config), Carried::none(), args)?;
+    boot_and_dump_carrying(arch, programs, config, wanted, binds, Carried::none(), args)
+}
+
+/// [`boot_and_dump`], with files of the boot's own in the initramfs.
+fn boot_and_dump_carrying(
+    arch: Arch,
+    programs: &Programs,
+    config: &str,
+    wanted: &Wanted<'_>,
+    binds: &[(&str, &[&str])],
+    carried: Carried,
+    args: &Args,
+) -> Result<(Vec<Image>, Vec<String>)> {
+    let (image, kernel) = build_image(arch, programs, &undithered(config), carried, args)?;
 
     let port = free_port()?;
     let mut qemu_args = args.clone();
@@ -2440,6 +2459,7 @@ const BOOTS: [(&str, Boot); 25] = [
     ("twin", test_twin),
     ("screenshot", test_screenshot),
     ("lock", test_lock),
+    ("hyprlock", test_hyprlock),
     ("menu", test_menu),
     ("pointer", test_pointer),
     ("cursor", test_cursor),
@@ -3693,6 +3713,145 @@ fn test_lock(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
         screens
             .first()
             .map_or(0, |screen| screen.width * screen.height)
+    );
+    Ok(())
+}
+
+/// The hyprlock boot's configuration: the two windows, the German layout
+/// the customer types on, and the key that runs the gate's hyprlock.
+const HYPRLOCK_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+input:kb_layout = de
+input:kb_variant = nodeadkeys
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two --after one
+bind = , L, exec, /bin/hyprlock-gate -c /etc/hypr/hyprlock.conf
+";
+
+/// What the hyprlock boot's screen must show, in order.
+const HYPRLOCK_EXPECTED: [(&str, &str); 5] = [
+    (
+        "tiled",
+        "compositor/render/tests/data/dwindle-two-clients.xrle",
+    ),
+    (
+        "locked by hyprlock, its field empty",
+        "compositor/hyprlock/tests/data/hyprlock-locked.xrle",
+    ),
+    (
+        "five characters typed, five dots",
+        "compositor/hyprlock/tests/data/hyprlock-dots.xrle",
+    ),
+    (
+        "a wrong password refused, the field in fail_color",
+        "compositor/hyprlock/tests/data/hyprlock-failed.xrle",
+    ),
+    (
+        "the windows again, once the right password let the lock go",
+        "compositor/render/tests/data/dwindle-two-clients.xrle",
+    ),
+];
+
+/// The keys between them. Each is pressed as a chord and let go in reverse,
+/// which types the letters in order; no letter twice in one, since a key
+/// already held does not go down again. `y` is where a German keyboard has
+/// `z`, so the password `gatez` only matches if the layout is German.
+const HYPRLOCK_BINDS: [(&str, &[&str]); 4] = [
+    ("L, which runs hyprlock", &["l"]),
+    ("w r o n g", &["w", "r", "o", "n", "g"]),
+    ("Return", &["ret"]),
+    (
+        "g a t e z and Return, on a German keyboard",
+        &["g", "a", "t", "e", "y", "ret"],
+    ),
+];
+
+/// A boot of hyprlock on the customer's layout: lock, a wrong password and
+/// its failure, the right one, unlock.
+///
+/// It runs `hyprlock-gate`, which is `/bin/hyprlock` with a test-only
+/// backend behind its authentication interface -- one fixed secret --
+/// because Ferrix's authentication service (`docs/AUTH.md`) is not written
+/// yet and no image may carry a password policy meanwhile; when it is, the
+/// boot seeds a real store entry instead (§4.4). The configuration and the
+/// secret are the crate's own test data; the pictures are drawn from them on the host by
+/// `compositor/hyprlock/tests/gate.rs`, with the same code, and composited
+/// as hyprix composites a lock surface.
+fn test_hyprlock(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let data = paths::workspace_root().join("compositor/hyprlock/tests/data");
+    let read = |path: &Path| -> Result<Vec<u8>> {
+        std::fs::read(path)
+            .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))
+    };
+    let file = |path: &str, mode: u32, bytes: Vec<u8>| crate::ports::File {
+        path: path.to_owned(),
+        mode,
+        content: crate::ports::Content::Bytes(bytes),
+    };
+    let fonts = paths::workspace_root().join("fonts/liberation");
+    let carried = Carried {
+        ports: vec![
+            file(HYPRLOCK_GATE_PATH, 0o755, read(&programs.hyprlock_gate)?),
+            file(
+                "etc/hypr/hyprlock.conf",
+                0o644,
+                read(&data.join("gate.conf"))?,
+            ),
+            file(
+                "etc/hyprlock/gate.secret",
+                0o600,
+                read(&data.join("gate.secret"))?,
+            ),
+            // Who uid 0 is, for `$USER`. Nothing reads a credential from it.
+            file("etc/passwd", 0o644, b"root:x:0:0:root:/:/bin/sh\n".to_vec()),
+            file(
+                "usr/share/ferrix/fonts/LiberationSans-Regular.ttf",
+                0o644,
+                read(&fonts.join("LiberationSans-Regular.ttf"))?,
+            ),
+        ],
+        ..Carried::none()
+    };
+    let (screens, said) = boot_and_dump_carrying(
+        arch,
+        programs,
+        HYPRLOCK_CONFIG,
+        &Wanted {
+            states: &HYPRLOCK_EXPECTED,
+            others: &[],
+            moving: None,
+            pointer: None,
+            awaiting: &["hyprlock: unlocked"],
+        },
+        &HYPRLOCK_BINDS,
+        carried,
+        args,
+    )?;
+    if screens.len() != HYPRLOCK_EXPECTED.len() {
+        return Err(Error::new(format!(
+            "{arch}: {} of {} pictures were taken",
+            screens.len(),
+            HYPRLOCK_EXPECTED.len()
+        )));
+    }
+    let has = |wanted: &str| said.iter().any(|line| line.contains(wanted));
+    for wanted in [
+        "hyprix: the session is locked",
+        "hyprlock: locked",
+        "hyprlock: Authentication failed",
+        "hyprlock: authenticated",
+        "hyprlock: unlocked",
+        "hyprix: the session is unlocked",
+    ] {
+        if !has(wanted) {
+            return Err(Error::new(format!(
+                "{arch}: the hyprlock boot did not say `{wanted}`"
+            )));
+        }
+    }
+    println!(
+        "  {arch}: hyprlock locked the screen, refused a wrong password with its fail colour, \
+         took the right one typed on a German keyboard, and let the screen go"
     );
     Ok(())
 }
