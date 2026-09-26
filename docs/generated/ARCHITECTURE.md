@@ -102,7 +102,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1687 elements, 201 relations. Model digest `bd0e4640a8b17f11`.
+13 files, 16 packages, 1687 elements, 201 relations. Model digest `e73dbc3a3f10b48c`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -3217,7 +3217,7 @@ Most of it arrived under other stages' names: /bin is the uutils family and zinc
 
 Job control landed on 2026-09-19, in the shell rather than the kernel: every call it is made of -- setpgid, TIOCSPGRP, TIOCSCTTY, the line discipline's SIGTSTP, wait4's WUNTRACED -- had been answered since stage 7 with nothing using them. userland/zinc/src/jobs.rs puts a pipeline in one process group, hands the terminal to the foreground job and takes it back, and keeps the table jobs, fg, bg, wait, disown and kill %1 name. Verified by jobsSession and by zinc's pty gate.
 
-A working init landed on 2026-09-26 (L1 to L4 of docs/INIT.md): /sbin/init over libs/init/svc's manager, a cgroup per service, a getty on the console, shutdown by SIGTERM; the same day svc and its control socket, readiness, socket activation and resource limits (L5 to L7, L9) and the directory with native services (L8), and the images booting it with the compositor as its service (L10). Verified by initSession. Later by design: L11 to L13.
+A working init landed on 2026-09-26 (L1 to L4 of docs/INIT.md): /sbin/init over libs/init/svc's manager, a cgroup per service, a getty on the console, shutdown by SIGTERM; the same day svc and its control socket, readiness, socket activation and resource limits (L5 to L7, L9) and the directory with native services (L8), and the images booting it with the compositor as its service (L10). Verified by initSession. devmgr on the restart policy (L11) the same day; the customer counts the init done there. Next: L12, init starting devmgr; L13 parked until stage 13's namespaces.
 
 Next: authentication (docs/AUTH.md, approved by the customer on 2026-09-26): authd, passwords checked by Argon2id, passwd, authctl and a real hyprlock, phase 1, 27 points, not started; its P0, process_create giving a child root's credentials rather than its creator's, 2 points, fixed.
 

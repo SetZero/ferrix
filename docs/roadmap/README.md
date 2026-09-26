@@ -22,8 +22,8 @@ The sidebar marks each stage: ✓ done, ◐ in progress, ○ not started.
 
 - **Stage 13:** cgroups with pids, memory, OOM kill and CPU weight;
   namespaces and seccomp are left.
-- **Stage 15:** `/sbin/init` boots every image and runs the desktop as a
-  service; authentication (`docs/AUTH.md`) is next.
+- **Stage 15:** the init is done (L1 to L11): `/sbin/init` boots every image
+  and runs the desktop as a service; authentication (`docs/AUTH.md`) is next.
 - **Stage 19:** the desktop composites on the GPU; XWayland and the
   second-pass effects are left. waybar, fuzzel, hyprlock and hypridle are being
   rewritten in Rust.

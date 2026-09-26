@@ -522,7 +522,9 @@ package FerrixRoadmap {
              * activation and resource limits (L5 to L7, L9) and the
              * directory with native services (L8), and the images booting
              * it with the compositor as its service (L10). Verified by
-             * initSession. Later by design: L11 to L13.
+             * initSession. devmgr on the restart policy (L11) the same day;
+             * the customer counts the init done there. Next: L12, init
+             * starting devmgr; L13 parked until stage 13's namespaces.
              *
              * Next: authentication (docs/AUTH.md, approved by the customer
              * on 2026-09-26): authd, passwords checked by Argon2id, passwd,

@@ -896,13 +896,17 @@ the system people will actually use.
 | L8 | done, 2026-09-26: the kernel half (K2, K3, K4, K6), then init's | "Let a parent hand its child a bootstrap handle across execve" and the five after it; "Route the directory's OPENs, and start Type=native services" |
 | L10 | done, 2026-09-26 | "Boot the images through init, and the compositor as its service" |
 | L11 | done, 2026-09-26, by ferrix-55b with T0 | "Give the restart policy a crate of its own that allocates nothing"; "Restart drivers by the service manager's policy, and report how they died" |
-| L12, L13 | not started, and later by design (§13) | |
+| L12 | not started; next, after `docs/AUTH.md`'s P0b (the customer, 2026-09-26) | |
+| L13 | parked until stage 13's namespaces and seccomp exist (the customer, 2026-09-26) | |
 
 All of L1 to L11's 69 points are spent. L11 put `devmgr` on the restart
 policy, which moved into `libs/init/restart` because `devmgr` has no
-allocator; its start limit became systemd's fixed window. L12 and L13, 16
-more, come later: init starting `devmgr` (the microkernel step), and the
-sandboxing keys, which wait for the rest of stage 13.
+allocator; its start limit became systemd's fixed window. The customer
+counts the init done at L11 (2026-09-26). L12, init starting `devmgr` (the
+microkernel step), is next after `docs/AUTH.md`'s P0b; then `sshd` with
+`LISTEN_FDS`, so L9's gate runs real socket activation in place of `nc`.
+L13, the sandboxing keys, is parked until stage 13's namespaces and seccomp
+exist.
 
 **L1, as built (5 points).** `libs/init/svc` is on `main`: `no_std` with
 `alloc`, `forbid(unsafe_code)`, 52 host tests, a Miri step in CI and in
@@ -1465,8 +1469,7 @@ it to use. Linux services' own OFFERs are kept but no gate offers one yet.
 * **`test-jobs`** types its session at the getty's shell, and ends it with
   `exit`, after which init must give the console a new session.
 
-**What the next session does first.** L11 to L13, which §13 put later by
-design: `devmgr` sharing `libs/init/svc`'s restart policy (and reading how a
-driver died through K6, where it reports 137 today), init starting
-`devmgr`, and the sandboxing keys once stage 13's namespaces and seccomp are
-in.
+**What the next session does first.** `docs/AUTH.md`'s P0b (a `Type=native`
+service made by a child that has already become its `User=`), then L12,
+init starting `devmgr` (§7.3), then `sshd` with `LISTEN_FDS` for L9's gate.
+L13 waits for stage 13's namespaces and seccomp.

@@ -138,9 +138,15 @@ that `devmgr` can link it, and `libs/init/svc` re-exports it; its start limit
 is systemd's fixed window. `devmgr` restarts a driver by it and reports how
 each driver died through K6.
 
-**Still to do:** nothing of L1 to L11. L12 and L13 of `docs/INIT.md` are
-later by design: init starting `devmgr`, and the sandboxing keys after the
-rest of stage 13.
+**The init is done: L1 to L11 (the customer, 2026-09-26).** The stage stays
+in progress until authentication's phase 1 lands.
+
+**Still to do for the init,** in the customer's order: **L12** next, after
+`docs/AUTH.md`'s P0b -- the kernel starts only init, and init starts
+`devmgr` (about 8 points). Then `sshd` with `LISTEN_FDS` (the sshdt port,
+x86-64 only), so L9's gate runs real `sshd` socket activation where it runs
+`nc` today. **L13**, the sandboxing keys, is parked until stage 13's
+namespaces and seccomp exist.
 
 **Designed (2026-09-23): `docs/INIT.md`.** `/sbin/init` is pid 1 and a
 service manager in one program. Its units are in systemd's syntax, with
@@ -160,10 +166,9 @@ host-only and were built while stage 13 was.
 
 **Where it stands.** Init is pid 1 of every image a person boots, and a
 service manager they drive, with the directory native services are reached
-through (L1 to L10), gated by `cargo xtask test-init` on all three
+through (L1 to L11), gated by `cargo xtask test-init` on all three
 architectures, `test-compositor` and `test-jobs`. The
-stage's exit has been met by `test-jobs` since 2026-09-19; the images still
-start their own pid 1 until L10.
+stage's exit has been met by `test-jobs` since 2026-09-19.
 
 **Next: authentication (`docs/AUTH.md`, approved by the customer on
 2026-09-26, all eleven decisions as recommended).** `authd`, a service
@@ -175,7 +180,10 @@ prompts (about 32). Its P0 was a kernel hole it named:
 `process_create` gave the process it made root's credentials instead of
 its creator's. Fixed on 2026-09-26: the child takes a copy of its
 creator's ids, and the `creator` boot line proves it for a uid-1000 service
-in its delegated cgroup (2 points, spent).
+in its delegated cgroup (2 points, spent). Beside it: P0a, a `Type=native`
+unit with `User=` refused at load rather than run as root, and F-40, a
+delegated cgroup lifting its own limits, closed by a `SET_LIMIT` right and
+the `limits` boot line.
 
 `test-jobs` is x86-64 only, because `sleep` is uutils' and uutils is built
 for x86-64 alone (`docs/UUTILS.md` D3).
