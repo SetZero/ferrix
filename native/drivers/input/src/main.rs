@@ -247,8 +247,8 @@ impl Block {
             "a register inside the block, aligned"
         );
         // SAFETY: mapped device memory the kernel gave this process, the
-        // offset inside it and aligned for `T`, read volatile.
-        unsafe { ptr::read_volatile((self.base + offset) as *const T) }
+        // offset inside it and aligned for `T`.
+        unsafe { device_read((self.base + offset) as *const T) }
     }
 
     fn write<T: Copy>(&mut self, offset: u32, value: T) {
@@ -258,8 +258,39 @@ impl Block {
             "a register inside the block, aligned"
         );
         // SAFETY: as for `read`, and the mapping is writable.
-        unsafe { ptr::write_volatile((self.base + offset) as *mut T, value) }
+        unsafe { device_write((self.base + offset) as *mut T, value) }
     }
+}
+
+/// Read a register at `at`, as one plain load.
+///
+/// Never inlined, so the address arrives in a register and the load is
+/// `ldr` from it and nothing else. Inlined into a loop -- `query` reading a
+/// config answer a byte at a time -- the compiler folds the address step
+/// into the load as a post-index writeback, which a device model sees as a
+/// data abort with no syndrome to emulate: KVM gives up with `ENOSYS`, and
+/// crosvm stops the virtual processor (the Pixel 7's VM, 2026-09-26).
+/// QEMU's emulator decodes the instruction itself, so nothing else showed
+/// it.
+///
+/// # Safety
+///
+/// `at` is mapped device memory, aligned for `T`.
+#[inline(never)]
+unsafe fn device_read<T: Copy>(at: *const T) -> T {
+    // SAFETY: as the caller promises.
+    unsafe { ptr::read_volatile(at) }
+}
+
+/// Write a register at `at`, as one plain store: see [`device_read`].
+///
+/// # Safety
+///
+/// `at` is mapped, writable device memory, aligned for `T`.
+#[inline(never)]
+unsafe fn device_write<T: Copy>(at: *mut T, value: T) {
+    // SAFETY: as the caller promises.
+    unsafe { ptr::write_volatile(at, value) }
 }
 
 /// The device as `ferrix-virtio-input` drives it.
