@@ -116,7 +116,7 @@ pub(crate) fn apply_this_cpu() {
 }
 
 /// Issue the switch barrier, where the plan has one. Answers whether it did.
-pub(crate) fn switch_barrier() -> bool {
+pub(crate) fn switch_barrier(_cpu: usize) -> bool {
     match BARRIER.load(Ordering::Relaxed) {
         BARRIER_BPIALL => {
             // SAFETY: `BPIALL` invalidates the branch predictor, which only
@@ -138,6 +138,10 @@ pub(crate) fn switch_barrier() -> bool {
         _ => false,
     }
 }
+
+/// Nothing to add once every processor has started: `init` decided for all
+/// of them, from the boot processor's `MIDR`, and printed the exposure then.
+pub(crate) fn report_once_started() {}
 
 /// Nothing more to check on this architecture.
 ///

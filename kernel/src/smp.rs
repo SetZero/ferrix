@@ -307,7 +307,13 @@ pub(crate) fn start_secondaries(view: &BootView<'_>) -> Result<(), &'static str>
     // has not reported in may still be about to read the start block, and
     // freeing it under that core would turn a missing processor into a
     // corrupted one.
-    starter.finish()
+    starter.finish()?;
+
+    // Every processor has decided and recorded its side-channel defences, so
+    // what the machine is exposed to can be said for all of it -- which, on a
+    // machine of mixed cores, the boot processor alone cannot.
+    arch::report_speculation();
+    Ok(())
 }
 
 /// Wait for `cpu` to say it is running, for at most [`START_TIMEOUT_NANOS`].

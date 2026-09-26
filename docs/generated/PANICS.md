@@ -488,18 +488,22 @@ that bounds a program-chosen index to return an index inside its bound unchanged
 and one outside it as zero (unchanged in a build made with `--mitigations off`),
 every running processor to have recorded what it applied, nothing written to a
 processor -- `IA32_SPEC_CTRL`, `EFER`, `SCTLR_EL1` -- to have failed to read
-back, and a switch barrier to have been issued where the plan has one, since
-programs in different address spaces have run by then. The defences stand
-between a program and a speculative read of another's memory or the kernel's.
+back, a switch barrier to have been issued where any processor's plan has one,
+since programs in different address spaces have run by then, and none by a
+processor whose plan has none. The defences stand between a program and a
+speculative read of another's memory or the kernel's.
 
 1. A hypervisor that advertises a speculation control in `CPUID` and drops
    writes to it, which is what a read-back failure on one processor usually is.
 2. A secondary start path that stopped calling the architecture's
    `apply_this_cpu`, so a processor runs programs without the boot processor's
    defences.
-3. A change to `install_user_root` that stopped calling
+3. On `AArch64`, a switch barrier issued from another processor's decision: each
+   core decides for itself, and the barrier is read from the switching core's
+   own bit.
+4. A change to `install_user_root` that stopped calling
    `speculation::entered_space`, which is where every switch barrier is issued.
-4. A change to an architecture's `clamp_index` that lets an out-of-bound index
+5. A change to an architecture's `clamp_index` that lets an out-of-bound index
    through.
 
 See: kernel/src/arch/speculation.rs; kernel/src/arch/speculation_check.rs;

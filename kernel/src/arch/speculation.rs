@@ -1,10 +1,11 @@
 //! Side-channel defences: the part every architecture shares.
 //!
 //! `docs/certification/SPECULATION.md` is the argument; this is the
-//! bookkeeping. Each architecture decides, on the boot processor, which
-//! defences its processor needs and offers (`<arch>/speculation.rs`), applies
-//! them there and on every secondary as it starts, and reads back what it
-//! wrote. What is common is kept here:
+//! bookkeeping. Each architecture decides which defences its processors need
+//! and offer (`<arch>/speculation.rs`) -- on the boot processor, or on
+//! `AArch64` on each core for itself -- applies them there and on every
+//! secondary as it starts, and reads back what it wrote. What is common is
+//! kept here:
 //!
 //! * [`nospec_index`] and [`nospec_below`], the bounds checks a mispredicted
 //!   branch cannot see past, built on each architecture's one-instruction
@@ -175,12 +176,12 @@ static APPLIED: [AtomicU32; MAX_CPUS] = [const { AtomicU32::new(0) }; MAX_CPUS];
 /// zero before the first.
 static LAST_ROOT: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
 
-/// How many switch barriers have been issued, on every processor together.
-static SWITCH_BARRIERS: AtomicU64 = AtomicU64::new(0);
+/// How many switch barriers each processor has issued, by logical number.
+static SWITCH_BARRIERS: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
 
 /// The running processor's logical number, or zero for the boot processor
 /// before it has a per-CPU record -- which it is, being processor zero.
-fn this_cpu() -> usize {
+pub(crate) fn this_cpu() -> usize {
     crate::smp::this_cpu().map_or(0, |cpu| cpu.logical)
 }
 
@@ -194,12 +195,31 @@ pub(crate) fn record_this_cpu(applied: Defences) {
 /// What processor `logical` recorded, or `None` if it recorded nothing.
 pub(crate) fn applied_by(logical: usize) -> Option<Defences> {
     let bits = APPLIED.get(logical)?.load(Ordering::Acquire);
-    (bits & RECORDED != 0).then_some(Defences(bits & !RECORDED))
+    (bits & RECORDED != 0).then_some(Defences::from_bits(bits & !RECORDED))
 }
 
-/// How many switch barriers have been issued so far.
+/// How many switch barriers have been issued so far, on every processor
+/// together.
 pub(crate) fn switch_barriers() -> u64 {
-    SWITCH_BARRIERS.load(Ordering::Relaxed)
+    SWITCH_BARRIERS
+        .iter()
+        .map(|issued| issued.load(Ordering::Relaxed))
+        .sum()
+}
+
+/// How many switch barriers processor `logical` has issued so far.
+pub(crate) fn switch_barriers_on(logical: usize) -> u64 {
+    SWITCH_BARRIERS
+        .get(logical)
+        .map_or(0, |issued| issued.load(Ordering::Relaxed))
+}
+
+/// Say what the machine is exposed to, once every processor has started and
+/// recorded what it applied. On `AArch64`, where each core decides for itself,
+/// a line per kind of core; elsewhere the boot processor decided for all of
+/// them and said so as it did, and this adds nothing.
+pub(crate) fn report_exposure() {
+    machine::report_once_started();
 }
 
 /// Called by an architecture's `install_user_root` after it has written
@@ -216,11 +236,12 @@ pub(crate) fn entered_space(root: u64) {
     if !HARDENED {
         return;
     }
-    let Some(last) = LAST_ROOT.get(this_cpu()) else {
+    let cpu = this_cpu();
+    let (Some(last), Some(issued)) = (LAST_ROOT.get(cpu), SWITCH_BARRIERS.get(cpu)) else {
         return;
     };
-    if last.swap(root, Ordering::Relaxed) != root && machine::switch_barrier() {
-        let _ = SWITCH_BARRIERS.fetch_add(1, Ordering::Relaxed);
+    if last.swap(root, Ordering::Relaxed) != root && machine::switch_barrier(cpu) {
+        let _ = issued.fetch_add(1, Ordering::Relaxed);
     }
 }
 

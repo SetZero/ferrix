@@ -1,15 +1,19 @@
 //! `AArch64`'s side-channel defences.
 //!
 //! `docs/certification/SPECULATION.md` §4 argues the set; this applies it.
-//! Decided on the boot processor from its ID registers and what firmware
-//! says through SMCCC, applied there and on every secondary as it starts.
+//! Each processor decides for itself, as it starts, from its own ID registers
+//! and what firmware says about it through SMCCC: the cores of one machine need
+//! not be alike. Only how firmware is reached, and whether it answers SMCCC at
+//! all, is found once, on the boot processor. Once every processor has
+//! started, [`report_once_started`] says what the machine is exposed to, a
+//! line per kind of core.
 //!
 //! | Hazard | Defence here | When |
 //! |---|---|---|
 //! | Spectre v1 | indices clamped with `csel` and `csdb` | always |
-//! | Spectre v2 | firmware's `ARCH_WORKAROUND_1` when the processor switches address space | the core lacks `CSV2` and firmware offers it |
+//! | Spectre v2 | firmware's `ARCH_WORKAROUND_1` when the processor switches address space | the core lacks `CSV2`, is not on Arm's list of unaffected cores, and firmware says this core needs it |
 //! | Spectre-BHB | the branch history overwritten by a loop on every entry from EL0 | the core is on Arm's list, and lacks `ECBHB` |
-//! | Speculative store bypass | `PSTATE.SSBS` clear in EL1 (`SCTLR_EL1.DSSBS`) and for a program's first instruction; firmware's `ARCH_WORKAROUND_2` without `SSBS` | the core has `SSBS`, or firmware offers the workaround |
+//! | Speculative store bypass | `PSTATE.SSBS` clear in EL1 (`SCTLR_EL1.DSSBS`) and for a program's first instruction; firmware's `ARCH_WORKAROUND_2` without `SSBS` | the core has `SSBS`, or firmware says this core needs the workaround |
 //! | Meltdown | none: KPTI is not built | reported, and excluded by AoU-11 |
 //!
 //! The reference machine's Cortex-A72 needs the BHB loop (eight branches),
@@ -18,12 +22,13 @@
 //! Meltdown.
 
 use core::arch::asm;
-use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use ferrix_bootinfo::BootView;
+use ferrix_sched::MAX_CPUS;
 
 use super::cpu;
-use crate::arch::speculation::{Defences, HARDENED, applied_by, record_this_cpu};
+use crate::arch::speculation::{Defences, HARDENED, applied_by, record_this_cpu, this_cpu};
 use crate::console::println;
 
 /// `SCTLR_EL1.DSSBS`: the value `PSTATE.SSBS` takes on an exception to EL1.
@@ -54,13 +59,17 @@ const CONDUIT_HVC: u8 = 1;
 /// Through `smc`.
 const CONDUIT_SMC: u8 = 2;
 
-/// Whether a switch of address space calls `ARCH_WORKAROUND_1`.
-static SWITCH_WORKAROUND: AtomicU8 = AtomicU8::new(0);
-/// Whether each processor calls `ARCH_WORKAROUND_2` to turn the store bypass
-/// mitigation on.
-static FIRMWARE_SSBD: AtomicU8 = AtomicU8::new(0);
-/// The boot processor's plan, which each secondary adjusts to its own core.
-static PLAN_DEFENCES: AtomicU32 = AtomicU32::new(0);
+/// Whether firmware answers `SMCCC_ARCH_FEATURES`, which the boot processor
+/// finds out once: whether a core may ask it about the workarounds.
+static ARCH_FEATURES_ANSWERED: AtomicBool = AtomicBool::new(false);
+
+/// Whether a switch of address space calls `ARCH_WORKAROUND_1`, by logical
+/// processor: each core's own decision, read by the core that switches.
+static SWITCH_WORKAROUND: [AtomicBool; MAX_CPUS] = [const { AtomicBool::new(false) }; MAX_CPUS];
+
+/// What each processor's ID registers and firmware said, by logical number,
+/// as [`Seen::pack`] packs it: zero for a processor that recorded nothing.
+static SEEN: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
 
 /// How many branches the entry loop takes: the largest any processor needs,
 /// zero for none. Read from assembly by every vector entry from EL0.
@@ -70,8 +79,40 @@ pub(super) static BHB_LOOPS: AtomicU64 = AtomicU64::new(0);
 /// for an assembler `.if`.
 pub(super) const ENTRY_HARDENING: u8 = HARDENED as u8;
 
+/// Arm's parts by the part number in `MIDR_EL1`, for the boot log. The
+/// numbers are Linux's `ARM_CPU_PART_*` (`arch/arm64/include/asm/cputype.h`).
+const ARM_PARTS: [(u64, &str); 27] = [
+    (0xD03, "Cortex-A53"),
+    (0xD04, "Cortex-A35"),
+    (0xD05, "Cortex-A55"),
+    (0xD07, "Cortex-A57"),
+    (0xD08, "Cortex-A72"),
+    (0xD09, "Cortex-A73"),
+    (0xD0A, "Cortex-A75"),
+    (0xD0B, "Cortex-A76"),
+    (0xD0C, "Neoverse N1"),
+    (0xD0D, "Cortex-A77"),
+    (0xD0E, "Cortex-A76AE"),
+    (0xD40, "Neoverse V1"),
+    (0xD41, "Cortex-A78"),
+    (0xD42, "Cortex-A78AE"),
+    (0xD44, "Cortex-X1"),
+    (0xD46, "Cortex-A510"),
+    (0xD47, "Cortex-A710"),
+    (0xD48, "Cortex-X2"),
+    (0xD49, "Neoverse N2"),
+    (0xD4B, "Cortex-A78C"),
+    (0xD4C, "Cortex-X1C"),
+    (0xD4D, "Cortex-A715"),
+    (0xD4E, "Cortex-X3"),
+    (0xD4F, "Neoverse V2"),
+    (0xD80, "Cortex-A520"),
+    (0xD81, "Cortex-A720"),
+    (0xD82, "Cortex-X4"),
+];
+
 /// What the ID registers say about this core.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Core {
     /// `MIDR_EL1`.
     midr: u64,
@@ -106,6 +147,22 @@ impl Core {
         } else {
             None
         }
+    }
+
+    /// Whether the core is one Arm lists as not affected by Spectre v2:
+    /// Linux's `spectre_v2_safe_list` (`arch/arm64/kernel/proton-pack.c`), for
+    /// Arm's own parts -- the Cortex-A53 (`0xD03`), A35 (`0xD04`) and A55
+    /// (`0xD05`), in-order designs. The list's other entries are other
+    /// implementers' (Broadcom's Brahma-B53, `HiSilicon`'s TSV110, Qualcomm's
+    /// Kryo silver cores), not built here.
+    fn v2_listed_safe(self) -> bool {
+        matches!(self.arm_part(), Some(0xD03..=0xD05))
+    }
+
+    /// Whether the core's own hardware keeps it from Spectre v2: `CSV2`, or
+    /// Arm's list. Only a core without either needs firmware's workaround.
+    fn v2_unaffected(self) -> bool {
+        self.csv2 || self.v2_listed_safe()
     }
 
     /// The branches the BHB loop must take on this core: Arm's figures for
@@ -144,36 +201,99 @@ impl Core {
     }
 }
 
-/// What firmware offers, through SMCCC.
-#[derive(Debug, Clone, Copy, Default)]
-struct Firmware {
-    /// `ARCH_WORKAROUND_1` is implemented and needed on this core.
-    workaround_1: bool,
-    /// `ARCH_WORKAROUND_2` is implemented, needed, and can be turned on.
-    workaround_2: bool,
-    /// `ARCH_WORKAROUND_2` says this core does not need it.
-    ssb_not_required: bool,
+/// What firmware answered `SMCCC_ARCH_FEATURES` about one workaround, asked
+/// on one core.
+///
+/// The SMC Calling Convention (ARM DEN 0028D, §7.5.2 and §7.6.2) makes the
+/// answer per processor: "not supported" is the same on every core, but
+/// where the workaround is implemented, 0 says *this* core needs it and 1
+/// that it does not, and the call is then safe, if wasted, on every core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Answer {
+    /// Not implemented, or not asked because the core needs nothing.
+    #[default]
+    NotSupported,
+    /// Implemented, and this core needs it: 0.
+    Required,
+    /// Implemented, and this core does not need it: 1.
+    NotRequired,
 }
 
-/// Ask firmware, through `conduit`, what it offers.
+impl Answer {
+    /// The answer to a status firmware returned.
+    const fn from_status(status: i32) -> Answer {
+        match status {
+            0 => Answer::Required,
+            1 => Answer::NotRequired,
+            _ => Answer::NotSupported,
+        }
+    }
+
+    /// Two bits, for [`Seen::pack`].
+    const fn bits(self) -> u64 {
+        match self {
+            Answer::NotSupported => 0,
+            Answer::Required => 1,
+            Answer::NotRequired => 2,
+        }
+    }
+
+    /// The answer [`Answer::bits`] made.
+    const fn from_bits(bits: u64) -> Answer {
+        match bits & 0b11 {
+            1 => Answer::Required,
+            2 => Answer::NotRequired,
+            _ => Answer::NotSupported,
+        }
+    }
+}
+
+/// What firmware says about this core, through SMCCC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct Firmware {
+    /// About `ARCH_WORKAROUND_1`.
+    workaround_1: Answer,
+    /// About `ARCH_WORKAROUND_2`.
+    workaround_2: Answer,
+}
+
+/// Whether firmware, through `conduit`, answers `SMCCC_ARCH_FEATURES`.
 ///
-/// Only as far as PSCI says it is safe to: an SMCCC call that firmware does
-/// not implement is an undefined instruction on a machine with no EL2 behind
-/// `hvc`, so SMCCC is asked for only once `PSCI_FEATURES` has said it exists.
-fn ask_firmware(conduit: u8) -> Firmware {
+/// Only as far as PSCI says it is safe to ask: an SMCCC call that firmware
+/// does not implement is an undefined instruction on a machine with no EL2
+/// behind `hvc`, so SMCCC is asked for only once `PSCI_FEATURES` has said it
+/// exists.
+fn answers_arch_features(conduit: u8) -> bool {
     let call = |function, argument| firmware_call(conduit, function, argument) as u32 as i32;
     let psci = call(smccc::PSCI_VERSION, 0);
     if psci < 0x1_0000 || call(smccc::PSCI_FEATURES, smccc::VERSION) < 0 {
+        return false;
+    }
+    call(smccc::VERSION, 0) >= 0x1_0001
+}
+
+/// Ask firmware what it says about the running core, for what the core's own
+/// hardware does not already settle: workaround 1 only on a core Spectre v2
+/// affects, workaround 2 only on one without `SSBS`.
+fn ask_about_this_core(core: Core) -> Firmware {
+    if !ARCH_FEATURES_ANSWERED.load(Ordering::Acquire) {
         return Firmware::default();
     }
-    if call(smccc::VERSION, 0) < 0x1_0001 {
-        return Firmware::default();
-    }
-    let second = call(smccc::ARCH_FEATURES, smccc::WORKAROUND_2);
+    let conduit = CONDUIT.load(Ordering::Relaxed);
+    let ask = |workaround| {
+        Answer::from_status(firmware_call(conduit, smccc::ARCH_FEATURES, workaround) as u32 as i32)
+    };
     Firmware {
-        workaround_1: call(smccc::ARCH_FEATURES, smccc::WORKAROUND_1) == 0,
-        workaround_2: second == 0,
-        ssb_not_required: second == 1,
+        workaround_1: if core.v2_unaffected() {
+            Answer::NotSupported
+        } else {
+            ask(smccc::WORKAROUND_1)
+        },
+        workaround_2: if core.ssbs > 0 {
+            Answer::NotSupported
+        } else {
+            ask(smccc::WORKAROUND_2)
+        },
     }
 }
 
@@ -190,80 +310,74 @@ fn firmware_call(conduit: u8, function: u64, argument: u64) -> u64 {
     }
 }
 
-/// Decide, apply on the boot processor, and say what was done.
+/// Find how firmware is reached, then decide and apply on the boot
+/// processor, and say what it applied.
 pub(crate) fn init(view: &BootView<'_>) {
     if !HARDENED {
         println!("  cpu      speculation defences off: built with --mitigations off");
         record_this_cpu(Defences::NONE);
         return;
     }
-    let core = Core::read();
     let conduit = match super::smp::psci_conduit(view) {
         Ok(super::smp::Conduit::Hvc) => CONDUIT_HVC,
         Ok(super::smp::Conduit::Smc) => CONDUIT_SMC,
         Err(_) => CONDUIT_NONE,
     };
-    let firmware = ask_firmware(conduit);
     CONDUIT.store(conduit, Ordering::Relaxed);
+    ARCH_FEATURES_ANSWERED.store(answers_arch_features(conduit), Ordering::Release);
+    let applied = decide_and_apply();
+    println!("  cpu      speculation defences: {}", applied.names());
+}
 
+/// Decide and apply on a secondary, as it starts.
+///
+/// The cores of one machine need not be alike: a Pixel 7 boots on a
+/// Cortex-A55, which Arm lists as unaffected by Spectre v2 and which needs no
+/// branch history loop, and starts two A78s and two X1s, which have `CSV2`
+/// and need 32 branches of the loop. So each core decides everything for
+/// itself, asking firmware about itself too, as the SMC Calling Convention
+/// has it asked: only how firmware is reached is the boot processor's.
+pub(crate) fn apply_this_cpu() {
+    if !HARDENED {
+        record_this_cpu(Defences::NONE);
+        return;
+    }
+    let _ = decide_and_apply();
+}
+
+/// Decide what the running core needs, apply it, record what it saw and
+/// applied, and answer what it applied.
+fn decide_and_apply() -> Defences {
+    let core = Core::read();
+    let firmware = ask_about_this_core(core);
+    let plan = plan_for(core, firmware);
+    let cpu = this_cpu();
+    if let Some(slot) = SEEN.get(cpu) {
+        slot.store(Seen { core, firmware }.pack(), Ordering::Release);
+    }
+    let applied = apply(plan, core, cpu);
+    record_this_cpu(applied);
+    applied
+}
+
+/// What `core` needs, given what firmware said about it.
+fn plan_for(core: Core, firmware: Firmware) -> Defences {
     let mut plan = Defences::CLAMPED_INDICES;
-    if !core.csv2 && firmware.workaround_1 {
-        SWITCH_WORKAROUND.store(1, Ordering::Relaxed);
+    if !core.v2_unaffected() && firmware.workaround_1 == Answer::Required {
         plan = plan.with(Defences::SWITCH_BARRIER);
     }
     if core.bhb_loops() > 0 {
         plan = plan.with(Defences::BHB_LOOP);
     }
-    if core.ssbs > 0 {
-        plan = plan.with(Defences::SSBD);
-    } else if firmware.workaround_2 {
-        FIRMWARE_SSBD.store(1, Ordering::Relaxed);
+    if core.ssbs > 0 || firmware.workaround_2 == Answer::Required {
         plan = plan.with(Defences::SSBD);
     }
-    PLAN_DEFENCES.store(plan.bits(), Ordering::Release);
-
-    let applied = apply(plan, core);
-    record_this_cpu(applied);
-    println!("  cpu      speculation defences: {}", applied.names());
-    report_exposure(core, &firmware, plan);
+    plan
 }
 
-/// Say what the plan leaves uncovered, and why.
-fn report_exposure(core: Core, firmware: &Firmware, plan: Defences) {
-    let v2 = if core.csv2 {
-        "not affected (CSV2)"
-    } else if plan.contains(Defences::SWITCH_BARRIER) {
-        "covered between programs"
-    } else {
-        "NOT covered: no CSV2, and firmware offers no ARCH_WORKAROUND_1 (AoU-11)"
-    };
-    let bhb = if plan.contains(Defences::BHB_LOOP) {
-        "covered"
-    } else if core.ecbhb {
-        "not affected (ECBHB)"
-    } else {
-        "not affected (not on Arm's list)"
-    };
-    let bypass = if plan.contains(Defences::SSBD) {
-        "covered"
-    } else if firmware.ssb_not_required || core.in_order() {
-        "not affected"
-    } else {
-        "NOT covered: no SSBS, and firmware offers no ARCH_WORKAROUND_2 (AoU-11)"
-    };
-    let meltdown = if core.meltdown_safe() {
-        "not affected"
-    } else {
-        "EXPOSED: no CSV3 on a core Arm does not list as safe, and KPTI is not built (AoU-11)"
-    };
-    println!(
-        "  cpu      speculation exposure: Spectre v2 {v2}; Spectre-BHB {bhb}; store bypass \
-         {bypass}; Meltdown {meltdown}"
-    );
-}
-
-/// Apply `plan` on this core, read back what can be, and say what took.
-fn apply(plan: Defences, core: Core) -> Defences {
+/// Apply `plan` on this core, logical processor `cpu`, read back what can
+/// be, and say what took.
+fn apply(plan: Defences, core: Core, cpu: usize) -> Defences {
     let mut held = true;
     let _ = BHB_LOOPS.fetch_max(core.bhb_loops(), Ordering::Relaxed);
     if plan.contains(Defences::SSBD) && core.ssbs > 0 {
@@ -276,8 +390,11 @@ fn apply(plan: Defences, core: Core) -> Defences {
             clear_ssbs();
         }
     }
-    if plan.contains(Defences::SSBD) && FIRMWARE_SSBD.load(Ordering::Relaxed) != 0 {
+    if plan.contains(Defences::SSBD) && core.ssbs == 0 {
         let _ = firmware_call(CONDUIT.load(Ordering::Relaxed), smccc::WORKAROUND_2, 1);
+    }
+    if let Some(switch) = SWITCH_WORKAROUND.get(cpu) {
+        switch.store(plan.contains(Defences::SWITCH_BARRIER), Ordering::Relaxed);
     }
     if held {
         plan
@@ -286,50 +403,180 @@ fn apply(plan: Defences, core: Core) -> Defences {
     }
 }
 
-/// Apply the boot processor's plan on a secondary, as it starts, adjusted to
-/// this core.
+/// What one processor's ID registers and firmware said, kept for the
+/// machine's exposure report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Seen {
+    /// The core.
+    core: Core,
+    /// What firmware said about it.
+    firmware: Firmware,
+}
+
+/// Set in a packed [`Seen`]: a word of zero is a processor that never got
+/// here.
+const SEEN_RECORDED: u64 = 1 << 63;
+
+impl Seen {
+    /// One word: `MIDR_EL1`'s 32 bits, then the flags, the `SSBS` field and
+    /// the two answers.
+    fn pack(self) -> u64 {
+        let core = self.core;
+        (core.midr & 0xFFFF_FFFF)
+            | (u64::from(core.csv2) << 32)
+            | (u64::from(core.csv3) << 33)
+            | (u64::from(core.ecbhb) << 34)
+            | ((core.ssbs & 0xF) << 35)
+            | (self.firmware.workaround_1.bits() << 39)
+            | (self.firmware.workaround_2.bits() << 41)
+            | SEEN_RECORDED
+    }
+
+    /// The record [`Seen::pack`] made, if one was.
+    fn unpack(bits: u64) -> Option<Seen> {
+        (bits & SEEN_RECORDED != 0).then_some(Seen {
+            core: Core {
+                midr: bits & 0xFFFF_FFFF,
+                csv2: (bits >> 32) & 1 != 0,
+                csv3: (bits >> 33) & 1 != 0,
+                ecbhb: (bits >> 34) & 1 != 0,
+                ssbs: (bits >> 35) & 0xF,
+            },
+            firmware: Firmware {
+                workaround_1: Answer::from_bits(bits >> 39),
+                workaround_2: Answer::from_bits(bits >> 41),
+            },
+        })
+    }
+}
+
+/// What processor `logical` saw and applied, packed, if it recorded both.
+fn kind_of(logical: usize) -> Option<(u64, Defences)> {
+    let seen = SEEN.get(logical)?.load(Ordering::Acquire);
+    if seen & SEEN_RECORDED == 0 {
+        return None;
+    }
+    Some((seen, applied_by(logical)?))
+}
+
+/// Say what the machine is exposed to, once every processor has started and
+/// recorded: a line for each kind of core -- the same part, told the same by
+/// firmware, having applied the same -- with how many there are.
 ///
-/// The cores of one machine need not be alike: a Pixel 7 boots on a
-/// Cortex-A55, which needs no branch history loop, and starts two A78s and two
-/// X1s, which need 32 branches of it. So what depends on the core -- the loop
-/// and `SSBS` -- is decided here, per core, in both directions: a little core
-/// may drop what the boot processor has, and a big one add what it lacks. What
-/// depends on firmware stays the boot processor's decision, since firmware is
-/// the same for every core.
-pub(crate) fn apply_this_cpu() {
+/// Not at [`init`], where only the boot processor has decided: a Pixel 7's
+/// Cortex-A55 is not on Arm's Spectre-BHB list, and its A78s and X1s are.
+pub(crate) fn report_once_started() {
     if !HARDENED {
-        record_this_cpu(Defences::NONE);
         return;
     }
-    let core = Core::read();
-    let plan = for_core(
-        Defences::from_bits(PLAN_DEFENCES.load(Ordering::Acquire)),
-        core,
-    );
-    record_this_cpu(apply(plan, core));
-}
-
-/// `plan` with what depends on the core decided for `core`.
-fn for_core(plan: Defences, core: Core) -> Defences {
-    let without =
-        |plan: Defences, defence: Defences| Defences::from_bits(plan.bits() & !defence.bits());
-    let plan = if core.bhb_loops() > 0 {
-        plan.with(Defences::BHB_LOOP)
-    } else {
-        without(plan, Defences::BHB_LOOP)
-    };
-    if core.ssbs > 0 || FIRMWARE_SSBD.load(Ordering::Relaxed) != 0 {
-        plan.with(Defences::SSBD)
-    } else {
-        without(plan, Defences::SSBD)
+    let count = crate::smp::count();
+    for logical in 0..count {
+        let Some(kind) = kind_of(logical) else {
+            continue;
+        };
+        if (0..logical).any(|earlier| kind_of(earlier) == Some(kind)) {
+            continue;
+        }
+        let Some(seen) = Seen::unpack(kind.0) else {
+            continue;
+        };
+        let alike = (logical..count)
+            .filter(|&other| kind_of(other) == Some(kind))
+            .count();
+        println!(
+            "  cpu      speculation exposure: {alike} x {}: {}",
+            CoreName(seen.core.midr),
+            Exposure(seen, kind.1),
+        );
     }
 }
 
-/// Issue the switch barrier: firmware's `ARCH_WORKAROUND_1`, which
-/// invalidates the branch predictor, where the plan has it. Answers whether
-/// it was issued.
-pub(crate) fn switch_barrier() -> bool {
-    if SWITCH_WORKAROUND.load(Ordering::Relaxed) == 0 {
+/// A core's name for the boot log: Arm's, for its own parts; the `MIDR_EL1`
+/// fields otherwise.
+struct CoreName(u64);
+
+impl core::fmt::Display for CoreName {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let implementer = (self.0 >> 24) & 0xFF;
+        let part = (self.0 >> 4) & 0xFFF;
+        let named = ARM_PARTS
+            .iter()
+            .find(|&&(number, _)| implementer == 0x41 && number == part);
+        match named {
+            Some(&(_, name)) => f.write_str(name),
+            None => write!(f, "implementer {implementer:#04x} part {part:#05x}"),
+        }
+    }
+}
+
+/// What one kind of core is exposed to, for the boot log: what its plan
+/// leaves uncovered, and why.
+#[derive(Debug, Clone, Copy)]
+struct Exposure(Seen, Defences);
+
+impl Exposure {
+    /// Spectre v2: whether the core is affected, and if so whether its plan
+    /// covers it.
+    fn v2(self) -> &'static str {
+        let Exposure(Seen { core, firmware }, plan) = self;
+        if core.csv2 {
+            "not affected (CSV2)"
+        } else if core.v2_listed_safe() {
+            "not affected (Arm lists this core as unaffected)"
+        } else if plan.contains(Defences::SWITCH_BARRIER) {
+            "covered between programs"
+        } else if firmware.workaround_1 == Answer::NotRequired {
+            "not affected (firmware says this core needs no ARCH_WORKAROUND_1)"
+        } else {
+            "NOT covered: no CSV2, and firmware offers no ARCH_WORKAROUND_1 (AoU-11)"
+        }
+    }
+
+    /// Speculative store bypass, likewise.
+    fn bypass(self) -> &'static str {
+        let Exposure(Seen { core, firmware }, plan) = self;
+        if plan.contains(Defences::SSBD) {
+            "covered"
+        } else if firmware.workaround_2 == Answer::NotRequired || core.in_order() {
+            "not affected"
+        } else {
+            "NOT covered: no SSBS, and firmware offers no ARCH_WORKAROUND_2 (AoU-11)"
+        }
+    }
+}
+
+impl core::fmt::Display for Exposure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let Exposure(Seen { core, .. }, plan) = *self;
+        write!(f, "Spectre v2 {}; Spectre-BHB ", self.v2())?;
+        if plan.contains(Defences::BHB_LOOP) {
+            write!(f, "covered ({} branches)", core.bhb_loops())?;
+        } else if core.ecbhb {
+            f.write_str("not affected (ECBHB)")?;
+        } else {
+            f.write_str("not affected (not on Arm's list)")?;
+        }
+        let meltdown = if core.meltdown_safe() {
+            "not affected"
+        } else {
+            "EXPOSED: no CSV3 on a core Arm does not list as safe, and KPTI is not built (AoU-11)"
+        };
+        write!(f, "; store bypass {}; Meltdown {meltdown}", self.bypass())
+    }
+}
+
+/// Issue the switch barrier on logical processor `cpu`, the one switching:
+/// firmware's `ARCH_WORKAROUND_1`, which invalidates the branch predictor,
+/// where that core's plan has it. Answers whether it was issued.
+///
+/// Per core, because the need is: a core with `CSV2` or on Arm's list never
+/// pays for a firmware call it does not need, and one that needs it always
+/// makes it.
+pub(crate) fn switch_barrier(cpu: usize) -> bool {
+    if !SWITCH_WORKAROUND
+        .get(cpu)
+        .is_some_and(|wanted| wanted.load(Ordering::Relaxed))
+    {
         return false;
     }
     let _ = firmware_call(CONDUIT.load(Ordering::Relaxed), smccc::WORKAROUND_1, 0);

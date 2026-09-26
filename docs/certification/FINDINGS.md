@@ -549,10 +549,12 @@ processor needs and offers: on x86-64 enhanced or automatic IBRS, STIBP, SSBD,
 `IBPB` and a return stack refill at each switch of address space, `VERW` on an
 MDS-exposed part, a `swapgs` fence and cleared registers on entry; on AArch64
 the Spectre-BHB loop, `SSBS` or firmware's workaround 2, and firmware's
-workaround 1 at a switch; on ARMv7-A `BPIALL`/`ICIALLU` for the cores Arm lists
+workaround 1 at a switch, each decided by every core for itself so that a
+machine of mixed cores (a Pixel 7's A55s, A78s and X1s) gets what each kind
+needs; on ARMv7-A `BPIALL`/`ICIALLU` for the cores Arm lists
 as affected, of which the reference Cortex-A7 is not one. Every processor reads
 back what it wrote and the boot check fails otherwise (FX-0307); the boot log
-names what is covered and what is not. `--mitigations off` compiles all of it
+names what is covered and what is not, on AArch64 for each kind of core. `--mitigations off` compiles all of it
 out, and `cargo xtask check` builds both settings. Measured cost under KVM: +1.0%
 on two million system calls, +2.8% on a thousand fork-exec-waits.
 

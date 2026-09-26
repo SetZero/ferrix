@@ -368,7 +368,7 @@ pub(crate) fn apply_this_cpu() {
 ///
 /// Called with interrupts masked, from `install_user_root`, when the
 /// processor is about to run a program other than the one it last ran.
-pub(crate) fn switch_barrier() -> bool {
+pub(crate) fn switch_barrier(_cpu: usize) -> bool {
     if SWITCH_IBPB.load(Ordering::Relaxed) {
         // SAFETY: `SWITCH_IBPB` is set only when CPUID said `IA32_PRED_CMD`
         // takes IBPB; the write empties predictors and changes nothing else.
@@ -449,6 +449,10 @@ pub(crate) fn clear_cpu_buffers() {
         );
     }
 }
+
+/// Nothing to add once every processor has started: `init` decided for all
+/// of them, from the boot processor's `CPUID`, and printed the exposure then.
+pub(crate) fn report_once_started() {}
 
 /// What the boot check adds on this architecture: run `VERW` once, so a
 /// machine whose exit path never runs it -- every one without MDS -- still

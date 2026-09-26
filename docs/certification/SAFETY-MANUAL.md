@@ -158,12 +158,13 @@ The element has no operational history. Proven-in-use and prior-use credit
 ASR-1's separation holds against speculative reads only on a processor that
 offers what [SPECULATION.md](SPECULATION.md) builds on, and the element cannot
 supply what the processor lacks. The integrator shall run the element, built
-`--mitigations on`, only on processors whose boot log line
-`cpu      speculation exposure:` names nothing **NOT covered** and nothing
-**EXPOSED** — which on x86-64 means an IBRS form (enhanced, automatic, or
+`--mitigations on`, only on processors whose boot log lines
+`cpu      speculation exposure:` (on AArch64, one for each kind of core the
+machine has) name nothing **NOT covered** and nothing **EXPOSED** — which on x86-64 means an IBRS form (enhanced, automatic, or
 always-on), `IBPB`, `SSBD` unless the part says `SSB_NO`, and a part not
-affected by Meltdown; on AArch64, `CSV2` or firmware implementing SMCCC
-`ARCH_WORKAROUND_1`, `SSBS` or `ARCH_WORKAROUND_2`, and a core Arm lists as
+affected by Meltdown; on AArch64, for every core, `CSV2`, a core Arm lists
+as unaffected by Spectre v2 (Cortex-A35, A53, A55), or firmware implementing
+SMCCC `ARCH_WORKAROUND_1`, `SSBS` or `ARCH_WORKAROUND_2`, and a core Arm lists as
 unaffected by Meltdown or reporting `CSV3`; on ARMv7-A, a core Arm lists as
 unaffected, or firmware that set `ACTLR.IBE` on one that is not. On an
 MDS-affected x86-64 part the integrator shall disable SMT. Partitions that

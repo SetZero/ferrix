@@ -138,25 +138,67 @@ which is not built.
 
 ## 4. AArch64
 
-Decided from `MIDR_EL1` and the ID registers, and from what firmware says
-through SMCCC, asked only after `PSCI_FEATURES` has said SMCCC is there — an
-unimplemented `hvc` on a machine with no EL2 is an undefined instruction
-(`arch/aarch64/speculation.rs`).
+Decided by **each core for itself**, as it starts, from its own `MIDR_EL1`
+and ID registers and from what firmware says about it through SMCCC
+(`arch/aarch64/speculation.rs`). The cores of one machine need not be alike: a
+Pixel 7 boots on a Cortex-A55 and starts two A78s and two X1s, and the two
+kinds need different things. Only how firmware is reached, and whether it
+answers `SMCCC_ARCH_FEATURES` at all, is found once, on the boot processor —
+asked only after `PSCI_FEATURES` has said SMCCC is there, because an
+unimplemented `hvc` on a machine with no EL2 is an undefined instruction.
 
-| Hazard | `on` does | Condition |
+| Hazard | `on` does | Condition, per core |
 |---|---|---|
 | Spectre v1 | clamps with `csdb` (§2) | always |
-| Spectre v2 | `SMCCC_ARCH_WORKAROUND_1` when a core switches address space | no `CSV2`, and firmware offers it |
-| Spectre-BHB | a loop of taken branches on every vector entry from EL0 — 8 on Cortex-A57/A72, 24 on A76/A77/N1, 32 on A78/X1/A710/X2/N2/V1, 38 on A715/A720, 132 on X3/V2 (Linux's figures) | the core is on Arm's list and lacks `ECBHB` |
-| Speculative store bypass | `SCTLR_EL1.DSSBS` cleared, so EL1 runs with `PSTATE.SSBS` clear from every exception on, and `MSR SSBS` where the core has it; a program starts with it clear. Without `SSBS`, `SMCCC_ARCH_WORKAROUND_2` on each core | `SSBS`, or firmware offers workaround 2 |
+| Spectre v2 | `SMCCC_ARCH_WORKAROUND_1` when that core switches address space | the core lacks `CSV2`, is not a Cortex-A35, A53 or A55, and firmware answers that *this core* needs the workaround |
+| Spectre-BHB | a loop of taken branches on every vector entry from EL0 — 8 on Cortex-A57/A72, 24 on A76/A77/N1, 32 on A78/X1/A710/X2/N2/V1, 38 on A715/A720, 132 on X3/V2 (Linux's figures); one count for the machine, the largest any core needs | the core is on Arm's list and lacks `ECBHB` |
+| Speculative store bypass | `SCTLR_EL1.DSSBS` cleared, so EL1 runs with `PSTATE.SSBS` clear from every exception on, and `MSR SSBS` where the core has it; a program starts with it clear. Without `SSBS`, `SMCCC_ARCH_WORKAROUND_2` | the core has `SSBS`, or firmware answers that this core needs workaround 2 |
 | Meltdown | **none** — reported | §6 |
 
-**The reference CPU**, QEMU's `cortex-a72`, has neither `CSV2` nor `SSBS`, and
-QEMU's firmware offers neither workaround, so its boot log reads:
+**Spectre v2's list of unaffected cores** is Linux's `spectre_v2_safe_list`
+(`arch/arm64/kernel/proton-pack.c`, read in the Android common kernel 6.1.157
+that the Pixel 7 work builds modules against), for Arm's own parts: the
+Cortex-A35, A53 and A55, in-order designs. Their part numbers — `0xD04`,
+`0xD03`, `0xD05` — were checked against `ARM_CPU_PART_*` in the same tree's
+`arch/arm64/include/asm/cputype.h`, and again in this host's 7.0 kernel
+headers, not written from memory. The list's other entries are other
+implementers' cores (Broadcom's Brahma-B53, HiSilicon's TSV110, Qualcomm's Kryo
+silver parts) and are not built: such a core without `CSV2` is reported NOT
+covered unless firmware covers it.
+
+**Firmware is asked per core.** The SMC Calling Convention (ARM DEN 0028D,
+issue 1.3, §7.5.2 and §7.6.2) defines `SMCCC_ARCH_FEATURES`' answer about each workaround
+per processor: *not supported* is the same on every core, but where firmware
+implements the workaround, `0` says the core that asked needs it and `1` that
+it does not, and the workaround is then safe, if wasted, on every core. Its
+Appendix B suggests exactly this on big.LITTLE: ask on each core and leave out the calls
+where the answer is `1`. So each core asks about itself — about workaround 1
+only if its own hardware does not settle Spectre v2, about workaround 2 only
+if it lacks `SSBS` — and keeps its own switch barrier bit, which
+`switch_barrier` reads on the core that is switching. A core with `CSV2`, or on
+the list, never pays for a firmware call it does not need; one that needs it
+always makes it, whichever core the machine booted on.
+
+**The exposure is said once every processor has started**, a line per kind of
+core — the same part, told the same by firmware, having applied the same —
+with how many there are. The boot processor alone could not say it: a Pixel 7's
+A55 is on neither Arm's Spectre v2 nor its Spectre-BHB list, and its X1s need
+the loop. The reference CPU, QEMU's `cortex-a72`, has neither `CSV2` nor
+`SSBS`, is not on the Spectre v2 list, and QEMU's firmware offers neither
+workaround, so its boot log reads:
 
 ```
   cpu      speculation defences: clamped indices, BHB loop on entry
-  cpu      speculation exposure: Spectre v2 NOT covered: no CSV2, and firmware offers no ARCH_WORKAROUND_1 (AoU-11); Spectre-BHB covered; store bypass NOT covered: no SSBS, and firmware offers no ARCH_WORKAROUND_2 (AoU-11); Meltdown not affected
+  cpu      speculation exposure: 4 x Cortex-A72: Spectre v2 NOT covered: no CSV2, and firmware offers no ARCH_WORKAROUND_1 (AoU-11); Spectre-BHB covered (8 branches); store bypass NOT covered: no SSBS, and firmware offers no ARCH_WORKAROUND_2 (AoU-11); Meltdown not affected
+```
+
+A machine of mixed cores gets a line per kind. Simulated under QEMU's `max`
+with the ID registers overridden (a scratch edit, not committed) as a Pixel 7
+— a Cortex-A55 boot core, Cortex-X1 secondaries:
+
+```
+  cpu      speculation exposure: 1 x Cortex-A55: Spectre v2 not affected (Arm lists this core as unaffected); Spectre-BHB not affected (not on Arm's list); store bypass not affected; Meltdown not affected
+  cpu      speculation exposure: 3 x Cortex-X1: Spectre v2 not affected (CSV2); Spectre-BHB covered (32 branches); store bypass covered; Meltdown not affected
 ```
 
 That is honest for real Cortex-A72 silicon without TF-A's workarounds, and it
@@ -164,6 +206,14 @@ is what AoU-11 turns into an obligation: real hardware must run firmware that
 implements them. Under TCG nothing speculates, so the test platform is not a
 counter-example. `FERRIX_ARM_CPU=max` boots the `SSBS` path (`DSSBS` written and
 read back on four cores) and reports Spectre v2 not affected by `CSV2`.
+
+A second simulation gave one secondary a Cortex-A72's registers and firmware's
+answer that this core needs workaround 1 (the call itself left out, as QEMU has
+none behind `hvc`). That core alone planned the barrier and issued all of
+stage 7's 18; the A55 and X1s issued none. The same boot with
+`switch_barrier` reading one core's bit for every core — the boot-processor
+flag this replaced — failed FX-0307, *"a processor issued a switch barrier its
+plan does not have"*.
 
 Arm lists the Cortex-A57 and A72 as affected by variant 3a (a system register
 read speculatively); the kernel keeps no secret in a system register EL0 can
@@ -241,12 +291,13 @@ Once, on the boot processor, before the second processor starts:
 ```
 
 (`x86_64 --accel kvm` on an AMD Ryzen 9 9900X host.) Every secondary applies
-the boot processor's plan as it starts, adjusted to its own core, and records
-what it applied. On AArch64 the branch history loop and `SSBS` depend on the
-core, so a secondary decides them itself, in both directions: a Pixel 7 boots on
-a Cortex-A55, which needs no loop, and starts A78s and X1s, which need 32
-branches of it. The loop's count is one word every entry reads, so it is the
-largest any core needs. After stage 7's
+the boot processor's plan as it starts and records what it applied. On
+AArch64 each core decides everything for itself instead (§4): a Pixel 7 boots
+on a Cortex-A55, which needs neither the loop nor a switch barrier, and starts
+A78s and X1s, which need 32 branches of the loop. The loop's count is one word
+every entry reads, so it is the largest any core needs. There the exposure line
+is printed once every processor has started, a line per kind of core, rather
+than here. After stage 7's
 programs, `arch::check_speculation` (`arch/speculation_check.rs`) requires:
 
 * the clamp to return an index inside its bound unchanged, and — run on its
@@ -255,7 +306,11 @@ programs, `arch::check_speculation` (`arch/speculation_check.rs`) requires:
 * every running processor to have recorded, and nothing it wrote to
   `IA32_SPEC_CTRL`, `EFER`, `VIRT_SPEC_CTRL` or `SCTLR_EL1` to have failed to
   read back;
-* a switch barrier to have been issued where the plan has one;
+* a switch barrier to have been issued where any processor's plan has one —
+  any processor's, not the boot processor's, which on a mixed machine may need
+  none while others do;
+* no processor to have issued a switch barrier its own plan does not have
+  (the count is kept per processor);
 * on x86-64, `VERW` to take its operand, on machines whose exit path never
   runs it;
 * on AArch64, the entry loop's count to be non-zero exactly when some
@@ -339,6 +394,14 @@ instructions per clamp.
   were not read for them.
 * **`csdb` in the libraries' clamps** (§2), the handle and descriptor tables.
 * **Spectre-BHB on affected ARMv7-A cores**, and variant 3a on the A57/A72.
+* **Mixed ARMv7-A machines.** ARMv7-A still decides on the boot processor for
+  every core, as AArch64 did before it decided per core (§4): a big.LITTLE
+  Cortex-A15/A7 machine booted on an A7 would plan no barrier for its A15s.
+  The reference STM32MP157 has two A7s, so this is outside the reference
+  configuration.
+* **Other implementers' cores on Linux's Spectre v2 list** (Brahma-B53,
+  TSV110, Kryo silver), which the item reports as NOT covered unless they have
+  `CSV2` or firmware covers them (§4).
 * **The paranoid entry's registers.** An NMI or `#MC` taken in ring 3 on
   x86-64 does not clear the program's registers the way an ordinary trap does
   (a ring-3 `#DB` moves to the ordinary path and does); its return to ring 3

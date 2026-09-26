@@ -11,8 +11,12 @@
 //!   wrote to the processor failed to read back;
 //! * a hardened build applied at least the clamp everywhere, and an unhardened
 //!   one applied nothing anywhere;
-//! * where the plan has a switch barrier, programs in different address spaces
-//!   have run, so at least one was issued;
+//! * where any processor's plan has a switch barrier, programs in different
+//!   address spaces have run, so at least one was issued -- any processor's,
+//!   not the boot processor's, because on `AArch64` each core decides for
+//!   itself, and a machine that boots on a core that needs no barrier may
+//!   start others that do;
+//! * no processor issued a switch barrier its own plan does not have;
 //! * whatever the architecture adds: on x86-64, that `VERW`'s operand is one
 //!   the instruction takes, on a machine whose exit path may not have run it.
 //!
@@ -22,7 +26,7 @@
 
 use super::machine_speculation as machine;
 use super::speculation::{
-    Defences, HARDENED, applied_by, nospec_below, nospec_index, switch_barriers,
+    Defences, HARDENED, applied_by, nospec_below, nospec_index, switch_barriers, switch_barriers_on,
 };
 
 /// What the check found, for the boot log.
@@ -51,25 +55,15 @@ pub(crate) fn check() -> Result<Report, &'static str> {
     let boot = applied_by(0).ok_or("the boot processor recorded no side-channel defences")?;
     let processors = crate::smp::count();
     let mut differing = 0;
+    let mut barrier_planned = false;
     for logical in 0..processors {
-        let applied = applied_by(logical)
-            .ok_or("a processor started without applying the side-channel defences")?;
-        if applied.contains(Defences::READ_BACK_FAILED) {
-            return Err("a side-channel defence written to a processor did not read back");
-        }
-        if HARDENED && !applied.contains(Defences::CLAMPED_INDICES) {
-            return Err("a hardened build has a processor that did not record clamped indices");
-        }
-        if !HARDENED && applied != Defences::NONE {
-            return Err("a build with the defences off has a processor that applied one");
-        }
+        let applied = check_processor(logical)?;
+        barrier_planned |= plans_barrier(applied);
         if applied != boot {
             differing += 1;
         }
     }
     let barriers = switch_barriers();
-    let barrier_planned =
-        boot.contains(Defences::SWITCH_BARRIER) || boot.contains(Defences::RSB_FILL);
     if HARDENED && barrier_planned && barriers == 0 {
         return Err("programs in different address spaces ran and no switch barrier was issued");
     }
@@ -84,6 +78,34 @@ pub(crate) fn check() -> Result<Report, &'static str> {
         barriers,
         hardened: HARDENED,
     })
+}
+
+/// What processor `logical` recorded, held to the rules every processor
+/// keeps: it recorded, everything it wrote read back, it applied the clamp in
+/// a hardened build and nothing in an unhardened one, and it issued no switch
+/// barrier its plan does not have.
+fn check_processor(logical: usize) -> Result<Defences, &'static str> {
+    let applied = applied_by(logical)
+        .ok_or("a processor started without applying the side-channel defences")?;
+    if applied.contains(Defences::READ_BACK_FAILED) {
+        return Err("a side-channel defence written to a processor did not read back");
+    }
+    if HARDENED && !applied.contains(Defences::CLAMPED_INDICES) {
+        return Err("a hardened build has a processor that did not record clamped indices");
+    }
+    if !HARDENED && applied != Defences::NONE {
+        return Err("a build with the defences off has a processor that applied one");
+    }
+    if !plans_barrier(applied) && switch_barriers_on(logical) != 0 {
+        return Err("a processor issued a switch barrier its plan does not have");
+    }
+    Ok(applied)
+}
+
+/// Whether `applied` has something to issue when its processor switches
+/// address space.
+const fn plans_barrier(applied: Defences) -> bool {
+    applied.contains(Defences::SWITCH_BARRIER) || applied.contains(Defences::RSB_FILL)
 }
 
 /// The clamp, on both sides of its bound and on the mispredicted path.
