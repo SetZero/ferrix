@@ -644,7 +644,27 @@ pub fn run_shaped_on(
     title: &str,
     shape: Shape,
 ) -> Result<String, String> {
-    run_with(path, pattern, title, shape, Shown::Pattern)
+    run_with(path, pattern, title, shape, Shown::Pattern, None)
+}
+
+/// The same, making `drawn` once the compositor has drawn a frame with the
+/// window in it, as [`announce_when_drawn`] does for a whole program.
+///
+/// Several clients in one process each say it for themselves: a test that
+/// starts them in turn waits on one's file before starting the next, so they
+/// are placed in the order it wants however slow the host is.
+///
+/// # Errors
+///
+/// A sentence saying what could not be done.
+pub fn run_announced_on(
+    path: &std::path::Path,
+    pattern: Pattern,
+    title: &str,
+    shape: Shape,
+    drawn: std::path::PathBuf,
+) -> Result<String, String> {
+    run_with(path, pattern, title, shape, Shown::Pattern, Some(drawn))
 }
 
 /// Connect to the compositor the environment names and be its wallpaper:
@@ -682,6 +702,7 @@ fn be_wallpaper(shown: Shown) -> Result<String, String> {
         "wallpaper",
         Shape::Wallpaper,
         shown,
+        None,
     )
 }
 
@@ -722,6 +743,7 @@ fn run_with(
     title: &str,
     shape: Shape,
     shown: Shown,
+    announce: Option<std::path::PathBuf>,
 ) -> Result<String, String> {
     let stream = UnixStream::connect(path)
         .map_err(|error| format!("connecting to {}: {error}", path.display()))?;
@@ -788,6 +810,7 @@ fn run_with(
         twin_size: (0, 0),
         twin: None,
         twin_drawn: None,
+        announce: announce.or_else(|| DRAWN.get().cloned()),
         twin_closed: false,
         scaled: Vec::new(),
         stale: [Vec::new(), Vec::new()],
@@ -947,6 +970,9 @@ struct Client {
     twin_size: (i32, i32),
     twin: Option<Shared>,
     twin_drawn: Option<Instant>,
+    /// Where to say the window has been drawn: this client's own file, or
+    /// the program's (`announce_when_drawn`), or nowhere.
+    announce: Option<std::path::PathBuf>,
     twin_closed: bool,
     /// A moving wallpaper's frame, scaled to the buffer's size and kept
     /// between frames, so that a frame scales only the rows the video
@@ -1055,8 +1081,9 @@ impl Client {
             id::FRAME if opcode == core::wl_callback::event::DONE => {
                 self.awaiting = false;
                 // The compositor drew a frame with this window in it: it is
-                // placed. Said once, to whoever waits with `--after`.
-                if let Some(path) = DRAWN.get()
+                // placed. Said once, to whoever waits with `--after` or on
+                // this client's own file.
+                if let Some(path) = self.announce.as_ref()
                     && !path.exists()
                 {
                     let _ = std::fs::write(path, b"");
@@ -2222,9 +2249,9 @@ impl Client {
         // Ask to be told when this frame reaches the screen, which is what
         // the next one waits for. A wallpaper that moves asks every frame;
         // anything else only for its first, and only when the program says
-        // where to announce that it has been drawn (`announce_when_drawn`):
-        // otherwise the answer would never be read.
-        let announcing = self.drawn == 0 && DRAWN.get().is_some();
+        // where to announce that it has been drawn (`announce_when_drawn`,
+        // `run_announced_on`): otherwise the answer would never be read.
+        let announcing = self.drawn == 0 && self.announce.is_some();
         if (matches!(self.shown, Shown::Moving(_)) || announcing) && !self.awaiting {
             request(
                 out,

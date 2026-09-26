@@ -129,6 +129,7 @@ fn run_configured(
         .map(|(pattern, title, shape)| (*pattern, (*title).to_owned(), *shape))
         .collect();
     let socket_for_clients = socket.clone();
+    let work_for_clients = work.clone();
     let started = std::thread::spawn(move || {
         // The clients wait for the socket rather than racing it: the
         // compositor binds it before it accepts anything.
@@ -139,16 +140,19 @@ fn run_configured(
             std::thread::sleep(Duration::from_millis(5));
         }
         let mut handles = Vec::new();
-        for (pattern, title, shape) in clients {
+        for (number, (pattern, title, shape)) in clients.into_iter().enumerate() {
             let path = socket_for_clients.clone();
+            let drawn = work_for_clients.join(format!("drawn-{number}"));
+            let marker = drawn.clone();
             handles.push(std::thread::spawn(move || {
                 // Each client is told where to connect the way any client is.
-                connect(&path, pattern, &title, shape)
+                connect_announced(&path, pattern, &title, shape, marker)
             }));
             // In order, so the dwindle tree is the one the expected image was
             // built from: the first window takes the whole area and the
-            // second splits it.
-            std::thread::sleep(Duration::from_millis(250));
+            // second splits it. So the next client starts once this one has
+            // been drawn (`until_drawn`).
+            until_drawn(&drawn);
         }
         let mut lines = Vec::new();
         for handle in handles {
@@ -184,6 +188,47 @@ fn connect(socket: &Path, pattern: Pattern, title: &str, shape: Shape) -> String
     // which is what this is.
     compositor_pattern::client::run_shaped_on(socket, pattern, title, shape)
         .unwrap_or_else(|error| format!("pattern failed: {error}"))
+}
+
+/// The same, making `drawn` once its window has been drawn.
+fn connect_announced(
+    socket: &Path,
+    pattern: Pattern,
+    title: &str,
+    shape: Shape,
+    drawn: PathBuf,
+) -> String {
+    compositor_pattern::client::run_announced_on(socket, pattern, title, shape, drawn)
+        .unwrap_or_else(|error| format!("pattern failed: {error}"))
+}
+
+/// Wait until a client has said its window was drawn, by making `drawn`,
+/// and then a quarter of a second more.
+///
+/// The wait is what orders the windows: the next client starts only once
+/// this one is placed. A fixed sleep alone was a guess at how long that
+/// takes, and on a loaded host a first client slower than the guess mapped
+/// second, so the two windows swapped sides and every channel of both was
+/// wrong (`the_same_frame_is_drawn_on_a_gpu`, 2087572 of them each time).
+///
+/// The quarter of a second after it is not ordering. Two windows mapped
+/// within a few milliseconds of each other leave hyprix drawing three or
+/// four frames of their opening animation and then no more, so the last
+/// frame is caught half-way (`docs/BACKLOG.md`, the hyprix row about
+/// windows mapped together). Until that is fixed, the tests keep the gap
+/// they were written with.
+///
+/// Bounded by the compositor's own deadline: a client that is never drawn
+/// is not waited for past it, and the frame the test compares then says
+/// what went wrong.
+fn until_drawn(drawn: &Path) {
+    for _ in 0..1600 {
+        if drawn.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::thread::sleep(Duration::from_millis(250));
 }
 
 /// The last PPM in `directory`, as `XRGB8888`-order bytes.
