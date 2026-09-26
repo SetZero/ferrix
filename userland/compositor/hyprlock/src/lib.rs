@@ -5,13 +5,28 @@
 //! configuration describes on a surface for every screen, reads a password
 //! and hands it to PAM, and lets the lock go when PAM says yes. This is the
 //! same program for Ferrix, reading the same `hyprlock.conf` unchanged.
-//! `docs/DESKTOP-CLIENTS.md` says what of the file works and what cannot.
+//! `docs/DESKTOP-CLIENTS.md` §5 says what of the file works and what cannot.
+//!
+//! Everything here is a pure function of what it is given -- the file, the
+//! screen, the clock, the keys -- so each rule is a host test: [`config`]
+//! reads the file through `compositor/hyprlang`, [`scene`] draws one screen's
+//! widgets with [`paint`] and [`blur`], [`session`] is the field's key rules,
+//! and [`auth`] the one interface a password goes through. [`app`] is the
+//! program on `compositor/toolkit`, [`assets`] its text and pictures, and
+//! [`cli`] its command line.
 
+pub mod app;
+pub mod assets;
 pub mod auth;
+pub mod blur;
+pub mod cli;
 pub mod config;
 pub mod format;
 pub mod layout;
+pub mod paint;
+pub mod scene;
 pub mod session;
+pub mod tween;
 
 /// Say a line on standard error, as upstream's log does: every diagnostic
 /// this program has, one line each.
@@ -20,10 +35,3 @@ pub fn say(line: &str) {
     let mut err = std::io::stderr();
     let _ = writeln!(err, "{line}");
 }
-pub mod app;
-pub mod assets;
-pub mod blur;
-pub mod cli;
-pub mod paint;
-pub mod scene;
-pub mod tween;
