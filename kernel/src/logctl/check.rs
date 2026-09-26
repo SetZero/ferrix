@@ -79,6 +79,12 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     if answer.is_some_and(|kind| kind != Message::Refused(Refusal::Protocol).kind()) {
         return Err("a driver that sent DATA was answered with something other than REFUSED");
     }
+    if answer.is_none() {
+        // Said on every boot it happens, so the row counts its sightings.
+        crate::console::println!(
+            "  logctl   SIGHTING: a driver that sent DATA lost its claim with no REFUSED queued (docs/BACKLOG.md)"
+        );
+    }
     let _ = released()?;
     drop(driver);
 
