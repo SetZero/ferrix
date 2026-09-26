@@ -168,7 +168,10 @@ private const val MOUSE = "$VM_DIR/mouse.sock"
  *
  * The guest is `desktop.Image` when there is one, a build whose init is the
  * compositor (`cargo xtask flash --compositor`, wrapped by the loader), and
- * otherwise `ferrix.Image`, the helper's console image.
+ * otherwise `ferrix.Image`, the helper's console image. `chromium.img` beside
+ * it, `scripts/fetch/fetch-chromium-arm64.sh`'s volume, becomes the guest's
+ * disk, which Ferrix mounts at `/data`: a desktop built with `--chrome`
+ * starts Chromium from it.
  */
 private fun guestCommand(apk: String, uid: Int, token: String, size: IntSize): String {
     val (w, h) = size.width to size.height
@@ -185,6 +188,7 @@ private fun guestCommand(apk: String, uid: Int, token: String, size: IntSize): S
         "--input 'single-touch[path=$TOUCH,width=$w,height=$h]' --input 'keyboard[path=$KEYBOARD]' " +
         "--input 'mouse[path=$MOUSE]'; " +
         "else echo 'FERRIX-VM-BRIDGE did not start: no screen'; set --; fi; " +
+        "[ ! -f $VM_DIR/chromium.img ] || set -- \"\$@\" --block path=$VM_DIR/chromium.img; " +
         "exec $CROSVM run --disable-sandbox -m 4096 --cpus 8 -s $SOCKET --serial type=stdout,num=1,stdin " +
         "\"\$@\" \$I 2>/dev/null"
 }
