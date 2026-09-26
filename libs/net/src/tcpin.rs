@@ -118,10 +118,11 @@ impl Stack {
         let Some(Socket::Listen(waiting)) = self.sockets.get(&listener.0) else {
             return;
         };
-        if waiting.ready.len() >= waiting.backlog {
-            // The backlog is full. Dropping the request is what Linux does
-            // without SYN cookies: the peer retransmits, and by then the
-            // program may have accepted one.
+        if waiting.ready.len() >= waiting.backlog || waiting.pending.len() >= waiting.backlog {
+            // The backlog is full, of connections made or still being made.
+            // Dropping the request is what Linux does without SYN cookies:
+            // the peer retransmits, and by then the program may have
+            // accepted one.
             self.counters.no_socket += 1;
             return;
         }

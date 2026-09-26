@@ -358,8 +358,8 @@ pub struct ListenSocket {
     pub backlog: usize,
     /// Connections that finished their handshake and have not been accepted.
     pub ready: VecDeque<SocketId>,
-    /// Connections still in their handshake, which do not count against the
-    /// backlog until they finish.
+    /// Connections still in their handshake, at most `backlog` of them,
+    /// apart from those that finished.
     pub pending: Vec<SocketId>,
     /// Its options.
     pub options: Options,

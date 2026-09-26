@@ -244,7 +244,11 @@ impl InetSocket {
         if !self.kind.is_stream() {
             return Err(Errno::EOPNOTSUPP);
         }
-        let backlog = usize::try_from(backlog.max(0)).unwrap_or(0);
+        // At most `SOMAXCONN`, as Linux caps it: a backlog of a billion is a
+        // program's mistake, and each connection waiting holds its buffers.
+        let backlog = usize::try_from(backlog.max(0))
+            .unwrap_or(0)
+            .min(ferrix_linux_abi::socket::SOMAXCONN);
         net::core()
             .with(|stack, _| stack.listen(self.id, backlog))
             .map_err(errno)

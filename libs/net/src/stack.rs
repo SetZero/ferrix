@@ -422,9 +422,15 @@ impl Stack {
                 self.detach_from_listeners(id);
             }
             Socket::Listen(listener) => {
+                // Nobody will accept them now: reset each, and let `reap`
+                // take it once it has closed, as it takes one a program let
+                // go of. Left with its listener named and not closing, it
+                // stayed in the table for good.
                 for waiting in listener.ready.iter().chain(listener.pending.iter()) {
                     if let Some(Socket::Stream(stream)) = self.sockets.get_mut(&waiting.0) {
                         stream.connection.abort();
+                        stream.closing = true;
+                        stream.listener = None;
                     }
                 }
             }
