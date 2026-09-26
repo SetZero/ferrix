@@ -91,7 +91,7 @@ static RAMOOPS_LENGTH: AtomicU64 = AtomicU64::new(0);
 
 /// Parse `ramoops,<address>,<size>`, the loader's `console=` value, both
 /// numbers in hexadecimal with a `0x` prefix.
-fn ramoops_zone(value: &str) -> Option<(u64, u64)> {
+pub(super) fn ramoops_zone(value: &str) -> Option<(u64, u64)> {
     let mut fields = value.strip_prefix("ramoops,")?.split(',');
     let number = |text: &str| u64::from_str_radix(text.strip_prefix("0x")?, 16).ok();
     let base = number(fields.next()?)?;

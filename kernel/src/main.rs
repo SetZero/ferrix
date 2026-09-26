@@ -314,6 +314,14 @@ fn check_timer_and_start_clocks(info: &BootInfo) {
         ),
     };
     report_stage3(measured, info);
+    // With the interrupt controller up, because part of it is the
+    // controller's masking.
+    if let Err(problem) = arch::check_machine() {
+        fatal!(
+            catalog::STAGE3_MACHINE,
+            "stage 3 self-check failed: {problem}"
+        );
+    }
 }
 
 /// The last line of boot before init: the success marker when every check

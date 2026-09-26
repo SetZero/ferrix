@@ -600,6 +600,31 @@ pub(crate) static SPECULATION_DEFENCES: Explanation = Explanation {
           docs/certification/SPECULATION.md",
 };
 
+/// For `check_timer_and_start_clocks` in `main.rs`, when `arch::check_machine`
+/// fails.
+pub(crate) static STAGE3_MACHINE: Explanation = Explanation {
+    code: "FX-0308",
+    title: "the architecture decoded or masked something wrongly",
+    meaning: "`arch::check_machine` drives what the architecture decides on its own from \
+              values the machine hands it with inputs built for the purpose, since an \
+              ordinary boot raises only some of them: trap frames carrying every exception \
+              class or vector entry and fault status the decoder names, each required to \
+              become the trap and the signal Linux raises; the descriptions a console or \
+              interrupt controller can be given; and one idle shared line and one idle \
+              private line masked and let through at the interrupt controller, read back \
+              from its registers. A program that faults, and a driver that holds its \
+              interrupt, rely on exactly these answers. On the Arm architectures only.",
+    causes: &[
+        "A change to the architecture's trap decoding that moved an exception class or \
+         fault status to another trap or signal; the message says which kind of case.",
+        "An interrupt controller whose enable registers do not read back what was written, \
+         or a driver that writes the wrong register or bit for a line.",
+        "A change to how the console port or GIC version is chosen from the machine's \
+         description.",
+    ],
+    see: "kernel/src/arch/aarch64/check.rs; kernel/src/arch/armv7a/check.rs",
+};
+
 /// For `bring_up_processors` in `main.rs`, when `smp::discover` fails.
 pub(crate) static PROCESSOR_DISCOVERY: Explanation = Explanation {
     code: "FX-0401",
@@ -2085,6 +2110,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &CONSOLE_INPUT,
     &RANDOM_GENERATOR,
     &SPECULATION_DEFENCES,
+    &STAGE3_MACHINE,
     &PROCESSOR_DISCOVERY,
     &SECONDARY_START,
     &SECONDARY_GDT,

@@ -238,7 +238,7 @@ pub(crate) unsafe fn init_from_tree(tree: &Fdt<'_>) -> Result<u8, &'static str> 
 }
 
 /// Whether [`init`] chose the GICv3 driver.
-fn is_v3() -> bool {
+pub(super) fn is_v3() -> bool {
     VERSION.load(Ordering::Relaxed) == 3
 }
 
@@ -269,6 +269,60 @@ pub(crate) fn disable(id: u32) {
     } else {
         gicv2::disable(id);
     }
+}
+
+/// Whether `id` is let through, as the controller reads it back: for the
+/// boot check that masks a line and requires it to stay masked.
+pub(super) fn enabled_for_check(id: u32) -> bool {
+    if is_v3() {
+        gicv3::enabled_for_check(id)
+    } else {
+        gicv2::enabled_for_check(id)
+    }
+}
+
+/// A line nothing has enabled, for the boot check to mask and let through:
+/// a private peripheral interrupt or a shared one.
+pub(super) fn idle_line_for_check(private: bool) -> Option<u32> {
+    if is_v3() {
+        gicv3::idle_line_for_check(private)
+    } else {
+        gicv2::idle_line_for_check(private)
+    }
+}
+
+/// Which driver each description firmware can give gets: the version it
+/// states, or for version zero the one its register blocks imply. Returns
+/// how many descriptions.
+///
+/// # Errors
+///
+/// A description given the wrong driver.
+pub(super) fn check_described_version() -> Result<usize, &'static str> {
+    let layout = |version, cpu_interface, redistributors| Layout {
+        distributor: 0x0800_0000,
+        cpu_interface,
+        redistributors,
+        version,
+        msi_frame: None,
+        its: None,
+    };
+    let cases = [
+        (layout(0, 0x0801_0000, None), 2),
+        (layout(0, 0, Some((0x080A_0000, 0x00F6_0000))), 3),
+        (layout(2, 0x0801_0000, None), 2),
+        (layout(3, 0, Some((0x080A_0000, 0x00F6_0000))), 3),
+        (layout(4, 0, Some((0x080A_0000, 0x00F6_0000))), 4),
+        // Neither register block: nothing to probe, and nothing is chosen.
+        (layout(0, 0, None), 0),
+    ];
+    if cases
+        .iter()
+        .any(|(layout, version)| described_version(core::hint::black_box(layout)) != *version)
+    {
+        return Err("a GIC firmware described was given the wrong driver");
+    }
+    Ok(cases.len())
 }
 
 /// Claim the interrupt that arrived, or `None` if there was none.

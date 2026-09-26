@@ -106,6 +106,30 @@ pub(crate) use armv7a::{
     take_console_byte, timer_arm, timer_disarm, timer_irq, uninstall_user_root, unmask_interrupt,
     user_hwcaps, user_platform, wait_for_interrupt, wait_for_work,
 };
+// What the architecture decodes and decides on its own from values the
+// machine hands it -- trap syndromes, the console's description, the
+// interrupt controller's masking -- checked at boot against built inputs
+// (`aarch64/check.rs`, `armv7a/check.rs`). x86-64's is for that
+// architecture's pass to write; until then it has nothing here to check.
+#[cfg(target_arch = "aarch64")]
+pub(crate) use aarch64::check_machine;
+#[cfg(target_arch = "arm")]
+pub(crate) use armv7a::check_machine;
+
+/// What the architecture decodes on its own, checked: nothing yet on x86-64.
+///
+/// # Errors
+///
+/// None.
+#[cfg(target_arch = "x86_64")]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the Arm architectures' checks return what failed, and callers are shared"
+)]
+pub(crate) const fn check_machine() -> Result<(), &'static str> {
+    Ok(())
+}
+
 // The watchdogs a board's firmware leaves running: found at boot, fed once
 // the scheduler can run a task, fired to reset. Only the Pixel 7's today.
 #[cfg(target_arch = "aarch64")]

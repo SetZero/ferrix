@@ -96,6 +96,28 @@ fn chosen<'a>(tree: &Fdt<'a>) -> Option<(Node<'a>, Port)> {
     })
 }
 
+/// The port [`chosen`] picks from each of `trees`, held to the address of
+/// the one it must: for the boot check (`super::check`), whose trees have
+/// what QEMU's `virt` does not -- an override in `/chosen/bootargs`, no
+/// `stdout-path`, a port turned off. Returns how many trees.
+///
+/// # Errors
+///
+/// A tree that does not parse, or one whose console is another port.
+pub(super) fn check_chosen(trees: &[(alloc::vec::Vec<u8>, u64)]) -> Result<usize, &'static str> {
+    for (blob, address) in trees {
+        let tree =
+            Fdt::parse(blob).map_err(|_| "a device tree built for the check did not parse")?;
+        let chosen = chosen(&tree)
+            .and_then(|(node, _)| node.reg().next())
+            .map(|registers| registers.address);
+        if chosen != Some(*address) {
+            return Err("a device tree's console was not the port its description chooses");
+        }
+    }
+    Ok(trees.len())
+}
+
 /// The GIC interrupt the console port receives on, if the tree says so in a
 /// shape `ferrix_fdt` follows.
 ///

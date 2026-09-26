@@ -38,6 +38,7 @@ Causes are listed most likely first.
 | [FX-0305](#fx-0305) | console input could not be set up |
 | [FX-0306](#fx-0306) | the random number generator repeated itself |
 | [FX-0307](#fx-0307) | the side-channel defences did not hold |
+| [FX-0308](#fx-0308) | the architecture decoded or masked something wrongly |
 | [FX-0401](#fx-0401) | the processor list could not be read |
 | [FX-0402](#fx-0402) | a secondary processor could not be started |
 | [FX-0403](#fx-0403) | a secondary processor could not build its GDT |
@@ -581,6 +582,29 @@ speculative read of another's memory or the kernel's.
 
 See: kernel/src/arch/speculation.rs; kernel/src/arch/speculation_check.rs;
 docs/certification/SPECULATION.md.
+
+<a id="fx-0308"></a>
+
+## FX-0308 — the architecture decoded or masked something wrongly
+
+`arch::check_machine` drives what the architecture decides on its own from
+values the machine hands it with inputs built for the purpose, since an ordinary
+boot raises only some of them: trap frames carrying every exception class or
+vector entry and fault status the decoder names, each required to become the
+trap and the signal Linux raises; the descriptions a console or interrupt
+controller can be given; and one idle shared line and one idle private line
+masked and let through at the interrupt controller, read back from its
+registers. A program that faults, and a driver that holds its interrupt, rely on
+exactly these answers. On the Arm architectures only.
+
+1. A change to the architecture's trap decoding that moved an exception class or
+   fault status to another trap or signal; the message says which kind of case.
+2. An interrupt controller whose enable registers do not read back what was
+   written, or a driver that writes the wrong register or bit for a line.
+3. A change to how the console port or GIC version is chosen from the machine's
+   description.
+
+See: kernel/src/arch/aarch64/check.rs; kernel/src/arch/armv7a/check.rs.
 
 <a id="fx-0401"></a>
 

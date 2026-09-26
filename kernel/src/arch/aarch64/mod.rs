@@ -1,5 +1,6 @@
 //! The `AArch64` end of the kernel.
 
+mod check;
 pub(crate) mod console;
 mod cpu;
 mod gic;
@@ -1300,6 +1301,17 @@ pub(crate) fn msi_allocate(device: u32) -> Result<crate::irq::Msi, &'static str>
 /// The page a device's MSI writes land in, which an IOMMU domain must map.
 pub(crate) fn msi_doorbell() -> Option<u64> {
     gic::msi_doorbell()
+}
+
+/// Check what this architecture decodes and decides on its own: see
+/// [`check::check`]. After interrupt bring-up, because part of it is the
+/// controller's masking.
+///
+/// # Errors
+///
+/// What did not hold.
+pub(crate) fn check_machine() -> Result<(), &'static str> {
+    check::check()
 }
 
 /// Stop interrupt `number` being delivered until [`unmask_interrupt`] lets

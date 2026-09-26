@@ -215,6 +215,26 @@ pub(crate) fn disable(id: u32) {
     }
 }
 
+/// Whether `id` is let through, read back from the distributor register
+/// [`enable`] and [`disable`] write: for the boot check.
+pub(crate) fn enabled_for_check(id: u32) -> bool {
+    window(&DISTRIBUTOR).read32(GICD_ISENABLER + u64::from(id / 32) * 4) & 1 << (id % 32) != 0
+}
+
+/// The highest line nothing has enabled: a private peripheral interrupt, as
+/// this core's banked registers read, or a shared one the distributor has.
+/// For the boot check.
+pub(crate) fn idle_line_for_check(private: bool) -> Option<u32> {
+    let lines = (window(&DISTRIBUTOR).read32(GICD_TYPER) & 0b1_1111) + 1;
+    let private_lines = PRIVATE_LINES as u32;
+    let mut range = if private {
+        16..private_lines
+    } else {
+        private_lines..(lines * 32).min(FIRST_SPECIAL_ID)
+    };
+    range.rfind(|&id| !enabled_for_check(id))
+}
+
 /// Claim the interrupt that arrived, or `None` if there was none.
 ///
 /// The value returned by the controller is kept whole for [`complete`]: the

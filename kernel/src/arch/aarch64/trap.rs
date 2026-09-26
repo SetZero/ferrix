@@ -308,7 +308,7 @@ unsafe extern "C" {
 /// pointer, and `AArch64` faults on a misaligned one.
 #[derive(Debug, Clone, Copy)]
 #[repr(C, align(16))]
-pub(crate) struct UserRegs(TrapFrame);
+pub(crate) struct UserRegs(pub(super) TrapFrame);
 
 impl UserRegs {
     /// The same registers, as a child sees them: the call returned zero.

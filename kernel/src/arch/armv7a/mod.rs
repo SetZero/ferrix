@@ -8,6 +8,7 @@
 //! directory is how this architecture finds them, and everything that is
 //! coprocessor 15 rather than a system register.
 
+mod check;
 pub(crate) mod console;
 mod cpu;
 mod signal;
@@ -1344,6 +1345,17 @@ pub(crate) fn msi_allocate(_device: u32) -> Result<crate::irq::Msi, &'static str
 /// The page a device's MSI writes land in, which an IOMMU domain must map.
 pub(crate) fn msi_doorbell() -> Option<u64> {
     gicv2::msi_doorbell()
+}
+
+/// Check what this architecture decodes and decides on its own: see
+/// [`check::check`]. After interrupt bring-up, because part of it is the
+/// controller's masking.
+///
+/// # Errors
+///
+/// What did not hold.
+pub(crate) fn check_machine() -> Result<(), &'static str> {
+    check::check()
 }
 
 /// Stop interrupt `number` being delivered until [`unmask_interrupt`] lets

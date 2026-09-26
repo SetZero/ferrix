@@ -318,7 +318,7 @@ unsafe extern "C" {
 /// user state instead, which is why [`UserRegs::set_stack`] writes there.
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
-pub(crate) struct UserRegs(TrapFrame);
+pub(crate) struct UserRegs(pub(super) TrapFrame);
 
 impl UserRegs {
     /// The same registers, as a child sees them: the call returned zero.
