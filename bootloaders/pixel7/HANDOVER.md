@@ -74,6 +74,12 @@ None of it is pushed.
   machine-wide exposure line, since the one printed is the boot core's, and
   Linux's Spectre v2 safe list (A35/A53/A55), since the A55 is reported as
   `NOT covered` for v2.
+  Both landed as `f70b2516`, and run 11 (`$P/run11-v2/`, `main` at that
+  commit) reached `FERRIX-BOOT-OK` on 8 cores in 89 s, with one exposure
+  line per kind of core: 4 x Cortex-A55 not affected by Spectre v2 or BHB,
+  2 x Cortex-A78 and 2 x Cortex-X1 not affected by v2 (CSV2) and covered for
+  BHB (32 branches), store bypass covered and Meltdown not affected on all
+  three, 0 switch barriers.
 * **Running the phone with nobody there.** `WT=<worktree> $P/build-run.sh <name>`
   builds that worktree into `$P/<name>/`, keeping the tree's diff and a debug
   kernel. `$P/boot-run.sh <name>` boots it and saves the record. Neither
@@ -266,10 +272,9 @@ them). Check any new one against the phone before you rely on it.
 
 ## What to do next, most important first
 
-1. **Boot the phone again after ferrix-55's exposure follow-ups land,**
-   with `$P/build-run.sh`/`$P/boot-run.sh`: they change what the boot core
-   decides for Spectre v2. The asm budget still counts a raw-string
-   `global_asm!` as 2 lines, a hole worth closing.
+1. **Close the asm budget's hole:** `check-asm-budget.py` counts a
+   raw-string `global_asm!` as 2 lines. And the owner has yet to confirm
+   ARMv7-A `cpu.rs` going from 100 to 102.
 2. **Entropy beyond 64 bits.** ABL gives 8 bytes, and the kernel credits
    them (`BootInfo.firmware_seed_len`), so the phone boots
    `NOT SEEDED: 64 of 256 bits`. The rest would have to come from the SoC's
