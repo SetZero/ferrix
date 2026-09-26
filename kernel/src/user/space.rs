@@ -476,6 +476,13 @@ fn inherited(
     Ok((native, files))
 }
 
+/// A fork refused for memory once its child's root is taken: the root goes
+/// back, since nothing else owns it yet.
+fn unrooted(root: Frame) -> SpaceError {
+    mm::deallocate_frames(root, 0);
+    SpaceError::OutOfMemory
+}
+
 /// Attach a forked child to every object it names.
 ///
 /// The child's copy of a mapping that may write its file counts as one more
@@ -800,9 +807,11 @@ impl AddressSpace {
                 native,
             }),
         })
-        // The root goes back with the rest: the parent's marks only make it
-        // copy on write what it could have written, which is harmless.
-        .map_err(|_| SpaceError::OutOfMemory)?;
+        // Refused before the closure ran, so nothing owns the root but this:
+        // it goes back here, and the rest the closure captured goes as it
+        // drops. The parent's marks only make it copy on write what it could
+        // have written, which is harmless.
+        .map_err(|_| unrooted(root))?;
         attach_child(&child)?;
         Ok(child)
     }
