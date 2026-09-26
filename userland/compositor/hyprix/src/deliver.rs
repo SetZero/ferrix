@@ -518,14 +518,19 @@ fn window_part(slot: &Slot, surface: ObjectId) -> Option<(f64, f64, f64, f64)> {
     ))
 }
 
-/// The popups -- menus, dropdowns, tooltips -- in front of `windows`, the
-/// newest first, since that is the order they are drawn in from the top.
+/// The popups -- menus, dropdowns, tooltips -- in front of everything, the
+/// newest first, since that is the order they are drawn in from the top;
+/// then the layer surfaces above the windows (`overlay`, then `top`: a
+/// bar), the windows, and the layer surfaces under them (`bottom`, then
+/// `background`), as Hyprland stacks them for input.
 ///
 /// A popup is a surface of its own over its window, and a click on a menu
 /// item belongs to the menu: sent to the window under it, at the window's
 /// coordinates, it was a click outside the menu, which closed it and did
 /// nothing else, or clicked whatever was beneath. Chrome's menus, its
-/// address bar's suggestions and its dropdowns are all popups.
+/// address bar's suggestions and its dropdowns are all popups. A bar is a
+/// layer surface, and one the pointer never reached was a bar nobody could
+/// click or hover.
 fn with_popups(
     windows: Vec<Placement>,
     slots: &[Slot],
@@ -547,7 +552,30 @@ fn with_popups(
             ),
         })
         .collect();
+    let layer = |wanted: compositor_server::Layer| -> Vec<Placement> {
+        let mut found: Vec<Placement> = slots
+            .iter()
+            .enumerate()
+            .flat_map(|(client, slot)| {
+                slot.placed_layers()
+                    .filter(|(_, _, layer)| *layer == wanted)
+                    .map(move |(surface, rect, _)| Placement {
+                        window: None,
+                        client,
+                        surface,
+                        rect: (rect.x, rect.y, rect.width, rect.height),
+                    })
+            })
+            .collect();
+        // The last made is drawn on top, so the pointer finds it first.
+        found.reverse();
+        found
+    };
+    out.extend(layer(compositor_server::Layer::Overlay));
+    out.extend(layer(compositor_server::Layer::Top));
     out.extend(windows);
+    out.extend(layer(compositor_server::Layer::Bottom));
+    out.extend(layer(compositor_server::Layer::Background));
     out
 }
 

@@ -68,6 +68,19 @@ pub struct Slot {
 }
 
 impl Slot {
+    /// This connection's layer surfaces where they were last placed: the
+    /// `wl_surface`, its rectangle in the space all screens share, and its
+    /// layer. What the pointer is delivered to beside the windows.
+    pub(crate) fn placed_layers(
+        &self,
+    ) -> impl Iterator<Item = (ObjectId, Rect, compositor_server::Layer)> + '_ {
+        self.layers.iter().filter_map(|id| {
+            let rect = self.layer_rects.get(id).copied()?;
+            let layer = self.client.layer_surface(*id)?;
+            Some((layer.surface, rect, layer.layer))
+        })
+    }
+
     /// A fresh client on one end of a socket pair, offered the globals the
     /// compositor offers with one screen, for a test that drives a slot the
     /// way the loop does.
