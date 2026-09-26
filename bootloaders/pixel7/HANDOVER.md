@@ -48,8 +48,8 @@ None of it is pushed.
     (the A55s' VIPT instruction caches rule out `IC IVAU` by the direct
     map's address). ARMv7-A got the same, untested on the DK1.
     `scripts/asm-allowlist.json` raised ARMv7-A `cpu.rs` from 100 to 102
-    lines for it, after the three `CTR` reads there became one. **The
-    owner should confirm that raise.**
+    lines for it, after the three `CTR` reads there became one. The owner
+    allowed the raise on 2026-09-27.
   * **The reverse-map check's user program had no barriers**
     (`9489aab4`). A diagnostic build (run 7) showed the kernel's side
     right and the parent reading page 0 before the child's marker was
@@ -273,18 +273,15 @@ them). Check any new one against the phone before you rely on it.
 
 ## What to do next, most important first
 
-1. **Close the asm budget's hole:** `check-asm-budget.py` counts a
-   raw-string `global_asm!` as 2 lines. And the owner has yet to confirm
-   ARMv7-A `cpu.rs` going from 100 to 102.
-2. **Entropy beyond 64 bits.** ABL gives 8 bytes, and the kernel credits
+1. **Entropy beyond 64 bits.** ABL gives 8 bytes, and the kernel credits
    them (`BootInfo.firmware_seed_len`), so the phone boots
    `NOT SEEDED: 64 of 256 bits`. The rest would have to come from the SoC's
    TRNG. That is a security block, so under "Never write anything that
    survives a reset" it needs the owner's word before anyone reads it.
-3. **A faster boot console**, if anything comes to need one: map the
+2. **A faster boot console**, if anything comes to need one: map the
    framebuffer write-combining rather than as device memory (run 4 lost
    about 28 s to drawing).
-4. **The kernel is a PIE now, and boots on the phone** (KASLR,
+3. **The kernel is a PIE now, and boots on the phone** (KASLR,
    `docs/certification/SPECULATION.md` §6.1, 2026-09-26). `boot/` moves it
    each boot; this loader does not. It places the kernel at its link address
    and applies its `R_AARCH64_RELATIVE` fixups there (`load.rs`
@@ -325,6 +322,11 @@ them). Check any new one against the phone before you rely on it.
   (`$P/fbcon_shots.py`) are `$P/qemu-fbcon-mid.png` and
   `$P/qemu-fbcon-wrapped.png`. The owner agreed to the amendment of
   `docs/ARCHITECTURE.md` §1 that allows it. Run 4 showed it on the phone.
+* **The asm budget's raw-string hole.** `check-asm-budget.py` counted a
+  raw-string `global_asm!` as the two lines its quotes were on. It now
+  counts every line: the tree held 1569 lines, not 733, and the owner had
+  the cap and nine budgets moved to the truth. AArch64's secondary entry,
+  58 lines, is the one that had really grown, by the EL2 drop.
 * **The seed** (`bootloaders/pixel7/src/seed.rs`) folds `/chosen`'s
   `rng-seed` and `kaslr-seed` into `firmware_seed` and NOPs both out of the
   kernel's copy of the tree. The owner chose to credit ABL's 8 bytes rather
