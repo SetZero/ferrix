@@ -1495,7 +1495,7 @@ fn qemu_command(
 
     attach_rng(&mut command, arch);
     attach_display(&mut command, arch, args, &binary);
-    attach_asked_for(&mut command, arch, args);
+    attach_asked_for(&mut command, arch, args, &binary);
     attach_test_disk(&mut command, arch)?;
     attach_btrfs_disk(&mut command, arch)?;
     attach_root_disk(&mut command, arch, args)?;
@@ -1587,19 +1587,35 @@ fn attach_clipboard(command: &mut Command, arch: Arch, args: &Args) {
 
 /// The devices a flag asks for and nothing else brings: the clipboard's
 /// virtio-serial port and the sound card.
-fn attach_asked_for(command: &mut Command, arch: Arch, args: &Args) {
+fn attach_asked_for(command: &mut Command, arch: Arch, args: &Args, binary: &Path) {
     attach_clipboard(command, arch, args);
-    attach_audio(command, arch, args);
+    attach_audio(command, arch, args, binary);
 }
 
-/// A virtio-snd card (`docs/AUDIO.md` §4), when `--audio` names a backend.
+/// A virtio-snd card (`docs/AUDIO.md` §4), when `--audio` names a backend,
+/// or when `--everything` asks for a desktop with all of it, which gets the
+/// host's own sound server as this QEMU knows it
+/// ([`crate::window::audio_backend`]).
 ///
 /// `wav:PATH` writes what the guest plays to `PATH` with QEMU's mixing
 /// engine off, so the file holds the stream's own frames, neither resampled
 /// nor scaled; any other backend is passed to `-audiodev` as named, for a
 /// person to hear. Through the IOMMU but on ARMv7-A, as every virtio device.
-fn attach_audio(command: &mut Command, arch: Arch, args: &Args) {
-    let Some(backend) = &args.audio else {
+fn attach_audio(command: &mut Command, arch: Arch, args: &Args, binary: &Path) {
+    let chosen = if args.everything && args.audio.is_none() {
+        let found = crate::window::audio_backend(binary).map(str::to_owned);
+        if found.is_none() {
+            println!(
+                "  {arch}: no sound: {} has none of pipewire, pa, coreaudio or dsound \
+                 (`-audiodev help`); name one with --audio",
+                binary.display()
+            );
+        }
+        found
+    } else {
+        args.audio.clone()
+    };
+    let Some(backend) = &chosen else {
         return;
     };
     let audiodev = match backend.strip_prefix("wav:") {

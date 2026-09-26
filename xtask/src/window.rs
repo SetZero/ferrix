@@ -650,6 +650,32 @@ fn devices(binary: &Path) -> Vec<String> {
     named(&text)
 }
 
+/// The audio backend a desktop that wants sound gets from this QEMU: the
+/// first of the host's own sound servers it was built with -- `pipewire`,
+/// `pa`, `coreaudio`, `dsound` -- as `-audiodev help` lists them, or
+/// none when it has none of them.
+pub(crate) fn audio_backend(binary: &Path) -> Option<&'static str> {
+    let mut command = Command::new(binary);
+    let _ = command.args(["-audiodev", "help"]);
+    let output = command.output().ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let offered = audio_drivers(&text);
+    ["pipewire", "pa", "coreaudio", "dsound"]
+        .into_iter()
+        .find(|wanted| offered.iter().any(|driver| driver == wanted))
+}
+
+/// The names under `Available audio drivers:`, one a line.
+fn audio_drivers(text: &str) -> Vec<String> {
+    text.lines()
+        .skip_while(|line| !line.trim().ends_with("audio drivers:"))
+        .skip(1)
+        .map(str::trim)
+        .take_while(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 /// Every `name "..."` in `text`, which is how `-device help` writes each
 /// device and each alias.
 fn named(text: &str) -> Vec<String> {
@@ -712,6 +738,25 @@ fn takes_vnc(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `-audiodev help` as QEMU 10.2.1 and 9.2.4 on nazuna print it.
+    #[test]
+    fn audio_drivers_are_read_from_audiodev_help() {
+        let full = "Available audio drivers:\nnone\nalsa\ndbus\njack\noss\npa\npipewire\nsdl\nspice\nwav\n";
+        assert_eq!(
+            audio_drivers(full),
+            [
+                "none", "alsa", "dbus", "jack", "oss", "pa", "pipewire", "sdl", "spice", "wav"
+            ]
+        );
+        let bare = "Available audio drivers:\nnone\ndbus\noss\nspice\nwav\n";
+        assert!(
+            !audio_drivers(bare)
+                .iter()
+                .any(|driver| driver == "pipewire")
+        );
+        assert!(audio_drivers("no such list\n").is_empty());
+    }
 
     /// The listing this host's QEMU prints, which the parser is written for.
     const WINDOWS_HELP: &str = "\

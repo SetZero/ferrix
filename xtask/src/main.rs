@@ -265,7 +265,9 @@ OPTIONS:
                                          today (docs/CLIPBOARD.md §8)
     --audio <BACKEND>                    run, run-compositor: a virtio-snd card whose far end is
                                          QEMU's audio backend BACKEND: `pipewire` or `pa` to hear
-                                         it, `wav:PATH` to write what plays to a file (docs/AUDIO.md §4)
+                                         it, `wav:PATH` to write what plays to a file (docs/AUDIO.md §4).
+                                         --everything brings one on the host's sound server
+                                         (pipewire, pa, coreaudio or dsound, whichever QEMU has)
     --vnc <DISPLAY>                      run --display, run-compositor: serve the screen over VNC
                                          at e.g. `:0` (127.0.0.1) rather than in a window of this host's
     --rendernode <PATH>                  --gl on a served or headless screen: which GPU egl-headless
