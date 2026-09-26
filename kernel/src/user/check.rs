@@ -1000,6 +1000,20 @@ fn check_fork_shares_pages_and_a_write_copies_one() -> Result<u64, &'static str>
         return Err("a second write fault overwrote a page it should have left alone");
     }
 
+    // And a kernel write into it -- `copy_to_user`'s, a time a program asked
+    // for or the bytes a read returns -- goes straight through: the page is
+    // this side's alone and mapped writable, so there is nothing to fault in
+    // and no translation to take down. Faulting first took it down and put it
+    // back on every copy, a shootdown each: thirty thousand a second, for a
+    // browser that forked once and then asked the time.
+    let begun = child.shootdowns_begun();
+    child
+        .with_page(base, Access::WRITE, |_| ())
+        .map_err(|_| "a kernel write to a page already copied was refused")?;
+    if child.shootdowns_begun() != begun {
+        return Err("a kernel write to a page already its own took a translation down");
+    }
+
     // The sole-holder case, on the page neither side has written. Dropping the
     // parent leaves the child the only holder, so its write must take the
     // frame it already has rather than duplicate data nobody else can see.

@@ -228,8 +228,8 @@ pub(crate) struct AddressSpace {
     me: Weak<AddressSpace>,
     /// The processors whose TLB may still hold this space's translations.
     cpus: CpuMask,
-    /// Shootdowns of this space counted under its lock and not yet returned.
-    flushes_pending: AtomicU64,
+    /// Its shootdowns: those not yet returned, and those ever begun.
+    flushes: Flushes,
     /// Held by each system call that changes which ranges are mapped, from
     /// its first look at the map to its last change: see
     /// [`AddressSpace::layout`].
@@ -263,7 +263,7 @@ impl AddressSpace {
             root,
             me: me.clone(),
             cpus: CpuMask::new(),
-            flushes_pending: AtomicU64::new(0),
+            flushes: Flushes::new(),
             layout: SleepLock::new((), &crate::sync::SchedParker),
             inner: SpinLock::new(Inner {
                 map,
@@ -585,7 +585,7 @@ impl AddressSpace {
             root,
             me: me.clone(),
             cpus: CpuMask::new(),
-            flushes_pending: AtomicU64::new(0),
+            flushes: Flushes::new(),
             layout: SleepLock::new((), &crate::sync::SchedParker),
             inner: SpinLock::new(Inner {
                 map,
@@ -1084,25 +1084,25 @@ impl AddressSpace {
         touch: impl FnOnce(u64) -> R,
     ) -> Result<R, SpaceError> {
         loop {
+            {
+                let inner = self.inner.lock();
+                let region = *inner
+                    .map
+                    .find(address)
+                    .ok_or(SpaceError::NotMapped(address))?;
+                if !permits(region.flags, access) {
+                    return Err(SpaceError::Refused(address));
+                }
+                if let Some(physical) = mm::translate_in(self.root * PAGE_SIZE, address)
+                    && (!access.write
+                        || writable_in_place(&inner, &region, address, physical / PAGE_SIZE))
+                {
+                    let answer = touch(mm::direct_map(physical));
+                    drop(inner);
+                    return Ok(answer);
+                }
+            }
             self.fault(address, access)?;
-
-            let inner = self.inner.lock();
-            let region = *inner
-                .map
-                .find(address)
-                .ok_or(SpaceError::NotMapped(address))?;
-            if !permits(region.flags, access) {
-                return Err(SpaceError::Refused(address));
-            }
-            let Some(physical) = mm::translate_in(self.root * PAGE_SIZE, address) else {
-                continue;
-            };
-            if access.write && !writable_in_place(&inner, &region, address, physical / PAGE_SIZE) {
-                continue;
-            }
-            let answer = touch(mm::direct_map(physical));
-            drop(inner);
-            return Ok(answer);
         }
     }
 
@@ -1400,7 +1400,7 @@ impl AddressSpace {
             }
             _ => Vec::new(),
         };
-        let pending = self.flushes_pending.load(Ordering::SeqCst) > 0;
+        let pending = self.flushes.pending.load(Ordering::SeqCst) > 0;
         if !found && !pending && copies.is_empty() {
             return None;
         }
@@ -1456,14 +1456,20 @@ impl AddressSpace {
     /// Called with the lock held — `_locked` is the proof — and after the
     /// translations it is for are out of the tables, never before.
     fn begin_shootdown(&self, _locked: &Inner) -> CpuSet {
-        let _ = self.flushes_pending.fetch_add(1, Ordering::SeqCst);
+        let _ = self.flushes.pending.fetch_add(1, Ordering::SeqCst);
+        let _ = self.flushes.begun.fetch_add(1, Ordering::Relaxed);
         self.cpus.snapshot()
+    }
+
+    /// How many shootdowns of this space have begun: see the field.
+    pub(crate) fn shootdowns_begun(&self) -> u64 {
+        self.flushes.begun.load(Ordering::Relaxed)
     }
 
     /// A shootdown [`AddressSpace::begin_shootdown`] or
     /// [`AddressSpace::forget_pages`] counted has returned.
     pub(crate) fn flushed(&self) {
-        let _ = self.flushes_pending.fetch_sub(1, Ordering::SeqCst);
+        let _ = self.flushes.pending.fetch_sub(1, Ordering::SeqCst);
     }
 
     /// Run this space's own shootdown, begun under the lock, now that the lock
@@ -1471,6 +1477,26 @@ impl AddressSpace {
     fn shoot(&self, cpus: &CpuSet, pages: &TlbPages) {
         smp::flush_tlb_pages(cpus, pages);
         self.flushed();
+    }
+}
+
+/// An address space's shootdowns, counted.
+#[derive(Debug)]
+struct Flushes {
+    /// Counted under the space's lock and not yet returned.
+    pending: AtomicU64,
+    /// Ever begun, for the checks: what a change that should have taken
+    /// nothing down is held to.
+    begun: AtomicU64,
+}
+
+impl Flushes {
+    /// None of either.
+    const fn new() -> Flushes {
+        Flushes {
+            pending: AtomicU64::new(0),
+            begun: AtomicU64::new(0),
+        }
     }
 }
 
