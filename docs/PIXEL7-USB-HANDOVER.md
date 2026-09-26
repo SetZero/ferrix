@@ -335,7 +335,10 @@ happens again.
 **The "Boot Android" line.** Since 2026-09-26 `usbdev` restarts Ferrix
 when the serial port's host sends the line `ferrix-usbdev: reboot`, which
 is the monitor's "Boot Android" button. On the phone that is the watchdog
-reset every run ends with, so no register access changed. It is an
+reset every run ends with, so no register access changed. Run
+`bootandroid1` proved it: the line restarted Ferrix within a second and
+Android was back 79 s later. The monitor sends a newline first, because
+the host's echo can leave a piece of Ferrix's log in `usbdev`'s line. It is an
 unauthenticated reboot for anyone with a USB cable to the phone, acceptable
 for a debug console, and it goes when adb's `reboot:` replaces it
 (`docs/ADB.md`).
