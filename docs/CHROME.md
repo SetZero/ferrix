@@ -45,7 +45,7 @@ what is left:
 | What running it found missing: `CLOCK_THREAD_CPUTIME_ID` and `CLOCK_PROCESS_CPUTIME_ID`, `clock_getres`, `creat`, and `/proc/<pid>/task`'s link count | **done** 2026-09-24 (§8) |
 | Chrome in a window on the compositor, a Wayland client drawing in software | **done** 2026-09-24, x86-64, `cargo xtask test-chrome-window`, `run-compositor --chrome` (§9) |
 | The zygote, which could not learn its children's pids until `SCM_CREDENTIALS` carried them | **done** 2026-09-26: `test-chrome` (glibc and ferrousli) and `test-chrome-window` run without `--no-zygote` (§8) |
-| Chrome's speed: a futex wait woken every 5 ms, the HPET as the clock under KVM, `munmap` walking every page of a reservation, a shootdown for every write to a page after a fork, and the virtio-gpu doorbell held by QEMU | **done** 2026-09-26: idle 443% of a processor → 15%, the machine 96% busy → 6%, a turning box 1.5 frames a second → 60.8; `cargo xtask bench-chrome` (§9) |
+| Chrome's speed: a futex wait woken every 5 ms, the HPET as the clock under KVM, `munmap` walking every page of a reservation, a shootdown for every write to a page after a fork, and the virtio-gpu doorbell held by QEMU | **done** 2026-09-26: idle 443% of a processor → 15%, the machine 96% busy → 6%, a turning box 1.5 frames a second → 60.8; then a vDSO (idle → 13%) and a kick to one processor (QEMU on the host 81% of a core → 65%); `cargo xtask bench-chrome` (§9) |
 | Chrome on the desktop's persistent btrfs root | **done** 2026-09-26: `/dev/shm` was not mounted there; `cargo xtask test-chrome-window --btrfs-root` (§9) |
 | Chrome's text, its name for the system, and Chrome for Testing's bar | **done** 2026-09-26: Inter and Liberation from the tree with slight hinting, Ferrix in the user agent, `navigator` and the client hints, no bar (§9) |
 | Chrome on ferrousli's `libc.so.6` in glibc's place | **done** 2026-09-26, x86-64, headless, `cargo xtask test-chrome --interpreter ferrousli --library ferrousli` (§8); the window build on it is not tried |
@@ -857,6 +857,31 @@ seconds, nine reports read as 545 frames where 605 were drawn, and main's
 own runs did it as often. `bench-chrome` now gives a phase's reports beside
 its frames, and its frames a second are frames per report. A real stall
 still shows: the report that covers it counts fewer frames for its second.
+
+**Brief slowdowns are the host's.** Some runs still dip for a second or
+two, to 42–56 frames a second in a phase, and the dips come and go between
+runs of the same kernel. To find out why, two probes ran side by side over
+four runs. They were not landed.
+- **In the guest:** the compositor logged every gap of 25 ms or more
+  between its frames, with its own clock and where the frame's time went.
+- **On the host:** a sampler read QEMU's per-thread `schedstat`, which
+  gives each thread's time running and its time waiting for a processor,
+  every 10 ms. It also read the host's `/proc/stat` and, every half second,
+  its busiest processes.
+
+Of the 13.4 s lost to gaps of 40 ms or more, 12.9 s fell while the host's
+24 processors were at least 90% busy. In those stretches, QEMU's
+virtual-processor threads spent 50–100% of their time runnable and waiting
+in the host's run queue, and the compositor's flip took 25–390 ms instead
+of 2. The flip hands the frame to QEMU's GPU and waits for it. The load was
+other work on the same host: compilers on 11–16 processors, and other
+virtual machines. Runs taken while the host was quiet had almost no dips.
+
+**What is left inside the guest** is small: six gaps of 46–247 ms over four
+runs, 0.54 s in all. In most of them the compositor was idle and Chrome sent
+its next frame late; twice the compositor's own frame took 28–49 ms. So
+read a dip in `bench-chrome` against the host's load before blaming a
+change for it.
 
 Memory has not moved: 521 MiB is in use, and most of that is page cache
 for Chrome's 294 MB program. `/proc/meminfo` counts the cache as used,
