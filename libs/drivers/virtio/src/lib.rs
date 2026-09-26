@@ -602,6 +602,13 @@ impl<M: QueueMemory> SplitQueue<M> {
         queue
     }
 
+    /// Give the memory back, for a queue built on it again after the device
+    /// has been reset: [`SplitQueue::new`] writes every index afresh.
+    #[must_use]
+    pub fn into_memory(self) -> M {
+        self.memory
+    }
+
     /// The layout this queue was built with.
     #[must_use]
     pub const fn layout(&self) -> &Layout {

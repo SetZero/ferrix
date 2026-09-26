@@ -93,6 +93,11 @@ fn submit(sequence: u32, offset: u32, bytes: u32) -> Message {
     })
 }
 
+/// What a bring-up asks of QEMU's two streams: `PCM_INFO`, the drain's
+/// `STOP` and `RELEASE` for each stream, and `PCM_INFO` again after the
+/// reset between them.
+const BRING_UP: [u32; 6] = [0x0100, 0x0105, 0x0103, 0x0105, 0x0103, 0x0100];
+
 fn codes(device: &Rc<RefCell<Device>>) -> Vec<u32> {
     device
         .borrow()
@@ -125,7 +130,7 @@ fn qemus_device_comes_up_and_says_what_it_offers() {
         0,
         "DRIVER_OK before HELLO"
     );
-    assert_eq!(codes(&device), [0x0100], "one PCM_INFO");
+    assert_eq!(codes(&device), BRING_UP, "the drain, then PCM_INFO");
     assert_eq!(driver.info().config.streams, 2);
     let hello = driver.hello(0x300);
     assert_eq!(
@@ -149,14 +154,18 @@ fn ready_gives_the_stream_its_one_configuration() {
     assert_eq!(rig.driver.phase(), Phase::Running);
     let device = rig.device.borrow();
     let requests = &device.requests;
-    assert_eq!(requests.len(), 3, "PCM_INFO, SET_PARAMS, PREPARE");
-    let (code, params) = &requests[1];
+    assert_eq!(
+        requests.len(),
+        BRING_UP.len() + 2,
+        "the bring-up, SET_PARAMS, PREPARE"
+    );
+    let (code, params) = &requests[BRING_UP.len()];
     assert_eq!(*code, 0x0101);
     assert_eq!(params[4..8], 0u32.to_le_bytes(), "stream 0");
     assert_eq!(params[8..12], 15360u32.to_le_bytes(), "buffer_bytes");
     assert_eq!(params[12..16], 3840u32.to_le_bytes(), "period_bytes");
     assert_eq!(params[20..24], [2, 5, 7, 0], "two channels, S16, 48 kHz");
-    assert_eq!(requests[2].0, 0x0102);
+    assert_eq!(requests[BRING_UP.len() + 1].0, 0x0102);
     assert!(device.protocol_errors.is_empty());
 }
 
@@ -214,6 +223,38 @@ fn the_device_reads_exactly_the_samples_submitted_and_the_first_starts_it() {
         ]
     );
     assert_eq!(rig.device.borrow().played, samples[..6640]);
+    assert!(rig.device.borrow().protocol_errors.is_empty());
+}
+
+#[test]
+fn a_driver_started_again_is_not_handed_the_last_ones_buffers() {
+    let mut rig = rig(false);
+    for sequence in 0..3 {
+        follow(&mut rig.driver, &submit(sequence, sequence * 3840, 3840));
+    }
+    assert_eq!(rig.device.borrow().holding(), 3);
+    // Killed: nothing of it runs again, and its memory stays as it was.
+    let _dead = core::mem::ManuallyDrop::new(rig.driver);
+    let mut driver =
+        Snd::init(parts(&rig.bus, &rig.device), options()).expect("up again on the same device");
+    assert_eq!(
+        rig.device.borrow().holding(),
+        0,
+        "the drain released what the dead driver left"
+    );
+    let buffer = rig.bus.pin(4, false);
+    let samples: Vec<u8> = (0..3840_u32).map(|index| (index % 253) as u8).collect();
+    buffer.fill(0, &samples);
+    driver
+        .on_ready(&ready(published()), &[&buffer.device])
+        .expect("READY");
+    follow(&mut driver, &submit(0, 0, 3840));
+    assert_eq!(rig.device.borrow_mut().consume(8), 1, "only its own buffer");
+    let drained = driver.on_interrupt().expect("its own completion alone");
+    assert_eq!(drained.taken, 1);
+    assert_eq!(driver.fault(), None);
+    let played = rig.device.borrow().played.clone();
+    assert_eq!(played, samples);
     assert!(rig.device.borrow().protocol_errors.is_empty());
 }
 
@@ -389,7 +430,7 @@ fn a_core_that_asks_what_the_device_must_not_do_is_refused() {
             Err(ControlError::Refused(why))
         );
     }
-    assert_eq!(codes(&device), [0x0100], "nothing asked of the device");
+    assert_eq!(codes(&device), BRING_UP, "nothing asked of the device");
     assert_eq!(
         driver.on_ready(&ready(published()), &[]),
         Err(ControlError::Refused(Refusing::Count))

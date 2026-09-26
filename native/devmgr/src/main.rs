@@ -197,7 +197,10 @@ const MAX_RESTARTS: u32 = 8;
 /// still a dead disk: what a filesystem does with a device that went and
 /// came back is its own decision. The net, input and serial cores do not yet
 /// wait for a dead driver's claim to go (`kernel/src/claim.rs`), so a driver
-/// started again would be refused its channel.
+/// started again would be refused its channel. The audio core does, but a
+/// sound driver waits for the pin quarantine (`docs/BACKLOG.md`): QEMU
+/// writes a dead one's buffers' status into pages a translated domain has
+/// already freed, and a driver started at once is given them.
 const fn restarted(kind: Kind) -> bool {
     matches!(kind, Kind::Display)
 }

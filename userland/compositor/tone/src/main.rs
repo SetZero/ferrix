@@ -13,6 +13,13 @@
 //! **The negative control** (`negative-control`) writes period 10 twice and
 //! never period 11, so the file QEMU writes holds every frame but a period's
 //! worth in the wrong place, and the check must fail exactly there.
+//!
+//! **The restart** (`restart`) first kills the card's driver twice under a
+//! running stream (`docs/DEVMGR.md` §4): each round plays silence, kills the
+//! `snd` process, requires the stream to answer `EBADFD` as a disconnected
+//! card's does, and waits for `card0` to be published again. The second
+//! is then played on the third driver's card, and found whole as ever:
+//! silence is what the check skips.
 
 #[cfg(target_os = "linux")]
 fn main() {
@@ -42,6 +49,8 @@ mod linux {
     const BLOCK: u32 = 700;
     /// Frames in a period, which the negative control moves one of.
     const PERIOD: u32 = 960;
+    /// The playback node.
+    const PCM: &str = "/dev/snd/pcmC0D0p";
 
     const fn width() -> Width {
         if usize::BITS == 32 {
@@ -294,40 +303,156 @@ mod linux {
         bytes
     }
 
+    /// Write `data`, `count` frames, whole: `Err` with what a write that
+    /// took nothing answered.
+    fn write_frames(pcm: libc::c_int, data: &[u8], count: u32) -> Result<(), (i32, i64)> {
+        let mut sent = 0;
+        while sent < count {
+            let xferi = Xferi {
+                result: 0,
+                buf: data.as_ptr() as u64 + u64::from(sent) * 4,
+                frames: u64::from(count - sent),
+            };
+            let mut bytes = vec![0_u8; Xferi::size(width())];
+            let _ = xferi.write(width(), &mut bytes);
+            let answer = ioctl(pcm, Pcm::WriteiFrames.request(width()), &mut bytes);
+            let result = Xferi::read(width(), &bytes).map_or(-1, |x| x.result);
+            if answer != 0 || result <= 0 {
+                return Err((answer, result));
+            }
+            sent += result as u32;
+        }
+        Ok(())
+    }
+
     fn play(pcm: libc::c_int) {
         let mut next = 1;
         while next <= FRAMES {
             let count = BLOCK.min(FRAMES + 1 - next);
             let data = samples(next, count);
-            let mut sent = 0;
-            while sent < count {
-                let xferi = Xferi {
-                    result: 0,
-                    buf: data.as_ptr() as u64 + u64::from(sent) * 4,
-                    frames: u64::from(count - sent),
-                };
-                let mut bytes = vec![0_u8; Xferi::size(width())];
-                let _ = xferi.write(width(), &mut bytes);
-                let answer = ioctl(pcm, Pcm::WriteiFrames.request(width()), &mut bytes);
-                let result = Xferi::read(width(), &bytes).map_or(-1, |x| x.result);
-                if answer != 0 || result <= 0 {
-                    fail(&format!(
-                        "WRITEI_FRAMES at frame {next}: {answer}, result {result}"
-                    ));
-                }
-                sent += result as u32;
+            if let Err((answer, result)) = write_frames(pcm, &data, count) {
+                fail(&format!(
+                    "WRITEI_FRAMES at frame {next}: {answer}, result {result}"
+                ));
             }
             next += count;
         }
+    }
+
+    /// Every pid whose `comm` is `snd`.
+    fn drivers() -> Vec<i32> {
+        let Ok(entries) = std::fs::read_dir("/proc") else {
+            fail("/proc could not be read");
+        };
+        entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().to_str()?.parse::<i32>().ok())
+            .filter(|pid| {
+                std::fs::read_to_string(format!("/proc/{pid}/comm"))
+                    .is_ok_and(|comm| comm.trim() == "snd")
+            })
+            .collect()
+    }
+
+    /// Up to `tries` looks, 10 ms apart, for `found` to give something.
+    fn wait_for<T>(tries: u32, mut found: impl FnMut() -> Option<T>) -> Option<T> {
+        for _ in 0..tries {
+            if let Some(it) = found() {
+                return Some(it);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        None
+    }
+
+    /// One round of the restart: silence playing, the driver killed, the
+    /// stream disconnected, the card back. `killed` is the drivers earlier
+    /// rounds killed, which a dead one may still be listed beside.
+    fn survive_a_kill(round: u32, killed: &mut Vec<i32>) {
+        let pcm = open(PCM, libc::O_RDWR);
+        let (_, buffer) = configure(pcm);
+        software(pcm, PERIOD, buffer);
+        let answer = ioctl_none(pcm, Pcm::Prepare.request(width()));
+        if answer != 0 {
+            fail(&format!("round {round}: PREPARE: {answer}"));
+        }
+        let silence = vec![0_u8; BLOCK as usize * 4];
+        // A buffer and a little more, so the stream has started.
+        let mut written = 0;
+        while written <= buffer + PERIOD {
+            if let Err((answer, result)) = write_frames(pcm, &silence, BLOCK) {
+                fail(&format!(
+                    "round {round}: silence before the kill: {answer}, result {result}"
+                ));
+            }
+            written += BLOCK;
+        }
+        let Some(pid) = wait_for(500, || {
+            let fresh: Vec<i32> = drivers()
+                .into_iter()
+                .filter(|pid| !killed.contains(pid))
+                .collect();
+            (fresh.len() == 1).then(|| fresh.first().copied()).flatten()
+        }) else {
+            fail(&format!("round {round}: no one snd driver in /proc"));
+        };
+        // SAFETY: `kill` takes a pid and a signal and touches no memory.
+        if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 {
+            fail(&format!("round {round}: kill {pid}: errno {}", errno()));
+        }
+        killed.push(pid);
+        say(&format!("round {round}: killed snd {pid}"));
+        // Writes go on until the stream says its card went: ten seconds of
+        // audio is far longer than devmgr's word of a death takes.
+        let mut answered = None;
+        for _ in 0..(10 * 48_000 / BLOCK) {
+            if let Err((answer, _)) = write_frames(pcm, &silence, BLOCK) {
+                answered = Some(answer);
+                break;
+            }
+        }
+        match answered {
+            Some(answer) if answer == -libc::EBADFD => {
+                say(&format!("round {round}: the stream answered EBADFD"));
+            }
+            Some(answer) => fail(&format!(
+                "round {round}: a write on the dead card answered {answer}, not EBADFD"
+            )),
+            None => fail(&format!(
+                "round {round}: ten seconds of writes after the kill all took"
+            )),
+        }
+        // SAFETY: a descriptor this program opened and uses no more.
+        let _ = unsafe { libc::close(pcm) };
+        let Some(fd) = wait_for(3_000, || {
+            let name = CString::new(PCM).ok()?;
+            // SAFETY: a NUL-terminated path that lives across the call.
+            let fd = unsafe { libc::open(name.as_ptr(), libc::O_RDWR | libc::O_CLOEXEC) };
+            (fd >= 0).then_some(fd)
+        }) else {
+            fail(&format!(
+                "round {round}: {PCM} did not open again within 30 s: errno {}",
+                errno()
+            ));
+        };
+        // SAFETY: as above.
+        let _ = unsafe { libc::close(fd) };
+        say(&format!("round {round}: card0 is back"));
     }
 
     pub(crate) fn run() {
         if cfg!(feature = "negative-control") {
             say("negative control");
         }
+        if cfg!(feature = "restart") {
+            let mut killed = Vec::new();
+            for round in 1..=2 {
+                survive_a_kill(round, &mut killed);
+            }
+        }
         let control = open("/dev/snd/controlC0", libc::O_RDWR);
         card(control);
-        let pcm = open("/dev/snd/pcmC0D0p", libc::O_RDWR);
+        let pcm = open(PCM, libc::O_RDWR);
         let (period, buffer) = configure(pcm);
         software(pcm, period, buffer);
         let answer = ioctl_none(pcm, Pcm::Prepare.request(width()));

@@ -9,7 +9,9 @@
 //! crate is written against [`Transport`], [`DevicePages`] and [`Scratch`],
 //! which the process implements over its handles, and holds everything else:
 //!
-//! * [`Driver::init`] negotiates features, reads the configuration block,
+//! * [`Driver::init`] first stops and releases every stream with no
+//!   transmit queue, since QEMU's reset leaves a dead driver's buffers
+//!   queued, then resets, negotiates features, reads the configuration block,
 //!   sets up the control and transmit queues, sets `DRIVER_OK` and asks every
 //!   stream's `PCM_INFO`; [`Driver::hello`] is what that comes to in the
 //!   core's terms;
@@ -453,6 +455,16 @@ pub enum Rings<R> {
     Queue(SplitQueue<R>),
 }
 
+impl<R: QueueMemory> Rings<R> {
+    /// The memory, out of the queue if one was built.
+    fn into_memory(self) -> R {
+        match self {
+            Self::Unused(memory) => memory,
+            Self::Queue(queue) => queue.into_memory(),
+        }
+    }
+}
+
 /// How a driver ended.
 pub enum Teardown<T, R, S> {
     /// The device reset; the memory may be unpinned.
@@ -716,11 +728,62 @@ where
         clippy::result_large_err,
         reason = "a failed bring-up hands every part back by value, as virtio-input's does"
     )]
+    pub fn init(parts: Parts<T, R, S>, options: Options) -> Result<Self, InitFailure<T, R, S>> {
+        let mut drained = Self::bring_up(parts, options, false)?;
+        drained.drain();
+        match drained.shutdown() {
+            Teardown::Released(released) => Self::bring_up(
+                Parts {
+                    transport: released.transport,
+                    control: released.control.into_memory(),
+                    tx: released.tx.into_memory(),
+                    scratch: released.scratch,
+                },
+                options,
+                true,
+            ),
+            wedged => Err(InitFailure {
+                error: InitError::Transport(TransportError::ResetTimedOut),
+                teardown: wedged,
+            }),
+        }
+    }
+
+    /// Stop and release every stream, with no transmit queue for what a
+    /// release returns to go to.
+    ///
+    /// QEMU's reset leaves the streams as they were (`virtio_snd_reset`
+    /// clears only its control commands): a driver killed while playing
+    /// leaves its buffers queued, and QEMU returns them, as it plays them or
+    /// at a release, into whatever transmit queue there is by then -- the
+    /// next driver's, as completions it never asked for. A release with no
+    /// transmit queue enabled returns them to nothing: QEMU drops a push to a
+    /// queue with no rings. A refusal is of no matter, since the device is
+    /// reset next either way, which clears the `FAILED` it sets.
+    fn drain(&mut self) {
+        for stream in 0..self.info.config.streams {
+            let _ = self.stream_command(PcmCommand::Stop, stream);
+            self.fault = None;
+            let _ = self.stream_command(PcmCommand::Release, stream);
+            self.fault = None;
+        }
+    }
+
+    /// [`Driver::init`]'s bring-up, with the transmit queue enabled only if
+    /// `transmit`: the first pass, [`Driver::drain`]'s, leaves it off.
+    #[allow(
+        clippy::result_large_err,
+        reason = "a failed bring-up hands every part back by value, as virtio-input's does"
+    )]
     #[expect(
         clippy::too_many_lines,
         reason = "one bring-up sequence, each step handing its parts back on failure"
     )]
-    pub fn init(parts: Parts<T, R, S>, options: Options) -> Result<Self, InitFailure<T, R, S>> {
+    fn bring_up(
+        parts: Parts<T, R, S>,
+        options: Options,
+        transmit: bool,
+    ) -> Result<Self, InitFailure<T, R, S>> {
         let Parts {
             mut transport,
             control,
@@ -796,8 +859,18 @@ where
             control_at,
         )
         .and_then(|control_active| {
-            activate(&mut transport, snd::TX_QUEUE, &tx_layout, tx_at)
-                .map(|tx_active| (control_active, tx_active))
+            if transmit {
+                activate(&mut transport, snd::TX_QUEUE, &tx_layout, tx_at)
+                    .map(|tx_active| (control_active, tx_active))
+            } else {
+                Ok((
+                    control_active,
+                    pci::ActiveQueue {
+                        notify_off: 0,
+                        vector: pci::NO_VECTOR,
+                    },
+                ))
+            }
         });
         let (control_active, tx_active) = match active {
             Ok(active) => active,

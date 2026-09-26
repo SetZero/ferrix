@@ -15,6 +15,9 @@ path = "src/main.rs"
 # that its check reads the samples rather than the program's shape.
 [features]
 negative-control = []
+# Kill the card's driver twice under a running stream before the second is
+# played, so `xtask test-audio` sees the card come back and play.
+restart = []
 
 [dependencies]
 libc = "0.2.189"

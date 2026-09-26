@@ -203,8 +203,13 @@ b"snd", Kind::Sound)`; 0x1059 is virtio's modern PCI id for device 25,
 `VIRTIO_ID_SOUND`. `start_sound` asks the kernel for the control channel
 with a new native call, `SOUND_CONTROL_CREATE` (0x1050, the next free number
 after `DEVICE_CLOCK`), sends `START` with blk's layout to `/lib/drivers/snd`,
-and waits for `PUBLISHED`. devmgr does not restart it, as it does not
-restart an input driver.
+and waits for `PUBLISHED`. The core is ready for devmgr to start it again
+when it dies, as it does a display driver (`docs/DEVMGR.md` §4). It claims
+the device through `crate::claim`, so a quiesce waits for the dead
+driver's task to let go. It numbers its cards lowest-free, so the card
+comes back as `C0`. A program holding the dead card gets `EBADFD` and opens
+the new one. devmgr does not restart it yet: that waits for the pin
+quarantine (§3.3's sixth quirk, `docs/BACKLOG.md`).
 
 | Type | Direction | Body | Handles |
 |---|---|---|---|
@@ -259,7 +264,7 @@ status's 8 bytes, that the status is `VIRTIO_SND_S_OK`, and that a control
 response has the length its request expects.
 
 **QEMU 9.2.4's device** (`hw/audio/virtio-snd.c`, read 2026-09-26) differs
-from what the spec lets a driver expect in five ways, each of which the
+from what the spec lets a driver expect in six ways, each of which the
 driver has to live with:
 
 * **Two streams by default, one each way** (`VIRTIO_SOUND_STREAM_DEFAULT`,
@@ -285,6 +290,26 @@ driver has to live with:
   the backend is given nothing.
 * **`latency_bytes` is the buffer's own size** (`return_tx_buffer`, line
   1121), not a latency. The core does not add it to `DELAY`.
+* **A reset leaves the streams as they were** (`virtio_snd_reset`, line
+  1344, clears only the queued control commands). A driver killed while
+  playing leaves its stream started and its buffers held, and QEMU returns
+  them as it plays them, or all at once at a `RELEASE`, into whatever
+  transmit queue there is by then: the next driver's, as completions of
+  chains it never posted, which it fails the device for. Found when devmgr
+  first restarted `snd` (2026-09-26): every restarted driver ended as
+  `Faulted` within a few milliseconds. So bring-up is two passes
+  (`Driver::init`). The first enables only the control queue, sets
+  `DRIVER_OK`, and sends `STOP` and `RELEASE` for every stream, whose
+  buffers go to a queue with no rings, where QEMU drops them
+  (`virtqueue_split_fill`). The second pass starts from a reset. QEMU also
+  writes each returned buffer's status through the mapping it took when
+  it popped the buffer, so on x86-64 those eight bytes land in the dead
+  driver's pages after the IOMMU has let them go. A driver started at once
+  is given those frames: on AArch64 a restarted `snd` died of `SIGILL` 30 ms
+  in, and on x86-64 xtask's DMA-fault check caught the writes the unit
+  faulted. Real hardware is stopped at the IOMMU. Until the kernel keeps a
+  dead driver's frames in quarantine for longer than a device can hold
+  them, devmgr does not start a sound driver again.
 
 Formats offered are S8, U8, S16, U16, S32, U32 and FLOAT, and rates from
 5512 to 384000 Hz (lines 40–61). Version 1 uses one of each.

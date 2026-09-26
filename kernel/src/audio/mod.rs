@@ -42,6 +42,7 @@ use ferrix_sndctl::message::{BUFFER_RIGHTS, MAX_BYTES, Message, Refusal, Submit}
 use ferrix_sndctl::pcm::{Effects, Stream};
 use ferrix_sndctl::session::{self, Publication, Received, Session};
 
+use crate::claim::{Claims, Numbers, StillServed};
 use crate::device::DeviceNode;
 use crate::hooks::Full;
 use crate::object::channel::{ChannelMessage, Endpoint, ReadError};
@@ -107,10 +108,13 @@ struct Start {
 }
 
 static STARTING: SpinLock<Vec<Start>> = SpinLock::new(Vec::new());
-static CLAIMED: SpinLock<Vec<Arc<DeviceNode>>> = SpinLock::new(Vec::new());
+/// The devices a driver's channel claims, which a quiesce waits out, so
+/// that devmgr can start a dead card's driver again (`crate::claim`).
+static CLAIMS: Claims = Claims::new();
 static CARDS: SpinLock<Vec<Arc<Card>>> = SpinLock::new(Vec::new());
 static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
-static NEXT_CARD: AtomicU32 = AtomicU32::new(0);
+/// The cards' numbers: a card whose driver came back is `C0` again.
+static NUMBERS: Numbers = Numbers::new(0);
 
 /// A published sound card, with its one playback stream.
 pub(crate) struct Card {
@@ -263,7 +267,27 @@ pub(crate) fn card_indices() -> Vec<u32> {
 ///
 /// [`Full`] when the item has no room for the registration.
 pub(crate) fn install() -> Result<(), Full> {
-    native::serve(NativeCall::SoundControlCreate, control_create)
+    native::serve(NativeCall::SoundControlCreate, control_create)?;
+    native::register_server(&SERVER)
+}
+
+/// What a quiesce waits out for audio.
+static SERVER: native::Server = native::Server {
+    wait_until_unserved,
+    release: None,
+};
+
+/// Wait until no sound driver's channel claims `node`, for a quiesce
+/// (`crate::claim`).
+///
+/// # Errors
+///
+/// [`StillServed`].
+fn wait_until_unserved(
+    node: &Arc<DeviceNode>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), StillServed> {
+    CLAIMS.wait_until_released(node, cancelled)
 }
 
 /// `sound_control_create`: the device's own channel, one per device, and the
@@ -285,12 +309,8 @@ fn control_create(caller: &dyn Host, registers: &[u64; 6]) -> Result<usize, Errn
 
 fn create(node: &Arc<DeviceNode>) -> Result<Arc<Endpoint>, CreateError> {
     let (kernel_end, driver_end) = Endpoint::pair().map_err(|_| CreateError::NoMemory)?;
-    {
-        let mut claimed = CLAIMED.lock();
-        if claimed.iter().any(|held| Arc::ptr_eq(held, node)) {
-            return Err(CreateError::InUse);
-        }
-        claimed.push(Arc::clone(node));
+    if !CLAIMS.claim(node, &kernel_end) {
+        return Err(CreateError::InUse);
     }
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     STARTING.lock().push(Start {
@@ -301,7 +321,7 @@ fn create(node: &Arc<DeviceNode>) -> Result<Arc<Endpoint>, CreateError> {
     });
     if sched::spawn("audio", run, id, ferrix_sched::NICE_0_WEIGHT).is_err() {
         let _ = take_start(id);
-        unclaim(node);
+        CLAIMS.release(node);
         return Err(CreateError::NoMemory);
     }
     Ok(driver_end)
@@ -311,10 +331,6 @@ fn take_start(id: usize) -> Option<Start> {
     let mut starting = STARTING.lock();
     let at = starting.iter().position(|start| start.id == id)?;
     Some(starting.remove(at))
-}
-
-fn unclaim(node: &Arc<DeviceNode>) {
-    CLAIMED.lock().retain(|held| !Arc::ptr_eq(held, node));
 }
 
 /// One card's task.
@@ -329,9 +345,12 @@ fn run(id: usize) {
         // Every request now answers `EBADFD`, as a disconnected card's do.
         card.stream.lock().disconnect(&mut Effects::default());
         card.changed.wake_all();
+        // A program still holding the old card's nodes keeps its `Card`,
+        // and a lookup of the number finds the next one.
+        NUMBERS.give_back(card.index);
         crate::console::println!("  audio    card{} is gone", card.index);
     }
-    unclaim(&start.device);
+    CLAIMS.release(&start.device);
 }
 
 fn receive(control: &Endpoint, deadline: u64) -> Option<ChannelMessage> {
@@ -398,7 +417,7 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<(Arc<Card>, Session
     let config = publication.config;
     let pages = (config.buffer_bytes() as usize).div_ceil(PAGE_BYTES) as u64;
     let buffer = Vmo::new_anonymous(pages).map_err(|_| Refusal::Hello)?;
-    let index = NEXT_CARD.fetch_add(1, Ordering::Relaxed);
+    let index = NUMBERS.take().ok_or(Refusal::Hello)?;
     let location = start.location.map_or(0, Location::raw);
     let card = Arc::new(Card {
         index,
@@ -419,7 +438,11 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<(Arc<Card>, Session
     if let Some(location) = start.location {
         crate::devmgr::published(location);
     }
-    send_ready(&start.control, &publication, index, buffer)?;
+    if let Err(refusal) = send_ready(&start.control, &publication, index, buffer) {
+        CARDS.lock().retain(|held| !Arc::ptr_eq(held, &card));
+        NUMBERS.give_back(index);
+        return Err(refusal);
+    }
     crate::console::println!(
         "  audio    card{index} virtio-snd: playback {} Hz, {} channels, S16_LE{}",
         config.rate,

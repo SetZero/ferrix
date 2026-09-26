@@ -6,8 +6,10 @@
 //! control requests answered as the doorbell rings; transmit buffers held
 //! until the backend has consumed all of each ([`Device::consume`]), then
 //! completed with status OK and the buffer's own size as `latency_bytes`;
-//! `PCM_RELEASE` completing every buffer it holds before it answers; no
-//! events at all. [`Misbehave`] is what a device might do instead. Every way
+//! `PCM_RELEASE` completing every buffer it holds before it answers; a
+//! reset that leaves the streams and the buffers they hold as they were
+//! (`virtio_snd_reset` clears only the control commands), and a completion
+//! to a queue with no rings dropped; no events at all. [`Misbehave`] is what a device might do instead. Every way
 //! the driver breaks the protocol goes to `protocol_errors`.
 
 use core::cell::RefCell;
@@ -298,7 +300,8 @@ impl Device {
                 ..Queue::default()
             };
         }
-        self.held.clear();
+        // As QEMU's: the streams, started or not, and every buffer they
+        // hold, outlive it.
     }
 
     fn set_register(&mut self, offset: u32, value: u32) {
@@ -573,8 +576,10 @@ impl Device {
         bytes.extend_from_slice(&size.to_le_bytes());
         self.write_bytes(held.status, &bytes);
         let written = self.misbehave.written.unwrap_or(8);
-        let ring = self.queues[2].ring.as_mut().expect("a ring");
-        ring.complete(held.head, written).expect("completes");
+        // QEMU's `virtqueue_split_fill` drops a push to a queue with no rings.
+        if let Some(ring) = self.queues[2].ring.as_mut() {
+            ring.complete(held.head, written).expect("completes");
+        }
     }
 
     /// The backend consumes up to `buffers` whole buffers of started streams:

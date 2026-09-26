@@ -17,6 +17,12 @@
 //! frames still reach the file, so the control does not fail by the guest
 //! falling over; the check must fail, and at exactly the first frame of
 //! period 11.
+//!
+//! **The restart.** A third boot, with tone built with `restart`: the
+//! `snd` driver killed twice under a running stream of silence, the stream
+//! answering `EBADFD` each time, devmgr starting the driver again
+//! (`docs/DEVMGR.md` §4), and then the same second played on the third
+//! driver's card and held to the same check.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -26,8 +32,10 @@ use crate::paths::{self, Arch};
 use crate::qemu::Watching;
 use crate::{Error, Result};
 
-/// What tone prints once the stream is prepared.
-const READY: &str = "tone: ready";
+/// What every line tone prints begins with: the boot is watched from its
+/// first, so a failure in the restart's rounds, before the stream it plays
+/// is prepared, is reported in tone's own words.
+const SPOKE: &str = "tone: ";
 /// What it prints once the drain is over.
 const DONE: &str = "tone: done";
 /// What it prints when anything was refused.
@@ -38,14 +46,34 @@ const FRAMES: u32 = 48_000;
 /// Frames in a period, which the negative control moves one of.
 const PERIOD: u32 = 960;
 
-/// How long to wait for the second to play and drain, in an emulated guest.
-const PATIENCE: Duration = Duration::from_secs(60);
+/// How long to wait for the second to play and drain, in an emulated guest,
+/// after two restarts of the driver for the restart boot.
+const PATIENCE: Duration = Duration::from_secs(120);
 
-/// Build `userland/compositor/tone` for `arch`, with the negative control or without.
-fn build_tone(arch: Arch, negative: bool) -> Result<PathBuf> {
+/// Which `userland/compositor/tone` is built.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Flavour {
+    Plain,
+    /// `negative-control`: period 10 twice, period 11 never.
+    Negative,
+    /// `restart`: the driver killed twice before the second is played.
+    Restart,
+}
+
+/// Build `userland/compositor/tone` for `arch`, in `flavour`.
+fn build_tone(arch: Arch, flavour: Flavour) -> Result<PathBuf> {
     let target = crate::display::target(arch)
         .ok_or_else(|| Error::new(format!("{arch} has no user-space target for tone")))?;
-    let flavour = if negative { "negative" } else { "plain" };
+    let feature = match flavour {
+        Flavour::Plain => None,
+        Flavour::Negative => Some("negative-control"),
+        Flavour::Restart => Some("restart"),
+    };
+    let flavour = match flavour {
+        Flavour::Plain => "plain",
+        Flavour::Negative => "negative",
+        Flavour::Restart => "restart",
+    };
     let target_dir = paths::target_dir()
         .join("compositor")
         .join(format!("tone-{flavour}"));
@@ -65,8 +93,8 @@ fn build_tone(arch: Arch, negative: bool) -> Result<PathBuf> {
     ])
     .env("CARGO_TARGET_DIR", &target_dir)
     .output(&program);
-    if negative {
-        build = build.args(["--features", "negative-control"]);
+    if let Some(feature) = feature {
+        build = build.args(["--features", feature]);
     }
     build.run()?;
     Ok(program)
@@ -96,7 +124,7 @@ fn boot_and_play(arch: Arch, program: &Path, wav: &Path, args: &Args) -> Result<
         lines.extend_from_slice(watching.after());
         Ok(())
     };
-    let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, READY, hook)?;
+    let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, SPOKE, hook)?;
     Ok(lines)
 }
 
@@ -161,32 +189,12 @@ fn describe(played: &[(u16, u16)], at: u32) -> String {
 pub(crate) fn test_audio(args: &Args) -> Result<()> {
     for arch in args.arches()? {
         let wav = paths::build_dir(arch).join("audio.wav");
-        let plain = build_tone(arch, false)?;
+        let plain = build_tone(arch, Flavour::Plain)?;
         let lines = boot_and_play(arch, &plain, &wav, args)?;
-        if let Some(line) = lines.iter().find(|line| line.contains(FAILED)) {
-            return Err(Error::new(format!("{arch}: {}", line.trim())));
-        }
-        if !lines.iter().any(|line| line.contains(DONE)) {
-            return Err(Error::new(format!("{arch}: tone never finished its drain")));
-        }
-        for line in lines.iter().filter(|line| line.contains("tone: ")) {
-            println!("  {arch}: {}", line.trim());
-        }
-        let bytes = std::fs::read(&wav)
-            .map_err(|error| Error::new(format!("{}: {error}", wav.display())))?;
-        let played = frames(&bytes)?;
-        if let Some(at) = first_wrong(&played) {
-            return Err(Error::new(format!(
-                "{arch}: the file QEMU wrote parts from the counter at frame {at} (it holds {}), \
-                 {} frames in all; {}",
-                describe(&played, at),
-                played.len(),
-                wav.display()
-            )));
-        }
+        played_whole(arch, &lines, &wav)?;
         println!("  {arch}: all {FRAMES} frames written reached the device whole and in order");
 
-        let negative = build_tone(arch, true)?;
+        let negative = build_tone(arch, Flavour::Negative)?;
         let lines = boot_and_play(arch, &negative, &wav, args)?;
         if !lines.iter().any(|line| line.contains(DONE)) {
             return Err(Error::new(format!(
@@ -212,6 +220,61 @@ pub(crate) fn test_audio(args: &Args) -> Result<()> {
                 )));
             }
         }
+
+        // Until devmgr starts a sound driver again, which waits for the pin
+        // quarantine (`docs/BACKLOG.md`), the restart boot is run only when
+        // asked for: without the quarantine a restarted driver is handed
+        // pages QEMU still writes.
+        if args.boot.as_deref() != Some("restart") {
+            println!(
+                "  {arch}: the restart boot is run with `--boot restart` only, until devmgr \
+                 starts a sound driver again"
+            );
+            continue;
+        }
+        let restart = build_tone(arch, Flavour::Restart)?;
+        let lines = boot_and_play(arch, &restart, &wav, args)?;
+        played_whole(arch, &lines, &wav)?;
+        let restarts = lines.iter().filter(|line| line.contains(RESTARTED)).count();
+        if restarts < 2 {
+            return Err(Error::new(format!(
+                "{arch}: devmgr said `{RESTARTED}` {restarts} times, not 2"
+            )));
+        }
+        println!(
+            "  {arch}: the sound driver was killed twice under a running stream, the stream \
+             answered EBADFD each time, devmgr started the driver again, and the third one's \
+             card played all {FRAMES} frames whole"
+        );
+    }
+    Ok(())
+}
+
+/// What devmgr's word of a driver started again says, printed by the kernel.
+const RESTARTED: &str = "was started again and published";
+
+/// Require that tone finished and that the file holds the counter whole.
+fn played_whole(arch: Arch, lines: &[String], wav: &Path) -> Result<()> {
+    if let Some(line) = lines.iter().find(|line| line.contains(FAILED)) {
+        return Err(Error::new(format!("{arch}: {}", line.trim())));
+    }
+    if !lines.iter().any(|line| line.contains(DONE)) {
+        return Err(Error::new(format!("{arch}: tone never finished its drain")));
+    }
+    for line in lines.iter().filter(|line| line.contains("tone: ")) {
+        println!("  {arch}: {}", line.trim());
+    }
+    let bytes =
+        std::fs::read(wav).map_err(|error| Error::new(format!("{}: {error}", wav.display())))?;
+    let played = frames(&bytes)?;
+    if let Some(at) = first_wrong(&played) {
+        return Err(Error::new(format!(
+            "{arch}: the file QEMU wrote parts from the counter at frame {at} (it holds {}), \
+             {} frames in all; {}",
+            describe(&played, at),
+            played.len(),
+            wav.display()
+        )));
     }
     Ok(())
 }
