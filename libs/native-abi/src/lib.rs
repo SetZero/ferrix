@@ -45,6 +45,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bootstrap;
+pub mod directory;
 pub mod handle;
 pub mod nr;
 pub mod rights;
