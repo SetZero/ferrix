@@ -228,7 +228,13 @@ shell says it does, and the program reports it.
   since hyprix refuses an `xdg_popup` whose parent comes from
   `zwlr_layer_surface_v1.get_popup` -- a gap in the compositor, which the
   waybar stream is fixing; the test for it is `#[ignore]`d with that reason.
-* `userland/compositor/hyprlang` and `userland/compositor/image` are written and gated on
-  `clients-base`, and land next; `userland/compositor/text` is being written there.
+* **`userland/compositor/hyprlang` and `userland/compositor/image` are on `main`**
+  (2026-09-26). hyprlang's tests pin each place config.cpp behaves
+  unexpectedly (a top-level name no keyword takes is accepted silently; a
+  scoped keyword written out in full keeps its full name; a shorthand line
+  and a following block are one instance). image renders all fifteen of the
+  user's waybar icons on nazuna (an ignored probe test); JPEG decodes with
+  zune-jpeg's SIMD off, so it forbids unsafe and is slower than it could be.
+* `userland/compositor/text` is written on `clients-base` and lands next.
 * Not yet: the xtask flag that carries the user's dotfiles and fonts, and the
   boot check of a toolkit client drawing text in the user's font.

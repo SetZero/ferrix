@@ -1,0 +1,36 @@
+[package]
+name = "compositor-image"
+description = "Pictures for the desktop clients: PNG, JPEG and SVG decoded into tiny-skia pixmaps"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "compositor_image"
+path = "src/lib.rs"
+
+[dependencies]
+# SVG: usvg parses the file into a tree (paths, shapes, gradients, patterns,
+# clips, masks, filters, transforms, CSS) and resvg renders the tree with
+# tiny-skia -- 0.48 is built against tiny-skia 0.12, the version the
+# compositor pins, so there is one rasteriser in the process. A subset
+# rasteriser would do the user's own waybar icons (paths, a circle, linear
+# gradients in both unit systems); it would not do the icon themes fuzzel
+# draws from, which are anything Inkscape writes. Default features off:
+# `text` (fontdb, harfrust, skrifa) and `system-fonts` are not wanted -- an
+# icon with text in it is rare and a launcher that scanned the fonts twice
+# would start slowly -- and `raster-images` is PNG/JPEG inside an SVG, which
+# icon themes do not use. Pure Rust; see the SOUP register for the crates it
+# brings (roxmltree, svgtypes, kurbo, simplecss, strict-num and a few more).
+resvg = { version = "0.48.1", default-features = false }
+# `png-format` is tiny-skia's own PNG decoder (the `png` crate), which is
+# what a PNG icon and hyprlock's `image { path = }` are read with.
+tiny-skia = { version = "=0.12.0", default-features = false, features = ["std", "simd", "png-format"] }
+# JPEG, which hyprlock's backgrounds may well be (hyprgraphics reads it with
+# libjpeg-turbo). Pure Rust, one dependency (zune-core).
+zune-jpeg = { version = "0.5", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true
