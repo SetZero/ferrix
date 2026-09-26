@@ -18,6 +18,13 @@
 //! It kills the restarted driver a second time and requires the same again,
 //! so a restart is shown to be repeatable rather than a one-off.
 //!
+//! The driver it kills is looked up afresh each round, and must be the one
+//! `gpu` process it has not killed already: a driver killed in round one may
+//! still be listed in `/proc` when round two looks, beside the one that
+//! replaced it, and procfs says `S` for both. The kill itself checks the pid
+//! is still a `gpu` in the same line, and the gate fails naming the pid if it
+//! is not, rather than kill whatever has the number by then.
+//!
 //! x86-64 only, for the reason `test-jobs` is: `kill` and `cat` are uutils',
 //! built for x86-64 alone (`docs/UUTILS.md` D3).
 
@@ -38,9 +45,23 @@ const SETTLE: Duration = Duration::from_secs(3);
 /// middle, so the echo of the typed line never matches it.
 const PID_TAG: &str = "restart-gate-pid=";
 
-/// The line that finds the driver: every process whose `comm` is `gpu`.
+/// What the pid search prints once it has looked at every process, so the
+/// gate reads the whole list and not only its first line.
+const LISTED: &str = "restart-gate-listed";
+
+/// The line that finds the driver: every process whose `comm` is `gpu`,
+/// then [`LISTED`].
 const FIND: &[u8] = b"for p in /proc/[0-9]*; do read n < $p/comm; \
-    [ \"$n\" = gpu ] && echo restart-gate-'pid='${p#/proc/}; done\n";
+    [ \"$n\" = gpu ] && echo restart-gate-'pid='${p#/proc/}; done; \
+    echo restart-gate-'listed'\n";
+
+/// What the kill line prints when it killed the pid it was given, which it
+/// does only if that pid is still a `gpu` process.
+const KILLED_TAG: &str = "restart-gate-killed=";
+
+/// What the kill line prints when the pid was not a `gpu` process by then,
+/// or the kill was refused, and nothing was killed.
+const SPARED_TAG: &str = "restart-gate-spared=";
 
 /// What the kernel prints for devmgr's DIED.
 const DIED: &str = "devmgr   the driver of";
@@ -129,8 +150,9 @@ pub(crate) fn test_restart(args: &Args) -> Result<()> {
                 failures.push(failure);
                 return Ok(());
             }
+            let mut killed = Vec::new();
             for round in 1..=2 {
-                if let Err(failure) = kill_and_expect_back(watching, round) {
+                if let Err(failure) = kill_and_expect_back(watching, round, &mut killed) {
                     failures.push(failure);
                     break;
                 }
@@ -180,28 +202,52 @@ fn hold_the_card(watching: &mut qemu::Watching<'_>) -> std::result::Result<(), S
 }
 
 /// One round: find the driver, kill it, and require DIED, the restart, the
-/// card again and a live shell, in that order.
+/// card again and a live shell, in that order. `killed` is the pids earlier
+/// rounds killed, which this one adds to.
 fn kill_and_expect_back(
     watching: &mut qemu::Watching<'_>,
     round: u32,
+    killed: &mut Vec<u32>,
 ) -> std::result::Result<(), String> {
     let io = |error: Error| format!("round {round}: {error}");
     let before = watching.after().len();
     watching.type_in(FIND).map_err(io)?;
-    let found = watching
+    let listed = watching
         .read_more(Instant::now() + PATIENCE, |lines| {
-            pid_in(lines.get(before..).unwrap_or_default()).is_some()
+            listing_ended(lines.get(before..).unwrap_or_default())
         })
         .map_err(io)?;
-    let pid = found
-        .then(|| pid_in(watching.after().get(before..).unwrap_or_default()))
-        .flatten()
-        .ok_or_else(|| format!("round {round}: no process named gpu in /proc"))?;
+    if !listed {
+        return Err(format!(
+            "round {round}: the search for the gpu driver never finished"
+        ));
+    }
+    let found = pids_in(watching.after().get(before..).unwrap_or_default());
+    let pid = the_driver(&found, killed).map_err(|why| format!("round {round}: {why}"))?;
 
+    // Checked again in the line that kills, so what is killed is the gpu
+    // driver the list named or nothing.
     let before = watching.after().len();
-    watching
-        .type_in(format!("kill -9 {pid}\n").as_bytes())
+    watching.type_in(&kill_line(pid)).map_err(io)?;
+    let _ = watching
+        .read_more(Instant::now() + PATIENCE, |lines| {
+            kill_answer(lines.get(before..).unwrap_or_default(), pid).is_some()
+        })
         .map_err(io)?;
+    match kill_answer(watching.after().get(before..).unwrap_or_default(), pid) {
+        Some(true) => killed.push(pid),
+        Some(false) => {
+            return Err(format!(
+                "round {round}: pid {pid} was no longer a gpu process when the gate came to \
+                 kill it, so nothing was killed"
+            ));
+        }
+        None => {
+            return Err(format!(
+                "round {round}: the line that kills pid {pid} never said whether it did"
+            ));
+        }
+    }
     let wants = [DIED, RESTARTED, PUBLISHED];
     let back = watching
         .read_more(Instant::now() + PATIENCE, |lines| {
@@ -245,12 +291,73 @@ fn panicked(lines: &[String]) -> bool {
     lines.iter().any(|line| line.contains(qemu::PANIC_MARKER))
 }
 
-/// The first pid the search printed.
-fn pid_in(lines: &[String]) -> Option<u32> {
+/// The number after `tag` in `line`, if the tag is there.
+fn number_after(line: &str, tag: &str) -> Option<u32> {
+    let (_, rest) = line.split_once(tag)?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
+/// Whether the search has printed [`LISTED`]: its end, and not the echo of
+/// the typed line, which has a quote in the middle of the tag.
+fn listing_ended(lines: &[String]) -> bool {
+    lines.iter().any(|line| line.contains(LISTED))
+}
+
+/// Every pid the search printed, in order, up to its end.
+fn pids_in(lines: &[String]) -> Vec<u32> {
+    lines
+        .iter()
+        .take_while(|line| !line.contains(LISTED))
+        .filter_map(|line| number_after(line, PID_TAG))
+        .collect()
+}
+
+/// The driver to kill: the one `gpu` process listed that no earlier round
+/// killed. A killed driver may still be listed beside the one that replaced
+/// it; anything else -- none, or two the gate has not killed -- is a
+/// failure, named, rather than a guess.
+fn the_driver(found: &[u32], killed: &[u32]) -> std::result::Result<u32, String> {
+    let fresh: Vec<u32> = found
+        .iter()
+        .copied()
+        .filter(|pid| !killed.contains(pid))
+        .collect();
+    match fresh.as_slice() {
+        [pid] => Ok(*pid),
+        [] if found.is_empty() => Err("no process named gpu in /proc".to_owned()),
+        [] => Err(format!(
+            "the only gpu processes in /proc, {found:?}, are ones the gate already killed"
+        )),
+        more => Err(format!(
+            "more than one gpu process the gate has not killed, {more:?}: it will not guess \
+             which is the driver"
+        )),
+    }
+}
+
+/// The line that kills `pid`, if it is still a `gpu` process when the shell
+/// runs the line, and says which it did. Its tags have a quote in the middle,
+/// as [`FIND`]'s has.
+fn kill_line(pid: u32) -> Vec<u8> {
+    format!(
+        "if read n < /proc/{pid}/comm && [ \"$n\" = gpu ] && kill -9 {pid}; \
+         then echo restart-gate-'killed='{pid}; else echo restart-gate-'spared='{pid}; fi\n"
+    )
+    .into_bytes()
+}
+
+/// What the kill line said about `pid`: `Some(true)` killed, `Some(false)`
+/// spared, `None` nothing yet.
+fn kill_answer(lines: &[String], pid: u32) -> Option<bool> {
     lines.iter().find_map(|line| {
-        let (_, rest) = line.split_once(PID_TAG)?;
-        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-        digits.parse().ok()
+        if number_after(line, KILLED_TAG) == Some(pid) {
+            Some(true)
+        } else if number_after(line, SPARED_TAG) == Some(pid) {
+            Some(false)
+        } else {
+            None
+        }
     })
 }
 
@@ -270,23 +377,65 @@ fn came_back(lines: &[String]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{PID_TAG, came_back, pid_in};
+    use super::{
+        KILLED_TAG, LISTED, PID_TAG, SPARED_TAG, came_back, kill_answer, kill_line, listing_ended,
+        pids_in, the_driver,
+    };
 
     fn lines(text: &[&str]) -> Vec<String> {
         text.iter().map(|line| (*line).to_owned()).collect()
     }
 
     #[test]
-    fn the_typed_line_is_not_a_pid() {
-        // The console echoes what was typed; its tag is split by a quote.
+    fn the_typed_lines_are_not_answers() {
+        // The console echoes what was typed; every tag is split by a quote.
         let typed = String::from_utf8_lossy(super::FIND).into_owned();
         assert!(!typed.contains(PID_TAG));
-        assert_eq!(pid_in(&lines(&[&typed])), None);
+        assert!(!typed.contains(LISTED));
+        assert!(!listing_ended(&lines(&[&typed])));
+        let kill = String::from_utf8_lossy(&kill_line(273)).into_owned();
+        assert!(!kill.contains(KILLED_TAG));
+        assert!(!kill.contains(SPARED_TAG));
+        assert_eq!(kill_answer(&lines(&[&kill]), 273), None);
     }
 
     #[test]
-    fn a_printed_pid_is_found() {
-        assert_eq!(pid_in(&lines(&["x", "restart-gate-pid=17"])), Some(17));
+    fn every_printed_pid_is_found() {
+        let printed = lines(&[
+            "x",
+            "restart-gate-pid=222",
+            "restart-gate-pid=273",
+            "restart-gate-listed",
+            "restart-gate-pid=9",
+        ]);
+        assert!(listing_ended(&printed));
+        assert_eq!(pids_in(&printed), [222, 273]);
+    }
+
+    #[test]
+    fn a_driver_killed_already_is_not_killed_again() {
+        // Round two of the run that killed 222 twice: 222 was still listed,
+        // first, beside the 273 that replaced it.
+        assert_eq!(the_driver(&[222, 273], &[222]), Ok(273));
+        assert_eq!(the_driver(&[273], &[222]), Ok(273));
+    }
+
+    #[test]
+    fn no_driver_or_two_is_a_failure_not_a_guess() {
+        assert!(the_driver(&[], &[]).is_err());
+        assert!(the_driver(&[222], &[222]).is_err());
+        assert!(the_driver(&[222, 273], &[]).is_err());
+    }
+
+    #[test]
+    fn the_kill_line_says_which_pid_it_killed_or_spared() {
+        let killed = lines(&["restart-gate-killed=273"]);
+        assert_eq!(kill_answer(&killed, 273), Some(true));
+        assert_eq!(kill_answer(&killed, 27), None);
+        assert_eq!(
+            kill_answer(&lines(&["restart-gate-spared=273"]), 273),
+            Some(false)
+        );
     }
 
     #[test]
