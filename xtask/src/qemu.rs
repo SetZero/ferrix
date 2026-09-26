@@ -1148,12 +1148,20 @@ fn accelerator_arguments(accelerator: &str) -> Result<Vec<String>> {
 /// AMD's automatic IBRS -- and passes on whichever the host has, warning about
 /// the rest. Not under TCG, which emulates no speculation to control and
 /// would warn about every one. `docs/certification/SPECULATION.md`.
+///
+/// And under KVM an invariant TSC, which the host's is and `qemu64` does not
+/// say: without the bit the kernel's clock is the HPET
+/// (`kernel/src/arch/x86_64/clock.rs`), and every reading of an emulated HPET
+/// is an exit to QEMU. A browser asking the time six thousand times a second,
+/// and the scheduler asking at every switch, spent processors on nothing
+/// else. Only KVM is asked: TCG has no invariant TSC to give and says so.
 fn x86_cpu(accelerator: &str) -> String {
     let base = "qemu64,+pdpe1gb,+smep,+smap,+rdrand,+rdseed";
     if accelerator == "tcg" {
         return base.to_owned();
     }
-    format!("{base},+spec-ctrl,+stibp,+ssbd,+arch-capabilities,+auto-ibrs")
+    let clock = if accelerator == "kvm" { ",+invtsc" } else { "" };
+    format!("{base},+spec-ctrl,+stibp,+ssbd,+arch-capabilities,+auto-ibrs{clock}")
 }
 
 /// Which CPU model the `virt` machine emulates for an Arm architecture.
@@ -1249,8 +1257,8 @@ fn qemu_command(
                 // keep ring 0 out of user pages, so emulate a CPU that has them.
                 // RDRAND and RDSEED too, which the kernel seeds its random
                 // generator from beside firmware's bytes, so that path runs.
-                // Under a hypervisor, the speculation controls as well; see
-                // `x86_cpu`.
+                // Under a hypervisor, the speculation controls as well, and
+                // under KVM an invariant TSC; see `x86_cpu`.
                 "-cpu",
                 &x86_cpu(&accelerator),
                 // A controlled way for the guest to end the test: writing 0x10
