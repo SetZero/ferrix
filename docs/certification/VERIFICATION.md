@@ -55,7 +55,9 @@ reclaim   84 MiB from the loader and ACPI, 434 free; arena 34 live, 708 KiB
 Counted quantities, not assertions of success. For the Security Target's
 objectives this is directly usable: the `w^x` and `sealed` lines are O.WXN
 demonstrated on every run, the second over the direct map's alias of the text
-that the first cannot see (F-34), and the `handles` line is O.CAPABILITY's refusals exercised.
+that the first cannot see (F-34), the `handles` line is O.CAPABILITY's refusals exercised,
+and the `quota` line, since 2026-09-26, is O.QUOTA's: each job limit refused at
+exactly its value while a sibling job goes on (F-35).
 
 The largest bodies of in-kernel test code sit against the item: `syscall/
 check.rs` at 9,537 lines, `object/check.rs` at 3,318, `user/check.rs` at 1,263,

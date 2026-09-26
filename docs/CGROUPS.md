@@ -322,7 +322,7 @@ Order: G1, G2, G3, G4 (init's C1 to C5), then G5 and P1, then M1 and M2 (the
 stage exit's memory limit), then F1, S1, S2 and B1. Namespaces and seccomp
 follow, as `docs/BACKLOG.md` decided.
 
-### 7.1 Where it stands (2026-09-24)
+### 7.1 Where it stands (2026-09-24; the controllers 2026-09-26)
 
 | | State | On `main` as |
 |---|---|---|
@@ -331,13 +331,36 @@ follow, as `docs/BACKLOG.md` decided.
 | G3 | done, 2026-09-24 | 02bfbe69 |
 | G4 | done, 2026-09-24 | 410aef15 |
 | G5 | done, 2026-09-24 | "Wait for a cgroup to empty through a native job handle" |
-| P1, M1, M2, F1, S1, S2, B1 | not started | |
+| P1 | done, 2026-09-26, with the certification's F-35 | "Charge each job for its tasks, memory, objects and processor share"; "Show the job quotas as cgroup2's cpu, memory and pids controllers" |
+| M1 | charging, `memory.max`, `memory.current` and `memory.events` done, 2026-09-26; `memory.stat` and the scoped OOM kill not | the same two |
+| S1 | done differently, 2026-09-26: a weight per job applied to each task's, not a group entity | the same two |
+| M2, F1, S2, B1 | not started | |
 
-58 of the cgroup half's 85 points are left, all of them controllers, and
-none stands before anything of `docs/INIT.md`: G1 to G5 met C1 to C5, C7
-and C8. Init's L5 writes `TasksMax=` and `MemoryMax=` to the `pids` and
-`memory` files P1 and M1 make, and until they land it has nothing to write
-them to.
+What is left of the controllers is M1's `memory.stat` and scoped OOM kill,
+M2's reclaim, F1, S2 and B1. Init's L5 writes `TasksMax=` and `MemoryMax=`
+to `pids.max` and `memory.max`, which exist since 2026-09-26.
+
+**P1, M1's charging and S1, as built (2026-09-26).** The certification's
+work order W-13 built them as the job quotas the Security Target claims
+(`docs/certification/IMPLEMENTATION.md`, "As built", has the design and
+where it moved from this document's). A job's counters are a slot in
+`kernel/src/object/quota.rs`, charged hierarchically; cgroupfs's
+`pids.max`, `pids.current`, `pids.events`, `memory.max`, `memory.current`,
+`memory.events` and `cpu.weight` read and write that slot, and a native job
+handle reaches the same through `job_set_limit` and `job_get_quota`.
+Differences from §6 and §7: tasks are charged in the core's
+`Process::new` and a thread's id allocation, and given back at reap; memory
+is charged per frame at allocation to the running task's job, page tables
+included, and the frame record keeps the slot, so every free uncharges; a
+charge past `memory.max` is refused like running out of memory, since
+there is no reclaim or scoped OOM kill yet; and `cpu.weight` scales each
+task's weight by its job's weight over its job's load instead of adding a
+group entity to `libs/sched` -- Linux's own per-processor approximation of
+a group's share, one task alone in its job keeping 50.0% of a processor
+against eight in another at boot. `BUILT` is `cpu memory pids`, so the
+no-internal-process rule is reachable, and its host tests have a boot path.
+The `cgroups` boot line drives the files, and `test-vfs` command 19 forks
+until `pids.max` 10 refuses.
 
 **G3, as built (3 points).** §4 says what it is. The `cgroups` boot check
 (`kernel/src/fs/cgroupfs/events_check.rs`) gives a cgroup two members, reads
@@ -391,7 +414,8 @@ there.
 
 **What the next session does first, and where each starts.**
 
-* **P1, `pids`** (3 points). `BUILT` in `kernel/src/fs/cgroupfs.rs` gains
+* **P1, `pids`** (3 points), done as written below but for the charge's
+  place, which is the core's `Process::new`. `BUILT` in `kernel/src/fs/cgroupfs.rs` gains
   `pids`, and `libs/cgroupfs`'s `files` a table of controller files beside
   the base ones (`pids.max`, `pids.current`, `pids.events`), each listed
   only where the parent's `subtree_control` enables it. The charge is per
@@ -410,7 +434,9 @@ there.
   with `count_in_checked`, failing the fork (`EBUSY`) when the target
   turned internal after `cgroup_target` looked.
 * **M1, `memory` charging** (13 points), after P1: §6, and §8's warning
-  about the seven allocation sites.
+  about the seven allocation sites. Charging, `memory.max`,
+  `memory.current` and `memory.events` done 2026-09-26; `memory.stat`
+  and the scoped OOM kill are what is left of it.
 
 **How a landing was gated today, and what to keep.** The customer's rule
 since 2026-09-23: `cargo xtask check` plus only the rows the change

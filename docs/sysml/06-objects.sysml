@@ -131,7 +131,38 @@ package FerrixObjects {
              * a unit together with anything it spawned. */
         part processes : Process[0..*];
         part children : Job[0..*];
+        part quota : JobQuota[0..1] {
+            doc /* None for the tree's root, which nothing is charged to. */
+        }
         action kill;
+        action setLimit;
+        action getQuota;
+    }
+
+    #implemented part def JobQuota {
+        @stage { number = 13; }
+        doc /* What a job and every job beneath it may hold at once, and hold
+             * now: the Security Target's FRU_RSA.1 (certification finding
+             * F-35, work order W-13). kernel/src/object/quota.rs: a slot in a
+             * table of atomics, named by a u32 so a frame freed under any
+             * lock finds its charge from the frame record alone. A charge
+             * walks the slots from the job up with a compare-and-swap at
+             * each, so a limit anywhere above refuses and no use passes a
+             * limit even briefly. Charged: the job's tasks (fork, clone,
+             * process_create; uncharged at reap), its programs' frames and
+             * page tables (at allocation, to the running task's job; at every
+             * free), and the native objects they make (a token in each). The
+             * processor is a weight, not a limit: each task runs at its own
+             * weight times its job's weight over its job's load. cgroupfs's
+             * pids, memory and cpu files are a view of it. Not charged: the
+             * heap the Linux personality allocates for a job (F-37). */
+        attribute tasksUsed : Natural;
+        attribute tasksLimit : Natural[0..1];
+        attribute memoryPagesUsed : Natural;
+        attribute memoryPagesLimit : Natural[0..1];
+        attribute objectsUsed : Natural;
+        attribute objectsLimit : Natural[0..1];
+        attribute cpuWeight : Natural;
     }
 
     #implemented part def HandleTable {
@@ -283,7 +314,8 @@ package FerrixObjects {
              * table is asked, with the numbers in libs/native-abi/src/nr.rs
              * and typed wrappers in libs/native. Beyond that first list:
              * waits on one object or asynchronously through a port, VMO
-             * pins for a device's DMA, process create and start, device
+             * pins for a device's DMA, a job's quota set and read, process
+             * create and start, device
              * info and quiesce, and the calls that make a block or net ring
              * and a display, input or render control channel. Left: an EXECUTE
              * right on a VMO handle, sub-page apertures, and the process
@@ -320,6 +352,8 @@ package FerrixObjects {
         action vmoPinAddresses;
         action jobCreate;
         action jobKill;
+        action jobSetLimit;
+        action jobGetQuota;
         action processCreate;
         action processStart;
         action interruptCreate;

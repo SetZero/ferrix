@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-16 findings are open and 25 are closed, of 41. F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
+16 findings are open and 26 are closed, of 42. F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 2 | 6 | 7 | 0 | 1 |
+| Open | 2 | 5 | 8 | 0 | 1 |
 
 Blocking: F-27 and F-28 — independent assessment and a quality management
 system. Both need an organisation; neither is a defect in the code.
@@ -801,38 +801,78 @@ Profile can be claimed — but an evaluator would press on whether a TOE that
 cannot record a security-relevant event can claim EAL5.
 
 ### F-35 — the job quotas FRU_RSA.1 claims are not built
-**Major.** Opened 2026-09-26. The Security Target claims `FRU_RSA.1`: the TSF
-enforces maximum quotas of physical memory, kernel objects and CPU time that a
-job can use simultaneously, for O.QUOTA against T.EXHAUST, and its summary
-specification names `kernel/src/object/job.rs` as the implementation and
-`object/check.rs` as the evidence. The vulnerability analysis credited "job
-quotas" with resisting its first two T.EXHAUST paths. Read against the code,
-none of the three quotas exists:
+**Closed 2026-09-26** by work order W-13 ([IMPLEMENTATION.md](IMPLEMENTATION.md)),
+with `FRU_RSA.1` refined in the Security Target to what the quotas bound.
+What they leave out is F-37.
 
-* **Memory.** Nothing is charged for the frames or the heap a job holds.
-  cgroupfs builds no controller (`BUILT` in `kernel/src/fs/cgroupfs.rs` is
-  empty); `memory` charging is landing M1 of `docs/CGROUPS.md`.
-  `vm.overcommit_memory` reads 1, and no rlimit on memory is enforced.
-* **Kernel objects.** `object/job.rs` limits the job tree only:
-  `cgroup.max.depth` and `cgroup.max.descendants`, when a parent sets them.
-  A process holds at most 4,096 handles (`HANDLE_LIMIT`) and `RLIMIT_NOFILE`
-  descriptors, but nothing limits the processes a job makes except the global
-  `PID_MAX`, so a job's tables are as many as it makes processes. `pids` is P1.
-* **CPU.** EEVDF shares per task; there is no group entity, `cpu.weight` or
-  `cpu.max` (S1, S2).
+*Was:* **Major.** The Security Target claimed `FRU_RSA.1`: the TSF enforces
+maximum quotas of physical memory, kernel objects and CPU time that a job can
+use simultaneously, for O.QUOTA against T.EXHAUST, and the vulnerability
+analysis credited "job quotas" with resisting its first two T.EXHAUST paths.
+None of the three existed. Nothing charged a job for frames or heap, cgroupfs
+built no controller, `object/job.rs` limited only the job tree's depth and
+descendants, nothing limited the processes a job made but the global
+`PID_MAX`, and EEVDF shared the processor per task, so a job with *n*
+runnable tasks took *n* shares. T.EXHAUST was *not resisted* but for CPU per
+task.
 
-What does hold is F-23's: running out is an error the item reports, not a
-stop. The denial of service to other jobs is not bounded, and the analysis
-now says so: T.EXHAUST is *not resisted* but for CPU per task, and V-05 covers
-memory, objects and CPU as well as the heap. The safety manual's FM-7 already
-credited only the job limits on depth and descendants.
+*Now:* every job below the tree's root has a quota slot in a table of atomics
+(`kernel/src/object/quota.rs`), charged hierarchically -- a limit anywhere
+above refuses, and a refused charge takes nothing -- and set through a job
+handle (`job_set_limit`, `job_get_quota`) or cgroupfs:
 
-*Closes when* a job's memory, processes and CPU are charged and capped, with a
-boot check for each that a job at its cap is refused or throttled while a
-sibling is untouched -- P1, M1 and S1 of `docs/CGROUPS.md` are the plan, and
-their acceptance tests are those checks -- and the summary specification
-cites them. *Or* the Security Target withdraws `FRU_RSA.1` and states
-T.EXHAUST as not countered, which is honest and loses O.QUOTA.
+* **Tasks** (`pids`): a process and each thread beside its first, charged
+  as it is made, moved with a process, uncharged at reap. `fork` answers
+  `EAGAIN` at the limit, `process_create` `SHOULD_WAIT`.
+* **Memory** (`memory`): every frame of a program's memory -- anonymous and
+  file pages, copy-on-write copies, the page cache's fill -- and the page
+  tables of its address spaces, charged to the job of the task that caused
+  it and uncharged wherever the frame is freed, from a slot index the frame
+  record keeps. Refused as running out is refused: `ENOMEM`, the fault's
+  signal, `NO_MEMORY`.
+* **Kernel objects**: VMOs, channel ends, ports and jobs a program made,
+  charged for as long as each exists wherever it went. Refused `NO_MEMORY`.
+* **Processor**: a weight per job (`cpu.weight`) applied to each task's
+  weight, so a job's share of a contended processor no longer grows with its
+  task count. A share, not a cap: `FRU_RSA.1` now says so.
+
+The evidence is the `quota` line of every boot, on all three architectures:
+a fork loop refused at exactly its job's 8 tasks, faults refused at exactly
+48 pages with a sibling job faulting on, objects at 5, one task alone in its
+job keeping 50.0% of a processor against eight spinning in another (11.1%
+with the job share taken out, the negative control), and every counter and
+slot back at zero after. The `cgroups` line and a `test-vfs` command drive
+`pids.max`, `memory.max` and `cpu.weight` as a Linux program does. Four
+negative controls fail by the checks' own messages (W-13). Charging costs a
+fault 848 ns against 832 on main and a fork 79 µs against 77, under KVM,
+within the runs' spread.
+
+### F-37 — the kernel heap a job drives through the Linux personality is not bounded
+**Moderate.** Opened 2026-09-26, as F-35 closed. O.QUOTA is to bound the
+memory, objects and CPU a job may consume, and the quotas F-35 built bound a
+job's user memory and page tables, its native objects, its tasks and its
+share of a processor. What a job holds of the kernel heap *through the Linux
+personality* is not charged to it:
+
+* the mapping regions of an address space: a shared mapping of a file makes a
+  region and no VMO, so a process mapping one page of a file at many
+  addresses holds a region each, and nothing counts them but memory;
+* the files and directories it makes in a memory filesystem -- their pages
+  are charged, their inodes and names are not;
+* descriptors in flight in a Unix socket's queue, and the sockets, pipes and
+  event files a descriptor holds, which `RLIMIT_NOFILE` bounds per process
+  and the task limit per job, but only as a product of the two.
+
+All of it is bounded by the machine's memory, and running out of it is
+reported, not fatal (F-23). What is not bounded is one job's share of it.
+Linux charges the same things to a memory cgroup as kernel memory, which is
+what would close this: a charge on those allocations to the running task's
+job, as `object::quota`'s tokens already do for native objects. V-05 in
+[VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) is the attack path.
+
+*Closes when* the regions, inodes and in-flight descriptors a job makes are
+charged to it as objects or as memory, with a boot check that a job at its
+limit is refused one while a sibling is not.
 
 ### F-22 — no safety case
 **Closed at the element level 2026-09-25** by

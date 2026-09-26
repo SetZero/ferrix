@@ -224,13 +224,16 @@ it.
 1. **A bound.** Nothing bounds what the item allocates. Measuring the
    pre-user-mode working set would give bring-up a bound. The paths a program
    drives would still be unbounded.
-2. **A quota on the heap.** Nothing limits the heap one program may use. A
-   job's limits are on its depth and its descendants, a channel's queue and a
-   port's registrations are capped, and a handle table only by the width of
-   its index. A program that drives an allocation in a loop now meets
-   `ENOMEM` and the machine keeps running. It still denies the heap to
-   everything else: V-05 in
-   [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md).
+2. **A quota on the whole heap.** Since 2026-09-26 a job is charged for
+   the frames of its programs' memory and page tables, the native objects
+   they make and their tasks, each against a limit (F-35, §1.6), so a job's
+   native objects, handle tables and descriptor tables are bounded by its
+   object and task limits. What is still charged to no job is the heap the
+   Linux personality allocates for a program -- mapping regions, a memory
+   filesystem's inodes, descriptors in flight -- and a program that drives
+   one of those in a loop meets `ENOMEM` with the machine running, and
+   denies that heap to everything else: V-05 in
+   [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md), F-37.
 3. **The load.** Converting the load ring the same way would take AoU-5's
    second half away. It is outside the item and not attempted.
 4. **Preallocation.** What a SIL 4 or DAL A item would do, and incompatible
@@ -241,6 +244,33 @@ item's own source is reported, not fatal, and the build says so. Two item
 calls still run load code whose allocations are fatal (§1.3), which the
 closure did not claim and the first version of this section implied. The bound it also names is
 not claimed, and is exported to the integrator as AoU-5.
+
+### 1.6 Job quotas — F-35
+
+What a job's programs hold at once is charged to the job and limited there
+(`kernel/src/object/quota.rs`; the design is IMPLEMENTATION.md W-13). A job
+below the tree's root has a slot of atomics -- use, limit and refusals for
+memory, objects and tasks -- and a charge walks the slots from the job up,
+with a compare-and-swap at each, so no use passes a limit anywhere above it,
+even for an instant, and a refused charge takes nothing.
+
+* **Memory** is charged when a frame of a program's memory is allocated
+  (`mm::allocate_user_frame`: a fault's commit, a copy-on-write copy, the
+  page cache's fill) and when `map_in` builds a page table for a user
+  space, to the job of the task that caused it. The frame record keeps the
+  slot's index in the link an allocated frame does not use
+  (`ferrix_frame::Frames::set_owner`), so `release_frame` and
+  `deallocate_frames` take the charge back wherever the frame is freed, with
+  no lookup and no lock -- the deferred page-table frees of F-36 included. A
+  refusal is an allocation failure, which §1.2 made an answer everywhere.
+* **Objects** carry a token that uncharges as the object drops.
+* **Tasks** are charged as a process is made and a thread's id chosen, and
+  given back at reap.
+
+The tree's root has no slot, so a machine with no limits set charges
+nothing: under KVM a fault costs 848 ns against 832 without the quotas, and
+a fork of 256 resident pages 79 µs against 77, within the spread of the runs.
+Every boot's `quota` line drives each limit to its refusal and back to zero.
 
 ---
 

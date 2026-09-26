@@ -464,7 +464,13 @@ package FerrixRoadmap {
              * libs/cgroupfs. G3 and G4 done on 2026-09-24: cgroup.events
              * wakes poll, select and epoll with POLLPRI; clone3 starts a
              * child in a cgroup; chown delegates a subtree under cgroup v2's
-             * common-ancestor rule. C1-C5 and C7 are met. */
+             * common-ancestor rule. C1-C5 and C7 are met. G5 done on
+             * 2026-09-24. P1, M1's charging and S1 done on 2026-09-26, as
+             * the certification's job quotas (F-35): a quota slot per job,
+             * charged for tasks, memory and native objects, a weight per
+             * job scaling its tasks', and cgroupfs's cpu, memory and pids
+             * files over the same slot. Left: M1's memory.stat and scoped
+             * OOM kill, M2's reclaim, F1, S2 and B1. */
     }
 
     #planned requirement <'S14'> stage14RealTime : Stage {

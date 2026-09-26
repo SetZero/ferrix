@@ -61,9 +61,9 @@ enforced on every build by `scripts/check-item-boundary.py`. Memory protection,
 scheduling, capability objects, the trap and syscall entry paths, the IOMMU,
 SMP and device enumeration are inside; the VFS, btrfs, the network stack, the
 Linux personality -- its dispatcher, `mmap`, `futex` and threads included --
-and the drivers are uncertified load above it, 47,528 lines of it.
+and the drivers are uncertified load above it, 48,425 lines of it.
 
-The boundary is nested so it can ratchet inward: a 43,523-line `core` ring is
+The boundary is nested so it can ratchet inward: a 48,954-line `core` ring is
 named now as the destination for a later EAL6+ or ASIL D effort, so that
 raising the target does not mean rewriting every artifact scoped to the old
 boundary.
@@ -72,9 +72,9 @@ boundary.
 
 | | |
 |---|---:|
-| Item product code | 56,218 lines |
-| Uncertified load | 48,323 lines |
-| In-kernel self-tests | 38,126 lines |
+| Item product code | 57,622 lines |
+| Uncertified load | 48,425 lines |
+| In-kernel self-tests | 38,632 lines |
 | Statement coverage, certified item | **82.2%** x86-64, 73.7% AArch64, 70.9% ARMv7-A (Arm before the tool's latest fixes) |
 | Statement coverage, core ring | 80.6% x86-64 |
 | Unreached statements, x86-64 | 1,202 — **196 argued, 249 hardware absent, 757 need a test** |
@@ -82,9 +82,9 @@ boundary.
 | External crates, host-side | 21 |
 | Upward boundary references | **0**, from 94 at the start of the work (29 and 62 before the gate could resolve module paths) |
 | `unsafe` blocks, all documented | 662 |
-| Directly recursive functions in the item | **0**, of 2,075 |
+| Directly recursive functions in the item | **0**, of 2,153 |
 | Allocations in the item that stop the machine when memory runs out | **0** in its source; 73 at bring-up, by design; 14 in the load `process_create` and `process_start` run, recorded, and the load's callees beyond those (F-23, MEMORY-AND-TIMING.md §1.3) |
-| Job quotas the ST claims (FRU_RSA.1) that are built | **0** of 3: memory, objects and CPU uncharged; only the job tree's depth and descendants are bounded (F-35) |
+| Job quotas the ST claims (FRU_RSA.1) that are built | **3** of 3, as refined: a job's user memory and page tables, native objects and tasks, each refused at exactly its limit with a sibling going on, and a processor shared by job weight (one task alone kept 50.0% against eight); the Linux personality's heap is not charged (F-35 closed, F-37) |
 | SMEP + SMAP (x86-64) | **on** |
 | PAN (AArch64) | **implemented**; absent from the reference CPU |
 | Side-channel defences | **on** by default, per processor; one switch, `--mitigations off`, takes them out |
@@ -144,9 +144,10 @@ the crate root is exempt by file (SECURITY-TARGET §9.6). The side-channel defen
 default (F-31, closed), but there is no cache partitioning and no KPTI, so a
 program with a timer can still find the kernel and time a neighbour (V-06). And the TOE claims neither audit nor
 authentication (F-21b), which is defensible for an isolation kernel and is why
-no Protection Profile is claimed. FRU_RSA.1 is claimed and not built: a job's
-memory, objects and CPU are not charged, so T.EXHAUST is not resisted but for
-CPU per task (F-35, V-05).
+no Protection Profile is claimed. FRU_RSA.1 is built as refined -- a job's
+user memory, native objects and tasks capped, and a processor shared by job
+weight rather than capped -- so T.EXHAUST is partially resisted: the kernel
+heap the Linux personality holds for a job is charged to no job (F-37, V-05).
 
 *Nearest credible claim:* EAL4+ looks defensible on this evidence with an ST
 written, which is also where RHEL and SUSE sit. EAL5 needs the design
@@ -233,10 +234,12 @@ In order of value per unit of effort:
    "written in a memory-safe language" as a talking point and as evidence.
    Whether it covers `armv7a-none-eabi` and the UEFI targets is the first
    question.
-4. **Build the job quotas the ST claims, or withdraw the claim (F-35, W-13).**
-   The `pids`, `memory` and `cpu` controllers `docs/CGROUPS.md` plans are the
-   quotas FRU_RSA.1 names; until they land an evaluator fails that SFR, and
-   T.EXHAUST is the one threat the analysis finds not resisted.
+4. **Charge the Linux personality's heap to the job (F-37).** The job quotas
+   are built (F-35, W-13); what a job still takes from the others is the heap
+   the personality allocates for it -- mapping regions, a memory
+   filesystem's inodes, descriptors in flight -- which Linux charges to a
+   memory cgroup as kernel memory. T.EXHAUST is the one threat the analysis
+   finds only partially resisted.
 Done since the audit began: the vulnerability analysis (F-21a), SMEP, SMAP and
 PAN (F-32), the release profile and both Arm architectures measured (F-11,
 F-12), the complexity and recursion gate (F-25), board support, bring-up
@@ -252,8 +255,10 @@ direct map's writable alias of the kernel's text, sealed (F-34); allocation
 failure made an error the item reports rather than a stop, at every site in
 its own source, with a gate that counts the rest and now reads the load files
 the item's own calls run (F-23, [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md)
-§1); and user and IOMMU page tables given back only after the shootdown that
-covers them, not before (F-36).
+§1); user and IOMMU page tables given back only after the shootdown that
+covers them, not before (F-36); and the job quotas FRU_RSA.1 claims, charged
+per job and refused at their limits, over a native handle and cgroup2's
+`pids`, `memory` and `cpu` controllers (F-35, W-13).
 
 ## 5. What cannot be fixed from here
 

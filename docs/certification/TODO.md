@@ -328,17 +328,35 @@ and the scratch negative control in W-14 must still stop it.
 ---
 
 ### 4.5 Job quotas — **F-35**
-**Open**, found 2026-09-26 when the vulnerability analysis's T.EXHAUST paths
-were read against the code (IMPLEMENTATION.md W-13).
+**Done 2026-09-26** (IMPLEMENTATION.md W-13). F-35 is closed, with
+`FRU_RSA.1` refined to what the quotas bound; what they leave out is F-37.
 
-To re-audit: read `BUILT` in `kernel/src/fs/cgroupfs.rs` -- the controllers
-the kernel has, empty when this was written -- and what `object/job.rs`
-refuses (`JobError::Limited`, depth and descendants only). F-35 closes when
-`pids`, `memory` and `cpu` are built and each has a boot check that a job at
-its cap is refused or held while a sibling is not, or when the ST no longer
-claims FRU_RSA.1. Then re-judge T.EXHAUST and V-05 in
-VULNERABILITY-ANALYSIS.md: the heap one job drives stays unquota'd until its
-allocations are charged too.
+To re-audit: read the `quota` line of a boot on each architecture. It must
+say a fork loop was refused at its job's 8 tasks, faults at exactly 48 pages
+(some of them page tables: 3 on the 64-bit pair, 2 on ARMv7-A) while a
+sibling faulted in 48, objects at 5, one task alone in its job kept about
+half a processor against eight in another, and every counter and slot came
+back. Read the `cgroups` line, which must name the controllers enabled and a
+fork refused at `pids.max`, and `test-vfs` command 19. Then grep for
+`mm::allocate_frames(0)` in `user/`, `fs/pages.rs` and the fault path: a
+frame of a program's memory taken that way is charged to nobody, and each
+must be `allocate_user_frame`. As negative controls (scratch), each of which
+must stop the boot by its check's own message: let `quota::charge` ignore the
+limit (the `cgroups` check: *"forks went past pids.max"*); drop the
+uncharge from `mm::release_frame` (*"address spaces gone and their frames
+still charged"*); have `Task::effective_weight` answer the base weight (*"a
+job with many spinning tasks took more than its share from another job"*,
+with one task at 111 per mille); and have `Process::new` charge nothing (the
+`cgroups` check again).
+
+### 4.6 The Linux personality's heap per job — **F-37**
+**Open**, found 2026-09-26 as F-35 closed. To re-audit: list the heap the
+personality allocates for a program that no `quota::Charge` covers -- a
+region of a shared file mapping (`AddressSpace::map_file` with `shared`), an
+inode of a memory filesystem, a descriptor in flight in `fs/socket.rs`. F-37
+closes when each is charged to the running task's job, with a boot check that
+a job at its limit is refused one while a sibling is not; then re-judge
+T.EXHAUST and V-05.
 
 ## 5. Tools
 

@@ -102,11 +102,11 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1656 elements, 198 relations. Model digest `dde2cf05c03d29e9`.
+13 files, 16 packages, 1669 elements, 198 relations. Model digest `830e6beb0998c96b`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
-| `#implemented` | 267 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
+| `#implemented` | 268 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
 | `#inProgress` | 9 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 3 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
 | `#planned` | 39 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
@@ -354,6 +354,7 @@ userland : Userland  [in progress]
     job : Job
       processes : Process
       children : Job
+      quota : JobQuota
     ioMappings : IoMapping
       domain : FerrixDrivers::IommuDomain
     interrupts : Interrupt
@@ -1914,7 +1915,26 @@ A container of processes, where resource limits and kill authority live. A wedge
 | --- | --- | --- | --- | --- |
 | `processes` | part | `Process` |  |  |
 | `children` | part | `Job` |  |  |
+| `quota` | part | `JobQuota` |  | None for the tree's root, which nothing is charged to. |
 | `kill` | action |  |  |  |
+| `setLimit` | action |  |  |  |
+| `getQuota` | action |  |  |  |
+
+#### JobQuota
+
+`#implemented`  ·  stage 13
+
+What a job and every job beneath it may hold at once, and hold now: the Security Target's FRU_RSA.1 (certification finding F-35, work order W-13). kernel/src/object/quota.rs: a slot in a table of atomics, named by a u32 so a frame freed under any lock finds its charge from the frame record alone. A charge walks the slots from the job up with a compare-and-swap at each, so a limit anywhere above refuses and no use passes a limit even briefly. Charged: the job's tasks (fork, clone, process_create; uncharged at reap), its programs' frames and page tables (at allocation, to the running task's job; at every free), and the native objects they make (a token in each). The processor is a weight, not a limit: each task runs at its own weight times its job's weight over its job's load. cgroupfs's pids, memory and cpu files are a view of it. Not charged: the heap the Linux personality allocates for a job (F-37).
+
+| Feature | Kind | Type | Maturity | Note |
+| --- | --- | --- | --- | --- |
+| `tasksUsed` | attribute | `Natural` |  |  |
+| `tasksLimit` | attribute | `Natural` |  |  |
+| `memoryPagesUsed` | attribute | `Natural` |  |  |
+| `memoryPagesLimit` | attribute | `Natural` |  |  |
+| `objectsUsed` | attribute | `Natural` |  |  |
+| `objectsLimit` | attribute | `Natural` |  |  |
+| `cpuWeight` | attribute | `Natural` |  |  |
 
 #### HandleTable
 
@@ -1997,7 +2017,7 @@ Pipes, ttys and job control: what an interactive shell needs. Pipes and FIFOs ar
 
 Syscall numbers from 0x1000. Handle-table operations, channel send/receive with handle passing, port wait, interrupt bind, VMO create/map, job create/kill. What devmgr and drivers speak; a process may use both ABIs.
 
-kernel/src/syscall/native.rs, branched to before any Linux table is asked, with the numbers in libs/native-abi/src/nr.rs and typed wrappers in libs/native. Beyond that first list: waits on one object or asynchronously through a port, VMO pins for a device's DMA, process create and start, device info and quiesce, and the calls that make a block or net ring and a display, input or render control channel. Left: an EXECUTE right on a VMO handle, sub-page apertures, and the process calls beyond create and start, 0x1032..=0x1037 held for them.
+kernel/src/syscall/native.rs, branched to before any Linux table is asked, with the numbers in libs/native-abi/src/nr.rs and typed wrappers in libs/native. Beyond that first list: waits on one object or asynchronously through a port, VMO pins for a device's DMA, a job's quota set and read, process create and start, device info and quiesce, and the calls that make a block or net ring and a display, input or render control channel. Left: an EXECUTE right on a VMO handle, sub-page apertures, and the process calls beyond create and start, 0x1032..=0x1037 held for them.
 
 The item answers every call on the core's objects in a match the compiler holds exhaustive. The six about a subsystem above it -- the five control-channel creates and job_for_cgroup -- are a table the subsystems register handlers into from main.rs's register_load, and the boot stops (FX-0006) if one has none. A native process is made and started through the Processes the Linux personality lends (syscall/launch.rs), which devmgr starts through too, and a quiesce waits out the Servers the rings and cards register. native.rs names nothing above the item (F-07).
 
@@ -2024,6 +2044,8 @@ The item answers every call on the core's objects in a match the compiler holds 
 | `vmoPinAddresses` | action |  |  |  |
 | `jobCreate` | action |  |  |  |
 | `jobKill` | action |  |  |  |
+| `jobSetLimit` | action |  |  |  |
+| `jobGetQuota` | action |  |  |  |
 | `processCreate` | action |  |  |  |
 | `processStart` | action |  |  |  |
 | `interruptCreate` | action |  |  |  |
@@ -3157,7 +3179,7 @@ btrfs stage B. Exit, strict: Ferrix writes a tree and host btrfs check finds not
 
 All eight namespaces, the unified cgroup hierarchy with cpu, memory, io and pids, cgroupfs, classic-BPF seccomp with the interpreter in libs/. Exit: an unprivileged user namespace runs pid 1 under a memory limit that triggers scoped reclaim and a scoped OOM kill, with a seccomp filter blocking a syscall.
 
-Cgroups first (customer, 2026-09-23): stage 15's init is planned as if they exist, so the cgroup half is built before namespaces and seccomp. docs/INIT.md section 0.1 lists what init needs, C1-C5 before its first boot. C8, accepted the same day: every cgroup is backed by a Job. docs/CGROUPS.md is the design: landings G1-G5 (27 points) for init, then the controllers (58), 85 for the cgroup half. G1 done on 2026-09-23: every process in exactly one job, fork inheriting it, populated counted exactly, the two kills apart. G2 done the same day: cgroupfs mounts as cgroup2, over libs/cgroupfs. G3 and G4 done on 2026-09-24: cgroup.events wakes poll, select and epoll with POLLPRI; clone3 starts a child in a cgroup; chown delegates a subtree under cgroup v2's common-ancestor rule. C1-C5 and C7 are met.
+Cgroups first (customer, 2026-09-23): stage 15's init is planned as if they exist, so the cgroup half is built before namespaces and seccomp. docs/INIT.md section 0.1 lists what init needs, C1-C5 before its first boot. C8, accepted the same day: every cgroup is backed by a Job. docs/CGROUPS.md is the design: landings G1-G5 (27 points) for init, then the controllers (58), 85 for the cgroup half. G1 done on 2026-09-23: every process in exactly one job, fork inheriting it, populated counted exactly, the two kills apart. G2 done the same day: cgroupfs mounts as cgroup2, over libs/cgroupfs. G3 and G4 done on 2026-09-24: cgroup.events wakes poll, select and epoll with POLLPRI; clone3 starts a child in a cgroup; chown delegates a subtree under cgroup v2's common-ancestor rule. C1-C5 and C7 are met. G5 done on 2026-09-24. P1, M1's charging and S1 done on 2026-09-26, as the certification's job quotas (F-35): a quota slot per job, charged for tasks, memory and native objects, a weight per job scaling its tasks', and cgroupfs's cpu, memory and pids files over the same slot. Left: M1's memory.stat and scoped OOM kill, M2's reclaim, F1, S2 and B1.
 
 **Allocated to: **`ferrix.kernel.namespaces`, `ferrix.kernel.cgroups` and `ferrix.kernel.seccomp`
 
@@ -3870,6 +3892,7 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 12 | `FerrixAssurance::PowerFailInjection` | verification | `#implemented` |
 | 13 | `FerrixStructure::Workspace::seccompBpf` | part | `#planned` |
 | 13 | `FerrixMemory::Reclaim` | part | `#planned` |
+| 13 | `FerrixObjects::JobQuota` | part | `#implemented` |
 | 13 | `FerrixObjects::LinuxSyscallLayer::seccompCheck` | action | `#planned` |
 | 13 | `FerrixIsolation::Namespace` | part | `#planned` |
 | 13 | `FerrixIsolation::NsSet` | part | `#planned` |
@@ -3906,7 +3929,7 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 19 | `FerrixDrivers::Gc400Driver` | part | `#inProgress` |
 | 19 | `FerrixAssurance::VideoTest` | verification | `#implemented` |
 
-184 elements across 18 stages.
+185 elements across 18 stages.
 
 ## Figures
 

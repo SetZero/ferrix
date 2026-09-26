@@ -534,7 +534,8 @@ Unblocks DAL C, 62304 §5.4 and `ADV_TDS.3` at once.
 no SMAP, SMEP or PAN was enabled, which F-32 then fixed on x86-64 and AArch64.
 The attack tests per threat below remain worth writing as regression tests.
 Corrected 2026-09-26: its T.EXHAUST paths credited job quotas that are not
-built, and the verdict is now *not resisted* but for CPU per task (F-35, W-13).
+built, and the verdict was *not resisted* but for CPU per task (F-35) until
+W-13 built them the same day; it is now *partially resisted* (F-37).
 
 **Closes:** F-21a. **Size:** medium. Last EAL5 gap that is engineering.
 
@@ -669,9 +670,10 @@ load file, add it to `REACHED`.
 
 ## W-13 — Job quotas (FRU_RSA.1)
 
-**Closes:** F-35, and narrows V-05. **Size:** large. **Chosen 2026-09-26:**
-build the quotas, not withdraw the claim. What follows is the design, argued
-before the code; §"As built" below is filled in as each part lands.
+**Done 2026-09-26.** F-35 is closed; V-05 is narrowed to F-37, the Linux
+personality's heap. **Chosen 2026-09-26:** build the quotas, not withdraw the
+claim. What follows is the design as it was argued before the code, and then
+what was built and where it differs.
 
 `object/job.rs` bounds the job tree's depth and descendants and nothing else.
 `docs/CGROUPS.md` plans P1 (`pids`), M1 (`memory`) and S1 (`cpu.weight`) as
@@ -797,6 +799,62 @@ sets `pids.max` to 10 and forks until refused. Cost: page fault, fork and a
 null system call timed under KVM before and after, in the root job and in a
 limited one.
 
+### As built
+
+Four commits on `cert-f35-quotas`: the design, the charging (core), the
+cgroupfs view, and these documents. Where the code differs from the design
+above:
+
+* **Tasks are uncharged at reap**, not at `Drop for Process`: the reaped
+  process's last reference may be a task the scheduler has not freed yet, and
+  a shell running short commands under `pids.max` saw exited ones still
+  counted. The parent's `reap_child` and `disown` call `uncharge_tasks`, and
+  the drop takes back whatever is left.
+* **A native `process_create` loads as a task of the target job**
+  (`sched::set_current_group` around the load), so the child's first memory
+  is its job's; `CLONE_INTO_CGROUP` does the same around `fork`'s copy. The
+  move of a new native process into its job is checked against the task
+  limit (`Process::move_new_to`); a move by `cgroup.procs` is not.
+* **Objects** are charged by `Vmo::new_anonymous` and `Vmo::fork`, so each
+  anonymous or private mapping a Linux program makes counts as one; a page
+  cache object is the file's and is not. cgroupfs has no file for the object
+  limit, which only a job handle sets.
+* **A task follows its process to a new job** at its next trap from user
+  mode or system call (`sched::regroup_current`): one per-processor word is
+  compared with a global count of moves, 5.3 ns a call under KVM. A process
+  that moves itself regroups before its call returns.
+* **The effective weight** takes a job's load to be at least what the level
+  below adds, so a task not yet counted is never scaled up; without that the
+  first check spun one task at 16 million and starved the rest. A job's load
+  and what it adds to its parent's are kept by atomics and can drift when a
+  job turns busy and idle on two processors at once: the drift scales every
+  sibling of that job's parent alike, so shares within the parent hold.
+* **Page tables** are charged in `map_in` for user mappings only, through a
+  `PhysMem` that tags the table with the running task's slot; their frees,
+  F-36's deferred ones included, uncharge in `deallocate_frames` untouched.
+
+Measured under KVM, x86-64, best of five, three runs each against `main`
+without the quotas: a fault 848 ns against 832, the same in a job two levels
+deep; a fork of 256 resident pages 79 µs against 77; within the runs' spread.
+
+Negative controls, scratch, each stopping the boot by its own message: the
+limit ignored in `quota::charge` (*"forks went past pids.max"*, the `cgroups`
+check); `release_frame` uncharging nothing (*"address spaces gone and their
+frames still charged"*); the job share taken out of `effective_weight` (*"a
+job with many spinning tasks took more than its share from another job"*,
+one task at 111 per mille); `Process::new` charging nothing (*"forks went
+past pids.max"*).
+
+**Verify:** the `quota` and `cgroups` lines of any boot, `test-vfs` command
+19, and `cat /sys/fs/cgroup/cgroup.controllers` listing `cpu memory pids`.
+
+**What is left:** F-37, the heap the Linux personality allocates for a job;
+`cpu.max` (S2), a bandwidth cap, which the ST no longer claims; `memory`'s
+reclaim and scoped OOM kill (M1's rest and M2 in `docs/CGROUPS.md`), without
+which a job at `memory.max` is refused rather than reclaimed from.
+
+---
+
 ## W-14 — Page tables go back after their shootdown
 
 **Done 2026-09-26.** Closes F-36, found by the memory coverage work.
@@ -826,11 +884,11 @@ shootdown"*.
 ## Suggested order
 
 **Done:** order zero, W-3, W-2, W-6, W-9, W-4 (with F-08), W-1, W-5 (with
-F-09 and F-33), W-7's measurement and ratchet, W-11, W-12 (F-23), and W-14
-(F-36).
+F-09 and F-33), W-7's measurement and ratchet, W-11, W-12 (F-23), W-14
+(F-36), and W-13 (F-35).
 **Remaining:** F-10's tests, by module from COVERAGE-WORKLIST.md → W-8
-(largest), with W-10 in parallel whenever someone can answer step 1. W-13
-(F-35) is independent of all three; its controllers are stage 13's to build.
+(largest), with W-10 in parallel whenever someone can answer step 1. F-37,
+the Linux personality's heap per job, is independent of all three.
 
 W-1 landed as a split rather than a move, and took the boundary from 36
 references to 29 by the gate's count of the day. What it leaves is F-09's:

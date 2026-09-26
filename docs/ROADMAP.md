@@ -148,7 +148,7 @@ sizes them.
 | ~~Chrome on Ferrix, headless and in a window, x86-64 (`docs/CHROME.md`)~~ *done 2026-09-24* | foot and its ports 13, the kernel's rows ≈ 30, spent | done |
 | Chrome: the zygote's fork | unsized; ferrousli in glibc's place, headless, and the persistent btrfs root are done, 2026-09-26 | under way |
 | Chrome on the STM32MP157D-DK1 (`docs/CHROME.md` §10) | ≈ 45–55 | not started |
-| Stage 13, namespaces, cgroups, seccomp | cgroups 85 (`docs/CGROUPS.md` §7: 27 for what init needs, 58 for the controllers); namespaces and seccomp unsized, the old guess for the whole stage was *month* ≈ 60 | under way: G1 to G5 done (27 of 85), which is all init needs from it, C8 for native services included; its cgroups come first, as init's prerequisite (`docs/INIT.md` §0); the controllers are next, `pids` first |
+| Stage 13, namespaces, cgroups, seccomp | cgroups 85 (`docs/CGROUPS.md` §7: 27 for what init needs, 58 for the controllers); namespaces and seccomp unsized, the old guess for the whole stage was *month* ≈ 60 | under way: G1 to G5 done (27 of 85), which is all init needs from it, C8 for native services included; its cgroups come first, as init's prerequisite (`docs/INIT.md` §0); `pids`, `memory`'s charging and `cpu.weight` done (2026-09-26, as the certification's job quotas), `memory`'s reclaim and OOM kill, freezing, `cpu.max` and `io` left |
 | Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51 | not started |
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | not started |
 | Stage 14, real-time domains | *month* ≈ 40 | not started |
@@ -4336,8 +4336,24 @@ own message. A native job made inside a cgroup shows as `job-<id>`, as
 `devmgr`'s drivers do under `drivers.slice`. Init's C8 is met, so every
 `Type=native` service init's L8 starts has what it waits on.
 
-**Still to do:** the controllers, `pids` (P1) first, then `memory` (M1,
-M2), then freezing, `cpu` and `io`. `docs/CGROUPS.md` §7.1 says where each
+**Done -- P1, M1's charging and S1, the job quotas (2026-09-26).** Built as
+the certification's F-35, the quotas its Security Target claims: every job
+has a slot of counters in `object/quota.rs`, charged hierarchically for its
+tasks, its programs' memory and page tables, and the native objects they
+make, and a weight that scales its tasks' so its share of a processor no
+longer grows with its task count. cgroupfs's `BUILT` is `cpu memory pids`:
+`pids.max`, `pids.current`, `pids.events`, `memory.max`, `memory.current`,
+`memory.events` and `cpu.weight` read and write the same slot a native
+`job_set_limit` and `job_get_quota` do. The `quota` boot line refuses a
+fork loop at 8 tasks and faults at 48 pages with a sibling going on, and
+keeps one task alone in its job at 50% of a processor against eight in
+another; the `cgroups` line drives the files, and `test-vfs` forks until
+`pids.max` refuses. `docs/CGROUPS.md` §7.1 says where it differs from the
+plan.
+
+**Still to do:** `memory.stat`, and a charge past `memory.max` reclaiming
+and OOM-killing inside the job rather than being refused (M1's rest, M2),
+then freezing, `cpu.max` and `io`. `docs/CGROUPS.md` §7.1 says where each
 starts in the code, how landings are gated now, and what cost a gate on
 2026-09-23.
 
