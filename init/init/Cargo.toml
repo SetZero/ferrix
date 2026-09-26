@@ -13,6 +13,8 @@ publish.workspace = true
 libc = "0.2.189"
 # The manager: unit files, the graph, operations, every kind's state machine.
 ferrix-svc = { path = "../../libs/svc" }
+# The control socket's records and the readiness lines.
+ferrix-svc-proto = { path = "../../libs/svc-proto" }
 
 [lints]
 workspace = true

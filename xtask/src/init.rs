@@ -130,6 +130,127 @@ const TEST_UNITS: &[(&str, &str)] = &[
          ExecStart=:/bin/sh -c \"(sh -c 'echo $$ > /run/forker.pid; read x < /dev/ptmx' &)\"\n",
     ),
     (
+        "echoer.service",
+        "[Unit]\n\
+         Description=Says its pid, then blocks\n\
+         \n\
+         [Service]\n\
+         ExecStart=:/bin/sh -c 'echo \"echoer-up $$\"; read x < /dev/ptmx'\n",
+    ),
+    (
+        "notifier.service",
+        "[Unit]\n\
+         Description=Says READY=1 on its readiness pipe\n\
+         \n\
+         [Service]\n\
+         Type=notify\n\
+         NotifyFd=3\n\
+         ExecStart=:/bin/sh -c 'echo STATUS=warming >&3; echo READY=1 >&3; echo STATUS=serving >&3; read x < /dev/ptmx'\n",
+    ),
+    (
+        "lazy.service",
+        "[Unit]\n\
+         Description=Never says READY=1\n\
+         \n\
+         [Service]\n\
+         Type=notify\n\
+         TimeoutStartSec=infinity\n\
+         ExecStart=:/bin/sh -c 'echo STATUS=still-starting >&$NOTIFY_FD; read x < /dev/ptmx'\n",
+    ),
+    (
+        "daemon.service",
+        "[Unit]\n\
+         Description=Forks, and says its daemon's pid in a file\n\
+         \n\
+         [Service]\n\
+         Type=forking\n\
+         PIDFile=/run/daemon.pid\n\
+         ExecStart=:/bin/sh -c 'sh -c \"read x < /dev/ptmx\" & echo $! > /run/daemon.pid'\n",
+    ),
+    (
+        "echo.socket",
+        "[Unit]\n\
+         Description=Answers each connection with an instance\n\
+         \n\
+         [Socket]\n\
+         ListenStream=127.0.0.1:7777\n\
+         Accept=yes\n",
+    ),
+    (
+        "echo@.service",
+        "[Unit]\n\
+         Description=Echoes one connection's line\n\
+         \n\
+         [Service]\n\
+         ExecStart=:/bin/sh -c 'read l; echo \"echoed $l\"'\n\
+         StandardInput=socket\n\
+         StandardOutput=socket\n",
+    ),
+    (
+        "hello.socket",
+        "[Unit]\n\
+         Description=Starts hello.service on the first connection\n\
+         \n\
+         [Socket]\n\
+         ListenStream=127.0.0.1:7778\n",
+    ),
+    (
+        "hello.service",
+        "[Unit]\n\
+         Description=Says what the socket passed it\n\
+         \n\
+         [Service]\n\
+         ExecStart=:/bin/sh -c 'echo \"hello-fds $LISTEN_FDS $LISTEN_FDNAMES pid-ok-$(( LISTEN_PID == $$ ))\"; read x < /dev/ptmx'\n",
+    ),
+    (
+        "test.slice",
+        "[Unit]\n\
+         Description=The test's own slice\n\
+         \n\
+         [Slice]\n\
+         TasksMax=64\n",
+    ),
+    (
+        "hog.service",
+        "[Unit]\n\
+         Description=Grows past its MemoryMax=\n\
+         \n\
+         [Service]\n\
+         Slice=test.slice\n\
+         MemoryMax=16M\n\
+         ExecStart=:/bin/sh -c 'x=0123456789abcdef; while :; do x=\"$x$x\"; done'\n",
+    ),
+    (
+        "tasks.service",
+        "[Unit]\n\
+         Description=Forks past its TasksMax=\n\
+         \n\
+         [Service]\n\
+         TasksMax=3\n\
+         ExecStart=:/bin/sh -c 'for i in 1 2 3 4 5; do read x < /dev/ptmx & done; echo forked; read x < /dev/ptmx'\n",
+    ),
+    (
+        "deleg.service",
+        "[Unit]\n\
+         Description=Manages its own cgroup as uid 1000\n\
+         \n\
+         [Service]\n\
+         User=ferrix\n\
+         Delegate=yes\n\
+         ExecStart=:/bin/sh -c 'mkdir /sys/fs/cgroup/system.slice/deleg.service/sub && echo delegated-ok; read x < /dev/ptmx'\n",
+    ),
+    (
+        "spare.service",
+        "[Unit]\n\
+         Description=Enabled and disabled from the prompt\n\
+         \n\
+         [Service]\n\
+         ExecStart=:/bin/sh -c 'read x < /dev/ptmx'\n\
+         \n\
+         [Install]\n\
+         WantedBy=multi-user.target\n",
+    ),
+    (
         "getty@.service.d/test.conf",
         "[Service]\n\
          Environment=TERM=dumb \"PS1=init-test%%# \"\n",
@@ -137,7 +258,26 @@ const TEST_UNITS: &[(&str, &str)] = &[
 ];
 
 /// The units the test's `multi-user.target` wants besides the getty.
-const WANTED: [&str; 3] = ["flaky.service", "anchor.service", "forker.service"];
+const WANTED: [&str; 11] = [
+    "flaky.service",
+    "anchor.service",
+    "forker.service",
+    "echoer.service",
+    "notifier.service",
+    "daemon.service",
+    "echo.socket",
+    "hello.socket",
+    "hog.service",
+    "tasks.service",
+    "deleg.service",
+];
+
+/// Who the test's user is: root, and `ferrix`, whom `su` becomes to be
+/// refused what only root may do.
+const PASSWD: &str = "root:x:0:0:root:/:/bin/sh\nferrix:x:1000:1000:ferrix:/:/bin/sh\n";
+
+/// Their groups.
+const GROUP: &str = "root:x:0:\nferrix:x:1000:\n";
 
 /// The three programs of `init/` for one architecture.
 #[derive(Debug)]
@@ -145,6 +285,7 @@ pub(crate) struct Built {
     init: PathBuf,
     getty: PathBuf,
     generator: PathBuf,
+    svc: PathBuf,
 }
 
 /// Build `init/` for `arch`, or `None` on an architecture it is not built
@@ -161,6 +302,7 @@ pub(crate) fn built(arch: Arch) -> Result<Option<Built>> {
         init: release.join("init"),
         getty: release.join("getty"),
         generator: release.join("getty-generator"),
+        svc: release.join("svc"),
     };
     crate::builds::Build::cargo(
         format!("cargo build (init) --target {target}"),
@@ -174,6 +316,7 @@ pub(crate) fn built(arch: Arch) -> Result<Option<Built>> {
     .output(&built.init)
     .output(&built.getty)
     .output(&built.generator)
+    .output(&built.svc)
     .run()?;
     Ok(Some(built))
 }
@@ -200,6 +343,7 @@ pub(crate) fn carried(arch: Arch) -> Result<Vec<File>> {
         program("sbin/init", &built.init)?,
         program("sbin/getty", &built.getty)?,
         program("lib/ferrix/generators/getty-generator", &built.generator)?,
+        program("bin/svc", &built.svc)?,
     ];
     let units = paths::workspace_root().join(UNITS);
     let mut names: Vec<PathBuf> = std::fs::read_dir(&units)
@@ -226,8 +370,8 @@ pub(crate) fn carried(arch: Arch) -> Result<Vec<File>> {
     Ok(files)
 }
 
-/// The test's own units and zinc, as carried files.
-fn test_files(shell: &[u8]) -> Vec<File> {
+/// The test's own units, zinc, and busybox for its `su`, as carried files.
+fn test_files(shell: &[u8], busybox: &[u8]) -> Vec<File> {
     let mut files: Vec<File> = ["bin/sh", "bin/zinc"]
         .into_iter()
         .map(|path| File {
@@ -248,6 +392,25 @@ fn test_files(shell: &[u8]) -> Vec<File> {
             path: format!("etc/ferrix/units/multi-user.target.wants/{name}"),
             mode: 0o777,
             content: Content::Link(format!("/etc/ferrix/units/{name}")),
+        });
+    }
+    files.push(File {
+        path: "bin/busybox".to_owned(),
+        mode: 0o755,
+        content: Content::Bytes(busybox.to_vec()),
+    });
+    for applet in ["su", "nc", "mkdir"] {
+        files.push(File {
+            path: format!("bin/{applet}"),
+            mode: 0o777,
+            content: Content::Link("busybox".to_owned()),
+        });
+    }
+    for (path, text) in [("etc/passwd", PASSWD), ("etc/group", GROUP)] {
+        files.push(File {
+            path: path.to_owned(),
+            mode: 0o644,
+            content: Content::Bytes(text.as_bytes().to_vec()),
         });
     }
     files
@@ -276,7 +439,8 @@ fn test_arch(arch: Arch, args: &Args, checker: &Checker) -> Result<()> {
     if files.is_empty() {
         return Err(Error::new(format!("init is not built for {arch}")));
     }
-    files.extend(test_files(&shell));
+    let busybox = read(&crate::busybox::program(arch)?)?;
+    files.extend(test_files(&shell, &busybox));
     println!("  {arch}: building an image whose init is {PATH}");
     let loader = cargo::build_loader(arch, args.release)?;
     let kernel = cargo::build_kernel(arch, args.release)?;
@@ -319,7 +483,8 @@ fn test_arch(arch: Arch, args: &Args, checker: &Checker) -> Result<()> {
     checker.run(&volume, arch)?;
     println!(
         "  {arch}: init booted multi-user.target, gave the console a session, spent a failing \
-         service's budget, ended a service's grandchild with its cgroup, and powered off clean"
+         service's budget, ended a service's grandchild with its cgroup, answered svc, waited for \
+         readiness, activated sockets, OOM-killed a service in its own slice, and powered off clean"
     );
     Ok(())
 }
@@ -427,11 +592,343 @@ fn session(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
             ));
         }
     }
+    control(at, failures)?;
+    readiness(at, failures)?;
+    sockets(at, failures)?;
+    resources(at, failures)?;
     power_off(at, failures)
 }
 
+/// Resources (L5, stage three): `hog.service`, in `test.slice` under a
+/// 16 MiB `MemoryMax=`, grows until the kernel's OOM kill takes it, and is
+/// reported `failed (oom-kill)` while its siblings run on; `tasks.service`'s
+/// forks past `TasksMax=3` are refused and counted in its `pids.events`; a
+/// process started at the prompt is grouped into a scope by `svc scope`;
+/// and `deleg.service`, uid 1000 with `Delegate=yes`, makes a cgroup in its
+/// own.
+fn resources(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
+    let deadline = Instant::now() + PATIENCE;
+    let killed = at.read_more(deadline, |lines| {
+        has(lines, "hog.service: failed (oom-kill)")
+    })?;
+    if !killed {
+        failures
+            .push("hog.service, past its MemoryMax=, was not reported failed (oom-kill)".into());
+    }
+    match ask(at, "svc status hog.service\n", "CGroup: ")? {
+        Some(line) if line.trim() == "CGroup: /test.slice/hog.service" => {}
+        other => failures.push(format!(
+            "hog.service's cgroup is not under test.slice: {other:?}"
+        )),
+    }
+    let (_, running) = status_active(at, "echoer.service")?;
+    if !running {
+        failures.push("the OOM kill in hog.service reached echoer.service too".into());
+    }
+
+    let counted = ask(
+        at,
+        "m=tasks; while read k v; do [ \"$k\" = max ] && echo \"$m-max $v\"; done \
+         < /sys/fs/cgroup/system.slice/tasks.service/pids.events\n",
+        "tasks-max ",
+    )?;
+    let refused = counted
+        .as_deref()
+        .and_then(|line| line.trim().strip_prefix("tasks-max "))
+        .and_then(|count| count.trim().parse::<u64>().ok())
+        .is_some_and(|count| count >= 1);
+    if !refused {
+        failures.push(format!(
+            "tasks.service's forks past TasksMax=3 were not refused and counted: {counted:?}"
+        ));
+    }
+
+    let scoped = ask(
+        at,
+        "read x < /dev/ptmx & p=$!; svc scope --unit probe.scope $p; read c < /proc/$p/cgroup; \
+         m=scope; echo \"$m-cg $c\"\n",
+        "scope-cg ",
+    )?;
+    match scoped {
+        Some(line) if line.trim() == "scope-cg 0::/system.slice/probe.scope" => {}
+        other => failures.push(format!(
+            "svc scope did not move the process into probe.scope: {other:?}"
+        )),
+    }
+
+    let deadline = Instant::now() + PATIENCE;
+    let delegated = at.read_more(deadline, |lines| {
+        lines
+            .iter()
+            .any(|line| line.contains("deleg.service[") && line.contains("delegated-ok"))
+    })?;
+    if !delegated {
+        failures.push(
+            "deleg.service, uid 1000 with Delegate=yes, could not make a cgroup in its own".into(),
+        );
+    }
+    Ok(())
+}
+
+/// Whether `svc status` says `unit` is active and running, with the lines
+/// it printed.
+fn status_active(at: &mut Watching<'_>, unit: &str) -> Result<(Vec<String>, bool)> {
+    let before = at.after().len();
+    let _ = ask(at, &format!("svc status {unit}\n"), "Active: ")?;
+    let shown: Vec<String> = at
+        .after()
+        .iter()
+        .skip(before)
+        .map(|l| l.trim().to_owned())
+        .collect();
+    let running = shown.iter().any(|line| line == "Active: active (running)");
+    Ok((shown, running))
+}
+
+/// Socket activation (L9): nothing of `hello.service` runs until a
+/// connection reaches `hello.socket`, and then it runs with the listening
+/// socket as descriptor 3 (`LISTEN_FDS=1`, its name, and `LISTEN_PID` its
+/// own pid); `echo.socket` (`Accept=yes`) answers each connection with an
+/// instance of `echo@.service` whose standard streams are the connection.
+fn sockets(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
+    let before = at.after().len();
+    let _ = ask(at, "svc status hello.service\n", "Active: ")?;
+    if !at
+        .after()
+        .iter()
+        .skip(before)
+        .any(|line| line.trim() == "Active: inactive (dead)")
+    {
+        failures.push("hello.service ran before any connection reached hello.socket".into());
+    }
+    let wanted = "hello.service[";
+    let before = at.after().len();
+    at.type_in(b"nc 127.0.0.1 7778 < /dev/null &\n")?;
+    let deadline = Instant::now() + PATIENCE;
+    let _ = at.read_more(deadline, |lines| {
+        lines
+            .get(before..)
+            .unwrap_or_default()
+            .iter()
+            .any(|line| line.contains(wanted) && line.contains("hello-fds"))
+    })?;
+    let said = at
+        .after()
+        .iter()
+        .skip(before)
+        .find(|line| line.contains(wanted) && line.contains("hello-fds"))
+        .cloned();
+    match said {
+        Some(line) if line.contains("hello-fds 1 hello.socket pid-ok-1") => {}
+        Some(line) => failures.push(format!(
+            "hello.service was started without the socket as sd_listen_fds says it: `{}`",
+            line.trim()
+        )),
+        None => failures.push("a connection to hello.socket did not start hello.service".into()),
+    }
+    match ask(at, "echo ping | nc 127.0.0.1 7777\n", "echoed ")? {
+        Some(line) if line.trim() == "echoed ping" => {}
+        Some(line) => failures.push(format!("echo.socket's instance said `{}`", line.trim())),
+        None => failures.push(
+            "a connection to echo.socket was not answered by an echo@.service instance".into(),
+        ),
+    }
+    Ok(())
+}
+
+/// Readiness (L7): `notifier.service` became active on its `READY=1` and
+/// shows its last `STATUS=`; `lazy.service`, which never says `READY=1`,
+/// stays activating with its status shown; `daemon.service` forked, and its
+/// main pid is the one its `PIDFile=` names.
+fn readiness(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
+    let before = at.after().len();
+    let _ = ask(at, "svc status notifier.service\n", "Status: ")?;
+    let shown: Vec<String> = at
+        .after()
+        .iter()
+        .skip(before)
+        .map(|l| l.trim().to_owned())
+        .collect();
+    if !shown.iter().any(|line| line == "Active: active (running)") {
+        failures.push("notifier.service did not become active on READY=1".into());
+    }
+    if !shown.iter().any(|line| line == "Status: \"serving\"") {
+        failures.push("svc status did not show notifier.service's last STATUS=, serving".into());
+    }
+
+    at.type_in(b"svc start lazy.service &\n")?;
+    thread::sleep(SETTLE);
+    let before = at.after().len();
+    let _ = ask(at, "svc status lazy.service\n", "Status: ")?;
+    let shown: Vec<String> = at
+        .after()
+        .iter()
+        .skip(before)
+        .map(|l| l.trim().to_owned())
+        .collect();
+    if !shown
+        .iter()
+        .any(|line| line == "Active: activating (start)")
+    {
+        failures.push(
+            "lazy.service, which never says READY=1, was not left activating: readiness is \
+             not waited for"
+                .into(),
+        );
+    }
+    if !shown
+        .iter()
+        .any(|line| line == "Status: \"still-starting\"")
+    {
+        failures.push("svc status did not show lazy.service's STATUS= before readiness".into());
+    }
+
+    let written = ask(
+        at,
+        "m=daemon; read d < /run/daemon.pid; echo \"$m-pid $d\"\n",
+        "daemon-pid ",
+    )?
+    .and_then(|line| line.trim().strip_prefix("daemon-pid ").map(str::to_owned));
+    let before = at.after().len();
+    let main = ask(at, "svc status daemon.service\n", "Main PID: ")?
+        .and_then(|line| line.trim().strip_prefix("Main PID: ").map(str::to_owned));
+    let active = at
+        .after()
+        .iter()
+        .skip(before)
+        .any(|line| line.trim() == "Active: active (running)");
+    match (written, main) {
+        (Some(written), Some(main)) if written == main && active => {}
+        (written, main) => failures.push(format!(
+            "daemon.service's main pid is {main:?} and active is {active}, where its PIDFile= \
+             says {written:?}"
+        )),
+    }
+    Ok(())
+}
+
+/// Stage four: `svc` at the prompt. `status` gives `echoer.service`'s main
+/// pid, `log` the line that process wrote, `restart` a new main pid, and
+/// the same `svc stop` made as uid 1000 through `su` is refused and leaves
+/// the service running.
+fn control(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
+    let first = main_pid(at, failures, "before the restart")?;
+    if let Some(pid) = first {
+        let wanted = format!("[{pid}] echoer-up {pid}");
+        if ask(at, "svc log echoer.service\n", &wanted)?.is_none() {
+            failures.push(format!(
+                "svc log echoer.service did not show `{wanted}`, the line its main process wrote"
+            ));
+        }
+    }
+    match ask(
+        at,
+        "svc restart echoer.service; r=$?; m=restart; echo \"$m-status $r\"\n",
+        "restart-status ",
+    )? {
+        Some(line) if line.trim() == "restart-status 0" => {}
+        Some(line) => failures.push(format!("svc restart failed: `{}`", line.trim())),
+        None => failures.push("svc restart never returned".into()),
+    }
+    let second = main_pid(at, failures, "after the restart")?;
+    if first.is_some() && first == second {
+        failures.push(format!(
+            "svc restart left echoer.service's main pid at {first:?}"
+        ));
+    }
+    let refused = ask(
+        at,
+        "su ferrix -c 'svc stop echoer.service'; r=$?; m=su; echo \"$m-status $r\"\n",
+        "su-status ",
+    )?;
+    match refused {
+        Some(line) if line.trim() == "su-status 1" => {}
+        Some(line) => failures.push(format!(
+            "svc stop as uid 1000 was not refused: `{}`",
+            line.trim()
+        )),
+        None => failures.push("svc stop as uid 1000 never returned".into()),
+    }
+    if !has(at.after(), "Permission denied") {
+        failures.push("the refusal of uid 1000's svc stop did not say why".into());
+    }
+    if main_pid(at, failures, "after uid 1000's svc stop")? != second {
+        failures.push("uid 1000's refused svc stop changed echoer.service anyway".into());
+    }
+    administer(at, failures)
+}
+
+/// The rest of stage four: `set-property` writes a limit to the running
+/// cgroup, `enable` and `disable` make and remove the link `[Install]`
+/// names, and `top` lists the units with a cgroup.
+fn administer(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
+    let limit = ask(
+        at,
+        "svc set-property echoer.service TasksMax=7; \
+         read n < /sys/fs/cgroup/system.slice/echoer.service/pids.max; m=prop; echo \"$m-max $n\"\n",
+        "prop-max ",
+    )?;
+    match limit {
+        Some(line) if line.trim() == "prop-max 7" => {}
+        other => failures.push(format!(
+            "svc set-property TasksMax=7 did not reach echoer.service's pids.max: {other:?}"
+        )),
+    }
+    let link = "/etc/ferrix/units/multi-user.target.wants/spare.service";
+    let enabled = ask(
+        at,
+        &format!("svc enable spare.service; [ -L {link} ] && m=on || m=off; echo \"enable-$m\"\n"),
+        "enable-",
+    )?;
+    if enabled.as_deref().map(str::trim) != Some("enable-on") {
+        failures.push(format!(
+            "svc enable spare.service did not make {link}: {enabled:?}"
+        ));
+    }
+    let disabled = ask(
+        at,
+        &format!(
+            "svc disable spare.service; [ -L {link} ] && m=on || m=off; echo \"disable-$m\"\n"
+        ),
+        "disable-",
+    )?;
+    if disabled.as_deref().map(str::trim) != Some("disable-off") {
+        failures.push(format!(
+            "svc disable spare.service left {link}: {disabled:?}"
+        ));
+    }
+    if ask(at, "svc top\n", "echoer.service ")?.is_none() {
+        failures.push("svc top did not list echoer.service".into());
+    }
+    Ok(())
+}
+
+/// `echoer.service`'s main pid, from `svc status`, which must also say it
+/// is active and running.
+fn main_pid(at: &mut Watching<'_>, failures: &mut Vec<String>, when: &str) -> Result<Option<u32>> {
+    let before = at.after().len();
+    let Some(line) = ask(at, "svc status echoer.service\n", "Main PID: ")? else {
+        failures.push(format!("svc status echoer.service gave no main pid {when}"));
+        return Ok(None);
+    };
+    let active = at
+        .after()
+        .iter()
+        .skip(before)
+        .any(|line| line.trim() == "Active: active (running)");
+    if !active {
+        failures.push(format!(
+            "svc status did not say echoer.service was active {when}"
+        ));
+    }
+    Ok(line
+        .trim()
+        .strip_prefix("Main PID: ")
+        .and_then(|pid| pid.trim().parse().ok()))
+}
+
 /// Write to `/data`, so `btrfs check` reads a volume that was written, then
-/// `kill -TERM 1` and wait for the power to go.
+/// `svc poweroff` and wait for the power to go.
 fn power_off(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
     if ask(
         at,
@@ -442,7 +939,7 @@ fn power_off(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
     {
         failures.push("the shell could not write /data/init-test".into());
     }
-    at.type_in(b"kill -TERM 1\n")?;
+    at.type_in(b"svc poweroff\n")?;
     let deadline = Instant::now() + PATIENCE * 4;
     let _ = at.read_more(deadline, |lines| has(lines, POWER_DOWN))?;
     Ok(())
@@ -589,13 +1086,13 @@ fn judge_flaky(after: &[String]) -> std::result::Result<(), String> {
     Ok(())
 }
 
-/// `kill -TERM 1` stopped everything in reverse order and powered off.
+/// `svc poweroff` stopped everything in reverse order and powered off.
 fn judge_shutdown(after: &[String]) -> std::result::Result<(), String> {
     let Some(from) = after
         .iter()
         .position(|line| line.contains("init     going down: poweroff.target"))
     else {
-        return Err("SIGTERM to pid 1 did not start poweroff.target".into());
+        return Err("svc poweroff did not start poweroff.target".into());
     };
     let mut rest = after.iter().skip(from);
     for want in STOP_ORDER {

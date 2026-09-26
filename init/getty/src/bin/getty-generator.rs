@@ -40,8 +40,20 @@ fn generate(directory: &Path, command_line: &str) -> io::Result<()> {
     fs::create_dir_all(&wants)?;
     for name in consoles(command_line) {
         let link = wants.join(format!("getty@{name}.service"));
+        // A rerun -- `svc daemon-reload` runs the generators again -- finds
+        // its own link from the last run, and leaves it. Nothing here may
+        // open what is there: opening a link to write follows it, and an
+        // empty write to the template masks every getty.
+        if fs::symlink_metadata(&link).is_ok() {
+            continue;
+        }
         if symlink(TEMPLATE, &link).is_err() {
-            drop(fs::File::create(&link)?);
+            drop(
+                fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&link)?,
+            );
         }
     }
     Ok(())
@@ -61,7 +73,31 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::consoles;
+    use super::{TEMPLATE, consoles, generate};
+
+    #[test]
+    fn a_second_run_leaves_the_first_runs_links_and_their_targets_alone() {
+        let root = std::env::temp_dir().join(format!("getty-generator-{}", std::process::id()));
+        let template = root.join("getty@.service");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&template, "[Service]\nExecStart=/sbin/getty %i\n").unwrap();
+        let out = root.join("out");
+        let wants = out.join("multi-user.target.wants");
+        std::fs::create_dir_all(&wants).unwrap();
+        // The first run's link, pointing at a template this test owns.
+        std::os::unix::fs::symlink(&template, wants.join("getty@console.service")).unwrap();
+        generate(&out, "").unwrap();
+        generate(&out, "").unwrap();
+        let kept = std::fs::read_to_string(&template).unwrap();
+        assert!(
+            kept.contains("ExecStart"),
+            "the template was written through its link"
+        );
+        let link = std::fs::read_link(wants.join("getty@console.service")).unwrap();
+        assert_eq!(link, template);
+        assert_ne!(link, std::path::Path::new(TEMPLATE));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn a_console_option_names_a_getty_without_its_speed() {

@@ -55,6 +55,11 @@ struct Group {
     events: File,
     /// Whether the manager believes it has processes.
     populated: bool,
+    /// Its `memory.events`, where the memory controller is on, watched for
+    /// `EPOLLPRI` (§5.5).
+    memory_events: Option<File>,
+    /// The `oom_kill` count last read from it.
+    oom_kills: u64,
 }
 
 /// Every cgroup init made, by unit.
@@ -123,14 +128,15 @@ impl Groups {
 
     /// Make `unit`'s cgroup at `path` and write its limits; for a slice,
     /// enable its children's controllers. Returns the descriptor of its
-    /// `cgroup.events` for the caller to watch.
+    /// `cgroup.events` for the caller to watch, and of its `memory.events`
+    /// where the memory controller is on.
     pub(crate) fn make(
         &mut self,
         unit: UnitId,
         path: &GroupPath,
         limits: &Limits,
         log: &mut dyn FnMut(String),
-    ) -> io::Result<RawFd> {
+    ) -> io::Result<(RawFd, Option<RawFd>)> {
         let dir = self.root.join(path.as_str());
         if !path.as_str().is_empty() {
             make_dir(&dir)?;
@@ -139,6 +145,8 @@ impl Groups {
             self.enable_controllers(&dir, log);
         }
         self.write_limits(&dir, limits, log);
+        let memory_events = File::open(dir.join("memory.events")).ok();
+        let oom_kills = memory_events.as_ref().map_or(0, oom_kills);
         let group = Group {
             path: path.clone(),
             dir: OpenOptions::new()
@@ -147,12 +155,52 @@ impl Groups {
                 .open(&dir)?,
             events: File::open(dir.join("cgroup.events"))?,
             populated: false,
+            memory_events,
+            oom_kills,
         };
-        let fd = group.events.as_raw_fd();
+        let fds = (
+            group.events.as_raw_fd(),
+            group.memory_events.as_ref().map(AsRawFd::as_raw_fd),
+        );
         if let Some(old) = self.groups.insert(unit, group) {
             drop(old);
         }
-        Ok(fd)
+        Ok(fds)
+    }
+
+    /// `Delegate=yes` (§5.1, C7): give `uid` the cgroup of `unit`, its
+    /// `cgroup.procs`, `cgroup.subtree_control` and `cgroup.threads`, which
+    /// is how cgroup v2 hands a subtree to someone else to manage.
+    pub(crate) fn delegate(&self, unit: UnitId, uid: u32, gid: u32) -> io::Result<()> {
+        let Some(group) = self.groups.get(&unit) else {
+            return Ok(());
+        };
+        let dir = self.root.join(group.path.as_str());
+        std::os::unix::fs::chown(&dir, Some(uid), Some(gid))?;
+        for file in ["cgroup.procs", "cgroup.subtree_control", "cgroup.threads"] {
+            let path = dir.join(file);
+            if path.exists() {
+                std::os::unix::fs::chown(&path, Some(uid), Some(gid))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The units whose `memory.events` counted an OOM kill since it was
+    /// last read, each read from its start, which clears its `EPOLLPRI`.
+    pub(crate) fn oom_killed(&mut self) -> Vec<UnitId> {
+        let mut killed = Vec::new();
+        for (&unit, group) in &mut self.groups {
+            let Some(file) = group.memory_events.as_ref() else {
+                continue;
+            };
+            let count = oom_kills(file);
+            if count > group.oom_kills {
+                killed.push(unit);
+            }
+            group.oom_kills = count;
+        }
+        killed
     }
 
     /// Write new limits to `unit`'s cgroup.
@@ -219,7 +267,7 @@ impl Groups {
         let group = self.groups.remove(&unit)?;
         let fd = group.events.as_raw_fd();
         let dir = self.root.join(group.path.as_str());
-        Some((fd, fs::remove_dir(dir)))
+        Some((fd, remove_tree(&dir)))
     }
 
     /// The events descriptor of `unit`'s cgroup, to stop watching.
@@ -296,6 +344,34 @@ impl Groups {
         }
         emptied
     }
+}
+
+/// The `oom_kill` count a `memory.events` says, read from its start.
+fn oom_kills(file: &File) -> u64 {
+    let mut text = [0_u8; 256];
+    let Ok(count) = file.read_at(&mut text, 0) else {
+        return 0;
+    };
+    String::from_utf8_lossy(text.get(..count).unwrap_or_default())
+        .lines()
+        .find_map(|line| line.strip_prefix("oom_kill "))
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+/// Remove a cgroup and every cgroup beneath it, deepest first: what a
+/// service with `Delegate=yes` made in its own is removed with it, as
+/// systemd trims a delegated subtree. A cgroup's files are not removed but
+/// go with its directory, so only directories are walked.
+fn remove_tree(dir: &Path) -> io::Result<()> {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                remove_tree(&entry.path())?;
+            }
+        }
+    }
+    fs::remove_dir(dir)
 }
 
 /// `mkdir`, where one that is there already is fine.

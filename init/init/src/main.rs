@@ -25,8 +25,13 @@
 //! init says why and becomes a shell on the console, so the machine can be
 //! looked at.
 
+mod admin;
 mod cgroup;
+mod control;
+mod logs;
 mod probe;
+mod readiness;
+mod sockets;
 mod spawn;
 mod sys;
 mod units;
@@ -40,13 +45,22 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::time::Duration;
 
+use ferrix_svc::event::Role;
 use ferrix_svc::event::{
-    Action, ClientId, Event, Exit, MountSpec, Pid, PowerAction, Request, UnitId, Whom,
+    Action, ClientId, Event, Exit, MountSpec, Pid, PowerAction, Reply, Request, Status, UnitId,
+    Whom,
 };
+use ferrix_svc::kind::{Config, ServiceType};
+use ferrix_svc::source::Source;
 use ferrix_svc::{Instant, Manager, Options};
+use ferrix_svc_proto::control::{Answer, Call, UnitStatus};
 
 use crate::cgroup::Groups;
+use crate::control::{Control, Heard};
+use crate::logs::Logs;
 use crate::probe::Machine;
+use crate::readiness::Readiness;
+use crate::sockets::Sockets;
 use crate::spawn::Report;
 
 /// The unit directory generators write to (§8.1).
@@ -88,6 +102,16 @@ mod token {
     pub(crate) const GROUP: u64 = 2 << 32;
     /// A child's exec report pipe; its pid below.
     pub(crate) const REPORT: u64 = 3 << 32;
+    /// A log pipe; its number below.
+    pub(crate) const LOG: u64 = 4 << 32;
+    /// The control socket's listener.
+    pub(crate) const LISTEN: u64 = 5 << 32;
+    /// A control connection; its number below.
+    pub(crate) const CLIENT: u64 = 6 << 32;
+    /// A `Type=notify` service's readiness pipe; its number below.
+    pub(crate) const NOTIFY: u64 = 7 << 32;
+    /// A `.socket` unit's sockets; the unit's number below.
+    pub(crate) const SOCKET: u64 = 8 << 32;
     /// The kind of `token`.
     pub(crate) fn kind(token: u64) -> u64 {
         token & !0xffff_ffff
@@ -121,6 +145,30 @@ struct Init {
     queue: VecDeque<Event>,
     /// The `TERM` a service on a terminal gets.
     terminal: String,
+    /// The unit directories as last read, for `enable` and `set-property`.
+    source: Source,
+    /// The control socket, unless it could not be made.
+    control: Option<Control>,
+    /// What each control connection asked, to shape the manager's reply.
+    pending: BTreeMap<u64, Pending>,
+    /// The log pipes and each unit's last lines.
+    logs: Logs,
+    /// The readiness pipes of `Type=notify` services.
+    readiness: Readiness,
+    /// The first process of each `Type=forking` service still starting.
+    forking: BTreeMap<u32, UnitId>,
+    /// The `.socket` units' sockets.
+    sockets: Sockets,
+}
+
+/// What a control connection is waiting for from the manager.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pending {
+    /// Units: every one, or with `Some`, a list, the failed ones alone when
+    /// it holds `true`.
+    Units(Option<bool>),
+    /// An operation's end.
+    Done,
 }
 
 fn main() {
@@ -176,7 +224,7 @@ impl Init {
         };
         let source = units::read(&mut log);
         let machine = Machine { command_line };
-        let manager = Manager::new(source, Box::new(machine), options);
+        let manager = Manager::new(source.clone(), Box::new(machine), options);
 
         let epoll = sys::epoll().map_err(|e| format!("epoll_create1 failed: {e}"))?;
         sys::watch(
@@ -187,6 +235,26 @@ impl Init {
         )
         .map_err(|e| format!("watching the signalfd failed: {e}"))?;
         let terminal = std::env::var("TERM").unwrap_or_else(|_| "vt220".to_owned());
+        let control = match Control::listen() {
+            Ok(control) => {
+                if let Err(error) = sys::watch(
+                    epoll.as_fd(),
+                    control.fd(),
+                    libc::EPOLLIN as u32,
+                    token::LISTEN,
+                ) {
+                    say(&format!("watching the control socket failed: {error}"));
+                }
+                Some(control)
+            }
+            Err(error) => {
+                say(&format!(
+                    "the control socket {} could not be made: {error}",
+                    ferrix_svc_proto::control::SOCKET
+                ));
+                None
+            }
+        };
         Ok(Init {
             manager,
             epoll,
@@ -196,6 +264,13 @@ impl Init {
             mounts: BTreeMap::new(),
             queue: VecDeque::from([Event::Boot]),
             terminal,
+            source,
+            control,
+            pending: BTreeMap::new(),
+            logs: Logs::default(),
+            readiness: Readiness::default(),
+            forking: BTreeMap::new(),
+            sockets: Sockets::default(),
         })
     }
 
@@ -233,9 +308,17 @@ impl Init {
     /// them: exec reports before the exits of the same children, exits
     /// before the cgroups they leave empty, and the timer last.
     fn gather(&mut self, ready: &[(u32, u64)]) {
-        for &(_, token) in ready {
-            if token::kind(token) == token::REPORT {
-                self.report(token::number(token));
+        for &(events, token) in ready {
+            match token::kind(token) {
+                token::REPORT => self.report(token::number(token)),
+                // Before the reaping below, so what a process said comes
+                // out before its end is reported.
+                token::LOG => self.read_log(token::number(token)),
+                token::LISTEN => self.accept(),
+                token::CLIENT => self.client(u64::from(token::number(token)), events),
+                token::NOTIFY => self.read_notify(token::number(token)),
+                token::SOCKET => self.connected(UnitId(token::number(token))),
+                _ => {}
             }
         }
         loop {
@@ -256,6 +339,11 @@ impl Init {
                 }
             }
         }
+        // An OOM kill before the exit it caused, so the service's result is
+        // `oom-kill` rather than the signal (the manager keeps the first).
+        for unit in self.groups.oom_killed() {
+            self.queue.push_back(Event::OomKilled { unit });
+        }
         self.reap();
         for unit in self.groups.emptied() {
             self.queue.push_back(Event::Emptied { unit });
@@ -275,6 +363,11 @@ impl Init {
                         self.report(pid);
                     }
                     self.queue.push_back(Event::Exited { pid: Pid(pid), how });
+                    if let Some(unit) = self.forking.remove(&pid)
+                        && how == Exit::Code(0)
+                    {
+                        self.find_forked_main(unit);
+                    }
                 }
                 Ok(None) => return,
                 Err(error) => {
@@ -318,7 +411,22 @@ impl Init {
             Action::MakeGroup { unit, path, limits } => {
                 let mut log = |line: String| say(&line);
                 match self.groups.make(unit, &path, &limits, &mut log) {
-                    Ok(fd) => self.watch(fd, token::GROUP | u64::from(unit.0)),
+                    Ok((events, memory)) => {
+                        self.watch(events, token::GROUP | u64::from(unit.0));
+                        // A kernel whose memory.events does not poll
+                        // refuses the watch (EPERM); it is read after every
+                        // wake all the same.
+                        if let Some(memory) = memory {
+                            let token = token::GROUP | u64::from(unit.0);
+                            let _ = sys::watch(
+                                self.epoll.as_fd(),
+                                memory,
+                                libc::EPOLLPRI as u32,
+                                token,
+                            );
+                        }
+                        self.delegate(unit);
+                    }
                     Err(error) => say(&format!("making the cgroup {path}: {error}")),
                 }
             }
@@ -373,13 +481,34 @@ impl Init {
                 };
                 self.queue.push_back(Event::Unmounted { unit, result });
             }
+            Action::Listen { unit, spec } => {
+                let result = self.sockets.listen(unit, &spec).map_err(|error| {
+                    let name = self.display(unit);
+                    say(&format!("{name}: {error}"));
+                    ferrix_svc::event::Errno(error.raw_os_error().unwrap_or(libc::EINVAL))
+                });
+                self.queue.push_back(Event::Listening { unit, result });
+            }
+            Action::Unlisten { unit } => {
+                self.unwatch_sockets(unit);
+                self.sockets.unlisten(unit);
+            }
+            Action::Watch { unit } => {
+                for fd in self.sockets.fds(unit) {
+                    let token = token::SOCKET | u64::from(unit.0);
+                    if let Err(error) =
+                        sys::watch(self.epoll.as_fd(), fd, libc::EPOLLIN as u32, token)
+                    {
+                        say(&format!("watching a socket failed: {error}"));
+                    }
+                }
+            }
+            Action::Close { connection } => self.sockets.close(connection),
             Action::Route { to, name, .. } | Action::Refuse { to, name, .. } => {
                 let unit = self.display(to);
                 say(&format!("{unit}: the directory ({}) comes with L8", name.0));
             }
-            // No control socket yet (L6): the one client is a signal to
-            // pid 1, which waits for no answer.
-            Action::Reply { .. } => {}
+            Action::Reply { client, reply } => self.reply(client, reply),
             Action::Power(action) => power(action),
         }
     }
@@ -401,7 +530,23 @@ impl Init {
                 error: ferrix_svc::event::Errno(errno),
             });
         };
-        let prepared = match spawn::prepare(spec, &self.terminal) {
+        let passed = spawn::Passed {
+            sockets: spec
+                .sockets
+                .iter()
+                .flat_map(|&socket| {
+                    let name = self.display(socket);
+                    self.sockets
+                        .fds(socket)
+                        .into_iter()
+                        .map(move |fd| (fd, name.clone()))
+                })
+                .collect(),
+            connection: spec
+                .connection
+                .and_then(|token| self.sockets.connection(token)),
+        };
+        let prepared = match spawn::prepare(spec, &self.terminal, &passed) {
             Ok(prepared) => prepared,
             Err(unprepared) => return failed(self, unprepared.errno, &unprepared.why),
         };
@@ -409,9 +554,44 @@ impl Init {
             let why = format!("its cgroup {} was never made", spec.group);
             return failed(self, libc::ENOENT, &why);
         };
-        match spawn::start(&prepared, cgroup) {
-            Ok((pid, report)) => {
+        let started = spawn::start(&prepared, &passed, cgroup);
+        // The child has the connection now, or nobody will.
+        if let Some(token) = spec.connection {
+            self.sockets.close(token);
+        }
+        match started {
+            Ok(spawn::Started {
+                pid,
+                report,
+                log,
+                notify,
+            }) => {
                 self.groups.filled(&spec.group);
+                if let Some(notify) = notify {
+                    let (id, fd) = self.readiness.add(unit, notify);
+                    if let Err(error) = sys::watch(
+                        self.epoll.as_fd(),
+                        fd,
+                        libc::EPOLLIN as u32,
+                        token::NOTIFY | u64::from(id),
+                    ) {
+                        say(&format!("watching a readiness pipe failed: {error}"));
+                    }
+                }
+                if spec.service_type == ServiceType::Forking && spec.role == Role::Main {
+                    let _ = self.forking.insert(pid, unit);
+                }
+                if let Some(log) = log {
+                    let (id, fd) = self.logs.add(unit, pid, log);
+                    if let Err(error) = sys::watch(
+                        self.epoll.as_fd(),
+                        fd,
+                        libc::EPOLLIN as u32,
+                        token::LOG | u64::from(id),
+                    ) {
+                        say(&format!("watching a log pipe failed: {error}"));
+                    }
+                }
                 let fd = report.as_raw_fd();
                 let _ = self.reports.insert(pid, (unit, report));
                 if let Err(error) = sys::watch(
@@ -433,6 +613,359 @@ impl Init {
             }
         }
     }
+}
+
+impl Init {
+    /// `Delegate=yes`: the cgroup just made is its `User=`'s to manage.
+    fn delegate(&mut self, unit: UnitId) {
+        let Some(name) = self.manager.name(unit).map(|name| name.as_str().to_owned()) else {
+            return;
+        };
+        let (delegate, user) = match self.source.load(&name).map(|loaded| loaded.config) {
+            Ok(Config::Service(service)) => (service.delegate, service.user),
+            Ok(Config::Scope(scope)) => (scope.delegate, None),
+            _ => return,
+        };
+        if !delegate {
+            return;
+        }
+        let Some(user) = user else {
+            // Root's own subtree: nothing to hand over.
+            return;
+        };
+        match spawn::account(&user) {
+            Some((uid, gid)) => {
+                if let Err(error) = self.groups.delegate(unit, uid, gid) {
+                    say(&format!("{name}: delegating its cgroup to {user}: {error}"));
+                }
+            }
+            None => say(&format!(
+                "{name}: Delegate=yes, but User={user} is not known"
+            )),
+        }
+    }
+
+    /// A socket unit's sockets are readable: a connection, or data, waits.
+    /// Stop watching them until the manager asks again, and tell it.
+    fn connected(&mut self, unit: UnitId) {
+        self.unwatch_sockets(unit);
+        if !self.sockets.accepts(unit) {
+            self.queue.push_back(Event::Incoming { unit });
+            return;
+        }
+        match self.sockets.accept(unit) {
+            Some(connection) => self.queue.push_back(Event::Accepted { unit, connection }),
+            // Gone before it was taken: listen on.
+            None => self.perform(Action::Watch { unit }),
+        }
+    }
+
+    /// Stop watching a socket unit's sockets.
+    fn unwatch_sockets(&self, unit: UnitId) {
+        for fd in self.sockets.fds(unit) {
+            sys::unwatch(self.epoll.as_fd(), fd);
+        }
+    }
+
+    /// Read readiness pipe `id` into events.
+    fn read_notify(&mut self, id: u32) {
+        let (events, closed) = self.readiness.read(id);
+        self.queue.extend(events);
+        if let Some(fd) = closed {
+            sys::unwatch(self.epoll.as_fd(), fd);
+        }
+    }
+
+    /// A forking service's first process exited 0: tell the manager which
+    /// process is now its main one, if one can be told (§5.3).
+    fn find_forked_main(&mut self, unit: UnitId) {
+        let Some(name) = self.manager.name(unit).map(|name| name.as_str().to_owned()) else {
+            return;
+        };
+        let pid_file = match self.source.load(&name).map(|loaded| loaded.config) {
+            Ok(Config::Service(service)) => service.pid_file,
+            _ => None,
+        };
+        let procs = self.groups.procs(unit);
+        match readiness::forked_main(pid_file.as_deref(), &procs) {
+            Some(pid) => self.queue.push_back(Event::MainPid {
+                unit,
+                pid: Pid(pid),
+            }),
+            None => say(&format!(
+                "{name}: no main process found (PIDFile={}, {} processes left)",
+                pid_file.as_deref().unwrap_or("none"),
+                procs.len()
+            )),
+        }
+    }
+
+    /// Read log pipe `id`, and say each line as its unit's.
+    fn read_log(&mut self, id: u32) {
+        let (said, closed) = self.logs.read(id);
+        for line in said {
+            let name = self.display(line.unit);
+            say(&format!("{name}[{}]: {}", line.pid, line.line));
+        }
+        if let Some(fd) = closed {
+            sys::unwatch(self.epoll.as_fd(), fd);
+        }
+    }
+
+    /// Accept control connections.
+    fn accept(&mut self) {
+        let Some(control) = self.control.as_mut() else {
+            return;
+        };
+        for (id, fd) in control.accept() {
+            let token = token::CLIENT | (id & 0xffff_ffff);
+            if let Err(error) = sys::watch(self.epoll.as_fd(), fd, libc::EPOLLIN as u32, token) {
+                say(&format!("watching a control connection failed: {error}"));
+            }
+        }
+    }
+
+    /// A control connection is readable, or has room to write.
+    fn client(&mut self, id: u64, events: u32) {
+        let Some(control) = self.control.as_mut() else {
+            return;
+        };
+        if events & libc::EPOLLOUT as u32 != 0 {
+            let waiting = control.flush(id);
+            self.rewatch_client(id, waiting);
+        }
+        if events & (libc::EPOLLIN | libc::EPOLLHUP | libc::EPOLLERR) as u32 == 0 {
+            return;
+        }
+        let Some(control) = self.control.as_mut() else {
+            return;
+        };
+        match control.read(id) {
+            Heard::Call { client, uid, call } => self.call(client, uid, call),
+            Heard::Gone => {
+                let _ = self.pending.remove(&id);
+            }
+            Heard::Nothing => {}
+        }
+    }
+
+    /// Watch a connection for room to write while it has bytes waiting.
+    fn rewatch_client(&mut self, id: u64, waiting: Option<bool>) {
+        let Some(waiting) = waiting else {
+            let _ = self.pending.remove(&id);
+            return;
+        };
+        let Some(fd) = self
+            .control
+            .as_ref()
+            .and_then(|control| control.client_fd(id))
+        else {
+            return;
+        };
+        let mut events = libc::EPOLLIN as u32;
+        if waiting {
+            events |= libc::EPOLLOUT as u32;
+        }
+        let _ = sys::rewatch(
+            self.epoll.as_fd(),
+            fd,
+            events,
+            token::CLIENT | (id & 0xffff_ffff),
+        );
+    }
+
+    /// Answer control connection `id`.
+    fn answer(&mut self, id: u64, answer: &Answer) {
+        let Some(control) = self.control.as_mut() else {
+            return;
+        };
+        let waiting = control.answer(id, answer);
+        if answer.is_final() {
+            let _ = self.pending.remove(&id);
+        }
+        self.rewatch_client(id, waiting);
+    }
+
+    /// A call from `svc`, made by `uid`.
+    fn call(&mut self, id: u64, uid: u32, call: Call) {
+        if let Some(why) = refusal(uid, &call) {
+            self.answer(id, &Answer::Refused(why));
+            return;
+        }
+        let client = ClientId(id);
+        let ask = |init: &mut Init, pending: Pending, request: Request| {
+            let _ = init.pending.insert(id, pending);
+            init.queue.push_back(Event::Request { client, request });
+        };
+        match call {
+            Call::Status(unit) => ask(self, Pending::Units(None), Request::Status(unit)),
+            Call::List { failed } => {
+                ask(self, Pending::Units(Some(failed)), Request::Status(None));
+            }
+            Call::Start(unit) => ask(self, Pending::Done, Request::start(&unit)),
+            Call::Stop(unit) => ask(self, Pending::Done, Request::stop(&unit)),
+            Call::Restart(unit) => ask(self, Pending::Done, Request::restart(&unit)),
+            Call::Reload(unit) => ask(self, Pending::Done, Request::Reload(unit)),
+            Call::Isolate(unit) => ask(self, Pending::Done, Request::Isolate(unit)),
+            Call::ResetFailed(unit) => ask(self, Pending::Done, Request::ResetFailed(unit)),
+            Call::Poweroff => ask(self, Pending::Done, Request::Poweroff),
+            Call::Reboot => ask(self, Pending::Done, Request::Reboot),
+            Call::Scope { unit, slice, pids } => {
+                let pids = pids.into_iter().map(Pid).collect();
+                ask(self, Pending::Done, Request::Scope { unit, slice, pids });
+            }
+            Call::Log { unit, lines } => {
+                let answer = match self.manager.unit(&unit) {
+                    Some(found) => {
+                        let count = usize::try_from(lines).unwrap_or(usize::MAX);
+                        Answer::Lines(self.logs.tail(found, count))
+                    }
+                    None => Answer::Refused(format!("{unit}: not loaded")),
+                };
+                self.answer(id, &answer);
+            }
+            Call::DaemonReload => {
+                self.reload_units();
+                self.answer(id, &Answer::Done("done".to_owned()));
+            }
+            Call::Enable(unit) => {
+                let done = admin::enable(&self.source, &unit);
+                self.changed(id, done);
+            }
+            Call::Disable(unit) => self.changed(id, admin::disable(&unit)),
+            Call::Mask(unit) => self.changed(id, admin::mask(&unit)),
+            Call::Unmask(unit) => self.changed(id, admin::unmask(&unit)),
+            Call::SetProperty {
+                unit,
+                assignments,
+                persistent,
+            } => {
+                // Written to the running cgroup before the answer, so what
+                // the caller reads next is the new limit.
+                match admin::set_property(&unit, &assignments, persistent) {
+                    Ok(notes) => {
+                        for note in notes {
+                            self.answer(id, &Answer::Note(note));
+                        }
+                        self.reload_units();
+                        self.apply_limits(&unit);
+                        self.answer(id, &Answer::Done("done".to_owned()));
+                    }
+                    Err(error) => self.answer(id, &Answer::Refused(error.to_string())),
+                }
+            }
+        }
+    }
+
+    /// The unit directories changed: say what changed, read them again,
+    /// and answer.
+    fn changed(&mut self, id: u64, done: io::Result<Vec<String>>) {
+        match done {
+            Ok(notes) => {
+                for note in notes {
+                    self.answer(id, &Answer::Note(note));
+                }
+                self.reload_units();
+                self.answer(id, &Answer::Done("done".to_owned()));
+            }
+            Err(error) => self.answer(id, &Answer::Refused(error.to_string())),
+        }
+    }
+
+    /// `svc daemon-reload`: run the generators and read the directories
+    /// again; what runs is left running.
+    fn reload_units(&mut self) {
+        run_generators();
+        let mut log = |line: String| say(&line);
+        let source = units::read(&mut log);
+        self.source = source.clone();
+        self.manager.reload(source);
+    }
+
+    /// Write a running unit's limits again, as its files now say them.
+    fn apply_limits(&mut self, name: &str) {
+        let Some(unit) = self.manager.unit(name) else {
+            return;
+        };
+        let limits = match self.source.load(name).map(|loaded| loaded.config) {
+            Ok(Config::Service(service)) => service.limits,
+            Ok(Config::Slice(slice)) => slice.limits,
+            Ok(Config::Scope(scope)) => scope.limits,
+            _ => return,
+        };
+        let mut log = |line: String| say(&line);
+        self.groups.set_limits(unit, &limits, &mut log);
+    }
+
+    /// The manager answered a client.
+    fn reply(&mut self, client: ClientId, reply: Reply) {
+        if client == SIGNALLED {
+            return;
+        }
+        let id = client.0;
+        let pending = self.pending.get(&id).copied();
+        let answer = match reply {
+            Reply::Done(result) => Answer::Done(result.name().to_owned()),
+            Reply::Refused(why) => Answer::Refused(why),
+            Reply::Status(list) => {
+                let failed_only = matches!(pending, Some(Pending::Units(Some(true))));
+                Answer::Units(
+                    list.iter()
+                        .filter(|status| !failed_only || status.active.name() == "failed")
+                        .map(|status| self.unit_status(status))
+                        .collect(),
+                )
+            }
+        };
+        self.answer(id, &answer);
+    }
+
+    /// One unit's status on the wire.
+    fn unit_status(&self, status: &Status) -> UnitStatus {
+        UnitStatus {
+            name: status.name.clone(),
+            description: status.description.clone(),
+            load: status.load.to_owned(),
+            active: status.active.name().to_owned(),
+            sub: status.sub.to_owned(),
+            main: status.main.map(|pid| pid.0),
+            result: status.result.map(|result| result.name().to_owned()),
+            status: status.status.clone(),
+            cgroup: self
+                .manager
+                .group(status.unit)
+                .map(|group| group.as_str().to_owned()),
+        }
+    }
+}
+
+/// Why `uid` may not make `call`, if it may not (§10): anyone may read,
+/// only root may change state, and a user may group their own processes in
+/// a scope under their own slice.
+fn refusal(uid: u32, call: &Call) -> Option<String> {
+    if uid == 0 || !call.changes_state() {
+        return None;
+    }
+    if let Call::Scope { slice, pids, .. } = call {
+        let own = format!("user-{uid}.slice");
+        let owned = pids.iter().all(|&pid| owner(pid) == Some(uid));
+        if slice.as_deref() == Some(own.as_str()) && owned {
+            return None;
+        }
+        return Some(format!(
+            "Permission denied: uid {uid} may make a scope only of its own processes, under {own}"
+        ));
+    }
+    Some(format!(
+        "Permission denied: only root may change the system, and this is uid {uid}"
+    ))
+}
+
+/// The real uid of process `pid`, from `/proc/<pid>/status`.
+fn owner(pid: u32) -> Option<u32> {
+    let text = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let line = text.lines().find(|line| line.starts_with("Uid:"))?;
+    line.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// A tmpfs on `/run`, and the runtime unit directory in it.

@@ -29,7 +29,7 @@ use std::ptr;
 
 use ferrix_svc::event::SpawnSpec;
 use ferrix_svc::exec::Command;
-use ferrix_svc::kind::{Input, Output};
+use ferrix_svc::kind::{Input, Output, ServiceType};
 
 use crate::sys::{self, Forked};
 
@@ -121,6 +121,18 @@ enum Stream {
     Tty,
     /// A copy of a stream set up before it: standard error as output.
     Same(RawFd),
+    /// The log's pipe (§10), made when the process is started.
+    Log,
+    /// The connection an `Accept=yes` socket took.
+    Socket,
+}
+
+/// What a spawn is handed from a `.socket` unit: the listening sockets for
+/// `LISTEN_FDS`, each with its unit's name, and an accepted connection.
+#[derive(Debug, Default)]
+pub(crate) struct Passed {
+    pub(crate) sockets: Vec<(RawFd, String)>,
+    pub(crate) connection: Option<RawFd>,
 }
 
 /// A spawn worked out in the parent: nothing the child does allocates.
@@ -134,6 +146,11 @@ pub(crate) struct Prepared {
     streams: [Stream; 3],
     directory: Option<(CString, bool)>,
     user: Option<(u32, u32, Vec<u32>)>,
+    /// For `Type=notify`: the descriptor its readiness pipe goes on
+    /// (`NotifyFd=`, 3 when the unit names none).
+    notify: Option<libc::c_int>,
+    /// Where `LISTEN_PID=` is in `envp`: the child writes its own pid there.
+    listen_pid: Option<usize>,
 }
 
 /// Why a spawn could not be worked out.
@@ -158,7 +175,11 @@ fn c_string(text: &str) -> Result<CString, Unprepared> {
 
 /// Work out everything the child needs from `spec`, with `terminal` the
 /// `TERM` a service on a terminal gets unless it sets its own.
-pub(crate) fn prepare(spec: &SpawnSpec, terminal: &str) -> Result<Prepared, Unprepared> {
+pub(crate) fn prepare(
+    spec: &SpawnSpec,
+    terminal: &str,
+    passed: &Passed,
+) -> Result<Prepared, Unprepared> {
     let user = match &spec.user {
         Some(name) => Some(lookup_user(name)?),
         None => None,
@@ -173,6 +194,41 @@ pub(crate) fn prepare(spec: &SpawnSpec, terminal: &str) -> Result<Prepared, Unpr
     }
     if spec.tty.is_some() {
         let _ = environment.insert("TERM".to_owned(), terminal.to_owned());
+    }
+    let notify = match spec.service_type {
+        ServiceType::Notify => {
+            let fd = spec.notify_fd.unwrap_or(3);
+            let fd = libc::c_int::try_from(fd)
+                .ok()
+                .filter(|fd| (3..64).contains(fd))
+                .ok_or_else(|| {
+                    Unprepared::new(libc::EINVAL, format!("NotifyFd={fd} is not from 3 to 63"))
+                })?;
+            // How a service learns where to write, as NOTIFY_SOCKET tells
+            // a systemd service.
+            let _ = environment.insert("NOTIFY_FD".to_owned(), fd.to_string());
+            Some(fd)
+        }
+        _ => None,
+    };
+    let sockets = passed.sockets.len();
+    if sockets > 0 {
+        // sd_listen_fds(3)'s words: the count, whose names, and whose pid.
+        let names: Vec<&str> = passed
+            .sockets
+            .iter()
+            .map(|(_, name)| name.as_str())
+            .collect();
+        let _ = environment.insert("LISTEN_FDS".to_owned(), sockets.to_string());
+        let _ = environment.insert("LISTEN_FDNAMES".to_owned(), names.join(":"));
+        let _ = environment.insert("LISTEN_PID".to_owned(), String::new());
+        let last = 3 + libc::c_int::try_from(sockets).unwrap_or(libc::c_int::MAX);
+        if notify.is_some_and(|fd| fd < last) {
+            return Err(Unprepared::new(
+                libc::EINVAL,
+                format!("NotifyFd= falls among the {sockets} sockets passed from 3"),
+            ));
+        }
     }
     for (name, value) in &spec.environment {
         let _ = environment.insert(name.clone(), value.clone());
@@ -222,6 +278,7 @@ pub(crate) fn prepare(spec: &SpawnSpec, terminal: &str) -> Result<Prepared, Unpr
         Input::Null => Stream::Open(c"/dev/null".to_owned(), libc::O_RDONLY),
         Input::Tty | Input::TtyForce | Input::TtyFail => Stream::Tty,
         Input::File(path) => Stream::Open(c_string(path)?, libc::O_RDONLY),
+        Input::Socket => Stream::Socket,
     };
     let stdin_is_tty = matches!(stdin, Stream::Tty);
     let stdout = output(&spec.stdout, stdin_is_tty, None)?;
@@ -239,7 +296,9 @@ pub(crate) fn prepare(spec: &SpawnSpec, terminal: &str) -> Result<Prepared, Unpr
         None => Some((c"/".to_owned(), false)),
     };
 
+    let listen_pid = environment.keys().position(|name| name == "LISTEN_PID");
     Ok(Prepared {
+        listen_pid,
         path: c_string(&path)?,
         argv: argv
             .iter()
@@ -253,13 +312,14 @@ pub(crate) fn prepare(spec: &SpawnSpec, terminal: &str) -> Result<Prepared, Unpr
         streams: [stdin, stdout, stderr],
         directory,
         user: user_ids,
+        notify,
     })
 }
 
 /// Where standard output or error goes. `Inherit` is standard input's
-/// terminal if it has one, and otherwise the log -- which reaches the
-/// console (§10), and until L6 gives the log a pipe of its own is the
-/// console itself. Standard error's `Inherit` is standard output.
+/// terminal if it has one, and otherwise the log, a pipe init reads and
+/// says on the console (§10). Standard error's `Inherit` is standard
+/// output.
 fn output(
     output: &Output,
     stdin_is_tty: bool,
@@ -270,11 +330,12 @@ fn output(
         Output::Inherit => match inherit_from {
             Some(fd) => Stream::Same(fd),
             None if stdin_is_tty => Stream::Tty,
-            None => Stream::Open(c"/dev/console".to_owned(), write),
+            None => Stream::Log,
         },
         Output::Null => Stream::Open(c"/dev/null".to_owned(), write),
         Output::Tty => Stream::Tty,
-        Output::Console | Output::Log => Stream::Open(c"/dev/console".to_owned(), write),
+        Output::Console => Stream::Open(c"/dev/console".to_owned(), write),
+        Output::Log => Stream::Log,
         Output::File(path) => Stream::Open(c_string(path)?, write | libc::O_CREAT),
         Output::Append(path) => {
             Stream::Open(c_string(path)?, write | libc::O_CREAT | libc::O_APPEND)
@@ -282,6 +343,7 @@ fn output(
         Output::Truncate(path) => {
             Stream::Open(c_string(path)?, write | libc::O_CREAT | libc::O_TRUNC)
         }
+        Output::Socket => Stream::Socket,
     })
 }
 
@@ -419,6 +481,13 @@ fn lookup_user(user: &str) -> Result<Account, Unprepared> {
     }
 }
 
+/// The uid and gid of `User=`, for `Delegate=`.
+pub(crate) fn account(user: &str) -> Option<(u32, u32)> {
+    lookup_user(user)
+        .ok()
+        .map(|account| (account.uid, account.gid))
+}
+
 /// `Group=`: a name in `/etc/group`, or a number.
 fn lookup_group(group: &str) -> Result<u32, Unprepared> {
     if let Ok(gid) = group.parse() {
@@ -436,19 +505,108 @@ fn lookup_group(group: &str) -> Result<u32, Unprepared> {
         .ok_or_else(|| Unprepared::new(libc::ESRCH, format!("Group={group} is not in /etc/group")))
 }
 
-/// Start `prepared` in the cgroup `cgroup` is open on, and return the
-/// child's pid and the read end of its report pipe.
-pub(crate) fn start(prepared: &Prepared, cgroup: BorrowedFd<'_>) -> io::Result<(u32, OwnedFd)> {
+/// A started process: its pid, the read end of its report pipe, and the
+/// read end of its log pipe when a stream goes to the log.
+#[derive(Debug)]
+pub(crate) struct Started {
+    pub(crate) pid: u32,
+    pub(crate) report: OwnedFd,
+    pub(crate) log: Option<OwnedFd>,
+    /// The read end of a `Type=notify` service's readiness pipe.
+    pub(crate) notify: Option<OwnedFd>,
+}
+
+/// Start `prepared` in the cgroup `cgroup` is open on.
+pub(crate) fn start(
+    prepared: &Prepared,
+    passed: &Passed,
+    cgroup: BorrowedFd<'_>,
+) -> io::Result<Started> {
     let (report, write_end) = sys::pipe()?;
+    // Copies above anything the child moves them to, so one `dup2` to 3
+    // cannot land on another socket before that one has moved.
+    let sockets = passed
+        .sockets
+        .iter()
+        .map(|(fd, _)| sys::duplicate_high(*fd))
+        .collect::<io::Result<Vec<OwnedFd>>>()?;
+    let connection = passed.connection.map(sys::duplicate_high).transpose()?;
+    let log = if prepared
+        .streams
+        .iter()
+        .any(|stream| matches!(stream, Stream::Log))
+    {
+        let (read, write) = sys::pipe()?;
+        sys::nonblocking(read.as_raw_fd())?;
+        Some((read, write))
+    } else {
+        None
+    };
+    let notify = match prepared.notify {
+        Some(_) => {
+            let (read, write) = sys::pipe()?;
+            sys::nonblocking(read.as_raw_fd())?;
+            Some((read, write))
+        }
+        None => None,
+    };
     // Built before the clone: the child must not allocate.
     let argv = pointers(&prepared.argv);
-    let envp = pointers(&prepared.envp);
+    let mut envp = pointers(&prepared.envp);
+    let pipes = Pipes {
+        report: write_end.as_raw_fd(),
+        log: log.as_ref().map(|(_, write)| write.as_raw_fd()),
+        notify: notify.as_ref().map(|(_, write)| write.as_raw_fd()),
+        sockets: sockets.iter().map(AsRawFd::as_raw_fd).collect(),
+        connection: connection.as_ref().map(AsRawFd::as_raw_fd),
+    };
     match sys::fork_into(cgroup)? {
-        Forked::Child => child(prepared, &argv, &envp, write_end.as_raw_fd()),
+        Forked::Child => child(prepared, &argv, &mut envp, &pipes),
         Forked::Parent(pid) => {
             drop(write_end);
-            Ok((pid, report))
+            drop(sockets);
+            drop(connection);
+            Ok(Started {
+                pid,
+                report,
+                log: log.map(|(read, write)| {
+                    drop(write);
+                    read
+                }),
+                notify: notify.map(|(read, write)| {
+                    drop(write);
+                    read
+                }),
+            })
         }
+    }
+}
+
+/// `LISTEN_PID=<pid>` and a NUL into `buffer`, without allocating.
+fn write_pid(buffer: &mut [u8; 32], pid: u32) {
+    const KEY: &[u8] = b"LISTEN_PID=";
+    let mut digits = [0_u8; 10];
+    let mut value = pid;
+    let mut count = 0;
+    loop {
+        if let Some(digit) = digits.get_mut(count) {
+            *digit = b'0' + u8::try_from(value % 10).unwrap_or(0);
+        }
+        count += 1;
+        value /= 10;
+        if value == 0 || count == digits.len() {
+            break;
+        }
+    }
+    let mut at = 0;
+    for &byte in KEY.iter().chain(digits.iter().take(count).rev()) {
+        if let Some(slot) = buffer.get_mut(at) {
+            *slot = byte;
+        }
+        at += 1;
+    }
+    if let Some(slot) = buffer.get_mut(at) {
+        *slot = 0;
     }
 }
 
@@ -461,8 +619,25 @@ fn pointers(strings: &[CString]) -> Vec<*const c_char> {
         .collect()
 }
 
+/// The descriptors the child moves into place: the write ends of init's
+/// pipes, and what a `.socket` unit passes.
+#[derive(Debug)]
+struct Pipes {
+    report: RawFd,
+    log: Option<RawFd>,
+    notify: Option<RawFd>,
+    sockets: Vec<RawFd>,
+    connection: Option<RawFd>,
+}
+
 /// The child, from `clone3` to `execve`.
-fn child(prepared: &Prepared, argv: &[*const c_char], envp: &[*const c_char], report: RawFd) -> ! {
+fn child(
+    prepared: &Prepared,
+    argv: &[*const c_char],
+    envp: &mut [*const c_char],
+    pipes: &Pipes,
+) -> ! {
+    let (report, log) = (pipes.report, pipes.log);
     let fail = |step: Step, error: io::Error| -> ! {
         let errno = error.raw_os_error().unwrap_or(libc::EIO);
         let mut bytes = [0_u8; 8];
@@ -513,10 +688,35 @@ fn child(prepared: &Prepared, argv: &[*const c_char], envp: &[*const c_char], re
                 None => fail(step, io::Error::from_raw_os_error(libc::ENOTTY)),
             },
             Stream::Same(fd) => *fd,
+            Stream::Log => match log {
+                Some(fd) => fd,
+                None => fail(step, io::Error::from_raw_os_error(libc::EBADF)),
+            },
+            Stream::Socket => match pipes.connection {
+                Some(fd) => fd,
+                None => fail(step, io::Error::from_raw_os_error(libc::ENOTSOCK)),
+            },
         };
         if let Err(error) = sys::dup2(from, target) {
             fail(step, error);
         }
+    }
+    for (target, fd) in (3..).zip(&pipes.sockets) {
+        if let Err(error) = sys::dup2(*fd, target) {
+            fail(Step::Stdin, error);
+        }
+    }
+    // `LISTEN_PID=` is this process's pid, which only it knows now: written
+    // into a buffer on its own stack, which lives until `execve`.
+    let mut listen_pid = [0_u8; 32];
+    if let Some(slot) = prepared.listen_pid.and_then(|at| envp.get_mut(at)) {
+        write_pid(&mut listen_pid, sys::own_pid());
+        *slot = listen_pid.as_ptr().cast();
+    }
+    if let (Some(target), Some(write)) = (prepared.notify, pipes.notify)
+        && let Err(error) = sys::dup2(write, target)
+    {
+        fail(Step::Stdout, error);
     }
     if let Some((path, missing_ok)) = &prepared.directory
         && let Err(error) = sys::chdir(path)
@@ -589,6 +789,15 @@ mod tests {
                 ("C".to_owned(), "x".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn listen_pid_is_written_without_allocating() {
+        let mut buffer = [0xff_u8; 32];
+        write_pid(&mut buffer, 4096);
+        assert_eq!(&buffer[..16], b"LISTEN_PID=4096\0");
+        write_pid(&mut buffer, 7);
+        assert_eq!(&buffer[..13], b"LISTEN_PID=7\0");
     }
 
     #[test]

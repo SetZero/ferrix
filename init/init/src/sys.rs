@@ -290,7 +290,31 @@ pub(crate) fn reboot(command: libc::c_int) -> io::Error {
     io::Error::last_os_error()
 }
 
-/// A pipe whose ends close on `execve`.
+/// The lowest descriptor a pipe of init's is moved to, above any a unit
+/// names (`NotifyFd=`), so a child's `dup2` onto one never lands on another.
+const HIGH_FD: libc::c_int = 100;
+
+/// A copy of `fd` at [`HIGH_FD`] or above, closed on `execve`; `fd` is
+/// closed.
+fn high(fd: OwnedFd) -> io::Result<OwnedFd> {
+    // SAFETY: no pointers.
+    owned(unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, HIGH_FD) })
+}
+
+/// A copy of `fd`, which stays init's, at [`HIGH_FD`] or above.
+pub(crate) fn duplicate_high(fd: RawFd) -> io::Result<OwnedFd> {
+    // SAFETY: no pointers.
+    owned(unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, HIGH_FD) })
+}
+
+/// The calling process's pid, from the kernel: the child's own, after
+/// `clone3`.
+pub(crate) fn own_pid() -> u32 {
+    // SAFETY: no arguments.
+    unsafe { libc::getpid() }.unsigned_abs()
+}
+
+/// A pipe whose ends close on `execve`, both at [`HIGH_FD`] or above.
 pub(crate) fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     let mut fds = [0 as libc::c_int; 2];
     // SAFETY: `fds` is writable for two descriptors.
@@ -300,7 +324,44 @@ pub(crate) fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     let read = unsafe { OwnedFd::from_raw_fd(read) };
     // SAFETY: as above.
     let write = unsafe { OwnedFd::from_raw_fd(write) };
-    Ok((read, write))
+    Ok((high(read)?, high(write)?))
+}
+
+/// Make `fd` non-blocking.
+pub(crate) fn nonblocking(fd: RawFd) -> io::Result<()> {
+    // SAFETY: no pointers.
+    let flags = check(unsafe { libc::fcntl(fd, libc::F_GETFL) })?;
+    // SAFETY: no pointers.
+    check(unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) }).map(drop)
+}
+
+/// The uid of the process at the other end of a Unix socket.
+pub(crate) fn peer_uid(fd: RawFd) -> io::Result<u32> {
+    let mut credentials = libc::ucred {
+        pid: 0,
+        uid: u32::MAX,
+        gid: u32::MAX,
+    };
+    let mut size = libc::socklen_t::try_from(size_of::<libc::ucred>()).unwrap_or(0);
+    // SAFETY: `credentials` is writable for `size` bytes.
+    let ret = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            ptr::from_mut(&mut credentials).cast(),
+            &mut size,
+        )
+    };
+    check(ret).map(|_| credentials.uid)
+}
+
+/// Change what `fd` is watched for.
+pub(crate) fn rewatch(epoll: BorrowedFd<'_>, fd: RawFd, events: u32, token: u64) -> io::Result<()> {
+    let mut event = libc::epoll_event { events, u64: token };
+    // SAFETY: `event` is a valid `epoll_event`.
+    let ret = unsafe { libc::epoll_ctl(epoll.as_raw_fd(), libc::EPOLL_CTL_MOD, fd, &mut event) };
+    check(ret).map(drop)
 }
 
 /// Which side of a `clone3` this is.
