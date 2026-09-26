@@ -54,7 +54,7 @@ pub use client::{
 pub use globals::{Global, Globals};
 pub use layer::{Anchors, Layer, LayerSurface, Margin};
 pub use role::Role;
-pub use shm::{Buffer, BufferError, FORMATS, Format, Pool};
+pub use shm::{Buffer, BufferError, FORMATS, Format, Pool, PoolKey};
 pub use surface::{Committed, Output, Rect, Region, State, Subsurface, Surface};
 pub use xdg::{Popup, Positioner, Toplevel, XdgRole, XdgSurface};
 

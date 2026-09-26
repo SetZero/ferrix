@@ -853,7 +853,10 @@ fn a_real_client_s_window_setup_is_understood_request_for_request() {
 
     // The buffer is the rectangle the client cut.
     let cut = client.buffer(ObjectId(*buffer)).expect("a buffer");
-    assert_eq!(cut.pool, ObjectId(*pool));
+    assert_eq!(
+        cut.pool, made.key,
+        "the buffer names the pool it was cut from"
+    );
     assert_eq!(
         (cut.width, cut.height, cut.stride),
         (*width, *height, *stride)
@@ -899,7 +902,7 @@ fn a_real_client_s_window_setup_is_understood_request_for_request() {
     assert!(
         events.iter().any(|event| matches!(
             event,
-            Event::PoolCreated { pool: made, .. } if made.0 == *pool
+            Event::PoolCreated { pool: key, .. } if *key == client.pool(ObjectId(*pool)).expect("a pool").key
         )),
         "the compositor is told to map the pool"
     );
@@ -1321,7 +1324,7 @@ fn a_pool_may_grow_and_may_not_shrink() {
     assert_eq!(
         client.take_events(),
         [Event::PoolResized {
-            pool: ObjectId(6),
+            pool: client.pool(ObjectId(6)).expect("a pool").key,
             size: 8192
         }]
     );
@@ -4992,4 +4995,49 @@ fn a_cursor_shape_shows_the_arrow_and_a_null_cursor_hides_it() {
         !client.said_cursor() && client.cursor().is_none(),
         "a shape is drawn as the arrow, not hidden"
     );
+}
+
+/// A client may destroy a pool, go on drawing with a buffer cut from it, and
+/// make a new pool that libwayland gives the freed id. The buffer still
+/// names the first pool, which is still in use, and the compositor is told
+/// that pool was retired and a different one made: Chrome's window was read
+/// out of its next pool's few kilobytes, and drawn blank, when they were
+/// both known by the id.
+#[test]
+fn a_pool_made_under_a_destroyed_pools_id_is_another_pool() {
+    let mut client = drawing_client();
+    let mut bytes = create_pool(6, 4096);
+    bytes.extend(create_buffer(6, 7, 0, 16, 16, 64, 1));
+    assert_eq!(client.read(&bytes, &[Fd(3)]), bytes.len());
+    let first = client.pool(ObjectId(6)).expect("a pool").key;
+    assert_eq!(client.buffer(ObjectId(7)).expect("a buffer").pool, first);
+    let _ = client.take_events();
+
+    let destroy = request(6, core::wl_shm_pool::request::DESTROY, &[], &[]);
+    assert_eq!(client.read(&destroy, &[]), destroy.len());
+    assert!(
+        client
+            .take_events()
+            .contains(&Event::PoolRetired { pool: first }),
+        "the compositor is told which pool went"
+    );
+
+    let again = create_pool(6, 64);
+    assert_eq!(client.read(&again, &[Fd(4)]), again.len());
+    assert_eq!(client.fatal(), None);
+    let second = client.pool(ObjectId(6)).expect("the new pool").key;
+    assert_ne!(second, first, "a pool's key is never given again");
+    assert!(
+        client
+            .take_events()
+            .iter()
+            .any(|event| matches!(event, Event::PoolCreated { pool, .. } if *pool == second))
+    );
+    assert_eq!(
+        client.buffer(ObjectId(7)).expect("the buffer").pool,
+        first,
+        "the buffer is still the first pool's"
+    );
+    assert!(client.pool_in_use(first), "its buffer keeps the first pool");
+    assert!(!client.pool_in_use(second));
 }

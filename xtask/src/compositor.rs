@@ -4832,6 +4832,8 @@ pub(crate) fn test_chrome_window(args: &Args) -> Result<()> {
     let dump = paths::build_dir(arch).join("chrome-window.ppm");
     let mut said: Vec<String> = Vec::new();
     let mut best: Option<Image> = None;
+    // The emptiest screen after the page was clicked into and typed at.
+    let mut after_input: Option<Image> = None;
     let hook = |watching: &mut Watching<'_>| -> Result<()> {
         let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
         let up = watching.read_more(Instant::now() + SETTLE, |lines| {
@@ -4861,6 +4863,16 @@ pub(crate) fn test_chrome_window(args: &Args) -> Result<()> {
             }
             let _ = watching.read_more(Instant::now() + Duration::from_secs(2), |_| false)?;
         }
+        // Clicked into and typed at, as a person does: the window must
+        // still show its page. It went blank on the desktop when the
+        // compositor knew pools by object id, and a pool Chrome made after
+        // the click took the id of the one its window was drawn from.
+        if best
+            .as_ref()
+            .is_some_and(|screen| yellow_pixels(screen) >= CHROME_YELLOW_PIXELS)
+        {
+            after_input = Some(click_and_type(&mut qmp, watching, &dump)?);
+        }
         let _ = watching.read_more(Instant::now() + Duration::from_secs(2), |_| false)?;
         said = watching
             .lines()
@@ -4871,7 +4883,46 @@ pub(crate) fn test_chrome_window(args: &Args) -> Result<()> {
         Ok(())
     };
     let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
-    judge_chrome_window(arch, &said, best.as_ref(), &dump)
+    judge_chrome_window(arch, &said, best.as_ref(), after_input.as_ref(), &dump)
+}
+
+/// Click into Chrome's page and type three letters, as a person does, and
+/// answer the emptiest of the screens taken after the click, after the
+/// typing and five seconds later.
+fn click_and_type(qmp: &mut Qmp, watching: &mut Watching<'_>, dump: &Path) -> Result<Image> {
+    let click = |down: bool| {
+        format!("{{\"type\":\"btn\",\"data\":{{\"down\":{down},\"button\":\"left\"}}}}")
+    };
+    let mut emptiest: Option<Image> = None;
+    let mut look = |qmp: &mut Qmp| -> Result<()> {
+        qmp.screendump(Some(DEVICE_ID), dump)?;
+        let bytes = std::fs::read(dump)
+            .map_err(|error| Error::new(format!("reading {}: {error}", dump.display())))?;
+        let screen = parse_ppm(&bytes)?;
+        if emptiest
+            .as_ref()
+            .is_none_or(|kept| yellow_pixels(&screen) < yellow_pixels(kept))
+        {
+            emptiest = Some(screen);
+        }
+        Ok(())
+    };
+    qmp.input_send_event(&[absolute("x", 16384), absolute("y", 20000)])?;
+    std::thread::sleep(Duration::from_millis(500));
+    qmp.input_send_event(&[click(true)])?;
+    std::thread::sleep(Duration::from_millis(100));
+    qmp.input_send_event(&[click(false)])?;
+    std::thread::sleep(Duration::from_millis(500));
+    look(qmp)?;
+    for name in ["a", "b", "c"] {
+        press(qmp, &[name])?;
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    std::thread::sleep(Duration::from_secs(2));
+    look(qmp)?;
+    let _ = watching.read_more(Instant::now() + Duration::from_secs(5), |_| false)?;
+    look(qmp)?;
+    emptiest.ok_or_else(|| Error::new("no screen was taken after the click"))
 }
 
 /// What [`test_chrome_window`] requires of what the guest said and showed.
@@ -4879,6 +4930,7 @@ fn judge_chrome_window(
     arch: Arch,
     said: &[String],
     screen: Option<&Image>,
+    after_input: Option<&Image>,
     dump: &Path,
 ) -> Result<()> {
     let transcript = || {
@@ -4910,9 +4962,26 @@ fn judge_chrome_window(
             kept.display()
         ));
     }
+    let Some(after) = after_input else {
+        return fail("the page was never clicked into and typed at".to_owned());
+    };
+    let after_found = yellow_pixels(after);
+    if after_found < CHROME_YELLOW_PIXELS {
+        let blank = dump.with_file_name("chrome-window-after-input.ppm");
+        let mut ppm = format!("P6\n{} {}\n255\n", after.width, after.height).into_bytes();
+        ppm.extend_from_slice(&after.pixels);
+        std::fs::write(&blank, &ppm)
+            .map_err(|error| Error::new(format!("writing {}: {error}", blank.display())))?;
+        return fail(format!(
+            "clicked into and typed at, the window went blank: {after_found} pixels of the \
+             page's yellow at the emptiest, from {found}; the screen is {}",
+            blank.display()
+        ));
+    }
     println!(
         "  {arch}: Chrome drew its window and the page on the compositor, {found} pixels of \
-         the page's yellow; the screen is {}",
+         the page's yellow, and still {after_found} after it was clicked into and typed at; \
+         the screen is {}",
         kept.display()
     );
     Ok(())

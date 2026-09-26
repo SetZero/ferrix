@@ -66,7 +66,7 @@ pub use workspaces::{Workspace, WorkspaceRequest};
 use crate::globals::Globals;
 use crate::layer::{Anchors, Layer, LayerSurface, Margin};
 use crate::role::Role;
-use crate::shm::{Buffer, FORMATS, Format, Pool};
+use crate::shm::{Buffer, FORMATS, Format, Pool, PoolKey};
 use crate::surface::{Committed, Output, Rect, Region, Subsurface, Surface};
 use crate::xdg::{Popup, Positioner, Toplevel, XdgRole, XdgSurface};
 
@@ -401,8 +401,9 @@ pub enum Event {
     /// A pool was made over a descriptor the client sent. The compositor
     /// above maps it; nothing here touches it.
     PoolCreated {
-        /// The `wl_shm_pool` object.
-        pool: ObjectId,
+        /// Which pool, by its key rather than its object id, which the
+        /// client may give to another object once this one is destroyed.
+        pool: PoolKey,
         /// The pool's descriptor and size.
         memory: Pool,
     },
@@ -643,10 +644,16 @@ pub enum Event {
         /// Whether it asked to be fullscreen.
         fullscreen: bool,
     },
+    /// The client destroyed a pool's object. Its memory lives on while
+    /// buffers cut from it do ([`Client::pool_in_use`]).
+    PoolRetired {
+        /// Which pool, by its key.
+        pool: PoolKey,
+    },
     /// A pool grew. Whatever mapped it has to map it again.
     PoolResized {
-        /// The `wl_shm_pool` object.
-        pool: ObjectId,
+        /// Which pool, by its key.
+        pool: PoolKey,
         /// Its size now.
         size: i32,
     },
@@ -672,6 +679,8 @@ pub struct Client {
     surfaces: BTreeMap<ObjectId, Surface>,
     regions: BTreeMap<ObjectId, Region>,
     pools: BTreeMap<ObjectId, Pool>,
+    /// How many pools this connection has made: the last [`PoolKey`] given.
+    pools_made: u64,
     buffers: BTreeMap<ObjectId, Buffer>,
     xdg_surfaces: BTreeMap<ObjectId, XdgSurface>,
     toplevels: BTreeMap<ObjectId, Toplevel>,
@@ -959,6 +968,7 @@ impl Client {
             surfaces: BTreeMap::new(),
             regions: BTreeMap::new(),
             pools: BTreeMap::new(),
+            pools_made: 0,
             buffers: BTreeMap::new(),
             xdg_surfaces: BTreeMap::new(),
             toplevels: BTreeMap::new(),
@@ -1643,7 +1653,7 @@ impl Client {
     /// `grim` does it between asking for a screenshot and taking it. So the
     /// compositor above keeps the mapping until this says no.
     #[must_use]
-    pub fn pool_in_use(&self, pool: ObjectId) -> bool {
+    pub fn pool_in_use(&self, pool: PoolKey) -> bool {
         self.buffers.values().any(|buffer| buffer.pool == pool)
     }
 
@@ -1832,8 +1842,12 @@ impl Client {
                 // cut from it live: "the mmapped memory will be released
                 // when all buffers that have been created from this pool are
                 // gone". So the object goes and the memory does not, and the
-                // compositor above unmaps it when the last buffer does.
-                let _ = self.pools.remove(&id);
+                // compositor above unmaps it when the last buffer does --
+                // told by the pool's key, since the id may be the client's
+                // next object's before then.
+                if let Some(pool) = self.pools.remove(&id) {
+                    self.events.push(Event::PoolRetired { pool: pool.key });
+                }
             }
             Role::XdgSurface => {
                 // xdg_surface.destroy with a role object still live is
@@ -2386,9 +2400,13 @@ impl Client {
         if !self.make(id, &core::WL_SHM_POOL, 1, Role::ShmPool) {
             return;
         }
-        let memory = Pool::new(fd, size);
+        self.pools_made += 1;
+        let memory = Pool::new(fd, size, PoolKey(self.pools_made));
         let _ = self.pools.insert(id, memory);
-        self.events.push(Event::PoolCreated { pool: id, memory });
+        self.events.push(Event::PoolCreated {
+            pool: memory.key,
+            memory,
+        });
     }
 
     /// `wl_shm_pool`: `create_buffer` and `resize`.
@@ -2408,7 +2426,7 @@ impl Client {
                 ) else {
                     return;
                 };
-                match pool.buffer(sender, *offset, *width, *height, *stride, format) {
+                match pool.buffer(pool.key, *offset, *width, *height, *stride, format) {
                     Ok(buffer) => {
                         if self.make(id, &core::WL_BUFFER, 1, Role::Buffer) {
                             let _ = self.buffers.insert(id, buffer);
@@ -2429,7 +2447,8 @@ impl Client {
                     return;
                 };
                 if pool.resize(size) {
-                    self.events.push(Event::PoolResized { pool: sender, size });
+                    let pool = pool.key;
+                    self.events.push(Event::PoolResized { pool, size });
                 }
             }
             _ => {}

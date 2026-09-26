@@ -8,7 +8,9 @@ use compositor_config::{Config, MonitorRule, NoSources, Position, Transform};
 use compositor_layout::{Monitor, MonitorId, Rect, Settings, State, WindowId};
 use compositor_protocol::{core, xdg_shell};
 use compositor_render::{Canvas, Style};
-use compositor_server::{Client, Event, ForeignRequest, Globals, Rect as ServerRect, Role};
+use compositor_server::{
+    Client, Event, ForeignRequest, Globals, PoolKey, Rect as ServerRect, Role,
+};
 
 use crate::clipboard::{Through, Which};
 use compositor_socket::{Connection, Listener, RecvError};
@@ -28,7 +30,10 @@ use crate::seat::Seat;
 pub struct Slot {
     client: Client,
     connection: Connection,
-    pools: BTreeMap<ObjectId, Mapping>,
+    /// Each pool's mapping, by its key: an object id the client may give
+    /// to its next pool once it has destroyed this one, while buffers cut
+    /// from this one still draw.
+    pools: BTreeMap<PoolKey, Mapping>,
     /// Pools the client has destroyed that still have buffers made from
     /// them. `wl_shm_pool.destroy` releases the object, not the memory:
     /// "the mmapped memory will be released when all buffers that have
@@ -36,7 +41,7 @@ pub struct Slot {
     /// at `destroy` hands nothing back to a client that made its buffers
     /// and then threw the pool away, which is what almost every toolkit
     /// does.
-    retired: std::collections::BTreeSet<ObjectId>,
+    retired: std::collections::BTreeSet<PoolKey>,
     /// Windows this connection owns, so they can be closed when it goes.
     windows: Vec<(ObjectId, WindowId)>,
     /// Layer surfaces it owns, in the order it made them: wlroots places
@@ -102,8 +107,8 @@ impl Slot {
         &mut self.client
     }
 
-    /// The pools this connection has shared, by object.
-    pub const fn pools(&self) -> &BTreeMap<ObjectId, Mapping> {
+    /// The pools this connection has shared, by key.
+    pub const fn pools(&self) -> &BTreeMap<PoolKey, Mapping> {
         &self.pools
     }
 
@@ -1832,11 +1837,8 @@ fn serve(
                         closed.push(window);
                     }
                 }
-                Event::Destroyed {
-                    object,
-                    role: Role::ShmPool,
-                } => {
-                    let _ = slot.retired.insert(object);
+                Event::PoolRetired { pool } => {
+                    let _ = slot.retired.insert(pool);
                     if release_retired_pools(slot) {
                         commits.everything();
                     }
@@ -3783,7 +3785,7 @@ fn remember_size(
 ///
 /// Which is to say: every surface whose pixels are in that memory, and
 /// whose pixels have therefore moved when the memory has.
-fn showing_from(client: &Client, pool: ObjectId) -> Vec<ObjectId> {
+fn showing_from(client: &Client, pool: PoolKey) -> Vec<ObjectId> {
     client
         .surfaces()
         .filter(|(_, state)| {
@@ -3818,7 +3820,7 @@ fn whole_of(client: usize, surface: ObjectId) -> crate::damage::Painted {
 /// else announces: a surface whose pool is no longer mapped is drawn as its
 /// border and background alone.
 fn release_retired_pools(slot: &mut Slot) -> bool {
-    let done: Vec<ObjectId> = slot
+    let done: Vec<PoolKey> = slot
         .retired
         .iter()
         .copied()

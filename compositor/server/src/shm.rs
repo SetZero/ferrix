@@ -58,6 +58,23 @@ impl Format {
 /// Every format the compositor offers, in the order `wl_shm` announces them.
 pub const FORMATS: [Format; 2] = [Format::Argb8888, Format::Xrgb8888];
 
+/// Which pool a buffer was cut from, for as long as the connection lasts.
+///
+/// Not the `wl_shm_pool`'s object id: a client may destroy a pool and go on
+/// drawing with the buffers cut from it, and libwayland hands the freed id
+/// to the next object it makes -- Chrome's next pool, a cursor's few
+/// kilobytes, took the id of the one its window's buffer was cut from, and
+/// the window was then read out of the wrong memory and drawn blank. A key
+/// is given once per pool and never again on the connection. Zero is no
+/// pool, which a single-pixel buffer is in.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+pub struct PoolKey(pub u64);
+
+impl PoolKey {
+    /// No pool: a buffer that is one colour.
+    pub const NONE: Self = Self(0);
+}
+
 /// A pool: memory a client shares and cuts buffers out of.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Pool {
@@ -66,13 +83,15 @@ pub struct Pool {
     pub fd: Fd,
     /// How many bytes it holds. A `resize` may only grow it.
     pub size: i32,
+    /// Which pool it is, whatever its object id is now or is later.
+    pub key: PoolKey,
 }
 
 /// A rectangle of a pool.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Buffer {
     /// The pool it is cut from.
-    pub pool: compositor_wire::ObjectId,
+    pub pool: PoolKey,
     /// Where in the pool the first row starts.
     pub offset: i32,
     /// In pixels.
@@ -86,7 +105,7 @@ pub struct Buffer {
     /// The one colour this buffer is, for a `wp_single_pixel_buffer_v1`.
     ///
     /// Such a buffer has no pool: the colour *is* the buffer, and `pool` is
-    /// the null object. Held as the four bytes the renderer reads, in the
+    /// [`PoolKey::NONE`]. Held as the four bytes the renderer reads, in the
     /// order `Format::Argb8888` puts them on a little-endian machine.
     pub solid: Option<[u8; 4]>,
 }
@@ -96,7 +115,7 @@ impl Buffer {
     #[must_use]
     pub const fn solid(alpha: u8, red: u8, green: u8, blue: u8) -> Self {
         Self {
-            pool: compositor_wire::ObjectId::NULL,
+            pool: PoolKey::NONE,
             offset: 0,
             width: 1,
             height: 1,
@@ -142,10 +161,10 @@ impl BufferError {
 }
 
 impl Pool {
-    /// A pool of `size` bytes over `fd`.
+    /// A pool of `size` bytes over `fd`, known as `key`.
     #[must_use]
-    pub const fn new(fd: Fd, size: i32) -> Self {
-        Self { fd, size }
+    pub const fn new(fd: Fd, size: i32, key: PoolKey) -> Self {
+        Self { fd, size, key }
     }
 
     /// Grow the pool to `size`.
@@ -188,7 +207,7 @@ impl Pool {
     /// division by a `stride` that another branch already allowed to be zero.
     pub fn buffer(
         &self,
-        pool: compositor_wire::ObjectId,
+        pool: PoolKey,
         offset: i32,
         width: i32,
         height: i32,
