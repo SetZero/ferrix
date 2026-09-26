@@ -251,12 +251,22 @@ fn load_and_run(
 
 /// Start `process` and wait for it to end, requiring the status its code
 /// exits with.
+///
+/// Ended is not gone. `wait_for_exit` returns at the release, while the
+/// program's task still holds its process, and through it the address space
+/// and the file's pages, until it has left and been reaped. The check waits
+/// for that too ([`crate::sched::wait_until_gone`]), so the space goes when
+/// the check lets go of the process, here. Otherwise it went whenever the
+/// task was reaped, and on a loaded host that was inside the next check's
+/// frame window: the signalfd check (FX-0884) once saw 137 frames released
+/// and 9 user page tables given back that it had never taken.
 fn run_to_its_end(process: &Arc<Process>) -> Result<i32, &'static str> {
     let task = process::start(process).map_err(|_| "a program the check loaded would not start")?;
     let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
     let status = process
         .wait_for_exit(deadline)
         .ok_or("a program the check loaded never ended")?;
+    crate::sched::wait_until_gone(&task, crate::sched::REAPER_PATIENCE_NANOS)?;
     drop(task);
     if status != arch::USER_TEST_STATUS {
         return Err("a program the check loaded did not exit with its code's status");
@@ -428,6 +438,8 @@ fn fork_and_exec_self() -> Result<i32, &'static str> {
     let status = child
         .wait_for_exit(deadline)
         .ok_or("the fork that ran /proc/self/exe never ended")?;
+    // Gone, not only ended, for the reason `run_to_its_end` gives.
+    crate::sched::wait_until_gone(&task, crate::sched::REAPER_PATIENCE_NANOS)?;
     drop(task);
     if let Some(errno) = REFUSED.lock().take() {
         crate::console::println!("  exec     execve(\"/proc/self/exe\") in a fork: errno {errno}");
