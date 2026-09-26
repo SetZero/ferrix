@@ -91,8 +91,15 @@ the phone's copy differs. It needs to have been built with guest support
 crosvm's 16550 as `stdout-path`, and sends its log and the kernel's there.
 crosvm's machine has 2 to 8 vCPUs, GICv3, PSCI through `hvc`, and RAM at
 `0x8000_0000`, and a virtio-gpu and a virtio-input single-touch device that
-Ferrix does not drive yet. The guest powers off at the end of its run, and
-crosvm exits.
+Ferrix drives since its kernel reads crosvm's `pci-host-cam-generic` host
+and gives each function the INTx line its `interrupt-map` names. The guest
+powers off at the end of its run, and crosvm exits.
+
+**The desktop.** When `desktop.Image` is beside `ferrix.Image`, the app boots
+it instead: a loader wrapping `cargo xtask flash --arch aarch64 --release
+--compositor --size 1080x2400 --wallpaper none --stage <dir>`'s kernel and
+initramfs, whose init is the compositor. Delete it to go back to the console
+image.
 
 Starting a VM opens it full screen: one bar, with the run's state and a menu
 to pause or resume it, stop it, run it again, or go back, and the console

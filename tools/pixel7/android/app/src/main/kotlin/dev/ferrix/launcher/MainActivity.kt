@@ -137,10 +137,15 @@ private const val TOUCH = "$VM_DIR/touch.sock"
  * before crosvm starts, for crosvm connects to it and will not start without
  * it. If the bridge has not bound it within ten seconds, or ended, the guest
  * runs as before, with its console only.
+ *
+ * The guest is `desktop.Image` when there is one, a build whose init is the
+ * compositor (`cargo xtask flash --compositor`, wrapped by the loader), and
+ * otherwise `ferrix.Image`, the helper's console image.
  */
 private fun guestCommand(apk: String, uid: Int, token: String, size: IntSize): String {
     val (w, h) = size.width to size.height
-    return "cd $VM_DIR && [ -f ferrix.Image ] || { echo 'FERRIX-VM no image in $VM_DIR'; exit 3; }; " +
+    return "cd $VM_DIR && I=ferrix.Image && { [ ! -f desktop.Image ] || I=desktop.Image; } && " +
+        "[ -f \$I ] || { echo 'FERRIX-VM no image in $VM_DIR'; exit 3; }; echo FERRIX-VM-IMAGE \$I; " +
         "rm -f $SOCKET $TOUCH; echo FERRIX-VM-PID $$; " +
         "T=$(pm path com.android.virtualization.terminal | sed -n 's/^package://p' | head -n 1); " +
         "CLASSPATH=$apk:\$T app_process /system/bin ${Bridge::class.java.name} $$ $token $uid $TOUCH " +
@@ -150,7 +155,7 @@ private fun guestCommand(apk: String, uid: Int, token: String, size: IntSize): S
         "--android-display-service ferrix --input 'single-touch[path=$TOUCH,width=$w,height=$h]'; " +
         "else echo 'FERRIX-VM-BRIDGE did not start: no screen'; set --; fi; " +
         "exec $CROSVM run --disable-sandbox -m 4096 --cpus 8 -s $SOCKET --serial type=stdout,num=1 " +
-        "\"\$@\" ferrix.Image 2>/dev/null"
+        "\"\$@\" \$I 2>/dev/null"
 }
 
 /** How the guest is doing. */
