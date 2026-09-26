@@ -14,8 +14,8 @@ use std::vec::Vec;
 
 use crate::errno::{Errno, encode};
 use crate::nr::{
-    AARCH64_END, ARM_END, ARM_PRIVATE_END, Syscall, X86_64_END, aarch64, arm, from_aarch64,
-    from_arm, from_x86_64, x86_64,
+    AARCH64_END, ARM_END, ARM_PRIVATE_END, I386_END, Syscall, X86_64_END, aarch64, arm,
+    from_aarch64, from_arm, from_i386, from_x86_64, i386, x86_64,
 };
 use crate::types;
 
@@ -25,10 +25,11 @@ use crate::types;
 #[test]
 fn each_table_ends_exactly_at_its_bound() {
     type Translate = fn(usize) -> Option<Syscall>;
-    let tables: [(Translate, usize); 3] = [
+    let tables: [(Translate, usize); 4] = [
         (from_x86_64, X86_64_END),
         (from_aarch64, AARCH64_END),
         (from_arm, ARM_END),
+        (from_i386, I386_END),
     ];
     for (translate, end) in tables {
         assert!(translate(end - 1).is_some(), "the last number below {end}");
@@ -1708,7 +1709,13 @@ fn the_whole_number_space_is_total() {
         let _x86 = from_x86_64(nr);
         let _aarch64 = from_aarch64(nr);
         let _arm = from_arm(nr);
+        let _i386 = from_i386(nr);
     }
+    assert_eq!(
+        from_i386(usize::MAX),
+        None,
+        "the largest number is answered, not trapped"
+    );
     assert_eq!(
         from_x86_64(usize::MAX),
         None,
@@ -3261,3 +3268,47 @@ mod input;
 mod netlink;
 mod sound;
 mod virtgpu;
+
+/// Every i386 number [`from_i386`] translates, as `asm/unistd_32.h` numbers
+/// it and as ARMv7-A's table -- the other 32-bit one, whose `32` credential
+/// forms and `exit_group` these share -- names the call. A number copied
+/// from the wrong table, or onto the wrong call, fails here.
+#[test]
+fn the_i386_numbers_are_the_headers_and_mean_what_arm_means() {
+    let table: [(usize, usize, usize); 18] = [
+        (i386::RESTART_SYSCALL, 0, arm::RESTART_SYSCALL),
+        (i386::EXIT, 1, arm::EXIT),
+        (i386::READ, 3, arm::READ),
+        (i386::WRITE, 4, arm::WRITE),
+        (i386::CLOSE, 6, arm::CLOSE),
+        (i386::GETPID, 20, arm::GETPID),
+        (i386::DUP, 41, arm::DUP),
+        (i386::DUP2, 63, arm::DUP2),
+        (i386::GETPPID, 64, arm::GETPPID),
+        (i386::UNAME, 122, arm::UNAME),
+        (i386::SCHED_YIELD, 158, arm::SCHED_YIELD),
+        (i386::GETUID32, 199, arm::GETUID32),
+        (i386::GETGID32, 200, arm::GETGID32),
+        (i386::GETEUID32, 201, arm::GETEUID32),
+        (i386::GETEGID32, 202, arm::GETEGID32),
+        (i386::GETTID, 224, arm::GETTID),
+        (i386::EXIT_GROUP, 252, arm::EXIT_GROUP),
+        (i386::DUP3, 330, arm::DUP3),
+    ];
+    for (constant, header, on_arm) in table {
+        assert_eq!(constant, header, "i386 number {constant}");
+        assert!(from_i386(constant).is_some(), "{constant} translates");
+        assert_eq!(from_i386(constant), from_arm(on_arm), "i386 {constant}");
+    }
+    let translated = (0..I386_END).filter(|&nr| from_i386(nr).is_some()).count();
+    assert_eq!(translated, table.len(), "no i386 number is mapped unread");
+    // The numbers x86-64 gives these calls are other calls, or none, on
+    // i386: `int $0x80` from a 64-bit program is an i386 call, so the two
+    // tables must never be confused.
+    assert_eq!(
+        from_i386(x86_64::WRITE),
+        Some(Syscall::Exit),
+        "x86-64's write is i386's exit"
+    );
+    assert_eq!(from_i386(39), None, "x86-64's getpid is i386's mkdir");
+}

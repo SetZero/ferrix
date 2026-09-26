@@ -636,6 +636,35 @@ impl AddressSpace {
         self.high
     }
 
+    /// Move the top of the usable window to `high`, down or back up: what
+    /// `execve` does when the program it loads has a smaller address space
+    /// than the one before it, as a 32-bit program on a 64-bit kernel has, or
+    /// a larger one.
+    ///
+    /// # Errors
+    ///
+    /// [`VmaError::Misaligned`] unless `high` is page-aligned,
+    /// [`VmaError::ZeroLength`] if the window would be empty, and
+    /// [`VmaError::OutOfRange`] if a region already mapped would be left
+    /// outside it. Nothing is changed on an error.
+    pub fn set_high(&mut self, high: u64) -> Result<(), VmaError> {
+        if !is_page_aligned(high) {
+            return Err(VmaError::Misaligned);
+        }
+        if self.low >= high {
+            return Err(VmaError::ZeroLength);
+        }
+        if self
+            .regions
+            .last()
+            .is_some_and(|region| region.range.end > high)
+        {
+            return Err(VmaError::OutOfRange);
+        }
+        self.high = high;
+        Ok(())
+    }
+
     /// Number of regions in the map.
     ///
     /// This is the number that a `mprotect` cycle would grow without bound if

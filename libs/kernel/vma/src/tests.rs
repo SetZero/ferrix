@@ -1919,3 +1919,36 @@ fn regions_are_charged_to_the_spaces_job() {
     drop((space, child));
     assert_eq!((job.used(), job.holds()), (0, 0));
 }
+
+// -- Moving the ceiling ------------------------------------------------------
+
+/// `execve` of a 32-bit program lowers the ceiling of the space it empties,
+/// and of a 64-bit one raises it again: the search and a fixed mapping both
+/// stop there, and a ceiling that would leave a region outside is refused
+/// with nothing changed.
+#[test]
+fn the_ceiling_moves_and_bounds_what_is_placed() {
+    let mut space = space();
+    assert_eq!(space.set_high(0x8_0000), Ok(()));
+    assert_eq!(space.high(), 0x8_0000);
+    assert_eq!(space.find_free(0x1000, 0x1000, None), Some(0x7_f000));
+    assert_eq!(
+        space.insert(
+            range(0x8_0000, 0x8_1000),
+            VmaFlags::READ_WRITE,
+            anon(0x8_0000)
+        ),
+        Err(VmaError::OutOfRange)
+    );
+
+    map(&mut space, 0x7_0000, 0x7_2000, VmaFlags::READ_WRITE);
+    assert_eq!(space.set_high(0x7_1000), Err(VmaError::OutOfRange));
+    assert_eq!(space.high(), 0x8_0000, "a refused ceiling changes nothing");
+    assert_eq!(space.set_high(0x7_2000), Ok(()));
+    assert_eq!(space.set_high(HIGH), Ok(()));
+    assert_eq!(space.find_free(0x1000, 0x1000, None), Some(HIGH - 0x1000));
+
+    assert_eq!(space.set_high(0x7_2800), Err(VmaError::Misaligned));
+    assert_eq!(space.set_high(LOW), Err(VmaError::ZeroLength));
+    check(&space);
+}

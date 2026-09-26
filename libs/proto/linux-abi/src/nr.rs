@@ -9,8 +9,12 @@
 //! call has a different number on each, some calls exist on only one, and a
 //! binary compiled for one architecture never sees the others' numbers.
 //!
-//! The kernel should not care. [`from_x86_64`], [`from_aarch64`] and
-//! [`from_arm`] map each architecture's raw number onto one [`Syscall`], and
+//! A fourth arrives on x86-64 itself: a 32-bit program running there calls
+//! through `int $0x80` with i386's numbers (`arch/x86/entry/syscalls/
+//! syscall_32.tbl`), and [`from_i386`] reads those (`docs/I386.md`).
+//!
+//! The kernel should not care. [`from_x86_64`], [`from_aarch64`],
+//! [`from_arm`] and [`from_i386`] map each table's raw number onto one [`Syscall`], and
 //! the dispatcher matches on that. An unknown number maps to [`None`], which
 //! the caller answers with [`crate::errno::Errno::ENOSYS`] — the same thing
 //! Linux does.
@@ -1600,6 +1604,58 @@ pub mod arm {
     pub const SYNCFS: usize = 373;
 }
 
+/// System call numbers for i386, as a 32-bit program on the x86-64 kernel
+/// issues them through `int $0x80`.
+///
+/// From `arch/x86/entry/syscalls/syscall_32.tbl`, generated from the UAPI
+/// header `asm/unistd_32.h` and checked back against it. Only the calls
+/// [`from_i386`] translates are here: an i386 call is mapped once its
+/// handler has been read for the 32-bit widths it sees (`docs/I386.md`
+/// §3.2), and a number with no constant is one nobody has read yet.
+pub mod i386 {
+    /// Resume a system call interrupted by a signal handler. The kernel points
+    /// a restarted call's number register (`eax`) here; no program issues it
+    /// itself.
+    pub const RESTART_SYSCALL: usize = 0;
+    /// Terminate the calling thread.
+    pub const EXIT: usize = 1;
+    /// Read bytes from a file descriptor.
+    pub const READ: usize = 3;
+    /// Write bytes to a file descriptor.
+    pub const WRITE: usize = 4;
+    /// Close a file descriptor.
+    pub const CLOSE: usize = 6;
+    /// Return the calling process's identifier.
+    pub const GETPID: usize = 20;
+    /// Duplicate a file descriptor onto the lowest free number.
+    pub const DUP: usize = 41;
+    /// Duplicate a file descriptor onto a chosen number.
+    pub const DUP2: usize = 63;
+    /// Return the parent process's identifier.
+    pub const GETPPID: usize = 64;
+    /// Describe the running kernel: `struct new_utsname`, six 65-byte fields
+    /// on every architecture.
+    pub const UNAME: usize = 122;
+    /// Give up the processor to another runnable task.
+    pub const SCHED_YIELD: usize = 158;
+    /// Return the real user identifier. The `32` form: i386's number 24 is
+    /// the 16-bit one, which is absent for the reason `nr.rs` gives for
+    /// ARMv7-A's.
+    pub const GETUID32: usize = 199;
+    /// Return the real group identifier, the `32` form.
+    pub const GETGID32: usize = 200;
+    /// Return the effective user identifier, the `32` form.
+    pub const GETEUID32: usize = 201;
+    /// Return the effective group identifier, the `32` form.
+    pub const GETEGID32: usize = 202;
+    /// Return the calling thread's identifier.
+    pub const GETTID: usize = 224;
+    /// Terminate every thread in the process.
+    pub const EXIT_GROUP: usize = 252;
+    /// Duplicate a file descriptor onto a chosen number, with flags.
+    pub const DUP3: usize = 330;
+}
+
 /// An architecture-neutral system call.
 ///
 /// The kernel dispatches on this, never on a raw number, so that the two
@@ -2245,6 +2301,10 @@ pub const ARM_END: usize = 442;
 
 /// One past the highest ARM-private number [`from_arm`] translates.
 pub const ARM_PRIVATE_END: usize = arm::ARM_SET_TLS + 1;
+
+/// One past the highest number [`from_i386`] translates. As
+/// [`X86_64_END`], and it moves up as calls are mapped.
+pub const I386_END: usize = i386::DUP3 + 1;
 
 /// Translate an x86-64 system call number.
 ///
@@ -3256,6 +3316,41 @@ fn arm_signals_and_scheduling(nr: usize) -> Option<Syscall> {
         arm::PSELECT6_TIME64 => Syscall::Pselect6Time64,
         arm::RT_SIGTIMEDWAIT_TIME64 => Syscall::RtSigtimedwaitTime64,
         arm::SCHED_RR_GET_INTERVAL_TIME64 => Syscall::SchedRrGetIntervalTime64,
+        _ => return None,
+    };
+    Some(call)
+}
+
+/// Translate an i386 system call number: a 32-bit program's, or any
+/// program's `int $0x80`.
+///
+/// Returns [`None`] for a number this crate does not translate, which the
+/// caller reports as `ENOSYS`. That includes most of the table, on purpose:
+/// the kernel is 64-bit and the caller is not, so a handler that reads a
+/// `long`, a pointer inside a structure or a 64-bit register pair in its own
+/// widths would misread an i386 call silently. A call is mapped here only
+/// once its handler has been read for that (`docs/I386.md` §3.2).
+#[must_use]
+pub fn from_i386(nr: usize) -> Option<Syscall> {
+    let call = match nr {
+        i386::RESTART_SYSCALL => Syscall::RestartSyscall,
+        i386::EXIT => Syscall::Exit,
+        i386::READ => Syscall::Read,
+        i386::WRITE => Syscall::Write,
+        i386::CLOSE => Syscall::Close,
+        i386::GETPID => Syscall::Getpid,
+        i386::DUP => Syscall::Dup,
+        i386::DUP2 => Syscall::Dup2,
+        i386::GETPPID => Syscall::Getppid,
+        i386::UNAME => Syscall::Uname,
+        i386::SCHED_YIELD => Syscall::SchedYield,
+        i386::GETUID32 => Syscall::Getuid,
+        i386::GETGID32 => Syscall::Getgid,
+        i386::GETEUID32 => Syscall::Geteuid,
+        i386::GETEGID32 => Syscall::Getegid,
+        i386::GETTID => Syscall::Gettid,
+        i386::EXIT_GROUP => Syscall::ExitGroup,
+        i386::DUP3 => Syscall::Dup3,
         _ => return None,
     };
     Some(call)
