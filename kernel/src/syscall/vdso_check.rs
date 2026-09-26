@@ -43,16 +43,58 @@ const SLOTS: [(&str, &str, usize); 3] = [
 /// What the check found: which way the vDSO answers the clock.
 pub(crate) type Answered = &'static str;
 
+/// What the check answers for a vDSO that is only the signal return
+/// trampoline, AArch64's: no clock was read through it.
+pub(crate) const SIGRETURN_ONLY: Answered = "the signal return trampoline alone";
+
 /// Run the check, or `Ok(None)` on an architecture without a vDSO.
+///
+/// An image with no clock -- AArch64's, which is `__kernel_rt_sigreturn`
+/// alone -- is checked for exporting the trampoline where its code puts it,
+/// its data page and its mapping, and answers [`SIGRETURN_ONLY`].
 pub(crate) fn check_the_vdso() -> Result<Option<Answered>, &'static str> {
     let Some(image) = vdso::image() else {
         return Ok(None);
     };
+    let has_clock = crate::arch::vdso_spec().is_some_and(|spec| {
+        spec.functions
+            .iter()
+            .any(|function| function.name == SLOTS[0].0)
+    });
+    if !has_clock {
+        check_the_trampoline(&image)?;
+        let _ = check_the_data_page()?;
+        check_the_mapping()?;
+        return Ok(Some(SIGRETURN_ONLY));
+    }
     check_the_image(&image)?;
     let answered = check_the_data_page()?;
     check_the_mapping()?;
     check_a_program_reads_the_clock_through_it()?;
     Ok(Some(answered))
+}
+
+/// The trampoline is exported, by both lookups, at the offset its code has,
+/// and a space it is mapped into finds it there.
+fn check_the_trampoline(image: &[u8]) -> Result<(), &'static str> {
+    let spec = crate::arch::vdso_spec().ok_or("the vDSO has no image to check")?;
+    let function = spec
+        .functions
+        .iter()
+        .find(|function| function.name == vdso::SIGRETURN)
+        .ok_or("the vDSO has no signal return trampoline")?;
+    let slot = ferrix_vdso::CODE_AT + function.offset;
+    let at = ferrix_vdso::lookup(image, vdso::SIGRETURN, Some(ferrix_vdso::VERSION));
+    let hashed = ferrix_vdso::lookup_hashed(image, vdso::SIGRETURN, Some(ferrix_vdso::VERSION));
+    if at != Some(slot) || hashed != Some(slot) {
+        return Err("the vDSO's image does not export its signal return trampoline where it is");
+    }
+    let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
+    let mapped = vdso::map_into(&space).ok_or("the vDSO could not be mapped")?;
+    if vdso::sigreturn(&space) != Some(mapped + slot as u64) {
+        return Err("a space the vDSO is mapped into does not find its trampoline there");
+    }
+    Ok(())
 }
 
 /// Every function at `LINUX_2.6`, under its alias too, found by both

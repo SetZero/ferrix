@@ -115,6 +115,28 @@ pub(crate) fn map_into(space: &AddressSpace) -> Option<u64> {
     space.map_shared_code(Arc::clone(&vdso.vmo)).ok()
 }
 
+/// The name of the return trampoline a signal handler without
+/// `SA_RESTORER` goes back through, as Linux's AArch64 vDSO exports it.
+pub(crate) const SIGRETURN: &str = "__kernel_rt_sigreturn";
+
+/// Where `space`'s vDSO has [`SIGRETURN`], if the architecture's image has
+/// one and `space` maps the vDSO: the address a handler without
+/// `SA_RESTORER` returns to, as Linux's AArch64 kernel points it there.
+/// glibc on AArch64 never sets `SA_RESTORER` -- it has no trampoline of its
+/// own -- so without this every handler returned to address zero.
+pub(crate) fn sigreturn(space: &AddressSpace) -> Option<u64> {
+    let spec = crate::arch::vdso_spec()?;
+    let function = spec
+        .functions
+        .iter()
+        .find(|function| function.name == SIGRETURN)?;
+    let vdso = VDSO.get()?.as_ref()?;
+    let data = space.shared_code_at(&vdso.vmo)?;
+    let offset = u64::try_from(ferrix_vdso::CODE_AT + function.offset).ok()?;
+    data.checked_add(ferrix_bootinfo::PAGE_SIZE)?
+        .checked_add(offset)
+}
+
 /// Run `change`, which stores the kernel's real-time offset, and write the
 /// offset it leaves into the data page, both under one lock.
 pub(crate) fn publish_realtime_offset(change: impl FnOnce()) {

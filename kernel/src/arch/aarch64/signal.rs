@@ -15,9 +15,11 @@
 //! walks on into the code it interrupted.
 //!
 //! The handler returns to `x30`, the restorer. Linux points it at the vDSO's
-//! trampoline when the handler has no `SA_RESTORER`; there is no vDSO here, so
-//! such a handler returns to address zero and faults. Both musl and glibc set
-//! `SA_RESTORER` for every handler.
+//! `__kernel_rt_sigreturn` when the handler has no `SA_RESTORER`, and so does
+//! Ferrix: signal delivery hands this the vDSO's trampoline as the restorer
+//! then (`syscall::vdso::sigreturn`). musl sets `SA_RESTORER` for every
+//! handler; glibc on AArch64 never does, having no trampoline of its own, and
+//! before the vDSO had one every glibc handler returned to address zero.
 
 use ferrix_linux_abi::types::SA_RESTORER;
 

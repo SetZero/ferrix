@@ -2671,6 +2671,22 @@ impl AddressSpace {
     ///
     /// [`SpaceError::BadRange`] for an object that is not two pages, and
     /// [`SpaceError::OutOfMemory`] if there is no room.
+    /// Where [`AddressSpace::map_shared_code`] put `vmo` in this space: the
+    /// data page's address, or `None` if it is not mapped here. How a
+    /// signal's delivery finds the vDSO's return trampoline, which the space
+    /// maps once at exec and a fork keeps where it was.
+    pub(crate) fn shared_code_at(&self, vmo: &Arc<Vmo>) -> Option<u64> {
+        let inner = self.inner.lock();
+        let id = inner
+            .objects
+            .iter()
+            .find_map(|(&id, object)| Arc::ptr_eq(object, vmo).then_some(id))?;
+        inner.map.iter().find_map(|region| {
+            matches!(region.backing, Backing::Anonymous { id: named, offset: 0 } if named == id)
+                .then(|| region.range.start())
+        })
+    }
+
     pub(crate) fn map_shared_code(&self, vmo: Arc<Vmo>) -> Result<u64, SpaceError> {
         let len = 2 * PAGE_SIZE;
         if vmo.len_bytes() != len {
