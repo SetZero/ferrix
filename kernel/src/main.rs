@@ -663,6 +663,11 @@ fn check_cgroupfs() {
             "CLONE_INTO_CGROUP not run on this architecture"
         },
     );
+    println!(
+        "  creator  a native process made by uid 1000 in its delegated cgroup has its creator's \
+         ids and exited with getuid's answer, {} (uid 1000's low byte; root's would be 0)",
+        checked.created_as,
+    );
 }
 
 /// sysfs (`docs/SYSFS.md`): the device tree mounted and walked through the

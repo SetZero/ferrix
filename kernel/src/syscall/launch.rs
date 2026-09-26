@@ -30,6 +30,7 @@ use crate::fs;
 use crate::hooks::Full;
 use crate::init::{Failure, Image, Launcher, Opened, Start};
 use crate::object::process::{self as core_process, Host};
+use crate::syscall::credentials::Credentials;
 use crate::syscall::exec::{self, ExecError};
 use crate::syscall::load::{LoadError, Source};
 use crate::syscall::native::{self, Argument, Processes, StartRefused};
@@ -92,9 +93,24 @@ fn process_give(caller: &dyn Host, registers: &[u64; 6]) -> Result<usize, Errno>
     native::give_bootstrap(parent.core(), child.core(), Handle::from_register(handle))
 }
 
-/// A native process with `image` loaded, named `name`, made and not started.
-fn load_native(image: &[u8], name: &[u8]) -> Result<Arc<dyn Host>, Errno> {
-    let process: Arc<dyn Host> = exec::load_native(image, name).map_err(load_status)?;
+/// A native process with `image` loaded, named `name`, made and not started,
+/// running as `creator` runs, or as root with none ([`native::LoadNative`]).
+///
+/// A creator of another personality's has no ids to give, and is refused
+/// rather than given root's.
+fn load_native(
+    creator: Option<&dyn Host>,
+    image: &[u8],
+    name: &[u8],
+) -> Result<Arc<dyn Host>, Errno> {
+    let credentials = match creator {
+        Some(creator) => process::of_host(creator)
+            .ok_or(status::BAD_STATE)?
+            .with_credentials(|held| held.clone()),
+        None => Credentials::root(),
+    };
+    let process: Arc<dyn Host> =
+        exec::load_native(image, name, credentials).map_err(load_status)?;
     Ok(process)
 }
 

@@ -491,7 +491,7 @@ fn start_program(
     kernel_end: &Arc<Endpoint>,
 ) -> Result<(), &'static str> {
     let processes = native::processes().ok_or("nothing is registered to start devmgr with")?;
-    let process = (processes.load)(image, NAME).map_err(|_| "/sbin/devmgr does not load")?;
+    let process = (processes.load)(None, image, NAME).map_err(|_| "/sbin/devmgr does not load")?;
     let bootstrap = process
         .core()
         // FALLIBLE: the handle table's insert hands the object back.

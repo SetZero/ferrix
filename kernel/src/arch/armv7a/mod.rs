@@ -338,6 +338,26 @@ pub(crate) const USER_BOOTSTRAP_PROGRAM: &[u8] = &[
     0x00, 0x00, 0x00, 0xef, // svc  #0
 ];
 
+/// A program that asks `getuid` who it runs as and exits with the answer, so
+/// its exit status is the low byte of its real user id: 0 for root, 232 for
+/// uid 1000. Made with `process_create` by a uid-1000 process in the check of
+/// `docs/AUTH.md` §7's P0 (`fs/cgroupfs/creator_check.rs`), where a child
+/// that became root would exit 0.
+///
+/// ```text
+///   mov r7, #199 ; svc #0   ; getuid32(), its answer in r0
+///   mov r7, #248 ; svc #0   ; exit_group(it)
+/// ```
+///
+/// Assembled by the host's GNU assembler for Arm, in ARM state, and read
+/// back with its disassembler.
+pub(crate) const USER_GETUID_PROGRAM: &[u8] = &[
+    0xc7, 0x70, 0xa0, 0xe3, // mov  r7, #199
+    0x00, 0x00, 0x00, 0xef, // svc  #0
+    0xf8, 0x70, 0xa0, 0xe3, // mov  r7, #248
+    0x00, 0x00, 0x00, 0xef, // svc  #0
+];
+
 /// A program that forks, has its child exit with 23, waits for it, and exits
 /// with the child's exit code plus one: 24 when `fork`, the child's copy of
 /// its parent's registers and `wait4`'s status word are all right, 99 when

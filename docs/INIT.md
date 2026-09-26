@@ -397,6 +397,10 @@ A native service is `job_for_cgroup` on the directory (C8), then
 `process_create` in that job and `process_start` with its bootstrap channel.
 That is exactly what `devmgr` does for a driver, so a native service is in
 the service's cgroup just as a Linux one is.
+A native process runs as the process that made it, as a fork child does
+(`docs/AUTH.md` §7, P0), so a native service init starts is root's.
+`User=` does not apply to one yet: init would have to make it from a child
+that has already become that user.
 
 To stop a service, init runs `ExecStop=` if the unit has one. Then it sends
 `KillSignal=` (`SIGTERM` by default) as `KillMode=` says: to the main process

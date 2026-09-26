@@ -2055,34 +2055,43 @@ and a port registration for EMPTY must stay quiet through the first member's
 release and fire at the last, at once, with cgroup.events saying `populated 0`;
 one made on an empty job fires as it is made; a native job made inside shows as
 `job-<id>`, keeps the cgroup from rmdir, and goes when its handle closes.
+docs/AUTH.md §7, P0: a process running as uid 1000, given MANAGE on /check-p's
+job because the cgroup and its cgroup.procs were chowned to it, must be able to
+make a native process there with process_create, and that process must have
+every id its creator has before it starts, and started, exit with 232, the low
+byte of what getuid answered it; a child made as root would exit 0.
 
-1. `forked_into` in kernel/src/syscall/process.rs or
+1. `load_native` in kernel/src/syscall/launch.rs did not take the creator's
+   credentials, or `process_create` in kernel/src/syscall/native.rs did not pass
+   the caller as the creator, so a native process started as root
+   (`Credentials::root()`, what `Process::new` gives) whoever made it.
+2. `forked_into` in kernel/src/syscall/process.rs or
    `clone_with`/`cgroup_target` in kernel/src/syscall/family.rs put the child in
    its parent's job, or `cgroupfs::clone_target` did not recognise a cgroupfs
    directory.
-2. `attach_permissions` in kernel/src/fs/cgroupfs.rs did not find the common
+3. `attach_permissions` in kernel/src/fs/cgroupfs.rs did not find the common
    ancestor, or judged the move as someone other than the file's opener; or
    `set_node`/`node` lost an owner, so a lookup reports root's.
-3. `Job::remove_named_child` did not mark the job removed, or `count_in_checked`
+4. `Job::remove_named_child` did not mark the job removed, or `count_in_checked`
    and `new_named_child` did not look.
-4. `EventsFile` in kernel/src/fs/cgroupfs.rs does not name the job's `events`
+5. `EventsFile` in kernel/src/fs/cgroupfs.rs does not name the job's `events`
    queue in `poll_queues`, or does not compare the queue's wake count with the
    one it last rendered at; or `job::notify` did not wake the queue at the flip.
-5. `poll::revents`, `poll::select_sets` or epoll's `bits` lost
+6. `poll::revents`, `poll::select_sets` or epoll's `bits` lost
    `Readiness::priority`.
-6. `Job::new_named_child`, `remove_named_child` or `children` in
+7. `Job::new_named_child`, `remove_named_child` or `children` in
    kernel/src/object/job.rs lost a named child, or `room_for_a_child` reads the
    limits wrongly.
-7. `Process::move_to` did not move the process, or its job's counts, so
+8. `Process::move_to` did not move the process, or its job's counts, so
    cgroup.procs or cgroup.events disagree with where the process is.
-8. `Job::kill_members` did not find the member through the registry, or sealed
+9. `Job::kill_members` did not find the member through the registry, or sealed
    the job.
-9. `job::notify` did not fire the job's EMPTY registrations at the flip,
-   `Job::observe` did not fire one on an empty job at once, or `Job::signals`
-   does not report EMPTY; or `job_for_cgroup` in kernel/src/syscall/native.rs
-   judged the rights by someone other than the caller, or
-   `cgroupfs::directory_job` did not recognise a cgroup directory.
-10. A write's text is parsed differently from Linux's: libs/fs/cgroupfs, whose
+10. `job::notify` did not fire the job's EMPTY registrations at the flip,
+    `Job::observe` did not fire one on an empty job at once, or `Job::signals`
+    does not report EMPTY; or `job_for_cgroup` in kernel/src/syscall/native.rs
+    judged the rights by someone other than the caller, or
+    `cgroupfs::directory_job` did not recognise a cgroup directory.
+11. A write's text is parsed differently from Linux's: libs/fs/cgroupfs, whose
     host tests pin each parse.
 
 See: kernel/src/fs/cgroupfs.rs; kernel/src/object/job.rs; libs/fs/cgroupfs;

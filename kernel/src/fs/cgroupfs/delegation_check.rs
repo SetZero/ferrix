@@ -74,7 +74,7 @@ fn directory_at(harness: &Harness, tail: &[u8]) -> Checked<Arc<Directory>> {
 }
 
 /// `chown` of the node at `tail` to the delegate, as root.
-fn delegate(harness: &Harness, tail: &[u8]) -> Checked<()> {
+pub(super) fn delegate(harness: &Harness, tail: &[u8]) -> Checked<()> {
     let at = harness
         .ns
         .resolve(&harness.ctx, None, &Harness::path(tail), true)

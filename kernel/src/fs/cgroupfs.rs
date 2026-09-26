@@ -69,6 +69,7 @@ use crate::syscall::process::{self, Process};
 use crate::syscall::registry;
 
 mod controllers_check;
+mod creator_check;
 mod delegation_check;
 mod events_check;
 mod native_check;
@@ -929,6 +930,10 @@ pub(crate) struct Report {
     pub(crate) controlled: u32,
     /// Processes the scoped OOM kill ended at a `memory.max`.
     pub(crate) oom_killed: u64,
+    /// What a native process that uid 1000 made in its delegated cgroup
+    /// exited with: the low byte of what `getuid` answered it
+    /// (`docs/AUTH.md` §7, P0).
+    pub(crate) created_as: u32,
 }
 
 /// Where [`check`] mounts its cgroupfs: under `/tmp`, and gone afterwards.
@@ -1082,6 +1087,7 @@ pub(crate) fn check() -> Checked<Report> {
     harness.report.emptied = native_check::run(&mut harness)?;
     harness.report.controlled = controllers_check::run(&mut harness, &process)?;
     harness.report.oom_killed = oom_check::run(&mut harness)?;
+    harness.report.created_as = creator_check::run(&mut harness)?;
 
     let root = ns
         .resolve(&harness.ctx, None, CHECK_AT, true)

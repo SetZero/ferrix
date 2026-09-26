@@ -80,7 +80,7 @@ pub(super) fn run(harness: &mut Harness) -> Checked<u32> {
 
 /// A descriptor in `side`'s table on the directory at `tail` beneath the
 /// mount, opened `O_PATH`, as a service manager holds a cgroup it made.
-fn descriptor(harness: &Harness, side: &Side, tail: &[u8]) -> Checked<u64> {
+pub(super) fn descriptor(harness: &Harness, side: &Side, tail: &[u8]) -> Checked<u64> {
     descriptor_at(harness, side, &Harness::path(tail))
 }
 

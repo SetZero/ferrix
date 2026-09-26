@@ -1637,3 +1637,25 @@ pub(crate) const USER_BOOTSTRAP_PROGRAM: &[u8] = &[
     0xb8, 0xe7, 0x00, 0x00, 0x00, // movl $231, %eax
     0x0f, 0x05, // syscall
 ];
+
+/// A program that asks `getuid` who it runs as and exits with the answer, so
+/// its exit status is the low byte of its real user id: 0 for root, 232 for
+/// uid 1000. Made with `process_create` by a uid-1000 process in the check of
+/// `docs/AUTH.md` §7's P0 (`fs/cgroupfs/creator_check.rs`), where a child
+/// that became root would exit 0.
+///
+/// ```text
+///   movl $102, %eax ; syscall      ; getuid()
+///   movl %eax, %edi
+///   movl $231, %eax ; syscall      ; exit_group(it)
+/// ```
+///
+/// Assembled by the host's GNU assembler and read back with its
+/// disassembler.
+pub(crate) const USER_GETUID_PROGRAM: &[u8] = &[
+    0xb8, 0x66, 0x00, 0x00, 0x00, // movl $102, %eax
+    0x0f, 0x05, // syscall
+    0x89, 0xc7, // movl %eax, %edi
+    0xb8, 0xe7, 0x00, 0x00, 0x00, // movl $231, %eax
+    0x0f, 0x05, // syscall
+];

@@ -42,6 +42,7 @@ use crate::mm;
 use ferrix_elf::Class;
 
 use crate::console::println;
+use crate::syscall::credentials::Credentials;
 use crate::syscall::load::Source::Bytes;
 use crate::syscall::memory::{self, MmapRequest, OffsetUnit};
 use crate::syscall::process::{self, Process};
@@ -9845,7 +9846,7 @@ fn check_a_program_is_handed_its_start_argument() -> Result<Option<i32>, &'stati
         image::Shape::Good,
         arch::USER_ARGUMENT_PROGRAM,
     );
-    let program = exec::load_native(&file, b"/argument")
+    let program = exec::load_native(&file, b"/argument", Credentials::root())
         .map_err(|_| "a program to hand a start argument to could not be loaded")?;
     let claim = process::claim_start(&program)
         .map_err(|_| "a loaded program's start could not be claimed")?;
@@ -9866,7 +9867,7 @@ fn check_a_program_is_handed_its_start_argument() -> Result<Option<i32>, &'stati
     // A process ended before anyone started it cannot be claimed: a native
     // `process_start` on a killed child would otherwise report a start whose
     // task returns before entering the program.
-    let ended = exec::load_native(&file, b"/argument")
+    let ended = exec::load_native(&file, b"/argument", Credentials::root())
         .map_err(|_| "a program to end before its start could not be loaded")?;
     process::kill(&ended, 137);
     if process::claim_start(&ended).is_ok() {

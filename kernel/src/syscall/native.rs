@@ -236,8 +236,15 @@ pub(crate) struct Processes {
     pub(crate) must_leave: fn(caller: &dyn Host) -> bool,
 }
 
-/// [`Processes::load`]: an image and a name, and the process made from them.
-pub(crate) type LoadNative = fn(image: &[u8], name: &[u8]) -> Result<Arc<dyn Host>, Errno>;
+/// [`Processes::load`]: the process asking, an image and a name, and the
+/// process made from them.
+///
+/// The new process runs as `creator` does, as a fork child runs as its
+/// parent: making a process is not a way to become anyone else
+/// (`docs/AUTH.md` §7, P0). With no creator -- one the kernel makes for
+/// itself, as `devmgr` -- it is root's.
+pub(crate) type LoadNative =
+    fn(creator: Option<&dyn Host>, image: &[u8], name: &[u8]) -> Result<Arc<dyn Host>, Errno>;
 
 /// What gives a starting process its first argument, or refuses to.
 pub(crate) type Argument<'a> = &'a mut dyn FnMut() -> Result<u64, Errno>;
@@ -381,7 +388,7 @@ pub(crate) fn dispatch(args: &SyscallArgs, caller: Option<&dyn Host>) -> Result<
         | NativeCall::JobSetLimit
         | NativeCall::JobGetQuota
         | NativeCall::ProcessCreate
-        | NativeCall::ProcessStart => job_call(call, process, &a),
+        | NativeCall::ProcessStart => job_call(call, caller, &a),
         NativeCall::InterruptCreate => interrupt_create(process, handle(a[0]), a[1]),
         NativeCall::InterruptAck => interrupt_ack(process, handle(a[0])),
         NativeCall::InterruptBind => interrupt_bind(process, handle(a[0]), handle(a[1]), a[2]),
@@ -1165,15 +1172,16 @@ fn job_in(process: &Process, job: Handle, needed: Rights) -> Result<Arc<Job>, Er
 
 /// The calls on a job and on the processes made in one, which `dispatch`
 /// hands on as one.
-fn job_call(call: NativeCall, process: &Process, a: &[u64; 6]) -> Result<usize, Errno> {
+fn job_call(call: NativeCall, caller: &dyn Host, a: &[u64; 6]) -> Result<usize, Errno> {
     let [first, second, third, fourth, ..] = *a;
+    let process = caller.core();
     match call {
         NativeCall::JobCreate => job_create(process, handle(first)),
         NativeCall::JobKill => job_kill(process, handle(first)),
         NativeCall::JobSetLimit => job_set_limit(process, handle(first), second, third),
         NativeCall::JobGetQuota => job_get_quota(process, handle(first), second, third),
         NativeCall::ProcessCreate => process_create(
-            process,
+            caller,
             handle(first),
             handle(second),
             Buffer {
@@ -1286,13 +1294,15 @@ const MAX_IMAGE_BYTES: u64 = 16 << 20;
 /// The image is read out of the VMO into kernel memory and loaded from there,
 /// so the new process's code is ordinary memory of its own and no VMO is ever
 /// mapped executable. The process is in `job` before the caller hears of it,
-/// so a kill of the job reaches a process that was never started.
+/// so a kill of the job reaches a process that was never started. It runs as
+/// its creator, the `caller`, runs ([`LoadNative`]).
 fn process_create(
-    process: &Process,
+    caller: &dyn Host,
     job: Handle,
     image: Handle,
     name: Buffer,
 ) -> Result<usize, Errno> {
+    let process = caller.core();
     let job = job_in(process, job, Rights::MANAGE)?;
     let vmo = process.with_handles(|table| vmo_in(table, image, Rights::READ))?;
     let name_len = usize::try_from(name.count)
@@ -1306,7 +1316,7 @@ fn process_create(
     // task of that job, so a limit there bounds it (`object::quota`).
     let own = crate::sched::running_group();
     crate::sched::set_current_group(job.quota_index());
-    let loaded = (processes.load)(&image, &name);
+    let loaded = (processes.load)(Some(caller), &image, &name);
     crate::sched::set_current_group(own);
     let child = loaded?;
     drop(image);

@@ -35,6 +35,7 @@ use ferrix_vma::VmaFlags;
 use crate::arch;
 use crate::fallible::AllocError;
 use crate::object::{self, Transfer};
+use crate::syscall::credentials::Credentials;
 use crate::syscall::fd;
 use crate::syscall::load::{self, LoadError, Source};
 use crate::syscall::process::{self, Process, Startup};
@@ -176,15 +177,21 @@ pub(crate) fn load(
 /// It enters at the image's entry point with its stack pointer at
 /// [`Image::stack_top`], and its start argument is zero until a
 /// [`process::StartClaim`] starts it with one. `name` is what `/proc/<pid>/exe`
-/// and its command line report.
+/// and its command line report. It runs as `credentials` from the first moment
+/// anything can see it.
 ///
 /// # Errors
 ///
 /// [`ExecError`].
-pub(crate) fn load_native(image: &[u8], name: &[u8]) -> Result<Arc<Process>, ExecError> {
+pub(crate) fn load_native(
+    image: &[u8],
+    name: &[u8],
+    credentials: Credentials,
+) -> Result<Arc<Process>, ExecError> {
     let space = AddressSpace::new().map_err(ExecError::Space)?;
     let process =
         Process::new(Arc::clone(&space)).map_err(|_| ExecError::Space(SpaceError::OutOfMemory))?;
+    process.with_credentials(|held| *held = credentials);
     let loaded = load_into(&space, Source::Bytes(image), None)?;
     // A native process's start argument is a 64-bit handle, and it speaks
     // the native ABI through `SYSCALL`: a 32-bit image cannot be one.

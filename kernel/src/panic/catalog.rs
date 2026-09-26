@@ -1121,8 +1121,17 @@ pub(crate) static STAGE13_CGROUPFS: Explanation = Explanation {
               EMPTY must stay quiet through the first member's release and fire at the last, \
               at once, with cgroup.events saying `populated 0`; one made on an empty job fires \
               as it is made; a native job made inside shows as `job-<id>`, keeps the cgroup \
-              from rmdir, and goes when its handle closes.",
+              from rmdir, and goes when its handle closes. docs/AUTH.md §7, P0: a process \
+              running as uid 1000, given MANAGE on /check-p's job because the cgroup and its \
+              cgroup.procs were chowned to it, must be able to make a native process there with \
+              process_create, and that process must have every id its creator has before it \
+              starts, and started, exit with 232, the low byte of what getuid answered it; a \
+              child made as root would exit 0.",
     causes: &[
+        "`load_native` in kernel/src/syscall/launch.rs did not take the creator's \
+         credentials, or `process_create` in kernel/src/syscall/native.rs did not pass the \
+         caller as the creator, so a native process started as root \
+         (`Credentials::root()`, what `Process::new` gives) whoever made it.",
         "`forked_into` in kernel/src/syscall/process.rs or `clone_with`/`cgroup_target` in \
          kernel/src/syscall/family.rs put the child in its parent's job, or \
          `cgroupfs::clone_target` did not recognise a cgroupfs directory.",
