@@ -76,6 +76,8 @@ pub(crate) fn check_the_vdso() -> Result<Option<Answered>, &'static str> {
 
 /// The trampoline is exported, by both lookups, at the offset its code has,
 /// and a space it is mapped into finds it there.
+///
+/// Verifies: L.user.77
 fn check_the_trampoline(image: &[u8]) -> Result<(), &'static str> {
     let spec = crate::arch::vdso_spec().ok_or("the vDSO has no image to check")?;
     let function = spec
@@ -143,6 +145,8 @@ fn check_the_data_page() -> Result<Answered, &'static str> {
 /// A space the vDSO is mapped into shows the image read-and-run and the data
 /// page read-only below it, and refuses to write either or make either
 /// writable.
+///
+/// Verifies: L.user.76
 fn check_the_mapping() -> Result<(), &'static str> {
     let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
     let at = vdso::map_into(&space).ok_or("the vDSO could not be mapped")?;

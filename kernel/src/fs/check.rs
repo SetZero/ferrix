@@ -210,6 +210,8 @@ fn pattern(at: usize) -> u8 {
 
 /// Write across pages, read back, truncate into a page, grow again, rename,
 /// and remove. Returns the pages the file had committed.
+///
+/// Verifies: L.user.41
 fn check_tmpfs_stores_pages() -> Result<u64, &'static str> {
     let ns = fs::namespace();
     let ctx = ns.context();
@@ -365,6 +367,8 @@ fn check_a_mapping_faults_in_its_source() -> Result<u64, &'static str> {
 
 /// The body of [`check_a_mapping_faults_in_its_source`], with its two
 /// mappings of `object` at `shared` and `private`.
+///
+/// Verifies: L.user.37
 fn fault_in_from_source(
     space: &AddressSpace,
     shared: u64,

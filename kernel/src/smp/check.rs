@@ -461,6 +461,8 @@ fn tables_wait_for_their_shootdown() -> Result<(), &'static str> {
 
 /// [`tables_wait_for_their_shootdown`] over the tree at `root`, mapping and
 /// unmapping `phys` at a user address the tree has nothing else under.
+///
+/// Verifies: L.mm.23, L.mm.39
 fn unlink_and_shoot(root: u64, phys: u64) -> Result<(), &'static str> {
     use super::TlbPages;
 
@@ -505,7 +507,7 @@ fn unlink_and_shoot(root: u64, phys: u64) -> Result<(), &'static str> {
 /// which is what a missing shootdown looks like in a running kernel, and
 /// exactly what this counts.
 ///
-/// Verifies: H.MEM.7
+/// Verifies: H.MEM.12, L.mm.28
 fn shootdown(report: &mut Report) -> Result<(), &'static str> {
     const ROUNDS: u64 = 20;
 

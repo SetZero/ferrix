@@ -209,6 +209,8 @@ fn check_on(here: usize) {
 }
 
 /// The whole check, on processor `a`.
+///
+/// Verifies: L.user.32
 fn check(a: usize) -> Result<Report, &'static str> {
     let count = smp::topology().map_or(1, smp::Topology::count);
     let b = (a + 1) % count;
@@ -469,6 +471,8 @@ fn take_pages_away(programs: &Programs<'_>) -> Result<u32, &'static str> {
 /// refuse the child's next write from user mode, and the refusal ends the
 /// child. A protect that took the entry down without telling the child's
 /// processor lets the write through, and the child answers.
+///
+/// Verifies: L.user.88
 fn protect_under_child(programs: &Programs<'_>) -> Result<(), &'static str> {
     let [_, child] = programs.processes;
     let (_, written) = programs.probe(CHILD)?;
@@ -509,6 +513,8 @@ fn protect_under_child(programs: &Programs<'_>) -> Result<(), &'static str> {
 }
 
 /// Step 1: decommit the page both processes touch.
+///
+/// Verifies: L.user.16, L.user.90
 fn decommit_under_both(programs: &Programs<'_>) -> Result<(), &'static str> {
     let vmo = programs.vmo;
     let child_mark = CHILD_MARK;
@@ -555,6 +561,8 @@ fn decommit_under_both(programs: &Programs<'_>) -> Result<(), &'static str> {
 
 /// Step 2: replace the page both processes touch, with a frame of the
 /// kernel's choosing.
+///
+/// Verifies: L.user.17
 fn replace_under_both(programs: &Programs<'_>) -> Result<(), &'static str> {
     let vmo = programs.vmo;
     let (child_mark, parent_mark) = (CHILD_MARK, PARENT_MARK);
@@ -597,6 +605,8 @@ fn replace_under_both(programs: &Programs<'_>) -> Result<(), &'static str> {
 
 /// Step 3: a held page stays, mapped in both processes, whatever is asked of
 /// it.
+///
+/// Verifies: L.user.23
 fn hold_under_both(programs: &Programs<'_>) -> Result<(), &'static str> {
     let vmo = programs.vmo;
     let child_mark = CHILD_MARK;

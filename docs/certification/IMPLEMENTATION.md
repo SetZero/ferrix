@@ -725,6 +725,92 @@ What this slice found, for review:
   configurations, twenty for the 43 requirements, the two splits and the
   tags.
 
+**Step 4, the `mm` and `user` slice, done 2026-09-27.** 166 low-level
+requirements in `docs/sysml/17-memory-requirements.sysml`, in two id spaces
+because they are two layers: `L.mm.1` to `L.mm.61` for the kernel's own
+memory (`mm.rs`, `mm/`, `vmap.rs`, `early.rs`) and `L.user.1` to
+`L.user.105` for a program's (`user/vmo.rs`, `user/space.rs`). **111 are
+verified** -- 27 of `L.mm`, 84 of `L.user` -- by 90 check functions newly
+tagged, or given one more id, in `mm/check.rs`, `user/`'s five check files,
+`smp/check.rs`, `syscall/{check,unmap_check,vdso_check}.rs`,
+`fs/{check,mmap_check,memfd_check}.rs` and `object/{check,alloc_check,
+quota_check}.rs`; **55 need a check** and are the baseline's `L.mm.*` and
+`L.user.*`. Of the 297 product functions of `mm`, `vmap`, `early` and
+`user`, 236 are a requirement's unit, 49 accessors, 12 check code in a
+product file (`traceability-units.json` says why each stays), and **0 are
+named by none**; the gate holds all four as complete. The item's unnamed
+functions go from 1,393 to 1,178.
+
+Before the requirements, the checks moved. Stage 2's whole allocator check
+(`memory_check`, the frame, heap, vmap-arena, device-window and stack checks)
+and the W^X and sealed sweeps left `main.rs` and `mm.rs` for a new check
+file, `mm/check.rs`, run from the same two points of bring-up with the same
+boot lines, so a tag can go on them; `mm::sweep` and `permissions_of`, which
+only the sweeps and the protection check used, followed. The item counts 21
+product functions fewer. Stage 1's checks of the early mapper and stage 3's
+demand-paging check are still in `main.rs`: `check_early_mapper` maps the
+framebuffer too, so it is not check-only, and the requirements they would
+verify (`L.mm.18`, `.58` to `.60`) wait in the baseline.
+
+The high level grew from 66 to 74, by the one-check rule and by behaviour no
+requirement said:
+
+* `H.MEM.7` keeps the page tables an unmap empties (on
+  `tables_wait_for_their_shootdown`); its remap half is `H.MEM.12`, on
+  `smp/check.rs`'s `shootdown`, which was tagged `H.MEM.7` for a half it
+  proves; its frame half is `H.MEM.17`, which no check proves.
+* `H.MEM.5` keeps the sealed sweep; the direct-map write that must fault is
+  `H.MEM.13`, no check. `H.FAIL.2` keeps the guard pages (`check_stacks`);
+  an overflow reported as the safe state is `H.FAIL.3`, no check.
+* `H.MEM.8` keeps the `cow` program; the `shared` program is `H.MEM.16`.
+* `H.MEM.4` said "any page table", and the sweep walks the kernel's root and
+  the identity root. It now says those. **User mappings may be writable and
+  executable at once** -- `mmap` and `mprotect` pass `PROT_WRITE |
+  PROT_EXEC` through, as Linux does -- so O.WXN as the Security Target states
+  it covers the kernel's mappings only; what the kernel refuses a program
+  (an executable device window or native VMO mapping, a writable vDSO) is
+  `H.MEM.18`, no one check yet. Whether RWX user memory needs an assumption
+  of use is for the Security Target's owner.
+* New: `H.MEM.14`, the kernel's allocators give each frame, block and range
+  one holder and never frame 0 (`memory_check`); `H.MEM.15`, the kernel's
+  own mappings are what was asked (`check_vmap`).
+
+31 of the 74 are verified. What is left open at the high level from this
+slice's areas: `H.MEM.9` names three boot lines no one check proves, and
+`H.MEM.10` asks for a range straddling the image's end where stage 2's
+check probes one straddling its start.
+
+The 55 that need a check, as check-writing work. Kernel memory: bring-up
+against a constructed map (`L.mm.1`), a user table charged to its job and a
+disowned frame charged to nobody (`.9`, `.10`), `allocate_frames_below`
+(`.11`), a heap refusal counted (`.14`), a table, a `zero_frame` and a
+`copy_frame` read whole after the frame was dirtied (`.15` to `.17`, and the
+arena's `.45`) -- the checks that exist never dirty the frame first --,
+`map_in` and user code fetched as written (`.20`, `.21`), the kernel slots
+shared (`.22`), `unmap_unwalked` and `prune_in` (`.24`, `.25`), the I/O
+tables (`.26`, `.27`), a kernel unmap's release and its no-memory path
+(`.29`, `.30`), the reclaim's counts (`.34`), the reserve's refusal, scope
+and large blocks (`.36` to `.38`), merged and dropped table lists (`.40`,
+`.41`), `device_windows`, `free_stacks` and `Buffer` (`.54`, `.56`, `.57`),
+the early mapper (`.58` to `.61`); and three whose checks exist in product
+files -- `check_demand_paging` in `main.rs` (`.18`), vmap's own
+`check_failed_device_map` and `check_invariants` (`.52`, `.53`). User
+memory: a first write committing a zeroed page and an uncommitted page
+reading zeros (`L.user.3`, `.10`), a VMO at the object limit (`.9`, with
+`H.QUOTA.9`), a byte range leaving the page (`.11`), a displaced shared
+frame taken down and `retire` folding the caller's shootdown (`.13`, `.18`),
+held ranges and an undone move (`.28`, `.31`), the mapper list's pruning,
+single private mapper and charge (`.33` to `.35`), `insert_absent` (`.38`),
+mapped writes reported (`.43`), `with_present_page` (`.65`), `madvise`'s
+refusals (`.84`, `.85`), a pending shootdown widening the forget (`.91`),
+the ceiling (`.102`), a disk file's page (`.103`, waiting on the ring-3
+disk), a fault with no preemption lock held (`.104`), and an unmap's order
+at the space level (`.105`).
+
+* **Time.** The requirements were drafted by three agents in parallel, one
+  per layer, from the pilot's lessons, in about 20 minutes; review, the
+  high-level splits and tagging took about as long again.
+
 49,431 lines of item product code trace to 33 system-level requirements, and no
 test names a requirement id.
 

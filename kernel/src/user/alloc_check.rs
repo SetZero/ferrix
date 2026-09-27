@@ -110,7 +110,7 @@ type Scenario = (&'static str, fn(u64) -> Result<(), Refusal>);
 /// `frame` is a frame of RAM the caller owns, for the scenario that maps a
 /// window over one.
 ///
-/// Verifies: H.MEM.11
+/// Verifies: H.MEM.11, L.mm.48, L.user.20, L.user.100
 pub(crate) fn run(frame: u64) -> Result<Report, &'static str> {
     let scenarios: [Scenario; 8] = [
         ("fork", fork_every_kind_of_region),

@@ -513,6 +513,15 @@ check is in a check file. Of the 66 high-level ones **22** are verified
 all. *Still open:* the other subsystems' tags, the 93, and the run-time
 column's evidence.
 
+**Advanced 2026-09-27 (W-8 step 4, `mm` and `user`).** 151 check functions,
+host tests and xtask gates name a requirement. Of memory's 166 low-level requirements
+**111 are verified** (27 of 61 `L.mm`, 84 of 105 `L.user`) and 55 are in the
+baseline; of the 74 high-level ones **31** are verified. Stage 2's memory
+check and the W^X and sealed sweeps moved from `main.rs` and `mm.rs` into
+`mm/check.rs` so a tag could go on them; `H.MEM.7`'s two tags, each on a
+check proving one half, became `H.MEM.7` and `H.MEM.12`, one each. *Still
+open:* the other subsystems, 147 baselined requirements, the run-time column.
+
 **Major.** The boot gates assert rich properties — 2,387 mappings swept for
 W^X, 16 of 16 interrupt deliveries waking their waiter — but nothing links an
 assertion to a requirement id. `docs/sysml/` has 33 requirements and 32
@@ -556,6 +565,14 @@ checks moved out of product files into check files (`check_iommu`,
 2,332 product functions (2,338 before), of which 1,393 are still named by
 none. *Still open:* the other subsystems.
 
+**Advanced 2026-09-27 (W-8 step 4, `mm` and `user`).** 166 more:
+`L.mm.1` to `L.mm.61` and `L.user.1` to `L.user.105` in
+`docs/sysml/17-memory-requirements.sysml`. Of the 297 product functions of
+`mm`, `vmap`, `early` and `user`, 236 are a requirement's unit, 49
+accessors and 12 check code; **0 are named by none**, and the gate holds the
+four as complete. Item-wide, 1,178 of 2,330 product functions are still
+named by none. *Still open:* the remaining subsystems.
+
 **Major.** 33 requirements exist, all at system level (`<'G.1'>` kernel
 threads, `<'G.2'>` address-space scale). DO-178C needs high- and low-level
 requirements with the design between them; 62304 §5.4 needs detailed design
@@ -584,6 +601,15 @@ IMPLEMENTATION.md W-8). *Still open:* the other subsystems' low level.
 requirements carry both, and the same rule split two of step 2's: `H.DMA.2`
 into `H.DMA.2`, `6` and `7`, and `H.DMA.3` into `H.DMA.3` and `8`, one
 check able to prove each (66 high-level now).
+
+**Advanced 2026-09-27 (W-8 step 4, `mm` and `user`).** The 166 memory
+requirements carry both. The rule narrowed `H.MEM.4` to what its sweep walks
+-- the kernel's own root and the identity root -- and so found that O.WXN,
+as stated, does not cover user mappings, which may be writable and
+executable at once as on Linux (`H.MEM.18` says what the kernel does refuse
+a program). Splits by the one-check rule: `H.MEM.5` (and `H.MEM.13`),
+`H.MEM.7` (`H.MEM.12`, `H.MEM.17`), `H.MEM.8` (`H.MEM.16`), `H.FAIL.2`
+(`H.FAIL.3`); new: `H.MEM.14`, `H.MEM.15`. 74 high-level now.
 
 **Major.** They are prose doc comments (*"Forces: 1:1 kernel threads, a real
 futex, per-thread TLS registers"*) explaining why the system is shaped as it

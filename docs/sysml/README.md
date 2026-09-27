@@ -31,6 +31,7 @@ tooling that can check a model for consistency where it cannot check prose.
 | `12-views.sysml` | `FerrixViews` | Views filtering the one model into current, written-ahead, future and deferred. |
 | `13-item-requirements.sysml` | `FerrixItemRequirements` | The certified item's high-level requirements (`H.<AREA>.<n>`), each with a statement, a pass/fail criterion and its parent objective; the definitions the low-level ones (`L.<module>.<n>`) use. `scripts/check/check-traceability.py` holds them to their checks. |
 | `14-object-requirements.sysml` | `FerrixObjectRequirements` | The low-level requirements of `kernel/src/object/` (`L.object.<n>`), the pilot of W-8: each names the functions that carry it as its `unit` and the `H.*` it refines. One file per subsystem follows it. |
+| `17-memory-requirements.sysml` | `FerrixMemoryRequirements` | The low-level requirements of the item's memory management: `L.mm.<n>` for the kernel's own (`mm.rs`, `mm/`, `vmap.rs`, `early.rs`) and `L.user.<n>` for a program's (`user/vmo.rs`, `user/space.rs`), in the pilot's format. |
 
 ## Reading it
 

@@ -136,6 +136,8 @@ fn check_once(process: &Process) -> Result<Counts, &'static str> {
 /// Eight pages dropped with `MADV_DONTNEED`, then with `MADV_FREE`: eight
 /// frames back each time, zeros after, the neighbours untouched; and every
 /// hint accepted and dropping nothing.
+///
+/// Verifies: L.user.79
 fn check_anonymous_memory(process: &Process, counts: &mut Counts) -> Result<(), &'static str> {
     let at = map(process, PAGES * PAGE_SIZE, MAP_ANONYMOUS | MAP_PRIVATE, -1)?;
     let outcome = drop_and_count(process, at, MADV_DONTNEED, counts)
@@ -208,6 +210,8 @@ fn drop_and_count(
 
 /// A parent drops a page its `fork` child still shares copy-on-write: the
 /// parent reads zeros, and the child what the page held.
+///
+/// Verifies: L.user.80
 fn check_a_fork_keeps_its_copy(process: &Process) -> Result<(), &'static str> {
     let at = map(process, 3 * PAGE_SIZE, MAP_ANONYMOUS | MAP_PRIVATE, -1)?;
     let space = process.space();
@@ -234,6 +238,8 @@ fn check_a_fork_keeps_its_copy(process: &Process) -> Result<(), &'static str> {
 
 /// A private mapping of a memfd gives back what it copied and shows the file
 /// again; a shared one keeps what it wrote; the file keeps every page.
+///
+/// Verifies: L.user.81
 fn check_file_mappings(
     process: &Process,
     scratch: u64,
@@ -362,6 +368,8 @@ fn check_a_shared_file_mapping(
 /// `MADV_REMOVE` punches a hole in shared anonymous memory that a `fork`
 /// child sees as well, and gives its two frames back; `MADV_DONTNEED` there
 /// keeps the contents.
+///
+/// Verifies: L.user.82
 fn check_a_hole_in_shared_memory(
     process: &Process,
     counts: &mut Counts,
@@ -422,6 +430,8 @@ fn check_a_hole_in_shared_memory(
 }
 
 /// The refusals that need only private anonymous memory, and a hole.
+///
+/// Verifies: L.user.83
 fn check_refusals(process: &Process, counts: &mut Counts) -> Result<(), &'static str> {
     let at = map(process, 2 * PAGE_SIZE, MAP_ANONYMOUS | MAP_PRIVATE, -1)?;
     let wraps = usize::MAX as u64;

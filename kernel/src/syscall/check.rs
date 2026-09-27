@@ -1050,6 +1050,8 @@ fn check_the_cpu_time_clocks(process: &Process) -> Result<(), &'static str> {
 ///
 /// With no SMAP or PAN, a page mapped at zero is what a kernel null
 /// dereference would read.
+///
+/// Verifies: L.user.45
 fn check_nothing_is_mapped_near_page_zero(process: &Process) -> Result<(), &'static str> {
     let request = |addr: u64, flags: u32| MmapRequest {
         addr,
@@ -1212,6 +1214,8 @@ fn check_a_c_string_stops_at_its_nul(process: &Process) -> Result<(), &'static s
 /// carrying the old ones is still writable in hardware until something removes
 /// it. Nothing can observe that from user mode yet -- there is no user mode --
 /// which is exactly why it is worth checking from here.
+///
+/// Verifies: L.user.86
 fn check_mprotect_takes_write_away(process: &Process) -> Result<(), &'static str> {
     let at = map_rw(process, PAGE_SIZE)?;
     uaccess::copy_to_user(process.space(), at, b"before")
@@ -1253,6 +1257,8 @@ fn check_mprotect_takes_write_away(process: &Process) -> Result<(), &'static str
 /// a corrupted heap that no call ever reports. The string written across the
 /// page boundary is there so a move that got one page right and the other
 /// wrong, or both in the wrong order, is caught too.
+///
+/// Verifies: L.user.30, L.user.73
 fn check_mremap_moves_the_contents_and_shrinks_in_place(
     process: &Process,
 ) -> Result<(), &'static str> {
@@ -6807,6 +6813,8 @@ const COW_STATUS: i32 = 61;
 /// translation and the invalidation after it are all on the path. A fault that
 /// mapped the shared frame writable instead of copying it would pass every
 /// kernel-side check of `fork`; it fails this one.
+///
+/// Verifies: H.MEM.8, L.user.61
 fn check_a_copy_on_write_page_is_copied_for_the_side_that_writes()
 -> Result<Option<i32>, &'static str> {
     if arch::USER_COW_PROGRAM.is_empty() {
@@ -6845,6 +6853,8 @@ const SHARED_STATUS: i32 = 62;
 /// One of the shared pages is first touched by the child, so the page the
 /// child's fault commits has to land in the object both processes name rather
 /// than in a copy of it.
+///
+/// Verifies: H.MEM.16, L.user.62
 fn check_a_shared_mapping_is_shared_across_fork() -> Result<Option<i32>, &'static str> {
     if arch::USER_SHARED_PROGRAM.is_empty() {
         return Ok(None);
@@ -6897,6 +6907,8 @@ const MPROTECT_STATUS: i32 = 128 + ferrix_linux_abi::types::SIGSEGV as i32;
 /// between reloads its root and drops the entry by accident. A program free to
 /// move would pass without the invalidation whenever it was switched between
 /// the two, which is the stale entry hidden rather than removed.
+///
+/// Verifies: L.user.87
 fn check_a_write_after_mprotect_read_only_faults() -> Result<Option<i32>, &'static str> {
     if arch::USER_MPROTECT_PROGRAM.is_empty() {
         return Ok(None);
@@ -7412,6 +7424,8 @@ fn a_requeue_crosses_buckets() -> Result<(), &'static str> {
 /// the child's wake with `FUTEX_PRIVATE_FLAG`, keyed by the child's own space
 /// -- which is how every futex was keyed before shared keys existed -- must
 /// find nobody, and the check must say so by name. Answers one.
+///
+/// Verifies: L.user.78
 fn a_shared_futex_crosses_a_fork() -> Result<usize, &'static str> {
     let parent = process::new_for_check()
         .map_err(|_| "could not make a process for the shared futex check")?;

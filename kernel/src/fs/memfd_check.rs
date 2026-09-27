@@ -298,6 +298,8 @@ fn check_size_seals(
 
 /// The write seal: refused while a shared mapping may write the file, a fork
 /// child's copy included, and enforced once it stands.
+///
+/// Verifies: L.user.42
 fn check_the_write_seal(
     process: &Process,
     sealed: u64,
@@ -375,6 +377,8 @@ fn check_the_write_seal(
 
 /// The gap the may-write accounting closed: a shared read-only mapping of a
 /// file opened read-only may not be made writable.
+///
+/// Verifies: L.user.89
 fn check_a_read_only_mapping_stays_read_only(
     process: &Process,
     page: u64,

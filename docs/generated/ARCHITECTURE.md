@@ -114,8 +114,9 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixItemRequirements` | `13-item-requirements.sysml` | The high-level requirements of the certified item (the `core` and `item` rings of docs/certification/ITEM.md): what each subsystem promises at its interface, decomposed from the Security Target's objectives (docs/certification/SECURITY-TARGET.md §4.1 and §8.2) and the safety manual's assumed safety requirements (SAFETY-MANUAL.md §2). The low-level requirements, one per unit of code, go in one file per subsystem after this one. docs/certification/IMPLEMENTATION.md W-8 is the design, and scripts/check/check-traceability.py the gate that reads these and writes docs/certification/TRACEABILITY.md. |
 | `FerrixObjectRequirements` | `14-object-requirements.sysml` | What each unit of kernel/src/object/ does, as `ItemLowLevel` requirements (part 13 defines the format): the core ring's object layer -- what a handle names and how it is dropped, channels, ports, interrupts, I/O mappings, pins, the job quotas, jobs, the core half of a process, and the scoped OOM kill. The handle table itself and the rights arithmetic are `libs/kernel/objects` and `libs/proto/native-abi`, whose host tests verify H.OBJ.1 to H.OBJ.4 directly; nothing here restates them. |
 | `FerrixIommuRequirements` | `16-iommu-requirements.sysml` | What each unit of kernel/src/iommu.rs and kernel/src/iommu/ does, as `ItemLowLevel` requirements (part 13 defines the format): where firmware puts each PCI function's DMA, the units the kernel turns translation on for, the domains a driver pins pages into, the gate a wait on a unit is made through, and the faults a unit records. The pins a program makes through a handle, and the quarantine a dead driver's pins go to, are object/'s (part 14, `L.object.45` to `L.object.49`); this is the domain side under them. |
+| `FerrixMemoryRequirements` | `17-memory-requirements.sysml` | What each unit of the item's memory management does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies), in two id spaces. |
 
-16 files, 43 packages, 2727 elements, 205 relations. Model digest `688357d31db2844e`.
+17 files, 51 packages, 3597 elements, 206 relations. Model digest `e611650a218ad23a`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -230,16 +231,23 @@ Address spaces, the frames under them and the mappings that reach them: O.ISOLAT
 | `H.MEM.1` | A user address space shall translate a user virtual address only to a frame its own mappings name, so that one address in two address spaces reaches two frames unless a VMO both map shares one. | Of N reads of one user address, made alternately in two address spaces that each wrote a different value there, all N return the reading space's own value and none the other's (the boot's `spaces` line, N = 128). | `O.ISOLATE, ASR-1` |
 | `H.MEM.2` | No mapping of kernel memory shall be accessible from user mode: a user-mode read, write or instruction fetch at a kernel address shall end in a fault delivered to the thread, never in the access. | A program that reads, writes and jumps to a kernel-half address is ended with SIGSEGV each time, 3 of 3, on every architecture, and the kernel's memory at that address is unchanged. | `O.ISOLATE, ASR-1` |
 | `H.MEM.3` | On every processor the kernel shall run with its own access to user pages refused outside the window a user copy opens: SMEP and SMAP on x86-64, PAN on AArch64 where the processor implements it. ARMv7-A has no such control (AoU-6). | The boot reports SMEP on and SMAP on (x86-64), or PAN on where offered (AArch64), for each of the N online processors; a kernel read of a user page outside the window faults. | `O.ISOLATE, ASR-1` |
-| `H.MEM.4` | No mapping the kernel installs in any page table shall be both writable and executable. | The boot's sweep of every leaf mapping of every page table counts N mappings, E > 0 of them executable, and 0 both writable and executable (the `w^x` line). | `O.WXN, ASR-2` |
-| `H.MEM.5` | No mapping of the frames that hold the kernel's text and read-only data, the direct map's alias of them included, shall be writable. | The boot's sweep of every mapping of those frames finds 0 writable (the `sealed` line), and a write to the text through the direct map faults on every architecture (FX-9001). | `O.WXN, ASR-2` |
+| `H.MEM.4` | Once bring-up has dropped the loader's identity map, no leaf mapping under the kernel's own root table or the identity root shall be both writable and executable. | The boot's sweep of every leaf mapping under the kernel's root and the identity root counts N mappings, E > 0 of them executable, and 0 both writable and executable (the `w^x` line). | `O.WXN, ASR-2` |
+| `H.MEM.5` | No mapping of the frames that hold the kernel's text and read-only data, the direct map's alias of them included, shall be writable. | The boot's sweep of every mapping of those frames finds 0 writable, and finds the direct map aliasing every byte of them (the `sealed` line). | `O.WXN, ASR-2` |
 | `H.MEM.6` | A physical frame shall hold only zeros when it is committed to a VMO, mapped into a user address space for the first time, or made a page table. | A frame written with a pattern, freed and committed again reads 0 non-zero bytes of its 4096 before the new owner's first write, for a VMO page and for a page table alike. | `O.SCRUB, ASR-5` |
-| `H.MEM.7` | A frame or page-table frame removed from a translation shall not return to the frame allocator until the TLB invalidation that covers it has completed on every processor that may hold the translation. | A page table an unmap empties is still held, not freed, until the shootdown covering it completes: 0 tables freed before it; and each of N remaps is seen by every online processor (the `tlb` line). | `O.ISOLATE, ASR-1` |
-| `H.MEM.8` | After a fork, a write by the parent or the child to a private page shall not be visible to the other, and a write to a shared mapping shall be. | The `cow` program, in which each side writes a page both shared, exits 61 (neither saw the other's write); the `shared` program exits 62 (its MAP_SHARED write reached the parent and its MAP_PRIVATE write did not). | `O.ISOLATE, ASR-1` |
+| `H.MEM.7` | A page-table frame an unmap empties shall not return to the frame allocator until the TLB invalidation that covers the unmap has been made. | A page table an unmap empties is still held, not freed, until the shootdown covering it completes: 0 tables freed before it, and exactly the tables it emptied given back by it. | `O.ISOLATE, ASR-1` |
+| `H.MEM.8` | After a fork, a write by the parent or the child to a private page shall not be visible to the other. | The `cow` program, in which each side writes a page both shared, exits 61 (neither saw the other's write). | `O.ISOLATE, ASR-1` |
 | `H.MEM.9` | Every frame an address space, a VMO or a process holds shall return to the frame allocator when the last reference to it goes. | After each memory and program check, the free frame count is what it was before: 0 frames leaked, per check (the `objects`, `uaccess` and `exits` lines). | `O.QUOTA` |
 | `H.MEM.10` | Every interface that maps a physical range a caller names shall refuse a range that touches the kernel image. | Requests naming the image's first page, its last page and a range straddling its end are each refused, 0 accepted, at stages 1, 2 and 6. | `O.ISOLATE, O.WXN` |
 | `H.MEM.11` | An allocation the item makes after bring-up shall report failure to its caller, which shall answer it as running out of memory and keep nothing half made. | With every allocation of the swept memory operations and native calls failed in turn, each failure is absorbed or answered NO_MEMORY or ENOMEM, and 0 frames or objects are left behind (the `sweep` and `no-mem` lines). | `O.QUOTA` |
+| `H.MEM.12` | Once a change to a kernel mapping returns, every online processor shall translate the address as changed, and none through the translation it replaced. | Of N moves of one page to another frame, each made after every online processor has read the page, every processor reads the moved page's new value each time: 0 stale reads (the `tlb` line). | `O.ISOLATE, ASR-1` |
+| `H.MEM.13` | A write to the kernel's text through its direct-map alias shall fault, on every architecture. | A kernel write to the first word of the text through the direct map ends in the page-fault report (FX-9001) on x86-64, AArch64 and ARMv7-A, 3 of 3, and the word is unchanged. | `O.WXN, ASR-2` |
+| `H.MEM.14` | The kernel's own frame allocator, heap and address arena shall hand each frame, block and range to one holder at a time, and shall never hand out frame 0. | Stage 2's memory check finds two frames distinct, a 16-frame block 16-frame aligned, frame 0 neither managed nor handed out, a Box, a 4096-entry Vec and a 2048-key BTreeMap each holding what was put in it, and two arena ranges distinct, inside the arena and two guard pages apart. | `O.ISOLATE, ASR-1` |
+| `H.MEM.15` | A mapping the kernel makes in its own address space shall translate each page to the frame or register asked for, with the permissions and memory type asked for. | Each page of an 8-page arena range translates to a frame, none to its neighbour's; a page protected read-only reads back not writable in the descriptors and still translates; a device window at offset 0x40 translates to the register asked for, offset included, as device memory and not executable, and is gone once unmapped. | `O.ISOLATE, ASR-1` |
+| `H.MEM.16` | After a fork, a write by the child to a MAP_SHARED mapping shall be visible to the parent, and its write to a MAP_PRIVATE mapping shall not. | The `shared` program exits 62 (its MAP_SHARED write reached the parent and its MAP_PRIVATE write did not). | `O.ISOLATE, ASR-1` |
+| `H.MEM.17` | A frame taken out of a translation, of a user address space or of the kernel's, shall not return to the frame allocator until the TLB invalidation that covers it has been made on every processor that may hold the translation. | A frame an unmap, a decommit or a replace takes out of a translation that another processor has cached is still allocated until that processor's shootdown returns: 0 frames freed before it, on every architecture. | `O.ISOLATE, ASR-1` |
+| `H.MEM.18` | The kernel shall refuse to map a device window or a native VMO executable into a user address space, and shall map the vDSO's data page read-only. | An executable device window and an executable vmo_map are each refused, 0 mapped; the vDSO's data page reads back not writable, and a write to it faults. | `O.WXN, O.ISOLATE` |
 
-11 requirements.
+18 requirements.
 
 ### Objects
 
@@ -364,9 +372,10 @@ The safe state and what brings the kernel to it: O.FAILSAFE and ASR-6 (FPT_FLS.1
 | Id | Statement | Criterion | Parent |
 | --- | --- | --- | --- |
 | `H.FAIL.1` | On a failed internal consistency check the kernel shall stop every other processor, print a diagnostic naming the failure and its catalogued explanation, and halt without returning to user mode. | A boot told to panic at its end (`ferrix.onexit=panic`) ends with the FX-1501 report and no program output after it; every panic site in the item has a catalogue entry (`check-panic-audit.py`). | `O.FAILSAFE, ASR-6` |
-| `H.FAIL.2` | Every kernel stack shall have an unmapped guard page directly below and above it, so that an overflow faults rather than overwrites memory. | For every kernel stack, the page below and the page above do not translate, 0 exceptions; on x86-64 an overflow is taken as a double fault on its own stack (FX-9004). | `O.FAILSAFE, ASR-6` |
+| `H.FAIL.2` | The allocator every kernel stack comes from shall give each an unmapped guard page directly below and above it. | A kernel stack allocated, written at its first and last word and freed has the page below and the page above it untranslated, and gives back every frame it took. | `O.FAILSAFE, ASR-6` |
+| `H.FAIL.3` | A kernel stack overflow shall end in the halt and diagnostic of the safe state, never in a write below the stack. | A kernel thread that recurses past its stack ends the boot in a report naming the fault -- on x86-64 a double fault taken on its own stack (FX-9004) -- on each architecture, 3 of 3. | `O.FAILSAFE, ASR-6` |
 
-2 requirements.
+3 requirements.
 
 ## Structure
 
@@ -4049,6 +4058,172 @@ flowchart LR
 | `L.iommu.41` | `aProvokedFaultIsNotStray` | — | — | — |
 | `L.iommu.42` | `aStrayFaultIsCounted` | — | — | — |
 | `L.iommu.43` | `theAuditReadsEveryUnit` | — | — | — |
+| `L.mm.1` | `initGivesTheAllocatorTheUsableRam` | — | — | — |
+| `L.mm.2` | `frameZeroIsNeverHandedOut` | — | — | — |
+| `L.mm.3` | `aFrameHasOneHolder` | — | — | — |
+| `L.mm.4` | `freedBlocksComeBack` | — | — | — |
+| `L.mm.5` | `aRunIsWholeBlocks` | — | — | — |
+| `L.mm.6` | `aSplitBlockIsSingleFrames` | — | — | — |
+| `L.mm.7` | `aSharedFrameOutlivesOneHolder` | — | — | — |
+| `L.mm.8` | `userFramesAreChargedToTheirJob` | — | — | — |
+| `L.mm.9` | `userTablesAreChargedToTheirJob` | — | — | — |
+| `L.mm.10` | `aDisownedFrameIsChargedToNobody` | — | — | — |
+| `L.mm.11` | `lowFramesStayBelowTheirLimit` | — | — | — |
+| `L.mm.12` | `theHeapHoldsWhatIsPutInIt` | — | — | — |
+| `L.mm.13` | `theHeapGivesItsPagesBack` | — | — | — |
+| `L.mm.14` | `aRefusedAllocationIsNullAndCounted` | — | — | — |
+| `L.mm.15` | `pageTablesAreZeroed` | — | — | — |
+| `L.mm.16` | `zeroFrameClearsTheWholeFrame` | — | — | — |
+| `L.mm.17` | `copyFrameCopiesTheWholeFrame` | — | — | — |
+| `L.mm.18` | `demandPagesAreMappedOnFault` | — | — | — |
+| `L.mm.19` | `translateInAgreesWithTheProcessor` | — | — | — |
+| `L.mm.20` | `mapInMapsWhatItIsAsked` | — | — | — |
+| `L.mm.21` | `userCodeIsFetchedAsWritten` | — | — | — |
+| `L.mm.22` | `kernelSlotsAreShared` | — | — | — |
+| `L.mm.23` | `unmapInHoldsItsTablesForTheShootdown` | — | — | — |
+| `L.mm.24` | `unwalkedTablesGoBackAtOnce` | — | — | — |
+| `L.mm.25` | `pruneInGivesBackEmptyTables` | — | — | — |
+| `L.mm.26` | `ioPagesTranslateWhileMapped` | — | — | — |
+| `L.mm.27` | `ioTablesWaitForTheUnit` | — | — | — |
+| `L.mm.28` | `aKernelUnmapIsSeenEverywhere` | — | — | — |
+| `L.mm.29` | `aKernelUnmapReleasesAfterItsShootdown` | — | — | — |
+| `L.mm.30` | `aKernelUnmapNeedsNoMemory` | — | — | — |
+| `L.mm.31` | `protectChangesTheTables` | — | — | — |
+| `L.mm.32` | `noKernelMappingIsWritableAndExecutable` | — | — | — |
+| `L.mm.33` | `theImageIsWritableNowhere` | — | — | — |
+| `L.mm.34` | `earlyBootMemoryIsReclaimed` | — | — | — |
+| `L.mm.35` | `aSectionCompletesOnTheReserve` | — | — | — |
+| `L.mm.36` | `aSectionThatCannotFillIsRefused` | — | — | — |
+| `L.mm.37` | `theReserveServesOnlyItsSections` | — | — | — |
+| `L.mm.38` | `aLargeBlockGoesBackWithTheSection` | — | — | — |
+| `L.mm.39` | `theShootdownGivesBackTheHeldTables` | — | — | — |
+| `L.mm.40` | `mergedShootdownsKeepEveryTable` | — | — | — |
+| `L.mm.41` | `aDroppedListKeepsItsTables` | — | — | — |
+| `L.mm.42` | `arenaAllocationsAreApart` | — | — | — |
+| `L.mm.43` | `arenaAllocationsAreGuarded` | — | — | — |
+| `L.mm.44` | `arenaPagesAreTheirOwnFrames` | — | — | — |
+| `L.mm.45` | `arenaPagesAreZeroed` | — | — | — |
+| `L.mm.46` | `freeGivesTheAllocationBack` | — | — | — |
+| `L.mm.47` | `anEmptyAllocationIsRefused` | — | — | — |
+| `L.mm.48` | `aFailedAllocationKeepsNoFrame` | — | — | — |
+| `L.mm.49` | `deviceWindowsLandWhereAsked` | — | — | — |
+| `L.mm.50` | `deviceWindowsRefuseTheImage` | — | — | — |
+| `L.mm.51` | `deviceWindowsRefuseAWrappedRange` | — | — | — |
+| `L.mm.52` | `aFailedDeviceMapLeavesNothing` | — | — | — |
+| `L.mm.53` | `theArenaStaysConsistent` | — | — | — |
+| `L.mm.54` | `deviceWindowsAreListed` | — | — | — |
+| `L.mm.55` | `kernelStacksAreGuarded` | — | — | — |
+| `L.mm.56` | `stacksAreFreedUnderOneShootdown` | — | — | — |
+| `L.mm.57` | `aBufferIsZeroedPages` | — | — | — |
+| `L.mm.58` | `earlyWindowsTranslateAsAsked` | — | — | — |
+| `L.mm.59` | `earlyWindowsRefuseTheImage` | — | — | — |
+| `L.mm.60` | `earlyWindowsRefuseAWrappedRange` | — | — | — |
+| `L.mm.61` | `theEarlyTablePoolIsBounded` | — | — | — |
+| `L.user.1` | `aReservationCostsNothing` | — | — | — |
+| `L.user.2` | `aCommittedPageIsZeroed` | — | — | — |
+| `L.user.3` | `aFirstWriteCommitsAZeroedPage` | — | — | — |
+| `L.user.4` | `commitIsIdempotent` | — | — | — |
+| `L.user.5` | `commitRefusesPastTheEnd` | — | — | — |
+| `L.user.6` | `commitWithinRefusesPastTheEnd` | — | — | — |
+| `L.user.7` | `onlyWhatIsTouchedIsPaidFor` | — | — | — |
+| `L.user.8` | `aSharedFrameOutlivesOneHolder` | — | — | — |
+| `L.user.9` | `aVmoIsCountedAsAnObject` | — | — | — |
+| `L.user.10` | `anUncommittedPageReadsAsZeros` | — | — | — |
+| `L.user.11` | `aByteRangeLeavingThePageIsRefused` | — | — | — |
+| `L.user.12` | `forkSharesAndAWriteCopies` | — | — | — |
+| `L.user.13` | `aDisplacedSharedFrameIsTakenDown` | — | — | — |
+| `L.user.14` | `aReplaceGivesBackTheOldReference` | — | — | — |
+| `L.user.15` | `aReplaceOfAnAbsentPageDisplacesNothing` | — | — | — |
+| `L.user.16` | `decommitReachesEveryMapper` | — | — | — |
+| `L.user.17` | `replaceReachesEveryMapper` | — | — | — |
+| `L.user.18` | `retireFoldsTheCallersShootdown` | — | — | — |
+| `L.user.19` | `aDecommitNeedsNoMemory` | — | — | — |
+| `L.user.20` | `anAllocationFailureKeepsNothing` | — | — | — |
+| `L.user.21` | `holdingCopiesASharedPage` | — | — | — |
+| `L.user.22` | `aHeldPageKeepsItsFrame` | — | — | — |
+| `L.user.23` | `aHeldPageStaysMappedEverywhere` | — | — | — |
+| `L.user.24` | `forkCopiesAHeldPage` | — | — | — |
+| `L.user.25` | `holdsNest` | — | — | — |
+| `L.user.26` | `aHoldOutsideTheObjectIsRefused` | — | — | — |
+| `L.user.27` | `heldPagesComeBack` | — | — | — |
+| `L.user.28` | `aHeldRangeIsReported` | — | — | — |
+| `L.user.29` | `aHeldPageDoesNotMove` | — | — | — |
+| `L.user.30` | `aMoveTakesThePagesWithIt` | — | — | — |
+| `L.user.31` | `aFailedMoveIsUndone` | — | — | — |
+| `L.user.32` | `theMappersAreCounted` | — | — | — |
+| `L.user.33` | `goneMappersArePruned` | — | — | — |
+| `L.user.34` | `aPrivateObjectHasOneMapper` | — | — | — |
+| `L.user.35` | `aMapperIsCharged` | — | — | — |
+| `L.user.36` | `coherentOnlyWhileUnmapped` | — | — | — |
+| `L.user.37` | `aFaultFillsFromTheFile` | — | — | — |
+| `L.user.38` | `insertAbsentKeepsWhatIsThere` | — | — | — |
+| `L.user.39` | `pagesPastTheFileEndAreRefused` | — | — | — |
+| `L.user.40` | `aCutTakesThePrivateCopies` | — | — | — |
+| `L.user.41` | `aTruncationTakesTheFilesPages` | — | — | — |
+| `L.user.42` | `theWriteSealCountsWritableMappings` | — | — | — |
+| `L.user.43` | `mappedWritesAreReported` | — | — | — |
+| `L.user.44` | `anEmptySpaceHasARootAndNoRegions` | — | — | — |
+| `L.user.45` | `nothingIsMappedBelowTheFloor` | — | — | — |
+| `L.user.46` | `aRegionOutsideTheUserHalfIsRefused` | — | — | — |
+| `L.user.47` | `theKernelImageIsNoDeviceMemory` | — | — | — |
+| `L.user.48` | `aDeviceRangeThatWrapsIsABadRange` | — | — | — |
+| `L.user.49` | `aDeviceMappingIsWholePagesInTheUserHalf` | — | — | — |
+| `L.user.50` | `eachMappingCallRefusesWhatIsItsToRefuse` | — | — | — |
+| `L.user.51` | `aFaultOutsideEveryRegionIsASegfault` | — | — | — |
+| `L.user.52` | `aWriteToAReadOnlyRegionIsRefused` | — | — | — |
+| `L.user.53` | `anInaccessibleRegionIsNeverMapped` | — | — | — |
+| `L.user.54` | `pagesArriveOnDemandAndGoBack` | — | — | — |
+| `L.user.55` | `theProcessorWalksAnInstalledSpace` | — | — | — |
+| `L.user.56` | `twoSpacesReadTheirOwnPageAtOneAddress` | — | — | — |
+| `L.user.57` | `aSharedRegionIsOneObjectAcrossFork` | — | — | — |
+| `L.user.58` | `forkSharesAndAWriteCopies` | — | — | — |
+| `L.user.59` | `aKernelWriteToAnOwnPageTakesNothingDown` | — | — | — |
+| `L.user.60` | `aPageMadeWritableAfterForkIsCopied` | — | — | — |
+| `L.user.61` | `aProgramsCopyOnWriteWriteIsItsOwn` | — | — | — |
+| `L.user.62` | `aProgramsSharedWriteReachesItsParent` | — | — | — |
+| `L.user.63` | `anUnmapWaitsForACopyHoldingItsPage` | — | — | — |
+| `L.user.64` | `aLookupRefusesAWriteToAReadOnlyRegion` | — | — | — |
+| `L.user.65` | `aLookupUnderALockNeverFaults` | — | — | — |
+| `L.user.66` | `aWindowIsRefusedAsDeviceMemoryIs` | — | — | — |
+| `L.user.67` | `aWindowKeepsItsKeeperWhileMapped` | — | — | — |
+| `L.user.68` | `aDeviceMappingReachesTheDevicesOwnPages` | — | — | — |
+| `L.user.69` | `mremapRefusesWhatItShould` | — | — | — |
+| `L.user.70` | `aRegionGrowsWhereItHasRoom` | — | — | — |
+| `L.user.71` | `aSharedRegionNeverGrowsOverItsOwnPages` | — | — | — |
+| `L.user.72` | `aHeldPageDoesNotMove` | — | — | — |
+| `L.user.73` | `mremapCarriesTheContents` | — | — | — |
+| `L.user.74` | `aNativeRegionIsNotReshaped` | — | — | — |
+| `L.user.75` | `aMappedVmoIsTheVmo` | — | — | — |
+| `L.user.76` | `theVdsoIsReadAndRunOverReadOnlyData` | — | — | — |
+| `L.user.77` | `aSpaceFindsItsTrampoline` | — | — | — |
+| `L.user.78` | `aSharedWordIsOneFutexAcrossFork` | — | — | — |
+| `L.user.79` | `droppedAnonymousPagesGoBackAtOnce` | — | — | — |
+| `L.user.80` | `aDroppedPageKeepsItsForkCopy` | — | — | — |
+| `L.user.81` | `adviceOnAFileMappingSparesTheFile` | — | — | — |
+| `L.user.82` | `aHoleIsPunchedInSharedMemory` | — | — | — |
+| `L.user.83` | `adviceOverAHoleAdvisesTheMappedPart` | — | — | — |
+| `L.user.84` | `lockedAndDeviceRegionsRefuseAdvice` | — | — | — |
+| `L.user.85` | `adviceRefusedForMemoryChangesNothing` | — | — | — |
+| `L.user.86` | `protectTakesTheOldTranslationDown` | — | — | — |
+| `L.user.87` | `protectReachesTheCallersProcessor` | — | — | — |
+| `L.user.88` | `protectReachesAnotherProcessor` | — | — | — |
+| `L.user.89` | `anUnwritableFileMappingStaysUnwritable` | — | — | — |
+| `L.user.90` | `aPageTakenAwayIsForgottenInEverySpace` | — | — | — |
+| `L.user.91` | `aPendingShootdownWidensTheForget` | — | — | — |
+| `L.user.92` | `aTruncationReachesBothKindsOfFileMapping` | — | — | — |
+| `L.user.93` | `aSharedFileMappingIsTheFile` | — | — | — |
+| `L.user.94` | `aPrivateFileMappingKeepsItsWrites` | — | — | — |
+| `L.user.95` | `aForkKeepsPrivateFileCopiesApart` | — | — | — |
+| `L.user.96` | `aProgramsWriteToAReadFilePageCopiesIt` | — | — | — |
+| `L.user.97` | `aLoaderMapsItsFileAsItNeeds` | — | — | — |
+| `L.user.98` | `procMapsNamesAFileMapping` | — | — | — |
+| `L.user.99` | `faultsStopAtTheJobsMemoryLimit` | — | — | — |
+| `L.user.100` | `aFailedAllocationLeavesNothingBehind` | — | — | — |
+| `L.user.101` | `stageSixKeepsNoFrameAndNoTable` | — | — | — |
+| `L.user.102` | `theCeilingBoundsEveryMapping` | — | — | — |
+| `L.user.103` | `aDiskFilesPageIsReadBeforeItIsMapped` | — | — | — |
+| `L.user.104` | `aFaultIsResolvedWithNoPreemptionLockHeld` | — | — | — |
+| `L.user.105` | `anUnmapFreesNothingBeforeItsShootdown` | — | — | — |
 
 A design rule is upheld by a gate rather than allocated to a part, so the P and N families are expected to be verified but untraced. A goal requirement is traced by the dependency the stage that discharges it draws.
 

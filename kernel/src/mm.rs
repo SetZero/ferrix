@@ -55,9 +55,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use ferrix_bootinfo::{BootView, MemKind, MemRegion, PAGE_SIZE};
 use ferrix_frame::{Frame, Frames, PageEntry};
 use ferrix_heap::{Backing, Heap, Request};
-use ferrix_paging::{
-    Encoding, Leaf, MapFlags, Mapper, PhysAddr, PhysMem, Released, VirtAddr, WalkOutcome,
-};
+use ferrix_paging::{Encoding, MapFlags, Mapper, PhysAddr, PhysMem, Released, VirtAddr};
 use ferrix_sync::IrqSpinLock;
 
 use crate::fallible;
@@ -110,7 +108,7 @@ static HEAP: IrqSpinLock<Heap, crate::arch::Irq> = IrqSpinLock::new(Heap::new())
 ///
 /// Guards no data of its own: the tables are physical memory reached through
 /// the direct map, and what this lock owns is the right to walk them.
-/// [`with_tables`] and [`sweep`] are the only places that take it.
+/// [`with_tables`] and the boot sweeps' `check::sweep` are the only places that take it.
 static TABLES: IrqSpinLock<(), crate::arch::Irq> = IrqSpinLock::new(());
 
 /// Base of the direct map, learned from the hand-off.
@@ -1231,31 +1229,6 @@ pub(crate) fn protect_kernel(
     // another's TLB is not narrowed.
     crate::smp::flush_tlb_everywhere();
     Ok(())
-}
-
-/// Visit every leaf in the tree rooted at `root`, in address order, holding
-/// [`TABLES`] throughout.
-///
-/// Takes a root rather than going through [`with_tables`] because the W^X
-/// sweep also walks the loader's identity map, which on `AArch64` is a second
-/// tree with a root of its own.
-fn sweep(root: u64, visit: impl FnMut(Leaf) -> bool) -> WalkOutcome {
-    let _held = TABLES.lock();
-    let mapper: Mapper<crate::arch::PageEncoding> = Mapper::new(PhysAddr(root));
-    mapper.for_each_leaf(&KernelPhysMem, visit)
-}
-
-/// What `virt` is mapped as, or `None` if it is not mapped.
-pub(crate) fn permissions_of(virt: u64) -> Option<MapFlags> {
-    let mut found = None;
-    let _ = sweep(ROOT_TABLE.load(Ordering::Relaxed), |leaf| {
-        if virt >= leaf.virt.0 && virt < leaf.virt.0 + leaf.bytes() {
-            found = Some(leaf.flags);
-            return false;
-        }
-        true
-    });
-    found
 }
 
 // ---------------------------------------------------------------------------

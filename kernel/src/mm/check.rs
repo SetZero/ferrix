@@ -14,9 +14,9 @@ use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
 use ferrix_bootinfo::{BootView, PAGE_SIZE};
-use ferrix_paging::MapFlags;
+use ferrix_paging::{Leaf, MapFlags, Mapper, PhysAddr, WalkOutcome};
 
-use super::{PHYSMAP, PHYSMAP_PHYS, ROOT_TABLE, direct_map, sweep};
+use super::{KernelPhysMem, PHYSMAP, PHYSMAP_PHYS, ROOT_TABLE, TABLES, direct_map};
 use crate::console::{println, println_unlogged};
 use crate::{fallible, mm, vmap};
 
@@ -27,6 +27,8 @@ use crate::{fallible, mm, vmap};
 /// The W^X sweep after the identity map has gone: no mapping the kernel
 /// holds is both writable and executable, and there are executable ones to
 /// have swept.
+///
+/// Verifies: H.MEM.4, L.mm.32
 pub(crate) fn sweep_w_xor_x(view: &BootView<'_>) -> Result<(), &'static str> {
     let wx = match check_w_xor_x(view) {
         Ok(report) => report,
@@ -201,6 +203,8 @@ pub(crate) struct SealReport {
 /// The first writable mapping of a sealed frame, or, as a zero-length
 /// [`WriteExecute`] at the span's direct-map address, a direct map that does
 /// not cover the whole span.
+///
+/// Verifies: H.MEM.5, L.mm.33
 pub(crate) fn check_sealed_image(view: &BootView<'_>) -> Result<SealReport, WriteExecute> {
     let (low, bytes) = sealed_span(view);
     let high = low.saturating_add(bytes);
@@ -245,6 +249,31 @@ pub(crate) fn check_sealed_image(view: &BootView<'_>) -> Result<SealReport, Writ
     Ok(report)
 }
 
+/// Visit every leaf in the tree rooted at `root`, in address order, holding
+/// [`TABLES`](super::TABLES) throughout.
+///
+/// Takes a root rather than going through [`with_tables`](super::with_tables) because the W^X
+/// sweep also walks the loader's identity map, which on `AArch64` is a second
+/// tree with a root of its own.
+fn sweep(root: u64, visit: impl FnMut(Leaf) -> bool) -> WalkOutcome {
+    let _held = TABLES.lock();
+    let mapper: Mapper<crate::arch::PageEncoding> = Mapper::new(PhysAddr(root));
+    mapper.for_each_leaf(&KernelPhysMem, visit)
+}
+
+/// What `virt` is mapped as, or `None` if it is not mapped.
+fn permissions_of(virt: u64) -> Option<MapFlags> {
+    let mut found = None;
+    let _ = sweep(ROOT_TABLE.load(Ordering::Relaxed), |leaf| {
+        if virt >= leaf.virt.0 && virt < leaf.virt.0 + leaf.bytes() {
+            found = Some(leaf.flags);
+            return false;
+        }
+        true
+    });
+    found
+}
+
 // ---------------------------------------------------------------------------
 // Stage 2's allocators
 // ---------------------------------------------------------------------------
@@ -254,6 +283,8 @@ pub(crate) fn check_sealed_image(view: &BootView<'_>) -> Result<SealReport, Writ
 /// Every one of these is an invariant a later subsystem will assume without
 /// checking, because by then there will be no way to check it: a scheduler that
 /// gets a `Vec` back with the wrong contents has no idea the heap is at fault.
+///
+/// Verifies: H.MEM.14, L.mm.13
 pub(crate) fn memory_check(stats: &mm::Stats) -> Result<(), &'static str> {
     if stats.managed_frames == 0 {
         return Err("the frame allocator was given nothing");
@@ -303,6 +334,8 @@ pub(crate) fn memory_check(stats: &mm::Stats) -> Result<(), &'static str> {
 /// pages and never unmapped them would pass every read-back check here and
 /// leak a frame per page. Requiring the free count to return to exactly where
 /// it started is the only assertion that notices.
+///
+/// Verifies: H.MEM.15, L.mm.42, L.mm.46
 fn check_vmap(aperture: u64) -> Result<(), &'static str> {
     const PAGES: u64 = 8;
 
@@ -372,6 +405,8 @@ fn free_pair(first: vmap::Mapping, second: vmap::Mapping) -> Result<(), &'static
 }
 
 /// Every page of an allocation is mapped, distinct and zeroed.
+///
+/// Verifies: L.mm.44
 fn check_vmap_contents(mapping: vmap::Mapping) -> Result<(), &'static str> {
     let pages = mapping.len / PAGE_SIZE;
     let mut previous = None;
@@ -410,15 +445,17 @@ fn check_vmap_contents(mapping: vmap::Mapping) -> Result<(), &'static str> {
 /// Read back by walking the page tables, not by remembering what was asked
 /// for: what matters is what the hardware will do, and the whole reason the
 /// W^X sweep reads descriptors is that those are two different things.
+///
+/// Verifies: L.mm.31
 fn check_vmap_protection(mapping: vmap::Mapping) -> Result<(), &'static str> {
-    let before = mm::permissions_of(mapping.base).ok_or("a vmap page has no permissions at all")?;
+    let before = permissions_of(mapping.base).ok_or("a vmap page has no permissions at all")?;
     if !before.write {
         return Err("a fresh vmap allocation is not writable");
     }
 
     mm::protect_kernel(mapping.base, PAGE_SIZE, MapFlags::KERNEL_RODATA)
         .map_err(|_| "protecting a vmap page was refused")?;
-    let after = mm::permissions_of(mapping.base).ok_or("protecting a page unmapped it")?;
+    let after = permissions_of(mapping.base).ok_or("protecting a page unmapped it")?;
     if after.write {
         return Err("protecting a page read-only left it writable");
     }
@@ -439,6 +476,8 @@ fn check_vmap_protection(mapping: vmap::Mapping) -> Result<(), &'static str> {
 /// that has to be true before a stack can be switched to: it is mapped, it is
 /// writable to its last byte, the page below it is not, and freeing it gives
 /// the frames back.
+///
+/// Verifies: H.FAIL.2, L.mm.55
 fn check_stacks() -> Result<(), &'static str> {
     let free_before = mm::free_frames();
     let stack = vmap::allocate_stack().map_err(|_| "no kernel stack could be allocated")?;
@@ -494,6 +533,8 @@ fn check_stacks() -> Result<(), &'static str> {
 /// are: an I/O APIC's registers start at an offset within their page, and a
 /// window that rounded that away would work perfectly for the GIC and silently
 /// address the wrong register here.
+///
+/// Verifies: L.mm.49
 fn check_device_windows(aperture: u64) -> Result<(), &'static str> {
     const OFFSET: u64 = 0x40;
 
@@ -507,7 +548,7 @@ fn check_device_windows(aperture: u64) -> Result<(), &'static str> {
     if mm::translate(at) != Some(aperture + OFFSET) {
         return Err("a device window does not resolve to the registers it was asked for");
     }
-    match mm::permissions_of(at) {
+    match permissions_of(at) {
         Some(flags) if flags.device && !flags.execute => {}
         Some(_) => return Err("a device window is not mapped as device memory"),
         None => return Err("a device window is not mapped at all"),
@@ -532,6 +573,8 @@ fn check_device_windows(aperture: u64) -> Result<(), &'static str> {
 /// them would write the code the image mapping runs. This is what used to
 /// allow it: `vmap::map_device` mapped any physical address it was given.
 /// Nothing is mapped, so nothing is read or written.
+///
+/// Verifies: L.mm.50
 fn check_no_device_window_over_the_image() -> Result<(), &'static str> {
     let (image, len) = mm::image_span();
     if len == 0 {
@@ -573,6 +616,8 @@ fn check_no_device_window_over_the_image() -> Result<(), &'static str> {
 /// the ways a sum can wrap: the offset plus the length, the rounding up of
 /// that, and the base plus the rounded span, the last with an in-range
 /// length at the very top page. Nothing is mapped, so nothing is read.
+///
+/// Verifies: L.mm.51
 fn check_no_device_window_wraps() -> Result<(), &'static str> {
     let windows_before = vmap::usage().allocations;
     let top_page = !(PAGE_SIZE - 1);
@@ -605,6 +650,8 @@ fn check_no_device_window_wraps() -> Result<(), &'static str> {
 /// whole point is that there is no handler for a fault there, and stage 3's
 /// on-demand window is the only place a kernel fault is resolved rather than
 /// reported.
+///
+/// Verifies: L.mm.43
 fn check_vmap_guards(mapping: vmap::Mapping) -> Result<(), &'static str> {
     if mm::translate(mapping.base - PAGE_SIZE).is_some() {
         return Err("the guard page below a vmap allocation is mapped");
@@ -622,6 +669,8 @@ fn check_vmap_guards(mapping: vmap::Mapping) -> Result<(), &'static str> {
 /// slab pages out of this very allocator, and `ferrix_heap` documents that slab
 /// pages are never returned. The first version of this used a `Vec` and
 /// reported a leak that was the heap working as designed.
+///
+/// Verifies: L.mm.4
 fn frames_hammer() -> Result<(), &'static str> {
     /// Blocks held at once. Sixteen bytes each on a 64 KiB boot stack.
     const BATCH: usize = 256;
@@ -677,6 +726,8 @@ fn frames_hammer() -> Result<(), &'static str> {
 /// ordinary free frame, and under KVM it became an address space's root
 /// (FX-0601). On the Arm machines RAM starts above zero, so frame 0 is outside
 /// the allocator's array as well as excluded.
+///
+/// Verifies: L.mm.2
 fn check_frame_zero_is_never_managed() -> Result<(), &'static str> {
     if mm::frame_state(0).is_some_and(|state| state != ferrix_frame::State::Reserved) {
         return Err("frame 0 is managed by the frame allocator");
@@ -689,6 +740,8 @@ fn check_frame_zero_is_never_managed() -> Result<(), &'static str> {
 }
 
 /// Check the frame allocator hands out distinct, aligned blocks.
+///
+/// Verifies: L.mm.3
 fn check_frames() -> Result<(), &'static str> {
     check_frame_zero_is_never_managed()?;
     let first = mm::allocate_frames(0).ok_or("no frame available")?;
@@ -713,6 +766,8 @@ fn check_frames() -> Result<(), &'static str> {
 const NO_HEAP: &str = "the heap refused an allocation it had room for";
 
 /// Check that `alloc` works, which is the whole point of the stage.
+///
+/// Verifies: L.mm.12
 fn check_heap() -> Result<(), &'static str> {
     // A `Box`, which is the smallest possible proof that `GlobalAlloc` is wired
     // up at all.

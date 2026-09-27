@@ -76,6 +76,8 @@ fn expect<T>(
 
 /// `map_device` refuses a length that is not whole pages and a range that
 /// leaves the user half.
+///
+/// Verifies: L.user.49
 fn check_device_refusals(space: &AddressSpace) -> Result<u32, &'static str> {
     let mut refused = expect(
         space.map_device(Some(LOW), opaque(0), P, VmaFlags::READ_WRITE),
@@ -102,6 +104,8 @@ fn check_device_refusals(space: &AddressSpace) -> Result<u32, &'static str> {
 
 /// `map_anywhere`, `map_object`, `map_file` and `protect` each refuse what
 /// is theirs to refuse.
+///
+/// Verifies: L.user.50
 fn check_mapping_refusals(space: &AddressSpace) -> Result<u32, &'static str> {
     let mut refused = expect(
         space.map_anywhere(None, opaque(0), VmaFlags::READ_WRITE),
@@ -160,6 +164,8 @@ fn check_a_window_keeps_its_keeper(space: &AddressSpace) -> Result<u32, &'static
 }
 
 /// [`check_a_window_keeps_its_keeper`] over the frame at `physical`.
+///
+/// Verifies: L.user.66, L.user.67
 fn window_over(space: &AddressSpace, physical: u64) -> Result<u32, &'static str> {
     let keeper: Arc<dyn Any + Send + Sync> = Arc::new(7_u8);
     let window = |place, len, flags| {
@@ -234,6 +240,8 @@ fn window_over(space: &AddressSpace, physical: u64) -> Result<u32, &'static str>
 /// `mremap` refuses a length of zero, an old range longer than its region,
 /// and a fixed destination overlapping the old range; and a remap to the
 /// same length stays where it is.
+///
+/// Verifies: L.user.69
 fn check_remap_refusals(space: &AddressSpace) -> Result<u32, &'static str> {
     let _ = space
         .map_anonymous(LOW, 2 * P, VmaFlags::READ_WRITE)
@@ -263,6 +271,8 @@ fn check_remap_refusals(space: &AddressSpace) -> Result<u32, &'static str> {
 }
 
 /// A region with room after it grows there, even when it may move.
+///
+/// Verifies: L.user.70
 fn check_a_region_grows_where_it_is(space: &AddressSpace) -> Result<(), &'static str> {
     let _ = space
         .map_anonymous(LOW, P, VmaFlags::READ_WRITE)
@@ -282,6 +292,8 @@ fn check_a_region_grows_where_it_is(space: &AddressSpace) -> Result<(), &'static
 /// A shared region may not grow over offsets of its object that another of
 /// its regions already names: an unmap of either would give back pages the
 /// other still shows.
+///
+/// Verifies: L.user.71
 fn check_a_shared_region_does_not_grow_over_itself(
     space: &AddressSpace,
 ) -> Result<u32, &'static str> {
@@ -305,6 +317,8 @@ fn check_a_shared_region_does_not_grow_over_itself(
 
 /// A private region holding a page a device holds cannot move: the device
 /// would keep the old frame at an address the program had left.
+///
+/// Verifies: L.user.29, L.user.72
 fn check_a_held_page_does_not_move(space: &AddressSpace) -> Result<u32, &'static str> {
     let id = space
         .map_anonymous(LOW, P, VmaFlags::READ_WRITE)
@@ -334,6 +348,8 @@ fn check_a_held_page_does_not_move(space: &AddressSpace) -> Result<u32, &'static
 /// A page a fork of the object shares is copied before a write, and the
 /// fork keeps what it had; a copy put in place of a page an object does not
 /// have is simply its page.
+///
+/// Verifies: L.user.12, L.user.15
 fn check_a_shared_page_is_copied_before_a_write() -> Result<(), &'static str> {
     let vmo = Vmo::new_anonymous(1).map_err(|_| "no memory for a VMO")?;
     vmo.write_page(0, 0, b"before")
@@ -367,6 +383,8 @@ fn check_a_shared_page_is_copied_before_a_write() -> Result<(), &'static str> {
 
 /// An object refuses a page past its end, and becomes coherent only while
 /// nothing maps it.
+///
+/// Verifies: L.user.6, L.user.36, L.user.64
 fn check_object_refusals(space: &AddressSpace) -> Result<u32, &'static str> {
     let vmo = Vmo::new_anonymous(1).map_err(|_| "no memory for a VMO")?;
     if vmo.commit_within(1) != Err(VmoError::OutOfRange { index: 1, pages: 1 }) {
@@ -401,6 +419,8 @@ fn check_object_refusals(space: &AddressSpace) -> Result<u32, &'static str> {
 
 /// A run of whole blocks back to back, each given back on its own; and a
 /// block split into single frames, each its own to give back.
+///
+/// Verifies: L.mm.5, L.mm.6
 fn check_frame_runs_and_splits() -> Result<(), &'static str> {
     use ferrix_frame::State;
     let block = 1_u64 << ferrix_frame::MAX_ORDER;
@@ -496,6 +516,8 @@ fn check_a_window_settles_while_frames_move() -> Result<(), &'static str> {
 }
 
 /// The kernel arena refuses a length of nothing.
+///
+/// Verifies: L.mm.47
 fn check_kernel_arena_refusals() -> Result<u32, &'static str> {
     match vmap::allocate(0, ferrix_paging::MapFlags::KERNEL_DATA) {
         Err(VmapError::BadLength(0)) => Ok(1),

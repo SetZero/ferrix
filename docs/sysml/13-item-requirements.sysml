@@ -97,11 +97,13 @@ package FerrixItemRequirements {
             attribute :>> parent = ("O.ISOLATE", "ASR-1");
         }
         requirement <'H.MEM.4'> writableOrExecutable : ItemHighLevel {
-            attribute :>> statement = "No mapping the kernel installs in any page
-                table shall be both writable and executable.";
-            attribute :>> criterion = "The boot's sweep of every leaf mapping of every
-                page table counts N mappings, E > 0 of them executable, and 0 both
-                writable and executable (the `w^x` line).";
+            attribute :>> statement = "Once bring-up has dropped the loader's
+                identity map, no leaf mapping under the kernel's own root table or
+                the identity root shall be both writable and executable.";
+            attribute :>> criterion = "The boot's sweep of every leaf mapping under
+                the kernel's root and the identity root counts N mappings, E > 0 of
+                them executable, and 0 both writable and executable (the `w^x`
+                line).";
             attribute :>> parent = ("O.WXN", "ASR-2");
         }
         requirement <'H.MEM.5'> imageIsSealed : ItemHighLevel {
@@ -109,8 +111,8 @@ package FerrixItemRequirements {
                 kernel's text and read-only data, the direct map's alias of them
                 included, shall be writable.";
             attribute :>> criterion = "The boot's sweep of every mapping of those
-                frames finds 0 writable (the `sealed` line), and a write to the text
-                through the direct map faults on every architecture (FX-9001).";
+                frames finds 0 writable, and finds the direct map aliasing every byte
+                of them (the `sealed` line).";
             attribute :>> parent = ("O.WXN", "ASR-2");
         }
         requirement <'H.MEM.6'> framesZeroedBeforeUse : ItemHighLevel {
@@ -123,24 +125,19 @@ package FerrixItemRequirements {
             attribute :>> parent = ("O.SCRUB", "ASR-5");
         }
         requirement <'H.MEM.7'> nothingFreedBeforeItsShootdown : ItemHighLevel {
-            attribute :>> statement = "A frame or page-table frame removed from a
-                translation shall not return to the frame allocator until the TLB
-                invalidation that covers it has completed on every processor that
-                may hold the translation.";
+            attribute :>> statement = "A page-table frame an unmap empties shall not
+                return to the frame allocator until the TLB invalidation that covers
+                the unmap has been made.";
             attribute :>> criterion = "A page table an unmap empties is still held,
                 not freed, until the shootdown covering it completes: 0 tables freed
-                before it; and each of N remaps is seen by every online processor
-                (the `tlb` line).";
+                before it, and exactly the tables it emptied given back by it.";
             attribute :>> parent = ("O.ISOLATE", "ASR-1");
         }
         requirement <'H.MEM.8'> privateCopiesStayPrivate : ItemHighLevel {
             attribute :>> statement = "After a fork, a write by the parent or the
-                child to a private page shall not be visible to the other, and a
-                write to a shared mapping shall be.";
+                child to a private page shall not be visible to the other.";
             attribute :>> criterion = "The `cow` program, in which each side writes a
-                page both shared, exits 61 (neither saw the other's write); the
-                `shared` program exits 62 (its MAP_SHARED write reached the parent
-                and its MAP_PRIVATE write did not).";
+                page both shared, exits 61 (neither saw the other's write).";
             attribute :>> parent = ("O.ISOLATE", "ASR-1");
         }
         requirement <'H.MEM.9'> framesComeBack : ItemHighLevel {
@@ -169,6 +166,79 @@ package FerrixItemRequirements {
                 or answered NO_MEMORY or ENOMEM, and 0 frames or objects are left
                 behind (the `sweep` and `no-mem` lines).";
             attribute :>> parent = "O.QUOTA";
+        }
+        // Split out of H.MEM.7 and H.MEM.5 by W-8 step 4 (mm and user), so that
+        // one check proves each.
+        requirement <'H.MEM.12'> remapsAreSeenEverywhere : ItemHighLevel {
+            attribute :>> statement = "Once a change to a kernel mapping returns,
+                every online processor shall translate the address as changed, and
+                none through the translation it replaced.";
+            attribute :>> criterion = "Of N moves of one page to another frame, each
+                made after every online processor has read the page, every
+                processor reads the moved page's new value each time: 0 stale reads
+                (the `tlb` line).";
+            attribute :>> parent = ("O.ISOLATE", "ASR-1");
+        }
+        requirement <'H.MEM.13'> theTextCannotBeWritten : ItemHighLevel {
+            attribute :>> statement = "A write to the kernel's text through its
+                direct-map alias shall fault, on every architecture.";
+            attribute :>> criterion = "A kernel write to the first word of the text
+                through the direct map ends in the page-fault report (FX-9001) on
+                x86-64, AArch64 and ARMv7-A, 3 of 3, and the word is unchanged.";
+            attribute :>> parent = ("O.WXN", "ASR-2");
+        }
+        // Added by W-8 step 4 (mm and user): behaviour of the kernel's own memory
+        // and of user mappings that no requirement above said, and the halves of
+        // H.MEM.7 and H.MEM.8 that one check each proves.
+        requirement <'H.MEM.14'> kernelAllocationsHaveOneOwner : ItemHighLevel {
+            attribute :>> statement = "The kernel's own frame allocator, heap and
+                address arena shall hand each frame, block and range to one holder
+                at a time, and shall never hand out frame 0.";
+            attribute :>> criterion = "Stage 2's memory check finds two frames
+                distinct, a 16-frame block 16-frame aligned, frame 0 neither managed
+                nor handed out, a Box, a 4096-entry Vec and a 2048-key BTreeMap each
+                holding what was put in it, and two arena ranges distinct, inside
+                the arena and two guard pages apart.";
+            attribute :>> parent = ("O.ISOLATE", "ASR-1");
+        }
+        requirement <'H.MEM.15'> kernelMappingsAreWhatWasAsked : ItemHighLevel {
+            attribute :>> statement = "A mapping the kernel makes in its own address
+                space shall translate each page to the frame or register asked for,
+                with the permissions and memory type asked for.";
+            attribute :>> criterion = "Each page of an 8-page arena range translates
+                to a frame, none to its neighbour's; a page protected read-only reads back not
+                writable in the descriptors and still translates; a device window at
+                offset 0x40 translates to the register asked for, offset included,
+                as device memory and not executable, and is gone once unmapped.";
+            attribute :>> parent = ("O.ISOLATE", "ASR-1");
+        }
+        requirement <'H.MEM.16'> sharedWritesAreSeen : ItemHighLevel {
+            attribute :>> statement = "After a fork, a write by the child to a
+                MAP_SHARED mapping shall be visible to the parent, and its write to a
+                MAP_PRIVATE mapping shall not.";
+            attribute :>> criterion = "The `shared` program exits 62 (its MAP_SHARED
+                write reached the parent and its MAP_PRIVATE write did not).";
+            attribute :>> parent = ("O.ISOLATE", "ASR-1");
+        }
+        requirement <'H.MEM.17'> framesWaitForTheirInvalidation : ItemHighLevel {
+            attribute :>> statement = "A frame taken out of a translation, of a user
+                address space or of the kernel's, shall not return to the frame
+                allocator until the TLB invalidation that covers it has been made on
+                every processor that may hold the translation.";
+            attribute :>> criterion = "A frame an unmap, a decommit or a replace
+                takes out of a translation that another processor has cached is
+                still allocated until that processor's shootdown returns: 0 frames
+                freed before it, on every architecture.";
+            attribute :>> parent = ("O.ISOLATE", "ASR-1");
+        }
+        requirement <'H.MEM.18'> userMappingsKeepTheirPermissions : ItemHighLevel {
+            attribute :>> statement = "The kernel shall refuse to map a device
+                window or a native VMO executable into a user address space, and
+                shall map the vDSO's data page read-only.";
+            attribute :>> criterion = "An executable device window and an executable
+                vmo_map are each refused, 0 mapped; the vDSO's data page reads back
+                not writable, and a write to it faults.";
+            attribute :>> parent = ("O.WXN", "O.ISOLATE");
         }
     }
 
@@ -763,12 +833,21 @@ package FerrixItemRequirements {
             attribute :>> parent = ("O.FAILSAFE", "ASR-6");
         }
         requirement <'H.FAIL.2'> stacksAreGuarded : ItemHighLevel {
-            attribute :>> statement = "Every kernel stack shall have an unmapped
-                guard page directly below and above it, so that an overflow faults
-                rather than overwrites memory.";
-            attribute :>> criterion = "For every kernel stack, the page below and the
-                page above do not translate, 0 exceptions; on x86-64 an overflow is
-                taken as a double fault on its own stack (FX-9004).";
+            attribute :>> statement = "The allocator every kernel stack comes from
+                shall give each an unmapped guard page directly below and above
+                it.";
+            attribute :>> criterion = "A kernel stack allocated, written at its first
+                and last word and freed has the page below and the page above it
+                untranslated, and gives back every frame it took.";
+            attribute :>> parent = ("O.FAILSAFE", "ASR-6");
+        }
+        // Split out of H.FAIL.2 by W-8 step 4 (mm and user): the half no check proves.
+        requirement <'H.FAIL.3'> overflowIsReported : ItemHighLevel {
+            attribute :>> statement = "A kernel stack overflow shall end in the halt
+                and diagnostic of the safe state, never in a write below the stack.";
+            attribute :>> criterion = "A kernel thread that recurses past its stack
+                ends the boot in a report naming the fault -- on x86-64 a double fault
+                taken on its own stack (FX-9004) -- on each architecture, 3 of 3.";
             attribute :>> parent = ("O.FAILSAFE", "ASR-6");
         }
     }

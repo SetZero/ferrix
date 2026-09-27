@@ -189,7 +189,7 @@ fn fork(parent: &Arc<Process>) -> Result<Arc<Process>, &'static str> {
 /// memory limit, pages and page tables together, while a sibling's faults go
 /// on; and every frame comes back as the spaces go.
 ///
-/// Verifies: L.object.55, H.QUOTA.2
+/// Verifies: H.QUOTA.2, L.mm.8, L.object.55, L.user.99
 fn check_memory(tree: &Arc<Job>, report: &mut Report) -> Result<(), &'static str> {
     const LIMIT: u64 = 48;
     const BASE: u64 = 0x40_0000;

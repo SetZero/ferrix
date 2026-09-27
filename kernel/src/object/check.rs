@@ -972,6 +972,8 @@ fn check_a_port_hears_a_process_end(
 /// `mremap` may not change what `vmo_map` made, and a mapping with no
 /// protection, a write-only one, one past the object's end, one that is not
 /// whole pages, or one over another mapping is refused.
+///
+/// Verifies: L.user.75
 fn check_a_vmo_maps_as_shared_memory(counter: &mut Counter) -> Result<(), &'static str> {
     let side = Side::new()?;
     let vmo = side.handle(nr::VMO_CREATE, &[2 * PAGE_SIZE], "vmo_create failed")?;
@@ -1032,6 +1034,8 @@ fn check_a_vmo_maps_as_shared_memory(counter: &mut Counter) -> Result<(), &'stat
 /// A `vmo_map` protection needs the rights behind it, and `mprotect` and
 /// `mremap` may not change a region `vmo_map` made. Returns the two narrowed
 /// handles, for the caller to close.
+///
+/// Verifies: L.user.74
 fn check_vmo_map_needs_its_rights(
     side: &Side,
     vmo: Handle,
@@ -2331,7 +2335,7 @@ fn reaches(
 /// sub-page aperture runs wherever one exists: the virtio-mmio transports on
 /// ARMv7-A.
 ///
-/// Verifies: L.object.43, L.object.44
+/// Verifies: L.object.43, L.object.44, L.user.68
 fn check_a_device_gives_exactly_its_own_memory(counter: &mut Counter) -> Result<(), &'static str> {
     let side = Side::new()?;
 

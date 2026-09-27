@@ -18,11 +18,27 @@
     "function or one a requirement names."
   ],
   "complete": [
+    "early",
     "iommu",
-    "object"
+    "mm",
+    "object",
+    "user",
+    "vmap"
   ],
   "check_code_in_product": {
+    "early::EarlyMemory::read_physical_byte": "Stage 1's check_direct_map in main.rs reads the image's first bytes through it; nothing else calls it. It stays while that check is in main.rs.",
+    "early::EarlyMemory::translate": "Called only by stage 1's checks in main.rs (check_early_mapper, check_no_early_window_wraps); it reads EarlyMemory's private walk state.",
+    "mm::FrameWindow::kept": "A check's frame window: frames kept since it opened. Every caller is a check file; it reads Held, which reads the heap and route counters private to mm.rs.",
+    "mm::FrameWindow::report_at": "Prints a window's heap and per-route movement for a failing check, through FrameWindow::report; check files only.",
+    "mm::Held::now": "The frame window's settled read of free frames, slab pages and route counters, for FrameWindow and held_frames, whose callers are all check files. It reads HEAP and ROUTE_COUNTS, private to mm.rs.",
+    "mm::claim_frame": "Takes back a frame a check has just given up (smp/check.rs, user/rmap_check.rs), to prove it was free; no product caller.",
+    "mm::count": "Counts frames per allocation route into ROUTE_COUNTS. Called on the product allocation paths, so it cannot move, but only checks read what it writes (Held::now, and user_tables_given_back for smp/check.rs's table check).",
+    "mm::frame_state": "What the frame allocator records for a frame, for mm/check.rs's frame-0 check and user/edge_check.rs; no product caller.",
+    "mm::print_frame_delta": "Prints which way a check's frame count missed, for a check about to fail; called only from check files. Nothing private keeps it in mm.rs; it can move to mm/check.rs with FrameWindow.",
+    "mm::unlinked::UnlinkedTables::frames": "The frames a list holds, for smp/check.rs's check that an unmap's tables are still held; it reads the list's private links.",
     "object::as_if_draining_elsewhere": "Runs a check's closure as though another context were draining disposed objects (object/check.rs, block_ring/check.rs). It sets the DISPOSING flag dispose reads, which is private to object/mod.rs.",
-    "object::process::Exit::for_check": "An end no process has, for object/pin/check.rs's check_quarantine; it needs Exit's private constructor."
+    "object::process::Exit::for_check": "An end no process has, for object/pin/check.rs's check_quarantine; it needs Exit's private constructor.",
+    "vmap::check_failed_device_map": "A check, called from mm/check.rs's check_vmap, that a device mapping failing part way leaves nothing mapped. It uses vmap.rs's private reserve, release and map_reserved; moved into a check file it verifies L.mm.52.",
+    "vmap::check_invariants": "The arena's consistency check, called from mm/check.rs's check_vmap; it reads the private ARENA. Moved into a check file it verifies L.mm.53."
   }
 }

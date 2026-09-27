@@ -325,6 +325,8 @@ fn check_a_shared_file_mapping(
 /// takes write access away. This makes all three flags matter together: a
 /// test of an anonymous fixed mapping, or of `mprotect` after no file mapping,
 /// would leave the loader's actual path unexercised.
+///
+/// Verifies: L.user.97
 fn check_the_loader_mapping_pattern(
     process: &Process,
     descriptor: i32,
@@ -462,6 +464,8 @@ fn check_mmap_refuses_as_linux_does(process: &Process, page: u64) -> Result<(), 
 
 /// Step 2: the mapping shows the file, a write through it reaches the file,
 /// and a write to the file reaches it. Returns the bytes compared.
+///
+/// Verifies: L.user.93
 fn check_the_mapping_is_the_file(
     process: &Process,
     file: &OpenFile,
@@ -504,6 +508,8 @@ fn check_the_mapping_is_the_file(
 
 /// Step 3: `msync` answers as Linux does, and `/proc/<pid>/maps` names the
 /// mapping by its file.
+///
+/// Verifies: L.user.98
 fn check_msync_and_maps(process: &Process, at: u64) -> Result<(), &'static str> {
     let len = MAPPED_PAGES * PAGE_SIZE;
     if memory::sys_msync(process, at, len, MS_SYNC) != Ok(0)
@@ -555,6 +561,8 @@ fn check_msync_and_maps(process: &Process, at: u64) -> Result<(), &'static str> 
 /// Step 5: a truncation takes the pages past the new end away from both
 /// mappings, the private mapping's copies included, and a grow shows zeros
 /// where they were. Returns the pages cut from the shared mapping.
+///
+/// Verifies: L.user.39, L.user.40, L.user.92
 fn check_a_truncation_reaches_the_mapping(
     process: &Process,
     file: &OpenFile,
@@ -608,6 +616,8 @@ fn check_a_truncation_reaches_the_mapping(
 /// file nor the shared mapping `shared`, while a write to the file still shows
 /// through a page it has not copied and not through one it has. Returns the
 /// pages it copied.
+///
+/// Verifies: L.user.94
 fn check_a_private_mapping_copies(
     process: &Process,
     file: &OpenFile,
@@ -691,6 +701,8 @@ fn check_a_private_mapping_copies(
 
 /// Step 4, across a `fork`: the child inherits the parent's copies, and its
 /// own write into one reaches neither the parent nor the file.
+///
+/// Verifies: L.user.95
 fn check_a_fork_keeps_private_copies_apart(
     process: &Process,
     file: &OpenFile,
@@ -729,6 +741,8 @@ fn check_a_fork_keeps_private_copies_apart(
 /// the file must not change. The reverse map check's program does both, role
 /// 0, alone: page 0 at [`PROGRAM_BASE`] is the private mapping, page 1 its
 /// control page.
+///
+/// Verifies: L.user.96
 fn check_a_program_writes_privately(file: &Arc<OpenFile>) -> Result<(), &'static str> {
     if arch::USER_RMAP_PROGRAM.is_empty() {
         return Ok(());

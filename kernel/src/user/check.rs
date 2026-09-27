@@ -52,6 +52,8 @@ pub(crate) struct Report {
 }
 
 /// Run them. `Err` names the first thing that was not true.
+///
+/// Verifies: L.user.101
 pub(crate) fn run() -> Result<Report, &'static str> {
     // Once before the window, for the reason `object::check::run` gives: the
     // heap keeps a page of each size class the first run touched, and the
@@ -132,6 +134,8 @@ pub(crate) fn run() -> Result<Report, &'static str> {
 }
 
 /// A fresh object holds no frames at all.
+///
+/// Verifies: L.user.1
 fn check_reservation_is_lazy() -> Result<(), &'static str> {
     let before = quiet_frames()?;
     let vmo = Vmo::new_anonymous(1024).map_err(|_| "no memory for a VMO")?;
@@ -147,6 +151,8 @@ fn check_reservation_is_lazy() -> Result<(), &'static str> {
 }
 
 /// A committed page reads back as zero, all the way across.
+///
+/// Verifies: L.user.2
 fn check_a_committed_page_is_zeroed() -> Result<(), &'static str> {
     let vmo = Vmo::new_anonymous(4).map_err(|_| "no memory for a VMO")?;
     let frame = vmo.commit(2).map_err(|_| "committing a page failed")?;
@@ -169,6 +175,8 @@ fn check_a_committed_page_is_zeroed() -> Result<(), &'static str> {
 }
 
 /// Committing the same page twice hands back the same frame and costs nothing.
+///
+/// Verifies: L.user.4
 fn check_commit_is_idempotent() -> Result<(), &'static str> {
     let vmo = Vmo::new_anonymous(8).map_err(|_| "no memory for a VMO")?;
     let first = vmo.commit(3).map_err(|_| "committing a page failed")?;
@@ -190,6 +198,8 @@ fn check_commit_is_idempotent() -> Result<(), &'static str> {
 }
 
 /// A page past the end of the object is refused rather than allocated.
+///
+/// Verifies: L.user.5
 fn check_out_of_range_is_refused() -> Result<(), &'static str> {
     let vmo = Vmo::new_anonymous(4).map_err(|_| "no memory for a VMO")?;
     match vmo.commit(4) {
@@ -207,6 +217,8 @@ fn check_out_of_range_is_refused() -> Result<(), &'static str> {
 /// This is copy-on-write's invariant expressed at the object level, and the
 /// check that would catch the whole class of bug the allocator's `StillShared`
 /// guard exists for.
+///
+/// Verifies: L.mm.7, L.user.8
 fn check_a_shared_page_survives_one_drop() -> Result<(), &'static str> {
     let before = quiet_frames()?;
 
@@ -242,6 +254,8 @@ fn check_a_shared_page_survives_one_drop() -> Result<(), &'static str> {
 /// must be freed when it does not — the same invariant as
 /// [`check_a_shared_page_survives_one_drop`], reached through the object
 /// rather than through the allocator.
+///
+/// Verifies: L.user.14
 fn check_replacing_a_page_releases_the_old_one() -> Result<(), &'static str> {
     let before = quiet_frames()?;
     let vmo = Vmo::new_anonymous(1).map_err(|_| "no memory for a VMO")?;
@@ -284,6 +298,8 @@ fn check_replacing_a_page_releases_the_old_one() -> Result<(), &'static str> {
 /// one the object names: decommitting skips it, a copy-on-write replace is
 /// refused, a fork copies it rather than sharing it, and a write through the
 /// object lands on it.
+///
+/// Verifies: L.user.27
 fn check_a_held_page_keeps_its_frame() -> Result<(), &'static str> {
     let before = quiet_frames()?;
     hold_pages_through_everything()?;
@@ -292,6 +308,8 @@ fn check_a_held_page_keeps_its_frame() -> Result<(), &'static str> {
 }
 
 /// What [`check_a_held_page_keeps_its_frame`] measures.
+///
+/// Verifies: L.user.21, L.user.22, L.user.24, L.user.25, L.user.26
 fn hold_pages_through_everything() -> Result<(), &'static str> {
     let vmo = Vmo::new_anonymous(4).map_err(|_| "no memory for a VMO")?;
     vmo.write_page(1, 0, b"held")
@@ -370,6 +388,8 @@ fn hold_pages_through_everything() -> Result<(), &'static str> {
 }
 
 /// A large reservation costs exactly the pages that are touched.
+///
+/// Verifies: L.user.7
 fn check_only_what_is_touched_is_paid_for(reserved: u64) -> Result<usize, &'static str> {
     let before = quiet_frames()?;
     let vmo = Vmo::new_anonymous(reserved).map_err(|_| "no memory for a VMO")?;
@@ -411,6 +431,8 @@ fn check_only_what_is_touched_is_paid_for(reserved: u64) -> Result<usize, &'stat
 // change, which is the next piece of stage 6.
 
 /// A fresh space has a root, no regions, and the kernel in reach.
+///
+/// Verifies: L.user.44
 fn check_an_empty_space_maps_nothing() -> Result<(), &'static str> {
     let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
 
@@ -428,6 +450,8 @@ fn check_an_empty_space_maps_nothing() -> Result<(), &'static str> {
 /// The check that stops a process asking for kernel addresses and being given
 /// them, which on x86-64 -- where both halves share a root -- would hand it the
 /// kernel's own tables.
+///
+/// Verifies: L.user.46
 fn check_a_region_outside_the_user_half_is_refused() -> Result<(), &'static str> {
     let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
 
@@ -450,6 +474,8 @@ fn check_a_region_outside_the_user_half_is_refused() -> Result<(), &'static str>
 /// this is the refusal that holds if either ever does. The image's text has
 /// no writable mapping anywhere (`mm::check::check_sealed_image`), and these map
 /// read-write.
+///
+/// Verifies: L.user.47
 fn check_the_kernel_image_is_no_device_memory() -> Result<(), &'static str> {
     let (image, _) = mm::image_span();
     let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
@@ -484,6 +510,8 @@ fn check_the_kernel_image_is_no_device_memory() -> Result<(), &'static str> {
 /// then refused it for its backing, but only because it happened to check
 /// the same sum. The top page, whose end is one past the last address, and a
 /// whole-pages length from a low page that runs past the top.
+///
+/// Verifies: L.user.48
 fn check_a_device_range_that_wraps_is_refused() -> Result<(), &'static str> {
     let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
     // The last page's address, and as a length the most whole pages there are.
@@ -513,6 +541,8 @@ fn check_a_device_range_that_wraps_is_refused() -> Result<(), &'static str> {
 }
 
 /// A fault where nothing is mapped is the segmentation fault.
+///
+/// Verifies: L.user.51
 fn check_a_fault_outside_every_region_is_a_segfault() -> Result<(), &'static str> {
     let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
     let _ = space
@@ -527,6 +557,8 @@ fn check_a_fault_outside_every_region_is_a_segfault() -> Result<(), &'static str
 }
 
 /// A write to a region that does not permit writing is refused.
+///
+/// Verifies: L.user.52
 fn check_a_write_to_a_read_only_region_is_refused() -> Result<(), &'static str> {
     let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
     let _ = space
@@ -552,6 +584,8 @@ fn check_a_write_to_a_read_only_region_is_refused() -> Result<(), &'static str> 
 /// than as `SIGSEGV`. What is asserted is that no translation appears, which is
 /// the property; a frame count would be a weaker proxy and one that heap
 /// warm-up can move for reasons of its own.
+///
+/// Verifies: L.user.53
 fn check_a_read_of_an_inaccessible_region_is_refused() -> Result<(), &'static str> {
     let at = 0x2800_0000;
     let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
@@ -571,6 +605,8 @@ fn check_a_read_of_an_inaccessible_region_is_refused() -> Result<(), &'static st
 
 /// Pages arrive on the fault that needs them, hold what is written through the
 /// space's own tables, and every frame goes back when the space is dropped.
+///
+/// Verifies: L.user.54
 fn check_pages_arrive_on_demand_and_go_back() -> Result<u64, &'static str> {
     let before = quiet_frames()?;
     let base = 0x4000_0000;
@@ -684,6 +720,8 @@ fn check_pages_arrive_on_demand_and_go_back() -> Result<u64, &'static str> {
 /// processors finished starting, and the W^X sweep reaches the identity map's
 /// tables through the direct map rather than through `TTBR0` — but it is a
 /// real reordering and not an accident.
+///
+/// Verifies: L.user.55
 fn check_the_processor_walks_an_installed_space() -> Result<u64, &'static str> {
     let before = quiet_frames()?;
     let base = 0x5000_0000;
@@ -848,6 +886,8 @@ fn fault_and_write_installed(
 ///
 /// `round` only varies what is written, so that a round finding the previous
 /// round's value still in place is a failure rather than a pass.
+///
+/// Verifies: L.mm.19
 fn walk_through_installed(
     space: &AddressSpace,
     base: u64,
@@ -937,6 +977,8 @@ fn poke(phys: u64, value: u64) {
 /// `musl` uses for a process-shared mutex, and a fork that quietly gave the
 /// child a private copy would leave two processes each waiting on a lock the
 /// other cannot see.
+///
+/// Verifies: L.user.57
 fn check_a_shared_region_survives_fork_as_one_object() -> Result<(), &'static str> {
     let before = quiet_frames()?;
     let base = 0x7000_0000;
@@ -1005,6 +1047,8 @@ fn check_a_shared_region_survives_fork_as_one_object() -> Result<(), &'static st
 /// Identity is the property anyway: two spaces reaching one frame is sharing,
 /// and reaching different frames is a copy. The free count still has the last
 /// word on leaks, once everything is dropped.
+///
+/// Verifies: L.user.58, L.user.59
 fn check_fork_shares_pages_and_a_write_copies_one() -> Result<u64, &'static str> {
     let before = quiet_frames()?;
     let base = 0x6000_0000;
@@ -1134,6 +1178,8 @@ fn check_fork_shares_pages_and_a_write_copies_one() -> Result<u64, &'static str>
 /// did not, and a child that made such a page writable wrote into the frame
 /// its parent still read. Chromium on AArch64 met it as glibc's stack guard,
 /// kept in ld.so's RELRO page there, changing under the parent.
+///
+/// Verifies: L.user.60
 fn check_a_page_made_writable_after_fork_is_copied() -> Result<(), &'static str> {
     let before = quiet_frames()?;
     let base = 0x6100_0000;
@@ -1250,6 +1296,8 @@ fn read_own_space(expected: usize) {
 /// when it should have. A reader that faults is no root at all. Both are
 /// failures and they look different, which is why the marker carries the task's
 /// index rather than being a single sentinel.
+///
+/// Verifies: H.MEM.1, L.user.56
 fn check_two_tasks_keep_their_own_address_spaces() -> Result<u64, &'static str> {
     let frames_before = quiet_frames()?;
     let arena_before = crate::vmap::usage().allocations;

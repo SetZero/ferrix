@@ -129,6 +129,8 @@ pub(crate) fn run() -> Result<Report, &'static str> {
 /// An `Arc`, a large `Arc` and a run of map inserts complete with the heap
 /// refusing every allocation inside their sections; and fail before they
 /// start when their section cannot be entered.
+///
+/// Verifies: L.mm.35
 fn check_a_section_completes_on_the_reserve() -> Result<u64, &'static str> {
     let (drawn_before, _) = mm::reserve_counts();
     mm::bypass_heap_in_sections(true);
@@ -177,6 +179,8 @@ fn check_a_section_completes_on_the_reserve() -> Result<u64, &'static str> {
 /// Every other page of a mapped object, committed through faults and given
 /// back by a decommit with every fallible allocation failing: all of them
 /// back, none still translated, no frame kept. How many pages went.
+///
+/// Verifies: L.user.19
 fn check_a_teardown_needs_no_memory() -> Result<usize, &'static str> {
     let side = Side::new()?;
     let vmo = Vmo::new_anonymous(TORN_PAGES).map_err(|_| "no memory for the teardown's VMO")?;
