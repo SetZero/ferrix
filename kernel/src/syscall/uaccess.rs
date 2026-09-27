@@ -20,12 +20,16 @@
 //! than a kernel fault.
 //!
 //! **The address may not be the program's.** Nothing stops a program passing
-//! a kernel address as a buffer. On this tree nothing in the *hardware* stops
-//! the kernel following it either: no SMAP on x86-64, no PAN on Arm, not yet.
-//! The bound check below is therefore the only thing between a user pointer
-//! and a read of kernel memory at kernel privilege, which is why it is the
-//! first statement in both functions and why it happens before any arithmetic
-//! that could wrap.
+//! a kernel address as a buffer, and nothing in the *hardware* stops the
+//! kernel following one: SMAP on x86-64 and PAN on AArch64, which the kernel
+//! turns on where the processor has them (finding F-32), refuse ring 0 a
+//! *user* page, not its own memory. The bound check below is therefore the
+//! only thing between a user pointer and a read of kernel memory at kernel
+//! privilege, which is why it is the first statement in both functions and
+//! why it happens before any arithmetic that could wrap. What SMAP and PAN
+//! catch is the other mistake, a path that dereferences a user pointer
+//! instead of coming here; this module reaches user pages through the direct
+//! map, which neither of them sees.
 //!
 //! **The program's tables are not the kernel's.** A user address means nothing
 //! in the kernel's own translation until the space is installed on this
