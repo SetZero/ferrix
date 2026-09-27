@@ -902,6 +902,123 @@ What this slice found, for review:
   commits behind the bounds, fifteen for the 32 requirements and three
   high-level ones, ten for tags, the baseline and the documents.
 
+**Step 4, the x86-64, trap and system-call-entry slice, done 2026-09-27.**
+128 low-level requirements in `docs/sysml/18-x86-64-requirements.sysml`, in
+three id spaces: `L.x86_64.1` to `.119` for `kernel/src/arch/x86_64/`,
+`L.trap.1` to `.6` for `kernel/src/trap.rs`, and `L.syscall.1` to `.3` for
+`syscall/mod.rs`'s dispatcher (`dispatch_with`, `native_call`,
+`unanswered`); one package per part -- descriptors, user state, processors,
+paranoid entries, speculation, timers, both ABIs' signal frames, the
+SYSCALL entry, int $0x80, exceptions, the processor, memory operations,
+MSI, the console and dispatch. **57 are verified**, by 38 check functions
+newly tagged or given more ids: `arch/x86_64/{gdt,trap,paranoid,syscall}/
+check.rs`, `arch/speculation_check.rs`, `syscall/{check,vdso_check}.rs`,
+`smp/check.rs`, `sched/check.rs`, `user/check.rs`, `object/check.rs`, and
+the xtask gates `test_boot_lines`, `entropy_problem`, `reset_problem`,
+`init_file::test` and `jobs::test_jobs`. **71 need a check** and are the
+baseline's. Of the slice's 305 product functions, 221 were named by
+nothing; each is now a requirement's unit or, ten of them, check code in a
+product file (`traceability-units.json` says why: the debug-register and
+SMAP-window writes only checks make, the speculation check's machine half,
+the #DB hook, `check_exception_entry`, `trap::breakpoint`,
+`identity_map_live`). The gate holds `arch::x86_64` and `trap` as complete.
+Nothing moved: the checks this slice would have moved are `main.rs`'s, and
+moving them is its own change.
+
+The high level grew from 77 to 88, for behaviour no requirement said:
+`H.TRAP.8` (an i386 program runs in compatibility mode and enters only
+through int $0x80, answered as i386 Linux answers it; `check_compat`),
+`H.TRAP.9` (a 64-bit handler's frame is Linux's and its return resumes it;
+the `signals` program), `H.TRAP.10` (registers pass the kernel as the ABI
+says; no one check), `H.TRAP.11` (an unknown number is ENOSYS) and
+`H.TRAP.12` (a number is decoded by the build's own table); `H.SCHED.7`
+(thread-local descriptors are the thread's own; `check_thread_areas`),
+`H.SCHED.8` (FS and GS bases and x87/SSE state are the task's own; no
+check) and `H.SCHED.9` (a vDSO clock answers as the call); `H.BOOT.6` and
+`.7` (the run ends powered off, or reset when asked; xtask's gates) and
+`.8` (the serial console carries the session; no one check). The per-processor
+record's register (`L.x86_64.86`) serves the smp slice's `H.SCHED.6`, which
+says it already. `H.TRAP.4` and `H.TRAP.7` are now verified, by
+`trap::check::run` and `gdt::check::run`. `H.TRAP.6` is not: its criterion
+says each exception runs "on the kernel's own stack", and `paranoid/check.rs`
+asserts the count and GS, not the stack, although its `nmi` line prints
+"taken on its own stack". 43 of the 88 are verified.
+
+The 71 that need a check, as check-writing work:
+
+* **64-bit signal frames.** No check forges a 64-bit frame (`L.x86_64.43`),
+  so on x86-64 **`H.TRAP.5` is proved for i386 frames only**; the i386 check
+  misses VIF, VIP, ES and plain `sigreturn` (`.49`). `sanitised` against a
+  hostile trap frame (`.44`), the floating-point state through a frame
+  (`.45`, `.13`), a handler without `SA_RESTORER` (`.46`), and the i386
+  handler's registers, mask and alternate stack (`.50`, `.51`).
+* **User state per task.** FS and GS bases (`.9`, `.61`) and x87/SSE state
+  (`.10`) across a switch, their inheritance by a fork (`.11`) and their
+  reset at execve (`.12`), a stale selector at restore (`.16`), DS and ES on
+  an i386 program's first entry (`.14`) -- the i386 fixtures reach memory
+  only through SS and GS outside a handler.
+* **Entry and registers.** R8 and R9 as arguments (`.56`), the SYSCALL flag
+  mask (`.57`, whose TF half `main.rs`'s `check_trap_flag_entry` checks) and
+  STAR's RPL (`.58`), a clone child's stack (`.65`), the restart-block paths
+  (`.67`), registers zero on a fresh entry (`.70`), execve into an i386
+  image from either entry (`.71`, `.75`), `AT_PLATFORM` (`.76`), int $0x80
+  in the native range (`L.syscall.2`), and `unanswered`'s bound
+  (`L.syscall.3`; `service_check` makes the call and asserts nothing).
+* **Descriptors and processors.** The TSS and IST stacks read back per
+  processor (`.3`), port access from ring 3 (`.4`), RSP0 after switches
+  (`.6`) and at boot (`.104`), a secondary's failed allocation (`.5`), the
+  trampoline's frames (`.20`), CR4 on every processor (`.21`, `.90` -- the
+  SMEP/SMAP/UMIP `cpu` line is printed for the boot processor and never
+  asserted), UMIP from ring 3 (`.112`), a directed IPI and a refused APIC
+  ID (`.22`, `.23`, `.93`), the paranoid entries' fatal cases and the
+  double fault's stack (`.27`, `.83`), vectors ring 3 may not raise (`.81`),
+  a program's int3, single step and #AC (`.82`; AArch64 and ARMv7-A have
+  this check and x86-64 does not).
+* **Timers and interrupts.** The LAPIC timer's rate and one-shot (`.34`,
+  `.35`), whose checks are `main.rs`'s `timer_check` and `check_one_shot`;
+  the counter's rate against a reference it was not calibrated from
+  (`.38`) -- `timer_check` cannot see a wrong rate, since the timer is
+  calibrated from the same counter --, its bring-up failures and
+  monotonicity (`.39`, `.40`); the I/O APICs masked and COM1 routed (`.36`,
+  `.37`, `.96`); nesting interrupt masks (`.92`); `mask_interrupt` refusing
+  (`.94`); the spurious vector (`.95`); MSI vectors exhausted (`.114`).
+* **Speculation.** The plan's choice per CPUID (`.32`, a table-driven test)
+  and the exposure line (`.33`). The read-back check is tagged, but **under
+  TCG the processor offers no controls and nothing is written**: only the
+  KVM boot row exercises it, and its criterion says so.
+* **Kernel faults and the end of a run.** Kernel breakpoints and demand
+  paging (`.84`, `L.trap.3`), whose checks are `main.rs`'s; a fatal trap's
+  report (`.85`); a processor staying halted after a panic (`.100`); a
+  backtrace line (`.105`); the triple-fault reset (`.106`); the RNG words
+  (`.107`); CR0.WP (`.111`, `main.rs`'s `self_check`); one-page
+  invalidation (`.109`); returning to the kernel's root (`.89`); the console
+  transmit interrupt (`.116`, whose check `console::output::check` is in a
+  product file), its FIFO and bounded waits (`.117`, `.118`); no entry
+  registered (`L.trap.5`, unreachable in a boot) and a moved process's new
+  job (`L.trap.6`).
+
+What this slice found, for review:
+
+* **`main.rs` holds the strongest checks this slice's code has**: stage 3's
+  breakpoints and demand paging, the timer's rate and one-shot, the trap
+  flag, CR0.WP. Moving them to check files verifies four requirements whole
+  (`.34`, `.35`, `.84`, `L.trap.3`) and half of two more (`.57`, `.111`), as
+  the iommu and memory slices' moves did theirs.
+* **Three console lines print more than their checks assert**: `nmi` ("taken
+  on its own stack"), the SMEP/SMAP/UMIP `cpu` line, and `random`.
+* **`watch_to_power_off` takes an exit with status 0 after the marker as a
+  power-off.** Both it and `test-boot` require the success marker first, and
+  status 0 is right for them: ACPI's S5 and a QEMU asked to stop both exit 0.
+  But a triple fault under `-no-reboot` after the marker exits 0 by itself as
+  well, so a run that faults on its way down passes as powered off
+  (`L.x86_64.98`, `H.BOOT.6`); telling them apart needs the kernel's own
+  power-off line.
+* `check_compat` accepts SIGILL for SYSCALL from compatibility mode, so the
+  return from 0x23 to 0x33 is proved only on the -ENOSYS path.
+* **Time.** Drafted by five agents in parallel, one per group of files,
+  from the pilot's lessons, in about 15 minutes; merging their overlaps,
+  the high-level additions, review and tagging took about an hour.
+
 49,431 lines of item product code trace to 33 system-level requirements, and no
 test names a requirement id.
 

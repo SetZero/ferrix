@@ -24,6 +24,7 @@ const fn tls_selector(index: usize) -> u16 {
 /// # Errors
 ///
 /// The first selector answered otherwise than it must be.
+/// Verifies: `L.x86_64.1`, H.TRAP.7
 pub(crate) fn run() -> Result<(), &'static str> {
     // A thread's own data segment in the first slot, as `set_thread_area`
     // builds one.

@@ -503,6 +503,7 @@ const fn killed_by(signal: u32) -> i32 {
 /// # Errors
 ///
 /// The first program that could not be run, or ended other than it had to.
+/// Verifies: `L.x86_64.60`, `L.x86_64.77`, L.trap.1, `L.x86_64.78`, `L.x86_64.103`, H.TRAP.4
 pub(crate) fn run() -> Result<(), &'static str> {
     // What the trap path does after an `execve`: equal only to the same
     // entry, stack and mode. The dispatcher's callers compare outcomes, and
@@ -611,6 +612,7 @@ pub(crate) fn run() -> Result<(), &'static str> {
 /// program runs and calls through `int $0x80`, a 64-bit program's `int $0x80`
 /// is an i386 call, and neither `SYSCALL` nor `SYSENTER` from 32-bit code
 /// enters the kernel anywhere else.
+/// Verifies: `L.x86_64.2`, `L.x86_64.54`, `L.x86_64.72`, H.TRAP.8
 fn check_compat() -> Result<(), &'static str> {
     let file = crate::syscall::image::build_with(
         ferrix_elf::Class::Elf32,
@@ -672,6 +674,7 @@ fn check_compat() -> Result<(), &'static str> {
 
 /// [`FORGE_I386`], once for each forgery an i386 `rt_sigreturn` must refuse
 /// and once for a frame it must take. Answers how many were refused.
+/// Verifies: `L.x86_64.48`
 fn check_forged_frames() -> Result<u32, &'static str> {
     use ferrix_linux_abi::sigframe32::sigcontext;
     // `uc_mcontext` is 20 bytes into the `ucontext`, and each field is
@@ -789,6 +792,7 @@ fn check_socketcall() -> Result<(), &'static str> {
 }
 
 /// [`SIGNALS_I386`]: both i386 frames and their returns, and a fork.
+/// Verifies: `L.x86_64.15`, `L.x86_64.47`, `L.x86_64.64`, `L.x86_64.73`
 fn check_signals_and_fork() -> Result<(), &'static str> {
     let file = crate::syscall::image::build_with(
         ferrix_elf::Class::Elf32,
@@ -829,6 +833,7 @@ fn check_signals_and_fork() -> Result<(), &'static str> {
 /// [`TLS_I386_LOW`] and [`TLS_I386_HIGH`] at once, pinned to this processor
 /// so that each `sched_yield` can hand it straight to the other. Answers the
 /// reads through `%gs` each made.
+/// Verifies: `L.x86_64.7`, `L.x86_64.8`, H.SCHED.7
 fn check_thread_areas() -> Result<u32, &'static str> {
     /// Reads through `%gs` each program makes.
     const READS: u32 = 200;

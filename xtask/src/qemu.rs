@@ -83,6 +83,7 @@ pub(crate) fn test_boot(arch: Arch, image: &Path, kernel: &Path, args: &Args) ->
 }
 
 /// [`test_boot`], returning what the guest printed.
+/// Verifies: `L.x86_64.97`
 pub(crate) fn test_boot_lines(
     arch: Arch,
     image: &Path,
@@ -160,6 +161,7 @@ pub(crate) fn test_boot_lines(
 /// said it was resetting, and the loader then has to have started again. A
 /// power-off cannot do that: under `-action shutdown=pause` it only pauses
 /// QEMU, the debug-exit write on x86-64 included.
+/// Verifies: `L.x86_64.99`, H.BOOT.7
 fn reset_problem(watched: &Watched) -> Option<String> {
     let first = |text: &str| watched.lines.iter().position(|line| line.contains(text));
     if first(RESET_ARMED).is_none() {
@@ -208,6 +210,7 @@ fn count_before(line: &str, suffix: &str) -> Option<u32> {
 /// tool boots has one it configured itself, so here a boot that read no
 /// entropy has lost DMA. A device may legitimately write fewer bytes than it
 /// was asked for, so any positive count passes.
+/// Verifies: `L.x86_64.113`
 fn entropy_problem(lines: &[String]) -> Option<String> {
     let Some(line) = lines.iter().find(|line| line.contains(ENTROPY_READ)) else {
         return Some("the kernel never reported reading entropy by DMA".to_owned());

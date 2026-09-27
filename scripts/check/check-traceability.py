@@ -32,6 +32,9 @@ Verification is named where the check is, in a doc line on the function:
     /// Verifies: L.mm.4, L.mm.5
     fn tables_wait_for_their_shootdown() -> Result<(), &'static str> {
 
+(an id may be written in backticks, as clippy's `doc_markdown` asks of one
+with an underscore in xtask, which denies it)
+
 on a function in one of three places, and nowhere else:
 
   * an in-kernel check, in a kernel/src file the manifest's
@@ -594,7 +597,9 @@ def scan_verifiers(source: str, rel: str, kind: str) -> tuple[list[Verifier], li
             continue
         if start not in comments:
             continue  # inside a string literal
-        ids = [part.strip() for part in tag.group(1).split(",")]
+        # An id may be written in backticks, as clippy's `doc_markdown` asks of
+        # one with an underscore (`L.x86_64.1`) in a crate that denies it.
+        ids = [part.strip().strip("`") for part in tag.group(1).split(",")]
         if not any(ids):
             problems.append(f"{where}: `Verifies:` names no requirement")
             continue
@@ -1189,6 +1194,11 @@ def self_test() -> list[str]:
     found, problems = scan_verifiers(_HOST, "libs/x/src/lib.rs", "host")
     if [v.function for v in found] != ["a_test"] or len(problems) != 1 or "not a #[test]" not in problems[0]:
         failures.append(f"host: found {[v.function for v in found]}, problems {problems}")
+    found, problems = scan_verifiers(
+        "/// Verifies: `L.x86_64.1`, H.MEM.1\nfn a_gate() {}\n", "xtask/src/x.rs", "gate"
+    )
+    if [v.ids for v in found] != [["L.x86_64.1", "H.MEM.1"]] or problems:
+        failures.append(f"backticked id: found {[v.ids for v in found]}, problems {problems}")
     found, problems = scan_verifiers("/// Verifies: H.MEM.1\nfn product() {}\n", "mm.rs", "none")
     if found or len(problems) != 1 or "which is not a check" not in problems[0]:
         failures.append(f"product file: found {found}, problems {problems}")

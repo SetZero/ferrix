@@ -193,6 +193,7 @@ const SESSION: &[Step] = &[
 ///
 /// When the image cannot be built, when the boot fails, or when a keystroke
 /// does not get the answer a session at a terminal must give.
+/// Verifies: `L.x86_64.115`
 pub(crate) fn test_jobs(args: &Args) -> Result<()> {
     let arch = Arch::X86_64;
     if args.arches()?.iter().any(|&asked| asked != arch) {

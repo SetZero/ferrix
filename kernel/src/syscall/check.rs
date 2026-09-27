@@ -323,6 +323,7 @@ impl Counter {
 /// 39 on x86-64, 172 on AArch64, 20 on ARMv7-A. Asking the facade for its own
 /// number and then requiring the *other two* numbers to mean something else is
 /// what makes this a check rather than a tautology.
+/// Verifies: `L.x86_64.119`, H.TRAP.12
 fn check_the_right_table_was_compiled_in(counter: &mut Counter) -> Result<usize, &'static str> {
     let candidates = [
         ferrix_linux_abi::nr::x86_64::GETPID,
@@ -480,6 +481,7 @@ fn check_orphans_are_reparented() -> Result<(), &'static str> {
 }
 
 /// A number no table carries is `ENOSYS`, not a panic and not a wrong handler.
+/// Verifies: L.trap.4, H.TRAP.11
 fn check_an_unknown_number_is_enosys(counter: &mut Counter) -> Result<(), &'static str> {
     let enosys = Outcome::Return(Errno::ENOSYS.as_return_value());
     // 0xDEAD is above every table on all three architectures; the other two
@@ -3073,6 +3075,7 @@ fn check_the_loader_refuses_a_linker_it_cannot_use() -> Result<(), &'static str>
 }
 
 /// The images the loader must refuse, and refuse by name.
+/// Verifies: `L.x86_64.74`
 fn check_the_loader_refuses_what_it_cannot_run(process: &Process) -> Result<(), &'static str> {
     let class = class_of_this_build();
     let machine = arch::ARCH.elf_machine();
@@ -4067,6 +4070,7 @@ fn check_descriptors_are_refused_by_kind(process: &Process, page: u64) -> Result
 // ---------------------------------------------------------------------------
 
 /// Run a program in user mode and require it to come back correctly.
+/// Verifies: L.trap.2
 fn check_a_program_runs_in_user_mode() -> Result<Option<i32>, &'static str> {
     if arch::USER_TEST_PROGRAM.is_empty() {
         // No transition on this architecture yet. Reported as absent rather
@@ -4205,6 +4209,7 @@ pub(crate) fn spinner(tag: u8, rounds: u32, status: u32) -> Result<Arc<Process>,
 /// preempted in user mode. So interrupts must also have arrived *in user mode*
 /// while the two ran. Masking them there fails this with its own message; that
 /// was tried, and the switch count alone did not notice.
+/// Verifies: `L.x86_64.59`, `L.x86_64.79`
 fn check_two_programs_take_turns_on_one_processor() -> Result<Option<(u64, u64)>, &'static str> {
     if arch::USER_SPIN_PROGRAM.is_empty() {
         return Ok(None);
@@ -5422,6 +5427,7 @@ const FORK_STATUS: i32 = 24;
 /// parent's registers with the call returning zero, it ran in a copy of the
 /// parent's memory and exited, the parent's `wait4` found that child and not
 /// another, and the status word put the exit code in its second byte.
+/// Verifies: `L.x86_64.63`
 fn check_a_forked_child_is_waited_for() -> Result<Option<i32>, &'static str> {
     if arch::USER_FORK_PROGRAM.is_empty() {
         return Ok(None);
@@ -5762,6 +5768,7 @@ const STOP_STILL_NANOS: u64 = 50_000_000;
 /// still across a window; after `SIGCONT` both must move again and the waiter
 /// must be back in its wait, never having returned from it -- a stop ends a
 /// blocked call, and the call must restart, not fail. `SIGKILL` then ends it.
+/// Verifies: `L.x86_64.66`
 fn check_a_stop_stops_every_thread_and_a_continue_restarts_their_calls()
 -> Result<Option<i32>, &'static str> {
     use crate::syscall::signal::Origin;
@@ -6163,6 +6170,7 @@ const SIGNAL_STATUS: i32 = 77;
 /// and `rt_sigreturn` read the frame back -- the changed register included --
 /// and put the old mask back. On ARMv7-A the program does it a second time
 /// without `SA_SIGINFO`, through the other frame and `sigreturn`.
+/// Verifies: `L.x86_64.42`, `L.x86_64.55`, H.TRAP.9
 fn check_a_handler_runs_and_returns() -> Result<Option<i32>, &'static str> {
     if arch::USER_SIGNAL_PROGRAM.is_empty() {
         return Ok(None);
@@ -7005,6 +7013,7 @@ const EXEC_REAL: &[u8] = b"/exec-target-real";
 /// reports, and what glibc's static startup asserts is absolute. The program
 /// passes the link's own name as `argv[0]`, so recording that instead fails
 /// here.
+/// Verifies: `L.x86_64.69`
 fn check_execve_replaces_the_program() -> Result<Option<(i32, i32)>, &'static str> {
     use ferrix_vfs::OpenFlags;
 
@@ -10412,6 +10421,7 @@ const START_STATUS: i32 = 57;
 /// program, a native process's bootstrap handle. The program exits with the
 /// register as its status, so an entry path that cleared it after loading it,
 /// or loaded the wrong register, exits with 0 or garbage instead.
+/// Verifies: `L.x86_64.68`
 fn check_a_program_is_handed_its_start_argument() -> Result<Option<i32>, &'static str> {
     if arch::USER_ARGUMENT_PROGRAM.is_empty() {
         return Ok(None);

@@ -84,6 +84,7 @@ pub(crate) struct Parts<'a> {
 ///
 /// A boot that panicked or timed out, and every line the judges below want
 /// and did not get, with the serial log's path.
+/// Verifies: `L.x86_64.98`, H.BOOT.6
 pub(crate) fn test(parts: &Parts<'_>, args: &Args, busybox: bool) -> Result<()> {
     let (arch, kernel) = (parts.arch, parts.kernel);
     let program = parts.program;

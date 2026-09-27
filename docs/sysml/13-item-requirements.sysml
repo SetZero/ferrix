@@ -499,6 +499,36 @@ package FerrixItemRequirements {
                 misplaced runs (the `smp` line).";
             attribute :>> parent = ("O.ISOLATE", "ASR-1");
         }
+        requirement <'H.SCHED.7'> threadLocalDescriptorsPerThread : ItemHighLevel {
+            attribute :>> statement = "A thread's thread-local segment descriptors
+                and data selectors shall be its own whenever it runs in ring 3,
+                never another thread's. x86-64 only.";
+            attribute :>> criterion = "Two i386 programs pinned to one processor,
+                with one descriptor slot and selector but bases 4 bytes apart, each
+                read their own word through %gs 200 times across sched_yield: both
+                exit 42.";
+            attribute :>> parent = ("O.ISOLATE", "G.1");
+        }
+        requirement <'H.SCHED.8'> userRegisterStatePerTask : ItemHighLevel {
+            attribute :>> statement = "The user-mode state a trap does not save --
+                the FS and GS bases and the x87 and SSE registers -- shall be the
+                running task's own whenever it runs in ring 3, inherited by a fork
+                child and reset by an execve.";
+            attribute :>> criterion = "Two programs pinned to one processor, each
+                with its own FS and GS bases and XMM, MXCSR and x87 control values,
+                read back their own across N yields: 0 mismatches; a fork child
+                reads its parent's, and an execve'd image the reset values.";
+            attribute :>> parent = ("O.ISOLATE", "G.1");
+        }
+        requirement <'H.SCHED.9'> vdsoClocksAnswerAsTheCall : ItemHighLevel {
+            attribute :>> statement = "A clock read through the vDSO shall answer as
+                the system call would, between system calls made on either side of
+                it.";
+            attribute :>> criterion = "A program reading each of the 7 clocks,
+                gettimeofday and time through the vDSO finds each answer between
+                system calls made on either side: exit 120.";
+            attribute :>> parent = "G.5";
+        }
     }
 
     package Interrupts {
@@ -698,6 +728,58 @@ package FerrixItemRequirements {
                 are refused (the `gdt` line).";
             attribute :>> parent = ("O.ISOLATE", "O.VALIDATE");
         }
+        requirement <'H.TRAP.8'> compatibilityModeAsLinux : ItemHighLevel {
+            attribute :>> statement = "A 32-bit x86 program shall run in ring 3 in
+                compatibility mode, in Linux's user segments and its own
+                thread-local descriptors, and shall enter the kernel only through
+                int $0x80, answered as i386 Linux answers it. x86-64 only.";
+            attribute :>> criterion = "An ELF32 i386 program's calls through int
+                $0x80 answer as i386 Linux's do and it exits 42; a 64-bit program's
+                int $0x80 is an i386 call; SYSCALL from 32-bit code answers -ENOSYS
+                or is #UD, and SYSENTER ends the program (the first `i386` line).";
+            attribute :>> parent = ("O.ISOLATE", "G.5");
+        }
+        requirement <'H.TRAP.9'> signalFramesAsLinux : ItemHighLevel {
+            attribute :>> statement = "A 64-bit program's signal handler shall be
+                entered on a frame in Linux's layout, and its return shall resume
+                the registers and mask the frame holds.";
+            attribute :>> criterion = "The 64-bit signal program's SA_SIGINFO
+                handler is entered with the signal, the siginfo and the ucontext, a
+                register it changes through the frame comes back through
+                rt_sigreturn, and the mask after the return is empty: exit 77 (the
+                `signals` line).";
+            attribute :>> parent = "G.3";
+        }
+        requirement <'H.TRAP.10'> registersAsTheAbiSays : ItemHighLevel {
+            attribute :>> statement = "A program's registers shall pass the kernel
+                as its ABI says: a call's arguments are read from its argument
+                registers and its result returned in its return register, a fork
+                child resumes from its parent's registers with the call answering
+                zero, and a program started or replaced begins at its entry with its
+                start argument and no kernel value in any register.";
+            attribute :>> criterion = "A call with six arguments answers from all
+                six; a fork child's registers are its parent's with the return
+                register zero; a program started with an argument finds it, and one
+                that ORs its registers on entry finds nothing else set, for each
+                ABI.";
+            attribute :>> parent = ("G.4", "G.5");
+        }
+        requirement <'H.TRAP.11'> unknownCallsAreEnosys : ItemHighLevel {
+            attribute :>> statement = "A system call number no table carries shall
+                be refused with ENOSYS, never answered by a handler or a fault.";
+            attribute :>> criterion = "0xDEAD, usize::MAX and usize::MAX - 1, each
+                dispatched as a native call through the registered entry, are
+                answered -38, 3 of 3.";
+            attribute :>> parent = "O.VALIDATE";
+        }
+        requirement <'H.TRAP.12'> decodedByTheEntrysTable : ItemHighLevel {
+            attribute :>> statement = "A system call's number shall be decoded
+                through the table of the architecture it was built for.";
+            attribute :>> criterion = "Of getpid's numbers in the three tables,
+                exactly the running architecture's decodes to getpid, and
+                dispatching it answers a pid above zero.";
+            attribute :>> parent = "O.VALIDATE";
+        }
     }
 
     package Boot {
@@ -755,6 +837,31 @@ package FerrixItemRequirements {
                 described (4 of 4 on x86-64 and AArch64, 2 of 2 on ARMv7-A at `--smp
                 2`); a secondary made never to report in ends the boot in FX-0402.";
             attribute :>> parent = ("O.FAILSAFE", "ASR-6");
+        }
+        requirement <'H.BOOT.6'> endsPoweredOff : ItemHighLevel {
+            attribute :>> statement = "When init exits and ferrix.onexit asks for
+                nothing else, the machine shall power itself off after the console
+                has drained.";
+            attribute :>> criterion = "After init exits, QEMU exits by itself within
+                the grace, with status 0 or 33, and init's exit line is in the log.";
+            attribute :>> parent = "O.FAILSAFE";
+        }
+        requirement <'H.BOOT.7'> resetsWhenAsked : ItemHighLevel {
+            attribute :>> statement = "When init exits and ferrix.onexit=reset asks
+                for it, the machine shall restart from firmware after the console
+                has drained.";
+            attribute :>> criterion = "Under ferrix.onexit=reset the kernel says it
+                is resetting and the loader's banner is printed again after it.";
+            attribute :>> parent = "O.FAILSAFE";
+        }
+        requirement <'H.BOOT.8'> consoleCarriesTheSession : ItemHighLevel {
+            attribute :>> statement = "The serial console shall carry the kernel's
+                lines out, and a person's typed bytes in to the program reading
+                them, in order and without waiting unboundedly on the port.";
+            attribute :>> criterion = "test-boot reads every stage's line and
+                FERRIX-BOOT-OK from the serial port, and test-jobs's 18 typed steps
+                each have their answer after them.";
+            attribute :>> parent = "O.FAILSAFE";
         }
     }
 

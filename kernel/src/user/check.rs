@@ -721,7 +721,7 @@ fn check_pages_arrive_on_demand_and_go_back() -> Result<u64, &'static str> {
 /// tables through the direct map rather than through `TTBR0` — but it is a
 /// real reordering and not an accident.
 ///
-/// Verifies: L.user.55
+/// Verifies: L.user.55, `L.x86_64.88`
 fn check_the_processor_walks_an_installed_space() -> Result<u64, &'static str> {
     let before = quiet_frames()?;
     let base = 0x5000_0000;
@@ -1297,7 +1297,7 @@ fn read_own_space(expected: usize) {
 /// failures and they look different, which is why the marker carries the task's
 /// index rather than being a single sentinel.
 ///
-/// Verifies: H.MEM.1, L.user.56
+/// Verifies: H.MEM.1, L.user.56, `L.x86_64.110`
 fn check_two_tasks_keep_their_own_address_spaces() -> Result<u64, &'static str> {
     let frames_before = quiet_frames()?;
     let arena_before = crate::vmap::usage().allocations;

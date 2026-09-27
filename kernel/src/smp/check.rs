@@ -511,7 +511,7 @@ fn unlink_and_shoot(root: u64, phys: u64) -> Result<(), &'static str> {
 /// which is what a missing shootdown looks like in a running kernel, and
 /// exactly what this counts.
 ///
-/// Verifies: H.MEM.12, L.mm.28, L.smp.14
+/// Verifies: H.MEM.12, L.mm.28, L.smp.14, `L.x86_64.108`
 fn shootdown(report: &mut Report) -> Result<(), &'static str> {
     const ROUNDS: u64 = 20;
 
@@ -596,6 +596,7 @@ fn tally_run(me: &'static PerCpu) {
 /// That is a race, and one round would have to be lucky to lose it.
 ///
 /// Verifies: H.SCHED.6, L.smp.3, L.smp.11
+/// Verifies: `L.x86_64.18`, `L.x86_64.19`, `L.x86_64.86`, `L.x86_64.102`
 fn everywhere(topology: &Topology, report: &mut Report) -> Result<(), &'static str> {
     const ROUNDS: u64 = 100;
 

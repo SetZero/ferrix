@@ -18,15 +18,27 @@
     "function or one a requirement names."
   ],
   "complete": [
+    "arch::x86_64",
     "early",
     "iommu",
     "mm",
     "object",
     "smp",
+    "trap",
     "user",
     "vmap"
   ],
   "check_code_in_product": {
+    "arch::x86_64::check_exception_entry": "It only runs the paranoid, syscall, gdt and trap checks' run functions, for main.rs's stage 3; it can move into a check file under arch::x86_64.",
+    "arch::x86_64::cpu::forbid_user_access": "Closes SMAP's window through arch::forbid_user_access, whose only callers are user/check.rs's checks.",
+    "arch::x86_64::cpu::permit_user_access": "Opens SMAP's window through arch::permit_user_access, whose only callers are user/check.rs's checks of the window; the kernel's own user copies do not use it.",
+    "arch::x86_64::cpu::write_breakpoint_address": "Arms a debug register; called only from arch/x86_64/paranoid/check.rs, whose breakpoint checks are its reason to exist.",
+    "arch::x86_64::cpu::write_dr7": "Enables or clears the debug registers' slots; called only from arch/x86_64/paranoid/check.rs.",
+    "arch::x86_64::identity_map_live": "Its only caller is main.rs's stage 2 check, which runs only when the boot checks.",
+    "arch::x86_64::paranoid::debug_hook": "Only a breakpoint target and counter for paranoid/check.rs's check_breakpoints_do_not_nest; every kernel #DB calls it so the check can arm a breakpoint on the handler's own path.",
+    "arch::x86_64::speculation::check": "The x86-64 half of arch::speculation_check::check (machine::check), with no product caller: it runs VERW once to show the exit paths' operand is accepted. It reaches speculation.rs's private plan.",
+    "arch::x86_64::speculation::clear_cpu_buffers": "Called only by speculation::check, to run VERW once for the boot check.",
+    "arch::x86_64::trap::breakpoint": "Its only callers are main.rs's check_breakpoint, which raises int3 twice for stage 3's check.",
     "early::EarlyMemory::read_physical_byte": "Stage 1's check_direct_map in main.rs reads the image's first bytes through it; nothing else calls it. It stays while that check is in main.rs.",
     "early::EarlyMemory::translate": "Called only by stage 1's checks in main.rs (check_early_mapper, check_no_early_window_wraps); it reads EarlyMemory's private walk state.",
     "mm::FrameWindow::kept": "A check's frame window: frames kept since it opened. Every caller is a check file; it reads Held, which reads the heap and route counters private to mm.rs.",

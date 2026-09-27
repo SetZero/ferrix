@@ -942,6 +942,7 @@ fn park_then_count_a_run(_argument: usize) {
 }
 
 /// A sleep gives the processor up and comes back on time.
+/// Verifies: `L.x86_64.91`
 fn sleeping(report: &mut Report) -> Result<(), &'static str> {
     let started = crate::timer::now_nanos();
     super::sleep_for(SLEEP_NANOS);
@@ -976,6 +977,7 @@ fn a_running_processor_is_not_idle() -> Result<(), &'static str> {
 
 /// A thousand threads, started from one processor, run to completion — and
 /// every stack comes back.
+/// Verifies: `L.x86_64.17`
 fn many_tasks(topology: &Topology, report: &mut Report) -> Result<(), &'static str> {
     let allocations = crate::vmap::usage().allocations;
     DONE.store(0, Ordering::Release);

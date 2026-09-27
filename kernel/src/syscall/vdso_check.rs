@@ -52,6 +52,7 @@ pub(crate) const SIGRETURN_ONLY: Answered = "the signal return trampoline alone"
 /// An image with no clock -- AArch64's, which is `__kernel_rt_sigreturn`
 /// alone -- is checked for exporting the trampoline where its code puts it,
 /// its data page and its mapping, and answers [`SIGRETURN_ONLY`].
+/// Verifies: `L.x86_64.101`
 pub(crate) fn check_the_vdso() -> Result<Option<Answered>, &'static str> {
     let Some(image) = vdso::image() else {
         return Ok(None);
@@ -190,6 +191,7 @@ fn check_the_mapping() -> Result<(), &'static str> {
 }
 
 /// `USER_VDSO_PROGRAM`, run: every function held to its system call.
+/// Verifies: `L.x86_64.41`, H.SCHED.9
 fn check_a_program_reads_the_clock_through_it() -> Result<(), &'static str> {
     let class = if size_of::<usize>() == 8 {
         Class::Elf64

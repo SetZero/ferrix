@@ -50,6 +50,7 @@ pub(crate) struct Report {
 /// # Errors
 ///
 /// What did not hold.
+/// Verifies: `L.x86_64.28`, `L.x86_64.29`, `L.x86_64.31`
 pub(crate) fn check() -> Result<Report, &'static str> {
     check_clamp()?;
     let boot = applied_by(0).ok_or("the boot processor recorded no side-channel defences")?;
@@ -109,6 +110,7 @@ const fn plans_barrier(applied: Defences) -> bool {
 }
 
 /// The clamp, on both sides of its bound and on the mispredicted path.
+/// Verifies: `L.x86_64.30`
 fn check_clamp() -> Result<(), &'static str> {
     if nospec_index(3, 4) != Some(3) || nospec_index(0, 1) != Some(0) {
         return Err("an index inside its bound did not come back itself");

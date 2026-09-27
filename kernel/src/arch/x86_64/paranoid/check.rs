@@ -67,6 +67,7 @@ static WINDOW: SpinLock<Option<Result<i32, &'static str>>> = SpinLock::new(None)
 /// # Errors
 ///
 /// What failed, for the stage 3 report.
+/// Verifies: `L.x86_64.80`
 pub(crate) fn run() -> Result<(), &'static str> {
     let nmis = check_nmi()?;
     let (entries, returns, status) = check_system_call_window()?;
@@ -91,6 +92,7 @@ pub(crate) fn run() -> Result<(), &'static str> {
 ///
 /// Sent to this processor through its own local APIC with interrupts masked,
 /// which an NMI ignores. Without the paranoid entry vector 2 is fatal.
+/// Verifies: `L.x86_64.24`
 fn check_nmi() -> Result<u64, &'static str> {
     let before = NMIS.load(Ordering::Relaxed);
     let foreign = FOREIGN_GS.load(Ordering::Relaxed);
@@ -125,6 +127,7 @@ fn check_nmi() -> Result<u64, &'static str> {
 /// back, while [`super::super::USER_TEST_PROGRAM`] writes a line and exits. Debug
 /// registers are per processor, so the program and the task that arms them
 /// are pinned to one. Returns the hits at each, and the program's status.
+/// Verifies: `L.x86_64.25`, `L.x86_64.52`, `L.x86_64.87`
 fn check_system_call_window() -> Result<(u64, u64, i32), &'static str> {
     let cpu = crate::smp::this_cpu()
         .ok_or("the per-CPU register is not installed")?
@@ -181,6 +184,7 @@ fn window_task(cpu: usize) {
 }
 
 /// Arm the two breakpoints on this processor, run the program on it, disarm.
+/// Verifies: `L.x86_64.53`
 fn run_with_window_breakpoints(cpu: usize) -> Result<i32, &'static str> {
     use crate::syscall::exec::{Executable, load_executable};
 
@@ -258,6 +262,7 @@ fn is_cpu_record(address: u64) -> bool {
 /// land on the top of the stack the target's handler is still using, which the
 /// occupancy count reports as FX-9006. Returns the hook's runs: three, two in
 /// handlers and one here.
+/// Verifies: `L.x86_64.26`
 fn check_breakpoints_do_not_nest() -> Result<u64, &'static str> {
     let targets = hits(0);
     let hooks = hits(2);

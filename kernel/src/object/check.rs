@@ -2587,7 +2587,7 @@ fn task_stops(task: &Task, deadline: u64) -> Result<(), &'static str> {
 /// its VMO, and the receiver could only have read that secret through the
 /// handle it was sent.
 ///
-/// Verifies: L.object.10
+/// Verifies: L.object.10, L.syscall.1
 fn check_two_programs_talk_over_a_channel(counter: &mut Counter) -> Result<(), &'static str> {
     if arch::USER_NATIVE_PROGRAM.is_empty() {
         return Ok(());

@@ -116,9 +116,10 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixSchedRequirements` | `15-sched-requirements.sysml` | What each unit of kernel/src/sched/ does, as `ItemLowLevel` requirements (part 13 defines the format, part 14's pilot settled how they are cut). The scheduling decision itself is `libs/kernel/sched`'s `RunQueue`, an EEVDF queue the kernel's per-processor queue wraps; its host tests are the checks, and each requirement names the kernel function that carries the behaviour into the item as its `unit`. |
 | `FerrixIommuRequirements` | `16-iommu-requirements.sysml` | What each unit of kernel/src/iommu.rs and kernel/src/iommu/ does, as `ItemLowLevel` requirements (part 13 defines the format): where firmware puts each PCI function's DMA, the units the kernel turns translation on for, the domains a driver pins pages into, the gate a wait on a unit is made through, and the faults a unit records. The pins a program makes through a handle, and the quarantine a dead driver's pins go to, are object/'s (part 14, `L.object.45` to `L.object.49`); this is the domain side under them. |
 | `FerrixMemoryRequirements` | `17-memory-requirements.sysml` | What each unit of the item's memory management does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies), in two id spaces. |
+| `FerrixX8664Requirements` | `18-x86-64-requirements.sysml` | What each unit of kernel/src/arch/x86_64/, kernel/src/trap.rs and kernel/src/syscall/mod.rs's dispatcher does, as `ItemLowLevel` requirements (part 13 defines the format): the descriptor tables and which selectors ring 3 may hold, the context switch and the user state it carries, starting processors, the paranoid entries, the speculation defences, the counter and timer, both ABIs' signal frames, SYSCALL and int $0x80, the exception gates and what a fault becomes, and which calls reach which answer. |
 | `FerrixSmpRequirements` | `22-smp-requirements.sysml` | What each unit of kernel/src/smp.rs does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): finding the processors and giving each a record it finds itself by, starting the secondaries, the inter-processor interrupt, the TLB shootdown -- whole and scoped, and the bound on how long it waits -- grace periods, stopping the other processors for a panic, and the scheduler's kick. The start sequences themselves, the per-processor register and the interrupt controller are each architecture's (kernel/src/arch/\<isa>/smp.rs), and belong to the arch slices; this is the architecture-independent half above them. |
 
-19 files, 61 packages, 3799 elements, 208 relations. Model digest `d5d8167fb9473494`.
+20 files, 78 packages, 4500 elements, 209 relations. Model digest `deb95303a9ee0d29`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -290,8 +291,11 @@ Processor time: the fair class, placement and sleep. ASR-8 (partially met: the i
 | `H.SCHED.4` | A task shall run only on the processors its affinity mask allows. | Spinners confined to processors 0 and 1, twice as many as there are online processors, are seen running on no other processor: 0 violations. | `G.1` |
 | `H.SCHED.5` | A task that sleeps for a duration shall not be woken before the duration has passed, and shall be woken within twenty times it. | A 20 ms sleep returns after at least 20 ms and at most 400 ms (the `sleep` line). | `G.1, ASR-8` |
 | `H.SCHED.6` | Code running on a processor shall find, through that processor's per-processor register, the record that names that processor and no other. | In 100 rounds of work run on every online processor at once, each processor runs each round once and the record its register gives it names its own hardware identifier every time: 0 misplaced runs (the `smp` line). | `O.ISOLATE, ASR-1` |
+| `H.SCHED.7` | A thread's thread-local segment descriptors and data selectors shall be its own whenever it runs in ring 3, never another thread's. x86-64 only. | Two i386 programs pinned to one processor, with one descriptor slot and selector but bases 4 bytes apart, each read their own word through %gs 200 times across sched_yield: both exit 42. | `O.ISOLATE, G.1` |
+| `H.SCHED.8` | The user-mode state a trap does not save -- the FS and GS bases and the x87 and SSE registers -- shall be the running task's own whenever it runs in ring 3, inherited by a fork child and reset by an execve. | Two programs pinned to one processor, each with its own FS and GS bases and XMM, MXCSR and x87 control values, read back their own across N yields: 0 mismatches; a fork child reads its parent's, and an execve'd image the reset values. | `O.ISOLATE, G.1` |
+| `H.SCHED.9` | A clock read through the vDSO shall answer as the system call would, between system calls made on either side of it. | A program reading each of the 7 clocks, gettimeofday and time through the vDSO finds each answer between system calls made on either side: exit 120. | `G.5` |
 
-6 requirements.
+9 requirements.
 
 ### Interrupts
 
@@ -335,8 +339,13 @@ The system call boundary and the exceptions a program raises: O.VALIDATE and ASR
 | `H.TRAP.5` | Restoring a signal frame a program supplies shall not raise its privilege: the restored mode, segment selectors, interrupt masks and I/O privilege shall be the user's whatever the frame holds, and a return address outside the user half shall be refused. | A sigreturn through frames asking for kernel mode, masked interrupts, I/O privilege and a kernel-half return address resumes the program in user mode with user flags, or ends it with SIGSEGV, on each architecture: 0 in kernel mode. | `O.VALIDATE, O.ISOLATE, ASR-7` |
 | `H.TRAP.6` | On every entry from user mode the kernel shall establish its own stack and per-processor state before using either, whatever the program left in its registers, including for an exception taken on the entry path itself. | Breakpoints on the system call entry and on its return, and an NMI taken with interrupts masked, each run on the kernel's own stack with its own per-processor base, and the program exits 42 (the `debug` and `nmi` lines, x86-64). | `O.ISOLATE, O.FAILSAFE` |
 | `H.TRAP.7` | A program shall load only the segment selectors meant for user mode: one naming a kernel descriptor, the TSS, the LDT or a forged thread-local descriptor shall be refused. x86-64 only. | 7 user selectors load at RPL 3 and 18 others are refused (the `gdt` line). | `O.ISOLATE, O.VALIDATE` |
+| `H.TRAP.8` | A 32-bit x86 program shall run in ring 3 in compatibility mode, in Linux's user segments and its own thread-local descriptors, and shall enter the kernel only through int $0x80, answered as i386 Linux answers it. x86-64 only. | An ELF32 i386 program's calls through int $0x80 answer as i386 Linux's do and it exits 42; a 64-bit program's int $0x80 is an i386 call; SYSCALL from 32-bit code answers -ENOSYS or is #UD, and SYSENTER ends the program (the first `i386` line). | `O.ISOLATE, G.5` |
+| `H.TRAP.9` | A 64-bit program's signal handler shall be entered on a frame in Linux's layout, and its return shall resume the registers and mask the frame holds. | The 64-bit signal program's SA_SIGINFO handler is entered with the signal, the siginfo and the ucontext, a register it changes through the frame comes back through rt_sigreturn, and the mask after the return is empty: exit 77 (the `signals` line). | `G.3` |
+| `H.TRAP.10` | A program's registers shall pass the kernel as its ABI says: a call's arguments are read from its argument registers and its result returned in its return register, a fork child resumes from its parent's registers with the call answering zero, and a program started or replaced begins at its entry with its start argument and no kernel value in any register. | A call with six arguments answers from all six; a fork child's registers are its parent's with the return register zero; a program started with an argument finds it, and one that ORs its registers on entry finds nothing else set, for each ABI. | `G.4, G.5` |
+| `H.TRAP.11` | A system call number no table carries shall be refused with ENOSYS, never answered by a handler or a fault. | 0xDEAD, usize::MAX and usize::MAX - 1, each dispatched as a native call through the registered entry, are answered -38, 3 of 3. | `O.VALIDATE` |
+| `H.TRAP.12` | A system call's number shall be decoded through the table of the architecture it was built for. | Of getpid's numbers in the three tables, exactly the running architecture's decodes to getpid, and dispatching it answers a pid above zero. | `O.VALIDATE` |
 
-7 requirements.
+12 requirements.
 
 ### Boot
 
@@ -349,8 +358,11 @@ What the kernel does with what it is handed before anything runs above it, and w
 | `H.BOOT.3` | The kernel shall run with its image, direct map and vmap arena at the offsets the loader drew from the firmware's random-number protocol, and shall verify the move at stage 1. | Two boots of one image report two different layouts (`cargo xtask test-kaslr`), and stage 1 verifies the slide each reports. | `O.ISOLATE` |
 | `H.BOOT.4` | The kernel shall refuse an ACPI table or a device tree whose declared length is shorter than its header or reaches beyond the memory mapped for it, rather than read past it. | The ACPI and device-tree parsers' host tests feed truncated, oversized and misaligned tables and each is refused with its error, 0 read out of bounds; the kernel refuses a table outside the direct map. | `O.FAILSAFE, ASR-6` |
 | `H.BOOT.5` | Every processor firmware describes shall be running kernel code on its own per-processor record before the scheduler starts, or the boot shall halt with a diagnostic saying which step failed. | On each configuration `cargo xtask test-boot` boots, the `cpus` line counts as many processors online as firmware described (4 of 4 on x86-64 and AArch64, 2 of 2 on ARMv7-A at `--smp 2`); a secondary made never to report in ends the boot in FX-0402. | `O.FAILSAFE, ASR-6` |
+| `H.BOOT.6` | When init exits and ferrix.onexit asks for nothing else, the machine shall power itself off after the console has drained. | After init exits, QEMU exits by itself within the grace, with status 0 or 33, and init's exit line is in the log. | `O.FAILSAFE` |
+| `H.BOOT.7` | When init exits and ferrix.onexit=reset asks for it, the machine shall restart from firmware after the console has drained. | Under ferrix.onexit=reset the kernel says it is resetting and the loader's banner is printed again after it. | `O.FAILSAFE` |
+| `H.BOOT.8` | The serial console shall carry the kernel's lines out, and a person's typed bytes in to the program reading them, in order and without waiting unboundedly on the port. | test-boot reads every stage's line and FERRIX-BOOT-OK from the serial port, and test-jobs's 18 typed steps each have their answer after them. | `O.FAILSAFE` |
 
-5 requirements.
+8 requirements.
 
 ### Quotas
 
@@ -4233,6 +4245,134 @@ flowchart LR
 | `L.user.103` | `aDiskFilesPageIsReadBeforeItIsMapped` | — | — | — |
 | `L.user.104` | `aFaultIsResolvedWithNoPreemptionLockHeld` | — | — | — |
 | `L.user.105` | `anUnmapFreesNothingBeforeItsShootdown` | — | — | — |
+| `L.x86_64.1` | `selectorsRing3MayHoldAreLoadable` | — | — | — |
+| `L.x86_64.2` | `compatUserSegmentsInGdt` | — | — | — |
+| `L.x86_64.3` | `istStacksPerProcessor` | — | — | — |
+| `L.x86_64.4` | `ringThreeDeniedEveryPort` | — | — | — |
+| `L.x86_64.5` | `secondaryGdtFailureIsFatal` | — | — | — |
+| `L.x86_64.6` | `entryStackFollowsTask` | — | — | — |
+| `L.x86_64.7` | `threadAreaInLiveGdt` | — | — | — |
+| `L.x86_64.8` | `threadAreaTravelsWithThread` | — | — | — |
+| `L.x86_64.9` | `fsGsBaseTravelsWithTask` | — | — | — |
+| `L.x86_64.10` | `fpuStateTravelsWithTask` | — | — | — |
+| `L.x86_64.11` | `forkChildInheritsUserState` | — | — | — |
+| `L.x86_64.12` | `newProgramStartsWithResetState` | — | — | — |
+| `L.x86_64.13` | `sigreturnLoadsFpu` | — | — | — |
+| `L.x86_64.14` | `compatEntryHasUserData` | — | — | — |
+| `L.x86_64.15` | `handlerEnteredWithUserData` | — | — | — |
+| `L.x86_64.16` | `staleSelectorLoadsNull` | — | — | — |
+| `L.x86_64.17` | `contextSwitchStartsAndResumes` | — | — | — |
+| `L.x86_64.18` | `everyListedProcessorStarts` | — | — | — |
+| `L.x86_64.19` | `broadcastIpiReachesEverySecondary` | — | — | — |
+| `L.x86_64.20` | `trampolineFramesReturned` | — | — | — |
+| `L.x86_64.21` | `secondaryAdoptsBootCr4` | — | — | — |
+| `L.x86_64.22` | `directedIpiReachesOnlyItsTarget` | — | — | — |
+| `L.x86_64.23` | `wideApicIdRefused` | — | — | — |
+| `L.x86_64.24` | `kernelNmiSurvived` | — | — | — |
+| `L.x86_64.25` | `syscallWindowBreakpointsSurvived` | — | — | — |
+| `L.x86_64.26` | `debugStatusCountedOnce` | — | — | — |
+| `L.x86_64.27` | `paranoidUnexpectedIsFatal` | — | — | — |
+| `L.x86_64.28` | `everyProcessorRecordsItsDefences` | — | — | — |
+| `L.x86_64.29` | `speculationControlsReadBack` | — | — | — |
+| `L.x86_64.30` | `indexClampedUnderSpeculation` | — | — | — |
+| `L.x86_64.31` | `switchBarrierIssued` | — | — | — |
+| `L.x86_64.32` | `speculationPlanFollowsCpuid` | — | — | — |
+| `L.x86_64.33` | `speculationExposureReported` | — | — | — |
+| `L.x86_64.34` | `lapicTimerCalibrated` | — | — | — |
+| `L.x86_64.35` | `lapicTimerOneShot` | — | — | — |
+| `L.x86_64.36` | `ioApicInputsQuiesced` | — | — | — |
+| `L.x86_64.37` | `isaLineRouted` | — | — | — |
+| `L.x86_64.38` | `counterFrequencyKnown` | — | — | — |
+| `L.x86_64.39` | `counterBringUpRefusesDeadTimer` | — | — | — |
+| `L.x86_64.40` | `counterNeverBackwards` | — | — | — |
+| `L.x86_64.41` | `vdsoReadsCounterOnlyWhenTsc` | — | — | — |
+| `L.x86_64.42` | `nativeSignalRoundTrip` | — | — | — |
+| `L.x86_64.43` | `nativeForgedFrameRefused` | — | — | — |
+| `L.x86_64.44` | `sanitisedContext` | — | — | — |
+| `L.x86_64.45` | `fpStateRoundTrip` | — | — | — |
+| `L.x86_64.46` | `frameRefusedAtSetup` | — | — | — |
+| `L.x86_64.47` | `compatSignalRoundTrip` | — | — | — |
+| `L.x86_64.48` | `compatForgedFrameRefused` | — | — | — |
+| `L.x86_64.49` | `compatForgedFrameRest` | — | — | — |
+| `L.x86_64.50` | `compatHandlerView` | — | — | — |
+| `L.x86_64.51` | `compatMaskAndAltstack` | — | — | — |
+| `L.x86_64.52` | `syscallEntersAtLstar` | — | — | — |
+| `L.x86_64.53` | `programGsBaseNotPerCpu` | — | — | — |
+| `L.x86_64.54` | `compatModeEntriesRefused` | — | — | — |
+| `L.x86_64.55` | `syscallFirstFourArguments` | — | — | — |
+| `L.x86_64.56` | `syscallFifthSixthArguments` | — | — | — |
+| `L.x86_64.57` | `syscallFlagMask` | — | — | — |
+| `L.x86_64.58` | `starUserBaseRpl3` | — | — | — |
+| `L.x86_64.59` | `entryStackPerTask` | — | — | — |
+| `L.x86_64.60` | `archPrctlRefusals` | — | — | — |
+| `L.x86_64.61` | `threadPointerPerTask` | — | — | — |
+| `L.x86_64.62` | `forkChildRegistersCopied` | — | — | — |
+| `L.x86_64.63` | `nativeForkChildResumes` | — | — | — |
+| `L.x86_64.64` | `compatForkChildResumes` | — | — | — |
+| `L.x86_64.65` | `cloneStack` | — | — | — |
+| `L.x86_64.66` | `nativeRestartRewinds` | — | — | — |
+| `L.x86_64.67` | `restartOtherBranches` | — | — | — |
+| `L.x86_64.68` | `nativeFirstEntryArgument` | — | — | — |
+| `L.x86_64.69` | `nativeExecveEntry` | — | — | — |
+| `L.x86_64.70` | `freshEntryClearsRegisters` | — | — | — |
+| `L.x86_64.71` | `compatExecveFromSyscall` | — | — | — |
+| `L.x86_64.72` | `int80IsAnI386Call` | — | — | — |
+| `L.x86_64.73` | `i386SignalsDeliveredOnTheWayBack` | — | — | — |
+| `L.x86_64.74` | `aForeignImageIsRefused` | — | — | — |
+| `L.x86_64.75` | `anI386ExecveEntersCompatMode` | — | — | — |
+| `L.x86_64.76` | `auxvPlatform` | — | — | — |
+| `L.x86_64.77` | `userExceptionsNameLinuxSignals` | — | — | — |
+| `L.trap.1` | `aUserFaultBecomesItsSignal` | — | — | — |
+| `L.x86_64.78` | `aTouchPastAFileIsSigbus` | — | — | — |
+| `L.trap.2` | `aUserFaultInAMappedRegionIsResolved` | — | — | — |
+| `L.x86_64.79` | `userInterruptsPreempt` | — | — | — |
+| `L.x86_64.80` | `paranoidVectorsRouted` | — | — | — |
+| `L.x86_64.81` | `onlyInt80IsUserCallable` | — | — | — |
+| `L.x86_64.82` | `userBreakpointsAndRareFaults` | — | — | — |
+| `L.x86_64.83` | `doubleFaultHasItsOwnStack` | — | — | — |
+| `L.x86_64.84` | `kernelBreakpointsReturn` | — | — | — |
+| `L.x86_64.85` | `aFatalTrapIsReported` | — | — | — |
+| `L.trap.3` | `demandWindowFaultsAreMapped` | — | — | — |
+| `L.x86_64.86` | `eachProcessorReachesItsOwnRecord` | — | — | — |
+| `L.x86_64.87` | `syscallIsArmedWhereAProgramRuns` | — | — | — |
+| `L.x86_64.88` | `aUserRootTranslatesItsHalf` | — | — | — |
+| `L.x86_64.89` | `uninstallReturnsToTheKernelRoot` | — | — | — |
+| `L.x86_64.90` | `ringZeroIsKeptOutOfUserPages` | — | — | — |
+| `L.x86_64.91` | `theTimerWakesASleeper` | — | — | — |
+| `L.x86_64.92` | `irqMaskingNests` | — | — | — |
+| `L.x86_64.93` | `anIpiReachesOneProcessor` | — | — | — |
+| `L.x86_64.94` | `noControllerLineToMask` | — | — | — |
+| `L.x86_64.95` | `spuriousVectorIsNotAcknowledged` | — | — | — |
+| `L.x86_64.96` | `consoleInputByInterrupt` | — | — | — |
+| `L.x86_64.97` | `theConsoleCarriesTheBoot` | — | — | — |
+| `L.x86_64.98` | `theMachinePowersItselfOff` | — | — | — |
+| `L.x86_64.99` | `theMachineResets` | — | — | — |
+| `L.x86_64.100` | `aStoppedProcessorStaysStopped` | — | — | — |
+| `L.x86_64.101` | `theVdsoExportsItsClocks` | — | — | — |
+| `L.x86_64.102` | `idleProcessorIsWokenByIpi` | — | — | — |
+| `L.x86_64.103` | `descriptorTablesAreTheKernels` | — | — | — |
+| `L.x86_64.104` | `bootPrivilegeStackIsSet` | — | — | — |
+| `L.x86_64.105` | `backtraceStartsAtCallersFrame` | — | — | — |
+| `L.x86_64.106` | `tripleFaultResets` | — | — | — |
+| `L.x86_64.107` | `hardwareRandomWords` | — | — | — |
+| `L.x86_64.108` | `globalFlushReachesEveryProcessor` | — | — | — |
+| `L.x86_64.109` | `pageInvalidationDropsOneTranslation` | — | — | — |
+| `L.x86_64.110` | `installedRootIsTranslated` | — | — | — |
+| `L.x86_64.111` | `kernelHonoursReadOnlyMappings` | — | — | — |
+| `L.x86_64.112` | `umipKeepsTableAddressesFromRing3` | — | — | — |
+| `L.x86_64.113` | `msiMessageRaisesItsVector` | — | — | — |
+| `L.x86_64.114` | `msiVectorsAreExclusive` | — | — | — |
+| `L.x86_64.115` | `consoleReceivesTypedBytes` | — | — | — |
+| `L.x86_64.116` | `consoleTransmitsByInterrupt` | — | — | — |
+| `L.x86_64.117` | `consoleKnowsItsFifo` | — | — | — |
+| `L.x86_64.118` | `consoleWaitsAreBounded` | — | — | — |
+| `L.trap.4` | `anUnknownNumberIsEnosys` | — | — | — |
+| `L.x86_64.119` | `theX8664TableIsCompiledIn` | — | — | — |
+| `L.syscall.1` | `nativeNumbersReachTheNativeAbi` | — | — | — |
+| `L.syscall.2` | `compatNeverReachesNative` | — | — | — |
+| `L.syscall.3` | `enosysIsReportedWithinItsBound` | — | — | — |
+| `L.trap.5` | `noEntryMeansEnosys` | — | — | — |
+| `L.trap.6` | `aMovedProcessRunsInItsNewJob` | — | — | — |
 | `L.smp.1` | `impossibleListsAreRefused` | — | — | — |
 | `L.smp.2` | `theBootProcessorIsZero` | — | — | — |
 | `L.smp.3` | `eachProcessorFindsItsOwnRecord` | — | — | — |

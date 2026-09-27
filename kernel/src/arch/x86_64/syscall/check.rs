@@ -21,6 +21,7 @@ use crate::console::println;
 ///
 /// A register the copy changed, or one the printed frame does not name with
 /// its value.
+/// Verifies: `L.x86_64.62`
 pub(crate) fn run() -> Result<(), &'static str> {
     let frame = SyscallFrame {
         r15: 15,
