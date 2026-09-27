@@ -65,6 +65,8 @@ pub(crate) struct Report {
 /// # Errors
 ///
 /// Which property failed, for which kind.
+///
+/// Verifies: L.object.56, H.QUOTA.7
 pub(crate) fn run() -> Result<Report, &'static str> {
     let slots = quota::live_slots();
     let ns = fs::namespace();
