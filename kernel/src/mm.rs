@@ -251,7 +251,7 @@ fn place_page_array(base: u64, entries: usize) -> &'static mut [PageEntry] {
     // is an enum, and an undefined discriminant is not merely a strange value.
     // `ferrix_frame` guarantees zero is a state it defines.
     //
-    // SAFETY: `base` is the start of a run of RAM firmware called usable, and
+    // SAFETY: (KMEM) `base` is the start of a run of RAM firmware called usable, and
     // which is about to be excluded from the allocator, so nothing else refers
     // to it. `BootView::page_array_host` chose that run from inside the direct
     // map, so all `bytes` of it are mapped and writable at `virt` -- which is
@@ -259,7 +259,7 @@ fn place_page_array(base: u64, entries: usize) -> &'static mut [PageEntry] {
     // 1.25 GiB, and the rest is not mapped anywhere.
     unsafe { core::ptr::write_bytes(virt.cast::<u8>(), 0, bytes) };
 
-    // SAFETY: the range was just zeroed, is inside a usable region large enough
+    // SAFETY: (KMEM) the range was just zeroed, is inside a usable region large enough
     // for it, is excluded from the allocator below, and is naturally aligned
     // because the region base is page aligned.
     unsafe { core::slice::from_raw_parts_mut(virt, entries) }
@@ -511,7 +511,7 @@ pub(crate) fn heap_pages() -> usize {
 /// direct map.
 struct KernelPages;
 
-// SAFETY: `allocate_pages` returns frames the buddy allocator handed out, which
+// SAFETY: (KMEM) `allocate_pages` returns frames the buddy allocator handed out, which
 // are contiguous, page aligned and owned by nobody else, addressed through the
 // direct map, which covers all of RAM for the life of the system. `read_link`
 // and `write_link` are only ever called by the heap on addresses inside pages
@@ -530,13 +530,13 @@ unsafe impl Backing for KernelPages {
     }
 
     fn read_link(&self, at: u64) -> u64 {
-        // SAFETY: as documented on the impl. Eight-byte aligned because every
+        // SAFETY: (KMEM) as documented on the impl. Eight-byte aligned because every
         // size class is a multiple of eight and slab pages are page aligned.
         unsafe { core::ptr::read_volatile(at as *const u64) }
     }
 
     fn write_link(&mut self, at: u64, value: u64) {
-        // SAFETY: as `read_link`.
+        // SAFETY: (KMEM) as `read_link`.
         unsafe { core::ptr::write_volatile(at as *mut u64, value) };
     }
 
@@ -552,7 +552,7 @@ unsafe impl Backing for KernelPages {
 /// The kernel's `alloc` implementation.
 struct KernelAllocator;
 
-// SAFETY: `alloc` returns either null or the address of a block of at least
+// SAFETY: (KMEM) `alloc` returns either null or the address of a block of at least
 // `layout.size()` bytes, aligned to `layout.align()`, which no other live
 // allocation overlaps — that is `ferrix_heap`'s contract, and its tests are
 // where it is checked. `dealloc` is only called with a pointer and layout from
@@ -631,19 +631,19 @@ pub(crate) fn is_demand_window(address: u64) -> bool {
 /// and existed to get the console mapped before there was an allocator.
 struct KernelPhysMem;
 
-// SAFETY: `read` and `write` go through the direct map, which covers every byte
+// SAFETY: (TRANSLATE) `read` and `write` go through the direct map, which covers every byte
 // of RAM and is the only mapping of it the kernel holds, so nothing can alias
 // them. `allocate_table` returns a frame from the buddy allocator, which hands
 // each one out once; it is page aligned because frames are, and zeroed here
 // before it is returned.
 unsafe impl PhysMem for KernelPhysMem {
     fn read(&self, at: PhysAddr) -> u64 {
-        // SAFETY: as documented on the impl; `at` is a descriptor address.
+        // SAFETY: (TRANSLATE) as documented on the impl; `at` is a descriptor address.
         unsafe { core::ptr::read_volatile(physmap(at.0) as *const u64) }
     }
 
     fn write(&mut self, at: PhysAddr, value: u64) {
-        // SAFETY: as documented on the impl.
+        // SAFETY: (TRANSLATE) as documented on the impl.
         unsafe { core::ptr::write_volatile(physmap(at.0) as *mut u64, value) };
     }
 
@@ -653,7 +653,7 @@ unsafe impl PhysMem for KernelPhysMem {
         // A page table built on someone else's leftovers translates to wherever
         // they pointed, so this zeroing is not optional.
         //
-        // SAFETY: the frame was just allocated to us and nothing else refers to
+        // SAFETY: (TRANSLATE) the frame was just allocated to us and nothing else refers to
         // it; the direct map makes it writable.
         unsafe { core::ptr::write_bytes(physmap(address) as *mut u8, 0, PAGE_SIZE as usize) };
         Some(PhysAddr(address))
@@ -669,7 +669,7 @@ struct ChargedTables {
     owner: u32,
 }
 
-// SAFETY: every descriptor access is `KernelPhysMem`'s, whose argument this
+// SAFETY: (TRANSLATE) every descriptor access is `KernelPhysMem`'s, whose argument this
 // inherits; `allocate_table` returns a frame the buddy allocator handed out
 // once, page aligned, zeroed before it is returned, and charged besides.
 unsafe impl PhysMem for ChargedTables {
@@ -740,7 +740,7 @@ pub(crate) fn map_demand_page(address: u64) -> Result<(), MemoryError> {
     // holding the last owner's data is an information leak, so this is a
     // correctness requirement rather than tidiness.
     //
-    // SAFETY: the frame was just allocated to us and the direct map covers it.
+    // SAFETY: (FRAME) the frame was just allocated to us and the direct map covers it.
     unsafe { core::ptr::write_bytes(physmap(frame * PAGE_SIZE) as *mut u8, 0, PAGE_SIZE as usize) };
 
     map_kernel(page, frame * PAGE_SIZE, PAGE_SIZE, MapFlags::KERNEL_DATA)
@@ -1514,7 +1514,7 @@ impl Reclaimed {
 ///
 /// # Safety
 ///
-/// Every reference into loader or ACPI-reclaim memory must be dead. In this
+/// (KMEM) Every reference into loader or ACPI-reclaim memory must be dead. In this
 /// kernel that means being called from `kmain` after the last use of
 /// `crate::acpi::Firmware`, and it is called exactly once.
 pub(crate) unsafe fn reclaim_boot_memory(view: &BootView<'_>) -> Reclaimed {
@@ -1585,7 +1585,7 @@ pub(crate) fn clear_root_slots(slots: core::ops::Range<usize>) {
 /// data is an information leak and from stage 6 the last owner is another
 /// process.
 pub(crate) fn zero_frame(frame: Frame) {
-    // SAFETY: the caller has just taken `frame` from the buddy allocator, so
+    // SAFETY: (FRAME) the caller has just taken `frame` from the buddy allocator, so
     // nothing else refers to it, and the direct map covers every frame of RAM
     // and is writable.
     unsafe { core::ptr::write_bytes(physmap(frame * PAGE_SIZE) as *mut u8, 0, PAGE_SIZE as usize) };
@@ -1603,7 +1603,7 @@ pub(crate) fn zero_frame(frame: Frame) {
 /// else refers to; `source` may be shared with any number of readers, which is
 /// the situation that made the copy necessary.
 pub(crate) fn copy_frame(destination: Frame, source: Frame) {
-    // SAFETY: the direct map covers every frame of RAM and is writable. The
+    // SAFETY: (FRAME) the direct map covers every frame of RAM and is writable. The
     // two frames are distinct -- the caller allocated `destination` while
     // `source` was already committed -- so the regions do not overlap, and
     // nothing else refers to `destination`.

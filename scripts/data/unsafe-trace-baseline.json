@@ -13,13 +13,10 @@
     "backtrace.rs": 1,
     "console.rs": 1,
     "console/screen.rs": 1,
-    "early.rs": 6,
     "fdt.rs": 1,
     "iommu/smmuv3.rs": 2,
     "iommu/vtd.rs": 2,
     "main.rs": 18,
-    "mm.rs": 15,
-    "mm/reserve.rs": 4,
     "mmio.rs": 6,
     "object/check.rs": 1,
     "object/pin.rs": 1,
@@ -37,7 +34,6 @@
     "user/check.rs": 16,
     "user/rmap_check.rs": 5,
     "user/space.rs": 4,
-    "user/vmo.rs": 2,
-    "vmap.rs": 4
+    "user/vmo.rs": 2
   }
 }

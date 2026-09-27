@@ -31,7 +31,7 @@ struct Table([u64; 512]);
 /// The pool itself.
 struct TablePool(UnsafeCell<[Table; EARLY_TABLES]>);
 
-// SAFETY: early boot is single-threaded — no other CPU has been started, and
+// SAFETY: (SHARED) early boot is single-threaded — no other CPU has been started, and
 // interrupts are masked — so there is never a second accessor. `EarlyMemory`
 // hands out each frame at most once, and nothing else in the kernel refers to
 // this static.
@@ -114,7 +114,7 @@ impl EarlyMemory {
     /// Used by the boot self-check to prove the direct map really does alias
     /// the same memory the kernel image is mapped from.
     pub(crate) fn read_physical_byte(&self, phys: u64) -> u8 {
-        // SAFETY: the loader mapped every byte of RAM into the direct map, and
+        // SAFETY: (FRAME) the loader mapped every byte of RAM into the direct map, and
         // the caller is reading an address that came from the memory map.
         unsafe { core::ptr::read_volatile(self.direct(phys) as *const u8) }
     }
@@ -193,19 +193,19 @@ impl EarlyMemory {
     }
 }
 
-// SAFETY: `read` and `write` go through the loader's direct map, which covers
+// SAFETY: (TRANSLATE) `read` and `write` go through the loader's direct map, which covers
 // every byte of physical RAM and is the only mapping of it the kernel holds, so
 // no reference can alias them. `allocate_table` hands out each frame of `POOL`
 // at most once; the frames are page aligned because `Table` is, and zeroed
 // because `.bss` is.
 unsafe impl PhysMem for EarlyMemory {
     fn read(&self, at: PhysAddr) -> u64 {
-        // SAFETY: as above; `at` is a descriptor address inside a page table.
+        // SAFETY: (TRANSLATE) as above; `at` is a descriptor address inside a page table.
         unsafe { core::ptr::read_volatile(self.direct(at.0) as *const u64) }
     }
 
     fn write(&mut self, at: PhysAddr, value: u64) {
-        // SAFETY: as above.
+        // SAFETY: (TRANSLATE) as above.
         unsafe { core::ptr::write_volatile(self.direct(at.0) as *mut u64, value) };
     }
 
@@ -220,7 +220,7 @@ unsafe impl PhysMem for EarlyMemory {
         // system does not catch, and this runs before there is anything to
         // report a panic with.
         let base: *mut Table = POOL.0.get().cast::<Table>();
-        // SAFETY: single-threaded early boot, as documented on the `Sync` impl
+        // SAFETY: (SHARED) single-threaded early boot, as documented on the `Sync` impl
         // for `TablePool`, and `index` is below `EARLY_TABLES`, so the result
         // is inside the array.
         let table = unsafe { base.add(index) };

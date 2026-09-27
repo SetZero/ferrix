@@ -96,7 +96,7 @@ impl CpuReserve {
 /// Every processor's reserve, indexed by its logical number.
 struct Reserves([UnsafeCell<CpuReserve>; MAX_CPUS]);
 
-// SAFETY: each slot is reached only by the processor whose logical number
+// SAFETY: (SHARED) each slot is reached only by the processor whose logical number
 // indexes it, and only with interrupts masked on that processor (`reserve`,
 // `leave` and `draw` mask them before `slot` is called). Nothing else runs on
 // a processor whose interrupts are masked, so a slot is never reached from two
@@ -171,7 +171,7 @@ pub(crate) fn reserve(large: Option<Layout>) -> Result<Reserved, AllocError> {
 /// Fill this processor's reserve and count a section open.
 fn enter(large: Option<Layout>) -> Result<(), AllocError> {
     let cell = slot().ok_or(AllocError)?;
-    // SAFETY: this processor's own slot, with interrupts masked by `reserve`:
+    // SAFETY: (SHARED) this processor's own slot, with interrupts masked by `reserve`:
     // see `Reserves`. The reference ends with this function, and nothing in
     // it allocates through the global allocator, which is the only other
     // place that reaches the slot.
@@ -208,7 +208,7 @@ pub(crate) fn fill_reserve() -> Result<(), AllocError> {
 /// sections.
 fn leave() {
     let Some(cell) = slot() else { return };
-    // SAFETY: as in `enter`; the guard being dropped kept interrupts masked.
+    // SAFETY: (SHARED) as in `enter`; the guard being dropped kept interrupts masked.
     let here = unsafe { &mut *cell.get() };
     here.sections = here.sections.saturating_sub(1);
     if here.sections == 0 {
@@ -222,7 +222,7 @@ fn leave() {
 pub(super) fn draw(request: Request) -> Option<u64> {
     let saved = <arch::Irq as IrqControl>::disable();
     let block = slot().and_then(|cell| {
-        // SAFETY: as in `enter`, with interrupts masked just above. The
+        // SAFETY: (SHARED) as in `enter`, with interrupts masked just above. The
         // allocator calling this holds no reference to the slot.
         let here = unsafe { &mut *cell.get() };
         if here.sections == 0 {

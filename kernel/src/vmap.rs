@@ -259,7 +259,7 @@ impl core::ops::Deref for Buffer {
     fn deref(&self) -> &[u8] {
         match self.mapping {
             None => &[],
-            // SAFETY: the mapping is `len` bytes or more of readable kernel
+            // SAFETY: (KMEM) the mapping is `len` bytes or more of readable kernel
             // memory this buffer alone owns, zeroed when it was mapped, and it
             // stays mapped until the drop.
             Some(mapping) => unsafe {
@@ -273,7 +273,7 @@ impl core::ops::DerefMut for Buffer {
     fn deref_mut(&mut self) -> &mut [u8] {
         match self.mapping {
             None => &mut [],
-            // SAFETY: as `deref`, and writable; `&mut self` makes this the
+            // SAFETY: (KMEM) as `deref`, and writable; `&mut self` makes this the
             // only reference.
             Some(mapping) => unsafe {
                 core::slice::from_raw_parts_mut(mapping.base as usize as *mut u8, self.len)
@@ -693,7 +693,7 @@ pub(crate) fn allocate_stack() -> Result<Stack, VmapError> {
 ///
 /// # Safety
 ///
-/// No CPU may be running on it. Nothing in the type system says so, and
+/// (KMEM) No CPU may be running on it. Nothing in the type system says so, and
 /// freeing the stack under a running task unmaps the memory holding its own
 /// return address.
 pub(crate) unsafe fn free_stack(stack: Stack) -> Result<(), VmapError> {
@@ -707,7 +707,7 @@ pub(crate) unsafe fn free_stack(stack: Stack) -> Result<(), VmapError> {
 ///
 /// # Safety
 ///
-/// As [`free_stack`], for every one of them.
+/// (KMEM) As [`free_stack`], for every one of them.
 pub(crate) unsafe fn free_stacks(stacks: &[Stack]) -> Result<(), VmapError> {
     // Out of the live set first, all of them, so the addresses stay reserved
     // until the unmapping below has finished: see `claim`.
