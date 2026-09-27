@@ -559,6 +559,107 @@ impl Discipline {
         }
         Some(count)
     }
+
+    /// One look by a read that may wait: take what the settings say it
+    /// returns with now, or say until when it waits.
+    ///
+    /// Canonical mode waits for a line. Otherwise `VMIN` and `VTIME` decide,
+    /// as in Linux's `n_tty_read`:
+    ///
+    /// * both zero: whatever there is, and 0 at once when there is nothing;
+    /// * `VMIN` alone: `VMIN` bytes (at most the buffer), however long;
+    /// * `VTIME` alone: the first byte, or 0 once `VTIME` tenths of a second
+    ///   have passed since the read began;
+    /// * both: `VMIN` bytes, or what has come once `VTIME` passes with no
+    ///   new byte -- a timer that starts only when the first byte arrives, so
+    ///   that with nothing queued the read waits however long.
+    ///
+    /// With `nonblock` a read that would wait takes whatever raw input there
+    /// is; with none, the caller answers `EAGAIN` -- except when both are
+    /// zero, which is 0, as it is on Linux.
+    ///
+    /// `timer` carries the read from one look to the next, and `now` is the
+    /// counter's reading. The console's read and a pseudoterminal slave's
+    /// read both decide here, so the two cannot drift apart: the slave's
+    /// read had no `VMIN` or `VTIME` of its own, and btop, which sets both to
+    /// zero and reads until a read gives 0, waited forever for the second.
+    pub(crate) fn read_step(
+        &mut self,
+        buf: &mut [u8],
+        timer: &mut ReadTimer,
+        now: u64,
+        nonblock: bool,
+    ) -> ReadStep {
+        let available = self.available();
+        if available != timer.seen {
+            timer.seen = available;
+            timer.changed = now;
+        }
+        if self.termios.canonical() {
+            return self
+                .take(buf)
+                .map_or(ReadStep::Wait(u64::MAX), ReadStep::Took);
+        }
+        let min = usize::from(self.termios.cc(VMIN));
+        let time = u64::from(self.termios.cc(VTIME)) * DECISECOND_NANOS;
+        let since = if min == 0 {
+            timer.started
+        } else {
+            timer.changed
+        };
+        // The timer runs from the read's start with `VMIN` zero, and from the
+        // last byte otherwise -- so not at all before the first.
+        let timing = time > 0 && (min == 0 || available > 0);
+        let enough = available >= min.clamp(1, buf.len().max(1));
+        let timed_out = timing && now.saturating_sub(since) >= time;
+        if enough || timed_out || (min == 0 && time == 0) || (nonblock && available > 0) {
+            return ReadStep::Took(self.take(buf).unwrap_or(0));
+        }
+        ReadStep::Wait(if timing {
+            since.saturating_add(time)
+        } else {
+            u64::MAX
+        })
+    }
+}
+
+/// What a read has seen of a discipline between one look and the next: see
+/// [`Discipline::read_step`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ReadTimer {
+    /// When the read began.
+    started: u64,
+    /// How many bytes were available at the last look.
+    seen: usize,
+    /// When that last changed.
+    changed: u64,
+}
+
+impl ReadTimer {
+    /// A read beginning at `now`.
+    pub(crate) const fn new(now: u64) -> ReadTimer {
+        ReadTimer {
+            started: now,
+            seen: 0,
+            changed: now,
+        }
+    }
+
+    /// How many bytes were available at the last look: a waiting reader has
+    /// something new to look at once that differs.
+    pub(crate) const fn seen(&self) -> usize {
+        self.seen
+    }
+}
+
+/// What one look by a read decided: see [`Discipline::read_step`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReadStep {
+    /// The read is over, with this many bytes in the buffer.
+    Took(usize),
+    /// Nothing to return yet: look again when the input changes, or at this
+    /// reading of the counter, `u64::MAX` for never.
+    Wait(u64),
 }
 
 /// Echo a signal character: as `^C` under `ECHOCTL`, as itself otherwise,
@@ -666,9 +767,8 @@ pub(crate) fn available() -> usize {
 /// A program's read of the console.
 ///
 /// Canonical mode waits for a line. Otherwise `VMIN` and `VTIME` decide, as
-/// on Linux: `VMIN` bytes (at most the buffer), or, with `VTIME` set, whatever
-/// arrived once `VTIME` tenths of a second pass -- since the read began when
-/// `VMIN` is zero, since the last byte when it is not.
+/// on Linux, by [`Discipline::read_step`], which a pseudoterminal slave's
+/// read asks too.
 ///
 /// No lock is held while it waits: the wait may last minutes. A program ended
 /// while it waits stops waiting, and reads end of file. With `nonblock` -- the
@@ -683,34 +783,17 @@ pub(crate) fn read(buf: &mut [u8], nonblock: bool) -> Result<usize, Errno> {
         return Ok(0);
     }
     start_pumping();
-    let started = now();
-    let mut seen = 0;
-    let mut changed = started;
+    let mut timer = ReadTimer::new(now());
     loop {
         pump();
-        let answer = with(|terminal| {
-            let discipline = &mut terminal.discipline;
-            let termios = discipline.termios();
-            if termios.canonical() {
-                return discipline.take(buf);
-            }
-            let min = usize::from(termios.cc(VMIN));
-            let time = u64::from(termios.cc(VTIME)) * DECISECOND_NANOS;
-            let available = discipline.available();
-            if available != seen {
-                seen = available;
-                changed = now();
-            }
-            let since = if min == 0 { started } else { changed };
-            let enough = available >= min.clamp(1, buf.len());
-            let timed_out =
-                time > 0 && now().saturating_sub(since) >= time && (min == 0 || available > 0);
-            if enough || timed_out || (min == 0 && time == 0) || (nonblock && available > 0) {
-                return Some(discipline.take(buf).unwrap_or(0));
-            }
-            None
+        let step = with(|terminal| {
+            terminal
+                .discipline
+                .read_step(buf, &mut timer, now(), nonblock)
         });
-        if let Some(count) = answer {
+        // The console has no receive interrupt to wake it, so it looks again
+        // every `POLL_NANOS` whatever the deadline says.
+        if let ReadStep::Took(count) = step {
             return Ok(count);
         }
         if nonblock {

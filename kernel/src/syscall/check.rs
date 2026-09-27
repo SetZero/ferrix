@@ -794,6 +794,9 @@ fn check_handlers(output: Output) -> Result<u64, &'static str> {
     check_poll_reports_ready_invalid_and_skipped(&process)?;
     check_select_answers_with_the_sets_that_are_ready(&process)?;
     check_the_line_discipline_follows_its_settings()?;
+    check_a_raw_read_waits_as_vmin_and_vtime_say()?;
+    check_a_raw_read_waits_for_vmin()?;
+    check_a_pseudoterminal_slave_reads_as_vmin_and_vtime_say()?;
     check_the_console_answers_as_a_terminal(&process)?;
     check_a_signal_disposition_reads_back_as_it_was_set(&process)?;
     check_the_blocked_mask_follows_how(&process)?;
@@ -2141,6 +2144,209 @@ fn check_the_line_discipline_follows_its_settings() -> Result<(), &'static str> 
     let _ = feed(&mut discipline, b"\r", &mut echo);
     if discipline.take(&mut buf) != Some(1) {
         return Err("the interrupt character did not discard the line being typed");
+    }
+    Ok(())
+}
+
+/// Raw settings with `VMIN` and `VTIME` as given, for the raw-read checks.
+fn raw_termios(min: u8, time: u8) -> crate::fs::terminal::Termios {
+    use crate::fs::terminal::Termios;
+    use ferrix_linux_abi::types::{ECHO, ICANON, VMIN, VTIME};
+
+    let mut termios = Termios {
+        lflag: Termios::DEFAULT.lflag & !(ICANON | ECHO),
+        ..Termios::DEFAULT
+    };
+    if let Some(slot) = termios.cc.get_mut(VMIN) {
+        *slot = min;
+    }
+    if let Some(slot) = termios.cc.get_mut(VTIME) {
+        *slot = time;
+    }
+    termios
+}
+
+/// `VTIME`'s unit, a tenth of a second, in nanoseconds.
+const TENTH: u64 = 100_000_000;
+/// Where the raw-read checks start their own counter.
+const RAW_START: u64 = 1_000 * TENTH;
+
+/// Put `bytes` into a discipline as though they were typed.
+fn type_into(discipline: &mut crate::fs::terminal::Discipline, bytes: &[u8]) {
+    let mut echo = Vec::new();
+    for &byte in bytes {
+        let _ = discipline.receive(byte, &mut echo);
+    }
+}
+
+/// A raw read waits as `VMIN` and `VTIME` say, as Linux's `n_tty_read` does:
+/// the decision, driven with a counter of the check's own, with `VMIN` zero.
+/// [`check_a_raw_read_waits_for_vmin`] has the rest, and
+/// [`check_a_pseudoterminal_slave_reads_as_vmin_and_vtime_say`] the slave
+/// that decides the same way.
+///
+/// btop sets both to zero and reads until a read gives 0. A slave that
+/// waited for input whatever they said gave it its key and then held it in
+/// the next read for good: `q` did nothing, and a resize never redrew.
+fn check_a_raw_read_waits_as_vmin_and_vtime_say() -> Result<(), &'static str> {
+    use crate::fs::terminal::{Discipline, ReadStep, ReadTimer};
+
+    let start = RAW_START;
+    let mut buf = [0_u8; 8];
+    let mut discipline = Discipline::new();
+
+    // Both zero: what there is, and 0 at once when there is nothing.
+    discipline.set_termios(raw_termios(0, 0));
+    let mut timer = ReadTimer::new(start);
+    if discipline.read_step(&mut buf, &mut timer, start, false) != ReadStep::Took(0) {
+        return Err("VMIN 0 VTIME 0 with nothing typed did not read 0 at once");
+    }
+    type_into(&mut discipline, b"q");
+    let mut timer = ReadTimer::new(start);
+    if discipline.read_step(&mut buf, &mut timer, start, false) != ReadStep::Took(1)
+        || buf.first() != Some(&b'q')
+        || discipline.read_step(&mut buf, &mut timer, start, false) != ReadStep::Took(0)
+    {
+        return Err("VMIN 0 VTIME 0 did not read the key and then 0");
+    }
+    if discipline.read_step(&mut buf, &mut timer, start, true) != ReadStep::Took(0) {
+        return Err("VMIN 0 VTIME 0 with O_NONBLOCK was not 0, as n_tty_read's is");
+    }
+
+    // VTIME alone: from the read's start, the first byte or 0.
+    discipline.set_termios(raw_termios(0, 1));
+    let mut timer = ReadTimer::new(start);
+    let waits = ReadStep::Wait(start + TENTH);
+    if discipline.read_step(&mut buf, &mut timer, start, false) != waits
+        || discipline.read_step(&mut buf, &mut timer, start + TENTH - 1, false) != waits
+        || discipline.read_step(&mut buf, &mut timer, start + TENTH, false) != ReadStep::Took(0)
+    {
+        return Err("VMIN 0 VTIME 1 did not wait a tenth of a second from the start, then read 0");
+    }
+    let mut timer = ReadTimer::new(start);
+    type_into(&mut discipline, b"a");
+    if discipline.read_step(&mut buf, &mut timer, start + 1, false) != ReadStep::Took(1) {
+        return Err("VMIN 0 VTIME 1 did not read a byte that came before the timer");
+    }
+    Ok(())
+}
+
+/// See [`check_a_raw_read_waits_as_vmin_and_vtime_say`]: `VMIN` alone, then
+/// with `VTIME` -- an inter-byte timer that starts at the first byte and
+/// not before, so that with nothing typed the read waits however long --
+/// and canonical mode still a line.
+fn check_a_raw_read_waits_for_vmin() -> Result<(), &'static str> {
+    use crate::fs::terminal::{Discipline, ReadStep, ReadTimer, Termios};
+
+    let start = RAW_START;
+    let never = ReadStep::Wait(u64::MAX);
+    let mut buf = [0_u8; 8];
+    let mut discipline = Discipline::new();
+
+    // VMIN alone: that many bytes, however long.
+    discipline.set_termios(raw_termios(2, 0));
+    let mut timer = ReadTimer::new(start);
+    type_into(&mut discipline, b"b");
+    if discipline.read_step(&mut buf, &mut timer, start + 100 * TENTH, false) != never {
+        return Err("VMIN 2 VTIME 0 returned with one byte of two");
+    }
+    if discipline.read_step(&mut buf, &mut timer, start, true) != ReadStep::Took(1) {
+        return Err("VMIN 2 with O_NONBLOCK did not take the byte there was");
+    }
+    let mut timer = ReadTimer::new(start);
+    type_into(&mut discipline, b"cd");
+    if discipline.read_step(&mut buf, &mut timer, start, false) != ReadStep::Took(2) {
+        return Err("VMIN 2 VTIME 0 did not read two bytes once they came");
+    }
+
+    // Both: the timer starts at the first byte, again at each, not before.
+    discipline.set_termios(raw_termios(3, 1));
+    let mut timer = ReadTimer::new(start);
+    let first = start + 100 * TENTH;
+    if discipline.read_step(&mut buf, &mut timer, start, false) != never
+        || discipline.read_step(&mut buf, &mut timer, first, false) != never
+    {
+        return Err("VMIN 3 VTIME 1 timed out with nothing typed");
+    }
+    type_into(&mut discipline, b"e");
+    if discipline.read_step(&mut buf, &mut timer, first, false) != ReadStep::Wait(first + TENTH) {
+        return Err("VMIN 3 VTIME 1 did not start its timer at the first byte");
+    }
+    let second = first + TENTH * 6 / 10;
+    type_into(&mut discipline, b"f");
+    let later = ReadStep::Wait(second + TENTH);
+    if discipline.read_step(&mut buf, &mut timer, second, false) != later
+        || discipline.read_step(&mut buf, &mut timer, first + TENTH, false) != later
+    {
+        return Err("VMIN 3 VTIME 1 did not start its timer again at the second byte");
+    }
+    if discipline.read_step(&mut buf, &mut timer, second + TENTH, false) != ReadStep::Took(2) {
+        return Err("VMIN 3 VTIME 1 did not read what came once the gap passed VTIME");
+    }
+    let mut timer = ReadTimer::new(start);
+    type_into(&mut discipline, b"ghi");
+    if discipline.read_step(&mut buf, &mut timer, start, false) != ReadStep::Took(3) {
+        return Err("VMIN 3 VTIME 1 did not read three bytes once they came");
+    }
+
+    // Canonical mode is still a line.
+    discipline.set_termios(Termios::DEFAULT);
+    type_into(&mut discipline, b"x");
+    let mut timer = ReadTimer::new(start);
+    if discipline.read_step(&mut buf, &mut timer, first, false) != never {
+        return Err("half a line was read in canonical mode");
+    }
+    Ok(())
+}
+
+/// A pseudoterminal pair's slave reads as `VMIN` and `VTIME` say: see
+/// [`check_a_raw_read_waits_as_vmin_and_vtime_say`].
+///
+/// The reads that cannot wait come first. A slave that stopped honouring
+/// `VMIN` again fails here by name, on a read with `O_NONBLOCK`, rather than
+/// holding the boot in a read that never ends.
+fn check_a_pseudoterminal_slave_reads_as_vmin_and_vtime_say() -> Result<(), &'static str> {
+    use ferrix_vfs::Inode as _;
+
+    let mut buf = [0_u8; 8];
+    let master = crate::fs::pty::open_master().map_err(|_| "no pseudoterminal pair to check")?;
+    crate::fs::pty::set_locked(&master.pty, false);
+    let slave = crate::fs::pty::open_slave(master.pty.number)
+        .map_err(|_| "the check's pseudoterminal slave did not open")?;
+    master.pty.set_termios(raw_termios(0, 0), true);
+    if slave.read_stream(&mut buf, true) != Ok(0) {
+        return Err("a slave at VMIN 0 VTIME 0 with nothing typed did not read 0");
+    }
+    if master.write_stream(b"q", false) != Ok(1)
+        || slave.read_stream(&mut buf, true) != Ok(1)
+        || slave.read_stream(&mut buf, true) != Ok(0)
+    {
+        return Err("a slave at VMIN 0 VTIME 0 did not read the key and then 0");
+    }
+    if slave.read_stream(&mut buf, false) != Ok(0) {
+        return Err("a slave's waiting read at VMIN 0 VTIME 0 did not read 0");
+    }
+    master.pty.set_termios(raw_termios(1, 0), true);
+    if slave.read_stream(&mut buf, true) != Err(Errno::EAGAIN) {
+        return Err("a slave at VMIN 1 with O_NONBLOCK and nothing typed was not EAGAIN");
+    }
+    // The waits: a tenth of a second, and under a second here, since a wait
+    // is served by the timer and a loaded host may be late but not early.
+    let waited = |slave: &crate::fs::pty::SlaveFile, buf: &mut [u8]| {
+        let began = crate::timer::now_nanos();
+        let read = slave.read_stream(buf, false);
+        (read, crate::timer::now_nanos().saturating_sub(began))
+    };
+    master.pty.set_termios(raw_termios(0, 1), true);
+    let (read, took) = waited(&slave, &mut buf);
+    if read != Ok(0) || !(TENTH..10 * TENTH).contains(&took) {
+        return Err("a slave at VMIN 0 VTIME 1 did not read 0 after a tenth of a second");
+    }
+    master.pty.set_termios(raw_termios(2, 1), true);
+    let _ = master.write_stream(b"r", false);
+    let (read, took) = waited(&slave, &mut buf);
+    if read != Ok(1) || buf.first() != Some(&b'r') || !(TENTH..10 * TENTH).contains(&took) {
+        return Err("a slave at VMIN 2 VTIME 1 did not read its one byte once VTIME passed");
     }
     Ok(())
 }

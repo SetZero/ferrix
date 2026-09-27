@@ -12,9 +12,10 @@
 //! * The master writes what the person typed. Those bytes go through the
 //!   line discipline -- the same [`Discipline`] the console's terminal uses,
 //!   so `ICANON`, `ECHO`, `ISIG` and the rest behave exactly as they do
-//!   there -- and the slave reads what it makes ready. The echo goes back to
-//!   the master, because on a pseudoterminal the *terminal* is the program
-//!   holding the master, and it is the one that has to draw it.
+//!   there -- and the slave reads what it makes ready, waiting as `VMIN`
+//!   and `VTIME` say by the same rule as the console's read. The echo goes
+//!   back to the master, because on a pseudoterminal the *terminal* is the
+//!   program holding the master, and it is the one that has to draw it.
 //! * The slave writes the program's output. `OPOST` and `ONLCR` are applied,
 //!   as the console's writes are, and the master reads the result. At most
 //!   `OUTPUT_LIMIT` bytes wait for the master; a write that finds no room
@@ -50,7 +51,7 @@ use ferrix_linux_abi::types::{ONLCR, OPOST, SIGWINCH};
 use ferrix_vfs::initramfs::makedev;
 use ferrix_vfs::{FileType, Inode, Metadata, Readiness, Result as VfsResult, Timespec};
 
-use crate::fs::terminal::{Discipline, Termios, Winsize};
+use crate::fs::terminal::{Discipline, ReadStep, ReadTimer, Termios, Winsize};
 use crate::sched::WaitQueue;
 use crate::sync::SpinLock;
 use crate::syscall::process;
@@ -322,13 +323,19 @@ impl Pty {
         signal
     }
 
-    /// Take what the slave may read, or nothing if there is none.
-    fn read_typed(&self, buf: &mut [u8]) -> Option<usize> {
-        let taken = self.state.lock().discipline.take(buf);
-        if taken.is_some() {
+    /// One look by the slave's read, as [`Discipline::read_step`] decides:
+    /// taken under the lock, which is released before anybody waits.
+    fn read_step(&self, buf: &mut [u8], timer: &mut ReadTimer, nonblock: bool) -> ReadStep {
+        let now = crate::timer::now_nanos();
+        let step = self
+            .state
+            .lock()
+            .discipline
+            .read_step(buf, timer, now, nonblock);
+        if matches!(step, ReadStep::Took(_)) {
             self.changed.wake_all();
         }
-        taken
+        step
     }
 
     /// Put what the slave wrote where the master can read it, applying
@@ -381,20 +388,25 @@ impl Pty {
         self.state.lock().master
     }
 
-    /// Wait until `ready` or the caller is signalled.
-    fn wait_for(&self, ready: impl Fn() -> bool) -> Result<(), Errno> {
+    /// Wait until `ready`, the caller is signalled, or the counter reaches
+    /// `deadline` (`u64::MAX` for never). Only the signal is an error: at the
+    /// deadline the caller looks again, as it does when `ready`.
+    fn wait_for(&self, ready: impl Fn() -> bool, deadline: u64) -> Result<(), Errno> {
         let caller = process::current();
         let killed = || {
             caller
                 .as_ref()
                 .is_some_and(|process| process.signal_pending())
         };
-        while !ready() && !killed() {
+        let due = || crate::timer::now_nanos() >= deadline;
+        while !ready() && !killed() && !due() {
             let _ = self
                 .changed
-                .wait_until_deadline(|| ready() || killed(), u64::MAX);
+                .wait_until_deadline(|| ready() || killed(), deadline);
         }
-        if ready() {
+        // As before the deadline: not ready and not due is a signal, or a
+        // wake that lost its input to another reader, and restarts.
+        if ready() || (due() && !killed()) {
             Ok(())
         } else {
             Err(Errno::ERESTARTSYS)
@@ -476,7 +488,7 @@ impl Inode for MasterFile {
             if nonblock {
                 return Err(Errno::EAGAIN);
             }
-            self.pty.wait_for(ready)?;
+            self.pty.wait_for(ready, u64::MAX)?;
         }
         Ok(self.pty.read_written(buf))
     }
@@ -531,25 +543,34 @@ impl Inode for SlaveFile {
         self.read_stream(buf, false)
     }
 
-    /// What the master typed, once the discipline has a line or a byte to
-    /// give. A master that has closed is end of file, which is what a shell
-    /// reads as its terminal going away.
+    /// What the master typed: a line in canonical mode, and otherwise what
+    /// `VMIN` and `VTIME` say, as the console's read does -- both decide by
+    /// [`Discipline::read_step`]. A master that has closed is end of file,
+    /// which is what a shell reads as its terminal going away.
+    ///
+    /// The wait is for the input to change, the master to go, a signal, or
+    /// `VTIME`'s deadline; after each, the read looks again under the lock.
     fn read_stream(&self, buf: &mut [u8], nonblock: bool) -> VfsResult<usize> {
         if buf.is_empty() {
             return Ok(0);
         }
+        let mut timer = ReadTimer::new(crate::timer::now_nanos());
         loop {
-            if let Some(taken) = self.pty.read_typed(buf) {
-                return Ok(taken);
-            }
+            let deadline = match self.pty.read_step(buf, &mut timer, nonblock) {
+                ReadStep::Took(taken) => return Ok(taken),
+                ReadStep::Wait(deadline) => deadline,
+            };
             if !self.pty.master_open() {
                 return Ok(0);
             }
             if nonblock {
                 return Err(Errno::EAGAIN);
             }
-            self.pty
-                .wait_for(|| self.pty.slave_available() > 0 || !self.pty.master_open())?;
+            let seen = timer.seen();
+            self.pty.wait_for(
+                || self.pty.slave_available() != seen || !self.pty.master_open(),
+                deadline,
+            )?;
         }
     }
 
@@ -584,10 +605,10 @@ impl Inode for SlaveFile {
                     Err(Errno::EAGAIN)
                 };
             }
-            if let Err(error) = self
-                .pty
-                .wait_for(|| self.pty.output_room() || !self.pty.master_open())
-            {
+            if let Err(error) = self.pty.wait_for(
+                || self.pty.output_room() || !self.pty.master_open(),
+                u64::MAX,
+            ) {
                 return if written > 0 { Ok(written) } else { Err(error) };
             }
         }
