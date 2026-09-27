@@ -21,6 +21,7 @@ use std::io::{self, Write as _};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 use std::os::unix::fs::FileExt as _;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use ferrix_svc::event::{GroupPath, UnitId};
 use ferrix_svc::limits::{Controller, CpuWeight, Limits, Memory, Tasks};
@@ -62,6 +63,27 @@ struct Group {
     oom_kills: u64,
 }
 
+/// How often a cgroup that was still busy when its unit let it go is tried
+/// again, and for how long.
+const RETRY_EVERY: Duration = Duration::from_millis(50);
+const RETRY_FOR: Duration = Duration::from_secs(5);
+
+/// A cgroup whose unit let it go while something beneath it was still held:
+/// on Ferrix, the job a native process made for its own children lives as
+/// long as anything holds it, and a process that has ended holds its job
+/// until the kernel has let go of the process, a moment after the cgroup
+/// reads empty. Tried again until it goes, as systemd trims a cgroup it
+/// could not remove at once.
+#[derive(Debug)]
+struct Leftover {
+    /// Whose it was, for what is said if it never goes.
+    unit: UnitId,
+    /// Where, below the mount.
+    path: GroupPath,
+    /// When init stops trying.
+    until: Instant,
+}
+
 /// Every cgroup init made, by unit.
 #[derive(Debug)]
 pub(crate) struct Groups {
@@ -69,6 +91,9 @@ pub(crate) struct Groups {
     root: PathBuf,
     /// The groups.
     groups: BTreeMap<UnitId, Group>,
+    /// The cgroups still to be removed, and when they are next tried.
+    leftovers: Vec<Leftover>,
+    next_try: Option<Instant>,
 }
 
 impl Groups {
@@ -91,6 +116,8 @@ impl Groups {
         let groups = Groups {
             root,
             groups: BTreeMap::new(),
+            leftovers: Vec::new(),
+            next_try: None,
         };
         groups.enable_controllers(&groups.root, log);
         Ok(groups)
@@ -152,6 +179,8 @@ impl Groups {
         log: &mut dyn FnMut(String),
     ) -> io::Result<(RawFd, Option<RawFd>)> {
         let dir = self.root.join(path.as_str());
+        // A unit started again before its old cgroup went takes it over.
+        self.leftovers.retain(|leftover| leftover.path != *path);
         if !path.as_str().is_empty() {
             make_dir(&dir)?;
         }
@@ -290,11 +319,59 @@ impl Groups {
 
     /// Remove `unit`'s cgroup, returning its `cgroup.events` descriptor so
     /// the caller can stop watching it first.
+    ///
+    /// One still busy is kept to be tried again ([`Groups::retry`]), and
+    /// reads as removed here.
     pub(crate) fn remove(&mut self, unit: UnitId) -> Option<(RawFd, io::Result<()>)> {
         let group = self.groups.remove(&unit)?;
         let fd = group.events.as_raw_fd();
         let dir = self.root.join(group.path.as_str());
-        Some((fd, remove_tree(&dir)))
+        let result = match remove_tree(&dir) {
+            Err(error) if error.raw_os_error() == Some(libc::EBUSY) => {
+                let now = Instant::now();
+                self.leftovers.push(Leftover {
+                    unit,
+                    path: group.path,
+                    until: now + RETRY_FOR,
+                });
+                let _ = self.next_try.get_or_insert(now + RETRY_EVERY);
+                Ok(())
+            }
+            other => other,
+        };
+        Some((fd, result))
+    }
+
+    /// When the cgroups still to be removed are next tried, if any are.
+    pub(crate) fn next_try(&self) -> Option<Instant> {
+        self.next_try
+    }
+
+    /// Try again each cgroup still to be removed, once its time has come.
+    /// Returns those given up on, with why: one still busy after
+    /// [`RETRY_FOR`], or one that failed otherwise.
+    pub(crate) fn retry(&mut self) -> Vec<(UnitId, io::Error)> {
+        let now = Instant::now();
+        if self.next_try.is_none_or(|at| at > now) {
+            return Vec::new();
+        }
+        let mut given_up = Vec::new();
+        let root = &self.root;
+        self.leftovers.retain(
+            |leftover| match remove_tree(&root.join(leftover.path.as_str())) {
+                Ok(()) => false,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+                Err(error) if error.raw_os_error() == Some(libc::EBUSY) && now < leftover.until => {
+                    true
+                }
+                Err(error) => {
+                    given_up.push((leftover.unit, error));
+                    false
+                }
+            },
+        );
+        self.next_try = (!self.leftovers.is_empty()).then(|| now + RETRY_EVERY);
+        given_up
     }
 
     /// The events descriptor of `unit`'s cgroup, to stop watching.
@@ -418,12 +495,15 @@ fn oom_kills(file: &File) -> u64 {
 /// Remove a cgroup and every cgroup beneath it, deepest first: what a
 /// service with `Delegate=yes` made in its own is removed with it, as
 /// systemd trims a delegated subtree. A cgroup's files are not removed but
-/// go with its directory, so only directories are walked.
+/// go with its directory, so only directories are walked. One beneath that
+/// cannot be removed is passed over, since a native job, which has no name
+/// to remove it by, goes by itself once nothing holds it; the cgroup's own
+/// removal says whether anything is left.
 fn remove_tree(dir: &Path) -> io::Result<()> {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                remove_tree(&entry.path())?;
+                let _ = remove_tree(&entry.path());
             }
         }
     }

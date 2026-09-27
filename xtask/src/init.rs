@@ -890,7 +890,8 @@ fn directory(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
 /// kernel gave init the starter and init only a process handle back; `/`
 /// moved onto the fresh root disk with pid 1 once `devmgr` had reported;
 /// `devmgr.service` is active, and a `svc restart` of it has the kernel start
-/// a second `devmgr` once the first and its drivers have gone.
+/// a second `devmgr` once the first and its drivers have gone, with init
+/// removing the first's cgroup and not saying it could not.
 fn devmgr_by_init(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
     let all = everything(at);
     for (line, what) in [
@@ -930,6 +931,7 @@ fn devmgr_by_init(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<(
             .count()
     };
     let before = started(at.after());
+    let restart = at.after().len();
     at.type_in(b"svc restart devmgr.service\n")?;
     let deadline = Instant::now() + PATIENCE;
     let _ = at.read_more(deadline, |lines| started(lines) > before)?;
@@ -941,6 +943,12 @@ fn devmgr_by_init(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<(
         other => failures.push(format!(
             "devmgr.service is not active after its restart: {other:?}"
         )),
+    }
+    // The old devmgr's drivers' jobs are held a moment past its end, and
+    // init waits for them to go rather than failing to remove its cgroup.
+    let since = at.after().get(restart..).unwrap_or_default();
+    if has(since, "devmgr.service: removing its cgroup") {
+        failures.push("init could not remove devmgr.service's cgroup on its restart".into());
     }
     Ok(())
 }

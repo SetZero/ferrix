@@ -329,10 +329,17 @@ impl Init {
                     self.perform(action);
                 }
             }
-            let timeout = match self.manager.deadline() {
+            let manager = self
+                .manager
+                .deadline()
+                .map(|deadline| deadline.saturating_since(now()));
+            let groups = self
+                .groups
+                .next_try()
+                .map(|at| at.saturating_duration_since(std::time::Instant::now()));
+            let timeout = match manager.into_iter().chain(groups).min() {
                 None => -1,
-                Some(deadline) => {
-                    let wait = deadline.saturating_since(now());
+                Some(wait) => {
                     // Rounded up, so a timer is never looked at early.
                     let millis = wait.as_nanos().div_ceil(1_000_000);
                     i32::try_from(millis).unwrap_or(i32::MAX)
@@ -397,6 +404,10 @@ impl Init {
         }
         if self.manager.deadline().is_some_and(|at| at <= now()) {
             self.queue.push_back(Event::Timer);
+        }
+        for (unit, error) in self.groups.retry() {
+            let name = self.display(unit);
+            say(&format!("{name}: removing its cgroup: {error}"));
         }
     }
 
