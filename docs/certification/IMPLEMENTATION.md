@@ -535,6 +535,98 @@ for them to discharge.
 
 Unblocks DAL C, 62304 §5.4 and `ADV_TDS.3` at once.
 
+### Design (2026-09-27)
+
+**Three levels, one chain.** Each level names its parent, so every low-level
+requirement reaches something an assessor already accepts:
+
+| Level | Ids | What it is | Where it comes from |
+|---|---|---|---|
+| System | `O.*`, `ASR-*`, `G.*` | the Security Target's objectives, the safety manual's assumed safety requirements, the goal | exists: SECURITY-TARGET §4, SAFETY-MANUAL §2, `01-requirements.sysml` |
+| High-level | `H.<area>.<n>` | what a subsystem of the item promises at its interface: `H.MEM.3` "a frame is mapped writable in at most one address space unless a VMO both hold shares it" | decomposed from the SFR mapping in SECURITY-TARGET §8.2 and the ASR table, one area per SFR family the item implements (MEM, OBJ, SCHED, IRQ, DMA, TRAP, BOOT, QUOTA) |
+| Low-level | `L.<module>.<n>` | what one unit of code does: `L.mm.4` "`unmap_in` returns no page-table frame to the allocator before the shootdown that covers it has completed on every processor it reached" | written per module of the `core` and `item` rings |
+
+**The requirement is a model element, not prose.** High- and low-level
+requirements live in the SysML model, one package per area
+(`docs/sysml/13-item-requirements.sysml` for the `H.*`, and one file per
+subsystem for the `L.*` as they are written), with the ids in angle brackets as
+`01-requirements.sysml` already does. Each carries, as attributes the gate
+reads:
+
+* `statement` -- one sentence with *shall*, about observable behaviour (F-16);
+* `criterion` -- the pass/fail condition a test can check, in counted terms
+  where there is a count ("every one of the N mappings swept is not both
+  writable and executable");
+* `parent` -- one or more ids of the level above (`L.*` → `H.*`, `H.*` → `O.*`,
+  `ASR-*` or `G.*`);
+* `unit` (low level only) -- `path::function` in `kernel/src`, which the gate
+  resolves with `scripts/check/rustlex.py`, so a renamed function breaks the
+  trace loudly instead of silently.
+
+The existing parser (`scripts/gen/sysml/parser.py`) reads these; the generated
+architecture document gains a requirements chapter from them.
+
+**Verification is named where the check is.** A check function, in a
+`check.rs` or `*_check.rs` file, a host `#[test]`, or an xtask gate, carries
+the ids it discharges in a doc line the gate parses:
+
+```rust
+/// Verifies: L.mm.4, L.mm.5
+fn tables_wait_for_their_shootdown() -> Result<(), &'static str> {
+```
+
+A check that proves a refusal names the requirement the refusal enforces;
+its negative control (recorded in the commit that added it) is the evidence
+the check can fail. The id goes on the *function*, not on each assertion:
+1,026 check functions today, against tens of thousands of assertions, and a
+function is the unit a boot line reports.
+
+**The chain closes at run time too.** A requirement is verified on the
+reference configuration only if (1) a check names it, (2) that check's lines
+are reached in the coverage evidence for the architecture (drcov already
+records it, F-10), and (3) the boot reaches `FERRIX-BOOT-OK`. The matrix shows
+all three per architecture, so a check compiled out on one architecture shows
+as unverified there rather than passing everywhere by its name.
+
+**The gate** (`scripts/check/check-traceability.py`, run by `cargo xtask
+check`, generating `docs/certification/TRACEABILITY.md` with a `--check` mode):
+
+* fails on an id named by a check that no requirement defines;
+* fails on a low- or high-level requirement with no `parent`, a `parent` that
+  does not exist, a `unit` that does not resolve, or no `statement`/`criterion`;
+* fails on a requirement with no verifier -- **as a ratchet**: a baseline file,
+  `scripts/data/traceability-baseline.json`, lists the requirements written but
+  not yet verified, and it may only shrink, as `fallible-alloc-baseline.json`
+  does;
+* reports, without failing yet, the item's functions no low-level requirement
+  names as its `unit` -- DO-178C's "no unintended function" question, which
+  becomes a ratchet of its own once a subsystem is fully written.
+
+**Rollout.**
+
+1. The format, the gate and an empty register (one slice, docs and a script):
+   the gate passes with nothing written and fails on a malformed entry, with a
+   self-test.
+2. The high level, all at once (one slice): perhaps forty `H.*` requirements,
+   decomposed from SECURITY-TARGET §8.2 and ASR-1..8. These are few, and
+   writing them together keeps the areas disjoint.
+3. A pilot subsystem end to end: `object/` -- handles and rights (T.FORGE,
+   ASR-3), the best-tested part of the item (135 refusal assertions). Its
+   `L.object.*` requirements, and `Verifies:` on its check functions, until its
+   part of the baseline is empty. This is where the format is corrected before
+   it is copied.
+4. The rest by subsystem, each a slice a session can take: `mm` and `user`,
+   `sched`, `iommu`, `trap` and the syscall entry, `smp`, each `arch/<isa>`,
+   `console`, `claim` and `device`, `boot`. Each slice writes the `L.*`,
+   tags the checks, shrinks the baseline, and names any requirement no check
+   verifies yet -- those become check-writing work, not argument.
+
+F-15 closes when every item module has low-level requirements and the "no
+unintended function" report is empty; F-16 when every requirement has a
+`statement` and `criterion` the gate has accepted; F-14 when the baseline of
+unverified requirements is empty and the matrix shows each verified on all
+three architectures or argued as architecture-specific.
+
 ---
 
 ## W-9 — Vulnerability analysis against the ST threat model
