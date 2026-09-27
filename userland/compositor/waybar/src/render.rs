@@ -187,6 +187,16 @@ pub fn colour(text: &str) -> Option<Color> {
     Some(Color::from_rgba8(byte(0)?, byte(2)?, byte(4)?, 255))
 }
 
+/// A bar drawn: the picture, and where each module's box is in it.
+#[derive(Debug)]
+pub struct Rendered {
+    /// The output's width by the bar's height.
+    pub picture: Pixmap,
+    /// Each module the bar shows, by its config name, and its event box's
+    /// border box: where a boot points to hover, click or scroll it.
+    pub modules: Vec<(String, layout::Rect)>,
+}
+
 /// Draw the first bar `root` makes on an output named `name` of `size`,
 /// over `ground`, into a picture the output's width by the bar's height.
 ///
@@ -206,7 +216,7 @@ pub fn render(
     size: (u32, u32),
     ground: Color,
     diag: &mut Diagnostics,
-) -> Result<Pixmap, String> {
+) -> Result<Rendered, String> {
     let output = Output {
         name: name.to_owned(),
         description: name.to_owned(),
@@ -226,13 +236,14 @@ pub fn render(
         diag,
     };
     let mut made: Vec<Box<dyn Module>> = Vec::new();
+    let mut names: Vec<&str> = Vec::new();
     let mut sections: [Vec<usize>; 3] = [Vec::new(), Vec::new(), Vec::new()];
-    for (section, names) in options.modules.iter().enumerate() {
+    for (section, listed) in options.modules.iter().enumerate() {
         if section == 1 && options.no_center {
             continue;
         }
-        for module in names {
-            match modules::make(module, config.get(module), name, &mut host) {
+        for module_name in listed {
+            match modules::make(module_name, config.get(module_name), name, &mut host) {
                 Ok(mut module) => {
                     module.start(&mut host);
                     // Every script this start ran, to its end.
@@ -241,8 +252,9 @@ pub fn render(
                         list.push(made.len());
                     }
                     made.push(module);
+                    names.push(module_name);
                 }
-                Err(error) => host.diag.warn(format!("module {module}: {error}")),
+                Err(error) => host.diag.warn(format!("module {module_name}: {error}")),
             }
         }
     }
@@ -268,7 +280,7 @@ pub fn render(
         fixed_center: options.fixed_center,
         sections,
     };
-    let (mut tree, _) = view::build(&bar_view, &views);
+    let (mut tree, built) = view::build(&bar_view, &views);
     tree.style(sheet);
     let (_, natural) = layout::natural_size(&tree, engine);
     #[expect(clippy::cast_possible_truncation, reason = "a bar's height in pixels")]
@@ -288,7 +300,16 @@ pub fn render(
         Transform::identity(),
         None,
     );
-    Ok(picture)
+    let modules = names
+        .iter()
+        .zip(&built.modules)
+        .filter_map(|(module, nodes)| {
+            let (event_box, _) = (*nodes)?;
+            let placed = placement.nodes.get(event_box)?;
+            (placed.border.width > 0.0).then(|| ((*module).to_owned(), placed.border))
+        })
+        .collect();
+    Ok(Rendered { picture, modules })
 }
 
 /// A picture as binary PPM, which `xtask` reads screendumps as.

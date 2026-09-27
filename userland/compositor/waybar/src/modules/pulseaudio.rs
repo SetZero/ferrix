@@ -178,7 +178,7 @@ impl Pulseaudio {
                     .info(format!("pulseaudio: connected to {}", path.display()));
                 let watch = host.watch(listening.fd());
                 match asking.sink() {
-                    Ok(sink) => self.show(sink, host),
+                    Ok(sink) => self.answered(sink, host, "on connecting"),
                     Err(error) => host.diag().warn(format!("pulseaudio: {error}")),
                 }
                 self.server = Some((asking, listening, watch));
@@ -196,10 +196,24 @@ impl Pulseaudio {
         }
     }
 
-    fn requery(&mut self, host: &mut dyn Host) {
+    /// What the server said, shown, and at debug level said: the value
+    /// read, when (`why`), and the label it became, which a boot holds the
+    /// server to.
+    fn answered(&mut self, sink: Sink, host: &mut dyn Host, why: &str) {
+        let (volume, muted) = (sink.volume, sink.muted);
+        let description = sink.description.clone();
+        self.show(sink, host);
+        host.diag().debug(format!(
+            "pulseaudio: {why}, the default sink {description:?} is at {volume}%{}: the label reads {:?}",
+            if muted { ", muted" } else { "" },
+            self.view.markup
+        ));
+    }
+
+    fn requery(&mut self, host: &mut dyn Host, why: &str) {
         let answer = self.server.as_mut().map(|(asking, _, _)| asking.sink());
         match answer {
-            Some(Ok(sink)) => self.show(sink, host),
+            Some(Ok(sink)) => self.answered(sink, host, why),
             Some(Err(error)) => {
                 host.diag()
                     .warn(format!("pulseaudio: the server went away: {error}"));
@@ -256,7 +270,7 @@ impl Module for Pulseaudio {
             return true;
         }
         if changed {
-            self.requery(host);
+            self.requery(host, "told the sink changed");
         }
         changed
     }
@@ -290,7 +304,7 @@ impl Module for Pulseaudio {
         if let Err(error) = asking.set_volume(wanted) {
             host.diag().warn(format!("pulseaudio: {error}"));
         }
-        self.requery(host);
+        self.requery(host, "after setting the volume");
         true
     }
 }

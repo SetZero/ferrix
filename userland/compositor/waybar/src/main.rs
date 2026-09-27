@@ -98,19 +98,28 @@ fn main() -> ExitCode {
         );
         say(diag.drain(options.level));
         say(engine.diag.drain(options.level));
-        return match drawn.and_then(|picture| {
-            std::fs::write(path, render::ppm(&picture))
-                .map(|()| picture)
+        return match drawn.and_then(|rendered| {
+            std::fs::write(path, render::ppm(&rendered.picture))
+                .map(|()| rendered)
                 .map_err(|error| format!("{}: {error}", path.display()))
         }) {
-            Ok(picture) => {
+            Ok(rendered) => {
+                let mut out = std::io::stdout().lock();
                 let _ = writeln!(
-                    std::io::stdout(),
+                    out,
                     "waybar: rendered {}x{} into {}",
-                    picture.width(),
-                    picture.height(),
+                    rendered.picture.width(),
+                    rendered.picture.height(),
                     path.display()
                 );
+                // Where each module is, for a boot that points at one.
+                for (module, rect) in &rendered.modules {
+                    let _ = writeln!(
+                        out,
+                        "waybar: module {module} at {},{} {}x{}",
+                        rect.x, rect.y, rect.width, rect.height
+                    );
+                }
                 ExitCode::SUCCESS
             }
             Err(message) => {
