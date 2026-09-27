@@ -102,6 +102,8 @@ pub(crate) struct Report {
 }
 
 /// Run both parts.
+///
+/// Verifies: H.MEM.11
 pub(crate) fn run() -> Result<Report, &'static str> {
     let drawn = check_a_section_completes_on_the_reserve()?;
     let mut report = check_the_native_calls_survive()?;

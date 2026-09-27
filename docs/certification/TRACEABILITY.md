@@ -14,7 +14,7 @@ Coverage evidence recording the checks: none yet.
 
 | Level | Written | Named by a check | Unverified, in the baseline |
 |---|---:|---:|---:|
-| High (`H.*`) | 51 | 1 | 50 |
+| High (`H.*`) | 51 | 2 | 49 |
 | Low (`L.*`) | 0 | 0 | 0 |
 
 0 functions of the item are named as a low-level requirement's unit. The gate prints, without failing, the item's functions no requirement names; that list changes with every function written, so it is not kept here.
@@ -59,7 +59,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `H.MEM.8` | After a fork, a write by the parent or the child to a private page shall not be visible to the other, and a write to a shared mapping shall be. | The `cow` program, in which each side writes a page both shared, exits 61 (neither saw the other's write); the `shared` program exits 62 (its MAP_SHARED write reached the parent and its MAP_PRIVATE write did not). | O.ISOLATE, ASR-1 | *baselined* | — | — | — |
 | `H.MEM.9` | Every frame an address space, a VMO or a process holds shall return to the frame allocator when the last reference to it goes. | After each memory and program check, the free frame count is what it was before: 0 frames leaked, per check (the `objects`, `uaccess` and `exits` lines). | O.QUOTA | *baselined* | — | — | — |
 | `H.MEM.10` | Every interface that maps a physical range a caller names shall refuse a range that touches the kernel image. | Requests naming the image's first page, its last page and a range straddling its end are each refused, 0 accepted, at stages 1, 2 and 6. | O.ISOLATE, O.WXN | *baselined* | — | — | — |
-| `H.MEM.11` | An allocation the item makes after bring-up shall report failure to its caller, which shall answer it as running out of memory and keep nothing half made. | With every allocation of the swept memory operations and native calls failed in turn, each failure is absorbed or answered NO_MEMORY or ENOMEM, and 0 frames or objects are left behind (the `sweep` and `no-mem` lines). | O.QUOTA | *baselined* | — | — | — |
+| `H.MEM.11` | An allocation the item makes after bring-up shall report failure to its caller, which shall answer it as running out of memory and keep nothing half made. | With every allocation of the swept memory operations and native calls failed in turn, each failure is absorbed or answered NO_MEMORY or ENOMEM, and 0 frames or objects are left behind (the `sweep` and `no-mem` lines). | O.QUOTA | `kernel/src/object/alloc_check.rs::run`, `kernel/src/user/alloc_check.rs::run` | not measured | not measured | not measured |
 
 ### Objects (`H.OBJ`)
 
@@ -149,5 +149,7 @@ None written yet: IMPLEMENTATION.md W-8 steps 3 and 4 write them, subsystem by s
 
 | Check | Kind | Verifies |
 |---|---|---|
+| `kernel/src/object/alloc_check.rs::run` | kernel | H.MEM.11 |
 | `kernel/src/smp/check.rs::shootdown` | kernel | H.MEM.7 |
 | `kernel/src/smp/check.rs::tables_wait_for_their_shootdown` | kernel | H.MEM.7 |
+| `kernel/src/user/alloc_check.rs::run` | kernel | H.MEM.11 |
