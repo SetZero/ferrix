@@ -198,7 +198,10 @@ impl Seen {
     ///
     /// Only a run that got where it was going: one that panicked or stalled
     /// has a better reason to give and gives it, and QEMU's remarks are shown
-    /// beside it.
+    /// beside it, with any fault the kernel did not provoke. That fault may be
+    /// the reason: a device that read its own ring through a translation gone
+    /// wrong fails as a driver would, and the remarks alone say only that
+    /// something faulted, once, which the probe always has.
     ///
     /// # Errors
     ///
@@ -212,6 +215,9 @@ impl Seen {
     ) -> Result<()> {
         if !reached {
             self.show_remarks();
+            if let Some(problem) = problem(self, lines) {
+                eprintln!("  {arch}: beside that, {problem}");
+            }
             return Ok(());
         }
         if let Some(problem) = problem(self, lines) {

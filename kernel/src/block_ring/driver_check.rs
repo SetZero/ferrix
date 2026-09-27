@@ -398,7 +398,8 @@ fn published_by_devmgr(
 const DRIVER_DIED: &str = "a blk driver devmgr started died before publishing its disk";
 
 /// The step `/sbin/blk`'s exit status names: its `Step` enum, in
-/// `native/drivers/blk/src/main.rs`, whose numbers are its exit statuses.
+/// `native/drivers/blk/src/main.rs`, whose numbers are its exit statuses, and
+/// from 20 up its `fault_status`, the fault that stopped it serving.
 fn blk_step(status: i32) -> &'static str {
     match status {
         1 => "at its start",
@@ -411,6 +412,10 @@ fn blk_step(status: i32) -> &'static str {
         8 => "serving a broken ring or device",
         9 => "stopping a device that would not reset",
         10 => "on its control channel",
+        20 => "serving a ring that was corrupt",
+        21 => "serving, the ring and the device disagreeing about a request",
+        22..=27 => "serving a device that broke the protocol",
+        30..=39 => "serving a virtqueue whose used ring said something impossible",
         _ => "at no step it names",
     }
 }

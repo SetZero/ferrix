@@ -32,13 +32,14 @@
 //!
 //! The exit status is the diagnosis: 0 is a clean STOP, and every other
 //! number names the step that failed (see [`Step`]), so a boot check that
-//! started the process can say what went wrong without a console.
+//! started the process can say what went wrong without a console. A serve
+//! loop stopped by a fault says which (see [`fault_status`]).
 
 #![no_std]
 #![no_main]
 
 use core::ptr;
-use core::sync::atomic::{Ordering, fence};
+use core::sync::atomic::{AtomicI32, Ordering, fence};
 
 use ferrix_blkring::RingMemory;
 use ferrix_blkring::bell::{BELL_SUBMIT, Doorbell, Wait};
@@ -62,12 +63,12 @@ use ferrix_rt::native::pin::{Pin, PinAccess, device_address};
 use ferrix_rt::native::port::{self, Port};
 use ferrix_rt::native::vmo::{self, Vmo};
 use ferrix_rt::{Bootstrap, Kernel};
-use ferrix_virtio::QueueMemory;
 use ferrix_virtio::blk::DeviceConfig;
 use ferrix_virtio::pci::{CommonConfig, NO_VECTOR};
+use ferrix_virtio::{QueueError, QueueMemory};
 use ferrix_virtio_blk::{
-    Completion, DevicePages, Driver, ISR_QUEUE, Options, Parts, RequestArea, Slot, Status,
-    Teardown, Transport,
+    Completion, DeviceError, DevicePages, Driver, ISR_QUEUE, Options, Parts, RequestArea, Slot,
+    Status, Teardown, Transport,
 };
 
 ferrix_rt::entry!(main);
@@ -128,7 +129,9 @@ enum Step {
     Ring = 6,
     /// The port, the interrupt or the waits could not be arranged.
     Events = 7,
-    /// The serve loop stopped on a corrupt ring or a broken device.
+    /// The serve loop stopped on a corrupt ring or a broken device. The exit
+    /// status says which, from 20 up (see [`fault_status`]); 8 only if that
+    /// was not recorded.
     Faulted = 8,
     /// STOP came, but the device would not reset: its memory is kept.
     Wedged = 9,
@@ -142,7 +145,51 @@ fn main(bootstrap: Bootstrap) -> i32 {
     };
     match run(&control_boot) {
         Ok(()) => 0,
+        Err(Step::Faulted) => match FAULTED_BY.load(Ordering::Relaxed) {
+            0 => Step::Faulted as i32,
+            status => status,
+        },
         Err(step) => step as i32,
+    }
+}
+
+/// The exit status of the fault that stopped the serve loop, or 0 while none
+/// has: written once, just before the loop returns [`Step::Faulted`].
+static FAULTED_BY: AtomicI32 = AtomicI32::new(0);
+
+/// The exit status that names `fault`: 20 a corrupt ring, 21 the two sides
+/// disagreeing, 22 to 27 what the device did, and 30 up which of the
+/// virtqueue's checks it failed. Below 128, where a status would read as a
+/// signal.
+///
+/// A device that broke the protocol is the one failure a boot cannot say
+/// more about from here, and whether it was the driver's queue, the device
+/// or the IOMMU between them is decided by exactly this: `NeedsReset` is the
+/// device refusing something it was given, a queue error is the used ring
+/// saying something impossible.
+fn fault_status(fault: &Fault) -> i32 {
+    match fault {
+        Fault::Ring(_) => 20,
+        Fault::Protocol => 21,
+        Fault::Device(DeviceError::Broken) => 22,
+        Fault::Device(DeviceError::NeedsReset) => 23,
+        Fault::Device(DeviceError::UnknownChain(_)) => 24,
+        Fault::Device(DeviceError::ConfigUnstable) => 25,
+        Fault::Device(DeviceError::Bookkeeping) => 26,
+        Fault::Device(DeviceError::Protocol(_)) => 27,
+        Fault::Device(DeviceError::Queue(error)) => {
+            30 + match error {
+                QueueError::EmptyChain => 1,
+                QueueError::ChainTooLong => 2,
+                QueueError::OutOfDescriptors => 3,
+                QueueError::DescriptorOutOfRange => 4,
+                QueueError::ChainCycle => 5,
+                QueueError::NotAChainHead => 6,
+                QueueError::UsedIndexJumped => 7,
+                QueueError::AvailableIndexJumped => 8,
+                _ => 9,
+            }
+        }
     }
 }
 
@@ -674,7 +721,10 @@ fn serve_until(
         status: Status::Ok,
         bytes: 0,
     }; 32];
-    let faulted = |_: Fault| Step::Faulted;
+    let faulted = |fault: Fault| {
+        FAULTED_BY.store(fault_status(&fault), Ordering::Relaxed);
+        Step::Faulted
+    };
     ring_bell(kernel_port, serve.on_bell().map_err(faulted)?);
     loop {
         match serve.before_sleep().map_err(faulted)? {

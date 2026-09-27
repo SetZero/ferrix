@@ -1869,7 +1869,8 @@ running.
 1. The driver exited before publishing: the line above this report gives its
    exit status, which is the step `native/drivers/blk` stopped at (1 START, 2
    identity, 3 registers, 4 memory, 5 device bring-up, 6 ring or HELLO, 7
-   events).
+   events), or from 20 up the fault that stopped it serving (its `fault_status`:
+   23 the device refused a request, 30 up a virtqueue check).
 2. No disk appeared in time: HELLO was refused (the ring's task prints why), the
    ring's task did not publish, or the device never came up under TCG within the
    patience.
