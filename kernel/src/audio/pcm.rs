@@ -401,11 +401,41 @@ fn drain(card: &Card, nonblock: bool) -> Result<(), Errno> {
             },
             deadline,
         );
-        if !woken {
+        if !woken && !graced(card, wakes, caller.as_ref()) {
             let now = timer::now_nanos();
+            let queued = card.stream.lock().queued();
+            crate::console::println!(
+                "  audio    card{}: a drain heard no completion for {} ms and gave up with {queued} \
+                 frames queued",
+                card.index,
+                timeout / 1_000_000
+            );
             return card.with_stream(|stream, effects| stream.drain_expired(now, effects));
         }
     }
+}
+
+/// A period more for a drain whose timeout passed with no completion:
+/// whether one came in it.
+///
+/// The timeout may be the guest's rather than the device's. A host that
+/// stops every one of the guest's processors for longer than the timeout
+/// lets the guest's clock run on, and when they run again the drain's timer
+/// is taken before the driver is, with completions already waiting for it:
+/// `test-audio` failed so twice on 2026-09-27 at host load 25-29. A period
+/// lets them in. A device that has stopped still fails, a period later.
+fn graced(card: &Card, wakes: u64, caller: Option<&Arc<Process>>) -> bool {
+    let period = u64::from(card.stream.lock().config().period_time()).saturating_mul(1000);
+    let deadline = timer::now_nanos().saturating_add(period);
+    card.changed.wait_until_deadline(
+        || {
+            card.changed.wakes() != wakes
+                || card.is_gone()
+                || killed(caller)
+                || card.stream.lock().state() != STATE_DRAINING
+        },
+        deadline,
+    )
 }
 
 /// `WRITEI_FRAMES`: copy frames into the buffer as it has room, starting and

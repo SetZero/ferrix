@@ -800,3 +800,19 @@ must find each at a quarter of full scale within 5%, and nothing at 700 Hz.
 On x86-64 it found 8192 and 8192 of 8192, and 0. With the mix taking only
 the first stream, the check failed with 440 Hz at 7.
 
+**A drain's timeout and a stopped guest (2026-09-27).** `test-audio`'s tone
+boots failed twice under TCG at host load 25-29 with the drain's `EIO`:
+352 ms, Linux's `max(100 ms, buffer × 1100 / rate)`, with no completion.
+The wait is restarted by every completion, as Linux's is, so it was no
+completion at all. The cause was the host stopping every one of the guest's
+processors for longer than that. The guest's clock runs on meanwhile, and
+when the processors run again the drain's timer is taken before the driver
+is, with the device's completions already waiting for it. Stopping QEMU for
+0.6 s with `SIGSTOP` in a drain made it fail every time: "a drain heard no
+completion for 352 ms and gave up with 11520 frames queued". So a drain
+whose timeout passes now waits one period more for a completion
+(`audio/pcm.rs`, `graced`), and the same stop passes. A device that has
+really stopped still fails, one period later, which is the one way this
+departs from Linux. The kernel says when a drain gives up, and with how
+much queued.
+
