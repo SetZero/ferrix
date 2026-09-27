@@ -50,8 +50,6 @@ pub(crate) fn dispatch(
     process: &Process,
 ) -> Option<Result<usize, Errno>> {
     let answer = match call {
-        Syscall::Getrlimit => sys_getrlimit(process, a[0] as u32, a[1]),
-        Syscall::Setrlimit => sys_setrlimit(process, a[0] as u32, a[1]),
         Syscall::Prlimit64 => sys_prlimit64(process, int(a[0]), a[1] as u32, a[2], a[3]),
         Syscall::SchedSetaffinity => sys_sched_setaffinity(process, int(a[0]), a[1] as u32, a[2]),
         Syscall::SchedGetparam => sys_sched_getparam(process, int(a[0]), a[1]),
@@ -144,11 +142,11 @@ fn set_limit(caller: &Process, process: &Process, resource: u32, new: Limit) -> 
     Ok(())
 }
 
-/// A limit as a 32-bit `struct rlimit` can carry it: anything wider is
-/// `RLIM_INFINITY`, which is `~0UL`, as `kernel/sys.c` clamps it. The
-/// identity on a 64-bit build.
-fn to_word(value: u64) -> u64 {
-    if WORD == 4 && value > u64::from(u32::MAX) {
+/// A limit as a `struct rlimit` of `word`-byte words can carry it: in 32 bits
+/// anything wider is `RLIM_INFINITY`, which is `~0UL`, as `kernel/sys.c` and
+/// `compat_sys_getrlimit` clamp it. The identity for a 64-bit program.
+fn to_word(value: u64, word: usize) -> u64 {
+    if word == 4 && value > u64::from(u32::MAX) {
         u64::from(u32::MAX)
     } else {
         value
@@ -156,8 +154,8 @@ fn to_word(value: u64) -> u64 {
 }
 
 /// The inverse: a 32-bit `RLIM_INFINITY` means the 64-bit one.
-fn from_word(value: u64) -> u64 {
-    if WORD == 4 && value == u64::from(u32::MAX) {
+fn from_word(value: u64, word: usize) -> u64 {
+    if word == 4 && value == u64::from(u32::MAX) {
         RLIM_INFINITY
     } else {
         value
@@ -171,19 +169,64 @@ fn from_word(value: u64) -> u64 {
 /// `arm-linux-gnueabihf`. (ARM's original `getrlimit`, which clamped
 /// differently, is not in the EABI table at all.)
 pub(crate) fn sys_getrlimit(process: &Process, resource: u32, at: u64) -> Result<usize, Errno> {
+    sys_getrlimit_at_width(process, resource, at, WORD)
+}
+
+/// [`sys_getrlimit`] into a `struct rlimit` of `word`-byte words: an i386
+/// program's `ugetrlimit` takes two 32-bit ones.
+pub(crate) fn sys_getrlimit_at_width(
+    process: &Process,
+    resource: u32,
+    at: u64,
+    word: usize,
+) -> Result<usize, Errno> {
     let limit = limit_of(process, resource)?;
-    let space = process.space();
-    uaccess::put_word(space, at, to_word(limit.soft))?;
-    uaccess::put_word(space, at.wrapping_add(WORD as u64), to_word(limit.hard))?;
+    let mut bytes = [0_u8; 16];
+    let fields = to_word(limit.soft, word)
+        .to_le_bytes()
+        .into_iter()
+        .take(word)
+        .chain(
+            to_word(limit.hard, word)
+                .to_le_bytes()
+                .into_iter()
+                .take(word),
+        );
+    for (slot, byte) in bytes.iter_mut().zip(fields) {
+        *slot = byte;
+    }
+    let record = bytes.get(..word * 2).ok_or(Errno::EINVAL)?;
+    uaccess::copy_to_user(process.space(), at, record).map_err(|_| Errno::EFAULT)?;
     Ok(0)
 }
 
 /// `setrlimit`: the structure is read before the resource is checked, which is
 /// Linux's order.
 pub(crate) fn sys_setrlimit(process: &Process, resource: u32, at: u64) -> Result<usize, Errno> {
-    let space = process.space();
-    let soft = from_word(uaccess::get_word(space, at)?);
-    let hard = from_word(uaccess::get_word(space, at.wrapping_add(WORD as u64))?);
+    sys_setrlimit_at_width(process, resource, at, WORD)
+}
+
+/// [`sys_setrlimit`] from a `struct rlimit` of `word`-byte words.
+pub(crate) fn sys_setrlimit_at_width(
+    process: &Process,
+    resource: u32,
+    at: u64,
+    word: usize,
+) -> Result<usize, Errno> {
+    let mut bytes = [0_u8; 16];
+    let record = bytes.get_mut(..word * 2).ok_or(Errno::EINVAL)?;
+    uaccess::copy_from_user(process.space(), at, record).map_err(|_| Errno::EFAULT)?;
+    let field = |index: usize| {
+        let mut eight = [0_u8; 8];
+        for (slot, byte) in eight
+            .iter_mut()
+            .zip(bytes.iter().skip(index * word).take(word))
+        {
+            *slot = *byte;
+        }
+        from_word(u64::from_le_bytes(eight), word)
+    };
+    let (soft, hard) = (field(0), field(1));
     set_limit(process, process, resource, Limit { soft, hard }).map(|()| 0)
 }
 

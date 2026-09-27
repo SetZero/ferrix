@@ -17,6 +17,14 @@
 #       --interpreter "$D/{arch}/ld.so" \
 #       --library "$D/{arch}/libc.so.6" --library "$D/{arch}/libresolv.so.2"
 #
+# `i386` is not one of Ferrix's architectures but a program it runs on
+# x86-64 (docs/I386.md, I4), so its four files land in `$D/i386/` and are
+# named in an `--arch x86_64` run:
+#
+#   cargo xtask test-shell --arch x86_64 --init "$D/i386/busybox" \
+#       --interpreter "$D/i386/ld.so" \
+#       --library "$D/i386/libc.so.6" --library "$D/i386/libresolv.so.2"
+#
 # Needs curl, sha256sum and dpkg-deb. A mirror other than deb.debian.org can
 # be named with DEBIAN_MIRROR.
 #
@@ -39,6 +47,9 @@ packages=(
     "armv7a armhf arm-linux-gnueabihf ld-linux-armhf.so.3
      main/b/busybox/busybox_1.37.0-6+b9_armhf.deb 4427d67d42f782494b730c2c817a0c99cb74752dc993787419a5c849b6fdb3f4
      main/g/glibc/libc6_2.41-12+deb13u4_armhf.deb 4fc6fed8d77d01c0dacb5fda8b880a8c8a669575936de5761b693077a6f6c2ec"
+    "i386 i386 i386-linux-gnu ld-linux.so.2
+     main/b/busybox/busybox_1.37.0-6+b9_i386.deb f582430a73981f4692e24988353ad1714bf4d4e2541e8aa5f8d3c844d9615c55
+     main/g/glibc/libc6_2.41-12+deb13u4_i386.deb 67bb4b54cf4bb6a380449dfa1852cd9135659f85360caa0e41d312f4b30e573a"
 )
 
 for tool in curl sha256sum dpkg-deb; do

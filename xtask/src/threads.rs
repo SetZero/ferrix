@@ -17,13 +17,21 @@ use crate::args::Args;
 use crate::paths::{self, Arch};
 use crate::{Error, Result, cargo, fat, native, qemu, shell};
 
-/// The Rust target the program is built for on `arch`.
-fn target(arch: Arch) -> &'static str {
-    match arch {
-        Arch::X86_64 => "x86_64-unknown-linux-musl",
-        Arch::AArch64 => "aarch64-unknown-linux-musl",
-        Arch::Armv7a => "armv7-unknown-linux-musleabi",
-    }
+/// The Rust target the program is built for on `arch`: with `i686`, x86-64's
+/// program is 32-bit x86, which the kernel runs in compatibility mode through
+/// `int $0x80` (`docs/I386.md`, I4).
+fn target(arch: Arch, i686: bool) -> Result<&'static str> {
+    Ok(match (arch, i686) {
+        (Arch::X86_64, false) => "x86_64-unknown-linux-musl",
+        (Arch::X86_64, true) => "i686-unknown-linux-musl",
+        (Arch::AArch64, false) => "aarch64-unknown-linux-musl",
+        (Arch::Armv7a, false) => "armv7-unknown-linux-musleabi",
+        (_, true) => {
+            return Err(Error::new(format!(
+                "--i686 is a program for the x86-64 kernel, not for {arch}"
+            )));
+        }
+    })
 }
 
 /// The lines a working run prints, in order.
@@ -42,8 +50,8 @@ const NEGATIVE_FAILURE: &str = "threads: FAILED /proc/self/status does not count
 
 /// Build `threads-test` for `arch`, as the negative control or not, and return
 /// where the program is.
-fn build(arch: Arch, negative: bool) -> Result<PathBuf> {
-    let target = target(arch);
+fn build(arch: Arch, negative: bool, i686: bool) -> Result<PathBuf> {
+    let target = target(arch, i686)?;
     let flavour = if negative { "negative" } else { "plain" };
     let target_dir = paths::target_dir().join("threads-test").join(flavour);
     println!("  building threads-test ({flavour}) for {target}");
@@ -113,7 +121,7 @@ pub(crate) fn test_threads(args: &Args) -> Result<()> {
     for arch in args.arches()? {
         let log = paths::build_dir(arch).join("serial.log");
 
-        let program = build(arch, false)?;
+        let program = build(arch, false, args.i686)?;
         let lines = boot(arch, &program, args)?;
         let mut remaining = lines.iter();
         for want in STEPS {
@@ -137,7 +145,7 @@ pub(crate) fn test_threads(args: &Args) -> Result<()> {
             "  {arch}: std::thread, Mutex and mpsc ran, /proc/self counted every thread, exit 0"
         );
 
-        let negative = build(arch, true)?;
+        let negative = build(arch, true, args.i686)?;
         let lines = boot(arch, &negative, args)?;
         let failed_there = lines.iter().any(|line| says(line, NEGATIVE_FAILURE));
         let passed_proc = lines.iter().any(|line| says(line, "threads: proc ok"));

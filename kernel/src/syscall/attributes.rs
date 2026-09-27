@@ -59,7 +59,7 @@ use crate::sched::Task;
 use crate::syscall::credentials::{self, CAP_LAST_CAP};
 use crate::syscall::process::Process;
 use crate::syscall::registry;
-use crate::syscall::uaccess::{self, WORD};
+use crate::syscall::uaccess;
 
 /// Bytes in a task's name, the terminator included: Linux's `TASK_COMM_LEN`.
 pub(crate) const TASK_COMM_LEN: usize = 16;
@@ -235,8 +235,6 @@ pub(crate) fn dispatch(
     let answer = match call {
         Syscall::Prctl => sys_prctl(process, int(a[0]), [a[1], a[2], a[3], a[4]]),
         Syscall::Personality => Ok(sys_personality(process, a[0] as u32)),
-        Syscall::SetRobustList => sys_set_robust_list(process, a[0], a[1]),
-        Syscall::GetRobustList => sys_get_robust_list(process, int(a[0]), a[1], a[2]),
         Syscall::Getpriority => sys_getpriority(process, int(a[0]), int(a[1])),
         Syscall::Setpriority => sys_setpriority(process, int(a[0]), int(a[1]), int(a[2])),
         Syscall::IoprioGet => sys_ioprio_get(process, int(a[0]), int(a[1])),
@@ -399,11 +397,14 @@ pub(crate) fn sys_personality(process: &Process, persona: u32) -> usize {
     old as usize
 }
 
-/// Bytes in `struct robust_list_head`: two pointers and a `long`, so three
-/// native words -- 24 on the 64-bit pair, 12 on ARMv7-A. Verified with
-/// `sizeof` against `linux/futex.h` compiled for x86-64 and for
+/// Bytes in `struct robust_list_head` for a program whose words are `word`
+/// bytes: two pointers and a `long`, so three words -- 24 on the 64-bit pair,
+/// 12 on ARMv7-A and for an i386 program (`compat_robust_list_head`).
+/// Verified with `sizeof` against `linux/futex.h` compiled for x86-64 and for
 /// `arm-linux-gnueabihf`; AArch64 is LP64 with no override of the structure.
-const ROBUST_LIST_HEAD: u64 = (WORD * 3) as u64;
+const fn robust_list_head(word: usize) -> u64 {
+    (word * 3) as u64
+}
 
 /// `set_robust_list`: record the head, after insisting on the size.
 ///
@@ -411,8 +412,13 @@ const ROBUST_LIST_HEAD: u64 = (WORD * 3) as u64;
 /// a libc built for a different layout is refused rather than walked. Nothing
 /// walks the list yet: that is for a thread that dies holding a lock, and a
 /// process has one thread.
-pub(crate) fn sys_set_robust_list(process: &Process, head: u64, len: u64) -> Result<usize, Errno> {
-    if ulong(len) != ROBUST_LIST_HEAD {
+pub(crate) fn sys_set_robust_list(
+    process: &Process,
+    head: u64,
+    len: u64,
+    word: usize,
+) -> Result<usize, Errno> {
+    if ulong(len) != robust_list_head(word) {
         return Err(Errno::EINVAL);
     }
     update(process, |a| a.robust_list = ulong(head));
@@ -426,17 +432,23 @@ pub(crate) fn forget_robust_list(process: &Process) {
 }
 
 /// `get_robust_list`: the size through `len_ptr`, then the head through
-/// `head_ptr`, both native words, in that order as `kernel/futex/syscalls.c`
-/// writes them.
+/// `head_ptr`, both `word`-byte words, in that order as
+/// `kernel/futex/syscalls.c` writes them.
 pub(crate) fn sys_get_robust_list(
     process: &Process,
     pid: i32,
     head_ptr: u64,
     len_ptr: u64,
+    word: usize,
 ) -> Result<usize, Errno> {
     let head = get(&*subject(process, pid)?).robust_list;
-    uaccess::put_word(process.space(), len_ptr, ROBUST_LIST_HEAD)?;
-    uaccess::put_word(process.space(), head_ptr, head)?;
+    let put = |at: u64, value: u64| {
+        let bytes = value.to_le_bytes();
+        let used = bytes.get(..word).ok_or(Errno::EINVAL)?;
+        uaccess::copy_to_user(process.space(), at, used).map_err(|_| Errno::EFAULT)
+    };
+    put(len_ptr, robust_list_head(word))?;
+    put(head_ptr, head)?;
     Ok(0)
 }
 

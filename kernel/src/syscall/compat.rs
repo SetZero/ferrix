@@ -19,14 +19,18 @@
 //! they would a 64-bit program's. A call that passes a structure in memory
 //! instead asks its handler to read it at the call's word width, and
 //! [`ioctl_passes`] keeps back the `ioctl` requests no handler reads that way
-//! yet.
+//! yet. [`socketcall`] turns i386's one socket entry into the call it names.
 
+use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{
     FIOCLEX, FIONBIO, FIONCLEX, FIONREAD, TCFLSH, TCGETS, TCGETS2, TCSETS, TCSETS2, TCSETSF,
     TCSETSF2, TCSETSW, TCSETSW2, TCXONC, TIOCGPGRP, TIOCGPTN, TIOCGSID, TIOCGWINSZ, TIOCNOTTY,
     TIOCOUTQ, TIOCSCTTY, TIOCSPGRP, TIOCSPTLCK, TIOCSWINSZ,
 };
+
+use crate::syscall::process::Process;
+use crate::syscall::uaccess;
 
 /// `call`'s arguments as a 64-bit program would have passed them.
 ///
@@ -92,4 +96,66 @@ pub(crate) fn ioctl_passes(request: u32) -> bool {
             | FIOCLEX
             | FIONCLEX
     )
+}
+
+/// Words in each `socketcall` sub-call's block, by sub-call number: Linux's
+/// `nargs` in `net/socket.c`, in 32-bit words rather than bytes. Zero is no
+/// call; 19 and 20 are `recvmmsg` and `sendmmsg`.
+const SOCKETCALL_WORDS: [usize; 21] = [
+    0, 3, 3, 3, 2, 3, 3, 3, 4, 4, 4, 6, 6, 2, 5, 5, 3, 3, 4, 5, 4,
+];
+
+/// i386's `socketcall(call, args)`: the socket call sub-call `call` names,
+/// with its arguments read from the block at `args` as 32-bit words and
+/// zero-extended, as `compat_sys_socketcall` reads them.
+///
+/// Linux's order: a sub-call outside 1 to 20 is `EINVAL` before anything is
+/// read, and a block that cannot be read is `EFAULT`. `send` and `recv` are
+/// `sendto` and `recvfrom` with no address, as Linux answers them.
+/// `recvmmsg` and `sendmmsg` have no handler here and are `ENOSYS` once
+/// their block has been read.
+///
+/// # Errors
+///
+/// As above.
+pub(crate) fn socketcall(process: &Process, a: [u64; 6]) -> Result<(Syscall, [u64; 6]), Errno> {
+    let number = a[0] as u32 as i32;
+    let words = usize::try_from(number)
+        .ok()
+        .filter(|&number| number >= 1)
+        .and_then(|number| SOCKETCALL_WORDS.get(number).copied())
+        .ok_or(Errno::EINVAL)?;
+    let mut bytes = [0_u8; 6 * 4];
+    let block = bytes.get_mut(..words * 4).ok_or(Errno::EINVAL)?;
+    uaccess::copy_from_user(process.space(), a[1] & 0xFFFF_FFFF, block)
+        .map_err(|_| Errno::EFAULT)?;
+    let mut w = [0_u64; 6];
+    for (slot, word) in w.iter_mut().zip(bytes.chunks_exact(4)) {
+        let mut four = [0_u8; 4];
+        four.copy_from_slice(word);
+        *slot = u64::from(u32::from_le_bytes(four));
+    }
+    let call = match number {
+        1 => Syscall::Socket,
+        2 => Syscall::Bind,
+        3 => Syscall::Connect,
+        4 => Syscall::Listen,
+        5 => Syscall::Accept,
+        6 => Syscall::Getsockname,
+        7 => Syscall::Getpeername,
+        8 => Syscall::Socketpair,
+        // `send(fd, buf, len, flags)` and `recv`: no address.
+        9 => return Ok((Syscall::Sendto, [w[0], w[1], w[2], w[3], 0, 0])),
+        10 => return Ok((Syscall::Recvfrom, [w[0], w[1], w[2], w[3], 0, 0])),
+        11 => Syscall::Sendto,
+        12 => Syscall::Recvfrom,
+        13 => Syscall::Shutdown,
+        14 => Syscall::Setsockopt,
+        15 => Syscall::Getsockopt,
+        16 => Syscall::Sendmsg,
+        17 => Syscall::Recvmsg,
+        18 => Syscall::Accept4,
+        _ => return Err(Errno::ENOSYS),
+    };
+    Ok((call, w))
 }

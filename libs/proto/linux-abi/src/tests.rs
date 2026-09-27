@@ -3296,7 +3296,7 @@ mod virtgpu;
 /// Every i386 number [`from_i386`] translates beside the thread-area pair:
 /// the constant, the number `asm/unistd_32.h` gives it, and ARMv7-A's constant
 /// for the same call.
-const I386_NUMBERS: [(usize, usize, usize); 225] = [
+const I386_NUMBERS: [(usize, usize, usize); 229] = [
     (i386::FORK, 2, arm::FORK),
     (i386::KILL, 37, arm::KILL),
     (i386::WAIT4, 114, arm::WAIT4),
@@ -3534,6 +3534,10 @@ const I386_NUMBERS: [(usize, usize, usize); 225] = [
     (i386::RECVFROM, 371, arm::RECVFROM),
     (i386::RECVMSG, 372, arm::RECVMSG),
     (i386::SHUTDOWN, 373, arm::SHUTDOWN),
+    (i386::UGETRLIMIT, 191, arm::UGETRLIMIT),
+    (i386::SETRLIMIT, 75, arm::SETRLIMIT),
+    (i386::SET_ROBUST_LIST, 311, arm::SET_ROBUST_LIST),
+    (i386::GET_ROBUST_LIST, 312, arm::GET_ROBUST_LIST),
 ];
 
 /// Every i386 number [`from_i386`] translates, as `asm/unistd_32.h` numbers
@@ -3556,10 +3560,13 @@ fn the_i386_numbers_are_the_headers_and_mean_what_arm_means() {
     assert_eq!((i386::ALARM, i386::TIME), (27, 13));
     assert_eq!(from_i386(27), Some(Syscall::Alarm));
     assert_eq!(from_i386(13), Some(Syscall::Time));
+    // `socketcall`, which only i386 has among these tables.
+    assert_eq!(i386::SOCKETCALL, 102);
+    assert_eq!(from_i386(102), Some(Syscall::Socketcall));
     let translated = (0..I386_END).filter(|&nr| from_i386(nr).is_some()).count();
     assert_eq!(
         translated,
-        I386_NUMBERS.len() + 4,
+        I386_NUMBERS.len() + 5,
         "no i386 number is mapped unread"
     );
     // The numbers x86-64 gives these calls are other calls, or none, on

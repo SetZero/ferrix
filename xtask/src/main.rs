@@ -8,7 +8,7 @@
 //! cargo xtask test-kaslr --arch x86_64 [--release] [--timeout SECONDS]
 //! cargo xtask test-shell --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask test-vfs  --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
-//! cargo xtask test-threads --arch all [--timeout SECONDS]
+//! cargo xtask test-threads --arch all [--i686] [--timeout SECONDS]
 //! cargo xtask test-rustc [--accel kvm] [--memory M] [--timeout SECONDS]
 //! cargo xtask test-selfhost [--accel kvm] [--release] [--smp N] [--memory M] [--timeout SECONDS] [--plan DIR]
 //! cargo xtask builds-execute --plan DIR
@@ -203,7 +203,8 @@ COMMANDS:
     bench-seam    Boot a stock Linux kernel on the same QEMU machine and time a 4 KiB O_DIRECT read of the pattern disk at depths 1 and 32: the in-kernel reference for the seam boot line (scripts/fetch/fetch-linux-reference.sh first)
     test-restart  Boot a shell beside a device, kill -9 its driver twice, and require it started again each time (--boot gpu|input|net|blk|all; gpu if not given)
     test-sysfs    Boot a shell beside a card, input devices and a network adapter, read sysfs, and unbind and bind the card through it
-    test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count
+    test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count (--i686: the x86-64
+                  image runs a 32-bit x86 build of it)
     test-rustc    Attach the rustc volume scripts/fetch/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
     test-chrome   Attach the volume scripts/fetch/fetch-chrome.sh makes, and require headless Chrome to run a page's script and draw it
     test-chrome-window  The same volume, and require Chrome in a window on the compositor, its page on the screen

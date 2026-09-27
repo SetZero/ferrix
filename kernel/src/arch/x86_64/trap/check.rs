@@ -164,6 +164,61 @@ const HELLO_I386: &[u8] = &[
     b'r', b'o', b'm', b' ', b'i', b'3', b'8', b'6', b'\n',
 ];
 
+/// i386's `socketcall` (`docs/I386.md` I4), which glibc on i386 sends every
+/// socket operation through: a sub-call number and a block of 32-bit
+/// arguments. The program makes a pair of connected Unix sockets through it,
+/// sends a byte down one with `send` and reads it from the other with `recv`,
+/// then asks for sub-call 0, which must be `-EINVAL`, sub-call 1 with no
+/// block, `-EFAULT`, and `recvmmsg` (19), which has no handler here and must
+/// be `-ENOSYS`. Exits 42, or 60 to 66 for the step that failed.
+///
+/// ```text
+///   subl $48, %esp                      ; block at 0, sv at 32, bytes at 40 and 44
+///   movl $1, 0(%esp) ; movl $1, 4(%esp) ; movl $0, 8(%esp)
+///   leal 32(%esp), %eax ; movl %eax, 12(%esp)
+///   movl $102, %eax ; movl $8, %ebx ; movl %esp, %ecx ; int $0x80
+///   movl $60, %edi ; testl %eax, %eax ; jne 9f        ; SOCKETPAIR == 0
+///   movb $0x5a, 40(%esp) ; movl 32(%esp), %eax ; movl %eax, 0(%esp)
+///   leal 40(%esp), %eax ; movl %eax, 4(%esp) ; movl $1, 8(%esp) ; movl $0, 12(%esp)
+///   movl $102, %eax ; movl $9, %ebx ; movl %esp, %ecx ; int $0x80
+///   movl $61, %edi ; cmpl $1, %eax ; jne 9f          ; SEND == 1
+///   movb $0, 44(%esp) ; movl 36(%esp), %eax ; movl %eax, 0(%esp)
+///   leal 44(%esp), %eax ; movl %eax, 4(%esp)
+///   movl $102, %eax ; movl $10, %ebx ; movl %esp, %ecx ; int $0x80
+///   movl $62, %edi ; cmpl $1, %eax ; jne 9f          ; RECV == 1
+///   movl $63, %edi ; cmpb $0x5a, 44(%esp) ; jne 9f   ; the byte sent
+///   movl $102, %eax ; xorl %ebx, %ebx ; movl %esp, %ecx ; int $0x80
+///   movl $64, %edi ; cmpl $-22, %eax ; jne 9f        ; sub-call 0: EINVAL
+///   movl $102, %eax ; movl $1, %ebx ; xorl %ecx, %ecx ; int $0x80
+///   movl $65, %edi ; cmpl $-14, %eax ; jne 9f        ; no block: EFAULT
+///   movl $102, %eax ; movl $19, %ebx ; movl %esp, %ecx ; int $0x80
+///   movl $66, %edi ; cmpl $-38, %eax ; jne 9f        ; RECVMMSG: ENOSYS
+///   movl $42, %edi
+/// 9: movl %edi, %ebx ; movl $252, %eax ; int $0x80   ; exit_group(%edi)
+/// ```
+///
+/// Assembled by GNU `as --32` in `.code32`, and read back with `objdump -m
+/// i386`.
+const SOCKETCALL_I386: &[u8] = &[
+    0x83, 0xec, 0x30, 0xc7, 0x04, 0x24, 0x01, 0x00, 0x00, 0x00, 0xc7, 0x44, 0x24, 0x04, 0x01, 0x00,
+    0x00, 0x00, 0xc7, 0x44, 0x24, 0x08, 0x00, 0x00, 0x00, 0x00, 0x8d, 0x44, 0x24, 0x20, 0x89, 0x44,
+    0x24, 0x0c, 0xb8, 0x66, 0x00, 0x00, 0x00, 0xbb, 0x08, 0x00, 0x00, 0x00, 0x89, 0xe1, 0xcd, 0x80,
+    0xbf, 0x3c, 0x00, 0x00, 0x00, 0x85, 0xc0, 0x0f, 0x85, 0xc2, 0x00, 0x00, 0x00, 0xc6, 0x44, 0x24,
+    0x28, 0x5a, 0x8b, 0x44, 0x24, 0x20, 0x89, 0x04, 0x24, 0x8d, 0x44, 0x24, 0x28, 0x89, 0x44, 0x24,
+    0x04, 0xc7, 0x44, 0x24, 0x08, 0x01, 0x00, 0x00, 0x00, 0xc7, 0x44, 0x24, 0x0c, 0x00, 0x00, 0x00,
+    0x00, 0xb8, 0x66, 0x00, 0x00, 0x00, 0xbb, 0x09, 0x00, 0x00, 0x00, 0x89, 0xe1, 0xcd, 0x80, 0xbf,
+    0x3d, 0x00, 0x00, 0x00, 0x83, 0xf8, 0x01, 0x0f, 0x85, 0x82, 0x00, 0x00, 0x00, 0xc6, 0x44, 0x24,
+    0x2c, 0x00, 0x8b, 0x44, 0x24, 0x24, 0x89, 0x04, 0x24, 0x8d, 0x44, 0x24, 0x2c, 0x89, 0x44, 0x24,
+    0x04, 0xb8, 0x66, 0x00, 0x00, 0x00, 0xbb, 0x0a, 0x00, 0x00, 0x00, 0x89, 0xe1, 0xcd, 0x80, 0xbf,
+    0x3e, 0x00, 0x00, 0x00, 0x83, 0xf8, 0x01, 0x75, 0x56, 0xbf, 0x3f, 0x00, 0x00, 0x00, 0x80, 0x7c,
+    0x24, 0x2c, 0x5a, 0x75, 0x4a, 0xb8, 0x66, 0x00, 0x00, 0x00, 0x31, 0xdb, 0x89, 0xe1, 0xcd, 0x80,
+    0xbf, 0x40, 0x00, 0x00, 0x00, 0x83, 0xf8, 0xea, 0x75, 0x35, 0xb8, 0x66, 0x00, 0x00, 0x00, 0xbb,
+    0x01, 0x00, 0x00, 0x00, 0x31, 0xc9, 0xcd, 0x80, 0xbf, 0x41, 0x00, 0x00, 0x00, 0x83, 0xf8, 0xf2,
+    0x75, 0x1d, 0xb8, 0x66, 0x00, 0x00, 0x00, 0xbb, 0x13, 0x00, 0x00, 0x00, 0x89, 0xe1, 0xcd, 0x80,
+    0xbf, 0x42, 0x00, 0x00, 0x00, 0x83, 0xf8, 0xda, 0x75, 0x05, 0xbf, 0x2a, 0x00, 0x00, 0x00, 0x89,
+    0xfb, 0xb8, 0xfc, 0x00, 0x00, 0x00, 0xcd, 0x80,
+];
+
 /// What [`HELLO_I386`] exits with when every call answered as it had to.
 const HELLO_I386_STATUS: i32 = 42;
 
@@ -581,6 +636,7 @@ fn check_compat() -> Result<(), &'static str> {
 
     let tls = check_thread_areas()?;
     check_signals_and_fork()?;
+    check_socketcall()?;
     let forged = check_forged_frames()?;
 
     let syscall_ended = run_program(b"/cstar", COMPAT_SYSCALL)?;
@@ -692,6 +748,44 @@ fn check_forged_frames() -> Result<u32, &'static str> {
         refused += 1;
     }
     Ok(refused)
+}
+
+/// [`SOCKETCALL_I386`]: glibc's one socket entry, unpacked into the call it
+/// names, with Linux's refusals in Linux's order.
+fn check_socketcall() -> Result<(), &'static str> {
+    let file = crate::syscall::image::build_with(
+        ferrix_elf::Class::Elf32,
+        EM_386,
+        crate::syscall::image::Shape::Good,
+        SOCKETCALL_I386,
+    );
+    let status = crate::syscall::exec::run(
+        &file,
+        &[b"/socketcall"],
+        &[],
+        [0x7e; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "the i386 socketcall program could not be started")?;
+    let failed = match status {
+        HELLO_I386_STATUS => {
+            println!(
+                "  i386     socketcall made a Unix socket pair, and a byte sent down it with send \
+                 came back through recv; sub-call 0 was EINVAL, a missing block EFAULT, and \
+                 recvmmsg ENOSYS"
+            );
+            return Ok(());
+        }
+        60 => "socketcall(SOCKETPAIR) did not make a pair of Unix sockets",
+        61 => "socketcall(SEND) did not send one byte",
+        62 => "socketcall(RECV) did not receive one byte",
+        63 => "the byte socketcall(RECV) received was not the one sent",
+        64 => "socketcall with sub-call 0 was not EINVAL",
+        65 => "socketcall with no block to read was not EFAULT",
+        66 => "socketcall(RECVMMSG) was not ENOSYS",
+        _ => "the i386 socketcall program ended some other way",
+    };
+    println!("  i386     the socketcall program ended with {status}");
+    Err(failed)
 }
 
 /// [`SIGNALS_I386`]: both i386 frames and their returns, and a fork.

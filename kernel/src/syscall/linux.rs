@@ -82,6 +82,37 @@ fn dispatch(call: Syscall, args: &SyscallArgs, regs: Option<&arch::UserRegs>) ->
     // against a process it built itself, months before a program can.
     let process = process::current();
 
+    // What the entry registers held, which a restart puts back: for
+    // `socketcall`, the sub-call and the block's address, not the call the
+    // block names.
+    let first_argument = args.args[0];
+
+    // i386's `socketcall`: the sub-call it names, with the arguments read
+    // from the program's block, is answered as that call (`compat`).
+    let unpacked;
+    let (call, args) = if call == Syscall::Socketcall {
+        let Some(caller) = process.as_deref() else {
+            return Outcome::Return(Errno::ESRCH.as_return_value());
+        };
+        match compat::socketcall(caller, args.args) {
+            Ok((inner, block)) => {
+                unpacked = SyscallArgs {
+                    args: block,
+                    ..*args
+                };
+                (inner, &unpacked)
+            }
+            Err(error) => {
+                if error == Errno::ENOSYS {
+                    unanswered(Some(call), args.number);
+                }
+                return Outcome::Return(error.as_return_value());
+            }
+        }
+    } else {
+        (call, args)
+    };
+
     // `exit` ends the calling thread and `exit_group` its whole process; both
     // end the task here and never come back, and with one thread they are the
     // same. The reference is dropped first, because nothing after this line
@@ -155,7 +186,7 @@ fn dispatch(call: Syscall, args: &SyscallArgs, regs: Option<&arch::UserRegs>) ->
     if let (Err(error), Some(thread)) = (answer, thread.as_ref())
         && error.is_restart()
     {
-        thread.with_own_signals(|signals| signals.mark_restart(args.number as u64, args.args[0]));
+        thread.with_own_signals(|signals| signals.mark_restart(args.number as u64, first_argument));
     }
     Outcome::Return(errno::encode(answer))
 }
@@ -245,6 +276,9 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
     if let Some(answer) = fsctl::dispatch(call, &a, process, args.abi) {
         return answer;
     }
+    if let Some(answer) = at_width(call, &a, process, signal::word_of(args.abi)) {
+        return answer;
+    }
     let answer = attributes::dispatch(call, &a, process)
         .or_else(|| limits::dispatch(call, &a, process))
         .or_else(|| credentials::dispatch(call, &a, process))
@@ -297,15 +331,6 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::Time => time::sys_time_at_width(process, a[0], signal::word_of(args.abi)),
         Syscall::Getrandom => time::sys_getrandom(process, a[0], a[1], a[2]),
         Syscall::Uname => system::sys_uname(process, a[0]),
-        Syscall::SchedGetaffinity => {
-            let word = signal::word_of(args.abi);
-            limits::sys_sched_getaffinity(process, fd::arg(a[0]), truncate(a[1]), a[2], word)
-        }
-        Syscall::Times => time::sys_times(process, a[0], signal::word_of(args.abi)),
-        Syscall::Getrusage => {
-            time::sys_getrusage(process, fd::arg(a[0]), a[1], signal::word_of(args.abi))
-        }
-        Syscall::Sysinfo => system::sys_sysinfo_at_width(process, a[0], signal::word_of(args.abi)),
         Syscall::Poll => poll::sys_poll(process, a[0], a[1], a[2] as i32),
         Syscall::Select => {
             let sets = [a[1], a[2], a[3]];
@@ -336,6 +361,34 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         }
         _ => Err(Errno::ENOSYS),
     }
+}
+
+/// The calls whose structure in memory is made of `long`s, answered at the
+/// caller's `word`: four bytes for an i386 program on this 64-bit kernel. A
+/// table of its own, like [`descriptors`], so that `None` means "not one of
+/// mine".
+fn at_width(
+    call: Syscall,
+    a: &[u64; 6],
+    process: &Process,
+    word: usize,
+) -> Option<Result<usize, Errno>> {
+    let answer = match call {
+        Syscall::Getrlimit => limits::sys_getrlimit_at_width(process, truncate(a[0]), a[1], word),
+        Syscall::Setrlimit => limits::sys_setrlimit_at_width(process, truncate(a[0]), a[1], word),
+        Syscall::SetRobustList => attributes::sys_set_robust_list(process, a[0], a[1], word),
+        Syscall::GetRobustList => {
+            attributes::sys_get_robust_list(process, fd::arg(a[0]), a[1], a[2], word)
+        }
+        Syscall::SchedGetaffinity => {
+            limits::sys_sched_getaffinity(process, fd::arg(a[0]), truncate(a[1]), a[2], word)
+        }
+        Syscall::Times => time::sys_times(process, a[0], word),
+        Syscall::Getrusage => time::sys_getrusage(process, fd::arg(a[0]), a[1], word),
+        Syscall::Sysinfo => system::sys_sysinfo_at_width(process, a[0], word),
+        _ => return None,
+    };
+    Some(answer)
 }
 
 /// The calls that take a descriptor, or make one.

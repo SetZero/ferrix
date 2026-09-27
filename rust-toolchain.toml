@@ -30,6 +30,9 @@ targets = [
     # initramfs, linked by rust-lld against the target's own musl.
     "x86_64-unknown-linux-musl",
     "aarch64-unknown-linux-musl",
+    # `test-threads --i686`: the thread program as a 32-bit x86 program, which
+    # the x86-64 kernel runs in compatibility mode (`docs/I386.md`, I4).
+    "i686-unknown-linux-musl",
     # ferrousli on AArch64 and ARMv7-A, hard-float as Debian's armhf is, whose
     # programs it must one day load in glibc's place. Its unit tests link
     # `std`, which needs a C library under it, so they build for the gnu

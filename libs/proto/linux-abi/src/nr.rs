@@ -2112,6 +2112,20 @@ pub mod i386 {
     /// Deliver `SIGALRM` after a number of seconds. i386 kept it where ARM's
     /// EABI dropped it, and musl calls it.
     pub const ALARM: usize = 27;
+    /// Every socket operation, as a sub-call and a block of 32-bit arguments:
+    /// what glibc on i386 calls.
+    pub const SOCKETCALL: usize = 102;
+    /// Read a resource limit into a 32-bit `struct rlimit`: glibc's
+    /// `getrlimit`, whose `RLIM_INFINITY` is `~0` in 32 bits. The older
+    /// `getrlimit` at 76, which clamps to `0x7fffffff`, is not carried.
+    pub const UGETRLIMIT: usize = 191;
+    /// Set a resource limit from a 32-bit `struct rlimit`.
+    pub const SETRLIMIT: usize = 75;
+    /// Register the robust futex list: a 12-byte 32-bit `robust_list_head`,
+    /// which glibc registers in every process and thread.
+    pub const SET_ROBUST_LIST: usize = 311;
+    /// Read the robust futex list's head and size back, as 32-bit words.
+    pub const GET_ROBUST_LIST: usize = 312;
     /// Create a socket.
     pub const SOCKET: usize = 359;
     /// Create a connected pair of sockets.
@@ -2366,6 +2380,11 @@ pub enum Syscall {
     Listen,
     /// Accept a connection on a listening socket.
     Accept,
+    /// i386's one entry for every socket call: a sub-call number and a
+    /// pointer to its arguments as 32-bit words. i386 only; glibc there
+    /// calls it for every socket operation, where musl tries the direct
+    /// numbers first.
+    Socketcall,
     /// Accept a connection, with flags for the new descriptor.
     Accept4,
     /// Read a socket's local address.
@@ -3920,6 +3939,7 @@ fn i386_early(nr: usize) -> Option<Syscall> {
         i386::SETTIMEOFDAY => Syscall::Settimeofday,
         i386::TIME => Syscall::Time,
         i386::ALARM => Syscall::Alarm,
+        i386::SETRLIMIT => Syscall::Setrlimit,
         _ => return None,
     };
     Some(call)
@@ -3977,6 +3997,8 @@ fn i386_middle(nr: usize) -> Option<Syscall> {
         i386::NANOSLEEP => Syscall::Nanosleep,
         i386::NEWSELECT => Syscall::Select,
         i386::ADJTIMEX => Syscall::Adjtimex,
+        i386::SOCKETCALL => Syscall::Socketcall,
+        i386::UGETRLIMIT => Syscall::Getrlimit,
         _ => return None,
     };
     Some(call)
@@ -4123,6 +4145,8 @@ fn i386_recent(nr: usize) -> Option<Syscall> {
         i386::RECVFROM => Syscall::Recvfrom,
         i386::RECVMSG => Syscall::Recvmsg,
         i386::SHUTDOWN => Syscall::Shutdown,
+        i386::SET_ROBUST_LIST => Syscall::SetRobustList,
+        i386::GET_ROBUST_LIST => Syscall::GetRobustList,
         _ => return None,
     };
     Some(call)

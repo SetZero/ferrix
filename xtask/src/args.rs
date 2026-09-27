@@ -59,6 +59,9 @@ pub(crate) struct Args {
     /// `--statd`: the image carries the stat service at
     /// `/sbin/ferrix-statd`, for `ferrix.init=` to start.
     pub(crate) statd: bool,
+    /// `--i686`: `test-threads` on x86-64 builds its program for 32-bit x86,
+    /// which runs in compatibility mode (`docs/I386.md`, I4).
+    pub(crate) i686: bool,
     /// `--adbd`: the image carries adbd at `/bin/adbd`, which nothing
     /// starts (`docs/ADB.md`).
     pub(crate) adbd: bool,
@@ -422,6 +425,7 @@ impl Args {
                 "--ferrousli" => args.ferrousli = true,
                 "--zinc" => args.zinc = true,
                 "--statd" => args.statd = true,
+                "--i686" => args.i686 = true,
                 "--adbd" => args.adbd = true,
                 "--miri" => args.miri = true,
                 "--reset" => args.reset = true,
@@ -805,6 +809,8 @@ mod tests {
         assert!(parse(&["check", "--zinc"]).unwrap().zinc);
         assert!(parse(&["build", "--statd"]).unwrap().statd);
         assert!(!parse(&["build"]).unwrap().statd);
+        assert!(parse(&["test-threads", "--i686"]).unwrap().i686);
+        assert!(!parse(&["test-threads"]).unwrap().i686);
     }
 
     #[test]
