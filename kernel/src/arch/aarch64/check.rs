@@ -10,9 +10,13 @@
 //! built with that syndrome, because a program that raises one is a program
 //! the kernel's own checks do not carry. The rest is the same kind of thing:
 //!
-//! * the `console=` value a loader names a `ramoops` zone with, read or
-//!   refused -- the Pixel 7's console, whose parser is the one part of it a
-//!   machine with a PL011 can run;
+//! * the `console=` value a loader names a `ramoops` zone or a 16550 with,
+//!   read or refused -- the Pixel 7's console and its crosvm guest's, whose
+//!   parsers are the one part of either a machine with a PL011 can run;
+//! * how much entropy firmware's TRNG gives, from firmware scripted to answer
+//!   as one with a TRNG does, and as ones without it, with an old SMCCC or
+//!   with nothing ready do -- answers the machine the check runs on never
+//!   gives, since `QEMU`'s firmware has no TRNG;
 //! * which driver a GIC firmware describes with version zero gets;
 //! * rewinding a system call a signal interrupted, and pointing one whose
 //!   restart is `restart_syscall`'s at that call;
@@ -66,15 +70,16 @@ const FAR: u64 = 0x0dea_d000;
 pub(crate) fn check() -> Result<(), &'static str> {
     let decoded = check_trap_decoding()?;
     check_frames_render()?;
-    let zones = check_ramoops_zones()?;
+    let zones = check_console_values()?;
+    let firmwares = check_trng()?;
     let versions = check_described_version()?;
     check_restart_rewind()?;
     let lines = check_masking()?;
     let refused = check_refusals()?;
     println!(
         "  machine  {decoded} exception syndromes decoded to the trap and signal Linux gives them, \
-         {zones} console= values read as a ramoops zone or refused, {versions} GIC descriptions \
-         given their driver, {lines} idle lines masked and let through at the controller, \
+         {zones} console= values read as a ramoops zone or a 16550 or refused, {firmwares} \
+         firmwares' TRNG answers taken or refused, {versions} GIC descriptions given their driver, {lines} idle lines masked and let through at the controller, \
          {refused} requests refused as specified"
     );
     Ok(())
@@ -218,12 +223,13 @@ fn check_frames_render() -> Result<(), &'static str> {
     Ok(())
 }
 
-/// The loader's `console=ramoops,<address>,<size>`, read or refused.
-/// Returns how many values were tried.
+/// The loader's `console=ramoops,<address>,<size>` and crosvm's
+/// `console=uart8250,mmio,<address>`, read or refused. Returns how many
+/// values were tried.
 ///
 /// Verifies: L.console.40
-fn check_ramoops_zones() -> Result<usize, &'static str> {
-    use super::console::ramoops_zone;
+fn check_console_values() -> Result<usize, &'static str> {
+    use super::console::{ns16550_port, ramoops_zone};
 
     let read = [(
         "ramoops,0x9ff00000,0x40000",
@@ -251,7 +257,179 @@ fn check_ramoops_zones() -> Result<usize, &'static str> {
     {
         return Err("a console= value that names no usable ramoops zone was taken as one");
     }
-    Ok(read.len() + refused.len())
+    let ports = [("uart8250,mmio,0x3f8", 0x3f8_u64)];
+    let not_ports = [
+        // The address is hexadecimal with a prefix, as Linux's `earlycon` has it.
+        "uart8250,mmio,3f8",
+        "uart8250,mmio,0x",
+        // A port in I/O space, which an Arm machine does not have.
+        "uart8250,io,0x3f8",
+        "ramoops,0x9ff00000,0x40000",
+    ];
+    for (value, port) in ports {
+        if ns16550_port(black_box(value)) != Some(port) {
+            return Err("a console= value naming a 16550 was not read as its address");
+        }
+    }
+    if not_ports
+        .iter()
+        .any(|value| ns16550_port(black_box(value)).is_some())
+    {
+        return Err("a console= value that names no 16550 in memory was taken as one");
+    }
+    Ok(read.len() + refused.len() + ports.len() + not_ports.len())
+}
+
+/// Firmware as [`check_trng`] scripts it: the PSCI and SMCCC versions it
+/// reports, its TRNG interface's version (zero for none) and whether that
+/// offers `TRNG_RND64`, and the status each `TRNG_RND64` answers in turn --
+/// success, with three words that name the call, once the list runs out.
+struct Firmware {
+    psci: u64,
+    smccc: u64,
+    trng: u64,
+    rnd64: bool,
+    statuses: &'static [i32],
+    /// How many `TRNG_RND64` calls it has answered.
+    rnd64_calls: usize,
+}
+
+/// SMCCC's `NOT_SUPPORTED`, as a result register holds it.
+const NOT_SUPPORTED: u64 = -1_i64 as u64;
+
+impl Firmware {
+    const fn new(psci: u64, smccc: u64, trng: u64, rnd64: bool, statuses: &'static [i32]) -> Self {
+        Firmware {
+            psci,
+            smccc,
+            trng,
+            rnd64,
+            statuses,
+            rnd64_calls: 0,
+        }
+    }
+
+    /// One SMCCC call, answered from the script.
+    fn call(&mut self, function: u64, argument: u64) -> [u64; 4] {
+        use super::trng::{
+            BITS_PER_CALL, PSCI_FEATURES, PSCI_VERSION, SMCCC_VERSION, TRNG_FEATURES, TRNG_RND64,
+            TRNG_VERSION,
+        };
+
+        let status = |value: u64| [value, 0, 0, 0];
+        match function {
+            PSCI_VERSION => status(self.psci),
+            // PSCI 1.0 is the first with `PSCI_FEATURES`, and a firmware
+            // that has it answers for SMCCC by its own version.
+            PSCI_FEATURES if self.psci >= 0x1_0000 && argument == SMCCC_VERSION => {
+                status(if self.smccc == 0 { NOT_SUPPORTED } else { 0 })
+            }
+            SMCCC_VERSION if self.smccc != 0 => status(self.smccc),
+            TRNG_VERSION if self.trng != 0 => status(self.trng),
+            TRNG_FEATURES if self.trng != 0 && self.rnd64 && argument == TRNG_RND64 => status(0),
+            TRNG_RND64 if self.trng != 0 && self.rnd64 && argument == BITS_PER_CALL => {
+                let call = self.rnd64_calls;
+                self.rnd64_calls += 1;
+                match self.statuses.get(call) {
+                    Some(&answer) => status(i64::from(answer) as u64),
+                    None => {
+                        let [high, middle, low] = trng_words(call);
+                        [0, high, middle, low]
+                    }
+                }
+            }
+            _ => status(NOT_SUPPORTED),
+        }
+    }
+}
+
+/// The words a scripted `TRNG_RND64` gives on its `call`th call: `x1`, `x2`
+/// and `x3`, each different in every byte from the others and the other
+/// calls'.
+fn trng_words(call: usize) -> [u64; 3] {
+    let call = call as u64;
+    [1_u64, 2, 3].map(|register| 0x0101_0101_0101_0101 * (call * 3 + register))
+}
+
+/// Firmware's TRNG, scripted: bytes taken in the order the interface gives
+/// them from a firmware that has it, a call that found nothing ready asked
+/// again and one that failed ending the fill, and nothing taken, nor
+/// `TRNG_RND64` asked, from one without the interface or the SMCCC and PSCI
+/// versions it needs. Returns how many firmwares.
+fn check_trng() -> Result<usize, &'static str> {
+    use super::trng::{ATTEMPTS, NO_ENTROPY, fill_from};
+
+    const PSCI_1_1: u64 = 0x1_0001;
+    const SMCCC_1_1: u64 = 0x1_0001;
+    const TRNG_1_0: u64 = 0x1_0000;
+    static NEVER_READY: [i32; ATTEMPTS + 1] = [NO_ENTROPY; ATTEMPTS + 1];
+
+    // Nothing ready on the first call, then two calls' worth, the second cut
+    // to the 16 bytes left: each call's `x3` first, then `x2`, then `x1`.
+    let mut firmware = Firmware::new(PSCI_1_1, SMCCC_1_1, TRNG_1_0, true, &[NO_ENTROPY]);
+    let mut out = [0_u8; 40];
+    let filled = fill_from(
+        |function, argument| firmware.call(function, argument),
+        &mut out,
+    );
+    let mut expected = [0_u8; 40];
+    for (chunk, call) in expected.chunks_mut(24).zip(1..) {
+        let [high, middle, low] = trng_words(call);
+        let bytes = [low, middle, high].map(u64::to_le_bytes);
+        for (slot, byte) in chunk.iter_mut().zip(bytes.iter().flatten()) {
+            *slot = *byte;
+        }
+    }
+    if filled != out.len() || out != expected || firmware.rnd64_calls != 3 {
+        return Err("firmware's TRNG words were not taken whole and in the interface's order");
+    }
+
+    // A firmware that fails the second call: the first call's bytes, and the
+    // rest of the buffer left as it was.
+    let mut firmware = Firmware::new(PSCI_1_1, SMCCC_1_1, TRNG_1_0, true, &[0, -1]);
+    let mut out = [0_u8; 48];
+    let filled = fill_from(
+        |function, argument| firmware.call(function, argument),
+        &mut out,
+    );
+    if filled != 24 || out[24..].iter().any(|&byte| byte != 0) || firmware.rnd64_calls != 2 {
+        return Err("a TRNG call that failed did not end the fill at the bytes already taken");
+    }
+
+    // Never anything ready: asked `ATTEMPTS` times, and nothing taken.
+    let mut firmware = Firmware::new(PSCI_1_1, SMCCC_1_1, TRNG_1_0, true, &NEVER_READY);
+    let mut out = [0_u8; 24];
+    let filled = fill_from(
+        |function, argument| firmware.call(function, argument),
+        &mut out,
+    );
+    if filled != 0 || firmware.rnd64_calls != ATTEMPTS {
+        return Err("a TRNG with nothing ready was not asked a bounded number of times");
+    }
+
+    // Firmwares that cannot be asked: PSCI 0.2, which has no
+    // `PSCI_FEATURES`; PSCI 1.1 without SMCCC; SMCCC 1.0, which the TRNG
+    // interface needs 1.1 of; no TRNG interface; and one without
+    // `TRNG_RND64`.
+    let refusing = [
+        Firmware::new(0x2, SMCCC_1_1, TRNG_1_0, true, &[]),
+        Firmware::new(PSCI_1_1, 0, TRNG_1_0, true, &[]),
+        Firmware::new(PSCI_1_1, 0x1_0000, TRNG_1_0, true, &[]),
+        Firmware::new(PSCI_1_1, SMCCC_1_1, 0, true, &[]),
+        Firmware::new(PSCI_1_1, SMCCC_1_1, TRNG_1_0, false, &[]),
+    ];
+    let count = refusing.len();
+    for mut firmware in refusing {
+        let mut out = [0_u8; 24];
+        let filled = fill_from(
+            |function, argument| firmware.call(function, argument),
+            &mut out,
+        );
+        if filled != 0 || firmware.rnd64_calls != 0 || out != [0; 24] {
+            return Err("entropy was asked of firmware that does not offer TRNG_RND64");
+        }
+    }
+    Ok(3 + count)
 }
 
 /// An idle shared line and an idle private one are masked and let through,

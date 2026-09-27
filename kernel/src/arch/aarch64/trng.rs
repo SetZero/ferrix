@@ -21,26 +21,26 @@ use super::cpu;
 use super::smp::{self, Conduit};
 
 /// `PSCI_VERSION`.
-const PSCI_VERSION: u64 = 0x8400_0000;
+pub(super) const PSCI_VERSION: u64 = 0x8400_0000;
 /// `PSCI_FEATURES`.
-const PSCI_FEATURES: u64 = 0x8400_000A;
+pub(super) const PSCI_FEATURES: u64 = 0x8400_000A;
 /// `SMCCC_VERSION`.
-const SMCCC_VERSION: u64 = 0x8000_0000;
+pub(super) const SMCCC_VERSION: u64 = 0x8000_0000;
 /// `TRNG_VERSION`.
-const TRNG_VERSION: u64 = 0x8400_0050;
+pub(super) const TRNG_VERSION: u64 = 0x8400_0050;
 /// `TRNG_FEATURES`.
-const TRNG_FEATURES: u64 = 0x8400_0051;
+pub(super) const TRNG_FEATURES: u64 = 0x8400_0051;
 /// `TRNG_RND64`: up to 192 bits in `x1`-`x3`, the lowest 64 in `x3`.
-const TRNG_RND64: u64 = 0xC400_0053;
+pub(super) const TRNG_RND64: u64 = 0xC400_0053;
 
 /// The most bits one `TRNG_RND64` gives.
-const BITS_PER_CALL: u64 = 192;
+pub(super) const BITS_PER_CALL: u64 = 192;
 
 /// `TRNG_RND64`'s status when the source has nothing ready yet.
-const NO_ENTROPY: i32 = -3;
+pub(super) const NO_ENTROPY: i32 = -3;
 
 /// How many times a call that found no entropy ready is asked again.
-const ATTEMPTS: usize = 8;
+pub(super) const ATTEMPTS: usize = 8;
 
 /// Fill `out` with firmware's full-entropy bytes, and say how many it filled:
 /// 0 on a machine whose firmware has no TRNG, or that says nothing.
@@ -48,12 +48,20 @@ pub(crate) fn fill(view: &BootView<'_>, out: &mut [u8]) -> usize {
     let Ok(conduit) = smp::psci_conduit(view) else {
         return 0;
     };
-    if !offers_rnd64(conduit) {
+    fill_from(|function, argument| call(conduit, function, argument), out)
+}
+
+/// [`fill`], with firmware asked through `call`: one SMCCC call, its function
+/// and argument, answered with its four result registers. Apart from the
+/// conduit so that the stage 3 machine check can answer as firmware would,
+/// including the answers no machine it runs on gives.
+pub(super) fn fill_from(mut call: impl FnMut(u64, u64) -> [u64; 4], out: &mut [u8]) -> usize {
+    if !offers_rnd64(&mut call) {
         return 0;
     }
     let mut filled = 0;
     for chunk in out.chunks_mut((BITS_PER_CALL / 8) as usize) {
-        let Some(bits) = rnd64(conduit) else {
+        let Some(bits) = rnd64(&mut call) else {
             break;
         };
         let bytes = [bits[2], bits[1], bits[0]].map(u64::to_le_bytes);
@@ -65,9 +73,9 @@ pub(crate) fn fill(view: &BootView<'_>, out: &mut [u8]) -> usize {
     filled
 }
 
-/// Whether firmware, through `conduit`, offers `TRNG_RND64`.
-fn offers_rnd64(conduit: Conduit) -> bool {
-    let status = |function, argument| call(conduit, function, argument)[0] as u32 as i32;
+/// Whether firmware, asked through `call`, offers `TRNG_RND64`.
+fn offers_rnd64(call: &mut impl FnMut(u64, u64) -> [u64; 4]) -> bool {
+    let mut status = |function, argument| call(function, argument)[0] as u32 as i32;
     if status(PSCI_VERSION, 0) < 0x1_0000 || status(PSCI_FEATURES, SMCCC_VERSION) < 0 {
         return false;
     }
@@ -79,9 +87,9 @@ fn offers_rnd64(conduit: Conduit) -> bool {
 
 /// One `TRNG_RND64` for all 192 bits, asked again while firmware reports none
 /// ready: `x1`, `x2`, `x3`.
-fn rnd64(conduit: Conduit) -> Option<[u64; 3]> {
+fn rnd64(call: &mut impl FnMut(u64, u64) -> [u64; 4]) -> Option<[u64; 3]> {
     for _ in 0..ATTEMPTS {
-        let [status, high, middle, low] = call(conduit, TRNG_RND64, BITS_PER_CALL);
+        let [status, high, middle, low] = call(TRNG_RND64, BITS_PER_CALL);
         match status as u32 as i32 {
             0 => return Some([high, middle, low]),
             NO_ENTROPY => {}
