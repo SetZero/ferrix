@@ -139,6 +139,8 @@ fn program(harness: &Harness) -> Checked<Arc<Process>> {
 
 /// Watch `v`'s `memory.events`, run the program to its end, and require
 /// the kill, its counts and its wake. How many the scoped OOM kill ended.
+///
+/// Verifies: L.object.80, L.object.100, H.QUOTA.6
 fn check_the_kill(
     harness: &Harness,
     program: &Arc<Process>,
