@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ferrix | Linux apps without Linux</title>
-<meta name="description" content="Ferrix is an experimental Rust OS that runs unmodified Linux programs on its own kernel. Disk, network, graphics and input drivers run as separate processes and can restart after a crash.">
+<title>Ferrix: a Rust operating system that runs Linux apps</title>
+<meta name="description" content="Ferrix is an experimental operating system written in Rust. It runs tested Linux apps unchanged on its own kernel, with restartable drivers outside the kernel. Build and boot it in QEMU.">
 <link rel="canonical" href="https://setzero.github.io/ferrix/">
 <meta name="theme-color" content="#0d0f12" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#f7f5f2" media="(prefers-color-scheme: light)">
@@ -16,16 +16,16 @@
 
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Ferrix">
-<meta property="og:title" content="Ferrix | Linux apps without Linux">
-<meta property="og:description" content="Unmodified Linux programs run on Ferrix's own Rust kernel. Its disk, network, graphics and input drivers run as separate processes and can restart after a crash.">
+<meta property="og:title" content="Ferrix: Linux apps without Linux">
+<meta property="og:description" content="A Rust OS with its own kernel and restartable userland drivers. Run tested Linux apps unchanged, then build and boot it yourself.">
 <meta property="og:url" content="https://setzero.github.io/ferrix/">
 <meta property="og:image" content="https://setzero.github.io/ferrix/assets/social-preview.png">
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="640">
 <meta property="og:image:alt" content="Ferrix logo beside a serial log in which rustc runs and Ferrix builds its own image">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Ferrix | Linux apps without Linux">
-<meta name="twitter:description" content="Unmodified Linux programs on a Rust OS with drivers outside the kernel. Chrome, rustc, git and curl run today.">
+<meta name="twitter:title" content="Ferrix: Linux apps without Linux">
+<meta name="twitter:description" content="A Rust OS with its own kernel and restartable userland drivers. Chrome, rustc, git and curl run today.">
 <meta name="twitter:image" content="https://setzero.github.io/ferrix/assets/social-preview.png">
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -40,13 +40,13 @@
     {
       "@type": "SoftwareSourceCode",
       "name": "Ferrix",
-      "description": "An experimental operating system written in Rust for x86-64, AArch64 and ARMv7-A. The official rustc release runs on it, and it can build and boot its own x86-64 image.",
+      "description": "An experimental Rust operating system that runs tested Linux applications unchanged on its own kernel. Ferrix has restartable userland drivers and can build and boot its own x86-64 image.",
       "codeRepository": "https://github.com/SetZero/ferrix",
       "programmingLanguage": "Rust",
       "license": "https://opensource.org/licenses/MIT",
       "url": "https://setzero.github.io/ferrix/",
       "image": "https://setzero.github.io/ferrix/assets/social-preview.png",
-      "keywords": "Rust operating system, Rust kernel, hobby OS, osdev, microkernel drivers, Linux ABI, btrfs, Wayland compositor, self-hosting OS, AI-built software"
+      "keywords": "Rust operating system, Rust kernel, OS development, Linux ABI compatibility, userland drivers, btrfs, Wayland compositor"
     },
     {
       "@type": "SoftwareApplication",
@@ -172,7 +172,7 @@
 
 <section id="features" class="section alt">
   <div class="wrap">
-    <h2>What's in Ferrix</h2>
+    <h2>From Rust kernel to desktop</h2>
     <div class="grid">
       <article class="card">
         <h3>The kernel</h3>

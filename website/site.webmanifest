@@ -1,7 +1,7 @@
 {
   "name": "Ferrix",
   "short_name": "Ferrix",
-  "description": "A Rust operating system that runs rustc and builds itself.",
+  "description": "An experimental Rust operating system that runs tested Linux apps unchanged on its own kernel.",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#0d0f12",

@@ -1,7 +1,20 @@
+# Ferrix
+
+**Linux apps without Linux.**
+
+Ferrix is an experimental operating system written in Rust. It runs tested,
+unmodified Linux programs on its own kernel, with disk, network, graphics and
+input drivers in restartable userland processes. Chrome, `rustc`, `git` and
+`curl` work today. It is not ready to replace your everyday OS.
+
+**Try it:** install Rust and QEMU, then run `cargo xtask run --arch x86_64`.
+[Build instructions](#getting-started) · [Website](https://setzero.github.io/ferrix/) ·
+[What works](#what-exists-today) · [Known work left](docs/roadmap/where-it-stands.md)
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/banner-dark.png">
-    <img src="docs/brand/banner-light.png" alt="Ferrix: a Rust operating system that runs rustc and builds itself" width="100%">
+    <img src="docs/brand/banner-light.png" alt="Ferrix logo and operating system artwork" width="100%">
   </picture>
 </p>
 
@@ -39,18 +52,9 @@
 
 <p align="center"><sub>Real captures, x86-64 under KVM; how each was made is in <a href="docs/brand/screenshots/CAPTIONS.md">CAPTIONS.md</a>.</sub></p>
 
-# Ferrix
+## Proof you can run
 
-An operating system written in Rust for x86-64, AArch64 and ARMv7-A, whose
-acceptance test is that it compiles Rust.
-
-Not "has a shell", not "draws a window": it hosts `rustc`. That is the hardest
-thing a general-purpose OS is routinely asked to do, and the only goal that
-forces every subsystem to be real — threads and futexes, demand paging over
-gigabytes, `fork`/`execve`, the Linux system-call ABI, dynamic linking, and a
-filesystem that survives a crash.
-
-And it does. Since 2026-09-22, `cargo xtask test-rustc` boots Ferrix with a
+The boot tests do more than start a shell. `cargo xtask test-rustc` boots Ferrix with a
 btrfs volume holding the rust-lang.org release of `rustc` and Debian's glibc,
 compiles `hello.rs` through `cc`, `collect2` and `rust-lld` — five programs
 nobody here wrote, four `execve`s deep, over some 350 MiB of shared libraries
