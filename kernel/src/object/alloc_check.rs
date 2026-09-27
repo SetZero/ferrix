@@ -103,7 +103,7 @@ pub(crate) struct Report {
 
 /// Run both parts.
 ///
-/// Verifies: H.MEM.11
+/// Verifies: L.object.7, H.MEM.11
 pub(crate) fn run() -> Result<Report, &'static str> {
     let drawn = check_a_section_completes_on_the_reserve()?;
     let mut report = check_the_native_calls_survive()?;
@@ -300,6 +300,8 @@ fn check_the_native_calls_survive() -> Result<Report, &'static str> {
 /// One round of calls. With `failing`, a call may answer `NO_MEMORY`, or what
 /// follows from an earlier one having done so; without, every call must
 /// succeed.
+///
+/// Verifies: L.object.30
 fn round(side: &Side, root: Handle, tally: &mut Report, failing: bool) -> Result<(), &'static str> {
     let mut made = Round::default();
     let outcome = calls(side, root, tally, failing, &mut made);
