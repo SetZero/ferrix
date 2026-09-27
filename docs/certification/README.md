@@ -27,7 +27,7 @@ specific, measured, and mostly documents rather than code.
 * [TODO.md](TODO.md) — start here to re-audit: what to re-measure, and what not to write
 * [SAFETY-MANUAL.md](SAFETY-MANUAL.md) — the out-of-context argument: assumed requirements, safe state, eleven assumptions of use, element failure analysis
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
-* [FINDINGS.md](FINDINGS.md) — the audit register, 15 open findings and 30 closed
+* [FINDINGS.md](FINDINGS.md) — the audit register, 15 open findings and 31 closed
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
 * [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) — AVA_VAN.4 over the seven threats; six residual vulnerabilities
 * [SPECULATION.md](SPECULATION.md) — the side-channel defences, per architecture, behind one build switch, and what they cost
@@ -77,7 +77,7 @@ boundary.
 | In-kernel self-tests | 42,634 lines |
 | Statement coverage, certified item | **89.5%** x86-64, **90.2%** AArch64, **84.8%** ARMv7-A |
 | Statement coverage, core ring | 90.1% x86-64, 90.8% AArch64, 84.1% ARMv7-A |
-| Unreached statements | x86-64 785 — 461 argued, 247 hardware absent, **77 need a test**; AArch64 747 — 400, 201, **146**; ARMv7-A 1,131 — 557, 444, **130** |
+| Unreached statements | x86-64 785 — 461 argued, 247 hardware absent, **77 need a test**; AArch64 746 — 400, 201, **145**; ARMv7-A 1,131 — 557, 444, **130** |
 | SOUP in the item | **0** |
 | External crates, host-side | 21 |
 | Upward boundary references | **0**, from 94 at the start of the work (29 and 62 before the gate could resolve module paths) |

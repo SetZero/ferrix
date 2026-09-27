@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-15 findings are open and 30 are closed, of 45. F-10 was re-measured on 2026-09-27 over the checks written for it module by module: 89.5% of the certified item's statements on x86-64, 90.2% on AArch64 and 84.8% on ARMv7-A, with 77, 146 and 130 still needing a test and every other unreached statement argued or put down to absent hardware. F-38, F-39 and F-40 were found by other work on 2026-09-26 and recorded by the certification review that work now goes through, and all three closed the same day with their fixes: F-39, a native process any user made running as root; F-38, a device model writing a dead driver's frames after they were given back; and F-40, a delegated job lifting its own limits, closed by a job right of its own for setting limits. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
+15 findings are open and 31 are closed, of 46. F-41, a page `mprotect` made writable after a `fork` writing into the other process's copy, was found and closed on 2026-09-27. F-10 was re-measured on 2026-09-27 over the checks written for it module by module: 89.5% of the certified item's statements on x86-64, 90.2% on AArch64 and 84.8% on ARMv7-A, with 77, 146 and 130 still needing a test and every other unreached statement argued or put down to absent hardware. F-38, F-39 and F-40 were found by other work on 2026-09-26 and recorded by the certification review that work now goes through, and all three closed the same day with their fixes: F-39, a native process any user made running as root; F-38, a device model writing a dead driver's frames after they were given back; and F-40, a delegated job lifting its own limits, closed by a job right of its own for setting limits. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -383,8 +383,8 @@ the Arm figures above predate the tool's fixes.
 
 **All three, 2026-09-27** (on main at c14846aa, measured on 9076655c and
 carried across the kernel relayout, which moved files without changing a
-statement of the item): x86-64 **6,723 of 7,508, 89.5%**; AArch64 **6,869
-of 7,616, 90.2%**; ARMv7-A **6,296 of 7,427, 84.8%**. Three passes wrote
+statement of the item): x86-64 **6,723 of 7,508, 89.5%**; AArch64 **6,876
+of 7,622, 90.2%** (re-measured after the PL011 merge, ad339d3c); ARMv7-A **6,296 of 7,427, 84.8%**. Three passes wrote
 the checks, one per part of the item, and the suite measured them together:
 
 * *The memory layer and the objects* (`user/`, `object/`, `mm`, `vmap`,
@@ -1094,6 +1094,36 @@ job_set_limit"*, and `job_for_cgroup` granting `SET_LIMIT` to any writer of
 `cgroup.procs` at *"job_for_cgroup gave SET_LIMIT to a delegatee that may not
 write the limit files"*.
 
+
+### F-41 — a page mprotect made writable after a fork wrote into the other process's copy
+**Found and closed 2026-09-27** (c9661d5c, with its boot check 469bf17c; found
+by the Pixel 7 work, ferrix-d4, as a Chromium zygote's "stack smashing
+detected").
+
+*Was:* **Major.** A private file mapping's page is copied into an anonymous
+frame of its own on its first write (the shadow page), and `fork` leaves that
+frame shared by parent and child, read only, to be copied on the next write.
+The copy-on-write mark was set only for pages writable at the fork. A page
+written before the fork and then made read only -- `ld.so`'s RELRO after
+relocation is exactly that -- was shared unmarked, so when one process made it
+writable again with `mprotect` its write went into the frame the other still
+mapped. One process changed another's memory, a T.MEMORY path the analysis had
+not considered: here, the child corrupting the parent's
+`__stack_chk_guard`. The file's own page-cache page was never reached: a
+private file mapping maps the file's frame read only and copies on the first
+write, and the file still read its original bytes when traced.
+
+*Now:* `mprotect` making a private region writable marks it copy-on-write
+(`libs/kernel/vma`'s `protect`), merging and splitting regions keep the mark,
+and the next write gives the writer a copy of its own.
+
+*Checked by the build:* stage 6 (`user/check.rs`) writes a private page, makes
+it read only, forks, and has the child make it writable and write through its
+own translation: the child must get a copy, the parent's frame must keep its
+value, and no frame may leak. With `protect` not marking the region
+(scratch, AArch64) the boot stops at *"a write to a page a fork left read-only
+and mprotect made writable reached the other process's page"*. A host test in
+`libs/kernel/vma` holds the mark itself.
 ### F-22 — no safety case
 **Closed at the element level 2026-09-25** by
 [SAFETY-MANUAL.md](SAFETY-MANUAL.md): the argument is §2 (assumed safety

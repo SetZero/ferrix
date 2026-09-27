@@ -106,7 +106,7 @@ changing a statement of the item:
 |---|---:|---:|---:|
 | `core` | 5,092 / 5,649 — 90.1% | 5,262 / 5,796 — 90.8% | 4,712 / 5,606 — 84.1% |
 | `item` | 1,631 / 1,859 — 87.7% | 1,607 / 1,820 — 88.3% | 1,584 / 1,821 — 87.0% |
-| **Certified item** | **6,723 / 7,508 — 89.5%** | **6,869 / 7,616 — 90.2%** | **6,296 / 7,427 — 84.8%** |
+| **Certified item** | **6,723 / 7,508 — 89.5%** | **6,876 / 7,622 — 90.2%** | **6,296 / 7,427 — 84.8%** |
 | `load` (not claimed) | 9,231 / 12,989 — 71.1% | 8,997 / 12,980 — 69.3% | 9,136 / 13,102 — 69.7% |
 
 ARMv7-A trails because more of its residual is hardware and configuration it
@@ -141,13 +141,13 @@ defensive code, and neither conversation can start from a percentage.
 
 | | x86-64 | AArch64 | ARMv7-A |
 |---|---:|---:|---:|
-| Unreached | 785 | 747 | 1,131 |
+| Unreached | 785 | 746 | 1,131 |
 | Argued: another architecture or board | 184 | 156 | 266 |
 | Argued: reached only when stopping | 190 | 150 | 203 |
 | Argued: reached only when something has failed | 76 | 82 | 68 |
 | Argued: run, and credited to another line | 11 | 12 | 20 |
 | Hardware the machine does not present | 247 | 201 | 444 |
-| **Needs a test** | **77** | **146** | **130** |
+| **Needs a test** | **77** | **145** | **130** |
 
 [COVERAGE-WORKLIST.md](COVERAGE-WORKLIST.md) groups the last row by module,
 with each file's count on every architecture and the lines no architecture
@@ -268,7 +268,7 @@ architecture and both profiles in the reference configuration, without
 modifying the toolchain.
 
 **What it does not.** 89.5%, 90.2% and 84.8% are not 100%. The residual is
-enumerated and sorted, and 77 of x86-64's 785 statements, 146 of AArch64's 747
+enumerated and sorted, and 77 of x86-64's 785 statements, 145 of AArch64's 746
 and 130 of ARMv7-A's 1,131 still need a test rather than an argument (F-10). There is no decision
 or MC/DC coverage, which DAL C does not require and DAL B and A do (F-13).
 
