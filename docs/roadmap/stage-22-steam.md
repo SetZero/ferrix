@@ -51,8 +51,14 @@ staged until now.
   `std::thread` program passes `test-threads`. glibc wanted `socketcall`,
   the 32-bit `ugetrlimit` and the 12-byte robust list, found by tracing it
   under `qemu-i386` before booting it. Still to do: what Steam finds
-  missing, which is I5 -- `modify_ldt` for 32-bit Wine, `ipc`, the calls
-  that carry a `siginfo`, more `ioctl`s.
+  missing, which is I5. **I5a** follows (2026-09-27): Valve's steamcmd,
+  the client's core without its display, updates itself and logs in to
+  Steam anonymously on Ferrix (`cargo xtask test-steamcmd`, under KVM, with
+  the network): the i386 `stat64` family, `waitid`, `cpu MHz` in
+  `/proc/cpuinfo`, and a certificate bundle on its volume. Still to do: the
+  client's bootstrapper (I5b), which needs XWayland for its window;
+  System V semaphores, which steamcmd asks for through `ipc` and carries on
+  without, waiting for the customer; `modify_ldt` for 32-bit Wine.
 * **glibc's place, taken.** The dynamic linking stage's third part, glibc's
   names, with Steam as its stress test: `ld-linux` and `libc.so.6` requested
   by name, `dlopen` from the client and from every Steam runtime library,

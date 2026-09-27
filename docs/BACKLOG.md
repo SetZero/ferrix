@@ -223,7 +223,7 @@ session's name in its owner cell in your first landing.
 | ferrix-15 | The init (`docs/INIT.md`), L13 parked; the audit record's design (F-21b) |
 | ferrix-55b | T0 of the live kernel update plan (cf265506, debe8998, 742fdaeb) and S0 of the opaque-kernel plan, both seam rows measured (d6974a66, c4c8b186); the plan is shelved by the customer (2026-09-27), so nothing further is owned here |
 | ferrix-c7 | Chrome and `rustc` on ferrousli's loader (the customer's ask, 2026-09-26): landed d7b0709a and beffed20; last, the git and foot port reds (weak obstack, `random_r` declared); then **winding down**. ferrousli has had no owner since; last touched by ferrix-90 on 2026-09-27 for libpulse (`backtrace_symbols`, and a mutex inheriting priority refused with `ENOTSUP` as glibc does, since Ferrix has no PI futexes) |
-| ferrix-41 | Stage 22's 32-bit x86 ABI (`docs/I386.md`): I1, I2a (the thread pointer), I2b (fork, clone, signal frames), I3 (Alpine's i386 busybox) and I4 (Debian's glibc i386 busybox, i686 threads) on main; I5, what `steam.sh` finds missing, next |
+| ferrix-41 | Stage 22's 32-bit x86 ABI (`docs/I386.md`): I1 to I4 on main, and I5a, Valve's steamcmd logging in to Steam on Ferrix (`test-steamcmd`); I5b, the Steam client's bootstrapper, next |
 | ferrix-90 | Audio (`docs/AUDIO.md`): L1 to L7 done 2026-09-26, Chrome plays through `/dev/snd`, a dead driver restarted (F-38's quarantine); U1, alsa-lib and aplay on ferrousli, done 2026-09-27; U2, the PulseAudio-protocol server in Rust, 18 points in `docs/AUDIO.md` §5: U2, the PulseAudio-protocol server, done 2026-09-27 in four slices: the protocol, `pulsed` playing one client frame for frame, mixing and resampling, and the desktop with Chrome playing through it. Next U3, SDL and games finding what is missing by running. `userland/media/` is this session's too since 2026-09-27, Bad Apple's included: its `test-badapple` is in the gate of any slice that touches `pcm` or `resample` |
 | ferrix-d5 | The Rust desktop clients (`docs/DESKTOP-CLIENTS.md`: the clients-base crates, waybar, fuzzel, hyprlock, hypridle), the EDID override, `docs/AUTH.md` and its phase 1; at most three streams running at once |
 | ferrix-55 | Standing certification consultant (reviews item changes before they land; keeps `docs/certification/` current). Its last engineering landing, the combined coverage evidence, is on branch `cov-d-evidence` |
@@ -804,6 +804,14 @@ otherwise; one a later decision replaced is deleted, and the history keeps it.
   as interfering with a running workload; it needs the customer's hand.
 * Pushes to `origin`: local `main` is about a dozen commits ahead; a push
   needs the customer's word, given in the session that pushes.
+* System V IPC for Steam (ferrix-41, I5 of `docs/I386.md`): steamcmd's
+  anonymous login calls `semget` and `semctl` -- through `ipc` (117) on
+  i386 -- which are `ENOSYS` by the stage 7 decision (futexes, pipes and
+  `MAP_SHARED` stand in). On Ferrix steamcmd logs in without them, printing
+  a `threadtools` assertion each time (`test-steamcmd`, 2026-09-27);
+  whether the full client does is not known yet.
+  Implementing SysV semaphores (and likely shared memory, for Steam's
+  overlay) reverses that decision, so it waits for the customer's word.
 
 ---
 
