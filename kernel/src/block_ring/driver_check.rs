@@ -157,7 +157,9 @@ pub(crate) fn run(started_by_devmgr: bool) -> Result<Report, &'static str> {
         }
         let disk = first.ok_or("no disk was published")?;
         let read = if checks::run() {
-            read_back(disk.as_ref())?
+            let read = read_back(disk.as_ref())?;
+            super::hop_check::run(&disk)?;
+            read
         } else {
             0
         };
@@ -204,7 +206,9 @@ pub(crate) fn run(started_by_devmgr: bool) -> Result<Report, &'static str> {
     // Sectors through the first disk, the path a mount takes.
     let disk = first.ok_or("no disk was published")?;
     let read = if checks::run() {
-        read_back(disk.as_ref())?
+        let read = read_back(disk.as_ref())?;
+        super::hop_check::run(&disk)?;
+        read
     } else {
         0
     };

@@ -88,6 +88,7 @@ use crate::syscall::native;
 
 pub(crate) mod check;
 pub(crate) mod driver_check;
+pub(crate) mod hop_check;
 
 /// The block major every ring's disk is published under. Linux allocates
 /// virtio-blk's major dynamically, usually 253 or 254; nothing keys on it.
@@ -1302,6 +1303,11 @@ impl Serving<'_> {
                 continue;
             };
             crate::fs::seam::completed();
+            if completed.device_ticks != 0 {
+                let _ = hop_check::DEVICE_TICKS
+                    .fetch_add(u64::from(completed.device_ticks), Ordering::Relaxed);
+                let _ = hop_check::DEVICE_TIMED.fetch_add(1, Ordering::Relaxed);
+            }
             let result = outcome(&completed);
             let offset = u64::from(region) * self.region_bytes;
             answer(
