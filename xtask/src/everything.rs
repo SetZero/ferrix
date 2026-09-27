@@ -157,8 +157,7 @@ fn merge(from: &Path, into: &Path) -> Result<u64> {
                     None => return Err(clash(&target)),
                 }
             }
-            std::os::unix::fs::symlink(&link, &target)
-                .map_err(|error| Error::new(format!("{}: {error}", target.display())))?;
+            symlink(&link, &target)?;
         } else if kind.is_dir() {
             match std::fs::symlink_metadata(&target) {
                 Ok(there) if !there.is_dir() => return Err(clash(&target)),
@@ -195,6 +194,24 @@ fn merge(from: &Path, into: &Path) -> Result<u64> {
         }
     }
     Ok(bytes)
+}
+
+/// A symbolic link at `at` reading `link`.
+#[cfg(unix)]
+fn symlink(link: &Path, at: &Path) -> Result<()> {
+    std::os::unix::fs::symlink(link, at)
+        .map_err(|error| Error::new(format!("{}: {error}", at.display())))
+}
+
+/// A symbolic link, which only a Unix host makes: the volume is made from
+/// two trees of links on the Linux host that boots it, and a Windows build of
+/// xtask has neither the trees nor `mkfs.btrfs`.
+#[cfg(not(unix))]
+fn symlink(_link: &Path, at: &Path) -> Result<()> {
+    Err(Error::new(format!(
+        "{}: --everything makes its volume on a Unix host",
+        at.display()
+    )))
 }
 
 /// Remove the copy a newer one replaces.
@@ -358,6 +375,7 @@ fn modified(path: &Path) -> Result<SystemTime> {
 }
 
 #[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
 

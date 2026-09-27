@@ -142,12 +142,7 @@ fn walk(dir: &Path, name: &str, out: &mut Vec<File>) -> Result<()> {
             let bytes = std::fs::read(&path).map_err(|error| {
                 crate::Error::new(format!("reading {}: {error}", path.display()))
             })?;
-            use std::os::unix::fs::PermissionsExt as _;
-            let mode = if meta.permissions().mode() & 0o111 != 0 {
-                0o755
-            } else {
-                0o644
-            };
+            let mode = if executable(&meta) { 0o755 } else { 0o644 };
             out.push(File {
                 path: inside,
                 mode,
@@ -470,4 +465,19 @@ mod probe {
                 .any(|file| file.path.starts_with("usr/share/fonts/host/"))
         );
     }
+}
+
+/// Whether any execute bit is set: on a Unix host, from the file's mode; on
+/// any other there are none to read, and a dotfile is taken as not a
+/// program.
+#[cfg(unix)]
+fn executable(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    meta.permissions().mode() & 0o111 != 0
+}
+
+/// As above: no mode bits off a Unix host.
+#[cfg(not(unix))]
+fn executable(_meta: &std::fs::Metadata) -> bool {
+    false
 }

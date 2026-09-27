@@ -66,7 +66,12 @@ mod busybox;
 mod cargo;
 mod check;
 mod chrome;
+// A Unix socket is the clipboard port's far end.
+#[cfg(unix)]
 mod clipboard;
+// test-clipboard's codec, which nothing else here speaks.
+#[cfg(not(unix))]
+use ferrix_vdagent as _;
 mod compositor;
 mod console;
 mod coverage;
@@ -418,7 +423,12 @@ fn run() -> Result<()> {
         "test-vfs" => test_vfs(&args),
         "test-net" => test_net(&args),
         "test-adb" => adbd::test_adb(&args, program_for),
+        #[cfg(unix)]
         "test-clipboard" => clipboard::test_clipboard(&args),
+        #[cfg(not(unix))]
+        "test-clipboard" => Err(Error::new(
+            "test-clipboard serves the clipboard port on a Unix socket: run it on the Linux host",
+        )),
         "test-display" => display::test_display(&args),
         "run-compositor" => compositor::run_compositor(&args),
         "run-badapple" => badapple::run_badapple(&args),

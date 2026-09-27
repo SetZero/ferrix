@@ -1250,6 +1250,7 @@ fn wait_for(watching: &mut Watching<'_>, awaiting: &[&str]) -> Result<()> {
 /// Build the bootable image for one boot: the compositor as init, the
 /// client, `hyprctl` and the plugin in the initramfs, and the configuration
 /// beside them.
+#[cfg(unix)]
 /// A desktop image whose compositor starts with `config`, and its kernel,
 /// for a gate beside `test-compositor` that needs the compositor, its
 /// programs and a shell to run them in sequence: `test-clipboard`. zinc and
