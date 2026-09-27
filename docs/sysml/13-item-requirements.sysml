@@ -678,6 +678,50 @@ package FerrixItemRequirements {
         }
     }
 
+    package Devices {
+        doc /* A device served by its drivers one at a time, and stopped
+             * between them: O.CAPABILITY and ASR-3 for the claim, O.DMA and
+             * ASR-4 for the quiesce. Proposed 2026-09-27 with part 20's
+             * low-level requirements, which nothing above them stated. */
+
+        requirement <'H.DEV.1'> servedByItsClaimsAlone : ItemHighLevel {
+            attribute :>> statement = "A device shall be claimed through no more of
+                its core's control channels at once than the core allows -- one,
+                but for an STM32 USB host's input functions -- and a claim shall
+                stand until the core lets it go.";
+            attribute :>> criterion = "A second claim of a node is refused, a
+                shared node's claims stop at its limit, and one claim let go leaves
+                the others (the `services` line).";
+            attribute :>> parent = ("O.CAPABILITY", "ASR-3");
+        }
+        requirement <'H.DEV.2'> refusedUnderALiveDriver : ItemHighLevel {
+            attribute :>> statement = "A quiesce shall be refused while a live
+                driver serves the device.";
+            attribute :>> criterion = "A quiesce of the device a running block
+                driver serves answers BAD_STATE (the `blk-ring` line).";
+            attribute :>> parent = ("O.DMA", "ASR-4");
+        }
+        requirement <'H.DEV.4'> stoppedBeforeItAnswers : ItemHighLevel {
+            attribute :>> statement = "A quiesce shall answer success only once
+                every core has let the device go and the function's bus mastering
+                is off.";
+            attribute :>> criterion = "A quiesce the instant a block driver dies
+                answers success, and the function's command register, whose
+                bus mastering was turned on while the driver served it as its
+                first pin turns it, reads it off (the `blk-ring` line).";
+            attribute :>> parent = ("O.DMA", "ASR-4");
+        }
+        requirement <'H.DEV.3'> aRestartedDriverKeepsItsName : ItemHighLevel {
+            attribute :>> statement = "A device a driver started again serves shall
+                be published under the lowest number its core has free, so that it
+                takes back the name its predecessor had.";
+            attribute :>> criterion = "A number given back is the next taken (the
+                `services` line); a GPU driver killed and restarted is card0
+                again (`xtask test-restart`).";
+            attribute :>> parent = "P.2";
+        }
+    }
+
     package Traps {
         doc /* The system call boundary and the exceptions a program raises:
              * O.VALIDATE and ASR-7 (FPT_TDC.1), with O.ISOLATE for what a

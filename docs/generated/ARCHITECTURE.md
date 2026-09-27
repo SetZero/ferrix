@@ -111,10 +111,11 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixIommuRequirements` | `16-iommu-requirements.sysml` | What each unit of kernel/src/iommu.rs and kernel/src/iommu/ does, as `ItemLowLevel` requirements (part 13 defines the format): where firmware puts each PCI function's DMA, the units the kernel turns translation on for, the domains a driver pins pages into, the gate a wait on a unit is made through, and the faults a unit records. The pins a program makes through a handle, and the quarantine a dead driver's pins go to, are object/'s (part 14, `L.object.45` to `L.object.49`); this is the domain side under them. |
 | `FerrixMemoryRequirements` | `17-memory-requirements.sysml` | What each unit of the item's memory management does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies), in two id spaces. |
 | `FerrixX8664Requirements` | `18-x86-64-requirements.sysml` | What each unit of kernel/src/arch/x86_64/, kernel/src/trap.rs and kernel/src/syscall/mod.rs's dispatcher does, as `ItemLowLevel` requirements (part 13 defines the format): the descriptor tables and which selectors ring 3 may hold, the context switch and the user state it carries, starting processors, the paranoid entries, the speculation defences, the counter and timer, both ABIs' signal frames, SYSCALL and int $0x80, the exception gates and what a fault becomes, and which calls reach which answer. |
+| `FerrixDeviceRequirements` | `20-device-requirements.sysml` | What each unit of kernel/src/claim.rs and kernel/src/device.rs does, and the quiesce in kernel/src/syscall/native.rs, as `ItemLowLevel` requirements (part 13 defines the format): a device claimed through its core's control channels, the number its node is published under, the apertures and vectors a node hands out and nothing past them, the MSI-X vectors it mints, the bus mastering a quiesce turns off, and the quiesce itself, which waits out every core that serves the device before the next driver is given it. The objects a driver holds for a device -- its mapping, its interrupt, its pins -- are object/'s (part 14); the domain under them is iommu's (part 16). |
 | `FerrixSmpRequirements` | `22-smp-requirements.sysml` | What each unit of kernel/src/smp.rs does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): finding the processors and giving each a record it finds itself by, starting the secondaries, the inter-processor interrupt, the TLB shootdown -- whole and scoped, and the bound on how long it waits -- grace periods, stopping the other processors for a panic, and the scheduler's kick. The start sequences themselves, the per-processor register and the interrupt controller are each architecture's (kernel/src/arch/\<isa>/smp.rs), and belong to the arch slices; this is the architecture-independent half above them. |
 | `FerrixConsoleRequirements` | `23-console-requirements.sysml` | What each unit of kernel/src/console.rs and kernel/src/console/ does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): the kernel's lines to the port, whole and in order; the way a failure report gets past a lock nobody will release; the recent-output ring a panic screen draws; the transmit ring and the writers who queue into it, wait for room or poll; the receive ring the port's interrupt fills; the kernel log every byte is recorded in, what it promises a reader and what it keeps out; and the boot console drawn on the framebuffer. The ports themselves are each architecture's (kernel/src/arch/\<isa>/console.rs) and belong to the arch slices; the two of their functions that decide \*which\* console the kernel writes to, and whose checks test that, are here too (`Ports`), at the coordinator's asking. |
 
-21 files, 86 packages, 4741 elements, 210 relations. Model digest `1841d0c642c8c9a0`.
+22 files, 91 packages, 4937 elements, 211 relations. Model digest `1971b9f169dd3592`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -4271,6 +4272,41 @@ flowchart LR
 | `L.syscall.3` | `enosysIsReportedWithinItsBound` | — | — | — |
 | `L.trap.5` | `noEntryMeansEnosys` | — | — | — |
 | `L.trap.6` | `aMovedProcessRunsInItsNewJob` | — | — | — |
+| `L.claim.1` | `aNodeIsClaimedOnce` | — | — | — |
+| `L.claim.2` | `aSharedNodeUpToItsLimit` | — | — | — |
+| `L.claim.3` | `refusedUnderAnyLiveDriver` | — | — | — |
+| `L.claim.4` | `aReleaseEndsTheWait` | — | — | — |
+| `L.claim.5` | `aCancelledWaitIsToldWaiting` | — | — | — |
+| `L.claim.6` | `theWaitHasAPatience` | — | — | — |
+| `L.claim.7` | `oneClaimLetGo` | — | — | — |
+| `L.claim.8` | `refusedForMemory` | — | — | — |
+| `L.claim.9` | `theLowestFreeNumber` | — | — | — |
+| `L.device.1` | `aperturesClearOfTheKernel` | — | — | — |
+| `L.device.2` | `anApertureGrantsExactlyItsRange` | — | — | — |
+| `L.device.3` | `interruptTablesNeverGranted` | — | — | — |
+| `L.device.4` | `staticVectorsAsRecorded` | — | — | — |
+| `L.device.5` | `nodesShareNothing` | — | — | — |
+| `L.device.6` | `msixMintedOnce` | — | — | — |
+| `L.device.7` | `msixMaskedAsTold` | — | — | — |
+| `L.device.8` | `aDomainPerNode` | — | — | — |
+| `L.device.9` | `dmaIsSwitchedAtTheFunction` | — | — | — |
+| `L.device.10` | `aPciNodeDescribedAsItIs` | — | — | — |
+| `L.device.11` | `aFailureNamesItsNode` | — | — | — |
+| `L.device.12` | `theLogOnlyToItsReader` | — | — | — |
+| `L.device.13` | `noClockWithoutABoard` | — | — | — |
+| `L.device.14` | `reservedIsWhatTheKernelUses` | — | — | — |
+| `L.device.15` | `aHostVisibleWindow` | — | — | — |
+| `L.device.16` | `aHostTableOnlyWhereItIs` | — | — | — |
+| `L.device.17` | `legacyLinesOnceEach` | — | — | — |
+| `L.device.18` | `treeAndBoardNodes` | — | — | — |
+| `L.device.19` | `aTreeNodeDescribed` | — | — | — |
+| `L.device.20` | `nothingMintedUnpublished` | — | — | — |
+| `L.device.21` | `inputFunctionsOfAHost` | — | — | — |
+| `L.quiesce.1` | `onlyItsManagerQuiesces` | — | — | — |
+| `L.quiesce.2` | `refusedUnderItsDriver` | — | — | — |
+| `L.quiesce.3` | `itWaitsOutADeadDriver` | — | — | — |
+| `L.quiesce.4` | `aRestartedManagerQuiesces` | — | — | — |
+| `L.quiesce.5` | `theWaitHasAnEnd` | — | — | — |
 | `L.smp.1` | `impossibleListsAreRefused` | — | — | — |
 | `L.smp.2` | `theBootProcessorIsZero` | — | — | — |
 | `L.smp.3` | `eachProcessorFindsItsOwnRecord` | — | — | — |

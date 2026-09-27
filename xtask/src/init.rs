@@ -892,6 +892,8 @@ fn directory(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
 /// `devmgr.service` is active, and a `svc restart` of it has the kernel start
 /// a second `devmgr` once the first and its drivers have gone, with init
 /// removing the first's cgroup and not saying it could not.
+///
+/// Verifies: L.quiesce.4
 fn devmgr_by_init(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
     let all = everything(at);
     for (line, what) in [

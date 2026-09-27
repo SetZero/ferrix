@@ -155,7 +155,23 @@ impl Claims {
         node: &Arc<DeviceNode>,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<(), StillServed> {
-        let deadline = timer::now_nanos().saturating_add(PATIENCE_NANOS);
+        self.wait_within(node, cancelled, PATIENCE_NANOS)
+    }
+
+    /// [`Claims::wait_until_released`] with the patience given rather than
+    /// the product's five seconds: the check proves in milliseconds what the
+    /// patience's end answers.
+    ///
+    /// # Errors
+    ///
+    /// As [`Claims::wait_until_released`].
+    pub(crate) fn wait_within(
+        &self,
+        node: &Arc<DeviceNode>,
+        cancelled: &dyn Fn() -> bool,
+        patience: u64,
+    ) -> Result<(), StillServed> {
+        let deadline = timer::now_nanos().saturating_add(patience);
         loop {
             if !self.is_claimed(node) {
                 return Ok(());

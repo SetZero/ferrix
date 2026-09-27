@@ -311,6 +311,8 @@ fn a_copy_past_the_caches_is_refused(side: &Side, report: &mut Report) -> Result
 /// `device_clock` refuses an option it does not know and a rate of zero
 /// before it looks at the handle, and a device whose board keeps no clock for
 /// it with `WRONG_TYPE`.
+///
+/// Verifies: L.device.13
 fn a_clock_asked_for_badly_is_refused(
     side: &Side,
     report: &mut Report,
@@ -351,6 +353,8 @@ fn a_clock_asked_for_badly_is_refused(
 /// only the Pixel 7's USB device controller may, and no machine the boot
 /// tests run on has one. What a device that may read gets is the log core's
 /// own check (`logctl/check.rs`).
+///
+/// Verifies: L.device.12
 fn a_log_reader_its_binding_does_not_allow_is_refused(
     side: &Side,
     report: &mut Report,

@@ -217,7 +217,7 @@
       ],
       "argued_by": [
         "kernel/src/mmio.rs",
-        "kernel/src/device.rs::check_exclusive",
+        "kernel/src/device/check.rs::check_exclusive",
         "scripts/check/check-device-access.py"
       ]
     },

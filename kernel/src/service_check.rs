@@ -14,18 +14,21 @@
 
 use alloc::format;
 use alloc::string::String;
+use alloc::sync::Arc;
 
 use ferrix_linux_abi::errno::Errno;
+use ferrix_sched::NICE_0_WEIGHT;
 
 use crate::claim::{Claims, Numbers, StillServed};
-use crate::device::Location;
+use crate::device::{DeviceNode, Location};
 use crate::devmgr::{self, Request};
 use crate::hooks::{Full, Hooks};
 use crate::init::Failure;
 use crate::iommu::{Cause, Domain, Fault};
 use crate::irq::IrqError;
 use crate::object::channel::Endpoint;
-use crate::sync::SchedParker;
+use crate::sched::{self, Task};
+use crate::sync::{SchedParker, SpinLock};
 use crate::syscall::uaccess::UserError;
 
 /// What the checks did, for the boot log.
@@ -45,11 +48,16 @@ pub(crate) struct Report {
 /// # Errors
 ///
 /// The first property that did not hold, as a sentence.
+///
+/// Verifies: H.DEV.1
 pub(crate) fn run() -> Result<Report, &'static str> {
     let mut report = Report::default();
     a_list_keeps_its_order_and_its_bound(&mut report)?;
     a_claim_is_refused_while_its_driver_lives(&mut report)?;
     a_shared_node_waits_for_every_claim(&mut report)?;
+    a_wait_ends_with_its_release_or_its_patience(&mut report)?;
+    a_claim_or_a_number_without_memory_is_refused(&mut report)?;
+    a_device_failure_names_its_node(&mut report)?;
     a_number_given_back_is_the_next_taken()?;
     a_boot_mode_nobody_keeps_is_refused(&mut report)?;
     failures_read_as_they_are_documented(&mut report)?;
@@ -98,6 +106,8 @@ fn a_list_keeps_its_order_and_its_bound(report: &mut Report) -> Result<(), &'sta
 ///
 /// On a node the boot published and a set of claims of this check's own, so
 /// the display and render cores' claims are untouched.
+///
+/// Verifies: L.claim.1, L.claim.5
 fn a_claim_is_refused_while_its_driver_lives(report: &mut Report) -> Result<(), &'static str> {
     let Some(node) = crate::device::devices().first() else {
         // No device to claim: nothing a quiesce could be asked about either.
@@ -134,6 +144,8 @@ fn a_claim_is_refused_while_its_driver_lives(report: &mut Report) -> Result<(), 
 /// mouse -- takes no more than its limit, refuses a quiesce while any one
 /// driver end is open, and is free only once every claim has gone; letting
 /// one claim go leaves the other standing.
+///
+/// Verifies: L.claim.2, L.claim.3, L.claim.7
 fn a_shared_node_waits_for_every_claim(report: &mut Report) -> Result<(), &'static str> {
     let Some(node) = crate::device::devices().first() else {
         return Ok(());
@@ -169,8 +181,156 @@ fn a_shared_node_waits_for_every_claim(report: &mut Report) -> Result<(), &'stat
     Ok(())
 }
 
+/// The claims the parked-wait check waits on, and the node and task it
+/// waits with: statics, since the task that releases is started with a word.
+static PARKED_CLAIMS: Claims = Claims::new();
+/// The node claimed and the task waiting for it, for [`release_when_parked`].
+static PARKED: SpinLock<Option<(Arc<DeviceNode>, Arc<Task>)>> = SpinLock::new(None);
+
+/// Wait until the waiter [`PARKED`] names is blocked -- parked in its wait,
+/// not merely descheduled -- and then release the node it waits for.
+fn release_when_parked(_argument: usize) {
+    loop {
+        let parked = PARKED.lock().clone();
+        let Some((node, waiter)) = parked else {
+            return;
+        };
+        if waiter.is_blocked() {
+            PARKED_CLAIMS.release(&node);
+            return;
+        }
+        sched::yield_now();
+    }
+}
+
+/// A wait for a claim whose driver has gone ends `Ok` once the claim is let
+/// go, whichever comes first -- the release before the wait begins, or while
+/// the wait is parked -- and answers `Waiting` when its patience runs out
+/// first.
+///
+/// The parked case is a handshake, not a sleep: a task on this processor
+/// releases only once the waiter is blocked in its wait. The patience is the
+/// check's own, ten milliseconds, where the product waits five seconds.
+///
+/// Verifies: L.claim.4, L.claim.6
+fn a_wait_ends_with_its_release_or_its_patience(report: &mut Report) -> Result<(), &'static str> {
+    const SHORT_NANOS: u64 = 10_000_000;
+    const LONG_NANOS: u64 = 10_000_000_000;
+    let Some(node) = crate::device::devices().first() else {
+        return Ok(());
+    };
+    let claim = |claims: &Claims| -> Result<(), &'static str> {
+        let (core, driver) = Endpoint::pair().map_err(|_| "no memory for a claim's channel")?;
+        if !claims.claim(node, &core) {
+            return Err("a device nobody holds could not be claimed");
+        }
+        // The driver goes: what is left is waiting for the core to let go.
+        drop(driver);
+        Ok(())
+    };
+
+    // Its patience runs out first.
+    let claims = Claims::new();
+    claim(&claims)?;
+    if claims.wait_within(node, &|| false, SHORT_NANOS) != Err(StillServed::Waiting) {
+        return Err("a wait past its patience was not told the device is still claimed");
+    }
+    // The release comes before the wait begins.
+    claims.release(node);
+    if claims.wait_within(node, &|| false, SHORT_NANOS) != Ok(()) {
+        return Err("a wait begun after its claim's release did not end at once");
+    }
+
+    // The release comes while the wait is parked.
+    claim(&PARKED_CLAIMS)?;
+    let waiter = sched::current().ok_or("the checking task is not running")?;
+    *PARKED.lock() = Some((Arc::clone(node), waiter));
+    let releaser = sched::spawn("parked", release_when_parked, 0, NICE_0_WEIGHT)?;
+    let waited = PARKED_CLAIMS.wait_within(node, &|| false, LONG_NANOS);
+    *PARKED.lock() = None;
+    sched::wait_until_gone(&releaser, LONG_NANOS)?;
+    drop(releaser);
+    PARKED_CLAIMS.release(node);
+    if waited != Ok(()) {
+        return Err("a wait parked for its claim did not end when the claim was released");
+    }
+    report.refusals += 1;
+    Ok(())
+}
+
+/// A claim, or a node's number, with no memory to record it is refused --
+/// the claim as a device in use, the number as none -- and records nothing,
+/// so the next asked with memory is given.
+///
+/// Verifies: L.claim.8
+fn a_claim_or_a_number_without_memory_is_refused(report: &mut Report) -> Result<(), &'static str> {
+    let me = sched::current_id().ok_or("the checking task is not running")?;
+    if let Some(node) = crate::device::devices().first() {
+        let claims = Claims::new();
+        let (core, _driver) = Endpoint::pair().map_err(|_| "no memory for a claim's channel")?;
+        crate::fallible::inject_once(me, 1, false);
+        let claimed = claims.claim(node, &core);
+        let refused = crate::fallible::stop_injecting();
+        if claimed || refused != 1 {
+            return Err("a claim with no memory to record it was not refused");
+        }
+        if !claims.claim(node, &core) {
+            return Err("a claim refused for memory was recorded");
+        }
+        claims.release(node);
+        report.refusals += 1;
+    }
+    let numbers = Numbers::new(3);
+    crate::fallible::inject_once(me, 1, false);
+    let taken = numbers.take();
+    let refused = crate::fallible::stop_injecting();
+    if taken.is_some() || refused != 1 {
+        return Err("a node's number with no memory to hold it was not refused");
+    }
+    if numbers.take() != Some(3) {
+        return Err("a number refused for memory was held");
+    }
+    report.refusals += 1;
+    Ok(())
+}
+
+/// A device node that broke its rule is named in the sentence the boot
+/// stops with, whatever kind of node it is: a PCI function by its address,
+/// a device tree node by its registers.
+///
+/// Verifies: L.device.11
+fn a_device_failure_names_its_node(report: &mut Report) -> Result<(), &'static str> {
+    let say = |location| {
+        format!(
+            "{}",
+            crate::device::Failure {
+                location,
+                what: "it broke its rule",
+            }
+        )
+    };
+    let pci = crate::device::devices()
+        .iter()
+        .map(|node| node.location())
+        .find(|location| matches!(location, Location::Pci(_)));
+    if let Some(location @ Location::Pci(address)) = pci
+        && say(location) != format!("pci {address}: it broke its rule")
+    {
+        return Err("a PCI function's failure did not name its address");
+    }
+    if say(Location::VirtioMmio(0xa00_0200)) != "virtio,mmio@0xa000200: it broke its rule"
+        || say(Location::Tree(0x5a00_1000)) != "tree@0x5a001000: it broke its rule"
+    {
+        return Err("a device tree node's failure did not name its registers");
+    }
+    report.sentences += 1;
+    Ok(())
+}
+
 /// A number given back is the lowest free one, and so the next taken: the
 /// property that makes a driver started again `card0` rather than `card1`.
+///
+/// Verifies: L.claim.9
 fn a_number_given_back_is_the_next_taken() -> Result<(), &'static str> {
     let numbers = Numbers::new(7);
     let (Some(first), Some(second)) = (numbers.take(), numbers.take()) else {
@@ -352,7 +512,7 @@ fn devmgr_refuses_what_a_sysfs_write_is_refused(report: &mut Report) -> Result<(
 /// are queued for the port without waiting for room. The line is the proof
 /// that they went out.
 fn a_write_that_may_not_wait_is_queued() {
-    static HELD: crate::sync::SpinLock<()> = crate::sync::SpinLock::new(());
+    static HELD: SpinLock<()> = SpinLock::new(());
     let _held = HELD.lock();
     crate::console::write_bytes(
         b"  console  a program's bytes written where the writer may not wait\n",

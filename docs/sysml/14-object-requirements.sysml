@@ -543,7 +543,8 @@ package FerrixObjectRequirements {
             attribute :>> criterion = "Every sub-page aperture the machine has (the
                 virtio-mmio transports on ARMv7-A) is refused; 0 are mapped.";
             attribute :>> parent = "H.DMA.5";
-            attribute :>> unit = "object::io_mapping::IoMapping::new";
+            attribute :>> unit = ("object::io_mapping::IoMapping::new",
+                "device::Aperture::whole_pages");
         }
         requirement <'L.object.44'> exactlyItsAperture : ItemLowLevel {
             attribute :>> statement = "IoMapping::map_into shall map exactly the

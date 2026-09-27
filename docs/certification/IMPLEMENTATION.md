@@ -1130,6 +1130,58 @@ for them to discharge.
    verification, or a test naming a requirement that does not exist. Same
    pattern as `gen-arch-doc.py --check`.
 
+
+**Step 4, the `claim` and `device` slice, done 2026-09-27.** 35 low-level
+requirements in `docs/sysml/20-device-requirements.sysml`, in three id
+spaces: `L.claim.1` to `9` (a device claimed through a core's control
+channel, and the numbers nodes are published under), `L.device.1` to `21`
+(what a node hands out, the nodes published, the bus mastering a node's DMA
+is switched with) and `L.quiesce.1` to `5` (the quiesce in
+`syscall/native.rs`, whose other units are the syscall-entry slice's; the
+module stays short of complete). **26 are verified**: every `L.claim`,
+`L.device.1` to `13` and `L.quiesce.1` to `4`, by the claim checks of
+`service_check.rs`, the node checks, `iommu/check.rs`'s domain check, two
+refusals of `syscall/native_check.rs`, `block_ring/check.rs` and xtask's
+`test-init`; **9 need a check** and are the baseline's. The gate holds
+`claim` and `device` as complete, `device::Aperture::whole_pages` named
+as a unit of `L.object.43`, which it serves. What changed:
+
+* `check_node`, `check_exclusive` and `check_msix` out of `device.rs` into
+  `device/check.rs`, a child module, their bodies byte-identical, and still
+  run by `device::publish` on every boot; `check_node` leaves the complexity
+  baseline with the item.
+* Three checks new: `check_dma_switch` reads a PCI function's command
+  register back after `enable_dma` and `disable_dma` (nothing had), so a
+  quiesce's DMA off is proved at the function; a claim's wait ends `Ok`
+  with its release before the wait or while it is parked -- a task releases
+  once the waiter is blocked, not after a sleep -- and answers `Waiting` at
+  its patience, which `Claims::wait_within` takes explicitly so the check
+  waits 10 ms where products wait five seconds; and a claim or a number
+  refused for memory, and a node's failure sentence for each kind of node.
+* The high level, for what the claim and the quiesce promise and nothing
+  above them stated: `H.DEV.1` (a device claimed no more than its core
+  allows: `service_check::run`), `H.DEV.2` (a quiesce refused under a live
+  driver) and `H.DEV.4` (a quiesce answers success only once every core has
+  let go and the function's bus mastering is off), both verified by the
+  block ring's `round`, which now reads the command register back -- on
+  once DMA is turned on as a driver's first pin turns it, off after the
+  quiesce of its death -- and `H.DEV.3` (a restarted driver's device keeps
+  its number), under the design rule `P.2`, which `check-traceability.py`
+  now accepts as a parent with the goals, and waiting for a check.
+* `device/**` joins the core in `certification-item.json`, as `iommu/**`
+  is, and the `DEVICE` failure mode's evidence names
+  `device/check.rs::check_exclusive`.
+
+The 9 that need a check: the reserved set's contents (`.14`), a host-visible
+window's refusals (`.15`), an MSI-X table not found where it is not
+(`.16`), legacy lines taken once each (`.17`), the device tree and board
+nodes' refusals (`.18`), a tree node described (`.19`), nothing minted for
+an unpublished node (`.20`), a USB host's input functions (`.21`), and a
+quiesce's two ends, `TIMED_OUT` and `BAD_STATE` from DMA that cannot be
+turned off (`L.quiesce.5`). Most want a machine QEMU does not present: an
+STM32MP15 or GS201 board, INTx without MSI, a function whose BAR firmware
+left unassigned.
+
 Unblocks DAL C, 62304 §5.4 and `ADV_TDS.3` at once.
 
 ### Design (2026-09-27)

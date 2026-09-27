@@ -6,9 +6,9 @@ The statements in the certified item that the measured suite did not reach, on e
 
 | Architecture | Profile | Unreached | Argued | Hardware absent | Needs a test |
 |---|---|---:|---:|---:|---:|
-| x86_64 | debug | 764 | 443 | 246 | **75** |
-| aarch64 | debug | 723 | 379 | 200 | **144** |
-| armv7a | debug | 1094 | 526 | 440 | **128** |
+| x86_64 | debug | 753 | 443 | 235 | **75** |
+| aarch64 | debug | 720 | 379 | 197 | **144** |
+| armv7a | debug | 1091 | 526 | 437 | **128** |
 
 *Argued* is the first four categories below; *hardware absent* is a statement about which machine was measured rather than an argument; *needs a test* is the gap.
 
@@ -16,15 +16,15 @@ The statements in the certified item that the measured suite did not reach, on e
 
 ## x86_64
 
-**764** unreached statements, debug profile.
+**753** unreached statements, debug profile.
 
 | Category | Statements | Share |
 |---|---:|---:|
 | Unreachable on the measured architecture | 182 | 24% |
-| Reached only when the kernel is stopping | 177 | 23% |
+| Reached only when the kernel is stopping | 177 | 24% |
 | Reached only when something has already failed | 73 | 10% |
 | Run, and credited to another line | 11 | 1% |
-| Hardware the measured machine does not have | 246 | 32% |
+| Hardware the measured machine does not have | 235 | 31% |
 | Needs a test | 75 | 10% |
 
 ### x86_64: Unreachable on the measured architecture — 182 statements
@@ -107,13 +107,13 @@ Justified, line by line. The statement runs, and a test shows what it does, but 
 | 1 | `core` | `sched/wait.rs` |
 | 1 | `core` | `user/space.rs` |
 
-### x86_64: Hardware the measured machine does not have — 246 statements
+### x86_64: Hardware the measured machine does not have — 235 statements
 
 **Not a justification, a configuration statement.** Enumeration and setup for devices this QEMU invocation does not present. A different machine would reach some of it, so the honest closure is either to measure on a machine that has the hardware or to state which devices the claim excludes.
 
 | Statements | Ring | File |
 |---:|---|---|
-| 95 | `core` | `device.rs` |
+| 84 | `core` | `device.rs` |
 | 51 | `item` | `pci.rs` |
 | 37 | `item` | `pci/virtio.rs` |
 | 10 | `core` | `arch/x86_64/clock.rs` |
@@ -429,7 +429,7 @@ From `coverage-argued-x86_64.json`. Each row is one argument, for the lines it n
 
 ## aarch64
 
-**723** unreached statements, debug profile.
+**720** unreached statements, debug profile.
 
 | Category | Statements | Share |
 |---|---:|---:|
@@ -437,7 +437,7 @@ From `coverage-argued-x86_64.json`. Each row is one argument, for the lines it n
 | Reached only when the kernel is stopping | 136 | 19% |
 | Reached only when something has already failed | 78 | 11% |
 | Run, and credited to another line | 11 | 2% |
-| Hardware the measured machine does not have | 200 | 28% |
+| Hardware the measured machine does not have | 197 | 27% |
 | Needs a test | 144 | 20% |
 
 ### aarch64: Unreachable on the measured architecture — 154 statements
@@ -516,13 +516,13 @@ Justified, line by line. The statement runs, and a test shows what it does, but 
 | 1 | `core` | `sched/wait.rs` |
 | 1 | `item` | `syscall/native.rs` |
 
-### aarch64: Hardware the measured machine does not have — 200 statements
+### aarch64: Hardware the measured machine does not have — 197 statements
 
 **Not a justification, a configuration statement.** Enumeration and setup for devices this QEMU invocation does not present. A different machine would reach some of it, so the honest closure is either to measure on a machine that has the hardware or to state which devices the claim excludes.
 
 | Statements | Ring | File |
 |---:|---|---|
-| 66 | `core` | `device.rs` |
+| 63 | `core` | `device.rs` |
 | 46 | `item` | `pci.rs` |
 | 33 | `item` | `pci/virtio.rs` |
 | 9 | `core` | `arch/aarch64/console.rs` |
@@ -828,7 +828,7 @@ From `coverage-argued-aarch64.json`. Each row is one argument, for the lines it 
 
 ## armv7a
 
-**1094** unreached statements, debug profile.
+**1091** unreached statements, debug profile.
 
 | Category | Statements | Share |
 |---|---:|---:|
@@ -836,7 +836,7 @@ From `coverage-argued-aarch64.json`. Each row is one argument, for the lines it 
 | Reached only when the kernel is stopping | 190 | 17% |
 | Reached only when something has already failed | 65 | 6% |
 | Run, and credited to another line | 20 | 2% |
-| Hardware the measured machine does not have | 440 | 40% |
+| Hardware the measured machine does not have | 437 | 40% |
 | Needs a test | 128 | 12% |
 
 ### armv7a: Unreachable on the measured architecture — 251 statements
@@ -914,14 +914,14 @@ Justified, line by line. The statement runs, and a test shows what it does, but 
 | 1 | `core` | `iommu.rs` |
 | 1 | `core` | `mm.rs` |
 
-### armv7a: Hardware the measured machine does not have — 440 statements
+### armv7a: Hardware the measured machine does not have — 437 statements
 
 **Not a justification, a configuration statement.** Enumeration and setup for devices this QEMU invocation does not present. A different machine would reach some of it, so the honest closure is either to measure on a machine that has the hardware or to state which devices the claim excludes.
 
 | Statements | Ring | File |
 |---:|---|---|
 | 127 | `core` | `iommu/smmuv3.rs` |
-| 65 | `core` | `device.rs` |
+| 62 | `core` | `device.rs` |
 | 53 | `item` | `pci.rs` |
 | 50 | `item` | `pci/virtio.rs` |
 | 48 | `core` | `iommu.rs` |

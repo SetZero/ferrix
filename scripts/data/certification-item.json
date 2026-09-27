@@ -112,6 +112,7 @@
         "console.rs",
         "console/**",
         "device.rs",
+        "device/**",
         "early.rs",
         "fallible.rs",
         "fdt.rs",

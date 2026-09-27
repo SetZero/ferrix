@@ -132,6 +132,8 @@ struct DomainReport {
 ///
 /// The first thing that is not so. The frames are then kept out of the
 /// allocator, since a pin that was not given back may still be reachable.
+///
+/// Verifies: L.device.8
 fn check_domains(nodes: &[Arc<DeviceNode>]) -> Result<DomainReport, &'static str> {
     let mut report = DomainReport::default();
     let Some(node) = nodes

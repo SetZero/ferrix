@@ -6,7 +6,7 @@ thousands of lines of in-kernel self-test assert rich properties, and nothing
 said which requirement each assertion was evidence *for*. This gate is the
 chain docs/certification/IMPLEMENTATION.md W-8 designs, in three levels:
 
-    system      O.*, ASR-*, G.*   SECURITY-TARGET.md 4.1, SAFETY-MANUAL.md 2,
+    system      O.*, ASR-*, G.*, P.* SECURITY-TARGET.md 4.1, SAFETY-MANUAL.md 2,
                                   docs/sysml/01-requirements.sysml
     high level  H.<AREA>.<n>      what a subsystem of the item promises at its
                                   interface; docs/sysml/13-item-requirements.sysml
@@ -261,8 +261,10 @@ def requirements_of(elements) -> tuple[list[Requirement], set[str], list[str]]:
 
 
 def system_ids(model_ids: set[str]) -> set[str]:
-    """The ids a high-level requirement may name as its parent."""
-    ids = {short for short in model_ids if re.match(r"G(?:\.|\+|\Z)", short)}
+    """The ids a high-level requirement may name as its parent: the goals
+    and the design rules the model defines (G.*, P.*), the security
+    objectives and the assumed safety requirements."""
+    ids = {short for short in model_ids if re.match(r"[GP](?:\.|\+|\Z)", short)}
     text = SECURITY_TARGET.read_text(encoding="utf-8")
     section = re.search(r"^### 4\.1 .*?$(.*?)^### ", text, re.S | re.M)
     if section:
@@ -292,7 +294,7 @@ def check_requirements(requirements: list[Requirement], parents_allowed: set[str
         if not r.parents:
             problems.append(f"{where}: no parent")
         allowed = parents_allowed if r.level == "high" else high
-        above = "a system-level id (O.*, ASR-*, G.*)" if r.level == "high" else "a high-level id"
+        above = "a system-level id (O.*, ASR-*, G.*, P.*)" if r.level == "high" else "a high-level id"
         for parent in r.parents:
             if parent not in allowed:
                 problems.append(f"{where}: parent {parent} is not {above} that exists")
@@ -1135,6 +1137,10 @@ _UNITS_EXPECT = {
 
 def self_test() -> list[str]:
     failures = [f"lexer: {f}" for f in rustlex.self_test()]
+
+    parents = system_ids({"G.1", "P.2", "X.3", "PX.4"})
+    if not {"G.1", "P.2"} <= parents or {"X.3", "PX.4"} & parents:
+        failures.append(f"system ids: goals and design rules only, got {sorted(parents)}")
 
     for name, first, _, owner in functions_in(_UNITS):
         want = _UNITS_EXPECT.get(name)

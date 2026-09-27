@@ -14,19 +14,19 @@ Coverage evidence recording the checks: none yet.
 
 | Level | Written | Named by a check | Unverified, in the baseline |
 |---|---:|---:|---:|
-| High (`H.*`) | 95 | 44 | 51 |
-| Low (`L.*`) | 518 | 294 | 224 |
+| High (`H.*`) | 99 | 47 | 52 |
+| Low (`L.*`) | 553 | 320 | 233 |
 
-816 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
+865 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
 
 | Product functions | Count |
 |---|---:|
-| Named by a low-level requirement | 816 |
-| Accessors, covered by the requirement they serve | 628 |
+| Named by a low-level requirement | 865 |
+| Accessors, covered by the requirement they serve | 621 |
 | Check code in a product file | 28 |
-| Named by none | 876 |
+| Named by none | 832 |
 
-Subsystems whose low-level requirements are complete: `arch::x86_64`, `console`, `early`, `iommu`, `mm`, `object`, `smp`, `trap`, `user`, `vmap`.
+Subsystems whose low-level requirements are complete: `arch::x86_64`, `claim`, `console`, `device`, `early`, `iommu`, `mm`, `object`, `smp`, `trap`, `user`, `vmap`.
 
 ### Check code in product files
 
@@ -71,8 +71,8 @@ Each system-level requirement, and the high-level requirements that name it as t
 |---|---|
 | ASR-1 | `H.MEM.1`, `H.MEM.2`, `H.MEM.3`, `H.MEM.7`, `H.MEM.8`, `H.MEM.12`, `H.MEM.14`, `H.MEM.15`, `H.MEM.16`, `H.MEM.17`, `H.MEM.19`, `H.SCHED.6`, `H.TRAP.4` |
 | ASR-2 | `H.MEM.4`, `H.MEM.5`, `H.MEM.13` |
-| ASR-3 | `H.OBJ.1`, `H.OBJ.2`, `H.OBJ.3`, `H.OBJ.4`, `H.OBJ.5`, `H.OBJ.6`, `H.OBJ.14`, `H.OBJ.15`, `H.IRQ.1` |
-| ASR-4 | `H.DMA.1`, `H.DMA.2`, `H.DMA.6`, `H.DMA.7`, `H.DMA.3`, `H.DMA.8`, `H.DMA.5` |
+| ASR-3 | `H.OBJ.1`, `H.OBJ.2`, `H.OBJ.3`, `H.OBJ.4`, `H.OBJ.5`, `H.OBJ.6`, `H.OBJ.14`, `H.OBJ.15`, `H.IRQ.1`, `H.DEV.1` |
+| ASR-4 | `H.DMA.1`, `H.DMA.2`, `H.DMA.6`, `H.DMA.7`, `H.DMA.3`, `H.DMA.8`, `H.DMA.5`, `H.DEV.2`, `H.DEV.4` |
 | ASR-5 | `H.MEM.6` |
 | ASR-6 | `H.BOOT.1`, `H.BOOT.2`, `H.BOOT.4`, `H.BOOT.5`, `H.FAIL.1`, `H.FAIL.2`, `H.FAIL.3`, `H.FAIL.4` |
 | ASR-7 | `H.TRAP.1`, `H.TRAP.2`, `H.TRAP.5` |
@@ -83,14 +83,31 @@ Each system-level requirement, and the high-level requirements that name it as t
 | G.5 | `H.SCHED.9`, `H.TRAP.8`, `H.TRAP.10`, `H.TRAP.14`, `H.TRAP.15` |
 | G.7 | `H.OBJ.11`, `H.OBJ.17` |
 | G.8 | `H.OBJ.12`, `H.QUOTA.6` |
-| O.CAPABILITY | `H.OBJ.1`, `H.OBJ.2`, `H.OBJ.3`, `H.OBJ.4`, `H.OBJ.5`, `H.OBJ.6`, `H.OBJ.7`, `H.OBJ.8`, `H.OBJ.9`, `H.OBJ.11`, `H.OBJ.14`, `H.OBJ.15`, `H.OBJ.16`, `H.OBJ.17`, `H.IRQ.1`, `H.IRQ.2`, `H.DMA.5` |
-| O.DMA | `H.DMA.1`, `H.DMA.2`, `H.DMA.6`, `H.DMA.7`, `H.DMA.3`, `H.DMA.8`, `H.DMA.4`, `H.DMA.5` |
+| O.CAPABILITY | `H.OBJ.1`, `H.OBJ.2`, `H.OBJ.3`, `H.OBJ.4`, `H.OBJ.5`, `H.OBJ.6`, `H.OBJ.7`, `H.OBJ.8`, `H.OBJ.9`, `H.OBJ.11`, `H.OBJ.14`, `H.OBJ.15`, `H.OBJ.16`, `H.OBJ.17`, `H.IRQ.1`, `H.IRQ.2`, `H.DMA.5`, `H.DEV.1` |
+| O.DMA | `H.DMA.1`, `H.DMA.2`, `H.DMA.6`, `H.DMA.7`, `H.DMA.3`, `H.DMA.8`, `H.DMA.4`, `H.DMA.5`, `H.DEV.2`, `H.DEV.4` |
 | O.FAILSAFE | `H.TRAP.6`, `H.BOOT.1`, `H.BOOT.2`, `H.BOOT.4`, `H.BOOT.5`, `H.BOOT.6`, `H.BOOT.7`, `H.BOOT.8`, `H.FAIL.1`, `H.FAIL.2`, `H.FAIL.3`, `H.FAIL.4` |
 | O.ISOLATE | `H.MEM.1`, `H.MEM.2`, `H.MEM.3`, `H.MEM.7`, `H.MEM.8`, `H.MEM.10`, `H.MEM.12`, `H.MEM.14`, `H.MEM.15`, `H.MEM.16`, `H.MEM.17`, `H.MEM.18`, `H.MEM.19`, `H.OBJ.13`, `H.SCHED.6`, `H.SCHED.7`, `H.SCHED.8`, `H.TRAP.3`, `H.TRAP.4`, `H.TRAP.5`, `H.TRAP.6`, `H.TRAP.7`, `H.TRAP.8`, `H.TRAP.13`, `H.BOOT.3`, `H.BOOT.9` |
 | O.QUOTA | `H.MEM.9`, `H.MEM.11`, `H.OBJ.7`, `H.OBJ.8`, `H.OBJ.9`, `H.OBJ.10`, `H.OBJ.12`, `H.OBJ.16`, `H.SCHED.2`, `H.SCHED.3`, `H.SCHED.10`, `H.SCHED.11`, `H.IRQ.2`, `H.IRQ.3`, `H.DMA.4`, `H.QUOTA.1`, `H.QUOTA.2`, `H.QUOTA.3`, `H.QUOTA.4`, `H.QUOTA.5`, `H.QUOTA.6`, `H.QUOTA.7`, `H.QUOTA.8`, `H.QUOTA.9` |
 | O.SCRUB | `H.MEM.6` |
 | O.VALIDATE | `H.TRAP.1`, `H.TRAP.2`, `H.TRAP.3`, `H.TRAP.5`, `H.TRAP.7`, `H.TRAP.11`, `H.TRAP.12`, `H.TRAP.13` |
 | O.WXN | `H.MEM.4`, `H.MEM.5`, `H.MEM.10`, `H.MEM.13`, `H.MEM.18` |
+| P.1 | — |
+| P.2 | `H.DEV.3` |
+| P.3 | — |
+| P.4 | — |
+| P.5 | — |
+| P.6 | — |
+| P.7 | — |
+| P.8 | — |
+| P.9 | — |
+| P.10 | — |
+| P.11 | — |
+| P.12 | — |
+| P.13 | — |
+| P.14 | — |
+| P.15 | — |
+| P.16 | — |
+| P.17 | — |
 
 ## High-level requirements
 
@@ -176,6 +193,15 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `H.DMA.8` | Unpinning shall complete the unit's invalidation before the frame or a table the unpin emptied is reused, and a unit that never completes it shall leave both held. | A table an unpin empties returns to the frame allocator only after the unit has answered the invalidation that covers it, and a unit made never to answer keeps the pin's frames and the table out of the allocator. | O.DMA, ASR-4 | *baselined* | — | — | — |
 | `H.DMA.4` | Frames a driver pinned shall not be reused after the driver dies until its replacement announces itself, and the frames so held shall be bounded. | A dead driver's pin is quarantined, a pin past the quarantine's cap is refused and taken again once the quarantine is released, and a live driver's pin is given back (the `iommu` quarantine line). | O.DMA, O.QUOTA | `kernel/src/object/pin/check.rs::check_quarantine` | not measured | not measured | not measured |
 | `H.DMA.5` | A driver shall reach device registers only through an I/O mapping of an aperture it holds, and an aperture that is not whole pages or that covers an MSI-X table shall be withheld. | The `devices` line counts the apertures withheld for partial pages and for MSI-X ranges; a mapping of a withheld range is refused; a program reaches only the aperture it was given (the `handles` line). | O.DMA, O.CAPABILITY, ASR-4 | *baselined* | — | — | — |
+
+### Devices (`H.DEV`)
+
+| Id | Statement | Criterion | Parent | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|
+| `H.DEV.1` | A device shall be claimed through no more of its core's control channels at once than the core allows -- one, but for an STM32 USB host's input functions -- and a claim shall stand until the core lets it go. | A second claim of a node is refused, a shared node's claims stop at its limit, and one claim let go leaves the others (the `services` line). | O.CAPABILITY, ASR-3 | `kernel/src/service_check.rs::run` | not measured | not measured | not measured |
+| `H.DEV.2` | A quiesce shall be refused while a live driver serves the device. | A quiesce of the device a running block driver serves answers BAD_STATE (the `blk-ring` line). | O.DMA, ASR-4 | `kernel/src/block_ring/check.rs::round` | not measured | not measured | not measured |
+| `H.DEV.4` | A quiesce shall answer success only once every core has let the device go and the function's bus mastering is off. | A quiesce the instant a block driver dies answers success, and the function's command register, whose bus mastering was turned on while the driver served it as its first pin turns it, reads it off (the `blk-ring` line). | O.DMA, ASR-4 | `kernel/src/block_ring/check.rs::round` | not measured | not measured | not measured |
+| `H.DEV.3` | A device a driver started again serves shall be published under the lowest number its core has free, so that it takes back the name its predecessor had. | A number given back is the next taken (the `services` line); a GPU driver killed and restarted is card0 again (`xtask test-restart`). | P.2 | *baselined* | — | — | — |
 
 ### Traps (`H.TRAP`)
 
@@ -307,7 +333,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 
 | Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
 |---|---|---|---|---|---|---|---|---|
-| `L.object.43` | IoMapping::new shall refuse an aperture that does not start on a page boundary or is not a whole number of pages. | Every sub-page aperture the machine has (the virtio-mmio transports on ARMv7-A) is refused; 0 are mapped. | H.DMA.5 | `object::io_mapping::IoMapping::new` | `kernel/src/object/check.rs::check_a_device_gives_exactly_its_own_memory` | not measured | not measured | not measured |
+| `L.object.43` | IoMapping::new shall refuse an aperture that does not start on a page boundary or is not a whole number of pages. | Every sub-page aperture the machine has (the virtio-mmio transports on ARMv7-A) is refused; 0 are mapped. | H.DMA.5 | `object::io_mapping::IoMapping::new`, `device::Aperture::whole_pages` | `kernel/src/object/check.rs::check_a_device_gives_exactly_its_own_memory` | not measured | not measured | not measured |
 | `L.object.44` | IoMapping::map_into shall map exactly the aperture's pages, readable and writable, onto the device's own physical addresses. | Each mapped page translates to the aperture's physical page at the same offset, and a forked child reaches the same device pages rather than copies. | H.DMA.5 | `object::io_mapping::IoMapping::map_into` | `kernel/src/object/check.rs::check_a_device_gives_exactly_its_own_memory` | not measured | not measured | not measured |
 
 ### Pins
@@ -874,6 +900,56 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `L.trap.5` | system_call shall answer ENOSYS with no entry registered, and the first registration shall stand. | With no entry registered, system_call answers -38; a second set_syscall_entry leaves the first in place. | H.TRAP.11 | `trap::system_call`, `trap::set_syscall_entry` | *baselined* | — | — | — |
 | `L.trap.6` | system_call and dispatch shall regroup the running task after a call or a trap from user mode, so that a process moved to another job runs in it from then on. | After a program writes its pid to another cgroup's cgroup.procs, its next charges land in that job. | H.OBJ.12 | `trap::system_call`, `trap::dispatch` | *baselined* | — | — | — |
 
+### Claims
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.claim.1` | Claims::claim shall record a claim of a node nobody holds, and refuse a second claim of it while the first stands. | A published node nobody holds is claimed, and a second claim of it is refused. | H.DEV.1 | `claim::Claims::claim`, `claim::Claims::claim_up_to` | `kernel/src/service_check.rs::a_claim_is_refused_while_its_driver_lives` | not measured | not measured | not measured |
+| `L.claim.2` | Claims::claim_up_to shall record up to its limit of claims of one node, each through its own channel, and refuse one more. | At a limit of 2, two claims of one node through two channels are recorded and a third is refused. | H.DEV.1 | `claim::Claims::claim_up_to` | `kernel/src/service_check.rs::a_shared_node_waits_for_every_claim` | not measured | not measured | not measured |
+| `L.claim.3` | Claims::wait_until_released shall answer ByADriver, at once, while any driver end a node is claimed through is still open. | With a node claimed through two channels, one driver end closed and the other open, the wait answers ByADriver. | H.DEV.2 | `claim::Claims::wait_until_released`, `claim::Claims::wait_within`, `claim::Claims::is_held_by_a_driver` | `kernel/src/service_check.rs::a_shared_node_waits_for_every_claim` | not measured | not measured | not measured |
+| `L.claim.4` | A wait for a node whose drivers have gone shall answer Ok once no claim of it stands, whether its release came before the wait began or while the wait was parked. | A wait begun after the node's release ends Ok at once, and a wait parked on a node released by another task once the wait is blocked ends Ok. | H.DEV.4 | `claim::Claims::wait_within`, `claim::Claims::is_claimed`, `claim::Claims::release` | `kernel/src/service_check.rs::a_wait_ends_with_its_release_or_its_patience` | not measured | not measured | not measured |
+| `L.claim.5` | A wait for a node still claimed shall answer Waiting when its caller is cancelled. | A wait on a node whose driver end has closed and whose claim stands, cancelled, answers Waiting; after the release, the same wait answers Ok. | H.DEV.4 | `claim::Claims::wait_within` | `kernel/src/service_check.rs::a_claim_is_refused_while_its_driver_lives` | not measured | not measured | not measured |
+| `L.claim.6` | A wait for a node still claimed shall answer Waiting when its patience runs out. | A wait of 10 ms on a node whose driver end has closed and whose claim stands answers Waiting. | H.DEV.4 | `claim::Claims::wait_within` | `kernel/src/service_check.rs::a_wait_ends_with_its_release_or_its_patience` | not measured | not measured | not measured |
+| `L.claim.7` | Claims::release_one shall let go only the claim made through its channel, leaving the node's others standing. | Of a node's two claims, one let go leaves the node waited for under the other's driver; the other let go frees it. | H.DEV.1 | `claim::Claims::release_one` | `kernel/src/service_check.rs::a_shared_node_waits_for_every_claim` | not measured | not measured | not measured |
+| `L.claim.8` | A claim, or a node's number, with no memory to record it shall be refused and record nothing. | With the one allocation of a claim refused, the claim is refused and the next, with memory, is recorded; with the one allocation of a number refused, none is taken and the next is the first. | H.MEM.11 | `claim::Claims::claim_up_to`, `claim::Numbers::take` | `kernel/src/service_check.rs::a_claim_or_a_number_without_memory_is_refused` | not measured | not measured | not measured |
+| `L.claim.9` | Numbers::take shall give the lowest number from the first nothing holds, and a number given back shall be the next taken. | From 7, two numbers taken are 7 and 8; 7 given back is the next taken. | H.DEV.3 | `claim::Numbers::take`, `claim::Numbers::give_back` | `kernel/src/service_check.rs::a_number_given_back_is_the_next_taken` | not measured | not measured | not measured |
+
+### Nodes
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.device.1` | DeviceNode::mint shall withhold, and count, an aperture that overlaps memory the kernel uses, so that no published aperture does. | Every aperture of every published node is clear of every reserved range. | H.MEM.10, H.DMA.5 | `device::DeviceNode::mint`, `device::Reserved::covers`, `device::Aperture::overlaps` | `kernel/src/device/check.rs::check_node` | not measured | not measured | not measured |
+| `L.device.2` | DeviceNode::aperture shall grant a range only when it lies inside one of the node's apertures, and none of length 0 or past the address space's end. | For every published aperture: the whole is granted, and its last byte; a range one byte past its end, one ending before its start by a byte, one of length 0 and one wrapping the address space are refused. | H.DMA.5 | `device::DeviceNode::aperture`, `device::Aperture::end` | `kernel/src/device/check.rs::check_node` | not measured | not measured | not measured |
+| `L.device.3` | DeviceNode::pci shall keep a function's MSI-X table and pending-bit pages out of every aperture it grants. | For every published PCI function, the whole of each MSI-X table or pending-bit range, its first byte and its last byte are refused. | H.DMA.5 | `device::DeviceNode::pci` | `kernel/src/device/check.rs::check_node` | not measured | not measured | not measured |
+| `L.device.4` | DeviceNode::vector shall hand out a node's recorded vectors as recorded, and none past its count. | For every published node without MSI-X, each index below the count answers its recorded vector and the count itself answers none. | H.IRQ.1 | `device::DeviceNode::vector` | `kernel/src/device/check.rs::check_node` | not measured | not measured | not measured |
+| `L.device.5` | publish shall take from a later node an aperture an earlier one holds, so that no two published nodes' apertures overlap, and publish no device tree vector that is not a shared peripheral interrupt or that two nodes hold. | Sorted by start, no two published apertures overlap; every device tree vector is 32 or above and held by one node. | H.DMA.5, H.IRQ.1 | `device::publish` | `kernel/src/device/check.rs::check_exclusive` | not measured | not measured | not measured |
+| `L.device.6` | MsixTable::mint shall mint an entry once and answer the same vector when asked again, never on a number that has a handler, and none past the table. | On the first published MSI-X table, entry 0 minted twice is one vector, its number has no handler, and the entry at the table's size is refused. | H.IRQ.1 | `device::MsixTable::mint`, `device::MsixTable::open` | `kernel/src/device/check.rs::check_msix` | not measured | not measured | not measured |
+| `L.device.7` | A minted MSI-X entry shall be masked until unmasked, and shall read back masked or unmasked as it was last told. | The first published MSI-X table's minted entry 0 reads masked; unmasked it reads unmasked, masked again it reads masked. | H.IRQ.2, H.IRQ.3 | `device::MsixTable::set_masked`, `device::MsixTable::is_masked`, `device::Vector::set_masked` | `kernel/src/device/check.rs::check_msix` | not measured | not measured | not measured |
+| `L.device.8` | DeviceNode::domain shall make a node's domain once and answer that one domain afterwards. | Every published node asked for its domain twice answers one domain. | H.DMA.3 | `device::DeviceNode::domain` | `kernel/src/iommu/check.rs::check_domains` | not measured | not measured | not measured |
+| `L.device.9` | enable_dma shall set a PCI function's bus mastering and memory decoding, and disable_dma shall clear its bus mastering and keep its memory decoding. | On the first published function with a configuration space, its command register reads bus mastering and decoding on after enable_dma, and bus mastering off with decoding on after disable_dma. | H.DEV.4 | `device::DeviceNode::enable_dma`, `device::DeviceNode::disable_dma`, `device::DeviceNode::set_bus_master` | `kernel/src/device/check.rs::check_dma_switch` | not measured | not measured | not measured |
+| `L.device.10` | DeviceNode::describe shall report a PCI function's location, identity, aperture and vector counts and virtio placement as the node holds them. | For the first published PCI function, device_info's location, vendor and device, counts and virtio blocks agree with the node and with enumeration. | H.DMA.5 | `device::DeviceNode::describe`, `device::VirtioBlocks::of` | `kernel/src/block_ring/check.rs::described` | not measured | not measured | not measured |
+| `L.device.11` | A node's failure shall read as its location -- a PCI function's address, a device tree node's registers -- and what it did. | A failure of a PCI function, a virtio,mmio node and a device tree node reads as the address or registers and the sentence. | H.FAIL.1 | `device::Location::fmt`, `device::Failure::fmt` | `kernel/src/service_check.rs::a_device_failure_names_its_node` | not measured | not measured | not measured |
+| `L.device.12` | DeviceNode::reads_log shall allow the kernel log to no node but a GS201's DWC3. | A published node of another binding asking for the kernel log is refused. | H.OBJ.2 | `device::DeviceNode::reads_log` | `kernel/src/syscall/native_check.rs::a_log_reader_its_binding_does_not_allow_is_refused` | not measured | not measured | not measured |
+| `L.device.13` | board_clock shall answer no clock for a node whose board keeps none for it. | A clock asked of a published node whose board keeps none is refused. | H.OBJ.2 | `device::board_clock`, `device::DeviceNode::tree_binding` | `kernel/src/syscall/native_check.rs::a_clock_asked_for_badly_is_refused` | not measured | not measured | not measured |
+| `L.device.14` | Reserved::of shall reserve the framebuffer, every memory-map region but MMIO, the ECAM windows, the kernel's device windows, every IOMMU unit's registers and, without ACPI, the device tree console. | Each of those ranges on the booted machine is covered by the reserved set. | H.MEM.10, H.DMA.5 | `device::Reserved::of`, `device::Reserved::add`, `device::Reserved::overlaps` | *baselined* | — | — | — |
+| `L.device.15` | A function's host-visible window shall be taken only from an assigned memory BAR it fits, in whole pages, clear of reserved memory. | A window from a BAR that is not assigned, does not fit, is not whole pages or overlaps reserved memory is refused, and one that is all four is taken. | H.DMA.5 | `device::Window::of`, `device::DeviceNode::host_visible` | *baselined* | — | — | — |
+| `L.device.16` | MsixTable::of shall find a function's MSI-X table only inside an assigned memory BAR, clear of reserved memory. | A table in an unassigned BAR, past its BAR or overlapping reserved memory is not found. | H.IRQ.1 | `device::MsixTable::of` | *baselined* | — | — | — |
+| `L.device.17` | A PCI function's legacy interrupt shall be one controller vector with its firmware trigger, on a line of 32 or above that no kernel handler holds and no other function took. | Two functions offered one line give it to the first; a line below 32 or with a handler is given to neither. | H.IRQ.1 | `device::claim_line`, `device::trigger_of` | *baselined* | — | — | — |
+| `L.device.18` | tree_nodes and board_node shall publish a device tree node only with registers clear of reserved memory and an interrupt no other node or handler holds, and leave it alone, saying why, otherwise. | A board node whose registers overlap reserved memory, or whose interrupt is taken, is left alone and named on the console; one clear of both is published. | H.DMA.5, H.IRQ.1 | `device::tree_nodes`, `device::board_node` | *baselined* | — | — | — |
+| `L.device.19` | DeviceNode::describe shall report a device tree node as not PCI, with its binding and its first two apertures. | A published virtio,mmio or board node's device_info names no PCI location, its binding, and its apertures 0 and 1. | H.DMA.5 | `device::DeviceNode::describe` | *baselined* | — | — | — |
+| `L.device.20` | An MSI-X vector shall be minted, masked or unmasked only for a published node. | A node not in the published list asked for an MSI-X vector answers none, and a vector naming one refuses to mask. | H.IRQ.1 | `device::DeviceNode::vector`, `device::Vector::set_masked` | *baselined* | — | — | — |
+| `L.device.21` | DeviceNode::input_functions shall allow eight input claims of an STM32 USB host's node, and one of every other. | An STM32 USB host's node answers 8 and a PCI function answers 1. | H.DEV.1 | `device::DeviceNode::input_functions` | *baselined* | — | — | — |
+
+### Quiesce
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.quiesce.1` | device_quiesce shall be refused with ACCESS_DENIED through a device handle without MANAGE. | A quiesce through a handle to the device without MANAGE answers ACCESS_DENIED. | H.OBJ.2 | `syscall::native::device_quiesce` | `kernel/src/block_ring/check.rs::refusals` | not measured | not measured | not measured |
+| `L.quiesce.2` | A quiesce shall answer BAD_STATE, changing nothing, while a driver serves the device. | A quiesce of the device a running driver serves answers BAD_STATE, and the driver goes on serving it. | H.DEV.2 | `syscall::native::quiesce_while` | `kernel/src/block_ring/check.rs::round` | not measured | not measured | not measured |
+| `L.quiesce.3` | A quiesce made as a driver dies shall wait for every core serving the device to let go, turn the device's DMA off, let go the claims a core keeps past its driver, and answer success. | A quiesce the instant a block driver's handles close answers success, and the next driver is given a ring on the device. | H.DEV.4 | `syscall::native::quiesce_while` | `kernel/src/block_ring/check.rs::run` | not measured | not measured | not measured |
+| `L.quiesce.4` | The kernel shall quiesce every device a dead devmgr's drivers served before a devmgr started again is handed them. | Restarting devmgr.service starts a second devmgr, which is given the devices and starts their drivers. | H.DEV.4 | `syscall::native::quiesce` | `xtask/src/init.rs::devmgr_by_init` | xtask gate | xtask gate | xtask gate |
+| `L.quiesce.5` | A quiesce whose device a core has not let go within its patience shall answer TIMED_OUT, and one whose DMA cannot be turned off BAD_STATE. | A quiesce with a core that never lets go answers TIMED_OUT; one on a function whose configuration space cannot be mapped answers BAD_STATE. | H.DEV.4 | `syscall::native::quiesce_while` | *baselined* | — | — | — |
+
 ### BringUp
 
 | Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
@@ -1020,10 +1096,18 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `kernel/src/arch/x86_64/trap/check.rs::check_thread_areas` | kernel | L.x86_64.7, L.x86_64.8, H.SCHED.7 |
 | `kernel/src/arch/x86_64/trap/check.rs::run` | kernel | L.x86_64.60, L.x86_64.77, L.trap.1, L.x86_64.78, L.x86_64.103, H.TRAP.4 |
 | `kernel/src/audit/check.rs::booted` | kernel | L.iommu.44 |
+| `kernel/src/block_ring/check.rs::described` | kernel | L.device.10 |
+| `kernel/src/block_ring/check.rs::refusals` | kernel | L.quiesce.1 |
+| `kernel/src/block_ring/check.rs::round` | kernel | L.quiesce.2, H.DEV.2, H.DEV.4 |
+| `kernel/src/block_ring/check.rs::run` | kernel | L.quiesce.3 |
 | `kernel/src/console/log_check.rs::console_records` | kernel | L.console.31, L.console.32, L.console.34 |
 | `kernel/src/console/log_check.rs::run` | kernel | H.TRAP.13 |
 | `kernel/src/console/log_check.rs::two_writers` | kernel | L.console.25, L.console.29 |
 | `kernel/src/console/log_check.rs::wrap_overrun_and_partial` | kernel | L.console.26, L.console.27, L.console.28 |
+| `kernel/src/device/check.rs::check_dma_switch` | kernel | L.device.9 |
+| `kernel/src/device/check.rs::check_exclusive` | kernel | L.device.5 |
+| `kernel/src/device/check.rs::check_msix` | kernel | L.device.6, L.device.7 |
+| `kernel/src/device/check.rs::check_node` | kernel | L.device.1, L.device.2, L.device.3, L.device.4 |
 | `kernel/src/fs/cgroupfs/controllers_check.rs::check_the_files` | kernel | L.object.52, L.object.61 |
 | `kernel/src/fs/cgroupfs/delegation_check.rs::check_a_removed_cgroup` | kernel | L.object.69 |
 | `kernel/src/fs/cgroupfs/native_check.rs::check_a_native_child_is_shown` | kernel | L.object.68 |
@@ -1042,6 +1126,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `kernel/src/fs/mmap_check.rs::check_the_loader_mapping_pattern` | kernel | L.user.97 |
 | `kernel/src/fs/mmap_check.rs::check_the_mapping_is_the_file` | kernel | L.user.93 |
 | `kernel/src/iommu/check.rs::check_dma_faults` | kernel | H.DMA.6 |
+| `kernel/src/iommu/check.rs::check_domains` | kernel | L.device.8 |
 | `kernel/src/iommu/check.rs::pin_and_unpin` | kernel | L.iommu.19, L.iommu.20, L.iommu.21, L.iommu.22, L.iommu.29, H.DMA.3 |
 | `kernel/src/iommu/check.rs::run` | kernel | L.iommu.30, L.iommu.31 |
 | `kernel/src/mm/check.rs::check_device_windows` | kernel | L.mm.49 |
@@ -1108,8 +1193,15 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `kernel/src/object/quota_check.rs::run` | kernel | L.object.53, H.QUOTA.4 |
 | `kernel/src/sched/check.rs::many_tasks` | kernel | L.x86_64.17 |
 | `kernel/src/sched/check.rs::sleeping` | kernel | L.x86_64.91 |
+| `kernel/src/service_check.rs::a_claim_is_refused_while_its_driver_lives` | kernel | L.claim.1, L.claim.5 |
+| `kernel/src/service_check.rs::a_claim_or_a_number_without_memory_is_refused` | kernel | L.claim.8 |
+| `kernel/src/service_check.rs::a_device_failure_names_its_node` | kernel | L.device.11 |
 | `kernel/src/service_check.rs::a_dropped_domain_gives_its_stream_back` | kernel | L.iommu.14 |
+| `kernel/src/service_check.rs::a_number_given_back_is_the_next_taken` | kernel | L.claim.9 |
+| `kernel/src/service_check.rs::a_shared_node_waits_for_every_claim` | kernel | L.claim.2, L.claim.3, L.claim.7 |
+| `kernel/src/service_check.rs::a_wait_ends_with_its_release_or_its_patience` | kernel | L.claim.4, L.claim.6 |
 | `kernel/src/service_check.rs::faults_and_domains_read_as_recorded` | kernel | L.iommu.13, L.iommu.34 |
+| `kernel/src/service_check.rs::run` | kernel | H.DEV.1 |
 | `kernel/src/service_check.rs::the_last_line_is_kept_for_a_failure_report` | kernel | L.console.17 |
 | `kernel/src/smp/check.rs::everywhere` | kernel | H.SCHED.6, L.smp.3, L.smp.11 |
 | `kernel/src/smp/check.rs::everywhere` | kernel | L.x86_64.18, L.x86_64.19, L.x86_64.86, L.x86_64.102 |
@@ -1140,7 +1232,9 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `kernel/src/syscall/init_calls_check.rs::check_execve_seals_and_keeps` | kernel | L.object.91 |
 | `kernel/src/syscall/init_calls_check.rs::give_and_take` | kernel | L.object.89 |
 | `kernel/src/syscall/init_calls_check.rs::process_statuses` | kernel | L.object.94 |
+| `kernel/src/syscall/native_check.rs::a_clock_asked_for_badly_is_refused` | kernel | L.device.13 |
 | `kernel/src/syscall/native_check.rs::a_full_table_refuses_and_loses_nothing` | kernel | L.object.82, L.object.92, H.OBJ.7 |
+| `kernel/src/syscall/native_check.rs::a_log_reader_its_binding_does_not_allow_is_refused` | kernel | L.device.12 |
 | `kernel/src/syscall/native_check.rs::a_send_that_would_walk_too_far_is_refused` | kernel | L.object.26 |
 | `kernel/src/syscall/unmap_check.rs::check_an_unmap_waits_for_a_copy_holding_its_page` | kernel | L.user.63 |
 | `kernel/src/syscall/vdso_check.rs::check_a_program_reads_the_clock_through_it` | kernel | L.x86_64.41, H.SCHED.9 |
@@ -1199,6 +1293,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `libs/kernel/objects/src/tests.rs::replace_closes_the_original_and_cannot_add_rights` | host | H.OBJ.14 |
 | `libs/kernel/sched/src/tests.rs::something_waiting_is_decided_on_within_a_slice` | host | L.sched.1 |
 | `libs/kernel/sched/src/tests.rs::yielding_alone_leaves_the_request_as_it_was` | host | L.sched.2 |
+| `xtask/src/init.rs::devmgr_by_init` | gate | L.quiesce.4 |
 | `xtask/src/init_file.rs::judge_k7_read` | gate | L.console.14 |
 | `xtask/src/init_file.rs::test` | gate | L.x86_64.98, H.BOOT.6 |
 | `xtask/src/jobs.rs::test_jobs` | gate | L.x86_64.115 |

@@ -48,6 +48,7 @@ use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
 use ferrix_native_abi::types::{DEVICE_INFO_BYTES, DEVICE_VIRTIO_PCI};
+use ferrix_pci::header::{COMMAND, COMMAND_BUS_MASTER};
 use ferrix_vfs::initramfs::makedev;
 
 use super::{VIRTIO_BLK_MAJOR, forget_parked, is_parked, location_of, start_for};
@@ -125,6 +126,8 @@ struct Counter {
 /// # Errors
 ///
 /// What was not true.
+///
+/// Verifies: L.quiesce.3
 pub(crate) fn run() -> Result<Report, &'static str> {
     let Some(node) = device::devices()
         .iter()
@@ -190,7 +193,12 @@ fn settle() -> Result<(), &'static str> {
 }
 
 /// One round: every refusal, then an accepted HELLO and its disk, ended by
-/// STOPPED or by closing the channel as a dying driver would.
+/// STOPPED or by closing the channel as a dying driver would. A driver that
+/// died leaves a device the quiesce answered success for, and that device's
+/// bus mastering, turned on while its driver served it as the driver's first
+/// pin would, reads off.
+///
+/// Verifies: L.quiesce.2, H.DEV.2, H.DEV.4
 fn round(
     node: &Arc<DeviceNode>,
     counter: &mut Counter,
@@ -213,13 +221,41 @@ fn round(
         "a device was quiesced under the driver serving it",
         counter,
     )?;
+    // As the driver's first pin would: its rings' pages are pinned for the
+    // device, and the function masters the bus from then on.
+    node.enable_dma()
+        .map_err(|_| "a served device's DMA could not be turned on")?;
+    if bus_mastering(node)? == Some(false) {
+        return Err("a device whose DMA was turned on did not have bus mastering on");
+    }
     end(&side, device, control, rdev, location, ending, counter)?;
+    if ending == Ending::DriverDied && bus_mastering(node)? != Some(false) {
+        return Err("a device quiesced after its driver died still had bus mastering on");
+    }
     side.close_everything();
     Ok(())
 }
 
+/// Whether `node`'s bus mastering is on, read from its command register:
+/// `None` for a node with no configuration space.
+fn bus_mastering(node: &DeviceNode) -> Result<Option<bool>, &'static str> {
+    let Some(config_phys) = node
+        .pci_function()
+        .and_then(|function| function.config_phys)
+    else {
+        return Ok(None);
+    };
+    let config = crate::vmap::map_device(config_phys, 256)
+        .map_err(|_| "a function's configuration space could not be mapped to read it")?;
+    let command = crate::mmio::Mmio::at(config).read16(u64::from(COMMAND));
+    let _ = crate::vmap::unmap_device(config);
+    Ok(Some(command & COMMAND_BUS_MASTER != 0))
+}
+
 /// Every refusal: of the call, then of three HELLOs, each on a ring of its
 /// own, since a refused ring is over.
+///
+/// Verifies: L.quiesce.1
 fn refusals(
     side: &Side,
     node: &Arc<DeviceNode>,
@@ -410,6 +446,8 @@ fn end(
 /// Require `device_info` to describe `node` as enumeration found it, every
 /// virtio block inside one of its apertures, and the kernel's own START for
 /// the node to agree with it.
+///
+/// Verifies: L.device.10
 fn described(
     side: &Side,
     node: &Arc<DeviceNode>,
