@@ -834,6 +834,40 @@ on the 3D card under KVM, main and this change run alternately.
 What is left of §3.9 is the third item: a client's pixels are still copied
 into a texture's backing in the guest before the device moves them.
 
+### 3.12 The 3D card on Windows needs a patched QEMU (2026-09-27)
+
+Every `--gl` boot on Windows -- `run-compositor --everything` among them --
+ended as the loader handed over, with QEMU exiting `0xC0000005`. The
+released Windows build (Stefan Weil's 11.1.0) is stripped, so the crash was
+found in a build of the same release with symbols, under gdb:
+
+```
+#0  0x0000000000000000 in ?? ()
+#1  surface_gl_destroy_texture ()      ui/console-gl.c:187
+#2  gd_gl_area_switch ()               ui/gtk-gl-area.c:196
+#4  qemu_console_set_surface ()        ui/console.c:795
+#5  virtio_gpu_disable_scanout ()      hw/display/virtio-gpu.c:440
+#7  virtio_gpu_gl_reset ()             hw/display/virtio-gpu-gl.c:102
+#10 virtio_pci_reset ()                a status write of 0, in a vCPU thread
+```
+
+A reset of `virtio-gpu-gl-pci` -- OVMF's, at `ExitBootServices` -- disables
+the scanouts in the vCPU thread that wrote the status register. The display
+then deletes a texture with its GL context, which only the main thread can
+make current: WGL refuses it in another thread, no context is current, and
+epoxy's dispatch for `glDeleteTextures` is NULL. On Linux the same call
+fails quietly, which is why no Linux host ever saw it. SDL's GL window
+crashes the same way. The bug is QEMU's since bd9258917f ("virtio-gpu:
+Destroy virgl resources on virtio-gpu reset"), in 11.1.0.
+
+The fix is `scripts/data/qemu/0001-*.patch`: the reset's bottom half, which
+already runs in the main thread, disables the GL scanouts. On Windows,
+`scripts/fetch/fetch-qemu-windows.sh` builds 11.1.0 with it into
+`~/.local/share/ferrix/qemu`, which xtask takes before `PATH`. With it the
+`--everything` desktop draws on the GPU on Windows. Current QEMU master
+(v11.1.0-1860) is not the base: built there, devmgr never reported, with
+or without the 3D card.
+
 ### 3a, which was not chosen for the compositor
 
 Mesa's virgl driver built on ferrousli would give *every client* OpenGL ES

@@ -375,6 +375,8 @@ pub(crate) fn which(program: &str) -> Option<PathBuf> {
 /// Every `program` [`which`] could have answered, in the order it tries
 /// them, each once.
 ///
+/// [`own_qemu`] first, then `PATH`, then where the Windows installer puts it.
+///
 /// A machine can have two QEMUs and only one of them with the 3D card -- a
 /// hand-built one first on `PATH` and the distribution's behind it is the
 /// usual way -- and a boot that wants the card is better served by the
@@ -391,7 +393,12 @@ pub(crate) fn which_all(program: &str) -> Vec<PathBuf> {
     // The Windows installer does not put QEMU on PATH.
     let installed = ["C:/Program Files/qemu", "C:/Program Files (x86)/qemu"].map(PathBuf::from);
     let mut found: Vec<PathBuf> = Vec::new();
-    for dir in std::env::split_paths(&path).chain(installed) {
+    let own = own_qemu().filter(|_| program.starts_with("qemu-"));
+    for dir in own
+        .into_iter()
+        .chain(std::env::split_paths(&path))
+        .chain(installed)
+    {
         for suffix in suffixes {
             let candidate = dir.join(format!("{program}{suffix}"));
             if candidate.is_file() && !found.iter().any(|seen| same_file(seen, &candidate)) {
@@ -400,6 +407,24 @@ pub(crate) fn which_all(program: &str) -> Vec<PathBuf> {
         }
     }
     found
+}
+
+/// `~/.local/share/ferrix/qemu`, where `scripts/fetch/fetch-qemu-windows.sh`
+/// installs a QEMU with the fixes in `scripts/data/qemu/`, looked in before
+/// `PATH`: the released Windows build jumps to NULL the first time a guest
+/// resets `virtio-gpu-gl-pci`, so every `--gl` boot there needs this one
+/// (`docs/GPU.md` §3.12). Taken whenever it is there, on any host, rather
+/// than on Windows alone: a machine that has it asked for it.
+fn own_qemu() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    Some(
+        PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("ferrix")
+            .join("qemu"),
+    )
+    .filter(|dir| dir.is_dir())
 }
 
 /// Whether two paths are one file: `PATH` often names a directory twice,
