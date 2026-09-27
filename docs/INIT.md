@@ -685,6 +685,22 @@ keeps the kernel's path.
 * With it, init's `KillMode=control-group` signals every process in the
   unit's cgroup and beneath it, as systemd does, not only its own
   `cgroup.procs`: `devmgr`'s drivers are in jobs beneath its unit's.
+* **The switch moves pid 1 only.** `devmgr` and every driver it starts keep
+  the initramfs root, before the switch and after a restart alike, since
+  `devmgr_start` loads and starts them from it. So a driver-side socket that
+  other programs find must not be a path: bound under the initramfs's
+  `/tmp` or `/run`, it is out of sight of every program started from the
+  volume, and init mounts a fresh `/run` there rather than moving the old
+  one across as Linux's `mount --move /run` would. The rule is an abstract
+  `AF_UNIX` name, gated on the peer's `SO_PEERCRED` in place of a file
+  mode: `vport`'s `\0ferrix.vport` is the first (ferrix-e4, 2026-09-27).
+  Abstract names are per network namespace, so a unit with L13's
+  `PrivateNetwork=` will not see them.
+* When a unit's cgroup goes, init removes the cgroups beneath it first and
+  tries a cgroup still busy again every 50 ms for up to 5 s: a dead
+  driver's job outlives its last process for a moment, while the kernel
+  lets go of that process, and a job `job_create` made has no name to
+  remove it by.
 
 ## 8. Boot and shutdown
 
