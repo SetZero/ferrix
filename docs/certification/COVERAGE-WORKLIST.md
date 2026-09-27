@@ -10,14 +10,14 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | Module | x86_64 | aarch64 | armv7a | Files |
 |---|---:|---:|---:|---:|
+| [`arch/aarch64`](#archaarch64) | - | 27 | - | 2 |
 | [`syscall`](#syscall) | 27 | 23 | 22 | 2 |
 | [`user`](#user) | 6 | 22 | 26 | 2 |
 | [`trap`](#trap) | - | 25 | 25 | 1 |
-| [`arch/aarch64`](#archaarch64) | - | 24 | - | 2 |
 | [`object`](#object) | 17 | 19 | 18 | 7 |
 | [`arch/x86_64`](#archx86_64) | 11 | - | - | 3 |
-| [`console`](#console) | 3 | 10 | 3 | 4 |
 | [`devmgr`](#devmgr) | - | 7 | 6 | 1 |
+| [`console`](#console) | 3 | 6 | 3 | 3 |
 | [`vmap`](#vmap) | 2 | - | 5 | 1 |
 | [`mm`](#mm) | 1 | 1 | 4 | 1 |
 | [`smp`](#smp) | - | 4 | 4 | 1 |
@@ -30,7 +30,16 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | [`iommu`](#iommu) | 1 | 1 | 1 | 1 |
 | [`signal_frame`](#signal_frame) | - | - | 1 | 1 |
 | [`timer`](#timer) | - | - | 1 | 1 |
-| **Total** | **77** | **146** | **130** | 35 |
+| **Total** | **77** | **145** | **130** | 34 |
+
+---
+
+## `arch/aarch64`
+
+| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
+|---|---|---:|---:|---:|---:|---|
+| `arch/aarch64/console.rs` | `core` | - | 17 | - | 17 | 94-95, 106, 109, 115, 136, 138, 170, 176, 200, 217, 224-225, 230, 246-247, 291 |
+| `arch/aarch64/trng.rs` | `core` | - | 10 | - | 10 | 51, 55-56, 60-61, 63, 74, 77, 83, 85 |
 
 ---
 
@@ -60,15 +69,6 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 ---
 
-## `arch/aarch64`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `arch/aarch64/console.rs` | `core` | - | 14 | - | 14 | 116-117, 128, 131, 137, 158, 160, 195, 201, 246, 250-251, 287, 360 |
-| `arch/aarch64/trng.rs` | `core` | - | 10 | - | 10 | 51, 55-56, 60-61, 63, 74, 77, 83, 85 |
-
----
-
 ## `object`
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
@@ -93,22 +93,21 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 ---
 
-## `console`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `console.rs` | `core` | 0 | 5 | 2 | 0 | - |
-| `console/screen.rs` | `core` | 3 | 2 | 0 | 0 | - |
-| `console/output.rs` | `core` | 0 | 2 | 0 | 0 | - |
-| `console/input.rs` | `core` | 0 | 1 | 1 | 0 | - |
-
----
-
 ## `devmgr`
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
 | `devmgr.rs` | `item` | 0 | 7 | 6 | 0 | - |
+
+---
+
+## `console`
+
+| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
+|---|---|---:|---:|---:|---:|---|
+| `console/screen.rs` | `core` | 3 | 3 | 0 | 0 | - |
+| `console.rs` | `core` | 0 | 2 | 2 | 0 | - |
+| `console/input.rs` | `core` | 0 | 1 | 1 | 0 | - |
 
 ---
 

@@ -7,7 +7,7 @@ The statements in the certified item that the measured suite did not reach, on e
 | Architecture | Profile | Unreached | Argued | Hardware absent | Needs a test |
 |---|---|---:|---:|---:|---:|
 | x86_64 | debug | 785 | 461 | 247 | **77** |
-| aarch64 | debug | 747 | 400 | 201 | **146** |
+| aarch64 | debug | 746 | 400 | 201 | **145** |
 | armv7a | debug | 1131 | 557 | 444 | **130** |
 
 *Argued* is the first four categories below; *hardware absent* is a statement about which machine was measured rather than an argument; *needs a test* is the gap.
@@ -449,7 +449,7 @@ From `coverage-argued-x86_64.json`. Each row is one argument, for the lines it n
 
 ## aarch64
 
-**747** unreached statements, debug profile.
+**746** unreached statements, debug profile.
 
 | Category | Statements | Share |
 |---|---:|---:|
@@ -458,7 +458,7 @@ From `coverage-argued-x86_64.json`. Each row is one argument, for the lines it n
 | Reached only when something has already failed | 82 | 11% |
 | Run, and credited to another line | 12 | 2% |
 | Hardware the measured machine does not have | 201 | 27% |
-| Needs a test | 146 | 20% |
+| Needs a test | 145 | 19% |
 
 ### aarch64: Unreachable on the measured architecture — 156 statements
 
@@ -549,7 +549,7 @@ Justified, line by line. The statement runs, and a test shows what it does, but 
 | 66 | `core` | `device.rs` |
 | 46 | `item` | `pci.rs` |
 | 33 | `item` | `pci/virtio.rs` |
-| 12 | `core` | `arch/aarch64/console.rs` |
+| 9 | `core` | `arch/aarch64/console.rs` |
 | 6 | `core` | `arch/aarch64/gic/gicv3_its.rs` |
 | 6 | `core` | `iommu.rs` |
 | 5 | `item` | `syscall/native.rs` |
@@ -558,6 +558,7 @@ Justified, line by line. The statement runs, and a test shows what it does, but 
 | 3 | `core` | `arch/aarch64/smp.rs` |
 | 3 | `core` | `arch/aarch64/speculation.rs` |
 | 3 | `core` | `arch/arm_common/gicv2.rs` |
+| 3 | `core` | `arch/arm_common/pl011.rs` |
 | 3 | `item` | `init.rs` |
 | 2 | `core` | `arch/aarch64/gic/gicv3.rs` |
 | 1 | `core` | `arch/aarch64/cpu.rs` |
@@ -566,7 +567,7 @@ Justified, line by line. The statement runs, and a test shows what it does, but 
 | 1 | `item` | `devmgr.rs` |
 | 1 | `core` | `iommu/smmuv3.rs` |
 
-### aarch64: Needs a test — 146 statements
+### aarch64: Needs a test — 145 statements
 
 **The real gap.** No argument covers these; they are reachable on the measured configuration and nothing exercised them. This is the number that has to reach zero for DO-178C table A-7 objective 5. [COVERAGE-WORKLIST.md](COVERAGE-WORKLIST.md) groups them by module.
 
@@ -575,19 +576,18 @@ Justified, line by line. The statement runs, and a test shows what it does, but 
 | 25 | `core` | `trap.rs` |
 | 22 | `core` | `user/space.rs` |
 | 19 | `item` | `syscall/native.rs` |
-| 14 | `core` | `arch/aarch64/console.rs` |
+| 17 | `core` | `arch/aarch64/console.rs` |
 | 10 | `core` | `arch/aarch64/trng.rs` |
 | 7 | `item` | `devmgr.rs` |
 | 6 | `core` | `object/oom.rs` |
-| 5 | `core` | `console.rs` |
 | 5 | `core` | `object/process.rs` |
 | 4 | `core` | `object/channel.rs` |
 | 4 | `core` | `smp.rs` |
 | 4 | `item` | `syscall/program.rs` |
+| 3 | `core` | `console/screen.rs` |
 | 3 | `item` | `main.rs` |
 | 3 | `core` | `sched/mod.rs` |
-| 2 | `core` | `console/output.rs` |
-| 2 | `core` | `console/screen.rs` |
+| 2 | `core` | `console.rs` |
 | 2 | `item` | `init.rs` |
 | 2 | `core` | `object/mod.rs` |
 | 2 | `item` | `random.rs` |
@@ -603,12 +603,9 @@ From `coverage-argued-aarch64.json`. Each row is one argument, for the lines it 
 
 | File | Lines | Category | Why it is not reached |
 |---|---|---|---|
-| `arch/aarch64/console.rs` | 167, 169-170, 173 | Hardware the measured machine does not have | Mapping the `ramoops` zone and continuing the loader's record in it. The console is a `ramoops` record only when the loader passes `console=ramoops,<address>,<size>`, which the Pixel 7's loader alone does: its UART is behind a debug accessory on the USB-C port. QEMU's `virt` has a PL011, and a `ramoops` console there would need RAM firmware keeps out of the memory map and would take the boot's output off the serial port every gate reads. The zone's parser is run by the stage 3 machine check (seven values read or refused). The phone's boot log, which is this record read back after its watchdog reset, reaches FERRIX-BOOT-OK in ~/.local/share/ferrix/pixel7/run13-sealed/run.log (main at 47934c84, an ancestor of this tree). |
-| `arch/aarch64/console.rs` | 197, 204-205, 211 | Hardware the measured machine does not have | Appending a byte to the `ramoops` record. The console is a `ramoops` record only when the loader passes `console=ramoops,<address>,<size>`, which the Pixel 7's loader alone does: its UART is behind a debug accessory on the USB-C port. QEMU's `virt` has a PL011, and a `ramoops` console there would need RAM firmware keeps out of the memory map and would take the boot's output off the serial port every gate reads. The zone's parser is run by the stage 3 machine check (seven values read or refused). The phone's boot log, which is this record read back after its watchdog reset, reaches FERRIX-BOOT-OK in ~/.local/share/ferrix/pixel7/run13-sealed/run.log (main at 47934c84, an ancestor of this tree). |
-| `arch/aarch64/console.rs` | 227 | Hardware the measured machine does not have | The line's only statement row is `write` as `ramoops_append` inlines it into `console::emit`, updating the record's header after each byte; the PL011's register writes carry their callers' rows. The console is a `ramoops` record only when the loader passes `console=ramoops,<address>,<size>`, which the Pixel 7's loader alone does: its UART is behind a debug accessory on the USB-C port. QEMU's `virt` has a PL011, and a `ramoops` console there would need RAM firmware keeps out of the memory map and would take the boot's output off the serial port every gate reads. The zone's parser is run by the stage 3 machine check (seven values read or refused). The phone's boot log, which is this record read back after its watchdog reset, reaches FERRIX-BOOT-OK in ~/.local/share/ferrix/pixel7/run13-sealed/run.log (main at 47934c84, an ancestor of this tree). |
-| `arch/aarch64/console.rs` | 260 | Hardware the measured machine does not have | The wait for room in the transmit FIFO taking a second turn. QEMU's PL011 model sends each byte as it is written and never reports `FR.TXFF`, so the first read finds room; a real PL011 at 115200 baud fills its sixteen-byte FIFO in 1.4 ms of output. No machine the suite boots has a PL011 slower than the CPU. |
-| `arch/aarch64/console.rs` | 285 | Hardware the measured machine does not have | The drain's second turn: the port still sending. QEMU's PL011 reports its FIFO empty and not busy at every read, so `drain` returns on the first; the loop exists for a real port, whose last line would otherwise be cut off by the power-off (seen on the DK1's USART). |
-| `arch/aarch64/console.rs` | 315 | Hardware the measured machine does not have | A received byte carrying a framing, parity, break or overrun flag. QEMU's PL011 flags a byte only for a break on its character device, which no gate sends; on a real port it is line noise. The byte is delivered either way. |
+| `arch/aarch64/console.rs` | 145, 147-148, 151 | Hardware the measured machine does not have | Mapping the `ramoops` zone and continuing the loader's record in it. The console is a `ramoops` record only when the loader passes `console=ramoops,<address>,<size>`, which the Pixel 7's loader alone does: its UART is behind a debug accessory on the USB-C port. QEMU's `virt` has a PL011, and a `ramoops` console there would need RAM firmware keeps out of the memory map and would take the boot's output off the serial port every gate reads. The zone's parser is run by the stage 3 machine check (seven values read or refused). The phone's boot log, which is this record read back after its watchdog reset, reaches FERRIX-BOOT-OK in ~/.local/share/ferrix/pixel7/run13-sealed/run.log (main at 47934c84, an ancestor of this tree). |
+| `arch/aarch64/console.rs` | 172, 179-180, 186 | Hardware the measured machine does not have | Appending a byte to the `ramoops` record. The console is a `ramoops` record only when the loader passes `console=ramoops,<address>,<size>`, which the Pixel 7's loader alone does: its UART is behind a debug accessory on the USB-C port. QEMU's `virt` has a PL011, and a `ramoops` console there would need RAM firmware keeps out of the memory map and would take the boot's output off the serial port every gate reads. The zone's parser is run by the stage 3 machine check (seven values read or refused). The phone's boot log, which is this record read back after its watchdog reset, reaches FERRIX-BOOT-OK in ~/.local/share/ferrix/pixel7/run13-sealed/run.log (main at 47934c84, an ancestor of this tree). |
+| `arch/aarch64/console.rs` | 202 | Hardware the measured machine does not have | The line's only statement row is `ramoops_write` as `ramoops_append` inlines it into `console::emit`, updating the record's header after each byte. The console is a `ramoops` record only when the loader passes `console=ramoops,<address>,<size>`, which the Pixel 7's loader alone does: its UART is behind a debug accessory on the USB-C port. QEMU's `virt` has a PL011, and a `ramoops` console there would need RAM firmware keeps out of the memory map and would take the boot's output off the serial port every gate reads. The zone's parser is run by the stage 3 machine check (seven values read or refused). The phone's boot log, which is this record read back after its watchdog reset, reaches FERRIX-BOOT-OK in ~/.local/share/ferrix/pixel7/run13-sealed/run.log (main at 47934c84, an ancestor of this tree). |
 | `arch/aarch64/cpu.rs` | 500 | Hardware the measured machine does not have | `smc_call`: a PSCI or SMCCC call through the secure monitor. QEMU's `virt` without EL3 firmware answers PSCI itself through `hvc`, and its FADT and device tree say so; the Pixel 7's `/psci` node says `method = "smc"` (panther.dts), and its boot started all eight processors through this call: `cpus 8 described by firmware, 8 online` in ~/.local/share/ferrix/pixel7/run13-sealed/run.log (main at 47934c84, an ancestor of this tree). |
 | `arch/aarch64/gic.rs` | 157 | Reached only when something has already failed | The row is `init_v3`'s `?` returning the GICv3 driver's error: no redistributor for the boot core, one that will not wake, or a CPU interface EL1 may not use. Interrupt bring-up then fails and the kernel stops (FX-0303). Both GICv3 boots of the suite bring the controller up. |
 | `arch/aarch64/gic.rs` | 186 | Reached only when something has already failed | A MADT whose GIC version is 1, or 5 and later, which neither driver can run: refused by name rather than writing one version's registers as the other's, and the kernel stops (FX-0303). QEMU describes 2 or 3, and version 0 is resolved by `described_version`, which the stage 3 check holds to its answers. |
@@ -638,6 +635,9 @@ From `coverage-argued-aarch64.json`. Each row is one argument, for the lines it 
 | `arch/arm_common/gicv2.rs` | 419 | Hardware the measured machine does not have | A vector asked of a GICv2 without a `GICv2m` frame. QEMU's `virt` gives every GICv2 one; a machine without one has no MSI vectors, and a device asking for one is refused. |
 | `arch/arm_common/gicv2.rs` | 426 | Reached only when something has already failed | Every one of the frame's SPIs taken, up to 64. The machine's devices take one each, five at most, and a vector is never given back while its device runs; a machine with more message-signalled vectors than the frame has SPIs would reach it. |
 | `arch/arm_common/gicv2.rs` | 428 | Reached only when something has already failed | The row is the retry after a lost compare-exchange: another processor took an SPI between this one's read of the bitmap and its claim. Vectors are taken while device nodes are brought up and drivers started, one at a time, so no allocation races another; the loop keeps the bitmap right if one ever does. |
+| `arch/arm_common/pl011.rs` | 106 | Hardware the measured machine does not have | The wait for room in the transmit FIFO taking a second turn. QEMU's PL011 model sends each byte as it is written and never reports `FR.TXFF`, so the first read finds room; a real PL011 at 115200 baud fills its sixteen-byte FIFO in 1.4 ms of output. No machine the suite boots has a PL011 slower than the CPU. |
+| `arch/arm_common/pl011.rs` | 131 | Hardware the measured machine does not have | The drain's second turn: the port still sending. QEMU's PL011 reports its FIFO empty and not busy at every read, so `drain` returns on the first; the loop exists for a real port, whose last line would otherwise be cut off by the power-off (seen on the DK1's USART). |
+| `arch/arm_common/pl011.rs` | 154 | Hardware the measured machine does not have | A received byte carrying a framing, parity, break or overrun flag. QEMU's PL011 flags a byte only for a break on its character device, which no gate sends; on a real port it is line noise. The byte is delivered either way. |
 | `arch/speculation.rs` | 162 | Unreachable on the measured architecture | `none` names an empty set of defences, which only a `--mitigations off` build records: on AArch64 every processor's plan in the certified build starts from the index clamp. That build is another configuration, not the one certified. |
 | `console.rs` | 197 | Reached only when the kernel is stopping | The writer a failure report uses when the port's lock cannot be had in PANIC_SPINS tries -- held by a processor that stopped part way through a line. Reached only while the kernel is reporting a failure. |
 | `console.rs` | 202 | Reached only when the kernel is stopping | The writer a failure report uses when the port's lock cannot be had in PANIC_SPINS tries -- held by a processor that stopped part way through a line. Reached only while the kernel is reporting a failure. |

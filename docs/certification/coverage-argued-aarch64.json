@@ -15,42 +15,42 @@
   "arguments": [
     {
       "file": "arch/aarch64/console.rs",
-      "lines": "167, 169-170, 173",
+      "lines": "145, 147-148, 151",
       "category": "absent-hardware",
-      "match": "memory.map_device(PL011_VIRT, base, size)?;",
+      "match": "memory.map_device(WINDOW, base, size)?;",
       "why": "Mapping the `ramoops` zone and continuing the loader's record in it. The console is a `ramoops` record only when the loader passes `console=ramoops,<address>,<size>`, which the Pixel 7's loader alone does: its UART is behind a debug accessory on the USB-C port. QEMU's `virt` has a PL011, and a `ramoops` console there would need RAM firmware keeps out of the memory map and would take the boot's output off the serial port every gate reads. The zone's parser is run by the stage 3 machine check (seven values read or refused). The phone's boot log, which is this record read back after its watchdog reset, reaches FERRIX-BOOT-OK in ~/.local/share/ferrix/pixel7/run13-sealed/run.log (main at 47934c84, an ancestor of this tree)."
     },
     {
       "file": "arch/aarch64/console.rs",
-      "lines": "197, 204-205, 211",
+      "lines": "172, 179-180, 186",
       "category": "absent-hardware",
       "match": "if length >= RAMOOPS_CAPACITY.load(Ordering::Relaxed) {",
       "why": "Appending a byte to the `ramoops` record. The console is a `ramoops` record only when the loader passes `console=ramoops,<address>,<size>`, which the Pixel 7's loader alone does: its UART is behind a debug accessory on the USB-C port. QEMU's `virt` has a PL011, and a `ramoops` console there would need RAM firmware keeps out of the memory map and would take the boot's output off the serial port every gate reads. The zone's parser is run by the stage 3 machine check (seven values read or refused). The phone's boot log, which is this record read back after its watchdog reset, reaches FERRIX-BOOT-OK in ~/.local/share/ferrix/pixel7/run13-sealed/run.log (main at 47934c84, an ancestor of this tree)."
     },
     {
       "file": "arch/aarch64/console.rs",
-      "lines": "227",
+      "lines": "202",
       "category": "absent-hardware",
       "match": "unsafe { core::ptr::write_volatile((base + offset) as *mut u32, value) };",
-      "why": "The line's only statement row is `write` as `ramoops_append` inlines it into `console::emit`, updating the record's header after each byte; the PL011's register writes carry their callers' rows. The console is a `ramoops` record only when the loader passes `console=ramoops,<address>,<size>`, which the Pixel 7's loader alone does: its UART is behind a debug accessory on the USB-C port. QEMU's `virt` has a PL011, and a `ramoops` console there would need RAM firmware keeps out of the memory map and would take the boot's output off the serial port every gate reads. The zone's parser is run by the stage 3 machine check (seven values read or refused). The phone's boot log, which is this record read back after its watchdog reset, reaches FERRIX-BOOT-OK in ~/.local/share/ferrix/pixel7/run13-sealed/run.log (main at 47934c84, an ancestor of this tree)."
+      "why": "The line's only statement row is `ramoops_write` as `ramoops_append` inlines it into `console::emit`, updating the record's header after each byte. The console is a `ramoops` record only when the loader passes `console=ramoops,<address>,<size>`, which the Pixel 7's loader alone does: its UART is behind a debug accessory on the USB-C port. QEMU's `virt` has a PL011, and a `ramoops` console there would need RAM firmware keeps out of the memory map and would take the boot's output off the serial port every gate reads. The zone's parser is run by the stage 3 machine check (seven values read or refused). The phone's boot log, which is this record read back after its watchdog reset, reaches FERRIX-BOOT-OK in ~/.local/share/ferrix/pixel7/run13-sealed/run.log (main at 47934c84, an ancestor of this tree)."
     },
     {
-      "file": "arch/aarch64/console.rs",
-      "lines": "260",
+      "file": "arch/arm_common/pl011.rs",
+      "lines": "106",
       "category": "absent-hardware",
       "match": "for _ in 0..SPIN_LIMIT {",
       "why": "The wait for room in the transmit FIFO taking a second turn. QEMU's PL011 model sends each byte as it is written and never reports `FR.TXFF`, so the first read finds room; a real PL011 at 115200 baud fills its sixteen-byte FIFO in 1.4 ms of output. No machine the suite boots has a PL011 slower than the CPU."
     },
     {
-      "file": "arch/aarch64/console.rs",
-      "lines": "285",
+      "file": "arch/arm_common/pl011.rs",
+      "lines": "131",
       "category": "absent-hardware",
       "match": "for _ in 0..DRAIN_LIMIT {",
       "why": "The drain's second turn: the port still sending. QEMU's PL011 reports its FIFO empty and not busy at every read, so `drain` returns on the first; the loop exists for a real port, whose last line would otherwise be cut off by the power-off (seen on the DK1's USART)."
     },
     {
-      "file": "arch/aarch64/console.rs",
-      "lines": "315",
+      "file": "arch/arm_common/pl011.rs",
+      "lines": "154",
       "category": "absent-hardware",
       "match": "if data & DR_ERRORS != 0 {",
       "why": "A received byte carrying a framing, parity, break or overrun flag. QEMU's PL011 flags a byte only for a break on its character device, which no gate sends; on a real port it is line noise. The byte is delivered either way."
