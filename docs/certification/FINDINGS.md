@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-14 findings are open and 32 are closed, of 46. F-26 closed on 2026-09-27 when every unsafe site in the item was traced to one of fourteen obligations, each tied to the requirement or hazard it serves, and the gate began refusing an untraced one. F-41, a page `mprotect` made writable after a `fork` writing into the other process's copy, was found and closed on 2026-09-27. F-10 was re-measured on 2026-09-27 over the checks written for it module by module: 89.5% of the certified item's statements on x86-64, 90.2% on AArch64 and 84.8% on ARMv7-A, with 77, 146 and 130 still needing a test and every other unreached statement argued or put down to absent hardware. F-38, F-39 and F-40 were found by other work on 2026-09-26 and recorded by the certification review that work now goes through, and all three closed the same day with their fixes: F-39, a native process any user made running as root; F-38, a device model writing a dead driver's frames after they were given back; and F-40, a delegated job lifting its own limits, closed by a job right of its own for setting limits. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
+14 findings are open and 32 are closed, of 46. F-13 was measured on 2026-09-27 and stays open: 37.5%, 32.6% and 28.7% of the item's object-code decisions, guards left out, took both ways on x86-64, AArch64 and ARMv7-A, and 50.2%, 48.6% and 48.8% counted by source line. F-26 closed on 2026-09-27 when every unsafe site in the item was traced to one of fourteen obligations, each tied to the requirement or hazard it serves, and the gate began refusing an untraced one. F-41, a page `mprotect` made writable after a `fork` writing into the other process's copy, was found and closed on 2026-09-27. F-10 was re-measured on 2026-09-27 over the checks written for it module by module: 89.5% of the certified item's statements on x86-64, 90.2% on AArch64 and 84.8% on ARMv7-A, with 77, 146 and 130 still needing a test and every other unreached statement argued or put down to absent hardware. F-38, F-39 and F-40 were found by other work on 2026-09-26 and recorded by the certification review that work now goes through, and all three closed the same day with their fixes: F-39, a native process any user made running as root; F-38, a device model writing a dead driver's frames after they were given back; and F-40, a delegated job lifting its own limits, closed by a job right of its own for setting limits. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -452,6 +452,35 @@ three agree within four points.
 **Informational.** Not required at DAL C. Required at DAL B and DAL A, and the
 present method (basic-block granularity) cannot produce MC/DC without
 instrumenting conditions.
+
+**Measured 2026-09-27** (main at 88d9ce39, debug profile, the §3.1 suite):
+decision coverage of the item's *object code*, from the drcov traces the
+statement figure already uses, by `scripts/gen/decision-coverage.py`. A
+conditional branch has taken both ways when executed blocks began at its
+target and at its fall-through. Of the certified item's conditional branches,
+leaving out the guards -- the overflow, bounds, `unwrap`, assertion and
+precondition checks and `fatal!`s whose other way is a panic, 1,906, 1,814
+and 1,775 of them -- **37.5% on x86-64 (3,965 of 10,571), 32.6% on AArch64
+(2,994 of 9,192) and 28.7% on ARMv7-A (3,267 of 11,378)** took both ways.
+Those are upper bounds; the lower bound, counting a successor only when no
+other edge into it ran, is 10.4%, 8.9% and 9.8% of all branches. Counted by
+source line instead -- a decision covered when any compiled copy of it took
+both ways -- **50.2%, 48.6% and 48.8%**. VERIFICATION.md §3.6 gives the
+method and its limits; `decision-coverage-<arch>.json` the rings and files.
+
+Most of the object-code gap is a few source decisions multiplied by inlining
+and monomorphisation: `timer::now_nanos`'s `hz == 0`, in more than 400
+functions; the deadline tests of the generic waits in `sched/wait.rs`; the
+`?`s of `object/quota.rs`'s slot lookup; x86-64's interrupt restore in every
+lock guard; the Arm pair's `copy_to_user` results.
+
+*Would be tightened by:* QEMU's `cflow` plugin, which records edges rather
+than blocks and would close the gap between the two bounds; a measurement of
+the release profile, which drops most guards; an analysis of the
+object-to-source correspondence DO-178C §6.4.4.2b asks before object-code
+coverage stands in for source coverage. *Stays open* at DAL C, as
+Informational; at DAL B it would be Major, and MC/DC at DAL A is out of this
+method's reach.
 
 ### F-14 — tests are not traced to requirements
 **Advanced 2026-09-27 (W-8 steps 1 and 2).** The trace exists as a gate:

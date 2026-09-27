@@ -82,6 +82,8 @@ output is used to *satisfy* an objective rather than to find defects.
 | `check-crate-layering.sh` | layering; `libs/` depends on nothing above | T2 |
 | `gen-soup.py` | the item links no external crate | T2 |
 | `coverage-report.py` | statement coverage | **T2, and load-bearing** |
+| `decision-coverage.py` | decision (branch) coverage of object code, from the same traces; not yet offered against an objective (F-13) | T2 |
+| `llvm-objdump`, `llvm-nm` (the pinned toolchain's `llvm-tools`) | disassembly and symbols for `decision-coverage.py` | T2 |
 | `clippy` | ten configurations; denies `unwrap`, `panic`, indexing | T2 |
 | `miri` | UB detection over 13 crates | T2 |
 | `cargo fuzz` | 30 targets with committed corpora | T2 |
@@ -211,3 +213,20 @@ file against the source. Measuring three architectures is itself a cross-check:
 generic code every boot runs must read alike on all three, and the two defects
 of 2026-09-26 were found because it did not. A qualification effort would need a second
 implementation to compare against.
+
+### TOR-4 — `decision-coverage.py`
+
+Classified with `coverage-report.py` and read the same way, one step further
+from an objective: DAL C asks no decision coverage, so its figure is offered
+as a measurement of the distance to DAL B (F-13), not as evidence meeting one.
+It becomes load-bearing the day it is.
+
+| | |
+|---|---|
+| Output | the decision-coverage figures in [VERIFICATION.md](VERIFICATION.md) §3.6 and `decision-coverage-<arch>.json` |
+| **Shall** | count a direct conditional branch as taken both ways only when executed blocks began at both its target and its fall-through; count every such branch in the item's code, guards included, in the denominator |
+| **Shall not** | count a conditional call or conditional indirect branch as covered; count an outcome as *sure* while another instruction with a known edge into that successor ran |
+| Failure mode | as TOR-3: a figure nobody can tell from a correct one |
+| Verification | none independent. Its own check is the branch that ran and left no outcome, which correct successors make impossible; it reads 0 on every architecture |
+| Known biases | the upper bound credits a successor another edge entered; the lower bound can be fooled by an indirect jump or an interrupt or exception return; the object-code unit counts each inlined or monomorphised copy of a decision; branchless code (`cmov`, `csel`, ARM predication) is not counted. All in its docstring and VERIFICATION.md §3.6 |
+| Evidence it is not wildly wrong | two defects found before the first figure was published, both by its own checks. `tbz w8, #0x0, <target>` was read as a branch to the bit it tests, leaving 185 AArch64 branches that ran with no outcome; the target is now the operand objdump annotates. And the guard walk ran on past an ARM `pop {..., pc}` return and past a call that does not return (`idle_loop`), into the next block's panic, making 192 ARMv7-A branches and 3 AArch64 ones look like guards that had panicked; it now stops at a return, a function's start and the first call. Every executed block of an x86-64 boot starts on an instruction boundary of the disassembly, which checks the slide and the reconstruction it shares with TOR-3 |

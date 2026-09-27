@@ -5,7 +5,8 @@
 //!
 //! The measurement is QEMU's `drcov` TCG plugin, named by
 //! `FERRIX_QEMU_PLUGIN`, and `scripts/gen/coverage-report.py`, which reads the
-//! trace against the kernel's DWARF line table. Two things about a suite of
+//! trace against the kernel's DWARF line table; `scripts/gen/decision-coverage.py`
+//! reads the same traces for decision coverage (§3.6). Two things about a suite of
 //! gates make that harder than one boot:
 //!
 //! * **A gate may boot more than once**, and the plugin truncates the file it
@@ -478,7 +479,7 @@ fn run_gate(
 }
 
 /// Run the report over every trace in `directory`, against the recorded
-/// floor.
+/// floor, and the decision report after it.
 fn report(arch: Arch, directory: &Path) -> Result<()> {
     let mut traces = Vec::new();
     for entry in std::fs::read_dir(directory)? {
@@ -527,7 +528,25 @@ fn report(arch: Arch, directory: &Path) -> Result<()> {
         arguments.join(" ")
     );
     let borrowed: Vec<&str> = arguments.iter().map(String::as_str).collect();
-    crate::check::python_with("scripts/gen/coverage-report.py", &borrowed)
+    let statements = crate::check::python_with("scripts/gen/coverage-report.py", &borrowed);
+
+    // Decision coverage from the same traces (finding F-13): reported, with
+    // no floor yet, whether or not the statements met theirs.
+    let mut decisions = vec![
+        "--arch".to_owned(),
+        arch.name().to_owned(),
+        "--elf".to_owned(),
+        elf.display().to_string(),
+        "--drcov".to_owned(),
+    ];
+    decisions.extend(traces.iter().map(|trace| trace.display().to_string()));
+    println!(
+        "\n  coverage: {arch}: python3 scripts/gen/decision-coverage.py {}",
+        decisions.join(" ")
+    );
+    let borrowed: Vec<&str> = decisions.iter().map(String::as_str).collect();
+    let decided = crate::check::python_with("scripts/gen/decision-coverage.py", &borrowed);
+    statements.and(decided)
 }
 
 #[cfg(test)]

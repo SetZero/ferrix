@@ -72,7 +72,8 @@ checks F-10's module-by-module passes wrote (FINDINGS.md F-10), and **not
 comparable with the figures published on 2026-09-25**, which two defects in
 the measurement made wrong in opposite directions, nor with the 2026-09-26
 figures, which two more defects inflated and deflated (§3.4). Raw per-file
-data in `coverage-*.json`; the ratchet in `coverage-floor.json`.
+data in `coverage-*.json`; the ratchet in `coverage-floor.json`. Decision
+coverage, from the same traces, is §3.6 and `decision-coverage-*.json`.
 
 ### 3.1 The suite, every architecture
 
@@ -246,7 +247,9 @@ FERRIX_DRCOV=/path/to/qemu/build/contrib/plugins/libdrcov.so \
 That runs the suite with `--accel tcg` (a TCG plugin observes nothing under
 KVM, and the launcher refuses rather than reporting zero), writes the traces to
 `build/coverage/<arch>`, prints the `coverage-report.py` command it runs, and
-fails below the architecture's floor in `coverage-floor.json`. It needs boots,
+fails below the architecture's floor in `coverage-floor.json`; then it prints
+and runs `decision-coverage.py` over the same traces, which has no floor yet
+(§3.6), and `--json` regenerates its evidence the same way. It needs boots,
 so it is not part of `cargo xtask check`. Adding `--json` and `--residual` to
 the printed command regenerates the evidence, and
 `scripts/gen/gen-coverage-justification.py` the two documents from it.
@@ -269,8 +272,9 @@ modifying the toolchain.
 
 **What it does not.** 89.5%, 90.2% and 84.8% are not 100%. The residual is
 enumerated and sorted, and 77 of x86-64's 785 statements, 145 of AArch64's 746
-and 130 of ARMv7-A's 1,131 still need a test rather than an argument (F-10). There is no decision
-or MC/DC coverage, which DAL C does not require and DAL B and A do (F-13).
+and 130 of ARMv7-A's 1,131 still need a test rather than an argument (F-10). Decision
+coverage, which DAL C does not require and DAL B and A do, is measured of
+object code in §3.6 and is far short; there is no MC/DC (F-13).
 
 Two biases, both optimistic and both declared in the tool's own docstring: a
 basic block credits every statement inside it even if a trap left it early, and
@@ -331,6 +335,129 @@ shootdown's bound (`processor 0 never flushed its TLB for a shootdown`). A
 failing run is not coverage evidence, so none of the three counts. `test-foot`,
 `test-video`, `test-vkgears`, `test-rustc`, `test-chrome` and `test-selfhost`
 need a GL host, ports or fetched volumes.
+
+### 3.6 Decision coverage
+
+DO-178C table A-7 objective 6 asks, at DAL B and above, that every decision
+has taken every outcome. DAL C does not ask it, and F-13 stays Informational;
+this section measures how far the item is from it, from the traces §3.1
+already collects, with no new instrumentation.
+
+**Method.** `scripts/gen/decision-coverage.py` disassembles each kernel build
+with the pinned toolchain's `llvm-objdump` (the `llvm-tools` component
+`rust-toolchain.toml` installs, one tool for all three architectures) and
+finds every direct conditional branch: `jcc` on x86-64; `b.<cond>`,
+`cbz`/`cbnz` and `tbz`/`tbnz` on AArch64; `b<cond>` on ARMv7-A, whose kernel
+is A32 with no Thumb. QEMU ends a translation block at every conditional
+branch, and control that leaves one starts the next block at the branch's
+target if it was taken and at the instruction after it if not; drcov records
+the address every executed block starts at. So a branch has taken **both
+ways** when blocks began at both successors. Each branch is attributed to a
+file and line by the same DWARF line table the statement figure uses (every
+row, not only `is_stmt` ones) and to a ring by the boundary gate's
+classifier; traces are read against their own build and slide, and the builds
+are joined by naming each branch by its function, file, line and order at
+that line, onto the `test-boot` build, which is the denominator. `cargo xtask
+coverage` runs it after the statement report.
+
+It reports three things, because the one number the method can give exactly
+is not the one the standard means:
+
+* **Both ways**, an upper bound. A block can begin at a successor for a
+  reason other than this branch: the successor is also another branch's
+  fall-through, a jump's target or a call's return.
+* **Sure**, a lower bound: both outcomes seen, and for each successor every
+  *other* instruction with a known edge into it lies in no executed block,
+  so that this branch's edge is the only one that can have been taken. drcov
+  records blocks and not the edges between them, and nothing in its traces
+  narrows the gap between the two; QEMU's `cflow` plugin, built beside
+  `libdrcov.so`, records edges and would.
+* **By source line**: a decision is a (file, line, order at that line), and
+  is covered when *any* compiled copy of it took both ways -- nearer the
+  source-level decision the standard means than the object-code count, which
+  asks it of every copy.
+
+A **guard** is a branch one of whose successors runs, with no other decision
+or call first, into a panic: an overflow or bounds check, an `unwrap`, a
+`debug_assert!`, one of `core`'s debug-build precondition checks, a
+`fatal!`. A passing run never takes its panicking way -- none did on any
+architecture but the one `test-shell` asks for with `ferrix.onexit=panic` on
+x86-64 -- so a passing suite can never take it both ways. The guards are
+left out of the second and third rows below, as the statement residual's
+"reached only when something has already failed" is argued rather than
+tested (§3.1.1).
+
+Measured 2026-09-27 on main at 88d9ce39, debug profile, the §3.1 suite on
+each architecture (30, 28 and 27 traces, every gate passing; the same traces
+give the statement figures 89.4%, 90.5% and 84.8% on this tree):
+
+| Certified item | x86-64 | AArch64 | ARMv7-A |
+|---|---:|---:|---:|
+| Conditional branches | 12,477 | 11,006 | 13,153 |
+| Both ways | 3,966 — 31.8% | 2,994 — 27.2% | 3,267 — 24.8% |
+| Sure (lower bound) | 10.4% | 8.9% | 9.8% |
+| Guards | 1,906 | 1,814 | 1,775 |
+| **Both ways, guards left out** | **3,965 / 10,571 — 37.5%** | **2,994 / 9,192 — 32.6%** | **3,267 / 11,378 — 28.7%** |
+| **By source line, guards left out** | **1,931 / 3,850 — 50.2%** | **2,000 / 4,111 — 48.6%** | **1,694 / 3,471 — 48.8%** |
+| Never reached | 2,807 | 2,324 | 3,413 |
+| Outcomes seen, of two per branch | 54.6% | 53.0% | 49.4% |
+
+Per ring and per file in `decision-coverage-<arch>.json`; every short branch,
+with its function and outcome, from `--branches`, which is too long to
+commit. ARMv7-A has 44 more conditional calls and returns (`bl<cond>`,
+`pop<cond> {..., pc}`) whose outcomes block starts cannot tell apart; they
+are counted apart and never as covered.
+
+**Where the gap is.** The files with the most non-guard branches short of both
+ways are the same on the three: `timer.rs` (768, 702 and 3,362), whose
+`now_nanos` is inlined into more than 400 functions and every copy carries its
+`hz == 0` test, which only a read before the counter is calibrated takes --
+and on ARMv7-A its 128-bit arithmetic besides; `sched/wait.rs` (738, 635,
+562), whose waits are generic over their condition and compiled once per
+caller, each copy with its own deadline test; `object/quota.rs` (575, 553,
+435), almost all of it the `?`s of the one-line slot lookup at line 211,
+inlined everywhere a quota is charged; `object/mod.rs` (387, 364, 319); and
+on x86-64 `arch/x86_64/mod.rs` (692), the `if state != 0` of the interrupt
+restore every lock guard inlines, and on the Arm pair `syscall/uaccess.rs`
+(561, 556), the `?` of each inlined `copy_to_user`/`copy_from_user`. That
+is the method's pessimism at work: most of the gap is a handful of source
+decisions multiplied by inlining, which is why the source-line view reads
+half as far from 100%.
+
+**Limits, all declared in the tool.**
+
+* *Object code, not source decisions, and not MC/DC.* A source decision the
+  compiler copied must be taken both ways in every copy; one it turned into
+  `cmov`, `csel` or a predicated ARM instruction is not a branch and is not
+  counted; `a && b` may be one branch or two. The same source compiles to
+  different branches on each architecture: in the one case read against the
+  disassembly, x86-64's `copy_to_user` callers test the result so that the
+  error successor is also the next branch's fall-through, and read as covered
+  in the upper bound, where the Arm pair's do not. Structural coverage of object code is accepted in place
+  of source coverage only with an analysis of the correspondence (DO-178C
+  §6.4.4.2b), and none is written. MC/DC would need each condition's
+  independent effect shown, which no block trace can give.
+* *Compiler-generated branches.* The guards above are most of them. The
+  lints remove indexing and `unwrap` from product code, but not arithmetic
+  overflow checks in the debug profile (`overflow-checks = true`), `core`'s
+  debug-build precondition checks, or `debug_assert!`; the release profile
+  drops most of all three and was not measured here.
+* *Inlining.* A branch is attributed to the innermost source line, so an
+  inlined kernel function's decision is that function's, and `core`'s inlined
+  into the item are outside it -- 65,658, 75,795 and 69,560 branches in
+  `core`, `alloc` and `libs/` -- everything outside `kernel/src` -- as
+  outside the item as their statements are.
+* *Aliasing.* The upper bound credits a successor some other edge entered;
+  the lower bound can still be fooled by an indirect jump or an interrupt or
+  exception return landing on a successor.
+* *Joining builds.* 579, 459 and 454 branches of the gates' other builds had
+  no namesake in the reference -- the code only those builds contain, such
+  as `test-shell`'s built-in program -- and add nothing.
+
+The method's own check is the branch that ran and left no outcome, which
+cannot happen when the successors are right: it reads 0 on all three. It
+read 185 on AArch64 before the tool parsed `tbz w8, #0x0, <target>`'s target
+rather than its bit number.
 
 ## 4. The traceability gap
 
