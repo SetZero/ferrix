@@ -90,28 +90,37 @@ rather than a power-off; `boot-single`, one processor; and `boot-options`,
 the options no other gate gives -- the boot console on the framebuffer, a pid
 1 the image does not have, an `ferrix.onexit` the kernel does not know, and
 `nokaslr`. Fifteen boots on AArch64 and fourteen on ARMv7-A (`--smp 2`): the
-x86-64-only four are `test-jobs`, `test-restart` and `test-sysfs`, which carry
-uutils, and `test-vfs`, which fails off x86-64 for a reason of its own
-(§3.5). AArch64 boots `test-boot` again on a `virt` with a GICv3 and its ITS
+x86-64-only three are `test-jobs`, `test-restart` and `test-sysfs`, which carry
+uutils. `test-vfs` joined the Arm pair's suite on 2026-09-27, once its
+permissions row judged the words of whichever `cat` the image carries. AArch64 boots `test-boot` again on a `virt` with a GICv3 and its ITS
 (`FERRIX_ARM_MACHINE=gic-version=3`), from its device tree with no ACPI, once
 with the GICv2 and once as the Pixel 7 is (a GICv3 and ITS on a `max`
 processor), with `nosmp`, into a reset, and with the options above. ARMv7-A
 boots it again on a Cortex-A15, the one other core `virt` takes and one the
 Spectre defences apply to, into a reset, on one processor, with 3 GiB so that
 firmware loads the kernel above the split, as the DK1's memory always is, and
-with the options. Debug profile, with KASLR, measured on main at 9076655c and
-carried to c14846aa across the kernel relayout, which moved files without
-changing a statement of the item:
+with the options. Debug profile, with KASLR. x86-64 measured on main at
+9076655c and carried to c14846aa across the kernel relayout, which moved files
+without changing a statement of the item; AArch64 and ARMv7-A measured again
+on 2026-09-27 at 9e196852, with `test-vfs` in their suite and the trap
+check's read past a mapped file's end:
 
 | Ring | x86-64 | AArch64 | ARMv7-A |
 |---|---:|---:|---:|
-| `core` | 5,092 / 5,649 — 90.1% | 5,262 / 5,796 — 90.8% | 4,712 / 5,606 — 84.1% |
-| `item` | 1,631 / 1,859 — 87.7% | 1,607 / 1,820 — 88.3% | 1,584 / 1,821 — 87.0% |
-| **Certified item** | **6,902 / 7,664 — 90.1%** | **6,876 / 7,622 — 90.2%** | **6,296 / 7,427 — 84.8%** |
-| `load` (not claimed) | 9,598 / 13,745 — 69.8% | 8,997 / 12,980 — 69.3% | 9,136 / 13,102 — 69.7% |
+| `core` | 5,092 / 5,649 — 90.1% | 5,293 / 5,779 — 91.6% | 4,742 / 5,585 — 84.9% |
+| `item` | 1,631 / 1,859 — 87.7% | 1,531 / 1,808 — 84.7% | 1,509 / 1,815 — 83.1% |
+| **Certified item** | **6,723 / 7,508 — 89.5%** | **6,824 / 7,587 — 89.9%** | **6,251 / 7,400 — 84.5%** |
+| `load` (not claimed) | 9,231 / 12,989 — 71.1% | 9,377 / 13,718 — 68.4% | 9,463 / 13,775 — 68.7% |
+
+The Arm pair's figures are a little below their previous measurement (90.2%
+and 84.8%) although the suite reached more: in between, init's start of
+`devmgr` (L12, `docs/INIT.md` §7.3) added statements to `devmgr.rs` that only
+a boot under `ferrix.devmgr=init` takes, and the suite's boots keep the
+kernel's start, the reference configuration. They are 78 of AArch64's and 82
+of ARMv7-A's statements that need a test.
 
 ARMv7-A trails because more of its residual is hardware and configuration it
-does not have: 444 of its 1,131 unreached statements, against 247 of 785 on
+does not have: 442 of its 1,149 unreached statements, against 246 of 766 on
 x86-64 -- no IOMMU unit programmed, no framebuffer, no SMMU -- and the
 quarantine and translated paths that only a translating domain takes are
 another architecture's there (§3.1.1).
@@ -142,20 +151,23 @@ defensive code, and neither conversation can start from a percentage.
 
 | | x86-64 | AArch64 | ARMv7-A |
 |---|---:|---:|---:|
-| Unreached | 785 | 746 | 1,131 |
-| Argued: another architecture or board | 184 | 156 | 266 |
-| Argued: reached only when stopping | 190 | 150 | 203 |
-| Argued: reached only when something has failed | 76 | 82 | 68 |
-| Argued: run, and credited to another line | 11 | 12 | 20 |
-| Hardware the machine does not present | 247 | 201 | 444 |
-| **Needs a test** | **77** | **145** | **130** |
+| Unreached | 766 | 763 | 1,149 |
+| Argued: another architecture or board | 184 | 156 | 248 |
+| Argued: reached only when stopping | 177 | 154 | 209 |
+| Argued: reached only when something has failed | 73 | 81 | 68 |
+| Argued: run, and credited to another line | 11 | 10 | 19 |
+| Hardware the machine does not present | 246 | 217 | 442 |
+| **Needs a test** | **75** | **145** | **163** |
 
 [COVERAGE-WORKLIST.md](COVERAGE-WORKLIST.md) groups the last row by module,
 with each file's count on every architecture and the lines no architecture
 reaches, so that a module can be taken as one piece of work. The largest:
-`syscall/native.rs` 24, 19 and 20; `user/space.rs` 6, 22 and 25; `trap.rs`
-25 on each Arm architecture; on AArch64 `arch/aarch64/console.rs` 14 and
-`arch/aarch64/trng.rs` 10.
+`devmgr.rs` 78 and 82 on the Arm pair (init's start of `devmgr`, above);
+`syscall/native.rs` 24, 7 and 9; `object/` 17 on each; `init.rs` 14 on the
+Arm pair. `trap.rs`, `user/` and `arch/aarch64` left the list on 2026-09-27:
+a test for what a test could reach, and an argument, statement by statement,
+for the 16550 and `ramoops` consoles only the crosvm guest and the Pixel 7
+have.
 
 **Argued one statement at a time.** A file-level category cannot argue a line
 of an otherwise covered file, and most of what F-10 leaves is exactly that.
@@ -270,9 +282,9 @@ statement coverage. This is that measurement, for ring-0 code, on every
 architecture and both profiles in the reference configuration, without
 modifying the toolchain.
 
-**What it does not.** 90.1%, 90.2% and 84.8% are not 100%. The residual is
-enumerated and sorted, and 97 of x86-64's 762 statements, 145 of AArch64's 746
-and 130 of ARMv7-A's 1,131 still need a test rather than an argument (F-10). Decision
+**What it does not.** 89.5%, 89.9% and 84.5% are not 100%. The residual is
+enumerated and sorted, and 75 of x86-64's 766 statements, 145 of AArch64's 763
+and 163 of ARMv7-A's 1,149 still need a test rather than an argument (F-10). Decision
 coverage, which DAL C does not require and DAL B and A do, is measured of
 object code in §3.6 and is far short; there is no MC/DC (F-13).
 
@@ -325,14 +337,11 @@ TOR-3 records them.
 
 ### 3.5 What the suite leaves out
 
-`test-vfs` on AArch64 and ARMv7-A fails with and without the plugin: its
-permissions command expects uutils' `cat: /tmp/dac-private: Permission denied`,
-and the Arm images carry busybox, which says `cat: can't open ...`. The kernel
-refused correctly; the expectation is x86-64's. `test-seat` and
+`test-seat` and
 `test-compositor` pass under TCG but not under the plugin, which slows TCG
 enough that the first misses its redraw and the second trips the TLB
 shootdown's bound (`processor 0 never flushed its TLB for a shootdown`). A
-failing run is not coverage evidence, so none of the three counts. `test-foot`,
+failing run is not coverage evidence, so neither counts. `test-foot`,
 `test-video`, `test-vkgears`, `test-rustc`, `test-chrome` and `test-selfhost`
 need a GL host, ports or fetched volumes.
 

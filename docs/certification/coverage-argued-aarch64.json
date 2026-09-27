@@ -161,13 +161,6 @@
       "why": "Firmware whose PSCI `SYSTEM_RESET` returned instead of resetting: the machine is powered off rather than carrying on as though it had reset. The suite's `boot-reset` gate takes the reset, and QEMU resets."
     },
     {
-      "file": "arch/aarch64/mod.rs",
-      "lines": "1248",
-      "category": "failure-path",
-      "match": "cpu::wfi();",
-      "why": "`halt`'s loop, on a processor that stops for good: after a panic, on the stop IPI a panic sends, or where a power-off returned. A passing boot ends by a PSCI power-off that ends QEMU first. The suite's one deliberate panic, `test-shell`'s `ferrix.onexit=panic` boot, halts here, and whether QEMU is stopped before the halted processor's `wfi` has been translated varies from run to run: the line was reached in one measurement of this suite and not in the next."
-    },
-    {
       "file": "arch/aarch64/signal.rs",
       "lines": "116",
       "category": "credited-elsewhere",
@@ -649,13 +642,6 @@
       "category": "other-architecture",
       "match": "Translation::VtD { unit, attached, .. } => unit.detach(*atta",
       "why": "The VT-d arm, for a domain a VT-d unit translates, which no Arm machine has."
-    },
-    {
-      "file": "iommu.rs",
-      "lines": "724",
-      "category": "credited-elsewhere",
-      "match": "return Err(DomainError::Empty);",
-      "why": "Run by stage 10's iommu::check_domains, which requires a pin of no frames to be refused as Empty. The call passes an empty slice the compiler sees, so the refusal is folded into check_domains' inlined copy of pin; this row is only in the out-of-line Domain::pin, which is called with frames."
     },
     {
       "file": "iommu.rs",
@@ -1510,6 +1496,139 @@
       "category": "defensive",
       "match": "if matches!(allocation.kind, Kind::Device { .. }) {",
       "why": "A device window among the stacks being freed. Stacks are made only by `allocate_stack`, as anonymous memory, and callers free only stacks they made; the arm frees such a window without giving its frames to the buddy allocator, since they are a device's. On this build the test's own line has its only statement row inside the arm, after the unmap, so it is argued with it; the test runs for every stack freed."
+    },
+    {
+      "file": "trap.rs",
+      "lines": "32",
+      "category": "defensive",
+      "match": "Interrupt(u32),",
+      "why": "The Interrupt arm of `Trap`'s derived Debug. The only formatting of a `Trap` is the `signal ... ended by signal` line in `user_fault_as`, whose trap comes from `user_fault` or `handle_page_fault`; `dispatch` sends every Interrupt to the controller and never there. Reaching this would mean the dispatcher had treated a device interrupt as a program's fault."
+    },
+    {
+      "file": "trap.rs",
+      "lines": "137",
+      "category": "failure-path",
+      "match": "fatal(frame, why, &crate::panic::catalog::SYSTEM_CALL_TRAP);",
+      "why": "The stop when the architecture refuses a system call trap. On this architecture `system_call` (arch/aarch64/trap.rs) refuses only an `svc` taken from EL1, and the kernel issues no `svc` of its own: every `svc` in the tree is in a program's bytes."
+    },
+    {
+      "file": "trap.rs",
+      "lines": "140, 145-146",
+      "category": "failure-path",
+      "match": "Trap::IllegalInstruction => fatal(",
+      "why": "An undefined instruction or an unexpected exception taken in the kernel, which stops it. The same exceptions from a program are reached, by the trap check's programs (arch/aarch64/trap/check.rs), through the arm above these."
+    },
+    {
+      "file": "trap.rs",
+      "lines": "266",
+      "category": "defensive",
+      "match": "None => Outcome::Return(Errno::ENOSYS.as_return_value()),",
+      "why": "A system call with no dispatcher registered. `main.rs` registers the item's dispatcher before anything can enter user mode, and the first registration stands, so in this item every call finds one. The arm is what the core answers when built without a dispatcher above it, rather than a panic in a trap vector."
+    },
+    {
+      "file": "trap.rs",
+      "lines": "369",
+      "category": "failure-path",
+      "match": "fatal(",
+      "why": "A fault from user mode with no personality registered, which the kernel stops on; `main.rs` registers the Linux personality's return path before the first program."
+    },
+    {
+      "file": "trap.rs",
+      "lines": "387",
+      "category": "failure-path",
+      "match": "FaultOutcome::NoProcess => fatal(",
+      "why": "A fault from user mode that the personality finds no process for, which the kernel stops on: every task that enters ring 3 is a process's thread."
+    },
+    {
+      "file": "trap.rs",
+      "lines": "424",
+      "category": "defensive",
+      "match": "return Err(None);",
+      "why": "A fault from user mode on a task with no address space. `sched` gives a task made for a thread its process's space before it first runs, so this would be the kernel having entered ring 3 without recording who was running; it is reported as fatal rather than resolved."
+    },
+    {
+      "file": "trap.rs",
+      "lines": "502, 504, 507-510",
+      "category": "failure-path",
+      "match": "report(",
+      "why": "The report of a page fault the kernel could not resolve -- one in the kernel outside the demand window, or a user one with no program to blame -- printed as the kernel stops."
+    },
+    {
+      "file": "trap.rs",
+      "lines": "524, 529, 539, 547-549, 551",
+      "category": "failure-path",
+      "match": "pub(crate) fn fatal(",
+      "why": "`fatal` and `report`, the trap path's stop: the architecture's register dump, the abridged report for a second failure, and the panic's conclusion. Reached only when the kernel stops on a trap."
+    },
+    {
+      "file": "arch/aarch64/console.rs",
+      "lines": "106, 109, 115",
+      "category": "absent-hardware",
+      "match": "let base = unsafe { *BASE.0.get() };",
+      "why": "Reading and writing a 16550's byte registers. The console is a 16550 only when the command line names one, `console=uart8250,mmio,<address>`, which crosvm's guest on the Pixel 7 is given; QEMU's `virt` for AArch64 has no 16550 behind MMIO, only its PL011. The value's parser is run by the stage 3 machine check. The crosvm guest's boot, which printed its whole kernel log through this port, is ~/.local/share/ferrix/pixel7/vm-20260926-140648/run.log."
+    },
+    {
+      "file": "arch/aarch64/console.rs",
+      "lines": "136, 138",
+      "category": "absent-hardware",
+      "match": "memory.map_device(WINDOW, page, PAGE_SIZE)?;",
+      "why": "Mapping the 16550's page. The console is a 16550 only when the command line names one, `console=uart8250,mmio,<address>`, which crosvm's guest on the Pixel 7 is given; QEMU's `virt` for AArch64 has no 16550 behind MMIO, only its PL011. The value's parser is run by the stage 3 machine check. The crosvm guest's boot, which printed its whole kernel log through this port, is ~/.local/share/ferrix/pixel7/vm-20260926-140648/run.log."
+    },
+    {
+      "file": "arch/aarch64/console.rs",
+      "lines": "224-225, 230",
+      "category": "absent-hardware",
+      "match": "for _ in 0..SPIN_LIMIT {",
+      "why": "Sending a byte through the 16550, waiting for its holding register. The console is a 16550 only when the command line names one, `console=uart8250,mmio,<address>`, which crosvm's guest on the Pixel 7 is given; QEMU's `virt` for AArch64 has no 16550 behind MMIO, only its PL011. The value's parser is run by the stage 3 machine check. The crosvm guest's boot, which printed its whole kernel log through this port, is ~/.local/share/ferrix/pixel7/vm-20260926-140648/run.log."
+    },
+    {
+      "file": "arch/aarch64/console.rs",
+      "lines": "246-247",
+      "category": "absent-hardware",
+      "match": "for _ in 0..DRAIN_LIMIT {",
+      "why": "Waiting for the 16550's transmitter to go idle before a power-off. The console is a 16550 only when the command line names one, `console=uart8250,mmio,<address>`, which crosvm's guest on the Pixel 7 is given; QEMU's `virt` for AArch64 has no 16550 behind MMIO, only its PL011. The value's parser is run by the stage 3 machine check. The crosvm guest's boot, which printed its whole kernel log through this port, is ~/.local/share/ferrix/pixel7/vm-20260926-140648/run.log."
+    },
+    {
+      "file": "arch/aarch64/console.rs",
+      "lines": "159",
+      "category": "absent-hardware",
+      "match": "return Ok(());",
+      "why": "The end of mapping the `ramoops` zone. The console is a `ramoops` record only when the loader passes `console=ramoops,<address>,<size>`, which the Pixel 7's loader alone does: its UART is behind a debug accessory on the USB-C port. QEMU's `virt` has a PL011, and a `ramoops` console there would need RAM firmware keeps out of the memory map and would take the boot's output off the serial port every gate reads. The zone's parser is run by the stage 3 machine check."
+    },
+    {
+      "file": "arch/aarch64/console.rs",
+      "lines": "170, 176",
+      "category": "absent-hardware",
+      "match": "fn ramoops_append(byte: u8) {",
+      "why": "Appending a byte to the `ramoops` record. The console is a `ramoops` record only when the loader passes `console=ramoops,<address>,<size>`, which the Pixel 7's loader alone does: its UART is behind a debug accessory on the USB-C port. QEMU's `virt` has a PL011, and a `ramoops` console there would need RAM firmware keeps out of the memory map and would take the boot's output off the serial port every gate reads. The zone's parser is run by the stage 3 machine check."
+    },
+    {
+      "file": "arch/aarch64/console.rs",
+      "lines": "200",
+      "category": "absent-hardware",
+      "match": "let base = unsafe { *BASE.0.get() };",
+      "why": "Writing a word of the `ramoops` record's header. The console is a `ramoops` record only when the loader passes `console=ramoops,<address>,<size>`, which the Pixel 7's loader alone does: its UART is behind a debug accessory on the USB-C port. QEMU's `virt` has a PL011, and a `ramoops` console there would need RAM firmware keeps out of the memory map and would take the boot's output off the serial port every gate reads. The zone's parser is run by the stage 3 machine check."
+    },
+    {
+      "file": "arch/aarch64/console.rs",
+      "lines": "217",
+      "category": "absent-hardware",
+      "match": "ramoops_append(byte);",
+      "why": "`write_byte`'s arm for a `ramoops` record. The console is a `ramoops` record only when the loader passes `console=ramoops,<address>,<size>`, which the Pixel 7's loader alone does: its UART is behind a debug accessory on the USB-C port. QEMU's `virt` has a PL011, and a `ramoops` console there would need RAM firmware keeps out of the memory map and would take the boot's output off the serial port every gate reads. The zone's parser is run by the stage 3 machine check."
+    },
+    {
+      "file": "arch/aarch64/console.rs",
+      "lines": "291",
+      "category": "absent-hardware",
+      "match": "ramoops_append(byte);",
+      "why": "`put`'s arm for a `ramoops` record. The console is a `ramoops` record only when the loader passes `console=ramoops,<address>,<size>`, which the Pixel 7's loader alone does: its UART is behind a debug accessory on the USB-C port. QEMU's `virt` has a PL011, and a `ramoops` console there would need RAM firmware keeps out of the memory map and would take the boot's output off the serial port every gate reads. The zone's parser is run by the stage 3 machine check."
+    },
+    {
+      "file": "arch/aarch64/trng.rs",
+      "lines": "49",
+      "category": "absent-hardware",
+      "match": "return 0;",
+      "why": "A machine whose firmware description names no way to reach PSCI, so no SMCCC call can be made. Every machine the suite boots describes PSCI -- its secondaries start through it -- and the TRNG's decisions past this point are run against scripted firmware by the machine check (check_trng)."
     }
   ]
 }

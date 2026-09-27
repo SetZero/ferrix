@@ -208,11 +208,16 @@ repeat the pass for their own architecture code.
 
 **Re-measured on all three 2026-09-27**, after the memory layer, the objects,
 the Arm architectures and the kernel's services were each taken the same way:
-**90.1%** on x86-64 (re-measured 2026-09-27), **90.2%** on AArch64, **84.8%** on ARMv7-A, with
-**97, 146 and 130** statements that still need a test and the rest argued per
-statement or put down to absent hardware. Next by size: `syscall/native.rs`
-(24, 19, 20), `user/space.rs` (6, 22, 25), `trap.rs` on the Arm pair (25
-each), and on AArch64 `arch/aarch64/console.rs` 14 and `trng.rs` 10.
+**89.5%** on x86-64, **90.2%** on AArch64, **84.8%** on ARMv7-A, with
+**77, 146 and 130** statements that still need a test and the rest argued per
+statement or put down to absent hardware. **The Arm pair again on
+2026-09-27**: 89.9% and 84.5%, with 145 and 163 needing a test. `trap.rs`,
+`user/` and `arch/aarch64` are off the worklist (test-vfs in the Arm suite,
+the trap check's read past a file's end, the TRNG against scripted
+firmware, and arguments for the 16550 and `ramoops` consoles); init's start
+of `devmgr` (L12) put 78 and 82 of `devmgr.rs` on it, which a boot under
+`ferrix.devmgr=init` in the suite would take. Next by size: that, then
+`syscall/native.rs` (24, 7, 9) and `object/` (17 each).
 
 ### 2.4 Make coverage a ratchet
 **Done 2026-09-26** as `cargo xtask coverage` against `coverage-floor.json`.

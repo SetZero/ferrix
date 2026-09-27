@@ -474,8 +474,9 @@ floor in `coverage-floor.json`. One gate by hand is still
 3. **More gates in the union** (F-10) — done. The gates that ended by killing
    QEMU are now asked to stop first, which lets the plugin write its table,
    and each boot of a gate keeps its own trace. Not in the union, and why:
-   VERIFICATION.md §3.5 (`test-vfs` off x86-64, `test-seat`,
-   `test-compositor`, and the gates needing a GL host or fetched volumes).
+   VERIFICATION.md §3.5 (`test-seat`, `test-compositor`, and the gates
+   needing a GL host or fetched volumes). `test-vfs` joined the Arm pair's
+   suite on 2026-09-27.
 4. **Enumerate the residual** — done per architecture: COVERAGE-RESIDUAL.md
    sorts it, COVERAGE-WORKLIST.md groups the *needs a test* category by module.
 5. **Ratchet it** — done as `cargo xtask coverage`, not in `cargo xtask

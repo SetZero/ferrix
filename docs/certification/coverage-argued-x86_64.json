@@ -6,7 +6,7 @@
     "category named here instead of its file's, and fails when a line named",
     "is no longer in coverage-residual-x86_64.json (a test reaches it now, or",
     "it moved) or when `match` is not on the first line named. Line numbers",
-    "are the tree's the residual was measured on, main e5f3110f, re-measured 2026-09-27 (written 2026-09-26 for F-10)."
+    "are the tree's the residual was measured on, main 195a2e93 and this branch. Written 2026-09-26 for F-10."
   ],
   "arch": "x86_64",
   "arguments": [
@@ -166,9 +166,16 @@
     },
     {
       "file": "arch/x86_64/trap.rs",
-      "lines": "637, 640-641, 656",
+      "lines": "615",
+      "category": "credited-elsewhere",
+      "match": "Trap::PageFault(fault) => (SIGSEGV, SEGV_MAPERR, fault.address),",
+      "why": "Run by the stage 3 fault check's read of an unmapped address, which ends the program with SIGSEGV. The line's only statement row is in the copy of `fault_signal` that `dispatch` inlines for traps that are not page faults (in the measured image, inlined through `user_fault` into `dispatch` at trap.rs:102), where the arm cannot run. The copy `handle_page_fault` inlines (under trap.rs:482) computes the si_code as the fault's present bit plus one, one instruction under line 614's row, which is reached."
+    },
+    {
+      "file": "arch/x86_64/trap.rs",
+      "lines": "631, 637, 640-641, 656, 662",
       "category": "failure-path",
-      "match": "vector_name(frame.vector),",
+      "match": "pub(crate) fn report_trap(frame: &TrapFrame) {",
       "why": "The register dump the trap path prints when the kernel stops on an exception it cannot handle (`trap::report`); a passing run never prints it."
     },
     {
@@ -289,6 +296,27 @@
       "category": "defensive",
       "match": "self.flush()",
       "why": "Bytes that have waited a tenth of a second with nothing sent: the transmit interrupt stopped coming. console::output::check requires the stall count to stay where it was, and a working port never takes it."
+    },
+    {
+      "file": "console/output.rs",
+      "lines": "251",
+      "category": "absent-hardware",
+      "match": "WRITERS.wake_all();",
+      "why": "Wakes writers that waited for room in the transmit ring. An emulated port sends instantly, so no writer ever waits for room on a QEMU machine."
+    },
+    {
+      "file": "console/output.rs",
+      "lines": "276",
+      "category": "absent-hardware",
+      "match": "wake_writers();",
+      "why": "A task's write that found no room in the transmit ring and waits for it, woken when the ring drains. An emulated port sends instantly and never leaves the ring full, so on QEMU every chunk fits at once."
+    },
+    {
+      "file": "console/output.rs",
+      "lines": "285-286",
+      "category": "absent-hardware",
+      "match": "let _ = WRITERS.wait_until_deadline(",
+      "why": "A task's write that found no room in the transmit ring and waits for it, woken when the ring drains. An emulated port sends instantly and never leaves the ring full, so on QEMU every chunk fits at once."
     },
     {
       "file": "console/output.rs",
@@ -590,6 +618,13 @@
       "category": "other-architecture",
       "match": "Translation::SmmuV3 { unit, attached, .. } => unit.detach(*a",
       "why": "The SMMUv3 arm, for a domain an SMMUv3 translates, which no x86-64 machine has."
+    },
+    {
+      "file": "iommu.rs",
+      "lines": "724",
+      "category": "credited-elsewhere",
+      "match": "return Err(DomainError::Empty);",
+      "why": "Run by stage 10's iommu::check_domains, which requires a pin of no frames to be refused as Empty. The call passes an empty slice the compiler sees, so the refusal is folded into check_domains' inlined copy of pin; this row is only in the out-of-line Domain::pin, which is called with frames."
     },
     {
       "file": "iommu.rs",
@@ -1391,63 +1426,63 @@
     },
     {
       "file": "trap.rs",
-      "lines": "30",
+      "lines": "32",
       "category": "defensive",
       "match": "Interrupt(u32),",
       "why": "The Interrupt arm of `Trap`'s derived Debug. The only formatting of a `Trap` is the `signal ... ended by signal` line in `user_fault_as`, whose trap comes from `user_fault` or `handle_page_fault`; `dispatch` sends every Interrupt to the controller and never there. Reaching this would mean the dispatcher had treated a device interrupt as a program's fault."
     },
     {
       "file": "trap.rs",
-      "lines": "135",
+      "lines": "137",
       "category": "failure-path",
       "match": "fatal(frame, why, &crate::panic::catalog::SYSTEM_CALL_TRAP);",
       "why": "The stop when the architecture cannot read a system call trap's registers. On x86-64 only `int $0x80` classifies as one, and its gate is not open to ring 3."
     },
     {
       "file": "trap.rs",
-      "lines": "138, 143-144",
+      "lines": "140, 145-146",
       "category": "failure-path",
       "match": "Trap::IllegalInstruction => fatal(",
       "why": "An invalid opcode or an unexpected exception taken in the kernel, which stops it. The same exceptions from a program are reached, by the stage 3 fault check, through the arm above these."
     },
     {
       "file": "trap.rs",
-      "lines": "264",
+      "lines": "266",
       "category": "defensive",
       "match": "None => Outcome::Return(Errno::ENOSYS.as_return_value()),",
       "why": "A system call with no dispatcher registered. `main.rs` registers the item's dispatcher before anything can enter user mode, and the first registration stands, so in this item every call finds one. The arm is what the core answers when built without a dispatcher above it, rather than a panic in a trap vector."
     },
     {
       "file": "trap.rs",
-      "lines": "367",
+      "lines": "369",
       "category": "failure-path",
       "match": "fatal(",
       "why": "A fault from user mode with no personality registered, which the kernel stops on; `main.rs` registers the Linux personality's return path before the first program."
     },
     {
       "file": "trap.rs",
-      "lines": "385",
+      "lines": "387",
       "category": "failure-path",
       "match": "FaultOutcome::NoProcess => fatal(",
       "why": "A fault from user mode that the personality finds no process for, which the kernel stops on: every task that enters ring 3 is a process's thread."
     },
     {
       "file": "trap.rs",
-      "lines": "422",
+      "lines": "424",
       "category": "defensive",
       "match": "return Err(None);",
       "why": "A fault from user mode on a task with no address space. `sched` gives a task made for a thread its process's space before it first runs, so this would be the kernel having entered ring 3 without recording who was running; it is reported as fatal rather than resolved."
     },
     {
       "file": "trap.rs",
-      "lines": "500, 502, 505-508",
+      "lines": "502, 504, 507-510",
       "category": "failure-path",
       "match": "report(",
       "why": "The report of a page fault the kernel could not resolve -- one in the kernel outside the demand window, or a user one with no program to blame -- printed as the kernel stops."
     },
     {
       "file": "trap.rs",
-      "lines": "522, 527, 537, 546-547, 549",
+      "lines": "524, 529, 539, 547-549, 551",
       "category": "failure-path",
       "match": "pub(crate) fn fatal(",
       "why": "`fatal` and `report`, the trap path's stop: the architecture's register dump, the abridged report for a second failure, and the panic's conclusion. Reached only when the kernel stops on a trap."
