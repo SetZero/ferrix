@@ -254,7 +254,7 @@ pub(crate) fn discover(view: &BootView<'_>) -> Result<&'static Topology, &'stati
         .cpus
         .first()
         .ok_or("there is no record for the boot processor")?;
-    // SAFETY: `boot` is the boot processor's own record, this is the boot
+    // SAFETY: (SHARED) `boot` is the boot processor's own record, this is the boot
     // processor, and the record lives in a slice leaked for the life of the
     // system.
     unsafe { arch::set_cpu_local(boot.this) };
@@ -355,7 +355,7 @@ pub(crate) fn install_secondary_record(record: u64) {
             "a secondary processor arrived with no record of its own"
         );
     };
-    // SAFETY: `expected` is a record in the leaked slice, and it is this
+    // SAFETY: (SHARED) `expected` is a record in the leaked slice, and it is this
     // processor's own: `start_secondaries` passed its address to the start of
     // exactly this processor and no other.
     unsafe { arch::set_cpu_local(expected.this) };
@@ -1430,11 +1430,11 @@ pub(crate) fn this_cpu() -> Option<&'static PerCpu> {
     if !LOCAL_READY.load(Ordering::Acquire) {
         return None;
     }
-    // SAFETY: the boot processor installed its record before the flag above
+    // SAFETY: (SHARED) the boot processor installed its record before the flag above
     // was set, and a secondary installs its own before running anything that
     // could reach here.
     let at = unsafe { arch::cpu_local() };
-    // SAFETY: every processor's register holds the address of its own record
+    // SAFETY: (SHARED) every processor's register holds the address of its own record
     // in the slice `Topology::from_described` leaked, which lives forever and
     // is only ever reached through shared references.
     Some(unsafe { &*(at as *const PerCpu) })

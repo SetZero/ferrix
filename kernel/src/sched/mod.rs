@@ -137,7 +137,7 @@ static LOCK_SITE: Once<Vec<core::sync::atomic::AtomicPtr<core::panic::Location<'
 /// entry in [`PREEMPT_OFF`].
 pub(crate) struct Preempt;
 
-// SAFETY: `disable` raises this processor's count and `preempt_on_irq_exit`
+// SAFETY: (SHARED) `disable` raises this processor's count and `preempt_on_irq_exit`
 // switches nothing while it is raised; `enable` lowers it and makes the
 // decision that was deferred. Both are no-ops before the scheduler has a
 // count or a processor has a number, when nothing can be switched out.
@@ -263,7 +263,7 @@ fn preempt_enable_from(by_lock: bool) {
 /// The file and line that last raised `cpu`'s count, if any is recorded.
 pub(crate) fn preempt_site(cpu: usize) -> Option<&'static core::panic::Location<'static>> {
     let pointer = PREEMPT_SITE.get()?.get(cpu)?.load(Ordering::Acquire);
-    // SAFETY: only `preempt_disable_at` stores here, and only a pointer to a
+    // SAFETY: (SHARED) only `preempt_disable_at` stores here, and only a pointer to a
     // `'static` location the compiler handed it.
     unsafe { pointer.cast_const().as_ref() }
 }
@@ -279,7 +279,7 @@ pub(crate) fn preemption_held(cpu: usize) -> u32 {
 /// [`locks_held`] is above zero.
 pub(crate) fn lock_site(cpu: usize) -> Option<&'static core::panic::Location<'static>> {
     let pointer = LOCK_SITE.get()?.get(cpu)?.load(Ordering::Acquire);
-    // SAFETY: only `preempt_disable_at` stores here, and only a pointer to a
+    // SAFETY: (SHARED) only `preempt_disable_at` stores here, and only a pointer to a
     // `'static` location the compiler handed it.
     unsafe { pointer.cast_const().as_ref() }
 }
@@ -863,7 +863,7 @@ fn adopt_boot_task() -> Result<(), &'static str> {
 /// busy being something else.
 fn new_idle_task(cpu: usize) -> Result<Arc<Task>, &'static str> {
     let stack = crate::vmap::allocate_stack().map_err(|_| "no stack for an idle task")?;
-    // SAFETY: the stack was allocated a moment ago, is mapped and writable,
+    // SAFETY: (CONTEXT) the stack was allocated a moment ago, is mapped and writable,
     // and nothing else refers to it.
     let stack_pointer = unsafe { arch::prepare_stack(stack.top, task_start, 0) };
     let task = Task::new(task::NewTask {
@@ -883,7 +883,7 @@ fn new_idle_task(cpu: usize) -> Result<Arc<Task>, &'static str> {
     })
     .and_then(fallible::try_arc);
     task.map_err(|_| {
-        // SAFETY: allocated above and never run on.
+        // SAFETY: (KMEM) allocated above and never run on.
         let _ = unsafe { crate::vmap::free_stack(stack) };
         "no memory for an idle task"
     })
@@ -1294,7 +1294,7 @@ impl Drop for PreparedTask {
              every processor"
         );
         if let Some(stack) = self.task.stack() {
-            // SAFETY: the task was never on a queue, so no processor has run on
+            // SAFETY: (KMEM) the task was never on a queue, so no processor has run on
             // its stack, and none will: this is its only reference.
             let _ = unsafe { crate::vmap::free_stack(stack) };
         }
@@ -1359,7 +1359,7 @@ fn make_task(
         crate::console::println!("  tasks    no stack for {name}: {problem}");
         "no kernel stack for a new task"
     })?;
-    // SAFETY: the stack was allocated a moment ago, is mapped and writable,
+    // SAFETY: (CONTEXT) the stack was allocated a moment ago, is mapped and writable,
     // and nothing else refers to it.
     let stack_pointer = unsafe { arch::prepare_stack(stack.top, task_start, 0) };
     let task = Task::new(task::NewTask {
@@ -1378,7 +1378,7 @@ fn make_task(
     })
     .and_then(fallible::try_arc);
     task.map_err(|_| {
-        // SAFETY: allocated above and never run on.
+        // SAFETY: (KMEM) allocated above and never run on.
         let _ = unsafe { crate::vmap::free_stack(stack) };
         "no memory for a new task"
     })
@@ -1894,7 +1894,7 @@ fn pick_and_switch(interrupted_user: bool) {
     let Some((save, resume)) = choose_next(lock, cpu, interrupted_user) else {
         return;
     };
-    // SAFETY: `save` is this context's own slot and `resume` a stack pointer
+    // SAFETY: (CONTEXT) `save` is this context's own slot and `resume` a stack pointer
     // this module prepared or saved; this processor holds the run queue's
     // lock, which keeps every other processor off both until `finish_switch`
     // releases it.
@@ -1910,7 +1910,7 @@ fn choose_next(
     cpu: usize,
     interrupted_user: bool,
 ) -> Option<(*mut u64, u64)> {
-    // SAFETY: released below when nothing is switched, and otherwise by the
+    // SAFETY: (SHARED) released below when nothing is switched, and otherwise by the
     // context this switches to, in `finish_switch`.
     let queue = unsafe { lock.lock_manually() };
 
@@ -1947,7 +1947,7 @@ fn choose_next(
 
     if !switching {
         queue.arm_timer(now);
-        // SAFETY: taken above, and nothing was switched, so this context is
+        // SAFETY: (SHARED) taken above, and nothing was switched, so this context is
         // still the holder.
         unsafe { lock.force_unlock() };
         return None;
@@ -1993,10 +1993,10 @@ fn choose_next(
     swap_address_space(previous.address_space(), next.address_space());
     switch_user_state(&previous, &next);
 
-    // SAFETY: both tasks belong to this queue and this processor holds its
+    // SAFETY: (SHARED) both tasks belong to this queue and this processor holds its
     // lock, so nothing else may read or write either saved stack pointer.
     let save = unsafe { previous.stack_pointer_slot() };
-    // SAFETY: as above.
+    // SAFETY: (SHARED) as above.
     let resume = unsafe { next.saved_stack_pointer() };
     Some((save, resume))
 }
@@ -2042,12 +2042,12 @@ fn swap_address_space(
         // and doing it anyway would throw away every user translation.
         (Some(before), Some(after)) if Arc::ptr_eq(before, after) => {}
         (None, None) => {}
-        // SAFETY: `next` is the task this processor is about to run, and the
+        // SAFETY: (TRANSLATE) `next` is the task this processor is about to run, and the
         // queue holds an `Arc` to it for as long as it is `current`, so the
         // tables outlive the installation. Interrupts are off and the run
         // queue lock is held, so nothing else can install a root here first.
         (before, Some(after)) => unsafe { after.install(before.map(|space| &**space)) },
-        // SAFETY: the incoming task is a kernel thread and wants no user
+        // SAFETY: (TRANSLATE) the incoming task is a kernel thread and wants no user
         // address; the kernel is reachable without one on every architecture.
         (Some(before), None) => unsafe { before.uninstall() },
     }
@@ -2070,22 +2070,22 @@ fn swap_address_space(
 /// A dead task's state is not saved: nothing will ever load it.
 fn switch_user_state(previous: &Arc<Task>, next: &Arc<Task>) {
     if !previous.is_dead() {
-        // SAFETY: this processor holds the run queue lock that owns `previous`.
+        // SAFETY: (SHARED) this processor holds the run queue lock that owns `previous`.
         if let Some(state) = unsafe { previous.user_state() } {
-            // SAFETY: the pointer is to `previous`'s own boxed state, which
+            // SAFETY: (SHARED) the pointer is to `previous`'s own boxed state, which
             // nothing else touches while the lock is held.
             let state = unsafe { &mut *state };
-            // SAFETY: `previous` is the task this processor was running, so the
+            // SAFETY: (CONTEXT) `previous` is the task this processor was running, so the
             // registers are its.
             unsafe { arch::save_user_state(state) };
         }
     }
-    // SAFETY: as above, for `next`.
+    // SAFETY: (SHARED) as above, for `next`.
     if let Some(state) = unsafe { next.user_state() } {
         let entry_stack = next.stack_top().unwrap_or(0);
-        // SAFETY: as above, `next`'s own boxed state under the queue lock.
+        // SAFETY: (SHARED) as above, `next`'s own boxed state under the queue lock.
         let state = unsafe { &*state };
-        // SAFETY: `next` is the task this processor is switching to, and its
+        // SAFETY: (CONTEXT) `next` is the task this processor is switching to, and its
         // stack is its own and mapped for as long as the queue holds it.
         unsafe { arch::restore_user_state(state, entry_stack) };
     }
@@ -2096,7 +2096,7 @@ fn finish_switch() {
     let Some(lock) = this_cpu().and_then(queue_of) else {
         return;
     };
-    // SAFETY: this processor holds this lock — either it took it in
+    // SAFETY: (SHARED) this processor holds this lock — either it took it in
     // `choose_next` and switched to here, or the context that switched to
     // this one did and handed it over.
     let queue = unsafe { lock.locked_data() };
@@ -2112,7 +2112,7 @@ fn finish_switch() {
     if dead && previous.as_ref().is_some_and(|task| task.is_queued()) {
         let _ = DEAD_STILL_QUEUED.fetch_add(1, Ordering::Relaxed);
     }
-    // SAFETY: held as above, released exactly once, and the queue is not
+    // SAFETY: (SHARED) held as above, released exactly once, and the queue is not
     // touched afterwards.
     unsafe { lock.force_unlock() };
 
@@ -2453,7 +2453,7 @@ fn reap_up_to(most: usize) -> usize {
     if taken.is_empty() {
         return 0;
     }
-    // SAFETY: every task is dead and on no queue, and the processor that
+    // SAFETY: (KMEM) every task is dead and on no queue, and the processor that
     // switched away from it has finished doing so — which is what put it
     // here. Nothing is running on any of these stacks.
     let _ = unsafe { crate::vmap::free_stacks(&stacks) };
@@ -2472,7 +2472,7 @@ fn reap_one_at_a_time(most: usize) -> usize {
             break;
         };
         if let Some(stack) = task.stack() {
-            // SAFETY: as in `reap_up_to`.
+            // SAFETY: (KMEM) as in `reap_up_to`.
             let _ = unsafe { crate::vmap::free_stack(stack) };
         }
         drop(task);

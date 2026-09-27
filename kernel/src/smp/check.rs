@@ -267,7 +267,7 @@ fn read_side() {
             for _ in 0..HOLD_SPINS {
                 core::hint::spin_loop();
             }
-            // SAFETY: every object this check ever publishes stays allocated
+            // SAFETY: (SHARED) every object this check ever publishes stays allocated
             // until every reader has stopped, so `payload` points at a live
             // `Payload` whatever the grace periods do. Whether it is still the
             // *current* one is what this check measures.
@@ -298,7 +298,7 @@ fn write_side() {
         }));
         let old = PUBLISHED.swap(fresh, Ordering::AcqRel);
         super::synchronize();
-        // SAFETY: `old` was published by this check and is still allocated —
+        // SAFETY: (SHARED) `old` was published by this check and is still allocated —
         // nothing is freed while readers run — and after the grace period no
         // reader is holding it.
         unsafe { &*old }.value.store(POISON, Ordering::Relaxed);
@@ -328,7 +328,7 @@ fn grace(topology: &Topology, report: &mut Report) -> Result<(), &'static str> {
     let current = PUBLISHED.swap(core::ptr::null_mut(), Ordering::AcqRel);
     let mut retired = RETIRED.lock();
     for address in retired.drain(..).chain(core::iter::once(current as usize)) {
-        // SAFETY: each address came from `Box::into_raw` in this module, is
+        // SAFETY: (KMEM) each address came from `Box::into_raw` in this module, is
         // freed exactly once, here, and no processor is reading: the work that
         // read them has returned on every one.
         drop(unsafe { Box::from_raw(address as *mut Payload) });
@@ -362,7 +362,7 @@ const MARKER: u64 = 0x5407_D0A1_0000_0000;
 /// Read the probe page and compare it with what it should hold.
 fn read_probe(_me: &'static PerCpu) {
     let at = PROBE.load(Ordering::Acquire);
-    // SAFETY: `shootdown` maps a page at `at` before handing this out, and
+    // SAFETY: (PROBE) `shootdown` maps a page at `at` before handing this out, and
     // moves it only once every processor has finished reading it.
     let seen = unsafe { core::ptr::read_volatile(at as *const u64) };
     if seen != EXPECTED.load(Ordering::Acquire) {
@@ -513,7 +513,7 @@ fn shootdown(report: &mut Report) -> Result<(), &'static str> {
     PROBE.store(page.base, Ordering::Release);
     let shootdowns_before = super::shootdowns();
 
-    // SAFETY: the page was allocated a moment ago, writable, and is nobody
+    // SAFETY: (PROBE) the page was allocated a moment ago, writable, and is nobody
     // else's.
     unsafe { core::ptr::write_volatile(page.base as *mut u64, MARKER) };
 
@@ -525,7 +525,7 @@ fn shootdown(report: &mut Report) -> Result<(), &'static str> {
         // moved onto it. `unmap_kernel` is told to release nothing: the old
         // frame has to stay, holding the old marker, for a stale read to find.
         let next = mm::direct_map(spare * PAGE_SIZE);
-        // SAFETY: `spare` is a frame this check owns and nothing maps it; the
+        // SAFETY: (FRAME) `spare` is a frame this check owns and nothing maps it; the
         // direct map makes it writable.
         unsafe { core::ptr::write_volatile(next as *mut u64, MARKER + round + 1) };
         let _removed = mm::unmap_kernel(page.base, PAGE_SIZE, |_, _| {})

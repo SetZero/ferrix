@@ -158,7 +158,7 @@ fn slots() -> Result<(TaskSlot, TaskSlot), AllocError> {
     Ok((Slot::new()?, Slot::new()?))
 }
 
-// SAFETY: every field but `stack_pointer` and `user` is an atomic or
+// SAFETY: (SHARED) every field but `stack_pointer` and `user` is an atomic or
 // immutable. Both cells are written by the CPU that switches away from this
 // task and read by the one that switches to it, and both hold the lock of the
 // run queue that owns the task at that moment — so the accesses are ordered by
@@ -387,7 +387,7 @@ impl Task {
     ///
     /// # Safety
     ///
-    /// The caller must hold the lock of the run queue that owns this task,
+    /// (SHARED) The caller must hold the lock of the run queue that owns this task,
     /// and must only pass the pointer to the context switch.
     pub(crate) const unsafe fn stack_pointer_slot(&self) -> *mut u64 {
         self.stack_pointer.get()
@@ -397,9 +397,9 @@ impl Task {
     ///
     /// # Safety
     ///
-    /// The caller must hold the lock of the run queue that owns this task.
+    /// (SHARED) The caller must hold the lock of the run queue that owns this task.
     pub(crate) unsafe fn saved_stack_pointer(&self) -> u64 {
-        // SAFETY: the caller holds the owning queue's lock, which is what
+        // SAFETY: (SHARED) the caller holds the owning queue's lock, which is what
         // orders this read against the write made by whoever switched away.
         unsafe { *self.stack_pointer.get() }
     }
@@ -695,7 +695,7 @@ impl Task {
     ///
     /// # Safety
     ///
-    /// As [`Task::stack_pointer_slot`]: the caller must hold the lock of the
+    /// (SHARED) As [`Task::stack_pointer_slot`]: the caller must hold the lock of the
     /// run queue that owns this task, which is what orders every access.
     pub(crate) unsafe fn user_state(&self) -> Option<*mut arch::UserState> {
         self.user.as_ref().map(|cell| cell.get())
