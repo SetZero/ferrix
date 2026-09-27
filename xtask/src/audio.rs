@@ -327,7 +327,7 @@ fn pulsed_script() -> String {
 }
 
 /// Build one of `userland/media`'s programs for `arch`: `package`'s `bin`.
-fn build_media(arch: Arch, package: &str, bin: &str) -> Result<PathBuf> {
+pub(crate) fn build_media(arch: Arch, package: &str, bin: &str) -> Result<PathBuf> {
     let target = crate::display::target(arch)
         .ok_or_else(|| Error::new(format!("{arch} has no user-space target for {bin}")))?;
     let target_dir = paths::target_dir().join("media").join(bin);

@@ -446,7 +446,9 @@ fn exec_word(word: &str) -> String {
 /// compositor at `/bin/hyprix` with `hyprix.service` running it with
 /// `arguments`, and `default.target` pointed at `graphical.target`. Without
 /// a shell in the image the console's getty is masked, since it would only
-/// fail and be restarted.
+/// fail and be restarted. With `pulsed` the sound server is a service of
+/// `graphical.target` too, started before the compositor, and every client
+/// the compositor starts is told where it listens (`docs/AUDIO.md`, U2d).
 ///
 /// # Errors
 ///
@@ -456,6 +458,7 @@ pub(crate) fn desktop_files(
     hyprix: &[u8],
     arguments: &[&str],
     shell: bool,
+    pulsed: Option<&[u8]>,
 ) -> Result<Vec<File>> {
     let mut files = carried(arch)?;
     if files.is_empty() {
@@ -473,10 +476,19 @@ pub(crate) fn desktop_files(
          # Root's home, which the kernel gave hyprix as pid 1 and a unit with\n\
          # no User= is not given; the clients find ~/.config through it.\n\
          Environment=HOME=/\n\
+         {}\
          Restart=on-failure\n\
          StandardOutput=console\n\
          StandardError=console\n",
-        command.join(" ")
+        command.join(" "),
+        if pulsed.is_some() {
+            format!(
+                "# Where pulsed listens, for every client it starts.\n\
+                 Environment=PULSE_SERVER=unix:{PULSE_SOCKET}\n"
+            )
+        } else {
+            String::new()
+        }
     );
     let unit_file = |path: &str, text: &str| File {
         path: path.to_owned(),
@@ -505,8 +517,39 @@ pub(crate) fn desktop_files(
     if !shell {
         files.push(link("etc/ferrix/units/getty@.service", "/dev/null"));
     }
+    if let Some(pulsed) = pulsed {
+        files.push(File {
+            path: "bin/pulsed".to_owned(),
+            mode: 0o755,
+            content: Content::Bytes(pulsed.to_vec()),
+        });
+        files.push(unit_file(
+            "etc/ferrix/units/pulsed.service",
+            &format!(
+                "# The sound server, a service of graphical.target (docs/AUDIO.md, U2d).\n\
+                 [Unit]\n\
+                 Description=The PulseAudio-protocol server\n\
+                 Before=hyprix.service\n\
+                 \n\
+                 [Service]\n\
+                 ExecStart=/bin/pulsed {PULSE_SOCKET}\n\
+                 Restart=on-failure\n\
+                 StandardOutput=console\n\
+                 StandardError=console\n"
+            ),
+        ));
+        files.push(link(
+            "etc/ferrix/units/graphical.target.wants/pulsed.service",
+            "/etc/ferrix/units/pulsed.service",
+        ));
+    }
     Ok(files)
 }
+
+/// Where the desktop's `pulsed` listens: libpulse's clients are told with
+/// `PULSE_SERVER`, since the compositor gives them no `XDG_RUNTIME_DIR` of
+/// a session.
+pub(crate) const PULSE_SOCKET: &str = "/run/pulse/native";
 
 /// The test's own units, zinc, and busybox for its `su`, as carried files.
 fn test_files(shell: &[u8], busybox: &[u8], dirclient: &[u8]) -> Vec<File> {

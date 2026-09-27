@@ -480,7 +480,7 @@ repeats. Each slice lands on its own:
 | U2a | **Done 2026-09-27.** `pulse-server`, the protocol state machine, on `pulseaudio` at the pinned revision: `AUTH` at protocol 35 with shared memory and memfd both refused, so samples come inline; the client's name; the server's, sink's and source's information and lists (one sink, the card's 48 kHz S16_LE stereo); `CREATE_PLAYBACK_STREAM` and `DELETE_PLAYBACK_STREAM` with the buffer attributes, and requests accounted as `pa_memblockq` does (`tlength`, `minreq`, `prebuf`); `CORK`, `FLUSH`, `DRAIN`, `GET_PLAYBACK_LATENCY`. One stream, no mixing | Host tests replay command sequences `patrace` recorded between the host's `paplay` or Chrome and its server, and each answer matches in kind and field | 4 |
 | U2b | **Done 2026-09-27.** `pulsed`, the daemon: `$XDG_RUNTIME_DIR/pulse/native`, one stream written through `media/pcm` to `/dev/snd` and clocked by the card; `pa-tone`, a Rust client that sends tone's counter over the protocol | `test-audio`'s fifth boot, `pulsed` and `pa-tone`, frame for frame, with a negative control | 4 |
 | U2c | **Done 2026-09-27.** Mixing: any number of streams summed with saturation into the card's one format, each resampled from its own rate by `media/resample` and its channels mapped (mono to stereo), per-stream volume and mute, an underrun filled with silence | Host tests of the mix against a model; a boot of two `pa-tone`s at 44.1 and 48 kHz whose sum the file holds within the resampler's bound | 5 |
-| U2d | The desktop: `pulsed` as an init unit of the session, Debian's `libpulse0` and what it links on Chrome's volume, Chrome through Pulse rather than ALSA (it prefers Pulse once `libpulse.so.0` loads) | `test-chrome-audio` through `pulsed`; `run-compositor --everything` plays a video's sound through it | 5 |
+| U2d | **Done 2026-09-27.** The desktop: `pulsed` as an init unit of the session, Debian's `libpulse0` and what it links on Chrome's volume, Chrome through Pulse rather than ALSA (it prefers Pulse once `libpulse.so.0` loads) | `test-chrome-audio` through `pulsed`; `run-compositor --everything` plays a video's sound through it | 5 |
 
 U3's SDL and games then find what is missing by running.
 
@@ -815,4 +815,24 @@ whose timeout passes now waits one period more for a completion
 really stopped still fails, one period later, which is the one way this
 departs from Linux. The kernel says when a drain gives up, and with how
 much queued.
+
+U2d is done (2026-09-27): the desktop runs `pulsed` as a unit of
+`graphical.target`, before the compositor, listening on
+`/run/pulse/native`, and `hyprix.service` tells every client it starts
+`PULSE_SERVER=unix:/run/pulse/native`, since there is no session to give
+them an `XDG_RUNTIME_DIR`. Chrome's volume carries Debian's `libpulse0` and
+what it links (`libsndfile1` and its codecs, `libasyncns0`,
+`libx11-xcb1`). Chrome takes Pulse over ALSA once `libpulse.so.0` loads,
+and plays 48 kHz stereo float, which the mixer takes. `test-chrome-audio`
+requires `pulsed`'s `a stream: Chromium` line as well as the tone in
+QEMU's file: 2.61 s of 439.9 Hz on its first pass. Getting there found two
+things. Chrome's own verbose log (`--vmodule=pulse_util=1`) said only
+"Failed on loading the Pulse library and symbols"; `dlopen` from inside
+the guest said why, `libX11-xcb.so.1` missing. `fetch-chrome.sh`'s check
+of every library's needs had passed, because it walked only the top of
+`usr/lib/x86_64-linux-gnu`, not libpulse's private `pulseaudio/` beside
+it. The check now walks that too, and reads each file's `RUNPATH`. A
+volume fetched before 2026-09-27 has no libpulse: xtask then leaves
+`pulsed` out of the desktop and says so, since Chrome's ALSA would find the
+card held, and the gate refuses such a volume. U2, 18 points, is done.
 

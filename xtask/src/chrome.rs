@@ -387,8 +387,10 @@ pub(crate) fn desktop_policy() -> crate::ports::File {
 /// is for automated testing only. [`USER_AGENT`] says Ferrix where Chrome
 /// says Linux.
 ///
-/// Sound goes through ALSA, since there is no `PulseAudio` server and no
-/// `libpulse` on the volume: `--alsa-output-device=default` opens alsa-lib's
+/// Sound goes through `pulsed` where the image carries it and the volume has
+/// `libpulse` ([`has_pulse`]), which Chrome takes over ALSA once it loads
+/// (`docs/AUDIO.md`, U2d). Otherwise it goes through ALSA:
+/// `--alsa-output-device=default` opens alsa-lib's
 /// `default`, which is `plug` over the card (`docs/AUDIO.md` §2.2), without
 /// the enumeration of name hints Chrome would otherwise need to believe a
 /// card is there; `--audio-buffer-size=960` makes each packet Chrome writes
@@ -451,6 +453,36 @@ pub(crate) fn volume_for(arch: Arch) -> Result<std::path::PathBuf> {
 /// it starts, so foot draws with the same fonts file.
 pub(crate) const WINDOW_ENV: &str = "env = HOME,/dev/shm\nenv = XDG_RUNTIME_DIR,/tmp\n\
      env = FONTCONFIG_FILE,/usr/share/ferrix/fonts/fonts.conf\n";
+
+/// Whether the volume `image` has `libpulse`, in the tree
+/// `scripts/fetch/fetch-chrome.sh` keeps beside it: a volume fetched before
+/// 2026-09-27 has not, and on it Chrome's sound can only be ALSA's, which a
+/// `pulsed` holding the card would refuse.
+pub(crate) fn has_pulse(image: &std::path::Path) -> bool {
+    image
+        .parent()
+        .map(|directory| directory.join("tree/usr/lib/x86_64-linux-gnu/libpulse.so.0"))
+        .is_some_and(|library| library.exists())
+}
+
+/// [`volume`], refused unless it [`has_pulse`]: for a gate that plays
+/// Chrome's sound through `pulsed`.
+///
+/// # Errors
+///
+/// As [`volume`], and for a volume fetched before libpulse was on it.
+pub(crate) fn pulse_volume() -> Result<std::path::PathBuf> {
+    let volume = volume()?;
+    if has_pulse(&volume) {
+        Ok(volume)
+    } else {
+        Err(Error::new(format!(
+            "{} has no libpulse beside it, which Chrome's sound goes through: \
+             scripts/fetch/fetch-chrome.sh again",
+            volume.display()
+        )))
+    }
+}
 
 /// Where `scripts/fetch/fetch-chrome.sh` writes, unless `FERRIX_CHROME_VOLUME`
 /// names another directory.

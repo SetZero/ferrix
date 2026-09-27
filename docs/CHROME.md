@@ -377,7 +377,14 @@ that a program which asks for isolation now finds out it cannot have it.
   `--autoplay-policy=no-user-gesture-required`. `cargo xtask
   test-chrome-audio` requires a page's 440 Hz tone in the file QEMU writes;
   `run-compositor --chrome --audio pipewire` plays it aloud, from the welcome
-  page's button.
+  page's button. **Since 2026-09-27 it goes through `pulsed`** (`docs/AUDIO.md`,
+  U2d): the volume carries Debian's libpulse, which Chrome takes over ALSA
+  once it loads, the desktop runs `pulsed` as a unit, and hyprix's clients
+  are told `PULSE_SERVER`. Chrome plays 48 kHz stereo float, which the
+  server mixes; `test-chrome-audio` requires its stream in `pulsed`'s log as
+  well as the tone in QEMU's file. A volume fetched before then has no
+  libpulse; xtask then leaves `pulsed` out and says so, and the gate refuses
+  it.
 
 ---
 

@@ -200,6 +200,32 @@ impl Server {
             .collect()
     }
 
+    /// Every stream, as `(client, channel, what it is)`: the client's
+    /// application name and the stream's format, for a daemon's log.
+    #[must_use]
+    pub fn streams(&self) -> Vec<(ClientId, u32, String)> {
+        self.clients
+            .iter()
+            .flat_map(|(&id, client)| {
+                let name = client
+                    .props
+                    .get(protocol::Prop::ApplicationName)
+                    .map(|name| String::from_utf8_lossy(&trim_nul(name)).into_owned())
+                    .unwrap_or_else(|| "a client".to_owned());
+                client.streams.iter().map(move |(&channel, stream)| {
+                    (
+                        id,
+                        channel,
+                        format!(
+                            "{name}: {} Hz, {} channels, {:?}",
+                            stream.spec.sample_rate, stream.spec.channels, stream.spec.format
+                        ),
+                    )
+                })
+            })
+            .collect()
+    }
+
     /// The card takes up to `max` bytes of `channel` of `id` into `out`: how
     /// many it took. Asking for more than there is, while playing, is an
     /// underrun the client hears of.

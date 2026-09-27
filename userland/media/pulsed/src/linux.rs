@@ -83,6 +83,8 @@ fn serve() -> io::Result<()> {
     let wait =
         Duration::from_micros(u64::from(config.period) * 250_000 / u64::from(config.rate.max(1)));
     let mut scratch = vec![0_u8; 64 * 1024];
+    // The streams already said, so each new one is said once.
+    let mut seen = std::collections::BTreeSet::new();
     loop {
         match poll.poll(&mut events, Some(wait)) {
             Ok(()) => {}
@@ -97,12 +99,30 @@ fn serve() -> io::Result<()> {
             let Some(connection) = connections.get_mut(&event.token()) else {
                 continue;
             };
-            let ended = event.is_read_closed()
-                || (event.is_readable() && receive(connection, &mut server, &mut scratch).is_err());
+            let broken = if event.is_readable() {
+                receive(connection, &mut server, &mut scratch).err()
+            } else {
+                None
+            };
+            if let Some(Broken(why)) = &broken {
+                say(&format!("a client went: {why}"));
+            }
+            let ended = event.is_read_closed() || broken.is_some();
             if ended {
                 close(&poll, &mut server, &mut connections, event.token());
             }
         }
+        for (id, channel, what) in server.streams() {
+            if seen.insert((id, channel)) {
+                say(&format!("a stream: {what}"));
+            }
+        }
+        seen.retain(|key| {
+            server
+                .streams()
+                .iter()
+                .any(|(id, channel, _)| (*id, *channel) == *key)
+        });
         feed(&mut playback, &mut server)?;
         let stuck: Vec<Token> = connections
             .iter_mut()
@@ -128,6 +148,7 @@ fn accept(
             Err(error) => return Err(error),
         };
         let id = server.connect();
+        say("a client connected");
         let token = Token(connections.keys().last().map_or(1, |token| token.0 + 1));
         poll.registry()
             .register(&mut socket, token, Interest::READABLE)?;

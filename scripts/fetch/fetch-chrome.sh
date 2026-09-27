@@ -53,6 +53,20 @@ debs=(
     # alsa-lib's configuration, without which it opens no device at all:
     # even `hw:0,0` is defined in its alsa.conf (docs/AUDIO.md §3.5).
     "main/a/alsa-lib/libasound2-data_1.2.14-1+deb13u1_all.deb 04688afdff3769c0f685541daed7b2f6f0cb946799ddf1d5847ddf11fe245559"
+    # libpulse, which Chrome's sound takes over ALSA once it loads, and what
+    # it links: its server is pulsed (docs/AUDIO.md, U2d). Pinned from
+    # trixie's Packages file on 2026-09-27.
+    "main/p/pulseaudio/libpulse0_17.0+dfsg1-2+b1_amd64.deb 786aca79119cb249562708fd24dcdf817604cfe75bbfcb8cda3464042e17f40e"
+    "main/liba/libasyncns/libasyncns0_0.8-6+b5_amd64.deb e7958777b0e3586349c57ac759a95b68f80d28e5bd1c4225705198b39b436115"
+    "main/libs/libsndfile/libsndfile1_1.2.2-2+deb13u1_amd64.deb d92263a045554e6f39c6b1c2ee4cca44a3248d9b9339301ff195969bf84b75eb"
+    "main/f/flac/libflac14_1.5.0+ds-2_amd64.deb 658b9f77d35638caf75dfaea4f6d5cde196104d5662f0776e23d7cc450bd4cb5"
+    "main/libo/libogg/libogg0_1.3.5-3+b2_amd64.deb 911aec914f5bda0788164ff8068b682537378bf8d407b1d6c1b377522f96b83b"
+    "main/libv/libvorbis/libvorbis0a_1.3.7-3_amd64.deb 0465f7f602f7b00965e58e7273b5876060ab7946f0452a9f95d979046932cc42"
+    "main/libv/libvorbis/libvorbisenc2_1.3.7-3_amd64.deb 5fbbf06a5b196235aa2753cd12bbe7f843328571d368f15b1c337578e29f73a2"
+    "main/o/opus/libopus0_1.5.2-2_amd64.deb 794056db33d71b2ac4bd8b5a4eb23b627bcb8a49d123c33b6e841a996253a067"
+    "main/m/mpg123/libmpg123-0t64_1.32.10-1+deb13u1_amd64.deb 31fa6ef638f1fdbe198faee0b6fe50d9dd468077f8247cc3dbf6b2250abb6101"
+    "main/l/lame/libmp3lame0_3.100-6+b3_amd64.deb 3867319c9fbbc8cc25f2d1dc1d75d13548c84c37fa709c1ac9ca02ac051b63ab"
+    "main/libx/libx11/libx11-xcb1_1.8.12-1_amd64.deb e05f94d21a932fba5b09b9b13d99df776b155d3bc792c0e294451df9ffe1ba25"
     "main/a/at-spi2-core/libatk-bridge2.0-0t64_2.56.2-1+deb13u2_amd64.deb c0fe87ea1bdca2f938eaa8286af5ad38ecd15cf18c6cfb5961d7d46ac3192325"
     "main/a/at-spi2-core/libatk1.0-0t64_2.56.2-1+deb13u2_amd64.deb 24786bc90e3ff80c4d1d8bdb5ec18bb5f06df9081a5233eb080f3202fcf6a1c3"
     "main/a/at-spi2-core/libatspi2.0-0t64_2.56.2-1+deb13u2_amd64.deb 65e9c9ecbd820fba2d04104cddd0bad33d256cbdfe0d1cb5365f10e363df2315"
@@ -184,8 +198,15 @@ test -e "$tree/usr/lib64/ld-linux-x86-64.so.2" \
 missing=0
 while IFS= read -r -d '' file; do
     head -c 4 "$file" | grep -q $'\x7fELF' || continue
+    # The directories the file names itself, as libpulse names its private
+    # pulseaudio/ one, which the loader searches for it alone.
+    runpath=$(readelf -d "$file" 2> /dev/null | sed -n 's/.*(\(RUNPATH\|RPATH\)).*\[\(.*\)\]/\2/p' | tr ':' ' ')
     for needed in $(readelf -d "$file" 2> /dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'); do
-        if [ ! -e "$tree/usr/lib/x86_64-linux-gnu/$needed" ] \
+        own=0
+        for dir in $runpath; do
+            [ -e "$tree$dir/$needed" ] && own=1
+        done
+        if [ "$own" = 0 ] && [ ! -e "$tree/usr/lib/x86_64-linux-gnu/$needed" ] \
             && [ ! -e "$tree/lib/x86_64-linux-gnu/$needed" ] \
             && [ ! -e "$tree/chrome/$needed" ] \
             && [ ! -e "$tree/chrome-window/$needed" ] \
@@ -194,7 +215,8 @@ while IFS= read -r -d '' file; do
             missing=1
         fi
     done
-done < <(find "$tree/chrome" "$tree/chrome-window" "$tree/usr/lib/x86_64-linux-gnu" -maxdepth 1 -type f -print0)
+done < <(find "$tree/chrome" "$tree/chrome-window" "$tree/usr/lib/x86_64-linux-gnu" \
+    "$tree/usr/lib/x86_64-linux-gnu/pulseaudio" -maxdepth 1 -type f -print0)
 [ "$missing" = 0 ] || exit 1
 
 # Room for Chrome's profile, caches and the screenshot, and a size that does

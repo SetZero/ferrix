@@ -1334,6 +1334,7 @@ fn build_parts(
         &read(&programs.hyprix)?,
         &["--config", &config_path, "--instance", INSTANCE],
         carried_too.zinc.is_some(),
+        carried_too.pulsed.as_deref(),
     )?;
     for (path, program) in programs.carried() {
         carried.push(crate::ports::File {
@@ -2006,6 +2007,10 @@ struct Carried {
     /// watched boot wants them for the same reason it wants the applets, and
     /// a gate boot's archive names none.
     ports: Vec<crate::ports::File>,
+    /// `pulsed`, the sound server, as a service of the desktop beside the
+    /// compositor, whose clients are told where it listens
+    /// (`crate::init::desktop_files`).
+    pulsed: Option<Vec<u8>>,
 }
 
 impl Carried {
@@ -2015,6 +2020,7 @@ impl Carried {
             busybox: None,
             zinc: None,
             ports: Vec::new(),
+            pulsed: None,
         }
     }
 
@@ -2053,6 +2059,7 @@ impl Carried {
             busybox,
             zinc: crate::zinc::build(arch)?,
             ports,
+            pulsed: None,
         })
     }
 }
@@ -2359,6 +2366,23 @@ fn desktop(
         carried
             .ports
             .extend(crate::dotfiles::carried(Path::new(path))?);
+    }
+    // Chrome with a sound card gets the sound server beside it, which it
+    // takes over ALSA once libpulse loads (docs/AUDIO.md, U2d).
+    if args.chrome && (args.audio.is_some() || args.everything) {
+        if crate::chrome::has_pulse(&crate::chrome::volume_for(arch)?) {
+            let pulsed = crate::audio::build_media(arch, "media-pulsed", "pulsed")?;
+            println!("  {arch}: pulsed, the sound server, as a service beside the compositor");
+            carried.pulsed = Some(
+                std::fs::read(&pulsed)
+                    .map_err(|error| Error::new(format!("{}: {error}", pulsed.display())))?,
+            );
+        } else {
+            println!(
+                "  {arch}: Chrome's volume has no libpulse, so its sound goes through ALSA \
+                 with no pulsed (scripts/fetch/fetch-chrome.sh again for it)"
+            );
+        }
     }
     if args.chrome {
         let mut links = chrome_links(arch, &carried.ports);
@@ -5360,15 +5384,20 @@ pub(crate) fn test_chrome_audio(args: &Args) -> Result<()> {
         ));
     }
     let mut args = args.clone();
-    args.data_image = Some(crate::chrome::volume()?);
+    args.data_image = Some(crate::chrome::pulse_volume()?);
     if !args.memory_given {
         args.memory = crate::chrome::MEMORY;
     }
     let programs = Programs::build(arch)?;
     let mut ports = crate::rustc::files(crate::chrome::LINKS);
     ports.extend(crate::chrome::window_files());
+    let pulsed = crate::audio::build_media(arch, "media-pulsed", "pulsed")?;
     let carried = Carried {
         ports,
+        pulsed: Some(
+            std::fs::read(&pulsed)
+                .map_err(|error| Error::new(format!("{}: {error}", pulsed.display())))?,
+        ),
         ..Carried::none()
     };
     let config = format!(
@@ -5386,6 +5415,7 @@ pub(crate) fn test_chrome_audio(args: &Args) -> Result<()> {
     qemu_args.display = true;
     qemu_args.audio = Some(format!("wav:{}", wav.display()));
     let mut heard = None;
+    let mut said: Vec<String> = Vec::new();
     let hook = |watching: &mut Watching<'_>| -> Result<()> {
         let deadline = Instant::now() + CHROME_WINDOW_PATIENCE;
         loop {
@@ -5400,9 +5430,25 @@ pub(crate) fn test_chrome_audio(args: &Args) -> Result<()> {
             }
             let _ = watching.read_more(Instant::now() + Duration::from_secs(2), |_| false)?;
         }
+        said = watching
+            .lines()
+            .iter()
+            .chain(watching.after())
+            .cloned()
+            .collect();
         Ok(())
     };
     let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
+    // Through the sound server, not around it: Chrome takes Pulse once
+    // libpulse loads and the server answers, and falls back to ALSA
+    // without a word otherwise (docs/AUDIO.md, U2d).
+    let Some(stream) = said.iter().find(|line| line.contains(PULSED_STREAM)) else {
+        return Err(Error::new(format!(
+            "{arch}: pulsed never said `{PULSED_STREAM}`: Chrome's sound did not go through \
+             the sound server"
+        )));
+    };
+    println!("  {arch}: {}", stream.trim());
     match heard {
         Some((frames, hz)) if frames >= CHROME_TONE_FRAMES => {
             if (hz - CHROME_TONE_HZ).abs() > CHROME_TONE_HZ * 0.02 {
@@ -5413,7 +5459,8 @@ pub(crate) fn test_chrome_audio(args: &Args) -> Result<()> {
                 )));
             }
             println!(
-                "  {arch}: Chrome played {:.2} s of a {hz:.1} Hz tone through /dev/snd",
+                "  {arch}: Chrome played {:.2} s of a {hz:.1} Hz tone through pulsed and \
+                 /dev/snd",
                 frames as f64 / 48_000.0
             );
             Ok(())
@@ -5428,6 +5475,9 @@ pub(crate) fn test_chrome_audio(args: &Args) -> Result<()> {
         ))),
     }
 }
+
+/// What `pulsed` says of each stream a client makes.
+const PULSED_STREAM: &str = "pulsed: a stream: ";
 
 /// The frames of a WAV file's S16 stereo data that are not silence, and the
 /// pitch of their left channel by its zero crossings, or `None` when there
