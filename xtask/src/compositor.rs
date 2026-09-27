@@ -2659,7 +2659,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are twenty of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 30] = [
+const BOOTS: [(&str, Boot); 31] = [
     ("restart", test_driver_restart),
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
@@ -2678,6 +2678,7 @@ const BOOTS: [(&str, Boot); 30] = [
     ("screenshot", test_screenshot),
     ("lock", test_lock),
     ("hyprlock", test_hyprlock),
+    ("hyprlock-unset", test_hyprlock_unset),
     ("menu", test_menu),
     ("pointer", test_pointer),
     ("cursor", test_cursor),
@@ -4339,6 +4340,116 @@ const HYPRLOCK_BINDS: [(&str, &[&str]); 4] = [
 /// `userland/compositor/hyprlock/tests/gate.rs`, with the same code, and
 /// composited as hyprix composites a lock surface.
 fn test_hyprlock(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let carried = Carried {
+        ports: hyprlock_files(arch, Some(HYPRLOCK_PASSWORD))?,
+        ..Carried::none()
+    };
+    let (screens, said) = boot_and_dump_carrying(
+        arch,
+        programs,
+        HYPRLOCK_CONFIG,
+        (carried, None),
+        &Wanted {
+            states: &HYPRLOCK_EXPECTED,
+            others: &[],
+            moving: None,
+            pointer: None,
+            awaiting: &["hyprlock: unlocked"],
+        },
+        &HYPRLOCK_BINDS,
+        args,
+    )?;
+    if screens.len() != HYPRLOCK_EXPECTED.len() {
+        return Err(Error::new(format!(
+            "{arch}: {} of {} pictures were taken",
+            screens.len(),
+            HYPRLOCK_EXPECTED.len()
+        )));
+    }
+    let has = |wanted: &str| said.iter().any(|line| line.contains(wanted));
+    for wanted in [
+        "hyprix: the session is locked",
+        "hyprlock: locked",
+        // authd's audit lines: the refusal and the acceptance were its.
+        "service=hyprlock account=root",
+        "result=failed",
+        "hyprlock: Authentication failed",
+        "result=accepted",
+        "hyprlock: authenticated",
+        "hyprlock: unlocked",
+        "hyprix: the session is unlocked",
+    ] {
+        if !has(wanted) {
+            return Err(Error::new(format!(
+                "{arch}: the hyprlock boot did not say `{wanted}`"
+            )));
+        }
+    }
+    println!(
+        "  {arch}: hyprlock locked the screen, authd refused a wrong password and hyprlock showed \
+         its fail colour, authd took the right one typed on a German keyboard, and the screen \
+         came back"
+    );
+    Ok(())
+}
+
+/// The second hyprlock boot: the same image with no password seeded, where
+/// `L` must not lock (`docs/AUTH.md` §5.4, decision 4) and hyprlock must say
+/// why.
+fn test_hyprlock_unset(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let carried = Carried {
+        ports: hyprlock_files(arch, None)?,
+        ..Carried::none()
+    };
+    let (_, said) = boot_and_dump_carrying(
+        arch,
+        programs,
+        HYPRLOCK_CONFIG,
+        (carried, None),
+        &Wanted {
+            states: &HYPRLOCK_UNSET_EXPECTED,
+            others: &[],
+            moving: None,
+            pointer: None,
+            awaiting: &["not locking"],
+        },
+        &HYPRLOCK_UNSET_BINDS,
+        args,
+    )?;
+    let has = |wanted: &str| said.iter().any(|line| line.contains(wanted));
+    if !has("not locking: no password is set for root: run `passwd` first") {
+        return Err(Error::new(format!(
+            "{arch}: hyprlock with no password did not say why it did not lock"
+        )));
+    }
+    if has("hyprix: the session is locked") {
+        return Err(Error::new(format!(
+            "{arch}: hyprlock locked an account with no password"
+        )));
+    }
+    println!("  {arch}: with no password set, hyprlock did not lock, and said why");
+    Ok(())
+}
+
+/// What the no-password boot must show: the windows, before and after `L`.
+const HYPRLOCK_UNSET_EXPECTED: [(&str, &str); 2] = [
+    (
+        "tiled",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
+    ),
+    (
+        "still tiled after L, since nothing could unlock a lock",
+        "userland/compositor/render/tests/data/dwindle-two-clients.xrle",
+    ),
+];
+
+/// Its one key.
+const HYPRLOCK_UNSET_BINDS: [(&str, &[&str]); 1] = [("L, which runs hyprlock", &["l"])];
+
+/// What both hyprlock boots carry: hyprlock and its configuration, authd,
+/// root's and authd's accounts, the font, and root's password where one is
+/// given.
+fn hyprlock_files(arch: Arch, password: Option<&str>) -> Result<Vec<crate::ports::File>> {
     let data = paths::workspace_root().join("userland/compositor/hyprlock/tests/data");
     let read = |path: &Path| -> Result<Vec<u8>> {
         std::fs::read(path)
@@ -4373,59 +4484,16 @@ fn test_hyprlock(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
             0o644,
             format!("root:x:0:\n{}", crate::auth::GROUP_LINE).into_bytes(),
         ),
-        crate::auth::seed("root", HYPRLOCK_PASSWORD)?,
         file(
             "usr/share/ferrix/fonts/LiberationSans-Regular.ttf",
             0o644,
             read(&fonts.join("LiberationSans-Regular.ttf"))?,
         ),
     ]);
-    let carried = Carried {
-        ports,
-        ..Carried::none()
-    };
-    let (screens, said) = boot_and_dump_carrying(
-        arch,
-        programs,
-        HYPRLOCK_CONFIG,
-        (carried, None),
-        &Wanted {
-            states: &HYPRLOCK_EXPECTED,
-            others: &[],
-            moving: None,
-            pointer: None,
-            awaiting: &["hyprlock: unlocked"],
-        },
-        &HYPRLOCK_BINDS,
-        args,
-    )?;
-    if screens.len() != HYPRLOCK_EXPECTED.len() {
-        return Err(Error::new(format!(
-            "{arch}: {} of {} pictures were taken",
-            screens.len(),
-            HYPRLOCK_EXPECTED.len()
-        )));
+    if let Some(password) = password {
+        ports.push(crate::auth::seed("root", password)?);
     }
-    let has = |wanted: &str| said.iter().any(|line| line.contains(wanted));
-    for wanted in [
-        "hyprix: the session is locked",
-        "hyprlock: locked",
-        "hyprlock: Authentication failed",
-        "hyprlock: authenticated",
-        "hyprlock: unlocked",
-        "hyprix: the session is unlocked",
-    ] {
-        if !has(wanted) {
-            return Err(Error::new(format!(
-                "{arch}: the hyprlock boot did not say `{wanted}`"
-            )));
-        }
-    }
-    println!(
-        "  {arch}: hyprlock locked the screen, refused a wrong password with its fail colour, \
-         took the right one typed on a German keyboard, and let the screen go"
-    );
-    Ok(())
+    Ok(ports)
 }
 
 /// A fourteenth boot: a screenshot, through `zwlr_screencopy_v1`.
