@@ -924,8 +924,8 @@
     "arch/aarch64/mod.rs": {
       "ring": "core",
       "lines": [
-        1235,
-        1247
+        1237,
+        1249
       ]
     },
     "random.rs": {

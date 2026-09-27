@@ -1206,7 +1206,8 @@ pub(crate) fn shutdown() -> ! {
     crate::console::drain();
     // On the Pixel 7, a watchdog reset instead: powered off, the phone would
     // lose the `ramoops` record that is its whole console. Returns anywhere
-    // else.
+    // else. So on the Pixel the power-off line is followed by a reset, by
+    // design: no gate runs there to read it.
     watchdog::reset_now();
     cpu::psci_system_off();
     crate::console::announce_power_off_failed();

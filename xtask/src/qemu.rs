@@ -797,14 +797,15 @@ fn power_off_problem(
     let after = lines
         .iter()
         .position(|line| line.contains(until))
-        .map_or(&[][..], |at| &lines[at + 1..]);
+        .and_then(|at| lines.get(at + 1..))
+        .unwrap_or_default();
     let announced = after
         .iter()
         .position(|line| line.trim() == POWER_OFF_MARKER);
     if let Some(at) = announced
-        && after[at + 1..]
-            .iter()
-            .any(|line| line.trim() == POWER_OFF_FAILED)
+        && after
+            .get(at + 1..)
+            .is_some_and(|rest| rest.iter().any(|line| line.trim() == POWER_OFF_FAILED))
     {
         return Some(format!(
             "the kernel's power-off returned ({POWER_OFF_FAILED}), and the machine was left running"

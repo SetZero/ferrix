@@ -155,14 +155,14 @@
     },
     {
       "file": "arch/aarch64/mod.rs",
-      "lines": "1235",
+      "lines": "1237",
       "category": "defensive",
       "match": "shutdown()",
       "why": "Firmware whose PSCI `SYSTEM_RESET` returned instead of resetting: the machine is powered off rather than carrying on as though it had reset. The suite's `boot-reset` gate takes the reset, and QEMU resets."
     },
     {
       "file": "arch/aarch64/mod.rs",
-      "lines": "1247",
+      "lines": "1249",
       "category": "failure-path",
       "match": "cpu::wfi();",
       "why": "`halt`'s loop, on a processor that stops for good: after a panic, on the stop IPI a panic sends, or where a power-off returned. A passing boot ends by a PSCI power-off that ends QEMU first. The suite's one deliberate panic, `test-shell`'s `ferrix.onexit=panic` boot, halts here, and whether QEMU is stopped before the halted processor's `wfi` has been translated varies from run to run: the line was reached in one measurement of this suite and not in the next."

@@ -1682,15 +1682,18 @@ architecture's power-off gives (33 for x86-64, 0 for AArch64 and ARMv7-A).
 success line, a quoted echo of the marker rather than the kernel's own line,
 `FERRIX-POWER-OFF-FAILED` after the marker, a wrong status for the
 architecture, and QEMU having to be stopped rather than exiting by itself.
-Checked by three negative controls run and reverted by hand, each rejected
-with the message naming what was missing: x86-64's `shutdown` triple-faulting
-after `announce_power_off` instead of calling the debug-exit device (`QEMU
-exited by itself with status 0 after FERRIX-BOOT-OK ... not the 33 ...
-something else ended the run`); x86-64's `shutdown` calling the debug-exit
-device without `announce_power_off` first (`the kernel never printed
-FERRIX-POWER-OFF`);
-and AArch64's `psci_system_off` made to return without powering off
-(`FERRIX-POWER-OFF-FAILED`, `the kernel's power-off returned`).
+Checked by three negative controls, each run through `test-shell --init`
+busybox and reverted, and each rejected by the check meant to catch it:
+x86-64's `shutdown` triple-faulting after `announce_power_off` instead of
+calling the debug-exit device (`QEMU exited with status 0 after
+FERRIX-POWER-OFF, not the 33 x86_64's power-off gives: something else ended
+the run`); x86-64's `shutdown` calling the debug-exit device without
+`announce_power_off` first (`QEMU exited by itself with status 33 after
+FERRIX-BOOT-OK, but the kernel never printed FERRIX-POWER-OFF`); and
+AArch64's `shutdown` skipping `psci_system_off`, as a firmware without it
+returns (`FERRIX-POWER-OFF-FAILED` a second after the marker, then `the
+kernel's power-off returned (FERRIX-POWER-OFF-FAILED), and the machine was
+left running`).
 
 ## F. Organisational
 
