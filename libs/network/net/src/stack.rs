@@ -539,7 +539,11 @@ impl Stack {
     ///
     /// `SO_REUSEADDR` on both the socket binding and the one already there
     /// lifts the conflict, which is what lets a server bind a particular
-    /// address on a port a wildcard socket also holds.
+    /// address on a port a wildcard socket also holds -- unless the one there
+    /// is listening. Linux's `inet_csk_bind_conflict` keeps a listening
+    /// socket's port to it whatever `SO_REUSEADDR` says: a second listener on
+    /// an overlapping address could take connections meant for the first.
+    /// (`SO_REUSEPORT`, which would share it on purpose, is not offered.)
     fn port_taken(&self, id: SocketId, family: Family, endpoint: Endpoint) -> bool {
         let this = self.sockets.get(&id.0);
         let stream = matches!(this, Some(Socket::Listen(_) | Socket::Stream(_)));
@@ -569,7 +573,24 @@ impl Stack {
             if !overlaps {
                 return false;
             }
-            !(reusing && socket.options().reuse_address)
+            is_listening(socket) || !(reusing && socket.options().reuse_address)
+        })
+    }
+
+    /// Whether another socket is listening on a port and address overlapping
+    /// `endpoint`: what [`Stack::listen`] refuses, as Linux's
+    /// `inet_csk_listen_start` does, for two sockets bound side by side under
+    /// `SO_REUSEADDR` before either listened.
+    fn listener_on(&self, id: SocketId, family: Family, endpoint: Endpoint) -> bool {
+        self.sockets.iter().any(|(other, socket)| {
+            let held = socket.local();
+            *other != id.0
+                && is_listening(socket)
+                && socket.family() == family
+                && held.port == endpoint.port
+                && (held.address.is_unspecified()
+                    || endpoint.address.is_unspecified()
+                    || held.address == endpoint.address)
         })
     }
 
@@ -596,6 +617,11 @@ impl Stack {
             if let Some(Socket::Listen(listener)) = self.sockets.get_mut(&id.0) {
                 listener.local.port = port;
             }
+        } else if let Some(socket @ Socket::Listen(_)) = self.sockets.get(&id.0)
+            && !is_listening(socket)
+            && self.listener_on(id, family, socket.local())
+        {
+            return Err(Error::AddressInUse);
         }
         match self.sockets.get_mut(&id.0).ok_or(Error::NoSocket)? {
             Socket::Listen(listener) => {
@@ -792,4 +818,9 @@ pub(crate) fn unspecified(family: Family) -> IpAddress {
         Family::V4 => IpAddress::V4(Ipv4::UNSPECIFIED),
         Family::V6 => IpAddress::V6(Ipv6::UNSPECIFIED),
     }
+}
+
+/// Whether `socket` is a TCP socket that has been told to listen.
+fn is_listening(socket: &Socket) -> bool {
+    matches!(socket, Socket::Listen(listener) if listener.backlog > 0)
 }

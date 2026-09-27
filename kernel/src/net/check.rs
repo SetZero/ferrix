@@ -16,6 +16,10 @@
 //!   in both directions, and ends as a clean close at both ends;
 //! * a connection to a port nobody listens on is refused rather than left to
 //!   time out;
+//! * a port a socket listens on is its own: a second socket may not bind an
+//!   overlapping address on it, nor listen beside it having bound first,
+//!   `EADDRINUSE` both, though both set `SO_REUSEADDR` -- as Linux keeps a
+//!   listener's port, so a second listener cannot take its connections;
 //! * the same over IPv6, so that the second family is not a claim;
 //! * a raw ICMP socket reads the echo it sent and the reply to it, each with
 //!   its IPv4 header, and one filtering replies with `ICMP_FILTER` reads the
@@ -111,6 +115,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         IpAddress::V4(Ipv4::LOOPBACK),
         7_781,
     )?;
+    listeners_keep_their_port(&mut report, 7_783)?;
     raw_icmp(&mut report)?;
     raw_icmpv6(&mut report)?;
     raw_header_included(&mut report, 7_782)?;
@@ -287,6 +292,50 @@ fn refused(
         }
         _ => Err("a connection to a port nobody listens on was not refused"),
     }
+}
+
+/// A listener keeps its port against sockets that set `SO_REUSEADDR`, as
+/// every listener tokio makes and init's socket units do: a bind of the
+/// loopback on a port a wildcard listener holds, and a listen of a socket
+/// bound beside a listener before it listened, are both `EADDRINUSE`.
+fn listeners_keep_their_port(report: &mut Report, port: u16) -> Result<(), &'static str> {
+    use ferrix_linux_abi::socket::{SO_REUSEADDR, SOL_SOCKET, Width};
+    let reusing = || {
+        let made = socket(Family::V4, InetKind::Stream)?;
+        made.set_option(
+            SOL_SOCKET,
+            SO_REUSEADDR,
+            &1_i32.to_ne_bytes(),
+            Width::Bits64,
+        )
+        .map_err(|_| "SO_REUSEADDR could not be set on a stream socket")?;
+        Ok::<_, &'static str>(made)
+    };
+    let wildcard = IpAddress::V4(Ipv4::UNSPECIFIED);
+    let loopback = IpAddress::V4(Ipv4::LOOPBACK);
+
+    let listener = reusing()?;
+    let beside = reusing()?;
+    listener
+        .bind(&encode(wildcard, port))
+        .map_err(|_| "a stream socket could not bind the wildcard address")?;
+    beside
+        .bind(&encode(wildcard, port))
+        .map_err(|_| "SO_REUSEADDR did not let two sockets bind a port nobody listens on")?;
+    listener
+        .listen(4)
+        .map_err(|_| "a stream socket could not listen")?;
+    if beside.listen(4) != Err(Errno::EADDRINUSE) {
+        return Err("a second socket listened on a port another listens on");
+    }
+    report.refusals += 1;
+
+    let second = reusing()?;
+    if second.bind(&encode(loopback, port)) != Err(Errno::EADDRINUSE) {
+        return Err("a second socket bound a port a wildcard listener holds");
+    }
+    report.refusals += 1;
+    Ok(())
 }
 
 /// An echo request's identifier the raw check uses, which no other socket on

@@ -369,3 +369,71 @@ fn the_host_that_started_the_connection_can_also_be_the_one_that_reads() {
     wire.settle();
     assert_eq!(wire.drain(Host::One, client), b"greetings");
 }
+
+/// Two sockets that both set `SO_REUSEADDR`, as tokio's listeners and a
+/// service manager's do.
+fn reusing(host: &mut Alone) -> [crate::socket::SocketId; 2] {
+    [0, 1].map(|_| {
+        let socket = host.stack.open_tcp(Family::V4);
+        host.stack
+            .socket_mut(socket)
+            .expect("made")
+            .options_mut()
+            .reuse_address = true;
+        socket
+    })
+}
+
+#[test]
+fn a_port_a_socket_listens_on_is_its_own_whatever_so_reuseaddr_says() {
+    let mut host = Alone::new();
+    let [first, second] = reusing(&mut host);
+    host.stack
+        .bind(first, at(Ipv4::UNSPECIFIED, 2_200))
+        .expect("bound");
+    host.stack.listen(first, 4).expect("listening");
+    assert_eq!(
+        host.stack.bind(second, at(Ipv4::UNSPECIFIED, 2_200)),
+        Err(Error::AddressInUse),
+        "the same wildcard"
+    );
+    assert_eq!(
+        host.stack.bind(second, at(Ipv4::LOOPBACK, 2_200)),
+        Err(Error::AddressInUse),
+        "an address the wildcard covers"
+    );
+    host.stack
+        .bind(second, at(Ipv4::LOOPBACK, 2_201))
+        .expect("another port");
+}
+
+#[test]
+fn of_two_sockets_bound_side_by_side_only_the_first_may_listen() {
+    let mut host = Alone::new();
+    let [first, second] = reusing(&mut host);
+    host.stack
+        .bind(first, at(Ipv4::UNSPECIFIED, 2_202))
+        .expect("bound");
+    host.stack
+        .bind(second, at(Ipv4::UNSPECIFIED, 2_202))
+        .expect("SO_REUSEADDR lets two sockets bind a port nobody listens on");
+    host.stack.listen(first, 4).expect("listening");
+    assert_eq!(host.stack.listen(second, 4), Err(Error::AddressInUse));
+}
+
+#[test]
+fn a_port_is_free_again_once_its_listener_has_gone() {
+    let mut host = Alone::new();
+    let [first, second] = reusing(&mut host);
+    host.stack
+        .bind(first, at(Ipv4::UNSPECIFIED, 2_203))
+        .expect("bound");
+    host.stack.listen(first, 4).expect("listening");
+    host.stack.close(first);
+    host.stack
+        .bind(second, at(Ipv4::UNSPECIFIED, 2_203))
+        .expect("free again");
+    host.stack
+        .listen(second, 4)
+        .expect("listening in its place");
+}

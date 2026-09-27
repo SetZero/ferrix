@@ -1999,20 +1999,25 @@ address, a datagram to an empty port must earn ECONNREFUSED from the unreachable
 this host sends itself, a connection to a listening port must be made, accepted,
 carry bytes both ways and end as a clean close, and a connection to a port
 nobody listens on must be refused rather than left to time out — all of it over
-IPv4 and again over IPv6.
+IPv4 and again over IPv6. A port a socket listens on must be its own: a second
+socket binding an overlapping address on it, or listening beside it having bound
+first, must be EADDRINUSE though both set SO_REUSEADDR.
 
-1. The loopback interface is not up, or does not own 127.0.0.1 and ::1:
+1. `Stack::port_taken` in libs/network/net let SO_REUSEADDR lift the conflict
+   with a socket already listening, or `Stack::listen` no longer checks for a
+   listener on an overlapping address and port (`listener_on`).
+2. The loopback interface is not up, or does not own 127.0.0.1 and ::1:
    `Stack::new` no longer adds it, or `add_local_routes` no longer gives it its
    two routes.
-2. A packet routed to the loopback was handed out instead of going back up the
+3. A packet routed to the loopback was handed out instead of going back up the
    input path: `Stack::poll_transmit`'s loopback turn, or
    `NetCore::take_frames`, changed.
-3. A socket call reached the stack and the stack did not move: the net core's
+4. A socket call reached the stack and the stack did not move: the net core's
    task is not running, or `NetCore::with` stopped draining the egress after the
    call.
-4. A blocking call waited for ever: the wait's condition and what wakes it
+5. A blocking call waited for ever: the wait's condition and what wakes it
    disagree, or `NetCore::progress` is no longer woken after the stack moves.
-5. A connection was refused that should have been made, or made that should have
+6. A connection was refused that should have been made, or made that should have
    been refused: the listener lookup in `libs/network/net`'s TCP input, or the
    reset it sends a segment with nowhere to go.
 

@@ -1300,8 +1300,13 @@ pub(crate) static NET_CORE: Explanation = Explanation {
               sends itself, a connection to a listening port must be made, accepted, carry \
               bytes both ways and end as a clean close, and a connection to a port nobody \
               listens on must be refused rather than left to time out — all of it over IPv4 \
-              and again over IPv6.",
+              and again over IPv6. A port a socket listens on must be its own: a second \
+              socket binding an overlapping address on it, or listening beside it having bound \
+              first, must be EADDRINUSE though both set SO_REUSEADDR.",
     causes: &[
+        "`Stack::port_taken` in libs/network/net let SO_REUSEADDR lift the conflict with a \
+         socket already listening, or `Stack::listen` no longer checks for a listener on an \
+         overlapping address and port (`listener_on`).",
         "The loopback interface is not up, or does not own 127.0.0.1 and ::1: `Stack::new` no \
          longer adds it, or `add_local_routes` no longer gives it its two routes.",
         "A packet routed to the loopback was handed out instead of going back up the input \
