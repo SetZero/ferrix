@@ -683,7 +683,9 @@ fn a_cached_miss_does_not_hide_a_later_create() {
 /// deep at `umount` (ferrix-ea, 2026-09-26).
 #[test]
 fn a_deep_chain_of_dentries_drops_without_recursing() {
-    const DEPTH: usize = 20_000;
+    // Miri does not hold a thread to its stack size, so under it the chain
+    // checks the drops' aliasing only, and 300 levels do that in minutes.
+    const DEPTH: usize = if cfg!(miri) { 300 } else { 20_000 };
     let dropped = std::thread::Builder::new()
         .stack_size(256 * 1024)
         .spawn(|| {
@@ -1218,7 +1220,10 @@ fn a_pipe_delivers_bytes_in_order_against_a_model() {
     let mut pipe = open_pipe(PIPE_CAPACITY);
     let mut model = alloc::collections::VecDeque::new();
     let mut state = 0x9E37_79B9_7F4A_7C15_u64;
-    for _ in 0..4000 {
+    // Under Miri 4000 steps of up to 9000 bytes took hours; 150 still wrap
+    // the ring and cross PIPE_BUF.
+    let steps = if cfg!(miri) { 150 } else { 4000 };
+    for _ in 0..steps {
         state ^= state << 13;
         state ^= state >> 7;
         state ^= state << 17;
@@ -3415,7 +3420,10 @@ fn a_stream_delivers_bytes_and_ancillary_data_in_order_against_a_model() {
     // write that brought ancillary data, that data.
     let mut model = alloc::collections::VecDeque::<(u8, usize, Option<u64>)>::new();
     let mut state = 0x9E37_79B9_7F4A_7C15_u64;
-    for step in 0..6000 {
+    // As for the pipe's model: 6000 steps took Miri hours, 300 still fill
+    // the buffer and wrap it.
+    let steps = if cfg!(miri) { 300 } else { 6000 };
+    for step in 0..steps {
         state ^= state << 13;
         state ^= state >> 7;
         state ^= state << 17;
