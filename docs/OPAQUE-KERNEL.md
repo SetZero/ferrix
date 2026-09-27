@@ -1,12 +1,75 @@
 # An opaque kernel: services as supervised userspace servers
 
-**Proposal, not decided.** The customer's decision of 2026-09-27: measure
-first. S0 is next, then S1. The 2026-09-16 decision stands until S0's numbers
-are read, and nothing past S1 starts before that.
+**Shelved (customer, 2026-09-27): off the table for now.** S0 measured the
+seam, and the customer read the numbers and set the plan aside. S1 and
+everything after it are not started. The 2026-09-16 decision stands:
+monolithic core, device drivers in ring 3. What would bring the plan back is
+a cheaper trip to ring 3 (*The verdict of S0*, below).
 
 Drafted by ferrix-55b on 2026-09-27. The certification consultant reviewed
-§2 and §5, and the init owner reviewed §3. The decision is recorded in
+§2 and §5, and the init owner reviewed §3. Both decisions are recorded in
 `docs/BACKLOG.md`, Decisions, 2026-09-27.
+
+## The verdict of S0
+
+Worth it for filesystems on paper, not yet for the network stack, and not
+before the trip to ring 3 is made cheap. That trip is what today's Ferrix
+already pays for every cold disk read.
+
+**How often a build crosses to ring 3.** A warm `rustc` compile made 4,345
+system calls and crossed once. A cold run crossed 2,986 times while the page
+cache filled (§ *S0's first result*).
+
+**What one crossing costs.** A 4 KiB read through the block ring and the
+ring-3 driver took 300 to 844 us on x86-64 under KVM, over four back-to-back
+pairs at host loads of 20 to 28. Stock Linux, on the same QEMU machine with
+its driver in ring 0, took 27 to 48 us: 10 to 20 times less. On AArch64 under
+TCG the figures were 453 us and 145 us. With 32 reads in flight the 99th
+percentile reaches 150 to 230 ms (§ *S0's second result*).
+
+**What that costs a whole workload.** No Ferrix with in-kernel drivers exists
+(the 2026-09-13 decision forbids building one), so stock Linux stands in for
+one. Each trip costs Ferrix 252 to 817 us more. Multiplied by the trips each
+run made (x86-64, KVM; the `test-rustc` gate on 2026-09-27):
+
+| Workload | Time on today's Ferrix | Trips to ring 3 | Lost to the seam vs in-kernel drivers | Option B would add |
+| --- | --- | --- | --- | --- |
+| Cold: `rustc -vV`, `cargo -V`, rustc and gcc compile and run | 4.35 s | 2,982 | 0.75 to 2.4 s (17 to 56%) | about 0.9 to 2.5 s more (a server trip per fill) |
+| Warm: the second `rustc hello.rs` | 0.14 s | 1 | under 1 ms | under 1 ms |
+
+These are estimates. The per-trip cost was measured on 4 KiB reads one at a
+time, while the cold run's trips carry about 15 pages each, and some overlap.
+A direct measure would sum the time every request waits in the ring during
+the run.
+
+**Why the cost looks like the implementation, not the design.** Kernels that
+run drivers in user mode, such as seL4 and Fuchsia, pass a request between
+processes in about a microsecond; Ferrix's trip costs hundreds. A median of 2
+to 4 ms with a 99th percentile of 150 to 230 ms at depth 32 is the shape of
+missed wake-ups rescued by timers, not of crossing into ring 3. Known costs
+sit on the path:
+- the block ring task's 50 ms recheck timer;
+- no PCIDs, so every switch between the kernel's work and the driver
+  flushes the TLB;
+- the data copied between the kernel and the driver.
+
+QEMU makes each doorbell, interrupt and wake-up an exit to the host, which
+Linux's in-kernel path takes fewer of. Real hardware would narrow the gap,
+but that is not measured.
+
+**What would reopen the plan.** Cut the trip, then measure again:
+1. Fix the depth-32 stall.
+2. Find where the 250 to 800 us go; the driver's own `device_ticks` already
+   splits off the device's share.
+3. Add PCIDs.
+4. Remeasure with `cargo xtask bench-seam` and the `seam` boot line, with a
+   target such as within twice Linux's per trip.
+5. Add the direct measure of a cold `rustc` run.
+
+That work pays off whatever is decided: every cold read on today's Ferrix
+pays the trip. If the trip cannot be brought near the target, today's ring-3
+disk driver deserves a harder look too. BACKLOG has a row for each: the stall,
+and cutting the trip.
 
 ## 0. The decision this would change
 
@@ -16,7 +79,7 @@ Decisions). The seam sits at devices because `rustc`'s calls are `open`, `stat`,
 `read` and `mmap` on files the page cache holds, and those stay function calls.
 "What the shape gives up is restarting a kernel subsystem, which the goal does
 not need." The decision was to be closed by evidence: the two "seam measured"
-rows in P2, which are **still open**. No IPC hop cost has been measured yet.
+rows in P2, which were measured on 2026-09-27 (*The verdict of S0*).
 
 The door was kept open. C8 (2026-09-23) builds every cgroup over a `Job` "so a
 future microkernel keeps working". init treats the kernel's subsystems as
@@ -224,6 +287,9 @@ That is about 117 points for B after S0, about as large as stages 17 to 19 were.
   rule, instead of per-kind kernel code.
 
 ## 7. Decisions for the customer
+
+**Answered 2026-09-27: the plan is shelved.** None of the four below is
+taken up; they stand as they were asked, for whoever reopens the plan.
 
 1. **Reopen the 09-16 decision for B, subject to S0's numbers?** If yes, S0 is
    the next landing, and nothing past S1 starts before its numbers are read
