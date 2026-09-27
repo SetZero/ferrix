@@ -554,6 +554,102 @@ the per-subsystem slices. What step 3 should know:
   part of `H.TRAP.5`, `arch/x86_64/gdt/check.rs` for `H.TRAP.7`. A criterion
   no check tests is check-writing work, as the design says, not an argument.
 
+**Step 3 done 2026-09-27: the pilot, `object/`.** 103 low-level
+requirements, `L.object.1` to `L.object.103`, in
+`docs/sysml/14-object-requirements.sysml`, one package per file of
+`kernel/src/object/`. **78 are verified**, by 49 check functions and 4 host
+tests newly tagged (and one tag added to a check tagged already) in object/'s own check files and in
+`syscall/native_check.rs`, `syscall/init_calls_check.rs`,
+`fs/cgroupfs/{native,delegation,controllers,oom}_check.rs`,
+`fs/kmem_check.rs` and `libs/kernel/objects`; **25 need a check** and are
+the baseline's `L.object.*` (TRACEABILITY.md lists them). Of object/'s 261
+product functions, 173 are a requirement's unit, 83 are accessors and 5 are
+check code in a product file; **0 are named by none**, and the gate now holds
+`object` as complete, so a function added there without a requirement fails
+`cargo xtask check`. The high level grew from 51 to 63: four behaviours
+object/ has that nothing said (`H.OBJ.10` bounded queues, `H.OBJ.12` the job
+tree as the cgroup hierarchy, `H.OBJ.13` pids, `H.QUOTA.6` the scoped OOM
+kill), and eight halves split out of `H.OBJ.3`, `4`, `8`, `11`,
+`H.QUOTA.1`, `2`, `3` and `4` so one check can prove each (`H.OBJ.14` to
+`17`, `H.QUOTA.7` to `9`). 18 of the 63 are verified.
+
+The 25 that need a check, as check-writing work: the port and passive
+kinds' signals (`.2`); dispose's depth bound and the orphan queue's give-up
+(`.5`, `.8`); a write refused for PEER_CLOSED, TOO_BIG or a full queue
+keeping its handles (`.12`); messages written before a close read before
+PEER_CLOSED (`.19`); 64 registrations (`.34`); masking read back at the
+controller or MSI-X entry, and an unheld line masked (`.41`, `.42`); the
+quarantine's three (`.47` to `.49`), whose check `pin::check_quarantine`
+exists but lives in `pin.rs`; a reused quota slot claimed clean (`.54`);
+`charging_nobody` (`.58`); `cpu.weight`'s clamp and its effect on a busy
+parent (`.62`); a child job charged as an object and refused in a killed
+parent (`.65`); `cgroup.max.depth` and `.descendants` (`.67`); rmdir of a
+populated cgroup (`.70`); a fork into a dying job (`.78`); a thread charged
+as a task (`.84`); process_create at the task limit (`.87`); a bootstrap
+that found the table full (`.92`); a started process held by its task
+(`.97`); and the OOM kill's choice of victim, its fallbacks and the emptying
+of an ended victim (`.101` to `.103`).
+
+What the pilot taught, for the slices that copy it:
+
+* **One check proves a whole requirement.** A `Verifies:` tag credits the
+  whole requirement, so a check names one only if it proves its entire
+  criterion by itself -- never the union of two checks, since removing
+  either would leave the matrix claiming what nothing tests. Where the
+  checks that exist each prove a part, the requirement is split, one part
+  per check (the coordinator's rule, from a peer session that declined to
+  tag `H.TRAP.1` from a check of one pointer kind of three). The pilot's
+  first draft tagged some requirements from two or three partial checks; a
+  second pass split 13 low-level and 8 high-level requirements.
+* **The statement says no more than the criterion tests**, at both levels.
+  A statement broader than its criterion is a tag crediting what no check
+  proves; the pilot found it in step 2's `H.OBJ.8` (every object kind; one
+  check of unstarted processes), `H.QUOTA.1` (the refusal's EAGAIN and
+  SHOULD_WAIT answers), `H.QUOTA.3` (VMOs, jobs and pins; the check makes
+  ports and channels) and `H.SCHED.3` (weights in proportion; the check has
+  equal weights). The first three are object/'s and are split or untagged
+  here. **Proposed for other slices, not done:** `H.SCHED.3` into equal
+  weights against many tasks (verified by `quota_check::check_the_processor`
+  today) and unequal weights (no check); `H.OBJ.2` (every native operation
+  that needs a right) into a sweep check or one requirement per class of
+  call, since `syscall/native_check.rs` tries one; `H.OBJ.5` (the refused
+  writes that keep their handles, no check -- `L.object.12`); `H.IRQ.1`,
+  whose criterion says 16 of 16 wakes where the check requires 5 of 8;
+  `H.QUOTA.5`, whose criterion needs a grandparent's limit where
+  `check_the_counters` limits the parent (relax it to "an ancestor", or set
+  the limit two levels up).
+* **A requirement names every function that carries its behaviour** as its
+  `unit` -- a list, not one each. A write that is all or nothing is one
+  sentence whatever number of functions make it so.
+* **Accessors need no requirement of their own.** The gate's rule, with a
+  self-test: a body of one statement or one expression, no branch point as
+  `check-complexity.py` counts them, and no `unsafe`. 688 of the item's
+  2,335 product functions are accessors; they are counted, not dropped, and
+  a requirement may still name one where it is the behaviour's entry point
+  (object/ names 31).
+* **Check code in a product file is listed, not required.**
+  `scripts/data/traceability-units.json` names each with the reason it has
+  not moved (5 in object/, the quarantine's check and what serves it); the
+  gate fails on a stale entry. Step 2's `main.rs` sweeps go there too until
+  they move; moving them is the better answer, since a tag can then go on
+  them and the item stops counting them.
+* **A criterion that leans on its caller says so.** Two object/ checks
+  rely on the frame count `object::check::run` takes around all of them;
+  the criterion names it rather than claiming the check counts frames.
+* **Ids are flat per subsystem**, `L.<module>.<n>`, with a package per file
+  for the reader. Renumber freely while writing; never after a tag exists.
+* **The gate read owners wrongly:** an `impl` in a signature
+  (`f: impl FnOnce(..)`) was taken for an impl block, and every function
+  after it in the file got the wrong owner, so `Process::job` or `Job::kill`
+  could not be named. Fixed; a slice that finds a unit that will not resolve
+  should suspect the gate before the name.
+* **Time.** About 45 minutes of agent time from the first read to the last
+  tag: reading object/'s 5,600 lines of product code and 5,000 of checks,
+  writing 103 requirements and 12 new high-level ones, and tagging. The
+  checks are the cost -- each tag is a criterion read against a check's
+  assertions -- about half a minute a requirement once the code is read,
+  and the one-check pass added a third to it.
+
 49,431 lines of item product code trace to 33 system-level requirements, and no
 test names a requirement id.
 

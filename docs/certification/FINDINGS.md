@@ -465,6 +465,16 @@ requirements **1** is named by a check (`H.MEM.7`, by
 `smp/check.rs`'s two shootdown checks) and 50 are in the baseline. *Still
 open:* the tags, subsystem by subsystem, and the run-time column's evidence.
 
+**Advanced 2026-09-27 (W-8 step 3, the `object/` pilot).** 57 check
+functions and host tests name a requirement. Of `object/`'s 103 low-level
+requirements **78 are verified** and 25 are in the baseline as checks to
+write; of the 63 high-level ones **18** are verified (`H.MEM.7`, `H.MEM.11`,
+`H.OBJ.3`, `4`, `7`, `9`, `11`, `13` to `17`, `H.QUOTA.1` to `4`, `6`, `7`),
+45 in the baseline. A check names a requirement only if it proves the whole
+criterion alone; where checks prove parts, the requirement was split.
+*Still open:* the other subsystems' tags, the 70 baselined requirements,
+and the run-time column's evidence (the next `cargo xtask coverage`).
+
 **Major.** The boot gates assert rich properties — 2,387 mappings swept for
 W^X, 16 of 16 interrupt deliveries waking their waiter — but nothing links an
 assertion to a requirement id. `docs/sysml/` has 33 requirements and 32
@@ -489,6 +499,16 @@ of the item's product code. **0 low-level requirements** are written: the gate
 reports all 2,335 product functions as named by none (without failing).
 *Still open:* every low-level requirement; W-8 step 3 (`object/`) is next.
 
+**Advanced 2026-09-27 (W-8 step 3).** `object/` is the first subsystem with
+its low-level requirements complete: **103** `L.object.*` in
+`docs/sysml/14-object-requirements.sysml`, each naming the functions that
+carry it. Of its 261 product functions 173 are a requirement's unit, 83 are
+accessors (one statement or expression, no branch, no `unsafe`: covered by
+the requirement they serve, the gate's rule) and 5 check code awaiting a
+move; **0 are named by none**, and the gate fails a new function there that
+no requirement names. Item-wide, 1,469 of 2,335 product functions are still
+named by none. *Still open:* the other subsystems (W-8 step 4).
+
 **Major.** 33 requirements exist, all at system level (`<'G.1'>` kernel
 threads, `<'G.2'>` address-space scale). DO-178C needs high- and low-level
 requirements with the design between them; 62304 §5.4 needs detailed design
@@ -505,6 +525,13 @@ there is a count, and the gate refuses one without either. The 33 goal-level
 requirements of `01-requirements.sysml` stay rationale, as they should: they
 are the parents, not the requirements a test discharges. *Still open:* the
 same for every low-level requirement as it is written.
+
+**Advanced 2026-09-27 (W-8 step 3).** The 103 `L.object.*` requirements
+carry both, and the pilot tightened the rule: a statement says no more than
+its criterion tests. Applying it split or restated eight of step 2's
+high-level ones in object/'s areas (63 high-level now) and found four in
+other areas to propose (`H.SCHED.3`, `H.OBJ.2`, `H.IRQ.1`, `H.QUOTA.5`;
+IMPLEMENTATION.md W-8). *Still open:* the other subsystems' low level.
 
 **Major.** They are prose doc comments (*"Forces: 1:1 kernel threads, a real
 futex, per-thread TLS registers"*) explaining why the system is shaped as it
