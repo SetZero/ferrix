@@ -2377,6 +2377,7 @@ fn desktop(
         }
         carried.ports.extend(links);
         carried.ports.extend(crate::chrome::window_files());
+        carried.ports.push(crate::chrome::desktop_policy());
         if args.everything {
             let links = rustc_links(&carried.ports);
             carried.ports.extend(links);
