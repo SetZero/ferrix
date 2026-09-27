@@ -2517,6 +2517,10 @@ fn desktop(
         if args.everything {
             let links = rustc_links(&carried.ports);
             carried.ports.extend(links);
+            if crate::steamcmd::volume().is_ok() {
+                let files = crate::steamcmd::desktop_files(&carried.ports);
+                carried.ports.extend(files);
+            }
         }
     } else {
         carried.ports.extend(crate::rustc::default_links(args));

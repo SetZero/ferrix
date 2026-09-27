@@ -573,6 +573,16 @@ The roadmap's *Burndown* lists that scope.
 Dated, newest first. A decision here is final until the customer says
 otherwise; one a later decision replaced is deleted, and the history keeps it.
 
+* **2026-09-27 (customer, relayed by ferrix-f6)** **Steam's X server is
+  yserver** (github.com/joske/yserver, Rust, MIT), not C Xwayland with
+  xwayland-satellite. Ferrix adds the rootless Wayland backend yserver
+  lacks, behind its backend trait: each top-level X window an
+  `xdg_toplevel` on hyprix, input and the clipboard bridged.
+  xwayland-satellite (MPL-2.0) is read as a reference, not copied. Order:
+  a feasibility pass on a pinned release (headless backend on Ferrix, an X
+  client against it), then a written design sent to the coordinator, then
+  the build in small landings (`docs/roadmap/stage-22-steam.md`). Owner:
+  ferrix-c3 (was ferrix-41).
 * **2026-09-27 (customer)** The opaque-kernel plan (`docs/OPAQUE-KERNEL.md`,
   option B: the net stack, btrfs and the device cores as supervised servers
   behind the page cache) is measured before it is decided. S0 is the two

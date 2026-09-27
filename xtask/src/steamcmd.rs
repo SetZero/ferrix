@@ -42,6 +42,9 @@ use crate::{Error, Result, busybox, cargo, fat, initramfs, native, qemu, rustc, 
 /// glibc's i386 paths, each a link into the volume: the loader where
 /// steamcmd's `PT_INTERP` names it, and the directory it searches; and the
 /// certificate bundle its OpenSSL opens.
+///
+/// Also `run-compositor --everything`'s, for its `/bin/steamcmd`
+/// ([`desktop_files`]): the everything volume holds this one's tree.
 const LINKS: &[(&str, &str)] = &[
     (
         "lib/ld-linux.so.2",
@@ -75,6 +78,47 @@ echo steamcmd-gate: logged in
 exit 17
 "#;
 
+/// `/bin/steamcmd` on the `--everything` desktop: steamcmd with whatever the
+/// terminal gave it, started again while it exits 42 after updating itself.
+/// Valve's `steamcmd.sh` does the same, but only once `uname` says `Linux`,
+/// and Ferrix's says `Ferrix`.
+const WRAPPER: &str = r#"#!/bin/sh
+cd /data/steamcmd || { echo "steamcmd: /data/steamcmd is not on this volume" >&2; exit 1; }
+export LD_LIBRARY_PATH=/data/steamcmd/linux32${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+while :; do
+    ./linux32/steamcmd "$@"
+    status=$?
+    [ "$status" -eq 42 ] || exit "$status"
+done
+"#;
+
+/// What `run-compositor --everything` adds to the archive for steamcmd: the
+/// [`WRAPPER`] as `/bin/steamcmd`, and [`LINKS`] less any path `carried`
+/// already has -- the curl port's certificate bundle is a bundle too.
+pub(crate) fn desktop_files(carried: &[crate::ports::File]) -> Vec<crate::ports::File> {
+    let taken = |path: &str| {
+        carried.iter().any(|file| {
+            file.path == path
+                || file
+                    .path
+                    .strip_prefix(path)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
+    };
+    let links: Vec<(&str, &str)> = LINKS
+        .iter()
+        .copied()
+        .filter(|(path, _)| !taken(path))
+        .collect();
+    let mut files = rustc::files(&links);
+    files.push(crate::ports::File {
+        path: "bin/steamcmd".to_owned(),
+        mode: 0o755,
+        content: crate::ports::Content::Bytes(WRAPPER.as_bytes().to_vec()),
+    });
+    files
+}
+
 /// What the script exits with when steamcmd logged in and quit.
 const STATUS: i32 = 17;
 
@@ -94,7 +138,12 @@ const TIMEOUT: u64 = 3600;
 
 /// Where `scripts/fetch/fetch-steamcmd.sh` writes, unless
 /// `FERRIX_STEAMCMD_VOLUME` names another directory.
-fn volume() -> Result<std::path::PathBuf> {
+///
+/// # Errors
+///
+/// The volume has not been fetched, which `crate::everything::volume`, for
+/// which steamcmd is optional, says and carries on without.
+pub(crate) fn volume() -> Result<std::path::PathBuf> {
     let directory = match std::env::var_os("FERRIX_STEAMCMD_VOLUME") {
         Some(directory) => std::path::PathBuf::from(directory),
         None => {
@@ -204,5 +253,44 @@ fn judge(arch: Arch, lines: &[String]) -> Result<()> {
              was {}",
             if user_info { "there" } else { "missing" }
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ports::{Content, File};
+
+    /// The wrapper is always added; a link is dropped where the archive
+    /// already has the path, or a directory above it.
+    #[test]
+    fn the_desktop_gets_the_wrapper_and_only_links_not_already_carried() {
+        let bundle = File {
+            path: "etc/ssl/certs/ca-certificates.crt".to_owned(),
+            mode: 0o644,
+            content: Content::Bytes(Vec::new()),
+        };
+        let files = desktop_files(&[bundle]);
+        let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+        assert!(!paths.contains(&"etc/ssl/certs/ca-certificates.crt"));
+        assert!(paths.contains(&"lib/ld-linux.so.2"));
+        assert!(paths.contains(&"usr/lib/i386-linux-gnu"));
+        let wrapper = files
+            .iter()
+            .find(|file| file.path == "bin/steamcmd")
+            .expect("the wrapper");
+        assert_eq!(wrapper.mode, 0o755);
+        assert!(
+            matches!(&wrapper.content, Content::Bytes(bytes) if bytes.starts_with(b"#!/bin/sh\n"))
+        );
+
+        let under = File {
+            path: "lib/i386-linux-gnu/libc.so.6".to_owned(),
+            mode: 0o644,
+            content: Content::Bytes(Vec::new()),
+        };
+        let files = desktop_files(&[under]);
+        assert!(!files.iter().any(|file| file.path == "lib/i386-linux-gnu"));
+        assert_eq!(files.len(), LINKS.len());
     }
 }

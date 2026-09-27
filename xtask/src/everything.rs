@@ -1,6 +1,7 @@
 //! `run-compositor --everything`: one boot with all of it -- the GPU, the
-//! clipboard, the network, Chrome on the desktop and `rustc` and `cargo` in
-//! the shell.
+//! clipboard, the network, Chrome on the desktop and `rustc`, `cargo` and,
+//! once `scripts/fetch/fetch-steamcmd.sh` has run, Valve's `steamcmd` in the
+//! shell.
 //!
 //! The kernel mounts one data disk, at `/data`, and the two downloads that
 //! want it are two volumes: the one `scripts/fetch/fetch-rustc-sysroot.sh` makes
@@ -16,6 +17,10 @@
 //! winning -- with one exception, [`newer_runtime`] and [`newer_soname`]: a library whose newer build
 //! runs everything built against the older, where the newer is kept and the
 //! choice is said.
+//!
+//! steamcmd's tree, when it has been fetched, is merged in last. Its i386
+//! glibc is under paths neither of the other two uses, so it adds files and
+//! clashes with none.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -27,6 +32,10 @@ use crate::{Error, Result};
 /// caches, and what a compile leaves -- the two scripts' spares together,
 /// on top of what the files take.
 const SPARE_MIB: u64 = 1024 + 512;
+
+/// Room for what steamcmd writes beside itself: the update it downloads and
+/// unpacks on its first run, and what a login keeps.
+const STEAMCMD_SPARE_MIB: u64 = 512;
 
 /// The volume, made or made again from the two trees when it is missing or
 /// older than either of the images they were packed into.
@@ -49,24 +58,44 @@ pub(crate) fn volume() -> Result<PathBuf> {
                 chrome_image.display()
             ))
         })?;
+    let steamcmd = steamcmd()?;
     let directory = directory()?;
     let image = directory.join("everything.img");
-    let newest = [&rustc_image, &chrome_image]
+    let mut images = vec![&rustc_image, &chrome_image];
+    let mut trees = vec![&rustc_tree, &chrome_tree];
+    if let Some((steamcmd_image, steamcmd_tree)) = &steamcmd {
+        images.push(steamcmd_image);
+        trees.push(steamcmd_tree);
+    }
+    let newest = images
         .into_iter()
         .map(|path| modified(path))
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .max();
-    if image.is_file() && Some(modified(&image)?) >= newest {
+    // Which trees the image was made from: one made before steamcmd was
+    // fetched is newer than every image and would otherwise be kept.
+    let stamp = directory.join("sources");
+    let sources: String = trees
+        .iter()
+        .map(|tree| format!("{}\n", tree.display()))
+        .collect();
+    if image.is_file()
+        && Some(modified(&image)?) >= newest
+        && std::fs::read_to_string(&stamp).ok().as_deref() == Some(sources.as_str())
+    {
         println!("  everything: {}", image.display());
         return Ok(image);
     }
 
     println!(
-        "  everything: making {} from {} and {}",
+        "  everything: making {} from {}",
         image.display(),
-        rustc_tree.display(),
-        chrome_tree.display()
+        trees
+            .iter()
+            .map(|tree| tree.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
     );
     let tree = directory.join("tree");
     if tree.exists() {
@@ -75,11 +104,15 @@ pub(crate) fn volume() -> Result<PathBuf> {
     }
     create_dir(&tree)?;
     let mut bytes = 0u64;
-    for from in [&rustc_tree, &chrome_tree] {
+    for from in trees {
         bytes += merge(from, &tree)?;
     }
 
-    let size = bytes.div_ceil(1 << 20) + SPARE_MIB;
+    let mut size = bytes.div_ceil(1 << 20) + SPARE_MIB;
+    if steamcmd.is_some() {
+        size += STEAMCMD_SPARE_MIB;
+    }
+    let _ = std::fs::remove_file(&stamp);
     let _ = std::fs::remove_file(&image);
     let file = std::fs::File::create(&image)
         .map_err(|error| Error::new(format!("creating {}: {error}", image.display())))?;
@@ -101,8 +134,32 @@ pub(crate) fn volume() -> Result<PathBuf> {
             image.display()
         )));
     }
+    std::fs::write(&stamp, sources)
+        .map_err(|error| Error::new(format!("writing {}: {error}", stamp.display())))?;
     println!("  everything: {} ({size} MiB)", image.display());
     Ok(image)
+}
+
+/// steamcmd's image and the tree beside it, or `None` when it has not been
+/// fetched: the desktop is whole without it, and says how to add it.
+fn steamcmd() -> Result<Option<(PathBuf, PathBuf)>> {
+    let Ok(image) = crate::steamcmd::volume() else {
+        println!(
+            "  everything: no steamcmd in the terminal; scripts/fetch/fetch-steamcmd.sh adds it"
+        );
+        return Ok(None);
+    };
+    let tree = image
+        .parent()
+        .map(|directory| directory.join("tree"))
+        .filter(|tree| tree.is_dir())
+        .ok_or_else(|| {
+            Error::new(format!(
+                "no tree beside {}: scripts/fetch/fetch-steamcmd.sh keeps one there",
+                image.display()
+            ))
+        })?;
+    Ok(Some((image, tree)))
 }
 
 /// `~/.local/share/ferrix/everything`, or `FERRIX_EVERYTHING_VOLUME`.
@@ -355,8 +412,8 @@ fn same_contents(left: &Path, right: &Path) -> Result<bool> {
 /// The error for a path the two trees disagree about.
 fn clash(path: &Path) -> Error {
     Error::new(format!(
-        "{}: the rustc and Chrome volumes hold different files here; fetch both again so \
-         they are from the same Debian",
+        "{}: two of the volumes hold different files here; fetch them again so they are \
+         from the same Debian",
         path.display()
     ))
 }
