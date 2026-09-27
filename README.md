@@ -22,8 +22,20 @@ important pieces such as authentication and process isolation unfinished.
 
 ![Ferrix's Wayland desktop with Chrome, btop and a terminal](docs/brand/screenshots/desktop-hero.png)
 
-*Ferrix on x86-64 under KVM. This is a real capture; [here is how it was
-made](docs/brand/screenshots/CAPTIONS.md).*
+<table>
+  <tr>
+    <td width="33%"><img src="docs/brand/screenshots/terminal-omz.png" alt="zinc shell showing driver processes, service status and a curl request"></td>
+    <td width="33%"><img src="docs/brand/screenshots/desktop-chrome.png" alt="Chrome browsing Wikipedia on the Ferrix desktop"></td>
+    <td width="33%"><img src="docs/brand/screenshots/btop.png" alt="btop showing Chrome, the compositor and driver processes"></td>
+  </tr>
+  <tr>
+    <td>zinc at a shell prompt, with the drivers listed and <code>curl</code> fetching a page.</td>
+    <td>Chrome browsing Wikipedia on Ferrix.</td>
+    <td><code>btop</code> showing the browser, compositor and drivers.</td>
+  </tr>
+</table>
+
+*Captured on x86-64 under KVM. [How the screenshots were made](docs/brand/screenshots/CAPTIONS.md).*
 
 ## What works
 
