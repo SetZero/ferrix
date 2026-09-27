@@ -153,10 +153,13 @@ boots skip the kernel's disk checks of stages 10 to 12, which is why the
 option is outside the certified configuration; the default boots keep them
 (`docs/certification/ITEM.md` §5).
 
-**Still to do for the init,** in the customer's order: `sshd` with
-`LISTEN_FDS` (the sshdt port, x86-64 only), so L9's gate runs real `sshd`
-socket activation where it runs `nc` today. **L13**, the sandboxing keys,
-is parked until stage 13's namespaces and seccomp exist.
+**Done -- sshd under socket activation (2026-09-27).** The sshdt port takes
+its listening socket from init (`LISTEN_FDS`), and `test-init` on x86-64
+has the first connection to `sshd.socket` start `sshd.service` and be
+answered with its banner.
+
+**Still to do for the init:** **L13**, the sandboxing keys, is parked until
+stage 13's namespaces and seccomp exist.
 
 **Designed (2026-09-23): `docs/INIT.md`.** `/sbin/init` is pid 1 and a
 service manager in one program. Its units are in systemd's syntax, with

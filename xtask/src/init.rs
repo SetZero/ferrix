@@ -588,6 +588,12 @@ fn test_arch(arch: Arch, args: &Args, checker: &Checker) -> Result<()> {
         .transpose()?
         .unwrap_or_default();
     files.extend(test_files(&shell, &busybox, &dirclient));
+    // L9's gate as designed: real sshd under socket activation, where
+    // `sshdt` is built, which is x86-64 alone.
+    let sshd = arch == Arch::X86_64;
+    if sshd {
+        files.extend(sshd_files()?);
+    }
     println!("  {arch}: building an image whose init is {PATH}");
     let loader = cargo::build_loader(arch, args.release)?;
     let kernel = cargo::build_kernel(arch, args.release)?;
@@ -607,7 +613,7 @@ fn test_arch(arch: Arch, args: &Args, checker: &Checker) -> Result<()> {
     );
     let mut failures: Vec<String> = Vec::new();
     let lines = qemu::watch_then(arch, &image, &kernel, &with_volume, SUCCESS_MARKER, |at| {
-        session(at, &mut failures)
+        session(at, &mut failures, sshd)
     })?;
     let after = after_marker(&lines);
     failures.extend(judge_boot(after).err());
@@ -639,7 +645,7 @@ fn test_arch(arch: Arch, args: &Args, checker: &Checker) -> Result<()> {
 
 /// What is typed, and what it is judged by. Every failure goes into
 /// `failures`, so one run reports everything that was wrong.
-fn session(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
+fn session(at: &mut Watching<'_>, failures: &mut Vec<String>, sshd: bool) -> Result<()> {
     // The getty's banner, and the target it is part of: the prompt follows.
     let deadline = Instant::now() + PATIENCE * 2;
     let up = at.read_more(deadline, |lines| {
@@ -740,12 +746,20 @@ fn session(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
             ));
         }
     }
+    after_stage_one(at, failures, sshd)
+}
+
+/// The stages after the first, in order, and the power-off that ends them.
+fn after_stage_one(at: &mut Watching<'_>, failures: &mut Vec<String>, sshd: bool) -> Result<()> {
     control(at, failures)?;
     readiness(at, failures)?;
     sockets(at, failures)?;
     resources(at, failures)?;
     directory(at, failures)?;
     devmgr_by_init(at, failures)?;
+    if sshd {
+        sshd_activated(at, failures)?;
+    }
     power_off(at, failures)
 }
 
@@ -1195,6 +1209,95 @@ fn administer(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
 /// Every line of the boot so far, the marker's and what came after it.
 fn everything(at: &Watching<'_>) -> Vec<String> {
     at.lines().iter().chain(at.after()).cloned().collect()
+}
+
+/// `sshdt`, the units that run it under socket activation on port 2200, and
+/// the link that has `multi-user.target` listen for it.
+fn sshd_files() -> Result<Vec<File>> {
+    let (mut files, exec) = crate::ssh::test_server(Arch::X86_64)?;
+    let units = [
+        (
+            "sshd.socket",
+            "[Unit]\n\
+             Description=Starts sshd on the first connection to port 2200\n\
+             \n\
+             [Socket]\n\
+             ListenStream=0.0.0.0:2200\n"
+                .to_owned(),
+        ),
+        (
+            "sshd.service",
+            format!(
+                "[Unit]\n\
+                 Description=sshdt, given its listening socket by init\n\
+                 \n\
+                 [Service]\n\
+                 ExecStart={exec}\n"
+            ),
+        ),
+    ];
+    for (name, text) in units {
+        files.push(File {
+            path: format!("etc/ferrix/units/{name}"),
+            mode: 0o644,
+            content: Content::Bytes(text.into_bytes()),
+        });
+    }
+    files.push(File {
+        path: "etc/ferrix/units/multi-user.target.wants/sshd.socket".to_owned(),
+        mode: 0o777,
+        content: Content::Link("/etc/ferrix/units/sshd.socket".to_owned()),
+    });
+    Ok(files)
+}
+
+/// L9's gate as designed (§15): `sshd.service` does not run until a
+/// connection reaches `sshd.socket`; the first one starts it with the socket
+/// passed as `LISTEN_FDS`, and it answers on that same connection with its
+/// SSH banner. The socket is on port 2200 and `sshdt` would bind 127.0.0.1:2222 of its
+/// own accord, so only an `sshdt` that took the passed socket can answer.
+fn sshd_activated(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
+    match sshd_state(at)? {
+        Some(line) if line.contains("inactive") => {}
+        other => failures.push(format!(
+            "sshd.service ran before any connection reached sshd.socket: {other:?}"
+        )),
+    }
+    let banner = ask(
+        at,
+        "echo | nc -w 5 127.0.0.1 2200 | { read b; m=sshd; echo \"$m-said $b\"; }\n",
+        "sshd-said ",
+    )?;
+    match banner {
+        Some(line) if line.trim().starts_with("sshd-said SSH-2.0-") => {}
+        other => failures.push(format!(
+            "a connection to sshd.socket's port 2200 was not answered by sshd's banner: {other:?}"
+        )),
+    }
+    match sshd_state(at)? {
+        Some(line) if line.contains("active (running)") => {}
+        other => failures.push(format!(
+            "sshd.service is not running after the connection that started it: {other:?}"
+        )),
+    }
+    Ok(())
+}
+
+/// `svc status sshd.service`'s `Active:` line, read once the report's last
+/// line, its own `CGroup:`, has come, so none of it is left for the next
+/// question and no earlier report's is taken for it.
+/// It may follow the prompt on one serial line, as init's own lines can.
+fn sshd_state(at: &mut Watching<'_>) -> Result<Option<String>> {
+    let before = at.after().len();
+    let _ = ask(
+        at,
+        "svc status sshd.service\n",
+        "CGroup: /system.slice/sshd.service",
+    )?;
+    Ok(at.after().iter().skip(before).find_map(|line| {
+        let at = line.find("Active: ")?;
+        line.get(at..).map(|active| active.trim().to_owned())
+    }))
 }
 
 /// `echoer.service`'s main pid, from `svc status`, which must also say it

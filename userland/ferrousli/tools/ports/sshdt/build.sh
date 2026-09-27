@@ -104,6 +104,13 @@ build=$work/build
 rm -rf "$build"
 mkdir -p "$build"
 tar -xzf "$src/$SSHDT_TARBALL" -C "$build" --strip-components=1
+# Socket activation: take the listening socket a service manager passes, as
+# sd_listen_fds(3) describes, in place of binding one (docs/INIT.md §5.3, L9).
+patch -p1 -d "$build" --quiet < "$here/listen-fds.patch"
+# The crate's files keep the tarball's times, older than any build of them,
+# and cargo judges a path package by times: without this, a build after the
+# patch changed would keep the binary the last patch made.
+find "$build/src" -type f -exec touch {} +
 # The crate's rust-toolchain.toml names an older compiler than Ferrix's; the
 # one exported above is the one meant, and the file would override it.
 rm -f "$build/rust-toolchain.toml"

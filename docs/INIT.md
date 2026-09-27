@@ -954,9 +954,9 @@ policy, which moved into `libs/init/restart` because `devmgr` has no
 allocator; its start limit became systemd's fixed window. The customer
 counts the init done at L11 (2026-09-26). L12 (2026-09-27) has pid 1 start
 `devmgr` through a starter under `ferrix.devmgr=init`, which every image
-that boots init now sets. Next is `sshd` with `LISTEN_FDS`, so L9's gate
-runs real socket activation in place of `nc`. L13, the sandboxing keys, is
-parked until stage 13's namespaces and seccomp exist.
+that boots init now sets. `sshd` runs under socket activation in L9's gate
+since 2026-09-27. L13, the sandboxing keys, is parked until stage 13's
+namespaces and seccomp exist.
 
 **L1, as built (5 points).** `libs/init/svc` is on `main`: `no_std` with
 `alloc`, `forbid(unsafe_code)`, 52 host tests, a Miri step in CI and in
@@ -1372,10 +1372,19 @@ pid-ok-0`".
   going down" put it back to listening, for ever. Now nothing listens again
   once shutdown has begun, and a socket whose service cannot start -- refused,
   or its start limit spent -- fails and closes, as systemd's does.
-* **Not done: sshd.** §13 names "sshd activated on connect" as L9's gate.
-  sshdt binds its own socket and does not read `LISTEN_FDS`, so it needs a
-  patch in `userland/ferrousli/tools/ports/sshdt`, and the port is x86-64 only; the
-  activation it would show is shown above with `nc`.
+* **sshd, done 2026-09-27.** §13 names "sshd activated on connect" as L9's
+  gate. The sshdt port carries `listen-fds.patch`: its binary takes fd 3 when
+  `LISTEN_PID` is its own and `LISTEN_FDS` counts one, as `sd_listen_fds(3)`
+  has it, and hands it to the library's new `serve_on`, which serves on it
+  in place of binding (the library forbids `unsafe`; the one `from_raw_fd`
+  is in the binary). On x86-64, where sshdt is built, `test-init` carries it
+  with a host key and an authorized key, and `sshd.socket` on port 2200:
+  `sshd.service` is inactive until a connection comes, the first one starts
+  it with the socket passed and is answered on that same connection with
+  `SSH-2.0-...`, and it runs on. sshdt of its own accord binds
+  127.0.0.1:2222, so only one that took the passed socket can answer on
+  2200. Negative control: sshdt built without the patch binds its own and
+  the connection queued on init's socket is never answered.
 
 **K2, K3, K4, K6, as built (2026-09-26, the kernel half of L8).** Four
 native calls, numbered in `libs/proto/native-abi/src/nr.rs`, and one message
@@ -1519,8 +1528,8 @@ it to use. Linux services' own OFFERs are kept but no gate offers one yet.
 * **`test-jobs`** types its session at the getty's shell, and ends it with
   `exit`, after which init must give the console a new session.
 
-**What the next session does first.** `sshd` with `LISTEN_FDS` for L9's
-gate. L13 waits for stage 13's
+**What the next session does first.** Nothing of L1 to L12 is left. L13
+waits for stage 13's
 namespaces and seccomp. `docs/AUTH.md`'s P0 to P0c are done: a native
 process runs as its maker, a native service as its `User=`, and a
 delegated cgroup's limits stay its delegator's.

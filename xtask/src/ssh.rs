@@ -240,6 +240,40 @@ fn named_keys(named: &[String]) -> Result<Vec<String>> {
     Ok(texts)
 }
 
+/// What `cargo xtask test-init` carries to run `sshdt` under socket
+/// activation (`docs/INIT.md` §5.3, L9's gate): the server, the guest's host
+/// key, and this machine's client key authorized, at the paths `--ssh` uses.
+/// Answers the files, and the `ExecStart=` line that names them.
+///
+/// # Errors
+///
+/// No `sshdt` built for `arch` (`cargo xtask ports` builds it), or a key
+/// `ssh-keygen` could not make.
+pub(crate) fn test_server(arch: crate::paths::Arch) -> Result<(Vec<File>, String)> {
+    let mut files = crate::ports::installed_port(arch, "sshdt")?;
+    if !files.iter().any(|file| file.path == SERVER_PATH) {
+        return Err(Error::new(format!(
+            "no sshdt built for {arch}: `cargo xtask ports` builds it"
+        )));
+    }
+    let home = std::env::home_dir()
+        .ok_or_else(|| Error::new("no home directory to find the guest's keys in"))?;
+    let dir = guest_dir(&home);
+    let (_, client_line) = client_key(&dir)?;
+    files.push(File {
+        path: KEYS_PATH.to_owned(),
+        mode: 0o644,
+        content: Content::Bytes(client_line.into_bytes()),
+    });
+    files.push(File {
+        path: HOST_KEY_PATH.to_owned(),
+        mode: 0o600,
+        content: Content::Bytes(host_key(&dir)?),
+    });
+    let exec = format!("/{SERVER_PATH} -h /{HOST_KEY_PATH} --authorized-keys /{KEYS_PATH}");
+    Ok((files, exec))
+}
+
 /// The guest's host key, made with `ssh-keygen` the first time.
 fn host_key(dir: &Path) -> Result<Vec<u8>> {
     let path = dir.join("ssh_host_ed25519_key");
