@@ -267,7 +267,9 @@ OPTIONS:
                                          scripts/fetch/fetch-chrome.sh makes; SUPER+B opens another
     --everything                         run-compositor: all of it at once -- --gl, --release,
                                          --clipboard, --chrome, and rustc and cargo in the shell,
-                                         from one volume made of the rustc and Chrome ones
+                                         from one volume made of the rustc and Chrome ones; and
+                                         this machine's ~/.config/hypr/hyprland.conf with its
+                                         dotfiles unless --config or --no-dotfiles says otherwise
     --forward <HOST>:<GUEST>             the host's 127.0.0.1:HOST leads to the guest's port GUEST,
                                          e.g. 2222:22 for sshdt; repeatable; turns --net on
     --ssh <PORT>                         run-compositor: start sshdt in the guest, reached at

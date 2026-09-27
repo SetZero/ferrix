@@ -1,4 +1,5 @@
-//! The terminal's command line: `term [--headless] [--] <program> [args...]`.
+//! The terminal's command line: `term [--headless] [--] [<program> [args...]]`,
+//! the shell (`$SHELL`, else `/bin/zinc`) when no program is named.
 //!
 //! With a window, it connects to the compositor `WAYLAND_DISPLAY` names and
 //! draws the program's output in it. With `--headless` it has no window at
@@ -15,14 +16,19 @@ fn main() {
     let arguments =
         compositor_evecho::init::unshell(std::env::args().skip(1).collect::<Vec<String>>());
     let headless = arguments.iter().any(|word| word == "--headless");
-    let rest: Vec<String> = arguments
+    let mut rest: Vec<String> = arguments
         .into_iter()
         .filter(|word| word != "--headless" && word != "--")
         .collect();
-    let Some(program) = rest.first().cloned() else {
-        say("term: usage: term [--headless] <program> [arguments...]");
-        std::process::exit(2);
-    };
+    // Started as foot is (`/bin/foot` links here): `foot -e <program>`, or
+    // no program at all, which runs the user's shell.
+    if rest.first().is_some_and(|word| word == "-e") {
+        let _ = rest.remove(0);
+    }
+    let program = rest
+        .first()
+        .cloned()
+        .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "/bin/zinc".to_owned()));
     let program_arguments: Vec<String> = rest.into_iter().skip(1).collect();
 
     let answer = if headless {

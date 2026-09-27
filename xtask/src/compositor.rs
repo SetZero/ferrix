@@ -1969,6 +1969,48 @@ bind = SUPER, C, exec, /bin/hyprctl clients
 bind = SUPER, W, exec, /bin/hyprctl activewindow
 ";
 
+/// `--everything` with nothing else naming a configuration: the customer's
+/// own desktop, the same one `--config` would carry, found where hyprland
+/// keeps it. Without this, `--everything` shows [`RUN_CONFIG`]'s pattern
+/// desktop and never carries the fonts, `waybar` or the launcher script a
+/// real config names, which is why `/bin/waybar` on such a boot found no
+/// `~/.config/waybar`.
+///
+/// Sets `args.config` to the file found, so the caller's own dotfile
+/// carrying (keyed off it) runs unchanged, and returns the file's text with
+/// one line appended: the real config's own binds are whatever the host's
+/// programs are (`$terminal = foot`, and the rest), and one Ferrix does not
+/// have fails quietly, as any missing `exec` does. `SUPER RETURN` is kept
+/// working regardless, appended rather than substituted, so a desktop that
+/// carries someone else's binds still opens a shell.
+///
+/// `None` when nothing changed: an explicit `--config`, no `--everything`,
+/// `--no-dotfiles`, or no such file, in which case the caller keeps its own
+/// default.
+fn everything_config(args: &mut Args) -> Result<Option<String>> {
+    if args.config.is_some() || !args.everything || args.no_dotfiles {
+        return Ok(None);
+    }
+    let Some(home) = std::env::var_os("HOME") else {
+        return Ok(None);
+    };
+    let path = Path::new(&home).join(".config/hypr/hyprland.conf");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(&path)
+        .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))?;
+    args.config = Some(path.to_string_lossy().into_owned());
+    Ok(Some(format!(
+        "{}\n# Appended by `cargo xtask run-compositor --everything`: the clipboard agent a \
+         host's config has no line for, and a terminal always a key away even when the \
+         config's own $terminal is not one of Ferrix's programs.\n\
+         exec-once = /bin/vdagent\n\
+         bind = SUPER, RETURN, exec, /bin/term /bin/zinc\n",
+        text.trim_end()
+    )))
+}
+
 /// `config` with the interface brought up, when the boot has a network.
 ///
 /// `--net` puts a virtio-net device on the bus and xtask's own gateway behind
@@ -2177,10 +2219,13 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
     } else {
         crate::rustc::prepare_default(arch, &mut args)?;
     }
-    let config = match &args.config {
-        Some(path) => std::fs::read_to_string(path)
-            .map_err(|error| Error::new(format!("reading {path}: {error}")))?,
-        None => RUN_CONFIG.to_owned(),
+    let config = match everything_config(&mut args)? {
+        Some(config) => config,
+        None => match &args.config {
+            Some(path) => std::fs::read_to_string(path)
+                .map_err(|error| Error::new(format!("reading {path}: {error}")))?,
+            None => RUN_CONFIG.to_owned(),
+        },
     };
     let config = with_chrome(config, &args, arch);
     // A watched boot has a network unless it was told not to: a person at a
@@ -2391,6 +2436,29 @@ fn laid_out(size: (u32, u32), config: &str) -> (u32, u32) {
     if turned { (size.1, size.0) } else { size }
 }
 
+/// [`DESKTOP_CLIENTS`] built for `arch`, each at `/bin/<binary>`, and
+/// `/bin/foot` linked to `/bin/term`: a real config's `$terminal = foot`
+/// gets term, which runs the shell when started with no program, as foot does.
+fn desktop_programs(arch: Arch) -> Result<Vec<crate::ports::File>> {
+    let mut files = Vec::new();
+    for (package, binary) in DESKTOP_CLIENTS {
+        let program = build(arch, package, binary)?;
+        let bytes = std::fs::read(&program)
+            .map_err(|error| Error::new(format!("reading {}: {error}", program.display())))?;
+        files.push(crate::ports::File {
+            path: format!("bin/{binary}"),
+            mode: 0o755,
+            content: crate::ports::Content::Bytes(bytes),
+        });
+    }
+    files.push(crate::ports::File {
+        path: "bin/foot".to_owned(),
+        mode: 0o777,
+        content: crate::ports::Content::Link("/bin/term".to_owned()),
+    });
+    Ok(files)
+}
+
 fn desktop(
     arch: Arch,
     config: String,
@@ -2401,16 +2469,7 @@ fn desktop(
 ) -> Result<(String, Carried)> {
     let config = with_network(with_layout(config, args), args);
     let mut carried = Carried::wanted(arch, args)?;
-    for (package, binary) in DESKTOP_CLIENTS {
-        let program = build(arch, package, binary)?;
-        let bytes = std::fs::read(&program)
-            .map_err(|error| Error::new(format!("reading {}: {error}", program.display())))?;
-        carried.ports.push(crate::ports::File {
-            path: format!("bin/{binary}"),
-            mode: 0o755,
-            content: crate::ports::Content::Bytes(bytes),
-        });
-    }
+    carried.ports.extend(desktop_programs(arch)?);
     // The user's dotfiles and the fonts they name, from beside a real
     // `hyprland.conf`: `crate::dotfiles` says which and where.
     if let Some(path) = &args.config
@@ -2629,7 +2688,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are twenty of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 32] = [
+const BOOTS: [(&str, Boot); 33] = [
     ("restart", test_driver_restart),
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
@@ -2662,6 +2721,7 @@ const BOOTS: [(&str, Boot); 32] = [
     ("waybar-volume", test_waybar_volume),
     ("fuzzel", test_fuzzel),
     ("fuzzel-user", test_fuzzel_user),
+    ("everything-desktop", test_everything_desktop),
 ];
 
 /// What the `caption` boot draws: a clock's digits, letters with kerning
@@ -4531,32 +4591,191 @@ fn drive_fuzzel_user(
     std::thread::sleep(Duration::from_secs(3));
     qmp.screendump(None, dump)?;
     println!("  {arch}: fuzzel is up; the screen is {}", dump.display());
-    // The script's own toggle: a second press is `pkill -x fuzzel`.
-    let before = watching.lines().len() + watching.after().len();
-    press(&mut qmp, &["meta_l", "r"])?;
-    std::thread::sleep(Duration::from_secs(5));
-    press(&mut qmp, &["f12"])?;
-    let _ = watching.read_more(Instant::now() + Duration::from_secs(10), |lines| {
-        lines.iter().any(|line| line.contains("Layer level"))
-    })?;
-    let _ = watching.read_more(Instant::now() + Duration::from_secs(3), |_| false)?;
+    // Not asked here: the script's own toggle, a second SUPER R running
+    // `pkill -x fuzzel`. That needs `pkill` to find a process by a `comm`
+    // this exec path gives it, which is its own question -- docs/BACKLOG.md.
     let said: Vec<String> = watching
         .lines()
         .iter()
         .chain(watching.after())
         .cloned()
         .collect();
-    let closed = !said
-        .get(before..)
-        .unwrap_or_default()
-        .iter()
-        .any(|line| line.contains("namespace: launcher"));
-    if !closed {
+    Ok(said)
+}
+
+/// A boot of `run-compositor --everything` with no other configuration
+/// named: proves the fix for the customer's report that `/bin/waybar` on
+/// such a desktop found no `~/.config/waybar` -- [`everything_config`] now
+/// carries this machine's own `hyprland.conf`, its dotfiles and fonts, the
+/// same way `--config` does. After the marker, `hyprctl layers` must list a
+/// `waybar` namespace; the user's own `SUPER Q` (`$terminal = foot`) must
+/// open a window, `/bin/foot` being term; `SUPER RETURN`, appended, must
+/// start `/bin/term`; and `/bin/vdagent`, appended, must have been started.
+///
+/// Skips, and says why, on a machine with no `~/.config/hypr/hyprland.conf`:
+/// the fix has nothing of the customer's to carry there.
+fn test_everything_desktop(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let Some((config, carried)) = everything_desktop_setup(arch)? else {
+        println!(
+            "  {arch}: no ~/.config/hypr/hyprland.conf; the --everything desktop boot is skipped"
+        );
+        return Ok(());
+    };
+    let (image, kernel) = judged_image(arch, programs, &config, carried, None, args)?;
+    let port = free_port()?;
+    let mut qemu_args = args.clone();
+    qemu_args.display = true;
+    qemu_args.qmp_port = Some(port);
+    let dump = paths::build_dir(arch).join("everything-desktop.ppm");
+    let mut said = Vec::new();
+    let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        said = drive_everything_desktop(arch, port, &dump, watching)?;
+        Ok(())
+    };
+    let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
+    judge_still_running(arch, &said)?;
+    println!(
+        "  {arch}: the --everything desktop carried the user's real hyprland.conf: waybar drew, \
+         and a terminal was a key away"
+    );
+    Ok(())
+}
+
+/// The `--everything` desktop's config -- this machine's own `hyprland.conf`
+/// with the boot's own `F12` (`hyprctl layers`) debug bind added -- and the
+/// ports it needs: the dotfiles and fonts [`crate::dotfiles`] carries beside
+/// it, waybar and fuzzel built for `arch`. `None` when there is no such file,
+/// or no busybox to run the desktop's scripts with.
+fn everything_desktop_setup(arch: Arch) -> Result<Option<(String, Carried)>> {
+    let mut everything_args = Args {
+        everything: true,
+        ..Args::default()
+    };
+    let Some(config) = everything_config(&mut everything_args)? else {
+        return Ok(None);
+    };
+    let Some(conf_path) = everything_args.config.as_deref() else {
+        return Ok(None);
+    };
+    let mut ports = crate::dotfiles::carried(Path::new(conf_path))?;
+    ports.extend(desktop_programs(arch)?);
+    ports.extend(crate::fuzzel::files(None)?);
+    let carried = Carried {
+        busybox: crate::busybox::installed_program(arch),
+        ports,
+        ..Carried::none()
+    };
+    if carried.busybox.is_none() {
+        println!(
+            "  {arch}: no busybox on this machine for the desktop's scripts; the boot is skipped"
+        );
+        return Ok(None);
+    }
+    let config = format!(
+        "{}\n# Added by `cargo xtask test-compositor --boot everything-desktop`.\n\
+         bind = , F12, exec, /bin/hyprctl layers\n\
+         bind = , F11, exec, /bin/hyprctl clients\n",
+        config.trim_end()
+    );
+    Ok(Some((config, carried)))
+}
+
+/// Presses `F12` (`hyprctl layers`) until waybar's bar is listed, screendumps
+/// it, then presses `SUPER RETURN` and requires `/bin/term` to have started.
+/// Returns the transcript.
+fn drive_everything_desktop(
+    arch: Arch,
+    port: u16,
+    dump: &Path,
+    watching: &mut Watching<'_>,
+) -> Result<Vec<String>> {
+    let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
+    let up = watching.read_more(Instant::now() + SETTLE, |lines| {
+        lines.iter().any(|line| line.contains(MARKER))
+    })?;
+    if !up && !watching.lines().iter().any(|line| line.contains(MARKER)) {
         return Err(Error::new(format!(
-            "{arch}: a second SUPER R did not take fuzzel away (the script's pkill -x fuzzel)"
+            "{arch}: the compositor never printed `{MARKER}`"
         )));
     }
-    println!("  {arch}: a second SUPER R took it away, as the script's pkill toggle does");
+    say_the_marker(watching, arch);
+    // Asked until waybar's bar is listed: the user's fonts are twenty
+    // files, and reading them under emulation takes a while.
+    let deadline = Instant::now() + Duration::from_secs(150);
+    let mut has_bar = false;
+    while !has_bar && Instant::now() < deadline {
+        press(&mut qmp, &["f12"])?;
+        has_bar = watching.read_more(Instant::now() + Duration::from_secs(10), |lines| {
+            lines.iter().any(|line| line.contains("namespace: waybar"))
+        })?;
+    }
+    if !has_bar {
+        return Err(with_the_transcript(
+            &Error::new(format!(
+                "{arch}: waybar never put its bar up on the --everything desktop"
+            )),
+            watching,
+        ));
+    }
+    std::thread::sleep(Duration::from_secs(2));
+    qmp.screendump(None, dump)?;
+    println!(
+        "  {arch}: waybar is up on the --everything desktop; the screen is {}",
+        dump.display()
+    );
+    // The user's own `bind = $mainMod, Q, exec, $terminal`, `$terminal =
+    // foot`: `/bin/foot` is term, which must open a window on the shell.
+    press(&mut qmp, &["meta_l", "q"])?;
+    println!("  {arch}: pressed SUPER Q, the user's own $terminal (foot) bind");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut window = false;
+    while !window && Instant::now() < deadline {
+        press(&mut qmp, &["f11"])?;
+        window = watching.read_more(Instant::now() + Duration::from_secs(10), |lines| {
+            lines
+                .iter()
+                .any(|line| line.starts_with("Window ") && line.contains(" -> "))
+        })?;
+    }
+    if !window {
+        return Err(with_the_transcript(
+            &Error::new(format!(
+                "{arch}: SUPER Q (the user's `$terminal = foot`) never opened a window"
+            )),
+            watching,
+        ));
+    }
+    std::thread::sleep(Duration::from_secs(3));
+    qmp.screendump(None, &dump.with_extension("foot.ppm"))?;
+    println!("  {arch}: SUPER Q opened term in foot's place");
+    press(&mut qmp, &["meta_l", "ret"])?;
+    println!("  {arch}: pressed SUPER RETURN, the appended terminal bind");
+    let opened = watching.read_more(Instant::now() + Duration::from_secs(15), |lines| {
+        lines.iter().any(|line| line.contains("started /bin/term"))
+    })?;
+    let said: Vec<String> = watching
+        .lines()
+        .iter()
+        .chain(watching.after())
+        .cloned()
+        .collect();
+    if !opened {
+        return Err(Error::new(format!(
+            "{arch}: SUPER RETURN never started /bin/term on the --everything desktop"
+        )));
+    }
+    for wanted in ["started foot", "started /bin/vdagent"] {
+        if !said.iter().any(|line| line.contains(wanted)) {
+            return Err(Error::new(format!("{arch}: hyprix never said `{wanted}`")));
+        }
+    }
+    if let Some(line) = said
+        .iter()
+        .find(|line| line.contains("term: failed") || line.contains("term: usage"))
+    {
+        return Err(Error::new(format!("{arch}: {line}")));
+    }
+    println!("  {arch}: SUPER RETURN opened a terminal too, and vdagent was started");
     Ok(said)
 }
 
