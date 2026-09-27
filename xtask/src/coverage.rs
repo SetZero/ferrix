@@ -560,11 +560,14 @@ mod tests {
             numbered(plugin, 1),
             (plugin.to_owned(), Some(PathBuf::from("/c/shell.drcov")))
         );
+        // The numbered name is joined with the host's own separator, which
+        // is the one the host's QEMU reads: `\` on Windows.
+        let third = Path::new("/c").join("shell.3.drcov");
         assert_eq!(
             numbered(plugin, 3),
             (
-                "/q/libdrcov.so,filename=/c/shell.3.drcov".to_owned(),
-                Some(PathBuf::from("/c/shell.3.drcov"))
+                format!("/q/libdrcov.so,filename={}", third.display()),
+                Some(third)
             )
         );
     }

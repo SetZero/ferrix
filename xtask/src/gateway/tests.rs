@@ -813,6 +813,14 @@ fn resets_a_connection_to_a_port_nothing_listens_on() {
     };
     stream.send(Flags::SYN, &[]);
 
+    // A refusal takes as long as the host's stack takes to say so: at once on
+    // Linux, which answers a closed loopback port with a reset, but on
+    // Windows only after it has sent the SYN again and given up, which can
+    // take the gateway's whole CONNECT_TIMEOUT. So wait past that.
+    guest
+        .socket
+        .set_read_timeout(Some(super::tcp::CONNECT_TIMEOUT + PATIENCE))
+        .unwrap();
     let (header, _) = stream.segment();
     assert!(
         header.flags.contains(Flags::RST),

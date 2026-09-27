@@ -101,7 +101,7 @@ const DUPLICATE_ACKS: u32 = 3;
 
 /// How long a connect to the real destination may take before it is called
 /// refused. Without a bound the thread making it outlives the boot.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How long a closed connection is kept, so that a retransmitted FIN is
 /// acknowledged rather than reset.

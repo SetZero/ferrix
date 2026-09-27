@@ -1001,7 +1001,11 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
+    // `bash -c` with POSIX paths: the plans xtask records are carried out on
+    // the Linux host that builds images, and on Windows `bash` may be WSL's,
+    // which sees none of these paths.
     #[test]
+    #[cfg(unix)]
     fn record_execute_and_replay_agree() {
         // A plan of two builds, the second reading the first's output, carried
         // out by `bash` in place of cargo; then each is replayed.
