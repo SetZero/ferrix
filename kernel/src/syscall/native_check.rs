@@ -363,6 +363,8 @@ fn a_log_reader_its_binding_does_not_allow_is_refused(
 /// One channel's queue is filled with the ends of more channels than the
 /// walk visits; sending that channel's reading end anywhere then asks the
 /// walk to visit all of them.
+///
+/// Verifies: L.object.26
 fn a_send_that_would_walk_too_far_is_refused(
     side: &Side,
     report: &mut Report,
@@ -406,6 +408,8 @@ fn a_send_that_would_walk_too_far_is_refused(
 /// A table with no room refuses a new handle with `NO_HANDLES` -- from a
 /// duplicate, from a call that makes an object, and from a read that would
 /// deliver one -- and the message that could not be delivered stays queued.
+///
+/// Verifies: L.object.82, H.OBJ.7
 fn a_full_table_refuses_and_loses_nothing(
     side: &Side,
     report: &mut Report,
