@@ -7,7 +7,7 @@ stage has its own page, and the details are linked at the end.
 
 The sidebar marks each stage: ✓ done, ◐ in progress, ○ not started.
 
-## Where it stands (2026-09-26)
+## Where it stands (2026-09-27)
 
 **Done**
 
@@ -22,18 +22,26 @@ The sidebar marks each stage: ✓ done, ◐ in progress, ○ not started.
 
 - **Stage 13:** cgroups with pids, memory, OOM kill and CPU weight;
   namespaces and seccomp are left.
-- **Stage 15:** the init is done (L1 to L11): `/sbin/init` boots every image
-  and runs the desktop as a service; authentication (`docs/AUTH.md`) is next.
+- **Stage 15:** the init is done (L1 to L12): `/sbin/init` boots every image,
+  starts `devmgr` and runs the desktop as a service; logins go through `authd`
+  (`docs/AUTH.md` phase 1), and hyprlock's lock over it is parked on a branch.
 - **Stage 19:** the desktop composites on the GPU; XWayland and the
-  second-pass effects are left. waybar, fuzzel, hyprlock and hypridle are being
-  rewritten in Rust.
+  second-pass effects are left. waybar and fuzzel, rewritten in Rust, run the
+  customer's own config on `run-compositor --everything`; hyprlock and hypridle
+  are left.
 - **Stage 20:** Ferrix builds its own x86-64 image.
 - **Stage 22 (Steam):** sound plays through `/dev/snd`, Chrome plays video
-  with sound, and 32-bit x86 programs run.
+  with sound, 32-bit x86 programs run, and Valve's `steamcmd` logs in to Steam.
+  The Steam client needs an X server: yserver, in Rust, with a Wayland backend
+  of Ferrix's own (decided 2026-09-27).
 - **Chrome** runs headless and in a window, on glibc and on ferrousli, Ferrix's
   own C library.
 - **Pixel 7:** boots natively on all eight cores, runs the desktop in a VM,
   and streams its log over USB.
+
+**Next:** cutting test and gate run time, the customer's priority one
+(`docs/TEST-TIME.md`); where the 2026-09-27 wind-down left each piece of work
+is in [Where it stands](where-it-stands.md).
 
 **Not started**
 

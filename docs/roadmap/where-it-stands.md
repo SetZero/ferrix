@@ -1,6 +1,51 @@
 # Where it stands, in full
 
-*Reviewed 2026-09-26.* The short version is on the [overview](README.md).
+*Reviewed 2026-09-27.* The short version is on the [overview](README.md).
+
+## Where we left off (2026-09-27)
+
+The fleet wound down on the afternoon of 2026-09-27 with everything finished
+on `main` and pushed. Work that was not finished is on branches, pushed to
+GitHub, each with a row in `docs/BACKLOG.md` and a handover file:
+
+| Branch | What | Left |
+|---|---|---|
+| `boot-21b` | W-8 boot requirements, part b (root, init, power, random, F-51) | the consultant's diff review, a rebase with carry, then 21c (`devmgr`) |
+| `w8-armv7a` | W-8 file 24, ARMv7-A and `arch/arm_common` (drafts) | write the SysML file against the code as F-48 and F-50 left it |
+| `f46-power-off` | F-46, power-off gates that took a triple fault for a power-off | correct the message, rebase, gate, the consultant's OK |
+| `hyprlock` | hyprlock over `authd` (AUTH P1.5) | rebase and its boots |
+
+Not on a branch yet: F-49 (ARMv7-A `psci_system` not declaring `r12`
+clobbered; designed in its BACKLOG row) and the `ferrix.devmgr=init` coverage
+boot (one SUITE line).
+
+**Next, in the customer's order:**
+
+1. **Test and gate run time** (`docs/TEST-TIME.md`). Phase 1 measured it: an
+   item gate takes 828 s at a load of 12 to 30, a compositor boot 31.9 s of
+   which 12.6 s is the guest, and `test-compositor` over 1,107 s. The Arm
+   firmware waits are cut (7 s a boot pair); the other cuts are ordered in
+   that file. Targets: an item gate in 5 minutes, a desktop boot in 60 s, CI
+   green within an hour.
+2. **Steam's X server**: the yserver feasibility pass, then its Wayland
+   backend's design (`~/.local/share/ferrix/yserver-ref/FINDINGS.md` on
+   nazuna), then I5b, the Steam client's bootstrapper.
+3. **W-8**: 21b, 21c and file 24, then the modules the traceability gate does
+   not yet hold complete.
+4. **The desktop**: fuzzel's second-press toggle, hyprlock P1.5, hypridle.
+
+**Waiting on the customer** (`docs/BACKLOG.md`, *Waiting on the customer*):
+F-43 (W^X for programs, or a narrower claim), the Common Criteria version
+(F-52), FMT_SMF.1 and FMT_MTD.1, System V semaphores for Steam, and whether
+the customer's Python desktop scripts are rewritten for Ferrix. Hardware
+confirmations (F-44 on the Pixel 7, F-48 and F-50 on the DK1) wait for the
+product owner's word in daytime.
+
+CI: the Miri job's six-hour overrun is fixed (cf357e94), and the two fuzz
+crashes the night found are fixed (1bc64cc1, 3af00937); the first run to
+show all three green had not finished at the wind-down.
+
+## Stage by stage
 
 Stages 0–12 and 16 are done, and so are networking, 17 and 18.
 
@@ -112,12 +157,20 @@ second-pass effects; Mesa and `zwp_linux_dmabuf`, for clients that draw on the
 GPU themselves, are priced beside it.
 
 The desktop's own clients -- waybar, fuzzel, hyprlock and hypridle, written in
-Rust -- are begun: fuzzel's core is on `main` (2026-09-26), waybar draws the
-customer's bar on the desktop (2026-09-27), and the rest is on branches.
+Rust -- are half done. waybar and fuzzel are on `main` (2026-09-27):
+`cargo xtask run-compositor --everything` boots the customer's own
+`hyprland.conf`, dotfiles, fonts and monitor EDID, waybar draws their bar,
+SUPER+R runs their launcher script into fuzzel, and the clipboard is shared
+with the host's through xtask. hyprlock's lock over `authd` (P1.5) is parked
+on branch `hyprlock`, and hypridle is not started.
 
 Stage 21 is bare metal with a card of Ferrix's own, and stage 22 is Steam,
-whose 32-bit x86 ABI is under way (`docs/I386.md`): I1, a 32-bit program
-through `int $0x80`, is on `main`. Ferrix also boots on the customer's Pixel
+whose 32-bit x86 ABI is under way (`docs/I386.md`): I1 to I4 are on `main`
+(32-bit programs, their threads, signals and fork, Alpine's and Debian's i386
+busybox), and I5a: Valve's `steamcmd` logs in to Steam, from `test-steamcmd`
+and from the `--everything` desktop's terminal (2026-09-27). The Steam client
+itself needs an X server; the customer chose yserver, a Rust X11 server, with
+a rootless Wayland backend of Ferrix's own (2026-09-27, not started). Ferrix also boots on the customer's Pixel
 7: natively on all eight cores to `FERRIX-BOOT-OK stages 1-12`, and as a guest
 of the phone's own crosvm from a launcher app, which shows a desktop in that
 VM with Chromium on it (2026-09-27); during a native boot a USB serial port
@@ -128,7 +181,7 @@ it closed F-21b with an audit record of the TSF's own decisions, claimed in the
 Security Target; measured the certified item's statement coverage at 90.1%,
 89.9% and 84.5% on x86-64, AArch64 and ARMv7-A; and traced 602 low-level
 requirements, 396 of them verified by a named check. Its register stands at 15
-findings open and 38 closed.
+findings open and 39 closed, of 54.
 
 Stage 17's display iteration is done: `/dev/dri/card0` served by a ring-3
 virtio-gpu driver, with `cargo xtask test-display` requiring a compositor's

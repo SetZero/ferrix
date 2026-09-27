@@ -220,7 +220,7 @@ session's name in its owner cell in your first landing.
 | Session | Area |
 |---|---|
 | the customer | Product owner: priorities, decisions, what is stable enough for `main` |
-| ferrix-2c | Fleet coordinator: landing order, the landing lock, shared hot files, unblocking |
+| ferrix-2c | Fleet coordinator: landing order, the landing lock, shared hot files, unblocking, pushes. Named ferrix-f6 after the 2026-09-27 restart; the fleet **wound down 2026-09-27** with everything finished on `main` and every unfinished branch pushed to GitHub (`docs/roadmap/where-it-stands.md`, *Where we left off*) |
 | ferrix-15 | The init (`docs/INIT.md`), L13 parked; F-21b's audit record, closed 2026-09-27. **Wound down 2026-09-27**, handover in `~/.local/share/ferrix/ferrix-15/HANDOVER.md`. Parked: W-8 boot 21b on branch `boot-21b` (full gate green on cf13918f; left: ferrix-20's diff review, H.BOOT.15 is new, a rebase with carry and re-count, H.BOOT.14 as a parent of L.aarch64.44-46, the L.boot.35 control), then 21c (devmgr). Not committed: the devmgr=init coverage boot, one `Gate::new("test-init", "init", false)` line in `xtask/src/coverage.rs`'s SUITE (passes under drcov on the Arm pair in 141 s and 132 s; needs ferrix-20's OK) |
 | ferrix-55b | T0 of the live kernel update plan (cf265506, debe8998, 742fdaeb) and S0 of the opaque-kernel plan, both seam rows measured (d6974a66, c4c8b186); the plan is shelved by the customer (2026-09-27), so nothing further is owned here |
 | ferrix-c7 | Chrome and `rustc` on ferrousli's loader (the customer's ask, 2026-09-26): landed d7b0709a and beffed20; last, the git and foot port reds (weak obstack, `random_r` declared); then **winding down**. ferrousli has had no owner since; last touched by ferrix-90 on 2026-09-27 for libpulse (`backtrace_symbols`, and a mutex inheriting priority refused with `ENOTSUP` as glibc does, since Ferrix has no PI futexes) |
@@ -832,9 +832,16 @@ otherwise; one a later decision replaced is deleted, and the history keeps it.
   syntax, hyprix leaving pid 1, `devmgr` under init, what init's death does,
   the names. Each has a draft answer the design assumes meanwhile; L11 to
   L13 wait on them.
-* The sound server: U1 (alsa-lib) and U2 (the Pulse server), `docs/AUDIO.md`.
-* The Pixel 7's GUI: options A to D from ferrix-d4's survey.
 * Whether deleting busybox (S8, `docs/UUTILS.md` §8.3) is wanted at all.
+* System V semaphores for Steam (i386 `ipc` 117, `semget`/`semctl`, still
+  `ENOSYS`): steamcmd survives without them, printing a `threadtools`
+  assertion; whether the Steam client does is untested (`docs/I386.md`, I5).
+* Whether the customer's Python desktop scripts are rewritten for Ferrix:
+  `hypr-workspaces` and `ba-calendar` (waybar's workspace chips and clock),
+  `hypr-desktop-fx` (pointer effects) and `hypr-dock`. Without them those
+  chips are hidden and the rest does not start, which hyprix reports once.
+* Daytime hardware: F-44 on the Pixel 7's crosvm, and F-48 and F-50 on the
+  DK1, each needing the product owner's word for the device.
 * The WHPX panic: whether to report QEMU's MMIO emulator upstream, and
   permission to load the Windows machine to reproduce FX-1151.
 * The Pixel 7 launcher helper on nazuna (`tools/pixel7/helper.py`, port
@@ -842,8 +849,6 @@ otherwise; one a later decision replaced is deleted, and the history keeps it.
   `bootloaders/pixel7/mkbootimg.py`, which is now `boot/pixel7/`: a boot it
   builds fails until it is restarted. Restarting it was refused to an agent,
   as interfering with a running workload; it needs the customer's hand.
-* Pushes to `origin`: local `main` is about a dozen commits ahead; a push
-  needs the customer's word, given in the session that pushes.
 * System V IPC for Steam (ferrix-41, I5 of `docs/I386.md`): steamcmd's
   anonymous login calls `semget` and `semctl` -- through `ipc` (117) on
   i386 -- which are `ENOSYS` by the stage 7 decision (futexes, pipes and
