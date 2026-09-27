@@ -56,7 +56,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `user/space.rs` | `core` | 6 | 22 | 25 | 4 | 2677, 2706, 2722, 2724 |
+| `user/space.rs` | `core` | 6 | 22 | 25 | 4 | 2693, 2722, 2738, 2740 |
 | `user/vmo.rs` | `core` | 0 | 0 | 1 | 0 | - |
 
 ---
@@ -147,7 +147,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `main.rs` | `item` | 3 | 3 | 3 | 2 | 323, 1574 |
+| `main.rs` | `item` | 3 | 3 | 3 | 2 | 323, 1586 |
 
 ---
 
