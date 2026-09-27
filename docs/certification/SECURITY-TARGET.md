@@ -310,6 +310,12 @@ identity is a personality concern. It is also why no OS Protection Profile can
 be claimed (§2.3), and an evaluator would press hard on whether a TOE that
 cannot record a security-relevant event can meaningfully claim EAL5.
 
+[AUDIT.md](AUDIT.md) designs the audit this TOE would claim: FAU_GEN.1 at
+the TSF's own decisions, FAU_GEN.2 refined to the process and job the TSF
+attests, FAU_SAR.1 and .2 through a read-only capability, FAU_STG.1 with
+overwrite and why it is neither FAU_STG.3 nor .4, and FPT_STM.1. It is not
+built, and nothing of it is claimed here until it is (F-21b).
+
 ### 9.2 No trusted boot path
 The TOE does not verify its own integrity. A.FIRMWARE carries the whole of that
 burden, which is a large assumption to place on the environment.

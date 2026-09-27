@@ -868,6 +868,15 @@ load ring. Defensible for an isolation kernel and the reason no OS Protection
 Profile can be claimed — but an evaluator would press on whether a TOE that
 cannot record a security-relevant event can claim EAL5.
 
+*Would close its FAU half:* the design in [AUDIT.md](AUDIT.md), reviewed by
+this review and written 2026-09-27, not built: the TSF's own decisions
+recorded at their choke points in two fixed rings -- one for grants, changes,
+ends and system events that refusals cannot evict, one for refusals with
+per-job fairness -- read only through a capability pid 1 is given, with the
+boot's configuration, `ferrix.checks=skip` included, among the records. Open
+until it is built with the checks its §6 names. FIA stays the
+personality's.
+
 ### F-35 — the job quotas FRU_RSA.1 claims are not built
 **Closed 2026-09-26** by work order W-13 ([IMPLEMENTATION.md](IMPLEMENTATION.md)),
 with `FRU_RSA.1` refined in the Security Target to what the quotas bound.
