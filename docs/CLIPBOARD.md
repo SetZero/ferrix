@@ -292,7 +292,7 @@ agent is `std` and the driver is not.
 ## 6a. The terminal
 
 Copy and paste has to be reachable from a keyboard or it is not a feature a
-person has. `userland/compositor/term` has **no clipboard code of any kind** today --
+person has. `userland/compositor/term` had **no clipboard code of any kind** when this was written --
 no `wl_data_device`, no paste -- so `CTRL`+`SHIFT`+`V` in a Ferrix terminal
 would do nothing even with every part above built and working. That was
 found by reading `userland/compositor/term/src/client.rs` after a person tried exactly
@@ -344,7 +344,7 @@ nothing from the kernel and are pure host-tested logic.
 | 4 | the console driver library | `libs/drivers/virtio-console` | landed |
 | 5 | the driver and its socket, and `devmgr`'s kind | `native/drivers/vport`, `native/devmgr` | landed |
 | 6 | the agent | `userland/compositor/vdagent` | landed |
-| 7 | paste and copy in the terminal | `userland/compositor/term` | to do |
+| 7 | paste and copy in the terminal | `userland/compositor/term` | landed |
 | 8a | `--clipboard`: the device on the bus | `xtask` | landed |
 | 8b | starting the agent, and `test-clipboard` | `xtask` | landed |
 
@@ -383,7 +383,23 @@ whole message, so a paste longer than one read lost its start and stopped
 the agent; without the fix the gate fails with the agent's "the host's
 framing: TooLong".
 
-Left: the terminal's paste (7).
+The terminal's control-shift-V and control-shift-C (7) had landed without
+this table saying so; driven over VNC on 2026-09-27, a viewer's copy pasted
+into the terminal ran as a command, and a line selected with the pointer and
+copied reached the viewer. Doing that after the host had copied once found
+two last things in the agent:
+
+* **Grab serials count on.** QEMU discards a guest grab whose serial is
+  below the last it saw (`vdagent_clipboard_recv_grab`); the agent sent 0
+  every time, so once the host had copied, nothing the guest copied reached
+  it again. It counts on from the last grab either side made now, and
+  `test-clipboard`'s host refuses a grab older than its own, as QEMU does.
+* **A source let go of still gets its events.** The compositor may send
+  `cancelled` or `send` to a data source before it reads the agent's
+  destroy; the agent stopped on "an event for object 16" when the
+  terminal's copy replaced the host's selection. It reads and ignores them.
+
+Nothing is left of the landings above.
 
 Landings 1 to 5 and 8a are on `main`: the guest now has a driver that opens
 the port and offers it at `/tmp/vport`, and what is left is the two programs
