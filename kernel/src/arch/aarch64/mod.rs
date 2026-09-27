@@ -1202,12 +1202,14 @@ pub(crate) fn frame_pointer() -> u64 {
 
 /// Stop the machine, once the console has sent its last line.
 pub(crate) fn shutdown() -> ! {
+    crate::console::announce_power_off();
     crate::console::drain();
     // On the Pixel 7, a watchdog reset instead: powered off, the phone would
     // lose the `ramoops` record that is its whole console. Returns anywhere
     // else.
     watchdog::reset_now();
     cpu::psci_system_off();
+    crate::console::announce_power_off_failed();
     halt()
 }
 

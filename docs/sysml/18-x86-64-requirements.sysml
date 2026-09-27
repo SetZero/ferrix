@@ -1309,14 +1309,17 @@ package FerrixX8664Requirements {
                 "arch::x86_64::cpu::inb");
         }
         requirement <'L.x86_64.98'> theMachinePowersItselfOff : ItemLowLevel {
-            attribute :>> statement = "shutdown shall drain the console and power
-                the machine off.";
-            attribute :>> criterion = "After init exits, QEMU exits by itself within
-                the grace, with status 0 or 33, and init's exit line is in the log.";
+            attribute :>> statement = "shutdown shall drain the console, announce
+                the power-off and power the machine off, or say the write returned.";
+            attribute :>> criterion = "After init exits, FERRIX-POWER-OFF is printed
+                with no FERRIX-POWER-OFF-FAILED after it, QEMU exits by itself within
+                the grace with status 33, and init's exit line is in the log (F-46).";
             attribute :>> parent = "H.BOOT.6";
             attribute :>> unit = ("arch::x86_64::shutdown",
                 "arch::x86_64::cpu::debug_exit",
-                "arch::x86_64::cpu::outl");
+                "arch::x86_64::cpu::outl",
+                "console::announce_power_off",
+                "console::announce_power_off_failed");
         }
         requirement <'L.x86_64.99'> theMachineResets : ItemLowLevel {
             attribute :>> statement = "reset shall restart the machine from firmware

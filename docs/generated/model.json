@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "1841d0c642c8c9a023f18ff2a99e182e96efd3a5039f0259f132fb9432a884da",
+  "digest": "ca9659214aac54702f12e7d4fc058fe99ab05ba669450a94b2f630a6db80bee2",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -48671,7 +48671,7 @@
                   "qualifiedName": "FerrixX8664Requirements::Processor::theMachinePowersItselfOff",
                   "kind": "attribute",
                   "redefines": "statement",
-                  "value": "\"shutdown shall drain the console and power the machine off.\"",
+                  "value": "\"shutdown shall drain the console, announce the power-off and power the machine off, or say the write returned.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
                     "line": 1313
@@ -48682,10 +48682,10 @@
                   "qualifiedName": "FerrixX8664Requirements::Processor::theMachinePowersItselfOff",
                   "kind": "attribute",
                   "redefines": "criterion",
-                  "value": "\"After init exits, QEMU exits by itself within the grace, with status 0 or 33, and init's exit line is in the log.\"",
+                  "value": "\"After init exits, FERRIX-POWER-OFF is printed with no FERRIX-POWER-OFF-FAILED after it, QEMU exits by itself within the grace with status 33, and init's exit line is in the log (F-46).\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1315
+                    "line": 1316
                   }
                 },
                 {
@@ -48696,7 +48696,7 @@
                   "value": "\"H.BOOT.6\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1316
+                    "line": 1317
                   }
                 },
                 {
@@ -48704,10 +48704,10 @@
                   "qualifiedName": "FerrixX8664Requirements::Processor::theMachinePowersItselfOff",
                   "kind": "attribute",
                   "redefines": "unit",
-                  "value": "(\"arch::x86_64::shutdown\", \"arch::x86_64::cpu::debug_exit\", \"arch::x86_64::cpu::outl\")",
+                  "value": "(\"arch::x86_64::shutdown\", \"arch::x86_64::cpu::debug_exit\", \"arch::x86_64::cpu::outl\", \"console::announce_power_off\", \"console::announce_power_off_failed\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1319
+                    "line": 1322
                   }
                 }
               ]
@@ -48720,7 +48720,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1321
+                "line": 1324
               },
               "children": [
                 {
@@ -48731,7 +48731,7 @@
                   "value": "\"reset shall restart the machine from firmware after the console has drained.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1323
+                    "line": 1326
                   }
                 },
                 {
@@ -48742,7 +48742,7 @@
                   "value": "\"Under ferrix.onexit=reset the kernel says it is resetting and the loader's banner is printed again after it.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1325
+                    "line": 1328
                   }
                 },
                 {
@@ -48753,7 +48753,7 @@
                   "value": "\"H.BOOT.7\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1326
+                    "line": 1329
                   }
                 },
                 {
@@ -48764,7 +48764,7 @@
                   "value": "(\"arch::x86_64::reset\", \"arch::x86_64::settle\", \"arch::x86_64::settle_briefly\", \"arch::x86_64::record_reset_register\", \"arch::x86_64::cpu::outb\", \"arch::x86_64::cpu::inb\", \"arch::x86_64::cpu::disable_interrupts\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1333
+                    "line": 1336
                   }
                 }
               ]
@@ -48777,7 +48777,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1335
+                "line": 1338
               },
               "children": [
                 {
@@ -48788,7 +48788,7 @@
                   "value": "\"halt shall stop the processor for good.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1336
+                    "line": 1339
                   }
                 },
                 {
@@ -48799,7 +48799,7 @@
                   "value": "\"After the FX-1501 panic nothing more is printed and QEMU does not exit by itself.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1338
+                    "line": 1341
                   }
                 },
                 {
@@ -48810,7 +48810,7 @@
                   "value": "\"H.FAIL.1\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1339
+                    "line": 1342
                   }
                 },
                 {
@@ -48821,7 +48821,7 @@
                   "value": "(\"arch::x86_64::halt\", \"arch::x86_64::cpu::hlt\", \"arch::x86_64::cpu::disable_interrupts\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1342
+                    "line": 1345
                   }
                 }
               ]
@@ -48834,7 +48834,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1344
+                "line": 1347
               },
               "children": [
                 {
@@ -48845,7 +48845,7 @@
                   "value": "\"vdso_spec shall describe the vDSO's code with __vdso_clock_gettime, __vdso_gettimeofday and __vdso_time and their aliases at the offsets the code puts them.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1347
+                    "line": 1350
                   }
                 },
                 {
@@ -48856,7 +48856,7 @@
                   "value": "\"The image exports each function and alias where its code is, and a program calling each answers between two system calls: exit 120.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1350
+                    "line": 1353
                   }
                 },
                 {
@@ -48867,7 +48867,7 @@
                   "value": "\"H.SCHED.9\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1351
+                    "line": 1354
                   }
                 },
                 {
@@ -48878,7 +48878,7 @@
                   "value": "\"arch::x86_64::vdso::vdso_spec\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1352
+                    "line": 1355
                   }
                 }
               ]
@@ -48891,7 +48891,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1354
+                "line": 1357
               },
               "children": [
                 {
@@ -48902,7 +48902,7 @@
                   "value": "\"A secondary that masks interrupts, finds no work and waits with enable_interrupts_and_halt shall be woken by an interrupt sent to it.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1357
+                    "line": 1360
                   }
                 },
                 {
@@ -48913,7 +48913,7 @@
                   "value": "\"Every online processor runs the work handed out once in each of 100 rounds, and every secondary takes at least 1 inter-processor interrupt (the `smp` line).\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1360
+                    "line": 1363
                   }
                 },
                 {
@@ -48924,7 +48924,7 @@
                   "value": "\"H.SCHED.1\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1361
+                    "line": 1364
                   }
                 },
                 {
@@ -48935,7 +48935,7 @@
                   "value": "(\"arch::x86_64::cpu::disable_interrupts\", \"arch::x86_64::cpu::enable_interrupts_and_halt\", \"arch::x86_64::cpu::enable_interrupts\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1364
+                    "line": 1367
                   }
                 }
               ]
@@ -48948,7 +48948,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1366
+                "line": 1369
               },
               "children": [
                 {
@@ -48959,7 +48959,7 @@
                   "value": "\"load_gdt, reload_segments, load_tss and load_idt shall install the kernel's descriptor tables, segments and task state, so that an exception from ring 3 enters the kernel's handler for its vector.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1370
+                    "line": 1373
                   }
                 },
                 {
@@ -48970,7 +48970,7 @@
                   "value": "\"The six faulting programs of the `fault` line end with SIGFPE, SIGILL, SIGSEGV, SIGSEGV, SIGFPE and SIGBUS, 6 of 6, and the boot goes on.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1373
+                    "line": 1376
                   }
                 },
                 {
@@ -48981,7 +48981,7 @@
                   "value": "\"H.TRAP.4\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1374
+                    "line": 1377
                   }
                 },
                 {
@@ -48992,7 +48992,7 @@
                   "value": "(\"arch::x86_64::cpu::load_gdt\", \"arch::x86_64::cpu::reload_segments\", \"arch::x86_64::cpu::load_tss\", \"arch::x86_64::cpu::load_idt\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1378
+                    "line": 1381
                   }
                 }
               ]
@@ -49005,7 +49005,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1380
+                "line": 1383
               },
               "children": [
                 {
@@ -49016,7 +49016,7 @@
                   "value": "\"gdt's load shall give RSP0 the current stack pointer, rounded down to 16 bytes, before any task replaces it.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1382
+                    "line": 1385
                   }
                 },
                 {
@@ -49027,7 +49027,7 @@
                   "value": "\"Right after gdt::init, the TSS's RSP0 equals the stack pointer at that point rounded down to 16.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1384
+                    "line": 1387
                   }
                 },
                 {
@@ -49038,7 +49038,7 @@
                   "value": "\"H.TRAP.6\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1385
+                    "line": 1388
                   }
                 },
                 {
@@ -49049,7 +49049,7 @@
                   "value": "\"arch::x86_64::cpu::read_stack_pointer\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1386
+                    "line": 1389
                   }
                 }
               ]
@@ -49062,7 +49062,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1388
+                "line": 1391
               },
               "children": [
                 {
@@ -49073,7 +49073,7 @@
                   "value": "\"frame_pointer shall answer the calling function's frame record, from which a failure report's backtrace walks.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1391
+                    "line": 1394
                   }
                 },
                 {
@@ -49084,7 +49084,7 @@
                   "value": "\"The ferrix.onexit=panic report carries at least 1 `trace #0` line that xtask's symbolizer resolves to a kernel function.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1394
+                    "line": 1397
                   }
                 },
                 {
@@ -49095,7 +49095,7 @@
                   "value": "\"H.FAIL.1\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1395
+                    "line": 1398
                   }
                 },
                 {
@@ -49106,7 +49106,7 @@
                   "value": "\"arch::x86_64::cpu::frame_pointer\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1396
+                    "line": 1399
                   }
                 }
               ]
@@ -49119,7 +49119,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1398
+                "line": 1401
               },
               "children": [
                 {
@@ -49130,7 +49130,7 @@
                   "value": "\"triple_fault shall reset the processor by loading an empty IDT and raising a breakpoint.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1400
+                    "line": 1403
                   }
                 },
                 {
@@ -49141,7 +49141,7 @@
                   "value": "\"A --reset boot with no FADT reset register and no keyboard controller starts the loader again.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1402
+                    "line": 1405
                   }
                 },
                 {
@@ -49152,7 +49152,7 @@
                   "value": "\"H.BOOT.7\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1403
+                    "line": 1406
                   }
                 },
                 {
@@ -49163,7 +49163,7 @@
                   "value": "\"arch::x86_64::cpu::triple_fault\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1404
+                    "line": 1407
                   }
                 }
               ]
@@ -49176,7 +49176,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1406
+                "line": 1409
               },
               "children": [
                 {
@@ -49187,7 +49187,7 @@
                   "value": "\"hardware_random shall answer a word from RDSEED, or from RDRAND without RDSEED, retrying up to 10 times while the carry is clear, and nothing on a processor with neither.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1409
+                    "line": 1412
                   }
                 },
                 {
@@ -49198,7 +49198,7 @@
                   "value": "\"With RDRAND and RDSEED offered the `random` line counts at least 1 word from the processor; with neither, 0.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1411
+                    "line": 1414
                   }
                 },
                 {
@@ -49209,7 +49209,7 @@
                   "value": "\"H.BOOT.3\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1412
+                    "line": 1415
                   }
                 },
                 {
@@ -49220,7 +49220,7 @@
                   "value": "\"arch::x86_64::cpu::hardware_random\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1413
+                    "line": 1416
                   }
                 }
               ]
@@ -49234,7 +49234,7 @@
           "doc": "kernel/src/arch/x86_64/cpu.rs: the control-register and TLB operations the memory code relies on.",
           "source": {
             "file": "docs/sysml/18-x86-64-requirements.sysml",
-            "line": 1417
+            "line": 1420
           },
           "children": [
             {
@@ -49245,7 +49245,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1421
+                "line": 1424
               },
               "children": [
                 {
@@ -49256,7 +49256,7 @@
                   "value": "\"flush_tlb_including_global shall drop every cached translation on its processor, global ones included, by toggling CR4.PGE and reloading CR3.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1424
+                    "line": 1427
                   }
                 },
                 {
@@ -49267,7 +49267,7 @@
                   "value": "\"20 remaps of a global kernel page to a new frame are each seen by every online processor: 0 stale reads (the `tlb` line). Under TCG a plain CR3 reload would pass as well; the KVM boot row is the one that tells them apart.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1428
+                    "line": 1431
                   }
                 },
                 {
@@ -49278,7 +49278,7 @@
                   "value": "\"H.MEM.7\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1429
+                    "line": 1432
                   }
                 },
                 {
@@ -49289,7 +49289,7 @@
                   "value": "(\"arch::x86_64::cpu::flush_tlb_including_global\", \"arch::x86_64::cpu::read_cr4\", \"arch::x86_64::cpu::write_cr4\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1432
+                    "line": 1435
                   }
                 }
               ]
@@ -49302,7 +49302,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1434
+                "line": 1437
               },
               "children": [
                 {
@@ -49313,7 +49313,7 @@
                   "value": "\"invalidate_page shall drop this processor's translation of the page holding an address, global or not.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1436
+                    "line": 1439
                   }
                 },
                 {
@@ -49324,7 +49324,7 @@
                   "value": "\"A global kernel page read, remapped to another frame and invalidated by invalidate_page alone reads the new frame's value: 0 stale reads.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1439
+                    "line": 1442
                   }
                 },
                 {
@@ -49335,7 +49335,7 @@
                   "value": "\"H.MEM.7\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1440
+                    "line": 1443
                   }
                 },
                 {
@@ -49346,7 +49346,7 @@
                   "value": "\"arch::x86_64::cpu::invalidate_page\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1441
+                    "line": 1444
                   }
                 }
               ]
@@ -49359,7 +49359,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1443
+                "line": 1446
               },
               "children": [
                 {
@@ -49370,7 +49370,7 @@
                   "value": "\"write_cr3 shall make the processor translate user addresses through the tables at the root it is given.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1445
+                    "line": 1448
                   }
                 },
                 {
@@ -49381,7 +49381,7 @@
                   "value": "\"Two tasks pinned to one processor, each in its own address space, read one user address 64 times each across yields: 128 reads see their own space's value, 0 the other's (the `spaces` line).\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1449
+                    "line": 1452
                   }
                 },
                 {
@@ -49392,7 +49392,7 @@
                   "value": "\"H.MEM.1\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1450
+                    "line": 1453
                   }
                 },
                 {
@@ -49403,7 +49403,7 @@
                   "value": "\"arch::x86_64::cpu::write_cr3\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1451
+                    "line": 1454
                   }
                 }
               ]
@@ -49416,7 +49416,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1453
+                "line": 1456
               },
               "children": [
                 {
@@ -49427,7 +49427,7 @@
                   "value": "\"kernel_write_protected shall report CR0.WP, so that the boot stops when the kernel could write through a read-only mapping.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1456
+                    "line": 1459
                   }
                 },
                 {
@@ -49438,7 +49438,7 @@
                   "value": "\"Stage 1 reads CR0.WP set, and a kernel write through a read-only mapping faults.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1458
+                    "line": 1461
                   }
                 },
                 {
@@ -49449,7 +49449,7 @@
                   "value": "\"H.MEM.5\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1459
+                    "line": 1462
                   }
                 },
                 {
@@ -49460,7 +49460,7 @@
                   "value": "\"arch::x86_64::cpu::read_cr0\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1460
+                    "line": 1463
                   }
                 }
               ]
@@ -49473,7 +49473,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1462
+                "line": 1465
               },
               "children": [
                 {
@@ -49484,7 +49484,7 @@
                   "value": "\"enable_umip shall set CR4.UMIP where the processor offers it, so that ring 3 cannot read the descriptor tables' addresses.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1465
+                    "line": 1468
                   }
                 },
                 {
@@ -49495,7 +49495,7 @@
                   "value": "\"A program executing SIDT and one executing SGDT each end with SIGSEGV, 2 of 2.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1467
+                    "line": 1470
                   }
                 },
                 {
@@ -49506,7 +49506,7 @@
                   "value": "\"H.BOOT.3\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1468
+                    "line": 1471
                   }
                 },
                 {
@@ -49517,7 +49517,7 @@
                   "value": "\"arch::x86_64::cpu::enable_umip\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1469
+                    "line": 1472
                   }
                 }
               ]
@@ -49531,7 +49531,7 @@
           "doc": "kernel/src/arch/x86_64/msi.rs: message-signalled interrupts.",
           "source": {
             "file": "docs/sysml/18-x86-64-requirements.sysml",
-            "line": 1473
+            "line": 1476
           },
           "children": [
             {
@@ -49542,7 +49542,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1476
+                "line": 1479
               },
               "children": [
                 {
@@ -49553,7 +49553,7 @@
                   "value": "\"msi_allocate shall answer a message address and data that, written by a device, raise the vector it allocated on the calling processor's local APIC and reach the handler registered for it.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1480
+                    "line": 1483
                   }
                 },
                 {
@@ -49564,7 +49564,7 @@
                   "value": "\"On x86-64 the `pci` line reports at least 1 entropy request completed by MSI-X.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1482
+                    "line": 1485
                   }
                 },
                 {
@@ -49575,7 +49575,7 @@
                   "value": "\"H.IRQ.1\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1483
+                    "line": 1486
                   }
                 },
                 {
@@ -49586,7 +49586,7 @@
                   "value": "(\"arch::x86_64::msi::msi_allocate\", \"arch::x86_64::msi::allocate_vector\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1485
+                    "line": 1488
                   }
                 }
               ]
@@ -49599,7 +49599,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1487
+                "line": 1490
               },
               "children": [
                 {
@@ -49610,7 +49610,7 @@
                   "value": "\"allocate_vector shall hand out each of vectors 0x40 to 0x7F at most once and answer nothing once all 64 are taken, and msi_allocate shall refuse then, and refuse a local APIC ID above 255.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1491
+                    "line": 1494
                   }
                 },
                 {
@@ -49621,7 +49621,7 @@
                   "value": "\"64 allocations answer 64 distinct vectors in 0x40..0x80; the 65th answers nothing and msi_allocate its error.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1493
+                    "line": 1496
                   }
                 },
                 {
@@ -49632,7 +49632,7 @@
                   "value": "\"H.IRQ.1\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1494
+                    "line": 1497
                   }
                 },
                 {
@@ -49643,7 +49643,7 @@
                   "value": "(\"arch::x86_64::msi::allocate_vector\", \"arch::x86_64::msi::msi_allocate\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1496
+                    "line": 1499
                   }
                 }
               ]
@@ -49657,7 +49657,7 @@
           "doc": "kernel/src/arch/x86_64/console.rs: the serial port.",
           "source": {
             "file": "docs/sysml/18-x86-64-requirements.sysml",
-            "line": 1500
+            "line": 1503
           },
           "children": [
             {
@@ -49668,7 +49668,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1503
+                "line": 1506
               },
               "children": [
                 {
@@ -49679,7 +49679,7 @@
                   "value": "\"read_byte shall answer each byte received at the serial port once, in the order received, and nothing when none waits.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1506
+                    "line": 1509
                   }
                 },
                 {
@@ -49690,7 +49690,7 @@
                   "value": "\"cargo xtask test-jobs on x86-64 types 18 steps at the serial port, and each step's answer appears after its keystrokes.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1509
+                    "line": 1512
                   }
                 },
                 {
@@ -49701,7 +49701,7 @@
                   "value": "\"H.BOOT.8\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1510
+                    "line": 1513
                   }
                 },
                 {
@@ -49712,7 +49712,7 @@
                   "value": "(\"arch::x86_64::console::read_byte\", \"arch::x86_64::console::read_register\", \"arch::x86_64::cpu::inb\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1513
+                    "line": 1516
                   }
                 }
               ]
@@ -49725,7 +49725,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1515
+                "line": 1518
               },
               "children": [
                 {
@@ -49736,7 +49736,7 @@
                   "value": "\"transmit_interrupt shall enable the serial port's transmit-empty interrupt while bytes are queued, so that a task's queued write goes out by the interrupt.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1518
+                    "line": 1521
                   }
                 },
                 {
@@ -49747,7 +49747,7 @@
                   "value": "\"A task's write longer than a 64-byte burst leaves at most 64 bytes to the writer, and the rest is sent by the transmit interrupt within 2 s.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1521
+                    "line": 1524
                   }
                 },
                 {
@@ -49758,7 +49758,7 @@
                   "value": "\"H.BOOT.8\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1522
+                    "line": 1525
                   }
                 },
                 {
@@ -49769,7 +49769,7 @@
                   "value": "(\"arch::x86_64::console::transmit_interrupt\", \"arch::x86_64::console::transmit_room\", \"arch::x86_64::console::write_register\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1525
+                    "line": 1528
                   }
                 }
               ]
@@ -49782,7 +49782,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1527
+                "line": 1530
               },
               "children": [
                 {
@@ -49793,7 +49793,7 @@
                   "value": "\"console::init shall record whether the port's FIFOs came on, transmit_room shall offer 16 bytes with them and 1 without, and transmit_buffer shall name which.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1530
+                    "line": 1533
                   }
                 },
                 {
@@ -49804,7 +49804,7 @@
                   "value": "\"On QEMU's 16550A, transmit_buffer names a 16550's FIFO and transmit_room answers 0 or 16, never 1.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1532
+                    "line": 1535
                   }
                 },
                 {
@@ -49815,7 +49815,7 @@
                   "value": "\"H.BOOT.8\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1533
+                    "line": 1536
                   }
                 },
                 {
@@ -49826,7 +49826,7 @@
                   "value": "(\"arch::x86_64::console::init\", \"arch::x86_64::console::transmit_buffer\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1535
+                    "line": 1538
                   }
                 }
               ]
@@ -49839,7 +49839,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1537
+                "line": 1540
               },
               "children": [
                 {
@@ -49850,7 +49850,7 @@
                   "value": "\"write_byte shall wait at most 100000 polls for the holding register, and drain shall return once the transmitter is idle or after 10000000 polls.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1540
+                    "line": 1543
                   }
                 },
                 {
@@ -49861,7 +49861,7 @@
                   "value": "\"Against a port that never reports ready, write_byte and drain each return; after drain returns on a live port, the transmitter reads idle.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1543
+                    "line": 1546
                   }
                 },
                 {
@@ -49872,7 +49872,7 @@
                   "value": "\"H.FAIL.1\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1544
+                    "line": 1547
                   }
                 },
                 {
@@ -49883,7 +49883,7 @@
                   "value": "(\"arch::x86_64::console::write_byte\", \"arch::x86_64::console::drain\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1546
+                    "line": 1549
                   }
                 }
               ]
@@ -49897,7 +49897,7 @@
           "doc": "kernel/src/syscall/mod.rs's dispatcher and kernel/src/trap.rs's registration: which calls reach which answer.",
           "source": {
             "file": "docs/sysml/18-x86-64-requirements.sysml",
-            "line": 1550
+            "line": 1553
           },
           "children": [
             {
@@ -49908,7 +49908,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1554
+                "line": 1557
               },
               "children": [
                 {
@@ -49919,7 +49919,7 @@
                   "value": "\"system_call shall pass a call to the entry set_syscall_entry registered, and dispatch_with shall answer a native-entry number that no table carries with -ENOSYS, not a handler or a fault.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1558
+                    "line": 1561
                   }
                 },
                 {
@@ -49930,7 +49930,7 @@
                   "value": "\"0xDEAD, usize::MAX and usize::MAX - 1, each dispatched as a native call through the registered entry, are answered -38, 3 of 3.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1561
+                    "line": 1564
                   }
                 },
                 {
@@ -49941,7 +49941,7 @@
                   "value": "\"H.TRAP.11\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1562
+                    "line": 1565
                   }
                 },
                 {
@@ -49952,7 +49952,7 @@
                   "value": "(\"syscall::dispatch_with\", \"trap::system_call\", \"trap::set_syscall_entry\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1565
+                    "line": 1568
                   }
                 }
               ]
@@ -49965,7 +49965,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1567
+                "line": 1570
               },
               "children": [
                 {
@@ -49976,7 +49976,7 @@
                   "value": "\"decode_syscall shall decode a number through x86-64's own table.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1569
+                    "line": 1572
                   }
                 },
                 {
@@ -49987,7 +49987,7 @@
                   "value": "\"Of getpid's numbers in the three tables, exactly x86-64's decodes to getpid, and dispatching it answers a pid above zero.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1572
+                    "line": 1575
                   }
                 },
                 {
@@ -49998,7 +49998,7 @@
                   "value": "\"H.TRAP.12\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1573
+                    "line": 1576
                   }
                 },
                 {
@@ -50009,7 +50009,7 @@
                   "value": "\"arch::x86_64::decode_syscall\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1574
+                    "line": 1577
                   }
                 }
               ]
@@ -50022,7 +50022,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1576
+                "line": 1579
               },
               "children": [
                 {
@@ -50033,7 +50033,7 @@
                   "value": "\"dispatch_with shall send a native-entry number in the native range to native_call, which answers it for the calling task's own process.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1579
+                    "line": 1582
                   }
                 },
                 {
@@ -50044,7 +50044,7 @@
                   "value": "\"Two programs whose every native call is made by SYSCALL -- vmo_create, channel_write with a handle, object_wait_one, channel_read, vmo_read -- each exit 0.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1582
+                    "line": 1585
                   }
                 },
                 {
@@ -50055,7 +50055,7 @@
                   "value": "\"H.OBJ.1\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1583
+                    "line": 1586
                   }
                 },
                 {
@@ -50066,7 +50066,7 @@
                   "value": "(\"syscall::dispatch_with\", \"syscall::native_call\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1584
+                    "line": 1587
                   }
                 }
               ]
@@ -50079,7 +50079,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1586
+                "line": 1589
               },
               "children": [
                 {
@@ -50090,7 +50090,7 @@
                   "value": "\"dispatch_with shall answer an int $0x80 number in the native range with -ENOSYS, never as a native call.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1588
+                    "line": 1591
                   }
                 },
                 {
@@ -50101,7 +50101,7 @@
                   "value": "\"An int $0x80 with a number in 0x1000..0x1FFF answers -38.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1590
+                    "line": 1593
                   }
                 },
                 {
@@ -50112,7 +50112,7 @@
                   "value": "\"H.TRAP.12\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1591
+                    "line": 1594
                   }
                 },
                 {
@@ -50123,7 +50123,7 @@
                   "value": "\"syscall::dispatch_with\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1592
+                    "line": 1595
                   }
                 }
               ]
@@ -50136,7 +50136,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1594
+                "line": 1597
               },
               "children": [
                 {
@@ -50147,7 +50147,7 @@
                   "value": "\"unanswered shall print a call answered ENOSYS by name while report_unanswered's bound lasts, and nothing once it is spent.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1597
+                    "line": 1600
                   }
                 },
                 {
@@ -50158,7 +50158,7 @@
                   "value": "\"After report_unanswered(1), two unanswered calls print exactly one `syscall ... answered ENOSYS` line.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1599
+                    "line": 1602
                   }
                 },
                 {
@@ -50169,7 +50169,7 @@
                   "value": "\"H.TRAP.11\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1600
+                    "line": 1603
                   }
                 },
                 {
@@ -50180,7 +50180,7 @@
                   "value": "\"syscall::unanswered\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1601
+                    "line": 1604
                   }
                 }
               ]
@@ -50193,7 +50193,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1603
+                "line": 1606
               },
               "children": [
                 {
@@ -50204,7 +50204,7 @@
                   "value": "\"system_call shall answer ENOSYS with no entry registered, and the first registration shall stand.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1605
+                    "line": 1608
                   }
                 },
                 {
@@ -50215,7 +50215,7 @@
                   "value": "\"With no entry registered, system_call answers -38; a second set_syscall_entry leaves the first in place.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1607
+                    "line": 1610
                   }
                 },
                 {
@@ -50226,7 +50226,7 @@
                   "value": "\"H.TRAP.11\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1608
+                    "line": 1611
                   }
                 },
                 {
@@ -50237,7 +50237,7 @@
                   "value": "(\"trap::system_call\", \"trap::set_syscall_entry\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1609
+                    "line": 1612
                   }
                 }
               ]
@@ -50250,7 +50250,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1611
+                "line": 1614
               },
               "children": [
                 {
@@ -50261,7 +50261,7 @@
                   "value": "\"system_call and dispatch shall regroup the running task after a call or a trap from user mode, so that a process moved to another job runs in it from then on.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1614
+                    "line": 1617
                   }
                 },
                 {
@@ -50272,7 +50272,7 @@
                   "value": "\"After a program writes its pid to another cgroup's cgroup.procs, its next charges land in that job.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1616
+                    "line": 1619
                   }
                 },
                 {
@@ -50283,7 +50283,7 @@
                   "value": "\"H.OBJ.12\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1617
+                    "line": 1620
                   }
                 },
                 {
@@ -50294,7 +50294,7 @@
                   "value": "(\"trap::system_call\", \"trap::dispatch\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1618
+                    "line": 1621
                   }
                 }
               ]

@@ -4,7 +4,9 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-15 findings are open and 34 are closed, of 49. F-45, the virtqueue indices the device shares read and written a byte at a time, was found by the stage 10 seam investigation and closed on 2026-09-27. F-43, O.WXN and ASR-2 claiming W^X for every mapping when a program may map its own pages writable and executable, was found on 2026-09-27 and waits on the customer's choice between enforcing it and narrowing the claim. F-42, a channel write refused for memory closing the handles it carried, was found by the F-10 coverage work and closed on 2026-09-27. F-13 was measured on 2026-09-27 and stays open: 37.5%, 32.6% and 28.7% of the item's object-code decisions, guards left out, took both ways on x86-64, AArch64 and ARMv7-A, and 50.2%, 48.6% and 48.8% counted by source line. F-26 closed on 2026-09-27 when every unsafe site in the item was traced to one of fourteen obligations, each tied to the requirement or hazard it serves, and the gate began refusing an untraced one. F-41, a page `mprotect` made writable after a `fork` writing into the other process's copy, was found and closed on 2026-09-27. F-10 was re-measured on 2026-09-27 over the checks written for it module by module: 89.5% of the certified item's statements on x86-64, 90.2% on AArch64 and 84.8% on ARMv7-A, with 77, 146 and 130 still needing a test and every other unreached statement argued or put down to absent hardware. F-38, F-39 and F-40 were found by other work on 2026-09-26 and recorded by the certification review that work now goes through, and all three closed the same day with their fixes: F-39, a native process any user made running as root; F-38, a device model writing a dead driver's frames after they were given back; and F-40, a delegated job lifting its own limits, closed by a job right of its own for setting limits. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
+15 findings are open and 35 are closed, of 50. F-46, a triple fault or a
+returned PSCI reset passing a power-off gate that read QEMU's exit status
+alone, was found and closed on 2026-09-27. F-45, the virtqueue indices the device shares read and written a byte at a time, was found by the stage 10 seam investigation and closed on 2026-09-27. F-43, O.WXN and ASR-2 claiming W^X for every mapping when a program may map its own pages writable and executable, was found on 2026-09-27 and waits on the customer's choice between enforcing it and narrowing the claim. F-42, a channel write refused for memory closing the handles it carried, was found by the F-10 coverage work and closed on 2026-09-27. F-13 was measured on 2026-09-27 and stays open: 37.5%, 32.6% and 28.7% of the item's object-code decisions, guards left out, took both ways on x86-64, AArch64 and ARMv7-A, and 50.2%, 48.6% and 48.8% counted by source line. F-26 closed on 2026-09-27 when every unsafe site in the item was traced to one of fourteen obligations, each tied to the requirement or hazard it serves, and the gate began refusing an untraced one. F-41, a page `mprotect` made writable after a `fork` writing into the other process's copy, was found and closed on 2026-09-27. F-10 was re-measured on 2026-09-27 over the checks written for it module by module: 89.5% of the certified item's statements on x86-64, 90.2% on AArch64 and 84.8% on ARMv7-A, with 77, 146 and 130 still needing a test and every other unreached statement argued or put down to absent hardware. F-38, F-39 and F-40 were found by other work on 2026-09-26 and recorded by the certification review that work now goes through, and all three closed the same day with their fixes: F-39, a native process any user made running as root; F-38, a device model writing a dead driver's frames after they were given back; and F-40, a delegated job lifting its own limits, closed by a job right of its own for setting limits. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -1642,6 +1644,53 @@ x86-64 and one `ldrh` or `strh` on AArch64 and ARMv7-A (the commit that
 closed it lists them). Five of the six drivers run under `test-restart --boot
 all`; the sixth, `vport`, the clipboard agent's, is exercised by no boot gate
 and was checked by building it.
+
+### F-46 — a triple fault or a returned PSCI reset passed as a power-off
+**Found and closed 2026-09-27** (found reading `xtask::qemu::watch_to_power_off`
+against F-46's own question: what tells QEMU exiting quietly apart from the
+kernel powering the machine off).
+
+*Was:* **Minor.** `watch_to_power_off` (used by `test-init`'s K7 boot and
+`test-shell` under `--init`) and `test_boot` required the success marker and
+then QEMU exiting with status 0 or 33. Both are what a genuine power-off
+gives -- x86-64's debug-exit device (33) or PSCI `SYSTEM_OFF` returning
+nothing to run (0) -- but a triple fault under `-no-reboot` also ends QEMU
+with status 0, and so does a PSCI `SYSTEM_RESET` a board's firmware answers,
+on the machines this gate runs `-no-reboot` for. Status alone cannot tell a
+power-off from a fault or a reset on the way down, so a regression that
+crashed instead of shutting down cleanly, after `/data`'s commit, would have
+passed the gate and been reported as data safely on disk.
+
+*Now:* the kernel prints `FERRIX-POWER-OFF` last, after every registered
+[`Flush`](../../kernel/src/power.rs) is committed, before the architecture's
+own power-off write (`kernel/src/console.rs`, `announce_power_off`; called
+from `arch::{x86_64,aarch64,armv7a}::shutdown` -- in the core rather than
+`power.rs`, which orchestrates the power-off from the item and may not be
+depended on upward from it). A write that returns instead of stopping the
+machine -- PSCI `SYSTEM_OFF` unimplemented, or a board without QEMU's
+debug-exit device -- is itself reported: after a one-second grace (QEMU
+10.2's debug-exit device only asks its main loop to stop, and the processor
+runs on until it gets there), `announce_power_off_failed` prints
+`FERRIX-POWER-OFF-FAILED`. `watch_to_power_off`
+(`power_off_problem`) now requires all three together: QEMU exited by
+itself, `FERRIX-POWER-OFF` came after the run's success marker with no
+`FERRIX-POWER-OFF-FAILED` after it, and the exit status is the one the
+architecture's power-off gives (33 for x86-64, 0 for AArch64 and ARMv7-A).
+
+*Checked by the build:* `only_the_kernels_power_off_is_a_power_off` in
+`xtask/src/qemu.rs`, over the marker missing, the marker before the run's own
+success line, a quoted echo of the marker rather than the kernel's own line,
+`FERRIX-POWER-OFF-FAILED` after the marker, a wrong status for the
+architecture, and QEMU having to be stopped rather than exiting by itself.
+Checked by three negative controls run and reverted by hand, each rejected
+with the message naming what was missing: x86-64's `shutdown` triple-faulting
+after `announce_power_off` instead of calling the debug-exit device (`QEMU
+exited by itself with status 0 after FERRIX-BOOT-OK ... not the 33 ...
+something else ended the run`); x86-64's `shutdown` calling the debug-exit
+device without `announce_power_off` first (`the kernel never printed
+FERRIX-POWER-OFF`);
+and AArch64's `psci_system_off` made to return without powering off
+(`FERRIX-POWER-OFF-FAILED`, `the kernel's power-off returned`).
 
 ## F. Organisational
 
