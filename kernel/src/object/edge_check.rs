@@ -52,6 +52,8 @@ pub(crate) fn run() -> Result<u32, &'static str> {
 /// Enabling needs the controller offered; a parent may not disable what a
 /// child enables; a job enabling a domain controller for its children takes
 /// no process itself.
+///
+/// Verifies: L.object.71
 fn check_subtree_control() -> Result<(), &'static str> {
     let pids = Set::EMPTY.with(Controller::Pids);
     let memory = Set::EMPTY.with(Controller::Memory);
@@ -107,6 +109,8 @@ fn check_subtree_control() -> Result<(), &'static str> {
 
 /// A node's owner, set twice, is the second; a depth limit reads back; an
 /// anonymous job's path names it by number above its named child.
+///
+/// Verifies: L.object.72
 fn check_a_job_records_what_cgroupfs_sets() -> Result<(), &'static str> {
     let root = Job::new_root().map_err(|_| "no memory for the naming root")?;
     let anonymous = root
@@ -147,6 +151,8 @@ fn check_a_job_records_what_cgroupfs_sets() -> Result<(), &'static str> {
 
 /// Pids run up to `PID_MAX` and wrap to `RESERVED`, and the wrap passes over
 /// a number still held rather than hand it out twice.
+///
+/// Verifies: L.object.98, H.OBJ.13
 fn check_pids_wrap_past_one_still_held() -> Result<(), &'static str> {
     let held = process::RESERVED;
     let named = process::is_free(held);
@@ -180,6 +186,8 @@ fn check_pids_wrap_past_one_still_held() -> Result<(), &'static str> {
 /// A port's packet that could not be copied out is put back, whether a
 /// program queued it or a registration fired it -- on a change, or as it was
 /// made -- and the next wait takes it.
+///
+/// Verifies: L.object.31
 fn check_a_packet_is_put_back(side: &Side) -> Result<(), &'static str> {
     let port = side.handle(nr::PORT_CREATE, &[], "port_create failed")?;
     side.put(PACKET, &[0x5A; 32])?;
@@ -223,6 +231,8 @@ fn check_a_packet_is_put_back(side: &Side) -> Result<(), &'static str> {
 
 /// A message asserts `READABLE`, which fires the registration waiting for it
 /// and not the one waiting for `PEER_CLOSED` listed ahead of it.
+///
+/// Verifies: L.object.33
 fn check_a_change_fires_only_what_wants_it(side: &Side) -> Result<(), &'static str> {
     let port = side.handle(nr::PORT_CREATE, &[], "port_create failed")?;
     let (near, far) = pair(side)?;
@@ -254,6 +264,8 @@ fn check_a_change_fires_only_what_wants_it(side: &Side) -> Result<(), &'static s
 
 /// An end carried twice in one inbox, by two handles to it, is walked once
 /// when that inbox's end is itself carried.
+///
+/// Verifies: L.object.25
 fn check_a_cycle_walk_meets_one_end_twice(side: &Side) -> Result<(), &'static str> {
     let (x, x_far) = pair(side)?;
     let (y, y_far) = pair(side)?;
