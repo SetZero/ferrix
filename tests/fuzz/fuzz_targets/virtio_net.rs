@@ -157,6 +157,21 @@ unsafe impl QueueMemory for Region {
     fn write_u8(&mut self, offset: usize, value: u8) {
         self.set(offset, value);
     }
+    // One side at a time here, never both at once, so a `u16` of two byte
+    // accesses is as whole as one.
+    fn read_u16(&self, offset: usize) -> u16 {
+        u16::from_le_bytes([
+            QueueMemory::read_u8(self, offset),
+            QueueMemory::read_u8(self, offset + 1),
+        ])
+    }
+
+    fn write_u16(&mut self, offset: usize, value: u16) {
+        let [low, high] = value.to_le_bytes();
+        QueueMemory::write_u8(self, offset, low);
+        QueueMemory::write_u8(self, offset + 1, high);
+    }
+
     fn barrier(&self) {}
 }
 

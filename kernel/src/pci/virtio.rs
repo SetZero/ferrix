@@ -255,13 +255,12 @@ struct Rings {
 }
 
 // SAFETY: (DMA) `virt` is the direct-map alias of a whole page taken for this queue
-// alone and held until after the device has been reset, which is the memory
-// `QueueMemory` asks for: at least `Layout::total_size` bytes (`drive` checks
-// the layout fits a page), aligned to a page and so to 16 bytes, and shared
-// with nothing but the device. The barrier is every access itself: each is a
-// volatile load or store, which the compiler may neither defer nor reorder,
-// so every access issued before any point is visible to the device before
-// every access issued after it.
+// alone and held until after the device has been reset: at least
+// `Layout::total_size` bytes (`drive` checks the layout fits a page), aligned to
+// a page and so to 16 bytes, and shared with nothing but the device. Each `u16`
+// is one aligned access, as the trait asks of the ring's indices. The barrier
+// is every access itself: each is volatile, which the compiler may neither defer
+// nor reorder, so what is issued before any point reaches the device first.
 unsafe impl QueueMemory for Rings {
     fn read_u8(&self, offset: usize) -> u8 {
         // SAFETY: (DMA) `offset` is below `Layout::total_size`, which fits in the
@@ -272,6 +271,22 @@ unsafe impl QueueMemory for Rings {
     fn write_u8(&mut self, offset: usize, value: u8) {
         // SAFETY: (DMA) as `read_u8`.
         unsafe { core::ptr::write_volatile((self.virt + offset as u64) as *mut u8, value) };
+    }
+
+    fn read_u16(&self, offset: usize) -> u16 {
+        debug_assert_eq!(offset % 2, 0, "a ring u16 at an odd offset");
+        // SAFETY: (DMA) as `read_u8`, and aligned: every offset `SplitQueue`
+        // passes here is one of `Layout`'s field offsets, which are all even
+        // (`every_shared_field_is_even`), in a page-aligned page.
+        u16::from_le(unsafe { core::ptr::read_volatile((self.virt + offset as u64) as *const u16) })
+    }
+
+    fn write_u16(&mut self, offset: usize, value: u16) {
+        debug_assert_eq!(offset % 2, 0, "a ring u16 at an odd offset");
+        // SAFETY: (DMA) as `read_u16`: in the page, and even by `Layout`.
+        unsafe {
+            core::ptr::write_volatile((self.virt + offset as u64) as *mut u16, value.to_le());
+        };
     }
 
     fn barrier(&self) {}

@@ -145,6 +145,33 @@ impl Mapped {
         // SAFETY: as for `read_u8`, and the mapping is writable.
         unsafe { ptr::write_volatile((self.base + offset) as *mut u8, value) }
     }
+
+    /// The little-endian `u16` at `offset`, in one access: the other side may
+    /// be writing it now, and two byte reads could take one byte from before
+    /// its store and one from after.
+    fn read_u16(&self, offset: usize) -> u16 {
+        assert!(
+            offset.checked_add(2).is_some_and(|end| end <= self.len),
+            "a u16 inside the mapping"
+        );
+        let address = self.base + offset;
+        assert!(address.is_multiple_of(2), "a u16 on its own alignment");
+        // SAFETY: as for `read_u8`, and the two bytes are one aligned `u16`.
+        u16::from_le(unsafe { ptr::read_volatile(address as *const u16) })
+    }
+
+    /// Write the little-endian `u16` at `offset`, in one access: the other
+    /// side may read it at any moment, and must never see one byte changed.
+    fn write_u16(&mut self, offset: usize, value: u16) {
+        assert!(
+            offset.checked_add(2).is_some_and(|end| end <= self.len),
+            "a u16 inside the mapping"
+        );
+        let address = self.base + offset;
+        assert!(address.is_multiple_of(2), "a u16 on its own alignment");
+        // SAFETY: as for `write_u8`, and the two bytes are one aligned `u16`.
+        unsafe { ptr::write_volatile(address as *mut u16, value.to_le()) }
+    }
 }
 
 /// A VMO this process made, pinned read-write for the device and mapped.
@@ -220,6 +247,7 @@ impl Scratch for Pinned {
 // and mapped so this process sees `mapped`, both until the `Pinned` is
 // dropped, which the driver's teardown rule forbids while the device may
 // write. Every access is volatile and `barrier` is a full fence.
+// Each `u16` is one access, as the trait requires of the ring's indices.
 unsafe impl QueueMemory for Pinned {
     fn read_u8(&self, offset: usize) -> u8 {
         self.mapped.read_u8(offset)
@@ -227,6 +255,14 @@ unsafe impl QueueMemory for Pinned {
 
     fn write_u8(&mut self, offset: usize, value: u8) {
         self.mapped.write_u8(offset, value);
+    }
+
+    fn read_u16(&self, offset: usize) -> u16 {
+        self.mapped.read_u16(offset)
+    }
+
+    fn write_u16(&mut self, offset: usize, value: u16) {
+        self.mapped.write_u16(offset, value);
     }
 
     fn barrier(&self) {

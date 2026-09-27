@@ -38,6 +38,10 @@ enum Event {
     Read(usize),
     /// A byte was written at this offset.
     Write(usize),
+    /// A `u16` was read at this offset, in one access.
+    Read16(usize),
+    /// A `u16` was written at this offset, in one access.
+    Write16(usize),
     /// [`QueueMemory::barrier`] was called.
     Barrier,
 }
@@ -129,6 +133,17 @@ unsafe impl QueueMemory for Shared {
     fn write_u8(&mut self, offset: usize, value: u8) {
         self.record(Event::Write(offset));
         self.bytes.borrow_mut()[offset] = value;
+    }
+
+    fn read_u16(&self, offset: usize) -> u16 {
+        self.record(Event::Read16(offset));
+        let bytes = self.bytes.borrow();
+        u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+    }
+
+    fn write_u16(&mut self, offset: usize, value: u16) {
+        self.record(Event::Write16(offset));
+        self.bytes.borrow_mut()[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
     }
 
     fn barrier(&self) {
@@ -1220,6 +1235,9 @@ fn last_touch(events: &[Event], range: core::ops::Range<usize>) -> usize {
         .iter()
         .rposition(|event| match *event {
             Event::Read(offset) | Event::Write(offset) => range.contains(&offset),
+            Event::Read16(offset) | Event::Write16(offset) => {
+                range.contains(&offset) || range.contains(&(offset + 1))
+            }
             Event::Barrier => false,
         })
         .expect("the range must have been touched")
@@ -1231,9 +1249,94 @@ fn first_touch(events: &[Event], range: core::ops::Range<usize>) -> usize {
         .iter()
         .position(|event| match *event {
             Event::Read(offset) | Event::Write(offset) => range.contains(&offset),
+            Event::Read16(offset) | Event::Write16(offset) => {
+                range.contains(&offset) || range.contains(&(offset + 1))
+            }
             Event::Barrier => false,
         })
         .expect("the range must have been touched")
+}
+
+/// Every `u16` the other side reads or writes concurrently is at an even
+/// offset, for every queue size a device may offer: a 16-bit access is one
+/// access only when it is aligned, and the memory itself starts 16-byte
+/// aligned.
+#[test]
+fn every_shared_field_is_even() {
+    for shift in 0..=15 {
+        let layout = Layout::for_size(1 << shift).unwrap();
+        let size = layout.queue_size;
+        let mut fields = vec![
+            layout.available_flags(),
+            layout.available_idx(),
+            layout.used_event(),
+            layout.used_flags(),
+            layout.used_idx(),
+            layout.avail_event(),
+        ];
+        fields.extend((0..size).map(|slot| layout.available_entry(slot)));
+        for field in fields {
+            assert!(
+                field % 2 == 0,
+                "a shared u16 at odd offset {field} in a queue of {size}"
+            );
+        }
+    }
+}
+
+/// Every access to a field the device touches concurrently -- the two
+/// indices, the two event fields and the two flags words -- is one `u16`
+/// access, over a run long enough for both indices to wrap. A byte access to
+/// any of them is a value the device can see half-written: `avail.idx` going
+/// from `0x01FF` to `0x0200` a byte at a time is `0x0100` in between.
+#[test]
+fn the_shared_fields_are_touched_whole() {
+    let (layout, memory, mut driver, mut device) = queue_pair(8);
+    let fields = [
+        layout.available_flags(),
+        layout.available_idx(),
+        layout.used_event(),
+        layout.used_flags(),
+        layout.used_idx(),
+        layout.avail_event(),
+    ];
+    let halves = |offset: usize| {
+        fields
+            .iter()
+            .any(|&field| offset == field || offset == field + 1)
+    };
+
+    memory.start_log();
+    for round in 0..600_u32 {
+        let head = driver
+            .add_chain(&[Buffer::readable(0x1000, 16), Buffer::writable(0x2000, 32)])
+            .unwrap();
+        driver.set_used_event(driver.available_index());
+        let _ = driver.device_wants_notification();
+        let popped = device.next_chain().unwrap().unwrap();
+        device.complete(popped, round % 32).unwrap();
+        let _ = driver.avail_event();
+        assert_eq!(driver.take_used().unwrap().unwrap().head, head);
+    }
+    let events = memory.take_log();
+
+    let split: Vec<&Event> = events
+        .iter()
+        .filter(
+            |event| matches!(**event, Event::Read(offset) | Event::Write(offset) if halves(offset)),
+        )
+        .collect();
+    assert!(
+        split.is_empty(),
+        "a shared field was touched a byte at a time: {:?}",
+        split.first()
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| *event == Event::Write16(layout.available_idx())),
+        "the available index was published at all"
+    );
 }
 
 #[test]

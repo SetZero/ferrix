@@ -103,8 +103,8 @@
     {
       "file": "kernel/src/pci/virtio.rs",
       "kind": "register",
-      "max_sites": 3,
-      "reason": "virtio configuration space in a function's BAR, read during enumeration and by the boot check that proves a translated domain works. §7 permits the kernel to enumerate; the driver that then runs the device is in ring 3."
+      "max_sites": 4,
+      "reason": "virtio configuration space in a function's BAR, read during enumeration and by the boot check that proves a translated domain works. §7 permits the kernel to enumerate; the driver that then runs the device is in ring 3. The four sites are that check's ring memory, shared with the device rather than a register: a byte and a whole u16 each way, the u16 one access because the device reads and writes the ring's indices concurrently (F-45)."
     },
     {
       "file": "kernel/src/iommu/vtd.rs",

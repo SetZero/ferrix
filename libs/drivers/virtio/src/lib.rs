@@ -52,6 +52,14 @@
 //! #             *slot = value;
 //! #         }
 //! #     }
+//! #     fn read_u16(&self, offset: usize) -> u16 {
+//! #         u16::from_le_bytes([self.read_u8(offset), self.read_u8(offset + 1)])
+//! #     }
+//! #     fn write_u16(&mut self, offset: usize, value: u16) {
+//! #         let [low, high] = value.to_le_bytes();
+//! #         self.write_u8(offset, low);
+//! #         self.write_u8(offset + 1, high);
+//! #     }
 //! #     fn barrier(&self) {}
 //! # }
 //! let layout = Layout::for_size(8)?;
@@ -453,12 +461,38 @@ pub struct Completion {
 
 /// The shared memory a virtqueue lives in.
 ///
-/// Only [`QueueMemory::read_u8`], [`QueueMemory::write_u8`] and
+/// [`QueueMemory::read_u8`], [`QueueMemory::write_u8`],
+/// [`QueueMemory::read_u16`], [`QueueMemory::write_u16`] and
 /// [`QueueMemory::barrier`] have to be implemented; the wider accessors are
 /// provided in terms of them, little-endian because virtio 1.x defines every
-/// field in the rings as little-endian on the wire whatever the host is. An
-/// implementor over ordinary little-endian memory should override them with
-/// single loads and stores.
+/// field in the rings as little-endian on the wire whatever the host is.
+///
+/// **The `u16` accessors are not provided, and each must be one access.** The
+/// rings' indices and event fields -- `avail.idx`, `used.idx`, `used_event`,
+/// `avail_event` and the two flags words -- are `u16`s the other side reads
+/// and writes while this one does. Written as two bytes, `avail.idx` stepping
+/// from `0x01FF` to `0x0200` is `0x0100` for an instant, and a device that
+/// reads it then has been told the ring ran backwards; read as two bytes,
+/// `used.idx` can come back with one byte from before the device's store and
+/// one from after. These used to be provided in terms of the byte accessors,
+/// and every driver in the tree inherited that. The wider accessors are left
+/// provided because nothing reads a `u32` or `u64` while the other side
+/// writes it: a descriptor is written before it is published, and a used
+/// entry before `used.idx` says so.
+///
+/// An implementation that gives only the byte accessors does not compile:
+///
+/// ```compile_fail,E0046
+/// struct Bytes;
+/// // SAFETY: never used; this only has to fail to compile.
+/// unsafe impl ferrix_virtio::QueueMemory for Bytes {
+///     fn read_u8(&self, _offset: usize) -> u8 {
+///         0
+///     }
+///     fn write_u8(&mut self, _offset: usize, _value: u8) {}
+///     fn barrier(&self) {}
+/// }
+/// ```
 ///
 /// # Safety
 ///
@@ -472,6 +506,17 @@ pub struct Completion {
 /// The other side of the ring writes to this memory concurrently by design,
 /// which is why every field read back out of it here is validated rather than
 /// trusted.
+///
+/// [`QueueMemory::read_u16`] and [`QueueMemory::write_u16`] must each be a
+/// single access of the whole naturally aligned `u16`, never two of a byte,
+/// wherever the other side runs concurrently. A 16-bit access is single-copy
+/// atomic only when it is aligned, on Arm as on x86, and that holds by
+/// construction here: the memory starts 16-byte aligned, as above, and
+/// [`Layout`] puts every `u16` the crate passes at an even offset (the
+/// `u16`s of the available ring after a table of 16-byte descriptors, the used
+/// ring rounded up to 4; `every_shared_field_is_even` checks every size).
+/// Memory only one side touches at a time, as a test's is, may compose them
+/// from bytes.
 ///
 /// [`QueueMemory::barrier`] must be a real ordering fence for whatever couples
 /// the two sides — a `fence(SeqCst)`, a `dsb sy`, whatever the platform needs
@@ -489,10 +534,8 @@ pub unsafe trait QueueMemory {
     /// after it.
     fn barrier(&self);
 
-    /// Read a little-endian `u16` at `offset`.
-    fn read_u16(&self, offset: usize) -> u16 {
-        u16::from_le_bytes([self.read_u8(offset), self.read_u8(offset + 1)])
-    }
+    /// Read the little-endian `u16` at `offset`, in one access.
+    fn read_u16(&self, offset: usize) -> u16;
 
     /// Read a little-endian `u32` at `offset`.
     fn read_u32(&self, offset: usize) -> u32 {
@@ -504,11 +547,8 @@ pub unsafe trait QueueMemory {
         u64::from(self.read_u32(offset)) | (u64::from(self.read_u32(offset + 4)) << 32)
     }
 
-    /// Write a little-endian `u16` at `offset`.
-    fn write_u16(&mut self, offset: usize, value: u16) {
-        self.write_u8(offset, value as u8);
-        self.write_u8(offset + 1, (value >> 8) as u8);
-    }
+    /// Write the little-endian `u16` at `offset`, in one access.
+    fn write_u16(&mut self, offset: usize, value: u16);
 
     /// Write a little-endian `u32` at `offset`.
     fn write_u32(&mut self, offset: usize, value: u32) {

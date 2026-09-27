@@ -24,7 +24,7 @@ Coverage evidence recording the checks: none yet.
 | Named by a low-level requirement | 748 |
 | Accessors, covered by the requirement they serve | 647 |
 | Check code in a product file | 26 |
-| Named by none | 925 |
+| Named by none | 927 |
 
 Subsystems whose low-level requirements are complete: `arch::x86_64`, `early`, `iommu`, `mm`, `object`, `smp`, `trap`, `user`, `vmap`.
 
