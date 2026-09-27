@@ -460,15 +460,15 @@ fn free_stacks_together(_: u64) -> Result<(), Refusal> {
     let [first, middle, last] = stacks;
     match (made, first, middle, last) {
         (Ok(()), Some(first), Some(middle), Some(last)) => {
-            // SAFETY: made just above, and nothing has run on any of them.
+            // SAFETY: (KMEM) made just above, and nothing has run on any of them.
             let alone = unsafe { vmap::free_stacks(&[middle]) };
-            // SAFETY: as above.
+            // SAFETY: (KMEM) as above.
             let rest = unsafe { vmap::free_stacks(&[first, last]) };
             arena(alone.and(rest), "freeing kernel stacks was refused")
         }
         (made, ..) => {
             for stack in stacks.into_iter().flatten() {
-                // SAFETY: made just above, and nothing has run on it.
+                // SAFETY: (KMEM) made just above, and nothing has run on it.
                 let _ = unsafe { vmap::free_stack(stack) };
             }
             made

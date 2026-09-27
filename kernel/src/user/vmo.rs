@@ -821,7 +821,7 @@ impl Vmo {
             None => out.fill(0),
             Some(&frame) => {
                 let at = mm::direct_map(frame * PAGE_SIZE) as usize + offset;
-                // SAFETY: the object holds a reference on `frame` for as long
+                // SAFETY: (FRAME) the object holds a reference on `frame` for as long
                 // as its lock is held, `check_span` kept `offset + out.len()`
                 // inside the page, and the direct map covers all of RAM.
                 let source = unsafe { core::slice::from_raw_parts(at as *const u8, out.len()) };
@@ -883,7 +883,7 @@ impl Vmo {
                 None => (pages.exclusive(index)?.0, None),
             };
             let at = mm::direct_map(frame * PAGE_SIZE) as usize + offset;
-            // SAFETY: the frame is this object's alone (copied above if it was
+            // SAFETY: (FRAME) the frame is this object's alone (copied above if it was
             // not) and held under its lock; `check_span` kept the write inside
             // the page; the direct map is writable for all of RAM.
             unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), at as *mut u8, data.len()) };

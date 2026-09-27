@@ -343,7 +343,7 @@ impl AddressSpace {
     ///
     /// # Safety
     ///
-    /// Something must hold a reference to this address space for as long as it
+    /// (TRANSLATE) Something must hold a reference to this address space for as long as it
     /// stays installed. The tables are freed when the last [`Arc`] goes, and a
     /// processor whose root register still names freed frames is walking
     /// memory the allocator has handed to somebody else.
@@ -355,7 +355,7 @@ impl AddressSpace {
         let cpu = this_logical_cpu();
         // NOALLOC: a `CpuMask` is a fixed bitmap; joining sets a bit.
         self.cpus.join(cpu);
-        // SAFETY: the root was made by `new`, so `prepare_user_root` has run
+        // SAFETY: (TRANSLATE) the root was made by `new`, so `prepare_user_root` has run
         // on it and the kernel is reachable through it on the architecture
         // that needs that; the caller guarantees it outlives the installation.
         unsafe { arch::install_user_root(self.root * PAGE_SIZE) };
@@ -374,11 +374,11 @@ impl AddressSpace {
     ///
     /// # Safety
     ///
-    /// Nothing on this processor may still need a user address, and interrupts
+    /// (TRANSLATE) Nothing on this processor may still need a user address, and interrupts
     /// must be masked across the call.
     pub(crate) unsafe fn uninstall(&self) {
         let cpu = this_logical_cpu();
-        // SAFETY: the caller guarantees no user address is wanted, and the kernel
+        // SAFETY: (TRANSLATE) the caller guarantees no user address is wanted, and the kernel
         // is reachable without one on every architecture.
         unsafe { arch::uninstall_user_root() };
         self.cpus.leave(cpu);

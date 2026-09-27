@@ -652,10 +652,10 @@ fn poison(frame: Frame) -> Result<(), &'static str> {
 fn fill(frame: Frame, word: u32) {
     let base = mm::direct_map(frame * PAGE_SIZE) as *mut u32;
     for index in 0..(PAGE_SIZE / 4) as usize {
-        // SAFETY: `index` words is inside the page `base` starts, which the
+        // SAFETY: (FRAME) `index` words is inside the page `base` starts, which the
         // direct map covers.
         let at = unsafe { base.add(index) };
-        // SAFETY: the check allocated or claimed `frame`, so nothing else owns
+        // SAFETY: (FRAME) the check allocated or claimed `frame`, so nothing else owns
         // it, and `at` is a word inside it.
         unsafe { at.write_volatile(word) };
     }
@@ -665,16 +665,16 @@ fn fill(frame: Frame, word: u32) {
 fn poisoned(frame: Frame) -> bool {
     let base = mm::direct_map(frame * PAGE_SIZE) as *const u32;
     (0..(PAGE_SIZE / 4) as usize).all(|index| {
-        // SAFETY: as `fill`: inside the page `base` starts.
+        // SAFETY: (FRAME) as `fill`: inside the page `base` starts.
         let at = unsafe { base.add(index) };
-        // SAFETY: as `fill`; the frame is still the check's.
+        // SAFETY: (FRAME) as `fill`; the frame is still the check's.
         unsafe { at.read_volatile() == POISON }
     })
 }
 
 /// The first word of `frame`.
 fn first_word(frame: Frame) -> u32 {
-    // SAFETY: `frame` is allocated -- the object or the check holds it -- and
+    // SAFETY: (FRAME) `frame` is allocated -- the object or the check holds it -- and
     // the direct map covers every frame of RAM.
     unsafe { (mm::direct_map(frame * PAGE_SIZE) as *const u32).read_volatile() }
 }

@@ -136,7 +136,7 @@ fn holder(_argument: usize) {
         return;
     };
     let _ = space.with_page(page, Access::READ, |source| {
-        // SAFETY: `with_page` translated the page through the space's own
+        // SAFETY: (USER-COPY) `with_page` translated the page through the space's own
         // tables and runs this with the space's lock held, so `source` is the
         // direct-map address of a live frame for as long as this runs.
         let byte = unsafe { (source as *const u8).read() };

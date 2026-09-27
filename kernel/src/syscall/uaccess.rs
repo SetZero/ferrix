@@ -206,7 +206,7 @@ fn copy_from_user_through(
         let chunk = chunk_len(at, out.len() - done)?;
         let target = out.get_mut(done..done + chunk).ok_or(UserError::Overflow)?;
         let read = |source: u64| {
-            // SAFETY: both ways here -- `resolve`, having faulted the page in,
+            // SAFETY: (USER-COPY) both ways here -- `resolve`, having faulted the page in,
             // and `with_present_page`, having found it present -- translated
             // it through the space's own tables and run this with the space's
             // lock held, so `source` is the direct-map address of a frame that
@@ -301,7 +301,7 @@ fn copy_to_user_through(
         // a page the parent can still see.
         let source = data.get(done..done + chunk).ok_or(UserError::Overflow)?;
         let write = |target: u64| {
-            // SAFETY: both ways here -- `resolve`, having faulted the page in
+            // SAFETY: (USER-COPY) both ways here -- `resolve`, having faulted the page in
             // for writing, and `with_present_page`, having found it present and
             // writable and not shared copy-on-write -- translated it through
             // the space's own tables and run this with the space's lock held,
@@ -389,7 +389,7 @@ pub(crate) fn copy_cstr_from_user(
         // space's lock never has to allocate.
         crate::fallible::try_reserve(out, span).map_err(|_| UserError::NoMemory)?;
         let terminated = resolve(space, at, Access::READ, |source| {
-            // SAFETY: as `copy_from_user`. `span` stays inside the held page.
+            // SAFETY: (USER-COPY) as `copy_from_user`. `span` stays inside the held page.
             let bytes = unsafe { core::slice::from_raw_parts(source as *const u8, span) };
             let end = bytes.iter().position(|&b| b == 0);
             // NOALLOC: into the room reserved above.

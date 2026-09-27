@@ -155,10 +155,10 @@ fn check_a_committed_page_is_zeroed() -> Result<(), &'static str> {
     // that belongs to an object it has not mapped anywhere.
     let base = mm::direct_map(frame * PAGE_SIZE) as *const u8;
     for offset in 0..PAGE_SIZE as usize {
-        // SAFETY: `offset` is below `PAGE_SIZE` and `base` is the start of a
+        // SAFETY: (FRAME) `offset` is below `PAGE_SIZE` and `base` is the start of a
         // page, so the result is inside that page.
         let at = unsafe { base.add(offset) };
-        // SAFETY: `frame` was just committed, so it is allocated and nothing
+        // SAFETY: (FRAME) `frame` was just committed, so it is allocated and nothing
         // else refers to it; the direct map covers every frame of RAM.
         let byte = unsafe { at.read_volatile() };
         if byte != 0 {
@@ -603,10 +603,10 @@ fn check_pages_arrive_on_demand_and_go_back() -> Result<u64, &'static str> {
 
         let at = mm::direct_map(phys) as *mut u64;
         let written = 0xFEED_0000 + index;
-        // SAFETY: `phys` is the frame the fault above committed for this page,
+        // SAFETY: (FRAME) `phys` is the frame the fault above committed for this page,
         // it is mapped nowhere else, and the direct map covers all of RAM.
         unsafe { at.write_volatile(written) };
-        // SAFETY: the same address, just written.
+        // SAFETY: (FRAME) the same address, just written.
         if unsafe { at.read_volatile() } != written {
             return Err("a faulted page did not hold what was written to it");
         }
@@ -713,7 +713,7 @@ fn check_the_processor_walks_an_installed_space() -> Result<u64, &'static str> {
         // dropped: a processor left translating through tables that are then
         // freed is walking memory the allocator has given to somebody else.
         //
-        // SAFETY: nothing after this wants a user address — the next round
+        // SAFETY: (TRANSLATE) nothing after this wants a user address — the next round
         // installs its own, and every read outside this loop goes through the
         // direct map.
         unsafe { space.uninstall() };
@@ -809,7 +809,7 @@ fn fault_and_write_installed(
     // about address spaces yet.
     let state = <arch::Irq as IrqControl>::disable();
 
-    // SAFETY: `space` is borrowed across the whole window so its tables
+    // SAFETY: (TRANSLATE) `space` is borrowed across the whole window so its tables
     // outlive the installation, interrupts are masked, and it is uninstalled
     // below before anything else can want a user address.
     unsafe { space.install(None) };
@@ -819,20 +819,20 @@ fn fault_and_write_installed(
     arch::permit_user_access();
 
     let through = at as *mut u64;
-    // SAFETY: the caller faulted this page in read-only through `space`, which
+    // SAFETY: (PROBE) the caller faulted this page in read-only through `space`, which
     // is installed on this processor. This read is what puts the entry the
     // rest of this function is about into the TLB.
     let _seen = unsafe { through.read_volatile() };
 
     let resolved = space.fault(at, Access::WRITE);
     if resolved.is_ok() {
-        // SAFETY: the handler above has just made this page writable in the
+        // SAFETY: (PROBE) the handler above has just made this page writable in the
         // tables of the space installed on this processor.
         unsafe { through.write_volatile(value) };
     }
 
     arch::forbid_user_access();
-    // SAFETY: nothing after this wants a user address.
+    // SAFETY: (TRANSLATE) nothing after this wants a user address.
     unsafe { space.uninstall() };
     <arch::Irq as IrqControl>::restore(state);
 
@@ -854,7 +854,7 @@ fn walk_through_installed(
     pages: u64,
     round: u64,
 ) -> Result<(), &'static str> {
-    // SAFETY: `space` is borrowed for the whole of this call, so its tables
+    // SAFETY: (TRANSLATE) `space` is borrowed for the whole of this call, so its tables
     // outlive the installation; the caller has masked interrupts and
     // uninstalls before going on.
     unsafe { space.install(None) };
@@ -876,12 +876,12 @@ fn walk_through_installed(
             let written = 0xC0FF_EE00_u64 + round * 0x100 + index;
 
             let at = virt as *mut u64;
-            // SAFETY: the page at `virt` was faulted in by the caller, the
+            // SAFETY: (PROBE) the page at `virt` was faulted in by the caller, the
             // region is writable, and this address space is installed on this
             // processor — so this is a write to a page of RAM nothing else is
             // using.
             unsafe { at.write_volatile(written) };
-            // SAFETY: the same address, just written.
+            // SAFETY: (PROBE) the same address, just written.
             if unsafe { at.read_volatile() } != written {
                 return Err("a user address did not hold what the processor wrote to it");
             }
@@ -891,7 +891,7 @@ fn walk_through_installed(
                 return Err("a faulted page does not translate in its own address space");
             };
             let alias = mm::direct_map(phys) as *const u64;
-            // SAFETY: `phys` is the frame this space says backs `virt`, and
+            // SAFETY: (FRAME) `phys` is the frame this space says backs `virt`, and
             // the direct map covers every frame of RAM.
             if unsafe { alias.read_volatile() } != written {
                 return Err("a write through a user address did not land in the frame behind it");
@@ -917,7 +917,7 @@ const CHILD_MARK: u64 = 0xCAFE_0000_0000_0002;
 /// Read the first word of `frame` through the direct map.
 fn peek(phys: u64) -> u64 {
     let at = mm::direct_map(phys) as *const u64;
-    // SAFETY: `phys` is a frame some address space maps, so it is allocated,
+    // SAFETY: (FRAME) `phys` is a frame some address space maps, so it is allocated,
     // and the direct map covers every frame of RAM.
     unsafe { at.read_volatile() }
 }
@@ -925,7 +925,7 @@ fn peek(phys: u64) -> u64 {
 /// Write `value` into the first word of `frame` through the direct map.
 fn poke(phys: u64, value: u64) {
     let at = mm::direct_map(phys) as *mut u64;
-    // SAFETY: as `peek`, and the page belongs to an object this check owns, so
+    // SAFETY: (FRAME) as `peek`, and the page belongs to an object this check owns, so
     // nothing else is reading it.
     unsafe { at.write_volatile(value) };
 }
@@ -1209,7 +1209,7 @@ fn read_own_space(expected: usize) {
         // switch carries. A window held across it would hand SMAP's exception
         // to whatever ran next.
         arch::permit_user_access();
-        // SAFETY: this task owns an address space in which `SWAP_AT` is mapped
+        // SAFETY: (PROBE) this task owns an address space in which `SWAP_AT` is mapped
         // and was faulted in before the task existed, and the scheduler
         // installs that space on whichever processor runs the task, before the
         // first instruction of it. That installation is the thing under test:

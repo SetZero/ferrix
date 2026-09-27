@@ -18,13 +18,6 @@
     "mmio.rs": 6,
     "panic.rs": 1,
     "panic/screen.rs": 5,
-    "syscall/uaccess.rs": 3,
-    "syscall/unmap_check.rs": 1,
-    "trap.rs": 1,
-    "user/alloc_check.rs": 3,
-    "user/check.rs": 16,
-    "user/rmap_check.rs": 5,
-    "user/space.rs": 4,
-    "user/vmo.rs": 2
+    "trap.rs": 1
   }
 }
