@@ -344,6 +344,13 @@ impl Agent {
         let mut buffer = vec![0_u8; MAX_SELECTION + chunk::MAX_PAYLOAD];
         let mut reassembler = Reassembler::new(&mut buffer);
         let mut at = 0;
+        // Where the last whole message ended. What follows it goes back to
+        // wait for the next read, from its first chunk: a message longer
+        // than a read -- a host paste of more than about a kilobyte -- has
+        // chunks already fed that a fresh reassembler must see again, and
+        // keeping only the bytes after them lost the message's start and
+        // stopped the agent at the next chunk.
+        let mut whole = 0;
         while at < stream.len() {
             let rest = stream.get(at..).unwrap_or_default();
             let taken = match reassembler.feed(rest) {
@@ -365,10 +372,10 @@ impl Agent {
                     self.on_host_message(message)?;
                 }
                 reassembler.take();
+                whole = at;
             }
         }
-        // Whatever did not make a whole message waits for the next read.
-        self.frames = stream.get(at..).unwrap_or_default().to_vec();
+        self.frames = stream.get(whole..).unwrap_or_default().to_vec();
         Ok(())
     }
 
