@@ -1261,9 +1261,8 @@ fn wait_for(watching: &mut Watching<'_>, awaiting: &[&str]) -> Result<()> {
 pub(crate) fn desktop_image(arch: Arch, config: &str, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let programs = Programs::build(arch)?;
     let carried = Carried {
-        busybox: None,
         zinc: crate::zinc::build(arch)?,
-        ports: Vec::new(),
+        ..Carried::none()
     };
     build_image(arch, &programs, config, carried, args)
 }
