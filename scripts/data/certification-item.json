@@ -105,6 +105,8 @@
       "members": [
         "acpi.rs",
         "arch/**",
+        "audit.rs",
+        "audit/**",
         "backtrace.rs",
         "claim.rs",
         "console.rs",

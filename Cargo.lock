@@ -39,6 +39,10 @@ name = "ferrix-argon2"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-audit"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-auth-proto"
 version = "0.1.0"
 
@@ -253,6 +257,7 @@ name = "ferrix-kernel"
 version = "0.1.0"
 dependencies = [
  "ferrix-acpi",
+ "ferrix-audit",
  "ferrix-blkring",
  "ferrix-block",
  "ferrix-bootinfo",

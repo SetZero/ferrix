@@ -21,6 +21,7 @@ extern crate alloc;
 mod acpi;
 mod arch;
 mod audio;
+mod audit;
 mod backtrace;
 mod block_ring;
 mod checks;
@@ -359,6 +360,14 @@ fn check_waits_before_the_scheduler() {
 /// skipped.
 fn say_booted() {
     panic::mark_booted();
+    audit::record(
+        audit::BOOTED,
+        audit::Outcome::Done,
+        0,
+        audit::Subject::KERNEL,
+        audit::Target::NONE,
+        [u32::from(checks::run()), 0, 0],
+    );
     if checks::run() {
         // Last before the marker, so every driver the boot starts has run: a
         // DMA fault its unit recorded and nothing provoked fails the boot
@@ -2359,6 +2368,57 @@ fn report_clock_and_random(view: &BootView<'_>) {
             catalog::RANDOM_GENERATOR,
             "random generator check failed: {problem}"
         );
+    }
+    start_audit(view);
+}
+
+/// Start the audit record (finding F-21b, `docs/certification/AUDIT.md`)
+/// with the boot's audit id, drawn from the random generator now that it has
+/// passed its check, and record the boot's configuration: every option has
+/// been read by now. The store is checked here when the checks run. A boot
+/// that skips them records that it did, which only a reader outside that
+/// boot can check (§6).
+fn start_audit(view: &BootView<'_>) {
+    let mut id = [0_u8; 16];
+    random::fill(&mut id);
+    let _ = audit::start(u128::from_le_bytes(id));
+    let kaslr = view.raw().kaslr;
+    let expected = audit::check::Expected {
+        checks: u32::from(checks::run()),
+        devmgr: u32::from(devmgr::by_init()),
+        mitigations: u32::from(arch::HARDENED),
+        kaslr: kaslr.state,
+    };
+    audit::config(audit::Config::Checks, expected.checks, 0);
+    audit::config(audit::Config::Devmgr, expected.devmgr, 0);
+    audit::config(audit::Config::Mitigations, expected.mitigations, 0);
+    audit::config(
+        audit::Config::Kaslr,
+        expected.kaslr,
+        u32::from(kaslr.is_random()),
+    );
+    println!(
+        "  audit    started: {} high-value and {} refusal records, 4 configuration items recorded",
+        audit::HIGH_RECORDS,
+        audit::REFUSAL_RECORDS
+    );
+    if !checks::run() {
+        return;
+    }
+    match audit::check::run(&expected) {
+        Ok(report) => println!(
+            "  audit    {} records kept of a wrapped ring and {} reported lost, resumed after a \
+             partial read; {} jobs charged to their maker's budget; {} of a unit's refusals \
+             from three of its jobs kept and {} counted as suppressed, another unit's kept, \
+             grants untouched; {} configuration items read back",
+            report.kept,
+            report.lost,
+            report.budgets,
+            report.flood_kept,
+            report.suppressed,
+            report.configs,
+        ),
+        Err(problem) => fatal!(catalog::AUDIT_STORE, "audit self-check failed: {problem}"),
     }
 }
 

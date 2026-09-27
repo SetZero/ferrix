@@ -39,6 +39,7 @@ Causes are listed most likely first.
 | [FX-0306](#fx-0306) | the random number generator repeated itself |
 | [FX-0307](#fx-0307) | the side-channel defences did not hold |
 | [FX-0308](#fx-0308) | the architecture decoded or masked something wrongly |
+| [FX-0309](#fx-0309) | the audit record lost or misplaced what it keeps |
 | [FX-0401](#fx-0401) | the processor list could not be read |
 | [FX-0402](#fx-0402) | a secondary processor could not be started |
 | [FX-0403](#fx-0403) | a secondary processor could not build its GDT |
@@ -615,6 +616,37 @@ exactly these answers. On the Arm architectures only.
    description.
 
 See: kernel/src/arch/aarch64/check.rs; kernel/src/arch/armv7a/check.rs.
+
+<a id="fx-0309"></a>
+
+## FX-0309 — the audit record lost or misplaced what it keeps
+
+The audit store keeps a record of each security decision the kernel makes, in
+two rings of static storage (`docs/certification/AUDIT.md`). Right after the
+random generator, bring-up starts it with the boot's audit id and records the
+boot's configuration, and `audit::check` drives small stores of its own: the
+start-up record first and carrying the whole id, a ring written past its length
+numbering its last records without a gap and telling a reader exactly how many
+it lost, a partial read resuming, refusals kept apart from every other class,
+one job's refusals past the per-second limit counted in a single suppressed
+record once its second ends while another job's are kept, and a fairness window
+closed to make room writing its count out. Then it requires the kernel's store
+to begin with its start-up record and to hold the configuration bring-up read. A
+failure means a reader of the record could be handed a gap it is not told of, a
+flood of refusals could push out what matters, or the boot's configuration -- a
+boot that skipped its checks among it -- goes unrecorded.
+
+1. `Ring::push` stopped numbering a record before keeping it, or `Ring::read`
+   stopped moving a reader past what was overwritten and counting it.
+2. `Store::record_at` sends a class to the wrong ring, or `Refusals::keep` keeps
+   a refusal past `PER_JOB_PER_SECOND` in its window.
+3. `Refusals::close` frees a window without writing its suppressed count, or
+   `close_ended` stopped closing windows whose second has ended.
+4. Bring-up's `start_audit` stopped recording one of the configuration items, or
+   `Store::start` stopped writing the whole id into the start-up record.
+
+See: kernel/src/audit/check.rs; kernel/src/audit.rs;
+docs/certification/AUDIT.md.
 
 <a id="fx-0401"></a>
 

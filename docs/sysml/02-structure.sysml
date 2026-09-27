@@ -1241,6 +1241,18 @@ package FerrixStructure {
                  * of the conversation: one READ outstanding, answered once
                  * the log has a byte, lost counts carried to the next DATA. */
         }
+        #implemented part audit : LibraryCrate {
+            attribute :>> path = "libs/proto/audit";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 6;
+            doc /* The audit record's 64-byte layout, shared by the kernel's
+                 * store (kernel/src/audit.rs) and the reader it hands the
+                 * records to (docs/certification/AUDIT.md §2): the classes,
+                 * the events, the configuration keys, and the start-up
+                 * record that carries the boot's 128-bit audit id and both
+                 * ring lengths, round-tripped through the bytes by its host
+                 * tests. */
+        }
         #implemented part pci : LibraryCrate {
             attribute :>> path = "libs/platform/pci";
             attribute :>> forbidsUnsafe = true;

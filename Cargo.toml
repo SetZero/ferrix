@@ -19,6 +19,7 @@ members = [
     "libs/proto/sndctl",
     "libs/proto/adb",
     "libs/proto/logctl",
+    "libs/proto/audit",
     "libs/proto/bootinfo",
     "libs/platform/elf",
     "libs/kernel/fbtext",
@@ -128,6 +129,7 @@ ferrix-sndctl = { path = "libs/proto/sndctl" }
 ferrix-adb = { path = "libs/proto/adb" }
 ferrix-vdagent = { path = "libs/drivers/vdagent" }
 ferrix-logctl = { path = "libs/proto/logctl" }
+ferrix-audit = { path = "libs/proto/audit" }
 ferrix-bootinfo = { path = "libs/proto/bootinfo" }
 ferrix-elf = { path = "libs/platform/elf" }
 ferrix-fbtext = { path = "libs/kernel/fbtext" }

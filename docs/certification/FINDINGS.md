@@ -933,6 +933,10 @@ boot's configuration, `ferrix.checks=skip` included, among the records. Open
 until it is built with the checks its §6 names. FIA stays the
 personality's.
 
+*Advanced 2026-09-27:* the store and the start-up and configuration records
+are built and checked ("Keep an audit record of what the kernel decides:
+the store"); the event call sites and the ST claims follow. Not claimed.
+
 ### F-35 — the job quotas FRU_RSA.1 claims are not built
 **Closed 2026-09-26** by work order W-13 ([IMPLEMENTATION.md](IMPLEMENTATION.md)),
 with `FRU_RSA.1` refined in the Security Target to what the quotas bound.

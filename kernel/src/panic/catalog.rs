@@ -776,6 +776,38 @@ pub(crate) static STAGE3_MACHINE: Explanation = Explanation {
     see: "kernel/src/arch/aarch64/check.rs; kernel/src/arch/armv7a/check.rs",
 };
 
+/// For `start_audit` in `main.rs`, when `audit::check::run` fails.
+pub(crate) static AUDIT_STORE: Explanation = Explanation {
+    code: "FX-0309",
+    title: "the audit record lost or misplaced what it keeps",
+    meaning: "The audit store keeps a record of each security decision the kernel makes, in \
+              two rings of static storage (`docs/certification/AUDIT.md`). Right after the \
+              random generator, bring-up starts it with the boot's audit id and records the \
+              boot's configuration, and `audit::check` drives small stores of its own: the \
+              start-up record first and carrying the whole id, a ring written past its \
+              length numbering its last records without a gap and telling a reader exactly \
+              how many it lost, a partial read resuming, refusals kept apart from every other \
+              class, one job's refusals past the per-second limit counted in a single \
+              suppressed record once its second ends while another job's are kept, and a \
+              fairness window closed to make room writing its count out. Then it requires \
+              the kernel's store to begin with its start-up record and to hold the \
+              configuration bring-up read. A failure means a reader of the record could be \
+              handed a gap it is not told of, a flood of refusals could push out what \
+              matters, or the boot's configuration -- a boot that skipped its checks among \
+              it -- goes unrecorded.",
+    causes: &[
+        "`Ring::push` stopped numbering a record before keeping it, or `Ring::read` stopped \
+         moving a reader past what was overwritten and counting it.",
+        "`Store::record_at` sends a class to the wrong ring, or `Refusals::keep` keeps a \
+         refusal past `PER_JOB_PER_SECOND` in its window.",
+        "`Refusals::close` frees a window without writing its suppressed count, or \
+         `close_ended` stopped closing windows whose second has ended.",
+        "Bring-up's `start_audit` stopped recording one of the configuration items, or \
+         `Store::start` stopped writing the whole id into the start-up record.",
+    ],
+    see: "kernel/src/audit/check.rs; kernel/src/audit.rs; docs/certification/AUDIT.md",
+};
+
 /// For `bring_up_processors` in `main.rs`, when `smp::discover` fails.
 pub(crate) static PROCESSOR_DISCOVERY: Explanation = Explanation {
     code: "FX-0401",
@@ -2414,6 +2446,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &RANDOM_GENERATOR,
     &SPECULATION_DEFENCES,
     &STAGE3_MACHINE,
+    &AUDIT_STORE,
     &PROCESSOR_DISCOVERY,
     &SECONDARY_START,
     &SECONDARY_GDT,

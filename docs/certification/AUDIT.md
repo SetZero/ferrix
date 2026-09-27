@@ -1,10 +1,10 @@
 # Audit: a minimal record of security-relevant events
 
-Design only, for finding F-21b: *"there is no FAU family at all ... an
+The design for finding F-21b: *"there is no FAU family at all ... an
 evaluator would press on whether a TOE that cannot record a
-security-relevant event can claim EAL5."* Nothing here is built. It says what
-the TOE would record, where, who reads it, what it costs, and how the build
-would prove it, so the claim can be sized and argued before any code.
+security-relevant event can claim EAL5."* It says what the TOE records,
+where, who reads it, what it costs, and how the build proves it. It is
+being built in three slices (§8); the first, the store, is in.
 
 The TOE is an isolation kernel, and identity is the personality's
 (SECURITY-TARGET §9.1). This keeps that split. The item records what *it*
@@ -51,17 +51,21 @@ them through the same interface (§4), marked as its own.
 
 ## 2. What a record holds (FAU_GEN.1, FAU_GEN.2, FPT_STM.1)
 
-A fixed 64-byte record, so the store never allocates:
+A fixed 64-byte record, so the store never allocates (`audit::Record`):
 
 | Field | Bytes | |
 |---|---|---|
-| sequence number | 8 | per boot, gapless: a missing number is a lost record |
+| sequence number | 8 | per boot and per ring, gapless: a missing number is a lost record |
 | time | 8 | monotonic nanoseconds since boot (`timer::now_nanos`), the TSF's own clock; wall time is the reader's to add |
 | class and event | 4 | §1 |
 | outcome and status | 4 | the native status or errno answered |
-| subject | 12 | pid and job id, which the TSF attests; and, in a separate field flagged *personality-supplied*, the uid the personality's hook gives (`u32::MAX` when it gives none) |
-| object | 16 | the object's kind and identity: a handle's object kind and job id, a device's PCI location, a resource |
+| subject | 16 | pid and job id, which the TSF attests -- job ids are 64 bits -- and, in a separate field flagged *personality-supplied*, the uid the personality's hook gives (`u32::MAX` when it gives none) |
+| object | 12 | the object's kind and identity: a handle's object kind and job id, a device's PCI location, a resource |
 | detail | 12 | the rights asked and held, or the limit and the use |
+
+The start-up record carries the whole audit id, its low half as the object
+and its high half in the first two detail words, and the two rings' lengths
+in the third.
 
 FAU_GEN.2 (associating an event with a user) is claimed, refined, for the
 TOE's own subjects: the process and its job, which the TSF attests. The uid
@@ -77,12 +81,25 @@ kernel log's buffer is, so nothing on a recording path allocates:
 * **The high-value ring**, 512 records (32 KiB): `GRANTED`, `CHANGED`,
   `ENDED`, `DEVICE` and `SYSTEM`. They are rare, and `REFUSED` traffic can
   never evict one.
-* **The refusal ring**, 4096 records (256 KiB): `REFUSED`, with per-job
-  fairness. Past 64 records from one job in a second, that job's further
+* **The refusal ring**, 4096 records (256 KiB): `REFUSED`, with fairness
+  per budget. Past 64 records charged to one budget in a second, its further
   refusals fold into one *suppressed n* record for it, written when its
-  second ends. A job that provokes refusals by the thousand -- varying the
-  object, which defeats a fold by identical event -- flushes at most its own
-  older refusals, never another job's, and never a grant.
+  second ends. A program that provokes refusals by the thousand -- varying
+  the object, which defeats a fold by identical event -- flushes at most its
+  own unit's older refusals, never another unit's, and never a grant.
+* **The budget** a refusal is charged to is its job's, walked up
+  (`audit::budget_of`) past every job the program's own authority could
+  have made: an anonymous one, which anyone holding a job handle that allows
+  it makes, and a named one in a directory someone other than root may
+  write, which is a delegatee's `mkdir`. The walk stops at a named job made
+  in a directory only root may write -- a unit's own cgroup -- so a program
+  that makes sub-jobs to refuse from shares its unit's one budget rather than
+  gaining 64 a second per job (the certification review, 2026-09-27).
+  A stated residual: root in the personality may make root-owned cgroups in
+  a directory only root may write, and each is a budget of its own, so root
+  can widen its own refusal throughput up to `cgroup.max.descendants`
+  budgets. That is root's own reach, which the personality already grants,
+  not an escalation.
 
 Each ring's lock is an `IrqSpinLock` (`crate::sync`): interrupts masked while
 it is held, for a 64-byte copy and two counters. An IOMMU fault is recorded
@@ -179,3 +196,28 @@ integrity of records once written to disk, which is the environment's
 F-21b would then read: audit claimed for the TSF's own decisions; FIA still
 the personality's, which is the isolation kernel's position and the reason no
 OS protection profile is claimed.
+
+## 8. How it is built
+
+Three slices, each reviewed before it lands:
+
+1. **The store** (built): `kernel/src/audit.rs`, in the core ring -- the
+   two rings of static storage under `IrqSpinLock`s, the gapless numbering
+   and the lost count, the fairness per budget with its *suppressed n*
+   record and `audit::budget_of`,
+   the audit id, which bring-up draws from the random generator and hands
+   in, since the generator is the item's and the core may not name it --
+   and bring-up's records: the start-up record and the boot's configuration
+   (`ferrix.checks`, `ferrix.devmgr`, the mitigations, KASLR) right after
+   the generator's check, and one when the boot is brought up. Its boot
+   check, `audit::check`, is §6's first half on stores of its own and on a
+   job tree of its own, and the kernel's store read back (FX-0309). The
+   record's layout is `libs/proto/audit`, whose host tests round-trip the
+   start-up record's id and ring lengths through the bytes a reader gets.
+2. **The call sites**: a record at each §1 decision, with a negative
+   control per site that the check names.
+3. **The reader**: `Object::Audit` and `audit_read`, init's
+   `audit.service` writing `/var/log/audit/<boot>.bin`, the xtask gate that
+   reads a `ferrix.checks=skip` boot's record from outside, the measured cost
+   in `MEMORY-AND-TIMING.md`, and the Security Target's claims (§7) with
+   their `H.AUD` requirements traced to the checks.
