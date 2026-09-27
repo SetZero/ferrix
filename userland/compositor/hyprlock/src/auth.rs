@@ -23,8 +23,8 @@
 use std::io;
 use std::sync::Mutex;
 
-pub use ferrix_auth_proto::Secret;
 use ferrix_auth_client::{Answer, Connection};
+pub use ferrix_auth_proto::Secret;
 use ferrix_auth_proto::{MAX_RECORD, Record, Response};
 
 /// Upstream's text for a wrong password.

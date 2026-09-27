@@ -136,7 +136,10 @@ fn a_wrong_password_then_the_right_one() {
         Next::Verdict(Verdict::Unavailable(_))
     ));
     assert!(backend.begin().is_ok());
-    assert_eq!(backend.respond(&secret("gatez")), Next::Verdict(Verdict::Accepted));
+    assert_eq!(
+        backend.respond(&secret("gatez")),
+        Next::Verdict(Verdict::Accepted)
+    );
     // STATUS, and one connection a conversation.
     assert_eq!(opened.load(Ordering::SeqCst), 3);
 }
@@ -154,7 +157,9 @@ fn no_credential_is_no_lock() {
     assert!(text.ends_with(": run `passwd` first"), "{text}");
     assert_eq!(
         backend.begin(),
-        Err(Verdict::Unavailable("no password is set for root".to_owned()))
+        Err(Verdict::Unavailable(
+            "no password is set for root".to_owned()
+        ))
     );
 }
 
@@ -179,9 +184,18 @@ fn no_authd_is_no_service() {
     let backend = Service::with_opener(Box::new(|| {
         Err(std::io::Error::from(std::io::ErrorKind::NotFound))
     }));
-    assert_eq!(backend.ready(), Err(Verdict::Unavailable(NO_SERVICE.to_owned())));
-    assert_eq!(backend.begin(), Err(Verdict::Unavailable(NO_SERVICE.to_owned())));
-    assert_eq!(Missing.begin(), Err(Verdict::Unavailable(NO_SERVICE.to_owned())));
+    assert_eq!(
+        backend.ready(),
+        Err(Verdict::Unavailable(NO_SERVICE.to_owned()))
+    );
+    assert_eq!(
+        backend.begin(),
+        Err(Verdict::Unavailable(NO_SERVICE.to_owned()))
+    );
+    assert_eq!(
+        Missing.begin(),
+        Err(Verdict::Unavailable(NO_SERVICE.to_owned()))
+    );
 }
 
 #[test]
