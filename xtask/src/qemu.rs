@@ -1341,6 +1341,51 @@ pub(crate) fn x86_cpu(accelerator: &str) -> String {
     format!("{base},+spec-ctrl,+stibp,+ssbd,+arch-capabilities,+auto-ibrs{clock}")
 }
 
+/// [`x86_cpu`] for the QEMU at `binary`: under TCG before QEMU 9.1, without
+/// SMAP.
+///
+/// Those QEMUs read the stack of a far return or `iret` from user mode to user
+/// mode as ring 0 -- "target/i386/tcg: Allow IRET from user mode to user mode
+/// with SMAP" fixed it in 9.1 -- so with SMAP on, the boot check that enters
+/// compatibility mode with `lretq` took a supervisor page fault in ring 3 and
+/// panicked the kernel. Ubuntu 24.04's QEMU is 8.2, which is what GitHub's
+/// runners install, and why CI's boot job failed from 2026-09-24. The
+/// kernel runs without SMAP, and says so; KVM uses the processor, which
+/// has no such fault, and `FERRIX_X86_CPU` still names any model at all.
+pub(crate) fn x86_cpu_for(binary: &Path, accelerator: &str) -> String {
+    let model = x86_cpu(accelerator);
+    if accelerator != "tcg" || std::env::var_os("FERRIX_X86_CPU").is_some() {
+        return model;
+    }
+    match qemu_version(binary) {
+        Some(version) if version < (9, 1) => {
+            println!(
+                "  x86_64: SMAP left off: QEMU {}.{} reads a user-mode far return's stack as                  ring 0 under TCG, which 9.1 fixed",
+                version.0, version.1
+            );
+            model.replace(",+smap", "")
+        }
+        _ => model,
+    }
+}
+
+/// The major and minor version `binary --version` prints: "QEMU emulator
+/// version 8.2.2 (Debian ...)".
+fn qemu_version(binary: &Path) -> Option<(u32, u32)> {
+    let output = Command::new(binary).arg("--version").output().ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    parse_qemu_version(&text)
+}
+
+/// [`qemu_version`]'s parse, apart for its tests.
+fn parse_qemu_version(text: &str) -> Option<(u32, u32)> {
+    let rest = text.split("version ").nth(1)?;
+    let mut parts = rest.split(|c: char| !c.is_ascii_digit());
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    Some((major, minor))
+}
+
 /// The PC QEMU emulates: `q35`, with `FERRIX_X86_MACHINE` added as
 /// `FERRIX_ARM_MACHINE` is added to `virt` -- `hpet=off` for a PC without an
 /// HPET, whose clock is then the TSC measured against the PIT.
@@ -1448,7 +1493,7 @@ fn qemu_command(
                 // Under a hypervisor, the speculation controls as well, and
                 // under KVM an invariant TSC; see `x86_cpu`.
                 "-cpu",
-                &x86_cpu(&accelerator),
+                &x86_cpu_for(&binary, &accelerator),
                 // A controlled way for the guest to end the test: writing 0x10
                 // to port 0xF4 exits QEMU with status 33.
                 "-device",
@@ -2285,8 +2330,23 @@ fn prepare_vars(arch: Arch, code: &Path, template: Option<&Path>) -> Result<Path
 mod tests {
     use super::{
         Arch, SUCCESS_MARKER, UNCHECKED_MARKER, devmgr_problem, entropy_problem, fault_problem,
-        iommu_problem,
+        iommu_problem, parse_qemu_version,
     };
+
+    /// What QEMU prints, from the two versions CI and this host have.
+    #[test]
+    fn the_qemu_version_is_read_from_its_banner() {
+        assert_eq!(
+            parse_qemu_version("QEMU emulator version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)\n"),
+            Some((8, 2))
+        );
+        assert_eq!(
+            parse_qemu_version("QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.2)\n"),
+            Some((10, 2))
+        );
+        assert!(parse_qemu_version("QEMU emulator version 8.2.2").is_some_and(|v| v < (9, 1)));
+        assert_eq!(parse_qemu_version("not qemu"), None);
+    }
 
     fn lines(text: &[&str]) -> Vec<String> {
         text.iter().map(|line| (*line).to_owned()).collect()
