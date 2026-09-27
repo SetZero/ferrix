@@ -660,18 +660,23 @@ jobs:
         with:
           tool: cargo-fuzz
 
+      # `--fuzz-dir .` on every call: cargo-fuzz finds the project's root --
+      # the workspace's -- and looks for `fuzz/` under it, whatever the working
+      # directory, and the corpus has been in tests/fuzz since the tree was
+      # regrouped (2026-09-26). Without it every call read fuzz/Cargo.toml and
+      # the job failed before building anything.
       # Pin the gnu host target: cargo-fuzz otherwise selects
       # x86_64-unknown-linux-musl, whose static libc is incompatible with
       # AddressSanitizer and whose std the runner does not have.
       - name: Build every target
-        run: cargo +nightly fuzz build --target x86_64-unknown-linux-gnu
+        run: cargo +nightly fuzz build --fuzz-dir . --target x86_64-unknown-linux-gnu
         working-directory: tests/fuzz
 
       - name: Replay the committed corpus
         run: |
-          for target in $(cargo +nightly fuzz list); do
+          for target in $(cargo +nightly fuzz list --fuzz-dir .); do
             echo "::group::replay $target"
-            cargo +nightly fuzz run "$target" \
+            cargo +nightly fuzz run --fuzz-dir . "$target" \
               --target x86_64-unknown-linux-gnu -- -runs=0
             echo "::endgroup::"
           done
@@ -681,9 +686,9 @@ jobs:
         # Thirty seconds each: long enough to explore what the diff changed,
         # short enough that the job stays inside a pull request's budget.
         run: |
-          for target in $(cargo +nightly fuzz list); do
+          for target in $(cargo +nightly fuzz list --fuzz-dir .); do
             echo "::group::search $target"
-            cargo +nightly fuzz run "$target" \
+            cargo +nightly fuzz run --fuzz-dir . "$target" \
               --target x86_64-unknown-linux-gnu -- -max_total_time=30
             echo "::endgroup::"
           done
