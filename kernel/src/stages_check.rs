@@ -1019,6 +1019,8 @@ pub(super) fn trap_check() -> Result<(), &'static str> {
 }
 
 /// A breakpoint must return to the instruction after it, twice.
+///
+/// Verifies: L.aarch64.6
 pub(super) fn check_breakpoint() -> Result<(), &'static str> {
     let before = trap::breakpoint_count();
 
@@ -1231,6 +1233,8 @@ pub(super) fn check_console_log() {
 /// the *counter* — two independent pieces of hardware on x86-64. Counting
 /// ticks and then converting them to seconds by the rate they were programmed
 /// at would be arithmetic, not a measurement: it could not fail.
+///
+/// Verifies: L.aarch64.24
 pub(super) fn timer_check() -> Result<u64, &'static str> {
     /// Ticks to count.
     ///

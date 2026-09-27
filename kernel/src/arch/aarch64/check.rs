@@ -106,6 +106,8 @@ const fn frame(kind: u64, class: u64, iss: u64) -> TrapFrame {
 type Case = (TrapFrame, Trap, Option<(u32, i32, u64)>);
 
 /// The exception classes, and what each becomes. Returns how many.
+///
+/// Verifies: L.aarch64.1, L.aarch64.2
 fn check_trap_decoding() -> Result<usize, &'static str> {
     /// `ISS` of a data abort: the write bit.
     const WRITE: u64 = 1 << 6;
@@ -227,7 +229,7 @@ fn check_frames_render() -> Result<(), &'static str> {
 /// `console=uart8250,mmio,<address>`, read or refused. Returns how many
 /// values were tried.
 ///
-/// Verifies: L.console.40
+/// Verifies: L.console.40, L.aarch64.27
 fn check_console_values() -> Result<usize, &'static str> {
     use super::console::{ns16550_port, ramoops_zone};
 
@@ -356,6 +358,8 @@ fn trng_words(call: usize) -> [u64; 3] {
 /// again and one that failed ending the fill, and nothing taken, nor
 /// `TRNG_RND64` asked, from one without the interface or the SMCCC and PSCI
 /// versions it needs. Returns how many firmwares.
+///
+/// Verifies: L.aarch64.44, L.aarch64.45
 fn check_trng() -> Result<usize, &'static str> {
     use super::trng::{ATTEMPTS, NO_ENTROPY, fill_from};
 
@@ -434,6 +438,8 @@ fn check_trng() -> Result<usize, &'static str> {
 
 /// An idle shared line and an idle private one are masked and let through,
 /// each read back. Returns how many lines.
+///
+/// Verifies: L.aarch64.16
 fn check_masking() -> Result<usize, &'static str> {
     use super::gic;
 
@@ -457,6 +463,8 @@ fn check_masking() -> Result<usize, &'static str> {
 }
 
 /// What the interrupt controller must refuse. Returns how many requests.
+///
+/// Verifies: L.aarch64.17, L.aarch64.21
 fn check_refusals() -> Result<usize, &'static str> {
     // 1020 to 1023 are the controller's answers, not lines: 1023 is
     // "spurious".
@@ -492,6 +500,8 @@ fn check_refusals() -> Result<usize, &'static str> {
 /// # Errors
 ///
 /// A description given the wrong driver.
+///
+/// Verifies: L.aarch64.13
 fn check_described_version() -> Result<usize, &'static str> {
     let layout = |version, cpu_interface, redistributors| super::gic::Layout {
         distributor: 0x0800_0000,
@@ -525,6 +535,8 @@ fn check_described_version() -> Result<usize, &'static str> {
 /// the program's own number in `x8` is kept for the first and replaced for
 /// the second, `x0` gets its argument back, and the return address steps
 /// back over the `svc`. Linux's `arch_do_signal_or_restart`.
+///
+/// Verifies: L.aarch64.8
 fn check_restart_rewind() -> Result<(), &'static str> {
     use ferrix_linux_abi::nr::aarch64::{CLOCK_NANOSLEEP, RESTART_SYSCALL};
 

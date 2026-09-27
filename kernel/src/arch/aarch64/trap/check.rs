@@ -87,6 +87,8 @@ const fn killed_by(signal: u32) -> i32 {
 /// # Errors
 ///
 /// The first program that could not be run, or ended other than it had to.
+///
+/// Verifies: L.aarch64.3
 pub(crate) fn run() -> Result<(), &'static str> {
     crate::trap::check::outcomes()?;
     let cases: [(&[u8], &[u8], i32, &'static str); 4] = [

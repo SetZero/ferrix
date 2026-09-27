@@ -111,11 +111,12 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixIommuRequirements` | `16-iommu-requirements.sysml` | What each unit of kernel/src/iommu.rs and kernel/src/iommu/ does, as `ItemLowLevel` requirements (part 13 defines the format): where firmware puts each PCI function's DMA, the units the kernel turns translation on for, the domains a driver pins pages into, the gate a wait on a unit is made through, and the faults a unit records. The pins a program makes through a handle, and the quarantine a dead driver's pins go to, are object/'s (part 14, `L.object.45` to `L.object.49`); this is the domain side under them. |
 | `FerrixMemoryRequirements` | `17-memory-requirements.sysml` | What each unit of the item's memory management does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies), in two id spaces. |
 | `FerrixX8664Requirements` | `18-x86-64-requirements.sysml` | What each unit of kernel/src/arch/x86_64/, kernel/src/trap.rs and kernel/src/syscall/mod.rs's dispatcher does, as `ItemLowLevel` requirements (part 13 defines the format): the descriptor tables and which selectors ring 3 may hold, the context switch and the user state it carries, starting processors, the paranoid entries, the speculation defences, the counter and timer, both ABIs' signal frames, SYSCALL and int $0x80, the exception gates and what a fault becomes, and which calls reach which answer. |
+| `FerrixAarch64Requirements` | `19-aarch64-requirements.sysml` | What each unit of kernel/src/arch/aarch64/ does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): the trap path and the signal frames it builds, the context switch, the interrupt controllers and the generic timer, the boot console, the system registers, translation and the TLB, starting the other processors, the speculation defences, and what firmware is asked for -- power, reset, entropy. The PL011 and the GICv2 are arch/arm_common's, shared with ARMv7-A, and are not here. |
 | `FerrixDeviceRequirements` | `20-device-requirements.sysml` | What each unit of kernel/src/claim.rs and kernel/src/device.rs does, and the quiesce in kernel/src/syscall/native.rs, as `ItemLowLevel` requirements (part 13 defines the format): a device claimed through its core's control channels, the number its node is published under, the apertures and vectors a node hands out and nothing past them, the MSI-X vectors it mints, the bus mastering a quiesce turns off, and the quiesce itself, which waits out every core that serves the device before the next driver is given it. The objects a driver holds for a device -- its mapping, its interrupt, its pins -- are object/'s (part 14); the domain under them is iommu's (part 16). |
 | `FerrixSmpRequirements` | `22-smp-requirements.sysml` | What each unit of kernel/src/smp.rs does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): finding the processors and giving each a record it finds itself by, starting the secondaries, the inter-processor interrupt, the TLB shootdown -- whole and scoped, and the bound on how long it waits -- grace periods, stopping the other processors for a panic, and the scheduler's kick. The start sequences themselves, the per-processor register and the interrupt controller are each architecture's (kernel/src/arch/\<isa>/smp.rs), and belong to the arch slices; this is the architecture-independent half above them. |
 | `FerrixConsoleRequirements` | `23-console-requirements.sysml` | What each unit of kernel/src/console.rs and kernel/src/console/ does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): the kernel's lines to the port, whole and in order; the way a failure report gets past a lock nobody will release; the recent-output ring a panic screen draws; the transmit ring and the writers who queue into it, wait for room or poll; the receive ring the port's interrupt fills; the kernel log every byte is recorded in, what it promises a reader and what it keeps out; and the boot console drawn on the framebuffer. The ports themselves are each architecture's (kernel/src/arch/\<isa>/console.rs) and belong to the arch slices; the two of their functions that decide \*which\* console the kernel writes to, and whose checks test that, are here too (`Ports`), at the coordinator's asking. |
 
-22 files, 92 packages, 4990 elements, 211 relations. Model digest `6726fcd3c793af0f`.
+23 files, 103 packages, 5246 elements, 212 relations. Model digest `24c9439a50e4dcc5`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -4272,6 +4273,55 @@ flowchart LR
 | `L.syscall.3` | `enosysIsReportedWithinItsBound` | — | — | — |
 | `L.trap.5` | `noEntryMeansEnosys` | — | — | — |
 | `L.trap.6` | `aMovedProcessRunsInItsNewJob` | — | — | — |
+| `L.aarch64.1` | `syndromesAreDecoded` | — | — | — |
+| `L.aarch64.2` | `faultsGetLinuxsSignal` | — | — | — |
+| `L.aarch64.3` | `programsFaultToTheirSignal` | — | — | — |
+| `L.aarch64.4` | `systemCallsAreServed` | — | — | — |
+| `L.aarch64.5` | `kernelTrapsAreReported` | — | — | — |
+| `L.aarch64.6` | `ownBreakpointsAreSteppedOver` | — | — | — |
+| `L.aarch64.7` | `perCpuRecordIsTheProcessors` | — | — | — |
+| `L.aarch64.8` | `interruptedCallsAreRewound` | — | — | — |
+| `L.aarch64.9` | `signalFramesAreLinuxs` | — | — | — |
+| `L.aarch64.10` | `sigreturnKeepsPrivilege` | — | — | — |
+| `L.aarch64.11` | `stacksSwitch` | — | — | — |
+| `L.aarch64.12` | `userStateFollowsTheTask` | — | — | — |
+| `L.aarch64.13` | `describedVersionPicksTheDriver` | — | — | — |
+| `L.aarch64.14` | `theControllerIsFoundAndBroughtUp` | — | — | — |
+| `L.aarch64.15` | `gicv3IsConfigured` | — | — | — |
+| `L.aarch64.16` | `linesAreMaskedAtTheController` | — | — | — |
+| `L.aarch64.17` | `specialIdentifiersAreNoLines` | — | — | — |
+| `L.aarch64.18` | `interruptsAreClaimedAndRetired` | — | — | — |
+| `L.aarch64.19` | `processorInterruptsAreSent` | — | — | — |
+| `L.aarch64.20` | `itsTranslatesMessages` | — | — | — |
+| `L.aarch64.21` | `itsRefusesAnUnknownDevice` | — | — | — |
+| `L.aarch64.22` | `msiDoorbellIsNamed` | — | — | — |
+| `L.aarch64.23` | `interruptMaskFollowsTheCaller` | — | — | — |
+| `L.aarch64.24` | `theTimerFiresOnce` | — | — | — |
+| `L.aarch64.25` | `theCounterRuns` | — | — | — |
+| `L.aarch64.26` | `programsReadTheCounter` | — | — | — |
+| `L.aarch64.27` | `a16550ValueIsReadOrRefused` | — | — | — |
+| `L.aarch64.28` | `theNamedConsoleIsMapped` | — | — | — |
+| `L.aarch64.29` | `bytesReachTheConsole` | — | — | — |
+| `L.aarch64.30` | `consoleInputArrives` | — | — | — |
+| `L.aarch64.31` | `userRootsAreInstalled` | — | — | — |
+| `L.aarch64.32` | `theIdentityMapGoes` | — | — | — |
+| `L.aarch64.33` | `tablesArePublishedAndFlushed` | — | — | — |
+| `L.aarch64.34` | `cachesAreMaintained` | — | — | — |
+| `L.aarch64.35` | `panKeepsTheKernelOut` | — | — | — |
+| `L.aarch64.49` | `devicesSeeAccessesInOrder` | — | — | — |
+| `L.aarch64.36` | `processorsAreDescribed` | — | — | — |
+| `L.aarch64.37` | `secondariesStart` | — | — | — |
+| `L.aarch64.38` | `programsSeeTheCoresFeatures` | — | — | — |
+| `L.aarch64.39` | `partTablesAreLinuxs` | — | — | — |
+| `L.aarch64.40` | `firmwareAnswersAreRead` | — | — | — |
+| `L.aarch64.41` | `theEntryLoopMatchesTheRecords` | — | — | — |
+| `L.aarch64.42` | `defencesAreAppliedAndReadBack` | — | — | — |
+| `L.aarch64.43` | `indicesAreClamped` | — | — | — |
+| `L.aarch64.44` | `trngWordsAreTakenInOrder` | — | — | — |
+| `L.aarch64.45` | `trngIsAskedOnlyWhereOffered` | — | — | — |
+| `L.aarch64.46` | `theSeedAsksFirmware` | — | — | — |
+| `L.aarch64.47` | `theMachineStops` | — | — | — |
+| `L.aarch64.48` | `watchdogsAreFed` | — | — | — |
 | `L.claim.1` | `aNodeIsClaimedOnce` | — | — | — |
 | `L.claim.2` | `aSharedNodeUpToItsLimit` | — | — | — |
 | `L.claim.3` | `refusedUnderAnyLiveDriver` | — | — | — |

@@ -862,9 +862,9 @@
     "arch/aarch64/speculation.rs": {
       "ring": "core",
       "lines": [
-        283,
-        298,
-        303
+        286,
+        301,
+        306
       ]
     },
     "arch/aarch64/smp.rs": {

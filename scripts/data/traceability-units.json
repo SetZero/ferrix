@@ -18,6 +18,7 @@
     "function or one a requirement names."
   ],
   "complete": [
+    "arch::aarch64",
     "arch::x86_64",
     "claim",
     "console",
@@ -32,6 +33,12 @@
     "vmap"
   ],
   "check_code_in_product": {
+    "arch::aarch64::check_exception_entry": "The architecture's answer to the generic boot's exception-entry check: nothing to check here, since no exception finds the kernel on a program's stack. Part of the arch interface every architecture provides.",
+    "arch::aarch64::check_machine": "The architecture's entry to its machine check (arch/aarch64/check.rs), which main.rs calls through the arch interface every architecture provides; it runs the check and nothing else.",
+    "arch::aarch64::gic::enabled_for_check": "Reads a line's enable back from whichever GIC driver the boot chose, for the machine check's masking case; it needs the driver choice private to gic.rs.",
+    "arch::aarch64::gic::gicv3::enabled_for_check": "Reads a GICv3 line's enable bit back for the machine check; it needs the register windows private to gicv3.rs.",
+    "arch::aarch64::gic::gicv3::idle_line_for_check": "Finds a GICv3 line nothing has enabled for the machine check; it needs the register windows private to gicv3.rs.",
+    "arch::aarch64::gic::idle_line_for_check": "Finds a line nothing has enabled, for the machine check's masking case; it needs the driver choice private to gic.rs.",
     "arch::x86_64::check_exception_entry": "It only runs the paranoid, syscall, gdt and trap checks' run functions, for main.rs's stage 3; it can move into a check file under arch::x86_64.",
     "arch::x86_64::cpu::forbid_user_access": "Closes SMAP's window through arch::forbid_user_access, whose only callers are user/check.rs's checks.",
     "arch::x86_64::cpu::permit_user_access": "Opens SMAP's window through arch::permit_user_access, whose only callers are user/check.rs's checks of the window; the kernel's own user copies do not use it.",

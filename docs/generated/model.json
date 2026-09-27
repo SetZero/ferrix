@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "6726fcd3c793af0f1d9d7373144eef6b63dae7cb07758e32ffaca0cdd72b6110",
+  "digest": "24c9439a50e4dcc5def2d8fd2d50d1b380627a7f39f62016772c0b9855e3a59d",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -79,6 +79,10 @@
       "synopsis": "Ferrix — SysML v2 model, part 18: the low-level requirements of the x86-64 architecture, the trap path and the system call entry.\n\nWhat each unit of kernel/src/arch/x86_64/, kernel/src/trap.rs and kernel/src/syscall/mod.rs's dispatcher does, as `ItemLowLevel` requirements (part 13 defines the format): the descriptor tables and which selectors ring 3 may hold, the context switch and the user state it carries, starting processors, the paranoid entries, the speculation defences, the counter and timer, both ABIs' signal frames, SYSCALL and int $0x80, the exception gates and what a fault becomes, and which calls reach which answer.\n\nThe format is the object/ pilot's (W-8 step 3), and so are its rules: a requirement names every function that carries its behaviour as its `unit`; one check proves a whole requirement, so a requirement is split where the checks that exist each prove a part; a statement says no more than its criterion tests; an accessor needs no requirement of its own.\n\nWhat proves what. Most of this is proved by programs the boot runs in ring 3: arch/x86_64/trap/check.rs's faulting programs and its i386 programs (int $0x80, thread-local segments, both signal frames and a fork, forged frames, socketcall), syscall/check.rs's 64-bit ones, and paranoid/check.rs's breakpoints in the SYSCALL window. Two limits of the default gate are said where they matter: under TCG the processor offers no speculation controls and the counter is the HPET, so the read-back and the TSC paths are exercised by the KVM boot row only; and several checks the boot runs -- stage 3's breakpoints and demand paging, the timer's rate, CR0.WP -- are functions of main.rs, product code a tag cannot go on, so their requirements wait in the baseline until the checks move. So does every criterion no check tests: docs/certification/IMPLEMENTATION.md W-8 lists them.\n\nIds are `L.x86_64.<n>`, `L.trap.<n>` and `L.syscall.<n>`, numbered through each; the package gives the part."
     },
     {
+      "path": "docs/sysml/19-aarch64-requirements.sysml",
+      "synopsis": "Ferrix — SysML v2 model, part 19: the low-level requirements of arch/aarch64.\n\nWhat each unit of kernel/src/arch/aarch64/ does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): the trap path and the signal frames it builds, the context switch, the interrupt controllers and the generic timer, the boot console, the system registers, translation and the TLB, starting the other processors, the speculation defences, and what firmware is asked for -- power, reset, entropy. The PL011 and the GICv2 are arch/arm_common's, shared with ARMv7-A, and are not here.\n\nWhat proves what. This architecture's own checks are arch/aarch64/check.rs (the machine check: exception syndromes decoded, console= values, the TRNG against scripted firmware, the GIC's driver per description, masking read back at the controller, refusals, a system call rewound), arch/aarch64/trap/check.rs (real programs whose own instructions fault, each required to end with the signal Linux sends) and arch/aarch64/speculation/check.rs (the part tables, firmware's answers, the entry loop's count). Most of the rest is exercised by every boot -- the console carries the log, the timer ticks, the secondaries start, the scheduler switches -- but through checks in product code (main.rs's stage checks) or through generic checks whose criteria are the generic layer's, so it waits in the baseline as check-writing work rather than being credited to a check that does not assert it. Where the hardware a unit drives is not on the machine the suite boots -- the crosvm guest's 16550, the Pixel 7's ramoops zone and watchdogs, a firmware TRNG -- the criterion says which machine shows it.\n\nIds are `L.aarch64.<n>`, flat through the architecture; the package gives the area. The pilot's rules hold: a requirement names every function that carries its behaviour; it is no broader than one check can prove; an accessor needs no requirement of its own; and check code living in a product file is listed in scripts/data/traceability-units.json."
+    },
+    {
       "path": "docs/sysml/20-device-requirements.sysml",
       "synopsis": "Ferrix — SysML v2 model, part 20: the low-level requirements of a device's claim, its node, and its quiesce.\n\nWhat each unit of kernel/src/claim.rs and kernel/src/device.rs does, and the quiesce in kernel/src/syscall/native.rs, as `ItemLowLevel` requirements (part 13 defines the format): a device claimed through its core's control channels, the number its node is published under, the apertures and vectors a node hands out and nothing past them, the MSI-X vectors it mints, the bus mastering a quiesce turns off, and the quiesce itself, which waits out every core that serves the device before the next driver is given it. The objects a driver holds for a device -- its mapping, its interrupt, its pins -- are object/'s (part 14); the domain under them is iommu's (part 16).\n\nThe format and its rules are the object/ pilot's (W-8 step 3): a requirement names every function that carries its behaviour as its `unit`; one check proves a whole requirement; a statement says no more than its criterion tests; an accessor needs no requirement of its own.\n\nWhat proves what. The claims and numbers are proved by service_check.rs, on claims of its own. A node's rules are proved on every boot, before the nodes are published, by device/check.rs, which `device::publish` runs. The quiesce is proved by block_ring/check.rs, which drives `device_quiesce` through a driver's life and death on the first PCI function, and by xtask's `test-init`, which restarts `devmgr`. What no check proves waits in the baseline as check-writing work.\n\nIds are `L.claim.<n>`, `L.device.<n>` and `L.quiesce.<n>`, numbered through each part; `L.quiesce` names the behaviour, whose units are in syscall/native.rs."
     },
@@ -92,8 +96,8 @@
     }
   ],
   "summary": {
-    "packages": 92,
-    "elements": 4990,
+    "packages": 103,
+    "elements": 5246,
     "maturity": {
       "implemented": 273,
       "inProgress": 11,
@@ -101,7 +105,7 @@
       "planned": 37
     },
     "deferred": 20,
-    "relations": 211,
+    "relations": 212,
     "figures": 20,
     "unparsed": 0
   },
@@ -51114,6 +51118,2930 @@
       ]
     },
     {
+      "name": "FerrixAarch64Requirements",
+      "qualifiedName": "FerrixAarch64Requirements",
+      "kind": "package",
+      "source": {
+        "file": "docs/sysml/19-aarch64-requirements.sysml",
+        "line": 37
+      },
+      "children": [
+        {
+          "name": "Traps",
+          "qualifiedName": "FerrixAarch64Requirements::Traps",
+          "kind": "package",
+          "doc": "kernel/src/arch/aarch64/trap.rs: the vector table, the save and restore sequences, and the decoding of a syndrome into the architecture-neutral trap the generic dispatcher acts on.",
+          "source": {
+            "file": "docs/sysml/19-aarch64-requirements.sysml",
+            "line": 40
+          },
+          "children": [
+            {
+              "name": "syndromesAreDecoded",
+              "qualifiedName": "FerrixAarch64Requirements::Traps::syndromesAreDecoded",
+              "kind": "requirement",
+              "shortName": "L.aarch64.1",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 45
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::syndromesAreDecoded",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"classify shall turn a trap frame into the trap its vector entry and exception class name: a breakpoint, a system call, an undefined instruction, a data or instruction abort as a page fault with its address, access and origin, an IRQ entry as an interrupt, and any other class, allocated or not, as a named fault; and came_from_user shall answer from the vector entry.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 51
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::syndromesAreDecoded",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The machine check's 14 frames, one per class a boot or a program raises and one the architecture has not allocated, are each classified as the trap listed for them, and a frame from EL0 and one from EL1 are told apart.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 55
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::syndromesAreDecoded",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.TRAP.4\", \"H.TRAP.6\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 56
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::syndromesAreDecoded",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::trap::classify\", \"arch::aarch64::trap::abort\", \"arch::aarch64::trap::is_irq\", \"arch::aarch64::trap::class_name\", \"arch::aarch64::trap::TrapFrame::came_from_user\", \"arch::aarch64::trap::TrapFrame::exception_class\", \"arch::aarch64::trap::TrapFrame::syndrome\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 61
+                  }
+                }
+              ]
+            },
+            {
+              "name": "faultsGetLinuxsSignal",
+              "qualifiedName": "FerrixAarch64Requirements::Traps::faultsGetLinuxsSignal",
+              "kind": "requirement",
+              "shortName": "L.aarch64.2",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 63
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::faultsGetLinuxsSignal",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"fault_signal shall give a program's unresolved trap the signal, si_code and address Linux's arch/arm64 gives it: SIGTRAP for a breakpoint, SIGILL for an undefined or unallocated instruction class, SIGSEGV with MAPERR or ACCERR for an abort, SIGBUS with ADRALN for a misaligned program counter or stack pointer, SIGFPE for a trapped floating-point exception.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 70
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::faultsGetLinuxsSignal",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Each of the machine check's 12 faulting frames is given the signal, si_code and address listed for it.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 72
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::faultsGetLinuxsSignal",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.TRAP.4\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 73
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::faultsGetLinuxsSignal",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"arch::aarch64::trap::fault_signal\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 74
+                  }
+                }
+              ]
+            },
+            {
+              "name": "programsFaultToTheirSignal",
+              "qualifiedName": "FerrixAarch64Requirements::Traps::programsFaultToTheirSignal",
+              "kind": "requirement",
+              "shortName": "L.aarch64.3",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 76
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::programsFaultToTheirSignal",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A program whose own instruction takes a misaligned program counter, an undefined instruction, a breakpoint or a read past the end of a file it mapped shall be ended by SIGBUS, SIGILL, SIGTRAP and SIGBUS respectively, the kernel going on: the vector table's entry from EL0 saves the frame, hands it to ferrix_trap_entry and returns through resume_user.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 82
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::programsFaultToTheirSignal",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Four programs, each one of those instructions and then exit_group(97), are run from the trap check, and each ends with the status 128 plus its signal.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 85
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::programsFaultToTheirSignal",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.TRAP.4\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 86
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::programsFaultToTheirSignal",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::trap::ferrix_trap_entry\", \"arch::aarch64::trap::resume_user\", \"arch::aarch64::trap::enter_user\", \"arch::aarch64::trap::init\", \"arch::aarch64::init_traps\", \"arch::aarch64::cpu::write_vbar\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 90
+                  }
+                }
+              ]
+            },
+            {
+              "name": "systemCallsAreServed",
+              "qualifiedName": "FerrixAarch64Requirements::Traps::systemCallsAreServed",
+              "kind": "requirement",
+              "shortName": "L.aarch64.4",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 92
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::systemCallsAreServed",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"system_call shall refuse an svc taken from EL1, answer rt_sigreturn itself by replacing the whole frame, and otherwise pass x8 and x0 to x5 to the dispatcher and write its result into x0, or begin the program an execve or clone child enters at its entry and stack.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 97
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::systemCallsAreServed",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Every program the boot runs makes its calls through this path; a check that an svc from EL1 is refused and that a call's six arguments and its number reach the dispatcher unchanged is not written.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 101
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::systemCallsAreServed",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.TRAP.10\", \"H.TRAP.12\", \"H.TRAP.6\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 102
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::systemCallsAreServed",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::trap::system_call\", \"arch::aarch64::trap::UserRegs::for_child\", \"arch::aarch64::trap::UserRegs::set_stack\", \"arch::aarch64::trap::UserRegs::stack_pointer\", \"arch::aarch64::decode_syscall\", \"arch::aarch64::decode_compat_syscall\", \"arch::aarch64::image_abi\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 108
+                  }
+                }
+              ]
+            },
+            {
+              "name": "kernelTrapsAreReported",
+              "qualifiedName": "FerrixAarch64Requirements::Traps::kernelTrapsAreReported",
+              "kind": "requirement",
+              "shortName": "L.aarch64.5",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 110
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::kernelTrapsAreReported",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"report_trap shall print the interrupted state -- the exception class by name, the syndrome, the fault address and the registers -- without taking the console's log, for a trap that stops the kernel.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 114
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::kernelTrapsAreReported",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A kernel trap's failure report carries the class name, esr, far and the 31 registers; no boot check provokes one, and a deliberate crash is the failure path's evidence.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 117
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::kernelTrapsAreReported",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.FAIL.1\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 118
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::kernelTrapsAreReported",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::trap::report_trap\", \"arch::aarch64::trap::TrapFrame::instruction_pointer\", \"arch::aarch64::frame_pointer\", \"arch::aarch64::cpu::frame_pointer\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 121
+                  }
+                }
+              ]
+            },
+            {
+              "name": "ownBreakpointsAreSteppedOver",
+              "qualifiedName": "FerrixAarch64Requirements::Traps::ownBreakpointsAreSteppedOver",
+              "kind": "requirement",
+              "shortName": "L.aarch64.6",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 123
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::ownBreakpointsAreSteppedOver",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A breakpoint the kernel raised itself shall be stepped over and returned from: advance_past_breakpoint moves the return address past the brk, which AArch64 leaves pointing at it.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 127
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::ownBreakpointsAreSteppedOver",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Stage 3's check raises two breakpoints; both reach the handler and return to the instruction after them, a register kept across them unchanged.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 130
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::ownBreakpointsAreSteppedOver",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.TRAP.4\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 131
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::ownBreakpointsAreSteppedOver",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::trap::breakpoint\", \"arch::aarch64::trap::advance_past_breakpoint\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 133
+                  }
+                }
+              ]
+            },
+            {
+              "name": "perCpuRecordIsTheProcessors",
+              "qualifiedName": "FerrixAarch64Requirements::Traps::perCpuRecordIsTheProcessors",
+              "kind": "requirement",
+              "shortName": "L.aarch64.7",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 135
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::perCpuRecordIsTheProcessors",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"set_cpu_local shall point TPIDR_EL1 at this processor's own per-CPU record, and cpu_local and cpu_local_register shall read it back, so that the trap path finds this processor's state whatever a program left in its registers.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 139
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::perCpuRecordIsTheProcessors",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Each processor's per-CPU record is its own: a check that every online processor reads back the record it installed is not written.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 142
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::perCpuRecordIsTheProcessors",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.6\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 143
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Traps::perCpuRecordIsTheProcessors",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::set_cpu_local\", \"arch::aarch64::cpu_local\", \"arch::aarch64::cpu_local_register\", \"arch::aarch64::cpu::write_tpidr_el1\", \"arch::aarch64::cpu::read_tpidr_el1\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 146
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Signals",
+          "qualifiedName": "FerrixAarch64Requirements::Signals",
+          "kind": "package",
+          "doc": "kernel/src/arch/aarch64/signal.rs: the rt_sigframe Linux builds on AArch64 and the restore that reads it back, and the rewind of a system call a signal interrupted.",
+          "source": {
+            "file": "docs/sysml/19-aarch64-requirements.sysml",
+            "line": 150
+          },
+          "children": [
+            {
+              "name": "interruptedCallsAreRewound",
+              "qualifiedName": "FerrixAarch64Requirements::Signals::interruptedCallsAreRewound",
+              "kind": "requirement",
+              "shortName": "L.aarch64.8",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 155
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Signals::interruptedCallsAreRewound",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"rewind_syscall shall make an interrupted svc run again when the program resumes: x0 gets its first argument back, the return address steps back over the svc, and x8 keeps the program's number, or becomes restart_syscall's when the call's restart is restart_syscall's.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 160
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Signals::interruptedCallsAreRewound",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A clock_nanosleep frame rewound both ways has x0 its argument, the return address four bytes back, and x8 clock_nanosleep's number and restart_syscall's respectively.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 163
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Signals::interruptedCallsAreRewound",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.TRAP.4\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 164
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Signals::interruptedCallsAreRewound",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::signal::UserContext::rewind_syscall\", \"arch::aarch64::signal::UserContext::from_trap\", \"arch::aarch64::signal::UserContext::store_trap\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 167
+                  }
+                }
+              ]
+            },
+            {
+              "name": "signalFramesAreLinuxs",
+              "qualifiedName": "FerrixAarch64Requirements::Signals::signalFramesAreLinuxs",
+              "kind": "requirement",
+              "shortName": "L.aarch64.9",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 169
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Signals::signalFramesAreLinuxs",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"setup_signal_frame shall write an rt_sigframe as arch/arm64 lays it out -- siginfo, ucontext with the registers and one fpsimd_context, a frame record -- 16-byte aligned below the stack pointer, and enter the handler with x0 the signal, x1 the siginfo, x2 the ucontext and x30 the restorer.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 174
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Signals::signalFramesAreLinuxs",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A handler entered from a frame this writes reads its signal, its siginfo and its interrupted registers where musl reads them; the generic signal checks run handlers but assert the generic layer's behaviour, and a check of the frame's layout on this architecture is not written.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 179
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Signals::signalFramesAreLinuxs",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.TRAP.9\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 180
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Signals::signalFramesAreLinuxs",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::signal::setup_signal_frame\", \"arch::aarch64::signal::write_frame_record\", \"arch::aarch64::signal::UserContext::stack_pointer\", \"arch::aarch64::signal::UserContext::syscall_result\", \"arch::aarch64::signal::UserContext::set_syscall_result\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 185
+                  }
+                }
+              ]
+            },
+            {
+              "name": "sigreturnKeepsPrivilege",
+              "qualifiedName": "FerrixAarch64Requirements::Signals::sigreturnKeepsPrivilege",
+              "kind": "requirement",
+              "shortName": "L.aarch64.10",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 187
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Signals::sigreturnKeepsPrivilege",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"restore_signal_frame shall refuse a frame whose stack pointer is not 16-byte aligned or whose records hold no single fpsimd_context, and shall load the registers from it with PSTATE's mode, interrupt masks and execution state forced to EL0's.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 191
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Signals::sigreturnKeepsPrivilege",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A frame forged with EL1 in PSTATE and masked interrupts returns to EL0 with them clear, and a misaligned or fpsimd-less frame is refused; not written as a check here (the x86-64 part of H.TRAP.5 has its forged frames).\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 195
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Signals::sigreturnKeepsPrivilege",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.TRAP.5\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 196
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Signals::sigreturnKeepsPrivilege",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::signal::restore_signal_frame\", \"arch::aarch64::signal::find_fpsimd\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 198
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Context",
+          "qualifiedName": "FerrixAarch64Requirements::Context",
+          "kind": "package",
+          "doc": "kernel/src/arch/aarch64/switch.rs: moving between kernel stacks, and a user task's floating-point, SIMD and thread-pointer state across the switch, a fork and an execve.",
+          "source": {
+            "file": "docs/sysml/19-aarch64-requirements.sysml",
+            "line": 202
+          },
+          "children": [
+            {
+              "name": "stacksSwitch",
+              "qualifiedName": "FerrixAarch64Requirements::Context::stacksSwitch",
+              "kind": "requirement",
+              "shortName": "L.aarch64.11",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 207
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Context::stacksSwitch",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"switch_to shall save the callee-saved registers and the stack pointer of the running context and resume the one saved at next, and prepare_stack shall lay out a new stack so that the first switch to it calls entry with argument.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 211
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Context::stacksSwitch",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Every task the scheduler starts runs its entry and every switch returns to the task switched from; the scheduler's checks assert the generic layer's fairness and wakes, and a check that a switch preserves x19 to x30 is not written.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 215
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Context::stacksSwitch",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.1\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 216
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Context::stacksSwitch",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::switch::switch_to\", \"arch::aarch64::switch::prepare_stack\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 218
+                  }
+                }
+              ]
+            },
+            {
+              "name": "userStateFollowsTheTask",
+              "qualifiedName": "FerrixAarch64Requirements::Context::userStateFollowsTheTask",
+              "kind": "requirement",
+              "shortName": "L.aarch64.12",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 220
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Context::userStateFollowsTheTask",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"save_user_state and restore_user_state shall carry a user task's q0 to q31, FPCR, FPSR and TPIDR_EL0 across a switch, capture shall copy them for a fork child, and reset_user_state and new shall give an execve the starting state: every register zero, round to nearest, no exception trapped, no thread pointer.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 226
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Context::userStateFollowsTheTask",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Two tasks whose SIMD registers hold different values each read back their own after switches; a check of it is not written, though every musl program's memcpy would corrupt without it.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 230
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Context::userStateFollowsTheTask",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.1\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 231
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Context::userStateFollowsTheTask",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::switch::save_user_state\", \"arch::aarch64::switch::restore_user_state\", \"arch::aarch64::switch::reset_user_state\", \"arch::aarch64::switch::UserState::capture\", \"arch::aarch64::switch::UserState::new\", \"arch::aarch64::switch::UserState::set_thread_pointer\", \"arch::aarch64::switch::UserState::set_thread_area\", \"arch::aarch64::switch::UserState::fp_control\", \"arch::aarch64::switch::UserState::vectors\", \"arch::aarch64::switch::UserState::set_fp\", \"arch::aarch64::cpu::enable_user_fpu\", \"arch::aarch64::set_thread_area\", \"arch::aarch64::thread_area\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 243
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Interrupts",
+          "qualifiedName": "FerrixAarch64Requirements::Interrupts",
+          "kind": "package",
+          "doc": "kernel/src/arch/aarch64/gic.rs, gic/gicv3.rs, gic/gicv3_its.rs and the interrupt half of mod.rs: which controller the machine has, a GICv3 and its ITS brought up, lines masked and let through, and interrupts claimed, dispatched and retired.",
+          "source": {
+            "file": "docs/sysml/19-aarch64-requirements.sysml",
+            "line": 247
+          },
+          "children": [
+            {
+              "name": "describedVersionPicksTheDriver",
+              "qualifiedName": "FerrixAarch64Requirements::Interrupts::describedVersionPicksTheDriver",
+              "kind": "requirement",
+              "shortName": "L.aarch64.13",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 253
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::describedVersionPicksTheDriver",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"described_version shall give a GIC the driver of the version firmware states, and for version 0 the one its register blocks imply -- a CPU interface GICv2's, a redistributor region GICv3's -- and none to a description with neither.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 258
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::describedVersionPicksTheDriver",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Each of the machine check's 6 descriptions, versions 0, 2, 3 and 4 with and without each block, is given the driver listed for it.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 261
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::describedVersionPicksTheDriver",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.IRQ.1\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 262
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::describedVersionPicksTheDriver",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"arch::aarch64::gic::described_version\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 263
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theControllerIsFoundAndBroughtUp",
+              "qualifiedName": "FerrixAarch64Requirements::Interrupts::theControllerIsFoundAndBroughtUp",
+              "kind": "requirement",
+              "shortName": "L.aarch64.14",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 265
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::theControllerIsFoundAndBroughtUp",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"init and init_from_tree shall find the interrupt controller in the MADT or the device tree and bring up the driver described_version chose, with its GICv2m frame or its ITS where the description has one, before any line is enabled.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 269
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::theControllerIsFoundAndBroughtUp",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Every aarch64 boot the suite runs reports the controller it described, GICv2 by default and GICv3 with an ITS under boot-gicv3, and takes interrupts; the report is judged by test-boot's stage lines rather than by a check that asserts the version.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 274
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::theControllerIsFoundAndBroughtUp",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.IRQ.1\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 275
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::theControllerIsFoundAndBroughtUp",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::gic::init\", \"arch::aarch64::gic::init_from_tree\", \"arch::aarch64::gic::init_v2\", \"arch::aarch64::gic::init_v3\", \"arch::aarch64::gic::layout\", \"arch::aarch64::gic::first_its\", \"arch::aarch64::gic::is_v3\", \"arch::aarch64::gic::init_this_cpu\", \"arch::aarch64::init_interrupts\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 280
+                  }
+                }
+              ]
+            },
+            {
+              "name": "gicv3IsConfigured",
+              "qualifiedName": "FerrixAarch64Requirements::Interrupts::gicv3IsConfigured",
+              "kind": "requirement",
+              "shortName": "L.aarch64.15",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 282
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::gicv3IsConfigured",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"gicv3::init shall map the distributor and the redistributor region, put every shared line off in group 1 at the default priority with affinity routing on, and init_this_cpu shall wake this core's redistributor, found by its affinity, and enable its CPU interface's system registers.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 287
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::gicv3IsConfigured",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The boot-gicv3 boot takes its timer and device interrupts on every core; a check that a shared line is off after bring-up and that each core found its own redistributor is not written.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 291
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::gicv3IsConfigured",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.IRQ.3\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 292
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::gicv3IsConfigured",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::gic::gicv3::init\", \"arch::aarch64::gic::gicv3::configure_distributor\", \"arch::aarch64::gic::gicv3::this_redistributor\", \"arch::aarch64::gic::gicv3::this_redistributor_both\", \"arch::aarch64::gic::gicv3::distributor_typer\", \"arch::aarch64::gic::gicv3::init_this_cpu\", \"arch::aarch64::gic::gicv3::window\", \"arch::aarch64::gic::gicv3::wait_for\", \"arch::aarch64::cpu::enable_gicv3_cpu_interface\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 300
+                  }
+                }
+              ]
+            },
+            {
+              "name": "linesAreMaskedAtTheController",
+              "qualifiedName": "FerrixAarch64Requirements::Interrupts::linesAreMaskedAtTheController",
+              "kind": "requirement",
+              "shortName": "L.aarch64.16",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 302
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::linesAreMaskedAtTheController",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"mask_interrupt and unmask_interrupt shall stop and let through a line at the controller, in the distributor for a shared line and this core's redistributor for a private one, so that the register reads back what was asked.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 306
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::linesAreMaskedAtTheController",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"An idle private line and an idle shared line, unmasked and masked again, each read back enabled and then disabled at the controller, on the GICv2 boot and the GICv3 one.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 309
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::linesAreMaskedAtTheController",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.IRQ.2\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 310
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::linesAreMaskedAtTheController",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::mask_interrupt\", \"arch::aarch64::unmask_interrupt\", \"arch::aarch64::gic::enable\", \"arch::aarch64::gic::disable\", \"arch::aarch64::gic::gicv3::enable\", \"arch::aarch64::gic::gicv3::disable\", \"arch::aarch64::gic::gicv3::registers_for\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 314
+                  }
+                }
+              ]
+            },
+            {
+              "name": "specialIdentifiersAreNoLines",
+              "qualifiedName": "FerrixAarch64Requirements::Interrupts::specialIdentifiersAreNoLines",
+              "kind": "requirement",
+              "shortName": "L.aarch64.17",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 316
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::specialIdentifiersAreNoLines",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"mask_interrupt and unmask_interrupt shall refuse the identifiers 1020 to 1023, which are the controller's answers and not lines.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 319
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::specialIdentifiersAreNoLines",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Masking 1020 and unmasking 1023 are both refused.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 321
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::specialIdentifiersAreNoLines",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.IRQ.2\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 322
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::specialIdentifiersAreNoLines",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::mask_interrupt\", \"arch::aarch64::unmask_interrupt\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 323
+                  }
+                }
+              ]
+            },
+            {
+              "name": "interruptsAreClaimedAndRetired",
+              "qualifiedName": "FerrixAarch64Requirements::Interrupts::interruptsAreClaimedAndRetired",
+              "kind": "requirement",
+              "shortName": "L.aarch64.18",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 325
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::interruptsAreClaimedAndRetired",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"service_interrupts shall claim every pending interrupt, dispatch it and retire it with exactly the value its claim returned, until the controller answers spurious.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 328
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::interruptsAreClaimedAndRetired",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Every boot's timer ticks and device interrupts arrive; the generic interrupt checks assert delivery to the holder (H.IRQ.1), not the claim and retire order, and a check of that order is not written.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 332
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::interruptsAreClaimedAndRetired",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.IRQ.1\", \"H.IRQ.3\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 333
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::interruptsAreClaimedAndRetired",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::service_interrupts\", \"arch::aarch64::gic::claim\", \"arch::aarch64::gic::complete\", \"arch::aarch64::gic::gicv3::claim\", \"arch::aarch64::gic::gicv3::complete\", \"arch::aarch64::cpu::read_icc_iar1\", \"arch::aarch64::cpu::write_icc_eoir1\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 337
+                  }
+                }
+              ]
+            },
+            {
+              "name": "processorInterruptsAreSent",
+              "qualifiedName": "FerrixAarch64Requirements::Interrupts::processorInterruptsAreSent",
+              "kind": "requirement",
+              "shortName": "L.aarch64.19",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 339
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::processorInterruptsAreSent",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"send_ipi_to_others and send_ipi_to shall interrupt the other processors on the IPI line after ordering the sender's stores before the interrupt, by the distributor on a GICv2 and ICC_SGI1R_EL1 on a GICv3.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 343
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::processorInterruptsAreSent",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The shootdown check's flushes reach every processor (H.MEM.7, smp/check.rs); a check that an IPI arrives on each other core and on none twice is not written.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 346
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::processorInterruptsAreSent",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.7\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 347
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::processorInterruptsAreSent",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::send_ipi_to_others\", \"arch::aarch64::send_ipi_to\", \"arch::aarch64::ipi_irq\", \"arch::aarch64::gic::send_sgi_to_others\", \"arch::aarch64::gic::gicv3::send_sgi_to_others\", \"arch::aarch64::cpu::write_icc_sgi1r\", \"arch::aarch64::cpu::dsb_ishst\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 351
+                  }
+                }
+              ]
+            },
+            {
+              "name": "itsTranslatesMessages",
+              "qualifiedName": "FerrixAarch64Requirements::Interrupts::itsTranslatesMessages",
+              "kind": "requirement",
+              "shortName": "L.aarch64.20",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 353
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::itsTranslatesMessages",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"The ITS driver shall quiesce an ITS firmware left on, give it zeroed device and collection tables, a command queue and each core's LPI property and pending tables, and map a device's next event to a free LPI collected on the boot core, waiting for each command to be consumed.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 358
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::itsTranslatesMessages",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Under boot-gicv3 the virtio devices' message interrupts arrive through the ITS; a check that a mapped event raises its LPI and only it is not written.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 361
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::itsTranslatesMessages",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.IRQ.1\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 362
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::itsTranslatesMessages",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::gic::gicv3_its::init\", \"arch::aarch64::gic::gicv3_its::bring_up\", \"arch::aarch64::gic::gicv3_its::enable_lpis\", \"arch::aarch64::gic::gicv3_its::pending_table\", \"arch::aarch64::gic::gicv3_its::set_attributes\", \"arch::aarch64::gic::gicv3_its::quiesce\", \"arch::aarch64::gic::gicv3_its::command_queue\", \"arch::aarch64::gic::gicv3_its::program_tables\", \"arch::aarch64::gic::gicv3_its::program_table\", \"arch::aarch64::gic::gicv3_its::allocate\", \"arch::aarch64::gic::gicv3_its::number\", \"arch::aarch64::gic::gicv3_its::Its::free_event\", \"arch::aarch64::gic::gicv3_its::Its::take\", \"arch::aarch64::gic::gicv3_its::Its::map_device\", \"arch::aarch64::gic::gicv3_its::Its::enable_property\", \"arch::aarch64::gic::gicv3_its::Its::submit\", \"arch::aarch64::gic::gicv3_its::zeroed\", \"arch::aarch64::gic::gicv3_its::order_for\", \"arch::aarch64::gic::gicv3_its::read64\", \"arch::aarch64::gic::gicv3_its::write64\", \"arch::aarch64::gic::msi_allocate\", \"arch::aarch64::msi_allocate\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 383
+                  }
+                }
+              ]
+            },
+            {
+              "name": "itsRefusesAnUnknownDevice",
+              "qualifiedName": "FerrixAarch64Requirements::Interrupts::itsRefusesAnUnknownDevice",
+              "kind": "requirement",
+              "shortName": "L.aarch64.21",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 385
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::itsRefusesAnUnknownDevice",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"gicv3_its::allocate shall refuse a device ID past the device table the ITS was given, rather than map it.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 387
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::itsRefusesAnUnknownDevice",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"On the GICv3 boot with an ITS, asking for a vector for device ID u32::MAX is refused.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 389
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::itsRefusesAnUnknownDevice",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.IRQ.1\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 390
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::itsRefusesAnUnknownDevice",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"arch::aarch64::gic::gicv3_its::allocate\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 391
+                  }
+                }
+              ]
+            },
+            {
+              "name": "msiDoorbellIsNamed",
+              "qualifiedName": "FerrixAarch64Requirements::Interrupts::msiDoorbellIsNamed",
+              "kind": "requirement",
+              "shortName": "L.aarch64.22",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 393
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::msiDoorbellIsNamed",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"msi_doorbell shall name the page a device's message writes land in -- the ITS's translater or the GICv2m frame -- so that an IOMMU domain maps it, and none on a machine with neither.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 397
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::msiDoorbellIsNamed",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The iommu domain check's device writes its message through its domain (L.iommu); a check that the page named is the one the controller decodes is not written.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 400
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::msiDoorbellIsNamed",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.DMA.3\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 401
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::msiDoorbellIsNamed",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::msi_doorbell\", \"arch::aarch64::gic::msi_doorbell\", \"arch::aarch64::gic::gicv3_its::doorbell\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 403
+                  }
+                }
+              ]
+            },
+            {
+              "name": "interruptMaskFollowsTheCaller",
+              "qualifiedName": "FerrixAarch64Requirements::Interrupts::interruptMaskFollowsTheCaller",
+              "kind": "requirement",
+              "shortName": "L.aarch64.23",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 405
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::interruptMaskFollowsTheCaller",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"disable_interrupts shall mask debug, SError, IRQ and FIQ, enable_interrupts shall unmask IRQ alone, a saved DAIF shall be put back exactly by Irq::restore, and wait_for_work shall wait with IRQ masked and then unmask it, so that an interrupt pending before the wait ends it.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 410
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::interruptMaskFollowsTheCaller",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Every lock that masks interrupts restores the state it found; a check that a nested save and restore leaves DAIF as it was is not written.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 413
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::interruptMaskFollowsTheCaller",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.IRQ.1\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 414
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Interrupts::interruptMaskFollowsTheCaller",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::enable_interrupts\", \"arch::aarch64::disable_interrupts\", \"arch::aarch64::wait_for_work\", \"arch::aarch64::wait_for_interrupt\", \"arch::aarch64::interrupts_enabled\", \"arch::aarch64::Irq::disable\", \"arch::aarch64::Irq::restore\", \"arch::aarch64::cpu::wfi\", \"arch::aarch64::cpu::wait_then_enable_interrupts\", \"arch::aarch64::cpu::disable_interrupts\", \"arch::aarch64::cpu::enable_interrupts\", \"arch::aarch64::cpu::read_daif\", \"arch::aarch64::cpu::write_daif\", \"arch::aarch64::halt\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 422
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Timer",
+          "qualifiedName": "FerrixAarch64Requirements::Timer",
+          "kind": "package",
+          "doc": "kernel/src/arch/aarch64/timer.rs and its wrappers in mod.rs: the generic timer's virtual counter and comparator.",
+          "source": {
+            "file": "docs/sysml/19-aarch64-requirements.sysml",
+            "line": 426
+          },
+          "children": [
+            {
+              "name": "theTimerFiresOnce",
+              "qualifiedName": "FerrixAarch64Requirements::Timer::theTimerFiresOnce",
+              "kind": "requirement",
+              "shortName": "L.aarch64.24",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 430
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Timer::theTimerFiresOnce",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"timer::arm shall make the virtual timer fire once, nanos from now, by setting its comparator to the counter plus nanos in counter ticks and enabling it, and disarm shall mask it.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 434
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Timer::theTimerFiresOnce",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Stage 3's timer check: a one-shot armed for a millisecond fires, and has not fired again ten intervals later; then 250 ticks at a requested 1,000 Hz take a time the counter measures as within 25 per cent of that rate, every tick an interrupt a handler took.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 439
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Timer::theTimerFiresOnce",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.5\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 440
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Timer::theTimerFiresOnce",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::timer::arm\", \"arch::aarch64::timer::disarm\", \"arch::aarch64::timer_arm\", \"arch::aarch64::timer_disarm\", \"arch::aarch64::cpu::write_cntv_cval\", \"arch::aarch64::cpu::write_cntv_ctl\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 443
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theCounterRuns",
+              "qualifiedName": "FerrixAarch64Requirements::Timer::theCounterRuns",
+              "kind": "requirement",
+              "shortName": "L.aarch64.25",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 445
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Timer::theCounterRuns",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"timer::init and init_from_tree shall take the timer's interrupt as firmware describes it, a private one, and shall refuse a counter whose CNTFRQ_EL0 reads zero or that does not advance; counter_now shall read the counter after an isb.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 449
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Timer::theCounterRuns",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Every boot reports the counter's frequency and ticks; a check that a zero frequency is refused is not written.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 452
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Timer::theCounterRuns",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.5\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 453
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Timer::theCounterRuns",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::timer::init\", \"arch::aarch64::timer::init_from_tree\", \"arch::aarch64::timer::finish\", \"arch::aarch64::timer::irq\", \"arch::aarch64::timer::counter_now\", \"arch::aarch64::timer::counter_hz\", \"arch::aarch64::timer_irq\", \"arch::aarch64::counter_now\", \"arch::aarch64::counter_hz\", \"arch::aarch64::cpu::read_cntfrq\", \"arch::aarch64::cpu::read_cntvct\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 459
+                  }
+                }
+              ]
+            },
+            {
+              "name": "programsReadTheCounter",
+              "qualifiedName": "FerrixAarch64Requirements::Timer::programsReadTheCounter",
+              "kind": "requirement",
+              "shortName": "L.aarch64.26",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 461
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Timer::programsReadTheCounter",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"allow_user_counter shall let EL0 read the virtual counter and CNTFRQ_EL0, as Linux does, and nothing else of the timer.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 464
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Timer::programsReadTheCounter",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A program's clock_gettime through musl reads the counter; a check that EL0 can read CNTVCT_EL0 and cannot write the comparator is not written.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 467
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Timer::programsReadTheCounter",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.2\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 468
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Timer::programsReadTheCounter",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::cpu::allow_user_counter\", \"arch::aarch64::vdso_spec\", \"arch::aarch64::vdso_can_read_counter\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 470
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Console",
+          "qualifiedName": "FerrixAarch64Requirements::Console",
+          "kind": "package",
+          "doc": "kernel/src/arch/aarch64/console.rs and its wrappers in mod.rs: which console the command line names -- the PL011 (arch/arm_common), a 16550 at an MMIO address, or a ramoops record -- and bytes to and from it.",
+          "source": {
+            "file": "docs/sysml/19-aarch64-requirements.sysml",
+            "line": 474
+          },
+          "children": [
+            {
+              "name": "a16550ValueIsReadOrRefused",
+              "qualifiedName": "FerrixAarch64Requirements::Console::a16550ValueIsReadOrRefused",
+              "kind": "requirement",
+              "shortName": "L.aarch64.27",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 480
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Console::a16550ValueIsReadOrRefused",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"ns16550_port shall read `uart8250,mmio,<address>` as a 16550 at that address only when the address is hexadecimal with a 0x prefix, and shall refuse a port in I/O space and any other console's value. The ramoops zone's value is console's (L.console.40).\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 485
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Console::a16550ValueIsReadOrRefused",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"`uart8250,mmio,0x3f8` is read as the port at 0x3f8; `uart8250,mmio,3f8`, `uart8250,mmio,0x`, `uart8250,io,0x3f8` and a ramoops value are each refused.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 488
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Console::a16550ValueIsReadOrRefused",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.8\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 489
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Console::a16550ValueIsReadOrRefused",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"arch::aarch64::console::ns16550_port\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 490
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theNamedConsoleIsMapped",
+              "qualifiedName": "FerrixAarch64Requirements::Console::theNamedConsoleIsMapped",
+              "kind": "requirement",
+              "shortName": "L.aarch64.28",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 492
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Console::theNamedConsoleIsMapped",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"console::init shall map the console the command line names as device memory before the first byte: a 16550's page at its address, a ramoops zone whole, continuing the loader's record where its signature is, or else the PL011.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 496
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Console::theNamedConsoleIsMapped",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"QEMU's boots print through the PL011; the crosvm guest's log (~/.local/share/ferrix/pixel7/vm-20260926-140648) through its 16550; the Pixel 7's boot log through its ramoops zone after the watchdog reset. None of the three is a check.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 500
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Console::theNamedConsoleIsMapped",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.BOOT.8\", \"H.FAIL.1\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 501
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Console::theNamedConsoleIsMapped",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::console::init\", \"arch::aarch64::init_console\", \"arch::aarch64::console::is_ns16550\", \"arch::aarch64::console::is_ramoops\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 503
+                  }
+                }
+              ]
+            },
+            {
+              "name": "bytesReachTheConsole",
+              "qualifiedName": "FerrixAarch64Requirements::Console::bytesReachTheConsole",
+              "kind": "requirement",
+              "shortName": "L.aarch64.29",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 505
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Console::bytesReachTheConsole",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"write_byte and put shall hand a byte to the console the command line named -- the PL011, the 16550 once its holding register has room within a bounded wait, or the ramoops record, dropping it once the zone is full -- and drain shall wait, bounded, until the port has sent everything.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 510
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Console::bytesReachTheConsole",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Every gate reads the boot's log from the serial port, FERRIX-BOOT-OK among it; the 16550 and ramoops arms run only on the crosvm guest and the Pixel 7.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 513
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Console::bytesReachTheConsole",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.BOOT.8\", \"H.FAIL.1\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 514
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Console::bytesReachTheConsole",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::console::write_byte\", \"arch::aarch64::console::put\", \"arch::aarch64::console::drain\", \"arch::aarch64::console::transmit_room\", \"arch::aarch64::console::transmit_interrupt\", \"arch::aarch64::console::transmit_buffer\", \"arch::aarch64::console::ramoops_append\", \"arch::aarch64::console::ramoops_read\", \"arch::aarch64::console::ramoops_write\", \"arch::aarch64::console::read_u8\", \"arch::aarch64::console::write_u8\", \"arch::aarch64::drain_console\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 521
+                  }
+                }
+              ]
+            },
+            {
+              "name": "consoleInputArrives",
+              "qualifiedName": "FerrixAarch64Requirements::Console::consoleInputArrives",
+              "kind": "requirement",
+              "shortName": "L.aarch64.30",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 523
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Console::consoleInputArrives",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"read_byte shall give a byte the port received, none from a ramoops record, and the receive interrupt shall be enabled at the controller and in the port only for the PL011, whose bytes read_console_byte then takes from the receive ring.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 528
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Console::consoleInputArrives",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The console input check runs the ring (console/input.rs); a check that a byte the host sends reaches a reader on this architecture is test-shell's typing, not a check.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 532
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Console::consoleInputArrives",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.8\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 533
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Console::consoleInputArrives",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::console::read_byte\", \"arch::aarch64::console::enable_receive_interrupt\", \"arch::aarch64::read_console_byte\", \"arch::aarch64::take_console_byte\", \"arch::aarch64::console_receive_irq\", \"arch::aarch64::enable_console_receive\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 537
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Translation",
+          "qualifiedName": "FerrixAarch64Requirements::Translation",
+          "kind": "package",
+          "doc": "The translation half of mod.rs and cpu.rs: the loader's identity map dropped, a program's tables installed in TTBR0_EL1 beside the kernel's in TTBR1_EL1, the TLB invalidated, and the cache maintenance code and shared memory need.",
+          "source": {
+            "file": "docs/sysml/19-aarch64-requirements.sysml",
+            "line": 541
+          },
+          "children": [
+            {
+              "name": "userRootsAreInstalled",
+              "qualifiedName": "FerrixAarch64Requirements::Translation::userRootsAreInstalled",
+              "kind": "requirement",
+              "shortName": "L.aarch64.31",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 547
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::userRootsAreInstalled",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"install_user_root shall translate the lower half through a program's root in TTBR0_EL1 and drop this processor's cached user translations, and uninstall_user_root shall stop translating the lower half, so that a kernel thread reaches no program's memory.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 552
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::userRootsAreInstalled",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Two programs mapping one address reach their own frames (H.MEM.1, checked generically); a check that a kernel thread's lower-half access faults is not written.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 555
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::userRootsAreInstalled",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.1\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 556
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::userRootsAreInstalled",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::install_user_root\", \"arch::aarch64::uninstall_user_root\", \"arch::aarch64::prepare_user_root\", \"arch::aarch64::cpu::write_ttbr0\", \"arch::aarch64::cpu::disable_ttbr0\", \"arch::aarch64::cpu::flush_user_tlb\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 560
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theIdentityMapGoes",
+              "qualifiedName": "FerrixAarch64Requirements::Translation::theIdentityMapGoes",
+              "kind": "requirement",
+              "shortName": "L.aarch64.32",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 562
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::theIdentityMapGoes",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"drop_identity_map shall stop the lower half translating through the loader's identity map, and identity_map_live shall read from TCR_EL1 and TTBR0_EL1 whether it still does.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 566
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::theIdentityMapGoes",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Stage 1 requires identity_map_live false after the drop; it is in main.rs, product code.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 568
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::theIdentityMapGoes",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.1\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 569
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::theIdentityMapGoes",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::drop_identity_map\", \"arch::aarch64::identity_map_live\", \"arch::aarch64::identity_root\", \"arch::aarch64::kernel_write_protected\", \"arch::aarch64::cpu::read_tcr\", \"arch::aarch64::cpu::read_ttbr0\", \"arch::aarch64::cpu::read_mair\", \"arch::aarch64::cpu::read_sctlr\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 574
+                  }
+                }
+              ]
+            },
+            {
+              "name": "tablesArePublishedAndFlushed",
+              "qualifiedName": "FerrixAarch64Requirements::Translation::tablesArePublishedAndFlushed",
+              "kind": "requirement",
+              "shortName": "L.aarch64.33",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 576
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::tablesArePublishedAndFlushed",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"flush_tlb and flush_tlb_page shall make every table write before them visible to the walker (dsb ishst) and then invalidate the whole TLB, or the page's entries for every ASID, inner-shareable, so that every core drops them.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 580
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::tablesArePublishedAndFlushed",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The shootdown checks (smp/check.rs) assert that a table waits for its shootdown and that a flushed translation is gone on every processor, across architectures; this architecture's instructions are not asserted apart.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 584
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::tablesArePublishedAndFlushed",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.7\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 585
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::tablesArePublishedAndFlushed",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::flush_tlb\", \"arch::aarch64::flush_tlb_page\", \"arch::aarch64::cpu::flush_tlb\", \"arch::aarch64::cpu::flush_tlb_page\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 587
+                  }
+                }
+              ]
+            },
+            {
+              "name": "cachesAreMaintained",
+              "qualifiedName": "FerrixAarch64Requirements::Translation::cachesAreMaintained",
+              "kind": "requirement",
+              "shortName": "L.aarch64.34",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 589
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::cachesAreMaintained",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"clean_to_poc and clean_invalidate_to_poc shall write back, and drop, every data cache line covering a range by the smallest line CTR_EL0 gives, and sync_instructions shall make instructions written through the data side the ones every core fetches.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 594
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::cachesAreMaintained",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A secondary that starts with its caches off reads the start block the boot core wrote, and a program's page of code runs as written; on QEMU, which models no caches, neither can fail, and a real core's evidence is the board's boot.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 598
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::cachesAreMaintained",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.6\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 599
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::cachesAreMaintained",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::cpu::clean_to_poc\", \"arch::aarch64::cpu::clean_invalidate_to_poc\", \"arch::aarch64::cpu::sync_instructions\", \"arch::aarch64::cpu::data_line\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 602
+                  }
+                }
+              ]
+            },
+            {
+              "name": "panKeepsTheKernelOut",
+              "qualifiedName": "FerrixAarch64Requirements::Translation::panKeepsTheKernelOut",
+              "kind": "requirement",
+              "shortName": "L.aarch64.35",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 604
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::panKeepsTheKernelOut",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"enable_user_access_protection shall turn on PAN where the core implements it, and permit_user_access and forbid_user_access shall clear and set PSTATE.PAN around a user copy alone.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 608
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::panKeepsTheKernelOut",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The boot line says PAN on under QEMU's max CPU; a check that a kernel read of a user page outside a copy faults is not written.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 611
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::panKeepsTheKernelOut",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.3\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 612
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::panKeepsTheKernelOut",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::cpu::enable_user_access_protection\", \"arch::aarch64::cpu::permit_user_access\", \"arch::aarch64::cpu::forbid_user_access\", \"arch::aarch64::permit_user_access\", \"arch::aarch64::forbid_user_access\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 615
+                  }
+                }
+              ]
+            },
+            {
+              "name": "devicesSeeAccessesInOrder",
+              "qualifiedName": "FerrixAarch64Requirements::Translation::devicesSeeAccessesInOrder",
+              "kind": "requirement",
+              "shortName": "L.aarch64.49",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 617
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::devicesSeeAccessesInOrder",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"dma_barrier shall order every memory access before it against every one after it as a DMA master observes them, both ways -- dmb osh, the outer-shareable domain a device sits in -- so that the item's virtqueue publishes a descriptor before the index that counts it, reads a used entry only after the index that counts it, and rings the doorbell only after the index is published.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 623
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::devicesSeeAccessesInOrder",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"No check can fail without it on the machines the suite boots: QEMU's TCG makes a core's accesses in program order. The instruction is argued (F-44). A real core's evidence is the Pixel 7's crosvm guest running stage 10's virtio check, when the hardware may be used (F-44's BACKLOG row): the DK1 has no PCI and no virtio. H.DMA.2 is its parent because the item's virtqueue exists only to drive that requirement's out-of-domain probe.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 630
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::devicesSeeAccessesInOrder",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.DMA.2\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 631
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Translation::devicesSeeAccessesInOrder",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"arch::aarch64::cpu::dma_barrier\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 632
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Processors",
+          "qualifiedName": "FerrixAarch64Requirements::Processors",
+          "kind": "package",
+          "doc": "kernel/src/arch/aarch64/smp.rs and the processor half of cpu.rs: which processors firmware says can be started, starting them through PSCI, and what each core says it has.",
+          "source": {
+            "file": "docs/sysml/19-aarch64-requirements.sysml",
+            "line": 636
+          },
+          "children": [
+            {
+              "name": "processorsAreDescribed",
+              "qualifiedName": "FerrixAarch64Requirements::Processors::processorsAreDescribed",
+              "kind": "requirement",
+              "shortName": "L.aarch64.36",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 641
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Processors::processorsAreDescribed",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"describe_cpus shall name every processor the MADT's enabled GIC CPU interfaces, or the device tree's /cpus with PSCI as its enable method, describe, by affinity, with this one as the boot processor, and the boot processor alone under nosmp.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 646
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Processors::processorsAreDescribed",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The boot line counts the cores QEMU was given (4, and 1 under boot-nosmp); it is judged by test-boot's lines, not a check.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 649
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Processors::processorsAreDescribed",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.5\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 650
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Processors::processorsAreDescribed",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::smp::describe_cpus\", \"arch::aarch64::smp::cpus_from_madt\", \"arch::aarch64::smp::cpus_from_tree\", \"arch::aarch64::smp::hardware_id\", \"arch::aarch64::cpu::read_mpidr\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 653
+                  }
+                }
+              ]
+            },
+            {
+              "name": "secondariesStart",
+              "qualifiedName": "FerrixAarch64Requirements::Processors::secondariesStart",
+              "kind": "requirement",
+              "shortName": "L.aarch64.37",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 655
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Processors::secondariesStart",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"CpuStarter shall start a processor through PSCI CPU_ON on its own stack with an identity map and a start block whose registers are the boot core's, secondary_start shall bring it into the kernel, and finish shall take the identity map down only after every started core has reported in.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 660
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Processors::secondariesStart",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Every core described reports in; the count is judged by stage 4's line in main.rs, product code.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 662
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Processors::secondariesStart",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.5\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 663
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Processors::secondariesStart",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::smp::CpuStarter::new\", \"arch::aarch64::smp::CpuStarter::start\", \"arch::aarch64::smp::CpuStarter::finish\", \"arch::aarch64::smp::secondary_start\", \"arch::aarch64::smp::psci\", \"arch::aarch64::smp::psci_conduit\", \"arch::aarch64::cpu::hvc_call\", \"arch::aarch64::cpu::smc_call\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 668
+                  }
+                }
+              ]
+            },
+            {
+              "name": "programsSeeTheCoresFeatures",
+              "qualifiedName": "FerrixAarch64Requirements::Processors::programsSeeTheCoresFeatures",
+              "kind": "requirement",
+              "shortName": "L.aarch64.38",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 670
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Processors::programsSeeTheCoresFeatures",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"user_hwcaps shall give a program the AT_HWCAP and AT_HWCAP2 bits arch/arm64 gives for what ID_AA64PFR0_EL1, ID_AA64ISAR0_EL1 and ID_AA64ISAR1_EL1 say the core has, and user_platform none.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 674
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Processors::programsSeeTheCoresFeatures",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The mapping is ferrix-linux-abi's hwcap, host-tested against Linux's bits; that the registers read here reach it is not checked on the machine.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 677
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Processors::programsSeeTheCoresFeatures",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.TRAP.4\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 678
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Processors::programsSeeTheCoresFeatures",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::user_hwcaps\", \"arch::aarch64::user_platform\", \"arch::aarch64::cpu::read_id_aa64pfr0\", \"arch::aarch64::cpu::read_id_aa64isar0\", \"arch::aarch64::cpu::read_id_aa64isar1\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 681
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Speculation",
+          "qualifiedName": "FerrixAarch64Requirements::Speculation",
+          "kind": "package",
+          "doc": "kernel/src/arch/aarch64/speculation.rs: what each core needs against Spectre v2, Spectre-BHB, Meltdown and speculative store bypass, from its own identification registers and Arm's lists, what firmware is asked, what is applied and read back, and the index clamp at the system call boundary.",
+          "source": {
+            "file": "docs/sysml/19-aarch64-requirements.sysml",
+            "line": 685
+          },
+          "children": [
+            {
+              "name": "partTablesAreLinuxs",
+              "qualifiedName": "FerrixAarch64Requirements::Speculation::partTablesAreLinuxs",
+              "kind": "requirement",
+              "shortName": "L.aarch64.39",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 692
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::partTablesAreLinuxs",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A core shall be given the Spectre-BHB loop count, the Spectre v2 safe listing, the Meltdown safe listing and the in-order classification Linux's proton-pack.c and cpufeature.c give its part, none of Arm's listings to a core another company designed, and no loop to a core whose branch history is not shared.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 698
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::partTablesAreLinuxs",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Each of the check's 12 cores -- ten of Arm's parts, one with ECBHB, one of Qualcomm's -- is given the figures listed for it, and the ECBHB core is reported unaffected by Spectre-BHB.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 702
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::partTablesAreLinuxs",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.TRAP.3\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 703
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::partTablesAreLinuxs",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::speculation::Core::read\", \"arch::aarch64::speculation::Core::arm_part\", \"arch::aarch64::speculation::Core::v2_listed_safe\", \"arch::aarch64::speculation::Core::v2_unaffected\", \"arch::aarch64::speculation::Core::bhb_loops\", \"arch::aarch64::speculation::Core::meltdown_safe\", \"arch::aarch64::speculation::Core::in_order\", \"arch::aarch64::speculation::Exposure::v2\", \"arch::aarch64::speculation::Exposure::bypass\", \"arch::aarch64::speculation::Exposure::fmt\", \"arch::aarch64::speculation::CoreName::fmt\", \"arch::aarch64::speculation::read_midr\", \"arch::aarch64::speculation::read_id_aa64pfr1\", \"arch::aarch64::speculation::read_id_aa64mmfr1\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 717
+                  }
+                }
+              ]
+            },
+            {
+              "name": "firmwareAnswersAreRead",
+              "qualifiedName": "FerrixAarch64Requirements::Speculation::firmwareAnswersAreRead",
+              "kind": "requirement",
+              "shortName": "L.aarch64.40",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 719
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::firmwareAnswersAreRead",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"An SMCCC_ARCH_FEATURES status shall be read as ARM DEN 0028D defines it -- 0 required, 1 not required, -2 always on, anything else not supported -- and shall survive the record it is packed into.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 723
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::firmwareAnswersAreRead",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Each of the five statuses the check tries is read as listed and comes back from its bits unchanged.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 725
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::firmwareAnswersAreRead",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.TRAP.3\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 726
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::firmwareAnswersAreRead",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::speculation::Answer::from_status\", \"arch::aarch64::speculation::Answer::bits\", \"arch::aarch64::speculation::Answer::from_bits\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 729
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theEntryLoopMatchesTheRecords",
+              "qualifiedName": "FerrixAarch64Requirements::Speculation::theEntryLoopMatchesTheRecords",
+              "kind": "requirement",
+              "shortName": "L.aarch64.41",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 731
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::theEntryLoopMatchesTheRecords",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"Each processor shall decide its defences from its core and firmware's answers, apply them, record what it saw and applied, and the vector entry's branch history loop shall run exactly when some processor recorded that it needs it.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 735
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::theEntryLoopMatchesTheRecords",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"After every processor has started, the loop's count is non-zero exactly when a processor's record holds the loop.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 738
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::theEntryLoopMatchesTheRecords",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.TRAP.3\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 739
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::theEntryLoopMatchesTheRecords",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::speculation::init\", \"arch::aarch64::speculation::apply_this_cpu\", \"arch::aarch64::speculation::decide_and_apply\", \"arch::aarch64::speculation::plan_for\", \"arch::aarch64::speculation::Seen::pack\", \"arch::aarch64::speculation::Seen::unpack\", \"arch::aarch64::speculation::kind_of\", \"arch::aarch64::init_speculation\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 746
+                  }
+                }
+              ]
+            },
+            {
+              "name": "defencesAreAppliedAndReadBack",
+              "qualifiedName": "FerrixAarch64Requirements::Speculation::defencesAreAppliedAndReadBack",
+              "kind": "requirement",
+              "shortName": "L.aarch64.42",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 748
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::defencesAreAppliedAndReadBack",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"apply shall clear SCTLR_EL1.DSSBS and PSTATE.SSBS on a core that needs the store bypass defence and has them, read back what can be read, and say what took; firmware's workaround 1 shall be asked on each switch only by a core whose plan holds it.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 753
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::defencesAreAppliedAndReadBack",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The speculation report names each kind of core and what was applied; QEMU's max CPU needs none of them, and a check that a cleared DSSBS reads back cleared on a core that has it is not written.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 757
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::defencesAreAppliedAndReadBack",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.TRAP.3\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 758
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::defencesAreAppliedAndReadBack",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::speculation::apply\", \"arch::aarch64::speculation::write_sctlr\", \"arch::aarch64::speculation::clear_ssbs\", \"arch::aarch64::speculation::switch_barrier\", \"arch::aarch64::speculation::answers_arch_features\", \"arch::aarch64::speculation::ask_about_this_core\", \"arch::aarch64::speculation::firmware_call\", \"arch::aarch64::speculation::report_once_started\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 766
+                  }
+                }
+              ]
+            },
+            {
+              "name": "indicesAreClamped",
+              "qualifiedName": "FerrixAarch64Requirements::Speculation::indicesAreClamped",
+              "kind": "requirement",
+              "shortName": "L.aarch64.43",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 768
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::indicesAreClamped",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"clamp_index and clamp_below shall answer an index below its bound unchanged and any other as zero, with a csel and a csdb so that no later instruction uses a predicted result.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 772
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::indicesAreClamped",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The generic speculation check requires the clamp on every architecture (arch/speculation_check.rs), whose criterion is the clamp's result, not this instruction sequence.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 775
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::indicesAreClamped",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.TRAP.3\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 776
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Speculation::indicesAreClamped",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::speculation::clamp_index\", \"arch::aarch64::speculation::clamp_below\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 778
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Firmware",
+          "qualifiedName": "FerrixAarch64Requirements::Firmware",
+          "kind": "package",
+          "doc": "What firmware is asked for: power off and reset through PSCI, the Pixel 7's watchdogs fed, and entropy from its TRNG through SMCCC (trng.rs) or the core's RNDR.",
+          "source": {
+            "file": "docs/sysml/19-aarch64-requirements.sysml",
+            "line": 782
+          },
+          "children": [
+            {
+              "name": "trngWordsAreTakenInOrder",
+              "qualifiedName": "FerrixAarch64Requirements::Firmware::trngWordsAreTakenInOrder",
+              "kind": "requirement",
+              "shortName": "L.aarch64.44",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 787
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::trngWordsAreTakenInOrder",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"fill_from shall fill its buffer from TRNG_RND64 192 bits at a time, each call's x3 then x2 then x1 as little-endian bytes, asking again at most ATTEMPTS times while firmware reports none ready, and shall stop at the bytes already taken when a call fails.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 792
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::trngWordsAreTakenInOrder",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Against scripted firmware: 40 bytes are taken over three calls, the first finding nothing ready, in that order; a failure on the second call leaves 24 bytes taken and the rest untouched; a firmware never ready is asked 8 times and gives 0 bytes.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 797
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::trngWordsAreTakenInOrder",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.3\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 798
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::trngWordsAreTakenInOrder",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::trng::fill_from\", \"arch::aarch64::trng::rnd64\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 799
+                  }
+                }
+              ]
+            },
+            {
+              "name": "trngIsAskedOnlyWhereOffered",
+              "qualifiedName": "FerrixAarch64Requirements::Firmware::trngIsAskedOnlyWhereOffered",
+              "kind": "requirement",
+              "shortName": "L.aarch64.45",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 801
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::trngIsAskedOnlyWhereOffered",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"offers_rnd64 shall ask TRNG_RND64 only of firmware that reports PSCI 1.0 or later, answers SMCCC_VERSION through PSCI_FEATURES, reports SMCCC 1.1 or later and TRNG 1.0 or later, and offers TRNG_RND64 through TRNG_FEATURES.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 805
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::trngIsAskedOnlyWhereOffered",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Five scripted firmwares -- PSCI 0.2, no SMCCC, SMCCC 1.0, no TRNG, no TRNG_RND64 -- each give 0 bytes and are asked no TRNG_RND64.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 808
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::trngIsAskedOnlyWhereOffered",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.3\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 809
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::trngIsAskedOnlyWhereOffered",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"arch::aarch64::trng::offers_rnd64\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 810
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theSeedAsksFirmware",
+              "qualifiedName": "FerrixAarch64Requirements::Firmware::theSeedAsksFirmware",
+              "kind": "requirement",
+              "shortName": "L.aarch64.46",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 812
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::theSeedAsksFirmware",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"firmware_entropy shall ask the TRNG through the conduit the machine describes PSCI on, and give 0 bytes where it describes none; hardware_random shall give a word only from a core ID_AA64ISAR0_EL1 says has RNDR, and only one RNDR reports valid within ten tries.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 817
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::theSeedAsksFirmware",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The crosvm guest's boot seeds 48 bytes from its TRNG (~/.local/share/ferrix/pixel7/vm-20260926-140648) and QEMU's 0; neither is a check, and RNDR is not asserted.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 820
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::theSeedAsksFirmware",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.3\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 821
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::theSeedAsksFirmware",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::firmware_entropy\", \"arch::aarch64::trng::fill\", \"arch::aarch64::trng::call\", \"arch::aarch64::cpu::hvc_call_x0_x3\", \"arch::aarch64::cpu::smc_call_x0_x3\", \"arch::aarch64::cpu::hardware_random\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 824
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theMachineStops",
+              "qualifiedName": "FerrixAarch64Requirements::Firmware::theMachineStops",
+              "kind": "requirement",
+              "shortName": "L.aarch64.47",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 826
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::theMachineStops",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"shutdown and reset shall drain the console and then ask PSCI for SYSTEM_OFF or SYSTEM_RESET, powering off where reset returns and halting where power-off returns.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 829
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::theMachineStops",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Every gate's QEMU exits when the boot powers off, and boot-reset's ferrix.onexit=reset is x86-64's; a reset on this architecture is not asserted.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 832
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::theMachineStops",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.BOOT.6\", \"H.BOOT.7\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 833
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::theMachineStops",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::shutdown\", \"arch::aarch64::reset\", \"arch::aarch64::cpu::psci_system_off\", \"arch::aarch64::cpu::psci_system_reset\", \"arch::aarch64::cpu::psci_system\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 836
+                  }
+                }
+              ]
+            },
+            {
+              "name": "watchdogsAreFed",
+              "qualifiedName": "FerrixAarch64Requirements::Firmware::watchdogsAreFed",
+              "kind": "requirement",
+              "shortName": "L.aarch64.48",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 838
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::watchdogsAreFed",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"init_watchdogs shall feed once every watchdog the device tree lists that firmware left running, and start_watchdogs shall start the task that keeps feeding them, and nothing where the tree lists none.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 842
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::watchdogsAreFed",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The Pixel 7 runs past its watchdogs' timeout; QEMU's tree lists none. Not a check.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 844
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::watchdogsAreFed",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.FAIL.1\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 845
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::watchdogsAreFed",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::init_watchdogs\", \"arch::aarch64::start_watchdogs\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 846
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "FerrixDeviceRequirements",
       "qualifiedName": "FerrixDeviceRequirements",
       "kind": "package",
@@ -59687,6 +62615,16 @@
       "origin": "FerrixX8664Requirements",
       "file": "docs/sysml/18-x86-64-requirements.sysml",
       "line": 36
+    },
+    {
+      "kind": "import",
+      "source": "FerrixAarch64Requirements",
+      "targets": [
+        "FerrixItemRequirements::*"
+      ],
+      "origin": "FerrixAarch64Requirements",
+      "file": "docs/sysml/19-aarch64-requirements.sysml",
+      "line": 38
     },
     {
       "kind": "import",

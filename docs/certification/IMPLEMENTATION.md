@@ -1019,6 +1019,69 @@ What this slice found, for review:
 * **Time.** Drafted by five agents in parallel, one per group of files,
   from the pilot's lessons, in about 15 minutes; merging their overlaps,
   the high-level additions, review and tagging took about an hour.
+**Step 4, the `arch/aarch64` slice, done 2026-09-27.** 49 low-level
+requirements, `L.aarch64.1` to `L.aarch64.49`, in
+`docs/sysml/19-aarch64-requirements.sysml`, one package each for traps,
+signals, the context switch, interrupts, the timer, the console,
+translation, the processors, speculation and firmware. **16 are verified**,
+by 13 check functions newly tagged: `arch/aarch64/check.rs`'s machine
+check (syndromes and signals, a system call rewound, `console=` values, the
+TRNG against scripted firmware, the GIC's driver per description, masking
+read back, refusals), `arch/aarch64/trap/check.rs`'s programs, and the
+speculation check, and stage 3's breakpoint and timer checks, which the boot
+slice's 21a moved into `stages_check.rs`. **33 need a check** and are the baseline's
+`L.aarch64.*`. Every product function of `arch::aarch64` is a unit, an
+accessor or one of 6 check-code entries (the machine check's entry, the
+exception-entry hook, and the GIC's two read-backs in each of `gic.rs` and
+`gicv3.rs`, which need register windows private to them); the gate holds
+`arch::aarch64` as complete. The PL011 and the GICv2 are `arch_common`'s,
+shared with ARMv7-A, and wait for that slice.
+
+What moved: speculation's boot check (`check`, `check_part_tables`,
+`check_firmware_answers` and the fixed-size `Line` they format into) left
+`speculation.rs` for `speculation/check.rs`, a child module that reads the
+part tables and records private to its parent, so that a tag can go on it.
+
+The console slice, which landed first, owns the ramoops value's parse
+(`L.console.40`); `L.aarch64.27` is the 16550's alone, and the machine
+check that tries both carries both tags.
+
+No high-level requirement was split or added. Nine hang from the ones the
+x86-64 slice added, the same promise on this architecture: the per-CPU
+record from `H.SCHED.6`, the signal frame from `H.TRAP.9`, the system call
+path from `H.TRAP.10` and `.12`, the processors from `H.BOOT.5`, power-off
+and reset from `H.BOOT.6` and `.7`, and the console from `H.BOOT.8`. The
+TRNG refines `H.BOOT.3`, as the certification session asked. `H.SCHED.8`
+(the user state a trap does not save) names only x86-64's registers, so
+`.12`, this architecture's FP/SIMD state and thread pointer, stays under
+`H.SCHED.1` until it is widened to say each architecture's.
+
+The 34 that need a check, as check-writing work:
+
+* **Asserted only by product code.** Stage 1's identity map (`.32`) and
+  stage 4's count of started cores (`.37`) are still in `main.rs`; moving
+  them into a check file, as 21a moved stage 3's, would verify both.
+* **Exercised by every boot, asserted by nothing here.** The system call
+  path (`.4`), the per-CPU record (`.7`), the signal frame's layout (`.9`),
+  the context switch and the user FP/SIMD state (`.11`, `.12`), the
+  controller's bring-up, GICv3 configuration, claim-and-retire order, IPIs
+  and the ITS (`.14`, `.15`, `.18` to `.20`), the MSI doorbell (`.22`), the
+  interrupt mask (`.23`), the counter (`.25`, `.26`), the console's bytes
+  and input (`.29`, `.30`), user roots and the TLB (`.31`, `.33`),
+  processors described (`.36`), hwcaps (`.38`) and the index clamp's
+  instruction sequence (`.43`). The generic checks run most of these but
+  state the generic layer's criteria, so crediting them here would claim
+  what they do not assert.
+* **Needs the item to stop, or hardware QEMU lacks.** A kernel trap's report
+  (`.5`), sigreturn keeping EL0 (`.10`, which x86-64 has forged frames for
+  and AArch64 does not yet), cache maintenance (`.34`, which QEMU does not
+  model), PAN refusing a kernel read (`.35`), the store bypass defence read
+  back (`.42`, which QEMU's max CPU does not need), the firmware TRNG and
+  RNDR themselves (`.46`), power-off and reset (`.47`) and the Pixel 7's
+  watchdogs (`.48`), and `dma_barrier`'s `dmb osh` (`.49`, F-44), which no
+  run under TCG can show missing. The console's 16550 and ramoops arms (`.28`, `.29`)
+  run only on the crosvm guest and the phone, whose logs are cited, not
+  checked.
 
 **Step 4, the `console` slice, done 2026-09-27.** 41 low-level
 requirements, `L.console.1` to `L.console.41`, in
