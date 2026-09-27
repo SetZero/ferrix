@@ -284,6 +284,29 @@ pub(crate) fn window_files() -> Vec<crate::ports::File> {
         .collect()
 }
 
+/// Where Chrome for Testing reads the policies an administrator sets: the
+/// directory its binary names (`strings chrome | grep policies`), where
+/// Google Chrome's is `/etc/opt/chrome` and Chromium's `/etc/chromium`.
+const POLICIES: &str = "etc/opt/chrome_for_testing/policies/managed";
+
+/// The policies a desktop somebody watches gives Chrome, as an administrator
+/// would: no signing in (`BrowserSignin` 0), so the toolbar's profile button
+/// does not ask "Sign in to Chromium?" on every fresh profile, and no sync
+/// or offer to become the default browser, neither of which means anything
+/// with a profile in tmpfs. Carried by `run-compositor` only: a gate's
+/// Chrome is the one it has always judged.
+pub(crate) fn desktop_policy() -> crate::ports::File {
+    crate::ports::File {
+        path: format!("{POLICIES}/ferrix.json"),
+        mode: 0o644,
+        content: crate::ports::Content::Bytes(
+            br#"{ "BrowserSignin": 0, "SyncDisabled": true, "DefaultBrowserSettingEnabled": false }
+"#
+            .to_vec(),
+        ),
+    }
+}
+
 /// The command that starts the full browser in a window on the compositor,
 /// showing `page`, which may hold no spaces or quotes: it is one word of the
 /// command, which the compositor splits as a shell would.
