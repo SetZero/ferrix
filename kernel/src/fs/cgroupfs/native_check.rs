@@ -267,6 +267,8 @@ fn member(harness: &Harness) -> Checked<Arc<Process>> {
 /// member; a registration fires at the last release and not the first, with
 /// the populated flip; one made while empty fires at once. Answers how many
 /// registrations fired.
+///
+/// Verifies: L.object.74
 fn check_empty(harness: &mut Harness, side: &Side, job: Handle) -> Checked<u32> {
     match empty_now(side, job)? {
         (true, observed) if !observed.intersects(Signals::TERMINATED) => {}
@@ -311,6 +313,8 @@ fn check_empty(harness: &mut Harness, side: &Side, job: Handle) -> Checked<u32> 
 /// A job native `job_create` makes inside a cgroup's job is shown beside it
 /// as `job-<id>`, keeps the cgroup from being removed, is itself refused
 /// `rmdir`, and goes when its handle is closed.
+///
+/// Verifies: L.object.68
 fn check_a_native_child_is_shown(harness: &mut Harness, side: &Side, job: Handle) -> Checked<()> {
     let child = side.handle(
         nr::JOB_CREATE,
