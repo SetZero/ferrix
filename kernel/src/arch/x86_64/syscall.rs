@@ -452,17 +452,17 @@ impl UserRegs {
 ///
 /// # Safety
 ///
-/// Must be called by a user task with its address space installed and its
+/// (CONTEXT) Must be called by a user task with its address space installed and its
 /// user state loaded, and `regs` must be a frame a system call from that
 /// address space saved.
 pub(crate) unsafe fn resume_user(regs: &UserRegs) -> ! {
     match regs {
-        // SAFETY: the caller's guarantee is the assembly's contract; the frame
+        // SAFETY: (CONTEXT) the caller's guarantee is the assembly's contract; the frame
         // is read before anything is pushed below it.
         UserRegs::Syscall(frame) => unsafe { ferrix_resume_user(core::ptr::from_ref(frame)) },
         UserRegs::Trap(frame) => {
             let context = super::signal::UserContext::from_trap(frame).sanitised();
-            // SAFETY: the caller's guarantee; a trap frame from ring 3, whose
+            // SAFETY: (CONTEXT) the caller's guarantee; a trap frame from ring 3, whose
             // selectors and addresses the processor itself saved.
             unsafe { super::signal::resume_context(&context) }
         }
@@ -518,7 +518,7 @@ extern "C" fn ferrix_syscall_entry(frame: &mut SyscallFrame) {
         {
             (path.return_to_user)(&mut context);
         }
-        // SAFETY: this task's own system call, on its own kernel stack, with
+        // SAFETY: (CONTEXT) this task's own system call, on its own kernel stack, with
         // nothing owned on it; `context` holds ring 3's selectors and user
         // instruction and stack pointers, which the frame restore checked, or
         // the process ended and `return_to_user` did not come back.
@@ -595,7 +595,7 @@ fn enter_compat_after_execve(entry: u64, stack: u64) -> ! {
     {
         (path.return_to_user)(&mut context);
     }
-    // SAFETY: the running task's own system call, on its own kernel stack,
+    // SAFETY: (CONTEXT) the running task's own system call, on its own kernel stack,
     // where `ferrix_syscall_entry` owns nothing; `context` holds ring 3's
     // 32-bit selectors and the entry and stack `execve` placed in the new
     // image, both user addresses, or the process ended and `return_to_user`
@@ -622,7 +622,7 @@ fn arch_prctl(code: u64, value: u64) -> isize {
             if !ferrix_bootinfo::is_user_address(value) {
                 return ferrix_linux_abi::errno::Errno::EPERM.as_return_value();
             }
-            // SAFETY: a canonical user address, written to this processor's
+            // SAFETY: (CONTEXT) a canonical user address, written to this processor's
             // `FS_BASE`; it changes only how user accesses resolve.
             unsafe { set_thread_pointer(value) };
             0
@@ -645,14 +645,14 @@ fn arch_prctl(code: u64, value: u64) -> isize {
 ///
 /// # Safety
 ///
-/// Must run on each processor after its per-CPU record is installed in `GS`,
+/// (ENTRY) Must run on each processor after its per-CPU record is installed in `GS`,
 /// and before any program makes a system call there. The GDT the selectors
 /// name need not be loaded yet, only by the time that call is made.
 pub(crate) unsafe fn init() {
-    // SAFETY: `IA32_EFER` exists on every 64-bit x86; setting SCE only enables
+    // SAFETY: (ENTRY) `IA32_EFER` exists on every 64-bit x86; setting SCE only enables
     // an instruction that faults until `LSTAR` is set, two lines below.
     let efer = unsafe { cpu::read_msr(IA32_EFER) };
-    // SAFETY: as above.
+    // SAFETY: (ENTRY) as above.
     unsafe { cpu::write_msr(IA32_EFER, efer | EFER_SCE) };
 
     // STAR[47:32] is the kernel selector base, STAR[63:48] the user one.
@@ -664,20 +664,20 @@ pub(crate) unsafe fn init() {
     // with `#GP(0x20)` -- on hardware and under KVM, never under `tcg`, which
     // is why it passed the boot test. Linux uses `__USER32_CS | 3` for this.
     let star = (u64::from(gdt::KERNEL_CODE) << 32) | (u64::from(gdt::SYSRET_BASE | 3) << 48);
-    // SAFETY: the selectors are this processor's own GDT entries, and the
+    // SAFETY: (ENTRY) the selectors are this processor's own GDT entries, and the
     // layout `SYSRET` computes from is asserted at their definition.
     unsafe { cpu::write_msr(IA32_STAR, star) };
 
-    // SAFETY: the address of a function in the kernel's own text.
+    // SAFETY: (ENTRY) the address of a function in the kernel's own text.
     unsafe { cpu::write_msr(IA32_LSTAR, stub_address()) };
-    // SAFETY: likewise; the stub answers `ENOSYS` and returns.
+    // SAFETY: (ENTRY) likewise; the stub answers `ENOSYS` and returns.
     unsafe { cpu::write_msr(IA32_CSTAR, cstar_stub_address()) };
     // Zero, so that `SYSENTER` from compatibility mode faults rather than
     // entering the kernel wherever firmware left `SYSENTER_EIP` pointing.
     // Linux leaves the same zero when it has no 32-bit entry there.
-    // SAFETY: the MSR exists on every 64-bit x86; zero enables nothing.
+    // SAFETY: (ENTRY) the MSR exists on every 64-bit x86; zero enables nothing.
     unsafe { cpu::write_msr(IA32_SYSENTER_CS, 0) };
-    // SAFETY: a mask of flag bits.
+    // SAFETY: (ENTRY) a mask of flag bits.
     unsafe { cpu::write_msr(IA32_FMASK, FMASK) };
 
     // While the kernel runs, `GS_BASE` holds its per-CPU record -- which
@@ -692,7 +692,7 @@ pub(crate) unsafe fn init() {
     // as the address -- and nothing could tell a wrong `swapgs` from a right
     // one. The paranoid entry's rule, that no program's `GS` base is an
     // upper-half address, rests on this.
-    // SAFETY: the shadow MSR exists on every 64-bit x86, and zero is a
+    // SAFETY: (ENTRY) the shadow MSR exists on every 64-bit x86, and zero is a
     // canonical address that no kernel code reaches through.
     unsafe { cpu::write_msr(IA32_KERNEL_GS_BASE, 0) };
 }
@@ -702,11 +702,11 @@ pub(crate) unsafe fn init() {
 ///
 /// # Safety
 ///
-/// Must be called from the kernel with its own `GS` installed -- anywhere but
+/// (CONTEXT) Must be called from the kernel with its own `GS` installed -- anywhere but
 /// the trampoline's ring-0 stretches before and after `swapgs`, which run with
 /// interrupts masked and cannot call this.
 pub(crate) unsafe fn program_gs_base() -> u64 {
-    // SAFETY: reading the shadow MSR has no side effects.
+    // SAFETY: (CONTEXT) reading the shadow MSR has no side effects.
     unsafe { cpu::read_msr(IA32_KERNEL_GS_BASE) }
 }
 
@@ -715,11 +715,11 @@ pub(crate) unsafe fn program_gs_base() -> u64 {
 ///
 /// # Safety
 ///
-/// Must be called from the kernel with its own `GS` installed, as for
+/// (CONTEXT) Must be called from the kernel with its own `GS` installed, as for
 /// [`program_gs_base`], and `base` must be a user address, never the kernel's:
 /// the paranoid entry tells the two apart by the sign bit.
 pub(crate) unsafe fn set_program_gs_base(base: u64) {
-    // SAFETY: writing the shadow MSR changes only what the next `swapgs`
+    // SAFETY: (CONTEXT) writing the shadow MSR changes only what the next `swapgs`
     // installs for ring 3.
     unsafe { cpu::write_msr(IA32_KERNEL_GS_BASE, base) };
 }
@@ -732,9 +732,9 @@ pub(crate) unsafe fn set_program_gs_base(base: u64) {
 ///
 /// # Safety
 ///
-/// `base` is a user address the program chose; nothing dereferences it here.
+/// (CONTEXT) `base` is a user address the program chose; nothing dereferences it here.
 pub(crate) unsafe fn set_thread_pointer(base: u64) {
-    // SAFETY: `IA32_FS_BASE` accepts any canonical address. Writing it affects
+    // SAFETY: (CONTEXT) `IA32_FS_BASE` accepts any canonical address. Writing it affects
     // only how this processor resolves `FS`-relative user accesses.
     unsafe { cpu::write_msr(IA32_FS_BASE, base) };
 }
@@ -743,9 +743,9 @@ pub(crate) unsafe fn set_thread_pointer(base: u64) {
 ///
 /// # Safety
 ///
-/// Reads an MSR; the caller wants the value for the task whose state it is.
+/// (CONTEXT) Reads an MSR; the caller wants the value for the task whose state it is.
 pub(crate) unsafe fn thread_pointer() -> u64 {
-    // SAFETY: `IA32_FS_BASE` exists on every 64-bit x86 and reading it has no
+    // SAFETY: (CONTEXT) `IA32_FS_BASE` exists on every 64-bit x86 and reading it has no
     // side effects.
     unsafe { cpu::read_msr(IA32_FS_BASE) }
 }
@@ -759,14 +759,14 @@ pub(crate) unsafe fn thread_pointer() -> u64 {
 ///
 /// # Safety
 ///
-/// `top` must be the top of the kernel stack of the task this processor is
+/// (ENTRY) `top` must be the top of the kernel stack of the task this processor is
 /// switching to, and a TSS must be loaded.
 pub(crate) unsafe fn set_entry_stack(top: u64) {
     if let Some(cpu) = crate::smp::this_cpu() {
         cpu.kernel_stack
             .store(top, core::sync::atomic::Ordering::Relaxed);
     }
-    // SAFETY: the caller guarantees the stack and the TSS.
+    // SAFETY: (ENTRY) the caller guarantees the stack and the TSS.
     unsafe { gdt::set_privilege_stack(top) };
 }
 
@@ -784,17 +784,17 @@ pub(crate) unsafe fn set_entry_stack(top: u64) {
 ///
 /// # Safety
 ///
-/// Must be called by a user task, on its own kernel stack, with its address
+/// (CONTEXT) Must be called by a user task, on its own kernel stack, with its address
 /// space installed and its entry stack set; `entry` and `stack` must be
 /// addresses inside that space, and below 4 GiB for a 32-bit program.
 pub(crate) unsafe fn enter_user(entry: u64, stack: u64, argument: u64, abi: Abi) -> ! {
     match abi {
-        // SAFETY: the caller's guarantee is the assembly's contract.
+        // SAFETY: (CONTEXT) the caller's guarantee is the assembly's contract.
         Abi::Native => unsafe { ferrix_enter_user(entry, stack, argument) },
         Abi::Compat => {
             super::switch::enter_compat_segments();
             let context = super::signal::UserContext::entering(entry, stack, abi);
-            // SAFETY: the caller's guarantee: this task's own kernel stack,
+            // SAFETY: (CONTEXT) the caller's guarantee: this task's own kernel stack,
             // with its space and user state loaded and nothing owned on it,
             // and `context` a ring-3 frame at user addresses.
             unsafe { super::signal::resume_context(&context) }

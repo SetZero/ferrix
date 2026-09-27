@@ -404,7 +404,7 @@ impl Gate {
 /// The table.
 struct Idt(UnsafeCell<[Gate; VECTORS]>);
 
-// SAFETY: written once by `init` on the boot CPU before interrupts are enabled,
+// SAFETY: (SHARED) written once by `init` on the boot CPU before interrupts are enabled,
 // and read-only thereafter. Unlike the GDT this one genuinely can be shared by
 // every CPU, because it holds no per-CPU state.
 unsafe impl Sync for Idt {}
@@ -434,10 +434,10 @@ struct DescriptorTablePointer {
 ///
 /// # Safety
 ///
-/// Must be called after [`gdt::init`], because every gate names the kernel code
+/// (ENTRY) Must be called after [`gdt::init`], because every gate names the kernel code
 /// selector that call installs.
 pub(crate) unsafe fn init() {
-    // SAFETY: single-threaded early boot, and this is the only writer.
+    // SAFETY: (SHARED) single-threaded early boot, and this is the only writer.
     let table = unsafe { &mut *IDT.0.get() };
     let stubs = (&raw const ferrix_trap_stubs) as u64;
     let paranoid_stubs = (&raw const ferrix_paranoid_stubs) as u64;
@@ -469,7 +469,7 @@ pub(crate) unsafe fn init() {
         };
     }
 
-    // SAFETY: the table was filled just above, and the GDT is loaded.
+    // SAFETY: (ENTRY) the table was filled just above, and the GDT is loaded.
     unsafe { load_on_this_cpu() };
 }
 
@@ -480,14 +480,14 @@ pub(crate) unsafe fn init() {
 ///
 /// # Safety
 ///
-/// [`init`] must have filled the table, and this processor's GDT must hold a
+/// (ENTRY) [`init`] must have filled the table, and this processor's GDT must hold a
 /// 64-bit kernel code segment at the selector every gate names.
 pub(crate) unsafe fn load_on_this_cpu() {
     let pointer = DescriptorTablePointer {
         limit: (size_of::<[Gate; VECTORS]>() - 1) as u16,
         base: IDT.0.get() as u64,
     };
-    // SAFETY: `pointer` describes the one table, every gate of which points at
+    // SAFETY: (ENTRY) `pointer` describes the one table, every gate of which points at
     // a stub in this image once `init` has run.
     unsafe { cpu::load_idt(&raw const pointer as u64) };
 }
@@ -671,7 +671,7 @@ pub(crate) const fn advance_past_breakpoint(_frame: &mut TrapFrame) {}
 
 /// Raise a breakpoint, so the boot self-check can prove the trap path runs.
 pub(crate) fn breakpoint() {
-    // SAFETY: `int3` raises vector 3, for which the IDT holds a gate. It has no
+    // SAFETY: (PROBE) `int3` raises vector 3, for which the IDT holds a gate. It has no
     // effect other than entering the handler, which returns to the instruction
     // after it.
     unsafe {

@@ -124,7 +124,7 @@ fn offered() -> Offered {
     };
     let bit = |word: u32, n: u32| word & (1 << n) != 0;
     let capabilities = if bit(leaf7, 29) {
-        // SAFETY: CPUID.7.EDX[29] says the register exists.
+        // SAFETY: (PROTECT) CPUID.7.EDX[29] says the register exists.
         unsafe { cpu::read_msr(IA32_ARCH_CAPABILITIES) }
     } else {
         0
@@ -318,25 +318,25 @@ fn report_exposure(offered: &Offered, defences: Defences) {
 fn apply(plan: &Plan) -> Defences {
     let mut held = true;
     if plan.spec_ctrl != 0 {
-        // SAFETY: each bit is in the plan only because CPUID said the
+        // SAFETY: (PROTECT) each bit is in the plan only because CPUID said the
         // register exists and takes it.
         unsafe { cpu::write_msr(IA32_SPEC_CTRL, plan.spec_ctrl) };
-        // SAFETY: as above, the register exists.
+        // SAFETY: (PROTECT) as above, the register exists.
         let read = unsafe { cpu::read_msr(IA32_SPEC_CTRL) };
         held &= read & plan.spec_ctrl == plan.spec_ctrl;
     }
     if plan.auto_ibrs {
-        // SAFETY: `IA32_EFER` exists on every processor with long mode.
+        // SAFETY: (PROTECT) `IA32_EFER` exists on every processor with long mode.
         let efer = unsafe { cpu::read_msr(IA32_EFER) };
-        // SAFETY: CPUID 0x8000_0021.EAX[8] says the bit is implemented.
+        // SAFETY: (PROTECT) CPUID 0x8000_0021.EAX[8] says the bit is implemented.
         unsafe { cpu::write_msr(IA32_EFER, efer | EFER_AUTO_IBRS) };
-        // SAFETY: as above.
+        // SAFETY: (PROTECT) as above.
         held &= unsafe { cpu::read_msr(IA32_EFER) } & EFER_AUTO_IBRS != 0;
     }
     if plan.virt_ssbd {
-        // SAFETY: CPUID 0x8000_0008.EBX[25] says the register exists.
+        // SAFETY: (PROTECT) CPUID 0x8000_0008.EBX[25] says the register exists.
         unsafe { cpu::write_msr(AMD_VIRT_SPEC_CTRL, SPEC_CTRL_SSBD) };
-        // SAFETY: as above.
+        // SAFETY: (PROTECT) as above.
         held &= unsafe { cpu::read_msr(AMD_VIRT_SPEC_CTRL) } & SPEC_CTRL_SSBD != 0;
     }
     if held {
@@ -370,7 +370,7 @@ pub(crate) fn apply_this_cpu() {
 /// processor is about to run a program other than the one it last ran.
 pub(crate) fn switch_barrier(_cpu: usize) -> bool {
     if SWITCH_IBPB.load(Ordering::Relaxed) {
-        // SAFETY: `SWITCH_IBPB` is set only when CPUID said `IA32_PRED_CMD`
+        // SAFETY: (PROTECT) `SWITCH_IBPB` is set only when CPUID said `IA32_PRED_CMD`
         // takes IBPB; the write empties predictors and changes nothing else.
         unsafe { cpu::write_msr(IA32_PRED_CMD, PRED_CMD_IBPB) };
     }
@@ -389,7 +389,7 @@ fn fill_return_stack() {
     if !HARDENED {
         return;
     }
-    // SAFETY: thirty-two calls to the next instruction and the stack put
+    // SAFETY: (PROTECT) thirty-two calls to the next instruction and the stack put
     // back as it was; no register but the stack pointer is touched, and that
     // is restored. The kernel's target has no red zone to overwrite.
     unsafe {
@@ -415,7 +415,7 @@ pub(crate) fn clamp_index(index: usize, len: usize) -> usize {
         return index;
     }
     let mask: usize;
-    // SAFETY: two register instructions; no memory, no stack.
+    // SAFETY: (PROTECT) two register instructions; no memory, no stack.
     unsafe {
         asm!(
             "cmp {index}, {len}",
@@ -439,7 +439,7 @@ pub(crate) fn clamp_below(value: u64, end: u64) -> u64 {
 /// processor: for the boot check, which shows the operand is one the
 /// instruction accepts wherever that path is not taken.
 pub(crate) fn clear_cpu_buffers() {
-    // SAFETY: `VERW` of a readable selector only sets `ZF` and, on a
+    // SAFETY: (PROTECT) `VERW` of a readable selector only sets `ZF` and, on a
     // processor with `MD_CLEAR`, clears buffers; the operand is a static.
     unsafe {
         asm!(

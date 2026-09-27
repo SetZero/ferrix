@@ -285,7 +285,7 @@ impl Tables {
 /// The boot processor's tables.
 struct Global(UnsafeCell<Tables>);
 
-// SAFETY: written once by `init` on the boot CPU before interrupts are enabled,
+// SAFETY: (SHARED) written once by `init` on the boot CPU before interrupts are enabled,
 // and read by the CPU alone thereafter. Every other processor has its own, from
 // `init_secondary`.
 unsafe impl Sync for Global {}
@@ -301,7 +301,7 @@ static BOOT_TABLES: Global = Global(UnsafeCell::new(Tables::new()));
 #[repr(C, align(16))]
 struct BootStack(UnsafeCell<[u8; IST_STACK_SIZE]>);
 
-// SAFETY: nothing in the kernel names these by address: the CPU switches to
+// SAFETY: (SHARED) nothing in the kernel names these by address: the CPU switches to
 // one on the exceptions its slot is given to, which is their whole purpose, and
 // only the handler running on it touches it.
 unsafe impl Sync for BootStack {}
@@ -321,10 +321,10 @@ struct DescriptorTablePointer {
 ///
 /// # Safety
 ///
-/// Must be called exactly once, on the boot CPU, before any user mode entry and
+/// (ENTRY) Must be called exactly once, on the boot CPU, before any user mode entry and
 /// before interrupts are enabled.
 pub(crate) unsafe fn init() {
-    // SAFETY: single-threaded early boot, and this is the only writer.
+    // SAFETY: (SHARED) single-threaded early boot, and this is the only writer.
     let tables = unsafe { &mut *BOOT_TABLES.0.get() };
 
     // The x86 stack grows down and `push` decrements first, so the top is one
@@ -334,7 +334,7 @@ pub(crate) unsafe fn init() {
     let tops = BOOT_IST_STACKS
         .each_ref()
         .map(|stack| (stack.0.get() as u64 + IST_STACK_SIZE as u64) & !0xF);
-    // SAFETY: the boot processor's own tables, loaded once, and stacks the CPU
+    // SAFETY: (ENTRY) the boot processor's own tables, loaded once, and stacks the CPU
     // alone uses.
     unsafe { load(tables, tops) };
 }
@@ -361,13 +361,13 @@ pub(crate) unsafe fn init() {
 ///
 /// # Safety
 ///
-/// A TSS must be loaded, which [`init`] or [`init_secondary`] has done by the
+/// (ENTRY) A TSS must be loaded, which [`init`] or [`init_secondary`] has done by the
 /// time any task runs, and `top` must be the top of a stack this processor
 /// alone uses.
 pub(crate) unsafe fn set_privilege_stack(top: u64) {
-    // SAFETY: reads the task register; no memory is touched.
+    // SAFETY: (ENTRY) reads the task register; no memory is touched.
     let selector = unsafe { cpu::read_task_register() };
-    // SAFETY: writes ten bytes of GDTR into a local.
+    // SAFETY: (ENTRY) writes ten bytes of GDTR into a local.
     let (gdt_base, gdt_limit) = unsafe { cpu::read_gdt() };
 
     let index = usize::from(selector & !0x7);
@@ -379,13 +379,13 @@ pub(crate) unsafe fn set_privilege_stack(top: u64) {
     }
 
     let descriptor = (gdt_base as usize + index) as *const u64;
-    // SAFETY: `index` is inside the GDT the processor is using, which this
+    // SAFETY: (ENTRY) `index` is inside the GDT the processor is using, which this
     // module built and which lives for the life of the processor.
     let low = unsafe { descriptor.read() };
-    // SAFETY: the second half of the same descriptor, whose sixteen bytes were
+    // SAFETY: (ENTRY) the second half of the same descriptor, whose sixteen bytes were
     // bounds-checked above.
     let upper = unsafe { descriptor.add(1) };
-    // SAFETY: as above; the pointer is inside the table.
+    // SAFETY: (ENTRY) as above; the pointer is inside the table.
     let high = unsafe { upper.read() };
 
     // The base is scattered across the descriptor in three pieces below 32
@@ -395,7 +395,7 @@ pub(crate) unsafe fn set_privilege_stack(top: u64) {
         ((low >> 16) & 0x00FF_FFFF) | (((low >> 56) & 0xFF) << 24) | ((high & 0xFFFF_FFFF) << 32);
 
     let rsp0 = (base as usize + TSS_PRIVILEGE_STACK) as *mut u64;
-    // SAFETY: the TSS this processor has loaded, at the offset long mode puts
+    // SAFETY: (ENTRY) the TSS this processor has loaded, at the offset long mode puts
     // `RSP0`. Unaligned because the 32-bit TSS layout put a `u32` before it,
     // which is why `TaskStateSegment` is a byte array in the first place.
     unsafe { rsp0.write_unaligned(top) };
@@ -404,7 +404,7 @@ pub(crate) unsafe fn set_privilege_stack(top: u64) {
 /// This processor's GDT, as the processor reports it, if it is one of the
 /// tables this module built: long enough to hold every slot.
 fn live_table() -> Option<*mut u64> {
-    // SAFETY: writes ten bytes of GDTR into a local.
+    // SAFETY: (ENTRY) writes ten bytes of GDTR into a local.
     let (base, limit) = unsafe { cpu::read_gdt() };
     (usize::from(limit) + 1 >= GDT_SLOTS * 8).then_some(base as *mut u64)
 }
@@ -415,16 +415,16 @@ fn live_table() -> Option<*mut u64> {
 ///
 /// # Safety
 ///
-/// Interrupts must be masked, or the thread could move to another processor
+/// (CONTEXT) Interrupts must be masked, or the thread could move to another processor
 /// between the question and the answer.
 pub(crate) unsafe fn read_tls() -> [u64; TLS_SLOTS] {
     let mut tls = [0; TLS_SLOTS];
     if let Some(table) = live_table() {
         for (slot, value) in tls.iter_mut().enumerate() {
-            // SAFETY: slots 12 to 14 are inside the table `live_table`
+            // SAFETY: (CONTEXT) slots 12 to 14 are inside the table `live_table`
             // measured.
             let at = unsafe { table.add(TLS_FIRST_SLOT + slot) };
-            // SAFETY: a slot of this processor's table, which the processor
+            // SAFETY: (CONTEXT) a slot of this processor's table, which the processor
             // reads and nothing else writes.
             *value = unsafe { at.read() };
         }
@@ -440,15 +440,15 @@ pub(crate) unsafe fn read_tls() -> [u64; TLS_SLOTS] {
 ///
 /// # Safety
 ///
-/// Interrupts must be masked, and every nonzero descriptor must be one
+/// (CONTEXT) Interrupts must be masked, and every nonzero descriptor must be one
 /// `ferrix_linux_abi::user_desc` built: ring 3 data, which no kernel selector
 /// names.
 pub(crate) unsafe fn write_tls(tls: &[u64; TLS_SLOTS]) {
     if let Some(table) = live_table() {
         for (slot, value) in tls.iter().enumerate() {
-            // SAFETY: as in `read_tls`.
+            // SAFETY: (CONTEXT) as in `read_tls`.
             let at = unsafe { table.add(TLS_FIRST_SLOT + slot) };
-            // SAFETY: only this processor uses its table. Ordinary memory, as
+            // SAFETY: (CONTEXT) only this processor uses its table. Ordinary memory, as
             // `set_privilege_stack`'s write to the TSS is: the processor reads
             // it at the next selector load, which is an `asm!` block that may
             // read memory, so the write is done by then.
@@ -510,7 +510,7 @@ pub(crate) const fn ring_3_segment(descriptor: u64) -> bool {
 ///
 /// # Safety
 ///
-/// Must be called once, on the secondary processor itself, before it enables
+/// (ENTRY) Must be called once, on the secondary processor itself, before it enables
 /// interrupts.
 pub(crate) unsafe fn init_secondary() -> Result<(), &'static str> {
     // One per slot, and never freed: the processor uses them for the rest of
@@ -526,7 +526,7 @@ pub(crate) unsafe fn init_secondary() -> Result<(), &'static str> {
     let tables: &'static mut Tables = Box::leak(
         crate::fallible::try_box(Tables::new()).map_err(|_| "no memory for a processor's GDT")?,
     );
-    // SAFETY: fresh tables that nothing else refers to, and fresh stacks.
+    // SAFETY: (ENTRY) fresh tables that nothing else refers to, and fresh stacks.
     unsafe { load(tables, tops) };
     Ok(())
 }
@@ -535,7 +535,7 @@ pub(crate) unsafe fn init_secondary() -> Result<(), &'static str> {
 ///
 /// # Safety
 ///
-/// `tables` must belong to this processor alone and live as long as it runs,
+/// (ENTRY) `tables` must belong to this processor alone and live as long as it runs,
 /// and each of `ist_tops`, the stack for slot 1 first, must be the top of a
 /// stack nothing else uses.
 unsafe fn load(tables: &'static mut Tables, ist_tops: [u64; IST_STACKS]) {
@@ -545,7 +545,7 @@ unsafe fn load(tables: &'static mut Tables, ist_tops: [u64; IST_STACKS]) {
         // above the frame the processor pushes at the IST entry, and nothing
         // else writes. It must start at zero, whatever the stack held.
         let entry = top - IST_OCCUPANCY_RESERVE;
-        // SAFETY: `entry` is inside the stack `top` ends, which the caller
+        // SAFETY: (ENTRY) `entry` is inside the stack `top` ends, which the caller
         // guarantees nothing else is using, and eight-byte aligned.
         unsafe { (entry as *mut u64).write(0) };
         tables.tss.set_interrupt_stack(slot, entry);
@@ -583,13 +583,13 @@ unsafe fn load(tables: &'static mut Tables, ist_tops: [u64; IST_STACKS]) {
         base: (&raw const tables.gdt) as u64,
     };
 
-    // SAFETY: `pointer` describes the table just built, whose selectors match
+    // SAFETY: (ENTRY) `pointer` describes the table just built, whose selectors match
     // the constants the reload below and every gate use.
     unsafe { cpu::load_gdt(&raw const pointer as u64) };
-    // SAFETY: the GDT is loaded and holds a flat kernel code and data segment
+    // SAFETY: (ENTRY) the GDT is loaded and holds a flat kernel code and data segment
     // at these selectors.
     unsafe { cpu::reload_segments(KERNEL_CODE, KERNEL_DATA) };
-    // SAFETY: slot 0x40 of the GDT just built is an available 64-bit TSS
+    // SAFETY: (ENTRY) slot 0x40 of the GDT just built is an available 64-bit TSS
     // descriptor for `tables.tss`.
     unsafe { cpu::load_tss(TSS_SELECTOR) };
 

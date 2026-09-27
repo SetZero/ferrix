@@ -211,19 +211,19 @@ fn run_with_window_breakpoints(cpu: usize) -> Result<i32, &'static str> {
     // and left undefined.
     let entry = super::super::syscall::stub_address();
     let sysret = (&raw const ferrix_syscall_sysret) as u64;
-    // SAFETY: an instruction of the trampoline, not in the paranoid entry nor
+    // SAFETY: (PROBE) an instruction of the trampoline, not in the paranoid entry nor
     // on an IST stack, which is what a `#DB` there needs; unarmed until DR7.
     unsafe { cpu::write_breakpoint_address(0, entry) };
-    // SAFETY: as above, for the trampoline's `sysretq`.
+    // SAFETY: (PROBE) as above, for the trampoline's `sysretq`.
     unsafe { cpu::write_breakpoint_address(1, sysret) };
-    // SAFETY: arms the two slots just written, and nothing else.
+    // SAFETY: (PROBE) arms the two slots just written, and nothing else.
     unsafe { cpu::write_dr7(dr7_local(0) | dr7_local(1)) };
 
     let status = crate::syscall::process::start_on(&process, Some(cpu))
         .ok()
         .and_then(|_task| process.wait_for_exit(u64::MAX));
 
-    // SAFETY: disarming changes nothing but that they stop firing. This task
+    // SAFETY: (PROBE) disarming changes nothing but that they stop firing. This task
     // is pinned, so this is the processor they were armed on.
     unsafe { cpu::write_dr7(0) };
 
@@ -231,7 +231,7 @@ fn run_with_window_breakpoints(cpu: usize) -> Result<i32, &'static str> {
     // a per-CPU record, both halves of `swapgs` would hold the same address,
     // and a handler that skipped the swap would find the kernel's GS anyway:
     // the breakpoints above would prove nothing.
-    // SAFETY: a kernel task, with the kernel's GS, outside the trampoline.
+    // SAFETY: (CONTEXT) a kernel task, with the kernel's GS, outside the trampoline.
     let program_gs = unsafe { super::super::syscall::program_gs_base() };
     if is_cpu_record(program_gs) {
         return Err("a program ran with a per-CPU record as its GS base");
@@ -266,16 +266,16 @@ fn check_breakpoints_do_not_nest() -> Result<u64, &'static str> {
     // Masked, so that arming, both breakpoints and disarming happen on one
     // processor.
     let saved = <super::super::Irq as IrqControl>::disable();
-    // SAFETY: a kernel function outside the paranoid entry and the IST stacks;
+    // SAFETY: (PROBE) a kernel function outside the paranoid entry and the IST stacks;
     // unarmed until DR7, and disarmed below before interrupts open again.
     unsafe { cpu::write_breakpoint_address(0, breakpoint_target as fn() -> u64 as usize as u64) };
-    // SAFETY: as above, for the hook every kernel `#DB` handler runs.
+    // SAFETY: (PROBE) as above, for the hook every kernel `#DB` handler runs.
     unsafe { cpu::write_breakpoint_address(2, debug_hook as fn() as usize as u64) };
-    // SAFETY: arms the two slots just written, and nothing else.
+    // SAFETY: (PROBE) arms the two slots just written, and nothing else.
     unsafe { cpu::write_dr7(dr7_local(0) | dr7_local(2)) };
     let _ = core::hint::black_box(breakpoint_target());
     debug_hook();
-    // SAFETY: disarming.
+    // SAFETY: (PROBE) disarming.
     unsafe { cpu::write_dr7(0) };
     <super::super::Irq as IrqControl>::restore(saved);
 

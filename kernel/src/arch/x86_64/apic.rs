@@ -147,7 +147,7 @@ fn lapic() -> Mmio {
 ///
 /// # Safety
 ///
-/// Must be called once, on the boot CPU, after the interrupt descriptor table
+/// (DEVICE) Must be called once, on the boot CPU, after the interrupt descriptor table
 /// is loaded and while interrupts are still masked: this leaves the local APIC
 /// enabled, and an interrupt arriving before there is a gate for it is a fault
 /// with no handler.

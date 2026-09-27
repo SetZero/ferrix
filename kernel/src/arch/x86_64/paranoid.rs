@@ -171,7 +171,7 @@ fn debug(frame: &mut TrapFrame) {
 /// again by the next one.
 pub(super) fn take_debug_status() -> u64 {
     let status = cpu::read_dr6();
-    // SAFETY: the value DR6 holds with nothing recorded, reserved bits as the
+    // SAFETY: (SYSREG) the value DR6 holds with nothing recorded, reserved bits as the
     // processor defines them.
     unsafe { cpu::write_dr6(DR6_CLEAR) };
     status

@@ -208,11 +208,11 @@ const FUNCTIONS: [Function<'static>; 3] = [
 
 /// The vDSO's machine code and what it exports: always, on x86-64.
 pub(crate) fn vdso_spec() -> Option<ferrix_vdso::Spec<'static>> {
-    // SAFETY: a quadword the assembly above defines in read-only data, never
+    // SAFETY: (BOOT-DATA) a quadword the assembly above defines in read-only data, never
     // written, and valid for the kernel's life.
     let len = usize::try_from(unsafe { ferrix_vdso_len }).ok()?;
     let start = &raw const ferrix_vdso_code;
-    // SAFETY: `start` is the code's first byte and `len` its length, both from
+    // SAFETY: (BOOT-DATA) `start` is the code's first byte and `len` its length, both from
     // the same assembly: the bytes lie in read-only data, one section, for the
     // kernel's life, and nothing writes them.
     let code = unsafe { core::slice::from_raw_parts(start, len) };

@@ -76,10 +76,10 @@ const IA32_GS_BASE: u32 = 0xC000_0101;
 ///
 /// # Safety
 ///
-/// `address` must be this processor's own `PerCpu` record, which must live for
+/// (SHARED) `address` must be this processor's own `PerCpu` record, which must live for
 /// the rest of the system's life: `cpu_local` hands it back as a reference.
 pub(crate) unsafe fn set_cpu_local(address: u64) {
-    // SAFETY: `IA32_GS_BASE` exists on every 64-bit x86 and accepts any
+    // SAFETY: (SHARED) `IA32_GS_BASE` exists on every 64-bit x86 and accepts any
     // canonical address, which a kernel pointer is.
     unsafe { cpu::write_msr(IA32_GS_BASE, address) };
 
@@ -90,7 +90,7 @@ pub(crate) unsafe fn set_cpu_local(address: u64) {
     // of them, and the first system call it made on one that skipped this
     // would take `#UD`. It used to run lazily before each program, when a
     // program never left the processor it started on.
-    // SAFETY: this processor's per-CPU record is installed in `GS` above. On
+    // SAFETY: (ENTRY) this processor's per-CPU record is installed in `GS` above. On
     // a secondary this runs before `init_secondary` loads its own GDT, which is
     // fine: the MSRs only record the selectors, and nothing uses them until a
     // program's first `SYSCALL`, long after that GDT is in place.
@@ -101,10 +101,10 @@ pub(crate) unsafe fn set_cpu_local(address: u64) {
 ///
 /// # Safety
 ///
-/// [`set_cpu_local`] must have run on this CPU. Before it has, `GS` points
+/// (SHARED) [`set_cpu_local`] must have run on this CPU. Before it has, `GS` points
 /// wherever firmware left it and the load below reads from there.
 pub(crate) unsafe fn cpu_local() -> u64 {
-    // SAFETY: the caller guarantees `GS` points at a per-CPU record, whose
+    // SAFETY: (SHARED) the caller guarantees `GS` points at a per-CPU record, whose
     // first word is its own address.
     unsafe { cpu::read_gs_word() }
 }
@@ -115,7 +115,7 @@ pub(crate) unsafe fn cpu_local() -> u64 {
 /// is whatever firmware left there, but reading it cannot fault. For a failure
 /// report, which has to name the processor without trusting it.
 pub(crate) fn cpu_local_register() -> u64 {
-    // SAFETY: `IA32_GS_BASE` exists on every 64-bit x86.
+    // SAFETY: (SHARED) `IA32_GS_BASE` exists on every 64-bit x86.
     unsafe { cpu::read_msr(IA32_GS_BASE) }
 }
 pub(crate) use trap::{
@@ -148,11 +148,11 @@ pub(crate) fn check_exception_entry() -> Result<(), &'static str> {
 ///
 /// # Safety
 ///
-/// Must be called exactly once, on the boot CPU, before interrupts are enabled.
+/// (ENTRY) Must be called exactly once, on the boot CPU, before interrupts are enabled.
 pub(crate) unsafe fn init_traps() {
-    // SAFETY: called once from `kmain`, before anything can fault deliberately.
+    // SAFETY: (ENTRY) called once from `kmain`, before anything can fault deliberately.
     unsafe { gdt::init() };
-    // SAFETY: after `gdt::init`, whose kernel code selector every gate names.
+    // SAFETY: (ENTRY) after `gdt::init`, whose kernel code selector every gate names.
     unsafe { trap::init() };
     // After the IDT, so that a fault this turns on is *reported* rather than
     // becoming a triple fault, and before user mode so that it covers every
@@ -1128,10 +1128,10 @@ pub(crate) const fn user_platform(abi: crate::trap::Abi) -> Option<&'static [u8]
 ///
 /// # Safety
 ///
-/// Must be called by a user task, on its own kernel stack, with its address
+/// (CONTEXT) Must be called by a user task, on its own kernel stack, with its address
 /// space installed; `entry` and `stack` must be addresses within it.
 pub(crate) unsafe fn enter_user(entry: u64, stack: u64, argument: u64, abi: crate::trap::Abi) -> ! {
-    // SAFETY: the caller's guarantee, passed straight through.
+    // SAFETY: (CONTEXT) the caller's guarantee, passed straight through.
     unsafe { syscall::enter_user(entry, stack, argument, abi) }
 }
 
@@ -1244,13 +1244,13 @@ pub(crate) fn prepare_user_root(root: u64) {
 ///
 /// # Safety
 ///
-/// `root` must be a root table [`prepare_user_root`] has made, so that it
+/// (TRANSLATE) `root` must be a root table [`prepare_user_root`] has made, so that it
 /// still names the kernel's upper half — the instruction after this one is a
 /// kernel instruction, and the trap taken if it did not translate would be a
 /// triple fault. The tables it roots must also stay alive until another root
 /// replaces this one on this processor.
 pub(crate) unsafe fn install_user_root(root: u64) {
-    // SAFETY: the caller guarantees the root carries the kernel's half, which
+    // SAFETY: (TRANSLATE) the caller guarantees the root carries the kernel's half, which
     // is what maps the code and stack this returns onto.
     unsafe { cpu::write_cr3(root) };
     // `IBPB` and a return stack refill, if this is another program's space
@@ -1269,9 +1269,9 @@ pub(crate) unsafe fn install_user_root(root: u64) {
 ///
 /// # Safety
 ///
-/// Nothing may still need a user address on this processor.
+/// (TRANSLATE) Nothing may still need a user address on this processor.
 pub(crate) unsafe fn uninstall_user_root() {
-    // SAFETY: the kernel's own root maps everything the kernel runs on, and
+    // SAFETY: (TRANSLATE) the kernel's own root maps everything the kernel runs on, and
     // the caller guarantees no user address is wanted.
     unsafe { cpu::write_cr3(crate::mm::root_table()) };
 }
@@ -1288,7 +1288,7 @@ pub(crate) unsafe fn uninstall_user_root() {
 ///
 /// # Safety
 ///
-/// Nothing may still be executing or reading through the lower half. The
+/// (TRANSLATE) Nothing may still be executing or reading through the lower half. The
 /// kernel runs entirely in the upper half from its first instruction.
 pub(crate) unsafe fn drop_identity_map(_view: &BootView<'_>) {
     crate::mm::clear_root_slots(0..UPPER_HALF_SLOT);
@@ -1334,7 +1334,7 @@ pub(crate) fn reset() -> ! {
     let port = ACPI_RESET_PORT.load(core::sync::atomic::Ordering::Relaxed);
     if port != 0 {
         let value = ACPI_RESET_VALUE.load(core::sync::atomic::Ordering::Relaxed);
-        // SAFETY: firmware named this port and value as the way to reset the
+        // SAFETY: (FIRMWARE) firmware named this port and value as the way to reset the
         // machine, and resetting it is the point.
         unsafe { cpu::outb(port, value) };
         settle();
@@ -1342,19 +1342,19 @@ pub(crate) fn reset() -> ! {
 
     for _ in 0..10 {
         for _ in 0..1000 {
-            // SAFETY: reading the 8042's status port has no side effect.
+            // SAFETY: (FIRMWARE) reading the 8042's status port has no side effect.
             if unsafe { cpu::inb(KBC_PORT) } & KBC_INPUT_FULL == 0 {
                 break;
             }
             settle_briefly();
         }
-        // SAFETY: the reset pulse is the command's only effect, and on a
+        // SAFETY: (FIRMWARE) the reset pulse is the command's only effect, and on a
         // machine with no controller the write is discarded.
         unsafe { cpu::outb(KBC_PORT, KBC_PULSE_RESET) };
         settle();
     }
 
-    // SAFETY: the last way to reset the machine, taken on purpose.
+    // SAFETY: (FIRMWARE) the last way to reset the machine, taken on purpose.
     unsafe { cpu::triple_fault() }
 }
 
@@ -1363,7 +1363,7 @@ pub(crate) fn reset() -> ! {
 /// to wait on.
 fn settle_briefly() {
     for _ in 0..1000 {
-        // SAFETY: port 0x80 is the POST diagnostic port; writes to it are
+        // SAFETY: (DEVICE) port 0x80 is the POST diagnostic port; writes to it are
         // discarded or shown on a debug card, and nothing reads it.
         unsafe { cpu::outb(0x80, 0) };
     }
@@ -1417,7 +1417,7 @@ pub(crate) fn halt() -> ! {
 ///
 /// # Safety
 ///
-/// Must be called exactly once, on the boot CPU, after [`init_traps`] and
+/// (DEVICE) Must be called exactly once, on the boot CPU, after [`init_traps`] and
 /// while interrupts are still masked.
 pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'static str> {
     let firmware =
@@ -1426,7 +1426,7 @@ pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'st
     record_reset_register(&acpi);
 
     let counter = clock::init(&acpi)?;
-    // SAFETY: called once from `kmain`, on the boot CPU, after `init_traps`
+    // SAFETY: (DEVICE) called once from `kmain`, on the boot CPU, after `init_traps`
     // filled the IDT and with interrupts masked.
     unsafe { apic::init(&acpi)? };
 
@@ -1476,7 +1476,7 @@ pub(crate) fn msi_doorbell() -> Option<u64> {
 #[derive(Debug)]
 pub(crate) struct Irq;
 
-// SAFETY: `disable` masks interrupts on this CPU with `cli` and reports
+// SAFETY: (SHARED) `disable` masks interrupts on this CPU with `cli` and reports
 // whether they were unmasked beforehand; `restore` unmasks only if they were,
 // so nesting two critical sections leaves the inner one unable to unmask
 // halfway out of the outer one. Neither touches any other state.

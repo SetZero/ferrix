@@ -220,7 +220,7 @@ fn start_tsc() -> Result<&'static str, &'static str> {
 
 /// Whether channel 2's output is high, meaning it reached terminal count.
 fn pit_finished() -> bool {
-    // SAFETY: port 0x61 is the PC/AT system control port. Reading it has no
+    // SAFETY: (DEVICE) port 0x61 is the PC/AT system control port. Reading it has no
     // side effect; bit 5 is channel 2's output.
     let status = unsafe { cpu::inb(PIT_GATE) };
     status & PIT_OUTPUT != 0
@@ -234,17 +234,17 @@ fn pit_finished() -> bool {
 fn calibrate_tsc() -> Option<u64> {
     let count = u16::try_from(PIT_HZ * CALIBRATION_MILLIS / 1000).ok()?;
 
-    // SAFETY: reading port 0x61 to preserve the bits this does not own —
+    // SAFETY: (DEVICE) reading port 0x61 to preserve the bits this does not own —
     // the speaker's, principally, which must come back as it was found.
     let saved = unsafe { cpu::inb(PIT_GATE) };
-    // SAFETY: gate on, speaker off. Bits 2..7 are preserved.
+    // SAFETY: (DEVICE) gate on, speaker off. Bits 2..7 are preserved.
     unsafe { cpu::outb(PIT_GATE, (saved & 0xFC) | PIT_GATE_ON) };
-    // SAFETY: the 8254 command register, programming channel 2 one-shot.
+    // SAFETY: (DEVICE) the 8254 command register, programming channel 2 one-shot.
     unsafe { cpu::outb(PIT_COMMAND, PIT_ONESHOT) };
-    // SAFETY: channel 2's counter, low byte then high byte as the command
+    // SAFETY: (DEVICE) channel 2's counter, low byte then high byte as the command
     // just asked for. The second write starts it.
     unsafe { cpu::outb(PIT_CHANNEL2, count as u8) };
-    // SAFETY: as above, the high byte.
+    // SAFETY: (DEVICE) as above, the high byte.
     unsafe { cpu::outb(PIT_CHANNEL2, (count >> 8) as u8) };
 
     let start = cpu::rdtsc();
@@ -259,7 +259,7 @@ fn calibrate_tsc() -> Option<u64> {
     }
     let elapsed = cpu::rdtsc().checked_sub(start)?;
 
-    // SAFETY: put port 0x61 back exactly as it was found.
+    // SAFETY: (DEVICE) put port 0x61 back exactly as it was found.
     unsafe { cpu::outb(PIT_GATE, saved) };
 
     if elapsed == 0 {

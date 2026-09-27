@@ -12,10 +12,10 @@ use core::sync::atomic::{AtomicBool, Ordering};
 ///
 /// # Safety
 ///
-/// I/O ports are device registers: the caller must know what device is behind
+/// (DEVICE) I/O ports are device registers: the caller must know what device is behind
 /// `port` and that writing `value` to it is intended.
 pub(crate) unsafe fn outb(port: u16, value: u8) {
-    // SAFETY: the caller guarantees the port and the value.
+    // SAFETY: (DEVICE) the caller guarantees the port and the value.
     unsafe {
         asm!("out dx, al", in("dx") port, in("al") value, options(nomem, nostack, preserves_flags));
     }
@@ -25,12 +25,12 @@ pub(crate) unsafe fn outb(port: u16, value: u8) {
 ///
 /// # Safety
 ///
-/// As [`outb`]: the caller must know what device is behind `port`. Reading a
+/// (DEVICE) As [`outb`]: the caller must know what device is behind `port`. Reading a
 /// device register can have side effects — on a 16550, reading the receive
 /// buffer consumes a character.
 pub(crate) unsafe fn inb(port: u16) -> u8 {
     let value: u8;
-    // SAFETY: the caller guarantees the port.
+    // SAFETY: (DEVICE) the caller guarantees the port.
     unsafe {
         asm!("in al, dx", out("al") value, in("dx") port, options(nomem, nostack, preserves_flags));
     }
@@ -41,9 +41,9 @@ pub(crate) unsafe fn inb(port: u16) -> u8 {
 ///
 /// # Safety
 ///
-/// As [`outb`].
+/// (DEVICE) As [`outb`].
 pub(crate) unsafe fn outl(port: u16, value: u32) {
-    // SAFETY: the caller guarantees the port and the value.
+    // SAFETY: (DEVICE) the caller guarantees the port and the value.
     unsafe {
         asm!("out dx, eax", in("dx") port, in("eax") value, options(nomem, nostack, preserves_flags));
     }
@@ -51,7 +51,7 @@ pub(crate) unsafe fn outl(port: u16, value: u32) {
 
 /// Halt until the next interrupt.
 pub(crate) fn hlt() {
-    // SAFETY: `hlt` at ring 0 stops the CPU until an interrupt arrives and has
+    // SAFETY: (SYSREG) `hlt` at ring 0 stops the CPU until an interrupt arrives and has
     // no other effect.
     unsafe {
         asm!("hlt", options(nomem, nostack, preserves_flags));
@@ -60,7 +60,7 @@ pub(crate) fn hlt() {
 
 /// Mask interrupts on this CPU.
 pub(crate) fn disable_interrupts() {
-    // SAFETY: `cli` only clears the interrupt flag.
+    // SAFETY: (SYSREG) `cli` only clears the interrupt flag.
     unsafe {
         asm!("cli", options(nomem, nostack));
     }
@@ -130,7 +130,7 @@ pub(crate) fn enable_user_access_protection() -> (bool, bool) {
     if smap {
         cr4 |= CR4_SMAP;
     }
-    // SAFETY: each bit is set only when CPUID reported the feature, and both
+    // SAFETY: (PROTECT) each bit is set only when CPUID reported the feature, and both
     // are legal in long mode with the four-level table already in force.
     unsafe { write_cr4(cr4) };
     SMAP_ON.store(smap, Ordering::Relaxed);
@@ -158,7 +158,7 @@ pub(crate) fn enable_umip() -> bool {
     if __cpuid(0).eax < 7 || __cpuid_count(7, 0).ecx & (1 << 2) == 0 {
         return false;
     }
-    // SAFETY: CPUID reported UMIP, which is legal to set in long mode and
+    // SAFETY: (PROTECT) CPUID reported UMIP, which is legal to set in long mode and
     // changes only what ring 3 may execute.
     unsafe { write_cr4(read_cr4() | CR4_UMIP) };
     read_cr4() & CR4_UMIP != 0
@@ -185,7 +185,7 @@ static SMAP_ON: AtomicBool = AtomicBool::new(false);
 /// off for this processor.
 pub(crate) fn permit_user_access() {
     if SMAP_ON.load(Ordering::Relaxed) {
-        // SAFETY: `stac` sets one flag, and is only reached when CPUID
+        // SAFETY: (PROTECT) `stac` sets one flag, and is only reached when CPUID
         // reported SMAP, without which it would be an undefined instruction.
         unsafe { asm!("stac", options(nomem, nostack)) };
     }
@@ -194,7 +194,7 @@ pub(crate) fn permit_user_access() {
 /// Refuse user pages to this processor again.
 pub(crate) fn forbid_user_access() {
     if SMAP_ON.load(Ordering::Relaxed) {
-        // SAFETY: `clac` clears one flag, under the same guard as `stac`.
+        // SAFETY: (PROTECT) `clac` clears one flag, under the same guard as `stac`.
         unsafe { asm!("clac", options(nomem, nostack)) };
     }
 }
@@ -242,12 +242,12 @@ pub(crate) fn flush_tlb_including_global() {
     disable_interrupts();
 
     let cr4 = read_cr4();
-    // SAFETY: `cr4` was just read, so this is that value with one bit cleared.
+    // SAFETY: (TRANSLATE) `cr4` was just read, so this is that value with one bit cleared.
     // Clearing `PGE` alters no mapping; its only effect is to invalidate the
     // whole `TLB`, global entries included, which is what this exists for. The
     // bit is restored immediately below, with interrupts masked in between.
     unsafe { write_cr4(cr4 & !CR4_PGE) };
-    // SAFETY: the value read a moment ago, put back unchanged, before anything
+    // SAFETY: (TRANSLATE) the value read a moment ago, put back unchanged, before anything
     // could observe `PGE` clear.
     unsafe { write_cr4(cr4) };
 
@@ -256,11 +256,11 @@ pub(crate) fn flush_tlb_including_global() {
     // leaving it out would make the correctness of this function depend on a
     // footnote rather than on two instructions that plainly do it.
     let cr3: u64;
-    // SAFETY: reading CR3 has no side effects.
+    // SAFETY: (TRANSLATE) reading CR3 has no side effects.
     unsafe {
         asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags));
     }
-    // SAFETY: writing back the value just read changes no mapping; its only
+    // SAFETY: (TRANSLATE) writing back the value just read changes no mapping; its only
     // effect is to flush the TLB, which is the point.
     unsafe {
         asm!("mov cr3, {}", in(reg) cr3, options(nostack, preserves_flags));
@@ -276,7 +276,7 @@ pub(crate) fn flush_tlb_including_global() {
 /// `invlpg`, which drops the entry whether or not it is global, and only on
 /// this processor.
 pub(crate) fn invalidate_page(address: u64) {
-    // SAFETY: `invlpg` names an address and reads nothing at it; its only
+    // SAFETY: (TRANSLATE) `invlpg` names an address and reads nothing at it; its only
     // effect is that the next use of the page re-walks the tables.
     unsafe {
         asm!("invlpg [{}]", in(reg) address, options(nostack, preserves_flags));
@@ -294,7 +294,7 @@ pub(crate) const RFLAGS_INTERRUPT: u64 = 1 << 9;
 /// interrupts halfway out of the outer critical section.
 pub(crate) fn read_rflags() -> u64 {
     let flags: u64;
-    // SAFETY: `pushfq` and `pop` read the flags register through the stack and
+    // SAFETY: (SYSREG) `pushfq` and `pop` read the flags register through the stack and
     // leave it as they found it. `nostack` is deliberately *not* claimed: this
     // is the one primitive here that uses the stack.
     unsafe {
@@ -307,11 +307,11 @@ pub(crate) fn read_rflags() -> u64 {
 ///
 /// # Safety
 ///
-/// `msr` must be a register this CPU implements and `value` one it accepts. An
+/// (SYSREG) `msr` must be a register this CPU implements and `value` one it accepts. An
 /// invalid one is a general protection fault; a valid but wrong one changes how
 /// the CPU behaves.
 pub(crate) unsafe fn write_msr(msr: u32, value: u64) {
-    // SAFETY: the caller guarantees the register and the value.
+    // SAFETY: (SYSREG) the caller guarantees the register and the value.
     unsafe {
         asm!(
             "wrmsr",
@@ -327,12 +327,12 @@ pub(crate) unsafe fn write_msr(msr: u32, value: u64) {
 ///
 /// # Safety
 ///
-/// `msr` must be a register this CPU implements; reading one it does not is a
+/// (SYSREG) `msr` must be a register this CPU implements; reading one it does not is a
 /// general protection fault.
 pub(crate) unsafe fn read_msr(msr: u32) -> u64 {
     let low: u32;
     let high: u32;
-    // SAFETY: the caller guarantees the register exists.
+    // SAFETY: (SYSREG) the caller guarantees the register exists.
     unsafe {
         asm!(
             "rdmsr",
@@ -348,7 +348,7 @@ pub(crate) unsafe fn read_msr(msr: u32) -> u64 {
 /// Control register 0: protection, paging, write protection, caching.
 pub(crate) fn read_cr0() -> u64 {
     let value: u64;
-    // SAFETY: reading CR0 has no side effects.
+    // SAFETY: (SYSREG) reading CR0 has no side effects.
     unsafe {
         asm!("mov {}, cr0", out(reg) value, options(nomem, nostack, preserves_flags));
     }
@@ -358,7 +358,7 @@ pub(crate) fn read_cr0() -> u64 {
 /// Control register 4: the paging and instruction-set extensions in force.
 pub(crate) fn read_cr4() -> u64 {
     let value: u64;
-    // SAFETY: reading CR4 has no side effects.
+    // SAFETY: (SYSREG) reading CR4 has no side effects.
     unsafe {
         asm!("mov {}, cr4", out(reg) value, options(nomem, nostack, preserves_flags));
     }
@@ -369,11 +369,11 @@ pub(crate) fn read_cr4() -> u64 {
 ///
 /// # Safety
 ///
-/// Every bit set must be a feature this processor has and a mode it can be in
+/// (SYSREG) Every bit set must be a feature this processor has and a mode it can be in
 /// now: `PCIDE` outside long mode, or `LA57` under a four-level table, is a
 /// fault at best.
 pub(crate) unsafe fn write_cr4(value: u64) {
-    // SAFETY: the caller guarantees the value.
+    // SAFETY: (SYSREG) the caller guarantees the value.
     unsafe {
         asm!("mov cr4, {}", in(reg) value, options(nostack, preserves_flags));
     }
@@ -383,10 +383,10 @@ pub(crate) unsafe fn write_cr4(value: u64) {
 ///
 /// # Safety
 ///
-/// `root` must map everything this processor touches next — the code it is
+/// (TRANSLATE) `root` must map everything this processor touches next — the code it is
 /// executing, its stack — at the addresses it is using them at.
 pub(crate) unsafe fn write_cr3(root: u64) {
-    // SAFETY: the caller guarantees the new tables map what runs next.
+    // SAFETY: (TRANSLATE) the caller guarantees the new tables map what runs next.
     unsafe {
         asm!("mov cr3, {}", in(reg) root, options(nostack, preserves_flags));
     }
@@ -396,11 +396,11 @@ pub(crate) unsafe fn write_cr3(root: u64) {
 ///
 /// # Safety
 ///
-/// `GS`'s base must point at readable memory. Until the kernel writes it, it
+/// (SHARED) `GS`'s base must point at readable memory. Until the kernel writes it, it
 /// points wherever firmware left it.
 pub(crate) unsafe fn read_gs_word() -> u64 {
     let word: u64;
-    // SAFETY: the caller guarantees the base is readable.
+    // SAFETY: (SHARED) the caller guarantees the base is readable.
     unsafe {
         asm!(
             "mov {}, qword ptr gs:[0]",
@@ -424,7 +424,7 @@ pub(crate) unsafe fn read_gs_word() -> u64 {
 #[inline(always)]
 pub(crate) fn frame_pointer() -> u64 {
     let value: u64;
-    // SAFETY: reading a register has no side effects.
+    // SAFETY: (SYSREG) reading a register has no side effects.
     unsafe {
         asm!("mov {}, rbp", out(reg) value, options(nomem, nostack, preserves_flags));
     }
@@ -444,7 +444,7 @@ const DEBUG_EXIT_SUCCESS: u32 = 0x10;
 
 /// Ask QEMU to exit successfully. Does nothing on real hardware.
 pub(crate) fn debug_exit() {
-    // SAFETY: on QEMU this port is the debug-exit device and this is exactly
+    // SAFETY: (FIRMWARE) on QEMU this port is the debug-exit device and this is exactly
     // what it is for; on hardware, port 0xF4 is unassigned and a write to an
     // unassigned port is discarded.
     unsafe { outl(DEBUG_EXIT_PORT, DEBUG_EXIT_SUCCESS) };
@@ -458,12 +458,12 @@ pub(crate) fn debug_exit() {
 ///
 /// # Safety
 ///
-/// `pointer` must be the address of a `limit`/`base` pair describing a valid
+/// (ENTRY) `pointer` must be the address of a `limit`/`base` pair describing a valid
 /// GDT that stays alive for as long as it is loaded. The CPU keeps using it for
 /// every privilege transition, so a GDT on a stack that goes away is a fault
 /// with no obvious cause.
 pub(crate) unsafe fn load_gdt(pointer: u64) {
-    // SAFETY: the caller guarantees the operand describes a live, valid table.
+    // SAFETY: (ENTRY) the caller guarantees the operand describes a live, valid table.
     unsafe {
         asm!("lgdt [{}]", in(reg) pointer, options(readonly, nostack, preserves_flags));
     }
@@ -473,9 +473,9 @@ pub(crate) unsafe fn load_gdt(pointer: u64) {
 ///
 /// # Safety
 ///
-/// As [`load_gdt`], for an IDT whose every present gate points at real code.
+/// (ENTRY) As [`load_gdt`], for an IDT whose every present gate points at real code.
 pub(crate) unsafe fn load_idt(pointer: u64) {
-    // SAFETY: the caller guarantees the operand describes a live, valid table.
+    // SAFETY: (ENTRY) the caller guarantees the operand describes a live, valid table.
     unsafe {
         asm!("lidt [{}]", in(reg) pointer, options(readonly, nostack, preserves_flags));
     }
@@ -487,15 +487,15 @@ pub(crate) unsafe fn load_idt(pointer: u64) {
 ///
 /// # Safety
 ///
-/// Destroys the machine's state on purpose. Only the last step of a reset may
+/// (FIRMWARE) Destroys the machine's state on purpose. Only the last step of a reset may
 /// call it.
 pub(crate) unsafe fn triple_fault() -> ! {
     // An `lidt` operand: a limit of zero and a base of zero, so no gate exists.
     let empty = [0_u8; 10];
-    // SAFETY: an empty table is exactly what this function is for, and the
+    // SAFETY: (FIRMWARE) an empty table is exactly what this function is for, and the
     // caller has given up on the machine.
     unsafe { load_idt(empty.as_ptr() as u64) };
-    // SAFETY: with no gate for it, this breakpoint becomes a double fault and
+    // SAFETY: (FIRMWARE) with no gate for it, this breakpoint becomes a double fault and
     // then a triple fault, which resets the processor.
     unsafe { asm!("int3", options(noreturn)) }
 }
@@ -504,11 +504,11 @@ pub(crate) unsafe fn triple_fault() -> ! {
 ///
 /// # Safety
 ///
-/// `selector` must name an available 64-bit TSS descriptor in the current GDT.
+/// (ENTRY) `selector` must name an available 64-bit TSS descriptor in the current GDT.
 /// Loading one that is already busy, or that is not a TSS at all, is a general
 /// protection fault.
 pub(crate) unsafe fn load_tss(selector: u16) {
-    // SAFETY: the caller guarantees the selector names an available TSS.
+    // SAFETY: (ENTRY) the caller guarantees the selector names an available TSS.
     unsafe {
         asm!("ltr {0:x}", in(reg) selector, options(nostack, preserves_flags));
     }
@@ -522,10 +522,10 @@ pub(crate) unsafe fn load_tss(selector: u16) {
 ///
 /// # Safety
 ///
-/// `code` and `data` must name a 64-bit code segment and a writable data
+/// (ENTRY) `code` and `data` must name a 64-bit code segment and a writable data
 /// segment in the currently loaded GDT.
 pub(crate) unsafe fn reload_segments(code: u16, data: u16) {
-    // SAFETY: the caller guarantees both selectors are valid in the live GDT.
+    // SAFETY: (ENTRY) the caller guarantees both selectors are valid in the live GDT.
     // The far return is the only way to reload CS: there is no `mov cs`.
     unsafe {
         asm!(
@@ -554,7 +554,7 @@ pub(crate) unsafe fn reload_segments(code: u16, data: u16) {
 /// §3.5), and a switch between tasks keeps each task's own.
 pub(crate) fn read_data_selectors() -> [u16; 4] {
     let (ds, es, fs, gs): (u16, u16, u16, u16);
-    // SAFETY: reading a segment register has no side effect.
+    // SAFETY: (SYSREG) reading a segment register has no side effect.
     unsafe {
         asm!(
             "mov {0:x}, ds",
@@ -580,11 +580,11 @@ pub(crate) fn read_data_selectors() -> [u16; 4] {
 ///
 /// # Safety
 ///
-/// Each selector must be null or name a present data segment, or a readable
+/// (CONTEXT) Each selector must be null or name a present data segment, or a readable
 /// code segment, in this processor's GDT whose DPL admits it. Anything else is
 /// `#GP` in ring 0.
 pub(crate) unsafe fn load_data_selectors(ds: u16, es: u16, fs: u16) {
-    // SAFETY: the caller guarantees each selector loads.
+    // SAFETY: (CONTEXT) the caller guarantees each selector loads.
     unsafe {
         asm!(
             "mov ds, {0:e}",
@@ -613,11 +613,11 @@ pub(crate) unsafe fn load_data_selectors(ds: u16, es: u16, fs: u16) {
 ///
 /// # Safety
 ///
-/// As [`load_data_selectors`], for `selector`.
+/// (CONTEXT) As [`load_data_selectors`], for `selector`.
 pub(crate) unsafe fn load_user_gs(selector: u16) {
     let open = read_rflags() & RFLAGS_IF != 0;
     disable_interrupts();
-    // SAFETY: the caller guarantees the selector loads; interrupts are masked
+    // SAFETY: (CONTEXT) the caller guarantees the selector loads; interrupts are masked
     // between the two `swapgs`, which leave `GS_BASE` the kernel's again.
     unsafe {
         asm!(
@@ -639,7 +639,7 @@ const RFLAGS_IF: u64 = 1 << 9;
 /// The linear address a page fault was taken on./// The linear address a page fault was taken on.
 pub(crate) fn read_cr2() -> u64 {
     let address: u64;
-    // SAFETY: reading CR2 has no side effects. It is only meaningful inside a
+    // SAFETY: (SYSREG) reading CR2 has no side effects. It is only meaningful inside a
     // page fault handler, before another fault overwrites it.
     unsafe {
         asm!("mov {}, cr2", out(reg) address, options(nomem, nostack, preserves_flags));
@@ -654,7 +654,7 @@ pub(crate) fn read_cr2() -> u64 {
 /// scheduler starts replacing it per task.
 pub(crate) fn read_stack_pointer() -> u64 {
     let stack: u64;
-    // SAFETY: reading `rsp` has no side effects.
+    // SAFETY: (SYSREG) reading `rsp` has no side effects.
     unsafe {
         asm!("mov {}, rsp", out(reg) stack, options(nomem, nostack, preserves_flags));
     }
@@ -666,7 +666,7 @@ pub(crate) fn read_stack_pointer() -> u64 {
 /// The counterpart to [`disable_interrupts`], and the moment the kernel stops
 /// being the only thing that decides when it runs.
 pub(crate) fn enable_interrupts() {
-    // SAFETY: `sti` only sets the interrupt flag. Every vector has a gate by
+    // SAFETY: (SYSREG) `sti` only sets the interrupt flag. Every vector has a gate by
     // the time anything calls this — `init_traps` runs long before.
     unsafe {
         asm!("sti", options(nomem, nostack));
@@ -680,7 +680,7 @@ pub(crate) fn enable_interrupts() {
 /// `hlt` — waking it — rather than slipping in between and leaving the
 /// processor asleep with the reason it should be awake already handled.
 pub(crate) fn enable_interrupts_and_halt() {
-    // SAFETY: `sti` and `hlt` change only the interrupt flag and whether the
+    // SAFETY: (SYSREG) `sti` and `hlt` change only the interrupt flag and whether the
     // processor is running; every vector has a gate by the time this is used.
     unsafe {
         asm!("sti", "hlt", options(nomem, nostack));
@@ -695,7 +695,7 @@ pub(crate) fn enable_interrupts_and_halt() {
 pub(crate) fn rdtsc() -> u64 {
     let low: u32;
     let high: u32;
-    // SAFETY: `rdtsc` reads a counter into edx:eax and has no other effect.
+    // SAFETY: (SYSREG) `rdtsc` reads a counter into edx:eax and has no other effect.
     unsafe {
         asm!(
             "rdtsc",
@@ -716,26 +716,26 @@ pub(crate) fn rdtsc() -> u64 {
 ///
 /// # Safety
 ///
-/// Changes which accesses raise `#DB` once `DR7` enables the slot. The kernel
+/// (SYSREG) Changes which accesses raise `#DB` once `DR7` enables the slot. The kernel
 /// must be ready to take one there: not on the entry stubs, and not on an
 /// interrupt stack, which a nested `#DB` would land on.
 pub(crate) unsafe fn write_breakpoint_address(slot: usize, address: u64) {
     // Each: writing a debug address register at ring 0 changes nothing until
     // DR7 enables it, and the caller guarantees the address is one to trap on.
     match slot {
-        // SAFETY: as above, for DR0.
+        // SAFETY: (SYSREG) as above, for DR0.
         0 => unsafe {
             asm!("mov dr0, {}", in(reg) address, options(nomem, nostack, preserves_flags));
         },
-        // SAFETY: as above, for DR1.
+        // SAFETY: (SYSREG) as above, for DR1.
         1 => unsafe {
             asm!("mov dr1, {}", in(reg) address, options(nomem, nostack, preserves_flags));
         },
-        // SAFETY: as above, for DR2.
+        // SAFETY: (SYSREG) as above, for DR2.
         2 => unsafe {
             asm!("mov dr2, {}", in(reg) address, options(nomem, nostack, preserves_flags));
         },
-        // SAFETY: as above, for DR3.
+        // SAFETY: (SYSREG) as above, for DR3.
         3 => unsafe {
             asm!("mov dr3, {}", in(reg) address, options(nomem, nostack, preserves_flags));
         },
@@ -747,9 +747,9 @@ pub(crate) unsafe fn write_breakpoint_address(slot: usize, address: u64) {
 ///
 /// # Safety
 ///
-/// As [`write_breakpoint_address`], for every slot `value` enables.
+/// (SYSREG) As [`write_breakpoint_address`], for every slot `value` enables.
 pub(crate) unsafe fn write_dr7(value: u64) {
-    // SAFETY: the caller guarantees each enabled slot's address.
+    // SAFETY: (SYSREG) the caller guarantees each enabled slot's address.
     unsafe {
         asm!("mov dr7, {}", in(reg) value, options(nomem, nostack, preserves_flags));
     }
@@ -759,7 +759,7 @@ pub(crate) unsafe fn write_dr7(value: u64) {
 /// sets bits and never clears them, so a handler clears it with [`write_dr6`].
 pub(crate) fn read_dr6() -> u64 {
     let value: u64;
-    // SAFETY: reading a debug register at ring 0 has no side effects.
+    // SAFETY: (SYSREG) reading a debug register at ring 0 has no side effects.
     unsafe {
         asm!("mov {}, dr6", out(reg) value, options(nomem, nostack, preserves_flags));
     }
@@ -770,10 +770,10 @@ pub(crate) fn read_dr6() -> u64 {
 ///
 /// # Safety
 ///
-/// `value` must keep DR6's reserved bits as the processor defines them:
+/// (SYSREG) `value` must keep DR6's reserved bits as the processor defines them:
 /// bits 63:32 clear, and the fixed-one bits set.
 pub(crate) unsafe fn write_dr6(value: u64) {
-    // SAFETY: the caller guarantees the reserved bits.
+    // SAFETY: (SYSREG) the caller guarantees the reserved bits.
     unsafe {
         asm!("mov dr6, {}", in(reg) value, options(nomem, nostack, preserves_flags));
     }
@@ -783,10 +783,10 @@ pub(crate) unsafe fn write_dr6(value: u64) {
 ///
 /// # Safety
 ///
-/// None beyond being x86-64; `STR` touches no memory.
+/// (ENTRY) None beyond being x86-64; `STR` touches no memory.
 pub(crate) unsafe fn read_task_register() -> u16 {
     let selector: u16;
-    // SAFETY: reads a register into a local.
+    // SAFETY: (ENTRY) reads a register into a local.
     unsafe {
         core::arch::asm!(
             "str {0:x}",
@@ -801,10 +801,10 @@ pub(crate) unsafe fn read_task_register() -> u16 {
 ///
 /// # Safety
 ///
-/// None beyond being x86-64; `SGDT` writes ten bytes to the local below.
+/// (ENTRY) None beyond being x86-64; `SGDT` writes ten bytes to the local below.
 pub(crate) unsafe fn read_gdt() -> (u64, u16) {
     let mut pointer = [0_u8; 10];
-    // SAFETY: `SGDT` writes exactly ten bytes, which is the size of the array.
+    // SAFETY: (ENTRY) `SGDT` writes exactly ten bytes, which is the size of the array.
     unsafe {
         core::arch::asm!(
             "sgdt [{0}]",
@@ -834,7 +834,7 @@ pub(crate) fn hardware_random() -> Option<u64> {
         let value: u64;
         let carry: u8;
         if rdseed {
-            // SAFETY: CPUID says `RDSEED` exists; it sets one register and the
+            // SAFETY: (SYSREG) CPUID says `RDSEED` exists; it sets one register and the
             // carry flag, which says whether the value is good.
             unsafe {
                 core::arch::asm!(
@@ -846,7 +846,7 @@ pub(crate) fn hardware_random() -> Option<u64> {
                 );
             }
         } else {
-            // SAFETY: as above, for `RDRAND`.
+            // SAFETY: (SYSREG) as above, for `RDRAND`.
             unsafe {
                 core::arch::asm!(
                     "rdrand {value}",

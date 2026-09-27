@@ -342,7 +342,7 @@ fn sigcontext_of(
 /// `FXSAVE` image at its 112th byte, `magic` saying so, and the control and
 /// status words in the `fsave` environment's first two.
 fn write_fpstate(space: &AddressSpace, fpstate: u64) -> Result<(), BadFrame> {
-    // SAFETY: on the running task's own way back to ring 3, so the processor
+    // SAFETY: (CONTEXT) on the running task's own way back to ring 3, so the processor
     // holds this program's x87 and SSE registers.
     let state = unsafe { switch::UserState::capture() };
     let image = state.fxsave();

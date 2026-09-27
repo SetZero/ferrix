@@ -73,13 +73,13 @@ unsafe extern "C" {
 ///
 /// # Safety
 ///
-/// `save` must be the stack-pointer slot of the context calling this, and
+/// (CONTEXT) `save` must be the stack-pointer slot of the context calling this, and
 /// `next` must be a stack pointer that [`prepare_stack`] produced or that an
 /// earlier call to this function saved. No other processor may be running on
 /// either stack, and both must stay mapped for as long as their contexts
 /// exist.
 pub(crate) unsafe fn switch_to(save: *mut u64, next: u64) {
-    // SAFETY: the caller's guarantee is exactly the assembly's contract.
+    // SAFETY: (CONTEXT) the caller's guarantee is exactly the assembly's contract.
     unsafe { ferrix_switch(save, next) };
 }
 
@@ -92,7 +92,7 @@ pub(crate) unsafe fn switch_to(save: *mut u64, next: u64) {
 ///
 /// # Safety
 ///
-/// `top` must be the top of a mapped, writable stack of at least
+/// (CONTEXT) `top` must be the top of a mapped, writable stack of at least
 /// [`FRAME_BYTES`], owned by the caller and not in use.
 pub(crate) unsafe fn prepare_stack(
     top: u64,
@@ -109,7 +109,7 @@ pub(crate) unsafe fn prepare_stack(
         ferrix_task_entry as *const () as usize as u64,
     ];
     let stack_pointer = top - FRAME_BYTES;
-    // SAFETY: the caller guarantees the stack is mapped, writable and theirs,
+    // SAFETY: (CONTEXT) the caller guarantees the stack is mapped, writable and theirs,
     // and the frame is written entirely inside it.
     unsafe {
         core::ptr::copy_nonoverlapping(frame.as_ptr(), stack_pointer as *mut u64, frame.len());
@@ -155,11 +155,11 @@ impl UserState {
     ///
     /// # Safety
     ///
-    /// The registers must be the calling task's own, which they are inside its
+    /// (CONTEXT) The registers must be the calling task's own, which they are inside its
     /// own system call.
     pub(crate) unsafe fn capture() -> UserState {
         let mut state = UserState::new();
-        // SAFETY: the caller's guarantee.
+        // SAFETY: (CONTEXT) the caller's guarantee.
         unsafe { save_user_state(&mut state) };
         state
     }
@@ -224,10 +224,10 @@ impl UserState {
 ///
 /// # Safety
 ///
-/// The registers must be the calling task's own, and `state`'s `MXCSR` must
+/// (CONTEXT) The registers must be the calling task's own, and `state`'s `MXCSR` must
 /// have no reserved bit set, which `FXRSTOR64` answers with `#GP` in ring 0.
 pub(super) unsafe fn load_fpu(state: &UserState) {
-    // SAFETY: a 512-byte area inside a sixteen-byte-aligned structure, whose
+    // SAFETY: (CONTEXT) a 512-byte area inside a sixteen-byte-aligned structure, whose
     // `MXCSR` the caller has masked.
     unsafe { ferrix_fpu_restore(state.fxsave.as_ptr()) };
 }
@@ -262,18 +262,18 @@ unsafe extern "C" {
 ///
 /// # Safety
 ///
-/// The registers must belong to the task `state` is for: it was the last task
+/// (CONTEXT) The registers must belong to the task `state` is for: it was the last task
 /// with user state to run on this processor.
 pub(crate) unsafe fn save_user_state(state: &mut UserState) {
-    // SAFETY: reading `FS_BASE` has no side effects.
+    // SAFETY: (CONTEXT) reading `FS_BASE` has no side effects.
     state.thread_pointer = unsafe { super::syscall::thread_pointer() };
-    // SAFETY: the kernel side of `swapgs`, where the shadow is the program's.
+    // SAFETY: (CONTEXT) the kernel side of `swapgs`, where the shadow is the program's.
     state.gs_base = unsafe { super::syscall::program_gs_base() };
     state.selectors = cpu::read_data_selectors();
-    // SAFETY: the caller switches tasks with interrupts masked, so these are
+    // SAFETY: (CONTEXT) the caller switches tasks with interrupts masked, so these are
     // this processor's slots and the outgoing thread's.
     state.tls = unsafe { gdt::read_tls() };
-    // SAFETY: a 512-byte area inside a sixteen-byte-aligned structure, which
+    // SAFETY: (CONTEXT) a 512-byte area inside a sixteen-byte-aligned structure, which
     // is what `FXSAVE64` writes.
     unsafe { ferrix_fpu_save(state.fxsave.as_mut_ptr()) };
 }
@@ -283,13 +283,13 @@ pub(crate) unsafe fn save_user_state(state: &mut UserState) {
 ///
 /// # Safety
 ///
-/// The task `state` belongs to must be the one this processor is switching to,
+/// (CONTEXT) The task `state` belongs to must be the one this processor is switching to,
 /// and `entry_stack` the top of its kernel stack.
 pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
-    // SAFETY: the caller switches with interrupts masked; the descriptors are
+    // SAFETY: (CONTEXT) the caller switches with interrupts masked; the descriptors are
     // ones `set_thread_area` built, or zero.
     unsafe { gdt::write_tls(&state.tls) };
-    // SAFETY: each selector checked loadable against the slots just written.
+    // SAFETY: (CONTEXT) each selector checked loadable against the slots just written.
     unsafe {
         load_selectors(
             state.selectors,
@@ -298,10 +298,10 @@ pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
             state.gs_base,
         );
     }
-    // SAFETY: an area this module initialised or `FXSAVE64` wrote, so every
+    // SAFETY: (CONTEXT) an area this module initialised or `FXSAVE64` wrote, so every
     // reserved bit `FXRSTOR64` checks is clear.
     unsafe { ferrix_fpu_restore(state.fxsave.as_ptr()) };
-    // SAFETY: the caller guarantees the stack.
+    // SAFETY: (ENTRY) the caller guarantees the stack.
     unsafe { super::syscall::set_entry_stack(entry_stack) };
 }
 
@@ -311,7 +311,7 @@ pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
 ///
 /// # Safety
 ///
-/// Must be called by the user task whose registers these are, from inside its
+/// (CONTEXT) Must be called by the user task whose registers these are, from inside its
 /// own system call.
 pub(crate) unsafe fn reset_user_state() {
     let fresh = UserState::new();
@@ -320,13 +320,13 @@ pub(crate) unsafe fn reset_user_state() {
     // the old one's segments. A 32-bit one is given user data in `DS` and `ES`
     // as it is entered (`enter_compat_segments`).
     with_interrupts_masked(|| {
-        // SAFETY: interrupts masked; zero descriptors.
+        // SAFETY: (CONTEXT) interrupts masked; zero descriptors.
         unsafe { gdt::write_tls(&fresh.tls) };
-        // SAFETY: null selectors always load; the bases are zero, which is
+        // SAFETY: (CONTEXT) null selectors always load; the bases are zero, which is
         // valid.
         unsafe { load_selectors(fresh.selectors, &fresh.tls, 0, 0) };
     });
-    // SAFETY: an area built by `UserState::new`, whose reserved bits are clear.
+    // SAFETY: (CONTEXT) an area built by `UserState::new`, whose reserved bits are clear.
     unsafe { ferrix_fpu_restore(fresh.fxsave.as_ptr()) };
 }
 
@@ -336,7 +336,7 @@ pub(crate) unsafe fn reset_user_state() {
 ///
 /// # Safety
 ///
-/// Interrupts masked, `tls` already in this processor's thread-local slots,
+/// (CONTEXT) Interrupts masked, `tls` already in this processor's thread-local slots,
 /// and both bases the program's own.
 unsafe fn load_selectors(
     selectors: [u16; 4],
@@ -345,16 +345,16 @@ unsafe fn load_selectors(
     gs_base: u64,
 ) {
     let [ds, es, fs, gs] = selectors.map(|selector| gdt::loadable(selector, tls));
-    // SAFETY: each selector null or loadable, as `gdt::loadable` checked.
+    // SAFETY: (CONTEXT) each selector null or loadable, as `gdt::loadable` checked.
     unsafe { cpu::load_data_selectors(ds, es, fs) };
     if fs == 0 {
-        // SAFETY: a user address the program set, or zero.
+        // SAFETY: (CONTEXT) a user address the program set, or zero.
         unsafe { super::syscall::set_thread_pointer(fs_base) };
     }
-    // SAFETY: as for the other three.
+    // SAFETY: (CONTEXT) as for the other three.
     unsafe { cpu::load_user_gs(gs) };
     if gs == 0 {
-        // SAFETY: the program's own base, into the shadow it lives in while
+        // SAFETY: (CONTEXT) the program's own base, into the shadow it lives in while
         // the kernel runs.
         unsafe { super::syscall::set_program_gs_base(gs_base) };
     }
@@ -366,12 +366,12 @@ unsafe fn load_selectors(
 /// and what its return from one puts back.
 pub(crate) fn load_program_selectors(selectors: [u16; 4]) {
     with_interrupts_masked(|| {
-        // SAFETY: interrupts masked, so these are the running thread's.
+        // SAFETY: (CONTEXT) interrupts masked, so these are the running thread's.
         let tls = unsafe { gdt::read_tls() };
         let [ds, es, fs, gs] = selectors.map(|selector| gdt::loadable(selector, &tls));
-        // SAFETY: each checked loadable against the live slots.
+        // SAFETY: (CONTEXT) each checked loadable against the live slots.
         unsafe { cpu::load_data_selectors(ds, es, fs) };
-        // SAFETY: as above.
+        // SAFETY: (CONTEXT) as above.
         unsafe { cpu::load_user_gs(gs) };
     });
 }
@@ -385,7 +385,7 @@ pub(crate) fn load_program_selectors(selectors: [u16; 4]) {
 /// task's state, which leave it so.
 pub(crate) fn enter_compat_segments() {
     let data = gdt::USER_DATA | 3;
-    // SAFETY: user data is a present ring 3 data segment in every GDT this
+    // SAFETY: (CONTEXT) user data is a present ring 3 data segment in every GDT this
     // kernel builds, and the null selector always loads.
     unsafe { cpu::load_data_selectors(data, data, 0) };
 }
@@ -404,25 +404,25 @@ pub(crate) fn enter_compat_segments() {
 /// the three.
 pub(crate) fn set_thread_area(index: Option<usize>, descriptor: u64) -> Option<usize> {
     with_interrupts_masked(|| {
-        // SAFETY: interrupts masked, so these are the calling thread's.
+        // SAFETY: (CONTEXT) interrupts masked, so these are the calling thread's.
         let mut tls = unsafe { gdt::read_tls() };
         let index = match index {
             Some(index) => index,
             None => tls.iter().position(|slot| *slot == 0)?,
         };
         *tls.get_mut(index)? = descriptor;
-        // SAFETY: interrupts masked; `descriptor` is one `user_desc` built,
+        // SAFETY: (CONTEXT) interrupts masked; `descriptor` is one `user_desc` built,
         // ring 3 data, or zero.
         unsafe { gdt::write_tls(&tls) };
         let named = |selector: u16| usize::from(selector >> 3) == gdt::TLS_FIRST_SLOT + index;
         let [ds, es, fs, gs] = cpu::read_data_selectors();
         if [ds, es, fs].into_iter().any(named) {
             let [ds, es, fs] = [ds, es, fs].map(|selector| gdt::loadable(selector, &tls));
-            // SAFETY: each checked loadable against the slots just written.
+            // SAFETY: (CONTEXT) each checked loadable against the slots just written.
             unsafe { cpu::load_data_selectors(ds, es, fs) };
         }
         if named(gs) {
-            // SAFETY: as above.
+            // SAFETY: (CONTEXT) as above.
             unsafe { cpu::load_user_gs(gdt::loadable(gs, &tls)) };
         }
         Some(index)
@@ -432,7 +432,7 @@ pub(crate) fn set_thread_area(index: Option<usize>, descriptor: u64) -> Option<u
 /// The descriptor in the calling thread's thread-local slot `index`, zero
 /// for an empty one: `get_thread_area`'s half that is the processor's.
 pub(crate) fn thread_area(index: usize) -> Option<u64> {
-    // SAFETY: interrupts masked by the closure's caller.
+    // SAFETY: (CONTEXT) interrupts masked by the closure's caller.
     with_interrupts_masked(|| unsafe { gdt::read_tls() }.get(index).copied())
 }
 

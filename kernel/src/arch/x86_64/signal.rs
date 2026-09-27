@@ -335,7 +335,7 @@ const USER_SS: u64 = (gdt::USER_DATA | 3) as u64;
 /// Write the program's x87 and SSE state, as `FXSAVE` lays it out, to
 /// `fpstate`.
 fn write_fp_area(space: &AddressSpace, fpstate: u64) -> Result<(), BadFrame> {
-    // SAFETY: on the running task's own way back to ring 3, so the processor
+    // SAFETY: (CONTEXT) on the running task's own way back to ring 3, so the processor
     // holds this program's x87 and SSE registers.
     let state = unsafe { UserState::capture() };
     let mut area = FrameBytes::zeroed(FXSAVE_BYTES)?;
@@ -456,7 +456,7 @@ pub(crate) fn restore_signal_frame(
 /// Load the x87 and SSE registers from the `FXSAVE` area at `at`.
 fn restore_fpu(space: &AddressSpace, at: u64) -> Result<(), BadFrame> {
     let area = FrameBytes::read(space, at, FXSAVE_BYTES)?;
-    // SAFETY: inside the running task's own system call, so the registers are
+    // SAFETY: (CONTEXT) inside the running task's own system call, so the registers are
     // its own; captured only to learn `MXCSR_MASK` and to carry the area.
     let mut state = unsafe { UserState::capture() };
     let mut live = FrameBytes::zeroed(FXSAVE_BYTES)?;
@@ -471,7 +471,7 @@ fn restore_fpu(space: &AddressSpace, at: u64) -> Result<(), BadFrame> {
     state
         .fxsave_mut()
         .copy_from_slice(wanted.get(0, FXSAVE_BYTES)?);
-    // SAFETY: the registers are the running task's, and `MXCSR` was masked to
+    // SAFETY: (CONTEXT) the registers are the running task's, and `MXCSR` was masked to
     // the bits this processor reports, so `FXRSTOR64` has nothing to refuse.
     unsafe { switch::load_fpu(&state) };
     Ok(())
@@ -488,12 +488,12 @@ unsafe extern "C" {
 ///
 /// # Safety
 ///
-/// Must be called by a user task with its address space and user state loaded,
+/// (CONTEXT) Must be called by a user task with its address space and user state loaded,
 /// from its own kernel stack, with nothing owned left on the stack above, and
 /// with `context`'s selectors ring 3's and its instruction and stack pointers
 /// user addresses -- which [`restore_signal_frame`] and
 /// [`setup_signal_frame`] leave true.
 pub(super) unsafe fn resume_context(context: &UserContext) -> ! {
-    // SAFETY: the caller's guarantee is the assembly's contract.
+    // SAFETY: (CONTEXT) the caller's guarantee is the assembly's contract.
     unsafe { ferrix_resume_trap_frame(core::ptr::from_ref(&context.0)) }
 }

@@ -256,7 +256,7 @@ impl CpuStarter {
             .ok_or("no free frame below one mebibyte for the trampoline's root table")?
             * PAGE_SIZE;
 
-        // SAFETY: `code` is a frame just allocated and referred to by nothing
+        // SAFETY: (FRAME) `code` is a frame just allocated and referred to by nothing
         // else, writable through the direct map; the source is the
         // trampoline's `len` bytes in this image, which fit in the page.
         unsafe {
@@ -279,7 +279,7 @@ impl CpuStarter {
 
         let boot_cr4 = cpu::read_cr4();
         BOOT_CR4.store(boot_cr4, Ordering::Relaxed);
-        // SAFETY: `IA32_EFER` exists on every processor that has long mode.
+        // SAFETY: (SYSREG) `IA32_EFER` exists on every processor that has long mode.
         let efer = unsafe { cpu::read_msr(IA32_EFER) };
 
         let gdt_base = code + header_offset + HEADER_GDT;
@@ -330,7 +330,7 @@ impl CpuStarter {
         self.header.stack_top = stack_top;
         self.header.argument = argument;
         let at = crate::mm::direct_map(self.code + self.header_offset) as *mut Header;
-        // SAFETY: the header is inside the trampoline page this starter owns,
+        // SAFETY: (FRAME) the header is inside the trampoline page this starter owns,
         // eight-byte aligned by the assembly, and nothing is reading it: the
         // last processor started has reported in and the next is not started.
         unsafe { at.write(self.header) };
@@ -370,7 +370,7 @@ fn spin_nanos(nanos: u64) {
 /// the upper half, on its own stack, with interrupts masked — and still on the
 /// trampoline's tree and GDT, both of which are about to be given back.
 extern "C" fn secondary_start(record: u64) -> ! {
-    // SAFETY: the kernel's root maps the upper half exactly as the
+    // SAFETY: (TRANSLATE) the kernel's root maps the upper half exactly as the
     // trampoline's copy of it does — this code, this stack, every record —
     // and nothing from here on touches the lower half, the only part in which
     // the two differ.
@@ -378,7 +378,7 @@ extern "C" fn secondary_start(record: u64) -> ! {
 
     let boot_cr4 = BOOT_CR4.load(Ordering::Relaxed);
     if cpu::read_cr4() != boot_cr4 {
-        // SAFETY: the boot processor's own `CR4`, on a processor of the same
+        // SAFETY: (SYSREG) the boot processor's own `CR4`, on a processor of the same
         // kind that is now in the same mode, with a `CR3` whose low bits are
         // clear as `PCIDE` requires.
         unsafe { cpu::write_cr4(boot_cr4) };
@@ -389,7 +389,7 @@ extern "C" fn secondary_start(record: u64) -> ! {
     // fault in the allocations `init_secondary` makes is reported rather than
     // turned into a triple fault.
     //
-    // SAFETY: the boot processor filled the table in `init_traps`.
+    // SAFETY: (ENTRY) the boot processor filled the table in `init_traps`.
     unsafe { super::trap::load_on_this_cpu() };
 
     // The per-CPU record before anything that allocates. `init_secondary`
@@ -403,7 +403,7 @@ extern "C" fn secondary_start(record: u64) -> ! {
     // program: after the record, which is where it says what it applied.
     super::speculation::apply_this_cpu();
 
-    // SAFETY: once, on this processor, with interrupts masked.
+    // SAFETY: (ENTRY) once, on this processor, with interrupts masked.
     if let Err(problem) = unsafe { super::gdt::init_secondary() } {
         crate::panic::fatal!(
             crate::panic::catalog::SECONDARY_GDT,

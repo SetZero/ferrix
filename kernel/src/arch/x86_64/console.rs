@@ -161,14 +161,14 @@ pub(crate) fn transmit_buffer() -> &'static str {
 /// seven call sites: every `port` passed in is one of the constants above, all
 /// of which name a register of the 16550 the platform fixes at `COM1`.
 fn write_register(port: u16, value: u8) {
-    // SAFETY: `port` is one of COM1's own registers and `value` is the setting
+    // SAFETY: (DEVICE) `port` is one of COM1's own registers and `value` is the setting
     // the device's documented initialisation sequence calls for.
     unsafe { cpu::outb(port, value) };
 }
 
 /// Read one of COM1's registers.
 fn read_register(port: u16) -> u8 {
-    // SAFETY: as `write_register`. Reading `LINE_STATUS` and
+    // SAFETY: (DEVICE) as `write_register`. Reading `LINE_STATUS` and
     // `INTERRUPT_ENABLE` has no side effects; reading `INTERRUPT_ID`
     // acknowledges a transmit interrupt, and `DATA` consumes a received
     // character, which is what their callers read them for.
