@@ -1,14 +1,13 @@
 # Ferrix — releases
 
-Each testable milestone on `main` is an annotated tag, verified by the product
-owner before tagging as `docs/BACKLOG.md`'s *Milestones* rule says. The notes
-here are the tag's, kept short: what a person can try, and what is known not
-to work yet. Newest first.
+These are snapshots of older Ferrix milestones, newest first. Each one records
+what worked and what was still missing at the time. For the current state,
+read [the roadmap](roadmap/where-it-stands.md).
 
-Pushing a tag publishes its section here, verbatim, as a GitHub Release
-(`.github/workflows/release.yml`); a tag with no section fails there. The
-release cadence, naming and the shape of the notes are in
-[docs/marketing/PLAYBOOK.md](marketing/PLAYBOOK.md) §3.
+Milestone tags are annotated and checked by the project owner before they are
+published. The release workflow uses the matching section from this file as
+its notes. See the [discovery plan](marketing/PLAYBOOK.md#what-to-do-next-in-order)
+for how future releases should be presented.
 
 ## stage-11.1-network-display-and-threads — 2026-09-16, features at a89aeb25
 

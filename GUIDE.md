@@ -20,11 +20,10 @@ rustc 1.97.1 (8bab26f4f 2026-07-14)
 rustc-gate: hello from rustc on Ferrix
 ```
 
-And since 2026-09-23 it builds itself. `cargo xtask test-selfhost` gives
-Ferrix that toolchain with Cargo added, this tree and its vendored crates on
-one btrfs volume, runs `cargo xtask build --arch x86_64` inside it -- the
-command you run on a Linux host -- then takes the image Ferrix made off the
-volume and boots it:
+Since 2026-09-23 it has also built and booted its own x86-64 image.
+`cargo xtask test-selfhost` puts Cargo, this tree and its vendored crates on a
+btrfs volume. Ferrix runs `cargo xtask build --arch x86_64` inside the guest.
+The test then takes the image Ferrix made from the volume and boots it:
 
 ```
    93.49 |   image /data/src/build/x86_64/ferrix.img (63 KiB loader, 75510 KiB kernel, 10666 KiB initramfs)
@@ -33,17 +32,15 @@ volume and boots it:
 
 ## How it is built
 
-Ferrix is written by a fleet of AI agents: many Claude sessions working at
-once, each in its own git worktree. A human product owner decides scope and
-priorities. A coordinator session orders the landings on `main`, and a
-certification consultant reviews every change to the kernel core. The first
-public commit is dated 2026-09-11. `rustc` ran on Ferrix on 2026-09-22, and
-Ferrix built its own image the day after.
+Claude sessions write most of the code, each in a separate git worktree. The
+project owner sets priorities, a coordinator handles merges into `main`, and
+a certification consultant reviews changes to the kernel core. The first
+public commit was on 2026-09-11. `rustc` ran on Ferrix on 2026-09-22; Ferrix
+built and booted its first x86-64 image the next day.
 
-Nothing about the process is hidden. A change lands only when its gate
-passes, and every change to what the image holds boots the whole system on
-all three architectures before it lands. The rules the fleet works by,
-and the incidents behind each one, are in [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
+Changes land after their tests pass. Changes to the boot image also run the
+boot test on all three architectures. The working rules, including the
+mistakes behind them, are in [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
 The [roadmap](docs/roadmap/README.md) and [backlog](docs/BACKLOG.md) show
 what each session owns and what is left.
 
@@ -105,17 +102,15 @@ ARMv7-A — so firmware calls a Rust `efi_main` with a stack set up and the MMU
 on. There is no bootstrap assembly on any of them, which is unusual and is a
 direct consequence of choosing UEFI over Multiboot or a bare kernel boot.
 
-The assembly that does exist — 437 lines against some 211,000 of Rust,
-**99.79% Rust** — is confined to constructs the machine defines before a Rust
-function could run: installing a translation regime and jumping to an address
-that did not exist a moment earlier, trap and system-call entry, the context
-switch, and the CPU primitives with no Rust spelling. `docs/ASSEMBLY.md` is
+The assembly that does exist is confined to constructs the machine defines
+before a Rust function could run: installing a translation regime and jumping
+to an address that did not exist a moment earlier, trap and system-call entry,
+the context switch, and CPU primitives with no Rust spelling. `docs/ASSEMBLY.md` is
 the argument for each one; `scripts/check/check-asm-budget.py` fails the build on
 any site that is not on the list, on a file over its budget, and on an entry
 that has gone stale.
 
-That number is a trend, not a gate. Assembly here is a fixed cost that does not
-grow with the system, so the percentage rises as the OS is written.
+The allow-list and line counts live in `scripts/check/check-asm-budget.py`.
 
 ## Getting started
 

@@ -13,7 +13,7 @@ repo=SetZero/ferrix
 
 # Keep the public description short enough to read in repository search.
 gh repo edit "$repo" \
-  --description "Experimental Rust operating system running unmodified Linux apps on its own kernel, with restartable userland drivers and a Wayland desktop." \
+  --description "Linux apps without Linux. Ferrix is an experimental Rust OS with a Wayland desktop and drivers outside the kernel." \
   --homepage "https://setzero.github.io/ferrix/" \
   --enable-discussions \
   --enable-issues \

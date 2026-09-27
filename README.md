@@ -9,13 +9,13 @@
 
 **Linux apps without Linux.**
 
-Ferrix is an experimental operating system with its own Rust kernel. It runs
-several unmodified Linux programs, including Chrome, `git`, `curl` and `rustc`.
-The disk, network, graphics and input drivers live in separate processes, so
-Ferrix can restart a driver that crashes.
+Boot Ferrix in QEMU and you can open its Wayland desktop, browse with Chrome,
+or run `git`, `curl` and `rustc`. Those are ordinary Linux binaries running on
+Ferrix's own Rust kernel. Disk, network, graphics and input drivers run as
+separate processes that Ferrix can restart if they crash.
 
-It has a desktop you can boot today. It is still a research project, with
-important pieces such as authentication and process isolation unfinished.
+Ferrix is still experimental. Authentication and parts of process isolation
+are unfinished, so it is not ready to be your everyday OS.
 
 [Boot Ferrix](#boot-ferrix) · [See what works](#what-works) ·
 [Read the technical guide](GUIDE.md) · [Visit the website](https://setzero.github.io/ferrix/)
@@ -29,9 +29,9 @@ important pieces such as authentication and process isolation unfinished.
     <td width="33%"><img src="docs/brand/screenshots/btop.png" alt="btop showing Chrome, the compositor and driver processes"></td>
   </tr>
   <tr>
-    <td>zinc at a shell prompt, with the drivers listed and <code>curl</code> fetching a page.</td>
+    <td>The zinc shell, driver processes and a <code>curl</code> request.</td>
     <td>Chrome browsing Wikipedia on Ferrix.</td>
-    <td><code>btop</code> showing the browser, compositor and drivers.</td>
+    <td><code>btop</code> showing what's running.</td>
   </tr>
 </table>
 
@@ -92,4 +92,5 @@ and what changed afterward. Human contributions are welcome; see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Ferrix is MIT licensed. [Explore the code and component docs](GUIDE.md#layout),
-[follow releases](docs/RELEASES.md), or [open an issue](https://github.com/SetZero/ferrix/issues).
+[get the logo and press kit](marketing/README.md), or
+[open an issue](https://github.com/SetZero/ferrix/issues).
