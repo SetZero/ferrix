@@ -138,6 +138,25 @@ review before the code. The consultant records found-and-closed findings,
 coverage entries and threat updates in `docs/certification/` in small
 batches, and flags item changes on `main` that skipped it.
 
+**An item change carries its coverage anchors (2026-09-27).** Since the
+coverage evidence landed (41456b68), a change that moves a line of the item
+makes `gen-coverage-justification.py --check`, and so `cargo xtask check`,
+fail on stale anchors. Before landing it, run `python3
+scripts/gen/carry-coverage.py && python3
+scripts/gen/gen-coverage-justification.py` on the rebased tree and commit
+the result: it renumbers the anchors through the diff, drops and prints the
+lines the change edited, and never re-measures.
+
+**Files every landing appends to overlap by function, not by file
+(2026-09-27).** `kernel/src/syscall/check.rs`, the panic catalog,
+`docs/generated/*` and this file change in nearly every landing, and
+counting any change to them as an overlap had a finished landing chase
+`main` twice. After a clean rebase, changes on `main` only in other
+functions or rows are no overlap for the re-verify rule above -- but
+`check.rs` runs at boot, so such a landing still runs `cargo xtask check`
+and one x86-64 boot on the rebased tree. A change to the landing's own
+function, chain or files is an overlap as before.
+
 **Agents.** Gates and boots in the foreground, never `run_in_background`; one
 architecture per tool call; the brief says so.
 
@@ -213,7 +232,7 @@ gates that fail on `main` itself, not flakes, and come before any row below.
 
 | Item | Owner |
 |---|---|
-| `cargo xtask ports` fails on x86-64 at the git port since 4da0f1e7 (2026-09-26), which gave ferrousli the obstack calls Chrome's libraries import (`userland/ferrousli/src/obstack.rs`): git links its own `compat/obstack.o`, and every static link of git's programs dies on `multiple definition of _obstack_begin` (and `_obstack_begin_1`, `_obstack_memory_used`, `obstack_free`). The row's loop stops there, so no port after git is built by it. Found gating U1 (alsa-ports); log `~/.local/share/ferrix/ports/ferrousli/git/build.log` lines 654-673 on nazuna. The same gate found `foot` failing too, built on its own: fontconfig's configure finds `random_r` and `initstate_r` in ferrousli (exported since 5b512da6, 2026-09-24) and uses them, but ferrousli's headers declare neither them nor `struct random_data` (`fccompat.c:179`, "storage size of 'fcrandbuf' isn't known"); log `~/.local/share/ferrix/ports/ferrousli/foot/fontconfig-build.log`. sshdt, vkgears, alsa-lib and alsa-utils built clean | ferrix-c7 |
+| None known on 2026-09-27: the git and foot port failures were fixed by d567d050 | -- |
 
 ## The path to the goal, in order
 
