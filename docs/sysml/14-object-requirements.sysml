@@ -785,7 +785,7 @@ package FerrixObjectRequirements {
             attribute :>> criterion = "In a job limited to 5 objects and holding 5,
                 job_create is refused and nothing is charged; job_create in a killed
                 job is refused.";
-            attribute :>> parent = ("H.QUOTA.3", "H.OBJ.9");
+            attribute :>> parent = ("H.QUOTA.9", "H.OBJ.9");
             attribute :>> unit = ("object::job::Job::new_child",
                 "object::job::Job::bare_child");
         }
@@ -1034,7 +1034,7 @@ package FerrixObjectRequirements {
             attribute :>> criterion = "process_create into a job at its task limit
                 is refused SHOULD_WAIT, the job's task count unchanged, and the
                 refused process is not started.";
-            attribute :>> parent = "H.QUOTA.1";
+            attribute :>> parent = "H.QUOTA.8";
             attribute :>> unit = ("object::process::Process::move_new_to",
                 "object::process::Process::move_charged");
         }

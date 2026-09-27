@@ -249,9 +249,10 @@ package FerrixItemRequirements {
         requirement <'H.OBJ.8'> objectsEndWithTheirLastHandle : ItemHighLevel {
             attribute :>> statement = "An object shall be destroyed when the last
                 handle to it closes.";
-            attribute :>> criterion = "A program made and never started ends when
-                its last handle closes, and one whose last handle rode unread in a
-                channel ends when the channel is closed: 2 of 2.";
+            attribute :>> criterion = "One object of each kind, made and its last
+                handle closed, is destroyed by the time the close returns or the
+                drain after it ends: 0 of them outlive it, and 0 frames are
+                leaked.";
             attribute :>> parent = ("O.CAPABILITY", "O.QUOTA");
         }
         requirement <'H.OBJ.9'> killingAJobEndsItsTree : ItemHighLevel {
@@ -268,6 +269,8 @@ package FerrixItemRequirements {
         // object/ implements that no requirement said; H.OBJ.14 to 17 are the
         // halves split out of H.OBJ.3, 4, 8 and 11, so that one check can prove
         // each whole, since a `Verifies:` tag credits the whole requirement.
+        // H.OBJ.8 itself is now one check of every kind of object, which does
+        // not exist yet; its low-level requirements prove it kind by kind.
 
         requirement <'H.OBJ.10'> queuesAreBounded : ItemHighLevel {
             attribute :>> statement = "Every queue a program can fill in the kernel
@@ -623,8 +626,8 @@ package FerrixItemRequirements {
 
         requirement <'H.QUOTA.1'> taskLimit : ItemHighLevel {
             attribute :>> statement = "Creating a task in a job that, with the jobs
-                beneath it, holds its task limit shall be refused: a fork with
-                EAGAIN, a native process_create with SHOULD_WAIT.";
+                beneath it, holds its task limit shall be refused, and no task shall
+                be counted beyond the limit.";
             attribute :>> criterion = "A fork loop in a job limited to 8 tasks is
                 refused at the limit, 0 tasks beyond it (the `quota` line).";
             attribute :>> parent = "O.QUOTA";
@@ -641,8 +644,9 @@ package FerrixItemRequirements {
             attribute :>> parent = "O.QUOTA";
         }
         requirement <'H.QUOTA.3'> objectLimit : ItemHighLevel {
-            attribute :>> statement = "Creating a VMO, a channel, a port, a job or a
-                pin in a job at its object limit shall be refused with NO_MEMORY.";
+            attribute :>> statement = "Creating a channel or a port in a job at its
+                object limit shall be refused, and no object shall be counted beyond
+                the limit.";
             attribute :>> criterion = "Object creation in a job limited to 5 objects
                 is refused at the limit, 0 objects beyond it (the `quota` line).";
             attribute :>> parent = "O.QUOTA";
@@ -687,6 +691,27 @@ package FerrixItemRequirements {
                 object is refused one past its count with ENOMEM (ENOLCK for a lock)
                 while a sibling makes one, and with them gone every byte charged has
                 come back (the `kmem` line).";
+            attribute :>> parent = "O.QUOTA";
+        }
+        // Split out of H.QUOTA.1 and H.QUOTA.3 by the pilot: the part no check proves.
+        requirement <'H.QUOTA.8'> taskLimitIsAnswered : ItemHighLevel {
+            attribute :>> statement = "A creation the task limit refuses shall be
+                answered as Linux and the native ABI answer it -- a fork with
+                EAGAIN, a native process_create with SHOULD_WAIT -- and the refused
+                process shall never start.";
+            attribute :>> criterion = "A fork past pids.max is answered EAGAIN and
+                counted in pids.events; process_create into a job at its task limit
+                is answered SHOULD_WAIT and the job's task count is unchanged.";
+            attribute :>> parent = "O.QUOTA";
+        }
+        requirement <'H.QUOTA.9'> everyObjectIsCounted : ItemHighLevel {
+            attribute :>> statement = "Creating a VMO, a job or a pin in a job at
+                its object limit shall be refused with NO_MEMORY, and each shall be
+                counted as an object for as long as it exists.";
+            attribute :>> criterion = "In a job limited to 5 objects and holding 5,
+                vmo_create, job_create and vmo_pin are each refused NO_MEMORY, 0
+                objects counted beyond the limit, and the job holds 0 once they are
+                all closed.";
             attribute :>> parent = "O.QUOTA";
         }
     }

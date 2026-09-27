@@ -634,7 +634,7 @@ fn check_a_killed_child_is_not_started(
 /// heard and, once the reaper is quiet, freed; carried in a message nobody
 /// read, it ends when the channel is closed.
 ///
-/// Verifies: L.object.95, H.OBJ.8
+/// Verifies: L.object.95
 fn check_an_unstarted_child_ends_with_its_handles(
     spawner: &Spawner<'_>,
     counter: &mut Counter,

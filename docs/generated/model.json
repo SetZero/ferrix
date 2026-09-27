@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "50a35d85945aa29434047d238d7bb447a6fd97d7f5bb37b64138e99322852912",
+  "digest": "807e33260c7304dd04415bfee496d6d2834239b487df613a3238a63589fad5f8",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -65,7 +65,7 @@
   ],
   "summary": {
     "packages": 37,
-    "elements": 2477,
+    "elements": 2485,
     "maturity": {
       "implemented": 272,
       "inProgress": 11,
@@ -20740,10 +20740,10 @@
                   "qualifiedName": "FerrixItemRequirements::Objects::objectsEndWithTheirLastHandle",
                   "kind": "attribute",
                   "redefines": "criterion",
-                  "value": "\"A program made and never started ends when its last handle closes, and one whose last handle rode unread in a channel ends when the channel is closed: 2 of 2.\"",
+                  "value": "\"One object of each kind, made and its last handle closed, is destroyed by the time the close returns or the drain after it ends: 0 of them outlive it, and 0 frames are leaked.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 254
+                    "line": 255
                   }
                 },
                 {
@@ -20754,7 +20754,7 @@
                   "value": "(\"O.CAPABILITY\", \"O.QUOTA\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 255
+                    "line": 256
                   }
                 }
               ]
@@ -20767,7 +20767,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 257
+                "line": 258
               },
               "children": [
                 {
@@ -20778,7 +20778,7 @@
                   "value": "\"Killing a job shall end every process in it and in every job beneath it.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 259
+                    "line": 260
                   }
                 },
                 {
@@ -20789,7 +20789,7 @@
                   "value": "\"4 processes in a tree of three jobs are all ended by two kills, and each wait on them is woken (the `jobs` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 262
+                    "line": 263
                   }
                 },
                 {
@@ -20800,7 +20800,7 @@
                   "value": "(\"O.CAPABILITY\", \"O.QUOTA\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 263
+                    "line": 264
                   }
                 }
               ]
@@ -20813,7 +20813,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 272
+                "line": 275
               },
               "children": [
                 {
@@ -20824,7 +20824,7 @@
                   "value": "\"Every queue a program can fill in the kernel shall be bounded -- a channel end's unread messages at 256, a port's user packets at 1024, an object's port registrations at 64 -- and an addition past the bound shall be refused without being queued.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 276
+                    "line": 279
                   }
                 },
                 {
@@ -20835,7 +20835,7 @@
                   "value": "\"Writing to a channel nobody reads is refused SHOULD_WAIT at its bound, and queueing on a port nobody takes from is refused SHOULD_WAIT at exactly 1024 packets, 0 queued past either bound, and draining the channel makes room again; the 65th registration on one object is refused.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 281
+                    "line": 284
                   }
                 },
                 {
@@ -20846,7 +20846,7 @@
                   "value": "\"O.QUOTA\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 282
+                    "line": 285
                   }
                 }
               ]
@@ -20859,7 +20859,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 284
+                "line": 287
               },
               "children": [
                 {
@@ -20870,7 +20870,7 @@
                   "value": "\"A wait on an object shall end when a signal it waits for is asserted, at once if one already is, and shall not end before its deadline while none is.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 287
+                    "line": 290
                   }
                 },
                 {
@@ -20881,7 +20881,7 @@
                   "value": "\"A wait on an empty channel end with a zero deadline times out; one with a two-minute deadline is ended by a message written 20 ms later, not before it, and reports READABLE; a wait for PEER_CLOSED on an end whose peer has closed returns at once.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 292
+                    "line": 295
                   }
                 },
                 {
@@ -20892,7 +20892,7 @@
                   "value": "(\"G.7\", \"O.CAPABILITY\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 293
+                    "line": 296
                   }
                 }
               ]
@@ -20905,7 +20905,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 295
+                "line": 298
               },
               "children": [
                 {
@@ -20916,7 +20916,7 @@
                   "value": "\"The job tree shall be the cgroup v2 hierarchy: every process in exactly one job, a job populated exactly while it or a job beneath it has a member not yet released, and a job refusing a process or a child that its killed or removed state, its limits or the no-internal-process rule forbid.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 300
+                    "line": 303
                   }
                 },
                 {
@@ -20927,7 +20927,7 @@
                   "value": "\"A new process is in the root job and a fork's child in its parent's; a job empties at its last member's release and wakes its waiters; a move a job refuses leaves the process where it was; a removed job takes neither a process nor a child; a child past cgroup.max.depth or cgroup.max.descendants is refused.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 305
+                    "line": 308
                   }
                 },
                 {
@@ -20938,7 +20938,7 @@
                   "value": "(\"G.8\", \"O.QUOTA\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 306
+                    "line": 309
                   }
                 }
               ]
@@ -20951,7 +20951,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 308
+                "line": 311
               },
               "children": [
                 {
@@ -20962,7 +20962,7 @@
                   "value": "\"A pid shall name at most one process at a time, and a pid given back shall not be handed out again before allocation has come round the whole range past it.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 311
+                    "line": 314
                   }
                 },
                 {
@@ -20973,7 +20973,7 @@
                   "value": "\"Allocating through the whole range wraps to 300 and passes over a pid still held: 0 pids handed out twice and none below 300 after the wrap.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 314
+                    "line": 317
                   }
                 },
                 {
@@ -20984,7 +20984,7 @@
                   "value": "(\"G.4\", \"O.ISOLATE\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 315
+                    "line": 318
                   }
                 }
               ]
@@ -20997,7 +20997,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 317
+                "line": 320
               },
               "children": [
                 {
@@ -21008,7 +21008,7 @@
                   "value": "\"Replacing a handle shall close the source and yield rights that are a subset of its; asking for a right the source lacks shall be refused with ACCESS_DENIED and leave the source as it was.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 321
+                    "line": 324
                   }
                 },
                 {
@@ -21019,7 +21019,7 @@
                   "value": "\"A replace asking for a right not held is refused ACCESS_DENIED and the source keeps its rights; a narrower replace closes the source and leaves one handle, with the rights asked for.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 325
+                    "line": 328
                   }
                 },
                 {
@@ -21030,7 +21030,7 @@
                   "value": "(\"O.CAPABILITY\", \"ASR-3\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 326
+                    "line": 329
                   }
                 }
               ]
@@ -21043,7 +21043,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 328
+                "line": 331
               },
               "children": [
                 {
@@ -21054,7 +21054,7 @@
                   "value": "\"A slot whose generations are all used shall be retired, so that no handle value is ever issued twice.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 330
+                    "line": 333
                   }
                 },
                 {
@@ -21065,7 +21065,7 @@
                   "value": "\"After every generation of one slot has been issued and closed, the next handle comes from another slot, and 0 of the values issued before it are issued again or resolve.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 333
+                    "line": 336
                   }
                 },
                 {
@@ -21076,7 +21076,7 @@
                   "value": "(\"O.CAPABILITY\", \"ASR-3\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 334
+                    "line": 337
                   }
                 }
               ]
@@ -21089,7 +21089,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 336
+                "line": 339
               },
               "children": [
                 {
@@ -21100,7 +21100,7 @@
                   "value": "\"The peer of a destroyed channel end shall observe PEER_CLOSED from the moment the close returns, and what the destroyed end held shall be freed.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 339
+                    "line": 342
                   }
                 },
                 {
@@ -21111,7 +21111,7 @@
                   "value": "\"After one end of a channel holding a queued VMO is closed, a read and a write on the survivor are refused PEER_CLOSED, 2 of 2, and 0 frames are leaked.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 342
+                    "line": 345
                   }
                 },
                 {
@@ -21122,7 +21122,7 @@
                   "value": "(\"O.CAPABILITY\", \"O.QUOTA\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 343
+                    "line": 346
                   }
                 }
               ]
@@ -21135,7 +21135,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 345
+                "line": 348
               },
               "children": [
                 {
@@ -21146,7 +21146,7 @@
                   "value": "\"A port registration shall queue exactly one packet, with its key and the asserted signals it asked for, when one of them is first asserted, at once if one already is.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 348
+                    "line": 351
                   }
                 },
                 {
@@ -21157,7 +21157,7 @@
                   "value": "\"A registration does not fire before its signal, fires once on the message that asserts it and not on a second, fires at once for a state already true, and fires when the peer closes for PEER_CLOSED, each packet with its key.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 352
+                    "line": 355
                   }
                 },
                 {
@@ -21168,7 +21168,7 @@
                   "value": "(\"G.7\", \"O.CAPABILITY\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 353
+                    "line": 356
                   }
                 }
               ]
@@ -21182,7 +21182,7 @@
           "doc": "Processor time: the fair class, placement and sleep. ASR-8 (partially met: the item has no admission control for real-time work, AoU-4, so none is required here) and O.QUOTA's share of a processor (FRU_RSA.1's refinement).",
           "source": {
             "file": "docs/sysml/13-item-requirements.sysml",
-            "line": 357
+            "line": 360
           },
           "children": [
             {
@@ -21193,7 +21193,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 363
+                "line": 366
               },
               "children": [
                 {
@@ -21204,7 +21204,7 @@
                   "value": "\"Every runnable task shall run: no task shall stay runnable without being scheduled while processors are online.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 365
+                    "line": 368
                   }
                 },
                 {
@@ -21215,7 +21215,7 @@
                   "value": "\"1000 threads spawned across the online processors all run to completion within the check's deadline (the `tasks` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 368
+                    "line": 371
                   }
                 },
                 {
@@ -21226,7 +21226,7 @@
                   "value": "(\"G.1\", \"ASR-8\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 369
+                    "line": 372
                   }
                 }
               ]
@@ -21239,7 +21239,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 371
+                "line": 374
               },
               "children": [
                 {
@@ -21250,7 +21250,7 @@
                   "value": "\"Among processor-bound tasks of equal weight on one processor, no task's service shall lag its fair share by more than one scheduling slice plus the timer overruns served in the window.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 375
+                    "line": 378
                   }
                 },
                 {
@@ -21261,7 +21261,7 @@
                   "value": "\"With 12 spinners on every processor, each processor's worst lag is at or below that bound (the `fair` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 377
+                    "line": 380
                   }
                 },
                 {
@@ -21272,7 +21272,7 @@
                   "value": "(\"ASR-8\", \"O.QUOTA\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 378
+                    "line": 381
                   }
                 }
               ]
@@ -21285,7 +21285,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 380
+                "line": 383
               },
               "children": [
                 {
@@ -21296,7 +21296,7 @@
                   "value": "\"Under contention a job shall receive processor time in proportion to its weight, whatever the number of tasks in it.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 383
+                    "line": 386
                   }
                 },
                 {
@@ -21307,7 +21307,7 @@
                   "value": "\"One task alone in a job keeps half of a processor, within the check's stated tolerance, against eight tasks in a sibling job of equal weight (the `quota` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 386
+                    "line": 389
                   }
                 },
                 {
@@ -21318,7 +21318,7 @@
                   "value": "(\"O.QUOTA\", \"ASR-8\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 387
+                    "line": 390
                   }
                 }
               ]
@@ -21331,7 +21331,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 389
+                "line": 392
               },
               "children": [
                 {
@@ -21342,7 +21342,7 @@
                   "value": "\"A task shall run only on the processors its affinity mask allows.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 391
+                    "line": 394
                   }
                 },
                 {
@@ -21353,7 +21353,7 @@
                   "value": "\"Spinners confined to processors 0 and 1, twice as many as there are online processors, are seen running on no other processor: 0 violations.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 394
+                    "line": 397
                   }
                 },
                 {
@@ -21364,7 +21364,7 @@
                   "value": "\"G.1\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 395
+                    "line": 398
                   }
                 }
               ]
@@ -21377,7 +21377,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 397
+                "line": 400
               },
               "children": [
                 {
@@ -21388,7 +21388,7 @@
                   "value": "\"A task that sleeps for a duration shall not be woken before the duration has passed, and shall be woken within twenty times it.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 400
+                    "line": 403
                   }
                 },
                 {
@@ -21399,7 +21399,7 @@
                   "value": "\"A 20 ms sleep returns after at least 20 ms and at most 400 ms (the `sleep` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 402
+                    "line": 405
                   }
                 },
                 {
@@ -21410,7 +21410,7 @@
                   "value": "(\"G.1\", \"ASR-8\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 403
+                    "line": 406
                   }
                 }
               ]
@@ -21424,7 +21424,7 @@
           "doc": "Interrupt lines given to ring-3 drivers as objects: O.CAPABILITY and ASR-3 for who receives one, O.QUOTA for what an unacknowledged or unclaimed line can cost.",
           "source": {
             "file": "docs/sysml/13-item-requirements.sysml",
-            "line": 407
+            "line": 410
           },
           "children": [
             {
@@ -21435,7 +21435,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 412
+                "line": 415
               },
               "children": [
                 {
@@ -21446,7 +21446,7 @@
                   "value": "\"An interrupt on a line bound to an Interrupt object shall be delivered only to that object, waking the task waiting on it.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 415
+                    "line": 418
                   }
                 },
                 {
@@ -21457,7 +21457,7 @@
                   "value": "\"16 of 16 deliveries end their wait by waking it (the `wake` line), and no other waiter is woken.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 417
+                    "line": 420
                   }
                 },
                 {
@@ -21468,7 +21468,7 @@
                   "value": "(\"O.CAPABILITY\", \"ASR-3\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 418
+                    "line": 421
                   }
                 }
               ]
@@ -21481,7 +21481,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 420
+                "line": 423
               },
               "children": [
                 {
@@ -21492,7 +21492,7 @@
                   "value": "\"A line bound to an Interrupt object shall stay masked from its delivery until the holder acknowledges it, and shall be masked when the object is destroyed.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 423
+                    "line": 426
                   }
                 },
                 {
@@ -21503,7 +21503,7 @@
                   "value": "\"A line held from delivery to acknowledgement is delivered once and 0 times more before the acknowledgement; after the last handle to its object closes, the line is masked.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 426
+                    "line": 429
                   }
                 },
                 {
@@ -21514,7 +21514,7 @@
                   "value": "(\"O.CAPABILITY\", \"O.QUOTA\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 427
+                    "line": 430
                   }
                 }
               ]
@@ -21527,7 +21527,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 429
+                "line": 432
               },
               "children": [
                 {
@@ -21538,7 +21538,7 @@
                   "value": "\"An interrupt on a line no object and no kernel handler holds shall be masked and counted, and delivered to nobody.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 431
+                    "line": 434
                   }
                 },
                 {
@@ -21549,7 +21549,7 @@
                   "value": "\"A delivery provoked on a line nobody holds leaves the line masked and the unclaimed count one higher, with 0 deliveries (the `edges` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 434
+                    "line": 437
                   }
                 },
                 {
@@ -21560,7 +21560,7 @@
                   "value": "\"O.QUOTA\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 435
+                    "line": 438
                   }
                 }
               ]
@@ -21574,7 +21574,7 @@
           "doc": "Devices driven from ring 3 through apertures and IOMMU domains: O.DMA and ASR-4 (FDP_ACF.1, FDP_IFF.1). ARMv7-A's reference board has no IOMMU, so these hold on x86-64 and AArch64 only (AoU-6).",
           "source": {
             "file": "docs/sysml/13-item-requirements.sysml",
-            "line": 439
+            "line": 442
           },
           "children": [
             {
@@ -21585,7 +21585,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 445
+                "line": 448
               },
               "children": [
                 {
@@ -21596,7 +21596,7 @@
                   "value": "\"Where a translating IOMMU is present, every PCI function the kernel enumerates shall be placed behind a unit before its driver starts, and a function no unit covers shall be reported.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 449
+                    "line": 452
                   }
                 },
                 {
@@ -21607,7 +21607,7 @@
                   "value": "\"The boot counts N functions behind units, 0 bypassing and 0 unresolved (the `iommu` line), with VT-d on x86-64 and SMMUv3 on AArch64.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 452
+                    "line": 455
                   }
                 },
                 {
@@ -21618,7 +21618,7 @@
                   "value": "(\"O.DMA\", \"ASR-4\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 453
+                    "line": 456
                   }
                 }
               ]
@@ -21631,7 +21631,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 455
+                "line": 458
               },
               "children": [
                 {
@@ -21642,7 +21642,7 @@
                   "value": "\"A device write to an address outside its domain shall be refused by the unit, reach no memory and be recorded as a fault against the device.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 458
+                    "line": 461
                   }
                 },
                 {
@@ -21653,7 +21653,7 @@
                   "value": "\"A device made to write a page outside its domain leaves the page unchanged and a fault recorded against its stream, and 0 faults are recorded that no check provoked.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 461
+                    "line": 464
                   }
                 },
                 {
@@ -21664,7 +21664,7 @@
                   "value": "(\"O.DMA\", \"ASR-4\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 462
+                    "line": 465
                   }
                 }
               ]
@@ -21677,7 +21677,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 464
+                "line": 467
               },
               "children": [
                 {
@@ -21688,7 +21688,7 @@
                   "value": "\"A frame shall be reachable by a device only while pinned into that device's domain through a handle its driver holds, and unpinning shall complete the unit's invalidation before the frame or an emptied table is reused.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 468
+                    "line": 471
                   }
                 },
                 {
@@ -21699,7 +21699,7 @@
                   "value": "\"Pages pinned through a translated domain are found at their device addresses while pinned and not after; invalid pins are refused as specified (the `iommu` pin line); a domain's emptied tables are freed only after its invalidation completes.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 472
+                    "line": 475
                   }
                 },
                 {
@@ -21710,7 +21710,7 @@
                   "value": "(\"O.DMA\", \"ASR-4\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 473
+                    "line": 476
                   }
                 }
               ]
@@ -21723,7 +21723,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 475
+                "line": 478
               },
               "children": [
                 {
@@ -21734,7 +21734,7 @@
                   "value": "\"Frames a driver pinned shall not be reused after the driver dies until its replacement announces itself, and the frames so held shall be bounded.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 478
+                    "line": 481
                   }
                 },
                 {
@@ -21745,7 +21745,7 @@
                   "value": "\"A dead driver's pin is quarantined, a pin past the quarantine's cap is refused and taken again once the quarantine is released, and a live driver's pin is given back (the `iommu` quarantine line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 482
+                    "line": 485
                   }
                 },
                 {
@@ -21756,7 +21756,7 @@
                   "value": "(\"O.DMA\", \"O.QUOTA\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 483
+                    "line": 486
                   }
                 }
               ]
@@ -21769,7 +21769,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 485
+                "line": 488
               },
               "children": [
                 {
@@ -21780,7 +21780,7 @@
                   "value": "\"A driver shall reach device registers only through an I/O mapping of an aperture it holds, and an aperture that is not whole pages or that covers an MSI-X table shall be withheld.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 488
+                    "line": 491
                   }
                 },
                 {
@@ -21791,7 +21791,7 @@
                   "value": "\"The `devices` line counts the apertures withheld for partial pages and for MSI-X ranges; a mapping of a withheld range is refused; a program reaches only the aperture it was given (the `handles` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 492
+                    "line": 495
                   }
                 },
                 {
@@ -21802,7 +21802,7 @@
                   "value": "(\"O.DMA\", \"O.CAPABILITY\", \"ASR-4\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 493
+                    "line": 496
                   }
                 }
               ]
@@ -21816,7 +21816,7 @@
           "doc": "The system call boundary and the exceptions a program raises: O.VALIDATE and ASR-7 (FPT_TDC.1), with O.ISOLATE for what a program may leave in the registers the kernel is entered with.",
           "source": {
             "file": "docs/sysml/13-item-requirements.sysml",
-            "line": 497
+            "line": 500
           },
           "children": [
             {
@@ -21827,7 +21827,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 502
+                "line": 505
               },
               "children": [
                 {
@@ -21838,7 +21838,7 @@
                   "value": "\"Every pointer and length a system call is given shall be checked to lie wholly within the user half before any access through it, and a range that does not shall be refused with EFAULT.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 506
+                    "line": 509
                   }
                 },
                 {
@@ -21849,7 +21849,7 @@
                   "value": "\"Each system call given a kernel-half pointer, a range that wraps past the user half's end and a null pointer is refused EFAULT, with 0 accesses made.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 509
+                    "line": 512
                   }
                 },
                 {
@@ -21860,7 +21860,7 @@
                   "value": "(\"O.VALIDATE\", \"ASR-7\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 510
+                    "line": 513
                   }
                 }
               ]
@@ -21873,7 +21873,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 512
+                "line": 515
               },
               "children": [
                 {
@@ -21884,7 +21884,7 @@
                   "value": "\"An access to user memory on a system call's behalf that meets an unmapped or protected page shall return EFAULT to the caller and shall not fault the kernel.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 515
+                    "line": 518
                   }
                 },
                 {
@@ -21895,7 +21895,7 @@
                   "value": "\"Copies to an unmapped and to a read-only user page, and from an unmapped one, each return EFAULT, and the boot goes on to FERRIX-BOOT-OK.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 518
+                    "line": 521
                   }
                 },
                 {
@@ -21906,7 +21906,7 @@
                   "value": "(\"O.VALIDATE\", \"ASR-7\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 519
+                    "line": 522
                   }
                 }
               ]
@@ -21919,7 +21919,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 521
+                "line": 524
               },
               "children": [
                 {
@@ -21930,7 +21930,7 @@
                   "value": "\"Every table index a program chooses shall be clamped at the system call boundary so that it cannot be used out of bounds under speculation, and each processor's speculation controls shall be applied and read back.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 525
+                    "line": 528
                   }
                 },
                 {
@@ -21941,7 +21941,7 @@
                   "value": "\"The boot reads the speculation defences back on every one of the N online processors (the `cpu` line), and the `--mitigations off` build is the only one without the clamps.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 528
+                    "line": 531
                   }
                 },
                 {
@@ -21952,7 +21952,7 @@
                   "value": "(\"O.ISOLATE\", \"O.VALIDATE\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 529
+                    "line": 532
                   }
                 }
               ]
@@ -21965,7 +21965,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 531
+                "line": 534
               },
               "children": [
                 {
@@ -21976,7 +21976,7 @@
                   "value": "\"A processor exception a user-mode instruction raises shall end in a signal to the faulting thread, the one Linux sends for it, and shall not stop the kernel.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 534
+                    "line": 537
                   }
                 },
                 {
@@ -21987,7 +21987,7 @@
                   "value": "\"A divide error, an invalid opcode, an unmapped read, a privileged instruction, a floating-point exception and a read past a mapped file's end end their programs with SIGFPE, SIGILL, SIGSEGV, SIGSEGV, SIGFPE and SIGBUS, 6 of 6 (the `fault` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 538
+                    "line": 541
                   }
                 },
                 {
@@ -21998,7 +21998,7 @@
                   "value": "(\"O.ISOLATE\", \"ASR-1\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 539
+                    "line": 542
                   }
                 }
               ]
@@ -22011,7 +22011,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 541
+                "line": 544
               },
               "children": [
                 {
@@ -22022,7 +22022,7 @@
                   "value": "\"Restoring a signal frame a program supplies shall not raise its privilege: the restored mode, segment selectors, interrupt masks and I/O privilege shall be the user's whatever the frame holds, and a return address outside the user half shall be refused.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 546
+                    "line": 549
                   }
                 },
                 {
@@ -22033,7 +22033,7 @@
                   "value": "\"A sigreturn through frames asking for kernel mode, masked interrupts, I/O privilege and a kernel-half return address resumes the program in user mode with user flags, or ends it with SIGSEGV, on each architecture: 0 in kernel mode.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 550
+                    "line": 553
                   }
                 },
                 {
@@ -22044,7 +22044,7 @@
                   "value": "(\"O.VALIDATE\", \"O.ISOLATE\", \"ASR-7\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 551
+                    "line": 554
                   }
                 }
               ]
@@ -22057,7 +22057,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 553
+                "line": 556
               },
               "children": [
                 {
@@ -22068,7 +22068,7 @@
                   "value": "\"On every entry from user mode the kernel shall establish its own stack and per-processor state before using either, whatever the program left in its registers, including for an exception taken on the entry path itself.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 557
+                    "line": 560
                   }
                 },
                 {
@@ -22079,7 +22079,7 @@
                   "value": "\"Breakpoints on the system call entry and on its return, and an NMI taken with interrupts masked, each run on the kernel's own stack with its own per-processor base, and the program exits 42 (the `debug` and `nmi` lines, x86-64).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 561
+                    "line": 564
                   }
                 },
                 {
@@ -22090,7 +22090,7 @@
                   "value": "(\"O.ISOLATE\", \"O.FAILSAFE\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 562
+                    "line": 565
                   }
                 }
               ]
@@ -22103,7 +22103,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 564
+                "line": 567
               },
               "children": [
                 {
@@ -22114,7 +22114,7 @@
                   "value": "\"A program shall load only the segment selectors meant for user mode: one naming a kernel descriptor, the TSS, the LDT or a forged thread-local descriptor shall be refused. x86-64 only.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 568
+                    "line": 571
                   }
                 },
                 {
@@ -22125,7 +22125,7 @@
                   "value": "\"7 user selectors load at RPL 3 and 18 others are refused (the `gdt` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 570
+                    "line": 573
                   }
                 },
                 {
@@ -22136,7 +22136,7 @@
                   "value": "(\"O.ISOLATE\", \"O.VALIDATE\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 571
+                    "line": 574
                   }
                 }
               ]
@@ -22150,7 +22150,7 @@
           "doc": "What the kernel does with what it is handed before anything runs above it, and what a boot claims: O.FAILSAFE and ASR-6 (FPT_FLS.1), and O.ISOLATE for the layout.",
           "source": {
             "file": "docs/sysml/13-item-requirements.sysml",
-            "line": 575
+            "line": 578
           },
           "children": [
             {
@@ -22161,7 +22161,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 580
+                "line": 583
               },
               "children": [
                 {
@@ -22172,7 +22172,7 @@
                   "value": "\"Before using what the loader hands over, the kernel shall verify the memory map, the page tables and its own placement, and shall halt with a diagnostic if any check fails.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 583
+                    "line": 586
                   }
                 },
                 {
@@ -22183,7 +22183,7 @@
                   "value": "\"Stage 1 reports the hand-off verified on every architecture; a hand-off with a field made inconsistent ends in the catalogued panic, not in a boot.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 586
+                    "line": 589
                   }
                 },
                 {
@@ -22194,7 +22194,7 @@
                   "value": "(\"O.FAILSAFE\", \"ASR-6\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 587
+                    "line": 590
                   }
                 }
               ]
@@ -22207,7 +22207,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 589
+                "line": 592
               },
               "children": [
                 {
@@ -22218,7 +22218,7 @@
                   "value": "\"Every boot shall run every stage's self-checks unless told not to, and shall print FERRIX-BOOT-OK only when all of them passed; a boot that skipped them shall end with FERRIX-BOOT-UNCHECKED instead.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 593
+                    "line": 596
                   }
                 },
                 {
@@ -22229,7 +22229,7 @@
                   "value": "\"`cargo xtask test-boot` finds FERRIX-BOOT-OK on each architecture; a boot with `ferrix.checks=skip` ends with FERRIX-BOOT-UNCHECKED and never prints FERRIX-BOOT-OK.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 596
+                    "line": 599
                   }
                 },
                 {
@@ -22240,7 +22240,7 @@
                   "value": "(\"O.FAILSAFE\", \"ASR-6\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 597
+                    "line": 600
                   }
                 }
               ]
@@ -22253,7 +22253,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 599
+                "line": 602
               },
               "children": [
                 {
@@ -22264,7 +22264,7 @@
                   "value": "\"The kernel shall run with its image, direct map and vmap arena at the offsets the loader drew from the firmware's random-number protocol, and shall verify the move at stage 1.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 602
+                    "line": 605
                   }
                 },
                 {
@@ -22275,7 +22275,7 @@
                   "value": "\"Two boots of one image report two different layouts (`cargo xtask test-kaslr`), and stage 1 verifies the slide each reports.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 605
+                    "line": 608
                   }
                 },
                 {
@@ -22286,7 +22286,7 @@
                   "value": "\"O.ISOLATE\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 606
+                    "line": 609
                   }
                 }
               ]
@@ -22299,7 +22299,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 608
+                "line": 611
               },
               "children": [
                 {
@@ -22310,7 +22310,7 @@
                   "value": "\"The kernel shall refuse an ACPI table or a device tree whose declared length is shorter than its header or reaches beyond the memory mapped for it, rather than read past it.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 611
+                    "line": 614
                   }
                 },
                 {
@@ -22321,7 +22321,7 @@
                   "value": "\"The ACPI and device-tree parsers' host tests feed truncated, oversized and misaligned tables and each is refused with its error, 0 read out of bounds; the kernel refuses a table outside the direct map.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 615
+                    "line": 618
                   }
                 },
                 {
@@ -22332,7 +22332,7 @@
                   "value": "(\"O.FAILSAFE\", \"ASR-6\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 616
+                    "line": 619
                   }
                 }
               ]
@@ -22346,7 +22346,7 @@
           "doc": "What a job, with every job beneath it, may hold at once: O.QUOTA (FRU_RSA.1), against T.EXHAUST.",
           "source": {
             "file": "docs/sysml/13-item-requirements.sysml",
-            "line": 620
+            "line": 623
           },
           "children": [
             {
@@ -22357,7 +22357,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 624
+                "line": 627
               },
               "children": [
                 {
@@ -22365,10 +22365,10 @@
                   "qualifiedName": "FerrixItemRequirements::Quotas::taskLimit",
                   "kind": "attribute",
                   "redefines": "statement",
-                  "value": "\"Creating a task in a job that, with the jobs beneath it, holds its task limit shall be refused: a fork with EAGAIN, a native process_create with SHOULD_WAIT.\"",
+                  "value": "\"Creating a task in a job that, with the jobs beneath it, holds its task limit shall be refused, and no task shall be counted beyond the limit.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 627
+                    "line": 630
                   }
                 },
                 {
@@ -22379,7 +22379,7 @@
                   "value": "\"A fork loop in a job limited to 8 tasks is refused at the limit, 0 tasks beyond it (the `quota` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 629
+                    "line": 632
                   }
                 },
                 {
@@ -22390,7 +22390,7 @@
                   "value": "\"O.QUOTA\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 630
+                    "line": 633
                   }
                 }
               ]
@@ -22403,7 +22403,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 632
+                "line": 635
               },
               "children": [
                 {
@@ -22414,7 +22414,7 @@
                   "value": "\"A job's programs shall not hold more memory than the job's limit, counting the frames of their address spaces and their page tables together with every job beneath it; a sibling job shall be unaffected.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 636
+                    "line": 639
                   }
                 },
                 {
@@ -22425,7 +22425,7 @@
                   "value": "\"Faults in a job limited to 48 pages' worth are refused when the next page would not fit, and the refusal is counted, while a sibling job faults 48 pages in (the `quota` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 640
+                    "line": 643
                   }
                 },
                 {
@@ -22436,7 +22436,7 @@
                   "value": "\"O.QUOTA\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 641
+                    "line": 644
                   }
                 }
               ]
@@ -22449,7 +22449,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 643
+                "line": 646
               },
               "children": [
                 {
@@ -22457,10 +22457,10 @@
                   "qualifiedName": "FerrixItemRequirements::Quotas::objectLimit",
                   "kind": "attribute",
                   "redefines": "statement",
-                  "value": "\"Creating a VMO, a channel, a port, a job or a pin in a job at its object limit shall be refused with NO_MEMORY.\"",
+                  "value": "\"Creating a channel or a port in a job at its object limit shall be refused, and no object shall be counted beyond the limit.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 645
+                    "line": 649
                   }
                 },
                 {
@@ -22471,7 +22471,7 @@
                   "value": "\"Object creation in a job limited to 5 objects is refused at the limit, 0 objects beyond it (the `quota` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 647
+                    "line": 651
                   }
                 },
                 {
@@ -22482,7 +22482,7 @@
                   "value": "\"O.QUOTA\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 648
+                    "line": 652
                   }
                 }
               ]
@@ -22495,7 +22495,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 650
+                "line": 654
               },
               "children": [
                 {
@@ -22506,7 +22506,7 @@
                   "value": "\"Every charge against a job shall be returned when the resource it paid for is freed, and a job's quota slot shall be given back when the job goes.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 653
+                    "line": 657
                   }
                 },
                 {
@@ -22517,7 +22517,7 @@
                   "value": "\"After the quota checks every counter of their jobs is back to zero, and as many quota slots are in use as before them (the `quota` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 656
+                    "line": 660
                   }
                 },
                 {
@@ -22528,7 +22528,7 @@
                   "value": "\"O.QUOTA\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 657
+                    "line": 661
                   }
                 }
               ]
@@ -22541,7 +22541,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 659
+                "line": 663
               },
               "children": [
                 {
@@ -22552,7 +22552,7 @@
                   "value": "\"A limit set on a job shall bound it together with every job beneath it, and a charge refused at any level shall leave no level charged.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 662
+                    "line": 666
                   }
                 },
                 {
@@ -22563,7 +22563,7 @@
                   "value": "\"A charge that would pass a grandparent's limit is refused although the child's own limit allows it, and each level's counter reads as before the attempt.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 665
+                    "line": 669
                   }
                 },
                 {
@@ -22574,7 +22574,7 @@
                   "value": "\"O.QUOTA\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 666
+                    "line": 670
                   }
                 }
               ]
@@ -22587,7 +22587,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 669
+                "line": 673
               },
               "children": [
                 {
@@ -22598,7 +22598,7 @@
                   "value": "\"A user page fault refused by a job's memory limit shall end a process in the job whose limit was full or beneath it, never one outside it, count the kill in that job and every job above it, and retry the fault.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 673
+                    "line": 677
                   }
                 },
                 {
@@ -22609,7 +22609,7 @@
                   "value": "\"A program writing 8 MiB in a job limited to 1 MiB ends by SIGKILL while a larger process in a sibling job lives; exactly 1 process is killed; memory.events counts one OOM kill in the job and its parent and none in the sibling.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 677
+                    "line": 681
                   }
                 },
                 {
@@ -22620,7 +22620,7 @@
                   "value": "(\"G.8\", \"O.QUOTA\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 678
+                    "line": 682
                   }
                 }
               ]
@@ -22633,7 +22633,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 681
+                "line": 685
               },
               "children": [
                 {
@@ -22644,7 +22644,7 @@
                   "value": "\"The kernel heap the Linux personality keeps for a job's programs shall be charged against the job's memory limit, and every byte of it returned when it is freed; a sibling job shall be unaffected.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 685
+                    "line": 689
                   }
                 },
                 {
@@ -22655,7 +22655,7 @@
                   "value": "\"At a 32 KiB limit each kind of personality object is refused one past its count with ENOMEM (ENOLCK for a lock) while a sibling makes one, and with them gone every byte charged has come back (the `kmem` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 689
+                    "line": 693
                   }
                 },
                 {
@@ -22666,7 +22666,99 @@
                   "value": "\"O.QUOTA\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 690
+                    "line": 694
+                  }
+                }
+              ]
+            },
+            {
+              "name": "taskLimitIsAnswered",
+              "qualifiedName": "FerrixItemRequirements::Quotas::taskLimitIsAnswered",
+              "kind": "requirement",
+              "shortName": "H.QUOTA.8",
+              "type": "ItemHighLevel",
+              "source": {
+                "file": "docs/sysml/13-item-requirements.sysml",
+                "line": 697
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixItemRequirements::Quotas::taskLimitIsAnswered",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A creation the task limit refuses shall be answered as Linux and the native ABI answer it -- a fork with EAGAIN, a native process_create with SHOULD_WAIT -- and the refused process shall never start.\"",
+                  "source": {
+                    "file": "docs/sysml/13-item-requirements.sysml",
+                    "line": 701
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixItemRequirements::Quotas::taskLimitIsAnswered",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A fork past pids.max is answered EAGAIN and counted in pids.events; process_create into a job at its task limit is answered SHOULD_WAIT and the job's task count is unchanged.\"",
+                  "source": {
+                    "file": "docs/sysml/13-item-requirements.sysml",
+                    "line": 704
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixItemRequirements::Quotas::taskLimitIsAnswered",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"O.QUOTA\"",
+                  "source": {
+                    "file": "docs/sysml/13-item-requirements.sysml",
+                    "line": 705
+                  }
+                }
+              ]
+            },
+            {
+              "name": "everyObjectIsCounted",
+              "qualifiedName": "FerrixItemRequirements::Quotas::everyObjectIsCounted",
+              "kind": "requirement",
+              "shortName": "H.QUOTA.9",
+              "type": "ItemHighLevel",
+              "source": {
+                "file": "docs/sysml/13-item-requirements.sysml",
+                "line": 707
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixItemRequirements::Quotas::everyObjectIsCounted",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"Creating a VMO, a job or a pin in a job at its object limit shall be refused with NO_MEMORY, and each shall be counted as an object for as long as it exists.\"",
+                  "source": {
+                    "file": "docs/sysml/13-item-requirements.sysml",
+                    "line": 710
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixItemRequirements::Quotas::everyObjectIsCounted",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"In a job limited to 5 objects and holding 5, vmo_create, job_create and vmo_pin are each refused NO_MEMORY, 0 objects counted beyond the limit, and the job holds 0 once they are all closed.\"",
+                  "source": {
+                    "file": "docs/sysml/13-item-requirements.sysml",
+                    "line": 714
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixItemRequirements::Quotas::everyObjectIsCounted",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"O.QUOTA\"",
+                  "source": {
+                    "file": "docs/sysml/13-item-requirements.sysml",
+                    "line": 715
                   }
                 }
               ]
@@ -22680,7 +22772,7 @@
           "doc": "The safe state and what brings the kernel to it: O.FAILSAFE and ASR-6 (FPT_FLS.1). SAFETY-MANUAL.md §3 defines the safe state.",
           "source": {
             "file": "docs/sysml/13-item-requirements.sysml",
-            "line": 694
+            "line": 719
           },
           "children": [
             {
@@ -22691,7 +22783,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 698
+                "line": 723
               },
               "children": [
                 {
@@ -22702,7 +22794,7 @@
                   "value": "\"On a failed internal consistency check the kernel shall stop every other processor, print a diagnostic naming the failure and its catalogued explanation, and halt without returning to user mode.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 702
+                    "line": 727
                   }
                 },
                 {
@@ -22713,7 +22805,7 @@
                   "value": "\"A boot told to panic at its end (`ferrix.onexit=panic`) ends with the FX-1501 report and no program output after it; every panic site in the item has a catalogue entry (`check-panic-audit.py`).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 706
+                    "line": 731
                   }
                 },
                 {
@@ -22724,7 +22816,7 @@
                   "value": "(\"O.FAILSAFE\", \"ASR-6\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 707
+                    "line": 732
                   }
                 }
               ]
@@ -22737,7 +22829,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 709
+                "line": 734
               },
               "children": [
                 {
@@ -22748,7 +22840,7 @@
                   "value": "\"Every kernel stack shall have an unmapped guard page directly below and above it, so that an overflow faults rather than overwrites memory.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 712
+                    "line": 737
                   }
                 },
                 {
@@ -22759,7 +22851,7 @@
                   "value": "\"For every kernel stack, the page below and the page above do not translate, 0 exceptions; on x86-64 an overflow is taken as a double fault on its own stack (FX-9004).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 715
+                    "line": 740
                   }
                 },
                 {
@@ -22770,7 +22862,7 @@
                   "value": "(\"O.FAILSAFE\", \"ASR-6\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 716
+                    "line": 741
                   }
                 }
               ]
@@ -26568,7 +26660,7 @@
                   "qualifiedName": "FerrixObjectRequirements::Jobs::aChildIsAnObjectAndRefusedWhenKilled",
                   "kind": "attribute",
                   "redefines": "parent",
-                  "value": "(\"H.QUOTA.3\", \"H.OBJ.9\")",
+                  "value": "(\"H.QUOTA.9\", \"H.OBJ.9\")",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
                     "line": 788
@@ -27834,7 +27926,7 @@
                   "qualifiedName": "FerrixObjectRequirements::Processes::aNewProcessMeetsTheTaskLimit",
                   "kind": "attribute",
                   "redefines": "parent",
-                  "value": "\"H.QUOTA.1\"",
+                  "value": "\"H.QUOTA.8\"",
                   "source": {
                     "file": "docs/sysml/14-object-requirements.sysml",
                     "line": 1037

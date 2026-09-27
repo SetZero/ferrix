@@ -321,7 +321,7 @@ const WINDOW_NANOS: u64 = 400_000_000;
 /// another, where per-task shares would give it a ninth; and the jobs' loads
 /// are empty once the tasks are gone. The share, in tenths of a per cent.
 ///
-/// Verifies: L.object.60, H.SCHED.3
+/// Verifies: L.object.60
 fn check_the_processor(tree: &Arc<Job>) -> Result<u64, &'static str> {
     let crowd = tree.new_child().map_err(|_| "a job refused a child")?;
     let alone = tree.new_child().map_err(|_| "a job refused a child")?;
