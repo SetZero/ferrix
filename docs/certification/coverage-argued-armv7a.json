@@ -99,7 +99,7 @@
     },
     {
       "file": "arch/armv7a/switch.rs",
-      "lines": "385",
+      "lines": "391",
       "category": "absent-hardware",
       "match": "}",
       "why": "The row is `save_user_state`'s return with no VFP registers to save (`user_fpu_doubles` zero): a core without VFP. Every ARMv7-A core the kernel boots on -- QEMU's Cortex-A7 and A15, the STM32MP157's A7 -- has VFP with 32 double registers, and the save path runs on every switch."
