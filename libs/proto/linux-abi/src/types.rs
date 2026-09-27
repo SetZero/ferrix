@@ -269,6 +269,63 @@ pub mod arm {
     }
 }
 
+/// Structures laid out for i386, as a 32-bit x86 program on the x86-64 kernel
+/// passes them (`docs/I386.md`).
+pub mod i386 {
+    /// i386's `struct stat64`, from `arch/x86/include/uapi/asm/stat.h`: 96
+    /// bytes, which old glibc's `__xstat64` and the `stat64` calls fill.
+    ///
+    /// Not ARMv7-A's [`super::arm::Stat64`], though the header reads the same:
+    /// the i386 ABI aligns a `long long` to four bytes inside a structure, so
+    /// `st_size` follows `__pad3` directly at 44 and nothing pads it, where the
+    /// EABI puts it at 48. Packed to four here to say so on any host; Linux's
+    /// compat `stat64` in `asm/ia32.h` is packed for the same reason. The
+    /// times and `__st_ino` are 32 bits, as on ARMv7-A.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    #[repr(C, packed(4))]
+    pub struct Stat64 {
+        /// Identifier of the device holding the file.
+        pub st_dev: u64,
+        /// Padding the kernel writes as zero.
+        pub __pad0: [u8; 4],
+        /// The low 32 bits of the inode number, for readers that predate
+        /// [`Stat64::st_ino`].
+        pub __st_ino: u32,
+        /// File type and permission bits; see the `S_IF*` constants.
+        pub st_mode: u32,
+        /// Number of hard links.
+        pub st_nlink: u32,
+        /// Owning user identifier.
+        pub st_uid: u32,
+        /// Owning group identifier.
+        pub st_gid: u32,
+        /// Device this file represents, for block and character devices.
+        pub st_rdev: u64,
+        /// Padding the kernel writes as zero.
+        pub __pad3: [u8; 4],
+        /// Size in bytes, or the link target length for a symbolic link.
+        pub st_size: i64,
+        /// Preferred block size for input and output.
+        pub st_blksize: u32,
+        /// Number of 512-byte blocks allocated.
+        pub st_blocks: u64,
+        /// Seconds of the last access time.
+        pub st_atime: u32,
+        /// Nanoseconds of the last access time.
+        pub st_atime_nsec: u32,
+        /// Seconds of the last modification time.
+        pub st_mtime: u32,
+        /// Nanoseconds of the last modification time.
+        pub st_mtime_nsec: u32,
+        /// Seconds of the last status change time.
+        pub st_ctime: u32,
+        /// Nanoseconds of the last status change time.
+        pub st_ctime_nsec: u32,
+        /// The inode number, all 64 bits of it.
+        pub st_ino: u64,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // statx
 // ---------------------------------------------------------------------------

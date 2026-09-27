@@ -2126,6 +2126,20 @@ pub mod i386 {
     pub const SET_ROBUST_LIST: usize = 311;
     /// Read the robust futex list's head and size back, as 32-bit words.
     pub const GET_ROBUST_LIST: usize = 312;
+    /// Stat a file by path into i386's 96-byte `struct stat64`: what old
+    /// glibc's `__xstat64` calls, which Valve's binaries link against.
+    pub const STAT64: usize = 195;
+    /// As [`STAT64`], not following a final symbolic link.
+    pub const LSTAT64: usize = 196;
+    /// As [`STAT64`], for an open file.
+    pub const FSTAT64: usize = 197;
+    /// As [`STAT64`], relative to a directory descriptor.
+    pub const FSTATAT64: usize = 300;
+    /// Register restartable sequences; refused, as it is for every program.
+    pub const RSEQ: usize = 386;
+    /// Wait for a child's change of state, into a 32-bit `siginfo` and
+    /// `rusage`.
+    pub const WAITID: usize = 284;
     /// Create a socket.
     pub const SOCKET: usize = 359;
     /// Create a connected pair of sockets.
@@ -3999,6 +4013,9 @@ fn i386_middle(nr: usize) -> Option<Syscall> {
         i386::ADJTIMEX => Syscall::Adjtimex,
         i386::SOCKETCALL => Syscall::Socketcall,
         i386::UGETRLIMIT => Syscall::Getrlimit,
+        i386::STAT64 => Syscall::Stat64,
+        i386::LSTAT64 => Syscall::Lstat64,
+        i386::FSTAT64 => Syscall::Fstat64,
         _ => return None,
     };
     Some(call)
@@ -4069,6 +4086,7 @@ fn i386_ids_and_at_family(nr: usize) -> Option<Syscall> {
         i386::CLOCK_GETTIME => Syscall::ClockGettime,
         i386::CLOCK_GETRES => Syscall::ClockGetres,
         i386::CLOCK_SETTIME => Syscall::ClockSettime,
+        i386::WAITID => Syscall::Waitid,
         _ => return None,
     };
     Some(call)
@@ -4147,6 +4165,8 @@ fn i386_recent(nr: usize) -> Option<Syscall> {
         i386::SHUTDOWN => Syscall::Shutdown,
         i386::SET_ROBUST_LIST => Syscall::SetRobustList,
         i386::GET_ROBUST_LIST => Syscall::GetRobustList,
+        i386::FSTATAT64 => Syscall::Fstatat64,
+        i386::RSEQ => Syscall::Rseq,
         _ => return None,
     };
     Some(call)

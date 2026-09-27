@@ -68,21 +68,27 @@ pub(crate) fn dispatch(
     process: &Process,
 ) -> Option<Result<usize, Errno>> {
     let a = &args.args;
-    describe(call, a, process)
+    describe(call, a, process, args.abi)
         .or_else(|| change(call, a, process))
         .or_else(|| attributes(call, a, process, args.abi))
 }
 
-/// The calls that report on a name without changing anything.
-fn describe(call: Syscall, a: &[u64; 6], process: &Process) -> Option<Result<usize, Errno>> {
+/// The calls that report on a name without changing anything. `abi` picks
+/// the `stat` family's record.
+fn describe(
+    call: Syscall,
+    a: &[u64; 6],
+    process: &Process,
+    abi: Abi,
+) -> Option<Result<usize, Errno>> {
     let answer = match call {
-        Syscall::Stat | Syscall::Stat64 => stat::sys_fstatat(process, AT_FDCWD, a[0], a[1], 0),
+        Syscall::Stat | Syscall::Stat64 => stat::sys_fstatat(process, AT_FDCWD, a[0], a[1], 0, abi),
         Syscall::Lstat | Syscall::Lstat64 => {
-            stat::sys_fstatat(process, AT_FDCWD, a[0], a[1], AT_SYMLINK_NOFOLLOW)
+            stat::sys_fstatat(process, AT_FDCWD, a[0], a[1], AT_SYMLINK_NOFOLLOW, abi)
         }
-        Syscall::Fstat | Syscall::Fstat64 => stat::sys_fstat(process, int(a[0]), a[1]),
+        Syscall::Fstat | Syscall::Fstat64 => stat::sys_fstat(process, int(a[0]), a[1], abi),
         Syscall::Newfstatat | Syscall::Fstatat64 => {
-            stat::sys_fstatat(process, int(a[0]), a[1], a[2], word(a[3]))
+            stat::sys_fstatat(process, int(a[0]), a[1], a[2], word(a[3]), abi)
         }
         Syscall::Statx => stat::sys_statx(process, int(a[0]), a[1], word(a[2]), word(a[3]), a[4]),
         Syscall::Getdents64 => stat::sys_getdents64(process, int(a[0]), a[1], a[2]),

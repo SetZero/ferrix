@@ -786,14 +786,16 @@ pub(crate) fn sys_pidfd_open(process: &Process, pid: i32, flags: u32) -> Result<
 /// # Errors
 ///
 /// As [`sys_wait4`], and `EINVAL` without one of `WEXITED`, `WSTOPPED` and
-/// `WCONTINUED`, or for an unknown `idtype`.
+/// `WCONTINUED`, or for an unknown `idtype`. The `siginfo` and `rusage` are
+/// of `word`-byte words: an i386 program's union starts at 12, as ARMv7-A's
+/// does.
 pub(crate) fn sys_waitid(
     process: &Process,
     idtype: u32,
     id: u32,
-    infop: u64,
+    (infop, rusage): (u64, u64),
     options: u32,
-    rusage: u64,
+    word: usize,
 ) -> Result<usize, Errno> {
     if options & (WEXITED | WUNTRACED | WCONTINUED) == 0
         || options & !(WNOHANG | WEXITED | WUNTRACED | WCONTINUED | WNOWAIT | WAIT_THREAD_BITS) != 0
@@ -833,7 +835,7 @@ pub(crate) fn sys_waitid(
             };
             // `si_signo`, `si_errno`, `si_code`, then the union, which starts
             // at the first pointer-aligned offset: 16 on 64-bit, 12 on 32-bit.
-            let union = if size_of::<usize>() == 8 { 16 } else { 12 };
+            let union = if word == 8 { 16 } else { 12 };
             put_i32(&mut info, 0, SIGCHLD as i32)?;
             put_i32(&mut info, 8, code)?;
             put_i32(&mut info, union, child.pid() as i32)?;
@@ -842,7 +844,7 @@ pub(crate) fn sys_waitid(
         uaccess::copy_to_user(process.space(), infop, &info).map_err(|_| Errno::EFAULT)?;
     }
     if rusage != 0 {
-        zero_rusage(process, rusage, size_of::<usize>())?;
+        zero_rusage(process, rusage, word)?;
     }
     Ok(0)
 }

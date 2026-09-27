@@ -80,7 +80,8 @@ pub(super) fn self_link(_: &Kernel) -> Result<Vec<u8>> {
 /// fields and `HWCAP` names; nothing here has read those, so nothing here
 /// claims them. What is left is the number of blocks — which is what a C
 /// library's `sysconf(_SC_NPROCESSORS_ONLN)` fallback counts — and each
-/// processor's hardware identifier under the name Linux gives it.
+/// processor's hardware identifier under the name Linux gives it, and on
+/// x86-64 its `cpu MHz`, when the kernel has measured the TSC.
 pub(super) fn cpuinfo(_: &Kernel) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     let Some(topology) = smp::topology() else {
@@ -89,13 +90,28 @@ pub(super) fn cpuinfo(_: &Kernel) -> Result<Vec<u8>> {
     for cpu in topology.cpus().iter().filter(|cpu| cpu.is_online()) {
         put(&mut out, format_args!("processor\t: {}\n", cpu.logical));
         match arch::ARCH {
-            Arch::X86_64 => put(
-                &mut out,
-                format_args!(
-                    "apicid\t\t: {id}\ninitial apicid\t: {id}\n",
-                    id = cpu.hardware_id
-                ),
-            ),
+            Arch::X86_64 => {
+                // Linux's `cpu MHz`, the TSC's rate, which Steam's runtime
+                // reads when there is no cpufreq and stops without. Only when
+                // the kernel's counter is the TSC: then its rate was measured
+                // against the HPET. When the counter is the HPET, its rate
+                // says nothing about the processor's, and the line is left
+                // out rather than wrong.
+                if arch::vdso_can_read_counter() {
+                    let khz = arch::counter_hz() / 1000;
+                    put(
+                        &mut out,
+                        format_args!("cpu MHz\t\t: {}.{:03}\n", khz / 1000, khz % 1000),
+                    );
+                }
+                put(
+                    &mut out,
+                    format_args!(
+                        "apicid\t\t: {id}\ninitial apicid\t: {id}\n",
+                        id = cpu.hardware_id
+                    ),
+                );
+            }
             Arch::AArch64 => out.extend_from_slice(b"CPU architecture: 8\n"),
             Arch::Armv7a => out.extend_from_slice(b"CPU architecture: 7\n"),
         }

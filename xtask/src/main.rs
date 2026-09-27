@@ -113,6 +113,7 @@ mod sha256;
 mod shell;
 mod ssh;
 mod statd;
+mod steamcmd;
 mod symbolize;
 mod sysfs;
 mod test_disk;
@@ -207,6 +208,8 @@ COMMANDS:
                   image runs a 32-bit x86 build of it)
     test-rustc    Attach the rustc volume scripts/fetch/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
     test-chrome   Attach the volume scripts/fetch/fetch-chrome.sh makes, and require headless Chrome to run a page's script and draw it
+    test-steamcmd Attach the volume scripts/fetch/fetch-steamcmd.sh makes, and require Valve's 32-bit steamcmd to update itself
+                  and log in to Steam anonymously, over the network
     test-chrome-window  The same volume, and require Chrome in a window on the compositor, its page on the screen
     test-chrome-audio   The same window on a page playing 440 Hz, and require the tone in QEMU's wav file of the virtio-snd card
     bench-chrome  Chrome in a window, left alone, scrolled and pointed at: processor time, frames and memory per phase
@@ -464,6 +467,7 @@ fn run() -> Result<()> {
         "coverage" => coverage::run(&args),
         "test-rustc" => rustc::test_rustc(&args),
         "test-chrome" | "test-chrome-window" | "test-chrome-audio" => chrome::run(command, &args),
+        "test-steamcmd" => steamcmd::test_steamcmd(&args),
         "bench-chrome" => compositor::bench_chrome(&args),
         "bench-chrome-video" => compositor::bench_chrome_video(&args),
         "test-selfhost" => selfhost::test_selfhost(&args),

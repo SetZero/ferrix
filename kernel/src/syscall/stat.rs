@@ -49,6 +49,7 @@ use crate::syscall::fd;
 use crate::syscall::path::{self, Target};
 use crate::syscall::process::Process;
 use crate::syscall::uaccess;
+use crate::trap::Abi;
 
 /// The encoding half of [`arch::StatLayout`], whose variants are declared in
 /// the architecture facade because choosing one is an architecture's business
@@ -85,30 +86,37 @@ const DIRENT_BUFFER: u64 = 1 << 16;
 // ---------------------------------------------------------------------------
 
 /// `newfstatat` and `fstatat64`; and, with the descriptor and flags fixed by
-/// the dispatcher, `stat`, `lstat`, `stat64` and `lstat64`.
+/// the dispatcher, `stat`, `lstat`, `stat64` and `lstat64`. `abi` picks the
+/// record: an i386 program's is always its `struct stat64`.
 pub(crate) fn sys_fstatat(
     process: &Process,
     dirfd: i32,
     path: u64,
     buf: u64,
     flags: u32,
+    abi: Abi,
 ) -> Result<usize, Errno> {
     if flags & !(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_EMPTY_PATH) != 0 {
         return Err(Errno::EINVAL);
     }
     let target = path::target(process, dirfd, path, flags)?;
-    write_stat(process, buf, &target.stat()?)
+    write_stat(process, buf, &target.stat()?, abi)
 }
 
 /// `fstat` and `fstat64`.
-pub(crate) fn sys_fstat(process: &Process, fd: i32, buf: u64) -> Result<usize, Errno> {
+pub(crate) fn sys_fstat(process: &Process, fd: i32, buf: u64, abi: Abi) -> Result<usize, Errno> {
     let target = Target::Open(fd::file(process, fd)?);
-    write_stat(process, buf, &target.stat()?)
+    write_stat(process, buf, &target.stat()?, abi)
 }
 
-/// Put `stat` into the program's buffer in this architecture's layout.
-fn write_stat(process: &Process, buf: u64, stat: &Stat) -> Result<usize, Errno> {
-    let record = arch::STAT_LAYOUT.encode(stat);
+/// Put `stat` into the program's buffer in this architecture's layout, or
+/// in i386's `struct stat64` for an i386 program, which is not one of the
+/// architecture's own and so is chosen here rather than in the facade.
+fn write_stat(process: &Process, buf: u64, stat: &Stat, abi: Abi) -> Result<usize, Errno> {
+    let record = match abi {
+        Abi::Compat => i386_stat64(stat),
+        Abi::Native => arch::STAT_LAYOUT.encode(stat),
+    };
     uaccess::copy_to_user(process.space(), buf, &record).map_err(|_| Errno::EFAULT)?;
     Ok(0)
 }
@@ -341,6 +349,54 @@ fn generic(stat: &Stat) -> Vec<u8> {
             st_mtime_nsec,
             st_ctime,
             st_ctime_nsec,
+        ]
+    )
+}
+
+/// i386's `struct stat64`: ARMv7-A's fields at i386's offsets
+/// ([`types::i386::Stat64`]), truncated the same way.
+fn i386_stat64(stat: &Stat) -> Vec<u8> {
+    let m = &stat.metadata;
+    encode!(
+        types::i386::Stat64 {
+            st_dev: stat.dev,
+            __st_ino: m.ino as u32,
+            st_mode: m.mode(),
+            st_nlink: m.nlink,
+            st_uid: m.uid,
+            st_gid: m.gid,
+            st_rdev: m.rdev,
+            st_size: signed(m.size),
+            st_blksize: m.block_size,
+            st_blocks: m.blocks,
+            st_atime: m.atime.tv_sec as u32,
+            st_atime_nsec: nanos(m.atime) as u32,
+            st_mtime: m.mtime.tv_sec as u32,
+            st_mtime_nsec: nanos(m.mtime) as u32,
+            st_ctime: m.ctime.tv_sec as u32,
+            st_ctime_nsec: nanos(m.ctime) as u32,
+            st_ino: m.ino,
+            ..Default::default()
+        },
+        types::i386::Stat64,
+        [
+            st_dev,
+            __st_ino,
+            st_mode,
+            st_nlink,
+            st_uid,
+            st_gid,
+            st_rdev,
+            st_size,
+            st_blksize,
+            st_blocks,
+            st_atime,
+            st_atime_nsec,
+            st_mtime,
+            st_mtime_nsec,
+            st_ctime,
+            st_ctime_nsec,
+            st_ino,
         ]
     )
 }

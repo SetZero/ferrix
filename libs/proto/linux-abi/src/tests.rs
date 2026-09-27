@@ -3296,7 +3296,7 @@ mod virtgpu;
 /// Every i386 number [`from_i386`] translates beside the thread-area pair:
 /// the constant, the number `asm/unistd_32.h` gives it, and ARMv7-A's constant
 /// for the same call.
-const I386_NUMBERS: [(usize, usize, usize); 229] = [
+const I386_NUMBERS: [(usize, usize, usize); 235] = [
     (i386::FORK, 2, arm::FORK),
     (i386::KILL, 37, arm::KILL),
     (i386::WAIT4, 114, arm::WAIT4),
@@ -3538,6 +3538,12 @@ const I386_NUMBERS: [(usize, usize, usize); 229] = [
     (i386::SETRLIMIT, 75, arm::SETRLIMIT),
     (i386::SET_ROBUST_LIST, 311, arm::SET_ROBUST_LIST),
     (i386::GET_ROBUST_LIST, 312, arm::GET_ROBUST_LIST),
+    (i386::STAT64, 195, arm::STAT64),
+    (i386::LSTAT64, 196, arm::LSTAT64),
+    (i386::FSTAT64, 197, arm::FSTAT64),
+    (i386::FSTATAT64, 300, arm::FSTATAT64),
+    (i386::RSEQ, 386, arm::RSEQ),
+    (i386::WAITID, 284, arm::WAITID),
 ];
 
 /// Every i386 number [`from_i386`] translates, as `asm/unistd_32.h` numbers
@@ -3818,4 +3824,29 @@ fn a_32_bit_sigaction_round_trips() {
     assert_eq!(bytes[16..20], 0x8000_0000_u32.to_le_bytes());
     assert_eq!(Sigaction32::from_bytes(&bytes), Some(action));
     assert_eq!(Sigaction32::from_bytes(&bytes[..19]), None);
+}
+
+/// i386's `struct stat64`: 96 bytes with `st_size` at 44, four bytes earlier
+/// than ARMv7-A's, because the i386 ABI aligns a `long long` to four. Offsets
+/// from `arch/x86/include/uapi/asm/stat.h` laid out by that rule, and the
+/// size Linux's packed compat `stat64` has.
+#[test]
+fn i386s_stat64_is_packed_to_four() {
+    use crate::types::i386::Stat64;
+    use core::mem::{offset_of, size_of};
+    assert_eq!(size_of::<Stat64>(), 96, "i386 struct stat64 is 96 bytes");
+    let at = [
+        (offset_of!(Stat64, __st_ino), 12),
+        (offset_of!(Stat64, st_mode), 16),
+        (offset_of!(Stat64, st_rdev), 32),
+        (offset_of!(Stat64, st_size), 44),
+        (offset_of!(Stat64, st_blksize), 52),
+        (offset_of!(Stat64, st_blocks), 56),
+        (offset_of!(Stat64, st_atime), 64),
+        (offset_of!(Stat64, st_ctime_nsec), 84),
+        (offset_of!(Stat64, st_ino), 88),
+    ];
+    for (offset, want) in at {
+        assert_eq!(offset, want, "a field of i386's struct stat64");
+    }
 }
