@@ -74,7 +74,7 @@ output is used to *satisfy* an objective rather than to find defects.
 | `check-item-boundary.py` | the item boundary — this scheme's own scope | T2 |
 | `check-complexity.py` | complexity, length and recursion in the item | T2 |
 | `rustlex.py` | tells code from comments and literals for the two above; self-tested on every run | T2 |
-| `check-unsafe-audit.py` | every `unsafe` block documented, one operation | T2 |
+| `check-unsafe-audit.py` | every `unsafe` block documented, one operation; every unsafe site in the item names an obligation id the register defines, the untagged remainder ratcheted (F-26) | T2 |
 | `check-panic-audit.py` | every panic-lint exemption justified | T2 |
 | `check-asm-budget.py` | the assembly allow-list and budget | T2 |
 | `check-device-access.py` | the kernel-enumerates-drivers-drive seam | T2 |

@@ -1186,6 +1186,86 @@ would reclaim them. The argued kinds in FINDINGS.md F-37 stay as argued.
 
 ---
 
+## W-16 — Trace every `unsafe` in the item to what it serves (F-26)
+
+Every unsafe site already says why it is sound. What an assessor cannot do
+with that prose is go the other way: from ASR-1 to every block whose soundness
+ASR-1 rests on. This order gives each unsafe block, `unsafe impl` and `unsafe
+fn` in the `core` and `item` rings -- self-tests included, since they run in
+the same image -- an **obligation id**, and each id a place in the safety
+argument.
+
+### The set, and how it was found
+
+Surveyed first, named second. On 9f369ebb the item held 663 sites -- 523
+blocks, 20 impls and 120 `unsafe fn`s that need a `# Safety` section (the two
+`GlobalAlloc` methods implement the trait's contract and are exempt, as
+before). Sorted by what each one actually does, they fall into fourteen
+obligations, which are the table in
+[SAFETY-MANUAL.md](SAFETY-MANUAL.md) §2 and `unsafe_obligations` in
+`scripts/data/safety-requirements.json`: `TRANSLATE`, `PROTECT`,
+`USER-COPY`, `FRAME`, `DMA`, `DEVICE`, `CONTEXT`, `ENTRY`, `SYSREG`,
+`FIRMWARE`, `SHARED`, `KMEM`, `BOOT-DATA`, `PROBE`. Each names the ASR, FM or
+AoU it serves and the code that argues it; the survey's counts per id are the
+gate's output below.
+
+Two candidates from the brief did not survive the survey. *Inline assembly
+per architecture* is not a reason, it is a means: the item's `asm!` blocks
+write a translation root, a vector base, a speculation control or a timer,
+and each is filed under what it writes. *FFI and linker symbols* are the
+same: `ferrix_switch` is `CONTEXT`, `ferrix_vdso_len` is `BOOT-DATA`. An id
+that says *how* instead of *why* traces to no requirement.
+
+The classification rule for a site that could be two things: the id is the
+obligation **its own operation** discharges, not the one of the function it
+sits in. `write_msr` is `SYSREG` as a primitive; its call writing
+`IA32_SPEC_CTRL` is `PROTECT`, its call writing `IA32_LSTAR` is `ENTRY`, and
+its call writing `IA32_FS_BASE` for a program is `CONTEXT`. A block inside an
+`unsafe fn` that only discharges the function's own contract (`write_cr3`'s
+`mov cr3`) takes the function's id. A block that reaches memory through a
+`Sync` claim or an `UnsafeCell` is `SHARED` whatever the memory is, because
+the exclusion argument is what could be wrong.
+
+### The comment form
+
+`// SAFETY: (DEVICE) <the prose, as it was>` on a block or an impl, and on
+an `unsafe fn` the id opens the first line of its `# Safety` section:
+`/// (TRANSLATE) The caller guarantees ...`. Not the tidier
+`// SAFETY(DEVICE):` -- clippy's `undocumented_unsafe_blocks`, which the
+workspace denies, looks for the text `SAFETY:` and refused a block commented
+that way when it was tried (rustc 1.97.1). One site may carry two ids,
+`(FRAME, DMA)`, when its one operation meets both; none does today.
+
+Putting the id on the existing line keeps every edit comment-only and moves
+no line, so the coverage evidence, which is anchored by file and line, stays
+valid without carrying.
+
+### The gate
+
+`scripts/check/check-unsafe-audit.py` finds the comment that covers each site
+(it already did, to require one), reads the id, and:
+
+* fails on an id the registry does not define, anywhere in the tree;
+* in the item, counts sites with no id per file against
+  `scripts/data/unsafe-trace-baseline.json`, a ratchet like the fallible
+  allocation one: a new untagged site fails, and so does a count that has
+  fallen without `--record`. The target is an empty map;
+* prints the item's sites per id, so a new `(SHARED)` shows in a diff.
+
+`check-safety-requirements.py` holds the manual's table and the register to
+each other, requires every `serves` to be a registered ASR, FM or AoU, and
+resolves every `argued_by`.
+
+`--report` lists the untagged sites by file.
+
+### Verify
+
+`cargo xtask check` (the "unsafe audit" and "safety requirements" steps). The
+tagging commits are comment-only; `git diff main -- kernel/src` filtered to
+lines that are not comments is empty.
+
+---
+
 ## Suggested order
 
 **Done:** order zero, W-3, W-2, W-6, W-9, W-4 (with F-08), W-1, W-5 (with

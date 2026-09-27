@@ -64,6 +64,46 @@ ASR-1 to ASR-7 are met on the reference configuration, with the architecture
 exceptions in §4. **ASR-8 is partially met** and is the one an integrator must
 read most carefully.
 
+### Why the element uses `unsafe`
+
+A kernel cannot be written without `unsafe`: storing to a page table or a
+device register is the program. So every `unsafe` block, `unsafe impl` and
+`unsafe fn` in the element says which of the obligations below it discharges,
+and through it which requirement, failure mode or assumption of use above it
+serves (finding F-26). The set is closed and was derived from what the
+element's unsafe sites do, not written first: a site that fits none of them is
+a reason to look at the site before it is a reason to add an id.
+
+The id opens the site's `SAFETY:` comment, `// SAFETY: (DEVICE) ...`, or an
+`unsafe fn`'s `# Safety` section, `/// (TRANSLATE) The caller ...`.
+`scripts/check/check-unsafe-audit.py` refuses an id that is not in this table
+and holds the untagged remainder to a baseline that may only shrink; this table
+and `unsafe_obligations` in `scripts/data/safety-requirements.json` are held
+to each other by `check-safety-requirements.py`.
+
+| Id | Obligation | What it covers | Serves |
+|---|---|---|---|
+| `(TRANSLATE)` | address translation | installing or removing a translation root, TLB invalidation, dropping the identity map, a page-table descriptor read or written in its frame | ASR-1, ASR-2, FM-1, FM-2 |
+| `(PROTECT)` | protection and speculation controls | SMEP, SMAP, UMIP, PAN, the user-access window; speculation-control registers, predictor and buffer flushes, return-stack filling, SSBS | ASR-1, FM-1, AoU-11 |
+| `(USER-COPY)` | a partition's memory | a system call's copy to or from a partition, through the frame its own tables name, with its space's lock held (V-01) | ASR-1, ASR-7, FM-1 |
+| `(FRAME)` | frame contents through the direct map | a memory object's pages; a frame cleared before it is handed out; a copy-on-write copy; a start block or trampoline another processor starts from | ASR-1, ASR-5, FM-1, FM-5 |
+| `(DMA)` | memory a device reads or writes | IOMMU tables and queues, interrupt translation tables, virtqueue rings and buffers, a pinned or quarantined frame | ASR-4, FM-4, AoU-12 |
+| `(DEVICE)` | device registers | a register window or I/O port of a device the element drives itself -- console, timer, interrupt controller, IOMMU unit, framebuffer -- claimed by it alone | ASR-4, ASR-6, FM-4, FM-6 |
+| `(CONTEXT)` | execution context | preparing and switching kernel stacks; saving and restoring a program's registers, floating-point, thread-pointer, segment and TLS state; entering and resuming user mode, a signal frame included | ASR-1, FM-1, FM-9 |
+| `(ENTRY)` | trap and system-call entry | the GDT, IDT and TSS, the vector base, the system-call registers, the privilege and interrupt stacks | ASR-6, ASR-7, FM-6, FM-9 |
+| `(SYSREG)` | processor registers | the running processor's own state that is neither translation nor protection: interrupt masks, barriers, cache maintenance, idle hints, identification, counter, timer, debug and scratch registers, the interrupt controller's CPU interface | ASR-6, FM-6 |
+| `(FIRMWARE)` | firmware and platform calls | PSCI and SMCCC through `hvc` or `smc` -- power, reset, starting a processor, workarounds, the TRNG -- a reset port, the triple fault, the emulator's exit port | ASR-6, AoU-2 |
+| `(SHARED)` | shared kernel state | an `UnsafeCell`, raw pointer or `Sync` claim whose exclusion or lifetime is argued: single-threaded early boot, masked interrupts, a lock taken or released by hand, a processor's own record, a `'static` published once, the interrupt and preemption controls the locks rest on | ASR-6, FM-6 |
+| `(KMEM)` | kernel memory ownership | the global allocator and the heap's pages, the page array, vmap buffers, kernel stacks and their release, a box taken back from a raw pointer, the loader's memory given back | FM-6, FM-7, FM-9 |
+| `(BOOT-DATA)` | what the loader and the image hand over | the boot information, the ACPI tables and the device tree, the kernel's own text, the vDSO's bytes | AoU-8, FM-6 |
+| `(PROBE)` | deliberate faults in self-checks | a breakpoint, a debug-register trap, a write that must fault and be mapped on demand, an access through a space under test | ASR-1, ASR-6 |
+
+The obligation says what a site must get right, not that it does: the prose
+after the id is the argument, and a reviewer reads it. What the id adds is
+the direction an assessor needs -- from a requirement to every site whose
+soundness it rests on, `grep 'SAFETY: (TRANSLATE)'` -- which the prose alone
+could not give.
+
 ---
 
 ## 3. Safe state

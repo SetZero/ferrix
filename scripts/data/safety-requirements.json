@@ -193,5 +193,236 @@
     "AoU-11",
     "AoU-12",
     "AoU-13"
+  ],
+  "//unsafe_obligations": [
+    "Why unsafe exists in the certified item (finding F-26): a closed set,",
+    "derived from what the item's unsafe sites do, each tied to the ASR, FM or",
+    "AoU above it serves and to the code that argues it. Every unsafe block,",
+    "unsafe impl and unsafe fn in the core and item rings names one, as",
+    "`// SAFETY: (ID)` or at the head of its `# Safety` section;",
+    "scripts/check/check-unsafe-audit.py resolves the id and holds the untagged",
+    "remainder to scripts/data/unsafe-trace-baseline.json. The manual tables",
+    "the same set in section 2."
+  ],
+  "unsafe_obligations": [
+    {
+      "id": "DEVICE",
+      "name": "Device registers",
+      "covers": "A load or store to a register window or I/O port of a device the kernel drives itself -- a console, a timer, an interrupt controller, an IOMMU unit, a framebuffer -- mapped as device memory and claimed by the kernel alone.",
+      "serves": [
+        "ASR-4",
+        "ASR-6",
+        "FM-4",
+        "FM-6"
+      ],
+      "argued_by": [
+        "kernel/src/mmio.rs",
+        "kernel/src/device.rs::check_exclusive",
+        "scripts/check/check-device-access.py"
+      ]
+    },
+    {
+      "id": "SYSREG",
+      "name": "Processor registers",
+      "covers": "A read or write of the running processor's own state that is neither translation nor protection: interrupt masks, barriers, cache maintenance, idle hints, identification and counter registers, timers, the interrupt controller's CPU interface, debug registers, scratch registers, model-specific registers.",
+      "serves": [
+        "ASR-6",
+        "FM-6"
+      ],
+      "argued_by": [
+        "kernel/src/arch/x86_64/cpu.rs",
+        "kernel/src/arch/aarch64/cpu.rs",
+        "kernel/src/arch/armv7a/cpu.rs"
+      ]
+    },
+    {
+      "id": "PROTECT",
+      "name": "Protection and speculation controls",
+      "covers": "Turning on, or relying on, a processor protection feature: SMEP, SMAP and UMIP, PAN, the user-access window's stac and clac, and the side-channel defences -- speculation-control registers, predictor and buffer flushes, return-stack filling, SSBS.",
+      "serves": [
+        "ASR-1",
+        "FM-1",
+        "AoU-11"
+      ],
+      "argued_by": [
+        "kernel/src/arch/x86_64/cpu.rs::enable_user_access_protection",
+        "kernel/src/arch/aarch64/cpu.rs::enable_user_access_protection",
+        "kernel/src/arch/x86_64/speculation.rs",
+        "kernel/src/arch/aarch64/speculation.rs",
+        "kernel/src/arch/armv7a/speculation.rs",
+        "docs/certification/SPECULATION.md"
+      ]
+    },
+    {
+      "id": "TRANSLATE",
+      "name": "Address translation",
+      "covers": "Installing or removing a translation root, invalidating TLB entries, dropping the identity map, and reading or writing a page-table descriptor in the frame that holds it.",
+      "serves": [
+        "ASR-1",
+        "ASR-2",
+        "FM-1",
+        "FM-2"
+      ],
+      "argued_by": [
+        "kernel/src/user/space.rs",
+        "kernel/src/mm.rs",
+        "kernel/src/main.rs::finish_memory",
+        "kernel/src/user/check.rs::check_the_processor_walks_an_installed_space"
+      ]
+    },
+    {
+      "id": "DMA",
+      "name": "Memory a device reads or writes",
+      "covers": "IOMMU root, context and stream tables and queues, interrupt translation tables, virtqueue rings and buffers, and a pinned or quarantined frame a device may still write.",
+      "serves": [
+        "ASR-4",
+        "FM-4",
+        "AoU-12"
+      ],
+      "argued_by": [
+        "kernel/src/iommu/vtd.rs",
+        "kernel/src/iommu/smmuv3.rs",
+        "kernel/src/object/pin.rs",
+        "kernel/src/iommu/gate.rs::waits_with_interrupts_on"
+      ]
+    },
+    {
+      "id": "FRAME",
+      "name": "Frame contents through the direct map",
+      "covers": "Reading, writing, zeroing or copying a frame of RAM through the kernel's direct map: a memory object's pages, a frame cleared before it is handed out, a copy-on-write copy, a start block or trampoline another processor starts from.",
+      "serves": [
+        "ASR-1",
+        "ASR-5",
+        "FM-1",
+        "FM-5"
+      ],
+      "argued_by": [
+        "kernel/src/mm.rs::zero_frame",
+        "kernel/src/user/vmo.rs",
+        "kernel/src/user/check.rs::check_a_committed_page_is_zeroed"
+      ]
+    },
+    {
+      "id": "USER-COPY",
+      "name": "A partition's memory",
+      "covers": "Copying to or from a partition's memory for a system call, through the frame the partition's own tables name, with its address space's lock held (V-01).",
+      "serves": [
+        "ASR-1",
+        "ASR-7",
+        "FM-1"
+      ],
+      "argued_by": [
+        "kernel/src/syscall/uaccess.rs::copy_from_user",
+        "kernel/src/syscall/uaccess.rs::copy_to_user",
+        "kernel/src/syscall/check.rs"
+      ]
+    },
+    {
+      "id": "CONTEXT",
+      "name": "Execution context",
+      "covers": "Preparing a kernel stack, switching stacks, saving and restoring a program's registers -- general, floating-point, thread pointer, segment and TLS state -- and entering or resuming user mode, through a signal frame or not.",
+      "serves": [
+        "ASR-1",
+        "FM-1",
+        "FM-9"
+      ],
+      "argued_by": [
+        "kernel/src/arch/x86_64/switch.rs::switch_to",
+        "kernel/src/arch/aarch64/switch.rs::switch_to",
+        "kernel/src/arch/armv7a/switch.rs::switch_to",
+        "kernel/src/sched/mod.rs::check_invariants"
+      ]
+    },
+    {
+      "id": "ENTRY",
+      "name": "Trap and system-call entry",
+      "covers": "Installing what the processor enters the kernel through: the GDT, IDT and TSS, the vector base, the system-call registers, the privilege and interrupt stacks.",
+      "serves": [
+        "ASR-6",
+        "ASR-7",
+        "FM-6",
+        "FM-9"
+      ],
+      "argued_by": [
+        "kernel/src/arch/x86_64/trap.rs",
+        "kernel/src/arch/x86_64/gdt.rs",
+        "kernel/src/arch/x86_64/syscall.rs",
+        "kernel/src/arch/aarch64/trap.rs",
+        "kernel/src/arch/armv7a/trap.rs"
+      ]
+    },
+    {
+      "id": "FIRMWARE",
+      "name": "Firmware and platform calls",
+      "covers": "A call into firmware or the platform: PSCI and SMCCC through hvc or smc -- power, reset, starting a processor, workarounds, the TRNG -- a reset port, the triple fault, the emulator's exit port.",
+      "serves": [
+        "ASR-6",
+        "AoU-2"
+      ],
+      "argued_by": [
+        "kernel/src/arch/aarch64/cpu.rs::hvc_call",
+        "kernel/src/arch/armv7a/cpu.rs::psci_call",
+        "kernel/src/arch/x86_64/mod.rs::reset"
+      ]
+    },
+    {
+      "id": "BOOT-DATA",
+      "name": "What the loader and the image hand over",
+      "covers": "Reading a structure the loader, the firmware or the image's own assembly placed in memory: the boot information, the ACPI tables and the device tree, the kernel's own text, the vDSO's bytes.",
+      "serves": [
+        "AoU-8",
+        "FM-6"
+      ],
+      "argued_by": [
+        "libs/proto/bootinfo/src/lib.rs::validate",
+        "kernel/src/acpi.rs",
+        "kernel/src/fdt.rs",
+        "kernel/src/main.rs::check_direct_map"
+      ]
+    },
+    {
+      "id": "KMEM",
+      "name": "Kernel memory ownership",
+      "covers": "The kernel's own memory: the global allocator and the heap's backing pages, the page array, vmap buffers, kernel stacks and their release, a box taken back from a raw pointer, the loader's memory given back.",
+      "serves": [
+        "FM-6",
+        "FM-7",
+        "FM-9"
+      ],
+      "argued_by": [
+        "kernel/src/mm.rs::KernelAllocator",
+        "kernel/src/vmap.rs::free_stack",
+        "kernel/src/main.rs::check_stacks"
+      ]
+    },
+    {
+      "id": "SHARED",
+      "name": "Shared kernel state",
+      "covers": "State reached through an UnsafeCell, a raw pointer or a Sync claim whose exclusion or lifetime is argued rather than typed: single-threaded early boot, masked interrupts, a lock taken or released by hand, a processor's own record, a 'static published once, and the interrupt and preemption controls the locks are built on.",
+      "serves": [
+        "ASR-6",
+        "FM-6"
+      ],
+      "argued_by": [
+        "libs/kernel/sync/src/lib.rs::lock_manually",
+        "kernel/src/sched/task.rs",
+        "kernel/src/smp.rs",
+        "kernel/src/sched/mod.rs::check_invariants"
+      ]
+    },
+    {
+      "id": "PROBE",
+      "name": "Deliberate faults in self-checks",
+      "covers": "An access or a trap a boot self-check makes on purpose to prove a handler or a mapping: a breakpoint, a debug-register trap, a write that must fault and be mapped on demand, an access through an address space under test.",
+      "serves": [
+        "ASR-1",
+        "ASR-6"
+      ],
+      "argued_by": [
+        "kernel/src/user/check.rs::check_the_processor_walks_an_installed_space",
+        "kernel/src/arch/x86_64/paranoid/check.rs",
+        "kernel/src/main.rs::check_stacks"
+      ]
+    }
   ]
 }
