@@ -216,7 +216,7 @@ needs no ring 0. **Recommended.**
 | Program | `/sbin/authd`, std Rust on `*-linux-musl`, like init (`docs/INIT.md` §2) |
 | Crate | `userland/auth/authd`, in a workspace `userland/auth/` beside `userland/init/` |
 | Runs as | its own user, `auth`, with a fixed system uid (§9, decision 10). It needs no root: it reads its own store, and the programs that change uid (`login`, `su`) are the ones that are root. |
-| Unit | `auth.service` (`Type=notify`, `User=auth`, `MemoryMax=` enough for one hash and a little more, `NoNewPrivileges=yes` once L13 lands) and `auth.socket` (`ListenSequentialPacket=/run/ferrix/auth`, `SocketMode=0666`), which init already supports (`libs/init/svc/src/kind/socket.rs:19-24`, `:83`) |
+| Unit | `auth.service` (`Type=simple`, started by its socket; no `User=`, since `authd` drops to `auth` itself after preparing the store; `MemoryMax=320M`, enough for one hash at the ceiling and a little more; `NoNewPrivileges=yes` once L13 lands) and `auth.socket` (`ListenSequentialPacket=/run/ferrix/auth`, `SocketMode=0666`), which init already supports (`libs/init/svc/src/kind/socket.rs:19-24`, `:83`) |
 | Without init | Under the phase 1 desktop, where hyprix is pid 1, `exec-once = /sbin/authd` starts it as root. It binds the socket and then drops to `auth` with `setresuid`. It is the same binary and the same socket, so no client can tell the difference. |
 | Offers | `ferrix.auth.seat` in the directory (phase 2, §3.7) |
 
@@ -642,6 +642,21 @@ and the floor holds on every target. Each `authd` also says what the floor
 took when it first sets a password (`authd: argon2id at the floor ...`), and
 `cargo xtask test-auth` prints that line for every architecture it boots.
 
+**In the guest**, as `cargo xtask test-auth --arch all` read it on
+2026-09-27 (QEMU under TCG, the build host's load about 25 to 30). Each boot
+times the floor twice, once for the seed's first use and once for `passwd`,
+and chooses from what it read:
+
+| Guest | Floor (19 MiB, t = 2) | What `authd` then chose |
+|---|---|---|
+| x86-64 | 352 ms, 362 ms | m = 26 MiB, t = 2 |
+| AArch64 | 620 ms, 307 ms | m = 19 MiB, then 30 MiB, t = 2 |
+| ARMv7-A | 502 ms, 476 ms | m = 37 MiB, then 39 MiB, t = 2 (its target is 1 s) |
+
+These are emulator speeds, and the two AArch64 readings show how much the
+host's load moves them; a guest under KVM reads the build host's own figure
+above. The floor held on every guest, as it must.
+
 `p = 1` because `authd` checks one password at a time (§3.5), so a second
 lane buys nothing. Because each hash carries its own parameters, a store
 copied from x86-64 to the DK1 still verifies there, only more slowly. When
@@ -848,7 +863,7 @@ what hyprlock does.
 |---|---|---|---|---|
 | P1.1 | `libs/crypto/argon2`: BLAKE2b, Argon2id, PHC strings; RFC 9106 and BLAKE2 vectors; Miri; a fuzzer on the parser; the timing table of §5.1 measured on x86-64 KVM, AArch64 and the DK1, and written in | auth | `cargo xtask check`, Miri, fuzz | 5 |
 | P1.2 | `libs/proto/auth-proto`: the records of §3.3, their framing, `Secret`; host tests; a fuzzer on the decoder | auth | `cargo xtask check`, Miri, fuzz | 3 |
-| P1.3 | `authd`: the socket, `SO_PEERCRED` rules (§3.4), policy files over `libs/init/svc`'s parser (§4.2), the `password` method with Argon2id and `$6$`/`$5$` import-and-rehash, the store (§5.2), seeds (§5.3), throttle (§3.5), audit (§3.6), zeroing (§3.8), `Type=notify`. Host tests run a real `authd` over a temporary root, as hyprlock's `Store::at` does. | auth | `cargo xtask check` | 8 |
+| P1.3 | `authd`: the socket, `SO_PEERCRED` rules (§3.4), policy files over `libs/init/svc`'s parser (§4.2), the `password` method with Argon2id and `$6$`/`$5$` import-and-rehash, the store (§5.2), seeds (§5.3), throttle (§3.5), audit (§3.6), zeroing (§3.8), started by `auth.socket`. Host tests run a real `authd` over a temporary root, as hyprlock's `Store::at` does. | auth | `cargo xtask check` | 8 |
 | P1.4 | `passwd` and `authctl` (status, reset, unlock-seat, which is inert until phase 2). They replace busybox's `passwd`, `chpasswd`, `cryptpw` and `mkpasswd` links (§4.3). | auth | `cargo xtask check` | 3 |
 | P1.5 | hyprlock's `Service` backend and the conversational trait (§4.4). `Shadow` and `Hashed` go. hyprlock refuses to lock an account with no credential (§5.4). | hyprlock | the hyprlock stream's gate | 2 |
 | P1.6 | Images and the gate. `--auth-seed` and `--auth-seed-file`. `auth.service` and `auth.socket` in images with init, `exec-once = /sbin/authd` in the desktop's. **`cargo xtask test-auth --arch all`**: a seeded account, a wrong password refused after the delay, the fourth failure throttled, the right one accepted, `passwd` changing it, and the change surviving a reboot on the btrfs root (x86-64, which attaches one). Also: the audit lines are there, no line contains the password, an unknown account fails like a wrong password, and a uid-1000 peer naming another account is refused. **`test-hyprlock`** moves onto the real `authd`. | auth, with hyprlock | `test-auth`, `test-hyprlock` | 5 |
@@ -1022,7 +1037,7 @@ it was put to the customer.
 
 ---
 
-## 10. Where it stands (2026-09-26)
+## 10. Where it stands (2026-09-27)
 
 | Slice | State |
 |---|---|
@@ -1030,19 +1045,23 @@ it was put to the customer.
 | P0a, P0b, P0c | done 2026-09-26 (ferrix-15): P0a refused `User=` on a native unit until P0b made it run as that user; P0c is `54cba422`, the `SET_LIMIT` right |
 | P1.1 `libs/crypto/argon2` | on `main` with this section: RFC 9106's vector and five RustCrypto ones, Miri in CI, the `argon2_phc` fuzz target, the timings of §5.1 |
 | P1.2 `libs/proto/auth-proto` | on `main` with this section: the records of §3.3, `Secret`, the `auth_proto` fuzz target |
-| P1.3 `authd`, P1.4 `passwd` and `authctl` | written on branch `auth-authd` (`userland/auth/`), with host tests over a root of their own and one over a real socket |
-| P1.6 `cargo xtask test-auth` | written on branch `auth-authd` (`xtask/src/auth.rs`), with `--sabotage NAME` for the four negative controls; not yet booted |
-| P1.5 hyprlock's backend | the hyprlock stream's, after `authd` lands |
+| P1.3 `authd`, P1.4 `passwd` and `authctl` | on `main` with this row (`userland/auth/`): 28 host tests, one of them over a real socket, and `test-auth` on all three architectures |
+| P1.6 `cargo xtask test-auth` | on `main` with this row (`xtask/src/auth.rs`): passes on x86-64, AArch64 and ARMv7-A, and each of `--sabotage accept-any`, `tell-unknown`, `let-anyone-name` and `no-throttle` fails on its own line |
+| P1.5 hyprlock's backend | the hyprlock stream's, now that `authd` and `userland/auth/client` are on `main`; it also puts `authd` into the desktop's image |
 | K-E `SO_PEERCRED` at `connect` and `listen` | on `main` with its boot check (E-01, closed) |
-| P1.7 the Security Target's OE.AUTH | with the last landing of phase 1 |
+| P1.7 the Security Target's OE.AUTH | on `main` with this row: OE.AUTH, A.AUTH and §9.1's note |
 
 **One rule found while building it**, and now written into §3.5: after any
 failure, no attempt on that account is looked at, from any connection,
 until its FAILED has gone out. A guesser with a hundred connections gets
 one guess per delay, like one with a single connection.
 
-**Left for the desktop.** `authd` reaches an image with init through
-`auth.socket`. The desktop's image, where hyprix is still pid 1, needs
-`exec-once = /sbin/authd` and the `auth` account in its `/etc/passwd`. That
-is to be agreed with hyprlock's P1.5 landing, so that `test-compositor`'s
-boots do not grow a userland build before a lock screen uses it.
+**Left for the desktop.** Since init's L10 (`e00def08`) the desktop's image
+boots `/sbin/init` too, and hyprix is `hyprix.service`, so `authd` reaches it
+the same way as any image: `auth::carried` (`xtask/src/auth.rs`) with the
+image's init files, and the `auth` account (`auth::PASSWD_LINE`) in its
+`/etc/passwd`. It goes in with hyprlock's P1.5, whose lock screen is the
+first desktop client to use it, so that `test-compositor`'s boots grow the
+auth build only when something on them needs it. authd reads no `HOME` and
+no other environment than init's `LISTEN_FDS` and `LISTEN_PID`, so
+5fa34300's `HOME=/` for hyprix.service does not concern it.

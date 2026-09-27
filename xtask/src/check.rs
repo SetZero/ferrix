@@ -175,8 +175,7 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     step("documentation", host_doc)?;
 
     compositor(&root)?;
-    init(&root)?;
-    media(&root)?;
+    userland(&root)?;
     adbd(&root)?;
 
     if args.ferrousli {
@@ -508,12 +507,36 @@ fn compositor(root: &std::path::Path) -> Result<()> {
     })
 }
 
-/// The init's gates: `userland/init/` is a workspace of its own, as the compositor
-/// is, so the host steps above never reach it. On by default, since they are
-/// seconds. The manager it runs is `libs/init/svc`, which the host steps do reach.
-fn init(root: &std::path::Path) -> Result<()> {
-    let dir = root.join("userland/init");
-    let in_init = |arguments: &[&str]| {
+/// The Linux-ABI workspaces under `userland/` that the host steps do not
+/// reach: init's, authentication's and media's.
+fn userland(root: &std::path::Path) -> Result<()> {
+    linux_workspace(root, "init", "userland/init")?;
+    linux_workspace(root, "auth", "userland/auth")?;
+    step("auth: no sabotage in the environment", no_sabotage)?;
+    media(root)
+}
+
+/// Every image build inherits this environment, and a set
+/// `FERRIX_AUTH_SABOTAGE` would build its authd with a refusal turned off
+/// (`userland/auth/authd/src/sabotage.rs`).
+fn no_sabotage() -> Result<()> {
+    match std::env::var_os("FERRIX_AUTH_SABOTAGE") {
+        Some(_) => Err(Error::new(
+            "FERRIX_AUTH_SABOTAGE is set; unset it: only test-auth --sabotage may sabotage authd",
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The gates of a Linux-ABI workspace under `userland/`: init's
+/// (`userland/init/`) and authentication's (`userland/auth/`). Each is a
+/// workspace of its own, as the compositor is, so the host steps above
+/// never reach it. On by default, since they are seconds. What they are
+/// built on -- `libs/init/svc`, `libs/proto/auth-proto`,
+/// `libs/crypto/argon2` -- the host steps do reach.
+fn linux_workspace(root: &std::path::Path, name: &str, relative: &str) -> Result<()> {
+    let dir = root.join(relative);
+    let in_workspace = |arguments: &[&str]| {
         if cfg!(windows) {
             return crate::wsl::cargo(&dir, arguments);
         }
@@ -522,21 +545,24 @@ fn init(root: &std::path::Path) -> Result<()> {
         command
     };
     if cfg!(windows) {
-        step("init: WSL", || {
-            crate::wsl::require_toolchain("init is a Linux program, with Linux's system calls")
+        step(&format!("{name}: WSL"), || {
+            crate::wsl::require_toolchain("it is a Linux program, with Linux's system calls")
         })?;
     }
-    step("init: formatting", || {
-        cargo::run(in_init(&["fmt", "--check"]), "cargo fmt (init)")
-    })?;
-    step("init: clippy", || {
+    step(&format!("{name}: formatting"), || {
         cargo::run(
-            in_init(&["clippy", "--all-targets", "--", "-D", "warnings"]),
-            "cargo clippy (init)",
+            in_workspace(&["fmt", "--check"]),
+            &format!("cargo fmt ({name})"),
         )
     })?;
-    step("init: tests", || {
-        cargo::run(in_init(&["test"]), "cargo test (init)")
+    step(&format!("{name}: clippy"), || {
+        cargo::run(
+            in_workspace(&["clippy", "--all-targets", "--", "-D", "warnings"]),
+            &format!("cargo clippy ({name})"),
+        )
+    })?;
+    step(&format!("{name}: tests"), || {
+        cargo::run(in_workspace(&["test"]), &format!("cargo test ({name})"))
     })
 }
 

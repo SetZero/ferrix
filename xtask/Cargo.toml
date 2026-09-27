@@ -38,6 +38,10 @@ ferrix-vdagent.workspace = true
 # the file. A second reader here would be a second opinion on which file the
 # kernel accepts.
 ferrix-displayctl.workspace = true
+# The password hash authd stores credentials under: an image's seed
+# (`--auth-seed`, and the gate's) is hashed on the host by the same code
+# that checks it on the guest, so the two cannot disagree about a hash.
+ferrix-argon2.workspace = true
 
 [lints]
 workspace = true

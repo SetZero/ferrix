@@ -125,6 +125,7 @@ and all are assumed hostile, which is the central design claim being made.
 | A.ADMIN | Whoever composes the system image and selects which drivers run is trusted to do so competently. |
 | A.HARDWARE | The MMU, IOMMU and interrupt controller behave as their specifications state. |
 | A.PROCESSOR | The processor offers the speculation controls [SPECULATION.md](SPECULATION.md) builds on, and they behave as the vendor states: SAFETY-MANUAL AoU-11, checkable from the boot log. |
+| A.AUTH | The authentication service of [docs/AUTH.md](../AUTH.md), `authd`, and the programs that act on its verdict (`login`, `su`, `sessiond`, the compositor) are competently built, as A.ADMIN has image composition. They rely on the TOE for O.ISOLATE, O.CAPABILITY and O.SCRUB, and on the Linux personality's uid model and its `SO_PEERCRED`, both in the uncertified load ring. |
 
 ### 3.4 Organisational security policies
 None claimed.
@@ -155,6 +156,7 @@ None claimed.
 | OE.ADMIN | Image composition is performed competently (A.ADMIN). |
 | OE.HARDWARE | MMU, IOMMU and interrupt controller conform to specification (A.HARDWARE). |
 | OE.PROCESSOR | The TOE runs, built `--mitigations on`, only on a processor whose boot log reports no side-channel hazard uncovered (A.PROCESSOR). |
+| OE.AUTH | People are identified and authenticated by `authd`, which alone holds credentials, in ring 3 and outside the TOE, and security-relevant events of that kind are recorded in its audit log ([docs/AUTH.md](../AUTH.md) §3.6) (A.AUTH). |
 
 ---
 
@@ -315,6 +317,16 @@ the TSF's own decisions, FAU_GEN.2 refined to the process and job the TSF
 attests, FAU_SAR.1 and .2 through a read-only capability, FAU_STG.1 with
 overwrite and why it is neither FAU_STG.3 nor .4, and FPT_STM.1. It is not
 built, and nothing of it is claimed here until it is (F-21b).
+
+Their counterparts are the operational environment's since 2026-09-26:
+OE.AUTH and A.AUTH (§3.3, §4.2). `authd` identifies and authenticates
+people and keeps the audit log of it, outside the TOE, and no
+organisational security policy is claimed for it. On ARMv7-A and the DK1,
+where no IOMMU confines a ring-3 driver (ARCHITECTURE.md §7), a driver can
+read `authd`'s memory, and so its secrets while they are checked. The one
+weakness found in what it relies on, E-01 (`SO_PEERCRED` taken when a
+socket was made), is closed by K-E ([VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md),
+"What this analysis does not cover").
 
 ### 9.2 No trusted boot path
 The TOE does not verify its own integrity. A.FIRMWARE carries the whole of that

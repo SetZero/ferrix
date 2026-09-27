@@ -1,0 +1,12 @@
+# Where authd listens (docs/AUTH.md §3.2). Anyone may connect: SO_PEERCRED
+# says who asked, and that decides what they may ask. authd is started by the
+# first connection and handed this socket.
+[Unit]
+Description=The authentication service's socket
+
+[Socket]
+ListenSequentialPacket=/run/ferrix/auth
+SocketMode=0666
+
+[Install]
+WantedBy=sockets.target

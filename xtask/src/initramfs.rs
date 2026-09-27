@@ -527,6 +527,8 @@ fn build_with_shell(
     uutils: &[(&str, Vec<u8>)],
     ports: &[ports::File],
 ) -> Result<Vec<u8>> {
+    // A sabotaged authd goes into test-auth's control images and no other.
+    crate::auth::refuse_sabotaged(ports)?;
     let mut archive = Newc::new();
     archive.directory(".", 0o755)?;
     for (name, permissions) in [

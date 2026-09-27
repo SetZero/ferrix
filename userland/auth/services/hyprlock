@@ -1,0 +1,8 @@
+# The lock screen (docs/AUTH.md §4.2): the caller's own password, and in
+# phase 2 a grant to the compositor so that it lets the lock go.
+[Service]
+Description=Unlock the screen
+Account=self
+Methods=password
+Grant=seat
+FailDelaySec=2

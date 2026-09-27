@@ -1,0 +1,21 @@
+[package]
+name = "authd"
+description = "/sbin/authd: the one process that holds credentials (docs/AUTH.md §3.2)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The socket, its peer's credentials, poll, and dropping to the `auth` user.
+libc = "0.2.189"
+ferrix-auth-proto = { path = "../../../libs/proto/auth-proto" }
+ferrix-argon2 = { path = "../../../libs/crypto/argon2" }
+# The policy files are in the unit files' syntax, read by the same parser.
+ferrix-svc = { path = "../../../libs/init/svc" }
+# The socket helpers the clients use too.
+ferrix-auth-client = { path = "../client" }
+
+[lints]
+workspace = true

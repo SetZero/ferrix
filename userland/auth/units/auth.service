@@ -1,0 +1,16 @@
+# authd (docs/AUTH.md §3.2). It starts as root to prepare the store and
+# import the image's seeds, then becomes the `auth` user before it answers
+# anyone, so there is no User= here: authd drops the privilege itself, and
+# refuses to start if it cannot.
+[Unit]
+Description=The authentication service
+Requires=auth.socket
+After=auth.socket
+
+[Service]
+Type=simple
+ExecStart=/sbin/authd
+Restart=on-failure
+RestartSec=1s
+MemoryMax=320M
+TasksMax=8

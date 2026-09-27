@@ -1,0 +1,17 @@
+[package]
+name = "ferrix-auth-client"
+description = "Talk to authd: open /run/ferrix/auth, run a conversation, ask a person"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# socket(AF_UNIX, SOCK_SEQPACKET), which std has no type for, and the
+# terminal's echo.
+libc = "0.2.189"
+ferrix-auth-proto = { path = "../../../libs/proto/auth-proto" }
+
+[lints]
+workspace = true

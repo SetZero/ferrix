@@ -191,6 +191,16 @@ pub(crate) struct Args {
     /// stands. For a client whose key is in neither place -- another user on
     /// this machine, a sandbox, a CI step.
     pub(crate) ssh_keys: Vec<String>,
+    /// `--auth-seed ACCOUNT`, as many as given: ask on this terminal for a
+    /// password, hash it here, and give the image it as the account's first
+    /// password (`docs/AUTH.md` §5.3).
+    pub(crate) auth_seeds: Vec<String>,
+    /// `--auth-seed-file ACCOUNT=FILE`: the same, with the password the
+    /// file's first line, for a script.
+    pub(crate) auth_seed_files: Vec<(String, std::path::PathBuf)>,
+    /// `--sabotage NAME`: `test-auth` against an `authd` built with one of
+    /// its refusals turned off, which must fail (`authd`'s `sabotage.rs`).
+    pub(crate) sabotage: Option<String>,
     /// `--display`: a virtio-gpu device on the bus, and for `run` a window
     /// that shows it. `test-display` turns it on.
     pub(crate) display: bool,
@@ -402,6 +412,23 @@ impl Args {
         }
     }
 
+    /// `--auth-seed`, `--auth-seed-file` and `--sabotage` (`crate::auth`).
+    fn auth(&mut self, flag: &str, items: &mut impl Iterator<Item = String>) -> Result<()> {
+        let raw = value(items, flag)?;
+        match flag {
+            "--auth-seed" => self.auth_seeds.push(raw),
+            "--auth-seed-file" => {
+                let (account, file) = raw.split_once('=').ok_or_else(|| {
+                    Error::new(format!("--auth-seed-file wants ACCOUNT=FILE, not {raw}"))
+                })?;
+                self.auth_seed_files
+                    .push((account.to_owned(), std::path::PathBuf::from(file)));
+            }
+            _ => self.sabotage = Some(raw),
+        }
+        Ok(())
+    }
+
     /// Parse an iterator of arguments, `cargo xtask` and the command name
     /// having already been stripped by the caller.
     pub(crate) fn parse(raw: impl Iterator<Item = String>) -> Result<Self> {
@@ -443,6 +470,9 @@ impl Args {
                 }
                 "--ssh" => args.ssh(&mut items)?,
                 "--ssh-key" => args.ssh_keys.push(value(&mut items, "--ssh-key")?),
+                "--auth-seed" | "--auth-seed-file" | "--sabotage" => {
+                    args.auth(&item, &mut items)?;
+                }
                 "--display" => args.display = true,
                 // A 3D card is still a card: `--gl` on its own turns the
                 // display on, so nobody has to write both; and Venus is

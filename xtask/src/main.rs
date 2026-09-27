@@ -58,6 +58,7 @@
 mod adbd;
 mod args;
 mod audio;
+mod auth;
 mod badapple;
 mod btrfs_check;
 mod btrfs_disk;
@@ -203,6 +204,9 @@ COMMANDS:
     test-init     Boot /sbin/init as pid 1, type at the shell its getty gives, and require its session, a failing
                   service's restart budget, a service's cgroup, and a shutdown btrfs check finds clean
     bench-seam    Boot a stock Linux kernel on the same QEMU machine and time a 4 KiB O_DIRECT read of the pattern disk at depths 1 and 32: the in-kernel reference for the seam boot line (scripts/fetch/fetch-linux-reference.sh first)
+    test-auth     Boot init with authd, type at the shell its getty gives, and require each refusal of
+                  docs/AUTH.md: a wrong password, an unknown account, a user naming another, the throttle
+                  (with --sabotage NAME, against an authd with that refusal turned off, which must fail)
     test-restart  Boot a shell beside a device, kill -9 its driver twice, and require it started again each time (--boot gpu|input|net|blk|all; gpu if not given)
     test-sysfs    Boot a shell beside a card, input devices and a network adapter, read sysfs, and unbind and bind the card through it
     test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count (--i686: the x86-64
@@ -461,6 +465,7 @@ fn run() -> Result<()> {
         "test-pty" => pty::test_pty(&args),
         "test-jobs" => jobs::test_jobs(&args),
         "test-init" => init::test_init(&args),
+        "test-auth" => auth::test_auth(&args),
         "test-restart" => restart::test_restart(&args),
         "bench-seam" => seam::bench_seam(&args),
         "test-sysfs" => sysfs::test_sysfs(&args),
@@ -803,6 +808,8 @@ fn build_init_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let mut carried = ports::installed(arch)?;
     carried.extend(rustc::default_links(args));
     carried.extend(init::carried(arch)?);
+    // `--auth-seed`: authd, its seeds and the accounts it needs.
+    carried.extend(auth::with_seeds(arch, args)?);
     let initramfs =
         initramfs::build_with_utilities(None, &natives, shell.as_deref(), &utilities, &carried)?;
     let mut cmdline = init::command_line();

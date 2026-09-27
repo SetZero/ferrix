@@ -1,0 +1,9 @@
+# login on a getty (phase 2): getty's login is root, and nobody else may
+# name an account to be checked.
+[Service]
+Description=Log in on a terminal
+Account=any
+Callers=root
+Methods=password
+FirstPassword=local
+FailDelaySec=2

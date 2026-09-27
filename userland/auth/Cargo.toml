@@ -1,0 +1,77 @@
+# Authentication (docs/AUTH.md): `/sbin/authd`, `/bin/passwd`, `/bin/authctl`,
+# and the client library they and hyprlock share.
+#
+# A workspace of its own, as userland/init/ is: Linux user programs built with
+# std on musl, speaking only the Linux ABI. The pure parts are Ferrix
+# workspace crates: the records in libs/proto/auth-proto, the hash in
+# libs/crypto/argon2, and the policy files' syntax in libs/init/svc.
+[workspace]
+resolver = "3"
+members = ["authctl", "authd", "client", "passwd"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Matches Ferrix's rust-toolchain.toml, which rustup finds from here.
+rust-version = "1.97"
+license = "MIT"
+publish = false
+
+# ---------------------------------------------------------------------------
+# Lints
+#
+# The Ferrix discipline, as init has it. A panic in authd ends every
+# conversation in flight and leaves the lock screen with no answer, so the
+# ways of reaching one are denied and a failing call is a verdict of
+# UNAVAILABLE, never an abort.
+# ---------------------------------------------------------------------------
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "deny"
+missing_debug_implementations = "deny"
+unused_results = "deny"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+multiple_unsafe_ops_per_block = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+allow_attributes_without_reason = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+uninlined_format_args = "warn"
+semicolon_if_nothing_returned = "warn"
+doc_markdown = "warn"
+
+[profile.dev]
+overflow-checks = true
+# A panic ends the process rather than unwinding through half-written state.
+panic = "abort"
+
+# Stripped: the release build is what goes into the initramfs.
+[profile.release]
+overflow-checks = true
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
+
+# Argon2id at the floor fills 19 MiB twice. Unoptimised, every check in a
+# test would take seconds.
+[profile.dev.package.ferrix-argon2]
+opt-level = 3
