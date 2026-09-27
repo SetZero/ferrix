@@ -286,16 +286,20 @@ impl Endpoint {
             if inbox.is_full() {
                 return Err(WriteFailure::Full);
             }
+            // FALLIBLE: the queue's room for the message, made before the
+            // handles leave the sender, whose write refused for memory then
+            // costs it nothing: the handles leave only if the write succeeds.
+            inbox.reserve().map_err(|_| WriteFailure::NoMemory)?;
             let handles = take().map_err(WriteFailure::Take)?;
-            // NOALLOC: `MessageQueue::push` reserves fallibly and refuses with
-            // `SendError::NoMemory`.
+            // NOALLOC: the room `reserve` made above.
             let refused = inbox.push(Message { bytes, handles }).err();
             let fired = refused.is_none() && trigger(&mut peer.observers.lock(), Signals::READABLE);
             (refused, fired)
         };
-        // Checked above under the same lock, so this is unreachable; if it
-        // ever were reached, the handles are already out of the sender's
-        // table and the only safe thing left is to free them, after the lock.
+        // Size and room checked, and the room made, above under the same
+        // lock, so this is unreachable; if it ever were reached, the handles
+        // are already out of the sender's table and the only safe thing left
+        // is to free them, after the lock.
         match refused {
             None => {
                 // After the queue lock is gone: a woken reader goes straight

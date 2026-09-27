@@ -74,7 +74,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 |---|---|---:|---:|---:|---:|---|
 | `object/oom.rs` | `core` | 5 | 6 | 5 | 5 | 169, 201, 205, 208, 213 |
 | `object/process.rs` | `core` | 5 | 5 | 4 | 3 | 128, 191-192 |
-| `object/channel.rs` | `core` | 4 | 4 | 4 | 4 | 311-313, 318 |
+| `object/channel.rs` | `core` | 4 | 4 | 4 | 4 | 315-317, 322 |
 | `object/mod.rs` | `core` | 2 | 2 | 2 | 2 | 262, 266 |
 | `object/port.rs` | `core` | 0 | 0 | 2 | 0 | - |
 | `object/pin.rs` | `core` | 0 | 1 | 0 | 0 | - |

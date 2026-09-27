@@ -115,7 +115,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixObjectRequirements` | `14-object-requirements.sysml` | What each unit of kernel/src/object/ does, as `ItemLowLevel` requirements (part 13 defines the format): the core ring's object layer -- what a handle names and how it is dropped, channels, ports, interrupts, I/O mappings, pins, the job quotas, jobs, the core half of a process, and the scoped OOM kill. The handle table itself and the rights arithmetic are `libs/kernel/objects` and `libs/proto/native-abi`, whose host tests verify H.OBJ.1 to H.OBJ.4 directly; nothing here restates them. |
 | `FerrixIommuRequirements` | `16-iommu-requirements.sysml` | What each unit of kernel/src/iommu.rs and kernel/src/iommu/ does, as `ItemLowLevel` requirements (part 13 defines the format): where firmware puts each PCI function's DMA, the units the kernel turns translation on for, the domains a driver pins pages into, the gate a wait on a unit is made through, and the faults a unit records. The pins a program makes through a handle, and the quarantine a dead driver's pins go to, are object/'s (part 14, `L.object.45` to `L.object.49`); this is the domain side under them. |
 
-16 files, 43 packages, 2722 elements, 205 relations. Model digest `8adc2471a089126b`.
+16 files, 43 packages, 2727 elements, 205 relations. Model digest `688357d31db2844e`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -3994,6 +3994,7 @@ flowchart LR
 | `L.object.90` | `anEndClosesTheSlot` | — | — | — |
 | `L.object.91` | `anExecveSealsTheSlot` | — | — | — |
 | `L.object.92` | `anUndeliveredBootstrapGoesBack` | — | — | — |
+| `L.object.104` | `anUndeliveredBootstrapOfAnEndedProcessIsClosed` | — | — | — |
 | `L.object.93` | `anEndFiresItsWatches` | — | — | — |
 | `L.object.94` | `howItEndedIsKept` | — | — | — |
 | `L.object.95` | `anUnstartedProcessEndsWithItsHandles` | — | — | — |

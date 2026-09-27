@@ -1245,10 +1245,10 @@
     "object/channel.rs": {
       "ring": "core",
       "lines": [
-        311,
-        312,
-        313,
-        318
+        315,
+        316,
+        317,
+        322
       ]
     },
     "sched/wait.rs": {

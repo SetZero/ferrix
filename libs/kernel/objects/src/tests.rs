@@ -1,5 +1,7 @@
 //! The rules the kernel's objects rely on, checked without a kernel.
 
+extern crate std;
+
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -481,4 +483,33 @@ fn a_drained_queue_keeps_its_order() {
     let drained: Vec<u8> = q.drain().into_iter().map(|m| m.bytes[0]).collect();
     assert_eq!(drained, vec![0, 1]);
     assert!(q.is_empty());
+}
+
+/// Allocation failure, injected through `ferrix_fallible`: a queue refuses
+/// room with `NoMemory` when it cannot grow, and once it has room, a push is
+/// not refused however the allocator answers -- the write asks before it
+/// takes the sender's handles, and the push after cannot lose them.
+#[test]
+fn room_made_first_cannot_be_refused_for_memory() {
+    std::thread_local! {
+        static FAIL: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+    }
+    fn policy() -> bool {
+        FAIL.with(core::cell::Cell::get)
+    }
+    let _ = ferrix_fallible::set_injector(policy);
+    ferrix_fallible::arm(true);
+
+    // A new queue has no room, so its first message needs an allocation.
+    let mut q: MessageQueue<u32> = MessageQueue::new(LIMITS);
+    FAIL.with(|fail| fail.set(true));
+    assert_eq!(q.reserve(), Err(SendError::NoMemory), "no room to be had");
+    assert!(q.is_empty(), "the refusal queued nothing");
+
+    FAIL.with(|fail| fail.set(false));
+    q.reserve().unwrap();
+    FAIL.with(|fail| fail.set(true));
+    assert_eq!(q.push(message(1, 2)), Ok(()), "the room made is used");
+    FAIL.with(|fail| fail.set(false));
+    assert_eq!(q.pop_fitting(8, 2), Ok(message(1, 2)), "handles and all");
 }

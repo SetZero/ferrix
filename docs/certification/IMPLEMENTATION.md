@@ -586,7 +586,9 @@ parent (`.62`); a child job charged as an object and refused in a killed
 parent (`.65`); `cgroup.max.depth` and `.descendants` (`.67`); rmdir of a
 populated cgroup (`.70`); a fork into a dying job (`.78`); a thread charged
 as a task (`.84`); process_create at the task limit (`.87`); a bootstrap
-that found the table full (`.92`); a started process held by its task
+that found the table full (`.92`, verified since 2026-09-27 by the native
+refusal check, its second half split out as `.104`, a bootstrap closed when
+its process ends before it is placed); a started process held by its task
 (`.97`); and the OOM kill's choice of victim, its fallbacks and the emptying
 of an ended victim (`.101` to `.103`).
 

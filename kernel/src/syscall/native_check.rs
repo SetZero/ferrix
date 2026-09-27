@@ -2,14 +2,18 @@
 //! the wrong kind, one without the right a call needs, one named twice in a
 //! message, a table with no room, a send whose cycle check would walk too far,
 //! a packet whose buffer faults, a copy through a VMO a device reads past the
-//! caches, a clock asked for badly, and the kernel log asked for by a device
-//! that may not read it.
+//! caches, a clock asked for badly, the kernel log asked for by a device
+//! that may not read it, a bootstrap handle or a message's handles with no
+//! room or no memory to be placed in, and a write with no memory for its
+//! message, which keeps the handles it carried (F-42). And the job limits a
+//! program sets, read back as it set them.
 //!
 //! Each is a sentence `docs/NATIVE-ABI.md` promises a program: which status
 //! it gets, and that a refused call leaves what it was given where it was.
 //! Driven through [`native::dispatch`] from one process of the check's own,
 //! as stage 9's check drives the calls that succeed.
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use ferrix_bootinfo::PAGE_SIZE;
@@ -18,11 +22,13 @@ use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::nr;
 use ferrix_native_abi::rights::{Rights, SAME_RIGHTS};
 use ferrix_native_abi::status;
-use ferrix_native_abi::types::CHANNEL_MAX_HANDLES;
+use ferrix_native_abi::types::{
+    CHANNEL_MAX_HANDLES, JOB_CPU_WEIGHT, JOB_MEMORY, JOB_OBJECTS, JOB_TASKS, UNLIMITED,
+};
 
 use crate::arch;
 use crate::object::check::{SCRATCH, Side, reg};
-use crate::object::job::Job;
+use crate::object::job::{self, Job};
 use crate::object::{HANDLE_LIMIT, Object};
 use crate::syscall::image::{self, Shape};
 
@@ -47,6 +53,13 @@ const CHILD_NAME: &[u8] = b"unstarted";
 const NAME_AT: u64 = SCRATCH + 0x480;
 /// A VMO offset for a write.
 const OFFSET: u64 = SCRATCH + 0x4C0;
+/// A limit handed to `job_set_limit`.
+const LIMIT_AT: u64 = SCRATCH + 0x500;
+/// What `job_get_quota` writes: used, limit and refused.
+const QUOTA_AT: u64 = SCRATCH + 0x520;
+/// How many handles a message carries into a table with no memory to grow:
+/// more than a table that has held one handle has room for without growing.
+const CARRIED: usize = 8;
 
 /// What the checks did, for the boot log.
 #[derive(Debug, Default)]
@@ -86,6 +99,10 @@ fn checks(side: &Side, report: &mut Report) -> Result<(), &'static str> {
     a_full_table_refuses_and_loses_nothing(side, report)?;
     a_table_that_cannot_grow_refuses_for_memory(report)?;
     a_bootstrap_without_transfer_is_refused(side, report)?;
+    a_job_reads_back_its_limits(side, report)?;
+    a_bootstrap_without_memory_is_kept(report)?;
+    a_delivery_without_memory_is_kept(side, report)?;
+    a_write_without_memory_keeps_its_handles(side, report)?;
     Ok(())
 }
 
@@ -406,10 +423,11 @@ fn a_send_that_would_walk_too_far_is_refused(
 }
 
 /// A table with no room refuses a new handle with `NO_HANDLES` -- from a
-/// duplicate, from a call that makes an object, and from a read that would
-/// deliver one -- and the message that could not be delivered stays queued.
+/// duplicate, from a call that makes an object, from a read that would
+/// deliver one, and from `process_bootstrap` -- and neither the message nor
+/// the bootstrap handle that could not be delivered is lost.
 ///
-/// Verifies: L.object.82, H.OBJ.7
+/// Verifies: L.object.82, L.object.92, H.OBJ.7
 fn a_full_table_refuses_and_loses_nothing(
     side: &Side,
     report: &mut Report,
@@ -455,6 +473,16 @@ fn a_full_table_refuses_and_loses_nothing(
         "a handle was delivered into a full table",
         report,
     )?;
+    let bootstrap = Job::new_root().map_err(|_| "no memory for a bootstrap")?;
+    side.process
+        .with_bootstrap(|slot| slot.give(Object::Job(bootstrap), Rights::JOB))
+        .map_err(|_| "the check's process refused a bootstrap")?;
+    refused(
+        side.call(nr::PROCESS_BOOTSTRAP, &[]),
+        status::NO_HANDLES,
+        "a bootstrap handle was placed in a full table",
+        report,
+    )?;
 
     // Room again, and the message is still there to read.
     let _ = side
@@ -473,6 +501,11 @@ fn a_full_table_refuses_and_loses_nothing(
             ],
         )
         .map_err(|_| "a message refused for a full table was lost")?;
+    // And room again for the bootstrap, which was put back for this call.
+    let _ = side
+        .call(nr::HANDLE_CLOSE, &[reg(inbox)])
+        .map_err(|_| "could not close a handle of a full table")?;
+    bootstrapped(side, "a bootstrap refused for a full table was lost")?;
     report.filled = filled;
     // Room for the checks after this one.
     side.close_everything();
@@ -587,5 +620,265 @@ fn a_bootstrap_without_transfer_is_refused(
     if side.call(nr::HANDLE_CLOSE, &[reg(kept)]).is_err() {
         return Err("a refused start took the bootstrap handle it was given");
     }
+    Ok(())
+}
+
+/// `process_bootstrap` in `side`, required to place a handle: the bootstrap
+/// a refused call put back.
+fn bootstrapped(side: &Side, what: &'static str) -> Result<(), &'static str> {
+    let placed = side.handle(nr::PROCESS_BOOTSTRAP, &[], what)?;
+    if placed == Handle::INVALID {
+        return Err(what);
+    }
+    Ok(())
+}
+
+/// `job_set_limit` on `job` for `resource`, to `limit`.
+fn set_limit(side: &Side, job: Handle, resource: u64, limit: u64) -> Result<usize, Errno> {
+    side.put(LIMIT_AT, &limit.to_ne_bytes())
+        .map_err(|_| status::FAULT)?;
+    side.call(nr::JOB_SET_LIMIT, &[reg(job), resource, LIMIT_AT])
+}
+
+/// `job_get_quota` on `job` for `resource`: used, limit and refused.
+fn quota(side: &Side, job: Handle, resource: u64) -> Result<[u64; 3], &'static str> {
+    let _ = side
+        .call(nr::JOB_GET_QUOTA, &[reg(job), resource, QUOTA_AT])
+        .map_err(|_| "job_get_quota failed")?;
+    let bytes = side.get(QUOTA_AT, 24)?;
+    let mut words = [0_u64; 3];
+    for (word, chunk) in words.iter_mut().zip(bytes.chunks_exact(8)) {
+        *word = u64::from_ne_bytes(chunk.try_into().map_err(|_| "a short quota")?);
+    }
+    Ok(words)
+}
+
+/// `job_get_quota` answers what `job_set_limit` set: a memory limit in whole
+/// pages, rounded down, and a processor weight as given, one outside 1 to
+/// 10,000 refused with `INVALID_ARGS`. The tree's root is charged nothing: it
+/// reads as unlimited, with the default weight, and refuses a limit with
+/// `BAD_STATE`. A quota written where nothing is mapped is `FAULT`.
+fn a_job_reads_back_its_limits(side: &Side, report: &mut Report) -> Result<(), &'static str> {
+    let made = Job::new_root().map_err(|_| "no memory for a job")?;
+    let job = side
+        .process
+        .with_handles(|table| table.insert(Object::Job(made), Rights::JOB))
+        .map_err(|_| "no room for a job")?;
+    let root = side
+        .process
+        .with_handles(|table| table.insert(Object::Job(Arc::clone(job::root())), Rights::JOB))
+        .map_err(|_| "no room for the tree's root")?;
+
+    let _ = set_limit(side, job, JOB_MEMORY, 3 * PAGE_SIZE + 1)
+        .map_err(|_| "job_set_limit refused a memory limit")?;
+    if quota(side, job, JOB_MEMORY)?[1] != 3 * PAGE_SIZE {
+        return Err("a memory limit did not read back rounded down to whole pages");
+    }
+    let _ = set_limit(side, job, JOB_CPU_WEIGHT, 250)
+        .map_err(|_| "job_set_limit refused a processor weight")?;
+    if quota(side, job, JOB_CPU_WEIGHT)? != [0, 250, 0] {
+        return Err("a processor weight did not read back as set");
+    }
+    for weight in [0, 10_001, u64::MAX] {
+        refused(
+            set_limit(side, job, JOB_CPU_WEIGHT, weight),
+            status::INVALID_ARGS,
+            "a processor weight outside 1 to 10,000 was accepted",
+            report,
+        )?;
+    }
+
+    refused(
+        set_limit(side, root, JOB_TASKS, 10),
+        status::BAD_STATE,
+        "the tree's root took a limit",
+        report,
+    )?;
+    if quota(side, root, JOB_OBJECTS)? != [0, UNLIMITED, 0] {
+        return Err("the tree's root did not read as unlimited");
+    }
+    if quota(side, root, JOB_CPU_WEIGHT)? != [0, 100, 0] {
+        return Err("the tree's root did not read as the default weight");
+    }
+    refused(
+        side.call(nr::JOB_GET_QUOTA, &[reg(job), JOB_MEMORY, UNMAPPED]),
+        status::FAULT,
+        "a quota was written where nothing is mapped",
+        report,
+    )?;
+
+    for handle in [job, root] {
+        let _ = side
+            .call(nr::HANDLE_CLOSE, &[reg(handle)])
+            .map_err(|_| "could not close a job handle")?;
+    }
+    Ok(())
+}
+
+/// A `process_bootstrap` whose table cannot grow for the handle is refused
+/// with `NO_MEMORY`, and the bootstrap is put back for the next call, which
+/// is given it.
+///
+/// Each attempt is a fresh process, whose table has never held a handle and
+/// must grow for its first; each of the call's first allocations in turn is
+/// failed.
+fn a_bootstrap_without_memory_is_kept(report: &mut Report) -> Result<(), &'static str> {
+    let me = crate::sched::current_id().ok_or("the checking task is not running")?;
+    let mut kept = 0;
+    for nth in 1..=4 {
+        let fresh = Side::new()?;
+        let bootstrap = Job::new_root().map_err(|_| "no memory for a bootstrap")?;
+        fresh
+            .process
+            .with_bootstrap(|slot| slot.give(Object::Job(bootstrap), Rights::JOB))
+            .map_err(|_| "a fresh process refused a bootstrap")?;
+        crate::fallible::inject_once(me, nth, false);
+        let taken = fresh.call(nr::PROCESS_BOOTSTRAP, &[]);
+        let _ = crate::fallible::stop_injecting();
+        let outcome = match taken {
+            Ok(_) => Ok(()),
+            Err(status::NO_MEMORY) => {
+                kept += 1;
+                bootstrapped(&fresh, "a bootstrap refused for memory was lost")
+            }
+            Err(_) => Err("a bootstrap without memory answered something other than NO_MEMORY"),
+        };
+        fresh.close_everything();
+        outcome?;
+    }
+    if kept == 0 {
+        return Err("no bootstrap was refused for memory with its first allocations failing");
+    }
+    report.refusals += kept;
+    Ok(())
+}
+
+/// A read that would deliver a message's handles into a table with no memory
+/// to grow for them is refused with `NO_MEMORY`, and the message stays
+/// queued, handles and all, for the next read.
+///
+/// The reading end is moved into a fresh process, so the table holds that
+/// one handle and must grow for the [`CARRIED`] the message brings; each of
+/// the read's first allocations in turn is failed.
+fn a_delivery_without_memory_is_kept(side: &Side, report: &mut Report) -> Result<(), &'static str> {
+    let me = crate::sched::current_id().ok_or("the checking task is not running")?;
+    let read = |at: &Side, inbox: Handle| {
+        at.call(
+            nr::CHANNEL_READ,
+            &[
+                reg(inbox),
+                BYTES,
+                0,
+                HANDLES,
+                CHANNEL_MAX_HANDLES as u64,
+                ACTUAL,
+            ],
+        )
+    };
+    let mut kept = 0;
+    for nth in 1..=4 {
+        let (inbox, sender) = channel(side)?;
+        let mut carried = Vec::new();
+        for _ in 0..CARRIED {
+            carried.push(vmo(side)?);
+        }
+        put_handles(side, &carried)?;
+        let _ = side
+            .call(
+                nr::CHANNEL_WRITE,
+                &[reg(sender), BYTES, 0, HANDLES, CARRIED as u64],
+            )
+            .map_err(|_| "could not send handles to read without memory")?;
+        let (object, rights) = side
+            .process
+            .with_handles(|table| table.remove(inbox))
+            .map_err(|_| "could not take the reading end out")?;
+        let fresh = Side::new()?;
+        let inbox = fresh
+            .process
+            .with_handles(|table| table.insert(object, rights))
+            .map_err(|_| "no room for the reading end")?;
+
+        crate::fallible::inject_once(me, nth, false);
+        let first = read(&fresh, inbox);
+        let _ = crate::fallible::stop_injecting();
+        let outcome = match first {
+            Ok(_) => Ok(()),
+            Err(status::NO_MEMORY) => {
+                kept += 1;
+                match read(&fresh, inbox) {
+                    Ok(_) if fresh.get_u32(ACTUAL + 4) == Ok(CARRIED as u32) => Ok(()),
+                    _ => Err("a message refused for memory was not delivered whole after"),
+                }
+            }
+            Err(_) => Err("a read without memory answered something other than NO_MEMORY"),
+        };
+        fresh.close_everything();
+        let _ = side.call(nr::HANDLE_CLOSE, &[reg(sender)]);
+        outcome?;
+    }
+    if kept == 0 {
+        return Err("no read was refused for memory with its first allocations failing");
+    }
+    report.refusals += kept;
+    Ok(())
+}
+
+/// A write the peer's queue has no memory to take is refused with
+/// `NO_MEMORY` and leaves the handles it carried in the sender's table, and
+/// nothing queued: the handles leave a process only if the write succeeds
+/// (`channel_write`'s promise).
+///
+/// Each attempt writes into a fresh channel, whose queue has never held a
+/// message and must grow for its first, carrying a handle; each of the
+/// write's first allocations in turn is failed.
+fn a_write_without_memory_keeps_its_handles(
+    side: &Side,
+    report: &mut Report,
+) -> Result<(), &'static str> {
+    let me = crate::sched::current_id().ok_or("the checking task is not running")?;
+    let mut kept = 0;
+    for nth in 1..=4 {
+        let (inbox, sender) = channel(side)?;
+        let carried = vmo(side)?;
+        put_handles(side, &[carried])?;
+        crate::fallible::inject_once(me, nth, false);
+        let wrote = side.call(nr::CHANNEL_WRITE, &[reg(sender), BYTES, 0, HANDLES, 1]);
+        let _ = crate::fallible::stop_injecting();
+        let outcome = match wrote {
+            // The handle went with the message; closing the inbox closes it.
+            Ok(_) => Ok(()),
+            Err(status::NO_MEMORY) => {
+                kept += 1;
+                let queued = side.call(
+                    nr::CHANNEL_READ,
+                    &[
+                        reg(inbox),
+                        BYTES,
+                        0,
+                        HANDLES,
+                        CHANNEL_MAX_HANDLES as u64,
+                        ACTUAL,
+                    ],
+                );
+                if queued != Err(status::SHOULD_WAIT) {
+                    Err("a write refused for memory queued its message")
+                } else if side.call(nr::HANDLE_CLOSE, &[reg(carried)]).is_err() {
+                    Err("a write refused for memory took the handle it carried")
+                } else {
+                    Ok(())
+                }
+            }
+            Err(_) => Err("a write without memory answered something other than NO_MEMORY"),
+        };
+        for end in [inbox, sender] {
+            let _ = side.call(nr::HANDLE_CLOSE, &[reg(end)]);
+        }
+        outcome?;
+    }
+    if kept == 0 {
+        return Err("no write was refused for memory with its first allocations failing");
+    }
+    report.refusals += kept;
     Ok(())
 }

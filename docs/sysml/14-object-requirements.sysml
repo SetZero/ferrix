@@ -1079,13 +1079,19 @@ package FerrixObjectRequirements {
         }
         requirement <'L.object.92'> anUndeliveredBootstrapGoesBack : ItemLowLevel {
             attribute :>> statement = "Bootstrap::put_back shall hold again a
-                bootstrap that was taken and could not be placed in the table,
-                unless the process has ended since, when it shall hand it back to be
-                closed.";
+                bootstrap that was taken and could not be placed in the table.";
             attribute :>> criterion = "process_bootstrap into a full table is
                 refused NO_HANDLES and the next process_bootstrap, with room,
-                answers the handle given; after the process ends the object is
-                closed and its peer hears it.";
+                answers the handle given.";
+            attribute :>> parent = ("H.OBJ.6", "H.OBJ.7");
+            attribute :>> unit = "object::process::Bootstrap::put_back";
+        }
+        requirement <'L.object.104'> anUndeliveredBootstrapOfAnEndedProcessIsClosed : ItemLowLevel {
+            attribute :>> statement = "Bootstrap::put_back shall hand a bootstrap
+                that could not be placed back to be closed when the process has
+                ended since it was taken.";
+            attribute :>> criterion = "A bootstrap taken and not placed while its
+                process ends is closed, and its peer hears it.";
             attribute :>> parent = ("H.OBJ.6", "H.OBJ.7");
             attribute :>> unit = "object::process::Bootstrap::put_back";
         }

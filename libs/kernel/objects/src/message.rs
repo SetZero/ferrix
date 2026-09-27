@@ -114,6 +114,18 @@ impl<H> MessageQueue<H> {
         bytes <= self.limits.max_bytes && handles <= self.limits.max_handles
     }
 
+    /// Make room for one more message, so that the [`MessageQueue::push`]
+    /// after it cannot be refused for memory. Asked before anything is taken
+    /// from the sender, as [`MessageQueue::accepts`] is, so a message there
+    /// is no memory for costs the sender nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`SendError::NoMemory`].
+    pub fn reserve(&mut self) -> Result<(), SendError> {
+        ferrix_fallible::try_reserve_deque(&mut self.queue, 1).map_err(|_| SendError::NoMemory)
+    }
+
     /// Queue a message.
     ///
     /// # Errors
