@@ -795,6 +795,14 @@ otherwise; one a later decision replaced is deleted, and the history keeps it.
   honoured, as on Linux. Enforce W^X for programs (and walk user roots in the
   sweep), narrow the claim to the kernel's mappings with an assumption of use,
   or make it switchable. The certification session drafts whichever is chosen.
+* F-52: the Security Target names no Common Criteria version. A new
+  evaluation starts under CC:2022, whose Part 2 restructured families the ST
+  uses (FAU_STG among them). Name the version in §2.1, and the certification
+  session re-reads §5 and §8.4 against it.
+* Whether the Security Target claims FMT_SMF.1 (the management functions:
+  a handle duplicated with fewer rights, a job's limits set, a starter or the
+  audit handle given to pid 1) and FMT_MTD.1 (the job limits as TSF data).
+  SECURITY-TARGET.md §8.4 justifies their absence today (F-47).
 * The init design's open decisions, `docs/INIT.md` §14, 2 to 8: the unit
   syntax, hyprix leaving pid 1, `devmgr` under init, what init's death does,
   the names. Each has a draft answer the design assumes meanwhile; L11 to

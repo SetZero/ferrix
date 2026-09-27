@@ -379,6 +379,48 @@ sentence; and
 eleven build-time gates support `ADV_INT.2`'s well-structuredness in a way
 review notes cannot.
 
+### 8.4 SFR dependencies
+Each SFR's dependencies as CC Part 2 states them, and whether this ST meets
+them. Three are unmet, each by design.
+
+| SFR | Depends on | Met |
+|---|---|---|
+| FAU_GEN.1 | FPT_STM.1 | yes |
+| FAU_GEN.2 | FAU_GEN.1, FIA_UID.1 | FAU_GEN.1 yes; **FIA_UID.1 no** (1) |
+| FAU_SAR.1 | FAU_GEN.1 | yes |
+| FAU_SAR.2 | FAU_SAR.1 | yes |
+| FAU_STG.1 | FAU_GEN.1 | yes |
+| FAU_STG.4 | FAU_STG.1 | yes |
+| FDP_ACC.1 | FDP_ACF.1 | yes |
+| FDP_ACF.1 | FDP_ACC.1, FMT_MSA.3 | yes |
+| FDP_IFC.1 | FDP_IFF.1 | yes |
+| FDP_IFF.1 | FDP_IFC.1, FMT_MSA.3 | yes (3) |
+| FDP_RIP.2 | none | -- |
+| FMT_MSA.1 | FDP_ACC.1 or FDP_IFC.1, FMT_SMR.1, FMT_SMF.1 | FDP_ACC.1 yes; **FMT_SMR.1 no** (2); **FMT_SMF.1 no** (2) |
+| FMT_MSA.3 | FMT_MSA.1, FMT_SMR.1 | FMT_MSA.1 yes; **FMT_SMR.1 no** (2) |
+| FPT_FLS.1 | none | -- |
+| FPT_STM.1 | none | -- |
+| FPT_TDC.1 | none | -- |
+| FRU_RSA.1 | none | -- |
+
+1. **FIA_UID.1.** People are identified outside the TOE (OE.AUTH, A.AUTH,
+   §9.1). FAU_GEN.2 is refined to the TSF's own subjects, a process and its
+   job as the TSF attests them, and those need no identification function:
+   the TSF made them.
+2. **FMT_SMR.1 and FMT_SMF.1.** The TOE has no roles. Authority is a handle
+   and the rights it carries (FDP_ACF.1), so "who may manage an attribute" is
+   "who holds a handle with the right to", not a role an identified user
+   plays. The management functions FMT_SMF.1 would list exist all the same:
+   duplicating a handle with fewer rights (FMT_MSA.1), setting a job's
+   limits through its handle or its cgroup files (FRU_RSA.1's quotas, each
+   change recorded under FAU_GEN.1), and giving a starter or the audit handle
+   to pid 1. Claiming FMT_SMF.1 for them, and FMT_MTD.1 for the job limits
+   as TSF data, is the ST owner's choice (`docs/BACKLOG.md`); until then they
+   are the unmet dependency this note justifies.
+3. **FMT_MSA.3 for the flow policy.** FMT_MSA.3's restrictive default -- a
+   new process holds no handle it was not given -- is also the flow policy's:
+   a flow between two processes needs an object both hold a handle to.
+
 ---
 
 ## 9. Limitations — where this ST would not survive evaluation
