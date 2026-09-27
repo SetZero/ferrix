@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ferrix: a Rust operating system that runs rustc and builds itself</title>
-<meta name="description" content="Ferrix is an operating system written from scratch in Rust for x86-64, AArch64 and ARMv7-A. It runs unmodified Linux programs (rustc, cargo, git, curl, Chrome) on its own kernel, ring-3 drivers, btrfs, C library, shell and Wayland desktop. Built by a fleet of AI agents.">
+<title>Ferrix | Linux apps without Linux</title>
+<meta name="description" content="Ferrix is an experimental Rust OS that runs unmodified Linux programs on its own kernel. Disk, network, graphics and input drivers run as separate processes and can restart after a crash.">
 <link rel="canonical" href="https://setzero.github.io/ferrix/">
 <meta name="theme-color" content="#0d0f12" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#f7f5f2" media="(prefers-color-scheme: light)">
@@ -16,16 +16,16 @@
 
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Ferrix">
-<meta property="og:title" content="Ferrix: a Rust operating system that runs rustc and builds itself">
-<meta property="og:description" content="A from-scratch OS in Rust that runs unmodified Linux programs (rustc, cargo, git, Chrome) on its own kernel, drivers, btrfs and Wayland desktop. Built by a fleet of AI agents.">
+<meta property="og:title" content="Ferrix | Linux apps without Linux">
+<meta property="og:description" content="Unmodified Linux programs run on Ferrix's own Rust kernel. Its disk, network, graphics and input drivers run as separate processes and can restart after a crash.">
 <meta property="og:url" content="https://setzero.github.io/ferrix/">
 <meta property="og:image" content="https://setzero.github.io/ferrix/assets/social-preview.png">
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="640">
 <meta property="og:image:alt" content="Ferrix logo beside a serial log in which rustc runs and Ferrix builds its own image">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Ferrix: a Rust OS that runs rustc and builds itself">
-<meta name="twitter:description" content="From-scratch kernel, ring-3 drivers, btrfs, a C library, a zsh-compatible shell and a Wayland desktop, all in Rust. Built by a fleet of AI agents.">
+<meta name="twitter:title" content="Ferrix | Linux apps without Linux">
+<meta name="twitter:description" content="Unmodified Linux programs on a Rust OS with drivers outside the kernel. Chrome, rustc, git and curl run today.">
 <meta name="twitter:image" content="https://setzero.github.io/ferrix/assets/social-preview.png">
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -40,7 +40,7 @@
     {
       "@type": "SoftwareSourceCode",
       "name": "Ferrix",
-      "description": "An operating system written from scratch in Rust for x86-64, AArch64 and ARMv7-A that runs unmodified Linux programs, hosts rustc and builds its own image.",
+      "description": "An experimental operating system written in Rust for x86-64, AArch64 and ARMv7-A. The official rustc release runs on it, and it can build and boot its own x86-64 image.",
       "codeRepository": "https://github.com/SetZero/ferrix",
       "programmingLanguage": "Rust",
       "license": "https://opensource.org/licenses/MIT",
@@ -60,15 +60,13 @@
       "@type": "FAQPage",
       "mainEntity": [
         { "@type": "Question", "name": "Is Ferrix based on Linux?",
-          "acceptedAnswer": { "@type": "Answer", "text": "No. The kernel, drivers, file systems, C library, shell and compositor are written from scratch in Rust. Ferrix implements the Linux system-call ABI so that unmodified Linux programs run on it." } },
-        { "@type": "Question", "name": "Can Ferrix run real Linux programs?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Yes. The rust-lang.org release of rustc and cargo, glibc's dynamic loader, git, curl, btop, busybox and Google Chrome run on it unmodified." } },
-        { "@type": "Question", "name": "Was Ferrix written by AI?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Yes. Ferrix is written by a fleet of Claude sessions working in parallel under a human product owner, who decides scope and priorities. Every claim is checked by a gate that boots the system and must pass before a change lands." } },
-        { "@type": "Question", "name": "What hardware does Ferrix run on?",
-          "acceptedAnswer": { "@type": "Answer", "text": "QEMU on x86-64, AArch64 and ARMv7-A, with KVM, HVF or WHPX where the host allows; an STM32MP157D-DK1 board from its SD card; and a Google Pixel 7." } },
-        { "@type": "Question", "name": "What licence is Ferrix under?",
-          "acceptedAnswer": { "@type": "Answer", "text": "MIT." } }
+          "acceptedAnswer": { "@type": "Answer", "text": "No. The kernel, drivers, file systems, C library, shell and compositor are written from scratch in Rust. Ferrix implements the Linux system-call ABI, so unmodified Linux programs run on it." } },
+        { "@type": "Question", "name": "Who writes the code?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Claude sessions do, in separate worktrees. A human project owner sets priorities. The tests, working rules and reports of mistakes are in the repository." } },
+        { "@type": "Question", "name": "Can I use it every day?",
+          "acceptedAnswer": { "@type": "Answer", "text": "No. Ferrix is an experimental system. It runs a desktop, a browser and a compiler, but authentication, namespaces and seccomp are still being written." } },
+        { "@type": "Question", "name": "How can I help?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Try booting it and file an issue if something fails. You can follow releases on GitHub." } }
       ]
     }
   ]
@@ -83,9 +81,9 @@
       <img src="assets/logo-mark.svg" alt="" width="28" height="28"> Ferrix
     </a>
     <nav aria-label="Sections">
-      <a href="#proof">Proof</a>
-      <a href="#features">Features</a>
-      <a href="#built">How it's built</a>
+      <a href="#proof">Tests</a>
+      <a href="#features">What's inside</a>
+      <a href="#built">Who wrote it</a>
       <a href="#try">Try it</a>
       <a href="#faq">FAQ</a>
     </nav>
@@ -100,38 +98,37 @@
 <section class="hero">
   <div class="wrap hero-in">
     <div class="hero-copy">
-      <p class="eyebrow">A from-scratch operating system in Rust</p>
-      <h1>The OS that runs <code>rustc</code>&thinsp;&mdash; and builds&nbsp;itself.</h1>
-      <p class="lede">Ferrix has its own kernel, drivers, file systems, C library, shell and
-        Wayland desktop, all in Rust. It runs unmodified Linux programs on them: <code>rustc</code>,
-        <code>cargo</code>, <code>git</code>, <code>curl</code> and Google Chrome.
-        A fleet of AI agents wrote it.</p>
+      <p class="eyebrow">Ferrix &middot; an experimental Rust OS</p>
+      <h1>Linux apps without Linux.</h1>
+      <p class="lede">Ferrix runs unmodified Linux programs on its own Rust kernel. Disk, network,
+        graphics and input drivers run as separate processes, and Ferrix can restart them after a crash.
+        Chrome, <code>rustc</code>, <code>git</code> and <code>curl</code> work today.</p>
       <div class="ctas">
-        <a class="btn" href="https://github.com/SetZero/ferrix">Star on GitHub</a>
-        <a class="btn btn-ghost" href="#try">Boot it yourself &rarr;</a>
+        <a class="btn" href="https://github.com/SetZero/ferrix">View the source</a>
+        <a class="btn btn-ghost" href="#try">Build and boot it &rarr;</a>
       </div>
       <p class="arches">x86-64 &middot; AArch64 &middot; ARMv7-A &middot; MIT licensed</p>
     </div>
     <figure class="hero-shot">
       <img src="assets/desktop-hero.png" width="1920" height="1080"
            alt="The Ferrix desktop: the hyprix Wayland compositor tiling btop, a zinc terminal and Chrome on rust-lang.org">
-      <figcaption>A real capture: hyprix tiling btop, zinc and Chrome on Ferrix (x86-64, KVM). Every pixel comes from code in this repository or from an unmodified Linux program.</figcaption>
+      <figcaption>Ferrix running under KVM on x86-64, with btop, the zinc shell and Chrome open in its Wayland desktop.</figcaption>
     </figure>
   </div>
 </section>
 
 <section class="stats" aria-label="Ferrix in numbers">
   <div class="wrap stats-in">
-    <div><b>850k</b><span>lines of Rust, none vendored</span></div>
-    <div><b>99.8%</b><span>of the kernel is Rust; no assembly at boot</span></div>
-    <div><b>3</b><span>architectures in every boot test</span></div>
-    <div><b>12</b><span>days from first public commit to building itself</span></div>
+    <div><b>850k</b><span>lines of Rust outside vendored code</span></div>
+    <div><b>99.8%</b><span>of the kernel is Rust</span></div>
+    <div><b>3</b><span>architectures in the boot test</span></div>
+    <div><b>12</b><span>days from first public commit to building its own image</span></div>
   </div>
 </section>
 
 <section class="section gallery-sec" aria-label="Screenshots">
   <div class="wrap gallery">
-    <figure><img src="assets/terminal-omz.png" width="1920" height="1080" loading="lazy" alt="zinc with oh-my-zsh: uname, the ring-3 driver processes, svc, df and curl over HTTPS"><figcaption><b>zinc</b>, a zsh-compatible shell in Rust, running oh-my-zsh. The drivers are ordinary processes.</figcaption></figure>
+    <figure><img src="assets/terminal-omz.png" width="1920" height="1080" loading="lazy" alt="zinc with oh-my-zsh: uname, the ring-3 driver processes, svc, df and curl over HTTPS"><figcaption><b>zinc</b> running oh-my-zsh. The driver processes are visible in the terminal.</figcaption></figure>
     <figure><img src="assets/desktop-chrome.png" width="1920" height="1080" loading="lazy" alt="Chrome on Ferrix showing Wikipedia's article on Rust"><figcaption><b>Chrome</b>, unmodified, on ferrousli, Ferrix's own C library.</figcaption></figure>
     <figure><img src="assets/btop.png" width="1920" height="1080" loading="lazy" alt="btop monitoring Chrome, the compositor and the user-space drivers"><figcaption><b>btop</b> watching Chrome, the compositor and the drivers.</figcaption></figure>
   </div>
@@ -139,16 +136,16 @@
 
 <section id="proof" class="section">
   <div class="wrap">
-    <h2>Proof, not claims</h2>
-    <p class="sub">Every headline on this page is a gate: a command that boots Ferrix in QEMU
-      and fails unless the system does what it says. These lines are copied from the gates' serial logs.</p>
+    <h2>What the boot tests do</h2>
+    <p class="sub">These two commands boot Ferrix in QEMU. One checks that <code>rustc</code> can compile
+      and run a program. The other builds a Ferrix image inside Ferrix and boots that image.
+      The output below comes from their serial logs.</p>
     <div class="proof">
       <article>
         <h3><code>cargo xtask test-rustc</code></h3>
-        <p>Boots Ferrix with a btrfs volume holding the rust-lang.org release of <code>rustc</code>
-          and Debian's glibc. It compiles <code>hello.rs</code> through <code>cc</code>, <code>collect2</code> and
-          <code>rust-lld</code>: five programs nobody here wrote, four <code>execve</code>s deep, over some
-          350&nbsp;MiB of shared libraries mapped from disk. Then it runs the result.</p>
+        <p>The guest reads the rust-lang.org release of <code>rustc</code> and Debian's glibc from btrfs.
+          Compiling <code>hello.rs</code> calls <code>cc</code>, <code>collect2</code> and <code>rust-lld</code>,
+          with about 350&nbsp;MiB of shared libraries mapped from disk. The test then runs the program.</p>
         <pre class="term"><span class="ts">  11.41 |</span> FERRIX-BOOT-OK stages 1-12
 <span class="ts">  12.38 |</span> rustc 1.97.1 (8bab26f4f 2026-07-14)
 <span class="ts">  12.40 |</span> LLVM version: 22.1.6
@@ -157,9 +154,8 @@
       </article>
       <article>
         <h3><code>cargo xtask test-selfhost</code></h3>
-        <p>Gives Ferrix that toolchain, this repository and its crates on one btrfs volume.
-          Inside the guest it runs <code>cargo xtask build</code>, the same command you run on a Linux host.
-          Then it boots the image Ferrix built.</p>
+        <p>The guest gets the toolchain, this repository and its crates on a btrfs volume.
+          It runs <code>cargo xtask build</code> inside Ferrix, then boots the resulting image.</p>
         <pre class="term"><span class="ts">   5.43 |</span> FERRIX-BOOT-OK stages 1-12
 <span class="ts">  51.81 |</span>    Compiling ferrix-kernel v0.1.0 (/data/src/kernel)
 <span class="ts"> 106.99 |</span>   image /data/src/build/x86_64/ferrix.img
@@ -168,57 +164,55 @@
 <span class="hi">x86_64: Ferrix built its own image, and it booted</span></pre>
       </article>
     </div>
-    <p class="note">Every boot also checks itself. The memory map is compared with the loader's allocations.
-      The allocators are hammered and must give every frame back. Four processors increment one counter
-      and must reach exactly 100,000. Each check carries a negative control that must be seen to fail.</p>
+    <p class="note">The regular boot test checks the memory map against the loader's allocations,
+      exercises the allocators and checks that four processors can reach exactly 100,000 on a shared counter.
+      It also runs a failing case for each check, to make sure the check catches it.</p>
   </div>
 </section>
 
 <section id="features" class="section alt">
   <div class="wrap">
-    <h2>A whole system, not a kernel demo</h2>
+    <h2>What's in Ferrix</h2>
     <div class="grid">
       <article class="card">
         <h3>The kernel</h3>
-        <p>UEFI hand-off with no bootstrap assembly. Higher-half memory where no mapping is both writable and executable.
-          SMP with TLB shootdown, preemptive tasks under an EEVDF fair scheduler, and cgroups.</p>
+        <p>UEFI hands off to a Rust kernel without bootstrap assembly. It runs preemptive tasks on multiple
+          processors, uses an EEVDF scheduler and checks that memory is never both writable and executable.</p>
       </article>
       <article class="card">
         <h3>Linux programs, unchanged</h3>
-        <p>The Linux system-call ABI: threads, futexes, signals, <code>fork</code>/<code>execve</code>,
-          <code>epoll</code>, ptys and job control. Dynamic linking goes through glibc's own <code>ld-linux</code>.
-          32-bit x86 programs run too.</p>
+        <p>Ferrix implements the Linux system-call ABI used by threads, signals, <code>fork</code>,
+          <code>execve</code> and more. Programs can use glibc's dynamic loader. It also runs 32-bit x86 programs.</p>
       </article>
       <article class="card">
         <h3>Drivers in ring 3</h3>
-        <p>virtio-blk, -net, -gpu, -input and -console are user programs started by <code>devmgr</code>.
-          They sit behind an IOMMU (VT-d on x86-64, SMMUv3 on AArch64) and restart after a crash.</p>
+        <p><code>devmgr</code> starts the virtio disk, network, graphics, input and console drivers as
+          processes. An IOMMU limits their device access on x86-64 and AArch64. A crashed driver can restart.</p>
       </article>
       <article class="card">
         <h3>btrfs, read and write</h3>
-        <p><code>/</code> is a persistent btrfs volume, written with a log tree that <code>fsync</code> replays.
-          The host's <code>btrfs check</code> judges it, including after QEMU is killed mid-write, across 249 seeds.</p>
+        <p>The root filesystem is a persistent btrfs volume. A power-failure test kills QEMU during a write,
+          mounts the volume again and checks it with the host's <code>btrfs check</code>. It has run across 249 seeds.</p>
       </article>
       <article class="card">
         <h3>Networking</h3>
-        <p>TCP, UDP, IPv6, raw and packet sockets, and netlink. <code>curl</code> fetches over HTTPS,
-          <code>git</code> clones inside the guest, and SSH is served from it.</p>
+        <p>Inside Ferrix, <code>curl</code> can fetch over HTTPS and <code>git</code> can clone a repository.
+          The network stack includes TCP, UDP, IPv6 and netlink; Ferrix also serves SSH.</p>
       </article>
       <article class="card">
         <h3>A userland of its own</h3>
-        <p><b>ferrousli</b>, a C library in Rust that answers most of POSIX.1-2024.
-          <b>zinc</b>, a zsh-compatible shell that runs oh-my-zsh. An init with <code>svc</code>, and the uutils tools.</p>
+        <p><b>ferrousli</b> is Ferrix's C library, written in Rust. The <b>zinc</b> shell runs oh-my-zsh.
+          There is also an init and service manager, plus the uutils command-line tools.</p>
       </article>
       <article class="card">
         <h3>A desktop</h3>
-        <p><b>hyprix</b>, a Hyprland-shaped Wayland compositor written from scratch. It reads a real
-          <code>hyprland.conf</code>, tiles windows, composites on the GPU through virgl,
-          and runs Chrome with video and sound.</p>
+        <p><b>hyprix</b> is Ferrix's Wayland compositor. It reads <code>hyprland.conf</code>, tiles windows
+          and draws through virgl. Chrome can play video with sound on the desktop.</p>
       </article>
       <article class="card">
         <h3>Real hardware</h3>
-        <p>Boots an STM32MP157D-DK1 board from its SD card (Cortex-A7), and a Google Pixel 7 on all
-          eight cores. Under QEMU, <code>--accel auto</code> runs it on KVM, HVF or WHPX.</p>
+        <p>Ferrix has booted from the SD card of an STM32MP157D-DK1 board and on all eight cores of a
+          Pixel 7. Most of the tests run in QEMU, where <code>--accel auto</code> selects KVM, HVF or WHPX.</p>
       </article>
     </div>
   </div>
@@ -227,18 +221,17 @@
 <section id="built" class="section">
   <div class="wrap built">
     <div>
-      <h2>How it's built: a fleet of AI agents</h2>
-      <p>Ferrix is written by many Claude sessions working at once, each in its own git worktree.
-        A human product owner sets scope and priorities. One coordinator session orders the landings,
-        and a certification consultant reviews every change to the kernel core.</p>
-      <p>A change lands only when its gate passes, and every change to what the image holds boots the whole system on all three architectures first. There is a
-        written convention for every mistake that cost work. The
-        <a href="https://github.com/SetZero/ferrix/tree/main/docs/roadmap">roadmap</a>,
-        <a href="https://github.com/SetZero/ferrix/blob/main/docs/BACKLOG.md">backlog</a> and
-        <a href="https://github.com/SetZero/ferrix/blob/main/docs/CONVENTIONS.md">conventions</a> are all in
-        the repository, including the failures.</p>
-      <p>We think it is the most complete answer yet to the question <em>"how far can agents go on a
-        real systems project?"</em>, and we built it in the open so you can check.</p>
+      <h2>Who wrote it</h2>
+      <p>Claude sessions write the code in separate git worktrees. A human project owner decides what
+        to work on and in what order. A coordinator session manages the merges, and a certification
+        consultant reviews changes to the kernel core.</p>
+      <p>Changes have to pass their tests before they land. Changes to the boot image also run the boot
+        test on all three architectures. This process has had mistakes: one shared git index silently
+        reverted another session's work. The team wrote down a rule after that happened.</p>
+      <p>The <a href="https://github.com/SetZero/ferrix/tree/main/docs/roadmap">roadmap</a> shows what is finished,
+        the <a href="https://github.com/SetZero/ferrix/blob/main/docs/BACKLOG.md">backlog</a> tracks what is left,
+        and <a href="https://github.com/SetZero/ferrix/blob/main/docs/CONVENTIONS.md">the working rules</a>
+        include the incidents behind them.</p>
     </div>
     <ol class="timeline" aria-label="Milestones">
       <li><time datetime="2026-09-11">Sep 11</time> First public commit: boot, memory, traps</li>
@@ -255,7 +248,7 @@
 <section id="try" class="section alt">
   <div class="wrap">
     <h2>Try it</h2>
-    <p class="sub">You need Rust and QEMU. It runs on Linux, macOS and Windows hosts.</p>
+    <p class="sub">Install Rust and QEMU first. You can run these commands on Linux, macOS or Windows.</p>
     <pre class="term big"><span class="c"># clone and boot to a shell on the serial console</span>
 git clone https://github.com/SetZero/ferrix &amp;&amp; cd ferrix
 cargo xtask run --arch x86_64
@@ -266,7 +259,7 @@ cargo xtask run-compositor
 <span class="c"># ...with Chrome, rustc and cargo (fetch them first, see the README)</span>
 cargo xtask run-compositor --everything
 
-<span class="c"># every gate CI runs</span>
+<span class="c"># run the project checks</span>
 cargo xtask check</pre>
     <p class="note">Quit QEMU with <kbd>Ctrl-A</kbd> <kbd>x</kbd>. The
       <a href="https://github.com/SetZero/ferrix#getting-started">README</a> covers every flag, the
@@ -278,9 +271,9 @@ cargo xtask check</pre>
   <div class="wrap">
     <h2>Where it's going</h2>
     <div class="road">
-      <div><h3 class="done">Done</h3><p>Stages 0&ndash;12 on three architectures, <code>rustc</code> (16), display, input and the compositor (17&ndash;18), networking, dynamic linking.</p></div>
-      <div><h3 class="doing">In progress</h3><p>Namespaces and seccomp (13), authentication (15), XWayland and effects (19), full self-hosting (20).</p></div>
-      <div><h3>Next</h3><p>Real-time domains (14), bare metal with a GPU driver of its own (21), and Steam (22).</p></div>
+      <div><h3 class="done">Done</h3><p>The boot test covers stages 0&ndash;12 on three architectures. <code>rustc</code>, networking, dynamic linking and the Wayland compositor have their own tests.</p></div>
+      <div><h3 class="doing">In progress</h3><p>Namespaces and seccomp, authentication, XWayland, desktop effects and more of the self-hosting work.</p></div>
+      <div><h3>Next</h3><p>Real-time domains, a native GPU driver for bare metal, and the work needed to run Steam.</p></div>
     </div>
     <p class="note"><a href="https://github.com/SetZero/ferrix/tree/main/docs/roadmap">Read the full roadmap &rarr;</a></p>
   </div>
@@ -293,15 +286,14 @@ cargo xtask check</pre>
       <p>No. The kernel, drivers, file systems, C library, shell and compositor are written from scratch in Rust.
         Ferrix implements the Linux system-call ABI, so unmodified Linux programs run on it.
         <code>uname -s</code> says <code>Ferrix</code>.</p></details>
-    <details><summary>Was it really written by AI?</summary>
-      <p>Yes, by a fleet of Claude sessions under a human product owner. Nothing about it is hidden:
-        the process, the landing rules and the post-mortems are in <code>docs/</code>.</p></details>
+    <details><summary>Who writes the code?</summary>
+      <p>Claude sessions do, in separate worktrees. A human project owner sets priorities.
+        The tests, working rules and reports of mistakes are in the repository.</p></details>
     <details><summary>Can I use it every day?</summary>
-      <p>Not yet. It is a research and hobby system. It runs a desktop, a browser and a compiler,
-        but authentication, namespaces and seccomp are still being written.</p></details>
+      <p>No. Ferrix is an experimental system. It runs a desktop, a browser and a compiler, but
+        authentication, namespaces and seccomp are still being written.</p></details>
     <details><summary>How can I help?</summary>
-      <p>Boot it, break it and file what you find. Star the repository if you want to follow along.
-        Each release is announced on GitHub.</p></details>
+      <p>Try booting it and file an issue if something fails. You can follow releases on GitHub.</p></details>
   </div>
 </section>
 </main>

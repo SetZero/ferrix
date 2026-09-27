@@ -50,11 +50,17 @@ JetBrains Mono on the web for code and terminal output.
   than "massive", and "11 days" rather than "incredibly fast".
 - **Honest about limits.** It is not a daily driver. Say so before someone asks.
 
-Taglines, in order of preference:
+Website hero:
 
-1. *A Rust operating system that runs `rustc` — and builds itself.*
-2. *The OS that compiles Rust, written by AI agents in Rust.*
-3. *Twelve days from its first public commit to building its own image.*
+* Eyebrow: *Ferrix · an experimental Rust OS*
+* Headline: *Linux apps without Linux.*
+
+The first paragraph explains the headline: tested Linux programs run unchanged
+on Ferrix's own Rust kernel. Disk, network, graphics and input drivers are
+separate processes that can restart after a crash. Name working programs as
+evidence; explain the human project owner's role in the "Who wrote it"
+section. Do not imply that every Linux program works or that Ferrix is ready
+for daily use.
 
 Avoid "self-hosting" on its own: stage 20 (full self-hosting) is still in
 progress. "Builds its own image" is what the gate proves.
