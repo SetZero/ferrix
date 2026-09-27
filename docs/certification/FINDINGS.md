@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-14 findings are open and 33 are closed, of 47. F-42, a channel write refused for memory closing the handles it carried, was found by the F-10 coverage work and closed on 2026-09-27. F-13 was measured on 2026-09-27 and stays open: 37.5%, 32.6% and 28.7% of the item's object-code decisions, guards left out, took both ways on x86-64, AArch64 and ARMv7-A, and 50.2%, 48.6% and 48.8% counted by source line. F-26 closed on 2026-09-27 when every unsafe site in the item was traced to one of fourteen obligations, each tied to the requirement or hazard it serves, and the gate began refusing an untraced one. F-41, a page `mprotect` made writable after a `fork` writing into the other process's copy, was found and closed on 2026-09-27. F-10 was re-measured on 2026-09-27 over the checks written for it module by module: 89.5% of the certified item's statements on x86-64, 90.2% on AArch64 and 84.8% on ARMv7-A, with 77, 146 and 130 still needing a test and every other unreached statement argued or put down to absent hardware. F-38, F-39 and F-40 were found by other work on 2026-09-26 and recorded by the certification review that work now goes through, and all three closed the same day with their fixes: F-39, a native process any user made running as root; F-38, a device model writing a dead driver's frames after they were given back; and F-40, a delegated job lifting its own limits, closed by a job right of its own for setting limits. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
+15 findings are open and 33 are closed, of 48. F-43, O.WXN and ASR-2 claiming W^X for every mapping when a program may map its own pages writable and executable, was found on 2026-09-27 and waits on the customer's choice between enforcing it and narrowing the claim. F-42, a channel write refused for memory closing the handles it carried, was found by the F-10 coverage work and closed on 2026-09-27. F-13 was measured on 2026-09-27 and stays open: 37.5%, 32.6% and 28.7% of the item's object-code decisions, guards left out, took both ways on x86-64, AArch64 and ARMv7-A, and 50.2%, 48.6% and 48.8% counted by source line. F-26 closed on 2026-09-27 when every unsafe site in the item was traced to one of fourteen obligations, each tied to the requirement or hazard it serves, and the gate began refusing an untraced one. F-41, a page `mprotect` made writable after a `fork` writing into the other process's copy, was found and closed on 2026-09-27. F-10 was re-measured on 2026-09-27 over the checks written for it module by module: 89.5% of the certified item's statements on x86-64, 90.2% on AArch64 and 84.8% on ARMv7-A, with 77, 146 and 130 still needing a test and every other unreached statement argued or put down to absent hardware. F-38, F-39 and F-40 were found by other work on 2026-09-26 and recorded by the certification review that work now goes through, and all three closed the same day with their fixes: F-39, a native process any user made running as root; F-38, a device model writing a dead driver's frames after they were given back; and F-40, a delegated job lifting its own limits, closed by a job right of its own for setting limits. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 2 | 5 | 6 | 0 | 1 |
+| Open | 2 | 5 | 7 | 0 | 1 |
 
 Blocking: F-27 and F-28 — independent assessment and a quality management
 system. Both need an organisation; neither is a defect in the code.
@@ -1297,6 +1297,40 @@ failed in turn, and requires every `NO_MEMORY` to leave the handle in the
 sender's table and nothing queued. A host test in `libs/kernel/objects`
 holds `reserve` itself.
 
+
+### F-43 — O.WXN and ASR-2 claim every mapping is W^X; a program's own need not be
+**Moderate.** Open. Found 2026-09-27 by the W-8 memory slice, writing the
+low-level requirements for `user/space.rs`.
+
+O.WXN says *"Ensure no mapping is both writable and executable"*, ASR-2 *"No
+mapping shall be simultaneously writable and executable"*, and FM-2's detection
+says every boot sweeps all mappings. The kernel keeps that for its own
+mappings: every kernel mapping is W^X at map time, the stage 2 sweep walks the
+kernel's root and the identity root, and the sealed sweep holds the image's
+text read only through every alias (F-34). A program's mappings are another
+matter: `mmap` and `mprotect` pass `PROT_WRITE|PROT_EXEC` through
+(`syscall/memory.rs::protection`, `user/space.rs::user_page`), as Linux does,
+so a program may map a page it can both write and run -- what a JIT that does
+not flip permissions relies on. The sweep never walks a user root, so nothing
+checks this either way. What the kernel does refuse a program -- an executable
+device window, an executable native `vmo_map`, a writable vDSO data page -- is
+H.MEM.18, not yet verified by one check.
+
+So the claim is broader than the enforcement. It is not an escalation
+(T.ESCALATE is about ring 0 running attacker-chosen code, and a user RWX page
+runs at user privilege), but an assessor reading "no mapping" finds the
+counter-example in one `mmap` call.
+
+*Would close it* -- the customer's decision, one of:
+1. **Enforce W^X for programs too**: refuse `PROT_WRITE|PROT_EXEC` together
+   (EACCES, as SELinux's `execmem` denial does), extend the sweep to user
+   roots, and accept that a JIT which needs RWX pages must flip permissions.
+   Chrome's V8 and most modern JITs already do; some do not.
+2. **Narrow the claim**: O.WXN and ASR-2 say "no kernel mapping", FM-2's
+   detection says what the sweep walks, and an assumption of use tells the
+   integrator that programs may map RWX memory unless a policy forbids it.
+3. **Both, switchable**: a build or boot option, with the reference
+   configuration naming which one is certified.
 ### F-22 — no safety case
 **Closed at the element level 2026-09-25** by
 [SAFETY-MANUAL.md](SAFETY-MANUAL.md): the argument is §2 (assumed safety

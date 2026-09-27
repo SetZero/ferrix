@@ -788,6 +788,11 @@ otherwise; one a later decision replaced is deleted, and the history keeps it.
 
 ## Waiting on the customer
 
+* F-43 (`docs/certification/FINDINGS.md`): O.WXN and ASR-2 claim no mapping is
+  writable and executable, but a program's own `mmap(PROT_WRITE|PROT_EXEC)` is
+  honoured, as on Linux. Enforce W^X for programs (and walk user roots in the
+  sweep), narrow the claim to the kernel's mappings with an assumption of use,
+  or make it switchable. The certification session drafts whichever is chosen.
 * The init design's open decisions, `docs/INIT.md` §14, 2 to 8: the unit
   syntax, hyprix leaving pid 1, `devmgr` under init, what init's death does,
   the names. Each has a draft answer the design assumes meanwhile; L11 to
