@@ -221,12 +221,14 @@ fn pin_and_unpin(
     Ok(())
 }
 
-/// Stage 10: no IOMMU recorded a fault that no check provoked.
+/// Stage 10: no IOMMU recorded a fault that no check provoked. Answers
+/// whether any unit translates, for the audit record's end-of-boot check,
+/// which runs after this since reading the faults is what records them.
 ///
 /// Halts rather than returning, as every other stage's check does.
 ///
 /// Verifies: H.DMA.6
-pub(crate) fn check_dma_faults() {
+pub(crate) fn check_dma_faults() -> bool {
     let audit = super::audit_faults();
     println!(
         "  iommu    {} DMA faults recorded that no check provoked, {} of them unit events other \
@@ -235,7 +237,7 @@ pub(crate) fn check_dma_faults() {
         audit.stray, audit.stray_events, audit.units, audit.provoked,
     );
     if audit.stray == 0 {
-        return;
+        return audit.units > 0;
     }
     if let Some(fault) = audit.first {
         println!("  iommu    the first read here: {fault}");

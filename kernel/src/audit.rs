@@ -25,8 +25,12 @@
 //! # Whose budget
 //!
 //! A refusal is charged to its job's audit budget, [`Subject::budget`],
-//! which the caller takes from [`budget_of`]: the job at or above the
-//! refusing one that its members' own authority could not have made. A
+//! which each job carries from when it was made (`Job::audit_budget`): the
+//! job at or above the refusing one that its members' own authority could
+//! not have made. Its maker decides, since whether a directory is writable
+//! by someone other than root is cgroupfs's to know: an anonymous job takes
+//! its parent's budget, and so does a cgroup `mkdir` made in a directory
+//! someone other than root may write. A
 //! program that makes sub-jobs to refuse from -- anonymous ones, or named
 //! ones in a cgroup delegated to it -- charges them all to the one budget,
 //! so it writes at most [`PER_BUDGET_PER_SECOND`] refusals a second however
@@ -45,8 +49,22 @@
 //! Each ring's lock is an [`IrqSpinLock`]: an IOMMU fault is recorded from
 //! its interrupt handler, and an OOM kill can be decided with the
 //! allocator's locks held, so a lock that left interrupts on could be taken
-//! by a handler on the processor already holding it. Under it is a 64-byte
-//! copy and two counters; nothing blocks or allocates.
+//! by a handler on the processor already holding it.
+//!
+//! **They are leaf locks.** Nothing is taken under them and nothing
+//! allocates under them: a 64-byte copy and two counters. A limit's refusal
+//! is recorded from inside the heap's charge path with other locks held, so
+//! everything a record needs -- its subject among it -- is worked out
+//! before a ring's lock is taken, and without a lock of its own on that
+//! path ([`Subject::of`] is for callers that hold none).
+//!
+//! # The boot's own records
+//!
+//! The first [`BOOT_RECORDS`] system records -- the start-up record and the
+//! boot's configuration -- are also pinned where no other record can reach
+//! them ([`Which::Boot`]): the boot's own checks make processes, kill jobs
+//! and set limits by the hundred, and could otherwise wrap the high-value
+//! ring past them before any reader exists.
 //!
 //! # The boot's audit id
 //!
@@ -60,11 +78,15 @@ pub(crate) mod check;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 pub(crate) use ferrix_audit::{
-    BOOTED, CONFIG, Class, Config, Event, NO_UID, Outcome, Record, SUPPRESSED,
+    BOOTED, CGROUP_KILLED, CGROUP_LIMIT, CONFIG, CONTROL, Class, Config, DELEGATED, DEVMGR_STARTED,
+    DMA_FAULT, Event, JOB_KILLED, LIMIT, LIMIT_SET, NO_UID, OOM_KILLED, Outcome, POWER,
+    PROCESS_MADE, QUIESCED, RIGHTS, ROOT_SWITCHED, Record, STARTER_GIVEN, SUPPRESSED, WIDEN,
+    saturated, target,
 };
 use ferrix_sync::IrqSpinLock;
 
-use crate::object::job::Job;
+use crate::object::process::Process;
+use crate::object::quota::Resource;
 
 /// The high-value ring's length: 32 KiB of records.
 pub(crate) const HIGH_RECORDS: usize = 512;
@@ -83,6 +105,9 @@ const FAIR_SLOTS: usize = 32;
 
 /// A fairness window's length, in nanoseconds.
 const SECOND: u64 = 1_000_000_000;
+
+/// How many of the first system records are pinned ([`Which::Boot`]).
+pub(crate) const BOOT_RECORDS: usize = 8;
 
 /// Who a record is about: the process and its job, which the TSF attests,
 /// and beside them the uid the personality says, which it does not.
@@ -108,38 +133,20 @@ impl Subject {
         job: 0,
         budget: 0,
     };
-}
 
-/// The id of the job a refusal of `job`'s members is charged to in the
-/// refusal ring's fairness (`docs/certification/AUDIT.md` §3): `job` or the
-/// nearest job above it that its members' own authority could not have
-/// made.
-///
-/// Two kinds of job are theirs to make, and count as the job above them: an
-/// anonymous one, which anyone holding a job handle that allows it makes
-/// with `job_create`, and a named one in a directory someone other than
-/// root may write -- a delegated cgroup's, where the delegatee makes its own
-/// with `mkdir`. The walk stops at a named job made in a directory only root
-/// may write, which is a unit's own cgroup that init made, or at the tree's
-/// root. So a program that makes sub-jobs to refuse from shares its unit's
-/// one budget however many it makes.
-pub(crate) fn budget_of(job: &Job) -> u64 {
-    let mut at = job;
-    while let Some(parent) = at.parent() {
-        if at.name().is_some() && !others_may_make_in(parent) {
-            break;
+    /// `process`, as the TSF attests it: its pid, its job and that job's
+    /// budget. Reads the process's job under its membership lock, so it is
+    /// for callers that hold no lock; a record made with locks held works
+    /// its subject out without one.
+    pub(crate) fn of(process: &Process) -> Subject {
+        let job = process.job();
+        Subject {
+            pid: process.pid(),
+            uid: NO_UID,
+            job: job.id(),
+            budget: job.audit_budget(),
         }
-        at = parent;
     }
-    at.id()
-}
-
-/// Whether someone other than root may make a named job in `job`'s cgroupfs
-/// directory: the directory `chown`ed away from root, or its mode letting its
-/// group or everyone write.
-fn others_may_make_in(job: &Job) -> bool {
-    job.node(0)
-        .is_some_and(|directory| directory.uid != 0 || directory.permissions & 0o022 != 0)
 }
 
 /// What a record's decision was about: an object's kind and identity, a
@@ -184,13 +191,17 @@ fn record_of(
     record
 }
 
-/// Which of the two rings.
+/// Which of the two rings, or the pinned boot records.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Which {
     /// Everything but refusals.
     High,
     /// Refusals, and the *suppressed n* records that count those not kept.
     Refusals,
+    /// The first [`BOOT_RECORDS`] system records, numbered as the
+    /// high-value ring numbered them, which never wraps: a record past the
+    /// first eight is kept in the high-value ring alone.
+    Boot,
 }
 
 /// What one read took out of a ring.
@@ -261,6 +272,58 @@ impl<const N: usize> Ring<N> {
             copied += 1;
         }
         (copied, at, lost)
+    }
+}
+
+/// The high-value ring and the boot records pinned beside it, under one
+/// lock.
+struct High<const N: usize> {
+    ring: Ring<N>,
+    boot: [Record; BOOT_RECORDS],
+    pinned: usize,
+}
+
+impl<const N: usize> High<N> {
+    /// Nothing kept.
+    const fn new() -> Self {
+        High {
+            ring: Ring::new(),
+            boot: [Record::EMPTY; BOOT_RECORDS],
+            pinned: 0,
+        }
+    }
+
+    /// Keep `record` in the ring, and a system record among the first
+    /// [`BOOT_RECORDS`] pinned as well, with the number the ring gave it.
+    fn put(&mut self, record: Record) {
+        let number = self.ring.next;
+        self.ring.put(record);
+        if record.class == Class::System as u16
+            && let Some(slot) = self.boot.get_mut(self.pinned)
+        {
+            *slot = Record {
+                sequence: number,
+                ..record
+            };
+            self.pinned += 1;
+        }
+    }
+
+    /// Copy the pinned records from number `from` on into `out`: those the
+    /// ring numbered `from` or later, in order. Nothing is lost from them.
+    fn read_boot(&self, from: u64, out: &mut [Record]) -> (usize, u64, u64) {
+        let mut copied = 0;
+        let mut next = from;
+        let pinned = self.boot.iter().take(self.pinned);
+        for (slot, record) in out
+            .iter_mut()
+            .zip(pinned.filter(|record| record.sequence >= from))
+        {
+            *slot = *record;
+            next = record.sequence + 1;
+            copied += 1;
+        }
+        (copied, next, 0)
     }
 }
 
@@ -413,7 +476,7 @@ impl<const N: usize> Refusals<N> {
 /// An audit store: the two rings and the boot's id. The kernel's is
 /// [`STORE`]; the boot check drives small ones of its own.
 pub(crate) struct Store<const H: usize, const R: usize> {
-    high: IrqSpinLock<Ring<H>, crate::arch::Irq>,
+    high: IrqSpinLock<High<H>, crate::arch::Irq>,
     refusals: IrqSpinLock<Refusals<R>, crate::arch::Irq>,
     /// The audit id's two halves, set once by [`Store::start`].
     id: [AtomicU64; 2],
@@ -432,7 +495,7 @@ impl<const H: usize, const R: usize> Store<H, R> {
     pub(crate) const fn new() -> Self {
         let () = Self::START_FIELDS;
         Store {
-            high: IrqSpinLock::new(Ring::new()),
+            high: IrqSpinLock::new(High::new()),
             refusals: IrqSpinLock::new(Refusals::new()),
             id: [AtomicU64::new(0), AtomicU64::new(0)],
             started: AtomicBool::new(false),
@@ -490,7 +553,8 @@ impl<const H: usize, const R: usize> Store<H, R> {
     /// so their counts are there to read.
     pub(crate) fn read_at(&self, now: u64, which: Which, from: u64, out: &mut [Record]) -> Read {
         let (copied, next, lost) = match which {
-            Which::High => self.high.lock().read(from, out),
+            Which::High => self.high.lock().ring.read(from, out),
+            Which::Boot => self.high.lock().read_boot(from, out),
             Which::Refusals => {
                 let mut refusals = self.refusals.lock();
                 refusals.close_ended(now);
@@ -545,6 +609,99 @@ pub(crate) fn config(key: Config, value: u32, more: u32) {
         Subject::KERNEL,
         Target::NONE,
         [key as u32, value, more],
+    );
+}
+
+/// A resource's number in a record (`ferrix_audit::resource`).
+pub(crate) fn resource_number(resource: Resource) -> u64 {
+    match resource {
+        Resource::Memory => ferrix_audit::resource::MEMORY,
+        Resource::Objects => ferrix_audit::resource::OBJECTS,
+        Resource::Tasks => ferrix_audit::resource::TASKS,
+        Resource::Kernel => ferrix_audit::resource::KERNEL,
+    }
+}
+
+/// Record a charge to `job`, whose budget is `budget`, that the limit at
+/// quota slot `at` refused: from `object::quota::charge`, which can run
+/// inside the heap, so the subject is the job as its slot names it, and no
+/// process is looked up.
+pub(crate) fn limit_refused(
+    job: u64,
+    budget: u64,
+    resource: Resource,
+    amount: u64,
+    limit: u64,
+    at: u32,
+) {
+    let subject = Subject {
+        pid: 0,
+        uid: NO_UID,
+        job,
+        budget,
+    };
+    let target = Target {
+        kind: target::RESOURCE,
+        id: resource_number(resource),
+    };
+    record(
+        LIMIT,
+        Outcome::Refused,
+        0,
+        subject,
+        target,
+        [saturated(amount), saturated(limit), at],
+    );
+}
+
+/// Record `subject` setting `job`'s limit on resource number `resource` to
+/// `limit`, as `event` says: through its handle ([`LIMIT_SET`]) or its
+/// cgroup's file ([`CGROUP_LIMIT`]).
+pub(crate) fn limit_set(event: Event, subject: Subject, job: u64, resource: u64, limit: u64) {
+    let target = Target {
+        kind: target::RESOURCE,
+        id: resource,
+    };
+    record(
+        event,
+        Outcome::Done,
+        0,
+        subject,
+        target,
+        [job as u32, (job >> 32) as u32, saturated(limit)],
+    );
+}
+
+/// Record `subject` ending what `target` names, as `event` says.
+pub(crate) fn ended(event: Event, subject: Subject, target: Target, detail: [u32; 3]) {
+    record(event, Outcome::Done, 0, subject, target, detail);
+}
+
+/// Record the scoped OOM kill of `pid`, for the job `limited` whose memory
+/// limit asked, with `resident` pages: the kernel decided it, so the kernel
+/// is the subject, and the victim and the job are what it names.
+pub(crate) fn oom_killed(pid: u32, limited: u64, resident: u64) {
+    ended(
+        OOM_KILLED,
+        Subject::KERNEL,
+        Target {
+            kind: target::PROCESS,
+            id: u64::from(pid),
+        },
+        [limited as u32, (limited >> 32) as u32, saturated(resident)],
+    );
+}
+
+/// Record `subject` asking for power action `action` (`ferrix_audit::power`),
+/// just before it is taken.
+pub(crate) fn power(subject: Subject, action: u32) {
+    record(
+        POWER,
+        Outcome::Done,
+        0,
+        subject,
+        Target::NONE,
+        [action, 0, 0],
     );
 }
 

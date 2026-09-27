@@ -372,7 +372,9 @@ fn say_booted() {
         // Last before the marker, so every driver the boot starts has run: a
         // DMA fault its unit recorded and nothing provoked fails the boot
         // here rather than sitting unread in the unit's record.
-        iommu::check_dma_faults();
+        let translating = iommu::check_dma_faults();
+        // And after it, since reading the faults is what records them.
+        check_audit_booted(translating);
         println!("{SUCCESS_MARKER} stages 1-12");
     } else {
         println!(
@@ -1865,6 +1867,18 @@ fn bring_up_processors(view: &BootView<'_>) -> &'static smp::Topology {
 /// Halts rather than returning, for the reason `bring_up_processors` does:
 /// "stage 5 failed" would say nothing about which of four checks, on which of
 /// a thousand threads, did.
+/// The audit record at the end of boot: every decision the boot's own
+/// checks made at a recording site is in it (`audit::check::booted`).
+fn check_audit_booted(translating: bool) {
+    match audit::check::booted(&audit::check::Booted { translating }) {
+        Ok(found) => println!(
+            "  audit    {found} kinds of decision the boot's checks made are recorded, each with \
+             its outcome and the subject that decided it; the boot recorded among its own records"
+        ),
+        Err(problem) => fatal!(catalog::AUDIT_STORE, "audit self-check failed: {problem}"),
+    }
+}
+
 fn start_scheduler(cpus: &'static smp::Topology) {
     if let Err(problem) = sched::init(cpus) {
         fatal!(

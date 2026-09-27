@@ -613,6 +613,13 @@ pub(crate) fn sys_reboot(
         command::POWER_OFF | command::HALT | command::RESTART | command::RESTART2
     ) {
         crate::power::sync_disks();
+        let action = match cmd {
+            command::POWER_OFF => ferrix_audit::power::OFF,
+            command::HALT => ferrix_audit::power::HALT,
+            _ => ferrix_audit::power::RESTART,
+        };
+        let caller = crate::object::process::Host::core(process);
+        crate::audit::power(crate::audit::Subject::of(caller), action);
     }
     match cmd {
         command::CAD_ON | command::CAD_OFF => Ok(0),

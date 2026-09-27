@@ -144,6 +144,11 @@ struct Slot {
     load: AtomicI64,
     /// What it adds to its parent's `load` while it is busy.
     contributed: AtomicI64,
+    /// The job it is the quota of, and that job's audit budget: what a
+    /// refused charge is recorded against (`audit`), read with no lock, as
+    /// a refusal can come from inside the heap. 0 until the job is made.
+    job: AtomicU64,
+    budget: AtomicU64,
 }
 
 impl Slot {
@@ -158,6 +163,8 @@ impl Slot {
             weight: AtomicU32::new(DEFAULT_WEIGHT),
             load: AtomicI64::new(0),
             contributed: AtomicI64::new(0),
+            job: AtomicU64::new(0),
+            budget: AtomicU64::new(0),
         }
     }
 
@@ -242,6 +249,8 @@ fn claim(parent: u32) -> Result<u32, AllocError> {
     }
     taken.weight.store(DEFAULT_WEIGHT, Ordering::Relaxed);
     taken.load.store(0, Ordering::Relaxed);
+    taken.job.store(0, Ordering::Relaxed);
+    taken.budget.store(0, Ordering::Relaxed);
     taken.contributed.store(0, Ordering::Relaxed);
     taken.parent.store(parent, Ordering::Relaxed);
     if parent != NONE {
@@ -324,11 +333,26 @@ pub(crate) fn charge(index: u32, resource: Resource, amount: u64) -> Result<(), 
                 let _ = refused.fetch_add(1, Ordering::Relaxed);
             }
             uncharge_below(index, at, resource, amount);
+            record_refused(index, at, resource, amount, limit);
             return Err(Exceeded);
         }
         at = slot.parent.load(Ordering::Acquire);
     }
     Ok(())
+}
+
+/// The audit record of a charge to `index` that the limit at `at` refused
+/// (`audit::LIMIT`): against the job whose slot `index` is, by the id and
+/// budget the slot keeps, since the running process is not to be found
+/// without a lock from inside the heap.
+fn record_refused(index: u32, at: u32, resource: Resource, amount: u64, limit: u64) {
+    let (job, budget) = slot(index).map_or((0, 0), |slot| {
+        (
+            slot.job.load(Ordering::Acquire),
+            slot.budget.load(Ordering::Acquire),
+        )
+    });
+    crate::audit::limit_refused(job, budget, resource, amount, limit, at);
 }
 
 /// The nearest slot from `index` up that a charge of `amount` of `resource`
@@ -575,6 +599,15 @@ impl Quota {
     /// Its slot's index.
     pub(crate) fn index(&self) -> u32 {
         self.index
+    }
+
+    /// Say which job it is the quota of, and that job's audit budget, for
+    /// the record of a charge it refuses.
+    pub(crate) fn identify(&self, job: u64, budget: u64) {
+        if let Some(slot) = slot(self.index) {
+            slot.job.store(job, Ordering::Release);
+            slot.budget.store(budget, Ordering::Release);
+        }
     }
 
     /// Set its limit on `resource`. A limit below its use refuses every

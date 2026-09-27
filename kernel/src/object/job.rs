@@ -183,6 +183,25 @@ pub(crate) struct Job {
     /// program's `job_create` or `mkdir` counts against its own job's object
     /// limit, not the new job's. Held for its drop, which uncharges it.
     charge: Charge,
+    /// The job a refusal of its members is charged to in the audit record's
+    /// fairness (`audit`, `docs/certification/AUDIT.md` §3), fixed when it
+    /// is made: its own id, or its parent's budget when its maker's own
+    /// authority could have made it ([`Budget`]).
+    audit_budget: u64,
+}
+
+/// Whose audit budget a new job's refusals are charged to: decided by
+/// whoever makes it, since whether a directory is writable by someone other
+/// than root is cgroupfs's to know, not the core's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Budget {
+    /// Its own: a job only root could have made, such as a unit's cgroup
+    /// init made in a directory only root may write.
+    Own,
+    /// Its parent's: a job its members' own authority could have made -- an
+    /// anonymous one `job_create` made, or a named one in a directory
+    /// someone other than root may write, a delegatee's `mkdir`.
+    Parents,
 }
 
 /// Who owns one node of a job's cgroupfs directory, and its mode: what
@@ -353,24 +372,34 @@ impl Job {
     /// [`AllocError`].
     pub(crate) fn new_root() -> Result<Arc<Job>, AllocError> {
         let quota = Quota::new(None)?;
-        fallible::try_arc(Job::bare(None, None, Some(quota))?)
+        fallible::try_arc(Job::bare(None, None, Some(quota), Budget::Own)?)
     }
 
     /// The tree's root: a job with no parent and no quota, since nothing is
     /// charged at the top of the tree every process is in.
     fn new_tree_root() -> Result<Arc<Job>, AllocError> {
-        fallible::try_arc(Job::bare(None, None, None)?)
+        fallible::try_arc(Job::bare(None, None, None, Budget::Own)?)
     }
 
-    /// A job inside `parent`, or none, not yet listed anywhere.
+    /// A job inside `parent`, or none, not yet listed anywhere, whose audit
+    /// budget is its own or its parent's as `budget` says.
     fn bare(
         parent: Option<Arc<Job>>,
         name: Option<Box<str>>,
         quota: Option<Quota>,
+        budget: Budget,
     ) -> Result<Job, AllocError> {
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let audit_budget = match (&parent, budget) {
+            (Some(parent), Budget::Parents) => parent.audit_budget,
+            _ => id,
+        };
+        if let Some(quota) = &quota {
+            quota.identify(id, audit_budget);
+        }
         Ok(Job {
             parent,
-            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            id,
             name,
             state: SpinLock::new(Members::default()),
             waiters: WaitQueue::new(),
@@ -381,25 +410,31 @@ impl Job {
             nodes: SpinLock::new(Vec::new()),
             quota,
             charge: Charge::none(Resource::Objects),
+            audit_budget,
         })
     }
 
     /// A job inside this one, with a quota inside this one's.
-    fn bare_child(self: &Arc<Job>, name: Option<Box<str>>) -> Result<Arc<Job>, AllocError> {
+    fn bare_child(
+        self: &Arc<Job>,
+        name: Option<Box<str>>,
+        budget: Budget,
+    ) -> Result<Arc<Job>, AllocError> {
         let charge = Charge::running(Resource::Objects, 1).map_err(|_| AllocError)?;
         let quota = Quota::new(self.quota.as_ref())?;
-        let mut child = Job::bare(Some(Arc::clone(self)), name, Some(quota))?;
+        let mut child = Job::bare(Some(Arc::clone(self)), name, Some(quota), budget)?;
         child.charge = charge;
         fallible::try_arc(child)
     }
 
-    /// A new anonymous job inside this one.
+    /// A new anonymous job inside this one, charged to this one's audit
+    /// budget: anyone holding a job handle that allows it can make one.
     ///
     /// # Errors
     ///
     /// [`JobError::Killed`], [`JobError::NoMemory`].
     pub(crate) fn new_child(self: &Arc<Job>) -> Result<Arc<Job>, JobError> {
-        let child = self.bare_child(None)?;
+        let child = self.bare_child(None, Budget::Parents)?;
         let mut members = self.state.lock();
         if members.killed {
             return Err(JobError::Killed);
@@ -412,7 +447,7 @@ impl Job {
     }
 
     /// A new job inside this one called `name`, which this one holds until
-    /// the name is removed.
+    /// the name is removed, with the audit budget its maker says.
     ///
     /// # Errors
     ///
@@ -420,10 +455,14 @@ impl Job {
     /// [`JobError::Exists`] if a named child already has that name, or
     /// [`JobError::Limited`] if a limit at or above it allows no further job,
     /// or [`JobError::NoMemory`].
-    pub(crate) fn new_named_child(self: &Arc<Job>, name: &str) -> Result<Arc<Job>, JobError> {
+    pub(crate) fn new_named_child(
+        self: &Arc<Job>,
+        name: &str,
+        budget: Budget,
+    ) -> Result<Arc<Job>, JobError> {
         self.room_for_a_child()?;
         let name_held = fallible::try_boxed_str(name)?;
-        let child = self.bare_child(Some(name_held))?;
+        let child = self.bare_child(Some(name_held), budget)?;
         let mut members = self.state.lock();
         if members.killed {
             return Err(JobError::Killed);
@@ -492,6 +531,11 @@ impl Job {
     /// The job it is inside, unless it is a root.
     pub(crate) fn parent(&self) -> Option<&Arc<Job>> {
         self.parent.as_ref()
+    }
+
+    /// The job its members' refusals are charged to in the audit record.
+    pub(crate) fn audit_budget(&self) -> u64 {
+        self.audit_budget
     }
 
     /// Whether `rmdir` has taken it out of its parent.

@@ -16,10 +16,13 @@
 //! * **the two rings**: a refusal goes to the refusal ring and every one of
 //!   the five other classes to the high-value ring, so a flood of refusals
 //!   leaves every grant readable;
-//! * **budgets**: on a job tree of the check's own, the jobs a unit's
-//!   program can make itself -- anonymous ones, and named ones in a cgroup
-//!   delegated to it -- are charged to the unit's budget, and a job root
-//!   made is its own;
+//! * **pinned**: the first eight system records are still readable after
+//!   the high-value ring has wrapped past them, numbered as it numbered
+//!   them, and a ninth is kept in the ring alone;
+//! * **budgets**: on a job tree of the check's own, each job keeps the
+//!   budget its maker gave it -- an anonymous job and one inside that take
+//!   their unit's, a delegatee's cgroup its delegated unit's, and a cgroup
+//!   root made is its own;
 //! * **fairness**: a unit whose program refuses from its job and from two
 //!   levels of sub-jobs it made has the limit kept between all three, not
 //!   per job, and the rest counted in one *suppressed n* record once the
@@ -29,16 +32,29 @@
 //!
 //! On the kernel's store, that bring-up started it with the id it drew, and
 //! recorded the boot's configuration as bring-up read it.
+//!
+//! And at the end of boot ([`booted`]), that each decision the boot's own
+//! checks made at a recording site is in the record: a rights refusal and a
+//! widening refused, a limit's refusal, a native process made, a job given
+//! for a cgroup, a device's control channel given, a job killed, a cgroup
+//! killed, an OOM kill, a device quiesced, a limit set through a job's
+//! handle and through a cgroup's file and, where an IOMMU
+//! translates, a DMA fault -- each with the outcome its class says, and the
+//! subject that decided it: the calling process where a program asked, the
+//! kernel for the OOM kill, the quiesce and the fault, which no task that
+//! happened to be running may be blamed for.
 
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
 use super::{
-    BOOTED, CONFIG, Class, Config, Event, NO_UID, Outcome, PER_BUDGET_PER_SECOND, Read, Record,
-    SECOND, SUPPRESSED, Store, Subject, Target, Which,
+    BOOT_RECORDS, BOOTED, CGROUP_KILLED, CGROUP_LIMIT, CONFIG, CONTROL, Class, Config, DELEGATED,
+    DMA_FAULT, Event, JOB_KILLED, LIMIT, LIMIT_SET, NO_UID, OOM_KILLED, Outcome,
+    PER_BUDGET_PER_SECOND, PROCESS_MADE, QUIESCED, RIGHTS, Read, Record, SECOND, SUPPRESSED, Store,
+    Subject, Target, WIDEN, Which,
 };
-use crate::object::job::{Job, NodeAttributes};
+use crate::object::job::{Budget, Job};
 
 /// A small store: four high-value records, a hundred and fifty refusals --
 /// room for more than the fairness limit, so the limit and not the ring is
@@ -49,6 +65,7 @@ static SMALL: Small = Store::new();
 static FAIR: Small = Store::new();
 static CROWDED: Small = Store::new();
 static ROUTED: Store<8, 8> = Store::new();
+static PINNED: Store<4, 4> = Store::new();
 
 /// The id the check's stores start with.
 const CHECK_ID: u128 = 0x0123_4567_89AB_CDEF_FEDC_BA98_7654_3210;
@@ -98,8 +115,8 @@ struct Tree {
     /// A job the unit's program made, and one it made inside that.
     made: Arc<Job>,
     made_inside: Arc<Job>,
-    /// A second unit, its directory delegated to uid 1000, and a cgroup its
-    /// program made in it.
+    /// A second unit, delegated to its program, and a cgroup the program
+    /// made in it, which cgroupfs gives its parent's budget.
     delegated: Arc<Job>,
     delegated_child: Arc<Job>,
     /// A cgroup made inside the first unit's directory, which only root may
@@ -118,7 +135,7 @@ fn refuse<const H: usize, const R: usize>(store: &Store<H, R>, now: u64, job: &J
             pid: 7,
             uid: NO_UID,
             job: job.id(),
-            budget: super::budget_of(job),
+            budget: job.audit_budget(),
         },
         Target {
             kind: 3,
@@ -182,6 +199,7 @@ fn read<const H: usize, const R: usize>(
 /// The first property that did not hold.
 pub(crate) fn run(expected: &Expected) -> Result<Report, &'static str> {
     let (kept, lost) = start_and_wrap()?;
+    pinned()?;
     routing()?;
     let tree = tree()?;
     let budgets = budgets(&tree)?;
@@ -249,6 +267,49 @@ fn start_and_wrap() -> Result<(usize, u64), &'static str> {
     Ok((read_all.copied, read_all.lost))
 }
 
+/// Nine system records and a grant in a ring of four, on [`PINNED`]: the
+/// first eight system records stay readable as the boot records, numbered
+/// as the ring numbered them, the ninth and the grant do not join them, and
+/// the ring itself has moved on.
+fn pinned() -> Result<(), &'static str> {
+    let _ = PINNED.start(0, CHECK_ID);
+    let system = Event::new(Class::System, 7);
+    for at in 1..=9_u64 {
+        let event = if at == 4 { GRANT } else { system };
+        PINNED.record_at(
+            at,
+            event,
+            Outcome::Done,
+            0,
+            Subject::KERNEL,
+            Target::NONE,
+            [at as u32, 0, 0],
+        );
+    }
+    let (boot, out) = read(&PINNED, 10, Which::Boot, 0, 16);
+    let kept_in_order = out
+        .iter()
+        .map(|record| record.sequence)
+        .eq([0, 1, 2, 3, 5, 6, 7, 8]);
+    let started = out
+        .first()
+        .is_some_and(|record| record.start_fields().is_some());
+    if boot.copied != BOOT_RECORDS || !kept_in_order || !started {
+        return Err(
+            "the first eight system records were not kept apart, numbered as the ring numbered them",
+        );
+    }
+    let (ring, _) = read(&PINNED, 10, Which::High, 0, 8);
+    if ring.lost == 0 {
+        return Err("the pinned check's ring did not wrap, so it proved nothing");
+    }
+    let (later, _) = read(&PINNED, 10, Which::Boot, 6, 16);
+    if later.copied != 3 || later.next != 9 {
+        return Err("a read of the boot records from a number did not resume there");
+    }
+    Ok(())
+}
+
 /// One event of every class, on [`ROUTED`]: each refusal in the refusal
 /// ring, each of the other five in the high-value ring, in the order made.
 fn routing() -> Result<(), &'static str> {
@@ -287,26 +348,26 @@ fn routing() -> Result<(), &'static str> {
 }
 
 /// A job tree of the check's own: a root, a unit in it, a job the unit's
-/// program made and one inside that; a second unit whose directory is
-/// delegated to uid 1000, and a cgroup made in it; and a cgroup root made
+/// program made and one inside that; a second unit and a cgroup made in it
+/// as cgroupfs makes one in a delegated directory; and a cgroup root made
 /// inside the first unit.
 fn tree() -> Result<Tree, &'static str> {
     let failed = "the check's job tree could not be made";
     let root = Job::new_root().map_err(|_| failed)?;
-    let unit = root.new_named_child("unit.service").map_err(|_| failed)?;
+    let unit = root
+        .new_named_child("unit.service", Budget::Own)
+        .map_err(|_| failed)?;
     let made = unit.new_child().map_err(|_| failed)?;
     let made_inside = made.new_child().map_err(|_| failed)?;
     let delegated = root
-        .new_named_child("delegated.service")
+        .new_named_child("delegated.service", Budget::Own)
         .map_err(|_| failed)?;
-    let chowned = NodeAttributes {
-        uid: 1000,
-        gid: 1000,
-        permissions: 0o755,
-    };
-    delegated.set_node(0, chowned).map_err(|_| failed)?;
-    let delegated_child = delegated.new_named_child("worker").map_err(|_| failed)?;
-    let rooted = unit.new_named_child("root-made").map_err(|_| failed)?;
+    let delegated_child = delegated
+        .new_named_child("worker", Budget::Parents)
+        .map_err(|_| failed)?;
+    let rooted = unit
+        .new_named_child("root-made", Budget::Own)
+        .map_err(|_| failed)?;
     Ok(Tree {
         _root: root,
         unit,
@@ -318,7 +379,8 @@ fn tree() -> Result<Tree, &'static str> {
     })
 }
 
-/// Each job's budget is what [`super::budget_of`] promises.
+/// Each job kept the budget its maker gave it, through two levels of
+/// anonymous jobs.
 fn budgets(tree: &Tree) -> Result<usize, &'static str> {
     let wants = [
         (&tree.unit, &tree.unit),
@@ -329,7 +391,7 @@ fn budgets(tree: &Tree) -> Result<usize, &'static str> {
         (&tree.rooted, &tree.rooted),
     ];
     for (job, budget) in wants {
-        if super::budget_of(job) != budget.id() {
+        if job.audit_budget() != budget.id() {
             return Err(
                 "a job's refusals are not charged to the budget its maker's authority sets",
             );
@@ -414,8 +476,8 @@ fn crowded() -> Result<(), &'static str> {
 /// The kernel's store: started, with its id, and the configuration bring-up
 /// read.
 fn kernel_store(expected: &Expected) -> Result<usize, &'static str> {
-    let mut out = vec![Record::EMPTY; 16];
-    let read = super::read(Which::High, 0, &mut out);
+    let mut out = vec![Record::EMPTY; BOOT_RECORDS];
+    let read = super::read(Which::Boot, 0, &mut out);
     out.truncate(read.copied);
     if read.id == 0 {
         return Err("the kernel's audit store was not started, or its id is zero");
@@ -446,4 +508,146 @@ fn kernel_store(expected: &Expected) -> Result<usize, &'static str> {
         return Err("the boot was recorded as brought up before it was");
     }
     Ok(wants.len())
+}
+
+/// Who decided an event the end-of-boot check requires.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Decider {
+    /// A process asked, and the record names it.
+    Process,
+    /// The kernel decided for itself: pid 0.
+    Kernel,
+    /// Either, as the check that provoked it ran: a limit's refusal is
+    /// recorded against the job its slot names, with no pid.
+    Job,
+}
+
+/// Each event the boot's own checks provoke at a recording site, who
+/// decides it, and what the check says when the record lacks it.
+const PROVOKED: [(Event, Decider, &str); 12] = [
+    (
+        RIGHTS,
+        Decider::Process,
+        "a native call refused for its handle's rights left no record",
+    ),
+    (
+        WIDEN,
+        Decider::Process,
+        "a handle's rights refused a widening left no record",
+    ),
+    (
+        LIMIT,
+        Decider::Job,
+        "a charge a limit refused left no record",
+    ),
+    (
+        PROCESS_MADE,
+        Decider::Process,
+        "a native process made left no record",
+    ),
+    (
+        DELEGATED,
+        Decider::Process,
+        "a job given for a cgroup left no record",
+    ),
+    (
+        CONTROL,
+        Decider::Process,
+        "a device's control channel given left no record",
+    ),
+    (JOB_KILLED, Decider::Process, "a job killed left no record"),
+    (
+        CGROUP_KILLED,
+        Decider::Kernel,
+        "a cgroup killed left no record",
+    ),
+    (OOM_KILLED, Decider::Kernel, "an OOM kill left no record"),
+    (
+        QUIESCED,
+        Decider::Kernel,
+        "a device quiesced left no record",
+    ),
+    (
+        LIMIT_SET,
+        Decider::Process,
+        "a limit set through a job's handle left no record",
+    ),
+    (
+        CGROUP_LIMIT,
+        Decider::Kernel,
+        "a cgroup's limit file written left no record",
+    ),
+];
+
+/// What the boot was, for the end-of-boot check.
+#[derive(Debug)]
+pub(crate) struct Booted {
+    /// Whether an IOMMU translates, so that its out-of-domain probe made a
+    /// fault for the record.
+    pub(crate) translating: bool,
+}
+
+/// The end-of-boot check: see the module's header. Answers how many events
+/// were found.
+///
+/// Verifies: L.iommu.44
+///
+/// # Errors
+///
+/// The first event the record lacks, or has with the wrong outcome or
+/// subject.
+pub(crate) fn booted(boot: &Booted) -> Result<usize, &'static str> {
+    let mut high = vec![Record::EMPTY; super::HIGH_RECORDS];
+    let mut refusals = vec![Record::EMPTY; super::REFUSAL_RECORDS];
+    let read_high = super::read(Which::High, 0, &mut high);
+    let read_refusals = super::read(Which::Refusals, 0, &mut refusals);
+    high.truncate(read_high.copied);
+    refusals.truncate(read_refusals.copied);
+    let all = || high.iter().chain(refusals.iter());
+    let mut found = 0;
+    for (event, decider, missing) in PROVOKED {
+        let mut of = all().filter(|record| record.is(event)).peekable();
+        if of.peek().is_none() {
+            return Err(missing);
+        }
+        let outcome = if event.class == Class::Refused {
+            Outcome::Refused
+        } else {
+            Outcome::Done
+        };
+        let fits = |record: &Record| {
+            record.outcome == outcome as u16
+                && match decider {
+                    Decider::Process => record.pid != 0 && record.job != 0,
+                    Decider::Kernel => true,
+                    Decider::Job => record.pid == 0 && record.job != 0,
+                }
+        };
+        if !of.any(fits) {
+            return Err("an event was recorded with the wrong outcome or subject");
+        }
+        found += 1;
+    }
+    let kernel_only = [OOM_KILLED, QUIESCED, DMA_FAULT];
+    if all().any(|record| kernel_only.iter().any(|&event| record.is(event)) && record.pid != 0) {
+        return Err("a decision the kernel made was recorded against a process");
+    }
+    if boot.translating {
+        let fault =
+            all().any(|record| record.is(DMA_FAULT) && record.outcome == Outcome::Refused as u16);
+        if !fault {
+            return Err("a DMA fault the IOMMU reported left no record");
+        }
+        found += 1;
+    }
+    let mut pinned = vec![Record::EMPTY; BOOT_RECORDS];
+    let read_boot = super::read(Which::Boot, 0, &mut pinned);
+    if !pinned
+        .iter()
+        .take(read_boot.copied)
+        .any(|record| record.is(BOOTED))
+    {
+        return Err("the boot brought up was not recorded among the boot's own records");
+    }
+    Ok(found)
 }

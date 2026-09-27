@@ -55,6 +55,7 @@ use ferrix_vfs::{
     SetAttributes, StatFs, Timespec,
 };
 
+use crate::audit;
 use crate::fs::{self, procfs};
 use crate::hooks::Full;
 use crate::object::Object;
@@ -485,9 +486,18 @@ impl Inode for Directory {
             return Err(Errno::EEXIST);
         }
         let text = core::str::from_utf8(name).map_err(|_| Errno::EINVAL)?;
+        // A cgroup made in a directory someone other than root may write is
+        // a delegatee's own, and its refusals are charged to the audit
+        // budget above it rather than starting one of their own.
+        let here = self.metadata();
+        let budget = if here.uid != 0 || here.permissions & 0o022 != 0 {
+            job::Budget::Parents
+        } else {
+            job::Budget::Own
+        };
         let child = self
             .job
-            .new_named_child(text)
+            .new_named_child(text, budget)
             .map_err(|refused| match refused {
                 JobError::Exists => Errno::EEXIST,
                 JobError::Limited => Errno::EAGAIN,
@@ -884,6 +894,25 @@ struct Writer {
     shared: Arc<Shared>,
 }
 
+/// The process writing, as the audit record's subject: the kernel when a
+/// write comes from none.
+fn writer() -> audit::Subject {
+    process::current().map_or(audit::Subject::KERNEL, |process| {
+        audit::Subject::of(process.core())
+    })
+}
+
+/// Record the writer setting `job`'s limit on `resource` to `limit`.
+fn limit_set(job: &Job, resource: Resource, limit: u64) {
+    audit::limit_set(
+        audit::CGROUP_LIMIT,
+        writer(),
+        job.id(),
+        audit::resource_number(resource),
+        limit,
+    );
+}
+
 /// A write of `data` to a file of `job`, opened by `opener`.
 fn write_to(job: &Arc<Job>, kind: Kind, data: &[u8], opener: &Writer) -> Result<usize> {
     match kind {
@@ -901,7 +930,16 @@ fn write_to(job: &Arc<Job>, kind: Kind, data: &[u8], opener: &Writer) -> Result<
         }
         Kind::Kill => {
             write::parse_kill(data).map_err(errno)?;
-            let _ = job.kill_members().map_err(|_| Errno::ENOMEM)?;
+            let ended = job.kill_members().map_err(|_| Errno::ENOMEM)?;
+            audit::ended(
+                audit::CGROUP_KILLED,
+                writer(),
+                audit::Target {
+                    kind: audit::target::JOB,
+                    id: job.id(),
+                },
+                [u32::try_from(ended).unwrap_or(u32::MAX), 0, 0],
+            );
         }
         Kind::SubtreeControl => {
             let change = controllers::parse_change(data, BUILT).map_err(errno)?;
@@ -918,7 +956,10 @@ fn write_to(job: &Arc<Job>, kind: Kind, data: &[u8], opener: &Writer) -> Result<
         Kind::Threads | Kind::Freeze => return Err(Errno::EOPNOTSUPP),
         Kind::PidsMax => {
             let limit = write::parse_pids_max(data).map_err(errno)?;
-            let _ = job.set_limit(Resource::Tasks, limit.unwrap_or(quota::UNLIMITED));
+            let limit = limit.unwrap_or(quota::UNLIMITED);
+            if job.set_limit(Resource::Tasks, limit) {
+                limit_set(job, Resource::Tasks, limit);
+            }
         }
         Kind::MemoryMax => {
             let limit = write::parse_memory_max(data).map_err(errno)?;
@@ -926,10 +967,21 @@ fn write_to(job: &Arc<Job>, kind: Kind, data: &[u8], opener: &Writer) -> Result<
             let bytes = limit.map_or(quota::UNLIMITED, |bytes| {
                 bytes - bytes % ferrix_bootinfo::PAGE_SIZE
             });
-            let _ = job.set_limit(Resource::Memory, bytes);
+            if job.set_limit(Resource::Memory, bytes) {
+                limit_set(job, Resource::Memory, bytes);
+            }
         }
         Kind::CpuWeight => {
-            let _ = job.set_cpu_weight(write::parse_weight(data).map_err(errno)?);
+            let weight = write::parse_weight(data).map_err(errno)?;
+            if job.set_cpu_weight(weight) {
+                audit::limit_set(
+                    audit::CGROUP_LIMIT,
+                    writer(),
+                    job.id(),
+                    ferrix_audit::resource::CPU_WEIGHT,
+                    u64::from(weight),
+                );
+            }
         }
         Kind::Controllers
         | Kind::Events

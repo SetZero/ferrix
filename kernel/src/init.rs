@@ -220,6 +220,18 @@ fn next_bootstrap() -> Option<Transfer> {
             });
         if written.is_err() {
             println!("  init     devmgr's starter could not be written; nothing will start devmgr");
+        } else {
+            crate::audit::record(
+                crate::audit::STARTER_GIVEN,
+                crate::audit::Outcome::Done,
+                0,
+                crate::audit::Subject::KERNEL,
+                crate::audit::Target {
+                    kind: crate::audit::target::PROCESS,
+                    id: u64::from(crate::object::process::INIT_PID),
+                },
+                [0; 3],
+            );
         }
     }
     let last = CHANNEL.lock().replace(kernel_end);
@@ -233,6 +245,14 @@ fn next_bootstrap() -> Option<Transfer> {
 /// pid 1 moved onto it, or still the tmpfs (`ferrix.devmgr=init`, L12). Said
 /// once, by `fs::root_disk`, once it knows.
 pub(crate) fn notify_root(switched: bool) {
+    crate::audit::record(
+        crate::audit::ROOT_SWITCHED,
+        crate::audit::Outcome::Done,
+        0,
+        crate::audit::Subject::KERNEL,
+        crate::audit::Target::NONE,
+        [u32::from(switched), 0, 0],
+    );
     let value = if switched {
         ROOT_SWITCHED
     } else {

@@ -164,6 +164,12 @@ pub(crate) fn sync_disks() {
 /// End boot the way [`init`] was told to.
 pub(crate) fn finish() -> ! {
     sync_disks();
+    let action = match ON_EXIT.load(Ordering::Relaxed) {
+        RESET_ON_EXIT => ferrix_audit::power::RESTART,
+        PANIC_ON_EXIT => ferrix_audit::power::PANIC,
+        _ => ferrix_audit::power::OFF,
+    };
+    crate::audit::power(crate::audit::Subject::KERNEL, action);
     match ON_EXIT.load(Ordering::Relaxed) {
         RESET_ON_EXIT => {
             println!("  power    resetting, as {OPTION}={RESET} asks");

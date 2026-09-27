@@ -234,6 +234,7 @@ fn kill_within(space: &AddressSpace, full: u32) -> (Answer, bool) {
         core.pid()
     );
     victim.kill(KILLED_STATUS);
+    crate::audit::oom_killed(core.pid(), scope.id(), resident);
     core.job().count_oom(true);
     let _ = KILLS.fetch_add(1, Ordering::Relaxed);
     if ours(victim) {

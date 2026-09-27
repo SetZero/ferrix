@@ -547,7 +547,21 @@ package FerrixIommuRequirements {
             attribute :>> criterion = "With 1 stray fault left in a unit's record,
                 the audit reports 1 unit read, 1 stray and that fault as the first.";
             attribute :>> parent = "H.DMA.6";
-            attribute :>> unit = ("iommu::audit_faults", "iommu::drain");
+            attribute :>> unit = ("iommu::audit_faults", "iommu::drain",
+                "iommu::recorded");
+        }
+        requirement <'L.iommu.44'> aRefusedAccessIsAuditRecorded : ItemLowLevel {
+            attribute :>> statement = "Every fault read from a unit, by the fault
+                audit or through a domain, shall be written to the audit record as
+                one DMA_FAULT, refused, naming the device's stream and the page it
+                addressed, with the kernel as its subject.";
+            attribute :>> criterion = "On a boot where a unit translates, the audit
+                record holds a DMA_FAULT from the out-of-domain probe, refused, with
+                pid 0; with the record's event swapped at recorded, or its subject
+                made a process, the end-of-boot audit check fails naming it.";
+            attribute :>> parent = "H.DMA.2";
+            attribute :>> unit = ("iommu::recorded", "audit::record",
+                "audit::Store::record_at");
         }
     }
 }

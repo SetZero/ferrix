@@ -87,14 +87,18 @@ kernel log's buffer is, so nothing on a recording path allocates:
   second ends. A program that provokes refusals by the thousand -- varying
   the object, which defeats a fold by identical event -- flushes at most its
   own unit's older refusals, never another unit's, and never a grant.
-* **The budget** a refusal is charged to is its job's, walked up
-  (`audit::budget_of`) past every job the program's own authority could
-  have made: an anonymous one, which anyone holding a job handle that allows
-  it makes, and a named one in a directory someone other than root may
-  write, which is a delegatee's `mkdir`. The walk stops at a named job made
-  in a directory only root may write -- a unit's own cgroup -- so a program
-  that makes sub-jobs to refuse from shares its unit's one budget rather than
-  gaining 64 a second per job (the certification review, 2026-09-27).
+* **The budget** a refusal is charged to is its job's, fixed when the job
+  is made (`Job::audit_budget`): its own id, or its parent's for a job the
+  program's own authority could have made -- an anonymous one, which anyone
+  holding a job handle that allows it makes, and a named one in a directory
+  someone other than root may write, which is a delegatee's `mkdir`. The
+  maker decides (`job::Budget`), since whether a directory is writable by
+  others is cgroupfs's to know and not the core's. So a program that makes
+  sub-jobs to refuse from shares its unit's one budget rather than gaining
+  64 a second per job (the certification review, 2026-09-27), and a job
+  made by root in a then root-only directory stays its own budget if the
+  directory is `chown`ed later. Fixed at creation, a budget is read with no
+  lock, as a limit's refusal must be from inside the heap.
   A stated residual: root in the personality may make root-owned cgroups in
   a directory only root may write, and each is a budget of its own, so root
   can widen its own refusal throughput up to `cgroup.max.descendants`
@@ -102,11 +106,24 @@ kernel log's buffer is, so nothing on a recording path allocates:
   not an escalation.
 
 Each ring's lock is an `IrqSpinLock` (`crate::sync`): interrupts masked while
-it is held, for a 64-byte copy and two counters. An IOMMU fault is recorded
-from its interrupt handler, and an OOM kill can be decided with the
-allocator's locks held, so a lock that left interrupts on could be taken by
-a handler on the processor already holding it. Nothing under it blocks or
-allocates, so the F-23 and FX-0503 rules hold on every path that records.
+it is held, for a 64-byte copy and two counters. An OOM kill can be decided
+with the allocator's locks held, and a limit's refusal is recorded from
+inside the heap, so a lock that left interrupts on could be taken by a
+handler on the processor already holding it. **They are leaf locks**:
+nothing is taken under them and nothing allocates under them, so the F-23
+and FX-0503 rules hold on every path that records, and everything a record
+needs, its subject among it, is worked out before a ring's lock is taken --
+on the heap's path without a lock of its own: a refused charge names the job
+its quota slot keeps the id and budget of, and no process.
+
+**The boot's own records.** The first eight system records -- the start-up
+record, the boot's configuration and the boot brought up -- are also pinned
+where nothing else reaches them (`Which::Boot`), numbered as the high-value
+ring numbered them. That array never wraps and holds at most eight; a system
+record after them is kept in the high-value ring alone. The boot's own
+checks make processes, kill jobs and set limits by the dozen, and a longer
+run could wrap the high-value ring past the records that say what the boot
+was before any reader exists.
 
 When a ring is full its oldest record is overwritten and its lost counter
 counts it; the reader sees the gap in sequence numbers and the count. This
@@ -161,6 +178,14 @@ and a record it submits can never claim a TSF class.
 
 ## 6. How the build would prove it
 
+*As built so far (slices 1 and 2):* `audit::check` proves the store on
+stores of its own and, at the end of every boot with checks, that each
+decision the boot's own checks make at a recording site is in the kernel's
+record with its outcome and subject (§8). `DEVMGR_STARTED`, `STARTER_GIVEN`,
+`ROOT_SWITCHED` and `POWER` are made only in `test-init`'s boots or at
+shutdown, which no test boot reaches: slice 3 proves them, reading them
+back through `audit_read` in `test-init`.
+
 A boot check, `audit_check`, provokes one event of every class from a check
 process -- an `ACCESS_DENIED`, a widened rights request, a limit, a grant, a
 kill, a quiesce -- and reads each back through an `Audit` handle with the
@@ -204,7 +229,7 @@ Three slices, each reviewed before it lands:
 1. **The store** (built): `kernel/src/audit.rs`, in the core ring -- the
    two rings of static storage under `IrqSpinLock`s, the gapless numbering
    and the lost count, the fairness per budget with its *suppressed n*
-   record and `audit::budget_of`,
+   record,
    the audit id, which bring-up draws from the random generator and hands
    in, since the generator is the item's and the core may not name it --
    and bring-up's records: the start-up record and the boot's configuration
@@ -214,8 +239,25 @@ Three slices, each reviewed before it lands:
    job tree of its own, and the kernel's store read back (FX-0309). The
    record's layout is `libs/proto/audit`, whose host tests round-trip the
    start-up record's id and ring lengths through the bytes a reader gets.
-2. **The call sites**: a record at each §1 decision, with a negative
-   control per site that the check names.
+2. **The call sites** (built): a record at each §1 decision the item
+   makes during a boot --
+   * every native call a handle's rights refused, and a widening refused,
+     at `syscall::native::dispatch`, where each answer passes;
+   * a limit's refusal, in `object::quota::charge`, against the job its
+     slot names;
+   * a native process made, a job given for a cgroup and a device's control
+     channel given;
+   * a job killed, a cgroup killed and an OOM kill;
+   * a device quiesced, and a DMA fault an IOMMU reported, with the kernel
+     as subject;
+   * a limit set through a job's handle (`job_set_limit`), and a cgroup's
+     limit file written, as two events.
+   At the end of boot `audit::check::booted` requires a record of each that
+   the boot's own checks provoke, with its outcome and subject, and the
+   boot's own records pinned; a negative control per site names the event.
+   `devmgr_start`, the starter, the root switch and a power action happen
+   only in `test-init`'s boots or at shutdown, and are read back there in
+   slice 3.
 3. **The reader**: `Object::Audit` and `audit_read`, init's
    `audit.service` writing `/var/log/audit/<boot>.bin`, the xtask gate that
    reads a `ferrix.checks=skip` boot's record from outside, the measured cost

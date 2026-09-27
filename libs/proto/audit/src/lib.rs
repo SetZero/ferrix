@@ -69,8 +69,136 @@ pub const CONFIG: Event = Event::new(Class::System, 2);
 /// The boot finished bringing up the kernel: whether its self-checks ran.
 pub const BOOTED: Event = Event::new(Class::System, 3);
 
-/// A budget's refusals past the per-second limit, counted and not kept.
+/// A budget's refusals past the per-second limit, counted and not kept:
+/// the count, then the limit, in the detail.
 pub const SUPPRESSED: Event = Event::new(Class::Refused, 1);
+
+/// A native call answered `ACCESS_DENIED`: the handle's rights did not
+/// cover it. The target is the first handle named, the detail the call's
+/// number and the rights asked, where it asks for some.
+pub const RIGHTS: Event = Event::new(Class::Refused, 2);
+
+/// A handle's rights asked widened by `handle_duplicate` or
+/// `handle_replace`, and refused: as [`RIGHTS`].
+pub const WIDEN: Event = Event::new(Class::Refused, 3);
+
+/// A charge a job's limit refused. The target is the resource
+/// ([`target::RESOURCE`], its `Resource` number); the detail the amount
+/// asked, the limit, and the quota slot charged.
+pub const LIMIT: Event = Event::new(Class::Refused, 4);
+
+/// A native process made, with its creator's ids: the target is the new
+/// process ([`target::PROCESS`]), the detail the job it was made in.
+pub const PROCESS_MADE: Event = Event::new(Class::Granted, 1);
+
+/// A job handle given for a cgroup (`job_for_cgroup`): the target is the
+/// handle, the detail the call's number and the rights given.
+pub const DELEGATED: Event = Event::new(Class::Granted, 2);
+
+/// A device's control channel or ring made for a driver: the target is the
+/// handle, the detail the call's number.
+pub const CONTROL: Event = Event::new(Class::Granted, 3);
+
+/// `devmgr` started by pid 1 through the kernel's starter
+/// (`devmgr_start`): the target is the new `devmgr`, the detail the job its
+/// drivers are made in.
+pub const DEVMGR_STARTED: Event = Event::new(Class::Granted, 4);
+
+/// The starter given to pid 1 on its bootstrap channel, with the kernel as
+/// subject: the target is pid 1.
+pub const STARTER_GIVEN: Event = Event::new(Class::Granted, 5);
+
+/// A job ended by `job_kill`: the target is the job.
+pub const JOB_KILLED: Event = Event::new(Class::Ended, 1);
+
+/// A cgroup's processes ended by a write to its `cgroup.kill`: the target
+/// is the job.
+pub const CGROUP_KILLED: Event = Event::new(Class::Ended, 2);
+
+/// A process ended by the scoped OOM kill: the target is the process, the
+/// detail the job whose memory limit asked for it.
+pub const OOM_KILLED: Event = Event::new(Class::Ended, 3);
+
+/// A device quiesced before it was handed on: the target is the device.
+pub const QUIESCED: Event = Event::new(Class::Device, 1);
+
+/// A DMA fault an IOMMU reported for a device, recorded from the unit's
+/// interrupt with the kernel as subject: the target is the requester, the
+/// detail the faulting page's number, split in two words.
+pub const DMA_FAULT: Event = Event::new(Class::Device, 2);
+
+/// A job's limit set through its handle (`job_set_limit`): the target is
+/// the resource, the detail the job's id, split in two words, and the
+/// limit, saturated.
+pub const LIMIT_SET: Event = Event::new(Class::Changed, 1);
+
+/// A cgroup's limit file written (`pids.max`, `memory.max`, `cpu.weight`):
+/// as [`LIMIT_SET`].
+pub const CGROUP_LIMIT: Event = Event::new(Class::Changed, 2);
+
+/// The resources a [`LIMIT`] or [`LIMIT_SET`] record names, by number.
+pub mod resource {
+    /// Memory, in bytes.
+    pub const MEMORY: u64 = 1;
+    /// Kernel objects.
+    pub const OBJECTS: u64 = 2;
+    /// Tasks.
+    pub const TASKS: u64 = 3;
+    /// The kernel heap part of memory, in bytes.
+    pub const KERNEL: u64 = 4;
+    /// The processor weight (`cpu.weight`).
+    pub const CPU_WEIGHT: u64 = 5;
+}
+
+/// A 64-bit amount in a 32-bit detail word: itself, or `u32::MAX` when it
+/// does not fit.
+#[must_use]
+pub const fn saturated(amount: u64) -> u32 {
+    if amount > u32::MAX as u64 {
+        u32::MAX
+    } else {
+        amount as u32
+    }
+}
+
+/// Where `/` is, as pid 1 is told (`docs/INIT.md` §7.3): the detail's
+/// first word 1 when the root volume was switched to and pid 1 moved onto
+/// it, 0 when `/` stays in memory.
+pub const ROOT_SWITCHED: Event = Event::new(Class::System, 4);
+
+/// A power action, recorded before it is taken: the detail's first word is
+/// a [`power`] number. The last record the boot makes.
+pub const POWER: Event = Event::new(Class::System, 5);
+
+/// The power actions a [`POWER`] record names.
+pub mod power {
+    /// Power off.
+    pub const OFF: u32 = 1;
+    /// Halt.
+    pub const HALT: u32 = 2;
+    /// Restart.
+    pub const RESTART: u32 = 3;
+    /// A panic asked for when init exits (`ferrix.onexit=panic`).
+    pub const PANIC: u32 = 4;
+}
+
+/// What a record's target names, in its `target_kind`.
+pub mod target {
+    /// Nothing in particular.
+    pub const NONE: u32 = 0;
+    /// A job, by its id.
+    pub const JOB: u32 = 1;
+    /// A process, by its pid.
+    pub const PROCESS: u32 = 2;
+    /// A handle, by its value in the subject's table.
+    pub const HANDLE: u32 = 3;
+    /// A device: for a quiesce, its place in the kernel's device list; for
+    /// a DMA fault, the requester's stream as the unit saw it (a VT-d source
+    /// id, an `SMMUv3` stream id).
+    pub const DEVICE: u32 = 4;
+    /// A resource a job is charged for, by its number.
+    pub const RESOURCE: u32 = 5;
+}
 
 /// Which item of the boot's configuration a [`CONFIG`] record states, in
 /// its first detail word; the value is in the second.

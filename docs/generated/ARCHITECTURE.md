@@ -116,7 +116,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixIommuRequirements` | `16-iommu-requirements.sysml` | What each unit of kernel/src/iommu.rs and kernel/src/iommu/ does, as `ItemLowLevel` requirements (part 13 defines the format): where firmware puts each PCI function's DMA, the units the kernel turns translation on for, the domains a driver pins pages into, the gate a wait on a unit is made through, and the faults a unit records. The pins a program makes through a handle, and the quarantine a dead driver's pins go to, are object/'s (part 14, `L.object.45` to `L.object.49`); this is the domain side under them. |
 | `FerrixMemoryRequirements` | `17-memory-requirements.sysml` | What each unit of the item's memory management does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies), in two id spaces. |
 
-17 files, 51 packages, 3597 elements, 206 relations. Model digest `e611650a218ad23a`.
+17 files, 51 packages, 3602 elements, 206 relations. Model digest `c3696b586a28c725`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -4058,6 +4058,7 @@ flowchart LR
 | `L.iommu.41` | `aProvokedFaultIsNotStray` | — | — | — |
 | `L.iommu.42` | `aStrayFaultIsCounted` | — | — | — |
 | `L.iommu.43` | `theAuditReadsEveryUnit` | — | — | — |
+| `L.iommu.44` | `aRefusedAccessIsAuditRecorded` | — | — | — |
 | `L.mm.1` | `initGivesTheAllocatorTheUsableRam` | — | — | — |
 | `L.mm.2` | `frameZeroIsNeverHandedOut` | — | — | — |
 | `L.mm.3` | `aFrameHasOneHolder` | — | — | — |

@@ -70,6 +70,7 @@ use ferrix_sync::Once;
 use ferrix_vma::VmaFlags;
 
 use crate::arch;
+use crate::audit;
 use crate::claim::StillServed;
 use crate::device::DeviceNode;
 use crate::fallible;
@@ -334,7 +335,69 @@ pub(crate) fn server_count() -> usize {
 pub(crate) fn dispatch(args: &SyscallArgs, caller: Option<&dyn Host>) -> Result<usize, Errno> {
     let call = decode(args.number).ok_or(Errno::ENOSYS)?;
     let caller = caller.ok_or(Errno::ESRCH)?;
-    let (process, a) = (caller.core(), args.args);
+    let answered = answer(call, caller, args.args);
+    record_call(call, args.number, caller.core(), &args.args, &answered);
+    answered
+}
+
+/// The audit record of a call's answer, where it is one (finding F-21b,
+/// `docs/certification/AUDIT.md` §1): every native call a handle's rights
+/// refused -- here, where each call's answer passes, rather than at each of
+/// the refusals -- and each handle given that carries authority, a job for
+/// a cgroup or a device's control channel. Made with no lock held.
+fn record_call(
+    call: NativeCall,
+    number: usize,
+    process: &Process,
+    a: &[u64; 6],
+    answered: &Result<usize, Errno>,
+) {
+    let number = u32::try_from(number).unwrap_or(u32::MAX);
+    let named = |id: u64| audit::Target {
+        kind: audit::target::HANDLE,
+        id,
+    };
+    let (event, target, detail) = match (call, answered) {
+        (NativeCall::HandleDuplicate | NativeCall::HandleReplace, Err(status::ACCESS_DENIED)) => {
+            let asked = a.get(1).copied().unwrap_or(0);
+            (audit::WIDEN, named(a[0]), [number, asked as u32, 0])
+        }
+        (_, Err(status::ACCESS_DENIED)) => (audit::RIGHTS, named(a[0]), [number, 0, 0]),
+        (NativeCall::JobForCgroup, Ok(given)) => {
+            (audit::DELEGATED, named(*given as u64), [number, 0, 0])
+        }
+        (
+            NativeCall::BlockRingCreate
+            | NativeCall::NetRingCreate
+            | NativeCall::DisplayControlCreate
+            | NativeCall::RenderControlCreate
+            | NativeCall::InputControlCreate
+            | NativeCall::SoundControlCreate
+            | NativeCall::LogControlCreate,
+            Ok(given),
+        ) => (audit::CONTROL, named(*given as u64), [number, 0, 0]),
+        _ => return,
+    };
+    let (outcome, status) = match answered {
+        Err(refused) => (
+            audit::Outcome::Refused,
+            i16::try_from(refused.0).unwrap_or(i16::MAX),
+        ),
+        Ok(_) => (audit::Outcome::Done, 0),
+    };
+    audit::record(
+        event,
+        outcome,
+        status,
+        audit::Subject::of(process),
+        target,
+        detail,
+    );
+}
+
+/// Answer `call` for `caller`: see [`dispatch`].
+fn answer(call: NativeCall, caller: &dyn Host, a: [u64; 6]) -> Result<usize, Errno> {
+    let process = caller.core();
     match call {
         NativeCall::HandleClose => handle_close(process, handle(a[0])),
         NativeCall::HandleDuplicate => handle_duplicate(process, handle(a[0]), a[1]),
@@ -1216,9 +1279,18 @@ fn job_create(process: &Process, parent: Handle) -> Result<usize, Errno> {
 /// rather than here, with nothing held.
 fn job_kill(process: &Process, job: Handle) -> Result<usize, Errno> {
     let job = job_in(process, job, Rights::MANAGE)?;
-    let _ended = job
+    let ended = job
         .kill(job::KILLED_STATUS)
         .map_err(|_| status::NO_MEMORY)?;
+    audit::ended(
+        audit::JOB_KILLED,
+        audit::Subject::of(process),
+        audit::Target {
+            kind: audit::target::JOB,
+            id: job.id(),
+        },
+        [u32::try_from(ended).unwrap_or(u32::MAX), 0, 0],
+    );
     Ok(0)
 }
 
@@ -1248,7 +1320,12 @@ fn limited(resource: u64) -> Result<Limited, Errno> {
 fn job_set_limit(process: &Process, job: Handle, resource: u64, at: u64) -> Result<usize, Errno> {
     let job = job_in(process, job, Rights::SET_LIMIT)?;
     let limit = read_u64(process, at)?;
-    let set = match limited(resource)? {
+    let limited = limited(resource)?;
+    let number = match limited {
+        Limited::Quota(resource) => audit::resource_number(resource),
+        Limited::Weight => ferrix_audit::resource::CPU_WEIGHT,
+    };
+    let set = match limited {
         Limited::Quota(Resource::Memory) => job.set_limit(
             Resource::Memory,
             // Whole pages, as `memory.max` keeps it.
@@ -1267,7 +1344,17 @@ fn job_set_limit(process: &Process, job: Handle, resource: u64, at: u64) -> Resu
             job.set_cpu_weight(weight)
         }
     };
-    if set { Ok(0) } else { Err(status::BAD_STATE) }
+    if !set {
+        return Err(status::BAD_STATE);
+    }
+    audit::limit_set(
+        audit::LIMIT_SET,
+        audit::Subject::of(process),
+        job.id(),
+        number,
+        limit,
+    );
+    Ok(0)
 }
 
 /// `job_get_quota`.
@@ -1337,8 +1424,22 @@ fn process_create(
             _ => status::BAD_STATE,
         });
     }
+    let pid = child.core().pid();
     let created = ProcessRef::created(child).map_err(|_| status::NO_MEMORY)?;
-    insert_new(process, Object::Process(created), Rights::PROCESS)
+    let handle = insert_new(process, Object::Process(created), Rights::PROCESS)?;
+    let made_in = job.id();
+    audit::record(
+        audit::PROCESS_MADE,
+        audit::Outcome::Done,
+        0,
+        audit::Subject::of(process),
+        audit::Target {
+            kind: audit::target::PROCESS,
+            id: u64::from(pid),
+        },
+        [made_in as u32, (made_in >> 32) as u32, 0],
+    );
+    Ok(handle)
 }
 
 /// Every byte of a VMO, for `process_create` to load.
@@ -1739,6 +1840,17 @@ fn quiesce_while(node: &Arc<DeviceNode>, cancelled: &dyn Fn() -> bool) -> Result
     for release in SERVERS.iter().filter_map(|server| server.release) {
         release(node);
     }
+    audit::record(
+        audit::QUIESCED,
+        audit::Outcome::Done,
+        0,
+        audit::Subject::KERNEL,
+        audit::Target {
+            kind: audit::target::DEVICE,
+            id: node.index() as u64,
+        },
+        [0; 3],
+    );
     Ok(())
 }
 

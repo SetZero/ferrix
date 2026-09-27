@@ -624,7 +624,7 @@ package FerrixObjectRequirements {
             attribute :>> parent = ("H.QUOTA.5", "H.QUOTA.3");
             attribute :>> unit = ("object::quota::charge",
                 "object::quota::uncharge_below", "object::quota::Resource::at",
-                "object::quota::slot");
+                "object::quota::slot", "object::quota::record_refused");
         }
         requirement <'L.object.51'> anUnchargeComesBackExactly : ItemLowLevel {
             attribute :>> statement = "quota::uncharge shall take back exactly the
@@ -769,6 +769,11 @@ package FerrixObjectRequirements {
                 "object::job::Job::bare");
         }
         requirement <'L.object.64'> aChildsQuotaIsInsideItsParents : ItemLowLevel {
+            doc /* The job's audit budget (docs/certification/AUDIT.md §3) is
+                 * fixed here too, when the job is made: its own id, or its
+                 * parent's where its maker says the job was its members' own
+                 * to make (job::Budget), and written into its quota slot for
+                 * the record of a refused charge. audit::check proves it. */
             attribute :>> statement = "A child job shall be made inside its parent,
                 with a quota slot inside the parent's.";
             attribute :>> criterion = "A charge to a grandchild is counted in its
@@ -776,7 +781,8 @@ package FerrixObjectRequirements {
                 parent refuses it.";
             attribute :>> parent = ("H.OBJ.12", "H.QUOTA.5");
             attribute :>> unit = ("object::job::Job::new_child",
-                "object::job::Job::bare_child", "object::job::Job::new_root");
+                "object::job::Job::bare_child", "object::job::Job::new_root",
+                "object::quota::Quota::identify");
         }
         requirement <'L.object.65'> aChildIsAnObjectAndRefusedWhenKilled : ItemLowLevel {
             attribute :>> statement = "A child job shall be charged as one object to

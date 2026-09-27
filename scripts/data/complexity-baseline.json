@@ -109,6 +109,11 @@
       "lines": 82,
       "recursive": false
     },
+    "syscall/native.rs::answer": {
+      "complexity": 32,
+      "lines": 87,
+      "recursive": false
+    },
     "syscall/native.rs::channel_read": {
       "complexity": 16,
       "lines": 54,
@@ -117,11 +122,6 @@
     "syscall/native.rs::channel_write": {
       "complexity": 19,
       "lines": 36,
-      "recursive": false
-    },
-    "syscall/native.rs::dispatch": {
-      "complexity": 34,
-      "lines": 89,
       "recursive": false
     },
     "syscall/native.rs::vmo_pin": {

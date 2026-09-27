@@ -678,6 +678,7 @@ pub(crate) fn devmgr_start(caller: &dyn Host, registers: &[u64; 6]) -> Result<us
     let core = caller.core();
     let job = starter_and_job(core, starter, job)?;
     may_start_again()?;
+    let drivers = job.id();
     let started = start_in(job)?;
     let handle = native::insert_new(core, Object::Process(started.created), Rights::PROCESS)?;
     if let Err(problem) = handed_only_to_devmgr(caller, &started.process, &started.end, handle) {
@@ -686,6 +687,17 @@ pub(crate) fn devmgr_start(caller: &dyn Host, registers: &[u64; 6]) -> Result<us
             "devmgr started by pid 1 self-check failed: {problem}"
         );
     }
+    crate::audit::record(
+        crate::audit::DEVMGR_STARTED,
+        crate::audit::Outcome::Done,
+        0,
+        crate::audit::Subject::of(core),
+        crate::audit::Target {
+            kind: crate::audit::target::PROCESS,
+            id: u64::from(started.process.core().pid()),
+        },
+        [drivers as u32, (drivers >> 32) as u32, 0],
+    );
     Ok(handle)
 }
 
@@ -945,7 +957,7 @@ const DRIVERS_JOB: &str = "drivers.slice";
 /// When there was no memory for any job at all.
 fn drivers_job() -> Result<Arc<Job>, &'static str> {
     let root = job::root();
-    root.new_named_child(DRIVERS_JOB)
+    root.new_named_child(DRIVERS_JOB, job::Budget::Own)
         .or_else(|_| root.new_child())
         .or_else(|_| Job::new_root())
         .map_err(|_| "no memory for the drivers' job")

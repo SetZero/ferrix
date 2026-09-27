@@ -595,8 +595,8 @@ impl Translation {
     fn take_fault(&self) -> Option<Fault> {
         match self {
             Translation::None => None,
-            Translation::VtD { unit, .. } => unit.take_fault(),
-            Translation::SmmuV3 { unit, .. } => unit.take_fault(),
+            Translation::VtD { unit, .. } => recorded(unit.take_fault()),
+            Translation::SmmuV3 { unit, .. } => recorded(unit.take_fault()),
         }
     }
 
@@ -1167,15 +1167,40 @@ pub(crate) fn audit_faults() -> FaultAudit {
     let mut audit = FaultAudit::default();
     if let Some(programmed) = PROGRAMMED.get() {
         for unit in &programmed.vtd {
-            drain(|| unit.take_fault(), &mut audit);
+            drain(|| recorded(unit.take_fault()), &mut audit);
         }
         for unit in &programmed.smmu {
-            drain(|| unit.take_fault(), &mut audit);
+            drain(|| recorded(unit.take_fault()), &mut audit);
         }
     }
     audit.stray = STRAY.load(Ordering::Relaxed);
     audit.stray_events = STRAY_EVENTS.load(Ordering::Relaxed);
     audit
+}
+
+/// A fault a unit reported, recorded in the audit record as it is read
+/// (`audit::DMA_FAULT`): every read of a unit's faults passes here. The
+/// kernel is the subject, never the task that happens to be running, which
+/// is not the device's.
+fn recorded(fault: Option<Fault>) -> Option<Fault> {
+    if let Some(fault) = fault {
+        crate::audit::record(
+            crate::audit::DMA_FAULT,
+            crate::audit::Outcome::Refused,
+            0,
+            crate::audit::Subject::KERNEL,
+            crate::audit::Target {
+                kind: crate::audit::target::DEVICE,
+                id: u64::from(fault.stream),
+            },
+            [
+                (fault.page >> 12) as u32,
+                (fault.page >> 44) as u32,
+                u32::from(fault.write),
+            ],
+        );
+    }
+    fault
 }
 
 /// Read one unit's faults into `audit`, counting it.

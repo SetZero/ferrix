@@ -117,7 +117,7 @@ fn check_a_job_records_what_cgroupfs_sets() -> Result<(), &'static str> {
         .new_child()
         .map_err(|_| "no memory for an anonymous job")?;
     let named = anonymous
-        .new_named_child("leaf")
+        .new_named_child("leaf", crate::object::job::Budget::Own)
         .map_err(|_| "no memory for a named job")?;
     let owner = |uid| NodeAttributes {
         uid,

@@ -2767,9 +2767,10 @@ fn check_the_two_kills() -> Result<(), &'static str> {
     // A name is held once among a job's children.
     let names = Job::new_root().map_err(|_| "no memory for a job")?;
     let named = names
-        .new_named_child("a.slice")
+        .new_named_child("a.slice", job::Budget::Own)
         .map_err(|_| "a live job refused a named child")?;
-    if named.name() != Some("a.slice") || names.new_named_child("a.slice").is_ok() {
+    if named.name() != Some("a.slice") || names.new_named_child("a.slice", job::Budget::Own).is_ok()
+    {
         return Err("a job took a second child with a name it already had");
     }
     drop((member, next, late));
