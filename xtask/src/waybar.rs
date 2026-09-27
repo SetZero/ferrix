@@ -126,3 +126,38 @@ pub(crate) fn write_here(dir: &Path, files: &[File], strip: &str) -> Result<()> 
     }
     Ok(())
 }
+
+/// A `waybar --render` line saying where a module is --
+/// `waybar: module pulseaudio at 888,0 78x40` -- as its name and
+/// `[x, y, width, height]`.
+#[must_use]
+pub(crate) fn module_line(line: &str) -> Option<(String, [f32; 4])> {
+    let rest = line.strip_prefix("waybar: module ")?;
+    let (name, place) = rest.rsplit_once(" at ")?;
+    let (corner, size) = place.split_once(' ')?;
+    let (x, y) = corner.split_once(',')?;
+    let (width, height) = size.split_once('x')?;
+    Some((
+        name.to_owned(),
+        [
+            x.parse().ok()?,
+            y.parse().ok()?,
+            width.parse().ok()?,
+            height.parse().ok()?,
+        ],
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::module_line;
+
+    #[test]
+    fn a_renders_module_line_is_read_back() {
+        assert_eq!(
+            module_line("waybar: module custom/ws-1 at 736,0 32x40"),
+            Some(("custom/ws-1".to_owned(), [736.0, 0.0, 32.0, 40.0]))
+        );
+        assert_eq!(module_line("waybar: rendered 1024x40 into x.ppm"), None);
+    }
+}

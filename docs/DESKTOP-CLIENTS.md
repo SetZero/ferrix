@@ -285,8 +285,11 @@ What the user's file does on Ferrix, line by line where it differs:
   (`run-compositor --everything`), and hyprix then tells every client
   `PULSE_SERVER`. Its one sink, the card, is its default, and the default
   sink is all this client reads. Where there is none -- a plain `run-compositor`,
-  the waybar boot -- the chip reads `vol 0%` and says once why. The client
-  has not yet been run against `pulsed`. `on-click`'s `wpctl` and
+  the waybar boot -- the chip reads `vol 0%` and says once why.
+  `test-compositor --boot waybar-volume` runs it against `pulsed` on the
+  card: it reads the sink at 100%, a wheel turned three clicks down over
+  the chip sets it, and the subscription's word that the sink changed
+  brings `vol 97%` (2026-09-27). `on-click`'s `wpctl` and
   `on-click-right`'s `pavucontrol` are not on Ferrix.
 * `cpu`'s `{load}`: no `/proc/loadavg` on Ferrix and `sysinfo` loads of 0,
   so `0`, said once.
@@ -328,8 +331,11 @@ list above). The `output` line matches through the EDID override that
 `run-compositor` applies.
 
 Text is placed in whole pixels as Pango places it (2026-09-27), so a
-label's width is GTK's. Left: the PulseAudio client tried against `pulsed`
-on the desktop.
+label's width is GTK's. The volume chip reads, sets and follows `pulsed`'s
+sink in the `waybar-volume` boot (2026-09-27): `waybar --render` says where
+each module is, the boot points QEMU's tablet at the chip and turns the
+wheel, and waybar says at debug level each answer, why it asked, and what
+the label became.
 
 A text measurement to settle when `userland/compositor/text` lands: the user's
 comment measures `line_height='2.0'` as 10.5 px over and 11.5 under at

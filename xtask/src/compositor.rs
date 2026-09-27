@@ -2619,7 +2619,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are twenty of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 29] = [
+const BOOTS: [(&str, Boot); 30] = [
     ("restart", test_driver_restart),
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
@@ -2649,6 +2649,7 @@ const BOOTS: [(&str, Boot); 29] = [
     ("idle-user", idle::test_idle_user),
     ("caption", test_caption),
     ("waybar", test_waybar),
+    ("waybar-volume", test_waybar_volume),
 ];
 
 /// What the `caption` boot draws: a clock's digits, letters with kerning
@@ -2851,14 +2852,111 @@ fn caption_differences(screen: &Image, want: &Image, tolerance: u8) -> (usize, O
     (count, first)
 }
 
+/// A module of the host's drawing, by config name, and its box:
+/// `[x, y, width, height]`.
+type WaybarModule = (String, [f32; 4]);
+
+/// What both waybar boots carry and hold the screen to: the files, and the
+/// picture the host draws from them.
+struct WaybarBoot {
+    /// The picture the top of the screen must show.
+    want: Image,
+    /// Where it was written.
+    expected_path: PathBuf,
+    /// Each module's box in it, by config name: `(x, y, width, height)`.
+    modules: Vec<WaybarModule>,
+    /// Whether the stylesheet is the user's.
+    users: bool,
+    /// waybar, its files and fonts, and zinc for its `/bin/sh`.
+    carried: Carried,
+}
+
+impl WaybarBoot {
+    /// Everything but the image: the files read here, the host's drawing of
+    /// them, and the guest's waybar built.
+    fn make(arch: Arch) -> Result<Self> {
+        let (files, users) = crate::waybar::files()?;
+        if !users {
+            println!(
+                "  {arch}: no ~/.config/waybar/style.css here; the bar is drawn in the tree's own \
+                 style"
+            );
+        }
+        let mut families = crate::waybar::families(&files);
+        families.push("sans-serif".to_owned());
+        let fonts = crate::dotfiles::font_files(&families);
+        if fonts.is_empty() {
+            return Err(Error::new(format!(
+                "{arch}: this machine resolves no font file for {families:?}"
+            )));
+        }
+        let (want, expected_path, modules) = waybar_expected(arch, &files, &fonts)?;
+        let guest = build(arch, "compositor-waybar", "waybar")?;
+        // waybar runs every `exec` as `/bin/sh -c`, and the test config's
+        // scripts are `echo`s: zinc is the shell, and nothing else is needed.
+        let mut carried = Carried {
+            zinc: crate::zinc::build(arch)?,
+            ..Carried::none()
+        };
+        carried.ports.push(crate::ports::File {
+            path: "bin/waybar".to_owned(),
+            mode: 0o755,
+            content: crate::ports::Content::Bytes(
+                std::fs::read(&guest)
+                    .map_err(|error| Error::new(format!("reading {}: {error}", guest.display())))?,
+            ),
+        });
+        carried.ports.extend(files);
+        carried.ports.extend(fonts);
+        Ok(Self {
+            want,
+            expected_path,
+            modules,
+            users,
+            carried,
+        })
+    }
+
+    /// The compositor's config: the screen, and waybar started at `level`.
+    fn config(level: &str) -> String {
+        let (width, height) = crate::waybar::SIZE;
+        format!(
+            "# Written into the initramfs by `cargo xtask test-compositor`'s waybar boots.\n\
+             monitor = , {width}x{height}@60, auto, 1\n\
+             exec-once = /bin/waybar -l {level} -c /{home}/config.jsonc \
+             -s /{home}/style.css --fonts-dir /{fonts}\n",
+            home = crate::waybar::HOME_DIR,
+            fonts = crate::dotfiles::FONT_DIR,
+        )
+    }
+}
+
+/// Wait for waybar's `Bar configured`, or say that it never came.
+fn waybar_configured(arch: Arch, watching: &mut Watching<'_>) -> Result<()> {
+    let configured = watching.read_more(Instant::now() + SETTLE, |lines| {
+        lines
+            .iter()
+            .any(|line| line.contains("Bar configured (width:"))
+    })?;
+    if configured {
+        Ok(())
+    } else {
+        Err(with_the_transcript(
+            &Error::new(format!("{arch}: waybar never said its bar was configured")),
+            watching,
+        ))
+    }
+}
+
 /// The picture the waybar boot's screen must show: the same `files` and
 /// `fonts` written here, and the `x86_64` build's `--render` of them, kept
-/// as `build/<arch>/waybar-expected.ppm`.
+/// as `build/<arch>/waybar-expected.ppm`; and where the render says each
+/// module is.
 fn waybar_expected(
     arch: Arch,
     files: &[crate::ports::File],
     fonts: &[crate::ports::File],
-) -> Result<(Image, PathBuf)> {
+) -> Result<(Image, PathBuf, Vec<WaybarModule>)> {
     // The same files here, for the host's render.
     let here = paths::build_dir(arch).join("waybar-boot");
     let _ = std::fs::remove_dir_all(&here);
@@ -2893,10 +2991,17 @@ fn waybar_expected(
             String::from_utf8_lossy(&rendered.stderr).trim()
         )));
     }
-    println!("  {arch}: here, {said_here}");
+    println!(
+        "  {arch}: here, {}",
+        said_here.lines().next().unwrap_or_default()
+    );
+    let modules = said_here
+        .lines()
+        .filter_map(crate::waybar::module_line)
+        .collect();
     let bytes = std::fs::read(&expected_path)
         .map_err(|error| Error::new(format!("reading {}: {error}", expected_path.display())))?;
-    Ok((parse_ppm(&bytes)?, expected_path))
+    Ok((parse_ppm(&bytes)?, expected_path, modules))
 }
 
 /// `cargo xtask test-compositor`'s `waybar` boot: `/bin/waybar` draws the
@@ -2911,48 +3016,14 @@ fn waybar_expected(
 /// within two a channel elsewhere. The screenshot is kept as
 /// `build/<arch>/waybar.ppm`.
 fn test_waybar(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
-    let (files, users) = crate::waybar::files()?;
-    if !users {
-        println!(
-            "  {arch}: no ~/.config/waybar/style.css here; the bar is drawn in the tree's own style"
-        );
-    }
-    let mut families = crate::waybar::families(&files);
-    families.push("sans-serif".to_owned());
-    let fonts = crate::dotfiles::font_files(&families);
-    if fonts.is_empty() {
-        return Err(Error::new(format!(
-            "{arch}: this machine resolves no font file for {families:?}"
-        )));
-    }
-    let (want, expected_path) = waybar_expected(arch, &files, &fonts)?;
-    let (width, height) = crate::waybar::SIZE;
-
-    let guest = build(arch, "compositor-waybar", "waybar")?;
-    // waybar runs every `exec` as `/bin/sh -c`, and the test config's
-    // scripts are `echo`s: zinc is the shell, and nothing else is needed.
-    let mut carried = Carried {
-        zinc: crate::zinc::build(arch)?,
-        ..Carried::none()
-    };
-    carried.ports.push(crate::ports::File {
-        path: "bin/waybar".to_owned(),
-        mode: 0o755,
-        content: crate::ports::Content::Bytes(
-            std::fs::read(&guest)
-                .map_err(|error| Error::new(format!("reading {}: {error}", guest.display())))?,
-        ),
-    });
-    carried.ports.extend(files);
-    carried.ports.extend(fonts);
-    let config = format!(
-        "# Written into the initramfs by `cargo xtask test-compositor`'s waybar boot.\n\
-         monitor = , {width}x{height}@60, auto, 1\n\
-         exec-once = /bin/waybar -l info -c /{home}/config.jsonc -s /{home}/style.css \
-         --fonts-dir /{fonts}\n",
-        home = crate::waybar::HOME_DIR,
-        fonts = crate::dotfiles::FONT_DIR,
-    );
+    let WaybarBoot {
+        want,
+        expected_path,
+        users,
+        carried,
+        ..
+    } = WaybarBoot::make(arch)?;
+    let config = WaybarBoot::config("info");
     let (image, kernel) = build_image(arch, programs, &undithered(&config), carried, args)?;
     let port = free_port()?;
     let mut qemu_args = args.clone();
@@ -2962,17 +3033,7 @@ fn test_waybar(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let tolerance = if arch == Arch::X86_64 { 0 } else { 2 };
     let hook = |watching: &mut Watching<'_>| -> Result<()> {
         let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
-        let configured = watching.read_more(Instant::now() + SETTLE, |lines| {
-            lines
-                .iter()
-                .any(|line| line.contains("Bar configured (width:"))
-        })?;
-        if !configured {
-            return Err(with_the_transcript(
-                &Error::new(format!("{arch}: waybar never said its bar was configured")),
-                watching,
-            ));
-        }
+        waybar_configured(arch, watching)?;
         let deadline = Instant::now() + SETTLE;
         loop {
             qmp.screendump(Some(DEVICE_ID), &dump)?;
@@ -3007,6 +3068,125 @@ fn test_waybar(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     };
     let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, MARKER, hook)?;
     Ok(())
+}
+
+/// What waybar says at debug level each time the server answers
+/// (`modules/pulseaudio.rs`, `answered`): the prefix, and why it asked, on
+/// connecting and on being told by its subscription that the sink changed.
+const WAYBAR_SINK: &str = "pulseaudio: ";
+/// Asked on connecting.
+const WAYBAR_CONNECTING: &str = "on connecting, the default sink ";
+/// Asked because the subscription said the sink changed.
+const WAYBAR_TOLD: &str = "told the sink changed, the default sink ";
+
+/// How many wheel clicks down the volume boot turns over the chip; with
+/// the config's `scroll-step` unset, each is one percent.
+const WAYBAR_CLICKS: u32 = 3;
+
+/// `cargo xtask test-compositor`'s `waybar-volume` boot: the waybar boot's
+/// bar with `pulsed` running beside it as the desktop runs it (a unit of
+/// the session, `PULSE_SERVER` given to hyprix's clients) on the card, and
+/// the volume chip held to the server.
+///
+/// waybar must connect, and read the sink at `PA_VOLUME_NORM`, 100%, the
+/// volume `pulsed` starts at, with its label reading `vol 100%`. Then the
+/// pointer goes to the chip where the host's drawing puts it and the wheel
+/// turns three clicks down: waybar sets the sink's volume, `pulsed` tells
+/// its subscribers the sink changed, and waybar, asking again because it
+/// was told, must read 97% and label it `vol 97%`. So the client's asking,
+/// setting and subscribed connections are all used.
+/// The screenshot is kept as `build/<arch>/waybar-volume.ppm`.
+fn test_waybar_volume(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let WaybarBoot {
+        modules,
+        mut carried,
+        ..
+    } = WaybarBoot::make(arch)?;
+    let chip = modules
+        .iter()
+        .find(|(name, _)| name == "pulseaudio")
+        .map(|(_, rect)| *rect)
+        .ok_or_else(|| Error::new(format!("{arch}: the host's drawing has no pulseaudio chip")))?;
+    let pulsed = crate::audio::build_media(arch, "media-pulsed", "pulsed")?;
+    carried.pulsed = Some(
+        std::fs::read(&pulsed)
+            .map_err(|error| Error::new(format!("{}: {error}", pulsed.display())))?,
+    );
+    let config = WaybarBoot::config("debug");
+    let (image, kernel) = build_image(arch, programs, &undithered(&config), carried, args)?;
+    let port = free_port()?;
+    let mut qemu_args = args.clone();
+    qemu_args.display = true;
+    qemu_args.qmp_port = Some(port);
+    if qemu_args.audio.is_none() {
+        let wav = paths::build_dir(arch).join("waybar-volume.wav");
+        qemu_args.audio = Some(format!("wav,path={}", wav.display()));
+    }
+    let dump = paths::build_dir(arch).join("waybar-volume.ppm");
+    let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
+        waybar_configured(arch, watching)?;
+        waybar_reads(arch, watching, WAYBAR_CONNECTING, 100)?;
+        let (width, height) = crate::waybar::SIZE;
+        let [x, y, w, h] = chip;
+        let tablet = |at: f32, across: u32| {
+            #[expect(clippy::cast_possible_truncation, reason = "a pixel on a screen")]
+            let at = at.round() as i32;
+            at * 0x7FFF / i32::try_from(across).unwrap_or(1)
+        };
+        qmp.input_send_event(&[
+            absolute("x", tablet(x + w / 2.0, width)),
+            absolute("y", tablet(y + h / 2.0, height)),
+        ])?;
+        std::thread::sleep(Duration::from_millis(300));
+        for _ in 0..WAYBAR_CLICKS {
+            qmp.input_send_event(&[button_event("wheel-down", true)])?;
+            qmp.input_send_event(&[button_event("wheel-down", false)])?;
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        waybar_reads(arch, watching, WAYBAR_TOLD, 100 - WAYBAR_CLICKS)?;
+        std::thread::sleep(Duration::from_millis(500));
+        qmp.screendump(Some(DEVICE_ID), &dump)?;
+        println!(
+            "  {arch}: waybar read pulsed's sink at 100%, set it {WAYBAR_CLICKS} clicks down \
+             from the wheel, and was told it is at {}%; the screen is {}",
+            100 - WAYBAR_CLICKS,
+            dump.display()
+        );
+        Ok(())
+    };
+    let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, MARKER, hook)?;
+    Ok(())
+}
+
+/// Wait for waybar to say, having asked for the reason `why`, that the
+/// sink is at `volume` and its label reads it.
+fn waybar_reads(arch: Arch, watching: &mut Watching<'_>, why: &str, volume: u32) -> Result<()> {
+    let at = format!("is at {volume}%: the label reads \"vol {volume}%\"");
+    let read = watching.read_more(Instant::now() + SETTLE, |lines| {
+        lines
+            .iter()
+            .any(|line| line.contains(&format!("{WAYBAR_SINK}{why}")) && line.contains(&at))
+    })?;
+    if read {
+        Ok(())
+    } else {
+        Err(with_the_transcript(
+            &Error::new(format!(
+                "{arch}: waybar never said, {why}, that the sink {at}"
+            )),
+            watching,
+        ))
+    }
+}
+
+/// A button of QEMU's pointer, pressed or let go: `wheel-down` is a wheel
+/// click.
+fn button_event(button: &str, down: bool) -> String {
+    format!(
+        "{{\"type\":\"btn\",\"data\":{{\"down\":{down},\"button\":{}}}}}",
+        crate::display::json_string(button)
+    )
 }
 
 /// How many of `want`'s pixels the screen at `origin` does not show, each
