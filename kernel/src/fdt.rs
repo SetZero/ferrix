@@ -40,7 +40,7 @@ pub(crate) fn open(view: &BootView<'_>) -> Result<Fdt<'static>, &'static str> {
     }
     let at = info.physmap_base + offset;
 
-    // SAFETY: the range is inside the direct map, checked above, which is a
+    // SAFETY: (BOOT-DATA) the range is inside the direct map, checked above, which is a
     // live mapping of RAM for the life of the system. The loader copied the
     // tree there into memory nothing reclaims or writes, so a shared borrow of
     // it for `'static` aliases no writer.

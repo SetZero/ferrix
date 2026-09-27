@@ -107,7 +107,7 @@ fn panic(info: &PanicInfo<'_>) -> ! {
         abridged()
     }
     let entry = EXPLANATION.load(Ordering::Acquire);
-    // SAFETY: only `explain` stores here, and only the address of a `'static`
+    // SAFETY: (SHARED) only `explain` stores here, and only the address of a `'static`
     // catalog entry, which is never written through.
     let entry = unsafe { entry.as_ref() };
     conclude(entry.or_else(|| allocation_failure(info)))

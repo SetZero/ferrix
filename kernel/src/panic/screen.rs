@@ -97,7 +97,7 @@ struct Scratch {
 /// The cell [`SCRATCH`] lives in.
 struct ScratchCell(UnsafeCell<Scratch>);
 
-// SAFETY: only `draw` touches it, and only the first panic reaches `draw`:
+// SAFETY: (SHARED) only `draw` touches it, and only the first panic reaches `draw`:
 // `panic.rs` lets exactly one caller past its `REPORTING` swap, and every
 // later report halts before drawing. There is never a second accessor.
 unsafe impl Sync for ScratchCell {}
@@ -144,13 +144,13 @@ pub(crate) fn draw() {
     // The boot console may be part way through a line on this screen; it
     // draws nothing from here on.
     console::screen::stop();
-    // SAFETY: nothing else writes the framebuffer during a panic: the other
+    // SAFETY: (SHARED) nothing else writes the framebuffer during a panic: the other
     // processors have been asked to stop, the boot console has just stopped,
     // and this is the only report that draws.
     let Some(mut surface) = (unsafe { surface() }) else {
         return;
     };
-    // SAFETY: the one accessor, as the `Sync` impl for `ScratchCell` argues.
+    // SAFETY: (SHARED) the one accessor, as the `Sync` impl for `ScratchCell` argues.
     let scratch = unsafe { &mut *SCRATCH.0.get() };
     let count = console::recent(&mut scratch.text);
     let text = scratch.text.get(..count).unwrap_or_default();
@@ -163,7 +163,7 @@ pub(crate) fn draw() {
 ///
 /// # Safety
 ///
-/// Nothing else may write the framebuffer while the surface lives. There are
+/// (SHARED) Nothing else may write the framebuffer while the surface lives. There are
 /// two callers: [`draw`], during the one panic that draws, and the boot
 /// console (`console::screen`), which [`draw`] stops first.
 pub(crate) unsafe fn surface() -> Option<Surface<'static>> {
@@ -192,7 +192,7 @@ pub(crate) unsafe fn surface() -> Option<Surface<'static>> {
         return None;
     };
 
-    // SAFETY: `install` recorded `len` bytes mapped at `address`, and the
+    // SAFETY: (DEVICE) `install` recorded `len` bytes mapped at `address`, and the
     // check above shows the mapping still stands; the caller is the only
     // writer.
     let pixels = unsafe { core::slice::from_raw_parts_mut(address as *mut u8, len) };

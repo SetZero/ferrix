@@ -42,7 +42,7 @@ impl Mmio {
         let Some(at) = self.address(offset) else {
             return 0;
         };
-        // SAFETY: as `read32`; a byte has no alignment to get wrong.
+        // SAFETY: (DEVICE) as `read32`; a byte has no alignment to get wrong.
         unsafe { core::ptr::read_volatile(at as *const u8) }
     }
 
@@ -51,7 +51,7 @@ impl Mmio {
         let Some(at) = self.address(offset) else {
             return;
         };
-        // SAFETY: as `read8`.
+        // SAFETY: (DEVICE) as `read8`.
         unsafe { core::ptr::write_volatile(at as *mut u8, value) };
     }
 
@@ -60,7 +60,7 @@ impl Mmio {
         let Some(at) = self.address(offset) else {
             return 0;
         };
-        // SAFETY: as `read32`, with the caller holding the offset to a
+        // SAFETY: (DEVICE) as `read32`, with the caller holding the offset to a
         // multiple of two.
         unsafe { core::ptr::read_volatile(at as *const u16) }
     }
@@ -70,7 +70,7 @@ impl Mmio {
         let Some(at) = self.address(offset) else {
             return;
         };
-        // SAFETY: as `read16`.
+        // SAFETY: (DEVICE) as `read16`.
         unsafe { core::ptr::write_volatile(at as *mut u16, value) };
     }
 
@@ -79,7 +79,7 @@ impl Mmio {
         let Some(at) = self.address(offset) else {
             return 0;
         };
-        // SAFETY: `at` is inside a window the caller mapped as device memory,
+        // SAFETY: (DEVICE) `at` is inside a window the caller mapped as device memory,
         // and register offsets are naturally aligned by the hardware's own
         // layout. Volatile because the read may have a side effect and must
         // not be elided or reordered with its neighbours.
@@ -91,7 +91,7 @@ impl Mmio {
         let Some(at) = self.address(offset) else {
             return;
         };
-        // SAFETY: as `read32`.
+        // SAFETY: (DEVICE) as `read32`.
         unsafe { core::ptr::write_volatile(at as *mut u32, value) };
     }
 }

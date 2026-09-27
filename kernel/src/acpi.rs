@@ -56,7 +56,7 @@ impl Tables for DirectMap {
             page = page.checked_add(PAGE_SIZE)?;
         }
 
-        // SAFETY: the range is inside the direct map, checked immediately
+        // SAFETY: (BOOT-DATA) the range is inside the direct map, checked immediately
         // above against both of its ends, every page of it translates, and the
         // direct map is a live read-only alias of physical memory for the
         // whole life of the system. The lifetime is tied to `&self`, and

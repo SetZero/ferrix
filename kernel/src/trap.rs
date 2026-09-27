@@ -343,7 +343,7 @@ pub(crate) fn set_return_path(path: &'static ReturnPath) {
 /// The registered return path, if there is one.
 pub(crate) fn return_path() -> Option<&'static ReturnPath> {
     let path = RETURN_PATH.load(Ordering::Acquire);
-    // SAFETY: only `set_return_path` stores here, and only the address of a
+    // SAFETY: (SHARED) only `set_return_path` stores here, and only the address of a
     // `'static` that is never written through.
     unsafe { path.as_ref() }
 }

@@ -8,16 +8,5 @@
     "new file appears, or when one has fallen without being",
     "re-recorded. The target is an empty map."
   ],
-  "files": {
-    "acpi.rs": 1,
-    "backtrace.rs": 1,
-    "console.rs": 1,
-    "console/screen.rs": 1,
-    "fdt.rs": 1,
-    "main.rs": 18,
-    "mmio.rs": 6,
-    "panic.rs": 1,
-    "panic/screen.rs": 5,
-    "trap.rs": 1
-  }
+  "files": {}
 }

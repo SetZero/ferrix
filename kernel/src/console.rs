@@ -95,7 +95,7 @@ static RECENT_WRITTEN: AtomicUsize = AtomicUsize::new(0);
 ///
 /// # Safety
 ///
-/// The caller must have configured the port `arch::console::write_byte` writes
+/// (DEVICE) The caller must have configured the port `arch::console::write_byte` writes
 /// to, including any mapping it needs.
 pub(crate) unsafe fn mark_ready() {
     READY.store(true, Ordering::Release);

@@ -171,7 +171,7 @@ pub(crate) fn start(view: &BootView<'_>) {
     if !view.flag(FLAG) {
         return;
     }
-    // SAFETY: nothing else writes the framebuffer while the board holds it:
+    // SAFETY: (SHARED) nothing else writes the framebuffer while the board holds it:
     // the panic screen stops the board before it draws, and so does a display
     // driver taking the screen.
     let Some(mut surface) = (unsafe { crate::panic::screen::surface() }) else {

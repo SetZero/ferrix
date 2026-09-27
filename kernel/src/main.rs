@@ -108,10 +108,10 @@ extern "C" fn _start(boot_info: *const BootInfo) -> ! {
     // `BootInfo` at all — so `validate` is the first thing that runs, and it
     // checks the magic before it follows anything.
     //
-    // SAFETY: the loader passes a pointer to a `BootInfo` it built, inside the
+    // SAFETY: (BOOT-DATA) the loader passes a pointer to a `BootInfo` it built, inside the
     // direct map, immutable for the life of the system.
     let info = unsafe { &*boot_info };
-    // SAFETY: the same structure, so its `regions` and `cmdline` point at the
+    // SAFETY: (BOOT-DATA) the same structure, so its `regions` and `cmdline` point at the
     // arrays the loader wrote beside it, for as long as the system runs.
     let Ok(view) = (unsafe { info.validate() }) else {
         // No console yet, and no way to make one without a valid hand-off.
@@ -122,7 +122,7 @@ extern "C" fn _start(boot_info: *const BootInfo) -> ! {
     if arch::init_console(&view, &mut memory).is_err() {
         arch::halt()
     }
-    // SAFETY: `init_console` configured the port and, on AArch64, mapped it.
+    // SAFETY: (DEVICE) `init_console` configured the port and, on AArch64, mapped it.
     unsafe { console::mark_ready() };
 
     kmain(&view, &mut memory)
@@ -151,7 +151,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // `exit_boot_services`. A fault in that window is a jump into reclaimed
     // memory, which on x86-64 is a triple fault and a silent reset.
     //
-    // SAFETY: called exactly once, on the boot CPU, with interrupts masked.
+    // SAFETY: (ENTRY) called exactly once, on the boot CPU, with interrupts masked.
     unsafe { arch::init_traps() };
     // The trap return is the core's; what happens on it is the Linux
     // personality's, and the core holds only a pointer to it
@@ -187,7 +187,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // moment it arrives, which is the whole difference between a program and
     // an operating system.
     //
-    // SAFETY: called once, on the boot CPU, after `init_traps` filled the
+    // SAFETY: (DEVICE) called once, on the boot CPU, after `init_traps` filled the
     // vector table and while interrupts are still masked.
     let clocks = match unsafe { arch::init_interrupts(view) } {
         Ok(report) => report,
@@ -2057,7 +2057,7 @@ fn finish_memory(view: &BootView<'_>) -> Result<(), &'static str> {
         return Err("the W^X sweep cannot see the loader's identity map");
     }
 
-    // SAFETY: the kernel executes, and reaches its stack and the hand-off,
+    // SAFETY: (TRANSLATE) the kernel executes, and reaches its stack and the hand-off,
     // entirely through the upper half. Nothing has held a lower-half address
     // since `_start`.
     unsafe { arch::drop_identity_map(view) };
@@ -2074,7 +2074,7 @@ fn finish_memory(view: &BootView<'_>) -> Result<(), &'static str> {
         sweep_w_xor_x(view)?;
     }
 
-    // SAFETY: called once, after the last use of `crate::acpi::Firmware` —
+    // SAFETY: (KMEM) called once, after the last use of `crate::acpi::Firmware` —
     // interrupt bring-up above is the only reader — and the loader's code has
     // not run since the jump into `_start`.
     let reclaimed = unsafe { mm::reclaim_boot_memory(view) };
@@ -2201,12 +2201,12 @@ fn check_demand_paging() -> Result<(), &'static str> {
         }
 
         let value = 0xFEED_0000_u64 + index as u64;
-        // SAFETY: nothing is mapped here, which is the point: the write takes a
+        // SAFETY: (PROBE) nothing is mapped here, which is the point: the write takes a
         // page fault, the handler maps a zeroed page, and the CPU retries the
         // instruction. `volatile` so the compiler cannot decide the write is
         // dead and remove the fault along with it.
         unsafe { core::ptr::write_volatile(*probe as *mut u64, value) };
-        // SAFETY: the page is mapped now, by the fault the write above took.
+        // SAFETY: (PROBE) the page is mapped now, by the fault the write above took.
         let read_back = unsafe { core::ptr::read_volatile(*probe as *const u64) };
 
         if read_back != value {
@@ -2239,7 +2239,7 @@ fn check_demand_paging() -> Result<(), &'static str> {
     // above a measurement rather than a shrug.
     let settled = mm::free_frames();
     let neighbour = mm::DEMAND_WINDOW + 0x3000;
-    // SAFETY: unmapped, so this faults; the handler maps a zeroed page and the
+    // SAFETY: (PROBE) unmapped, so this faults; the handler maps a zeroed page and the
     // instruction retries.
     unsafe { core::ptr::write_volatile(neighbour as *mut u64, 1) };
     if mm::free_frames() != settled - 1 {
@@ -2249,7 +2249,7 @@ fn check_demand_paging() -> Result<(), &'static str> {
     // The rest of the page must read as zero: a page handed out still holding
     // the last owner's data is an information leak, and from stage 6 the last
     // owner is another process.
-    // SAFETY: mapped by the faults above.
+    // SAFETY: (PROBE) mapped by the faults above.
     let tail = unsafe { core::ptr::read_volatile((mm::DEMAND_WINDOW + 0x800) as *const u64) };
     if tail != 0 {
         return Err("a faulted-in page was not zeroed");
@@ -2823,19 +2823,19 @@ fn check_vmap_contents(mapping: vmap::Mapping) -> Result<(), &'static str> {
         }
         previous = Some(phys);
 
-        // SAFETY: `at` is inside an allocation this function was handed, so it
+        // SAFETY: (KMEM) `at` is inside an allocation this function was handed, so it
         // is mapped writable and nothing else refers to it.
         let existing = unsafe { core::ptr::read_volatile(at as *const u64) };
         if existing != 0 {
             return Err("a vmap page was not zeroed before it was handed out");
         }
-        // SAFETY: as above.
+        // SAFETY: (KMEM) as above.
         unsafe { core::ptr::write_volatile(at as *mut u64, 0xA11C_0000 + page) };
     }
 
     for page in 0..pages {
         let at = mapping.base + page * PAGE_SIZE;
-        // SAFETY: as above; written a moment ago.
+        // SAFETY: (KMEM) as above; written a moment ago.
         if unsafe { core::ptr::read_volatile(at as *const u64) } != 0xA11C_0000 + page {
             return Err("a vmap page did not hold what was written to it");
         }
@@ -2895,10 +2895,10 @@ fn check_stacks() -> Result<(), &'static str> {
     // The last usable word, which is where the first push lands, and the first,
     // which is the byte an overflow reaches last before the guard.
     for at in [stack.top - 8, stack.base] {
-        // SAFETY: inside the stack's own mapping, which is writable and which
+        // SAFETY: (KMEM) inside the stack's own mapping, which is writable and which
         // nothing else refers to — no CPU is running on this stack.
         unsafe { core::ptr::write_volatile(at as *mut u64, 0x57AC_0000_0000_0000) };
-        // SAFETY: as above.
+        // SAFETY: (KMEM) as above.
         if unsafe { core::ptr::read_volatile(at as *const u64) } != 0x57AC_0000_0000_0000 {
             return Err("a kernel stack did not hold what was written to it");
         }
@@ -2911,7 +2911,7 @@ fn check_stacks() -> Result<(), &'static str> {
         return Err("a kernel stack has no guard page above it");
     }
 
-    // SAFETY: nothing is running on it; it was allocated a few lines above and
+    // SAFETY: (KMEM) nothing is running on it; it was allocated a few lines above and
     // never installed anywhere.
     unsafe { vmap::free_stack(stack) }.map_err(|_| "a kernel stack could not be freed")?;
     if mm::free_frames() != free_before {
@@ -3460,7 +3460,7 @@ fn check_direct_map(view: &BootView<'_>, memory: &EarlyMemory) -> Result<(), &'s
     let info = view.raw();
 
     for offset in [0u64, 1, 2, 3, 64, 4095] {
-        // SAFETY: `kernel_virt` is where the loader mapped the kernel image and
+        // SAFETY: (BOOT-DATA) `kernel_virt` is where the loader mapped the kernel image and
         // `offset` is inside its first page, which is `.text` and always
         // present.
         let through_image =

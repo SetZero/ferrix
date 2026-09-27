@@ -101,7 +101,7 @@ fn in_kernel(address: u64) -> bool {
 fn read_word(root: u64, virt: u64) -> Option<u64> {
     let _ = mm::translate_in(root, virt)?;
     let address = usize::try_from(virt).ok()? as *const usize;
-    // SAFETY: a page is mapped at `virt`, the address is word-aligned by the
+    // SAFETY: (KMEM) a page is mapped at `virt`, the address is word-aligned by the
     // caller's check, and reading a word of stack has no side effects.
     let value = unsafe { address.read_volatile() };
     Some(value as u64)
