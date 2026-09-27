@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-15 findings are open and 30 are closed, of 45. F-38, F-39 and F-40 were found by other work on 2026-09-26 and recorded by the certification review that work now goes through, and all three closed the same day with their fixes: F-39, a native process any user made running as root; F-38, a device model writing a dead driver's frames after they were given back; and F-40, a delegated job lifting its own limits, closed by a job right of its own for setting limits. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
+15 findings are open and 30 are closed, of 45. F-10 was re-measured on 2026-09-27 over the checks written for it module by module: 89.5% of the certified item's statements on x86-64, 90.2% on AArch64 and 84.8% on ARMv7-A, with 77, 146 and 130 still needing a test and every other unreached statement argued or put down to absent hardware. F-38, F-39 and F-40 were found by other work on 2026-09-26 and recorded by the certification review that work now goes through, and all three closed the same day with their fixes: F-39, a native process any user made running as root; F-38, a device model writing a dead driver's frames after they were given back; and F-40, a delegated job lifting its own limits, closed by a job right of its own for setting limits. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -330,7 +330,7 @@ only `debug_hook`, which its own handler runs. The boot's lines are unchanged.
 
 ## B. Verification
 
-### F-10 — statement coverage is 82.2% on x86-64, not 100%
+### F-10 — statement coverage is 84.8–90.2%, not 100%
 **Major**, re-measured 2026-09-26 on main at a6d505a2, with KASLR. Every boot
 gate that exercises the item now contributes, on every architecture: the
 certified item is 5,103 of 6,828 statements on x86-64 (74.7%), 5,189 of 7,041
@@ -380,6 +380,44 @@ statement a test runs but the line table credits elsewhere, and hardware the
 TCG machine lacks but gate 6's KVM boot has (the invariant TSC, the speculation
 controls). x86-64 still owes **757** statements a test, in the other modules;
 the Arm figures above predate the tool's fixes.
+
+**All three, 2026-09-27** (on main at c14846aa, measured on 9076655c and
+carried across the kernel relayout, which moved files without changing a
+statement of the item): x86-64 **6,723 of 7,508, 89.5%**; AArch64 **6,869
+of 7,616, 90.2%**; ARMv7-A **6,296 of 7,427, 84.8%**. Three passes wrote
+the checks, one per part of the item, and the suite measured them together:
+
+* *The memory layer and the objects* (`user/`, `object/`, `mm`, `vmap`,
+  `early`): each operation of the memory layer run once per allocation it
+  makes with that allocation failed (`fallible::inject_once`), the refusals
+  of an address space and of the core objects, the paths no program takes,
+  and every core error and object formatted as a diagnostic would. It found
+  and fixed three leaks and wrong answers under failure: the page tables a
+  fault that ran out of memory left, a forked space's root when the space
+  could not be made, and a private file write that could not record its copy.
+* *The Arm architectures* (`arch/aarch64`, `arch/armv7a`):
+  `arch::check_machine` (FX-0308) decodes a trap frame of every exception
+  class and fault status into Linux's signal and masks lines at the
+  interrupt controller; programs end by their own exceptions; the
+  speculation tables are held to Linux's for cores QEMU does not have; and
+  the suite boots AArch64 from its device tree (with a GICv2 and as the
+  Pixel 7's GICv3), with `nosmp` and into a reset, and ARMv7-A on a
+  Cortex-A15, one processor, 3 GiB and into a reset.
+* *The kernel's services* (`sched`, `syscall`, `iommu`, `devmgr`, `claim`,
+  `hooks`, `console`): the waits before the scheduler, the reaper under
+  failure, the native calls' refusals (FX-0903), the small services the
+  item leans on (FX-0904), and a boot with the command-line options no
+  other gate gives.
+
+What those reach no further is argued statement by statement in
+`coverage-argued-<arch>.json` -- 275, 264 and 329 arguments over 368, 320
+and 485 statements -- among them the quarantine F-38 added, whose check
+arms are failure paths and whose whole machinery is another architecture's
+on ARMv7-A, which programs no IOMMU unit. **77 statements on x86-64, 146 on
+AArch64 and 130 on ARMv7-A still need a test**; COVERAGE-WORKLIST.md lists
+them by module, `syscall/native.rs`, `user/space.rs`, AArch64's `trap` and
+`arch/aarch64` and `object/` the largest. The floors are 88.5, 89.0 and
+83.5.
 
 *Closes when:* the *needs-a-test* category is covered or individually
 justified on every architecture. The argued categories have their argument

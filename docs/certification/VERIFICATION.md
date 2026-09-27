@@ -67,45 +67,53 @@ check.rs` at 9,537 lines, `object/check.rs` at 3,318, `user/check.rs` at 1,263,
 
 ## 3. Structural coverage
 
-Measured 2026-09-26, and **not comparable with the figures published on
-2026-09-25**, which two defects in the measurement made wrong in opposite
-directions (§3.4). Raw per-file data in `coverage-*.json`; the ratchet in
-`coverage-floor.json`. **x86-64's column is re-measured** later the same day,
-on main at 195a2e93 with F-10's x86-64 tests and with two more defects of the
-tool fixed (§3.4), which change what counts as a statement; the Arm columns
-are still a6d505a2's under the earlier tool, and are not comparable with it
-until they are re-measured.
+Measured 2026-09-27 on all three architectures with the same tool, over the
+checks F-10's module-by-module passes wrote (FINDINGS.md F-10), and **not
+comparable with the figures published on 2026-09-25**, which two defects in
+the measurement made wrong in opposite directions, nor with the 2026-09-26
+figures, which two more defects inflated and deflated (§3.4). Raw per-file
+data in `coverage-*.json`; the ratchet in `coverage-floor.json`.
 
 ### 3.1 The suite, every architecture
 
 The union of every boot gate that exercises the item and passes under the
-plugin — `cargo xtask coverage` runs them. Sixteen on x86-64: `test-boot`,
-`test-shell`, `test-vfs`, `test-net`, `test-threads`, `test-pty`, `test-btrfs`,
-`test-powerfail`, `test-display`, `test-input`, `test-jobs`, `test-restart` and
-`test-sysfs`, and three more boots of `test-boot` on machines the rest do not
-present: `boot-legacy`, a q35 with no HPET and a processor with `RDRAND` and
-no `RDSEED` (`FERRIX_X86_MACHINE=hpet=off`, `FERRIX_X86_CPU`), whose clock is
-the TSC measured against the PIT; `boot-reset`, which ends in the firmware's
-reset rather than a power-off; and `boot-single`, one processor. Nine on AArch64 and on ARMv7-A (`--smp 2`): the x86-64-only four
-are `test-jobs`, `test-restart` and `test-sysfs`, which carry uutils, and
-`test-vfs`, which fails off x86-64 for a reason of its own (§3.5). AArch64 runs
-`test-boot` a second time on a `virt` with a GICv3 and its ITS
-(`FERRIX_ARM_MACHINE=gic-version=3`): the default `virt` has a GICv2, and
-without that boot the Pixel 7's interrupt controller reads as 187 statements
-nobody reached. Debug profile, measured on main at a6d505a2, with KASLR:
+plugin — `cargo xtask coverage` runs them. Twelve gates on x86-64:
+`test-boot`, `test-shell`, `test-vfs`, `test-net`, `test-threads`, `test-pty`,
+`test-btrfs`, `test-powerfail`, `test-display`, `test-input`, `test-jobs`,
+`test-restart` and `test-sysfs`, and four more boots of `test-boot` on
+machines or command lines the rest do not present: `boot-legacy`, a q35 with
+no HPET and a processor with `RDRAND` and no `RDSEED`
+(`FERRIX_X86_MACHINE=hpet=off`, `FERRIX_X86_CPU`), whose clock is the TSC
+measured against the PIT; `boot-reset`, which ends in the firmware's reset
+rather than a power-off; `boot-single`, one processor; and `boot-options`,
+the options no other gate gives -- the boot console on the framebuffer, a pid
+1 the image does not have, an `ferrix.onexit` the kernel does not know, and
+`nokaslr`. Fifteen boots on AArch64 and fourteen on ARMv7-A (`--smp 2`): the
+x86-64-only four are `test-jobs`, `test-restart` and `test-sysfs`, which carry
+uutils, and `test-vfs`, which fails off x86-64 for a reason of its own
+(§3.5). AArch64 boots `test-boot` again on a `virt` with a GICv3 and its ITS
+(`FERRIX_ARM_MACHINE=gic-version=3`), from its device tree with no ACPI, once
+with the GICv2 and once as the Pixel 7 is (a GICv3 and ITS on a `max`
+processor), with `nosmp`, into a reset, and with the options above. ARMv7-A
+boots it again on a Cortex-A15, the one other core `virt` takes and one the
+Spectre defences apply to, into a reset, on one processor, with 3 GiB so that
+firmware loads the kernel above the split, as the DK1's memory always is, and
+with the options. Debug profile, with KASLR, measured on main at 9076655c and
+carried to c14846aa across the kernel relayout, which moved files without
+changing a statement of the item:
 
 | Ring | x86-64 | AArch64 | ARMv7-A |
 |---|---:|---:|---:|
-| `core` | 4,050 / 5,022 — 80.6% | 3,890 / 5,441 — 71.5% | 3,625 / 5,325 — 68.1% |
-| `item` | 1,483 / 1,713 — 86.6% | 1,299 / 1,600 — 81.2% | 1,270 / 1,583 — 80.2% |
-| **Certified item** | **5,533 / 6,735 — 82.2%** | **5,189 / 7,041 — 73.7%** | **4,895 / 6,908 — 70.9%** |
-| `load` (not claimed) | 8,644 / 11,954 — 72.3% | 8,000 / 11,709 — 68.3% | 8,115 / 11,809 — 68.7% |
+| `core` | 5,092 / 5,649 — 90.1% | 5,262 / 5,796 — 90.8% | 4,712 / 5,606 — 84.1% |
+| `item` | 1,631 / 1,859 — 87.7% | 1,607 / 1,820 — 88.3% | 1,584 / 1,821 — 87.0% |
+| **Certified item** | **6,723 / 7,508 — 89.5%** | **6,869 / 7,616 — 90.2%** | **6,296 / 7,427 — 84.8%** |
+| `load` (not claimed) | 9,231 / 12,989 — 71.1% | 8,997 / 12,980 — 69.3% | 9,136 / 13,102 — 69.7% |
 
-x86-64 at 195a2e93, the Arm pair at a6d505a2. On x86-64 the same suite's
-traces read 74.8% under the earlier tool before the tests below were written;
-the tool's two fixes account for most of the rise, by taking out of the
-denominator lines with no statement in the image and rows filed under the
-wrong file, and the tests for the rest.
+ARMv7-A trails because more of its residual is hardware and configuration it
+does not have: 444 of its 1,131 unreached statements, against 247 of 785 on
+x86-64 -- no IOMMU unit programmed, no framebuffer, no SMMU -- and the
+quarantine and translated paths that only a translating domain takes are
+another architecture's there (§3.1.1).
 
 **Every gate now counts.** `test-btrfs`, `test-shell`, `test-sysfs`,
 `test-restart` and the rest used to pass under the plugin and write an empty
@@ -117,11 +125,11 @@ start and `test-shell` boots four times. The one boot that still leaves
 nothing is `test-powerfail`'s churn, whose point is that QEMU is killed with no
 chance to finish anything; its replay boots count.
 
-**Most of it is the boot.** One `test-boot` reaches 78.7% of the item on
-x86-64; the other fifteen gates add 3.5 points between them. The self-checks
+**Most of it is the boot.** One `test-boot` reaches 86.4% of the item on
+x86-64; the other sixteen boots add 3.1 points between them. The self-checks
 that run on every boot (§2) are the item's real test suite, and the gates
-mostly exercise the uncertified load ring above it — 72.3% of `load` against
-one boot's 59.8%.
+mostly exercise the uncertified load ring above it — 71.1% of `load` against
+one boot's 60.5%.
 
 ### 3.1.1 The residual
 
@@ -133,19 +141,20 @@ defensive code, and neither conversation can start from a percentage.
 
 | | x86-64 | AArch64 | ARMv7-A |
 |---|---:|---:|---:|
-| Unreached | 1,202 | 1,852 | 2,013 |
-| Argued: another architecture or board | 130 | 124 | 144 |
-| Argued: reached only when stopping | 56 | 8 | 61 |
-| Argued: reached only when something has failed | 9 | - | - |
-| Argued: run, and credited to another line | 1 | - | - |
-| Hardware the machine does not present | 249 | 239 | 362 |
-| **Needs a test** | **757** | **1,481** | **1,446** |
+| Unreached | 785 | 747 | 1,131 |
+| Argued: another architecture or board | 184 | 156 | 266 |
+| Argued: reached only when stopping | 190 | 150 | 203 |
+| Argued: reached only when something has failed | 76 | 82 | 68 |
+| Argued: run, and credited to another line | 11 | 12 | 20 |
+| Hardware the machine does not present | 247 | 201 | 444 |
+| **Needs a test** | **77** | **146** | **130** |
 
 [COVERAGE-WORKLIST.md](COVERAGE-WORKLIST.md) groups the last row by module,
 with each file's count on every architecture and the lines no architecture
-reaches, so that a module can be taken as one piece of work. The largest on
-x86-64: `user/space.rs` 110, `iommu.rs` 83, `main.rs` 68, `syscall/native.rs`
-49, `console/screen.rs` 44, `mm.rs` and `user/vmo.rs` 41.
+reaches, so that a module can be taken as one piece of work. The largest:
+`syscall/native.rs` 24, 19 and 20; `user/space.rs` 6, 22 and 25; `trap.rs`
+25 on each Arm architecture; on AArch64 `arch/aarch64/console.rs` 14 and
+`arch/aarch64/trng.rs` 10.
 
 **Argued one statement at a time.** A file-level category cannot argue a line
 of an otherwise covered file, and most of what F-10 leaves is exactly that.
@@ -171,11 +180,20 @@ that asks `arch_prctl` both of its refusals; stage 4 checks shootdown page sets 
 past their ceiling. `trap.rs`'s 22 left are the stopping path and three
 invariants; `smp.rs`'s 6 are `debug_assert!` and `fatal!` messages.
 
+**Then every module, on all three architectures** (2026-09-27). The memory
+layer, the core objects, the Arm architectures' code and the kernel's
+services were taken the same way, one pass each, and measured together
+(FINDINGS.md F-10). What their checks leave is argued in 275, 264 and 329
+arguments over 368, 320 and 485 statements; the rest of the argued rows are
+the file-level categories. The per-statement arguments were written against
+each pass's own tree and carried to the measured one by a diff of each file,
+narrowed to the lines still unreached; the generator's check holds every one
+to its line.
+
 The failure path is mostly covered now, and by a passing test: `test-shell`'s
 last boot asks for `ferrix.onexit=panic` and gets FX-1501, so the panic report
-runs — 16 statements of it are left on x86-64 and 8 on AArch64. ARMv7-A's
-61 are mostly the panic screen's renderer (53), which that boot does not draw
-there.
+runs. What is left of it is argued, with each `fatal!` arm that follows a
+self-check: a passing boot is one that never takes it.
 
 ### 3.2 One boot, and both profiles
 
@@ -238,9 +256,9 @@ statement coverage. This is that measurement, for ring-0 code, on every
 architecture and both profiles in the reference configuration, without
 modifying the toolchain.
 
-**What it does not.** 82.2% is not 100%. The residual is enumerated and
-sorted, and 757 of x86-64's 1,202 statements still need a test rather than an
-argument (F-10); AArch64 and ARMv7-A owe 1,481 and 1,446 as last measured. There is no decision
+**What it does not.** 89.5%, 90.2% and 84.8% are not 100%. The residual is
+enumerated and sorted, and 77 of x86-64's 785 statements, 146 of AArch64's 747
+and 130 of ARMv7-A's 1,131 still need a test rather than an argument (F-10). There is no decision
 or MC/DC coverage, which DAL C does not require and DAL B and A do (F-13).
 
 Two biases, both optimistic and both declared in the tool's own docstring: a

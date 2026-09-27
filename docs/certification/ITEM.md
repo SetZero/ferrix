@@ -42,12 +42,12 @@ three nested rings. A file in no ring fails the build.
 
 | Ring | Product lines | In-kernel test lines | Carries |
 |---|---:|---:|---|
-| `core` | 49,529 | 12,733 | EAL6+, ASIL D, SIL 3/4, DAL B — *aspirational* |
-| `item` | 8,708 | 1,351 | EAL5+, DAL C, Class C, SIL 2 — *the present claim* |
-| `load` | 49,043 | 25,179 | nothing |
+| `core` | 52,417 | 13,503 | EAL6+, ASIL D, SIL 3/4, DAL B — *aspirational* |
+| `item` | 9,204 | 1,420 | EAL5+, DAL C, Class C, SIL 2 — *the present claim* |
+| `load` | 53,420 | 27,711 | nothing |
 
-**The certified item is `core` + `item`: 58,237 lines of product code**, against
-49,043 lines of uncertified load. The item is 54.3% of the kernel's product
+**The certified item is `core` + `item`: 61,621 lines of product code**, against
+53,420 lines of uncertified load. The item is 53.6% of the kernel's product
 code. (Measured 2026-09-26, after W-5 moved the Linux dispatcher's routing and
 five of the personality's files out of the `item` ring, see below, and after
 F-23 made the item's allocations fallible. That added 2,711 lines, most of
@@ -67,7 +67,11 @@ load before it, the vDSO and the other work since F-35 included. F-37 added
 and the charges on a VMO's mappers -- 30 to `item`, the boot's `kmem` line
 and the quota line's heap, and 447 to the load, the charge at each of its
 sites; and 445 lines of self-test. The charging in the libraries the load
-calls, `libs/kernel/kmem` among them, is outside the kernel and not counted here.)
+calls, `libs/kernel/kmem` among them, is outside the kernel and not counted here.
+Re-measured 2026-09-27 with F-10's coverage evidence, on main at 7db6e8e8: the
+table above, after the checks F-10's passes wrote, F-38's quarantine, F-40's
+limit right and the other work since F-37, and the kernel relayout, which put
+the SoC code in `platform/` and the Arm peripherals in `arch/arm_common/`.)
 
 ### `core` — the minimal trusted base
 

@@ -181,7 +181,8 @@ kernel moves under them.
 
 ### 2.1 Measure AArch64 and ARMv7-A — **F-12**
 **Done 2026-09-25, the suite since 2026-09-26**: AArch64 73.7%, ARMv7-A 70.9%
-(`--smp 2`). AArch64's single-boot figure first published, 46.1%, had the
+(`--smp 2`); 90.2% and 84.8% on 2026-09-27 under the corrected tool, with
+their own suite boots and checks (2.3). AArch64's single-boot figure first published, 46.1%, had the
 sentinel defect in 2.3; ARMv7-A's 70.8% did not, and stands for its tree.
 
 ### 2.2 Measure the release profile — **F-11**
@@ -204,6 +205,14 @@ architecture code, `trap` and `smp` are done on x86-64 -- covered, or argued
 per statement in `coverage-argued-x86_64.json`. Next by size: `user/space.rs`
 110, `iommu.rs` 83, `main.rs` 68, `syscall/native.rs` 49. The Arm pair
 repeat the pass for their own architecture code.
+
+**Re-measured on all three 2026-09-27**, after the memory layer, the objects,
+the Arm architectures and the kernel's services were each taken the same way:
+**89.5%** on x86-64, **90.2%** on AArch64, **84.8%** on ARMv7-A, with
+**77, 146 and 130** statements that still need a test and the rest argued per
+statement or put down to absent hardware. Next by size: `syscall/native.rs`
+(24, 19, 20), `user/space.rs` (6, 22, 25), `trap.rs` on the Arm pair (25
+each), and on AArch64 `arch/aarch64/console.rs` 14 and `trng.rs` 10.
 
 ### 2.4 Make coverage a ratchet
 **Done 2026-09-26** as `cargo xtask coverage` against `coverage-floor.json`.

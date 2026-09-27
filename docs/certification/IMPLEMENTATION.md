@@ -483,8 +483,8 @@ floor in `coverage-floor.json`. One gate by hand is still
    drcov plugin (the one used here is built from QEMU's source tree). Floors
    are the measured figure less a point.
 
-**What is left is F-10's test-writing**: 757 statements on x86-64, 1,481 on
-AArch64 and 1,446 on ARMv7-A, by module in COVERAGE-WORKLIST.md. Take a module,
+**What is left is F-10's test-writing**: 77 statements on x86-64, 146 on
+AArch64 and 130 on ARMv7-A (2026-09-27), by module in COVERAGE-WORKLIST.md. Take a module,
 write the tests, re-run `cargo xtask coverage`, regenerate the evidence and
 raise the floor. A statement no run of the measured machine can reach gets its
 argument in `coverage-argued-<arch>.json` instead, which the generator checks
@@ -497,6 +497,15 @@ three more boots in the suite (`boot-legacy`, `boot-reset`, `boot-single`),
 or argued statement by statement (74). Two more tool defects were found
 doing it (VERIFICATION.md §3.4), which is most of x86-64's move from 74.7% to
 82.2%. The floor is raised to 81.0.
+
+**Advanced 2026-09-27 on every architecture**: the memory layer and the
+objects, the Arm architectures' code and the kernel's services, one pass
+each, with the checks FINDINGS.md F-10 lists and seven more suite boots on the
+Arm pair and one on every architecture (`boot-options`). Measured together:
+89.5% on x86-64, 90.2% on AArch64, 84.8% on ARMv7-A, the rest argued in 275,
+264 and 329 per-statement arguments or put down to absent hardware, and 77,
+146 and 130 statements still needing a test. The floors are raised to 88.5,
+89.0 and 83.5.
 
 ---
 

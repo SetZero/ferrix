@@ -16,7 +16,7 @@ that does not exist.
 | Target | Standard | Verdict |
 |---|---|---|
 | EAL5+ | Common Criteria (ISO/IEC 15408) | **Not met.** Security Target and vulnerability analysis written, and the boundary has no upward reference left; blocked on design evidence at module granularity and an accredited laboratory. |
-| DAL C | DO-178C / ED-12C | **Not met.** Coverage is measured on every architecture, at 82.2% on x86-64; planning data, requirements traceability and the 757 x86-64 statements that still need a test are not done. |
+| DAL C | DO-178C / ED-12C | **Not met.** Coverage is measured on every architecture, at 89.5% on x86-64, 90.2% on AArch64 and 84.8% on ARMv7-A, every other unreached statement argued or put down to absent hardware; planning data, requirements traceability and the 77, 146 and 130 statements that still need a test are not done. |
 | Class C | IEC 62304 | **Closest of the four.** No SOUP in the item; element-level safety analysis written. Blocked on a QMS and the integrator's risk file. |
 | SIL 2 | EN 50716:2023 | **Reachable.** Most of Annex A satisfied; generic software argument and application conditions written. Blocked on independent assessment. |
 
@@ -61,9 +61,9 @@ enforced on every build by `scripts/check/check-item-boundary.py`. Memory protec
 scheduling, capability objects, the trap and syscall entry paths, the IOMMU,
 SMP and device enumeration are inside; the VFS, btrfs, the network stack, the
 Linux personality -- its dispatcher, `mmap`, `futex` and threads included --
-and the drivers are uncertified load above it, 49,043 lines of it.
+and the drivers are uncertified load above it, 53,420 lines of it.
 
-The boundary is nested so it can ratchet inward: a 49,529-line `core` ring is
+The boundary is nested so it can ratchet inward: a 52,417-line `core` ring is
 named now as the destination for a later EAL6+ or ASIL D effort, so that
 raising the target does not mean rewriting every artifact scoped to the old
 boundary.
@@ -72,16 +72,16 @@ boundary.
 
 | | |
 |---|---:|
-| Item product code | 58,237 lines |
-| Uncertified load | 49,043 lines |
-| In-kernel self-tests | 39,263 lines |
-| Statement coverage, certified item | **82.2%** x86-64, 73.7% AArch64, 70.9% ARMv7-A (Arm before the tool's latest fixes) |
-| Statement coverage, core ring | 80.6% x86-64 |
-| Unreached statements, x86-64 | 1,202 — **196 argued, 249 hardware absent, 757 need a test** |
+| Item product code | 61,621 lines |
+| Uncertified load | 53,420 lines |
+| In-kernel self-tests | 42,634 lines |
+| Statement coverage, certified item | **89.5%** x86-64, **90.2%** AArch64, **84.8%** ARMv7-A |
+| Statement coverage, core ring | 90.1% x86-64, 90.8% AArch64, 84.1% ARMv7-A |
+| Unreached statements | x86-64 785 — 461 argued, 247 hardware absent, **77 need a test**; AArch64 747 — 400, 201, **146**; ARMv7-A 1,131 — 557, 444, **130** |
 | SOUP in the item | **0** |
 | External crates, host-side | 21 |
 | Upward boundary references | **0**, from 94 at the start of the work (29 and 62 before the gate could resolve module paths) |
-| `unsafe` blocks, all documented | 662 |
+| `unsafe` blocks, all documented | 800 |
 | Directly recursive functions in the item | **0**, of 2,173 |
 | Allocations in the item that stop the machine when memory runs out | **0** in its source; 73 at bring-up, by design; 13 in the load `process_create` and `process_start` run, recorded, and the load's callees beyond those (F-23, MEMORY-AND-TIMING.md §1.3) |
 | Job quotas the ST claims (FRU_RSA.1) that are built | **3** of 3, as refined: a job's memory -- its programs' frames and page tables and the kernel heap the Linux personality holds for them -- native objects and tasks, each refused at its limit with a sibling going on, and a processor shared by job weight (one task alone kept 50.0% against eight) (F-35, F-37 closed) |
@@ -94,10 +94,9 @@ boundary.
 | Assembly | 500 lines, 22 allow-listed sites, outside the Pixel 7 loader |
 | Cargo features in `kernel/`/`boot/uefi/` | 0 |
 
-The coverage rows were measured over the item as it stood before W-5 moved the
-Linux dispatcher's routing and five of the personality's files to the load ring
-(2026-09-26, [ITEM.md](ITEM.md) §2), and are to be re-measured over the new
-boundary with the next coverage run; the other rows are measured on it.
+The coverage rows were measured on 2026-09-27 over the item as W-5 left it,
+the Linux dispatcher's routing and five of the personality's files in the load
+ring ([ITEM.md](ITEM.md) §2); the other rows are measured on the same tree.
 
 Two of these were unknown before this audit and are the reason it was worth
 doing. The kernel had **no structural coverage measurement at all** — the
@@ -160,7 +159,7 @@ decomposed to the item's modules.
 
 62 objectives, 5 requiring independence.
 
-*In place:* statement coverage is now measurable and measured (F-10 at 82.2% on x86-64),
+*In place:* statement coverage is now measurable and measured (F-10 at 84.8–90.2% across the three architectures),
 which was the objective everyone assumes is impossible for a kernel. 492 lines
 of assembly across 22 allow-listed sites makes the source-to-object question
 tractable. Zero Cargo features in the item, and one two-valued build switch of
@@ -227,12 +226,13 @@ In order of value per unit of effort:
    assert rich properties; they need requirement ids attached and low-level
    requirements to attach them to. This one piece of work unblocks DAL C,
    62304 §5.4 and `ADV_TDS.3`.
-2. **Cover the 757 x86-64 statements that need a test (F-10).** Every gate
-   now counts on every architecture, and `cargo xtask coverage` ratchets the
-   union; what is left is tests. COVERAGE-WORKLIST.md splits them by module,
-   so the work divides, and `coverage-argued-<arch>.json` takes a statement
-   that cannot be reached with its reason. x86-64's architecture code, `trap`
-   and `smp` are done. AArch64 owes 1,481 and ARMv7-A 1,446 as last measured.
+2. **Cover the 77, 146 and 130 statements that still need a test (F-10)**, on
+   x86-64, AArch64 and ARMv7-A. Every gate counts on every architecture, and
+   `cargo xtask coverage` ratchets the union; what is left is tests.
+   COVERAGE-WORKLIST.md splits them by module, `syscall/native.rs`,
+   `user/space.rs`, AArch64's `trap` and `arch/aarch64` and `object/` the
+   largest, and `coverage-argued-<arch>.json` takes a statement that cannot be
+   reached with its reason.
 3. **Adopt Ferrocene (F-17).** A qualified toolchain is the difference between
    "written in a memory-safe language" as a talking point and as evidence.
    Whether it covers `armv7a-none-eabi` and the UEFI targets is the first
