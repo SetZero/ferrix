@@ -2025,7 +2025,8 @@ fn attach_data_image(command: &mut Command, arch: Arch, args: &Args) {
 /// `run-compositor`, unless `--tmpfs-root` says otherwise; and, made fresh
 /// each time so the boot depends on nothing an earlier one left, for
 /// `test-init`, whose pid 1 the switch moves onto it (`docs/INIT.md` §7.3),
-/// and `test-chrome-window` and `test-restart` under `--btrfs-root`.
+/// `test-clipboard`, whose driver starts before that switch and whose agent
+/// after it, and `test-chrome-window` and `test-restart` under `--btrfs-root`.
 fn attach_root_disk(command: &mut Command, arch: Arch, args: &Args) -> Result<()> {
     // A test's root is made fresh for it, so its boot still depends on
     // nothing an earlier one left.
@@ -2034,7 +2035,10 @@ fn attach_root_disk(command: &mut Command, arch: Arch, args: &Args) -> Result<()
             args.command.as_deref(),
             Some("test-chrome-window" | "test-restart")
         ))
-        || args.command.as_deref() == Some("test-init");
+        || matches!(
+            args.command.as_deref(),
+            Some("test-init" | "test-clipboard")
+        );
     if !test && !matches!(args.command.as_deref(), Some("run" | "run-compositor")) {
         return Ok(());
     }

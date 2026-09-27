@@ -15,6 +15,14 @@
 //!
 //! The guest runs the two one after the other under zinc, so its own copy
 //! cannot race the host's grab for the selection.
+//!
+//! The boot switches its root, as the desktop `run-compositor` boots does:
+//! a fresh root volume is attached, `devmgr` -- and with it the port's
+//! driver -- starts from the initramfs, pid 1 moves onto the volume, and the
+//! compositor and the agent start from there (`docs/INIT.md` §7.3). A boot
+//! without the switch passed while every desktop with one had no clipboard,
+//! because the driver's socket was a path in the initramfs's `/tmp`; so the
+//! gate requires the kernel's line that the switch happened.
 
 use std::io::{Read as _, Write as _};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -41,6 +49,10 @@ const HOST_CAPS: u32 = cap::bit(cap::CLIPBOARD_BY_DEMAND)
 /// clipboard's own count, and a guest that answers every grab with the same
 /// small number loses to any of them.
 const HOST_SERIAL: u32 = 7;
+
+/// What the kernel says when it has moved pid 1 onto the root volume
+/// (`docs/INIT.md` §7.3).
+const SWITCHED: &str = "root     pid 1 moved onto the volume with the switch";
 
 /// How long the guest may take from the compositor being up to the host
 /// holding the guest's text.
@@ -136,6 +148,15 @@ fn one(arch: Arch, args: &Args) -> Result<()> {
     let lines = lines?;
 
     let log = paths::build_dir(arch).join("serial.log");
+    // The desktop `run-compositor` boots: `devmgr`, and so the port's driver,
+    // started before `/` moves onto the root volume, and the agent after.
+    if !lines.iter().any(|line| line.contains(SWITCHED)) {
+        return Err(Error::new(format!(
+            "{arch}: the boot never moved pid 1 onto the root volume, so the port's driver and \
+             the agent were not on two sides of the switch.\n  Serial output is in {}",
+            log.display()
+        )));
+    }
     if !lines.iter().any(|line| line.contains(&pasted)) {
         return Err(Error::new(format!(
             "{arch}: the guest's `clip paste` never printed the host's {} bytes.\n  Serial output is in {}",
