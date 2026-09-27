@@ -288,6 +288,8 @@ fn status_of(side: &Side, handle: Handle) -> Result<(u32, u32), &'static str> {
 }
 
 /// The body of [`check_process_status`].
+///
+/// Verifies: L.object.94
 fn process_statuses(side: &Side, report: &mut Report) -> Result<(), &'static str> {
     let signalled = process::new_for_check().map_err(|_| "could not make a process")?;
     let jobbed = process::new_for_check().map_err(|_| "could not make a process")?;
@@ -670,6 +672,8 @@ fn check_give_and_take(report: &mut Report) -> Result<(), &'static str> {
 }
 
 /// The body of [`check_give_and_take`].
+///
+/// Verifies: L.object.89
 fn give_and_take(
     parent: &Arc<Process>,
     stranger: &Arc<Process>,
@@ -762,6 +766,8 @@ fn give_and_take(
 
 /// An `execve` with nothing given refuses a give from then on; one given
 /// before an `execve` is still there after it.
+///
+/// Verifies: L.object.91
 fn check_execve_seals_and_keeps(
     parent: &Arc<Process>,
     spare: Handle,
@@ -811,6 +817,8 @@ fn check_execve_seals_and_keeps(
 
 /// A bootstrap never taken is closed as its holder ends, and the peer end
 /// hears it; an ended child refuses a give.
+///
+/// Verifies: L.object.90
 fn check_an_end_closes_it(parent: &Arc<Process>, report: &mut Report) -> Result<(), &'static str> {
     let doomed = process::fork_for_check(parent).map_err(|_| "could not fork a child")?;
     let (given, near, far) = channel_in(parent, Rights::CHANNEL)?;
