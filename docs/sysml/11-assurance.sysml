@@ -77,6 +77,16 @@ package FerrixAssurance {
              * refactored into safety loses its exemption. */
         objective { verify noReachablePanic; }
     }
+    #implemented verification traceability : Gate {
+        attribute :>> command = "python3 scripts/check/check-traceability.py --check";
+        doc /* The certified item's requirements (part 13) against their
+             * parents, their units and the checks that name them with
+             * `/// Verifies:`. Fails on an id no requirement defines, a
+             * requirement with no statement, criterion or parent, a unit that
+             * does not resolve, and a requirement no check names that is not
+             * in the baseline of the unverified, which may only shrink.
+             * Writes docs/certification/TRACEABILITY.md. */
+    }
     #implemented verification architectureDocument : Gate {
         attribute :>> command = "python3 scripts/gen/sysml/tests.py && python3 scripts/gen/gen-arch-doc.py --check";
         doc /* docs/generated is generated from this model and committed; a

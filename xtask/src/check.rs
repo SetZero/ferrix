@@ -88,6 +88,15 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         python("scripts/check/check-safety-requirements.py")
     })?;
 
+    // The item's requirements, each naming its parent and, at the low level,
+    // the function it is about, against the `/// Verifies:` tags on the
+    // checks. A check naming an id nobody defines, or a requirement that loses
+    // its verifier, fails here rather than in an assessment.
+    // docs/certification/TRACEABILITY.md, which it regenerates.
+    step("traceability", || {
+        python_with("scripts/check/check-traceability.py", &["--check"])
+    })?;
+
     // The uncovered statements, sorted into what is argued and what is a gap.
     // Regenerated from the residual the coverage run writes, so the two cannot
     // disagree. docs/certification/COVERAGE-RESIDUAL.md.

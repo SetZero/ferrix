@@ -73,6 +73,7 @@ output is used to *satisfy* an objective rather than to find defects.
 | `xtask` | build driver and boot-test harness; 242 own tests | T2 |
 | `check-item-boundary.py` | the item boundary — this scheme's own scope | T2 |
 | `check-complexity.py` | complexity, length and recursion in the item | T2 |
+| `check-traceability.py` | the item's requirements against their parents, units and checks; writes TRACEABILITY.md; self-tested on every run | **T2, and load-bearing** |
 | `rustlex.py` | tells code from comments and literals for the two above; self-tested on every run | T2 |
 | `check-unsafe-audit.py` | every `unsafe` block documented, one operation; every unsafe site in the item names an obligation id the register defines, the untagged remainder ratcheted (F-26) | T2 |
 | `check-panic-audit.py` | every panic-lint exemption justified | T2 |
@@ -103,6 +104,20 @@ found strings with a pattern that mis-paired quotes and the boundary gate read
 only the literal text `crate::a::b` (FINDINGS.md §A, F-25). Both now read code
 through `rustlex.py` and run their own self-tests before every measurement,
 so a lexer or resolver regression fails the build instead of shrinking a count.
+
+`check-traceability.py` (W-8, since 2026-09-27) is load-bearing for the same
+reason: the matrix it writes is offered against DO-178C's requirements-based
+testing objectives and 62304 §5.4, not used to find defects. Its failure mode
+is to *credit* a requirement: a `/// Verifies:` tag is a claim by whoever wrote
+it that a check discharges a requirement, and the gate checks that the claim
+is well formed, names a requirement that exists and sits on a check -- not that
+the check actually tests what the requirement says. That judgement is review,
+recorded by the negative control in the commit that adds the tag. Its
+run-time column reads the `verification` map `coverage-report.py` writes (the
+checks' own reached statements, kept apart from the item's coverage), so it
+inherits TOR-3's biases, and until a coverage run has written that map it says
+*not measured* rather than guessing. Every run starts with its self-test over
+crafted model, Rust and coverage fragments, as the two ratchets above do.
 
 QEMU is also the *execution platform* for all boot evidence, not merely an
 observer of it. Every claim in [VERIFICATION.md](VERIFICATION.md) except the

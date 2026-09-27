@@ -101,12 +101,13 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixRoadmap` | `10-roadmap.sysml` | docs/ROADMAP.md as requirements: one per stage, each with its exit criterion, its status, the boot test that verifies it, and the part of the system that satisfies or will satisfy it. Each stage's status keyword says whether it is done; docs/ROADMAP.md's "Where it stands" is the prose this follows. |
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
+| `FerrixItemRequirements` | `13-item-requirements.sysml` | The high-level requirements of the certified item (the `core` and `item` rings of docs/certification/ITEM.md): what each subsystem promises at its interface, decomposed from the Security Target's objectives (docs/certification/SECURITY-TARGET.md §4.1 and §8.2) and the safety manual's assumed safety requirements (SAFETY-MANUAL.md §2). The low-level requirements, one per unit of code, go in one file per subsystem after this one. docs/certification/IMPLEMENTATION.md W-8 is the design, and scripts/check/check-traceability.py the gate that reads these and writes docs/certification/TRACEABILITY.md. |
 
-13 files, 16 packages, 1687 elements, 201 relations. Model digest `ab47c21fe2b1bd2c`.
+14 files, 17 packages, 1698 elements, 203 relations. Model digest `ffadd5ac62897429`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
-| `#implemented` | 271 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
+| `#implemented` | 272 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
 | `#inProgress` | 11 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 3 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
 | `#planned` | 37 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
@@ -3374,6 +3375,7 @@ flowchart LR
 | `deviceAccessAllowList` | `python3 scripts/check/check-device-access.py` | — | The seam docs/ARCHITECTURE.md §7 is built on: the kernel enumerates devices and drives none, so a register access in the wrong file fails the build rather than waiting for a review. |
 | `unsafeAudit` | `python3 scripts/check/check-unsafe-audit.py` | `unsafeIsExpensive` | Every unsafe block has a SAFETY comment and one operation; every unsafe fn a Safety section. |
 | `panicAudit` | `python3 scripts/check/check-panic-audit.py` | `noReachablePanic` | Every panic-lint exemption is an #\[expect\] whose reason begins AUDIT:. expect fails once the lint stops firing, so a site refactored into safety loses its exemption. |
+| `traceability` | `python3 scripts/check/check-traceability.py --check` | — | The certified item's requirements (part 13) against their parents, their units and the checks that name them with `/// Verifies:`. |
 | `architectureDocument` | `python3 scripts/gen/sysml/tests.py && python3 scripts/gen/gen-arch-doc.py --check` | — | docs/generated is generated from this model and committed; a model edited without regenerating fails here. |
 | `waylandProtocolTables` | `python3 scripts/gen/gen-wayland-protocol.py --check` | — | The compositor's interface tables against the protocol XML vendored beside them. |
 | `xkbTables` | `python3 scripts/gen/gen-xkb-tables.py --check` | — | The keymap every client is handed, and its modifier bits, against libxkbcommon's own output through a committed probe. |
@@ -3390,7 +3392,7 @@ flowchart LR
 | `buildImages` | `cargo xtask build --arch all --release` | — | One bootable FAT32 image per architecture, byte-for-byte reproducible, uploaded as a CI artifact. xtask refuses to build a kernel with RUSTFLAGS set, because cargo lets that variable replace the per-target flags and silently drop the linker script. |
 | `bootTest` | `cargo xtask test-boot --arch all` | `everyStageEndsInSomethingThatRuns` and `provedOnEveryBoot` | The gate that answers the question the others cannot. |
 
-23 gates, cheapest first.
+24 gates, cheapest first.
 
 ### The assembly budget
 

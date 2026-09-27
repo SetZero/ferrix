@@ -305,6 +305,19 @@ def read_floor(path: Path, arch: str | None) -> float:
     return float(floors["item"][arch])
 
 
+
+def format_lines(numbers) -> str:
+    """`1-3, 7`: the form carry-coverage.py reads and writes."""
+    numbers = sorted(set(numbers))
+    parts, i = [], 0
+    while i < len(numbers):
+        j = i
+        while j + 1 < len(numbers) and numbers[j + 1] == numbers[j] + 1:
+            j += 1
+        parts.append(str(numbers[i]) if i == j else f"{numbers[i]}-{numbers[j]}")
+        i = j + 1
+    return ", ".join(parts)
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -396,6 +409,7 @@ def main() -> int:
     totals: dict[str, dict[str, int]] = defaultdict(lambda: {"total": 0, "hit": 0})
     per_file: dict[str, dict[str, int]] = {}
     residual: dict[str, dict] = {}
+    verification: dict[str, dict] = {}
 
     for path, lines in table.items():
         rel = relative(path)
@@ -406,7 +420,14 @@ def main() -> int:
             continue
         kind = "test" if gate.is_test_file(rel, manifest) else "product"
         if kind == "test":
-            continue  # a test file's own coverage is not the item's coverage
+            # A check's own statements are not the item's coverage, and are
+            # counted apart: they say which checks this run executed, the
+            # run-time half of docs/certification/TRACEABILITY.md.
+            verification[rel] = {
+                "ring": ring,
+                "reached": format_lines(line for line in lines if (rel, line) in reached),
+            }
+            continue
 
         total = hit = 0
         missed: list[int] = []
@@ -455,6 +476,7 @@ def main() -> int:
                     "blocks_in_image": blocks_in_image,
                     "rings": {k: dict(v) for k, v in totals.items()},
                     "files": per_file,
+                    "verification": dict(sorted(verification.items())),
                 },
                 indent=2,
             )

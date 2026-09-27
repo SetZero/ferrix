@@ -22,7 +22,9 @@ edited or removed is dropped: it is new code now, unmeasured until the next
 run of `cargo xtask coverage`, and an argument written for the old text is not
 evidence for the new one. What is dropped is printed, so the landing can say
 so. The figures in coverage-<arch>.json stay as measured, and a renamed file
-keeps its figures under its new name.
+keeps its figures under its new name; the checks' own reached statements there
+(its `verification` map, which TRACEABILITY.md reads) are carried like the
+residual, an edited line dropped and so no longer counted as reached.
 """
 
 import argparse
@@ -162,6 +164,17 @@ def carry_figures(carrier, arch):
     path = CERT / f"coverage-{arch}.json"
     figures = json.loads(path.read_text())
     figures["files"] = {carrier.carry(name)[0]: entry for name, entry in figures["files"].items()}
+    # The checks' own reached statements (TRACEABILITY.md). A line the change
+    # edited is dropped: unmeasured, so never counted as reached.
+    if "verification" in figures:
+        checks = {}
+        for name, entry in figures["verification"].items():
+            new, mapping = carrier.carry(name)
+            lines = parse_lines(entry["reached"])
+            if mapping is not None:
+                lines = [mapping[line] for line in lines if line in mapping]
+            checks[new] = {**entry, "reached": format_lines(lines)}
+        figures["verification"] = dict(sorted(checks.items()))
     path.write_text(json.dumps(figures, indent=2) + "\n")
 
 

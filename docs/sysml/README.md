@@ -29,6 +29,7 @@ tooling that can check a model for consistency where it cannot check prose.
 | `10-roadmap.sysml` | `FerrixRoadmap` | Stages 0–22, the ARMv7-A port, networking and dynamic linking as requirements with status and exit criteria, their ordering, what satisfies each, and the boot tests that verify the done ones. |
 | `11-assurance.sysml` | `FerrixAssurance` | Every gate `cargo xtask check` and CI run, the xtask boot gates, the commit-authorship check, the assembly budget, what each layer's tests can reach, and the verification later stages owe. |
 | `12-views.sysml` | `FerrixViews` | Views filtering the one model into current, written-ahead, future and deferred. |
+| `13-item-requirements.sysml` | `FerrixItemRequirements` | The certified item's high-level requirements (`H.<AREA>.<n>`), each with a statement, a pass/fail criterion and its parent objective; the definitions the low-level ones (`L.<module>.<n>`) use. `scripts/check/check-traceability.py` holds them to their checks. |
 
 ## Reading it
 

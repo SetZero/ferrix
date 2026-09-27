@@ -1,0 +1,1101 @@
+#!/usr/bin/env python3
+"""Hold the item's requirements to their parents, their code and their checks.
+
+Findings F-14, F-15 and F-16 of docs/certification/FINDINGS.md: tens of
+thousands of lines of in-kernel self-test assert rich properties, and nothing
+said which requirement each assertion was evidence *for*. This gate is the
+chain docs/certification/IMPLEMENTATION.md W-8 designs, in three levels:
+
+    system      O.*, ASR-*, G.*   SECURITY-TARGET.md 4.1, SAFETY-MANUAL.md 2,
+                                  docs/sysml/01-requirements.sysml
+    high level  H.<AREA>.<n>      what a subsystem of the item promises at its
+                                  interface; docs/sysml/13-item-requirements.sysml
+    low level   L.<module>.<n>    what one unit of code does; one model file
+                                  per subsystem as they are written
+
+A high- or low-level requirement is a SysML `requirement` typed
+`ItemHighLevel` or `ItemLowLevel`, with the id in angle brackets and four
+attributes, each a string or a parenthesised list of strings:
+
+    requirement <'H.MEM.4'> writableOrExecutable : ItemHighLevel {
+        attribute :>> statement = "No mapping ... shall be both writable and executable.";
+        attribute :>> criterion = "Every one of the N mappings swept ...";
+        attribute :>> parent = ("O.WXN", "ASR-2");
+    }
+
+`unit` (low level only) names the code, `path::function` or
+`path::Type::method` relative to kernel/src -- `mm::zero_frame`,
+`object::quota::Quota::charge` -- and must be the item's product code.
+
+Verification is named where the check is, in a doc line on the function:
+
+    /// Verifies: L.mm.4, L.mm.5
+    fn tables_wait_for_their_shootdown() -> Result<(), &'static str> {
+
+on a function in one of three places, and nowhere else:
+
+  * an in-kernel check, in a kernel/src file the manifest's
+    `test_file_patterns` call verification (check.rs, *_check.rs, ...);
+  * a host test under libs/, a function carrying `#[test]`;
+  * an xtask gate, the function in xtask/src that implements it (the one a
+    `cargo xtask test-...` subcommand calls).
+
+The gate fails when
+
+  * a `Verifies:` line names an id no requirement defines, names none, is
+    not on a function, is on a function outside those three places, or is
+    written in any other comment form;
+  * a high- or low-level requirement has a malformed or duplicate id, no
+    `statement` (or one without *shall*), no `criterion`, no `parent` or a
+    parent that does not exist at the level above, or -- at the low level --
+    no `unit` or one that does not resolve to a function of the item;
+  * a requirement has no verifier and is not in
+    scripts/data/traceability-baseline.json, or the baseline lists one that is
+    now verified or no longer exists. A requirement enters the baseline only
+    by `--record`, in a diff somebody reviews; verifying one and not
+    re-recording fails, so an allowance cannot outlive its reason;
+  * docs/certification/TRACEABILITY.md is not what this script writes
+    (`--check`).
+
+It reports without failing -- DO-178C's "no unintended function" question,
+not yet a ratchet -- the item's functions that no low-level requirement names
+as its unit. That list moves with every function anybody adds, so it is
+printed, never committed.
+
+The run-time half of the chain: a requirement is verified on an architecture
+only if its check's lines were executed in that architecture's coverage run.
+`scripts/gen/coverage-report.py` records, per check file, the statements the
+suite reached, in the `verification` map of coverage-<arch>.json. The matrix
+reads a kernel check as *reached* when any statement of its function was,
+*not reached* when none was, *not built* when its file is another
+architecture's (kernel/src/arch/<isa>/) or the run's line table does not hold
+it, and *not measured* when the evidence predates the map. A host test or an
+xtask gate is not a per-architecture run and says so.
+
+    python3 scripts/check/check-traceability.py            # check, and write the matrix
+    python3 scripts/check/check-traceability.py --check    # check, and fail if the matrix is stale
+    python3 scripts/check/check-traceability.py --record   # rewrite the baseline
+    python3 scripts/check/check-traceability.py --report   # also list every unnamed unit
+    python3 scripts/check/check-traceability.py --self-test
+"""
+
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import importlib.util
+import json
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent
+sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(ROOT / "scripts" / "gen"))
+
+import rustlex  # noqa: E402  (after the path insert)
+from sysml import load, parse_text  # noqa: E402
+from sysml.parser import split_top_level  # noqa: E402
+
+KERNEL_SRC = ROOT / "kernel" / "src"
+LIBS = ROOT / "libs"
+XTASK_SRC = ROOT / "xtask" / "src"
+MODEL_DIR = ROOT / "docs" / "sysml"
+CERT = ROOT / "docs" / "certification"
+OUTPUT = CERT / "TRACEABILITY.md"
+BASELINE = ROOT / "scripts" / "data" / "traceability-baseline.json"
+SECURITY_TARGET = CERT / "SECURITY-TARGET.md"
+SAFETY_REGISTER = ROOT / "scripts" / "data" / "safety-requirements.json"
+
+ARCHES = ("x86_64", "aarch64", "armv7a")
+ARCH_LABEL = {"x86_64": "x86-64", "aarch64": "AArch64", "armv7a": "ARMv7-A"}
+# Directories of kernel/src built for only some architectures. `#[cfg(target_arch)]`
+# is allowed only under arch/ (a house rule a gate enforces), so a file's path
+# is what decides which kernels contain it.
+ARCH_ONLY = {
+    "arch/x86_64/": {"x86_64"},
+    "arch/aarch64/": {"aarch64"},
+    "arch/armv7a/": {"armv7a"},
+    "arch/arm_common/": {"aarch64", "armv7a"},
+    "arch/arm_common.rs": {"aarch64", "armv7a"},
+}
+
+LEVELS = {"ItemHighLevel": "high", "ItemLowLevel": "low"}
+ID_FORM = {
+    "high": re.compile(r"H\.[A-Z]+\.[1-9]\d*\Z"),
+    "low": re.compile(r"L\.[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\.[1-9]\d*\Z"),
+}
+ANY_ID = re.compile(r"[A-Z][A-Za-z0-9+_-]*(?:\.[A-Za-z0-9_]+)*\Z")
+SHALL = re.compile(r"\bshall\b")
+
+VERIFIES = re.compile(r"^[ \t]*///[ \t]*Verifies:(.*)$")
+# Any other comment that looks like a tag: `// Verifies:`, `//! Verifies:`,
+# `/** Verifies:`. Each is a tag somebody meant and the gate would not read, so
+# it is refused rather than ignored. (Prose such as "/// Verifies that ..." has
+# no colon and is left alone.)
+LOOKS_LIKE_A_TAG = re.compile(r"^[ \t]*(?://+!?|/\*+!?|\*)[ \t]*Verifies[ \t]*:")
+FN_LINE = re.compile(
+    r"^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?(?:const[ \t]+)?(?:async[ \t]+)?"
+    r"(?:unsafe[ \t]+)?(?:extern[ \t]+\"[^\"]*\"[ \t]+)?fn[ \t]+([A-Za-z_][A-Za-z0-9_]*)"
+)
+
+
+def _load(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+complexity = _load("complexity", HERE / "check-complexity.py")
+boundary = complexity.load_gate()
+
+
+# --- requirements ------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class Requirement:
+    id: str
+    level: str
+    name: str
+    statement: str
+    criterion: str
+    parents: list[str]
+    units: list[str]
+    source: str
+    line: int
+    area: str = ""
+
+
+def _string(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        return re.sub(r"\\(.)", r"\1", value[1:-1]).strip()
+    return value
+
+
+def _strings(value: str) -> list[str]:
+    value = value.strip()
+    if value.startswith("(") and value.endswith(")"):
+        value = value[1:-1]
+    return [_string(part) for part in split_top_level(value) if _string(part)]
+
+
+def _level_of(element) -> str | None:
+    for reference in (element.typed_by, element.specializes):
+        if reference:
+            level = LEVELS.get(reference.split("::")[-1].split(",")[0].strip())
+            if level:
+                return level
+    return None
+
+
+def requirements_of(elements) -> tuple[list[Requirement], set[str], list[str]]:
+    """The item's requirements among `elements`, every short name, and problems.
+
+    `elements` is every element of a model, walked. The short names returned
+    are all of them, the system-level `G.*` included, which is what a
+    duplicate is checked against.
+    """
+    found: list[Requirement] = []
+    problems: list[str] = []
+    seen: dict[str, str] = {}
+    definitions = set()
+    for element in elements:
+        where = f"{element.source}:{element.line}"
+        if element.kind == "requirement" and element.is_definition:
+            definitions.add(element.name)
+        if element.short_name:
+            if element.short_name in seen:
+                problems.append(
+                    f"{where}: id {element.short_name} is already defined at {seen[element.short_name]}"
+                )
+            else:
+                seen[element.short_name] = where
+        if element.kind != "requirement" or element.is_definition:
+            continue
+        level = _level_of(element)
+        if level is None:
+            if re.match(r"[HL]\.", element.short_name):
+                problems.append(
+                    f"{where}: {element.short_name} has an item requirement's id but is not "
+                    f"typed ItemHighLevel or ItemLowLevel"
+                )
+            continue
+        requirement = Requirement(
+            id=element.short_name,
+            level=level,
+            name=element.name,
+            statement=_string(element.attribute_value("statement")),
+            criterion=_string(element.attribute_value("criterion")),
+            parents=_strings(element.attribute_value("parent")),
+            units=_strings(element.attribute_value("unit")),
+            source=element.source,
+            line=element.line,
+        )
+        node = element.parent
+        while node is not None and node.kind != "package":
+            node = node.parent
+        requirement.area = node.name if node is not None else ""
+        found.append(requirement)
+    if found:
+        for needed in LEVELS:
+            if needed not in definitions:
+                problems.append(f"the model uses {needed} but defines no `requirement def {needed}`")
+    return found, set(seen), problems
+
+
+def system_ids(model_ids: set[str]) -> set[str]:
+    """The ids a high-level requirement may name as its parent."""
+    ids = {short for short in model_ids if re.match(r"G(?:\.|\+|\Z)", short)}
+    text = SECURITY_TARGET.read_text(encoding="utf-8")
+    section = re.search(r"^### 4\.1 .*?$(.*?)^### ", text, re.S | re.M)
+    if section:
+        ids |= set(re.findall(r"^\|\s*(O\.[A-Z]+)\s*\|", section.group(1), re.M))
+    register = json.loads(SAFETY_REGISTER.read_text(encoding="utf-8"))
+    ids |= {entry["id"] for entry in register.get("assumed_safety_requirements", [])}
+    return ids
+
+
+def check_requirements(requirements: list[Requirement], parents_allowed: set[str], units) -> list[str]:
+    """Every requirement's own fields. `units(unit)` returns a problem or None."""
+    problems: list[str] = []
+    high = {r.id for r in requirements if r.level == "high"}
+    for r in requirements:
+        where = f"{r.source}:{r.line}: {r.id or r.name}"
+        if not r.id:
+            problems.append(f"{where}: no id in angle brackets")
+        elif not ID_FORM[r.level].match(r.id):
+            form = "H.<AREA>.<n>" if r.level == "high" else "L.<module>.<n>"
+            problems.append(f"{where}: a {r.level}-level id is written {form}")
+        if not r.statement:
+            problems.append(f"{where}: no statement")
+        elif not SHALL.search(r.statement):
+            problems.append(f"{where}: the statement says no 'shall'")
+        if not r.criterion:
+            problems.append(f"{where}: no criterion")
+        if not r.parents:
+            problems.append(f"{where}: no parent")
+        allowed = parents_allowed if r.level == "high" else high
+        above = "a system-level id (O.*, ASR-*, G.*)" if r.level == "high" else "a high-level id"
+        for parent in r.parents:
+            if parent not in allowed:
+                problems.append(f"{where}: parent {parent} is not {above} that exists")
+        if r.level == "low":
+            if not r.units:
+                problems.append(f"{where}: no unit")
+            for unit in r.units:
+                problem = units(unit)
+                if problem:
+                    problems.append(f"{where}: unit {unit}: {problem}")
+        elif r.units:
+            problems.append(f"{where}: a unit is named at the low level, not the high")
+    return problems
+
+
+# --- units -------------------------------------------------------------------
+
+
+def functions_in(source: str) -> list[tuple[str, int, int, str]]:
+    """`(name, first line, last line, impl type or "")` for every function."""
+    masked = rustlex.mask(source)
+    impls: list[tuple[int, int, str]] = []
+    for match in re.finditer(r"(?<![\w])impl\b", masked):
+        body = complexity.body_of(masked, match.end())
+        if body is None:
+            continue
+        code, end = body
+        header = masked[match.end() : end - len(code) + 1]
+        impls.append((match.start(), end, _impl_type(header)))
+    found = []
+    for match in complexity.FN.finditer(masked):
+        body = complexity.body_of(masked, match.end())
+        if body is None:
+            continue
+        _, end = body
+        owner = ""
+        for start, stop, name in impls:
+            if start < match.start() < stop:
+                owner = name
+        found.append(
+            (
+                match.group(1),
+                masked.count("\n", 0, match.start()) + 1,
+                masked.count("\n", 0, end) + 1,
+                owner,
+            )
+        )
+    return found
+
+
+def _impl_type(header: str) -> str:
+    """The self type of `impl<T> Trait for Type<T> where ... {`."""
+    header = header.split("{")[0]
+    header = re.split(r"\bwhere\b", header)[0].strip()
+    if header.startswith("<"):
+        depth = 0
+        for index, char in enumerate(header):
+            depth += {"<": 1, ">": -1}.get(char, 0)
+            if depth == 0:
+                header = header[index + 1 :]
+                break
+    if re.search(r"\bfor\b", header):
+        header = re.split(r"\bfor\b", header)[-1]
+    header = header.strip().lstrip("&").strip()
+    header = re.sub(r"^(?:mut\s+|dyn\s+|'\w+\s+)+", "", header)
+    path = header.split("<")[0].strip()
+    return path.split("::")[-1].strip()
+
+
+class Units:
+    """Resolve `path::function` against kernel/src, product code of the item only."""
+
+    def __init__(self, files: dict[str, str] | None = None, product: set[str] | None = None):
+        self._files = files
+        self._product = product
+        self._functions: dict[str, list] = {}
+
+    def files(self) -> dict[str, str]:
+        if self._files is None:
+            self._files = {rel: "" for rel in boundary.kernel_files()}
+        return self._files
+
+    def product(self) -> set[str]:
+        if self._product is None:
+            manifest = boundary.load_manifest()
+            ring_of, _, _ = boundary.classify(manifest, list(self.files()))
+            self._product = {
+                rel
+                for rel, ring in ring_of.items()
+                if ring in ("core", "item") and not boundary.is_test_file(rel, manifest)
+            }
+        return self._product
+
+    def source(self, rel: str) -> str:
+        text = self.files().get(rel, "")
+        if not text:
+            text = (KERNEL_SRC / rel).read_text(encoding="utf-8", errors="replace")
+            self.files()[rel] = text
+        return text
+
+    def functions(self, rel: str):
+        if rel not in self._functions:
+            self._functions[rel] = functions_in(self.source(rel))
+        return self._functions[rel]
+
+    def module_files(self) -> dict[tuple[str, ...], str]:
+        return {boundary.module_of_file(rel): rel for rel in self.files()}
+
+    def __call__(self, unit: str) -> str | None:
+        segments = [s for s in unit.strip().split("::") if s]
+        if segments and segments[0] == "crate":
+            segments = segments[1:]
+        if len(segments) < 1:
+            return "is empty"
+        modules = self.module_files()
+        for cut in range(len(segments) - 1, -1, -1):
+            module = tuple(segments[:cut])
+            if module in modules:
+                rel, rest = modules[module], segments[cut:]
+                break
+        else:
+            return "names no module of kernel/src"
+        if rel not in self.product():
+            return f"{rel} is not the item's product code"
+        if len(rest) == 1:
+            owners = [owner for name, _, _, owner in self.functions(rel) if name == rest[0]]
+            if "" in owners:
+                return None
+            if owners:
+                return f"{rest[0]} in {rel} is a method of {owners[0]}; write {'::'.join(module + (owners[0], rest[0]))}"
+            return f"no function {rest[0]} in {rel}"
+        if len(rest) == 2:
+            for name, _, _, owner in self.functions(rel):
+                if name == rest[1] and owner == rest[0]:
+                    return None
+            return f"no method {rest[1]} of {rest[0]} in {rel}"
+        return f"{'::'.join(rest)} is not a function or a type's method in {rel}"
+
+    def names(self) -> list[str]:
+        """Every product function of the item, as a unit would name it."""
+        out = []
+        for rel in sorted(self.product()):
+            module = "::".join(boundary.module_of_file(rel))
+            for name, _, _, owner in self.functions(rel):
+                parts = [p for p in (module, owner, name) if p]
+                out.append("::".join(parts))
+        return out
+
+
+# --- verifiers ---------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class Verifier:
+    kind: str  # "kernel", "host" or "gate"
+    file: str  # repository-relative
+    function: str
+    line: int  # the fn line
+    ids: list[str]
+
+
+def scan_verifiers(source: str, rel: str, kind: str) -> tuple[list[Verifier], list[str]]:
+    """Every `/// Verifies:` in one file, and what is wrong with the rest.
+
+    `kind` is "kernel" for a kernel check file, "host" for a file under libs/,
+    "gate" for xtask/src, and "none" for a file where no tag may be.
+    """
+    found: list[Verifier] = []
+    problems: list[str] = []
+    lines = source.split("\n")
+    offsets = [0]
+    for line in lines:
+        offsets.append(offsets[-1] + len(line) + 1)
+    comments = {start for k, start, _ in rustlex.spans(source) if k == "comment"}
+
+    for index, line in enumerate(lines):
+        where = f"{rel}:{index + 1}"
+        tag = VERIFIES.match(line)
+        start = offsets[index] + (line.index("//") if "//" in line else 0)
+        if tag is None:
+            if LOOKS_LIKE_A_TAG.match(line) and start in comments:
+                problems.append(f"{where}: write a tag as `/// Verifies: <ids>` on the check's function")
+            continue
+        if start not in comments:
+            continue  # inside a string literal
+        ids = [part.strip() for part in tag.group(1).split(",")]
+        if not any(ids):
+            problems.append(f"{where}: `Verifies:` names no requirement")
+            continue
+        bad = [i for i in ids if not ANY_ID.match(i)]
+        if bad:
+            problems.append(f"{where}: not a requirement id: {', '.join(repr(b) for b in bad)}")
+            continue
+        attributes: list[str] = []
+        cursor = index + 1
+        depth = 0
+        while cursor < len(lines):
+            text = lines[cursor].strip()
+            if depth > 0:
+                attributes[-1] += text
+                depth += text.count("[") - text.count("]")
+            elif text.startswith("///"):
+                pass
+            elif text.startswith("#["):
+                attributes.append(text)
+                depth = text.count("[") - text.count("]")
+            else:
+                break
+            cursor += 1
+        function = FN_LINE.match(lines[cursor]) if cursor < len(lines) else None
+        if function is None:
+            problems.append(f"{where}: `Verifies:` is not on a function")
+            continue
+        if kind == "none":
+            problems.append(
+                f"{where}: `Verifies:` on {function.group(1)}, which is not a check: tags go on a "
+                f"kernel check file's function, a host #[test] under libs/, or an xtask gate"
+            )
+            continue
+        if kind == "host" and not any(re.sub(r"\s", "", a).startswith("#[test]") for a in attributes):
+            problems.append(f"{where}: `Verifies:` on {function.group(1)}, which is not a #[test]")
+            continue
+        found.append(Verifier(kind, rel, function.group(1), cursor + 1, ids))
+    return found, problems
+
+
+def all_verifiers() -> tuple[list[Verifier], list[str]]:
+    manifest = boundary.load_manifest()
+    verifiers: list[Verifier] = []
+    problems: list[str] = []
+    sources: list[tuple[Path, str]] = []
+    for rel in boundary.kernel_files():
+        kind = "kernel" if boundary.is_test_file(rel, manifest) else "none"
+        sources.append((KERNEL_SRC / rel, kind))
+    for path in sorted(LIBS.rglob("*.rs")):
+        if "target" not in path.relative_to(LIBS).parts:
+            sources.append((path, "host"))
+    for path in sorted(XTASK_SRC.rglob("*.rs")):
+        sources.append((path, "gate"))
+    for path, kind in sources:
+        source = path.read_text(encoding="utf-8", errors="replace")
+        if "Verifies" not in source and "verifies" not in source:
+            continue
+        found, wrong = scan_verifiers(source, path.relative_to(ROOT).as_posix(), kind)
+        verifiers += found
+        problems += wrong
+    return verifiers, problems
+
+
+# --- the run-time half -------------------------------------------------------
+
+
+def parse_lines(spec: str) -> set[int]:
+    out: set[int] = set()
+    for part in str(spec).split(","):
+        part = part.strip()
+        if "-" in part:
+            low, high = part.split("-")
+            out.update(range(int(low), int(high) + 1))
+        elif part:
+            out.add(int(part))
+    return out
+
+
+def built_for(rel: str) -> set[str]:
+    for prefix, arches in ARCH_ONLY.items():
+        if rel == prefix or rel.startswith(prefix):
+            return arches
+    return set(ARCHES)
+
+
+def reach(verifier: Verifier, arch: str, evidence: dict | None, spans) -> str:
+    """How one check fared on one architecture's coverage run."""
+    if verifier.kind == "host":
+        return "host test"
+    if verifier.kind == "gate":
+        return "xtask gate"
+    rel = verifier.file.removeprefix("kernel/src/")
+    if arch not in built_for(rel):
+        return "not built"
+    if evidence is None:
+        return "not measured"
+    entry = evidence.get(rel)
+    if entry is None:
+        return "not built"
+    reached = parse_lines(entry.get("reached", ""))
+    for name, first, last, _ in spans(rel):
+        if name == verifier.function and first == verifier.line:
+            return "reached" if any(first <= n <= last for n in reached) else "not reached"
+    return "not reached"
+
+
+RANK = ("reached", "not reached", "not measured", "xtask gate", "host test", "not built")
+
+
+def best(verdicts: list[str]) -> str:
+    for verdict in RANK:
+        if verdict in verdicts:
+            return verdict
+    return "—"
+
+
+def coverage_evidence() -> dict[str, dict | None]:
+    out: dict[str, dict | None] = {}
+    for arch in ARCHES:
+        path = CERT / f"coverage-{arch}.json"
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        out[arch] = data.get("verification")
+    return out
+
+
+# --- the ratchet -------------------------------------------------------------
+
+
+def ratchet(unverified: set[str], baseline: set[str], defined: set[str]) -> list[str]:
+    problems = []
+    for rid in sorted(unverified - baseline):
+        problems.append(
+            f"{rid} has no check naming it and is not in the baseline: tag the check that "
+            f"verifies it with `/// Verifies: {rid}`, or --record it as written but unverified"
+        )
+    for rid in sorted(baseline - unverified):
+        why = "is now verified" if rid in defined else "is no longer a requirement"
+        problems.append(f"the baseline lists {rid}, which {why}: --record so no allowance is left behind")
+    return problems
+
+
+def read_baseline() -> set[str] | None:
+    if not BASELINE.exists():
+        return None
+    return set(json.loads(BASELINE.read_text(encoding="utf-8"))["unverified"])
+
+
+def write_baseline(unverified: set[str]) -> None:
+    BASELINE.write_text(
+        json.dumps(
+            {
+                "//": [
+                    "High- and low-level requirements of the certified item that are",
+                    "written and that no check names yet with `/// Verifies:`, as",
+                    "scripts/check/check-traceability.py finds them. A debt register",
+                    "for finding F-14, not an allowance: an entry leaves when a check",
+                    "is tagged, and the gate fails until it is re-recorded; one enters",
+                    "only when a requirement is written unverified, in a reviewed diff.",
+                    "The target is an empty list.",
+                ],
+                "unverified": sorted(unverified, key=_id_key),
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _id_key(rid: str):
+    return [int(p) if p.isdigit() else p for p in rid.split(".")]
+
+
+# --- the matrix --------------------------------------------------------------
+
+
+def _cell(text: str) -> str:
+    return text.replace("|", "\\|").replace("\n", " ")
+
+
+def render(
+    requirements: list[Requirement],
+    by_id: dict[str, list[Verifier]],
+    verdicts: dict[str, dict[str, str]],
+    baseline: set[str],
+    parents_named: dict[str, list[str]],
+    system: set[str],
+    evidence: dict[str, dict | None],
+) -> str:
+    high = [r for r in requirements if r.level == "high"]
+    low = [r for r in requirements if r.level == "low"]
+    out: list[str] = []
+    w = out.append
+    w("# Traceability")
+    w("")
+    w("<!-- Generated by scripts/check/check-traceability.py from docs/sysml/, the")
+    w("     `/// Verifies:` tags on the checks and docs/certification/coverage-*.json.")
+    w("     Do not edit: run the script, which `cargo xtask check` runs with --check. -->")
+    w("")
+    w(
+        "The certified item's requirements in three levels, each naming its parent, "
+        "and the checks that name each one. The system level is the Security "
+        "Target's objectives (SECURITY-TARGET.md §4.1), the safety manual's assumed "
+        "safety requirements (SAFETY-MANUAL.md §2) and the goal "
+        "(`docs/sysml/01-requirements.sysml`). The high level (`H.*`) is what a "
+        "subsystem of the item promises at its interface "
+        "(`docs/sysml/13-item-requirements.sysml`); the low level (`L.*`) is what "
+        "one unit of code does. IMPLEMENTATION.md W-8 is the design."
+    )
+    w("")
+    w(
+        "A requirement is verified on an architecture when a check names it "
+        "(`/// Verifies:` on the check's function) and that check's statements were "
+        "executed in the architecture's coverage run. The columns per architecture "
+        "say: *reached*, *not reached*, *not built* (the check is another "
+        "architecture's), *not measured* (the coverage evidence was written before "
+        "it recorded the checks' own statements), or that the verifier is a host "
+        "test or an xtask gate rather than a boot. The boot's `FERRIX-BOOT-OK`, "
+        "the third link, is what `cargo xtask test-boot` gates on each architecture."
+    )
+    w("")
+    measured = [ARCH_LABEL[a] for a in ARCHES if evidence.get(a) is not None]
+    w(
+        "Coverage evidence recording the checks: "
+        + (", ".join(measured) if measured else "none yet")
+        + "."
+    )
+    w("")
+    w("## Summary")
+    w("")
+    w("| Level | Written | Named by a check | Unverified, in the baseline |")
+    w("|---|---:|---:|---:|")
+    for label, group in (("High (`H.*`)", high), ("Low (`L.*`)", low)):
+        named = sum(1 for r in group if by_id.get(r.id))
+        listed = sum(1 for r in group if r.id in baseline)
+        w(f"| {label} | {len(group)} | {named} | {listed} |")
+    w("")
+    units = sorted({u for r in low for u in r.units})
+    w(
+        f"{len(units)} functions of the item are named as a low-level requirement's "
+        "unit. The gate prints, without failing, the item's functions no "
+        "requirement names; that list changes with every function written, so it "
+        "is not kept here."
+    )
+    w("")
+
+    w("## From the system level")
+    w("")
+    w("Each system-level requirement, and the high-level requirements that name it as their parent.")
+    w("")
+    w("| System | Decomposed into |")
+    w("|---|---|")
+    for sid in sorted(system, key=_id_key):
+        if sid.startswith("G"):
+            if sid not in parents_named:
+                continue
+        children = parents_named.get(sid, [])
+        w(f"| {sid} | {', '.join(f'`{c}`' for c in children) if children else '—'} |")
+    w("")
+
+    def table(group: list[Requirement], with_unit: bool) -> None:
+        head = ["Id", "Statement", "Criterion", "Parent"]
+        if with_unit:
+            head.append("Unit")
+        head += ["Verified by"] + [ARCH_LABEL[a] for a in ARCHES]
+        w("| " + " | ".join(head) + " |")
+        w("|" + "---|" * len(head))
+        for r in group:
+            checks = by_id.get(r.id, [])
+            named = ", ".join(f"`{v.file}::{v.function}`" for v in checks) or (
+                "*baselined*" if r.id in baseline else "—"
+            )
+            row = [f"`{r.id}`", _cell(r.statement), _cell(r.criterion), ", ".join(r.parents)]
+            if with_unit:
+                row.append(", ".join(f"`{u}`" for u in r.units))
+            row.append(named)
+            row += [verdicts[r.id][a] if checks else "—" for a in ARCHES]
+            w("| " + " | ".join(row) + " |")
+        w("")
+
+    w("## High-level requirements")
+    w("")
+    if not high:
+        w("None written yet.")
+        w("")
+    areas: dict[str, list[Requirement]] = defaultdict(list)
+    for r in high:
+        areas[r.area].append(r)
+    for area, group in areas.items():
+        prefix = group[0].id.split(".")[1] if group[0].id.count(".") >= 2 else ""
+        w(f"### {area}" + (f" (`H.{prefix}`)" if prefix else ""))
+        w("")
+        table(group, with_unit=False)
+
+    w("## Low-level requirements")
+    w("")
+    if not low:
+        w("None written yet: IMPLEMENTATION.md W-8 steps 3 and 4 write them, subsystem by subsystem.")
+        w("")
+    areas = defaultdict(list)
+    for r in low:
+        areas[r.area].append(r)
+    for area, group in areas.items():
+        w(f"### {area}")
+        w("")
+        table(group, with_unit=True)
+
+    w("## Checks and what they verify")
+    w("")
+    everyone = sorted({(v.file, v.function, v.kind, tuple(v.ids)) for vs in by_id.values() for v in vs})
+    if not everyone:
+        w("No check names a requirement yet.")
+    else:
+        w("| Check | Kind | Verifies |")
+        w("|---|---|---|")
+        for file, function, kind, ids in everyone:
+            w(f"| `{file}::{function}` | {kind} | {', '.join(ids)} |")
+    w("")
+    return "\n".join(out)
+
+
+# --- self-test ---------------------------------------------------------------
+
+_MODEL = """
+package T {
+    requirement def ItemHighLevel;
+    requirement def ItemLowLevel;
+    package Memory {
+        requirement <'H.MEM.1'> good : ItemHighLevel {
+            attribute :>> statement = "A frame shall be zeroed; #PF is fine here.";
+            attribute :>> criterion = "Every one of the N frames reads zero.";
+            attribute :>> parent = ("O.SCRUB", "ASR-5");
+        }
+        requirement <'H.MEM.2'> noCriterion : ItemHighLevel {
+            attribute :>> statement = "It shall.";
+            attribute :>> parent = "O.SCRUB";
+        }
+        requirement <'H.MEM.3'> noShall : ItemHighLevel {
+            attribute :>> statement = "It does.";
+            attribute :>> criterion = "c";
+            attribute :>> parent = "O.NOPE";
+        }
+        requirement <'H.mem.4'> badId : ItemHighLevel {
+            attribute :>> statement = "It shall.";
+            attribute :>> criterion = "c";
+            attribute :>> parent = "O.SCRUB";
+        }
+        requirement <'H.MEM.1'> duplicate : ItemHighLevel {
+            attribute :>> statement = "It shall.";
+            attribute :>> criterion = "c";
+            attribute :>> parent = "O.SCRUB";
+        }
+    }
+    package Mm {
+        requirement <'L.mm.1'> resolves : ItemLowLevel {
+            attribute :>> statement = "zero_frame shall zero.";
+            attribute :>> criterion = "c";
+            attribute :>> parent = "H.MEM.1";
+            attribute :>> unit = ("mm::zero_frame", "mm::Frames::take");
+        }
+        requirement <'L.mm.2'> unresolved : ItemLowLevel {
+            attribute :>> statement = "It shall.";
+            attribute :>> criterion = "c";
+            attribute :>> parent = ("H.MEM.1", "O.SCRUB");
+            attribute :>> unit = ("mm::gone", "fs::write", "mm::take", "mm::check::sweep");
+        }
+        requirement <'L.mm.3'> noUnit : ItemLowLevel {
+            attribute :>> statement = "It shall.";
+            attribute :>> criterion = "c";
+            attribute :>> parent = "H.MEM.1";
+        }
+        requirement <'H.MEM.9'> notTyped : Other;
+    }
+}
+"""
+
+_MODEL_EXPECT = [
+    "id H.MEM.1 is already defined",
+    "H.MEM.9 has an item requirement's id but is not typed",
+    "H.MEM.2: no criterion",
+    "H.MEM.3: the statement says no 'shall'",
+    "H.MEM.3: parent O.NOPE is not a system-level id",
+    "H.mem.4: a high-level id is written H.<AREA>.<n>",
+    "L.mm.2: parent O.SCRUB is not a high-level id",
+    "L.mm.2: unit mm::gone: no function gone in mm.rs",
+    "L.mm.2: unit fs::write: fs.rs is not the item's product code",
+    "L.mm.2: unit mm::take: take in mm.rs is a method of Frames; write mm::Frames::take",
+    "L.mm.2: unit mm::check::sweep: mm/check.rs is not the item's product code",
+    "L.mm.3: no unit",
+]
+
+_KERNEL = {
+    "mm.rs": (
+        "pub fn zero_frame(f: u64) { let s = \"fn fake() {}\"; }\n"
+        "pub struct Frames;\n"
+        "impl<'a> Frames {\n    pub(crate) fn take(&self) -> u64 { 0 }\n}\n"
+    ),
+    "mm/check.rs": "fn sweep() {}\n",
+    "fs.rs": "pub fn write() {}\n",
+}
+
+_CHECK = """\
+/// A check.
+///
+/// Verifies: H.MEM.1, L.mm.1
+#[expect(clippy::too_many_lines, reason = "AUDIT: one scenario, read top to bottom")]
+#[cfg_attr(
+    test,
+    allow(dead_code)
+)]
+pub(crate) fn frames_read_zero() -> Result<(), &'static str> {
+    let doc = "
+/// Verifies: H.NOT.1";
+    Ok(())
+}
+
+/// Verifies: H.MEM.1
+struct NotAFunction;
+
+// Verifies: H.MEM.1
+fn plain_comment() {}
+
+/// Verifies:
+fn names_nothing() {}
+
+/// Verifies: mem one
+fn not_an_id() {}
+"""
+
+_CHECK_EXPECT_FOUND = [("frames_read_zero", 9, ["H.MEM.1", "L.mm.1"])]
+_CHECK_EXPECT_PROBLEMS = [
+    "check.rs:15: `Verifies:` is not on a function",
+    "check.rs:18: write a tag as `/// Verifies: <ids>` on the check's function",
+    "check.rs:21: `Verifies:` names no requirement",
+    "check.rs:24: not a requirement id: 'mem one'",
+]
+
+_HOST = """\
+#[cfg(test)]
+mod tests {
+    /// Verifies: H.MEM.1
+    #[test]
+    fn a_test() {}
+
+    /// Verifies: H.MEM.1
+    fn a_helper() {}
+}
+"""
+
+
+def self_test() -> list[str]:
+    failures = [f"lexer: {f}" for f in rustlex.self_test()]
+
+    root, _, unparsed = parse_text("t.sysml", _MODEL)
+    if unparsed:
+        failures.append(f"model: {len(unparsed)} unparsed declarations")
+    elements = list(root.walk())
+    for element in elements:
+        element.source = "t.sysml"
+    requirements, ids, problems = requirements_of(elements)
+    units = Units(dict(_KERNEL), product={"mm.rs"})
+    problems += check_requirements(requirements, {"O.SCRUB", "ASR-5"}, units)
+    for expected in _MODEL_EXPECT:
+        if not any(expected in p for p in problems):
+            failures.append(f"model: expected a problem {expected!r}; got {problems}")
+    if len(problems) != len(_MODEL_EXPECT):
+        failures.append(f"model: {len(problems)} problems, expected {len(_MODEL_EXPECT)}: {problems}")
+    good = [r for r in requirements if r.name == "good"]
+    if not good or good[0].parents != ["O.SCRUB", "ASR-5"] or "#PF" not in good[0].statement:
+        failures.append(f"model: H.MEM.1 read as {good}")
+    if [r.area for r in requirements if r.id == "L.mm.1"] != ["Mm"]:
+        failures.append("model: L.mm.1's area is not its package")
+
+    found, problems = scan_verifiers(_CHECK, "check.rs", "kernel")
+    got = [(v.function, v.line, v.ids) for v in found]
+    if got != _CHECK_EXPECT_FOUND:
+        failures.append(f"verifiers: found {got}, expected {_CHECK_EXPECT_FOUND}")
+    if problems != _CHECK_EXPECT_PROBLEMS:
+        failures.append(f"verifiers: problems {problems}, expected {_CHECK_EXPECT_PROBLEMS}")
+    found, problems = scan_verifiers(_HOST, "libs/x/src/lib.rs", "host")
+    if [v.function for v in found] != ["a_test"] or len(problems) != 1 or "not a #[test]" not in problems[0]:
+        failures.append(f"host: found {[v.function for v in found]}, problems {problems}")
+    found, problems = scan_verifiers("/// Verifies: H.MEM.1\nfn product() {}\n", "mm.rs", "none")
+    if found or len(problems) != 1 or "which is not a check" not in problems[0]:
+        failures.append(f"product file: found {found}, problems {problems}")
+
+    problems = ratchet({"H.A.1", "H.A.2"}, {"H.A.1", "H.A.3", "H.A.4"}, {"H.A.1", "H.A.2", "H.A.3"})
+    wanted = ["H.A.2 has no check", "H.A.3, which is now verified", "H.A.4, which is no longer"]
+    if len(problems) != 3 or not all(any(w in p for p in problems) for w in wanted):
+        failures.append(f"ratchet: {problems}")
+
+    spans = functions_in(_CHECK)
+    checker = Verifier("kernel", "kernel/src/mm/check.rs", "frames_read_zero", 9, ["H.MEM.1"])
+    spans_of = lambda rel: spans  # noqa: E731
+    cases = [
+        ("x86_64", None, "not measured"),
+        ("x86_64", {"mm/check.rs": {"reached": "1-3, 11"}}, "reached"),
+        ("x86_64", {"mm/check.rs": {"reached": "1-3, 14"}}, "not reached"),
+        ("x86_64", {}, "not built"),
+    ]
+    for arch, evidence, want in cases:
+        if reach(checker, arch, evidence, spans_of) != want:
+            failures.append(f"reach: {evidence} gave {reach(checker, arch, evidence, spans_of)}, expected {want}")
+    armed = Verifier("kernel", "kernel/src/arch/x86_64/trap/check.rs", "frames_read_zero", 9, [])
+    if reach(armed, "aarch64", {"x": {}}, spans_of) != "not built":
+        failures.append("reach: an x86-64 check counted on AArch64")
+    if best(["not built", "reached", "not reached"]) != "reached":
+        failures.append("best: a reached check does not win")
+    if _impl_type("<T: Copy> fmt::Debug for Table<T> where T: Sized ") != "Table":
+        failures.append(f"impl type: {_impl_type('<T: Copy> fmt::Debug for Table<T> where T: Sized ')}")
+    return failures
+
+
+# --- main --------------------------------------------------------------------
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--check", action="store_true", help="fail if TRACEABILITY.md is stale")
+    parser.add_argument("--record", action="store_true", help="rewrite the baseline")
+    parser.add_argument("--report", action="store_true", help="list every unnamed unit")
+    parser.add_argument("--self-test", action="store_true", help="run the crafted cases only")
+    args = parser.parse_args()
+
+    failures = self_test()
+    if failures:
+        for failure in failures:
+            print(f"traceability: self-test: {failure}", file=sys.stderr)
+        return 1
+    if args.self_test:
+        print("traceability: self-test passes (model, units, tags, ratchet, reach)")
+        return 0
+
+    model = load(sorted(MODEL_DIR.glob("*.sysml")), ROOT)
+    requirements, model_ids, problems = requirements_of(list(model.walk()))
+    system = system_ids(model_ids)
+    units = Units()
+    problems += check_requirements(requirements, system, units)
+
+    verifiers, wrong = all_verifiers()
+    problems += wrong
+    defined = {r.id for r in requirements}
+    known = defined | model_ids
+    by_id: dict[str, list[Verifier]] = defaultdict(list)
+    for verifier in verifiers:
+        for rid in verifier.ids:
+            if rid not in known:
+                problems.append(
+                    f"{verifier.file}:{verifier.line}: {verifier.function} verifies {rid}, "
+                    f"which no requirement defines"
+                )
+            else:
+                by_id[rid].append(verifier)
+
+    unverified = {r.id for r in requirements if not by_id.get(r.id)}
+    if args.record:
+        if problems:
+            for problem in problems:
+                print(f"traceability: {problem}", file=sys.stderr)
+            print("traceability: not recorded while the register has problems", file=sys.stderr)
+            return 1
+        write_baseline(unverified)
+        print(f"traceability: recorded {len(unverified)} unverified requirement(s)")
+        return 0
+    baseline = read_baseline()
+    if baseline is None:
+        problems.append(f"no {BASELINE.relative_to(ROOT)}; run with --record and commit it")
+        baseline = set()
+    else:
+        problems += ratchet(unverified, baseline, defined)
+
+    evidence = coverage_evidence()
+    kernel_spans = lambda rel: functions_in(  # noqa: E731
+        (KERNEL_SRC / rel).read_text(encoding="utf-8", errors="replace")
+    )
+    cache: dict[str, list] = {}
+
+    def spans(rel: str):
+        if rel not in cache:
+            cache[rel] = kernel_spans(rel)
+        return cache[rel]
+
+    verdicts = {
+        r.id: {a: best([reach(v, a, evidence[a], spans) for v in by_id.get(r.id, [])]) for a in ARCHES}
+        for r in requirements
+    }
+    parents_named: dict[str, list[str]] = defaultdict(list)
+    for r in requirements:
+        if r.level == "high":
+            for parent in r.parents:
+                parents_named[parent].append(r.id)
+    text = render(requirements, by_id, verdicts, baseline, parents_named, system, evidence)
+
+    status = 0
+    if problems:
+        for problem in problems:
+            print(f"traceability: {problem}", file=sys.stderr)
+        status = 1
+    if args.check:
+        current = OUTPUT.read_text(encoding="utf-8") if OUTPUT.exists() else ""
+        if current != text:
+            print(
+                f"traceability: {OUTPUT.relative_to(ROOT)} is stale; run "
+                f"python3 scripts/check/check-traceability.py",
+                file=sys.stderr,
+            )
+            status = 1
+    elif status == 0:
+        OUTPUT.write_text(text, encoding="utf-8")
+
+    named = {u for r in requirements if r.level == "low" for u in r.units}
+    everything = units.names()
+    unnamed = [u for u in everything if u not in named]
+    if args.report:
+        for unit in unnamed:
+            print(f"  unnamed  {unit}")
+    high = sum(1 for r in requirements if r.level == "high")
+    low = len(requirements) - high
+    print(
+        f"traceability: {high} high-level and {low} low-level requirement(s), "
+        f"{len(requirements) - len(unverified)} named by a check, {len(unverified)} in the baseline; "
+        f"{len(verifiers)} tagged check(s)"
+    )
+    print(
+        f"traceability: {len(unnamed)} of {len(everything)} product function(s) of the item named "
+        f"by no low-level requirement (reported, not failed; --report lists them)"
+    )
+    return status
+
+
+if __name__ == "__main__":
+    sys.exit(main())

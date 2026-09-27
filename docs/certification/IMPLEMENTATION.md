@@ -513,6 +513,21 @@ Arm pair and one on every architecture (`boot-options`). Measured together:
 
 **Closes:** F-14, F-15, F-16. **Size:** large. **The biggest structural gap.**
 
+**Step 1 done 2026-09-27**: the format and the gate. `ItemHighLevel` and
+`ItemLowLevel` are defined in `docs/sysml/13-item-requirements.sysml`, with
+`statement`, `criterion`, `parent` and (low level) `unit` as string
+attributes; the model reader learned string values that span lines and hold
+the notation's own punctuation. `scripts/check/check-traceability.py` runs in
+`cargo xtask check` with `--check`, self-tests on every run, keeps the
+baseline in `scripts/data/traceability-baseline.json` and writes
+`docs/certification/TRACEABILITY.md`. Two departures from the design below:
+a `/// Verifies:` tag on an xtask gate goes on the function in `xtask/src`
+that implements the gate; and the run-time column needed evidence the coverage
+run did not keep -- `coverage-report.py` dropped the check files' statements
+as not the item's -- so it now records them apart, in the `verification` map
+of `coverage-<arch>.json`, which `carry-coverage.py` carries. Until the next
+`cargo xtask coverage` writes that map, the matrix says *not measured*.
+
 49,431 lines of item product code trace to 33 system-level requirements, and no
 test names a requirement id.
 

@@ -331,6 +331,45 @@ def section_requirements(model: Model, doc: Doc) -> None:
         )
 
 
+def section_item_requirements(model: Model, doc: Doc) -> None:
+    """The certified item's requirements, one table per area.
+
+    docs/certification/TRACEABILITY.md carries the same requirements with the
+    checks that verify them; this chapter is the model's own reading, so the
+    architecture document states what the item promises beside how it is
+    built.
+    """
+    package = model.package("FerrixItemRequirements")
+    if package is None:
+        return
+    areas = [child for child in package.children if child.kind == "package"]
+    if not areas:
+        return
+    doc.add(Heading(1, "The certified item's requirements"))
+    paragraphs(doc, _synopsis_body(_package_synopsis(model, package)))
+    for area in areas:
+        rows = [
+            [
+                c(element.short_name),
+                prose(" ".join(unquote(element.attribute_value("statement")).split())),
+                prose(" ".join(unquote(element.attribute_value("criterion")).split())),
+                c(", ".join(part.strip().strip('"') for part in
+                            element.attribute_value("parent").strip("()").split(","))),
+            ]
+            for element in area.children
+            if element.kind == "requirement" and element.short_name
+        ]
+        doc.add(Heading(2, humanise(area.name)))
+        paragraphs(doc, area.doc)
+        doc.add(
+            Table(
+                head=["Id", "Statement", "Criterion", "Parent"],
+                rows=rows,
+                caption=f"{len(rows)} requirements.",
+            )
+        )
+
+
 def section_structure(model: Model, doc: Doc) -> None:
     package = model.package("FerrixStructure")
     if package is None:
@@ -1131,10 +1170,15 @@ def section_traceability(model: Model, doc: Doc) -> None:
         )
 
     doc.add(Heading(2, "Coverage"))
+    # The item's own requirements trace through their `parent` attributes and
+    # the checks that name them, which docs/certification/TRACEABILITY.md
+    # tabulates; the edges counted here are the system level's.
     requirements = [
         element
         for element in model.walk()
-        if element.kind == "requirement" and element.short_name
+        if element.kind == "requirement"
+        and element.short_name
+        and element.package != "FerrixItemRequirements"
     ]
     # Three different edges trace a requirement to something. A stage names
     # the parts that satisfy it; a future stage is allocated to the parts that
@@ -1299,6 +1343,7 @@ def section_figures(model: Model, doc: Doc) -> None:
 SECTIONS = (
     section_about,
     section_requirements,
+    section_item_requirements,
     section_structure,
     section_architectures,
     section_boot,

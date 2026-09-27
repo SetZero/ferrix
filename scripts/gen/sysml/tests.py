@@ -105,6 +105,29 @@ class Headers(unittest.TestCase):
         self.assertIn('base = "0x00"', package.children[0].value)
         self.assertIn('purpose = "user"', package.children[0].value)
 
+    def test_a_string_value_is_prose_not_notation(self):
+        # A requirement's statement names `#PF`, `<'H.1'>`, `[1..*]`, `;`,
+        # `{` and `=` as readily as any sentence, and wraps across lines.
+        text = (
+            "package P { requirement <'H.T.1'> r : ItemHighLevel {\n"
+            "    attribute :>> statement = \"A #PF from ring 3 shall be\n"
+            "        a signal; never <'X'> [1..*] {halt} a = b.\";\n"
+            "    attribute :>> parent = (\"O.ISOLATE\", \"ASR-1\");\n"
+            "} part def After; }"
+        )
+        root, _, unparsed = parse(text)
+        requirement, after = only(root).children
+        self.assertEqual(unparsed, [])
+        self.assertEqual(requirement.short_name, "H.T.1")
+        self.assertEqual(requirement.keywords, [])
+        self.assertEqual(
+            requirement.attribute_value("statement"),
+            '"A #PF from ring 3 shall be a signal; never <\'X\'> [1..*] {halt} a = b."',
+        )
+        self.assertEqual(requirement.attribute_value("parent"), '("O.ISOLATE", "ASR-1")')
+        # The lines a string spans are still counted.
+        self.assertEqual(after.line, 5)
+
     def test_modifiers_are_collected(self):
         package = only(parse("package P { abstract variation part def Layer :> Facade; }")[0])
         self.assertEqual(package.children[0].modifiers, ["abstract", "variation"])

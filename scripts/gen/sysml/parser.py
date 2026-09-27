@@ -26,14 +26,15 @@ One rule is worth stating because it is the whole of step 1: in this notation a
 of it. So a doc comment opening a body belongs to the element that body
 belongs to -- not to the declaration that happens to follow it.
 
-The subset covered, which is everything the thirteen files use:
+The subset covered, which is everything the fourteen files use:
 
     package / part / action / item / attribute / port / interface / state /
     enum / requirement / verification / metadata / view / viewpoint /
     constraint / subject / objective, in both `def` and usage form;
     `abstract`, `variation`, `variant`, `ref`, `perform`, `exhibit`, `assert`;
     short names in angle brackets; `:`, `:>`, `:>>`; multiplicities; `=`
-    values including sequences and constructor calls; enum literals;
+    values including sequences, constructor calls and string literals
+    that span lines and hold the notation's own punctuation; enum literals;
     `first`/`then` action flows and the `decide` / `if` / `else` branches
     between them; `transition`; `dependency`, `satisfy`, `allocate`,
     `verify`, `connect`, `import`, `expose`, `filter`; and the `@stage` /
@@ -148,6 +149,8 @@ _SHORT_NAME = re.compile(r"<\s*'([^']*)'\s*>")
 _MULTIPLICITY = re.compile(r"\[([^\]]*)\]")
 _PLACEHOLDER = re.compile(r"\x00(\d+)\x00")
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_STRING = re.compile(r'"(?:[^"\\]|\\.)*"', re.S)
+_STASHED = re.compile(r"\x01(\d+)\x01")
 
 
 class _Scanner:
@@ -308,7 +311,10 @@ class _Parser:
                 end = index + 1
                 while end < len(self.code) and self.code[end] != '"':
                     end += 2 if self.code[end] == "\\" else 1
-                buffer.append(self.code[index : end + 1])
+                literal = self.code[index : end + 1]
+                buffer.append(literal)
+                # A string may span lines; the ones after it are still counted.
+                line += literal.count("\n")
                 index = end + 1
                 continue
             if char == "{":
@@ -538,6 +544,18 @@ class _Parser:
             element.deferred_reason = " ".join(deferred.group(1).split())
             text = _DEFERRED.sub(" ", text)
 
+        # A string literal is prose -- a requirement's `statement` names
+        # `#PF` or `<'H.MEM.1'>` as readily as any sentence -- so it is set
+        # aside before the header's own syntax is looked for, and put back
+        # into the value it belongs to.
+        strings: list[str] = []
+
+        def stash(match: re.Match) -> str:
+            strings.append(match.group(0))
+            return f"\x01{len(strings) - 1}\x01"
+
+        text = _STRING.sub(stash, text)
+
         element.keywords.extend(re.findall(r"#(\w+)", text))
         text = re.sub(r"#\w+", " ", text)
 
@@ -549,7 +567,8 @@ class _Parser:
         # Split the value off first: it may hold colons, brackets and commas.
         value_match = re.search(r"(?<![:>=!<])=(?!=)", text)
         if value_match:
-            element.value = " ".join(text[value_match.end() :].split())
+            value = " ".join(text[value_match.end() :].split())
+            element.value = _STASHED.sub(lambda m: " ".join(strings[int(m.group(1))].split()), value)
             text = text[: value_match.start()]
 
         multiplicity = _MULTIPLICITY.search(text)
