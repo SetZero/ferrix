@@ -122,6 +122,7 @@ mod uutils;
 mod vfs;
 mod vnc;
 mod wallpaper;
+mod waybar;
 mod window;
 mod workspace;
 mod wsl;

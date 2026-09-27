@@ -123,7 +123,7 @@ const CONFIG_PATH: &str = "etc/hyprland.conf";
 /// `exec-once = waybar` and `bind = …, exec, hyprlock` find it. One line a
 /// program, added by its stream when it lands. A judged boot carries none,
 /// so its archive stays the bytes it was.
-const DESKTOP_CLIENTS: &[(&str, &str)] = &[];
+const DESKTOP_CLIENTS: &[(&str, &str)] = &[("compositor-waybar", "waybar")];
 
 /// Where `run-compositor` puts the wallpaper it carries.
 const WALLPAPER_PATH: &str = "etc/wallpaper.fxwall";
@@ -2619,7 +2619,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are twenty of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 28] = [
+const BOOTS: [(&str, Boot); 29] = [
     ("restart", test_driver_restart),
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
@@ -2648,6 +2648,7 @@ const BOOTS: [(&str, Boot); 28] = [
     ("idle", idle::test_idle),
     ("idle-user", idle::test_idle_user),
     ("caption", test_caption),
+    ("waybar", test_waybar),
 ];
 
 /// What the `caption` boot draws: a clock's digits, letters with kerning
@@ -2825,6 +2826,205 @@ fn caption_differences(screen: &Image, want: &Image, tolerance: u8) -> (usize, O
                 .pixels
                 .get((y * want.width + x) * 3..(y * want.width + x) * 3 + 3);
             let (sx, sy) = (x + origin, y + origin);
+            let shown = (sx < screen.width && sy < screen.height)
+                .then(|| {
+                    screen
+                        .pixels
+                        .get((sy * screen.width + sx) * 3..(sy * screen.width + sx) * 3 + 3)
+                })
+                .flatten();
+            let same = match (wanted, shown) {
+                (Some(wanted), Some(shown)) => wanted
+                    .iter()
+                    .zip(shown)
+                    .all(|(one, two)| one.abs_diff(*two) <= tolerance),
+                _ => false,
+            };
+            if !same {
+                count += 1;
+                if first.is_none() {
+                    first = Some((x, y, triple(wanted), triple(shown)));
+                }
+            }
+        }
+    }
+    (count, first)
+}
+
+/// The picture the waybar boot's screen must show: the same `files` and
+/// `fonts` written here, and the `x86_64` build's `--render` of them, kept
+/// as `build/<arch>/waybar-expected.ppm`.
+fn waybar_expected(
+    arch: Arch,
+    files: &[crate::ports::File],
+    fonts: &[crate::ports::File],
+) -> Result<(Image, PathBuf)> {
+    // The same files here, for the host's render.
+    let here = paths::build_dir(arch).join("waybar-boot");
+    let _ = std::fs::remove_dir_all(&here);
+    crate::waybar::write_here(&here, files, crate::waybar::HOME_DIR)?;
+    crate::waybar::write_here(&here.join("fonts"), fonts, crate::dotfiles::FONT_DIR)?;
+    let expected_path = paths::build_dir(arch).join("waybar-expected.ppm");
+    let host = build(Arch::X86_64, "compositor-waybar", "waybar")?;
+    let (width, height) = crate::waybar::SIZE;
+    let rendered = std::process::Command::new(&host)
+        .arg("-c")
+        .arg(here.join("config.jsonc"))
+        .arg("-s")
+        .arg(here.join("style.css"))
+        .arg("--fonts-dir")
+        .arg(here.join("fonts"))
+        .args([
+            "--output",
+            crate::waybar::OUTPUT,
+            "--over",
+            crate::waybar::GROUND,
+        ])
+        .arg("--size")
+        .arg(format!("{width}x{height}"))
+        .arg("--render")
+        .arg(&expected_path)
+        .output()
+        .map_err(|error| Error::new(format!("running {}: {error}", host.display())))?;
+    let said_here = String::from_utf8_lossy(&rendered.stdout).trim().to_owned();
+    if !rendered.status.success() {
+        return Err(Error::new(format!(
+            "{arch}: the host's waybar failed: {said_here} {}",
+            String::from_utf8_lossy(&rendered.stderr).trim()
+        )));
+    }
+    println!("  {arch}: here, {said_here}");
+    let bytes = std::fs::read(&expected_path)
+        .map_err(|error| Error::new(format!("reading {}: {error}", expected_path.display())))?;
+    Ok((parse_ppm(&bytes)?, expected_path))
+}
+
+/// `cargo xtask test-compositor`'s `waybar` boot: `/bin/waybar` draws the
+/// user's bar -- their own `~/.config/waybar/style.css`, its icons and the
+/// fonts it names, with a config of the tree's that is the user's module for
+/// module (`crate::waybar`) -- and the top of the screen must be exactly
+/// the picture the `x86_64` build of the same program draws here with
+/// `--render` from the same files: the bar laid over hyprix's ground.
+///
+/// So the chips, their SVG caps, the text in the user's font and the
+/// translucent ground are all judged, pixel for pixel on `x86_64` and
+/// within two a channel elsewhere. The screenshot is kept as
+/// `build/<arch>/waybar.ppm`.
+fn test_waybar(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let (files, users) = crate::waybar::files()?;
+    if !users {
+        println!(
+            "  {arch}: no ~/.config/waybar/style.css here; the bar is drawn in the tree's own style"
+        );
+    }
+    let mut families = crate::waybar::families(&files);
+    families.push("sans-serif".to_owned());
+    let fonts = crate::dotfiles::font_files(&families);
+    if fonts.is_empty() {
+        return Err(Error::new(format!(
+            "{arch}: this machine resolves no font file for {families:?}"
+        )));
+    }
+    let (want, expected_path) = waybar_expected(arch, &files, &fonts)?;
+    let (width, height) = crate::waybar::SIZE;
+
+    let guest = build(arch, "compositor-waybar", "waybar")?;
+    // waybar runs every `exec` as `/bin/sh -c`, and the test config's
+    // scripts are `echo`s: zinc is the shell, and nothing else is needed.
+    let mut carried = Carried {
+        zinc: crate::zinc::build(arch)?,
+        ..Carried::none()
+    };
+    carried.ports.push(crate::ports::File {
+        path: "bin/waybar".to_owned(),
+        mode: 0o755,
+        content: crate::ports::Content::Bytes(
+            std::fs::read(&guest)
+                .map_err(|error| Error::new(format!("reading {}: {error}", guest.display())))?,
+        ),
+    });
+    carried.ports.extend(files);
+    carried.ports.extend(fonts);
+    let config = format!(
+        "# Written into the initramfs by `cargo xtask test-compositor`'s waybar boot.\n\
+         monitor = , {width}x{height}@60, auto, 1\n\
+         exec-once = /bin/waybar -l info -c /{home}/config.jsonc -s /{home}/style.css \
+         --fonts-dir /{fonts}\n",
+        home = crate::waybar::HOME_DIR,
+        fonts = crate::dotfiles::FONT_DIR,
+    );
+    let (image, kernel) = build_image(arch, programs, &undithered(&config), carried, args)?;
+    let port = free_port()?;
+    let mut qemu_args = args.clone();
+    qemu_args.display = true;
+    qemu_args.qmp_port = Some(port);
+    let dump = paths::build_dir(arch).join("waybar.ppm");
+    let tolerance = if arch == Arch::X86_64 { 0 } else { 2 };
+    let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
+        let configured = watching.read_more(Instant::now() + SETTLE, |lines| {
+            lines
+                .iter()
+                .any(|line| line.contains("Bar configured (width:"))
+        })?;
+        if !configured {
+            return Err(with_the_transcript(
+                &Error::new(format!("{arch}: waybar never said its bar was configured")),
+                watching,
+            ));
+        }
+        let deadline = Instant::now() + SETTLE;
+        loop {
+            qmp.screendump(Some(DEVICE_ID), &dump)?;
+            let bytes = std::fs::read(&dump)
+                .map_err(|error| Error::new(format!("reading {}: {error}", dump.display())))?;
+            let screen = parse_ppm(&bytes)?;
+            let (differing, first) = picture_differences(&screen, &want, (0, 0), tolerance);
+            if differing == 0 {
+                println!(
+                    "  {arch}: the bar's {}x{} pixels are the ones this machine draws from the \
+                     {} style; the screen is {}",
+                    want.width,
+                    want.height,
+                    if users { "user's" } else { "tree's" },
+                    dump.display()
+                );
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(with_the_transcript(
+                    &Error::new(format!(
+                        "{arch}: {differing} of the bar's pixels differ from this machine's \
+                         drawing ({}); the first at {first:?}; the screen is {}",
+                        expected_path.display(),
+                        dump.display()
+                    )),
+                    watching,
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    };
+    let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, MARKER, hook)?;
+    Ok(())
+}
+
+/// How many of `want`'s pixels the screen at `origin` does not show, each
+/// channel allowed `tolerance`, and where the first is.
+fn picture_differences(
+    screen: &Image,
+    want: &Image,
+    origin: (usize, usize),
+    tolerance: u8,
+) -> (usize, Option<Differing>) {
+    let mut count = 0;
+    let mut first = None;
+    for y in 0..want.height {
+        for x in 0..want.width {
+            let wanted = want
+                .pixels
+                .get((y * want.width + x) * 3..(y * want.width + x) * 3 + 3);
+            let (sx, sy) = (x + origin.0, y + origin.1);
             let shown = (sx < screen.width && sy < screen.height)
                 .then(|| {
                     screen
