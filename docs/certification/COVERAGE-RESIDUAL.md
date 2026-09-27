@@ -6,9 +6,9 @@ The statements in the certified item that the measured suite did not reach, on e
 
 | Architecture | Profile | Unreached | Argued | Hardware absent | Needs a test |
 |---|---|---:|---:|---:|---:|
-| x86_64 | debug | 785 | 461 | 247 | **77** |
+| x86_64 | debug | 785 | 462 | 247 | **76** |
 | aarch64 | debug | 745 | 399 | 201 | **145** |
-| armv7a | debug | 1131 | 557 | 444 | **130** |
+| armv7a | debug | 1131 | 558 | 444 | **129** |
 
 *Argued* is the first four categories below; *hardware absent* is a statement about which machine was measured rather than an argument; *needs a test* is the gap.
 
@@ -22,10 +22,10 @@ The statements in the certified item that the measured suite did not reach, on e
 |---|---:|---:|
 | Unreachable on the measured architecture | 184 | 23% |
 | Reached only when the kernel is stopping | 190 | 24% |
-| Reached only when something has already failed | 76 | 10% |
+| Reached only when something has already failed | 77 | 10% |
 | Run, and credited to another line | 11 | 1% |
 | Hardware the measured machine does not have | 247 | 31% |
-| Needs a test | 77 | 10% |
+| Needs a test | 76 | 10% |
 
 ### x86_64: Unreachable on the measured architecture — 184 statements
 
@@ -67,7 +67,7 @@ Justified. The panic report, its catalogue and the backtrace walker run when the
 | 1 | `core` | `sched/wait.rs` |
 | 1 | `core` | `vmap.rs` |
 
-### x86_64: Reached only when something has already failed — 76 statements
+### x86_64: Reached only when something has already failed — 77 statements
 
 Justified, line by line. Each of these runs only when hardware misbehaves or an invariant the rest of the kernel keeps has broken: a counter that never advances, a reset that did not reset, a table that lost an entry it was just given. A passing run cannot show one without first breaking what it defends against, and removing it would leave the failure unhandled. Each argument below says what would have to go wrong.
 
@@ -76,7 +76,7 @@ Justified, line by line. Each of these runs only when hardware misbehaves or an 
 | 10 | `item` | `syscall/native.rs` |
 | 9 | `item` | `devmgr.rs` |
 | 8 | `core` | `iommu.rs` |
-| 7 | `core` | `user/space.rs` |
+| 8 | `core` | `user/space.rs` |
 | 6 | `core` | `object/port.rs` |
 | 4 | `core` | `mm.rs` |
 | 4 | `core` | `object/pin.rs` |
@@ -137,7 +137,7 @@ Justified, line by line. The statement runs, and a test shows what it does, but 
 | 1 | `item` | `devmgr.rs` |
 | 1 | `core` | `object/pin.rs` |
 
-### x86_64: Needs a test — 77 statements
+### x86_64: Needs a test — 76 statements
 
 **The real gap.** No argument covers these; they are reachable on the measured configuration and nothing exercised them. This is the number that has to reach zero for DO-178C table A-7 objective 5. [COVERAGE-WORKLIST.md](COVERAGE-WORKLIST.md) groups them by module.
 
@@ -145,9 +145,9 @@ Justified, line by line. The statement runs, and a test shows what it does, but 
 |---:|---|---|
 | 24 | `item` | `syscall/native.rs` |
 | 6 | `core` | `arch/x86_64/syscall.rs` |
-| 6 | `core` | `user/space.rs` |
 | 5 | `core` | `object/oom.rs` |
 | 5 | `core` | `object/process.rs` |
+| 5 | `core` | `user/space.rs` |
 | 4 | `core` | `object/channel.rs` |
 | 3 | `core` | `arch/x86_64/mod.rs` |
 | 3 | `core` | `console/screen.rs` |
@@ -163,7 +163,7 @@ Justified, line by line. The statement runs, and a test shows what it does, but 
 | 1 | `core` | `mm.rs` |
 | 1 | `core` | `object/quota.rs` |
 
-### x86_64: argued line by line — 368 statements
+### x86_64: argued line by line — 369 statements
 
 From `coverage-argued-x86_64.json`. Each row is one argument, for the lines it names and no others; the category is the one it is counted in above.
 
@@ -438,6 +438,7 @@ From `coverage-argued-x86_64.json`. Each row is one argument, for the lines it n
 | `user/space.rs` | 2266 | Reached only when something has already failed | The failure half of the debug assertion that a user page fault is resolved with no preemption-disabling lock held (a fault may sleep for a page from a disk). Every fault path takes its locks inside the resolution, after this; reaching the row is the assertion firing. |
 | `user/space.rs` | 2270-2271 | Reached only when something has already failed | The failure half of the debug assertion that a user page fault is resolved with no preemption-disabling lock held (a fault may sleep for a page from a disk). Every fault path takes its locks inside the resolution, after this; reaching the row is the assertion firing. |
 | `user/space.rs` | 2554 | Reached only when something has already failed | `map_anywhere`'s refusal of a place outside the user half. `find_free` answers only places inside the map's window, `MMAP_MIN_ADDR..USER_VIRT_END`, so the place it found is always inside the half; the check keeps the rule where the mapping is made rather than in the map's contract. |
+| `user/space.rs` | 2701 | Reached only when something has already failed | `map_shared_code`'s refusal of a place outside the user half, as `map_anywhere`'s is. `find_free` answers only places inside the map's window (its contract, `libs/kernel/vma/src/lib.rs`), and a space's window is `MMAP_MIN_ADDR..USER_VIRT_END` when built (`AddressSpace::new`) and never raised past `USER_VIRT_END` after (`set_ceiling` refuses it), so the place found is always inside the half; the check keeps the rule where the mapping is made rather than in the map's contract. |
 | `user/vmo.rs` | 1473 | Reached only when something has already failed | A page already held four billion times, whose count would wrap. Each hold is a pin a driver made and keeps a handle to, and a process may hold at most HANDLE_LIMIT (4,096) handles, so the count cannot approach the limit; the refusal is what keeps a wrapped count from freeing a page a device still reaches. |
 | `vmap.rs` | 391 | Reached only when something has already failed | A span given back from the middle of a merged region, which splits it, when the arena's region list is full and the heap has nothing to grow it with. The split reserves with the standard library's `try_reserve` (libs/vma `remove_quietly`), which the failure injection deliberately does not fail -- with room in the list it allocates nothing -- so reaching it needs the list at its capacity at the moment the heap is out of pages; the span then stays reserved, address space lost rather than memory, and is counted. |
 | `vmap.rs` | 393 | Reached only when something has already failed | The arena's map refusing to give back a span for a reason other than memory: `OutOfRange`, a span outside the arena's window. Every span came from `reserve`, which found it inside the window, so none is. The closing rows are the error arms' return. |
@@ -876,10 +877,10 @@ From `coverage-argued-aarch64.json`. Each row is one argument, for the lines it 
 |---|---:|---:|
 | Unreachable on the measured architecture | 266 | 24% |
 | Reached only when the kernel is stopping | 203 | 18% |
-| Reached only when something has already failed | 68 | 6% |
+| Reached only when something has already failed | 69 | 6% |
 | Run, and credited to another line | 20 | 2% |
 | Hardware the measured machine does not have | 444 | 39% |
-| Needs a test | 130 | 11% |
+| Needs a test | 129 | 11% |
 
 ### armv7a: Unreachable on the measured architecture — 266 statements
 
@@ -917,14 +918,14 @@ Justified. The panic report, its catalogue and the backtrace walker run when the
 | 1 | `core` | `sched/wait.rs` |
 | 1 | `core` | `vmap.rs` |
 
-### armv7a: Reached only when something has already failed — 68 statements
+### armv7a: Reached only when something has already failed — 69 statements
 
 Justified, line by line. Each of these runs only when hardware misbehaves or an invariant the rest of the kernel keeps has broken: a counter that never advances, a reset that did not reset, a table that lost an entry it was just given. A passing run cannot show one without first breaking what it defends against, and removing it would leave the failure unhandled. Each argument below says what would have to go wrong.
 
 | Statements | Ring | File |
 |---:|---|---|
+| 10 | `core` | `user/space.rs` |
 | 9 | `item` | `devmgr.rs` |
-| 9 | `core` | `user/space.rs` |
 | 8 | `item` | `syscall/native.rs` |
 | 6 | `core` | `iommu.rs` |
 | 6 | `core` | `object/port.rs` |
@@ -985,14 +986,14 @@ Justified, line by line. The statement runs, and a test shows what it does, but 
 | 1 | `item` | `devmgr.rs` |
 | 1 | `core` | `fdt.rs` |
 
-### armv7a: Needs a test — 130 statements
+### armv7a: Needs a test — 129 statements
 
 **The real gap.** No argument covers these; they are reachable on the measured configuration and nothing exercised them. This is the number that has to reach zero for DO-178C table A-7 objective 5. [COVERAGE-WORKLIST.md](COVERAGE-WORKLIST.md) groups them by module.
 
 | Statements | Ring | File |
 |---:|---|---|
 | 25 | `core` | `trap.rs` |
-| 25 | `core` | `user/space.rs` |
+| 24 | `core` | `user/space.rs` |
 | 20 | `item` | `syscall/native.rs` |
 | 6 | `item` | `devmgr.rs` |
 | 5 | `core` | `object/oom.rs` |
@@ -1018,7 +1019,7 @@ Justified, line by line. The statement runs, and a test shows what it does, but 
 | 1 | `core` | `signal_frame.rs` |
 | 2 | | *and 2 more files* |
 
-### armv7a: argued line by line — 485 statements
+### armv7a: argued line by line — 486 statements
 
 From `coverage-argued-armv7a.json`. Each row is one argument, for the lines it names and no others; the category is the one it is counted in above.
 
@@ -1347,6 +1348,7 @@ From `coverage-argued-armv7a.json`. Each row is one argument, for the lines it n
 | `user/space.rs` | 2266 | Reached only when something has already failed | The failure half of the debug assertion that a user page fault is resolved with no preemption-disabling lock held (a fault may sleep for a page from a disk). Every fault path takes its locks inside the resolution, after this; reaching the row is the assertion firing. |
 | `user/space.rs` | 2270-2271 | Reached only when something has already failed | The failure half of the debug assertion that a user page fault is resolved with no preemption-disabling lock held (a fault may sleep for a page from a disk). Every fault path takes its locks inside the resolution, after this; reaching the row is the assertion firing. |
 | `user/space.rs` | 2554 | Reached only when something has already failed | `map_anywhere`'s refusal of a place outside the user half. `find_free` answers only places inside the map's window, `MMAP_MIN_ADDR..USER_VIRT_END`, so the place it found is always inside the half; the check keeps the rule where the mapping is made rather than in the map's contract. |
+| `user/space.rs` | 2701 | Reached only when something has already failed | `map_shared_code`'s refusal of a place outside the user half, as `map_anywhere`'s is. `find_free` answers only places inside the map's window (its contract, `libs/kernel/vma/src/lib.rs`), and a space's window is `MMAP_MIN_ADDR..USER_VIRT_END` when built (`AddressSpace::new`) and never raised past `USER_VIRT_END` after (`set_ceiling` refuses it), so the place found is always inside the half; the check keeps the rule where the mapping is made rather than in the map's contract. |
 | `user/vmo.rs` | 1473 | Reached only when something has already failed | A page already held four billion times, whose count would wrap. Each hold is a pin a driver made and keeps a handle to, and a process may hold at most HANDLE_LIMIT (4,096) handles, so the count cannot approach the limit; the refusal is what keeps a wrapped count from freeing a page a device still reaches. |
 | `vmap.rs` | 391 | Reached only when something has already failed | A span given back from the middle of a merged region, which splits it, when the arena's region list is full and the heap has nothing to grow it with. The split reserves with the standard library's `try_reserve` (libs/vma `remove_quietly`), which the failure injection deliberately does not fail -- with room in the list it allocates nothing -- so reaching it needs the list at its capacity at the moment the heap is out of pages; the span then stays reserved, address space lost rather than memory, and is counted. |
 | `vmap.rs` | 393 | Reached only when something has already failed | The arena's map refusing to give back a span for a reason other than memory: `OutOfRange`, a span outside the arena's window. Every span came from `reserve`, which found it inside the window, so none is. The closing rows are the error arms' return. |

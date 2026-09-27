@@ -12,8 +12,8 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 |---|---:|---:|---:|---:|
 | [`arch/aarch64`](#archaarch64) | - | 27 | - | 2 |
 | [`syscall`](#syscall) | 27 | 23 | 22 | 2 |
-| [`user`](#user) | 6 | 22 | 26 | 2 |
 | [`trap`](#trap) | - | 25 | 25 | 1 |
+| [`user`](#user) | 5 | 22 | 25 | 2 |
 | [`object`](#object) | 17 | 19 | 18 | 7 |
 | [`arch/x86_64`](#archx86_64) | 11 | - | - | 3 |
 | [`devmgr`](#devmgr) | - | 7 | 6 | 1 |
@@ -30,7 +30,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | [`iommu`](#iommu) | 1 | 1 | 1 | 1 |
 | [`signal_frame`](#signal_frame) | - | - | 1 | 1 |
 | [`timer`](#timer) | - | - | 1 | 1 |
-| **Total** | **77** | **145** | **130** | 34 |
+| **Total** | **76** | **145** | **129** | 34 |
 
 ---
 
@@ -52,20 +52,20 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 ---
 
-## `user`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `user/space.rs` | `core` | 6 | 22 | 25 | 4 | 2693, 2722, 2738, 2740 |
-| `user/vmo.rs` | `core` | 0 | 0 | 1 | 0 | - |
-
----
-
 ## `trap`
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
 | `trap.rs` | `core` | 0 | 25 | 25 | 0 | - |
+
+---
+
+## `user`
+
+| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
+|---|---|---:|---:|---:|---:|---|
+| `user/space.rs` | `core` | 5 | 22 | 24 | 4 | 2693, 2722, 2738, 2740 |
+| `user/vmo.rs` | `core` | 0 | 0 | 1 | 0 | - |
 
 ---
 

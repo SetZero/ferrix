@@ -7,7 +7,8 @@
 //! operations -- a fork of a space holding every kind of region, an `mremap`
 //! that moves a private region and one that grows and shrinks a shared one,
 //! an unmap that splits, a VMO shared, written, held and forked, kernel stacks
-//! freed together -- and runs each once per allocation it makes, failing that
+//! freed together, an object mapped as shared code -- and runs each once per
+//! allocation it makes, failing that
 //! allocation alone: the first run fails the first, the second the second,
 //! until a run in which nothing failed. So every allocation site the scenario
 //! reaches is made to fail once, whatever order it comes in.
@@ -109,7 +110,7 @@ type Scenario = (&'static str, fn(u64) -> Result<(), Refusal>);
 /// `frame` is a frame of RAM the caller owns, for the scenario that maps a
 /// window over one.
 pub(crate) fn run(frame: u64) -> Result<Report, &'static str> {
-    let scenarios: [Scenario; 7] = [
+    let scenarios: [Scenario; 8] = [
         ("fork", fork_every_kind_of_region),
         ("move", remap_a_private_region),
         ("shared", remap_a_shared_region),
@@ -117,6 +118,7 @@ pub(crate) fn run(frame: u64) -> Result<Report, &'static str> {
         ("cut", cut_a_file_under_its_mappings),
         ("object", share_write_and_hold_an_object),
         ("stacks", free_stacks_together),
+        ("code", map_shared_code),
     ];
     let task = crate::sched::current_id().ok_or("the sweep runs outside a task")?;
     // Once each before the window, for the size classes and the tables their
@@ -438,6 +440,56 @@ fn share_write_and_hold_an_object(_: u64) -> Result<(), Refusal> {
     let large = fallible::try_arc([0x5A_u8; 3000])?;
     if large.iter().any(|&byte| byte != 0x5A) {
         return Err(Refusal::Wrong("a large allocation did not hold its value"));
+    }
+    Ok(())
+}
+
+/// A two-page object mapped as shared code, as the vDSO is: its first page
+/// read-only and shared, its second read and execute, both then unmapped.
+/// x86-64's vDSO is the only caller outside this check, so on the Arm
+/// architectures this is what reaches [`AddressSpace::map_shared_code`] at
+/// all. Before it, a one-page object is refused as a bad range and leaves the
+/// space as it was: that refusal comes before any allocation, so it is the
+/// same on every run of the sweep.
+fn map_shared_code(_: u64) -> Result<(), Refusal> {
+    let space_ = space(AddressSpace::new(), "a fresh space was refused")?;
+    let before = space_.region_count();
+    let small = Vmo::new_anonymous(1)?;
+    if !matches!(space_.map_shared_code(small), Err(SpaceError::BadRange)) {
+        return Err(Refusal::Wrong(
+            "a one-page object was not refused as shared code",
+        ));
+    }
+    if space_.region_count() != before {
+        return Err(Refusal::Wrong(
+            "a refused shared-code mapping left a region",
+        ));
+    }
+    let vmo = Vmo::new_anonymous(2)?;
+    let code = space(
+        space_.map_shared_code(vmo),
+        "mapping shared code was refused",
+    )?;
+    let regions = space_.regions()?;
+    let data = regions.iter().find(|region| region.end == code);
+    let text = regions.iter().find(|region| region.start == code);
+    let (Some(data), Some(text)) = (data, text) else {
+        return Err(Refusal::Wrong("shared code was not mapped as two regions"));
+    };
+    let data_right = data.start + P == code && data.flags.read && data.flags.shared;
+    let data_closed = !data.flags.write && !data.flags.execute;
+    let text_right = text.end == code + P && text.flags.execute && !text.flags.write;
+    if !(data_right && data_closed && text_right) {
+        return Err(Refusal::Wrong(
+            "shared code was not a read-only data page and a read-execute code page",
+        ));
+    }
+    space(
+        space_.unmap(code - P, 2 * P),
+        "unmapping shared code was refused",
+    )?;
+    if space_.region_count() != before {
+        return Err(Refusal::Wrong("unmapping shared code left a region"));
     }
     Ok(())
 }

@@ -937,6 +937,11 @@ impl AddressSpace {
     /// Returns `None` when nothing fits, and also for a `len` that is zero or
     /// unaligned or an `align` that is not a power of two of at least
     /// [`PAGE_SIZE`], since neither can describe a mapping at all.
+    ///
+    /// A range it does return lies wholly inside the window, `low..high`: a
+    /// hint is taken only past the window check, and the search only fits
+    /// gaps between `low` and `high`. The kernel's mapping paths rely on this
+    /// and keep their own check of the user half as a second line.
     #[must_use]
     pub fn find_free(&self, len: u64, align: u64, hint: Option<u64>) -> Option<u64> {
         if len == 0 || !is_page_aligned(len) || !align.is_power_of_two() || align < PAGE_SIZE {
