@@ -17,7 +17,28 @@ Coverage evidence recording the checks: none yet.
 | High (`H.*`) | 51 | 2 | 49 |
 | Low (`L.*`) | 0 | 0 | 0 |
 
-0 functions of the item are named as a low-level requirement's unit. The gate prints, without failing, the item's functions no requirement names; that list changes with every function written, so it is not kept here.
+0 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
+
+| Product functions | Count |
+|---|---:|
+| Named by a low-level requirement | 0 |
+| Accessors, covered by the requirement they serve | 719 |
+| Check code in a product file | 5 |
+| Named by none | 1611 |
+
+Subsystems whose low-level requirements are complete: none yet.
+
+### Check code in product files
+
+Functions that are checks, or serve only checks, and live in a product file, so that no `Verifies:` tag may go on them and the item's size counts them. Each is to move into a check file; until it does it is listed here, in `scripts/data/traceability-units.json`, and not reported as a function no requirement names.
+
+| Function | Why it is check code |
+|---|---|
+| `object::as_if_draining_elsewhere` | Runs a check's closure as though another context were draining disposed objects (object/check.rs, block_ring/check.rs). It sets the DISPOSING flag dispose reads, which is private to object/mod.rs. |
+| `object::pin::check_pin` | check_quarantine's pin of one fresh page under a cap of one page. |
+| `object::pin::check_quarantine` | The quarantine's boot check, called from main.rs. It reads pin.rs's private quarantined_pages, release and Pin::with_cap; moved into a check file it verifies the three quarantine requirements (L.object.41 to L.object.43). |
+| `object::pin::translated_pci_domain` | check_quarantine's search for a translated PCI domain. |
+| `object::process::Exit::for_check` | An end no process has, for check_quarantine; it needs Exit's private constructor. |
 
 ## From the system level
 

@@ -1,0 +1,28 @@
+{
+  "//": [
+    "What scripts/check/check-traceability.py needs to know about the item's",
+    "product functions, beyond the requirements that name them as units",
+    "(docs/certification/IMPLEMENTATION.md W-8, the pilot on object/).",
+    "",
+    "complete: subsystems whose low-level requirements are all written. In",
+    "one of these, a product function no requirement names, that is no",
+    "accessor and is not listed below, fails the gate: the 'no unintended",
+    "function' report is a ratchet there. A subsystem enters when its part",
+    "of the report is empty, in the slice that empties it.",
+    "",
+    "check_code_in_product: functions that are checks, or serve only checks,",
+    "and live in a product file, so that no `Verifies:` tag may go on them",
+    "and the item's size counts them. Each is to move into a check file; an",
+    "entry says why it is check code and what keeps it where it is. The",
+    "target is an empty map, and the gate fails on an entry that names no",
+    "function or one a requirement names."
+  ],
+  "complete": [],
+  "check_code_in_product": {
+    "object::as_if_draining_elsewhere": "Runs a check's closure as though another context were draining disposed objects (object/check.rs, block_ring/check.rs). It sets the DISPOSING flag dispose reads, which is private to object/mod.rs.",
+    "object::pin::check_pin": "check_quarantine's pin of one fresh page under a cap of one page.",
+    "object::pin::check_quarantine": "The quarantine's boot check, called from main.rs. It reads pin.rs's private quarantined_pages, release and Pin::with_cap; moved into a check file it verifies the three quarantine requirements (L.object.41 to L.object.43).",
+    "object::pin::translated_pci_domain": "check_quarantine's search for a translated PCI domain.",
+    "object::process::Exit::for_check": "An end no process has, for check_quarantine; it needs Exit's private constructor."
+  }
+}

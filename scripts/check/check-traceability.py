@@ -57,10 +57,18 @@ The gate fails when
   * docs/certification/TRACEABILITY.md is not what this script writes
     (`--check`).
 
-It reports without failing -- DO-178C's "no unintended function" question,
-not yet a ratchet -- the item's functions that no low-level requirement names
-as its unit. That list moves with every function anybody adds, so it is
-printed, never committed.
+It sorts the item's product functions for DO-178C's "no unintended function"
+question: those a low-level requirement names as its unit; *accessors* -- one
+statement or one expression, no branch point and no `unsafe` -- whose
+behaviour is the requirement of the function they serve, and which need none
+of their own (`is_accessor`); check code that still lives in a product file,
+listed with a reason in scripts/data/traceability-units.json; and the rest,
+which no requirement names. The last list moves with every function anybody
+adds, so it is printed (`--report`), never committed. It fails only for a
+subsystem that file lists as `complete`, whose low-level requirements are all
+written: there a function no requirement names is a ratchet failure. The gate
+also fails on a check-code entry that names no product function, or one a
+requirement names.
 
 The run-time half of the chain: a requirement is verified on an architecture
 only if its check's lines were executed in that architecture's coverage run.
@@ -106,6 +114,7 @@ MODEL_DIR = ROOT / "docs" / "sysml"
 CERT = ROOT / "docs" / "certification"
 OUTPUT = CERT / "TRACEABILITY.md"
 BASELINE = ROOT / "scripts" / "data" / "traceability-baseline.json"
+UNIT_RULES = ROOT / "scripts" / "data" / "traceability-units.json"
 SECURITY_TARGET = CERT / "SECURITY-TARGET.md"
 SAFETY_REGISTER = ROOT / "scripts" / "data" / "safety-requirements.json"
 
@@ -303,7 +312,10 @@ def functions_in(source: str) -> list[tuple[str, int, int, str]]:
     """`(name, first line, last line, impl type or "")` for every function."""
     masked = rustlex.mask(source)
     impls: list[tuple[int, int, str]] = []
-    for match in re.finditer(r"(?<![\w])impl\b", masked):
+    # An `impl` block starts a line. `impl` anywhere else is a type in a
+    # signature -- `change: impl FnOnce(&mut HandleTable) -> R` -- and taking
+    # it for a block gave every function after it the wrong owner.
+    for match in re.finditer(r"^[ \t]*(?:unsafe[ \t]+)?impl\b", masked, re.M):
         body = complexity.body_of(masked, match.end())
         if body is None:
             continue
@@ -329,6 +341,51 @@ def functions_in(source: str) -> list[tuple[str, int, int, str]]:
             )
         )
     return found
+
+
+def is_accessor(source: str, first: int) -> bool:
+    """Whether the function whose `fn` is on line `first` is an accessor.
+
+    The rule for the "no unintended function" report (IMPLEMENTATION.md W-8,
+    the pilot): a function whose body is one statement or one expression, with
+    no branch point as `check-complexity.py` counts them (`if`, `match` arms,
+    loops, `&&`, `||`, `?`) and no `unsafe`, needs no low-level requirement of
+    its own. A getter, a setter, a constructor of a literal, a one-call
+    delegate, a `Debug` or `From` impl of that shape: what it does is what the
+    requirement of the function it serves or calls says, and a check of that
+    requirement runs it. It is counted apart in the report, not silently
+    dropped, and a requirement may still name one as its unit.
+    """
+    masked = rustlex.mask(source)
+    offsets = [0]
+    for line in masked.split("\n"):
+        offsets.append(offsets[-1] + len(line) + 1)
+    if first - 1 >= len(offsets):
+        return False
+    match = complexity.FN.match(masked, offsets[first - 1])
+    if match is None:
+        return False
+    body = complexity.body_of(masked, match.end())
+    if body is None:
+        return False
+    code = body[0][1:-1]
+    if complexity.BRANCH.search(code) or re.search(r"(?<![\w])unsafe(?![\w])", code):
+        return False
+    statements = 0
+    depth = 0
+    current = ""
+    for char in code:
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        if char == ";" and depth == 0:
+            statements += 1 if current.strip() else 0
+            current = ""
+        else:
+            current += char
+    statements += 1 if current.strip() else 0
+    return statements <= 1
 
 
 def _impl_type(header: str) -> str:
@@ -421,13 +478,84 @@ class Units:
 
     def names(self) -> list[str]:
         """Every product function of the item, as a unit would name it."""
+        return [unit for unit, _, _ in self.located()]
+
+    def located(self) -> list[tuple[str, str, int]]:
+        """Every product function of the item: `(unit, file, fn line)`."""
         out = []
         for rel in sorted(self.product()):
             module = "::".join(boundary.module_of_file(rel))
-            for name, _, _, owner in self.functions(rel):
+            for name, first, _, owner in self.functions(rel):
                 parts = [p for p in (module, owner, name) if p]
-                out.append("::".join(parts))
+                out.append(("::".join(parts), rel, first))
         return out
+
+    def accessor(self, rel: str, first: int) -> bool:
+        return is_accessor(self.source(rel), first)
+
+
+@dataclasses.dataclass
+class Coverage:
+    """How the item's product functions stand against the low level."""
+
+    named: list[str]
+    accessors: list[str]
+    check_code: list[str]
+    unnamed: list[str]
+
+
+def read_unit_rules() -> dict:
+    if not UNIT_RULES.exists():
+        return {"complete": [], "check_code_in_product": {}}
+    data = json.loads(UNIT_RULES.read_text(encoding="utf-8"))
+    return {
+        "complete": list(data.get("complete", [])),
+        "check_code_in_product": dict(data.get("check_code_in_product", {})),
+    }
+
+
+def classify_units(located, named: set[str], accessor, rules: dict) -> tuple[Coverage, list[str]]:
+    """Sort every product function, and what is wrong with the rules.
+
+    `located` is `Units.located()`, `accessor(rel, line)` the accessor rule,
+    `rules` scripts/data/traceability-units.json. A subsystem listed
+    `complete` has every low-level requirement written, so a function of it
+    that no requirement names, that is no accessor and that is not listed as
+    check code fails: the "no unintended function" report is a ratchet there.
+    """
+    problems: list[str] = []
+    check_code: dict[str, str] = rules["check_code_in_product"]
+    coverage = Coverage([], [], [], [])
+    seen: set[str] = set()
+    for unit, rel, first in located:
+        seen.add(unit)
+        if unit in named:
+            coverage.named.append(unit)
+        elif unit in check_code:
+            coverage.check_code.append(unit)
+        elif accessor(rel, first):
+            coverage.accessors.append(unit)
+        else:
+            coverage.unnamed.append(unit)
+    for unit in sorted(check_code):
+        if unit not in seen:
+            problems.append(
+                f"{UNIT_RULES.relative_to(ROOT)} lists {unit} as check code, and the item has no "
+                f"such product function: take it out"
+            )
+        elif unit in named:
+            problems.append(f"{unit} is listed as check code and named as a requirement's unit")
+        if not str(check_code[unit]).strip():
+            problems.append(f"{UNIT_RULES.relative_to(ROOT)}: {unit} is listed with no reason")
+    for module in rules["complete"]:
+        for unit in coverage.unnamed:
+            if unit == module or unit.startswith(module + "::"):
+                problems.append(
+                    f"{unit} is a function of {module}, whose low-level requirements are complete, "
+                    f"and no requirement names it: write one (or add it as a unit of the one it "
+                    f"serves), or say why it is check code in {UNIT_RULES.relative_to(ROOT)}"
+                )
+    return coverage, problems
 
 
 # --- verifiers ---------------------------------------------------------------
@@ -655,7 +783,11 @@ def render(
     parents_named: dict[str, list[str]],
     system: set[str],
     evidence: dict[str, dict | None],
+    coverage: Coverage | None = None,
+    rules: dict | None = None,
 ) -> str:
+    coverage = coverage or Coverage([], [], [], [])
+    rules = rules or {"complete": [], "check_code_in_product": {}}
     high = [r for r in requirements if r.level == "high"]
     low = [r for r in requirements if r.level == "low"]
     out: list[str] = []
@@ -707,11 +839,46 @@ def render(
     units = sorted({u for r in low for u in r.units})
     w(
         f"{len(units)} functions of the item are named as a low-level requirement's "
-        "unit. The gate prints, without failing, the item's functions no "
-        "requirement names; that list changes with every function written, so it "
-        "is not kept here."
+        "unit. Of the item's product functions, the gate counts those a "
+        "requirement names, the *accessors* -- one statement or one expression, "
+        "no branch point and no `unsafe`, whose behaviour is the requirement of "
+        "the function they serve -- the check code that still lives in product "
+        "files (listed below), and the rest, which no requirement names. That "
+        "last list changes with every function written, so it is printed by "
+        "`--report`, not kept here; in a subsystem whose low-level requirements "
+        "are complete it must be empty, and the gate fails otherwise."
     )
     w("")
+    w("| Product functions | Count |")
+    w("|---|---:|")
+    w(f"| Named by a low-level requirement | {len(coverage.named)} |")
+    w(f"| Accessors, covered by the requirement they serve | {len(coverage.accessors)} |")
+    w(f"| Check code in a product file | {len(coverage.check_code)} |")
+    w(f"| Named by none | {len(coverage.unnamed)} |")
+    w("")
+    complete = rules["complete"]
+    w(
+        "Subsystems whose low-level requirements are complete: "
+        + (", ".join(f"`{m}`" for m in complete) if complete else "none yet")
+        + "."
+    )
+    w("")
+    if rules["check_code_in_product"]:
+        w("### Check code in product files")
+        w("")
+        w(
+            "Functions that are checks, or serve only checks, and live in a product "
+            "file, so that no `Verifies:` tag may go on them and the item's size "
+            "counts them. Each is to move into a check file; until it does it is "
+            "listed here, in `scripts/data/traceability-units.json`, and not "
+            "reported as a function no requirement names."
+        )
+        w("")
+        w("| Function | Why it is check code |")
+        w("|---|---|")
+        for unit, why in sorted(rules["check_code_in_product"].items()):
+            w(f"| `{unit}` | {_cell(str(why))} |")
+        w("")
 
     w("## From the system level")
     w("")
@@ -917,8 +1084,81 @@ mod tests {
 """
 
 
+_UNITS = """\
+impl Process {
+    pub(crate) fn with_handles<R>(&self, change: impl FnOnce(&mut Table) -> R) -> R {
+        change(&mut self.handles.lock())
+    }
+    pub(crate) fn job(&self) -> u32 {
+        if self.a { 1 } else { 2 }
+    }
+}
+impl Drop for Process {
+    fn drop(&mut self) {
+        release(self.pid);
+    }
+}
+fn two(a: u32) -> u32 {
+    let b = a + 1;
+    b * 2
+}
+fn guarded(a: Option<u32>) -> Option<u32> {
+    Some(a? + 1)
+}
+fn raw(p: *const u8) -> u8 {
+    unsafe { *p }
+}
+fn literal() -> Slot {
+    Slot {
+        a: [0; 4],
+        b: None,
+    }
+}
+"""
+
+# name -> (owner, accessor)
+_UNITS_EXPECT = {
+    "with_handles": ("Process", True),
+    "job": ("Process", False),
+    "drop": ("Process", True),
+    "two": ("", False),
+    "guarded": ("", False),
+    "raw": ("", False),
+    "literal": ("", True),
+}
+
+
 def self_test() -> list[str]:
     failures = [f"lexer: {f}" for f in rustlex.self_test()]
+
+    for name, first, _, owner in functions_in(_UNITS):
+        want = _UNITS_EXPECT.get(name)
+        got = (owner, is_accessor(_UNITS, first))
+        if want != got:
+            failures.append(f"units: {name} read as (owner, accessor) {got}, expected {want}")
+
+    located = [
+        ("m::named", "m.rs", 1),
+        ("m::getter", "m.rs", 2),
+        ("m::check_it", "m.rs", 3),
+        ("m::forgotten", "m.rs", 4),
+        ("n::elsewhere", "n.rs", 1),
+    ]
+    rules = {
+        "complete": ["m"],
+        "check_code_in_product": {"m::check_it": "a boot check", "m::gone": "moved", "m::named": "x"},
+    }
+    coverage, problems = classify_units(located, {"m::named"}, lambda rel, line: line == 2, rules)
+    if (coverage.named, coverage.accessors, coverage.check_code, coverage.unnamed) != (
+        ["m::named"],
+        ["m::getter"],
+        ["m::check_it"],
+        ["m::forgotten", "n::elsewhere"],
+    ):
+        failures.append(f"classify: {coverage}")
+    wanted = ["lists m::gone as check code", "m::named is listed as check code", "m::forgotten is a function of m"]
+    if len(problems) != 3 or not all(any(w in p for p in problems) for w in wanted):
+        failures.append(f"classify: problems {problems}")
 
     root, _, unparsed = parse_text("t.sysml", _MODEL)
     if unparsed:
@@ -1058,7 +1298,13 @@ def main() -> int:
         if r.level == "high":
             for parent in r.parents:
                 parents_named[parent].append(r.id)
-    text = render(requirements, by_id, verdicts, baseline, parents_named, system, evidence)
+    named = {u for r in requirements if r.level == "low" for u in r.units}
+    rules = read_unit_rules()
+    coverage, wrong = classify_units(units.located(), named, units.accessor, rules)
+    problems += wrong
+    text = render(
+        requirements, by_id, verdicts, baseline, parents_named, system, evidence, coverage, rules
+    )
 
     status = 0
     if problems:
@@ -1077,22 +1323,27 @@ def main() -> int:
     elif status == 0:
         OUTPUT.write_text(text, encoding="utf-8")
 
-    named = {u for r in requirements if r.level == "low" for u in r.units}
-    everything = units.names()
-    unnamed = [u for u in everything if u not in named]
     if args.report:
-        for unit in unnamed:
+        for unit in coverage.unnamed:
             print(f"  unnamed  {unit}")
+        for unit in coverage.accessors:
+            print(f"  accessor {unit}")
     high = sum(1 for r in requirements if r.level == "high")
     low = len(requirements) - high
+    everything = (
+        len(coverage.named) + len(coverage.accessors) + len(coverage.check_code) + len(coverage.unnamed)
+    )
     print(
         f"traceability: {high} high-level and {low} low-level requirement(s), "
         f"{len(requirements) - len(unverified)} named by a check, {len(unverified)} in the baseline; "
         f"{len(verifiers)} tagged check(s)"
     )
     print(
-        f"traceability: {len(unnamed)} of {len(everything)} product function(s) of the item named "
-        f"by no low-level requirement (reported, not failed; --report lists them)"
+        f"traceability: of {everything} product function(s) of the item, {len(coverage.named)} named "
+        f"by a low-level requirement, {len(coverage.accessors)} accessors, "
+        f"{len(coverage.check_code)} check code; {len(coverage.unnamed)} named by none "
+        f"(failed only in a complete subsystem: {', '.join(rules['complete']) or 'none yet'}; "
+        f"--report lists them)"
     )
     return status
 
