@@ -1442,8 +1442,14 @@ starts this machine's own `hyprland.conf` with its dotfiles, fonts and
 monitor EDID, so the user's waybar draws their bar. `exec-once =
 /bin/vdagent` and a `SUPER RETURN` terminal are added to it, and
 `/bin/foot` is term, so their `$terminal = foot` opens one
-(`--boot everything-desktop`). The script's `pkill -x fuzzel` toggle does
-not close fuzzel yet (`docs/BACKLOG.md`).
+(`--boot everything-desktop`). Chrome's `HOME=/dev/shm` goes on its own
+command, which hyprix reads as `sh` does, with leading `NAME=value` words as
+that program's environment. As a global `env =` line it had hidden the
+user's `~/.config` from waybar and hypridle. hyprix reports a program that
+does not exist, or a script whose `#!` interpreter does not, once per
+program rather than on every press of a bind that runs it. Still to do: the
+script's `pkill -x fuzzel` toggle does not close fuzzel yet, and hyprlock's
+lock over `authd` (P1.5) is parked on its branch (`docs/BACKLOG.md`).
 
 **Where the exit stands (reviewed 2026-09-21).** The existing exit criterion
 is met: `cargo xtask test-compositor` covers the non-GPU path on x86-64 and
