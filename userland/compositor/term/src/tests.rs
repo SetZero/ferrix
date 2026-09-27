@@ -335,6 +335,171 @@ fn braille_is_eight_dots_by_the_bits_of_its_code_point() {
     assert!(paint::braille('\u{2900}').is_none() && paint::braille('a').is_none());
 }
 
+/// A btop graph, written the way btop writes one, is painted as the dots it
+/// asks for and scrolls as it asks: the pixels, not only the cells.
+///
+/// btop's `Draw::Graph` is a row of braille a line, each line reached by
+/// `CSI 1 B` and `CSI width D` from the end of the one above, in an exact
+/// colour per line. On every update it drops each line's first character,
+/// adds a new last one, and writes the lines again from the same place.
+/// The screenshots of 2026-09-27 showed a flat line and a spike where a
+/// filled history was expected; this holds the terminal to drawing exactly
+/// what the program sent, which with the same bytes replayed from btop on a
+/// busy host is a filled history. The flat line was an idle guest.
+#[test]
+fn a_btop_graph_paints_its_dots_and_scrolls() {
+    // Two lines of five cells: a rising ramp, bottom line filled first. Each
+    // cell holds two samples, left and right, of zero to eight dots high.
+    let samples: [u32; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 8, 3, 0];
+    // The dots of one column, counted up from the bottom: dots 7, 3, 2, 1 on
+    // the left and 8, 6, 5, 4 on the right.
+    let column = |height: u32, right: bool| -> u32 {
+        let bits: [u32; 4] = if right {
+            [0x80, 0x20, 0x10, 0x08]
+        } else {
+            [0x40, 0x04, 0x02, 0x01]
+        };
+        bits.iter()
+            .take(usize::try_from(height.min(4)).unwrap_or(4))
+            .sum()
+    };
+    // Line 0 is the top: it holds whatever is above four dots.
+    let part = |line: u32, height: u32| {
+        if line == 0 {
+            height.saturating_sub(4)
+        } else {
+            height.min(4)
+        }
+    };
+    let graph = |from: usize| -> Vec<u8> {
+        let mut bytes = b"\x1b[2;3f".to_vec();
+        for line in 0..2u32 {
+            if line > 0 {
+                bytes.extend_from_slice(b"\x1b[1B\x1b[5D");
+            }
+            bytes.extend_from_slice(if line == 0 {
+                b"\x1b[38;2;220;80;60m"
+            } else {
+                b"\x1b[38;2;80;200;90m"
+            });
+            for cell in 0..5 {
+                let (left, right) = (samples[from + cell * 2], samples[from + cell * 2 + 1]);
+                let bits = column(part(line, left), false) | column(part(line, right), true);
+                let ch = char::from_u32(0x2800 + bits).expect("a braille pattern");
+                bytes.extend_from_slice(ch.to_string().as_bytes());
+            }
+        }
+        bytes
+    };
+    let colours = paint::Colours::default();
+    let (columns, rows) = (10, 4);
+    let (width, height) = (columns * paint::CELL.0, rows * paint::CELL.1);
+    let mut grid = Grid::new(columns, rows);
+    let mut pixels = vec![0u8; width * height * 4];
+    paint::draw(&mut pixels, (width, height), width * 4, &grid, &colours, 1);
+
+    // Whether the middle of a dot's slot is inked, in `pixels`.
+    let (slot_width, slot_height) = (paint::CELL.0 / 2, paint::CELL.1 / 4);
+    let inked = |pixels: &[u8], x: usize, y: usize| {
+        let at = (y * width + x) * 4;
+        let bg = colours.background;
+        pixels.get(at..at + 3) != Some(&[bg.b, bg.g, bg.r][..])
+    };
+    let check = |pixels: &[u8], from: usize| {
+        for cell in 0..5 {
+            for (half, sample) in [samples[from + cell * 2], samples[from + cell * 2 + 1]]
+                .into_iter()
+                .enumerate()
+            {
+                // Eight dot rows, top to bottom, over the graph's two lines.
+                for dot in 0..8u32 {
+                    let (line, slot) = (dot / 4, dot % 4);
+                    let x = (2 + cell) * paint::CELL.0 + half * slot_width + slot_width / 2;
+                    let y = (1 + usize::try_from(line).unwrap_or(0)) * paint::CELL.1
+                        + usize::try_from(slot).unwrap_or(0) * slot_height
+                        + slot_height / 2;
+                    let expected = 8 - dot <= sample;
+                    assert_eq!(
+                        inked(pixels, x, y),
+                        expected,
+                        "sample {sample} at cell {cell}, half {half}, dot row {dot}, from {from}"
+                    );
+                }
+            }
+        }
+    };
+
+    for from in 0..=2 {
+        let before = grid.snapshot();
+        grid.write(&graph(from));
+        if let Some(damage) = grid.damage_since(&before) {
+            paint::draw_damage(
+                &mut pixels,
+                (width, height),
+                width * 4,
+                &grid,
+                &colours,
+                1,
+                damage,
+            );
+        }
+        check(&pixels, from);
+        // What the window shows after the update is what a full repaint of
+        // the grid would show: nothing of the previous frame is left over.
+        let mut full = vec![0u8; width * height * 4];
+        paint::draw(&mut full, (width, height), width * 4, &grid, &colours, 1);
+        assert!(pixels == full, "the update from {from} left stale pixels");
+    }
+    // A full sample's column is a bar: the top line's dots are in its own
+    // colour, the lower line's in the other.
+    let at = |x: usize, y: usize| {
+        let i = (y * width + x) * 4;
+        (pixels[i + 2], pixels[i + 1], pixels[i])
+    };
+    let x = (2 + 3) * paint::CELL.0 + slot_width / 2;
+    assert_eq!(at(x, paint::CELL.1 + slot_height / 2), (220, 80, 60));
+    assert_eq!(at(x, 2 * paint::CELL.1 + slot_height / 2), (80, 200, 90));
+}
+
+/// The block elements btop's `block` graphs and meters use fill the cell
+/// from its bottom, an eighth at a time, the whole width, and the full block
+/// is the whole cell: rows of them stack without a gap.
+#[test]
+fn block_elements_fill_the_cell_from_the_bottom() {
+    let colours = paint::Colours::default();
+    let (width, height) = (8 * paint::CELL.0, paint::CELL.1);
+    let mut grid = Grid::new(8, 1);
+    grid.write("▁▂▃▄▅▆▇█".as_bytes());
+    let mut pixels = vec![0u8; width * height * 4];
+    paint::draw(&mut pixels, (width, height), width * 4, &grid, &colours, 1);
+    let bg = colours.background;
+    let ink = |x: usize, y: usize| {
+        let at = (y * width + x) * 4;
+        pixels.get(at..at + 3) != Some(&[bg.b, bg.g, bg.r][..])
+    };
+    let mut last = 0;
+    for eighths in 1..=8 {
+        let left = (eighths - 1) * paint::CELL.0;
+        // Rows with any ink, and each of them inked across the whole cell.
+        let tall = (0..paint::CELL.1)
+            .filter(|&y| (0..paint::CELL.0).any(|x| ink(left + x, y)))
+            .count();
+        for y in paint::CELL.1 - tall..paint::CELL.1 {
+            assert!(
+                (0..paint::CELL.0).all(|x| ink(left + x, y)),
+                "{eighths}/8 has a gap in row {y}"
+            );
+        }
+        let want = paint::CELL.1 * eighths / 8;
+        assert!(
+            tall >= want && tall <= want + 1 && tall > last,
+            "{eighths}/8 is {tall} rows high"
+        );
+        last = tall;
+    }
+    assert_eq!(last, paint::CELL.1, "the full block is the whole cell");
+}
+
 #[test]
 fn a_window_holds_as_many_cells_as_the_font_fits_in_it() {
     // Hack's cell is 12x24, so a 1024x768 window is 85 by 32, with the four
