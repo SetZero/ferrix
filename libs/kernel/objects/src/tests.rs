@@ -33,6 +33,7 @@ fn handles_are_non_zero_and_distinct() {
     assert_eq!(t.get(Handle::INVALID), Err(TableError::BadHandle), "zero");
 }
 
+/// Verifies: H.OBJ.4
 #[test]
 fn a_closed_handle_stays_stale_when_its_slot_is_reused() {
     let mut t = table(1);
@@ -45,6 +46,7 @@ fn a_closed_handle_stays_stale_when_its_slot_is_reused() {
     assert_eq!(t.get(second), Ok((&2, Rights::ALL)), "the new one works");
 }
 
+/// Verifies: H.OBJ.15
 #[test]
 fn a_slot_whose_generations_run_out_is_retired_rather_than_wrapped() {
     let mut t = table(1);
@@ -85,6 +87,7 @@ fn rights_are_checked_on_use() {
     );
 }
 
+/// Verifies: H.OBJ.3
 #[test]
 fn duplicate_needs_the_right_and_cannot_add_rights() {
     let mut t = table(4);
@@ -110,6 +113,7 @@ fn duplicate_needs_the_right_and_cannot_add_rights() {
     );
 }
 
+/// Verifies: H.OBJ.14
 #[test]
 fn replace_closes_the_original_and_cannot_add_rights() {
     let mut t = table(4);
