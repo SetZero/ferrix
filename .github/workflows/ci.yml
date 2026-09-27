@@ -18,13 +18,15 @@ on:
 # Only the newest commit on a branch needs a verdict. main is pushed after
 # every landing, often several times an hour, and each run is about twenty
 # jobs; on 2026-09-27 twenty-five runs stood queued and none had started in
-# an hour. A newer push now cancels the runs of its branch still queued or
-# running. The one-author job checks the range its own push adds, so a
-# cancelled run leaves that range to the pre-push hook, which checks every
-# push before it leaves the machine.
+# an hour. One run per branch runs at a time and one waits: a newer push
+# replaces the waiting run, and the running one is left to finish -- with
+# cancel-in-progress, pushes every quarter hour would cancel every run
+# before it ended and no commit would ever get a verdict. The one-author job
+# checks the range its own push adds, so a replaced run leaves that range to
+# the pre-push hook, which checks every push before it leaves the machine.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
