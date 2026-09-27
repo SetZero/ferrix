@@ -65,6 +65,23 @@ const DEBUG_EXIT_SUCCESS: i32 = 33;
 /// and a socket this program carries by hand on Windows, where
 /// [`crate::console`] says what the difference is for.
 pub(crate) fn run(arch: Arch, image: &Path, args: &Args) -> Result<()> {
+    // The host's clipboard, bridged by xtask for as long as the boot runs:
+    // `crate::clipboard::host` says why QEMU's own peer is not enough.
+    #[cfg(unix)]
+    let bridge = crate::clipboard::host::start(arch, args);
+    #[cfg(unix)]
+    let bridged;
+    #[cfg(unix)]
+    let args = match &bridge {
+        Some(bridge) => {
+            bridged = Args {
+                clipboard_socket: Some(bridge.socket().to_path_buf()),
+                ..args.clone()
+            };
+            &bridged
+        }
+        None => args,
+    };
     let console = console::open()?;
     let (mut command, network) = qemu_command(arch, image, None, args, &console)?;
     if args.gdb {
@@ -1633,7 +1650,10 @@ fn attach_rng(command: &mut Command, arch: Arch) {
 /// UI has -- a window's, or a VNC client's through the RFB extended clipboard
 /// -- so the guest reaches the clipboard of whoever is watching it, on
 /// whichever machine that is. `clipboard=on` is what makes it that peer;
-/// without it the chardev exists and carries nothing.
+/// without it the chardev exists and carries nothing. A window's clipboard
+/// is only a peer in a QEMU built with `gtk_clipboard`, which neither of this
+/// host's is; so on a Wayland host a watched boot's port goes to a socket
+/// instead, and xtask is the peer (`crate::clipboard::host`).
 ///
 /// `mouse` is left off: the agent announces no mouse capability, QEMU sends
 /// no mouse state to an agent that has not asked for it, and the machine
@@ -1646,7 +1666,9 @@ fn attach_clipboard(command: &mut Command, arch: Arch, args: &Args) {
     if !args.clipboard || arch == Arch::Armv7a {
         return;
     }
-    // `test-clipboard` is the host itself, over a socket it listens on.
+    // `test-clipboard`, or on a Wayland host the bridge a watched boot runs
+    // (`crate::clipboard::host`), is the host itself, over a socket it
+    // listens on.
     let chardev = match &args.clipboard_socket {
         Some(path) => format!("socket,id=vdagent,path={}", path.display()),
         None => "qemu-vdagent,id=vdagent,name=vdagent,clipboard=on,mouse=off".to_owned(),

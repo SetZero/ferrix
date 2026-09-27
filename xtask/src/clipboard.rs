@@ -36,6 +36,9 @@ use crate::args::Args;
 use crate::paths::{self, Arch};
 use crate::{Error, Result, compositor, qemu};
 
+// A watched desktop's clipboard, bridged to the host's Wayland one.
+pub(crate) mod host;
+
 /// What the guest copies for the host to take. No quote in it: it goes on a
 /// `zinc -c '...'` line.
 const GUEST_TEXT: &str = "the guest clipboard reached the host";

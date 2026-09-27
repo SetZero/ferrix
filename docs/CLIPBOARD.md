@@ -90,6 +90,23 @@ without it the chardev exists and carries nothing. `mouse=off` is left as it
 defaults, since the agent announces no mouse capability and QEMU then sends no
 mouse state (`ui/vdagent.c`, `have_mouse`).
 
+**A window is not a peer unless QEMU says so.** The chardev hands the
+clipboard to QEMU's UI, and QEMU's VNC server always takes it -- but its GTK
+window only in a QEMU built with `gtk_clipboard`, which is off by default and
+off in both QEMUs the tree has been run with (Ubuntu's 10.2.1 and a build
+from source: `CONFIG_GTK_CLIPBOARD` undefined). In a window the port then
+carried nothing, and `run-compositor --everything` had no clipboard. So on a
+Wayland host a watched boot (`run`, `run-compositor`) gives the port a socket
+chardev instead, and xtask is the host half for the whole run
+(`xtask/src/clipboard/host.rs`): what `wl-paste --watch` reports is grabbed
+into the guest -- or on GNOME, whose compositor offers `wl-paste --watch` no protocol, what the X11 selection holds, read through GTK as an Xwayland client, which needs no focus -- and what the guest copies goes to `wl-copy`. The serials are
+kept as `ui/vdagent.c` keeps them, and the guest's own copy coming back from
+`wl-paste --watch` is not grabbed back into the guest. Without
+`WAYLAND_DISPLAY`, or without wl-clipboard, the boot keeps `qemu-vdagent`, and
+says so: a VNC viewer's clipboard still reaches it. Proved on 2026-09-27 in
+a `run-compositor --everything` window on GNOME: a host `wl-copy` reached the
+guest's `clip paste`, and the guest's `clip copy` the host's `wl-paste`.
+
 virtio-console is device id 3, so the modern PCI device id is `0x1043` and the
 transitional one `0x1003` — the pair `devmgr`'s table takes (`docs/DEVMGR.md`
 §3). The features the driver takes are `VIRTIO_CONSOLE_F_MULTIPORT` (bit 1),
