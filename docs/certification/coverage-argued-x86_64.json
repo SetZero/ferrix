@@ -6,7 +6,7 @@
     "category named here instead of its file's, and fails when a line named",
     "is no longer in coverage-residual-x86_64.json (a test reaches it now, or",
     "it moved) or when `match` is not on the first line named. Line numbers",
-    "are the tree's the residual was measured on, main 195a2e93 and this branch. Written 2026-09-26 for F-10."
+    "are the tree's the residual was measured on, main e5f3110f, re-measured 2026-09-27 (written 2026-09-26 for F-10)."
   ],
   "arch": "x86_64",
   "arguments": [
@@ -166,16 +166,9 @@
     },
     {
       "file": "arch/x86_64/trap.rs",
-      "lines": "615",
-      "category": "credited-elsewhere",
-      "match": "Trap::PageFault(fault) => (SIGSEGV, SEGV_MAPERR, fault.address),",
-      "why": "Run by the stage 3 fault check's read of an unmapped address, which ends the program with SIGSEGV. The line's only statement row is in the copy of `fault_signal` that `dispatch` inlines for traps that are not page faults (in the measured image, inlined through `user_fault` into `dispatch` at trap.rs:102), where the arm cannot run. The copy `handle_page_fault` inlines (under trap.rs:482) computes the si_code as the fault's present bit plus one, one instruction under line 614's row, which is reached."
-    },
-    {
-      "file": "arch/x86_64/trap.rs",
-      "lines": "631, 637, 640-641, 656, 662",
+      "lines": "637, 640-641, 656",
       "category": "failure-path",
-      "match": "pub(crate) fn report_trap(frame: &TrapFrame) {",
+      "match": "vector_name(frame.vector),",
       "why": "The register dump the trap path prints when the kernel stops on an exception it cannot handle (`trap::report`); a passing run never prints it."
     },
     {
@@ -296,27 +289,6 @@
       "category": "defensive",
       "match": "self.flush()",
       "why": "Bytes that have waited a tenth of a second with nothing sent: the transmit interrupt stopped coming. console::output::check requires the stall count to stay where it was, and a working port never takes it."
-    },
-    {
-      "file": "console/output.rs",
-      "lines": "251",
-      "category": "absent-hardware",
-      "match": "WRITERS.wake_all();",
-      "why": "Wakes writers that waited for room in the transmit ring. An emulated port sends instantly, so no writer ever waits for room on a QEMU machine."
-    },
-    {
-      "file": "console/output.rs",
-      "lines": "276",
-      "category": "absent-hardware",
-      "match": "wake_writers();",
-      "why": "A task's write that found no room in the transmit ring and waits for it, woken when the ring drains. An emulated port sends instantly and never leaves the ring full, so on QEMU every chunk fits at once."
-    },
-    {
-      "file": "console/output.rs",
-      "lines": "285-286",
-      "category": "absent-hardware",
-      "match": "let _ = WRITERS.wait_until_deadline(",
-      "why": "A task's write that found no room in the transmit ring and waits for it, woken when the ring drains. An emulated port sends instantly and never leaves the ring full, so on QEMU every chunk fits at once."
     },
     {
       "file": "console/output.rs",
@@ -618,13 +590,6 @@
       "category": "other-architecture",
       "match": "Translation::SmmuV3 { unit, attached, .. } => unit.detach(*a",
       "why": "The SMMUv3 arm, for a domain an SMMUv3 translates, which no x86-64 machine has."
-    },
-    {
-      "file": "iommu.rs",
-      "lines": "724",
-      "category": "credited-elsewhere",
-      "match": "return Err(DomainError::Empty);",
-      "why": "Run by stage 10's iommu::check_domains, which requires a pin of no frames to be refused as Empty. The call passes an empty slice the compiler sees, so the refusal is folded into check_domains' inlined copy of pin; this row is only in the out-of-line Domain::pin, which is called with frames."
     },
     {
       "file": "iommu.rs",
@@ -1720,7 +1685,7 @@
     },
     {
       "file": "trap.rs",
-      "lines": "522, 527, 537, 545-547, 549",
+      "lines": "522, 527, 537, 546-547, 549",
       "category": "failure-path",
       "match": "pub(crate) fn fatal(",
       "why": "`fatal` and `report`, the trap path's stop: the architecture's register dump, the abridged report for a second failure, and the panic's conclusion. Reached only when the kernel stops on a trap."

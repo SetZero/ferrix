@@ -10,26 +10,42 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | Module | x86_64 | aarch64 | armv7a | Files |
 |---|---:|---:|---:|---:|
+| [`arch/x86_64`](#archx86_64) | 35 | - | - | 5 |
 | [`arch/aarch64`](#archaarch64) | - | 27 | - | 2 |
-| [`syscall`](#syscall) | 27 | 23 | 22 | 2 |
 | [`trap`](#trap) | - | 25 | 25 | 1 |
-| [`user`](#user) | 5 | 22 | 25 | 2 |
-| [`object`](#object) | 17 | 19 | 18 | 7 |
-| [`arch/x86_64`](#archx86_64) | 11 | - | - | 3 |
-| [`devmgr`](#devmgr) | - | 7 | 6 | 1 |
+| [`user`](#user) | - | 22 | 25 | 2 |
+| [`syscall`](#syscall) | 15 | 23 | 22 | 2 |
+| [`object`](#object) | 9 | 19 | 18 | 7 |
+| [`devmgr`](#devmgr) | 13 | 7 | 6 | 1 |
 | [`console`](#console) | 3 | 6 | 3 | 3 |
+| [`main`](#main) | 6 | 3 | 3 | 1 |
 | [`vmap`](#vmap) | 2 | - | 5 | 1 |
 | [`mm`](#mm) | 1 | 1 | 4 | 1 |
 | [`smp`](#smp) | - | 4 | 4 | 1 |
 | [`early`](#early) | - | - | 3 | 1 |
-| [`main`](#main) | 3 | 3 | 3 | 1 |
+| [`init`](#init) | 3 | 2 | 2 | 1 |
 | [`sched`](#sched) | 2 | 3 | 3 | 2 |
-| [`init`](#init) | 2 | 2 | 2 | 1 |
+| [`iommu`](#iommu) | 2 | - | - | 1 |
+| [`irq`](#irq) | 2 | - | - | 1 |
 | [`random`](#random) | 2 | 2 | 2 | 1 |
 | [`arch/armv7a`](#archarmv7a) | - | - | 1 | 1 |
+| [`audit`](#audit) | 1 | - | - | 1 |
+| [`claim`](#claim) | 1 | - | - | 1 |
 | [`signal_frame`](#signal_frame) | - | - | 1 | 1 |
 | [`timer`](#timer) | - | - | 1 | 1 |
-| **Total** | **75** | **144** | **128** | 33 |
+| **Total** | **97** | **144** | **128** | 39 |
+
+---
+
+## `arch/x86_64`
+
+| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
+|---|---|---:|---:|---:|---:|---|
+| `arch/x86_64/trap.rs` | `core` | 22 | - | - | 22 | 51, 54-67, 70, 72, 77-81 |
+| `arch/x86_64/syscall.rs` | `core` | 7 | - | - | 7 | 412, 543, 590, 593-594, 596, 603 |
+| `arch/x86_64/switch.rs` | `core` | 3 | - | - | 3 | 181, 411, 420 |
+| `arch/x86_64/mod.rs` | `core` | 2 | - | - | 2 | 1210-1211 |
+| `arch/x86_64/signal/compat.rs` | `core` | 1 | - | - | 1 | 336 |
 
 ---
 
@@ -39,15 +55,6 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 |---|---|---:|---:|---:|---:|---|
 | `arch/aarch64/console.rs` | `core` | - | 17 | - | 17 | 94-95, 106, 109, 115, 136, 138, 170, 176, 200, 217, 224-225, 230, 246-247, 291 |
 | `arch/aarch64/trng.rs` | `core` | - | 10 | - | 10 | 51, 55-56, 60-61, 63, 74, 77, 83, 85 |
-
----
-
-## `syscall`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `syscall/native.rs` | `item` | 24 | 19 | 20 | 16 | 869, 1341, 1363-1365, 1367, 1375-1376, 1379-1380, 1686-1687, 1691-1693, 1695 |
-| `syscall/program.rs` | `item` | 3 | 4 | 2 | 1 | 89 |
 
 ---
 
@@ -63,8 +70,17 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `user/space.rs` | `core` | 5 | 22 | 24 | 4 | 2693, 2722, 2738, 2740 |
+| `user/space.rs` | `core` | 0 | 22 | 24 | 0 | - |
 | `user/vmo.rs` | `core` | 0 | 0 | 1 | 0 | - |
+
+---
+
+## `syscall`
+
+| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
+|---|---|---:|---:|---:|---:|---|
+| `syscall/native.rs` | `item` | 12 | 19 | 20 | 0 | - |
+| `syscall/program.rs` | `item` | 3 | 4 | 2 | 1 | 89 |
 
 ---
 
@@ -72,23 +88,13 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `object/oom.rs` | `core` | 5 | 6 | 5 | 5 | 169, 201, 205, 208, 213 |
-| `object/process.rs` | `core` | 5 | 5 | 4 | 3 | 128, 191-192 |
+| `object/oom.rs` | `core` | 0 | 6 | 5 | 0 | - |
+| `object/process.rs` | `core` | 3 | 5 | 4 | 1 | 128 |
 | `object/channel.rs` | `core` | 4 | 4 | 4 | 4 | 315-317, 322 |
-| `object/mod.rs` | `core` | 2 | 2 | 2 | 2 | 270, 274 |
+| `object/mod.rs` | `core` | 2 | 2 | 2 | 0 | - |
 | `object/port.rs` | `core` | 0 | 0 | 2 | 0 | - |
 | `object/pin.rs` | `core` | 0 | 1 | 0 | 0 | - |
-| `object/quota.rs` | `core` | 1 | 1 | 1 | 1 | 656 |
-
----
-
-## `arch/x86_64`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `arch/x86_64/syscall.rs` | `core` | 6 | - | - | 6 | 543, 590, 593-594, 596, 603 |
-| `arch/x86_64/mod.rs` | `core` | 3 | - | - | 3 | 1210-1211, 1215 |
-| `arch/x86_64/switch.rs` | `core` | 2 | - | - | 2 | 411, 420 |
+| `object/quota.rs` | `core` | 0 | 1 | 1 | 0 | - |
 
 ---
 
@@ -96,7 +102,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `devmgr.rs` | `item` | 0 | 7 | 6 | 0 | - |
+| `devmgr.rs` | `item` | 13 | 7 | 6 | 0 | - |
 
 ---
 
@@ -107,6 +113,14 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | `console/screen.rs` | `core` | 3 | 3 | 0 | 0 | - |
 | `console.rs` | `core` | 0 | 2 | 2 | 0 | - |
 | `console/input.rs` | `core` | 0 | 1 | 1 | 0 | - |
+
+---
+
+## `main`
+
+| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
+|---|---|---:|---:|---:|---:|---|
+| `main.rs` | `item` | 6 | 3 | 3 | 2 | 323, 1632 |
 
 ---
 
@@ -142,11 +156,11 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 ---
 
-## `main`
+## `init`
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `main.rs` | `item` | 3 | 3 | 3 | 2 | 323, 1632 |
+| `init.rs` | `item` | 3 | 2 | 2 | 2 | 352, 472 |
 
 ---
 
@@ -159,11 +173,19 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 ---
 
-## `init`
+## `iommu`
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `init.rs` | `item` | 2 | 2 | 2 | 2 | 352, 472 |
+| `iommu.rs` | `core` | 2 | 0 | 0 | 0 | - |
+
+---
+
+## `irq`
+
+| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
+|---|---|---:|---:|---:|---:|---|
+| `irq.rs` | `core` | 2 | 0 | 0 | 0 | - |
 
 ---
 
@@ -180,6 +202,22 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
 | `arch/armv7a/mod.rs` | `core` | - | - | 1 | 1 | 1292 |
+
+---
+
+## `audit`
+
+| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
+|---|---|---:|---:|---:|---:|---|
+| `audit.rs` | `core` | 1 | - | - | 1 | 744 |
+
+---
+
+## `claim`
+
+| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
+|---|---|---:|---:|---:|---:|---|
+| `claim.rs` | `core` | 1 | 0 | 0 | 0 | - |
 
 ---
 

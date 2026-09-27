@@ -208,8 +208,8 @@ repeat the pass for their own architecture code.
 
 **Re-measured on all three 2026-09-27**, after the memory layer, the objects,
 the Arm architectures and the kernel's services were each taken the same way:
-**89.5%** on x86-64, **90.2%** on AArch64, **84.8%** on ARMv7-A, with
-**77, 146 and 130** statements that still need a test and the rest argued per
+**90.1%** on x86-64 (re-measured 2026-09-27), **90.2%** on AArch64, **84.8%** on ARMv7-A, with
+**97, 146 and 130** statements that still need a test and the rest argued per
 statement or put down to absent hardware. Next by size: `syscall/native.rs`
 (24, 19, 20), `user/space.rs` (6, 22, 25), `trap.rs` on the Arm pair (25
 each), and on AArch64 `arch/aarch64/console.rs` 14 and `trng.rs` 10.
