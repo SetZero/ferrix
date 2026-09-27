@@ -659,7 +659,15 @@ impl Agent {
         if self.offer == Some(id) || self.selection == Some(id) || id.is_server() {
             return Some(&ext_data_control::EXT_DATA_CONTROL_OFFER_V1);
         }
-        if self.source == Some(id) {
+        // A source this agent made and has since let go of is still a
+        // source: the compositor may have sent it `send` or `cancelled`
+        // before it read the destroy, and Wayland lets those arrive. They are
+        // read and ignored -- a `send`'s descriptor closes as it is dropped
+        // -- where an unknown object used to stop the agent ("an event for
+        // object 16", when a terminal's copy replaced the host's selection).
+        if self.source == Some(id)
+            || (id::FIRST_SOURCE..self.next_source).contains(&id.0) && !id.is_server()
+        {
             return Some(&ext_data_control::EXT_DATA_CONTROL_SOURCE_V1);
         }
         Some(match id {
