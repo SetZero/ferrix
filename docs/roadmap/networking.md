@@ -460,6 +460,17 @@ serial console, with `eth0`, `lo` and the running `sh`, `busybox` and
 `btop`, and redrew them every two seconds until `timeout` ended it. No gate
 runs it yet; `docs/BACKLOG.md` has the row.
 
+**Done — btop's keys on a pseudoterminal (2026-09-27).** In the desktop's
+terminal btop ignored `q` below 80x24 and froze once on a retile. A slave's
+raw read waited for input whatever `VMIN` and `VTIME` said, and btop reads
+with both at zero until a read gives 0, so its second read never ended. The
+slave now decides as the console does, in `Discipline::read_step`, which
+follows Linux's `n_tty_read`. The syscall self-check holds every case, and
+fails by name if `VMIN` is ignored again. Run as the boot's program on a pty,
+the image's btop shows "Terminal size too small" at 77x21 and quits on `q`,
+both when started that small and after a resize, and still redraws after a
+key at full size.
+
 **Done — an SSH server, and a way in from the host.**
 `userland/ferrousli/tools/ports/sshdt` builds sshdt 0.4.2, an SSH server written in Rust
 (russh, tokio, and aws-lc underneath). It is built the way uutils is: the musl
