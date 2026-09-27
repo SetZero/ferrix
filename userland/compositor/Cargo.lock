@@ -395,6 +395,11 @@ dependencies = [
 name = "compositor-waybar"
 version = "0.1.0"
 dependencies = [
+ "compositor-image",
+ "compositor-text",
+ "compositor-toolkit",
+ "hyprix",
+ "libc",
  "pulseaudio",
  "tiny-skia",
 ]

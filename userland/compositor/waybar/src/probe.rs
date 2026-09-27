@@ -17,6 +17,7 @@ use crate::css::selector::{Compound, Pseudo};
 use crate::css::value::Image;
 use crate::diag::{Diagnostics, Level};
 use crate::json::Value;
+use crate::options::{self, Support};
 
 /// The element names waybar's bar and tooltips are made of.
 pub const ELEMENTS: [&str; 6] = ["window", "box", "label", "widget", "tooltip", "image"];
@@ -80,12 +81,62 @@ fn report_bar(index: usize, bar: &Value, out: &mut Vec<String>) {
         .collect();
     out.push(format!("{prefix}: output {}", bar.get("output")));
     out.push(format!("{prefix}: modules {}", modules.join(" ")));
+    for (key, _) in bar.members() {
+        if modules.contains(key) || options::is_module_name(key) {
+            continue;
+        }
+        match options::bar(key) {
+            Support::Done => {}
+            Support::Partly(why) => out.push(format!("{prefix}: option \"{key}\": partly: {why}")),
+            Support::Not(why) => {
+                out.push(format!(
+                    "{prefix}: option \"{key}\": not carried out: {why}"
+                ));
+            }
+            Support::Unknown => {
+                out.push(format!(
+                    "{prefix}: option \"{key}\": not an option waybar reads"
+                ));
+            }
+        }
+    }
     for name in &modules {
-        if !bar.has(name) && !name.starts_with("group/") {
+        report_module(&prefix, name, bar.get(name), out);
+    }
+}
+
+fn report_module(prefix: &str, name: &str, module: &Value, out: &mut Vec<String>) {
+    let kind = options::kind(name);
+    match options::module(&kind) {
+        None => {
             out.push(format!(
-                "{prefix}: module \"{name}\" has no configuration block; it takes its defaults"
+                "{prefix}: module \"{name}\": not carried out: no such module here"
+            ));
+            return;
+        }
+        Some(Support::Partly(why)) => {
+            out.push(format!("{prefix}: module \"{name}\": partly: {why}"));
+        }
+        Some(Support::Not(why)) => {
+            out.push(format!(
+                "{prefix}: module \"{name}\": not carried out: {why}"
             ));
         }
+        Some(_) => {}
+    }
+    if module.is_null() && !name.starts_with("group/") {
+        out.push(format!(
+            "{prefix}: module \"{name}\" has no configuration block; it takes its defaults"
+        ));
+    }
+    for (key, _) in module.members() {
+        let line = match options::option(&kind, key) {
+            Support::Done => continue,
+            Support::Partly(why) => format!("partly: {why}"),
+            Support::Not(why) => format!("not carried out: {why}"),
+            Support::Unknown => format!("not an option waybar's {kind} reads"),
+        };
+        out.push(format!("{prefix}: \"{name}\" option \"{key}\": {line}"));
     }
 }
 
@@ -154,5 +205,8 @@ fn report_style(sheet: &Stylesheet, out: &mut Vec<String>) {
     }
     out.push(
         "style: GTK's theme is not applied: properties the user's file leaves unset take CSS initial values".to_owned(),
+    );
+    out.push(
+        "style: approximated: border styles other than solid are drawn solid; a blurred shadow is a box blur; text-shadow has no blur".to_owned(),
     );
 }
