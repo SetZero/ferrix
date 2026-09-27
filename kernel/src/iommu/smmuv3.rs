@@ -567,7 +567,7 @@ fn frames(order: u8) -> Option<u64> {
 
 /// Read the eight bytes at physical address `at`.
 fn read_entry(at: u64) -> u64 {
-    // SAFETY: `at` is a whole, aligned eight bytes inside a stream table or
+    // SAFETY: (DMA) `at` is a whole, aligned eight bytes inside a stream table or
     // queue this unit took from the frame allocator for itself and never gave
     // back; the direct map covers every frame of RAM. The unit reads them too,
     // which is why the access is volatile.
@@ -576,7 +576,7 @@ fn read_entry(at: u64) -> u64 {
 
 /// Write the eight bytes at physical address `at`.
 fn write_entry(at: u64, value: u64) {
-    // SAFETY: as `read_entry`: a whole, aligned eight bytes in memory only
+    // SAFETY: (DMA) as `read_entry`: a whole, aligned eight bytes in memory only
     // this unit's code writes.
     unsafe { core::ptr::write_volatile(mm::direct_map(at) as *mut u64, value) };
 }

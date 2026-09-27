@@ -2137,7 +2137,7 @@ fn check_a_pin_gives_a_device_exactly_its_pages(counter: &mut Counter) -> Result
     else {
         return Err("a pinned page's device address led nowhere");
     };
-    // SAFETY: `second` is the frame holding the VMO's second page, held by the
+    // SAFETY: (FRAME) `second` is the frame holding the VMO's second page, held by the
     // pin for as long as this runs, and the direct map covers every frame; the
     // read is shorter than a page.
     let seen =

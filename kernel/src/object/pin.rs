@@ -475,7 +475,7 @@ fn fold(frame: Frame) -> u64 {
     let at = mm::direct_map(frame * PAGE_SIZE) as *const u64;
     let mut sum = 0xcbf2_9ce4_8422_2325_u64;
     for word in 0..(PAGE_SIZE / 8) as usize {
-        // SAFETY: the quarantine holds a reference on `frame`, so it is an
+        // SAFETY: (DMA) the quarantine holds a reference on `frame`, so it is an
         // allocated frame the direct map covers, and `word` is within it. A
         // device may write it meanwhile, which a volatile read of a whole
         // aligned word tolerates: the answer is then either word.

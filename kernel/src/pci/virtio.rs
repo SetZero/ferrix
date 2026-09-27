@@ -254,7 +254,7 @@ struct Rings {
     virt: u64,
 }
 
-// SAFETY: `virt` is the direct-map alias of a whole page taken for this queue
+// SAFETY: (DMA) `virt` is the direct-map alias of a whole page taken for this queue
 // alone and held until after the device has been reset, which is the memory
 // `QueueMemory` asks for: at least `Layout::total_size` bytes (`drive` checks
 // the layout fits a page), aligned to a page and so to 16 bytes, and shared
@@ -264,13 +264,13 @@ struct Rings {
 // every access issued after it.
 unsafe impl QueueMemory for Rings {
     fn read_u8(&self, offset: usize) -> u8 {
-        // SAFETY: `offset` is below `Layout::total_size`, which fits in the
+        // SAFETY: (DMA) `offset` is below `Layout::total_size`, which fits in the
         // page, so the address is inside memory this queue owns.
         unsafe { core::ptr::read_volatile((self.virt + offset as u64) as *const u8) }
     }
 
     fn write_u8(&mut self, offset: usize, value: u8) {
-        // SAFETY: as `read_u8`.
+        // SAFETY: (DMA) as `read_u8`.
         unsafe { core::ptr::write_volatile((self.virt + offset as u64) as *mut u8, value) };
     }
 
@@ -657,7 +657,7 @@ fn drive(
             "the device wrote a length it was not given",
         ));
     }
-    // SAFETY: the buffer page is the direct-map alias of a frame this check
+    // SAFETY: (DMA) the buffer page is the direct-map alias of a frame this check
     // owns, `written` is at most `REQUEST`, which is less than a page, and the
     // device has finished writing it.
     let bytes = unsafe {
