@@ -265,7 +265,8 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // rest on — nothing outside what the device has — required of each.
     // Straight after enumeration, which builds the PCI half.
     check_devices(view, pci, &reserved);
-    check_iommu(view);
+    iommu::report(view, device::devices());
+    iommu::check_iommu();
 
     // Stage 9's device objects, on the nodes just published: an I/O mapping of
     // a device's own aperture and nothing past it, reached from a forked
@@ -371,7 +372,7 @@ fn say_booted() {
         // Last before the marker, so every driver the boot starts has run: a
         // DMA fault its unit recorded and nothing provoked fails the boot
         // here rather than sitting unread in the unit's record.
-        check_dma_faults();
+        iommu::check_dma_faults();
         println!("{SUCCESS_MARKER} stages 1-12");
     } else {
         println!(
@@ -1736,61 +1737,6 @@ fn check_pci(view: &BootView<'_>) -> (Vec<device::DeviceNode>, device::Reserved)
 /// apertures and vectors it has.
 ///
 /// Halts rather than returning, as every other stage's check does.
-/// Stage 10: find every IOMMU, and which one each PCI function's DMA arrives at.
-///
-/// Nothing is programmed yet, so nothing here can fail the boot: firmware that
-/// describes no IOMMU, or one this cannot follow, is reported and the boot goes
-/// on. `xtask test-boot` requires the placements on the machines it configures.
-fn check_iommu(view: &BootView<'_>) {
-    let (report, units, placements) = iommu::discover(view, device::devices());
-    println!(
-        "  iommu    {} VT-d units, {} SMMUv3s; {} PCI functions behind one, {} bypassing, \
-         {} unresolved",
-        report.vtd, report.smmu_v3, report.behind, report.bypassing, report.unresolved,
-    );
-    for placement in placements {
-        if let Some(unit) = units.get(placement.unit) {
-            println!(
-                "  iommu    pci {} behind the {:?} unit at {:#x} as stream {:#x}",
-                placement.function, unit.kind, unit.phys, placement.stream,
-            );
-        }
-    }
-    if !checks::run() {
-        return;
-    }
-    let domains = match iommu::check_domains(device::devices()) {
-        Ok(report) => report,
-        Err(problem) => fatal!(
-            catalog::STAGE10_IOMMU,
-            "stage 10 self-check failed: {problem}"
-        ),
-    };
-    println!(
-        "  iommu    {} pages pinned and unpinned through a device's {} domain, {} refusals \
-         as specified, {} waits on a unit with interrupts on",
-        domains.pinned,
-        if domains.translated {
-            "translated"
-        } else {
-            "untranslated"
-        },
-        domains.refusals,
-        domains.waits,
-    );
-    match object::pin::check_quarantine(device::devices()) {
-        Ok(true) => println!(
-            "  iommu    a dead driver's pin was quarantined, a pin past the quarantine's cap \
-             refused and one taken again once it was released, a live driver's given back"
-        ),
-        Ok(false) => {}
-        Err(problem) => fatal!(
-            catalog::STAGE10_IOMMU,
-            "stage 10 self-check failed: {problem}"
-        ),
-    }
-}
-
 fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>, reserved: &device::Reserved) {
     let report = match device::publish(view, pci, reserved) {
         Ok(report) => report,
@@ -1919,30 +1865,6 @@ fn bring_up_processors(view: &BootView<'_>) -> &'static smp::Topology {
 /// Halts rather than returning, for the reason `bring_up_processors` does:
 /// "stage 5 failed" would say nothing about which of four checks, on which of
 /// a thousand threads, did.
-/// Stage 10: no IOMMU recorded a fault that no check provoked.
-///
-/// Halts rather than returning, as every other stage's check does.
-fn check_dma_faults() {
-    let audit = iommu::audit_faults();
-    println!(
-        "  iommu    {} DMA faults recorded that no check provoked, {} of them unit events other \
-         than a refused access, across {} translating units; {} late faults from the \
-         out-of-domain probe",
-        audit.stray, audit.stray_events, audit.units, audit.provoked,
-    );
-    if audit.stray == 0 {
-        return;
-    }
-    if let Some(fault) = audit.first {
-        println!("  iommu    the first read here: {fault}");
-    }
-    fatal!(
-        catalog::STAGE10_DMA_FAULT,
-        "stage 10 self-check failed: {} DMA faults no check provoked",
-        audit.stray
-    );
-}
-
 fn start_scheduler(cpus: &'static smp::Topology) {
     if let Err(problem) = sched::init(cpus) {
         fatal!(

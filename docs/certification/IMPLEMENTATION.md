@@ -650,6 +650,79 @@ What the pilot taught, for the slices that copy it:
   assertions -- about half a minute a requirement once the code is read,
   and the one-check pass added a third to it.
 
+**Step 4, the `iommu` slice, done 2026-09-27.** 43 low-level requirements,
+`L.iommu.1` to `L.iommu.43`, in `docs/sysml/16-iommu-requirements.sysml`
+(15 is the sched slice's), one package each for discovery, bring-up and
+domains, pins, the unit gate and faults. **16 are verified**, by 6 kernel
+checks and 2 xtask gates newly tagged and one tag added to
+`object/check.rs`'s pin check; **27 need a check** and are the baseline's
+`L.iommu.*`. Of iommu's 95 product functions 76 are a requirement's unit
+and 19 accessors; **0 are named by none**, and the gate now holds `iommu` as
+complete. What moved, output unchanged on all four boots:
+
+* `check_iommu` and `check_dma_faults` out of `main.rs`, and `check_domains`
+  (with its body and report) out of `iommu.rs`, into `iommu/check.rs`; the
+  quarantine's `check_quarantine`, `check_pin` and `translated_pci_domain`
+  out of `object/pin.rs` into `object/pin/check.rs`, a child module that
+  reads what `pin.rs` keeps private. That verifies `L.object.47` to `49`
+  and `H.DMA.4`, and leaves `Exit::for_check` the only quarantine entry in
+  `traceability-units.json`. The placements report `check_iommu` began with
+  runs on every boot, checks or not, so it stays product code, as
+  `iommu::report`; `kmain` is a line longer for the two calls, recorded in
+  `complexity-baseline.json`.
+* The high level: `H.DMA.2`'s criterion had three parts with a check for two,
+  so it is split into `H.DMA.2` (a write outside the domain is recorded
+  against its stream: xtask's `fault_problem`), `H.DMA.6` (no fault no check
+  provoked: `check_dma_faults`) and `H.DMA.7` (the refused write leaves the
+  page as it was: no check). `H.DMA.3` into `H.DMA.3` (translated only while
+  pinned, the two refusals: `pin_and_unpin`) and `H.DMA.8` (invalidation
+  before a frame or an emptied table is reused: no check); its "through a
+  handle its driver holds" is `H.OBJ.1` and `2`'s. 22 of 66 high-level
+  requirements are verified.
+
+The 27 that need a check, as check-writing work: the units found and their
+counts (`.1`); each firmware's placement, which the boot prints and no gate
+reads, and the unresolved cases, which no QEMU produces (`.3` to `.6`); a
+unit left alone (`.8`); a function with no domain reaching nothing (`.9`);
+an untranslated domain where no unit is, and the degraded-mode line once
+(`.11`, `.12`); detach giving back what attach took, a domain in use staying
+attached, a refused attach leaving nothing (`.15` to `.17`); the SMMUv3's
+MSI doorbell (`.18`); a frame past 39 bits, a part-done pin undone (`.23`,
+`.25`); the unit's invalidation and the emptied tables before unpin returns
+(`.26`, `.27`, the F-36 order on the device side); caching mode (`.28`); a
+waiter woken at the gate's leave and a unit that never answers (`.32`,
+`.33`); the fault readers' overflow and event cases and firmware's leftover
+fault (`.37` to `.39`); and the fault accounting's negative controls --
+provoke, not-stray, stray, the audit finding one (`.40` to `.43`). Most want
+a unit that misbehaves on purpose, which QEMU does not offer; a software
+double of a unit's register file would reach `.8`, `.26`, `.33` and `.37` to
+`.39` at once.
+
+What this slice found, for review:
+
+* **Most of a unit is proved only end to end**, by the out-of-domain probe
+  in `pci/virtio.rs`, which is product code. The tag is on what judges its
+  count, `xtask/src/qemu.rs`'s `fault_problem`: `.7`, `.10`, `.35`, `.36`
+  and `H.DMA.2`. It skips on an AArch64 boot whose PCI came from the device
+  tree and on a QEMU without SMMUv3 stage 2, and passes there without
+  proving anything. Moving the probe into a check file is the pci slice's
+  question.
+* **`H.DMA.1` stays unverified by one line**: `iommu_problem` requires 1 or
+  more functions behind a unit and 0 unresolved, not the criterion's 0
+  bypassing. Adding that condition would verify it.
+* **Discovery is a second reading of firmware**: `discover` places functions
+  for the report, and `bring_up` with `domain_for` places them for the
+  domains, from the same tables by different code. The report's counts
+  prove the first; only the probe proves the second, on one function.
+* `xtask/src/dma_faults.rs`'s `problem` (every VT-d fault traced over a run
+  is one the kernel named) is left untagged: with no probe it passes
+  vacuously, so it proves `.40` only together with `fault_problem`.
+* **Time.** About 45 minutes of agent time from the first read to the
+  gates: ten reading the 1,800 lines of iommu product code and its checks,
+  fifteen for the move and its before-and-after boots on four
+  configurations, twenty for the 43 requirements, the two splits and the
+  tags.
+
 49,431 lines of item product code trace to 33 system-level requirements, and no
 test names a requirement id.
 

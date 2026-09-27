@@ -547,10 +547,10 @@ package FerrixObjectRequirements {
 
     package Pins {
         doc /* kernel/src/object/pin.rs. The quarantine's own check,
-             * pin::check_quarantine, is check code in this product file
-             * (scripts/data/traceability-units.json), so the three quarantine
-             * requirements wait in the baseline until it moves into a check file
-             * where a tag may go on it. */
+             * check_quarantine, is in object/pin/check.rs, a child module that
+             * may read what pin.rs keeps to itself, and verifies the three
+             * quarantine requirements. The domain side of a pin is iommu's
+             * (part 16). */
 
         requirement <'L.object.45'> aDeviceGetsExactlyItsPages : ItemLowLevel {
             attribute :>> statement = "A pin shall map exactly the held pages of the

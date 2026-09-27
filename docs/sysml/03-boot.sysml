@@ -356,8 +356,9 @@ package FerrixBoot {
                  * check_pci finds every PCI function, sizes its BARs and
                  * walks its capabilities; check_devices publishes the device
                  * nodes, requiring each to hand out exactly the apertures and
-                 * vectors it has; check_iommu reports which unit each
-                 * function's DMA arrives at. */
+                 * vectors it has; iommu::report says which unit each
+                 * function's DMA arrives at, and iommu::check_iommu pins
+                 * through a device's domain and drives the quarantine. */
         }
         then action stage9DeviceObjects {
             @stage { number = 9; }

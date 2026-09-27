@@ -1798,11 +1798,11 @@ See: kernel/src/device.rs publish; kernel/src/pci.rs; docs/ROADMAP.md stage 10.
 
 A driver in ring 3 pins the pages it gives a device into that device's IOMMU
 domain and hands the device the addresses the pin returns, so the domain decides
-what the device's DMA can reach. `iommu::check_domains` pins two frames through
-a device node's domain and requires one domain per node, an address for each
-frame, a count of the pages the domain holds, and a pin refused by every domain
-but the one that took it. A domain that gets any of these wrong sends a device's
-writes somewhere its driver did not choose.
+what the device's DMA can reach. `iommu/check.rs`'s check_domains pins two
+frames through a device node's domain and requires one domain per node, an
+address for each frame, a count of the pages the domain holds, and a pin refused
+by every domain but the one that took it. A domain that gets any of these wrong
+sends a device's writes somewhere its driver did not choose.
 
 1. `DeviceNode::domain` built a second domain for a node instead of handing back
    the first.
@@ -1813,8 +1813,9 @@ writes somewhere its driver did not choose.
    had unpinned.
 4. No frame could be allocated for the check.
 
-See: kernel/src/iommu.rs Domain and check_domains; kernel/src/device.rs
-DeviceNode::domain; docs/ARCHITECTURE.md section 7; docs/ROADMAP.md stage 10.
+See: kernel/src/iommu.rs Domain; kernel/src/iommu/check.rs check_domains;
+kernel/src/device.rs DeviceNode::domain; docs/ARCHITECTURE.md section 7;
+docs/ROADMAP.md stage 10.
 
 <a id="fx-1004"></a>
 
@@ -1943,9 +1944,10 @@ DMA it was not given, and a unit whose faults nobody reads would hide it.
    `first read here` line names the record that was full. QEMU's unit never
    overflows on one device's faults, so there it means a second device faulted.
 
-See: kernel/src/iommu.rs audit_faults; kernel/src/pci/virtio.rs
-probe_out_of_domain; kernel/src/iommu/vtd.rs Unit::take_fault;
-kernel/src/iommu/smmuv3.rs Unit::take_fault; xtask/src/dma_faults.rs;
+See: kernel/src/iommu.rs audit_faults; kernel/src/iommu/check.rs
+check_dma_faults; kernel/src/pci/virtio.rs probe_out_of_domain;
+kernel/src/iommu/vtd.rs Unit::take_fault; kernel/src/iommu/smmuv3.rs
+Unit::take_fault; xtask/src/dma_faults.rs;
 docs/certification/VULNERABILITY-ANALYSIS.md T.DMA.
 
 <a id="fx-1008"></a>

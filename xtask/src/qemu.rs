@@ -259,6 +259,8 @@ pub(crate) const VIRT_MACHINE: [&str; 4] = [
 /// places no PCI function behind one has lost that description, and one that
 /// leaves a function unresolved reads it differently from the firmware that
 /// wrote it.
+///
+/// Verifies: L.iommu.2
 fn iommu_problem(lines: &[String]) -> Option<String> {
     let Some(line) = lines.iter().find(|line| line.contains(BEHIND_IOMMU)) else {
         return Some("the kernel never reported where its IOMMUs are".to_owned());
@@ -331,6 +333,8 @@ fn devmgr_problem(lines: &[String]) -> Option<String> {
 /// from ACPI's IORT alone (`kernel/src/iommu.rs`), so on that path it is
 /// ARMv7-A's case, and says so in the same degraded-trusted-mode line. The
 /// coverage suite boots it for the Pixel 7's path, which has no ACPI.
+///
+/// Verifies: L.iommu.7, L.iommu.10, L.iommu.35, L.iommu.36, H.DMA.2
 fn fault_problem(arch: Arch, lines: &[String]) -> Option<String> {
     if arch == Arch::Armv7a {
         return None;

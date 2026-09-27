@@ -2104,7 +2104,7 @@ pub(crate) fn run_devices() -> Result<DeviceReport, &'static str> {
 /// On a translated domain the pages must also be unreachable once the pin is
 /// closed. On an untranslated one they stay held, which the console says.
 ///
-/// Verifies: L.object.45, L.object.46
+/// Verifies: L.object.45, L.object.46, L.iommu.24
 fn check_a_pin_gives_a_device_exactly_its_pages(counter: &mut Counter) -> Result<(), &'static str> {
     let Some(node) = device::devices()
         .iter()

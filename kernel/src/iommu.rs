@@ -73,7 +73,7 @@ mod gate;
 mod smmuv3;
 mod vtd;
 
-pub(crate) use check::run as check_gate;
+pub(crate) use check::{check_dma_faults, check_iommu, run as check_gate};
 
 use gate::Gate;
 
@@ -295,10 +295,7 @@ pub(crate) struct Report {
 }
 
 /// Find every unit, and place every PCI function among `nodes`.
-pub(crate) fn discover(
-    view: &BootView<'_>,
-    nodes: &[Arc<DeviceNode>],
-) -> (Report, Vec<Unit>, Vec<Placement>) {
+fn discover(view: &BootView<'_>, nodes: &[Arc<DeviceNode>]) -> (Report, Vec<Unit>, Vec<Placement>) {
     let units = units(view);
     let mut report = Report {
         vtd: units.iter().filter(|unit| unit.kind == Kind::VtD).count(),
@@ -354,6 +351,29 @@ pub(crate) fn discover(
         }
     }
     (report, units, placements)
+}
+
+/// Stage 10: find every IOMMU, and which one each PCI function's DMA arrives
+/// at, and say so on the console.
+///
+/// Nothing here can fail the boot: firmware that describes no IOMMU, or one
+/// this cannot follow, is reported and the boot goes on. `xtask test-boot`
+/// requires the placements on the machines it configures.
+pub(crate) fn report(view: &BootView<'_>, nodes: &[Arc<DeviceNode>]) {
+    let (report, units, placements) = discover(view, nodes);
+    println!(
+        "  iommu    {} VT-d units, {} SMMUv3s; {} PCI functions behind one, {} bypassing, \
+         {} unresolved",
+        report.vtd, report.smmu_v3, report.behind, report.bypassing, report.unresolved,
+    );
+    for placement in placements {
+        if let Some(unit) = units.get(placement.unit) {
+            println!(
+                "  iommu    pci {} behind the {:?} unit at {:#x} as stream {:#x}",
+                placement.function, unit.kind, unit.phys, placement.stream,
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1171,112 +1191,4 @@ fn drain(mut take: impl FnMut() -> Option<Fault>, audit: &mut FaultAudit) {
             audit.provoked += 1;
         }
     }
-}
-
-/// What the domain check found.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct DomainReport {
-    /// Pages pinned and unpinned.
-    pub(crate) pinned: u64,
-    /// Requests refused, each exactly as the rule requires.
-    pub(crate) refusals: usize,
-    /// Whether the domain checked was translated.
-    pub(crate) translated: bool,
-    /// Waits on a unit made with interrupts on, since boot.
-    pub(crate) waits: u64,
-}
-
-/// Pin two frames through the first PCI node's domain, and require the node to
-/// hand out one domain, the pin to give each frame an address, the domain to
-/// count what it holds, and a pin to be refused by any domain but its own.
-///
-/// # Errors
-///
-/// The first thing that is not so. The frames are then kept out of the
-/// allocator, since a pin that was not given back may still be reachable.
-pub(crate) fn check_domains(nodes: &[Arc<DeviceNode>]) -> Result<DomainReport, &'static str> {
-    let mut report = DomainReport::default();
-    let Some(node) = nodes
-        .iter()
-        .find(|node| matches!(node.location(), Location::Pci(_)))
-    else {
-        return Ok(report);
-    };
-    let domain = node
-        .domain()
-        .map_err(|_| "no memory for a device's domain")?;
-    let again = node
-        .domain()
-        .map_err(|_| "no memory for a device's domain")?;
-    if !Arc::ptr_eq(&domain, &again) {
-        return Err("a device node handed out two domains");
-    }
-    let Some(first) = mm::allocate_frames(0) else {
-        return Err("no frame to pin");
-    };
-    let Some(second) = mm::allocate_frames(0) else {
-        mm::deallocate_frames(first, 0);
-        return Err("no frame to pin");
-    };
-    pin_and_unpin(&domain, [first, second], &mut report)?;
-    mm::deallocate_frames(first, 0);
-    mm::deallocate_frames(second, 0);
-    Ok(report)
-}
-
-/// The body of [`check_domains`], once it has its frames.
-fn pin_and_unpin(
-    domain: &Domain,
-    frames: [u64; 2],
-    report: &mut DomainReport,
-) -> Result<(), &'static str> {
-    let before = domain.pinned_pages();
-    let pinned = domain
-        .pin(&frames, MapFlags::DMA)
-        .map_err(|_| "a domain refused to pin two frames")?;
-    let expected = frames.map(|frame| frame * PAGE_SIZE);
-    // Every domain gives a page its physical address as its device address;
-    // a translated one must also send the device there and nowhere else.
-    let addressed = pinned.addresses() == expected.as_slice()
-        && expected
-            .iter()
-            .all(|&phys| domain.resolve(phys) == Some(phys));
-    let counted = domain.pinned_pages() == before + 2;
-
-    let Err((DomainError::Foreign, pinned)) = Domain::untranslated().unpin(pinned) else {
-        return Err("a domain unpinned a pin another domain took");
-    };
-    report.refusals += 1;
-    if !addressed || !counted {
-        pinned.leak();
-        return Err(if addressed {
-            "a domain miscounted the pages pinned into it"
-        } else {
-            "an untranslated domain gave a device address other than the frame's"
-        });
-    }
-    if !matches!(domain.pin(&[], MapFlags::DMA), Err(DomainError::Empty)) {
-        pinned.leak();
-        return Err("a domain pinned nothing");
-    }
-    report.refusals += 1;
-    let waits = gate::waits_with_interrupts_on();
-    if domain.unpin(pinned).is_err() {
-        return Err("a domain refused its own pin");
-    }
-    if domain.pinned_pages() != before {
-        return Err("a domain still counted pages it had unpinned");
-    }
-    if domain.translated() && expected.iter().any(|&phys| domain.resolve(phys).is_some()) {
-        return Err("a translated domain still reached a page it had unpinned");
-    }
-    // The boot task may block, so the unpin's wait for its unit must have
-    // been made with interrupts on.
-    if domain.translated() && gate::waits_with_interrupts_on() == waits {
-        return Err("a translated domain's unpin waited on its unit with interrupts masked");
-    }
-    report.waits = gate::waits_with_interrupts_on();
-    report.translated = domain.translated();
-    report.pinned += 2;
-    Ok(())
 }

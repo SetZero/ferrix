@@ -504,6 +504,15 @@ criterion alone; where checks prove parts, the requirement was split.
 *Still open:* the other subsystems' tags, the 70 baselined requirements,
 and the run-time column's evidence (the next `cargo xtask coverage`).
 
+**Advanced 2026-09-27 (W-8 step 4, `iommu`).** 65 check functions, host
+tests and xtask gates name a requirement. Of `iommu`'s 43 low-level
+requirements **16 are verified** and 27 are in the baseline as checks to
+write; the quarantine's three `L.object` ones are verified now that their
+check is in a check file. Of the 66 high-level ones **22** are verified
+(`H.DMA.2`, `3`, `4` and `6` added), 44 in the baseline; 93 baselined in
+all. *Still open:* the other subsystems' tags, the 93, and the run-time
+column's evidence.
+
 **Major.** The boot gates assert rich properties — 2,387 mappings swept for
 W^X, 16 of 16 interrupt deliveries waking their waiter — but nothing links an
 assertion to a requirement id. `docs/sysml/` has 33 requirements and 32
@@ -538,6 +547,15 @@ move; **0 are named by none**, and the gate fails a new function there that
 no requirement names. Item-wide, 1,469 of 2,335 product functions are still
 named by none. *Still open:* the other subsystems (W-8 step 4).
 
+**Advanced 2026-09-27 (W-8 step 4, `iommu`).** `iommu` is the second
+subsystem complete: **43** `L.iommu.*` in
+`docs/sysml/16-iommu-requirements.sysml`. Of its 95 product functions 76 are
+a requirement's unit and 19 accessors; **0 are named by none**. Four boot
+checks moved out of product files into check files (`check_iommu`,
+`check_dma_faults`, `check_domains`, `check_quarantine`), so the item has
+2,332 product functions (2,338 before), of which 1,393 are still named by
+none. *Still open:* the other subsystems.
+
 **Major.** 33 requirements exist, all at system level (`<'G.1'>` kernel
 threads, `<'G.2'>` address-space scale). DO-178C needs high- and low-level
 requirements with the design between them; 62304 §5.4 needs detailed design
@@ -561,6 +579,11 @@ its criterion tests. Applying it split or restated eight of step 2's
 high-level ones in object/'s areas (63 high-level now) and found four in
 other areas to propose (`H.SCHED.3`, `H.OBJ.2`, `H.IRQ.1`, `H.QUOTA.5`;
 IMPLEMENTATION.md W-8). *Still open:* the other subsystems' low level.
+
+**Advanced 2026-09-27 (W-8 step 4, `iommu`).** The 43 `L.iommu.*`
+requirements carry both, and the same rule split two of step 2's: `H.DMA.2`
+into `H.DMA.2`, `6` and `7`, and `H.DMA.3` into `H.DMA.3` and `8`, one
+check able to prove each (66 high-level now).
 
 **Major.** They are prose doc comments (*"Forces: 1:1 kernel threads, a real
 futex, per-thread TLS registers"*) explaining why the system is shaped as it

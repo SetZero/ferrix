@@ -27,10 +27,9 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | [`init`](#init) | 2 | 2 | 2 | 1 |
 | [`random`](#random) | 2 | 2 | 2 | 1 |
 | [`arch/armv7a`](#archarmv7a) | - | - | 1 | 1 |
-| [`iommu`](#iommu) | 1 | 1 | 1 | 1 |
 | [`signal_frame`](#signal_frame) | - | - | 1 | 1 |
 | [`timer`](#timer) | - | - | 1 | 1 |
-| **Total** | **76** | **145** | **129** | 34 |
+| **Total** | **75** | **144** | **128** | 33 |
 
 ---
 
@@ -147,7 +146,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `main.rs` | `item` | 3 | 3 | 3 | 2 | 323, 1610 |
+| `main.rs` | `item` | 3 | 3 | 3 | 2 | 324, 1611 |
 
 ---
 
@@ -181,14 +180,6 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
 | `arch/armv7a/mod.rs` | `core` | - | - | 1 | 1 | 1291 |
-
----
-
-## `iommu`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `iommu.rs` | `core` | 1 | 1 | 1 | 1 | 1218 |
 
 ---
 

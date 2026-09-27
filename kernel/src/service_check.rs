@@ -236,6 +236,8 @@ fn failures_read_as_they_are_documented(report: &mut Report) -> Result<(), &'sta
 /// A DMA fault reads as its unit recorded it, whichever of the four causes it
 /// was, and a domain prints as what translates it: the words the boot's fault
 /// audit and a failed domain check put in the log.
+///
+/// Verifies: L.iommu.13, L.iommu.34
 fn faults_and_domains_read_as_recorded(report: &mut Report) -> Result<(), &'static str> {
     let fault = |write, cause| Fault {
         stream: 0x10,
@@ -402,6 +404,8 @@ fn the_last_line_is_kept_for_a_failure_report() -> Result<(), &'static str> {
 /// driver has given DMA, so nothing is reaching through the stream meanwhile;
 /// a machine whose functions all have domains, or none translated, has none
 /// to try.
+///
+/// Verifies: L.iommu.14
 fn a_dropped_domain_gives_its_stream_back() -> Result<(), &'static str> {
     for node in crate::device::devices() {
         let Location::Pci(function) = node.location() else {

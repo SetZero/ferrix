@@ -18,13 +18,11 @@
     "function or one a requirement names."
   ],
   "complete": [
+    "iommu",
     "object"
   ],
   "check_code_in_product": {
     "object::as_if_draining_elsewhere": "Runs a check's closure as though another context were draining disposed objects (object/check.rs, block_ring/check.rs). It sets the DISPOSING flag dispose reads, which is private to object/mod.rs.",
-    "object::pin::check_pin": "check_quarantine's pin of one fresh page under a cap of one page.",
-    "object::pin::check_quarantine": "The quarantine's boot check, called from main.rs. It reads pin.rs's private quarantined_pages, release and Pin::with_cap; moved into a check file it verifies the three quarantine requirements (L.object.47 to L.object.49).",
-    "object::pin::translated_pci_domain": "check_quarantine's search for a translated PCI domain.",
-    "object::process::Exit::for_check": "An end no process has, for check_quarantine; it needs Exit's private constructor."
+    "object::process::Exit::for_check": "An end no process has, for object/pin/check.rs's check_quarantine; it needs Exit's private constructor."
   }
 }

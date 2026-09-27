@@ -113,8 +113,9 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 | `FerrixItemRequirements` | `13-item-requirements.sysml` | The high-level requirements of the certified item (the `core` and `item` rings of docs/certification/ITEM.md): what each subsystem promises at its interface, decomposed from the Security Target's objectives (docs/certification/SECURITY-TARGET.md §4.1 and §8.2) and the safety manual's assumed safety requirements (SAFETY-MANUAL.md §2). The low-level requirements, one per unit of code, go in one file per subsystem after this one. docs/certification/IMPLEMENTATION.md W-8 is the design, and scripts/check/check-traceability.py the gate that reads these and writes docs/certification/TRACEABILITY.md. |
 | `FerrixObjectRequirements` | `14-object-requirements.sysml` | What each unit of kernel/src/object/ does, as `ItemLowLevel` requirements (part 13 defines the format): the core ring's object layer -- what a handle names and how it is dropped, channels, ports, interrupts, I/O mappings, pins, the job quotas, jobs, the core half of a process, and the scoped OOM kill. The handle table itself and the rights arithmetic are `libs/kernel/objects` and `libs/proto/native-abi`, whose host tests verify H.OBJ.1 to H.OBJ.4 directly; nothing here restates them. |
+| `FerrixIommuRequirements` | `16-iommu-requirements.sysml` | What each unit of kernel/src/iommu.rs and kernel/src/iommu/ does, as `ItemLowLevel` requirements (part 13 defines the format): where firmware puts each PCI function's DMA, the units the kernel turns translation on for, the domains a driver pins pages into, the gate a wait on a unit is made through, and the faults a unit records. The pins a program makes through a handle, and the quarantine a dead driver's pins go to, are object/'s (part 14, `L.object.45` to `L.object.49`); this is the domain side under them. |
 
-15 files, 37 packages, 2489 elements, 204 relations. Model digest `6c0233e0a11acd9f`.
+16 files, 43 packages, 2722 elements, 205 relations. Model digest `8adc2471a089126b`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -294,17 +295,20 @@ Interrupt lines given to ring-3 drivers as objects: O.CAPABILITY and ASR-3 for w
 
 ### Direct memory access
 
-Devices driven from ring 3 through apertures and IOMMU domains: O.DMA and ASR-4 (FDP_ACF.1, FDP_IFF.1). ARMv7-A's reference board has no IOMMU, so these hold on x86-64 and AArch64 only (AoU-6).
+Devices driven from ring 3 through apertures and IOMMU domains: O.DMA and ASR-4 (FDP_ACF.1, FDP_IFF.1). ARMv7-A's reference board has no IOMMU, so these hold on x86-64 and AArch64 only (AoU-6). H.DMA.6 and H.DMA.7 are split from H.DMA.2, and H.DMA.8 from H.DMA.3, so that one check can prove each (W-8's iommu slice). That a pin is made only through a device handle the driver holds is H.OBJ.1 and H.OBJ.2's: vmo_pin is a native call like any other.
 
 | Id | Statement | Criterion | Parent |
 | --- | --- | --- | --- |
 | `H.DMA.1` | Where a translating IOMMU is present, every PCI function the kernel enumerates shall be placed behind a unit before its driver starts, and a function no unit covers shall be reported. | The boot counts N functions behind units, 0 bypassing and 0 unresolved (the `iommu` line), with VT-d on x86-64 and SMMUv3 on AArch64. | `O.DMA, ASR-4` |
-| `H.DMA.2` | A device write to an address outside its domain shall be refused by the unit, reach no memory and be recorded as a fault against the device. | A device made to write a page outside its domain leaves the page unchanged and a fault recorded against its stream, and 0 faults are recorded that no check provoked. | `O.DMA, ASR-4` |
-| `H.DMA.3` | A frame shall be reachable by a device only while pinned into that device's domain through a handle its driver holds, and unpinning shall complete the unit's invalidation before the frame or an emptied table is reused. | Pages pinned through a translated domain are found at their device addresses while pinned and not after; invalid pins are refused as specified (the `iommu` pin line); a domain's emptied tables are freed only after its invalidation completes. | `O.DMA, ASR-4` |
+| `H.DMA.2` | A device write to an address outside its domain shall be refused by the unit and recorded as a fault against the device's stream and the page it addressed. | A device made to write a page its translated domain does not map has the write recorded by its unit as a write by its stream to that page: 1 or more out-of-domain writes faulted (the `pci` line) on x86-64 and AArch64. | `O.DMA, ASR-4` |
+| `H.DMA.6` | A boot shall end with no DMA fault recorded that no check provoked. | Last before the success marker, the audit reads every translating unit's records and counts 0 faults no check provoked, unit events and overflows included (the `iommu` audit line). | `O.DMA, ASR-4` |
+| `H.DMA.7` | A device write its unit refuses shall reach no memory. | A device made to write a frame the kernel holds and its domain does not map leaves every byte of the frame as it was. | `O.DMA, ASR-4` |
+| `H.DMA.3` | A device's domain shall translate a frame's address only while the frame is pinned into it, and shall refuse a pin of nothing and the unpin of a pin another domain took. | Pages pinned through a translated domain are found at their device addresses while pinned and not after; a pin of no frames and an unpin by another domain are refused (the `iommu` pin line's 2 refusals as specified). | `O.DMA, ASR-4` |
+| `H.DMA.8` | Unpinning shall complete the unit's invalidation before the frame or a table the unpin emptied is reused, and a unit that never completes it shall leave both held. | A table an unpin empties returns to the frame allocator only after the unit has answered the invalidation that covers it, and a unit made never to answer keeps the pin's frames and the table out of the allocator. | `O.DMA, ASR-4` |
 | `H.DMA.4` | Frames a driver pinned shall not be reused after the driver dies until its replacement announces itself, and the frames so held shall be bounded. | A dead driver's pin is quarantined, a pin past the quarantine's cap is refused and taken again once the quarantine is released, and a live driver's pin is given back (the `iommu` quarantine line). | `O.DMA, O.QUOTA` |
 | `H.DMA.5` | A driver shall reach device registers only through an I/O mapping of an aperture it holds, and an aperture that is not whole pages or that covers an MSI-X table shall be withheld. | The `devices` line counts the apertures withheld for partial pages and for MSI-X ranges; a mapping of a withheld range is refused; a program reaches only the aperture it was given (the `handles` line). | `O.DMA, O.CAPABILITY, ASR-4` |
 
-5 requirements.
+8 requirements.
 
 ### Traps
 
@@ -981,7 +985,7 @@ kmain. Every stage's exit criterion runs here on every boot, and each failure pa
 20. `entryPaths` — check_entry_paths: a trap flag a program set, which SYSCALL must mask, then the exceptions nothing masks, which must find the kernel's GS wherever they land. The Arm pair take every exception on a stack a program cannot set, and say so.
 21. `stage8PathCalls` — check_path_calls: the calls that take a path, by number, against the real namespace under /tmp.
 22. `stage9NativeObjects` — check_native_objects: the native ABI's objects driven through their handlers by two processes the check builds, before any program can make a native call.
-23. `stage10Devices` — iommu::bring_up programs the units firmware describes; check_pci finds every PCI function, sizes its BARs and walks its capabilities; check_devices publishes the device nodes, requiring each to hand out exactly the apertures and vectors it has; check_iommu reports which unit each function's DMA arrives at.
+23. `stage10Devices` — iommu::bring_up programs the units firmware describes; check_pci finds every PCI function, sizes its BARs and walks its capabilities; check_devices publishes the device nodes, requiring each to hand out exactly the apertures and vectors it has; iommu::report says which unit each function's DMA arrives at, and iommu::check_iommu pins through a device's domain and drives the quarantine.
 24. `stage9DeviceObjects` — check_device_objects: I/O mappings and interrupts minted from the nodes just published.
 25. `stage10Drivers` — check_block_ring: the block ring's control plane driven from a process, then devmgr started with every device and driver image, and sectors read through the disks its drivers serve.
 26. `stage11BtrfsRead` — check_btrfs_disk: the mkfs.btrfs fixture on the second disk mounted at /mnt and read back against its manifest, file by file.
@@ -4001,6 +4005,49 @@ flowchart LR
 | `L.object.101` | `theLargestIsChosen` | — | — | — |
 | `L.object.102` | `noLimitFullNoKill` | — | — | — |
 | `L.object.103` | `anEndedVictimIsEmptied` | — | — | — |
+| `L.iommu.1` | `unitsAreFoundOnce` | — | — | — |
+| `L.iommu.2` | `placementsAreCounted` | — | — | — |
+| `L.iommu.3` | `dmarEndpointsArePlaced` | — | — | — |
+| `L.iommu.4` | `iortMappingsArePlaced` | — | — | — |
+| `L.iommu.5` | `treeMapsArePlaced` | — | — | — |
+| `L.iommu.6` | `whatCannotBeFollowedIsUnresolved` | — | — | — |
+| `L.iommu.7` | `translationIsOn` | — | — | — |
+| `L.iommu.8` | `aUnitItCannotDriveIsLeftAlone` | — | — | — |
+| `L.iommu.9` | `noDomainReachesNothing` | — | — | — |
+| `L.iommu.10` | `aFunctionGetsADomainOnItsUnit` | — | — | — |
+| `L.iommu.11` | `noUnitNoTranslation` | — | — | — |
+| `L.iommu.12` | `degradedModeIsAnnounced` | — | — | — |
+| `L.iommu.13` | `aSecondDomainIsRefused` | — | — | — |
+| `L.iommu.14` | `aDroppedDomainGivesItsStreamBack` | — | — | — |
+| `L.iommu.15` | `detachGivesBackWhatAttachTook` | — | — | — |
+| `L.iommu.16` | `aDomainInUseStaysAttached` | — | — | — |
+| `L.iommu.17` | `aRefusedAttachLeavesNothing` | — | — | — |
+| `L.iommu.18` | `everyDomainMapsTheDoorbell` | — | — | — |
+| `L.iommu.19` | `aPinAddressesEachFrame` | — | — | — |
+| `L.iommu.20` | `anUnpinTakesThePagesOut` | — | — | — |
+| `L.iommu.21` | `onlyItsOwnDomainUnpins` | — | — | — |
+| `L.iommu.22` | `anEmptyPinIsRefused` | — | — | — |
+| `L.iommu.23` | `aFramePastTheTablesIsRefused` | — | — | — |
+| `L.iommu.24` | `aPageIsPinnedOnce` | — | — | — |
+| `L.iommu.25` | `aFailedPinUndoesItself` | — | — | — |
+| `L.iommu.26` | `theUnitForgetsBeforeUnpinReturns` | — | — | — |
+| `L.iommu.27` | `emptiedTablesWaitForTheFlush` | — | — | — |
+| `L.iommu.28` | `aMapInCachingModeIsFlushed` | — | — | — |
+| `L.iommu.29` | `anUnpinWaitsWithInterruptsOn` | — | — | — |
+| `L.iommu.30` | `aWaitEndsAtItsAnswerOrDeadline` | — | — | — |
+| `L.iommu.31` | `oneOperationAtATime` | — | — | — |
+| `L.iommu.32` | `aWaiterIsWokenWhenTheGateIsLeft` | — | — | — |
+| `L.iommu.33` | `aUnitThatNeverAnswersIsGivenUpOn` | — | — | — |
+| `L.iommu.34` | `faultsReadAsRecorded` | — | — | — |
+| `L.iommu.35` | `aVtdFaultIsReadWhole` | — | — | — |
+| `L.iommu.36` | `anSmmuFaultIsRead` | — | — | — |
+| `L.iommu.37` | `aLostVtdFaultIsReported` | — | — | — |
+| `L.iommu.38` | `everySmmuEventIsReported` | — | — | — |
+| `L.iommu.39` | `firmwaresFaultIsNotOurs` | — | — | — |
+| `L.iommu.40` | `aProvokedFaultIsNamedFirst` | — | — | — |
+| `L.iommu.41` | `aProvokedFaultIsNotStray` | — | — | — |
+| `L.iommu.42` | `aStrayFaultIsCounted` | — | — | — |
+| `L.iommu.43` | `theAuditReadsEveryUnit` | — | — | — |
 
 A design rule is upheld by a gate rather than allocated to a part, so the P and N families are expected to be verified but untraced. A goal requirement is traced by the dependency the stage that discharges it draws.
 

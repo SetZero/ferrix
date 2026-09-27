@@ -76,7 +76,7 @@
     },
     "main.rs::kmain": {
       "complexity": 12,
-      "lines": 67,
+      "lines": 68,
       "recursive": false
     },
     "main.rs::start_scheduler": {

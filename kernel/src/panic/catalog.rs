@@ -1544,17 +1544,18 @@ pub(crate) static STAGE10_RING: Explanation = Explanation {
           docs/ROADMAP.md stage 10",
 };
 
-/// For `check_iommu` in `main.rs`, when `iommu::check_domains` fails.
+/// For `check_iommu` in `iommu/check.rs`, when its domain check or the
+/// quarantine's fails.
 pub(crate) static STAGE10_IOMMU: Explanation = Explanation {
     code: "FX-1003",
     title: "an IOMMU domain gave a device the wrong addresses",
     meaning: "A driver in ring 3 pins the pages it gives a device into that device's IOMMU domain \
               and hands the device the addresses the pin returns, so the domain decides what the \
-              device's DMA can reach. `iommu::check_domains` pins two frames through a device \
-              node's domain and requires one domain per node, an address for each frame, a count \
-              of the pages the domain holds, and a pin refused by every domain but the one that \
-              took it. A domain that gets any of these wrong sends a device's writes somewhere its \
-              driver did not choose.",
+              device's DMA can reach. `iommu/check.rs`'s check_domains pins two frames through a \
+              device node's domain and requires one domain per node, an address for each frame, a \
+              count of the pages the domain holds, and a pin refused by every domain but the one \
+              that took it. A domain that gets any of these wrong sends a device's writes \
+              somewhere its driver did not choose.",
     causes: &[
         "`DeviceNode::domain` built a second domain for a node instead of handing back the first.",
         "An untranslated domain gave an address other than the frame's physical address, which is \
@@ -1563,12 +1564,13 @@ pub(crate) static STAGE10_IOMMU: Explanation = Explanation {
          unpinned.",
         "No frame could be allocated for the check.",
     ],
-    see: "kernel/src/iommu.rs Domain and check_domains; kernel/src/device.rs DeviceNode::domain; \
+    see: "kernel/src/iommu.rs Domain; kernel/src/iommu/check.rs check_domains; \
+          kernel/src/device.rs DeviceNode::domain; \
           docs/ARCHITECTURE.md section 7; docs/ROADMAP.md stage 10",
 };
 
-/// For `check_dma_faults` in `main.rs`, when an IOMMU recorded a fault no
-/// check provoked.
+/// For `check_dma_faults` in `iommu/check.rs`, when an IOMMU recorded a fault
+/// no check provoked.
 pub(crate) static STAGE10_DMA_FAULT: Explanation = Explanation {
     code: "FX-1007",
     title: "an IOMMU faulted DMA that no check provoked",
@@ -1606,7 +1608,8 @@ pub(crate) static STAGE10_DMA_FAULT: Explanation = Explanation {
          names the record that was full. QEMU's unit never overflows on one device's faults, \
          so there it means a second device faulted.",
     ],
-    see: "kernel/src/iommu.rs audit_faults; kernel/src/pci/virtio.rs probe_out_of_domain; \
+    see: "kernel/src/iommu.rs audit_faults; kernel/src/iommu/check.rs check_dma_faults; \
+          kernel/src/pci/virtio.rs probe_out_of_domain; \
           kernel/src/iommu/vtd.rs Unit::take_fault; kernel/src/iommu/smmuv3.rs \
           Unit::take_fault; xtask/src/dma_faults.rs; \
           docs/certification/VULNERABILITY-ANALYSIS.md T.DMA",

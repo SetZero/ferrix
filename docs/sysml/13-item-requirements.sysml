@@ -443,7 +443,11 @@ package FerrixItemRequirements {
         doc /* Devices driven from ring 3 through apertures and IOMMU domains:
              * O.DMA and ASR-4 (FDP_ACF.1, FDP_IFF.1). ARMv7-A's reference
              * board has no IOMMU, so these hold on x86-64 and AArch64 only
-             * (AoU-6). */
+             * (AoU-6). H.DMA.6 and H.DMA.7 are split from H.DMA.2, and
+             * H.DMA.8 from H.DMA.3, so that one check can prove each (W-8's
+             * iommu slice). That a pin is made only through a device handle
+             * the driver holds is H.OBJ.1 and H.OBJ.2's: vmo_pin is a native
+             * call like any other. */
 
         requirement <'H.DMA.1'> everyFunctionBehindAUnit : ItemHighLevel {
             attribute :>> statement = "Where a translating IOMMU is present, every
@@ -457,22 +461,49 @@ package FerrixItemRequirements {
         }
         requirement <'H.DMA.2'> outOfDomainWritesRefused : ItemHighLevel {
             attribute :>> statement = "A device write to an address outside its
-                domain shall be refused by the unit, reach no memory and be recorded
-                as a fault against the device.";
-            attribute :>> criterion = "A device made to write a page outside its
-                domain leaves the page unchanged and a fault recorded against its
-                stream, and 0 faults are recorded that no check provoked.";
+                domain shall be refused by the unit and recorded as a fault against
+                the device's stream and the page it addressed.";
+            attribute :>> criterion = "A device made to write a page its translated
+                domain does not map has the write recorded by its unit as a write by
+                its stream to that page: 1 or more out-of-domain writes faulted (the
+                `pci` line) on x86-64 and AArch64.";
+            attribute :>> parent = ("O.DMA", "ASR-4");
+        }
+        requirement <'H.DMA.6'> noFaultUnprovoked : ItemHighLevel {
+            attribute :>> statement = "A boot shall end with no DMA fault recorded
+                that no check provoked.";
+            attribute :>> criterion = "Last before the success marker, the audit
+                reads every translating unit's records and counts 0 faults no check
+                provoked, unit events and overflows included (the `iommu` audit
+                line).";
+            attribute :>> parent = ("O.DMA", "ASR-4");
+        }
+        requirement <'H.DMA.7'> refusedWritesReachNothing : ItemHighLevel {
+            attribute :>> statement = "A device write its unit refuses shall reach
+                no memory.";
+            attribute :>> criterion = "A device made to write a frame the kernel
+                holds and its domain does not map leaves every byte of the frame as
+                it was.";
             attribute :>> parent = ("O.DMA", "ASR-4");
         }
         requirement <'H.DMA.3'> onlyPinnedFramesReachable : ItemHighLevel {
-            attribute :>> statement = "A frame shall be reachable by a device only
-                while pinned into that device's domain through a handle its driver
-                holds, and unpinning shall complete the unit's invalidation before
-                the frame or an emptied table is reused.";
+            attribute :>> statement = "A device's domain shall translate a frame's
+                address only while the frame is pinned into it, and shall refuse a
+                pin of nothing and the unpin of a pin another domain took.";
             attribute :>> criterion = "Pages pinned through a translated domain are
-                found at their device addresses while pinned and not after; invalid
-                pins are refused as specified (the `iommu` pin line); a domain's
-                emptied tables are freed only after its invalidation completes.";
+                found at their device addresses while pinned and not after; a pin of
+                no frames and an unpin by another domain are refused (the `iommu`
+                pin line's 2 refusals as specified).";
+            attribute :>> parent = ("O.DMA", "ASR-4");
+        }
+        requirement <'H.DMA.8'> unpinnedBeforeReused : ItemHighLevel {
+            attribute :>> statement = "Unpinning shall complete the unit's
+                invalidation before the frame or a table the unpin emptied is
+                reused, and a unit that never completes it shall leave both held.";
+            attribute :>> criterion = "A table an unpin empties returns to the frame
+                allocator only after the unit has answered the invalidation that
+                covers it, and a unit made never to answer keeps the pin's frames and
+                the table out of the allocator.";
             attribute :>> parent = ("O.DMA", "ASR-4");
         }
         requirement <'H.DMA.4'> deadDriversPinsQuarantined : ItemHighLevel {
