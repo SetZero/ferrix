@@ -146,12 +146,7 @@ const TIMEOUT: u64 = 3600;
 pub(crate) fn volume() -> Result<std::path::PathBuf> {
     let directory = match std::env::var_os("FERRIX_STEAMCMD_VOLUME") {
         Some(directory) => std::path::PathBuf::from(directory),
-        None => {
-            let home = std::env::var_os("HOME")
-                .or_else(|| std::env::var_os("USERPROFILE"))
-                .ok_or_else(|| Error::new("neither HOME nor USERPROFILE is set"))?;
-            std::path::PathBuf::from(home).join(".local/share/ferrix/steamcmd")
-        }
+        None => crate::paths::volume_directory("steamcmd")?,
     };
     let image = directory.join("steamcmd.img");
     if !image.is_file() {

@@ -135,12 +135,7 @@ const TIMEOUT: u64 = 1800;
 fn directory() -> Result<std::path::PathBuf> {
     match std::env::var_os("FERRIX_RUSTC_SYSROOT") {
         Some(directory) => Ok(std::path::PathBuf::from(directory)),
-        None => {
-            let home = std::env::var_os("HOME")
-                .or_else(|| std::env::var_os("USERPROFILE"))
-                .ok_or_else(|| Error::new("neither HOME nor USERPROFILE is set"))?;
-            Ok(std::path::PathBuf::from(home).join(".local/share/ferrix/rustc"))
-        }
+        None => crate::paths::volume_directory("rustc"),
     }
 }
 

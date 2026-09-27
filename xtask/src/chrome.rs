@@ -151,12 +151,7 @@ exit 16
 pub(crate) fn arm64_volume() -> Result<std::path::PathBuf> {
     let directory = match std::env::var_os("FERRIX_CHROMIUM_VOLUME") {
         Some(directory) => std::path::PathBuf::from(directory),
-        None => {
-            let home = std::env::var_os("HOME")
-                .or_else(|| std::env::var_os("USERPROFILE"))
-                .ok_or_else(|| Error::new("neither HOME nor USERPROFILE is set"))?;
-            std::path::PathBuf::from(home).join(".local/share/ferrix/chromium-arm64")
-        }
+        None => crate::paths::volume_directory("chromium-arm64")?,
     };
     let image = directory.join("chromium.img");
     if !image.is_file() {
@@ -471,7 +466,9 @@ pub(crate) fn has_pulse(image: &std::path::Path) -> bool {
     image
         .parent()
         .map(|directory| directory.join("tree/usr/lib/x86_64-linux-gnu/libpulse.so.0"))
-        .is_some_and(|library| library.exists())
+        // The link itself: a Windows host reads the tree in WSL, where it
+        // cannot follow one.
+        .is_some_and(|library| std::fs::symlink_metadata(library).is_ok())
 }
 
 /// [`volume`], refused unless it [`has_pulse`]: for a gate that plays
@@ -498,12 +495,7 @@ pub(crate) fn pulse_volume() -> Result<std::path::PathBuf> {
 pub(crate) fn volume() -> Result<std::path::PathBuf> {
     let directory = match std::env::var_os("FERRIX_CHROME_VOLUME") {
         Some(directory) => std::path::PathBuf::from(directory),
-        None => {
-            let home = std::env::var_os("HOME")
-                .or_else(|| std::env::var_os("USERPROFILE"))
-                .ok_or_else(|| Error::new("neither HOME nor USERPROFILE is set"))?;
-            std::path::PathBuf::from(home).join(".local/share/ferrix/chrome")
-        }
+        None => crate::paths::volume_directory("chrome")?,
     };
     let image = directory.join("chrome.img");
     if !image.is_file() {

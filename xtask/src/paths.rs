@@ -130,6 +130,34 @@ pub(crate) fn target_dir() -> PathBuf {
         .map_or_else(|| workspace_root().join("target"), PathBuf::from)
 }
 
+/// Where a `scripts/fetch/` script that makes a btrfs volume writes unless
+/// its own variable says otherwise: `~/.local/share/ferrix/<name>`.
+///
+/// Those scripts need `dpkg-deb`, `mkfs.btrfs` and a file system that keeps
+/// symbolic links, so on Windows they run in WSL, and the home is the
+/// default distribution's, as Windows opens it (`crate::wsl::home`). Without
+/// WSL it is this user's own, where nothing can have made one, and the
+/// caller's "is not there" names the script.
+///
+/// # Errors
+///
+/// When there is no home at all.
+pub(crate) fn volume_directory(name: &str) -> Result<PathBuf> {
+    let home = if cfg!(windows)
+        && let Some(home) = crate::wsl::home()
+    {
+        home
+    } else {
+        std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .ok_or_else(|| Error::new("neither HOME nor USERPROFILE is set"))?
+    };
+    // One component at a time: on Windows the home is a UNC path, which
+    // wants its separators all the same.
+    Ok(home.join(".local").join("share").join("ferrix").join(name))
+}
+
 /// The firmware QEMU boots an architecture with.
 #[derive(Debug)]
 pub(crate) enum Firmware {

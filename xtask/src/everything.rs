@@ -45,6 +45,9 @@ const STEAMCMD_SPARE_MIB: u64 = 512;
 /// When either volume has not been fetched, the trees disagree about a
 /// file, or `mkfs.btrfs` cannot make the image.
 pub(crate) fn volume() -> Result<PathBuf> {
+    if cfg!(windows) {
+        return volume_in_wsl();
+    }
     let rustc_tree = crate::rustc::tree()?;
     let rustc_image = crate::rustc::volume()?;
     let chrome_image = crate::chrome::volume()?;
@@ -140,6 +143,45 @@ pub(crate) fn volume() -> Result<PathBuf> {
     Ok(image)
 }
 
+/// [`volume`] on Windows, where the trees are WSL's, full of symbolic links,
+/// and `mkfs.btrfs` is Linux's: xtask's Linux build makes the volume there
+/// (`cargo xtask everything-volume`), and this one boots it from WSL's home.
+/// `FERRIX_EVERYTHING_VOLUME` is not passed on, so the volume is always at
+/// the Linux run's default place, and this looks for it there.
+fn volume_in_wsl() -> Result<PathBuf> {
+    crate::wsl::require_toolchain(
+        "--everything makes its volume from trees of symbolic links with mkfs.btrfs",
+    )?;
+    let root = crate::paths::workspace_root();
+    let status = crate::wsl::cargo(
+        &root,
+        &[
+            "run",
+            "--quiet",
+            "--package",
+            "xtask",
+            "--",
+            "everything-volume",
+        ],
+    )
+    .stdin(std::process::Stdio::null())
+    .status()
+    .map_err(|error| Error::new(format!("could not run wsl.exe: {error}")))?;
+    if !status.success() {
+        return Err(Error::new(format!(
+            "making the --everything volume in WSL: {status}"
+        )));
+    }
+    let image = crate::paths::volume_directory("everything")?.join("everything.img");
+    if !image.is_file() {
+        return Err(Error::new(format!(
+            "WSL made the --everything volume, but {} is not there",
+            image.display()
+        )));
+    }
+    Ok(image)
+}
+
 /// steamcmd's image and the tree beside it, or `None` when it has not been
 /// fetched: the desktop is whole without it, and says how to add it.
 fn steamcmd() -> Result<Option<(PathBuf, PathBuf)>> {
@@ -170,10 +212,7 @@ fn directory() -> Result<PathBuf> {
     if let Some(directory) = std::env::var_os("FERRIX_EVERYTHING_VOLUME") {
         return Ok(PathBuf::from(directory));
     }
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .ok_or_else(|| Error::new("neither HOME nor USERPROFILE is set"))?;
-    Ok(PathBuf::from(home).join(".local/share/ferrix/everything"))
+    crate::paths::volume_directory("everything")
 }
 
 /// Put everything under `from` into `into`, and say how many bytes of files
@@ -260,9 +299,8 @@ fn symlink(link: &Path, at: &Path) -> Result<()> {
         .map_err(|error| Error::new(format!("{}: {error}", at.display())))
 }
 
-/// A symbolic link, which only a Unix host makes: the volume is made from
-/// two trees of links on the Linux host that boots it, and a Windows build of
-/// xtask has neither the trees nor `mkfs.btrfs`.
+/// A symbolic link, which only a Unix host makes: on Windows, [`volume`]
+/// has WSL make the volume, and never merges here.
 #[cfg(not(unix))]
 fn symlink(_link: &Path, at: &Path) -> Result<()> {
     Err(Error::new(format!(

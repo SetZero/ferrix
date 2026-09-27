@@ -7,6 +7,13 @@
 //! package for Linux. Everything else — the kernel, the loaders, QEMU, the
 //! gateway — builds and runs natively.
 //!
+//! The downloaded btrfs volumes are Linux's too: the `scripts/fetch/`
+//! scripts that make them unpack Debian packages into a tree of symbolic
+//! links and run `mkfs.btrfs` over it, and `run-compositor --everything`
+//! merges two such trees into a third volume. So on Windows those scripts
+//! run in WSL, the volumes are found in its home (`crate::paths::
+//! volume_directory`), and the merge is xtask's own, built and run there.
+//!
 //! So on Windows those two go through WSL's default distribution: the one
 //! `wsl.exe` starts with no `-d`, which is also the one a developer set up.
 //! Only that one is looked at. Opening a path into a distribution starts it,
@@ -58,6 +65,25 @@ pub(crate) fn path(linux: &str) -> Option<PathBuf> {
     let name = default_distribution()?;
     let relative = linux.trim_start_matches('/').replace('/', r"\");
     Some(PathBuf::from(format!(r"\\wsl.localhost\{name}\{relative}")))
+}
+
+/// The default distribution's `$HOME`, as Windows opens it, asked once per
+/// run. `None` without WSL.
+pub(crate) fn home() -> Option<PathBuf> {
+    static HOME: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| {
+        // Opening no distribution but the default one: see above.
+        let _ = default_distribution()?;
+        let output = Command::new("wsl.exe")
+            .args(["--exec", "sh", "-c", "printf %s \"$HOME\""])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        let home = String::from_utf8(output.stdout).ok()?;
+        (output.status.success() && home.starts_with('/')).then(|| path(&home))?
+    })
+    .clone()
 }
 
 /// `cargo` with `arguments`, run in the default distribution in `dir`.

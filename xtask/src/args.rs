@@ -374,14 +374,23 @@ pub(crate) struct Args {
 
 impl Args {
     /// `--everything`: the flags it stands for, set as if each were given,
-    /// so a later `--no-gl` still takes the 3D card away.
+    /// but for `--gl` beside a `--no-gl`, before or after it.
     fn everything(&mut self) {
         self.everything = true;
         self.chrome = true;
-        self.gl = true;
+        self.gl = !self.no_gl;
         self.display = true;
         self.release = true;
         self.clipboard = true;
+    }
+
+    /// `--no-gl`, which also takes away the 3D card an earlier
+    /// `--everything` asked for.
+    fn no_gl(&mut self) {
+        self.no_gl = true;
+        if self.everything {
+            self.gl = false;
+        }
     }
 
     /// `--mitigations on|off`.
@@ -495,7 +504,7 @@ impl Args {
                     args.gl = true;
                     args.display = true;
                 }
-                "--no-gl" => args.no_gl = true,
+                "--no-gl" => args.no_gl(),
                 "--clipboard" => args.clipboard = true,
                 "--input" => args.input = true,
                 "--audio" => args.audio = Some(value(&mut items, "--audio")?),
@@ -906,7 +915,9 @@ mod tests {
         assert!(args.gl && args.display);
         // A feature taken away after it is still taken away.
         let args = parse(&["run-compositor", "--everything", "--no-gl"]).unwrap();
-        assert!(args.everything && args.no_gl);
+        assert!(args.everything && args.no_gl && !args.gl);
+        let args = parse(&["run-compositor", "--no-gl", "--everything"]).unwrap();
+        assert!(args.everything && args.no_gl && !args.gl);
     }
 
     #[test]

@@ -182,6 +182,7 @@ COMMANDS:
     run-badapple  Boot userland/media/badapple as init: all of Bad Apple!! in a window, heard on this host's sound server (scripts/fetch/fetch-badapple.sh first)
     remote-desktop  Send this tree to another machine, boot the desktop there and watch it here over VNC
     wallpapers    Convert pictures for run-compositor's desktop and keep them on this machine
+    everything-volume  Make run-compositor --everything's volume from the fetched ones (on Windows, in WSL)
     test-btrfs    Boot, write a tree on the blank btrfs disk, and require host btrfs check to find nothing
     test-powerfail  Kill QEMU while it writes btrfs, replay at the next boot, and require btrfs check to pass, --seeds times
     test-boot     Boot the image under QEMU and assert the kernel came up, moved (KASLR) unless built
@@ -464,6 +465,7 @@ fn run() -> Result<()> {
         "run-badapple" => badapple::run_badapple(&args),
         "remote-desktop" => remote::remote_desktop(&args),
         "wallpapers" => wallpaper::import(&args),
+        "everything-volume" => everything::volume().map(drop),
         "test-compositor" => compositor::test_compositor(&args),
         "test-video" => compositor::test_video(&args),
         "test-foot" => compositor::test_foot(&args),

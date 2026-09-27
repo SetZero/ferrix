@@ -190,16 +190,32 @@ pub(crate) const FERROUSLI: &str = "ferrousli";
 ///
 /// # Errors
 ///
-/// A Windows host (the script is bash with binutils' `nm`, and links x86-64's
-/// with the host's Linux `cc`), and a failed build.
+/// A Windows host without WSL (the script is bash with binutils' `nm`, and
+/// links x86-64's with the host's Linux `cc`), and a failed build.
 pub(crate) fn ferrousli_shared(arch: Arch) -> Result<PathBuf> {
-    if cfg!(windows) {
-        return Err(Error::new(
-            "ferrousli's libc.so.6 is built by a bash script with a Linux host's tools; run this on Linux",
-        ));
-    }
     let out = paths::build_dir(arch).join("ferrousli-shared");
     let ferrousli = paths::workspace_root().join("userland/ferrousli");
+    if cfg!(windows) {
+        // The script in WSL, as `check --ferrousli` runs its cargo steps,
+        // writing into this checkout's build directory through `/mnt`.
+        crate::wsl::require_toolchain(
+            "ferrousli's libc.so.6 is built by a bash script with a Linux host's tools",
+        )?;
+        let status = crate::wsl::bash(
+            &ferrousli,
+            "exec tools/build-shared.sh --arch \"$1\" \"$(wslpath -u \"$2\")\"",
+            &[arch.name(), &out.to_string_lossy()],
+        )
+        .stdin(std::process::Stdio::null())
+        .status()
+        .map_err(|error| Error::new(format!("could not run wsl.exe: {error}")))?;
+        if !status.success() {
+            return Err(Error::new(format!(
+                "tools/build-shared.sh --arch {arch} in WSL: {status}"
+            )));
+        }
+        return Ok(out);
+    }
     // A build `FERRIX_BUILDS` may record or replay, as busybox's is.
     let mut build =
         crate::builds::Build::bash("userland/ferrousli/tools/build-shared.sh", &ferrousli)
