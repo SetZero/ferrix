@@ -110,9 +110,9 @@ type Scenario = (&'static str, fn(u64) -> Result<(), Refusal>);
 /// `frame` is a frame of RAM the caller owns, for the scenario that maps a
 /// window over one.
 ///
-/// Verifies: H.MEM.11, L.mm.48, L.user.20, L.user.100
+/// Verifies: H.MEM.11, L.mm.48, L.user.20, L.user.100, L.user.106
 pub(crate) fn run(frame: u64) -> Result<Report, &'static str> {
-    let scenarios: [Scenario; 8] = [
+    let scenarios: [Scenario; 9] = [
         ("fork", fork_every_kind_of_region),
         ("move", remap_a_private_region),
         ("shared", remap_a_shared_region),
@@ -121,6 +121,7 @@ pub(crate) fn run(frame: u64) -> Result<Report, &'static str> {
         ("object", share_write_and_hold_an_object),
         ("stacks", free_stacks_together),
         ("code", map_shared_code),
+        ("page", map_code_page),
     ];
     let task = crate::sched::current_id().ok_or("the sweep runs outside a task")?;
     // Once each before the window, for the size classes and the tables their
@@ -492,6 +493,42 @@ fn map_shared_code(_: u64) -> Result<(), Refusal> {
     )?;
     if space_.region_count() != before {
         return Err(Refusal::Wrong("unmapping shared code left a region"));
+    }
+    Ok(())
+}
+
+/// One page of code, ARMv7-A's signal return page's mapping, on every
+/// architecture: only ARMv7-A's exec reaches [`AddressSpace::map_code_page`]
+/// otherwise. A two-page object is refused first, before any allocation;
+/// then one page maps as a single region to be read and run, shared and never
+/// written, and unmapping it leaves the space as it was.
+fn map_code_page(_: u64) -> Result<(), Refusal> {
+    let space_ = space(AddressSpace::new(), "a fresh space was refused")?;
+    let before = space_.region_count();
+    let large = Vmo::new_anonymous(2)?;
+    if !matches!(space_.map_code_page(large), Err(SpaceError::BadRange)) {
+        return Err(Refusal::Wrong(
+            "a two-page object was not refused as a code page",
+        ));
+    }
+    if space_.region_count() != before {
+        return Err(Refusal::Wrong("a refused code page left a region"));
+    }
+    let vmo = Vmo::new_anonymous(1)?;
+    let at = space(space_.map_code_page(vmo), "mapping a code page was refused")?;
+    let regions = space_.regions()?;
+    let Some(page) = regions.iter().find(|region| region.start == at) else {
+        return Err(Refusal::Wrong("a code page was not where it was mapped"));
+    };
+    let flags = page.flags;
+    if page.end != at + P || !(flags.read && flags.execute && flags.shared) || flags.write {
+        return Err(Refusal::Wrong(
+            "a code page was not one read-execute, unwritable, shared page",
+        ));
+    }
+    space(space_.unmap(at, P), "unmapping a code page was refused")?;
+    if space_.region_count() != before {
+        return Err(Refusal::Wrong("unmapping a code page left a region"));
     }
     Ok(())
 }

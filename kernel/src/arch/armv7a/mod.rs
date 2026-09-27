@@ -1554,5 +1554,12 @@ pub(crate) fn vdso_can_read_counter() -> bool {
     false
 }
 
+/// The signal return page's code: this architecture has no vDSO its C
+/// libraries could read, so a handler without `SA_RESTORER` returns through
+/// this page instead, as Linux's ARM `sigpage` (F-48).
+pub(crate) fn sigpage_code() -> Option<&'static [u8]> {
+    Some(signal::sigpage_code())
+}
+
 /// No program to check a vDSO with, since there is none.
 pub(crate) const USER_VDSO_PROGRAM: &[u8] = &[];

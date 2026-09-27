@@ -99,6 +99,17 @@ pub(crate) use armv7a::{
     timer_disarm, timer_irq, uninstall_user_root, unmask_interrupt, user_hwcaps, user_platform,
     wait_for_interrupt, wait_for_work,
 };
+// A signal return page, for an architecture without a vDSO its programs
+// could read: ARMv7-A's (`syscall::sigpage`, F-48).
+#[cfg(target_arch = "arm")]
+pub(crate) use armv7a::sigpage_code;
+
+/// No signal return page: the vDSO has the trampoline here.
+#[cfg(not(target_arch = "arm"))]
+pub(crate) const fn sigpage_code() -> Option<&'static [u8]> {
+    None
+}
+
 // What the architecture decodes and decides on its own from values the
 // machine hands it -- trap syndromes, the console's description, the
 // interrupt controller's masking -- checked at boot against built inputs

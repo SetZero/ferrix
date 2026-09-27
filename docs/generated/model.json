@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "24c9439a50e4dcc5def2d8fd2d50d1b380627a7f39f62016772c0b9855e3a59d",
+  "digest": "c2ed684e0cf2505dd9ebb564168970d99c102aeed1fbda99a62a8b2ae37fa8b7",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -97,7 +97,7 @@
   ],
   "summary": {
     "packages": 103,
-    "elements": 5246,
+    "elements": 5251,
     "maturity": {
       "implemented": 273,
       "inProgress": 11,
@@ -43299,7 +43299,7 @@
                   "qualifiedName": "FerrixMemoryRequirements::AddressSpaces::aFailedAllocationLeavesNothingBehind",
                   "kind": "attribute",
                   "redefines": "criterion",
-                  "value": "\"With the n-th allocation failed alone for every n until a run in which none was, each run of the fork, move, shared, split, cut, object, stacks and code scenarios ends in success or out of memory, never another refusal, the run with nothing failed succeeds, and each scenario's frame window keeps 0 frames (the `sweep` line).\"",
+                  "value": "\"With the n-th allocation failed alone for every n until a run in which none was, each run of the fork, move, shared, split, cut, object, stacks, code and page scenarios ends in success or out of memory, never another refusal, the run with nothing failed succeeds, and each scenario's frame window keeps 0 frames (the `sweep` line).\"",
                   "source": {
                     "file": "docs/sysml/17-memory-requirements.sysml",
                     "line": 2099
@@ -43610,6 +43610,63 @@
                   "source": {
                     "file": "docs/sysml/17-memory-requirements.sysml",
                     "line": 2187
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aCodePageIsReadAndRunAlone",
+              "qualifiedName": "FerrixMemoryRequirements::AddressSpaces::aCodePageIsReadAndRunAlone",
+              "kind": "requirement",
+              "shortName": "L.user.106",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/17-memory-requirements.sysml",
+                "line": 2189
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixMemoryRequirements::AddressSpaces::aCodePageIsReadAndRunAlone",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"map_code_page shall map a one-page object as a single read-and-run shared page, never writable, and refuse an object of any other size before changing the space.\"",
+                  "source": {
+                    "file": "docs/sysml/17-memory-requirements.sysml",
+                    "line": 2192
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixMemoryRequirements::AddressSpaces::aCodePageIsReadAndRunAlone",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A two-page object is refused with BadRange and the space keeps its regions; a one-page object maps as one region read, execute and shared and not writable, one page long, and unmapping it leaves the space's regions as they were (the sweep's page scenario, the `sweep` line).\"",
+                  "source": {
+                    "file": "docs/sysml/17-memory-requirements.sysml",
+                    "line": 2197
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixMemoryRequirements::AddressSpaces::aCodePageIsReadAndRunAlone",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.18\"",
+                  "source": {
+                    "file": "docs/sysml/17-memory-requirements.sysml",
+                    "line": 2198
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixMemoryRequirements::AddressSpaces::aCodePageIsReadAndRunAlone",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"user::space::AddressSpace::map_code_page\"",
+                  "source": {
+                    "file": "docs/sysml/17-memory-requirements.sysml",
+                    "line": 2199
                   }
                 }
               ]

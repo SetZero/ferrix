@@ -2093,7 +2093,7 @@ package FerrixMemoryRequirements {
                 allocation with OutOfMemory or absorb it, and keep no frame.";
             attribute :>> criterion = "With the n-th allocation failed alone for every
                 n until a run in which none was, each run of the fork, move, shared,
-                split, cut, object, stacks and code scenarios ends in success or out
+                split, cut, object, stacks, code and page scenarios ends in success or out
                 of memory, never another refusal, the run with nothing failed
                 succeeds, and each scenario's frame window keeps 0 frames (the
                 `sweep` line).";
@@ -2185,6 +2185,18 @@ package FerrixMemoryRequirements {
                 "user::space::AddressSpace::give_back",
                 "user::space::AddressSpace::begin_shootdown",
                 "user::space::AddressSpace::shoot");
+        }
+        requirement <'L.user.106'> aCodePageIsReadAndRunAlone : ItemLowLevel {
+            attribute :>> statement = "map_code_page shall map a one-page object as a
+                single read-and-run shared page, never writable, and refuse an object
+                of any other size before changing the space.";
+            attribute :>> criterion = "A two-page object is refused with BadRange and
+                the space keeps its regions; a one-page object maps as one region
+                read, execute and shared and not writable, one page long, and
+                unmapping it leaves the space's regions as they were (the sweep's
+                page scenario, the `sweep` line).";
+            attribute :>> parent = "H.MEM.18";
+            attribute :>> unit = "user::space::AddressSpace::map_code_page";
         }
     }
 }

@@ -153,8 +153,69 @@ impl UserContext {
     }
 }
 
+/// The signal return page's code (`syscall::sigpage`), as Linux's
+/// `arch/arm/kernel/sigreturn_codes.S` lays it out, a word each: `sigreturn`
+/// in ARM state (`mov r7, #119`, `svc`) at word 0 and in Thumb (`movs r7,
+/// #119`, `svc #0`) at word 2, then `rt_sigreturn` the same way at words 3
+/// and 5. [`return_offset`] picks one.
+const SIGPAGE_CODE: [u8; 24] = {
+    const ARM_SIGRETURN: [u32; 2] = [0xe3a0_7000 | NR_SIGRETURN, 0xef00_0000 | NR_SIGRETURN];
+    const ARM_RT: [u32; 2] = [0xe3a0_7000 | NR_RT_SIGRETURN, 0xef00_0000 | NR_RT_SIGRETURN];
+    let [arm_sigreturn_mov, arm_sigreturn_svc] = ARM_SIGRETURN;
+    let [arm_rt_mov, arm_rt_svc] = ARM_RT;
+    // Two Thumb halfwords in one little-endian word: `movs r7, #n` first.
+    const THUMB_SIGRETURN: u32 = 0xdf00_0000 | 0x2700 | NR_SIGRETURN;
+    const THUMB_RT: u32 = 0xdf00_0000 | 0x2700 | NR_RT_SIGRETURN;
+    let [a, b, c, d] = arm_sigreturn_mov.to_le_bytes();
+    let [e, f, g, h] = arm_sigreturn_svc.to_le_bytes();
+    let [i, j, k, l] = THUMB_SIGRETURN.to_le_bytes();
+    let [m, n, o, p] = arm_rt_mov.to_le_bytes();
+    let [q, r, s, t] = arm_rt_svc.to_le_bytes();
+    let [u, v, w, x] = THUMB_RT.to_le_bytes();
+    [
+        a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x,
+    ]
+};
+
+/// The signal return page's code, for `syscall::sigpage` to build it from.
+pub(crate) fn sigpage_code() -> &'static [u8] {
+    &SIGPAGE_CODE
+}
+
+/// Where in the signal return page a handler returns to: the sequence for
+/// its frame (`rt_sigreturn` for an `rt_sigframe`) in its own instruction
+/// set, with the Thumb bit set for a Thumb one, as Linux's `setup_return`
+/// computes `retcode`.
+const fn return_offset(rt: bool, thumb: bool) -> u32 {
+    let word = if thumb { 2 } else { 0 } + if rt { 3 } else { 0 };
+    word * 4 + if thumb { 1 } else { 0 }
+}
+
+/// Where the handler returns to: its restorer if it has one, and otherwise
+/// the signal return page's sequence for its frame, as Linux's sigpage
+/// (F-48). A space the page could not be mapped into gets `copy`, the frame's
+/// own, which only an executable stack could run: the handler then faults on
+/// its return, as every one did before the page.
+fn return_address(
+    request: &FrameRequest,
+    rt: bool,
+    thumb: bool,
+    copy: u32,
+) -> Result<u32, BadFrame> {
+    if request.flags & SA_RESTORER != 0 {
+        return u32::try_from(request.restorer).map_err(|_| BadFrame);
+    }
+    Ok(request
+        .sigpage
+        .and_then(|page| page.checked_add(u64::from(return_offset(rt, thumb))))
+        .and_then(|at| u32::try_from(at).ok())
+        .unwrap_or(copy))
+}
+
 /// Write the `sigreturn` trampoline a handler without a restorer returns
-/// into: `mov r7, #number` and `svc 0`.
+/// into: `mov r7, #number` and `svc 0`. Written into the frame as Linux
+/// writes it, for an unwinder reading the frame; the handler returns through
+/// the signal return page's copy, since no stack page may run.
 fn write_retcode(frame: &mut FrameBytes, uc: usize, rt: bool) -> Result<(), BadFrame> {
     let number = if rt { NR_RT_SIGRETURN } else { NR_SIGRETURN };
     frame.put_u32(uc + RETCODE, 0xe3a0_7000 | number)?;
@@ -192,14 +253,7 @@ pub(crate) fn setup_signal_frame(
 
     let handler = u32::try_from(request.handler).map_err(|_| BadFrame)?;
     let thumb = handler & 1 != 0;
-    let return_to = if request.flags & SA_RESTORER != 0 {
-        u32::try_from(request.restorer).map_err(|_| BadFrame)?
-    } else {
-        // Linux's vectors page holds the trampoline; there is none here, so
-        // the handler returns into the copy on the stack, which runs only if
-        // the stack is executable.
-        frame_at + (uc + RETCODE) as u32
-    };
+    let return_to = return_address(request, rt, thumb, frame_at + (uc + RETCODE) as u32)?;
     let regs = &mut context.frame;
     let arguments = [
         (0, request.signal),

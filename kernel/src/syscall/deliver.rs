@@ -400,6 +400,7 @@ fn run_handler(
         mask,
         stack,
         altstack,
+        sigpage: super::sigpage::address(thread.process().space(), 0),
     };
     arch::setup_signal_frame(thread.process().space(), context, &request)
 }

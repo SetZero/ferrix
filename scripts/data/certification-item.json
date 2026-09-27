@@ -247,6 +247,7 @@
         "syscall/registry.rs",
         "syscall/signal.rs",
         "syscall/signalfd.rs",
+        "syscall/sigpage.rs",
         "syscall/sockets.rs",
         "syscall/stat.rs",
         "syscall/system.rs",

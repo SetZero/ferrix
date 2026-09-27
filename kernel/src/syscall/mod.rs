@@ -81,6 +81,7 @@ pub(crate) mod program_check;
 pub(crate) mod registry;
 pub(crate) mod signal;
 pub(crate) mod signalfd;
+pub(crate) mod sigpage;
 pub(crate) mod sockets;
 pub(crate) mod stat;
 pub(crate) mod system;
