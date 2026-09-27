@@ -1,7 +1,9 @@
 //! glibc's `execinfo.h`: `backtrace`, which answers the return addresses on
-//! the calling thread's stack, and `backtrace_symbols_fd`, which writes one
-//! line naming each. LLVM and `rustc`'s driver import both, for the stack a
-//! crash report prints.
+//! the calling thread's stack, `backtrace_symbols_fd`, which writes one line
+//! naming each, and `backtrace_symbols`, which answers those lines as
+//! strings. LLVM and `rustc`'s driver import the first two, for the stack a
+//! crash report prints; PulseAudio's `libpulsecommon` imports the first and
+//! the last, for the stack its log may show, and is not loaded without them.
 //!
 //! As glibc's, the walk is libgcc's unwinder's, `_Unwind_Backtrace`, found in
 //! `libgcc_s.so.1` -- which a C++ program such as `rustc` has loaded already
@@ -170,10 +172,96 @@ impl Line {
     }
 }
 
+/// The line naming `address`, as glibc writes it: `object(symbol+0xoffset)
+/// [0xaddress]`, `object(+0xoffset) [0xaddress]` when no symbol is near, or
+/// `[0xaddress]` when no object holds it. Without a newline.
+fn describe(address: *mut c_void) -> Line {
+    let mut line = Line {
+        bytes: [0; 1024],
+        len: 0,
+    };
+    let mut info = DlInfo {
+        dli_fname: core::ptr::null(),
+        dli_fbase: null_mut(),
+        dli_sname: core::ptr::null(),
+        dli_saddr: null_mut(),
+    };
+    // SAFETY: `info` is live.
+    let found = unsafe { dladdr(address, &raw mut info) } != 0;
+    if found && !info.dli_fname.is_null() {
+        // SAFETY: `dladdr` answers NUL-terminated names.
+        unsafe { line.string(info.dli_fname) };
+        line.push(b'(');
+        let base = if info.dli_sname.is_null() {
+            info.dli_fbase.addr()
+        } else {
+            // SAFETY: as above.
+            unsafe { line.string(info.dli_sname) };
+            info.dli_saddr.addr()
+        };
+        let (sign, offset) = if address.addr() >= base {
+            (b'+', address.addr() - base)
+        } else {
+            (b'-', base - address.addr())
+        };
+        line.push(sign);
+        line.hex(offset);
+        line.push(b')');
+        line.push(b' ');
+    }
+    line.push(b'[');
+    line.hex(address.addr());
+    line.push(b']');
+    line
+}
+
+/// Answers a string for each of the `size` addresses at `buffer`, the line
+/// [`backtrace_symbols_fd`] writes without its newline, as glibc does: in
+/// one block from `malloc`, which the caller frees whole, holding the `size`
+/// pointers and after them the strings they point to. Null when there is no
+/// memory for the block.
+///
+/// # Safety
+///
+/// `buffer` must be valid for reading `size` pointers.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn backtrace_symbols(
+    buffer: *const *mut c_void,
+    size: c_int,
+) -> *mut *mut c_char {
+    let count = usize::try_from(size).unwrap_or(0);
+    let address = |index: usize| {
+        // SAFETY: the caller vouches for `size` pointers.
+        unsafe { buffer.wrapping_add(index).read() }
+    };
+    let pointers = count.saturating_mul(size_of::<*mut c_char>());
+    let total = (0..count).fold(pointers, |total, index| {
+        total.saturating_add(describe(address(index)).len + 1)
+    });
+    // `malloc`'s alignment is a pointer's, so the slots at the start are
+    // aligned; the strings after them are bytes.
+    let block = crate::malloc::malloc(total);
+    if block.is_null() {
+        return null_mut();
+    }
+    let slots = block.cast::<*mut c_char>();
+    let mut text = block.cast::<u8>().wrapping_add(pointers);
+    for index in 0..count {
+        let line = describe(address(index));
+        // SAFETY: the block holds the pointers and every line with its NUL,
+        // each measured above as it is written here, and `text` stays in it.
+        unsafe { core::ptr::copy_nonoverlapping(line.bytes.as_ptr(), text, line.len) };
+        // SAFETY: as above: the line's NUL is inside the block.
+        unsafe { text.wrapping_add(line.len).write(0) };
+        // SAFETY: slot `index` is one of the `count` at the block's start.
+        unsafe { slots.wrapping_add(index).write(text.cast()) };
+        text = text.wrapping_add(line.len + 1);
+    }
+    slots
+}
+
 /// Writes one line for each of the `size` addresses at `buffer` to `fd`, as
-/// glibc does: `object(symbol+0xoffset) [0xaddress]`, `object(+0xoffset)
-/// [0xaddress]` when no symbol is near, or `[0xaddress]` when no object
-/// holds it.
+/// glibc does: [`describe`]'s, and a newline.
 ///
 /// # Safety
 ///
@@ -184,42 +272,7 @@ pub unsafe extern "C" fn backtrace_symbols_fd(buffer: *const *mut c_void, size: 
     for index in 0..count {
         // SAFETY: the caller vouches for `size` pointers.
         let address = unsafe { buffer.wrapping_add(index).read() };
-        let mut line = Line {
-            bytes: [0; 1024],
-            len: 0,
-        };
-        let mut info = DlInfo {
-            dli_fname: core::ptr::null(),
-            dli_fbase: null_mut(),
-            dli_sname: core::ptr::null(),
-            dli_saddr: null_mut(),
-        };
-        // SAFETY: `info` is live.
-        let found = unsafe { dladdr(address, &raw mut info) } != 0;
-        if found && !info.dli_fname.is_null() {
-            // SAFETY: `dladdr` answers NUL-terminated names.
-            unsafe { line.string(info.dli_fname) };
-            line.push(b'(');
-            let base = if info.dli_sname.is_null() {
-                info.dli_fbase.addr()
-            } else {
-                // SAFETY: as above.
-                unsafe { line.string(info.dli_sname) };
-                info.dli_saddr.addr()
-            };
-            let (sign, offset) = if address.addr() >= base {
-                (b'+', address.addr() - base)
-            } else {
-                (b'-', base - address.addr())
-            };
-            line.push(sign);
-            line.hex(offset);
-            line.push(b')');
-            line.push(b' ');
-        }
-        line.push(b'[');
-        line.hex(address.addr());
-        line.push(b']');
+        let mut line = describe(address);
         line.push(b'\n');
         let bytes = line.bytes.get(..line.len).unwrap_or_default();
         // SAFETY: `bytes` is live; a short or failed write is not reported,
@@ -242,5 +295,36 @@ mod tests {
         line.push(b' ');
         line.hex(0x7f00_dead_beef);
         assert_eq!(line.bytes.get(..line.len), Some(&b"0x0 0x7f00deadbeef"[..]));
+    }
+
+    #[test]
+    fn symbols_are_one_block_of_pointers_then_their_strings() {
+        // Addresses no object holds, so each line is its address alone.
+        let addresses = [
+            core::ptr::with_exposed_provenance_mut::<c_void>(0x10),
+            core::ptr::with_exposed_provenance_mut::<c_void>(0xabc0),
+        ];
+        let size = c_int::try_from(addresses.len()).unwrap_or(0);
+        // SAFETY: `addresses` holds `size` pointers.
+        let block = unsafe { backtrace_symbols(addresses.as_ptr(), size) };
+        assert!(!block.is_null());
+        let start = block.addr();
+        let pointers = addresses.len() * size_of::<*mut c_char>();
+        let mut expected = start + pointers;
+        for (index, want) in [&b"[0x10]"[..], &b"[0xabc0]"[..]].into_iter().enumerate() {
+            // SAFETY: the block holds `size` pointers.
+            let text = unsafe { block.wrapping_add(index).read() };
+            assert_eq!(
+                text.addr(),
+                expected,
+                "string {index} follows the one before"
+            );
+            // SAFETY: each string is NUL-terminated inside the block.
+            let got = unsafe { core::ffi::CStr::from_ptr(text) }.to_bytes();
+            assert_eq!(got, want);
+            expected += want.len() + 1;
+        }
+        // SAFETY: the block is `malloc`'s, and freed once.
+        unsafe { crate::malloc::free(block.cast()) };
     }
 }

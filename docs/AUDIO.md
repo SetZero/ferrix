@@ -480,7 +480,7 @@ repeats. Each slice lands on its own:
 | U2a | **Done 2026-09-27.** `pulse-server`, the protocol state machine, on `pulseaudio` at the pinned revision: `AUTH` at protocol 35 with shared memory and memfd both refused, so samples come inline; the client's name; the server's, sink's and source's information and lists (one sink, the card's 48 kHz S16_LE stereo); `CREATE_PLAYBACK_STREAM` and `DELETE_PLAYBACK_STREAM` with the buffer attributes, and requests accounted as `pa_memblockq` does (`tlength`, `minreq`, `prebuf`); `CORK`, `FLUSH`, `DRAIN`, `GET_PLAYBACK_LATENCY`. One stream, no mixing | Host tests replay command sequences `patrace` recorded between the host's `paplay` or Chrome and its server, and each answer matches in kind and field | 4 |
 | U2b | **Done 2026-09-27.** `pulsed`, the daemon: `$XDG_RUNTIME_DIR/pulse/native`, one stream written through `media/pcm` to `/dev/snd` and clocked by the card; `pa-tone`, a Rust client that sends tone's counter over the protocol | `test-audio`'s fifth boot, `pulsed` and `pa-tone`, frame for frame, with a negative control | 4 |
 | U2c | **Done 2026-09-27.** Mixing: any number of streams summed with saturation into the card's one format, each resampled from its own rate by `media/resample` and its channels mapped (mono to stereo), per-stream volume and mute, an underrun filled with silence | Host tests of the mix against a model; a boot of two `pa-tone`s at 44.1 and 48 kHz whose sum the file holds within the resampler's bound | 5 |
-| U2d | **Done 2026-09-27.** The desktop: `pulsed` as an init unit of the session, Debian's `libpulse0` and what it links on Chrome's volume, Chrome through Pulse rather than ALSA (it prefers Pulse once `libpulse.so.0` loads) | `test-chrome-audio` through `pulsed`; `run-compositor --everything` plays a video's sound through it | 5 |
+| U2d | **Done 2026-09-27.** The desktop: `pulsed` as an init unit of the session, Debian's `libpulse0` and what it links on Chrome's volume, Chrome through Pulse rather than ALSA (it prefers Pulse once `libpulse.so.0` loads) | `test-chrome-audio` through `pulsed`, on ferrousli as the desktop runs Chrome; `run-compositor --everything` plays a video's sound through it | 5 |
 
 U3's SDL and games then find what is missing by running.
 
@@ -835,4 +835,25 @@ it. The check now walks that too, and reads each file's `RUNPATH`. A
 volume fetched before 2026-09-27 has no libpulse: xtask then leaves
 `pulsed` out of the desktop and says so, since Chrome's ALSA would find the
 card held, and the gate refuses such a volume. U2, 18 points, is done.
+
+**On ferrousli (2026-09-27).** That gate ran Chrome on the volume's glibc
+and ignored `--interpreter`, while `run-compositor --everything` runs it on
+ferrousli, the customer's choice of 2026-09-26. There Chrome fell back to
+ALSA at start, found the card held by `pulsed`, and played nothing.
+`dlopen` inside the guest said `backtrace_symbols: undefined symbol`:
+`libpulsecommon` imports it for the stack its log may print, and ferrousli
+had `backtrace` and `backtrace_symbols_fd` and not it. It was the only
+symbol the whole of libpulse's closure needed that ferrousli lacked.
+ferrousli has it now (`userland/ferrousli/src/execinfo.rs`). With it
+libpulse loaded, authenticated, asked for the server's information, and
+waited for ever: its threaded main loop's lock is a recursive mutex that
+inherits priority, and Ferrix's futex has no `FUTEX_LOCK_PI`, so the first
+contended lock waited as a deadlock would. glibc refuses such a mutex in
+`pthread_mutex_init` with `ENOTSUP` where the kernel has no PI futexes,
+and libpulse then asks for a plain one; ferrousli had accepted it. It
+refuses it as glibc does now, having asked the kernel once
+(`userland/ferrousli/src/mutex.rs`). A client of libpulse's, a probe
+doing Chrome's sequence step by step, found where it stopped. And
+`test-chrome-audio` runs Chrome on ferrousli unless `--interpreter glibc`
+asks for the volume's own: 1.52 s of 439.9 Hz on its first pass there.
 

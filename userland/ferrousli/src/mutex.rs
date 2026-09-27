@@ -499,8 +499,38 @@ pub struct MutexAttr {
     kind: c_uint,
 }
 
+/// Whether the kernel has priority-inheriting futexes: 0 if it has, the
+/// error it refused them with if not, and -1 until asked. musl's
+/// `check_pi_result`.
+static PI_FUTEXES: AtomicI32 = AtomicI32::new(-1);
+
+/// Whether the kernel takes `FUTEX_LOCK_PI`, asked once, as musl asks: on a
+/// free word of this function's own, which a kernel that has them takes for
+/// this thread and nothing else ever sees.
+fn pi_futexes() -> bool {
+    let mut known = PI_FUTEXES.load(Ordering::Relaxed);
+    if known < 0 {
+        let word = AtomicI32::new(0);
+        // SAFETY: the kernel reads and may write `word`, which is live.
+        let ret = unsafe {
+            syscall::syscall4(nr::FUTEX, word.as_ptr().addr(), futex::FUTEX_LOCK_PI, 0, 0)
+        };
+        known = errno::decode(ret).map_or_else(|error| error, |_| 0);
+        PI_FUTEXES.store(known, Ordering::Relaxed);
+    }
+    known == 0
+}
+
 /// Initialises `*m` with the kind `*attr` describes, or a normal mutex if
 /// `attr` is null.
+///
+/// As glibc's, a mutex that would inherit priority is refused with
+/// `ENOTSUP` where the kernel has no futexes to do it with, so that the
+/// caller can ask for a plain one, as libpulse does. Ferrix's has none, and
+/// the first contended lock of such a mutex would wait for ever.
+/// `pthread_mutexattr_setprotocol` accepts the protocol regardless, as
+/// glibc's does: musl refuses it there with `ENOSYS`, which libpulse treats
+/// as a broken C library and aborts on.
 ///
 /// # Safety
 ///
@@ -510,6 +540,9 @@ pub struct MutexAttr {
 pub unsafe extern "C" fn pthread_mutex_init(m: *mut Mutex, attr: *const MutexAttr) -> c_int {
     // SAFETY: the caller passes null or an initialised attribute object.
     let kind = unsafe { attr.as_ref() }.map_or(0, |attr| attr.kind as c_int);
+    if kind & PRIO_INHERIT != 0 && !pi_futexes() {
+        return errno::ENOTSUP;
+    }
     // SAFETY: the caller vouches for `m`.
     unsafe { m.write(Mutex::new(kind)) };
     0
@@ -819,6 +852,30 @@ pub extern "C" fn pthread_mutexattr_setprioceiling(_attr: *mut MutexAttr, ceilin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mutex_inheriting_priority_is_refused_without_the_futexes_for_it() {
+        let mut attr = MutexAttr { kind: 0 };
+        // SAFETY: `attr` is live.
+        let set = unsafe { pthread_mutexattr_setprotocol(&raw mut attr, PRIO_INHERIT_PROTOCOL) };
+        assert_eq!(set, 0);
+        let plain = MutexAttr { kind: 0 };
+        let mut m = Mutex::new(NORMAL);
+        // As on Ferrix, whose kernel answers `FUTEX_LOCK_PI` with `ENOSYS`.
+        PI_FUTEXES.store(errno::ENOSYS, Ordering::Relaxed);
+        // SAFETY: `m` and `attr` are live.
+        let inheriting = unsafe { pthread_mutex_init(&raw mut m, &raw const attr) };
+        assert_eq!(inheriting, errno::ENOTSUP);
+        // SAFETY: as above.
+        let given = unsafe { pthread_mutex_init(&raw mut m, &raw const plain) };
+        assert_eq!(given, 0, "a plain one is still given");
+        // And as on Linux, which has them: asked of the host's kernel.
+        PI_FUTEXES.store(-1, Ordering::Relaxed);
+        // SAFETY: as above.
+        let inheriting = unsafe { pthread_mutex_init(&raw mut m, &raw const attr) };
+        assert_eq!(inheriting, 0);
+        assert_eq!(PI_FUTEXES.load(Ordering::Relaxed), 0);
+    }
 
     #[test]
     fn a_normal_mutex_is_busy_while_held() {

@@ -384,7 +384,10 @@ that a program which asks for isolation now finds out it cannot have it.
   server mixes; `test-chrome-audio` requires its stream in `pulsed`'s log as
   well as the tone in QEMU's file. A volume fetched before then has no
   libpulse; xtask then leaves `pulsed` out and says so, and the gate refuses
-  it.
+  it. The gate runs Chrome on ferrousli, as the desktop does, unless
+  `--interpreter glibc` asks for the volume's own; on ferrousli libpulse
+  needed `backtrace_symbols` and a mutex inheriting priority refused as
+  glibc refuses it (`docs/AUDIO.md`, "On ferrousli").
 
 ---
 

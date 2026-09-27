@@ -382,9 +382,10 @@ OPTIONS:
                                          give it once for each word
     --interpreter <PATH|ferrousli>       test-shell: a dynamic linker, carried at --init's PT_INTERP path; {arch} is replaced;
                                          test-chrome, test-chrome-window, test-rustc, run-compositor --chrome: at the program's;
-                                         run-compositor --chrome and --everything are on ferrousli by default, `glibc` for the volume's
+                                         run-compositor --chrome and --everything, and test-chrome-audio, are on ferrousli by
+                                         default, `glibc` for the volume's
                                          `ferrousli`: ferrousli's ld-ferrousli, built from this tree
-    --library <PATH|ferrousli>           test-shell, test-chrome(-window), test-rustc, run-compositor --chrome: a shared library, carried in /lib; as many as needed; {arch} is replaced
+    --library <PATH|ferrousli>           test-shell, test-chrome(-window|-audio), test-rustc, run-compositor --chrome: a shared library, carried in /lib; as many as needed; {arch} is replaced
                                          `ferrousli`: ferrousli linked as libc.so.6, built from this tree
     --boot <NAME>                        test-compositor: only the boots whose name holds this
     -h, --help                           This message

@@ -2164,16 +2164,8 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
         if !args.memory_given {
             args.memory = crate::chrome::MEMORY;
         }
-        // Chrome, and with `--everything` the compiler, run on ferrousli's
-        // loader and `libc.so.6` unless `--interpreter glibc` asks for the
-        // volume's own: the customer's choice of 2026-09-26.
-        if args.interpreter.as_deref() == Some(GLIBC) {
-            args.interpreter = None;
-            args.libraries.clear();
-        } else if !crate::chrome::on_ferrousli(&args) {
-            args.interpreter = Some(crate::shell::FERROUSLI.to_owned());
-            args.libraries = vec![crate::shell::FERROUSLI.to_owned()];
-        }
+        // Chrome, and with `--everything` the compiler, run on ferrousli.
+        chrome_libc(&mut args);
     } else if crate::chrome::on_ferrousli(&args) {
         return Err(Error::new(
             "--interpreter and --library need --chrome here: they put Chrome, and with \
@@ -5394,6 +5386,31 @@ fn rustc_links(carried: &[crate::ports::File]) -> Vec<crate::ports::File> {
 /// own glibc, which ferrousli otherwise stands in for.
 const GLIBC: &str = "glibc";
 
+/// What puts the libc [`chrome_libc`] chose under Chrome on `volume`:
+/// ferrousli's loader and `libc.so.6`, or the links to the volume's glibc.
+fn chrome_libc_files(arch: Arch, volume: &Path, args: &Args) -> Result<Vec<crate::ports::File>> {
+    if crate::chrome::on_ferrousli(args) {
+        println!("  {arch}: Chrome on ferrousli's loader and libc.so.6");
+        crate::chrome::ferrousli_files(arch, volume, crate::chrome::WINDOW_PROGRAM, args)
+    } else {
+        println!("  {arch}: Chrome on the volume's glibc");
+        Ok(crate::rustc::files(crate::chrome::LINKS))
+    }
+}
+
+/// The libc Chrome runs on: ferrousli's loader and `libc.so.6` unless
+/// `--interpreter glibc` asks for the volume's own, the customer's choice of
+/// 2026-09-26. An `--interpreter` or `--library` of another is kept.
+fn chrome_libc(args: &mut Args) {
+    if args.interpreter.as_deref() == Some(GLIBC) {
+        args.interpreter = None;
+        args.libraries.clear();
+    } else if !crate::chrome::on_ferrousli(args) {
+        args.interpreter = Some(crate::shell::FERROUSLI.to_owned());
+        args.libraries = vec![crate::shell::FERROUSLI.to_owned()];
+    }
+}
+
 /// The page `run-compositor --chrome` opens with.
 ///
 /// Its button plays a tone through the page's `AudioContext` and stops it
@@ -5567,12 +5584,18 @@ pub(crate) fn test_chrome_audio(args: &Args) -> Result<()> {
         ));
     }
     let mut args = args.clone();
-    args.data_image = Some(crate::chrome::pulse_volume()?);
+    let volume = crate::chrome::pulse_volume()?;
+    args.data_image = Some(volume.clone());
     if !args.memory_given {
         args.memory = crate::chrome::MEMORY;
     }
+    // On the libc `run-compositor --chrome` gives Chrome: a client of pulsed
+    // loads libpulse on it, which needs what glibc has and ferrousli may
+    // not (`backtrace_symbols`, missed on 2026-09-27 by a gate on glibc).
+    chrome_libc(&mut args);
+    let ferrousli = crate::chrome::on_ferrousli(&args);
     let programs = Programs::build(arch)?;
-    let mut ports = crate::rustc::files(crate::chrome::LINKS);
+    let mut ports = chrome_libc_files(arch, &volume, &args)?;
     ports.extend(crate::chrome::window_files());
     let pulsed = crate::audio::build_media(arch, "media-pulsed", "pulsed")?;
     let carried = Carried {
@@ -5584,8 +5607,9 @@ pub(crate) fn test_chrome_audio(args: &Args) -> Result<()> {
         ..Carried::none()
     };
     let config = format!(
-        "# Carried into the initramfs by `cargo xtask test-chrome-audio`.\n{}exec-once = {}\n",
+        "# Carried into the initramfs by `cargo xtask test-chrome-audio`.\n{}{}exec-once = {}\n",
         crate::chrome::WINDOW_ENV,
+        crate::chrome::window_library_path(ferrousli),
         crate::chrome::window_command(CHROME_TONE_PAGE)
     );
     let (image, kernel) = build_image(arch, &programs, &undithered(&config), carried, &args)?;
