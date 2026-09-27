@@ -148,6 +148,9 @@ pub enum DecodeError {
     Utf8,
     /// Bytes after the last field.
     Trailing,
+    /// A flag -- a boolean, or whether an optional field is there -- that is
+    /// neither 0 nor 1, which no encoding writes.
+    Flag(u8),
 }
 
 /// A record's writer.
@@ -258,17 +261,29 @@ impl Reader<'_> {
             .map_err(|_| DecodeError::Utf8)
     }
 
-    fn opt_str(&mut self) -> Result<Option<String>, DecodeError> {
+    /// A flag, 0 or 1 as the writer writes one: anything else is refused,
+    /// so that every record that decodes encodes back to the same bytes.
+    fn flag(&mut self) -> Result<bool, DecodeError> {
         match self.u8()? {
-            0 => Ok(None),
-            _ => self.str().map(Some),
+            0 => Ok(false),
+            1 => Ok(true),
+            other => Err(DecodeError::Flag(other)),
+        }
+    }
+
+    fn opt_str(&mut self) -> Result<Option<String>, DecodeError> {
+        if self.flag()? {
+            self.str().map(Some)
+        } else {
+            Ok(None)
         }
     }
 
     fn opt_u32(&mut self) -> Result<Option<u32>, DecodeError> {
-        match self.u8()? {
-            0 => Ok(None),
-            _ => self.u32().map(Some),
+        if self.flag()? {
+            self.u32().map(Some)
+        } else {
+            Ok(None)
         }
     }
 
@@ -383,9 +398,7 @@ impl Call {
         let mut r = Reader { rest: body };
         let call = match r.u8()? {
             1 => Call::Status(r.opt_str()?),
-            2 => Call::List {
-                failed: r.u8()? != 0,
-            },
+            2 => Call::List { failed: r.flag()? },
             3 => Call::Start(r.str()?),
             4 => Call::Stop(r.str()?),
             5 => Call::Restart(r.str()?),
@@ -406,7 +419,7 @@ impl Call {
             17 => Call::SetProperty {
                 unit: r.str()?,
                 assignments: r.strs()?,
-                persistent: r.u8()? != 0,
+                persistent: r.flag()?,
             },
             18 => {
                 let unit = r.str()?;
