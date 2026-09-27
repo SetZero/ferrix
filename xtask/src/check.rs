@@ -418,6 +418,21 @@ fn zinc(root: &std::path::Path) -> Result<()> {
         };
         cargo::run(command, "userland/zinc/tests/pty_completion.py")
     })?;
+    step("zinc: oh-my-zsh's git prompt on a pty", || {
+        let script = "cargo build --release --target \"$1\" && \
+                      python3 tests/pty_prompt_git.py \"$CARGO_TARGET_DIR/$1/release/zinc\"";
+        let command = if cfg!(windows) {
+            crate::wsl::bash(&dir, script, &[TARGET])
+        } else {
+            let mut command = Command::new("bash");
+            let _ = command
+                .current_dir(&dir)
+                .env("CARGO_TARGET_DIR", paths::target_dir().join("zinc-check"))
+                .args(["-c", script, "bash", TARGET]);
+            command
+        };
+        cargo::run(command, "userland/zinc/tests/pty_prompt_git.py")
+    })?;
     step("zinc: job control on a pty", || {
         let script = "cargo build --release --target \"$1\" && \
                       python3 tests/pty_jobs.py \"$CARGO_TARGET_DIR/$1/release/zinc\"";

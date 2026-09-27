@@ -647,3 +647,22 @@ fn a_subshells_last_command_runs_in_its_place() {
     // keep a parent that waits for them.
     assert_eq!(run("x=$(echo one two | wc -w); echo $x"), "2\n");
 }
+
+/// `zformat`, which `vcs_info` builds oh-my-zsh's git prompt with: each
+/// expected line is what zsh 5.9 printed after `zmodload zsh/zutil`.
+#[test]
+fn zformat_formats_and_aligns_as_zsh_does() {
+    assert_eq!(
+        run(
+            "zformat -f r '[%b] %F{red}%u%% %-5s|%.2s|%3(c.yes.no)' b:main u:'*' s:git c:3; print -r -- $r"
+        ),
+        "[main] %F{red}*%   git|gi|yes\n"
+    );
+    assert_eq!(
+        run(
+            "zformat -a a ' -- ' 'a:first' 'long\\:left:second' 'nocolon' 'empty:'; print -rl -- $a"
+        ),
+        "a         -- first\nlong:left -- second\nnocolon\nempty\n"
+    );
+    assert_eq!(run("zformat -f r x bad 2>/dev/null; echo $?"), "1\n");
+}

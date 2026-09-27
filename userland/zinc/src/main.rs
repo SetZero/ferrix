@@ -30,6 +30,7 @@ mod regex;
 mod shell;
 mod tok;
 mod wcwidth;
+mod zformat;
 mod zle;
 mod zstyle;
 
