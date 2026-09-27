@@ -135,6 +135,7 @@
         "syscall/uaccess.rs",
         "timer.rs",
         "trap.rs",
+        "trap/**",
         "user/**",
         "vmap.rs"
       ]

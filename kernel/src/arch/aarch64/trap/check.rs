@@ -47,6 +47,36 @@ const BREAKPOINT: &[u8] = &[
     0x00, 0x00, 0x20, 0xd4, 0xc8, 0x0b, 0x80, 0xd2, 0x20, 0x0c, 0x80, 0xd2, 0x01, 0x00, 0x00, 0xd4,
 ];
 
+/// A read of the second page of a shared mapping of a one-page file: a
+/// translation fault the address space answers with the file's end rather
+/// than a missing mapping, so the dispatcher sends `SIGBUS` itself and not
+/// what `fault_signal` would say. Exits with 96 if the file or the mapping
+/// could not be made. x86-64's check has the same program.
+///
+/// ```text
+///   adr x0, name ; mov x1, #0 ; mov x8, #279 ; svc #0     ; memfd_create
+///   tbnz x0, #63, 1f ; mov x9, x0
+///   mov x1, #4096 ; mov x8, #46 ; svc #0 ; cbnz x0, 1f    ; ftruncate to a page
+///   mov x0, #0 ; mov x1, #8192 ; mov x2, #1 ; mov x3, #1
+///   mov x4, x9 ; mov x5, #0 ; mov x8, #222 ; svc #0       ; two pages, shared
+///   cmn x0, #4095 ; b.hs 1f
+///   ldr x0, [x0, #4096]                                   ; past the file
+///   mov x8, #94 ; mov x0, #97 ; svc #0
+/// 1: mov x8, #94 ; mov x0, #96 ; svc #0
+/// name: .asciz "bus"
+/// ```
+///
+/// Assembled by GNU `as` for AArch64 and read back out of the object file.
+const PAST_END: &[u8] = &[
+    0x60, 0x03, 0x00, 0x10, 0x01, 0x00, 0x80, 0xd2, 0xe8, 0x22, 0x80, 0xd2, 0x01, 0x00, 0x00, 0xd4,
+    0x80, 0x02, 0xf8, 0xb7, 0xe9, 0x03, 0x00, 0xaa, 0x01, 0x00, 0x82, 0xd2, 0xc8, 0x05, 0x80, 0xd2,
+    0x01, 0x00, 0x00, 0xd4, 0xe0, 0x01, 0x00, 0xb5, 0x00, 0x00, 0x80, 0xd2, 0x01, 0x00, 0x84, 0xd2,
+    0x22, 0x00, 0x80, 0xd2, 0x23, 0x00, 0x80, 0xd2, 0xe4, 0x03, 0x09, 0xaa, 0x05, 0x00, 0x80, 0xd2,
+    0xc8, 0x1b, 0x80, 0xd2, 0x01, 0x00, 0x00, 0xd4, 0x1f, 0xfc, 0x3f, 0xb1, 0xa2, 0x00, 0x00, 0x54,
+    0x00, 0x00, 0x48, 0xf9, 0xc8, 0x0b, 0x80, 0xd2, 0x20, 0x0c, 0x80, 0xd2, 0x01, 0x00, 0x00, 0xd4,
+    0xc8, 0x0b, 0x80, 0xd2, 0x00, 0x0c, 0x80, 0xd2, 0x01, 0x00, 0x00, 0xd4, 0x62, 0x75, 0x73, 0x00,
+];
+
 /// The status of a program a signal ended, as `wait4` reports it to a shell.
 const fn killed_by(signal: u32) -> i32 {
     128 + signal as i32
@@ -58,7 +88,8 @@ const fn killed_by(signal: u32) -> i32 {
 ///
 /// The first program that could not be run, or ended other than it had to.
 pub(crate) fn run() -> Result<(), &'static str> {
-    let cases: [(&[u8], &[u8], i32, &'static str); 3] = [
+    crate::trap::check::outcomes()?;
+    let cases: [(&[u8], &[u8], i32, &'static str); 4] = [
         (
             b"/misaligned",
             MISALIGNED_PC,
@@ -77,6 +108,12 @@ pub(crate) fn run() -> Result<(), &'static str> {
             killed_by(SIGTRAP),
             "a program's own breakpoint did not end it with SIGTRAP",
         ),
+        (
+            b"/past-end",
+            PAST_END,
+            killed_by(SIGBUS),
+            "a program's read past the end of a mapped file did not end it with SIGBUS",
+        ),
     ];
     for (name, code, expected, problem) in cases {
         let status = run_program(name, code)?;
@@ -89,8 +126,8 @@ pub(crate) fn run() -> Result<(), &'static str> {
         }
     }
     println!(
-        "  fault    a program's misaligned program counter, undefined instruction and own \
-         breakpoint ended it with SIGBUS, SIGILL and SIGTRAP"
+        "  fault    a program's misaligned program counter, undefined instruction, own breakpoint \
+         and read past a mapped file's end ended it with SIGBUS, SIGILL, SIGTRAP and SIGBUS"
     );
     Ok(())
 }

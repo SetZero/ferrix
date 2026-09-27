@@ -506,17 +506,13 @@ const fn killed_by(signal: u32) -> i32 {
 /// Verifies: `L.x86_64.60`, `L.x86_64.77`, L.trap.1, `L.x86_64.78`, `L.x86_64.103`, H.TRAP.4
 pub(crate) fn run() -> Result<(), &'static str> {
     // What the trap path does after an `execve`: equal only to the same
-    // entry, stack and mode. The dispatcher's callers compare outcomes, and
-    // an entry compared by its return value alone would restart a program at
-    // another's first instruction, or a 32-bit one in 64-bit mode.
+    // entry, stack and mode. The entry and stack are every architecture's
+    // (`crate::trap::check`); the mode is this one's alone, and an entry
+    // compared without it would start a 32-bit program in 64-bit mode.
+    crate::trap::check::outcomes()?;
     let entered = crate::trap::Outcome::Enter {
         entry: 0x40_1000,
         stack: 0x7fff_f000,
-        abi: crate::trap::Abi::Native,
-    };
-    let elsewhere = crate::trap::Outcome::Enter {
-        entry: 0x40_1000,
-        stack: 0x7fff_e000,
         abi: crate::trap::Abi::Native,
     };
     let other_mode = crate::trap::Outcome::Enter {
@@ -524,19 +520,10 @@ pub(crate) fn run() -> Result<(), &'static str> {
         stack: 0x7fff_f000,
         abi: crate::trap::Abi::Compat,
     };
-    let again = crate::trap::Outcome::Enter {
-        entry: 0x40_1000,
-        stack: 0x7fff_f000,
-        abi: crate::trap::Abi::Native,
-    };
     // Through `black_box`, or the comparison is folded where it is written
     // and the trap path's own equality never runs.
-    let entered = core::hint::black_box(entered);
-    if entered == core::hint::black_box(elsewhere)
-        || entered == core::hint::black_box(other_mode)
-        || entered != core::hint::black_box(again)
-    {
-        return Err("two entries into a program compared by something but entry, stack and mode");
+    if core::hint::black_box(entered) == core::hint::black_box(other_mode) {
+        return Err("two entries into a program compared by something but their mode");
     }
 
     if cpu::read_cr0() & CR0_NE == 0 {

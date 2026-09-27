@@ -16,6 +16,8 @@ use ferrix_sync::Once;
 use crate::arch;
 use crate::console::println;
 
+pub(crate) mod check;
+
 /// Why the kernel was entered, in terms every architecture shares.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Trap {

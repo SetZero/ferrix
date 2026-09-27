@@ -78,6 +78,37 @@ const NO_RESTORER: &[u8] = &[
     0x37, 0x00, 0xa0, 0xe3, 0xf8, 0x70, 0xa0, 0xe3, 0x00, 0x00, 0x00, 0xef,
 ];
 
+/// A read of the second page of a shared mapping of a one-page file: a
+/// translation fault the address space answers with the file's end rather
+/// than a missing mapping, so the dispatcher sends `SIGBUS` itself and not
+/// what `fault_signal` would say. Exits with 96 if the file or the mapping
+/// could not be made. x86-64's check has the same program.
+///
+/// ```text
+///   adr r0, name ; mov r1, #0 ; movw r7, #385 ; svc #0     ; memfd_create
+///   cmp r0, #0 ; blt 1f ; mov r4, r0
+///   mov r1, #4096 ; mov r7, #93 ; svc #0 ; cmp r0, #0 ; bne 1f ; ftruncate
+///   mov r0, #0 ; mov r1, #8192 ; mov r2, #1 ; mov r3, #1
+///   mov r5, #0 ; mov r7, #192 ; svc #0                     ; mmap2, two pages
+///   cmn r0, #4096 ; bhi 1f
+///   add r0, r0, #4096 ; ldr r0, [r0]                       ; past the file
+///   mov r7, #248 ; mov r0, #97 ; svc #0
+/// 1: mov r7, #248 ; mov r0, #96 ; svc #0
+/// name: .asciz "bus"
+/// ```
+///
+/// Assembled by GNU `as` for ARMv7-A and read back out of the object file.
+const PAST_END: &[u8] = &[
+    0x6c, 0x00, 0x8f, 0xe2, 0x00, 0x10, 0xa0, 0xe3, 0x81, 0x71, 0x00, 0xe3, 0x00, 0x00, 0x00, 0xef,
+    0x00, 0x00, 0x50, 0xe3, 0x13, 0x00, 0x00, 0xba, 0x00, 0x40, 0xa0, 0xe1, 0x01, 0x1a, 0xa0, 0xe3,
+    0x5d, 0x70, 0xa0, 0xe3, 0x00, 0x00, 0x00, 0xef, 0x00, 0x00, 0x50, 0xe3, 0x0d, 0x00, 0x00, 0x1a,
+    0x00, 0x00, 0xa0, 0xe3, 0x02, 0x1a, 0xa0, 0xe3, 0x01, 0x20, 0xa0, 0xe3, 0x01, 0x30, 0xa0, 0xe3,
+    0x00, 0x50, 0xa0, 0xe3, 0xc0, 0x70, 0xa0, 0xe3, 0x00, 0x00, 0x00, 0xef, 0x01, 0x0a, 0x70, 0xe3,
+    0x04, 0x00, 0x00, 0x8a, 0x01, 0x0a, 0x80, 0xe2, 0x00, 0x00, 0x90, 0xe5, 0xf8, 0x70, 0xa0, 0xe3,
+    0x61, 0x00, 0xa0, 0xe3, 0x00, 0x00, 0x00, 0xef, 0xf8, 0x70, 0xa0, 0xe3, 0x60, 0x00, 0xa0, 0xe3,
+    0x00, 0x00, 0x00, 0xef, 0x62, 0x75, 0x73, 0x00,
+];
+
 /// The status of a program a signal ended, as `wait4` reports it to a shell.
 const fn killed_by(signal: u32) -> i32 {
     128 + signal as i32
@@ -89,7 +120,8 @@ const fn killed_by(signal: u32) -> i32 {
 ///
 /// The first program that could not be run, or ended other than it had to.
 pub(crate) fn run() -> Result<(), &'static str> {
-    let cases: [(&[u8], &[u8], i32, &'static str); 3] = [
+    crate::trap::check::outcomes()?;
+    let cases: [(&[u8], &[u8], i32, &'static str); 4] = [
         (
             b"/undefined",
             UNDEFINED,
@@ -108,6 +140,12 @@ pub(crate) fn run() -> Result<(), &'static str> {
             killed_by(SIGBUS),
             "a program's misaligned load-multiple did not end it with SIGBUS",
         ),
+        (
+            b"/past-end",
+            PAST_END,
+            killed_by(SIGBUS),
+            "a program's read past the end of a mapped file did not end it with SIGBUS",
+        ),
     ];
     for (name, code, expected, problem) in cases {
         let status = run_program(name, code)?;
@@ -120,8 +158,9 @@ pub(crate) fn run() -> Result<(), &'static str> {
         }
     }
     println!(
-        "  fault    a program's undefined instruction, own breakpoint and misaligned \
-         load-multiple ended it with SIGILL, SIGTRAP and SIGBUS"
+        "  fault    a program's undefined instruction, own breakpoint, misaligned \
+         load-multiple and read past a mapped file's end ended it with SIGILL, SIGTRAP, SIGBUS \
+         and SIGBUS"
     );
 
     let status = run_program(b"/no-restorer", NO_RESTORER)?;
