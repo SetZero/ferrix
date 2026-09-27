@@ -25,7 +25,7 @@ FONTS = ROOT / "assets" / "fonts"
 
 MARK = (BRAND / "src" / "mark.svgfrag").read_text()
 
-TAGLINE = "A Rust operating system that runs <code>rustc</code> &mdash; and builds itself."
+TAGLINE = "Linux apps without Linux."
 FEATURES = ["Linux ABI", "ring-3 drivers", "btrfs", "Wayland desktop", "Chrome"]
 ARCHES = "x86-64 &middot; AArch64 &middot; ARMv7-A"
 
@@ -135,8 +135,8 @@ def social():
     {TAGLINE}
   </div>
   <div class="muted" style="font-size:22px;margin-top:22px;max-width:590px;line-height:1.45">
-    Written by a fleet of AI agents. It ran <code>rustc</code> 11&nbsp;days after its first public commit,
-    and built itself the day after.
+    Chrome, <code>rustc</code>, <code>git</code> and <code>curl</code> run unchanged on Ferrix’s Rust kernel.
+    Drivers run as separate processes and can restart after a crash.
   </div>
   <div style="margin-top:auto" class="muted"><span style="font-size:21px;font-weight:600">{ARCHES}</span>
     <span style="font-size:21px">&nbsp;&nbsp;&middot;&nbsp;&nbsp;github.com/SetZero/ferrix</span></div>

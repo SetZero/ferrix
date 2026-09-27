@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/banner-dark.png">
+    <img src="docs/brand/banner-light.png" alt="Ferrix: Linux apps without Linux" width="100%">
+  </picture>
+</p>
+
 # Ferrix
 
 **Linux apps without Linux.**
