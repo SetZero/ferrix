@@ -18,6 +18,7 @@ use ferrix_linux_abi::types::{
 
 use crate::arch;
 use crate::sched;
+use crate::sched::WaitQueue;
 use crate::syscall::attributes::int;
 use crate::syscall::credentials;
 use crate::syscall::process::Process;
@@ -425,6 +426,14 @@ pub(crate) fn nanos_of(seconds: i64, nanos: i64) -> Result<u64, Errno> {
 /// from `deliver::return_to_user`), or to return `EINTR` when one does. The
 /// absolute deadline is what a resume waits to, so the time left is exact
 /// however many times it is interrupted.
+///
+/// The sleep is a wait on no queue, not `sched::sleep_until`: a wait marks
+/// the task blocked before its last look at the kill and the signals, so a
+/// kill or signal that lands between the look above and the block finds the
+/// task blocked and wakes it. `sched::sleep_until` only blocked, and a wake
+/// of a task not yet blocked does nothing, so a kill landing there was lost
+/// and the sleep ran to its deadline: a `sleep 30` that `cgroup.kill` had
+/// ended would keep its cgroup populated for the rest of the thirty seconds.
 fn sleep_until(thread: &Thread, deadline: u64, rem: u64, width: TimeWidth) -> Result<usize, Errno> {
     let process = thread.process();
     loop {
@@ -455,7 +464,12 @@ fn sleep_until(thread: &Thread, deadline: u64, rem: u64, width: TimeWidth) -> Re
             });
             return Err(Errno::ERESTART_RESTARTBLOCK);
         }
-        sched::sleep_until(deadline);
+        let _ = WaitQueue::wait_on_any(
+            &[],
+            || process.is_terminated() || thread.signal_pending(),
+            deadline,
+            u64::MAX,
+        );
     }
 }
 
