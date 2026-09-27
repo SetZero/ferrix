@@ -1,5 +1,8 @@
 # Ferrix brand
 
+The shareable logo, colours and reusable copy are collected in the
+[press and brand kit](../../marketing/README.md).
+
 ## The mark
 
 `logo-mark.svg` is a cube of iron's crystal lattice (body-centred cubic,
@@ -40,13 +43,12 @@ JetBrains Mono on the web for code and terminal output.
 
 ## Voice
 
-- **Claims come with their proof.** Every headline names the gate that checks
-  it, or quotes that gate's log. Write "runs `rustc`", not "supports Rust
-  development".
-- **Describe how it is built plainly.** Keep the AI-agent process in the
-  project story and documentation, after explaining what Ferrix does.
-- **Numbers, not adjectives.** Write "850k lines of Rust, none vendored" rather
-  than "massive", and "11 days" rather than "incredibly fast".
+- **Claims come with their proof.** Put a screenshot, command or test close to
+  each technical claim. Write "runs `rustc`", not "supports Rust development".
+- **Describe how it is built plainly.** Explain the Claude sessions in the
+  project story, after explaining what Ferrix does.
+- **Show the evidence.** Name a working program, a test or a screenshot instead
+  of using adjectives such as "massive" or "incredible".
 - **Honest about limits.** It is not a daily driver. Say so before someone asks.
 
 Website hero:
@@ -54,12 +56,11 @@ Website hero:
 * Eyebrow: *Ferrix · an experimental Rust OS*
 * Headline: *Linux apps without Linux.*
 
-The README banner uses the same headline. The first paragraph explains it: tested Linux programs run unchanged
-on Ferrix's own Rust kernel. Disk, network, graphics and input drivers are
-separate processes that can restart after a crash. Name working programs as
-evidence; explain the human project owner's role in the "Who wrote it"
-section. Do not imply that every Linux program works or that Ferrix is ready
-for daily use.
+The README banner uses the same headline. Explain it nearby: tested Linux
+programs run unchanged on Ferrix's own Rust kernel. Name working programs as
+evidence, and say that drivers run in separate, restartable processes. Keep
+the project's working process in its own section. Never imply that every
+Linux program works or that Ferrix is ready for daily use.
 
 Avoid "self-hosting" on its own: stage 20 (full self-hosting) is still in
 progress. "Builds its own image" is what the gate proves.

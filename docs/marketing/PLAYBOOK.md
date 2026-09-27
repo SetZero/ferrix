@@ -3,6 +3,9 @@
 Updated 2026-09-27. Ferrix is experimental software. Lead with what a visitor
 can see and try, then explain how it was built.
 
+The reusable logo, colours and short descriptions are in the
+[press and brand kit](../../marketing/README.md).
+
 ## The story
 
 **Hook:** Linux apps without Linux.

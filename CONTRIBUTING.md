@@ -1,7 +1,7 @@
 # Contributing to Ferrix
 
-Thank you for looking. The most useful thing you can do is boot Ferrix, run
-something on it, and tell us what broke.
+Boot Ferrix, try something, and tell us where it breaks. A clear report is as
+useful as a patch.
 
 ## Report what you find
 
@@ -28,6 +28,6 @@ something on it, and tell us what broke.
 
 ## How Ferrix is made
 
-Most of Ferrix is written by a fleet of AI agents (Claude sessions) under a
-human product owner, who decides scope and priorities. Contributions from
-people go through the same gates, and are reviewed like anything else.
+Most code is written in Claude sessions. The project owner chooses what to
+build and reviews the results. Contributions from other people go through the
+same checks.
