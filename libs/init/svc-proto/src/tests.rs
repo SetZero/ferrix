@@ -130,6 +130,16 @@ fn bytes_that_are_not_a_record_are_refused() {
         Err(DecodeError::Short)
     );
     assert_eq!(Call::decode(&[3, 1, 0, 0, 0, 0xff]), Err(DecodeError::Utf8));
+    // Only the values emitted by the encoder may decode successfully.
+    assert_eq!(Call::decode(&[2, 126]), Err(DecodeError::Value(126)));
+    assert_eq!(
+        Call::decode(&[1, 2, 0, 0, 0, 0]),
+        Err(DecodeError::Value(2))
+    );
+    assert_eq!(
+        Call::decode(&[17, 0, 0, 0, 0, 0, 0, 0, 0, 2]),
+        Err(DecodeError::Value(2))
+    );
     assert_eq!(Call::decode(&[9, 0]), Err(DecodeError::Trailing));
     assert_eq!(Answer::decode(&[9]), Err(DecodeError::Tag(9)));
 }

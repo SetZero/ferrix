@@ -144,6 +144,8 @@ pub enum DecodeError {
     TooLong,
     /// A tag no record has.
     Tag(u8),
+    /// A boolean or optional-value marker other than 0 or 1.
+    Value(u8),
     /// A string that is not UTF-8.
     Utf8,
     /// Bytes after the last field.
@@ -234,6 +236,14 @@ impl Reader<'_> {
         self.take(1)?.first().copied().ok_or(DecodeError::Short)
     }
 
+    fn flag(&mut self) -> Result<bool, DecodeError> {
+        match self.u8()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            value => Err(DecodeError::Value(value)),
+        }
+    }
+
     fn u32(&mut self) -> Result<u32, DecodeError> {
         let bytes = self.take(4)?;
         let array: [u8; 4] = bytes.try_into().map_err(|_| DecodeError::Short)?;
@@ -259,16 +269,18 @@ impl Reader<'_> {
     }
 
     fn opt_str(&mut self) -> Result<Option<String>, DecodeError> {
-        match self.u8()? {
-            0 => Ok(None),
-            _ => self.str().map(Some),
+        if self.flag()? {
+            self.str().map(Some)
+        } else {
+            Ok(None)
         }
     }
 
     fn opt_u32(&mut self) -> Result<Option<u32>, DecodeError> {
-        match self.u8()? {
-            0 => Ok(None),
-            _ => self.u32().map(Some),
+        if self.flag()? {
+            self.u32().map(Some)
+        } else {
+            Ok(None)
         }
     }
 
@@ -383,9 +395,7 @@ impl Call {
         let mut r = Reader { rest: body };
         let call = match r.u8()? {
             1 => Call::Status(r.opt_str()?),
-            2 => Call::List {
-                failed: r.u8()? != 0,
-            },
+            2 => Call::List { failed: r.flag()? },
             3 => Call::Start(r.str()?),
             4 => Call::Stop(r.str()?),
             5 => Call::Restart(r.str()?),
@@ -406,7 +416,7 @@ impl Call {
             17 => Call::SetProperty {
                 unit: r.str()?,
                 assignments: r.strs()?,
-                persistent: r.u8()? != 0,
+                persistent: r.flag()?,
             },
             18 => {
                 let unit = r.str()?;
