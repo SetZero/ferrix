@@ -98,6 +98,7 @@ mod qemu;
 mod remote;
 mod restart;
 mod rustc;
+mod seam;
 mod seat;
 mod selfhost;
 mod serial;
@@ -191,6 +192,7 @@ COMMANDS:
     test-jobs     Boot an interactive shell on the console, type a session with jobs at it, and require the answers
     test-init     Boot /sbin/init as pid 1, type at the shell its getty gives, and require its session, a failing
                   service's restart budget, a service's cgroup, and a shutdown btrfs check finds clean
+    bench-seam    Boot a stock Linux kernel on the same QEMU machine and time a 4 KiB O_DIRECT read of the pattern disk at depths 1 and 32: the in-kernel reference for the seam boot line (scripts/fetch/fetch-linux-reference.sh first)
     test-restart  Boot a shell beside a device, kill -9 its driver twice, and require it started again each time (--boot gpu|input|net|blk|all; gpu if not given)
     test-sysfs    Boot a shell beside a card, input devices and a network adapter, read sysfs, and unbind and bind the card through it
     test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count
@@ -431,6 +433,7 @@ fn run() -> Result<()> {
         "test-jobs" => jobs::test_jobs(&args),
         "test-init" => init::test_init(&args),
         "test-restart" => restart::test_restart(&args),
+        "bench-seam" => seam::bench_seam(&args),
         "test-sysfs" => sysfs::test_sysfs(&args),
         "test-threads" => threads::test_threads(&args),
         "coverage" => coverage::run(&args),

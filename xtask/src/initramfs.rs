@@ -165,6 +165,25 @@ impl Newc {
     }
 }
 
+/// An archive of `directories` and then `files`, each a path, its
+/// permission bits and its bytes: for a guest that is not Ferrix, such as the
+/// stock Linux kernel the seam's measurement compares against
+/// (`crate::seam`).
+///
+/// # Errors
+///
+/// A name or a file too large for a newc entry.
+pub(crate) fn plain(directories: &[&str], files: &[(&str, u32, &[u8])]) -> Result<Vec<u8>> {
+    let mut archive = Newc::new();
+    for directory in directories {
+        archive.directory(directory, 0o755)?;
+    }
+    for (name, permissions, data) in files {
+        archive.file(name, *permissions, data)?;
+    }
+    archive.finish()
+}
+
 /// `archive` again, with each regular file's contents replaced where `change`
 /// returns new ones, and every other entry and header field as it was.
 ///

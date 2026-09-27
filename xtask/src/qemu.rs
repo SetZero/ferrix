@@ -245,7 +245,7 @@ const UNRESOLVED: &str = " unresolved";
 /// it offers stage 1 alone unless asked. 9.2's machine sets "nested" itself,
 /// after the global, so asking changes nothing there. Before 8.1 the property
 /// does not exist and QEMU refuses it.
-const VIRT_MACHINE: [&str; 4] = [
+pub(crate) const VIRT_MACHINE: [&str; 4] = [
     "-global",
     "arm-smmuv3.stage=2",
     "-machine",
@@ -1281,7 +1281,10 @@ fn judged_vnc(args: &Args, card: Option<&str>) -> Vec<String> {
 /// `kernel` is the ELF the boot runs, which a coverage run keeps beside its
 /// trace: gates build different kernels, and a trace means nothing read
 /// against another one's addresses ([`crate::coverage::plugin_for_boot`]).
-fn accelerator_arguments(accelerator: &str, kernel: Option<&Path>) -> Result<Vec<String>> {
+pub(crate) fn accelerator_arguments(
+    accelerator: &str,
+    kernel: Option<&Path>,
+) -> Result<Vec<String>> {
     let mut arguments = vec!["-accel".to_owned(), accelerator.to_owned()];
 
     if let Ok(plugin) = std::env::var("FERRIX_QEMU_PLUGIN") {
@@ -1326,7 +1329,7 @@ fn accelerator_arguments(accelerator: &str, kernel: Option<&Path>) -> Result<Vec
 /// coverage suite boots a processor with `RDRAND` and no `RDSEED` that way,
 /// which is the only one that takes `cpu::hardware_random`'s other
 /// instruction.
-fn x86_cpu(accelerator: &str) -> String {
+pub(crate) fn x86_cpu(accelerator: &str) -> String {
     if let Ok(model) = std::env::var("FERRIX_X86_CPU") {
         return model;
     }
@@ -1341,7 +1344,7 @@ fn x86_cpu(accelerator: &str) -> String {
 /// The PC QEMU emulates: `q35`, with `FERRIX_X86_MACHINE` added as
 /// `FERRIX_ARM_MACHINE` is added to `virt` -- `hpet=off` for a PC without an
 /// HPET, whose clock is then the TSC measured against the PIT.
-fn x86_machine() -> String {
+pub(crate) fn x86_machine() -> String {
     match std::env::var("FERRIX_X86_MACHINE") {
         Ok(extra) => format!("q35,{extra}"),
         Err(_) => "q35".to_owned(),
@@ -1356,7 +1359,7 @@ fn x86_machine() -> String {
 /// swaps the model, which is how `docs/certification/FINDINGS.md` F-32
 /// demonstrates that path on `max` without changing what every Arm test runs
 /// on. ARMv7-A's Cortex-A7 cannot have PAN at all: it is an ARMv8.1 feature.
-fn arm_cpu(arch: Arch) -> String {
+pub(crate) fn arm_cpu(arch: Arch) -> String {
     if let Ok(model) = std::env::var("FERRIX_ARM_CPU") {
         return model;
     }
@@ -2080,7 +2083,7 @@ const fn host_accelerator() -> Option<&'static str> {
 /// stays `tcg`, because reproducibility is what a boot test is for and `CI`
 /// has no hypervisor to offer; `auto` is for the machine in front of you,
 /// which usually does.
-fn accelerator(arch: Arch, binary: &Path, requested: Option<&str>) -> Result<String> {
+pub(crate) fn accelerator(arch: Arch, binary: &Path, requested: Option<&str>) -> Result<String> {
     let requested = requested.unwrap_or("tcg");
     if requested == "tcg" {
         return Ok("tcg".to_owned());
@@ -2129,7 +2132,7 @@ fn accelerator(arch: Arch, binary: &Path, requested: Option<&str>) -> Result<Str
 /// it has not happened, and WHPX is still the fast path for the display, so
 /// that is the default under WHPX. A count given with `--smp` is kept, with a
 /// warning, for whoever is looking into it.
-fn processors(accelerator: &str, args: &Args) -> u32 {
+pub(crate) fn processors(accelerator: &str, args: &Args) -> u32 {
     if accelerator != "whpx" {
         return args.smp;
     }
