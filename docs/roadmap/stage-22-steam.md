@@ -46,8 +46,13 @@ staged until now.
   registers and structures read at the program's width -- the split 64-bit
   offsets, `iovec`, `flock64`, `statfs64`, the time32 `timespec`s musl
   prefers, the sockets' `msghdr` -- and an `ioctl` outside the terminal's
-  is `ENOTTY`. Still to do: the `stat` family's i386 layouts, `socketcall`,
-  the calls that carry a `siginfo`. I4, glibc's i386 busybox, is next.
+  is `ENOTTY`. **I4** follows (about 5 of its 8 points): Debian's dynamic
+  i386 busybox runs on its own glibc and `ld-linux.so.2`, and a 32-bit Rust
+  `std::thread` program passes `test-threads`. glibc wanted `socketcall`,
+  the 32-bit `ugetrlimit` and the 12-byte robust list, found by tracing it
+  under `qemu-i386` before booting it. Still to do: what Steam finds
+  missing, which is I5 -- `modify_ldt` for 32-bit Wine, `ipc`, the calls
+  that carry a `siginfo`, more `ioctl`s.
 * **glibc's place, taken.** The dynamic linking stage's third part, glibc's
   names, with Steam as its stress test: `ld-linux` and `libc.so.6` requested
   by name, `dlopen` from the client and from every Steam runtime library,
