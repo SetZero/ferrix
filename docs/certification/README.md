@@ -27,7 +27,7 @@ specific, measured, and mostly documents rather than code.
 * [TODO.md](TODO.md) — start here to re-audit: what to re-measure, and what not to write
 * [SAFETY-MANUAL.md](SAFETY-MANUAL.md) — the out-of-context argument: assumed requirements, safe state, eleven assumptions of use, element failure analysis
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
-* [FINDINGS.md](FINDINGS.md) — the audit register, 15 open findings and 31 closed
+* [FINDINGS.md](FINDINGS.md) — the audit register, 14 open findings and 32 closed
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
 * [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) — AVA_VAN.4 over the seven threats; six residual vulnerabilities
 * [SPECULATION.md](SPECULATION.md) — the side-channel defences, per architecture, behind one build switch, and what they cost
@@ -82,6 +82,7 @@ boundary.
 | External crates, host-side | 21 |
 | Upward boundary references | **0**, from 94 at the start of the work (29 and 62 before the gate could resolve module paths) |
 | `unsafe` blocks, all documented | 800 |
+| `unsafe` sites in the item traced to the requirement they serve | **663** of 663, under 14 obligations; a new untraced one fails the build (F-26) |
 | Directly recursive functions in the item | **0**, of 2,173 |
 | Allocations in the item that stop the machine when memory runs out | **0** in its source; 73 at bring-up, by design; 13 in the load `process_create` and `process_start` run, recorded, and the load's callees beyond those (F-23, MEMORY-AND-TIMING.md §1.3) |
 | Job quotas the ST claims (FRU_RSA.1) that are built | **3** of 3, as refined: a job's memory -- its programs' frames and page tables and the kernel heap the Linux personality holds for them -- native objects and tasks, each refused at its limit with a sibling going on, and a processor shared by job weight (one task alone kept 50.0% against eight) (F-35, F-37 closed) |

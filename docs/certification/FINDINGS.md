@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-15 findings are open and 31 are closed, of 46. F-41, a page `mprotect` made writable after a `fork` writing into the other process's copy, was found and closed on 2026-09-27. F-10 was re-measured on 2026-09-27 over the checks written for it module by module: 89.5% of the certified item's statements on x86-64, 90.2% on AArch64 and 84.8% on ARMv7-A, with 77, 146 and 130 still needing a test and every other unreached statement argued or put down to absent hardware. F-38, F-39 and F-40 were found by other work on 2026-09-26 and recorded by the certification review that work now goes through, and all three closed the same day with their fixes: F-39, a native process any user made running as root; F-38, a device model writing a dead driver's frames after they were given back; and F-40, a delegated job lifting its own limits, closed by a job right of its own for setting limits. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
+14 findings are open and 32 are closed, of 46. F-26 closed on 2026-09-27 when every unsafe site in the item was traced to one of fourteen obligations, each tied to the requirement or hazard it serves, and the gate began refusing an untraced one. F-41, a page `mprotect` made writable after a `fork` writing into the other process's copy, was found and closed on 2026-09-27. F-10 was re-measured on 2026-09-27 over the checks written for it module by module: 89.5% of the certified item's statements on x86-64, 90.2% on AArch64 and 84.8% on ARMv7-A, with 77, 146 and 130 still needing a test and every other unreached statement argued or put down to absent hardware. F-38, F-39 and F-40 were found by other work on 2026-09-26 and recorded by the certification review that work now goes through, and all three closed the same day with their fixes: F-39, a native process any user made running as root; F-38, a device model writing a dead driver's frames after they were given back; and F-40, a delegated job lifting its own limits, closed by a job right of its own for setting limits. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 2 | 5 | 7 | 0 | 1 |
+| Open | 2 | 5 | 6 | 0 | 1 |
 
 Blocking: F-27 and F-28 — independent assessment and a quality management
 system. Both need an organisation; neither is a defect in the code.
@@ -1316,10 +1316,36 @@ the script's docstring says so, along with the two kinds of recursion it cannot
 see: mutual, and through a function pointer or trait object.
 
 ### F-26 — `unsafe` is documented but not traced
-**Moderate.** 662 blocks, every one with a `SAFETY:` comment, one operation
-each, counted per crate by `check-unsafe-audit.py`. Best-in-class as hygiene.
-For an assurance argument each block in the item also needs to trace to the
-requirement or hazard that justifies it.
+**Closed 2026-09-27** by W-16.
+
+*Was:* **Moderate.** 662 blocks, every one with a `SAFETY:` comment, one
+operation each, counted per crate by `check-unsafe-audit.py`. Best-in-class as
+hygiene. For an assurance argument each block in the item also needs to trace
+to the requirement or hazard that justifies it.
+
+*Now:* each of the item's 663 unsafe sites -- 523 blocks, 20 `unsafe impl`s
+and 120 `unsafe fn`s, in the `core` and `item` rings, self-tests included --
+opens its `SAFETY:` comment or its `# Safety` section with an obligation id,
+`// SAFETY: (TRANSLATE) ...`. The ids are a closed set of fourteen, derived by
+sorting what the sites do, registered in `scripts/data/safety-requirements.json`
+with the ASR, FM or AoU each serves and the code that argues it, and tabled in
+[SAFETY-MANUAL.md](SAFETY-MANUAL.md) §2. Measured on the closing tree: 123
+`CONTEXT`, 118 `SYSREG`, 87 `SHARED`, 66 `ENTRY`, 60 `TRANSLATE`, 55
+`DEVICE`, 29 `FIRMWARE`, 29 `PROTECT`, 28 `KMEM`, 24 `FRAME`, 22 `PROBE`, 11
+`DMA`, 7 `BOOT-DATA`, 4 `USER-COPY`.
+
+*What says so in the build:* `check-unsafe-audit.py` refuses an id the register
+does not define anywhere in the tree, and holds the item's untagged sites to
+`scripts/data/unsafe-trace-baseline.json`, which is empty -- so a new unsafe
+site in the item without an id fails `cargo xtask check`.
+`check-safety-requirements.py` holds the manual's table and the register to
+each other and resolves every obligation's evidence.
+
+*What it does not do:* an id says which requirement a site's soundness serves,
+not that the site is sound; the prose after it is still the argument and still
+read by a person. And the classification is itself a judgement a reviewer can
+disagree with -- the rule it follows (a call is filed under what *it* does, not
+under the primitive it calls) is IMPLEMENTATION.md W-16's.
 
 ---
 

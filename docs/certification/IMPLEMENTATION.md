@@ -1188,6 +1188,11 @@ would reclaim them. The argued kinds in FINDINGS.md F-37 stay as argued.
 
 ## W-16 — Trace every `unsafe` in the item to what it serves (F-26)
 
+**Done 2026-09-27.** F-26 is closed: all 663 sites carry an id and the
+baseline is empty. What follows is the design, and what to know before
+adding an unsafe site to the item: give it the id of what its own operation
+discharges, and if none of the fourteen fits, look at the site first.
+
 Every unsafe site already says why it is sound. What an assessor cannot do
 with that prose is go the other way: from ASR-1 to every block whose soundness
 ASR-1 rests on. This order gives each unsafe block, `unsafe impl` and `unsafe
@@ -1206,8 +1211,10 @@ obligations, which are the table in
 `scripts/data/safety-requirements.json`: `TRANSLATE`, `PROTECT`,
 `USER-COPY`, `FRAME`, `DMA`, `DEVICE`, `CONTEXT`, `ENTRY`, `SYSREG`,
 `FIRMWARE`, `SHARED`, `KMEM`, `BOOT-DATA`, `PROBE`. Each names the ASR, FM or
-AoU it serves and the code that argues it; the survey's counts per id are the
-gate's output below.
+AoU it serves and the code that argues it. As tagged: 123 `CONTEXT`, 118
+`SYSREG`, 87 `SHARED`, 66 `ENTRY`, 60 `TRANSLATE`, 55 `DEVICE`, 29
+`FIRMWARE`, 29 `PROTECT`, 28 `KMEM`, 24 `FRAME`, 22 `PROBE`, 11 `DMA`, 7
+`BOOT-DATA`, 4 `USER-COPY` -- the gate prints the same table on every run.
 
 Two candidates from the brief did not survive the survey. *Inline assembly
 per architecture* is not a reason, it is a means: the item's `asm!` blocks
@@ -1270,7 +1277,7 @@ lines that are not comments is empty.
 
 **Done:** order zero, W-3, W-2, W-6, W-9, W-4 (with F-08), W-1, W-5 (with
 F-09 and F-33), W-7's measurement and ratchet, W-11, W-12 (F-23), W-14
-(F-36), W-13 (F-35) and W-15 (F-37).
+(F-36), W-13 (F-35), W-15 (F-37) and W-16 (F-26).
 **Remaining:** F-10's tests, by module from COVERAGE-WORKLIST.md → W-8
 (largest), with W-10 in parallel whenever someone can answer step 1.
 
