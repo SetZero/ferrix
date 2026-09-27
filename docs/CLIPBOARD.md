@@ -346,7 +346,7 @@ nothing from the kernel and are pure host-tested logic.
 | 6 | the agent | `userland/compositor/vdagent` | landed |
 | 7 | paste and copy in the terminal | `userland/compositor/term` | to do |
 | 8a | `--clipboard`: the device on the bus | `xtask` | landed |
-| 8b | starting the agent (landed with 6), and `test-clipboard` (to do) | `xtask` | half |
+| 8b | starting the agent, and `test-clipboard` | `xtask` | landed |
 
 **Where it stands, 2026-09-27 (ferrix-e4).** The agent landed, and with it
 the clipboard works both ways through QEMU 10.2.1's `qemu-vdagent` and its
@@ -375,7 +375,15 @@ does not. `clip --primary paste` with nothing selected waits its 20 seconds
 and says so -- the host offers no primary selection -- which is the wait
 `test-compositor`'s side-by-side `clip copy` and `clip paste` rely on.
 
-Left: `test-clipboard` (8b) and the terminal's paste (7).
+`cargo xtask test-clipboard` is the gate (§9), on x86-64 and AArch64: xtask
+listens on the port's far end as a Unix socket and speaks vdagent itself.
+Its host text is three chunks long, which found one more thing -- the agent
+kept only the bytes after the last chunk it had fed, not after the last
+whole message, so a paste longer than one read lost its start and stopped
+the agent; without the fix the gate fails with the agent's "the host's
+framing: TooLong".
+
+Left: the terminal's paste (7).
 
 Landings 1 to 5 and 8a are on `main`: the guest now has a driver that opens
 the port and offers it at `/tmp/vport`, and what is left is the two programs
