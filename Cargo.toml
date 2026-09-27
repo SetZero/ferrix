@@ -69,6 +69,7 @@ members = [
     "user/gpu",
     "user/input",
     "user/devmgr",
+    "user/vport",
 
     # Host-side build and test driver (`cargo xtask ...`).
     "xtask",

@@ -27,19 +27,19 @@ use crate::arch;
 #[cfg(target_arch = "x86_64")]
 mod nr {
     pub(super) use ferrix_linux_abi::nr::x86_64::{
-        ACCEPT4, BIND, CLOSE, FCNTL, LISTEN, READ, SOCKET, UNLINK, WRITE,
+        ACCEPT4, BIND, CLOCK_GETTIME, CLOSE, FCNTL, LISTEN, READ, SOCKET, UNLINK, WRITE,
     };
 }
 #[cfg(target_arch = "aarch64")]
 mod nr {
     pub(super) use ferrix_linux_abi::nr::aarch64::{
-        ACCEPT4, BIND, CLOSE, FCNTL, LISTEN, READ, SOCKET, UNLINKAT, WRITE,
+        ACCEPT4, BIND, CLOCK_GETTIME, CLOSE, FCNTL, LISTEN, READ, SOCKET, UNLINKAT, WRITE,
     };
 }
 #[cfg(target_arch = "arm")]
 mod nr {
     pub(super) use ferrix_linux_abi::nr::arm::{
-        ACCEPT4, BIND, CLOSE, FCNTL, LISTEN, READ, SOCKET, UNLINKAT, WRITE,
+        ACCEPT4, BIND, CLOCK_GETTIME, CLOSE, FCNTL, LISTEN, READ, SOCKET, UNLINKAT, WRITE,
     };
 }
 
@@ -62,6 +62,51 @@ pub const SOCKADDR_UN_BYTES: usize = 110;
 
 /// The longest path a Unix socket address carries, with room for its NUL.
 pub const PATH_MAX: usize = SOCKADDR_UN_BYTES - 2 - 1;
+
+/// `CLOCK_MONOTONIC`.
+pub const CLOCK_MONOTONIC: usize = 1;
+
+/// The monotonic clock, in nanoseconds, which is what
+/// [`crate::native::handle::Deadline::At`] is measured in.
+///
+/// A native program has no clock call of its own -- the native ABI has no
+/// notion of time -- and this is the other half of §5's point: it does not
+/// need one, because Linux's is a number away.
+///
+/// # Errors
+///
+/// Whatever the kernel answers.
+pub fn monotonic_nanos() -> Result<u64, Errno> {
+    // `struct timespec` is two words on every architecture this runs on.
+    let mut time = [0_usize; 2];
+    let at = time.as_mut_ptr().addr();
+    // SAFETY: `time` is borrowed exclusively for the call and is exactly the
+    // two words `clock_gettime` writes.
+    let _ = decode(unsafe { arch::linux(nr::CLOCK_GETTIME, [CLOCK_MONOTONIC, at, 0, 0, 0, 0]) })?;
+    let seconds = time[0] as u64;
+    let nanos = time[1] as u64;
+    Ok(seconds.saturating_mul(1_000_000_000).saturating_add(nanos))
+}
+
+/// A `sockaddr_un` for the abstract name `name`, and its length.
+///
+/// An abstract name is a `sun_path` that starts with a NUL and is in no
+/// filesystem (`kernel/src/fs/sockname.rs`), so there is no directory to
+/// make, no permission to get right and no stale file to unlink -- which is
+/// what a socket between two programs of the same system wants.
+#[must_use]
+pub fn sockaddr_un_abstract(name: &[u8]) -> Option<([u8; SOCKADDR_UN_BYTES], usize)> {
+    if name.is_empty() || name.len() > PATH_MAX {
+        return None;
+    }
+    let mut address = [0_u8; SOCKADDR_UN_BYTES];
+    let family = (AF_UNIX as u16).to_le_bytes();
+    *address.first_mut()? = family[0];
+    *address.get_mut(1)? = family[1];
+    // `sun_path[0]` stays NUL: that is what makes the name abstract.
+    address.get_mut(3..3 + name.len())?.copy_from_slice(name);
+    Some((address, 2 + 1 + name.len()))
+}
 
 /// A `sockaddr_un` for `path`, and its length, or `None` if the path is too
 /// long to be one.
