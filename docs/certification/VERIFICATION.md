@@ -283,6 +283,21 @@ an argument for the old text is no evidence for the new. The figures stay as
 measured until the next run of the suite, which takes in the new code and
 holds it to the floor.
 
+**A line can stop being a statement.** The denominator is the image's
+`is_stmt` rows, so a line whose function the compiler starts inlining, or
+drops, can lose every row: it leaves both counts, neither reached nor
+unreached. `gen-coverage-justification.py` then says a line an argument names
+is "not in the residual -- reached now, or moved", and cannot yet tell that
+case from being reached. On 11532464, x86-64's re-measure, `trap.rs` 545 and
+`arch/x86_64/trap.rs` 631 and 662 left the image this way -- `report_trap`
+inlined into `report`, inside `fatal` -- and were not reached; that commit's
+message says they read reached, which is wrong. Its other trims were reached,
+each found in the traces by address: `arch/x86_64/trap.rs` 615 in
+`user_fault`, `iommu.rs` 724 in `Domain::pin`, and `console/output.rs` 251,
+276 and 285-286 in `test-restart`, where a writer waited for room in the
+transmit ring and so refuted the argument that an emulated port never fills
+it.
+
 **What this supports.** DO-178C table A-7 objective 5 at DAL C asks for
 statement coverage. This is that measurement, for ring-0 code, on every
 architecture and both profiles in the reference configuration, without
