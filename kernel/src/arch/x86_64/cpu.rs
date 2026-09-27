@@ -863,3 +863,22 @@ pub(crate) fn hardware_random() -> Option<u64> {
     }
     None
 }
+
+/// Order this processor's accesses to memory a device reads or writes by
+/// DMA against each other, as the device observes them. F-44.
+///
+/// The compiler's reordering is all there is to stop. x86-64 keeps stores in
+/// order with stores and loads with loads (TSO), device DMA snoops the caches,
+/// and a virtqueue needs exactly those two: descriptors before the index that
+/// publishes them, an index read before the entry it counts. A write to a
+/// register through an uncached mapping is ordered after earlier stores too.
+/// Linux's `dma_wmb` and `dma_rmb` are the same compiler barrier here.
+///
+/// **It does not order an earlier store before a later load**, which TSO lets
+/// pass. The item's queue needs no such order: it rings the doorbell after
+/// every publish and never reads `used.flags` or `avail_event` after one.
+/// Notification suppression or `VIRTIO_F_EVENT_IDX` in the item would need a
+/// full fence there, as Linux's `virtio_mb` is.
+pub(crate) fn dma_barrier() {
+    core::sync::atomic::compiler_fence(Ordering::SeqCst);
+}

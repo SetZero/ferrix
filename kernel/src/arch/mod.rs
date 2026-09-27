@@ -196,6 +196,14 @@ pub(crate) use armv7a::{USER_RMAP_PROGRAM, flush_tlb_page, send_ipi_to};
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::{USER_RMAP_PROGRAM, flush_tlb_page, send_ipi_to};
 
+// Ordering memory a device reaches by DMA, and a register write after it (F-44).
+#[cfg(target_arch = "aarch64")]
+pub(crate) use aarch64::dma_barrier;
+#[cfg(target_arch = "arm")]
+pub(crate) use armv7a::dma_barrier;
+#[cfg(target_arch = "x86_64")]
+pub(crate) use x86_64::dma_barrier;
+
 // Deciding and applying the side-channel defences, on the boot processor.
 #[cfg(target_arch = "aarch64")]
 pub(crate) use aarch64::init_speculation;

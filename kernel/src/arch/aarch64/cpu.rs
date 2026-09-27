@@ -42,6 +42,25 @@ pub(crate) fn dsb_ishst() {
     }
 }
 
+/// Order this processor's accesses to memory a device reads or writes by
+/// DMA: every access before it against every access after it, as the device
+/// observes them, including a following write to the device's own registers.
+///
+/// `dmb osh`: the outer-shareable domain is where a DMA master sits, and a
+/// device is not a processor of the inner one, so `dmb ish` -- what
+/// `fence(SeqCst)` compiles to -- does not order what it sees. Both
+/// directions, because a virtqueue needs both: descriptors before the index
+/// that publishes them, and an index read before the entry it counts. Linux's
+/// `dma_wmb` and `dma_rmb` are this barrier's two halves (`dmb oshst`,
+/// `dmb oshld`), and its `__iowmb` puts one before a register write for the
+/// same reason as the doorbell after a publish. F-44.
+pub(crate) fn dma_barrier() {
+    // SAFETY: (SYSREG) a barrier has no effect beyond ordering.
+    unsafe {
+        asm!("dmb osh", options(nostack, preserves_flags));
+    }
+}
+
 /// Mask every interrupt on this CPU: debug, `SError`, `IRQ` and `FIQ`.
 pub(crate) fn disable_interrupts() {
     // SAFETY: (SYSREG) `daifset` only sets mask bits in `PSTATE`.

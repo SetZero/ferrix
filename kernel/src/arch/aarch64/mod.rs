@@ -3,6 +3,7 @@
 mod check;
 pub(crate) mod console;
 mod cpu;
+pub(crate) use cpu::dma_barrier;
 mod gic;
 mod signal;
 mod smp;

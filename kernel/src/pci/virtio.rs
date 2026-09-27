@@ -258,9 +258,9 @@ struct Rings {
 // alone and held until after the device has been reset: at least
 // `Layout::total_size` bytes (`drive` checks the layout fits a page), aligned to
 // a page and so to 16 bytes, and shared with nothing but the device. Each `u16`
-// is one aligned access, as the trait asks of the ring's indices. The barrier
-// is every access itself: each is volatile, which the compiler may neither defer
-// nor reorder, so what is issued before any point reaches the device first.
+// is one aligned access, as the trait asks of the ring's indices. `barrier` is
+// `arch::dma_barrier`, which orders the accesses as the device sees them: a
+// volatile access only stops the compiler, and an Arm core reorders (F-44).
 unsafe impl QueueMemory for Rings {
     fn read_u8(&self, offset: usize) -> u8 {
         // SAFETY: (DMA) `offset` is below `Layout::total_size`, which fits in the
@@ -289,7 +289,20 @@ unsafe impl QueueMemory for Rings {
         };
     }
 
-    fn barrier(&self) {}
+    fn barrier(&self) {
+        arch::dma_barrier();
+    }
+}
+
+/// Tell the device its queue has something new.
+///
+/// The index the chain was published under is a store to memory and the
+/// doorbell a store to a register, which an Arm core does not keep in order
+/// unless told: without the barrier the device can look before it can see
+/// (F-44).
+fn ring_doorbell(notify: &Block, doorbell: u64) {
+    arch::dma_barrier();
+    notify.registers.write16(doorbell, 0);
 }
 
 /// Interrupts the check's vector has delivered.
@@ -642,7 +655,7 @@ fn drive(
         ));
     }
     let before = DELIVERED.load(Ordering::SeqCst);
-    notify.registers.write16(doorbell, 0);
+    ring_doorbell(notify, doorbell);
 
     let deadline = timer::now_nanos().saturating_add(DEADLINE_NANOS);
     let completion = loop {
@@ -747,7 +760,7 @@ fn probe_out_of_domain(
     {
         return Ok(Err("no descriptor was free for the probe"));
     }
-    notify.registers.write16(doorbell, 0);
+    ring_doorbell(notify, doorbell);
     let deadline = timer::now_nanos().saturating_add(DEADLINE_NANOS);
     let mut completed = None;
     loop {

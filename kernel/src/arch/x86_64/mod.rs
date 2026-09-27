@@ -4,6 +4,7 @@ mod apic;
 mod clock;
 pub(crate) mod console;
 mod cpu;
+pub(crate) use cpu::dma_barrier;
 mod gdt;
 mod msi;
 mod paranoid;

@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-15 findings are open and 34 are closed, of 49. F-45, the virtqueue indices the device shares read and written a byte at a time, was found by the stage 10 seam investigation and closed on 2026-09-27. F-43, O.WXN and ASR-2 claiming W^X for every mapping when a program may map its own pages writable and executable, was found on 2026-09-27 and waits on the customer's choice between enforcing it and narrowing the claim. F-42, a channel write refused for memory closing the handles it carried, was found by the F-10 coverage work and closed on 2026-09-27. F-13 was measured on 2026-09-27 and stays open: 37.5%, 32.6% and 28.7% of the item's object-code decisions, guards left out, took both ways on x86-64, AArch64 and ARMv7-A, and 50.2%, 48.6% and 48.8% counted by source line. F-26 closed on 2026-09-27 when every unsafe site in the item was traced to one of fourteen obligations, each tied to the requirement or hazard it serves, and the gate began refusing an untraced one. F-41, a page `mprotect` made writable after a `fork` writing into the other process's copy, was found and closed on 2026-09-27. F-10 was re-measured on 2026-09-27 over the checks written for it module by module: 89.5% of the certified item's statements on x86-64, 90.2% on AArch64 and 84.8% on ARMv7-A, with 77, 146 and 130 still needing a test and every other unreached statement argued or put down to absent hardware. F-38, F-39 and F-40 were found by other work on 2026-09-26 and recorded by the certification review that work now goes through, and all three closed the same day with their fixes: F-39, a native process any user made running as root; F-38, a device model writing a dead driver's frames after they were given back; and F-40, a delegated job lifting its own limits, closed by a job right of its own for setting limits. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
+15 findings are open and 35 are closed, of 50. F-44, the barrier of the virtqueue the item drives left empty, so that an Arm core could let the device see an index before what it publishes, was found and closed on 2026-09-27, on an argument no emulator can test. F-45, the virtqueue indices the device shares read and written a byte at a time, was found by the stage 10 seam investigation and closed on 2026-09-27. F-43, O.WXN and ASR-2 claiming W^X for every mapping when a program may map its own pages writable and executable, was found on 2026-09-27 and waits on the customer's choice between enforcing it and narrowing the claim. F-42, a channel write refused for memory closing the handles it carried, was found by the F-10 coverage work and closed on 2026-09-27. F-13 was measured on 2026-09-27 and stays open: 37.5%, 32.6% and 28.7% of the item's object-code decisions, guards left out, took both ways on x86-64, AArch64 and ARMv7-A, and 50.2%, 48.6% and 48.8% counted by source line. F-26 closed on 2026-09-27 when every unsafe site in the item was traced to one of fourteen obligations, each tied to the requirement or hazard it serves, and the gate began refusing an untraced one. F-41, a page `mprotect` made writable after a `fork` writing into the other process's copy, was found and closed on 2026-09-27. F-10 was re-measured on 2026-09-27 over the checks written for it module by module: 89.5% of the certified item's statements on x86-64, 90.2% on AArch64 and 84.8% on ARMv7-A, with 77, 146 and 130 still needing a test and every other unreached statement argued or put down to absent hardware. F-38, F-39 and F-40 were found by other work on 2026-09-26 and recorded by the certification review that work now goes through, and all three closed the same day with their fixes: F-39, a native process any user made running as root; F-38, a device model writing a dead driver's frames after they were given back; and F-40, a delegated job lifting its own limits, closed by a job right of its own for setting limits. F-37 closed when every kind of kernel heap a program can make and keep through the Linux personality was charged to its job against its memory limit -- thirteen kinds, each refused at the limit by a boot check while a sibling goes on -- and five leaks and missing checks the same audit found were fixed (2026-09-26). F-35 closed when the job quotas were built -- a job's tasks, its user memory, its native objects and its share of a processor, each refused at its limit by a boot check while a sibling job goes on -- and `FRU_RSA.1` was refined to exactly those; F-37 was opened the same day for what they leave out, the kernel heap a job drives through the Linux personality (2026-09-26). F-36, a user page table freed before the shootdown that another processor's walk caches still needed, was found and closed the same day, and F-23's gate was found blind to a load file the item's own `process_create` runs, and was made to read it (2026-09-26). F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -1609,6 +1609,55 @@ disagree with -- the rule it follows (a call is filed under what *it* does, not
 under the primitive it calls) is IMPLEMENTATION.md W-16's.
 
 ---
+
+### F-44 — the item's virtqueue barrier was empty
+**Found and closed 2026-09-27** (found by ferrix-55b while fixing F-45, and
+raised by the certification review).
+
+*Was:* **Minor.** `QueueMemory::barrier` must order every access before it
+against every one after it as the device sees them, and says an empty one
+leaves the ring subtly wrong. The item's own, `Rings` in `pci/virtio.rs`
+(the rings of stage 10's translated-domain check), was empty, on the
+argument that each access is volatile. That stops the compiler; an Arm core
+still reorders, so a device could read `avail.idx` before the descriptor it
+published, or the queue read a used entry before the index that counts it.
+The doorbell after a publish had the same gap: the index is a store to
+memory and the doorbell a store to a register, which Arm does not keep in
+order without a barrier either.
+
+*Now:* `arch::dma_barrier` is `dmb osh` on AArch64 and ARMv7-A -- the
+outer-shareable domain, where a DMA master sits, both directions, Linux's
+`dma_wmb` and `dma_rmb` together -- and a compiler fence on x86-64, whose
+stores stay in order with stores and loads with loads and whose DMA snoops
+the caches, as Linux's `dma_wmb` and `dma_rmb` are there. That fence does
+not order an earlier store before a later load, which TSO lets pass, so on
+x86-64 the trait's "every access before it against every one after it" is
+met only for what the item's queue does: it rings the doorbell after every
+publish and never reads `used.flags` or `avail_event` after one.
+Notification suppression or `VIRTIO_F_EVENT_IDX` in the item would need a
+full fence there, as Linux's `virtio_mb` is. `Rings::barrier`
+is that, and the check rings every doorbell through `ring_doorbell`, which
+puts one before the register write.
+
+*The ring-3 drivers' barrier,* `fence(SeqCst)`, is `dmb ish` on Arm. That
+is enough toward a virtio device a hypervisor emulates, which is another
+processor's thread in the inner-shareable domain -- Linux's virtio uses the
+same "weak barriers" unless a device offers `VIRTIO_F_ORDER_PLATFORM` --
+and every device those drivers serve today is one. A virtio device in
+hardware, or one offering that feature, would need `dmb osh` through the
+native runtime; `docs/BACKLOG.md` keeps the row.
+
+*Checked by the build, as far as a build can:* no emulator reorders the way
+an Arm core does, so no boot gate can fail without the barrier, and this
+closes on the argument. What the build holds: `Rings::barrier` calls
+`arch::dma_barrier`; `the_driver_publishes_descriptors_before_the_available_index`
+in `libs/drivers/virtio` holds that the queue calls its barrier between the
+descriptors and the index; and the release kernels put a `dmb osh` there
+(the commit that closed it shows where). A run on real Arm is left for when
+the hardware may be used, and only the Pixel 7's crosvm can give it: the DK1
+has no PCI and no virtio device, so the stage 10 check cannot run there.
+That run shows AArch64 only; ARMv7-A's `dmb osh` stays on the argument and
+the disassembly.
 
 ### F-45 — a virtqueue's shared indices were read and written a byte at a time
 **Found and closed 2026-09-27** (found by the stage 10 seam investigation,

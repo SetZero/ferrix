@@ -86,8 +86,8 @@
     },
     {
       "file": "kernel/src/arch/armv7a/cpu.rs",
-      "max_lines": 102,
-      "reason": "CPU primitives, one instruction or one short sequence each. Every ARMv7-A system register is a coprocessor 15 transfer, which Rust has no syntax for -- VBAR, SCTLR, TTBCR, TTBR0 and the generic timer's four registers -- and so are the barriers, the TLB maintenance, the cache maintenance (by line to the point of coherency for devices, and ICIALLUIS and BPIALLIS for code a user page is mapped with), cpsid and cpsie, wfi, and the PSCI call, made with whichever of hvc or smc the device tree names. 102 rather than 100 for the code sync, after the three CTR reads became one."
+      "max_lines": 103,
+      "reason": "CPU primitives, one instruction or one short sequence each. Every ARMv7-A system register is a coprocessor 15 transfer, which Rust has no syntax for -- VBAR, SCTLR, TTBCR, TTBR0 and the generic timer's four registers -- and so are the barriers, the TLB maintenance, the cache maintenance (by line to the point of coherency for devices, and ICIALLUIS and BPIALLIS for code a user page is mapped with), cpsid and cpsie, wfi, and the PSCI call, made with whichever of hvc or smc the device tree names. 102 rather than 100 for the code sync, after the three CTR reads became one; 103 for `dma_barrier`'s `dmb osh`, which orders what a DMA master sees and which `fence` does not emit (F-44)."
     },
     {
       "file": "kernel/src/arch/armv7a/smp.rs",

@@ -87,7 +87,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
 | `arch/x86_64/syscall.rs` | `core` | 6 | - | - | 6 | 543, 590, 593-594, 596, 603 |
-| `arch/x86_64/mod.rs` | `core` | 3 | - | - | 3 | 1209-1210, 1214 |
+| `arch/x86_64/mod.rs` | `core` | 3 | - | - | 3 | 1210-1211, 1215 |
 | `arch/x86_64/switch.rs` | `core` | 2 | - | - | 2 | 411, 420 |
 
 ---
@@ -179,7 +179,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `arch/armv7a/mod.rs` | `core` | - | - | 1 | 1 | 1291 |
+| `arch/armv7a/mod.rs` | `core` | - | - | 1 | 1 | 1292 |
 
 ---
 
