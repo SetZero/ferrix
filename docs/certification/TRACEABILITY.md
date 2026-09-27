@@ -15,16 +15,16 @@ Coverage evidence recording the checks: none yet.
 | Level | Written | Named by a check | Unverified, in the baseline |
 |---|---:|---:|---:|
 | High (`H.*`) | 74 | 31 | 43 |
-| Low (`L.*`) | 314 | 210 | 104 |
+| Low (`L.*`) | 316 | 212 | 104 |
 
-490 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
+492 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
 
 | Product functions | Count |
 |---|---:|
-| Named by a low-level requirement | 490 |
+| Named by a low-level requirement | 492 |
 | Accessors, covered by the requirement they serve | 657 |
 | Check code in a product file | 14 |
-| Named by none | 1184 |
+| Named by none | 1182 |
 
 Subsystems whose low-level requirements are complete: `early`, `iommu`, `mm`, `object`, `user`, `vmap`.
 
@@ -363,6 +363,13 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `L.object.101` | Among the live processes of the full job and the jobs beneath it, kill_within shall choose the one with the most resident pages, and never pid 1. | With three processes of 1, 4 and 2 MiB resident in the full job, the one of 4 MiB is killed; with pid 1 the largest, the next largest is. | H.QUOTA.6 | `object::oom::kill_within`, `object::oom::at_or_above` | *baselined* | — | — | — |
 | `L.object.102` | A fault that failed for want of memory with no limit full, or with nothing killable in the full job, shall fail as it would without the OOM kill and kill nothing. | A fault refused with every limit unset kills 0 processes and ends its program with SIGSEGV; a system call's fault there answers EFAULT. | H.QUOTA.6 | `object::oom::out_of_memory`, `object::oom::fault`, `object::oom::kill_within` | *baselined* | — | — | — |
 | `L.object.103` | A victim that has ended and closed everything, whose address space no live process shares, shall have that space emptied at once rather than at its parent's wait, and a fault that finds a victim still ending shall wait and retry, killing no second process. | Two faults at one full limit while the first victim is ending kill 1 process, and the job's memory use falls by the victim's resident pages before its parent waits. | H.QUOTA.6 | `object::oom::kill_within`, `object::oom::shared_with_the_living` | *baselined* | — | — | — |
+
+### Decisions
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.sched.1` | While any task waits on a processor's queue, CpuQueue::arm_timer shall arm the next decision no more than one configured slice away, however long a request the running task holds. | With an entity queued that is not eligible and the running one having yielded 600 times, so that its remaining request exceeds 100 slices, the queue's next decision is at most one slice away; with nothing queued there is none. | H.SCHED.2 | `sched::queue::CpuQueue::arm_timer` | `libs/kernel/sched/src/tests.rs::something_waiting_is_decided_on_within_a_slice` | host test | host test | host test |
+| `L.sched.2` | A yield by the only task on a processor's queue shall leave its request unchanged. | After 600 yields with nothing else queued, the running entity's remaining slice is what it was before the first. | H.SCHED.2 | `sched::yield_now` | `libs/kernel/sched/src/tests.rs::yielding_alone_leaves_the_request_as_it_was` | host test | host test | host test |
 
 ### Discovery
 
@@ -772,5 +779,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `libs/kernel/objects/src/tests.rs::a_slot_whose_generations_run_out_is_retired_rather_than_wrapped` | host | H.OBJ.15 |
 | `libs/kernel/objects/src/tests.rs::duplicate_needs_the_right_and_cannot_add_rights` | host | H.OBJ.3 |
 | `libs/kernel/objects/src/tests.rs::replace_closes_the_original_and_cannot_add_rights` | host | H.OBJ.14 |
+| `libs/kernel/sched/src/tests.rs::something_waiting_is_decided_on_within_a_slice` | host | L.sched.1 |
+| `libs/kernel/sched/src/tests.rs::yielding_alone_leaves_the_request_as_it_was` | host | L.sched.2 |
 | `xtask/src/qemu.rs::fault_problem` | gate | L.iommu.7, L.iommu.10, L.iommu.35, L.iommu.36, H.DMA.2 |
 | `xtask/src/qemu.rs::iommu_problem` | gate | L.iommu.2 |

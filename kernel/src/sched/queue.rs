@@ -544,14 +544,13 @@ impl CpuQueue {
         let sleeper = self.sleepers.first_due();
         // A slice only ends in a decision if something is waiting for it. One
         // task alone on a CPU is left to run: interrupting it would change
-        // nothing, and this is where tickless comes from.
-        let slice = if self.fair.queued() > 0 {
-            self.fair
-                .remaining_ns()
-                .map(|left| now.saturating_add(left))
-        } else {
-            None
-        };
+        // nothing, and this is where tickless comes from. With something
+        // waiting, a decision at least once a slice, however long a request
+        // the running task holds: see `RunQueue::decision_in_ns`.
+        let slice = self
+            .fair
+            .decision_in_ns()
+            .map(|left| now.saturating_add(left));
 
         match [sleeper, slice].into_iter().flatten().min() {
             Some(at) => crate::timer::after(at.saturating_sub(now).max(MIN_ARM_NS)),

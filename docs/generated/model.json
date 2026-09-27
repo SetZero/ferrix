@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "c3696b586a28c7254a4dd9437331af11e2bc5281e8145939bc1e55b28db6e0cc",
+  "digest": "88ee3d2fe02c0187f1137b6fc40b43e6519ed0879eaf96f1f9b9958540c68c25",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -63,6 +63,10 @@
       "synopsis": "Ferrix — SysML v2 model, part 14: the low-level requirements of object/.\n\nWhat each unit of kernel/src/object/ does, as `ItemLowLevel` requirements (part 13 defines the format): the core ring's object layer -- what a handle names and how it is dropped, channels, ports, interrupts, I/O mappings, pins, the job quotas, jobs, the core half of a process, and the scoped OOM kill. The handle table itself and the rights arithmetic are `libs/kernel/objects` and `libs/proto/native-abi`, whose host tests verify H.OBJ.1 to H.OBJ.4 directly; nothing here restates them.\n\nThis is W-8's pilot (docs/certification/IMPLEMENTATION.md, step 3), the subsystem the format was corrected on before the others copy it. What it settled:\n\n- one requirement per behaviour a check can pass or fail, and a requirement names every function that carries the behaviour as its `unit`, not one each: a write that is all or nothing is one sentence whatever number of functions make it so; - a requirement is no broader than one check can prove: a `Verifies:` tag credits the whole requirement, so every check that names one proves its whole criterion alone. Where the checks that exist each prove a part, the requirement is split, one part per check, and a part no check proves stays in the baseline as check-writing work -- never a tag crediting what its check does not test. The statement says no more than the criterion tests; - an accessor -- one statement or one expression, no branch and no `unsafe` -- needs no requirement of its own (check-traceability.py's rule); one is still named where it is the behaviour's entry point; - check code that lives in a product file is listed in scripts/data/traceability-units.json, not given a requirement, and the requirement it would verify waits in the baseline until it moves into a check file where a `Verifies:` tag may go on it.\n\nIds are `L.object.<n>`, numbered through the subsystem; the package gives the file."
     },
     {
+      "path": "docs/sysml/15-sched-requirements.sysml",
+      "synopsis": "Ferrix — SysML v2 model, part 15: the low-level requirements of sched/.\n\nWhat each unit of kernel/src/sched/ does, as `ItemLowLevel` requirements (part 13 defines the format, part 14's pilot settled how they are cut). The scheduling decision itself is `libs/kernel/sched`'s `RunQueue`, an EEVDF queue the kernel's per-processor queue wraps; its host tests are the checks, and each requirement names the kernel function that carries the behaviour into the item as its `unit`.\n\nThe slice starts with the two requirements FX-0502's fix created. The rest of sched/ is check-writing work, in the baseline until then.\n\nIds are `L.sched.<n>`, numbered through the subsystem."
+    },
+    {
       "path": "docs/sysml/16-iommu-requirements.sysml",
       "synopsis": "Ferrix — SysML v2 model, part 16: the low-level requirements of iommu.\n\nWhat each unit of kernel/src/iommu.rs and kernel/src/iommu/ does, as `ItemLowLevel` requirements (part 13 defines the format): where firmware puts each PCI function's DMA, the units the kernel turns translation on for, the domains a driver pins pages into, the gate a wait on a unit is made through, and the faults a unit records. The pins a program makes through a handle, and the quarantine a dead driver's pins go to, are object/'s (part 14, `L.object.45` to `L.object.49`); this is the domain side under them.\n\nThe format is the object/ pilot's (W-8 step 3), and so are its rules: a requirement names every function that carries its behaviour as its `unit`; one check proves a whole requirement, so a requirement is split where the checks that exist each prove a part; a statement says no more than its criterion tests; an accessor needs no requirement of its own.\n\nWhat proves what. The boot's own checks are in iommu/check.rs (the domain check, the fault audit, the unit gate), service_check.rs (a fault's words, a second domain, a dropped domain) and object/check.rs (a page pinned twice). Most of what a unit does is proved only end to end, by the out-of-domain probe in pci/virtio.rs: its device writes a page its domain does not map, and it counts the write as faulted only when the unit's record reads back as exactly that write by the domain's stream. pci/virtio.rs is product code, so the tag is on what judges the count, `xtask test-boot`'s `fault_problem`, and on x86-64 and AArch64 only: ARMv7-A programs no unit (AoU-6). What no check proves waits in the baseline as check-writing work; docs/certification/IMPLEMENTATION.md W-8 lists it.\n\nIds are `L.iommu.<n>`, numbered through the subsystem; the package gives the part of it."
     },
@@ -72,8 +76,8 @@
     }
   ],
   "summary": {
-    "packages": 51,
-    "elements": 3602,
+    "packages": 53,
+    "elements": 3614,
     "maturity": {
       "implemented": 273,
       "inProgress": 11,
@@ -81,7 +85,7 @@
       "planned": 37
     },
     "deferred": 20,
-    "relations": 206,
+    "relations": 207,
     "figures": 20,
     "unparsed": 0
   },
@@ -29493,6 +29497,143 @@
       ]
     },
     {
+      "name": "FerrixSchedRequirements",
+      "qualifiedName": "FerrixSchedRequirements",
+      "kind": "package",
+      "source": {
+        "file": "docs/sysml/15-sched-requirements.sysml",
+        "line": 16
+      },
+      "children": [
+        {
+          "name": "Decisions",
+          "qualifiedName": "FerrixSchedRequirements::Decisions",
+          "kind": "package",
+          "doc": "kernel/src/sched/queue.rs and kernel/src/sched/mod.rs: when a processor next decides, and what a yield asks for.",
+          "source": {
+            "file": "docs/sysml/15-sched-requirements.sysml",
+            "line": 19
+          },
+          "children": [
+            {
+              "name": "aDecisionWithinASlice",
+              "qualifiedName": "FerrixSchedRequirements::Decisions::aDecisionWithinASlice",
+              "kind": "requirement",
+              "shortName": "L.sched.1",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/15-sched-requirements.sysml",
+                "line": 23
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Decisions::aDecisionWithinASlice",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"While any task waits on a processor's queue, CpuQueue::arm_timer shall arm the next decision no more than one configured slice away, however long a request the running task holds.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 27
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Decisions::aDecisionWithinASlice",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"With an entity queued that is not eligible and the running one having yielded 600 times, so that its remaining request exceeds 100 slices, the queue's next decision is at most one slice away; with nothing queued there is none.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 32
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Decisions::aDecisionWithinASlice",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.2\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 33
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Decisions::aDecisionWithinASlice",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"sched::queue::CpuQueue::arm_timer\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 34
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aLoneYieldAsksNothing",
+              "qualifiedName": "FerrixSchedRequirements::Decisions::aLoneYieldAsksNothing",
+              "kind": "requirement",
+              "shortName": "L.sched.2",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/15-sched-requirements.sysml",
+                "line": 36
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Decisions::aLoneYieldAsksNothing",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A yield by the only task on a processor's queue shall leave its request unchanged.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 38
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Decisions::aLoneYieldAsksNothing",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"After 600 yields with nothing else queued, the running entity's remaining slice is what it was before the first.\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 41
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Decisions::aLoneYieldAsksNothing",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.2\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 42
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSchedRequirements::Decisions::aLoneYieldAsksNothing",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"sched::yield_now\"",
+                  "source": {
+                    "file": "docs/sysml/15-sched-requirements.sysml",
+                    "line": 43
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "FerrixIommuRequirements",
       "qualifiedName": "FerrixIommuRequirements",
       "kind": "package",
@@ -43769,6 +43910,16 @@
       "origin": "FerrixObjectRequirements",
       "file": "docs/sysml/14-object-requirements.sysml",
       "line": 39
+    },
+    {
+      "kind": "import",
+      "source": "FerrixSchedRequirements",
+      "targets": [
+        "FerrixItemRequirements::*"
+      ],
+      "origin": "FerrixSchedRequirements",
+      "file": "docs/sysml/15-sched-requirements.sysml",
+      "line": 17
     },
     {
       "kind": "import",

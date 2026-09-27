@@ -360,6 +360,85 @@ fn yielding_lets_the_next_deadline_go_first() {
     );
 }
 
+/// Six hundred yields with nothing else queued leave the running entity's
+/// request where it was. Each used to push its deadline a slice further out,
+/// and 1.8 seconds of request was what the next arrival waited behind
+/// (FX-0502).
+///
+/// Verifies: L.sched.2
+#[test]
+fn yielding_alone_leaves_the_request_as_it_was() {
+    let mut queue = queue();
+    queue.enqueue(1, 1, EntityState::new(1024), slot()).unwrap();
+    assert_eq!(queue.pick_next(), Some(&1));
+    let _ = queue.update_curr(SLICE / 10);
+    let left = queue.remaining_ns();
+    for _ in 0..600 {
+        queue.yield_curr();
+        assert_eq!(queue.pick_next(), Some(&1), "alone, it runs on");
+    }
+    assert_eq!(
+        queue.remaining_ns(),
+        left,
+        "yielding to nobody asked for more of the processor"
+    );
+    check(&queue);
+}
+
+/// With an entity waiting that is not eligible, the running one yielding
+/// again and again, and so holding a deadline hundreds of slices out, the
+/// queue still asks for a decision within one slice. Armed for the whole
+/// request instead, the waiting entity sat out seconds (FX-0502).
+///
+/// Verifies: L.sched.1
+#[test]
+fn something_waiting_is_decided_on_within_a_slice() {
+    let mut queue = queue();
+    assert_eq!(queue.decision_in_ns(), None, "an empty queue needs none");
+    queue.enqueue(1, 1, EntityState::new(1024), slot()).unwrap();
+    assert_eq!(queue.pick_next(), Some(&1));
+    assert_eq!(queue.decision_in_ns(), None, "nor one running alone");
+
+    // Ahead of its share, as a woken or moved entity can arrive.
+    let ahead = EntityState {
+        weight: 1024,
+        vlag: -2_000_000,
+        sum_exec: 0,
+    };
+    queue.enqueue(2, 2, ahead, slot()).unwrap();
+    for _ in 0..600 {
+        queue.yield_curr();
+        assert_eq!(
+            queue.pick_next(),
+            Some(&1),
+            "the waiting one is not eligible"
+        );
+    }
+    assert!(
+        queue.remaining_ns().unwrap() > 100 * SLICE,
+        "yielding past an ineligible entity pushed the request far out"
+    );
+    let decision = queue.decision_in_ns().unwrap();
+    assert!(
+        decision <= SLICE,
+        "the next decision is {decision} ns away with something waiting"
+    );
+    check(&queue);
+}
+
+/// A request shorter than the slice is decided on when it ends, as it was:
+/// the bound only ever shortens the interval.
+#[test]
+fn a_short_request_is_decided_on_when_it_ends() {
+    let mut queue = queue();
+    queue.enqueue(1, 1, EntityState::new(1024), slot()).unwrap();
+    queue.enqueue(2, 2, EntityState::new(1024), slot()).unwrap();
+    let _ = queue.pick_next();
+    let _ = queue.update_curr(SLICE / 3);
+    assert_eq!(queue.decision_in_ns(), queue.remaining_ns());
+    assert!(queue.decision_in_ns().unwrap() < SLICE);
+}
+
 #[test]
 fn a_wakeup_with_an_earlier_eligible_deadline_preempts() {
     let mut queue = queue();

@@ -600,13 +600,46 @@ impl<T> RunQueue<T> {
     /// The running entity gives up the rest of its request: its deadline moves
     /// a slice further out, as Linux's `sched_yield` moves it, so anything
     /// eligible with a nearer deadline goes first.
+    ///
+    /// **Nothing at all while nothing else is queued**, as Linux's
+    /// `yield_task_fair` returns at once when its queue runs one task. There
+    /// is nobody to go first, the entity is picked again, and each yield
+    /// would push its deadline another slice out: six hundred yields in a
+    /// loop asked for 1.8 seconds, which is what the next entity to arrive
+    /// was then made to wait behind (FX-0502).
     pub fn yield_curr(&mut self) {
+        if self.tree.is_empty() {
+            return;
+        }
         let slice_ns = self.config.slice_ns;
         if let Some(curr) = self.curr.as_mut().map(|node| &mut node.entity) {
             curr.deadline = curr
                 .deadline
                 .wrapping_add(to_virtual(slice_ns, curr.weight));
         }
+    }
+
+    /// Real nanoseconds until the queue needs a decision: the running entity's
+    /// remaining slice, but never more than one configured slice while
+    /// anything waits, and `None` while nothing does.
+    ///
+    /// **The bound is not an optimisation.** An entity that arrives behind
+    /// the running one without being eligible -- woken, or moved from another
+    /// queue, ahead of its share -- does not preempt it, and waits for the
+    /// next decision. Armed for the whole remaining request, that decision is
+    /// as far away as the running entity's deadline, and a deadline can be
+    /// many slices out: yielding moves it a slice per yield. The waiting
+    /// entity then sat out seconds of an unrelated timer (FX-0502). Linux
+    /// keeps its tick while more than one task is runnable for the same
+    /// reason. The pick itself is unchanged: an entity that is still not
+    /// eligible at the decision waits for the next one.
+    #[must_use]
+    pub fn decision_in_ns(&self) -> Option<u64> {
+        if self.tree.is_empty() {
+            return None;
+        }
+        self.remaining_ns()
+            .map(|left| left.min(self.config.slice_ns))
     }
 
     /// Whether something queued should run instead of the running entity, now.

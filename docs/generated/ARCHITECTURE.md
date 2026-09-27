@@ -113,10 +113,11 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 | `FerrixItemRequirements` | `13-item-requirements.sysml` | The high-level requirements of the certified item (the `core` and `item` rings of docs/certification/ITEM.md): what each subsystem promises at its interface, decomposed from the Security Target's objectives (docs/certification/SECURITY-TARGET.md §4.1 and §8.2) and the safety manual's assumed safety requirements (SAFETY-MANUAL.md §2). The low-level requirements, one per unit of code, go in one file per subsystem after this one. docs/certification/IMPLEMENTATION.md W-8 is the design, and scripts/check/check-traceability.py the gate that reads these and writes docs/certification/TRACEABILITY.md. |
 | `FerrixObjectRequirements` | `14-object-requirements.sysml` | What each unit of kernel/src/object/ does, as `ItemLowLevel` requirements (part 13 defines the format): the core ring's object layer -- what a handle names and how it is dropped, channels, ports, interrupts, I/O mappings, pins, the job quotas, jobs, the core half of a process, and the scoped OOM kill. The handle table itself and the rights arithmetic are `libs/kernel/objects` and `libs/proto/native-abi`, whose host tests verify H.OBJ.1 to H.OBJ.4 directly; nothing here restates them. |
+| `FerrixSchedRequirements` | `15-sched-requirements.sysml` | What each unit of kernel/src/sched/ does, as `ItemLowLevel` requirements (part 13 defines the format, part 14's pilot settled how they are cut). The scheduling decision itself is `libs/kernel/sched`'s `RunQueue`, an EEVDF queue the kernel's per-processor queue wraps; its host tests are the checks, and each requirement names the kernel function that carries the behaviour into the item as its `unit`. |
 | `FerrixIommuRequirements` | `16-iommu-requirements.sysml` | What each unit of kernel/src/iommu.rs and kernel/src/iommu/ does, as `ItemLowLevel` requirements (part 13 defines the format): where firmware puts each PCI function's DMA, the units the kernel turns translation on for, the domains a driver pins pages into, the gate a wait on a unit is made through, and the faults a unit records. The pins a program makes through a handle, and the quarantine a dead driver's pins go to, are object/'s (part 14, `L.object.45` to `L.object.49`); this is the domain side under them. |
 | `FerrixMemoryRequirements` | `17-memory-requirements.sysml` | What each unit of the item's memory management does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies), in two id spaces. |
 
-17 files, 51 packages, 3602 elements, 206 relations. Model digest `c3696b586a28c725`.
+18 files, 53 packages, 3614 elements, 207 relations. Model digest `88ee3d2fe02c0187`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -4015,6 +4016,8 @@ flowchart LR
 | `L.object.101` | `theLargestIsChosen` | — | — | — |
 | `L.object.102` | `noLimitFullNoKill` | — | — | — |
 | `L.object.103` | `anEndedVictimIsEmptied` | — | — | — |
+| `L.sched.1` | `aDecisionWithinASlice` | — | — | — |
+| `L.sched.2` | `aLoneYieldAsksNothing` | — | — | — |
 | `L.iommu.1` | `unitsAreFoundOnce` | — | — | — |
 | `L.iommu.2` | `placementsAreCounted` | — | — | — |
 | `L.iommu.3` | `dmarEndpointsArePlaced` | — | — | — |
