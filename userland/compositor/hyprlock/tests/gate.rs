@@ -18,7 +18,10 @@ use compositor_hyprlock::auth::{REJECTED, Verdict};
 use compositor_hyprlock::config::Config;
 use compositor_hyprlock::format::Context;
 use compositor_hyprlock::scene::{Scene, Screen, View};
-use compositor_hyprlock::session::{FAIL_DELAY_MS, KeyPress, Session};
+use compositor_hyprlock::session::{KeyPress, Session};
+
+/// `authd`'s hold on a refusal, the `hyprlock` policy's `FailDelaySec`.
+const FAIL_DELAY_MS: u64 = 2000;
 use compositor_render::{Canvas, Damage, Format, Rect, Surface, golden};
 
 /// The screen test-compositor's boots have.
@@ -139,9 +142,6 @@ fn five_dots() {
 fn a_wrong_password_s_screen() {
     let (mut scene, mut session, mut assets) = locked();
     let _ = screen(&mut scene, &session, 0, &mut assets);
-    // The secret the boot carries is `gatez`, not "wrong".
-    let secret = std::fs::read_to_string(data().join("gate.secret")).expect("gate.secret");
-    assert_eq!(secret.trim_end(), "gatez");
     // "wrong", then Return: refused after PAM's delay.
     for (code, letter) in [(17, "w"), (19, "r"), (24, "o"), (49, "n"), (34, "g")] {
         tap(&mut session, code, letter, letter);

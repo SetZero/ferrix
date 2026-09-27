@@ -11,12 +11,6 @@ publish.workspace = true
 name = "hyprlock"
 path = "src/main.rs"
 
-# The gate boot's hyprlock: one fixed hash instead of an authentication
-# service (src/bin/gate.rs says why). Only that boot's image carries it.
-[[bin]]
-name = "hyprlock-gate"
-path = "src/bin/gate.rs"
-
 [lib]
 name = "compositor_hyprlock"
 path = "src/lib.rs"
@@ -28,6 +22,10 @@ compositor-hyprlang = { path = "../hyprlang" }
 compositor-image = { path = "../image" }
 compositor-text = { path = "../text" }
 compositor-toolkit = { path = "../toolkit" }
+# authd's client and its records (docs/AUTH.md §3.3): the password goes to
+# authd over /run/ferrix/auth, and hyprlock never sees a credential.
+ferrix-auth-client = { path = "../../auth/client" }
+ferrix-auth-proto = { path = "../../../libs/proto/auth-proto" }
 # Declarations only: getuid(2).
 libc = "0.2.189"
 # The rasteriser the widgets are drawn with, at the version the workspace

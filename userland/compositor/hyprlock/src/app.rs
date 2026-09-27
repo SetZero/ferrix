@@ -127,6 +127,9 @@ pub fn run(config: Config, options: &Options, backend: Arc<dyn Backend>) -> Resu
     // first prompt, and a lock nothing can open is not taken at all
     // (docs/AUTH.md §5.4, decision 4).
     let prompt = if config.auth.pam {
+        if let Err(verdict) = backend.ready() {
+            return Err(format!("not locking: {}", verdict.fail_text()));
+        }
         match backend.begin() {
             Ok(prompt) => Some(prompt.text),
             Err(verdict) => {
@@ -587,8 +590,21 @@ impl App {
         let backend = Arc::clone(&self.backend);
         let open = self.open;
         self.open = true;
-        let secret = Secret::new(password);
+        // Into the fixed buffer authd's records use, and the typed copy
+        // zeroed.
+        let mut typed = password.into_bytes();
+        let secret = Secret::from_bytes(&typed);
+        typed.fill(0);
+        let _ = std::hint::black_box(&typed);
+        drop(typed);
         let _ = std::thread::spawn(move || {
+            let Some(secret) = secret else {
+                let _ = sender.send(Answer::Next(Next::Verdict(Verdict::Failed {
+                    text: "a password is at most 256 bytes".to_owned(),
+                    retry_after_ms: 0,
+                })));
+                return;
+            };
             if !open {
                 match backend.begin() {
                     Ok(prompt) => {

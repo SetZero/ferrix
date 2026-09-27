@@ -1,14 +1,14 @@
 //! `hyprlock`: lock the screen until the user's password is typed.
 //!
-//! Ferrix authenticates through `authd` (`docs/AUTH.md`), whose client is
-//! phase 1's work; until it lands this one has [`Missing`], and hyprlock
-//! says there is no authentication service and does not take the lock.
+//! The password is checked by `authd` (`docs/AUTH.md`) through
+//! [`Service`]. With no `authd` running, or no password set for this
+//! account, hyprlock does not take the lock, and says why (decision 4).
 
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use compositor_hyprlock::auth::Missing;
+use compositor_hyprlock::auth::Service;
 
 fn main() -> ExitCode {
-    compositor_hyprlock::cli::main(Arc::new(Missing))
+    compositor_hyprlock::cli::main(Arc::new(Service::new()))
 }

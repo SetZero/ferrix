@@ -123,7 +123,10 @@ const CONFIG_PATH: &str = "etc/hyprland.conf";
 /// `exec-once = waybar` and `bind = …, exec, hyprlock` find it. One line a
 /// program, added by its stream when it lands. A judged boot carries none,
 /// so its archive stays the bytes it was.
-const DESKTOP_CLIENTS: &[(&str, &str)] = &[("compositor-waybar", "waybar")];
+const DESKTOP_CLIENTS: &[(&str, &str)] = &[
+    ("compositor-waybar", "waybar"),
+    ("compositor-hyprlock", "hyprlock"),
+];
 
 /// Where `run-compositor` puts the wallpaper it carries.
 const WALLPAPER_PATH: &str = "etc/wallpaper.fxwall";
@@ -2388,6 +2391,42 @@ fn laid_out(size: (u32, u32), config: &str) -> (u32, u32) {
     if turned { (size.1, size.0) } else { size }
 }
 
+/// authd on a desktop, so that hyprlock has something to check a password
+/// with (`docs/AUTH.md` P1.5): its programs, policies and units, its
+/// account, and a seed only where `--auth-seed` or `--auth-seed-file` asked
+/// for one. Without a seed root has no password, and hyprlock says so and
+/// does not lock (decision 4); `passwd` on the desktop sets one. The
+/// accounts replace the ones busybox's slot writes, a later entry in the
+/// archive replacing an earlier one. Nothing on an architecture authd is
+/// not built for.
+fn desktop_auth(arch: Arch, args: &Args) -> Result<Vec<crate::ports::File>> {
+    let mut files = crate::auth::carried(arch, None)?;
+    if files.is_empty() {
+        return Ok(files);
+    }
+    files.extend(crate::auth::seeds(args)?);
+    for (path, text) in [
+        (
+            "etc/passwd",
+            format!(
+                "root:x:0:0:root:/:/bin/sh\nferrix:x:1000:1000:ferrix:/home/ferrix:/bin/zsh\n{}",
+                crate::auth::PASSWD_LINE
+            ),
+        ),
+        (
+            "etc/group",
+            format!("root:x:0:\nferrix:x:1000:\n{}", crate::auth::GROUP_LINE),
+        ),
+    ] {
+        files.push(crate::ports::File {
+            path: path.to_owned(),
+            mode: 0o644,
+            content: crate::ports::Content::Bytes(text.into_bytes()),
+        });
+    }
+    Ok(files)
+}
+
 fn desktop(
     arch: Arch,
     config: String,
@@ -2408,6 +2447,7 @@ fn desktop(
             content: crate::ports::Content::Bytes(bytes),
         });
     }
+    carried.ports.extend(desktop_auth(arch, args)?);
     // The user's dotfiles and the fonts they name, from beside a real
     // `hyprland.conf`: `crate::dotfiles` says which and where.
     if let Some(path) = &args.config
@@ -2619,7 +2659,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are twenty of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 29] = [
+const BOOTS: [(&str, Boot); 30] = [
     ("restart", test_driver_restart),
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
@@ -4234,15 +4274,20 @@ fn test_lock(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
 }
 
 /// The hyprlock boot's configuration: the two windows, the German layout
-/// the customer types on, and the key that runs the gate's hyprlock.
+/// the customer types on, and the key that runs hyprlock.
 const HYPRLOCK_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
 input:kb_layout = de
 input:kb_variant = nodeadkeys
 exec-once = /bin/pattern checkerboard one
 exec-once = /bin/pattern gradient two --after one
-bind = , L, exec, /bin/hyprlock-gate -c /etc/hypr/hyprlock.conf
+bind = , L, exec, /bin/hyprlock -c /etc/hypr/hyprlock.conf
 ";
+
+/// Root's password in the hyprlock boot's image: seeded into `authd`'s store
+/// by this boot alone. Typed on a German keyboard, its last key is the one
+/// an American keyboard calls Y, so it only matches if the layout is German.
+const HYPRLOCK_PASSWORD: &str = "gatez";
 
 /// What the hyprlock boot's screen must show, in order.
 const HYPRLOCK_EXPECTED: [(&str, &str); 5] = [
@@ -4285,14 +4330,14 @@ const HYPRLOCK_BINDS: [(&str, &[&str]); 4] = [
 /// A boot of hyprlock on the customer's layout: lock, a wrong password and
 /// its failure, the right one, unlock.
 ///
-/// It runs `hyprlock-gate`, which is `/bin/hyprlock` with a test-only
-/// backend behind its authentication interface -- one fixed secret --
-/// because Ferrix's authentication service (`docs/AUTH.md`) is not written
-/// yet and no image may carry a password policy meanwhile; when it is, the
-/// boot seeds a real store entry instead (§4.4). The configuration and the
-/// secret are the crate's own test data; the pictures are drawn from them on the host by
-/// `userland/compositor/hyprlock/tests/gate.rs`, with the same code, and composited
-/// as hyprix composites a lock surface.
+/// It runs `/bin/hyprlock` as a desktop does, against `authd` with a
+/// password for root seeded into the image (`docs/AUTH.md` §5.3): the
+/// session is root in phase 1 (decision 3), so root's password is what
+/// unlocks it. The seed is the gate's own and only this boot carries it;
+/// no other image gets a password it did not ask for. The configuration is
+/// the crate's own test data; the pictures are drawn from it on the host by
+/// `userland/compositor/hyprlock/tests/gate.rs`, with the same code, and
+/// composited as hyprix composites a lock surface.
 fn test_hyprlock(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let data = paths::workspace_root().join("userland/compositor/hyprlock/tests/data");
     let read = |path: &Path| -> Result<Vec<u8>> {
@@ -4305,33 +4350,45 @@ fn test_hyprlock(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
         content: crate::ports::Content::Bytes(bytes),
     };
     let fonts = paths::workspace_root().join("assets/fonts/liberation");
+    let hyprlock = build(arch, "compositor-hyprlock", "hyprlock")?;
+    let mut ports = crate::auth::carried(arch, None)?;
+    if ports.is_empty() {
+        return Err(Error::new(format!("{arch}: authd is not built for it")));
+    }
+    ports.extend([
+        file("bin/hyprlock", 0o755, read(&hyprlock)?),
+        file(
+            "etc/hypr/hyprlock.conf",
+            0o644,
+            read(&data.join("gate.conf"))?,
+        ),
+        // Root, whom the lock is for, and authd's own account.
+        file(
+            "etc/passwd",
+            0o644,
+            format!("root:x:0:0:root:/:/bin/sh\n{}", crate::auth::PASSWD_LINE).into_bytes(),
+        ),
+        file(
+            "etc/group",
+            0o644,
+            format!("root:x:0:\n{}", crate::auth::GROUP_LINE).into_bytes(),
+        ),
+        crate::auth::seed("root", HYPRLOCK_PASSWORD)?,
+        file(
+            "usr/share/ferrix/fonts/LiberationSans-Regular.ttf",
+            0o644,
+            read(&fonts.join("LiberationSans-Regular.ttf"))?,
+        ),
+    ]);
     let carried = Carried {
-        ports: vec![
-            file(HYPRLOCK_GATE_PATH, 0o755, read(&programs.hyprlock_gate)?),
-            file(
-                "etc/hypr/hyprlock.conf",
-                0o644,
-                read(&data.join("gate.conf"))?,
-            ),
-            file(
-                "etc/hyprlock/gate.secret",
-                0o600,
-                read(&data.join("gate.secret"))?,
-            ),
-            // Who uid 0 is, for `$USER`. Nothing reads a credential from it.
-            file("etc/passwd", 0o644, b"root:x:0:0:root:/:/bin/sh\n".to_vec()),
-            file(
-                "usr/share/ferrix/fonts/LiberationSans-Regular.ttf",
-                0o644,
-                read(&fonts.join("LiberationSans-Regular.ttf"))?,
-            ),
-        ],
+        ports,
         ..Carried::none()
     };
     let (screens, said) = boot_and_dump_carrying(
         arch,
         programs,
         HYPRLOCK_CONFIG,
+        (carried, None),
         &Wanted {
             states: &HYPRLOCK_EXPECTED,
             others: &[],
@@ -4340,7 +4397,6 @@ fn test_hyprlock(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
             awaiting: &["hyprlock: unlocked"],
         },
         &HYPRLOCK_BINDS,
-        carried,
         args,
     )?;
     if screens.len() != HYPRLOCK_EXPECTED.len() {
