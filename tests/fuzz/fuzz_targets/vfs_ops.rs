@@ -58,7 +58,9 @@ impl Clock for Ticking {
 }
 
 fn tmpfs(device: u64) -> Arc<dyn FileSystem> {
-    Tmpfs::new(
+    // Charged to nobody, as the library's own tests make theirs: `new`
+    // charges the running job and can refuse, which a fuzzer has no job for.
+    Tmpfs::for_kernel(
         device,
         Arc::new(Ticking::default()),
         Arc::new(HeapStorage::new(1 << 20)),
