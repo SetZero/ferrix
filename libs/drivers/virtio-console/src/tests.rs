@@ -694,6 +694,31 @@ fn a_closed_port_carries_nothing() {
     assert_eq!(harness.driver.write(b"nowhere"), Ok(0));
 }
 
+/// The host's `PORT_OPEN` is answered with this end's own, of the same value.
+/// QEMU's vdagent closes the port after the first capabilities to reset its
+/// state, and opens it again only once the guest's end has closed; an end
+/// that stayed open left the clipboard dead from then on.
+#[test]
+fn the_host_opening_and_closing_is_answered_in_kind() {
+    let mut harness = opened();
+    while harness.control_sent().is_some() {}
+    harness.control(&control(1, 6, 0)); // the host closes
+    assert_eq!(harness.driver.poll(), Ok(Some(Event::Open { open: false })));
+    assert_eq!(
+        harness.control_sent(),
+        Some(control(1, 6, 0)),
+        "this end closes too"
+    );
+    harness.control(&control(1, 6, 1)); // and opens again
+    assert_eq!(harness.driver.poll(), Ok(Some(Event::Open { open: true })));
+    assert_eq!(
+        harness.control_sent(),
+        Some(control(1, 6, 1)),
+        "and this end opens with it"
+    );
+    assert!(harness.driver.port_open());
+}
+
 /// The port being removed closes it, and whoever was using it is told.
 #[test]
 fn a_removed_port_closes() {

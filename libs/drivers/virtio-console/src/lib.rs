@@ -499,8 +499,17 @@ impl<T: Transport, M: QueueMemory + DevicePages, A: Area> Driver<T, M, A> {
                 }
                 Ok(None)
             }
+            // Answered with this end's own, of the same value: a host that
+            // closes the port waits for the guest's end to close before it
+            // opens again, and reads the guest's reopening as a new peer.
+            // QEMU's vdagent closes it on purpose after the first
+            // capabilities, to reset its serial state, and never opened it
+            // again while this end stayed open -- the clipboard went dead a
+            // second into every boot (2026-09-27). Linux's agent gets the same
+            // by closing and reopening its port device.
             Control::Open { port, open } if self.port == Some(port) => {
                 self.open = open;
+                self.send_control(Control::Open { port, open })?;
                 Ok(Some(Event::Open { open }))
             }
             Control::Remove { port } if self.port == Some(port) => {
