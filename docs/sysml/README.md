@@ -30,6 +30,7 @@ tooling that can check a model for consistency where it cannot check prose.
 | `11-assurance.sysml` | `FerrixAssurance` | Every gate `cargo xtask check` and CI run, the xtask boot gates, the commit-authorship check, the assembly budget, what each layer's tests can reach, and the verification later stages owe. |
 | `12-views.sysml` | `FerrixViews` | Views filtering the one model into current, written-ahead, future and deferred. |
 | `13-item-requirements.sysml` | `FerrixItemRequirements` | The certified item's high-level requirements (`H.<AREA>.<n>`), each with a statement, a pass/fail criterion and its parent objective; the definitions the low-level ones (`L.<module>.<n>`) use. `scripts/check/check-traceability.py` holds them to their checks. |
+| `14-object-requirements.sysml` | `FerrixObjectRequirements` | The low-level requirements of `kernel/src/object/` (`L.object.<n>`), the pilot of W-8: each names the functions that carry it as its `unit` and the `H.*` it refines. One file per subsystem follows it. |
 
 ## Reading it
 

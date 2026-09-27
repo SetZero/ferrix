@@ -112,8 +112,9 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 | `FerrixItemRequirements` | `13-item-requirements.sysml` | The high-level requirements of the certified item (the `core` and `item` rings of docs/certification/ITEM.md): what each subsystem promises at its interface, decomposed from the Security Target's objectives (docs/certification/SECURITY-TARGET.md §4.1 and §8.2) and the safety manual's assumed safety requirements (SAFETY-MANUAL.md §2). The low-level requirements, one per unit of code, go in one file per subsystem after this one. docs/certification/IMPLEMENTATION.md W-8 is the design, and scripts/check/check-traceability.py the gate that reads these and writes docs/certification/TRACEABILITY.md. |
+| `FerrixObjectRequirements` | `14-object-requirements.sysml` | What each unit of kernel/src/object/ does, as `ItemLowLevel` requirements (part 13 defines the format): the core ring's object layer -- what a handle names and how it is dropped, channels, ports, interrupts, I/O mappings, pins, the job quotas, jobs, the core half of a process, and the scoped OOM kill. The handle table itself and the rights arithmetic are `libs/kernel/objects` and `libs/proto/native-abi`, whose host tests verify H.OBJ.1 to H.OBJ.4 directly; nothing here restates them. |
 
-14 files, 26 packages, 1911 elements, 203 relations. Model digest `762b6b55620d07bf`.
+15 files, 37 packages, 2477 elements, 204 relations. Model digest `50a35d85945aa294`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -247,15 +248,23 @@ Handles, rights and the objects they name: O.CAPABILITY and ASR-3 (FDP_ACC.1, FD
 | --- | --- | --- | --- |
 | `H.OBJ.1` | A native call shall act on an object only through a handle in the calling process's own handle table, and shall refuse a value naming no live handle there with BAD_HANDLE. | Every native call given a value never issued, a value from another process's table and a value closed earlier is refused BAD_HANDLE: 0 of them act on an object. | `O.CAPABILITY, ASR-3` |
 | `H.OBJ.2` | A native call shall be refused with WRONG_TYPE when its handle names an object of another type, and with ACCESS_DENIED unless its handle carries every right the operation requires. | For each native operation that requires a right, a call through a handle lacking it is refused ACCESS_DENIED, and a call through a handle of the wrong type WRONG_TYPE; 0 are performed. | `O.CAPABILITY, ASR-3` |
-| `H.OBJ.3` | Duplicating or replacing a handle shall yield rights that are a subset of the source's; asking for a right the source lacks shall be refused with ACCESS_DENIED, and duplicating shall need the DUPLICATE right. | Every duplicate and replace that asks for a right not held is refused ACCESS_DENIED and leaves the table as it was; a duplicate of a handle without DUPLICATE is refused. | `O.CAPABILITY, ASR-3` |
-| `H.OBJ.4` | A handle value shall stop naming its object when the handle is closed or transferred, and shall never name another object afterwards. | A value whose handle was closed is refused BAD_HANDLE after its slot is reused, on every reuse up to the generation's limit; at the limit the slot is retired, not reissued. | `O.CAPABILITY, ASR-3` |
+| `H.OBJ.3` | Duplicating a handle shall need the DUPLICATE right and yield rights that are a subset of the source's; asking for a right the source lacks shall be refused with ACCESS_DENIED. | A duplicate of a handle without DUPLICATE is refused ACCESS_DENIED; one asking for a right the source lacks is refused ACCESS_DENIED and the source keeps its rights; a narrower copy is made with the rights asked for. | `O.CAPABILITY, ASR-3` |
+| `H.OBJ.4` | A handle value shall stop naming its object when the handle is closed or transferred, and shall not name the object its slot holds next. | A value whose handle was closed is refused BAD_HANDLE, on a get and on a second close, after its slot is reused, and the reused slot issues a new value. | `O.CAPABILITY, ASR-3` |
 | `H.OBJ.5` | A handle shall pass from one process to another only inside a channel message, leaving the sender's table in the same step, and a write that is refused shall leave every handle it carried with the sender. | After a write carrying handles each is refused BAD_HANDLE in the sender and works in the reader; writes refused PEER_CLOSED, TOO_BIG and SHOULD_WAIT leave every carried handle usable by the sender; a handle without TRANSFER is refused ACCESS_DENIED. | `O.CAPABILITY, ASR-3` |
 | `H.OBJ.6` | A process shall start holding no handle but the bootstrap handle its creator explicitly passes, and a fork shall not copy the native handle table. | A created process holds 0 handles before it starts and exactly 1 after a start that passed a bootstrap; a forked child's native handle table is empty. | `O.CAPABILITY, ASR-3` |
 | `H.OBJ.7` | A process's handle table shall hold at most 4096 handles, refuse an insertion past that with NO_HANDLES, and lose nothing it could not deliver. | Duplicating until refused ends in NO_HANDLES with at most 4096 held; a channel read and a VMO create into the full table are refused NO_HANDLES and the message stays queued (the `refusals` line). | `O.CAPABILITY, O.QUOTA` |
-| `H.OBJ.8` | An object shall be destroyed when the last handle to it closes, and the peer of a destroyed channel end shall observe PEER_CLOSED. | Programs made and never started end when their last handle closes (2 of 2, the `spawn` line); a read on a channel whose peer closed returns PEER_CLOSED; 0 frames leaked. | `O.CAPABILITY, O.QUOTA` |
+| `H.OBJ.8` | An object shall be destroyed when the last handle to it closes. | A program made and never started ends when its last handle closes, and one whose last handle rode unread in a channel ends when the channel is closed: 2 of 2. | `O.CAPABILITY, O.QUOTA` |
 | `H.OBJ.9` | Killing a job shall end every process in it and in every job beneath it. | 4 processes in a tree of three jobs are all ended by two kills, and each wait on them is woken (the `jobs` line). | `O.CAPABILITY, O.QUOTA` |
+| `H.OBJ.10` | Every queue a program can fill in the kernel shall be bounded -- a channel end's unread messages at 256, a port's user packets at 1024, an object's port registrations at 64 -- and an addition past the bound shall be refused without being queued. | Writing to a channel nobody reads is refused SHOULD_WAIT at its bound, and queueing on a port nobody takes from is refused SHOULD_WAIT at exactly 1024 packets, 0 queued past either bound, and draining the channel makes room again; the 65th registration on one object is refused. | `O.QUOTA` |
+| `H.OBJ.11` | A wait on an object shall end when a signal it waits for is asserted, at once if one already is, and shall not end before its deadline while none is. | A wait on an empty channel end with a zero deadline times out; one with a two-minute deadline is ended by a message written 20 ms later, not before it, and reports READABLE; a wait for PEER_CLOSED on an end whose peer has closed returns at once. | `G.7, O.CAPABILITY` |
+| `H.OBJ.12` | The job tree shall be the cgroup v2 hierarchy: every process in exactly one job, a job populated exactly while it or a job beneath it has a member not yet released, and a job refusing a process or a child that its killed or removed state, its limits or the no-internal-process rule forbid. | A new process is in the root job and a fork's child in its parent's; a job empties at its last member's release and wakes its waiters; a move a job refuses leaves the process where it was; a removed job takes neither a process nor a child; a child past cgroup.max.depth or cgroup.max.descendants is refused. | `G.8, O.QUOTA` |
+| `H.OBJ.13` | A pid shall name at most one process at a time, and a pid given back shall not be handed out again before allocation has come round the whole range past it. | Allocating through the whole range wraps to 300 and passes over a pid still held: 0 pids handed out twice and none below 300 after the wrap. | `G.4, O.ISOLATE` |
+| `H.OBJ.14` | Replacing a handle shall close the source and yield rights that are a subset of its; asking for a right the source lacks shall be refused with ACCESS_DENIED and leave the source as it was. | A replace asking for a right not held is refused ACCESS_DENIED and the source keeps its rights; a narrower replace closes the source and leaves one handle, with the rights asked for. | `O.CAPABILITY, ASR-3` |
+| `H.OBJ.15` | A slot whose generations are all used shall be retired, so that no handle value is ever issued twice. | After every generation of one slot has been issued and closed, the next handle comes from another slot, and 0 of the values issued before it are issued again or resolve. | `O.CAPABILITY, ASR-3` |
+| `H.OBJ.16` | The peer of a destroyed channel end shall observe PEER_CLOSED from the moment the close returns, and what the destroyed end held shall be freed. | After one end of a channel holding a queued VMO is closed, a read and a write on the survivor are refused PEER_CLOSED, 2 of 2, and 0 frames are leaked. | `O.CAPABILITY, O.QUOTA` |
+| `H.OBJ.17` | A port registration shall queue exactly one packet, with its key and the asserted signals it asked for, when one of them is first asserted, at once if one already is. | A registration does not fire before its signal, fires once on the message that asserts it and not on a second, fires at once for a state already true, and fires when the peer closes for PEER_CLOSED, each packet with its key. | `G.7, O.CAPABILITY` |
 
-9 requirements.
+17 requirements.
 
 ### Scheduling
 
@@ -333,12 +342,14 @@ What a job, with every job beneath it, may hold at once: O.QUOTA (FRU_RSA.1), ag
 | Id | Statement | Criterion | Parent |
 | --- | --- | --- | --- |
 | `H.QUOTA.1` | Creating a task in a job that, with the jobs beneath it, holds its task limit shall be refused: a fork with EAGAIN, a native process_create with SHOULD_WAIT. | A fork loop in a job limited to 8 tasks is refused at the limit, 0 tasks beyond it (the `quota` line). | `O.QUOTA` |
-| `H.QUOTA.2` | A job's programs shall not hold more memory than the job's limit, counting the frames of their address spaces, their page tables and the kernel heap the Linux personality keeps for them, together with every job beneath it; a sibling job shall be unaffected. | In a job at its limit faults are refused at 47 pages, 3 of them page tables, while a sibling job faults in 48 (the `quota` line); at a 32 KiB limit each kind of personality object is refused one past its count with ENOMEM (ENOLCK for a lock) while a sibling makes one (the `kmem` line). | `O.QUOTA` |
+| `H.QUOTA.2` | A job's programs shall not hold more memory than the job's limit, counting the frames of their address spaces and their page tables together with every job beneath it; a sibling job shall be unaffected. | Faults in a job limited to 48 pages' worth are refused when the next page would not fit, and the refusal is counted, while a sibling job faults 48 pages in (the `quota` line). | `O.QUOTA` |
 | `H.QUOTA.3` | Creating a VMO, a channel, a port, a job or a pin in a job at its object limit shall be refused with NO_MEMORY. | Object creation in a job limited to 5 objects is refused at the limit, 0 objects beyond it (the `quota` line). | `O.QUOTA` |
-| `H.QUOTA.4` | Every charge against a job shall be returned when the resource it paid for is freed, and a job's quota slot shall be given back when the job goes. | After the quota checks every counter is back to zero and every slot given back, and every byte of heap charged came back (the `quota` and `kmem` lines). | `O.QUOTA` |
+| `H.QUOTA.4` | Every charge against a job shall be returned when the resource it paid for is freed, and a job's quota slot shall be given back when the job goes. | After the quota checks every counter of their jobs is back to zero, and as many quota slots are in use as before them (the `quota` line). | `O.QUOTA` |
 | `H.QUOTA.5` | A limit set on a job shall bound it together with every job beneath it, and a charge refused at any level shall leave no level charged. | A charge that would pass a grandparent's limit is refused although the child's own limit allows it, and each level's counter reads as before the attempt. | `O.QUOTA` |
+| `H.QUOTA.6` | A user page fault refused by a job's memory limit shall end a process in the job whose limit was full or beneath it, never one outside it, count the kill in that job and every job above it, and retry the fault. | A program writing 8 MiB in a job limited to 1 MiB ends by SIGKILL while a larger process in a sibling job lives; exactly 1 process is killed; memory.events counts one OOM kill in the job and its parent and none in the sibling. | `G.8, O.QUOTA` |
+| `H.QUOTA.7` | The kernel heap the Linux personality keeps for a job's programs shall be charged against the job's memory limit, and every byte of it returned when it is freed; a sibling job shall be unaffected. | At a 32 KiB limit each kind of personality object is refused one past its count with ENOMEM (ENOLCK for a lock) while a sibling makes one, and with them gone every byte charged has come back (the `kmem` line). | `O.QUOTA` |
 
-5 requirements.
+7 requirements.
 
 ### Failure
 
@@ -3883,6 +3894,109 @@ flowchart LR
 | `S20` | `stage20SelfHosting` | — | — | `#inProgress` |
 | `D.fuzz` | `fuzzTargetsOwed` | — | — | `#planned` |
 | `D.miri` | `miriOwed` | — | — | `#planned` |
+| `L.object.1` | `aProcessHandleSaysTerminated` | — | — | — |
+| `L.object.2` | `theOtherKindsSignals` | — | — | — |
+| `L.object.3` | `waitersAreWokenAtTheChange` | — | — | — |
+| `L.object.4` | `disposeFreesWhatIsNested` | — | — | — |
+| `L.object.5` | `disposeNeverRecurses` | — | — | — |
+| `L.object.6` | `aChannelEndClosesAtOnce` | — | — | — |
+| `L.object.7` | `nothingGivenUpWhileMemoryServes` | — | — | — |
+| `L.object.8` | `givenUpOnlyPastTheDepth` | — | — | — |
+| `L.object.9` | `aPairIsTwoObjects` | — | — | — |
+| `L.object.10` | `messagesReachThePeer` | — | — | — |
+| `L.object.11` | `aRefusedTakeMovesNothing` | — | — | — |
+| `L.object.12` | `aWriteIsAllOrNothing` | — | — | — |
+| `L.object.13` | `aQueueIsBounded` | — | — | — |
+| `L.object.14` | `aReadThatDoesNotFitTakesNothing` | — | — | — |
+| `L.object.15` | `anUndeliveredMessageGoesBack` | — | — | — |
+| `L.object.16` | `endpointsOnlyUnderTheTopologyLock` | — | — | — |
+| `L.object.17` | `anEmptyEndWithAClosedPeer` | — | — | — |
+| `L.object.18` | `anEmptyEndWithAnOpenPeerSaysWait` | — | — | — |
+| `L.object.19` | `messagesBeforeTheCloseAreReadFirst` | — | — | — |
+| `L.object.20` | `closingAnEndFreesItsQueue` | — | — | — |
+| `L.object.21` | `closingAnEndTellsItsPeer` | — | — | — |
+| `L.object.22` | `anEndsSignals` | — | — | — |
+| `L.object.23` | `anEndsRegistrations` | — | — | — |
+| `L.object.24` | `noCycleOfEnds` | — | — | — |
+| `L.object.25` | `anEndQueuedTwiceIsNoCycle` | — | — | — |
+| `L.object.26` | `theWalkIsBounded` | — | — | — |
+| `L.object.27` | `aPortIsOneObject` | — | — | — |
+| `L.object.28` | `userPacketsAreBounded` | — | — | — |
+| `L.object.29` | `aPacketComesBackAsQueued` | — | — | — |
+| `L.object.30` | `roomIsPromisedWhenRegistering` | — | — | — |
+| `L.object.31` | `anUndeliveredPacketGoesBack` | — | — | — |
+| `L.object.32` | `aRegistrationFiresOnce` | — | — | — |
+| `L.object.33` | `aChangeFiresOnlyWhatWantsIt` | — | — | — |
+| `L.object.34` | `sixtyFourRegistrations` | — | — | — |
+| `L.object.35` | `aLineIsClaimedOnce` | — | — | — |
+| `L.object.36` | `theLineIsFreedWithItsHolder` | — | — | — |
+| `L.object.37` | `pendingUntilAcknowledged` | — | — | — |
+| `L.object.38` | `aDeliveryWakes` | — | — | — |
+| `L.object.39` | `aBoundInterruptQueuesOnePacket` | — | — | — |
+| `L.object.40` | `aPendingInterruptIsQueuedWhenBound` | — | — | — |
+| `L.object.41` | `maskedFromDeliveryToAcknowledgement` | — | — | — |
+| `L.object.42` | `anUnheldLineIsMasked` | — | — | — |
+| `L.object.43` | `wholePagesOrRefused` | — | — | — |
+| `L.object.44` | `exactlyItsAperture` | — | — | — |
+| `L.object.45` | `aDeviceGetsExactlyItsPages` | — | — | — |
+| `L.object.46` | `unpinnedBeforeFreed` | — | — | — |
+| `L.object.47` | `aDeadDriversPinIsQuarantined` | — | — | — |
+| `L.object.48` | `theQuarantineIsCapped` | — | — | — |
+| `L.object.49` | `theQuarantineGoesBackOnHello` | — | — | — |
+| `L.object.50` | `aChargeIsHierarchical` | — | — | — |
+| `L.object.51` | `anUnchargeComesBackExactly` | — | — | — |
+| `L.object.52` | `aLimitReadsBackAndRefuses` | — | — | — |
+| `L.object.53` | `aSlotLivesWhileHeld` | — | — | — |
+| `L.object.54` | `aSlotIsClaimedClean` | — | — | — |
+| `L.object.55` | `aFrameIsChargedAPage` | — | — | — |
+| `L.object.56` | `kernelHeapIsMemory` | — | — | — |
+| `L.object.57` | `aMoveBringsItsTasks` | — | — | — |
+| `L.object.58` | `chargingNobodyRestores` | — | — | — |
+| `L.object.59` | `anObjectsChargeLivesWithIt` | — | — | — |
+| `L.object.60` | `weightIsShared` | — | — | — |
+| `L.object.61` | `theWeightIsSet` | — | — | — |
+| `L.object.62` | `theWeightIsClampedAndPassedUp` | — | — | — |
+| `L.object.63` | `everyProcessInOneJob` | — | — | — |
+| `L.object.64` | `aChildsQuotaIsInsideItsParents` | — | — | — |
+| `L.object.65` | `aChildIsAnObjectAndRefusedWhenKilled` | — | — | — |
+| `L.object.66` | `aNamedChildIsUnique` | — | — | — |
+| `L.object.67` | `theTreesLimits` | — | — | — |
+| `L.object.68` | `rmdirKeepsALiveJob` | — | — | — |
+| `L.object.69` | `aRemovedJobTakesNothing` | — | — | — |
+| `L.object.70` | `rmdirRefusedWhilePopulated` | — | — | — |
+| `L.object.71` | `theNoInternalProcessRule` | — | — | — |
+| `L.object.72` | `whatCgroupfsSetsIsKept` | — | — | — |
+| `L.object.73` | `populatedIsCounted` | — | — | — |
+| `L.object.74` | `aJobsSignals` | — | — | — |
+| `L.object.75` | `aKilledJobSaysTerminated` | — | — | — |
+| `L.object.76` | `aKillEndsTheTree` | — | — | — |
+| `L.object.77` | `cgroupKillLeavesTheJob` | — | — | — |
+| `L.object.78` | `aForkIntoADyingJobEnds` | — | — | — |
+| `L.object.79` | `aChainOfJobsIsFreedIteratively` | — | — | — |
+| `L.object.80` | `oomsAreCountedUpTheTree` | — | — | — |
+| `L.object.81` | `aProcessStartsCountedAndCharged` | — | — | — |
+| `L.object.82` | `aTableOf4096` | — | — | — |
+| `L.object.83` | `tasksAreGivenBack` | — | — | — |
+| `L.object.84` | `aThreadIsATask` | — | — | — |
+| `L.object.85` | `aMoveCarriesItsTasks` | — | — | — |
+| `L.object.86` | `aRefusedMoveLeavesItWhereItWas` | — | — | — |
+| `L.object.87` | `aNewProcessMeetsTheTaskLimit` | — | — | — |
+| `L.object.88` | `leavingTheJobOnce` | — | — | — |
+| `L.object.89` | `oneBootstrapOnce` | — | — | — |
+| `L.object.90` | `anEndClosesTheSlot` | — | — | — |
+| `L.object.91` | `anExecveSealsTheSlot` | — | — | — |
+| `L.object.92` | `anUndeliveredBootstrapGoesBack` | — | — | — |
+| `L.object.93` | `anEndFiresItsWatches` | — | — | — |
+| `L.object.94` | `howItEndedIsKept` | — | — | — |
+| `L.object.95` | `anUnstartedProcessEndsWithItsHandles` | — | — | — |
+| `L.object.96` | `aHandleKeepsOnlyTheEnd` | — | — | — |
+| `L.object.97` | `aStartedProcessIsHeldByItsTask` | — | — | — |
+| `L.object.98` | `pidsAreCyclic` | — | — | — |
+| `L.object.99` | `theLiveList` | — | — | — |
+| `L.object.100` | `theKillIsScoped` | — | — | — |
+| `L.object.101` | `theLargestIsChosen` | — | — | — |
+| `L.object.102` | `noLimitFullNoKill` | — | — | — |
+| `L.object.103` | `anEndedVictimIsEmptied` | — | — | — |
 
 A design rule is upheld by a gate rather than allocated to a part, so the P and N families are expected to be verified but untraced. A goal requirement is traced by the dependency the stage that discharges it draws.
 

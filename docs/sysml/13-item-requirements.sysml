@@ -196,23 +196,23 @@ package FerrixItemRequirements {
                 performed.";
             attribute :>> parent = ("O.CAPABILITY", "ASR-3");
         }
-        requirement <'H.OBJ.3'> rightsNeverRaised : ItemHighLevel {
-            attribute :>> statement = "Duplicating or replacing a handle shall yield
-                rights that are a subset of the source's; asking for a right the
-                source lacks shall be refused with ACCESS_DENIED, and duplicating
-                shall need the DUPLICATE right.";
-            attribute :>> criterion = "Every duplicate and replace that asks for a
-                right not held is refused ACCESS_DENIED and leaves the table as it
-                was; a duplicate of a handle without DUPLICATE is refused.";
+        requirement <'H.OBJ.3'> duplicatesNeverRaise : ItemHighLevel {
+            attribute :>> statement = "Duplicating a handle shall need the DUPLICATE
+                right and yield rights that are a subset of the source's; asking for
+                a right the source lacks shall be refused with ACCESS_DENIED.";
+            attribute :>> criterion = "A duplicate of a handle without DUPLICATE is
+                refused ACCESS_DENIED; one asking for a right the source lacks is
+                refused ACCESS_DENIED and the source keeps its rights; a narrower
+                copy is made with the rights asked for.";
             attribute :>> parent = ("O.CAPABILITY", "ASR-3");
         }
         requirement <'H.OBJ.4'> staleValuesRefused : ItemHighLevel {
             attribute :>> statement = "A handle value shall stop naming its object
-                when the handle is closed or transferred, and shall never name
-                another object afterwards.";
+                when the handle is closed or transferred, and shall not name the
+                object its slot holds next.";
             attribute :>> criterion = "A value whose handle was closed is refused
-                BAD_HANDLE after its slot is reused, on every reuse up to the
-                generation's limit; at the limit the slot is retired, not reissued.";
+                BAD_HANDLE, on a get and on a second close, after its slot is
+                reused, and the reused slot issues a new value.";
             attribute :>> parent = ("O.CAPABILITY", "ASR-3");
         }
         requirement <'H.OBJ.5'> handlesMoveOnlyInMessages : ItemHighLevel {
@@ -248,11 +248,10 @@ package FerrixItemRequirements {
         }
         requirement <'H.OBJ.8'> objectsEndWithTheirLastHandle : ItemHighLevel {
             attribute :>> statement = "An object shall be destroyed when the last
-                handle to it closes, and the peer of a destroyed channel end shall
-                observe PEER_CLOSED.";
-            attribute :>> criterion = "Programs made and never started end when
-                their last handle closes (2 of 2, the `spawn` line); a read on a
-                channel whose peer closed returns PEER_CLOSED; 0 frames leaked.";
+                handle to it closes.";
+            attribute :>> criterion = "A program made and never started ends when
+                its last handle closes, and one whose last handle rode unread in a
+                channel ends when the channel is closed: 2 of 2.";
             attribute :>> parent = ("O.CAPABILITY", "O.QUOTA");
         }
         requirement <'H.OBJ.9'> killingAJobEndsItsTree : ItemHighLevel {
@@ -262,6 +261,96 @@ package FerrixItemRequirements {
                 ended by two kills, and each wait on them is woken (the `jobs`
                 line).";
             attribute :>> parent = ("O.CAPABILITY", "O.QUOTA");
+        }
+
+        // H.OBJ.10 to H.OBJ.17 were added by the low-level pilot on object/
+        // (IMPLEMENTATION.md W-8, step 3). H.OBJ.10, 12 and 13 are behaviour
+        // object/ implements that no requirement said; H.OBJ.14 to 17 are the
+        // halves split out of H.OBJ.3, 4, 8 and 11, so that one check can prove
+        // each whole, since a `Verifies:` tag credits the whole requirement.
+
+        requirement <'H.OBJ.10'> queuesAreBounded : ItemHighLevel {
+            attribute :>> statement = "Every queue a program can fill in the kernel
+                shall be bounded -- a channel end's unread messages at 256, a port's
+                user packets at 1024, an object's port registrations at 64 -- and an
+                addition past the bound shall be refused without being queued.";
+            attribute :>> criterion = "Writing to a channel nobody reads is refused
+                SHOULD_WAIT at its bound, and queueing on a port nobody takes from is
+                refused SHOULD_WAIT at exactly 1024 packets, 0 queued past either
+                bound, and draining the channel makes room again; the 65th
+                registration on one object is refused.";
+            attribute :>> parent = "O.QUOTA";
+        }
+        requirement <'H.OBJ.11'> waitsEndAtTheirSignal : ItemHighLevel {
+            attribute :>> statement = "A wait on an object shall end when a signal
+                it waits for is asserted, at once if one already is, and shall not
+                end before its deadline while none is.";
+            attribute :>> criterion = "A wait on an empty channel end with a zero
+                deadline times out; one with a two-minute deadline is ended by a
+                message written 20 ms later, not before it, and reports READABLE; a
+                wait for PEER_CLOSED on an end whose peer has closed returns at
+                once.";
+            attribute :>> parent = ("G.7", "O.CAPABILITY");
+        }
+        requirement <'H.OBJ.12'> jobsAreCgroups : ItemHighLevel {
+            attribute :>> statement = "The job tree shall be the cgroup v2
+                hierarchy: every process in exactly one job, a job populated exactly
+                while it or a job beneath it has a member not yet released, and a
+                job refusing a process or a child that its killed or removed state,
+                its limits or the no-internal-process rule forbid.";
+            attribute :>> criterion = "A new process is in the root job and a fork's
+                child in its parent's; a job empties at its last member's release
+                and wakes its waiters; a move a job refuses leaves the process where
+                it was; a removed job takes neither a process nor a child; a child
+                past cgroup.max.depth or cgroup.max.descendants is refused.";
+            attribute :>> parent = ("G.8", "O.QUOTA");
+        }
+        requirement <'H.OBJ.13'> pidsNameOneProcess : ItemHighLevel {
+            attribute :>> statement = "A pid shall name at most one process at a
+                time, and a pid given back shall not be handed out again before
+                allocation has come round the whole range past it.";
+            attribute :>> criterion = "Allocating through the whole range wraps to
+                300 and passes over a pid still held: 0 pids handed out twice and
+                none below 300 after the wrap.";
+            attribute :>> parent = ("G.4", "O.ISOLATE");
+        }
+        requirement <'H.OBJ.14'> replacesNeverRaise : ItemHighLevel {
+            attribute :>> statement = "Replacing a handle shall close the source and
+                yield rights that are a subset of its; asking for a right the source
+                lacks shall be refused with ACCESS_DENIED and leave the source as it
+                was.";
+            attribute :>> criterion = "A replace asking for a right not held is
+                refused ACCESS_DENIED and the source keeps its rights; a narrower
+                replace closes the source and leaves one handle, with the rights
+                asked for.";
+            attribute :>> parent = ("O.CAPABILITY", "ASR-3");
+        }
+        requirement <'H.OBJ.15'> usedUpSlotsRetire : ItemHighLevel {
+            attribute :>> statement = "A slot whose generations are all used shall
+                be retired, so that no handle value is ever issued twice.";
+            attribute :>> criterion = "After every generation of one slot has been
+                issued and closed, the next handle comes from another slot, and 0 of
+                the values issued before it are issued again or resolve.";
+            attribute :>> parent = ("O.CAPABILITY", "ASR-3");
+        }
+        requirement <'H.OBJ.16'> thePeerSeesTheClose : ItemHighLevel {
+            attribute :>> statement = "The peer of a destroyed channel end shall
+                observe PEER_CLOSED from the moment the close returns, and what the
+                destroyed end held shall be freed.";
+            attribute :>> criterion = "After one end of a channel holding a queued
+                VMO is closed, a read and a write on the survivor are refused
+                PEER_CLOSED, 2 of 2, and 0 frames are leaked.";
+            attribute :>> parent = ("O.CAPABILITY", "O.QUOTA");
+        }
+        requirement <'H.OBJ.17'> registrationsFireOnce : ItemHighLevel {
+            attribute :>> statement = "A port registration shall queue exactly one
+                packet, with its key and the asserted signals it asked for, when one
+                of them is first asserted, at once if one already is.";
+            attribute :>> criterion = "A registration does not fire before its
+                signal, fires once on the message that asserts it and not on a
+                second, fires at once for a state already true, and fires when the
+                peer closes for PEER_CLOSED, each packet with its key.";
+            attribute :>> parent = ("G.7", "O.CAPABILITY");
         }
     }
 
@@ -542,15 +631,13 @@ package FerrixItemRequirements {
         }
         requirement <'H.QUOTA.2'> memoryLimit : ItemHighLevel {
             attribute :>> statement = "A job's programs shall not hold more memory
-                than the job's limit, counting the frames of their address spaces,
-                their page tables and the kernel heap the Linux personality keeps for
-                them, together with every job beneath it; a sibling job shall be
-                unaffected.";
-            attribute :>> criterion = "In a job at its limit faults are refused at
-                47 pages, 3 of them page tables, while a sibling job faults in 48
-                (the `quota` line); at a 32 KiB limit each kind of personality object
-                is refused one past its count with ENOMEM (ENOLCK for a lock) while a
-                sibling makes one (the `kmem` line).";
+                than the job's limit, counting the frames of their address spaces
+                and their page tables together with every job beneath it; a sibling
+                job shall be unaffected.";
+            attribute :>> criterion = "Faults in a job limited to 48 pages' worth
+                are refused when the next page would not fit, and the refusal is
+                counted, while a sibling job faults 48 pages in (the `quota`
+                line).";
             attribute :>> parent = "O.QUOTA";
         }
         requirement <'H.QUOTA.3'> objectLimit : ItemHighLevel {
@@ -564,9 +651,9 @@ package FerrixItemRequirements {
             attribute :>> statement = "Every charge against a job shall be returned
                 when the resource it paid for is freed, and a job's quota slot shall
                 be given back when the job goes.";
-            attribute :>> criterion = "After the quota checks every counter is back
-                to zero and every slot given back, and every byte of heap charged
-                came back (the `quota` and `kmem` lines).";
+            attribute :>> criterion = "After the quota checks every counter of their
+                jobs is back to zero, and as many quota slots are in use as before
+                them (the `quota` line).";
             attribute :>> parent = "O.QUOTA";
         }
         requirement <'H.QUOTA.5'> limitsAreHierarchical : ItemHighLevel {
@@ -576,6 +663,30 @@ package FerrixItemRequirements {
             attribute :>> criterion = "A charge that would pass a grandparent's limit
                 is refused although the child's own limit allows it, and each level's
                 counter reads as before the attempt.";
+            attribute :>> parent = "O.QUOTA";
+        }
+        // Added by the low-level pilot on object/ (W-8 step 3), like H.OBJ.10-13.
+        requirement <'H.QUOTA.6'> oomKillIsScoped : ItemHighLevel {
+            attribute :>> statement = "A user page fault refused by a job's memory
+                limit shall end a process in the job whose limit was full or beneath
+                it, never one outside it, count the kill in that job and every job
+                above it, and retry the fault.";
+            attribute :>> criterion = "A program writing 8 MiB in a job limited to 1
+                MiB ends by SIGKILL while a larger process in a sibling job lives;
+                exactly 1 process is killed; memory.events counts one OOM kill in the
+                job and its parent and none in the sibling.";
+            attribute :>> parent = ("G.8", "O.QUOTA");
+        }
+        // Split out of H.QUOTA.2 and H.QUOTA.4 by the pilot, for one check each.
+        requirement <'H.QUOTA.7'> kernelHeapIsCharged : ItemHighLevel {
+            attribute :>> statement = "The kernel heap the Linux personality keeps
+                for a job's programs shall be charged against the job's memory
+                limit, and every byte of it returned when it is freed; a sibling job
+                shall be unaffected.";
+            attribute :>> criterion = "At a 32 KiB limit each kind of personality
+                object is refused one past its count with ENOMEM (ENOLCK for a lock)
+                while a sibling makes one, and with them gone every byte charged has
+                come back (the `kmem` line).";
             attribute :>> parent = "O.QUOTA";
         }
     }
