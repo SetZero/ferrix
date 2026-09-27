@@ -59,16 +59,6 @@
       "lines": 88,
       "recursive": false
     },
-    "main.rs::check_loader_allocations": {
-      "complexity": 5,
-      "lines": 66,
-      "recursive": false
-    },
-    "main.rs::check_syscalls": {
-      "complexity": 15,
-      "lines": 88,
-      "recursive": false
-    },
     "main.rs::kmain": {
       "complexity": 12,
       "lines": 68,

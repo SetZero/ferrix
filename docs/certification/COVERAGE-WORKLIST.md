@@ -18,12 +18,12 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | [`object`](#object) | 9 | 19 | 18 | 7 |
 | [`devmgr`](#devmgr) | 13 | 7 | 6 | 1 |
 | [`console`](#console) | 3 | 6 | 3 | 3 |
-| [`main`](#main) | 6 | 3 | 3 | 1 |
 | [`vmap`](#vmap) | 2 | - | 5 | 1 |
 | [`mm`](#mm) | 1 | 1 | 4 | 1 |
 | [`smp`](#smp) | - | 4 | 4 | 1 |
 | [`early`](#early) | - | - | 3 | 1 |
 | [`init`](#init) | 3 | 2 | 2 | 1 |
+| [`main`](#main) | 3 | 3 | 3 | 1 |
 | [`sched`](#sched) | 2 | 3 | 3 | 2 |
 | [`iommu`](#iommu) | 2 | - | - | 1 |
 | [`irq`](#irq) | 2 | - | - | 1 |
@@ -33,7 +33,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | [`claim`](#claim) | 1 | - | - | 1 |
 | [`signal_frame`](#signal_frame) | - | - | 1 | 1 |
 | [`timer`](#timer) | - | - | 1 | 1 |
-| **Total** | **97** | **144** | **128** | 39 |
+| **Total** | **94** | **144** | **128** | 39 |
 
 ---
 
@@ -116,14 +116,6 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 ---
 
-## `main`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `main.rs` | `item` | 6 | 3 | 3 | 2 | 323, 1632 |
-
----
-
 ## `vmap`
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
@@ -161,6 +153,14 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
 | `init.rs` | `item` | 3 | 2 | 2 | 2 | 352, 472 |
+
+---
+
+## `main`
+
+| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
+|---|---|---:|---:|---:|---:|---|
+| `main.rs` | `item` | 3 | 3 | 3 | 2 | 306, 659 |
 
 ---
 

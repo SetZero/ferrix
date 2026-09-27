@@ -24,7 +24,7 @@ Coverage evidence recording the checks: x86-64.
 | Named by a low-level requirement | 865 |
 | Accessors, covered by the requirement they serve | 625 |
 | Check code in a product file | 28 |
-| Named by none | 840 |
+| Named by none | 791 |
 
 Subsystems whose low-level requirements are complete: `arch::x86_64`, `claim`, `console`, `device`, `early`, `iommu`, `mm`, `object`, `smp`, `trap`, `user`, `vmap`.
 
@@ -46,7 +46,7 @@ Functions that are checks, or serve only checks, and live in a product file, so 
 | `arch::x86_64::trap::breakpoint` | Its only callers are main.rs's check_breakpoint, which raises int3 twice for stage 3's check. |
 | `console::input::check` | The receive ring's check (FX-0305, the `input` line), run from main.rs before the port's interrupt is installed. It fills and empties RING and reads HELD and OVERRUNS, private to input.rs; as a child module, console/input/check.rs, it could read them and verify L.console.20. |
 | `console::output::check` | The transmit check (FX-0504, the `output` line), run from main.rs once tasks can wait. It reads BY_INTERRUPT, BY_WRITER, HELD and waits on WRITERS, private to output.rs; as a child module, console/output/check.rs, it could read them and verify L.console.9 and L.console.10. |
-| `early::EarlyMemory::read_physical_byte` | Stage 1's check_direct_map in main.rs reads the image's first bytes through it; nothing else calls it. It stays while that check is in main.rs. |
+| `early::EarlyMemory::read_physical_byte` | Stage 1's check_direct_map, in stages_check.rs, reads the image's first bytes through it; nothing else calls it. It can move into a check file of early's. |
 | `early::EarlyMemory::translate` | Called only by stage 1's checks in main.rs (check_early_mapper, check_no_early_window_wraps); it reads EarlyMemory's private walk state. |
 | `mm::FrameWindow::kept` | A check's frame window: frames kept since it opened. Every caller is a check file; it reads Held, which reads the heap and route counters private to mm.rs. |
 | `mm::FrameWindow::report_at` | Prints a window's heap and per-route movement for a failing check, through FrameWindow::report; check files only. |

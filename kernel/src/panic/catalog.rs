@@ -233,7 +233,7 @@ pub(crate) static ALLOCATION_ABORTED: Explanation = Explanation {
           kernel/src/mm.rs",
 };
 
-/// For `check_allocation_failure` in `main.rs`.
+/// For `check_allocation_failure` in `stages_check.rs`.
 pub(crate) static STAGE9_ALLOCATION: Explanation = Explanation {
     code: "FX-0902",
     title: "an allocation failure was not survived",
@@ -262,7 +262,7 @@ pub(crate) static STAGE9_ALLOCATION: Explanation = Explanation {
           docs/certification/MEMORY-AND-TIMING.md",
 };
 
-/// For `check_native_refusals` in `main.rs`.
+/// For `check_native_refusals` in `stages_check.rs`.
 pub(crate) static STAGE9_REFUSALS: Explanation = Explanation {
     code: "FX-0903",
     title: "a native call accepted what the ABI says it refuses",
@@ -287,7 +287,7 @@ pub(crate) static STAGE9_REFUSALS: Explanation = Explanation {
           kernel/src/object/channel.rs; libs/kernel/objects",
 };
 
-/// For `check_services` in `main.rs`.
+/// For `check_services` in `stages_check.rs`.
 pub(crate) static SERVICES: Explanation = Explanation {
     code: "FX-0904",
     title: "a service the item leans on failed its self-check",
@@ -309,7 +309,7 @@ pub(crate) static SERVICES: Explanation = Explanation {
           kernel/src/devmgr.rs; kernel/src/iommu/check.rs; kernel/src/iommu/gate.rs",
 };
 
-/// For `check_quotas` in `main.rs`.
+/// For `check_quotas` in `stages_check.rs`.
 pub(crate) static STAGE9_QUOTAS: Explanation = Explanation {
     code: "FX-0905",
     title: "a job quota did not bound what it claims to",
@@ -336,7 +336,7 @@ pub(crate) static STAGE9_QUOTAS: Explanation = Explanation {
           docs/certification/IMPLEMENTATION.md",
 };
 
-/// For `check_kernel_memory` in `main.rs`, when `fs::kmem_check::run` fails.
+/// For `check_kernel_memory` in `stages_check.rs`, when `fs::kmem_check::run` fails.
 pub(crate) static STAGE9_KMEM: Explanation = Explanation {
     code: "FX-0906",
     title: "the kernel heap a job drove through the Linux calls was not bounded by its job",
@@ -432,7 +432,7 @@ pub(crate) static VMAP_ARENA_BRING_UP: Explanation = Explanation {
     see: "kernel/src/vmap.rs init; libs/proto/bootinfo; libs/kernel/vma",
 };
 
-/// For `check_allocators_and_traps` in `main.rs`, when `mm::check::memory_check` fails.
+/// For `check_allocators_and_traps` in `stages_check.rs`, when `mm::check::memory_check` fails.
 pub(crate) static STAGE2_ALLOCATORS: Explanation = Explanation {
     code: "FX-0203",
     title: "the memory allocators failed their self-check",
@@ -723,7 +723,7 @@ pub(crate) static RANDOM_GENERATOR: Explanation = Explanation {
     see: "kernel/src/random.rs; libs/kernel/crng",
 };
 
-/// For `check_speculation` in `main.rs`, when `arch::check_speculation` fails.
+/// For `check_speculation` in `stages_check.rs`, when `arch::check_speculation` fails.
 pub(crate) static SPECULATION_DEFENCES: Explanation = Explanation {
     code: "FX-0307",
     title: "the side-channel defences did not hold",
@@ -1059,7 +1059,7 @@ pub(crate) static STAGE5_SCHEDULER: Explanation = Explanation {
     see: "kernel/src/sched/check.rs run; kernel/src/sched/mod.rs; docs/ROADMAP.md stage 5",
 };
 
-/// For `check_user_memory` in `main.rs`, when `user::check::run` fails.
+/// For `check_user_memory` in `stages_check.rs`, when `user::check::run` fails.
 pub(crate) static STAGE6_USER_MEMORY: Explanation = Explanation {
     code: "FX-0601",
     title: "the memory a process is built from failed its self-check",
@@ -1086,7 +1086,7 @@ pub(crate) static STAGE6_USER_MEMORY: Explanation = Explanation {
           docs/ROADMAP.md stage 6",
 };
 
-/// For `check_reverse_map` in `main.rs`, when `user::rmap_check::run` fails.
+/// For `check_reverse_map` in `stages_check.rs`, when `user::rmap_check::run` fails.
 pub(crate) static STAGE6_REVERSE_MAP: Explanation = Explanation {
     code: "FX-0602",
     title: "a page taken from a mapped object stayed reachable, or was not taken as it should be",
@@ -1148,7 +1148,7 @@ pub(crate) static STAGE10_PCI: Explanation = Explanation {
           docs/ROADMAP.md stage 10",
 };
 
-/// For `check_btrfs_disk` in `main.rs`, when `fs::btrfs_check::run` fails.
+/// For `check_btrfs_disk` in `stages_check.rs`, when `fs::btrfs_check::run` fails.
 pub(crate) static STAGE11_MOUNT: Explanation = Explanation {
     code: "FX-1101",
     title: "the btrfs disk did not mount and read back as the host wrote it",
@@ -1172,7 +1172,7 @@ pub(crate) static STAGE11_MOUNT: Explanation = Explanation {
           xtask/src/btrfs_disk.rs; docs/ROADMAP.md stage 11",
 };
 
-/// For `check_cgroupfs` in `main.rs`, when `fs::cgroupfs::check` fails.
+/// For `check_cgroupfs` in `stages_check.rs`, when `fs::cgroupfs::check` fails.
 pub(crate) static STAGE13_CGROUPFS: Explanation = Explanation {
     code: "FX-1301",
     title: "cgroupfs did not show the job tree as cgroup v2",
@@ -1255,7 +1255,7 @@ pub(crate) static STAGE13_CGROUPFS: Explanation = Explanation {
           docs/CGROUPS.md",
 };
 
-/// For `check_sysfs` in `main.rs`, when `fs::sysfs::check::run` fails.
+/// For `check_sysfs` in `stages_check.rs`, when `fs::sysfs::check::run` fails.
 pub(crate) static SYSFS: Explanation = Explanation {
     code: "FX-0890",
     title: "sysfs did not show the machine's devices as Linux shows them",
@@ -1355,7 +1355,7 @@ pub(crate) static NET_CORE: Explanation = Explanation {
           docs/ROADMAP.md",
 };
 
-/// For `check_net_ring` in `main.rs`, when the net ring's self-check fails.
+/// For `check_net_ring` in `stages_check.rs`, when the net ring's self-check fails.
 pub(crate) static NET_RING: Explanation = Explanation {
     code: "FX-1151",
     title: "the net ring did not carry a frame between the kernel and a driver",
@@ -1385,7 +1385,7 @@ pub(crate) static NET_RING: Explanation = Explanation {
           docs/NET-RING.md",
 };
 
-/// For `check_netlink` in `main.rs`, when the netlink self-check fails.
+/// For `check_netlink` in `stages_check.rs`, when the netlink self-check fails.
 pub(crate) static NETLINK: Explanation = Explanation {
     code: "FX-1152",
     title: "AF_NETLINK did not answer the requests `ip` makes",
@@ -1642,7 +1642,7 @@ pub(crate) static STAGE10_DEVICES: Explanation = Explanation {
     see: "kernel/src/device.rs publish; kernel/src/pci.rs; docs/ROADMAP.md stage 10",
 };
 
-/// For `check_path_calls` in `main.rs`, when `syscall::check::run_paths` fails.
+/// For `check_path_calls` in `stages_check.rs`, when `syscall::check::run_paths` fails.
 pub(crate) static STAGE8_PATH_CALLS: Explanation = Explanation {
     code: "FX-0820",
     title: "the system calls that take a path failed their self-check",
@@ -1672,7 +1672,7 @@ pub(crate) static STAGE8_PATH_CALLS: Explanation = Explanation {
           kernel/src/syscall/stat.rs; libs/fs/vfs; docs/ROADMAP.md stage 8",
 };
 
-/// For `check_native_objects` in `main.rs`, when `object::check::run` fails.
+/// For `check_native_objects` in `stages_check.rs`, when `object::check::run` fails.
 pub(crate) static STAGE9_OBJECTS: Explanation = Explanation {
     code: "FX-0901",
     title: "the native ABI's objects failed their self-check",
@@ -1720,7 +1720,7 @@ pub(crate) static STAGE9_OBJECTS: Explanation = Explanation {
           kernel/src/object/channel.rs; docs/ROADMAP.md stage 9",
 };
 
-/// For `check_syscalls` in `main.rs`, when `syscall::check::run` fails.
+/// For `check_syscalls` in `stages_check.rs`, when `syscall::check::run` fails.
 pub(crate) static STAGE7_SYSCALLS: Explanation = Explanation {
     code: "FX-0701",
     title: "the system call dispatch path failed its self-check",
@@ -1965,7 +1965,7 @@ pub(crate) static STAGE8_MEMFD: Explanation = Explanation {
           protect; libs/fs/vfs/src/tmpfs.rs add_seals",
 };
 
-/// For `check_epoll` in `main.rs`, when the epoll check fails.
+/// For `check_epoll` in `stages_check.rs`, when the epoll check fails.
 pub(crate) static STAGE8_EPOLL: Explanation = Explanation {
     code: "FX-0881",
     title: "epoll failed its self-check",
@@ -1995,7 +1995,7 @@ pub(crate) static STAGE8_EPOLL: Explanation = Explanation {
           poll_changes",
 };
 
-/// For `check_eventfd` in `main.rs`, when the eventfd check fails.
+/// For `check_eventfd` in `stages_check.rs`, when the eventfd check fails.
 pub(crate) static STAGE8_EVENTFD: Explanation = Explanation {
     code: "FX-0882",
     title: "eventfd failed its self-check",
@@ -2035,7 +2035,7 @@ pub(crate) static STAGE8_EVENTFD: Explanation = Explanation {
           kernel/src/fs/anon.rs",
 };
 
-/// For `check_timerfd` in `main.rs`, when the timerfd check fails.
+/// For `check_timerfd` in `stages_check.rs`, when the timerfd check fails.
 pub(crate) static STAGE8_TIMERFD: Explanation = Explanation {
     code: "FX-0883",
     title: "timerfd failed its self-check",
@@ -2075,7 +2075,7 @@ pub(crate) static STAGE8_TIMERFD: Explanation = Explanation {
           kernel/src/sched/wait.rs",
 };
 
-/// For `check_signalfd` in `main.rs`, when the signalfd check fails.
+/// For `check_signalfd` in `stages_check.rs`, when the signalfd check fails.
 pub(crate) static STAGE8_SIGNALFD: Explanation = Explanation {
     code: "FX-0884",
     title: "signalfd failed its self-check",
@@ -2111,7 +2111,7 @@ pub(crate) static STAGE8_SIGNALFD: Explanation = Explanation {
           kernel/src/syscall/process.rs notify_signal; kernel/src/fs/wake.rs",
 };
 
-/// For `check_madvise` in `main.rs`, when the madvise check fails.
+/// For `check_madvise` in `stages_check.rs`, when the madvise check fails.
 pub(crate) static STAGE8_MADVISE: Explanation = Explanation {
     code: "FX-0872",
     title: "madvise failed its self-check",
@@ -2175,7 +2175,7 @@ pub(crate) static STAGE8_FILE_MAPPINGS: Explanation = Explanation {
           kernel/src/user/space.rs map_file, fault; kernel/src/fs/pages.rs; docs/ROADMAP.md stage 8",
 };
 
-/// For `check_program_files` in `main.rs`, when the check of programs mapped
+/// For `check_program_files` in `stages_check.rs`, when the check of programs mapped
 /// from their files fails.
 pub(crate) static STAGE8_PROGRAM_FILES: Explanation = Explanation {
     code: "FX-0871",
@@ -2227,7 +2227,7 @@ pub(crate) static INIT_EXITED: Explanation = Explanation {
     see: "kernel/src/power.rs finish; kernel/src/init.rs run; docs/INIT.md §8.3",
 };
 
-/// For `check_init_calls` in `main.rs`, when `syscall::init_calls_check::run`
+/// For `check_init_calls` in `stages_check.rs`, when `syscall::init_calls_check::run`
 /// fails.
 pub(crate) static INIT_CALLS: Explanation = Explanation {
     code: "FX-1502",

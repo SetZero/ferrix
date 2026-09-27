@@ -149,7 +149,7 @@
       "reason": "Stage 6's boot checks: a page written and read back to prove a mapping, an alias, or a fault. Volatile so the compiler cannot decide the check proved itself."
     },
     {
-      "file": "kernel/src/main.rs",
+      "file": "kernel/src/stages_check.rs",
       "kind": "memory",
       "max_sites": 5,
       "reason": "The boot checks' probes: demand paging and the kernel image's own bytes. Ordinary RAM, read for real because that is what is being proven."

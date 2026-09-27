@@ -377,7 +377,7 @@
         "libs/proto/bootinfo/src/lib.rs::validate",
         "kernel/src/acpi.rs",
         "kernel/src/fdt.rs",
-        "kernel/src/main.rs::check_direct_map"
+        "kernel/src/stages_check.rs::check_direct_map"
       ]
     },
     {
