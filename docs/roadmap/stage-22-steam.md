@@ -40,8 +40,14 @@ staged until now.
   against the descriptor it names before it is loaded; reviewed by the
   certification consultant. **I2b** follows (about 13 points): `fork`,
   `clone` and both i386 signal frames with their returns, every returned
-  frame checked before any of it is loaded. I3, the compat layouts that
-  let Alpine's i386 busybox run, is next.
+  frame checked before any of it is loaded. **I3** follows (about 10 of its
+  13 points): Alpine's i386 busybox, unchanged, passes `test-shell` and
+  `test-vfs` under TCG and KVM. 229 i386 calls are mapped, their argument
+  registers and structures read at the program's width -- the split 64-bit
+  offsets, `iovec`, `flock64`, `statfs64`, the time32 `timespec`s musl
+  prefers, the sockets' `msghdr` -- and an `ioctl` outside the terminal's
+  is `ENOTTY`. Still to do: the `stat` family's i386 layouts, `socketcall`,
+  the calls that carry a `siginfo`. I4, glibc's i386 busybox, is next.
 * **glibc's place, taken.** The dynamic linking stage's third part, glibc's
   names, with Steam as its stress test: `ld-linux` and `libc.so.6` requested
   by name, `dlopen` from the client and from every Steam runtime library,
