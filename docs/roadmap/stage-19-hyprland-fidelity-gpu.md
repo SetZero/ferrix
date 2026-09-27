@@ -1433,6 +1433,18 @@ where `pulsed` does not run, load averages, wifi, a D-Bus tray -- is listed
 in `docs/DESKTOP-CLIENTS.md` §3, and `waybar-probe` lists it from the real
 files.
 
+**fuzzel, and the host's own desktop on `--everything` (2026-09-27).**
+`/bin/fuzzel` reads the user's `fuzzel.ini` and draws its window on a layer
+surface as upstream's `render.c` does. The user's `SUPER R` runs their own
+`hypr-launcher` script, carried unchanged, whose fuzzel path links to
+`/bin/fuzzel` (`--boot fuzzel-user`). `run-compositor --everything` now
+starts this machine's own `hyprland.conf` with its dotfiles, fonts and
+monitor EDID, so the user's waybar draws their bar. `exec-once =
+/bin/vdagent` and a `SUPER RETURN` terminal are added to it, and
+`/bin/foot` is term, so their `$terminal = foot` opens one
+(`--boot everything-desktop`). The script's `pkill -x fuzzel` toggle does
+not close fuzzel yet (`docs/BACKLOG.md`).
+
 **Where the exit stands (reviewed 2026-09-21).** The existing exit criterion
 is met: `cargo xtask test-compositor` covers the non-GPU path on x86-64 and
 AArch64, and `cargo xtask test-compositor --gl` covers Path A from inside the
