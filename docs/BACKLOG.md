@@ -430,6 +430,10 @@ log path and commit; a new sighting is added to its row the day it is seen.
   **Doom in Rust is in the backlog** (the customer, 2026-09-26: stop after
   Bad Apple): D1 to D4, estimated 21, not started and unowned.
   `docs/MEDIA.md` §3 has the plan and what reading room4doom found.
+* Ferrix in 8 to 16 MiB, for an FPGA RISC-V board (Tang Nano 20K, 8 MiB):
+  `docs/SMALL-MEMORY.md`. Phase 0 (`--strip-kernel`, the end-of-boot
+  memory line, CI's 128 MiB row) landed; phases 1 to 3 are estimated at 29,
+  unowned. The RISC-V port itself is unsized.
 * Huge pages; frame share and release are order 0 by design.
 * A panic report as a QR code: a port of Linux's `drm_panic_qr` as
   `libs/kernel/qr` (ferrix-qr), so a panic screen can carry the whole report. WIP

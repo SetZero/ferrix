@@ -390,6 +390,8 @@ jobs:
         uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: x86_64-unknown-none, aarch64-unknown-none-softfloat, armv7a-none-eabi, x86_64-unknown-uefi, aarch64-unknown-uefi, armv7-unknown-linux-musleabi
+          # `llvm-objcopy`, which `--strip-kernel` strips the kernel with.
+          components: llvm-tools
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -408,6 +410,14 @@ jobs:
 
       - name: Boot
         run: cargo xtask test-boot --arch ${{ matrix.arch }} --release --timeout 120
+
+      # The smallest machine every architecture boots today, so that what
+      # Ferrix needs cannot grow unseen (docs/SMALL-MEMORY.md). 128 MiB is
+      # the firmware's floor as much as ours: EDK2 refuses to start aarch64
+      # in less, U-Boot runs out below 48 MiB, and the loader, holding the
+      # kernel file, the kernel and the initramfs at once, below 128 MiB.
+      - name: Boot in 128 MiB
+        run: cargo xtask test-boot --arch ${{ matrix.arch }} --release --strip-kernel --memory 128 --timeout 120
 
       - name: Keep the serial log
         if: always()
