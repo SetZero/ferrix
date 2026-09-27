@@ -99,7 +99,13 @@ processor), with `nosmp`, into a reset, and with the options above. ARMv7-A
 boots it again on a Cortex-A15, the one other core `virt` takes and one the
 Spectre defences apply to, into a reset, on one processor, with 3 GiB so that
 firmware loads the kernel above the split, as the DK1's memory always is, and
-with the options. Debug profile, with KASLR. x86-64 measured on main at
+with the options. Debug profile, with KASLR. Every Arm boot goes through its
+firmware as a board's does -- EDK2 on AArch64, U-Boot on ARMv7-A -- with its
+two waits skipped since 2026-09-27: EDK2's boot menu, by a `Timeout` of 0 in
+the fresh variable store xtask writes (`xtask/src/uefi_vars.rs`), and U-Boot's
+autoboot countdown, by an environment in flash that is U-Boot's own
+compiled-in default with `bootdelay=0` and nothing else changed
+(`xtask/src/uboot_env.rs`). x86-64 measured on main at
 9076655c and carried to c14846aa across the kernel relayout, which moved files
 without changing a statement of the item; AArch64 and ARMv7-A measured again
 on 2026-09-27 at 9e196852, with `test-vfs` in their suite and the trap
