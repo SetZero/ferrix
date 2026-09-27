@@ -107,6 +107,7 @@ const LSWT_PATH: &str = "bin/lswt";
 const SHOT_PATH: &str = "bin/shot";
 const LOCK_PATH: &str = "bin/lock";
 const VKBD_PATH: &str = "bin/vkbd";
+const VDAGENT_PATH: &str = "bin/vdagent";
 /// hypridle, and the `loginctl` that reaches it (`userland/compositor/hypridle`).
 const HYPRIDLE_PATH: &str = "bin/hypridle";
 const LOGINCTL_PATH: &str = "bin/loginctl";
@@ -922,6 +923,8 @@ struct Programs {
     loginctl: PathBuf,
     /// `reboot`, which asks the firmware to come back up somewhere.
     reboot: PathBuf,
+    /// `vdagent`, which joins the host's clipboard to this one.
+    vdagent: PathBuf,
 }
 
 impl Programs {
@@ -941,11 +944,12 @@ impl Programs {
             hypridle: build(arch, "compositor-hypridle", "hypridle")?,
             loginctl: build(arch, "compositor-hypridle", "loginctl")?,
             reboot: build(arch, "compositor-reboot", "reboot")?,
+            vdagent: build(arch, "compositor-vdagent", "vdagent")?,
         })
     }
 
     /// The ones the initramfs carries, each with the path it goes at.
-    fn carried(&self) -> [(&'static str, &Path); 12] {
+    fn carried(&self) -> [(&'static str, &Path); 13] {
         [
             (CLIENT_PATH, self.client.as_path()),
             (CTL_PATH, self.ctl.as_path()),
@@ -959,6 +963,7 @@ impl Programs {
             (HYPRIDLE_PATH, self.hypridle.as_path()),
             (LOGINCTL_PATH, self.loginctl.as_path()),
             (REBOOT_PATH, self.reboot.as_path()),
+            (VDAGENT_PATH, self.vdagent.as_path()),
         ]
     }
 }
@@ -1872,6 +1877,11 @@ const RUN_CONFIG: &str = "# Written into the initramfs by `cargo xtask run-compo
 # covers it completely -- so the terminal needs an opacity below 1 for its
 # own default to be visible at all.
 windowrule = opacity 0.88, match:class ^(rocks\\.magical\\.term)$
+# The clipboard agent, which joins this desktop's selection to the clipboard
+# of whoever is watching (`docs/CLIPBOARD.md` §6). It needs `--clipboard` to
+# have put the port on the bus; without one it says so and leaves, so a boot
+# without the flag is a boot without a clipboard and not a boot with an error.
+exec-once = /bin/vdagent
 exec-once = /bin/term /bin/zinc
 bind = SUPER, RETURN, exec, /bin/term /bin/zinc
 bind = SUPER, P, exec, /bin/pattern gradient another

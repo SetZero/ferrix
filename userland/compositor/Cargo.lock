@@ -365,6 +365,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-vdagent"
+version = "0.1.0"
+dependencies = [
+ "compositor-evecho",
+ "compositor-protocol",
+ "compositor-socket",
+ "compositor-wire",
+ "ferrix-vdagent",
+ "libc",
+]
+
+[[package]]
 name = "compositor-virgl"
 version = "0.1.0"
 
@@ -446,6 +458,10 @@ version = "0.1.0"
 
 [[package]]
 name = "ferrix-svc-proto"
+version = "0.1.0"
+
+[[package]]
+name = "ferrix-vdagent"
 version = "0.1.0"
 
 [[package]]
