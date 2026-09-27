@@ -157,6 +157,29 @@ impl Default for Config {
 }
 
 impl Config {
+    /// For a device with no seek cost, which is every disk behind a block
+    /// ring (a virtio disk): a read, or a `sync` write or discard, waits
+    /// behind the elevator at most 25 ms, not [`Config::default`]'s 500.
+    ///
+    /// The rule: the read expiry is the longest a read can starve behind the
+    /// elevator. With readers adding requests ahead of the head faster than
+    /// it wraps, a request behind it waits the whole expiry. `mq-deadline`'s
+    /// half second is what a spinning disk gives up to keep the head moving
+    /// one way; a device with no head gets nothing for it. On a ring disk
+    /// the default made the 99th percentile of 32 concurrent 4 KiB reads 112
+    /// to 228 ms under KVM; 25 ms made it 28 to 35 ms with the median
+    /// unchanged (`docs/roadmap/stage-11-block-core-btrfs-read.md`, the seam
+    /// measured, 1). Asynchronous writes keep their five seconds.
+    #[must_use]
+    pub const fn fast_device() -> Self {
+        Config {
+            read_expiry: 25,
+            write_expiry: 5000,
+            plug_threshold: 16,
+            max_requests: 256,
+        }
+    }
+
     /// How long a request with this op and these flags may wait.
     #[must_use]
     pub const fn expiry(&self, op: Op, flags: Flags) -> u64 {

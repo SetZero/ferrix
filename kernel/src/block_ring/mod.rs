@@ -905,7 +905,7 @@ impl RingDisk {
         RingDisk {
             device,
             state: SpinLock::new(DiskState {
-                queue: Queue::new(limits, Config::default()),
+                queue: Queue::new(limits, Config::fast_device()),
                 reads: BTreeMap::new(),
                 next_id: 0,
                 ended: false,

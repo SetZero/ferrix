@@ -58,7 +58,9 @@ Linux's in-kernel path takes fewer of. Real hardware would narrow the gap,
 but that is not measured.
 
 **What would reopen the plan.** Cut the trip, then measure again:
-1. Fix the depth-32 stall.
+1. Fix the depth-32 stall. Done 2026-09-27: the elevator starved reads
+   behind its head for up to 500 ms; ring disks now use a 25 ms read
+   expiry, and the p99 fell to 28–35 ms.
 2. Find where the 250 to 800 us go; the driver's own `device_ticks` already
    splits off the device's share.
 3. Add PCIDs.

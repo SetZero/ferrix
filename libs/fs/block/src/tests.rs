@@ -510,6 +510,46 @@ fn the_elevator_climbs_then_wraps_once() {
     );
 }
 
+/// The tick at which a read waiting behind the elevator is dispatched, when
+/// a new read lands just ahead of the head every tick and one is dispatched
+/// every tick: the depth-32 stall of a ring disk, in miniature.
+fn starved_until(config: Config) -> u64 {
+    let mut q = Queue::new(Limits::new(512, 1_000_000, 64, 8, 4).unwrap(), config);
+    // Move the head past the victim's sector.
+    submit(&mut q, 0, &[Request::read(1, 500, 1)]);
+    let first = next(&mut q, 0).unwrap();
+    done(&mut q, &first);
+    submit(&mut q, 0, &[Request::read(2, 10, 1)]);
+    for (tick, id) in (1..2_000).zip(3..) {
+        let ahead = 1_000 + tick * 10;
+        submit(&mut q, tick, &[Request::read(id, ahead, 1)]);
+        let sent = next(&mut q, tick).unwrap();
+        done(&mut q, &sent);
+        if sent.ids.contains(&2) {
+            return tick;
+        }
+    }
+    u64::MAX
+}
+
+#[test]
+fn a_fast_device_bounds_a_read_behind_the_elevator() {
+    let bound = Config::fast_device().read_expiry;
+    let waited = starved_until(Config::fast_device());
+    assert!(
+        waited <= bound + 1,
+        "a read behind the elevator waited {waited} ticks on a fast device, past {bound}"
+    );
+    // The negative control: under the spinning-disk default the same read
+    // starves until its half-second expiry, which is the stall a ring disk
+    // showed at depth 32. Should the default ever change, this says so.
+    let starved = starved_until(Config::default());
+    assert!(
+        starved >= Config::default().read_expiry,
+        "under the default a read behind the elevator left after {starved} ticks"
+    );
+}
+
 #[test]
 fn an_overdue_unit_beats_the_elevator() {
     let mut q = queue();

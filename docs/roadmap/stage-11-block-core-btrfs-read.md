@@ -144,8 +144,11 @@ ranges over four pairs on x86-64 and one on AArch64:
 
 In QEMU a cold disk request costs Ferrix ten to twenty times Linux's on
 x86-64 at depth 1, and three times on AArch64. At depth 32 a stall of 150 to 230 ms
-reaches the 99th percentile on both architectures, which a BACKLOG row now
-owns. Against the second row: a warm build crosses once in thousands of
+reaches the 99th percentile on both architectures. That stall was the block
+queue's elevator starving a read behind the head until `mq-deadline`'s 500 ms
+spinning-disk expiry. With ring disks on `Config::fast_device()` (25 ms), the
+x86-64 KVM p99 at depth 32 fell to 28–35 ms, with the median unchanged
+(2026-09-27). Against the second row: a warm build crosses once in thousands of
 system calls, so the hop's cost falls on cold reads, which is where the
 decision of 2026-09-16 put it.
 
