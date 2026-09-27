@@ -38,6 +38,11 @@ pub const O_NONBLOCK: usize = 0o4000;
 /// [`Deadline`]: ferrix_native::handle::Deadline
 pub const CLOCK_MONOTONIC: usize = 1;
 
+/// `SOL_SOCKET`, the level of the options every socket has.
+pub const SOL_SOCKET: usize = 1;
+/// `SO_PEERCRED`: the pid, uid and gid of the peer as it connected.
+pub const SO_PEERCRED: usize = 17;
+
 /// Bytes of a `sockaddr_un`: the family, then the path.
 pub const SOCKADDR_UN_BYTES: usize = 110;
 
@@ -99,6 +104,47 @@ pub fn bind(fd: usize, address: &[u8], len: usize) -> Result<usize, Errno> {
     // which the caller and `sockaddr_un` together guarantee; the kernel only
     // reads it.
     decode(unsafe { arch::linux(nr::BIND, [fd, at, len.min(address.len()), 0, 0, 0]) })
+}
+
+/// A `sockaddr_un` for the abstract `name`, and its length, or `None` if the
+/// name is empty or too long to be one.
+///
+/// An abstract name is a `sun_path` that starts with a NUL. It is in no
+/// directory, so it is the same name whatever root the process that binds it
+/// or the one that connects has; its length is exactly the family, the NUL
+/// and the name, since the name may itself hold NULs.
+#[must_use]
+pub fn sockaddr_un_abstract(name: &[u8]) -> Option<([u8; SOCKADDR_UN_BYTES], usize)> {
+    if name.is_empty() || name.len() > SOCKADDR_UN_BYTES - 3 {
+        return None;
+    }
+    let mut address = [0_u8; SOCKADDR_UN_BYTES];
+    let family = (AF_UNIX as u16).to_le_bytes();
+    *address.first_mut()? = family[0];
+    *address.get_mut(1)? = family[1];
+    // `address[2]` stays the NUL that makes the name abstract.
+    address.get_mut(3..3 + name.len())?.copy_from_slice(name);
+    Some((address, 3 + name.len()))
+}
+
+/// The uid of the process at the other end of the connected Unix socket
+/// `fd`, as it was when it connected: `getsockopt(SO_PEERCRED)`.
+///
+/// # Errors
+///
+/// Whatever the kernel answers.
+pub fn peer_uid(fd: usize) -> Result<u32, Errno> {
+    // `struct ucred`: pid, uid, gid, each 32 bits.
+    let mut credentials = [0_u32; 3];
+    let mut len: u32 = 12;
+    let at = credentials.as_mut_ptr().addr();
+    let len_at = (&raw mut len).addr();
+    // SAFETY: `credentials` is 12 bytes borrowed exclusively for the call, and
+    // `len` says so; the kernel writes at most that many and then `len`.
+    let _written = decode(unsafe {
+        arch::linux(nr::GETSOCKOPT, [fd, SOL_SOCKET, SO_PEERCRED, at, len_at, 0])
+    })?;
+    Ok(credentials[1])
 }
 
 /// `listen(fd, backlog)`.

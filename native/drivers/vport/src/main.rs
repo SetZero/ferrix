@@ -77,12 +77,20 @@ const MAX_PAGES: usize = if PORT_PAGES > CONTROL_PAGES {
 /// (`docs/CLIPBOARD.md` §3.1).
 const VIRTIO_CONSOLE_IDS: [u16; 2] = [0x1043, 0x1003];
 
-/// The socket the agent connects to. `/tmp` is in the initramfs and writable
-/// (`xtask/src/initramfs.rs`), which `/run` is not.
-const SOCKET_PATH: &[u8] = b"/tmp/vport\0";
+/// The abstract name the agent connects to, `\0ferrix.vport`.
+///
+/// Not a path: `devmgr` starts this driver before pid 1 moves onto the root
+/// volume (`docs/INIT.md` §7.3), and a socket bound under the initramfs's
+/// `/tmp` stays there, out of sight of an agent started from the volume. An
+/// abstract name is in no directory, so the switch cannot hide it. It is
+/// per network namespace, as on Linux, so a unit given a network of its own
+/// would not see it; the agent is not run that way.
+const SOCKET_NAME: &[u8] = b"ferrix.vport";
 
-/// The path without its NUL, for `bind`, which takes a length instead.
-const SOCKET_NAME: &[u8] = b"/tmp/vport";
+/// The only uid the port answers. An abstract name has no file mode to keep
+/// others out, so the peer's credentials do what a root-owned socket's mode
+/// did.
+const PEER_UID: u32 = 0;
 
 /// How long a turn of the loop waits for an interrupt before servicing the
 /// socket anyway. Ten milliseconds.
@@ -412,15 +420,11 @@ struct Listener {
 }
 
 impl Listener {
-    /// Bind `SOCKET_PATH` and listen on it, non-blocking.
+    /// Bind `SOCKET_NAME` and listen on it, non-blocking.
     fn bind() -> Result<Listener, Step> {
-        // A path left behind by a previous boot of this process would make
-        // `bind` fail with EADDRINUSE, and there is nothing else that could
-        // own this name. ENOENT is the ordinary answer and is not an error.
-        let _removed = linux::unlink(SOCKET_PATH);
         let fd = linux::socket(linux::AF_UNIX, linux::SOCK_STREAM | linux::SOCK_NONBLOCK, 0)
             .map_err(|_| Step::Socket)?;
-        let (address, len) = linux::sockaddr_un(SOCKET_NAME).ok_or(Step::Socket)?;
+        let (address, len) = linux::sockaddr_un_abstract(SOCKET_NAME).ok_or(Step::Socket)?;
         let _bound = linux::bind(fd, &address, len).map_err(|_| Step::Socket)?;
         let _listening = linux::listen(fd, BACKLOG).map_err(|_| Step::Socket)?;
         Ok(Listener { fd, client: None })
@@ -435,7 +439,11 @@ impl Listener {
             return;
         }
         if let Ok(fd) = linux::accept4(self.fd, linux::SOCK_NONBLOCK) {
-            self.client = Some(fd);
+            if linux::peer_uid(fd) == Ok(PEER_UID) {
+                self.client = Some(fd);
+            } else {
+                let _closed = linux::close(fd);
+            }
         }
     }
 

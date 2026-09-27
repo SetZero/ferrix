@@ -259,12 +259,24 @@ character device -- another port, or a program that expects the Linux name --
 any other. It is a native program: it takes the device in START, maps the
 register blocks, negotiates the features of §3.1, sets up the four queues of
 §3.2 and walks the control conversation of §3.3 until the port named
-`com.redhat.spice.0` is open. Then it binds a Unix socket at **`/tmp/vport`**
--- `/tmp` because it is in the initramfs and writable and `/run` is neither --
-and everything
+`com.redhat.spice.0` is open. Then it binds a Unix socket at the abstract
+name **`\0ferrix.vport`** and answers only a peer whose `SO_PEERCRED` uid is
+0, and everything
 that arrives on the port is written to whoever is connected and everything
 written there goes out on the port. It understands nothing of vdagent: it is
 a pipe with a device on one end.
+
+The name is abstract because of when the driver starts. Under
+`ferrix.devmgr=init` with a root volume (`docs/INIT.md` §7.3), `devmgr` and
+its drivers start from the initramfs before `/` moves onto the volume, and
+only pid 1 is moved. Until 2026-09-27 the socket was the path `/tmp/vport`,
+bound in the initramfs's `/tmp`, and an agent started from the volume looked
+in the volume's: `no clipboard port at /tmp/vport` on every desktop that
+switched its root, which `run-compositor` does unless `--tmpfs-root` says
+otherwise. An abstract name is in no directory, so the switch cannot hide
+it. It has no file mode either, so the uid check keeps what a root-owned
+socket's mode kept. Like Linux's, it is per network namespace, so a unit
+given a network of its own would not see it; the agent is not run that way.
 
 Its loop answers the device's events and stops at the port's bytes, which
 are read when there is somewhere to write them. Until 2026-09-23 it asked the
@@ -402,7 +414,7 @@ two last things in the agent:
 Nothing is left of the landings above.
 
 Landings 1 to 5 and 8a are on `main`: the guest now has a driver that opens
-the port and offers it at `/tmp/vport`, and what is left is the two programs
+the port and offers it on a Unix socket, and what is left is the two programs
 that speak vdagent over it and the gate that drives them. What is left needs no
 kernel, which is
 §5's whole point, and 8a is worth its place in the order after all: `test-boot --arch x86_64

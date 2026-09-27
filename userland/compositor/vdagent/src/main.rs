@@ -3,7 +3,10 @@
 //! `docs/CLIPBOARD.md` §6 is the specification. This program sits between two
 //! sockets and belongs to neither protocol:
 //!
-//! * **`/tmp/vport`**, which `native/drivers/vport` binds. Everything written there goes
+//! * **`\0ferrix.vport`**, the abstract name `native/drivers/vport` binds --
+//!   not a path, because `devmgr` starts the driver before `/` moves onto the
+//!   root volume and a path it bound would stay behind in the initramfs's
+//!   `/tmp` (`docs/INIT.md` §7.3). Everything written there goes
 //!   out on the virtio-serial port to QEMU's own half of vdagent, and
 //!   everything the host sends arrives here. `ferrix-vdagent` is the codec;
 //!   the driver carries bytes and understands none of them.
@@ -36,7 +39,8 @@
 
 use std::collections::BTreeMap;
 use std::io::{Read as _, Write as _};
-use std::os::unix::net::UnixStream;
+use std::os::linux::net::SocketAddrExt as _;
+use std::os::unix::net::{SocketAddr, UnixStream};
 use std::time::{Duration, Instant};
 
 use compositor_protocol::core::{self, wl_display, wl_registry};
@@ -58,7 +62,7 @@ const TEXT: &str = "text/plain;charset=utf-8";
 const MANAGER_NAME: &str = ext_data_control::EXT_DATA_CONTROL_MANAGER_V1.name;
 
 /// Where `native/drivers/vport` listens (`docs/CLIPBOARD.md` §6).
-const PORT_SOCKET: &str = "/tmp/vport";
+const PORT_NAME: &[u8] = b"ferrix.vport";
 
 /// How long a turn of the loop rests before looking at both sockets again.
 const TICK: Duration = Duration::from_millis(10);
@@ -142,12 +146,15 @@ impl Stopped {
 /// Connect to the driver's socket, trying for [`PORT_PATIENCE`].
 fn connect_port() -> Result<UnixStream, Stopped> {
     let until = Instant::now() + PORT_PATIENCE;
+    let name = PORT_NAME.escape_ascii();
+    let address = SocketAddr::from_abstract_name(PORT_NAME)
+        .map_err(|error| Stopped::loud(format!("the port's name \\0{name}: {error}")))?;
     let port = loop {
-        match UnixStream::connect(PORT_SOCKET) {
+        match UnixStream::connect_addr(&address) {
             Ok(port) => break port,
             Err(error) if Instant::now() >= until => {
                 return Err(Stopped::quiet(format!(
-                    "no clipboard port at {PORT_SOCKET} ({error}); this boot has no clipboard"
+                    "no clipboard port at \\0{name} ({error}); this boot has no clipboard"
                 )));
             }
             Err(_) => std::thread::sleep(TICK),
