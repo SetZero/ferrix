@@ -89,7 +89,7 @@ fn window(slot: &AtomicU64) -> Mmio {
 ///
 /// # Safety
 ///
-/// Must be called once, on the boot CPU, after the vector table is installed
+/// (DEVICE) Must be called once, on the boot CPU, after the vector table is installed
 /// and while interrupts are masked: it leaves the controller able to deliver.
 pub(crate) unsafe fn init(distributor: u64, cpu_interface: u64) -> Result<(), &'static str> {
     let gicd = crate::vmap::map_device(distributor, GICD_WINDOW)

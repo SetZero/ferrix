@@ -63,7 +63,7 @@ const TDR: u64 = 0x28;
 /// The mapped base address, once [`init`] has run.
 struct Base(UnsafeCell<u64>);
 
-// SAFETY: early boot is single-threaded — no other CPU has been started and
+// SAFETY: (SHARED) early boot is single-threaded — no other CPU has been started and
 // interrupts are masked — so there is never a second accessor.
 unsafe impl Sync for Base {}
 
@@ -77,25 +77,25 @@ static BASE: Base = Base(UnsafeCell::new(0));
 pub(crate) fn init(memory: &mut EarlyMemory, phys: u64) -> Result<(), EarlyError> {
     let offset = phys % PAGE_SIZE;
     memory.map_device(WINDOW, phys - offset, PAGE_SIZE)?;
-    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    // SAFETY: (SHARED) single-threaded, as documented on the `Sync` impl above.
     unsafe { *BASE.0.get() = WINDOW + offset };
     Ok(())
 }
 
 /// Read one of the port's registers.
 fn read(offset: u64) -> u32 {
-    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    // SAFETY: (SHARED) single-threaded, as documented on the `Sync` impl above.
     let base = unsafe { *BASE.0.get() };
-    // SAFETY: `base` is the device window `init` mapped — the only caller
+    // SAFETY: (DEVICE) `base` is the device window `init` mapped — the only caller
     // checks it is not zero first — and `offset` is a register inside it.
     unsafe { core::ptr::read_volatile((base + offset) as *const u32) }
 }
 
 /// Write one of the port's registers.
 fn write(offset: u64, value: u32) {
-    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    // SAFETY: (SHARED) single-threaded, as documented on the `Sync` impl above.
     let base = unsafe { *BASE.0.get() };
-    // SAFETY: as in `read`.
+    // SAFETY: (DEVICE) as in `read`.
     unsafe { core::ptr::write_volatile((base + offset) as *mut u32, value) };
 }
 
@@ -112,7 +112,7 @@ fn write(offset: u64, value: u32) {
 pub(crate) fn write_byte(byte: u8) {
     const SPIN_LIMIT: u32 = 100_000;
 
-    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    // SAFETY: (SHARED) single-threaded, as documented on the `Sync` impl above.
     if unsafe { *BASE.0.get() } == 0 {
         return;
     }
@@ -142,7 +142,7 @@ pub(crate) fn drain() {
     /// register empty in under two milliseconds at 115200 baud.
     const DRAIN_LIMIT: u32 = 10_000_000;
 
-    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    // SAFETY: (SHARED) single-threaded, as documented on the `Sync` impl above.
     if unsafe { *BASE.0.get() } == 0 {
         return;
     }
@@ -161,7 +161,7 @@ pub(crate) fn drain() {
 /// later byte, and with the receive interrupt enabled it would hold the line
 /// asserted.
 pub(crate) fn read_byte() -> Option<u8> {
-    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    // SAFETY: (SHARED) single-threaded, as documented on the `Sync` impl above.
     if unsafe { *BASE.0.get() } == 0 {
         return None;
     }
@@ -184,7 +184,7 @@ pub(crate) fn read_byte() -> Option<u8> {
 /// the ones firmware set for the line format may be written only with the port
 /// disabled, and are left as they are.
 pub(crate) fn enable_receive_interrupt() {
-    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    // SAFETY: (SHARED) single-threaded, as documented on the `Sync` impl above.
     if unsafe { *BASE.0.get() } == 0 {
         return;
     }
@@ -195,7 +195,7 @@ pub(crate) fn enable_receive_interrupt() {
 /// [`ISR_TXE`] says there is room, in the transmit register or in the FIFO,
 /// which the caller asks again after each.
 pub(crate) fn transmit_room() -> usize {
-    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    // SAFETY: (SHARED) single-threaded, as documented on the `Sync` impl above.
     if unsafe { *BASE.0.get() } == 0 {
         return 0;
     }
@@ -205,7 +205,7 @@ pub(crate) fn transmit_room() -> usize {
 /// Hand the port one byte, for a caller [`transmit_room`] said it had room
 /// for.
 pub(crate) fn put(byte: u8) {
-    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    // SAFETY: (SHARED) single-threaded, as documented on the `Sync` impl above.
     if unsafe { *BASE.0.get() } == 0 {
         return;
     }
@@ -222,7 +222,7 @@ pub(crate) fn put(byte: u8) {
 /// has (`TXEIE`), which is an interrupt a byte. Both are levels: the handler
 /// turns them off when it has nothing more, or they would never stop.
 pub(crate) fn transmit_interrupt(on: bool) {
-    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    // SAFETY: (SHARED) single-threaded, as documented on the `Sync` impl above.
     if unsafe { *BASE.0.get() } == 0 {
         return;
     }
@@ -245,7 +245,7 @@ pub(crate) fn transmit_interrupt(on: bool) {
 /// Whether the port's FIFO is enabled, for the boot line that says how the
 /// console sends.
 pub(crate) fn has_fifo() -> bool {
-    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    // SAFETY: (SHARED) single-threaded, as documented on the `Sync` impl above.
     if unsafe { *BASE.0.get() } == 0 {
         return false;
     }

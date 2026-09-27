@@ -61,13 +61,13 @@ unsafe extern "C" {
 ///
 /// # Safety
 ///
-/// `save` must be the stack-pointer slot of the context calling this, and
+/// (CONTEXT) `save` must be the stack-pointer slot of the context calling this, and
 /// `next` must be a stack pointer that [`prepare_stack`] produced or that an
 /// earlier call to this function saved. No other processor may be running on
 /// either stack, and both must stay mapped for as long as their contexts
 /// exist.
 pub(crate) unsafe fn switch_to(save: *mut u64, next: u64) {
-    // SAFETY: the caller's guarantee is the assembly's contract. The slot is
+    // SAFETY: (CONTEXT) the caller's guarantee is the assembly's contract. The slot is
     // a `u64` the kernel keeps for every architecture; on this one only its
     // low half is used, and the assembly writes exactly that half — so the
     // pointer is cast rather than the value, and the high half stays zero.
@@ -78,7 +78,7 @@ pub(crate) unsafe fn switch_to(save: *mut u64, next: u64) {
 ///
 /// # Safety
 ///
-/// `top` must be the top of a mapped, writable stack of at least
+/// (CONTEXT) `top` must be the top of a mapped, writable stack of at least
 /// [`FRAME_BYTES`], owned by the caller and not in use.
 pub(crate) unsafe fn prepare_stack(
     top: u64,
@@ -105,7 +105,7 @@ pub(crate) unsafe fn prepare_stack(
     ];
 
     let stack_pointer = (top as u32) - FRAME_BYTES;
-    // SAFETY: the caller guarantees the stack is mapped, writable and theirs,
+    // SAFETY: (CONTEXT) the caller guarantees the stack is mapped, writable and theirs,
     // and the frame is written entirely inside it.
     unsafe {
         core::ptr::copy_nonoverlapping(frame.as_ptr(), stack_pointer as *mut u32, frame.len());
@@ -175,10 +175,10 @@ impl UserState {
     ///
     /// # Safety
     ///
-    /// The registers must be the calling task's own.
+    /// (CONTEXT) The registers must be the calling task's own.
     pub(crate) unsafe fn capture() -> UserState {
         let mut state = UserState::new();
-        // SAFETY: the caller's guarantee.
+        // SAFETY: (CONTEXT) the caller's guarantee.
         unsafe { save_user_state(&mut state) };
         state
     }
@@ -217,7 +217,7 @@ impl UserState {
 /// What a signal frame saves: no trap frame holds either on this architecture.
 pub(super) fn user_banked() -> (u32, u32) {
     let mut words = [0_u32; 2];
-    // SAFETY: two writable words; reading USR's banked registers through System
+    // SAFETY: (CONTEXT) two writable words; reading USR's banked registers through System
     // mode changes nothing.
     unsafe { ferrix_user_banked_save(words.as_mut_ptr()) };
     let [sp, lr] = words;
@@ -228,7 +228,7 @@ pub(super) fn user_banked() -> (u32, u32) {
 /// signal handler and returning from one do.
 pub(super) fn set_user_banked(sp: u32, lr: u32) {
     let words = [sp, lr];
-    // SAFETY: two readable words; loading USR's banked registers cannot affect
+    // SAFETY: (CONTEXT) two readable words; loading USR's banked registers cannot affect
     // the kernel, which runs in SVC mode.
     unsafe { ferrix_user_banked_restore(words.as_ptr()) };
 }
@@ -238,11 +238,11 @@ pub(super) fn set_user_banked(sp: u32, lr: u32) {
 ///
 /// # Safety
 ///
-/// The registers must be the calling task's own.
+/// (CONTEXT) The registers must be the calling task's own.
 pub(super) unsafe fn load_user_fpu(state: &UserState) {
     let doubles = super::cpu::user_fpu_doubles();
     if doubles != 0 {
-        // SAFETY: the FPU exists and is enabled, and `state` is a live
+        // SAFETY: (CONTEXT) the FPU exists and is enabled, and `state` is a live
         // `UserState` whose layout is asserted above; loading user registers
         // cannot affect the kernel, which uses none of them.
         unsafe { ferrix_user_fpu_restore(core::ptr::from_ref(state), u32::from(doubles == 32)) };
@@ -343,10 +343,10 @@ unsafe extern "C" {
 ///
 /// # Safety
 ///
-/// `CPACR` must grant access to coprocessors 10 and 11 on this core, which is
+/// (SYSREG) `CPACR` must grant access to coprocessors 10 and 11 on this core, which is
 /// what `cpu::enable_user_fpu` checks before calling this.
 pub(super) unsafe fn fpu_enable() {
-    // SAFETY: the caller guarantees access; setting `EN` changes nothing the
+    // SAFETY: (SYSREG) the caller guarantees access; setting `EN` changes nothing the
     // soft-float kernel uses.
     unsafe { ferrix_fpu_enable() };
 }
@@ -355,9 +355,9 @@ pub(super) unsafe fn fpu_enable() {
 ///
 /// # Safety
 ///
-/// As [`fpu_enable`].
+/// (SYSREG) As [`fpu_enable`].
 pub(super) unsafe fn fpu_features() -> u32 {
-    // SAFETY: the caller guarantees access; the read has no side effects.
+    // SAFETY: (SYSREG) the caller guarantees access; the read has no side effects.
     unsafe { ferrix_fpu_features() }
 }
 
@@ -365,9 +365,9 @@ pub(super) unsafe fn fpu_features() -> u32 {
 ///
 /// # Safety
 ///
-/// As [`fpu_enable`].
+/// (SYSREG) As [`fpu_enable`].
 pub(super) unsafe fn fpu_features1() -> u32 {
-    // SAFETY: the caller guarantees access; the read has no side effects.
+    // SAFETY: (SYSREG) the caller guarantees access; the read has no side effects.
     unsafe { ferrix_fpu_features1() }
 }
 
@@ -375,16 +375,16 @@ pub(super) unsafe fn fpu_features1() -> u32 {
 ///
 /// # Safety
 ///
-/// The registers must belong to the task `state` is for: it was the last task
+/// (CONTEXT) The registers must belong to the task `state` is for: it was the last task
 /// with user state to run on this processor.
 pub(crate) unsafe fn save_user_state(state: &mut UserState) {
     state.thread_pointer = super::cpu::read_tpidruro();
-    // SAFETY: `user_sp` and `user_lr` are two adjacent `u32`s in a `repr(C)`
+    // SAFETY: (CONTEXT) `user_sp` and `user_lr` are two adjacent `u32`s in a `repr(C)`
     // structure, which is the two words the assembly writes.
     unsafe { ferrix_user_banked_save(core::ptr::from_mut(&mut state.user_sp)) };
     let doubles = super::cpu::user_fpu_doubles();
     if doubles != 0 {
-        // SAFETY: the FPU exists and is enabled, and `state` is a live,
+        // SAFETY: (CONTEXT) the FPU exists and is enabled, and `state` is a live,
         // exclusively borrowed `UserState` whose layout is asserted above.
         unsafe { ferrix_user_fpu_save(core::ptr::from_mut(state), u32::from(doubles == 32)) };
     }
@@ -397,15 +397,15 @@ pub(crate) unsafe fn save_user_state(state: &mut UserState) {
 ///
 /// # Safety
 ///
-/// The task `state` belongs to must be the one this processor is switching to.
+/// (CONTEXT) The task `state` belongs to must be the one this processor is switching to.
 pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
     let _ = entry_stack;
     super::cpu::write_tpidruro(state.thread_pointer);
-    // SAFETY: as in `save_user_state`, read rather than written.
+    // SAFETY: (CONTEXT) as in `save_user_state`, read rather than written.
     unsafe { ferrix_user_banked_restore(core::ptr::from_ref(&state.user_sp)) };
     let doubles = super::cpu::user_fpu_doubles();
     if doubles != 0 {
-        // SAFETY: as above; loading user registers cannot affect the kernel,
+        // SAFETY: (CONTEXT) as above; loading user registers cannot affect the kernel,
         // which uses none of them.
         unsafe { ferrix_user_fpu_restore(core::ptr::from_ref(state), u32::from(doubles == 32)) };
     }
@@ -414,7 +414,7 @@ pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
 /// Set USR mode's banked stack pointer, as `execve` does for the new program.
 pub(crate) fn set_user_stack(stack: u32) {
     let words = [stack, 0];
-    // SAFETY: two readable words; loading USR's banked registers cannot affect
+    // SAFETY: (CONTEXT) two readable words; loading USR's banked registers cannot affect
     // the kernel, which runs in SVC mode.
     unsafe { ferrix_user_banked_restore(words.as_ptr()) };
 }
@@ -424,13 +424,13 @@ pub(crate) fn set_user_stack(stack: u32) {
 ///
 /// # Safety
 ///
-/// Must be called by the user task whose registers these are.
+/// (CONTEXT) Must be called by the user task whose registers these are.
 pub(crate) unsafe fn reset_user_state() {
     super::cpu::write_tpidruro(0);
     let doubles = super::cpu::user_fpu_doubles();
     if doubles != 0 {
         let fresh = UserState::new();
-        // SAFETY: the FPU exists and is enabled; the state is all zeros.
+        // SAFETY: (CONTEXT) the FPU exists and is enabled; the state is all zeros.
         unsafe { ferrix_user_fpu_restore(core::ptr::from_ref(&fresh), u32::from(doubles == 32)) };
     }
 }

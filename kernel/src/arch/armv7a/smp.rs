@@ -430,7 +430,7 @@ impl CpuStarter {
             ..self.template
         };
         let at = crate::mm::direct_map(self.block);
-        // SAFETY: `self.block` is a frame this starter allocated and nothing
+        // SAFETY: (FRAME) `self.block` is a frame this starter allocated and nothing
         // else refers to; the direct map makes it writable, and a frame is
         // aligned for anything.
         unsafe { (at as *mut StartBlock).write(block) };
@@ -530,7 +530,7 @@ const fn yes_no(set: bool) -> &'static str {
 
 /// Make a PSCI call and return its status.
 fn psci(conduit: PsciConduit, function: u32, a: u32, b: u32, c: u32) -> i32 {
-    // SAFETY: the only function this module calls is `CPU_ON`, whose entry
+    // SAFETY: (FIRMWARE) the only function this module calls is `CPU_ON`, whose entry
     // point is the sequence above and whose argument is a start block this
     // module wrote.
     let status = unsafe { cpu::psci_call(conduit, function, a, b, c) };
@@ -542,11 +542,11 @@ fn psci(conduit: PsciConduit, function: u32, a: u32, b: u32, c: u32) -> i32 {
 /// In SVC mode, in the upper half, on its own stack, with every exception
 /// masked and the identity map still installed.
 extern "C" fn secondary_start(record: u32) -> ! {
-    // SAFETY: nothing from here on executes or reads through the lower half.
+    // SAFETY: (TRANSLATE) nothing from here on executes or reads through the lower half.
     // The identity map was for the instructions before the branch here, and
     // this also invalidates what the walk through it left in this core's TLB.
     unsafe { cpu::disable_ttbr0() };
-    // SAFETY: once on this core, before anything on it can fault, with every
+    // SAFETY: (ENTRY) once on this core, before anything on it can fault, with every
     // exception masked. `trap::init` writes only this core's own `VBAR` and
     // `SCTLR` bits; the table it points them at is code every core shares.
     unsafe { super::trap::init() };

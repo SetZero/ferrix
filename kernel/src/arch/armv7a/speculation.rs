@@ -124,7 +124,7 @@ pub(crate) fn switch_barrier(_cpu: usize) -> bool {
 fn issue(barrier: u8) -> bool {
     match barrier {
         BARRIER_BPIALL => {
-            // SAFETY: `BPIALL` invalidates the branch predictor, which only
+            // SAFETY: (PROTECT) `BPIALL` invalidates the branch predictor, which only
             // costs time; the `isb` makes it take effect before the next
             // branch.
             unsafe {
@@ -133,7 +133,7 @@ fn issue(barrier: u8) -> bool {
             true
         }
         BARRIER_ICIALLU => {
-            // SAFETY: `ICIALLU` invalidates the instruction cache (and, with
+            // SAFETY: (PROTECT) `ICIALLU` invalidates the instruction cache (and, with
             // `ACTLR.IBE`, the predictor), which only costs time.
             unsafe {
                 asm!("mcr p15, 0, {zero}, c7, c5, 0", "isb", zero = in(reg) 0_u32, options(nostack, preserves_flags));
@@ -184,7 +184,7 @@ pub(crate) fn clamp_index(index: usize, len: usize) -> usize {
         return index;
     }
     let mut clamped = index;
-    // SAFETY: three register instructions; no memory, no stack.
+    // SAFETY: (PROTECT) three register instructions; no memory, no stack.
     unsafe {
         asm!(
             "cmp {clamped}, {len}",
@@ -207,7 +207,7 @@ pub(crate) fn clamp_below(value: u64, end: u64) -> u64 {
     }
     let mut low = value as u32;
     let mut high = (value >> 32) as u32;
-    // SAFETY: five register instructions; no memory, no stack.
+    // SAFETY: (PROTECT) five register instructions; no memory, no stack.
     unsafe {
         asm!(
             "subs {scratch}, {low}, {end_low}",
@@ -229,7 +229,7 @@ pub(crate) fn clamp_below(value: u64, end: u64) -> u64 {
 /// `MIDR`: who designed the core, and which part it is.
 fn read_midr() -> u32 {
     let value: u32;
-    // SAFETY: an ID register read, legal at PL1 on every core.
+    // SAFETY: (SYSREG) an ID register read, legal at PL1 on every core.
     unsafe {
         asm!("mrc p15, 0, {}, c0, c0, 0", out(reg) value, options(nomem, nostack, preserves_flags));
     };

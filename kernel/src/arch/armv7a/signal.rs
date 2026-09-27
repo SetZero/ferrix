@@ -239,7 +239,7 @@ fn write_vfp(frame: &mut FrameBytes, at: usize) -> Result<(), BadFrame> {
     if cpu::user_fpu_doubles() == 0 {
         return Ok(());
     }
-    // SAFETY: on the running task's own way back to USR mode, so the processor
+    // SAFETY: (CONTEXT) on the running task's own way back to USR mode, so the processor
     // holds this program's floating-point registers.
     let state = unsafe { UserState::capture() };
     let (fpscr, doubles) = state.fp();
@@ -300,11 +300,11 @@ fn restore_vfp(frame: &FrameBytes, at: usize) -> Result<(), BadFrame> {
     for (index, slot) in doubles.iter_mut().enumerate() {
         *slot = frame.u64_at(at + 8 + index * 8)?;
     }
-    // SAFETY: inside the running task's own system call, so the registers are
+    // SAFETY: (CONTEXT) inside the running task's own system call, so the registers are
     // its own; captured to carry the new values in the layout the load expects.
     let mut state = unsafe { UserState::capture() };
     state.set_fp(frame.u32_at(at + 264)?, doubles);
-    // SAFETY: the running task's own registers.
+    // SAFETY: (CONTEXT) the running task's own registers.
     unsafe { switch::load_user_fpu(&state) };
     Ok(())
 }

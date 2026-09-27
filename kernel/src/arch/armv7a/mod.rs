@@ -49,7 +49,7 @@ pub(crate) use trap::{
 ///
 /// # Safety
 ///
-/// `address` must be this processor's own `PerCpu` record, which must live for
+/// (SHARED) `address` must be this processor's own `PerCpu` record, which must live for
 /// the rest of the system's life: `cpu_local` hands it back as a reference.
 /// It is below 4 GiB, as every address on this architecture is, so the
 /// narrowing to the register's width loses nothing.
@@ -61,7 +61,7 @@ pub(crate) unsafe fn set_cpu_local(address: u64) {
 ///
 /// # Safety
 ///
-/// [`set_cpu_local`] must have run on this CPU. Until it has, `TPIDRPRW` holds
+/// (SHARED) [`set_cpu_local`] must have run on this CPU. Until it has, `TPIDRPRW` holds
 /// whatever firmware left there.
 pub(crate) unsafe fn cpu_local() -> u64 {
     u64::from(cpu::read_tpidrprw())
@@ -117,10 +117,10 @@ pub(crate) fn init_console(
 ///
 /// # Safety
 ///
-/// Must be called exactly once, on the boot CPU, before interrupts are
+/// (ENTRY) Must be called exactly once, on the boot CPU, before interrupts are
 /// unmasked.
 pub(crate) unsafe fn init_traps() {
-    // SAFETY: called once from `kmain`, before anything faults deliberately.
+    // SAFETY: (ENTRY) called once from `kmain`, before anything faults deliberately.
     unsafe { trap::init() };
 }
 
@@ -1139,10 +1139,10 @@ pub(crate) fn prepare_user_root(root: u64) {
 ///
 /// # Safety
 ///
-/// `root` must root a live set of tables for the lower half, and they must
+/// (TRANSLATE) `root` must root a live set of tables for the lower half, and they must
 /// stay live until another root replaces them on this processor.
 pub(crate) unsafe fn install_user_root(root: u64) {
-    // SAFETY: the caller guarantees the tables are live.
+    // SAFETY: (TRANSLATE) the caller guarantees the tables are live.
     unsafe { cpu::write_ttbr0(root) };
     cpu::flush_user_tlb();
     // The branch predictor invalidated, if this is another program's space
@@ -1158,9 +1158,9 @@ pub(crate) unsafe fn install_user_root(root: u64) {
 ///
 /// # Safety
 ///
-/// Nothing may still need a user address on this processor.
+/// (TRANSLATE) Nothing may still need a user address on this processor.
 pub(crate) unsafe fn uninstall_user_root() {
-    // SAFETY: the caller guarantees no user address is wanted; the kernel is
+    // SAFETY: (TRANSLATE) the caller guarantees no user address is wanted; the kernel is
     // reached entirely through `TTBR1`.
     unsafe { cpu::disable_ttbr0() };
     cpu::flush_user_tlb();
@@ -1219,7 +1219,7 @@ pub(crate) const fn kernel_write_protected() -> bool {
 ///
 /// # Safety
 ///
-/// Nothing may still be executing or reading through the lower half of the
+/// (TRANSLATE) Nothing may still be executing or reading through the lower half of the
 /// address space, or through that mapping. See [`cpu::disable_ttbr0`].
 pub(crate) unsafe fn drop_identity_map(view: &BootView<'_>) {
     if let Some((base, len)) = view.loader_alias() {
@@ -1230,7 +1230,7 @@ pub(crate) unsafe fn drop_identity_map(view: &BootView<'_>) {
         // exactly what notices one that survived.
         let _ = crate::mm::unmap_kernel(base, len, |_, _| {});
     }
-    // SAFETY: the caller guarantees the lower half is unused, and the kernel
+    // SAFETY: (TRANSLATE) the caller guarantees the lower half is unused, and the kernel
     // has run entirely in the upper half since its first instruction.
     unsafe { cpu::disable_ttbr0() };
     IDENTITY_DROPPED.store(true, Ordering::Relaxed);
@@ -1297,7 +1297,7 @@ pub(crate) fn halt() -> ! {
 ///
 /// # Safety
 ///
-/// Must be called exactly once, on the boot CPU, after [`init_traps`] and
+/// (DEVICE) Must be called exactly once, on the boot CPU, after [`init_traps`] and
 /// while interrupts are masked.
 pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'static str> {
     let tree = crate::fdt::open(view)?;
@@ -1315,7 +1315,7 @@ pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'st
         .cpu_interface()
         .ok_or("the device tree's GICv2 has no CPU interface")?;
 
-    // SAFETY: called once from `kmain`, on the boot CPU, after the vector
+    // SAFETY: (DEVICE) called once from `kmain`, on the boot CPU, after the vector
     // table is installed and with interrupts masked.
     unsafe { gicv2::init(distributor.address, cpu_interface.address)? };
     // As on AArch64, a frame that cannot be used costs MSI vectors, not boot.
@@ -1388,7 +1388,7 @@ pub(crate) fn send_ipi_to_others() -> Result<(), &'static str> {
 #[derive(Debug)]
 pub(crate) struct Irq;
 
-// SAFETY: `disable` masks every interrupt on this CPU and returns the CPSR it
+// SAFETY: (SHARED) `disable` masks every interrupt on this CPU and returns the CPSR it
 // found; `restore` puts back exactly that value's mask bits and nothing else,
 // so nesting two critical sections cannot unmask halfway out of the outer one.
 unsafe impl ferrix_sync::IrqControl for Irq {
@@ -1399,7 +1399,7 @@ unsafe impl ferrix_sync::IrqControl for Irq {
     }
 
     fn restore(state: usize) {
-        // SAFETY: `state` is a CPSR this CPU's `disable` read a moment ago,
+        // SAFETY: (SYSREG) `state` is a CPSR this CPU's `disable` read a moment ago,
         // which is exactly `restore_interrupt_mask`'s contract.
         unsafe { cpu::restore_interrupt_mask(state as u32) };
     }
