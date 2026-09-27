@@ -528,6 +528,32 @@ as not the item's -- so it now records them apart, in the `verification` map
 of `coverage-<arch>.json`, which `carry-coverage.py` carries. Until the next
 `cargo xtask coverage` writes that map, the matrix says *not measured*.
 
+**Step 2 done 2026-09-27**: 51 high-level requirements in nine areas --
+`H.MEM` 11, `H.OBJ` 9, `H.SCHED` 5, `H.IRQ` 3, `H.DMA` 5, `H.TRAP` 7,
+`H.BOOT` 4, `H.QUOTA` 5, `H.FAIL` 2 -- the eight the design named and
+`FAIL` for O.FAILSAFE's safe state, which no other area owns. Each of the
+eight objectives and eight ASRs is the parent of at least one
+(TRACEABILITY.md, "From the system level"). ASR-8's admission control is not
+built (AoU-4), so no requirement asks for it; the scheduling area requires
+only what the fair class does. One is tagged, `H.MEM.7`, on the two
+shootdown checks in `smp/check.rs`; the other 50 are the baseline, left to
+the per-subsystem slices. What step 3 should know:
+
+* several of the boot's strongest checks are not in a check file -- the
+  `w^x` and `sealed` sweeps, `check_stacks`, `check_iommu` are functions of
+  `main.rs`, product code -- so a tag cannot go on them. Either the gate
+  learns a marker for them or they move into a check file; moving is the
+  cleaner answer, since the item's size then stops counting them;
+* a tag credits a whole requirement, and a requirement whose criterion has
+  two halves (`H.MEM.7`: tables *and* frames) needs a check for each; the
+  slice that tags should say which half each check covers in the commit;
+* a first look finds checks that appear to discharge more of them, left
+  untagged here for their slices to read and argue: `object/quota_check.rs`'s
+  `check_the_counters` for `H.QUOTA.5` (a parent's limit refusing through a
+  child's), `arch/x86_64/trap/check.rs`'s forged i386 frames for the x86-64
+  part of `H.TRAP.5`, `arch/x86_64/gdt/check.rs` for `H.TRAP.7`. A criterion
+  no check tests is check-writing work, as the design says, not an argument.
+
 49,431 lines of item product code trace to 33 system-level requirements, and no
 test names a requirement id.
 

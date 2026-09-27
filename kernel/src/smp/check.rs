@@ -444,6 +444,8 @@ fn page_sets() -> Result<(), &'static str> {
 ///
 /// With the tables freed in the unmap, as user unmaps did before, this fails
 /// at its first test.
+///
+/// Verifies: H.MEM.7
 fn tables_wait_for_their_shootdown() -> Result<(), &'static str> {
     let root = mm::allocate_frames(0).ok_or("no frame for the table check's root")?;
     mm::zero_frame(root);
@@ -502,6 +504,8 @@ fn unlink_and_shoot(root: u64, phys: u64) -> Result<(), &'static str> {
 /// through a stale entry does not fault: it reads the old value, quietly —
 /// which is what a missing shootdown looks like in a running kernel, and
 /// exactly what this counts.
+///
+/// Verifies: H.MEM.7
 fn shootdown(report: &mut Report) -> Result<(), &'static str> {
     const ROUNDS: u64 = 20;
 

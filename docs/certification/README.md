@@ -34,6 +34,7 @@ specific, measured, and mostly documents rather than code.
 * [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) — what the item allocates, and what it promises about time
 * [SOUP.md](SOUP.md) — generated; the item contains none
 * [VERIFICATION.md](VERIFICATION.md) — what exercises the item, and the traceability gap
+* [TRACEABILITY.md](TRACEABILITY.md) — generated; the item's requirements, their parents, and the checks that verify each on each architecture
 * [COVERAGE-RESIDUAL.md](COVERAGE-RESIDUAL.md) — generated; the uncovered statements per architecture, sorted into argued and gap
 * [COVERAGE-WORKLIST.md](COVERAGE-WORKLIST.md) — generated; the statements that need a test, by module, for whoever writes them
 * [TOOLS.md](TOOLS.md) — tool classification under EN 50716 §6.7 and DO-330
@@ -94,6 +95,7 @@ boundary.
 | Writable mappings of the kernel's text | **0**, every mapping of its frames swept each boot; the direct map's alias was one until 2026-09-26 (F-34) |
 | Assembly | 500 lines, 22 allow-listed sites, outside the Pixel 7 loader |
 | Cargo features in `kernel/`/`boot/uefi/` | 0 |
+| Requirements of the item, each with a statement, a pass/fail criterion and its parent, gated | **51** high-level (`H.*`) decomposing all 8 objectives and all 8 ASRs; **0** low-level (`L.*`); 1 named by a check, 50 in the baseline of the unverified (TRACEABILITY.md, W-8) |
 
 The coverage rows were measured on 2026-09-27 over the item as W-5 left it,
 the Linux dispatcher's routing and five of the personality's files in the load
@@ -170,7 +172,8 @@ and to the side-channel defences behind `ferrix_mitigations_off`.
 
 *Missing:* every planning document — PSAC, SDP, SVP, SCMP, SQAP — none drafted.
 Low-level requirements (F-15) and requirements-to-test traceability (F-14),
-which are the spine of the standard. Tool qualification (F-17 to F-19).
+which are the spine of the standard: the gate and the 51 high-level
+requirements exist (W-8), the low level and nearly all the tags do not. Tool qualification (F-17 to F-19).
 
 *Honest gap:* this is the furthest of the four, because DO-178C wants a
 document set that does not exist rather than a property the code lacks.
@@ -226,7 +229,9 @@ In order of value per unit of effort:
 1. **Trace tests to requirements (F-14, F-15, W-8).** The boot gates already
    assert rich properties; they need requirement ids attached and low-level
    requirements to attach them to. This one piece of work unblocks DAL C,
-   62304 §5.4 and `ADV_TDS.3`.
+   62304 §5.4 and `ADV_TDS.3`. Since 2026-09-27 the format, the gate and the
+   51 high-level requirements are in place; the low level, subsystem by
+   subsystem with `object/` first, and the tags on the checks are what is left.
 2. **Cover the 77, 146 and 130 statements that still need a test (F-10)**, on
    x86-64, AArch64 and ARMv7-A. Every gate counts on every architecture, and
    `cargo xtask coverage` ratchets the union; what is left is tests.

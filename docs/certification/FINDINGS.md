@@ -454,6 +454,17 @@ present method (basic-block granularity) cannot produce MC/DC without
 instrumenting conditions.
 
 ### F-14 — tests are not traced to requirements
+**Advanced 2026-09-27 (W-8 steps 1 and 2).** The trace exists as a gate:
+`scripts/check/check-traceability.py`, in `cargo xtask check`, reads the
+`/// Verifies:` tags on check functions, fails on an id no requirement
+defines, and holds the unverified requirements in a baseline that may only
+shrink; TRACEABILITY.md is generated from it with, per architecture, whether
+the verifying check ran (the coverage run records the checks' own statements
+from its next run on; until then *not measured*). Of 51 high-level
+requirements **1** is named by a check (`H.MEM.7`, by
+`smp/check.rs`'s two shootdown checks) and 50 are in the baseline. *Still
+open:* the tags, subsystem by subsystem, and the run-time column's evidence.
+
 **Major.** The boot gates assert rich properties — 2,387 mappings swept for
 W^X, 16 of 16 interrupt deliveries waking their waiter — but nothing links an
 assertion to a requirement id. `docs/sysml/` has 33 requirements and 32
@@ -468,6 +479,16 @@ evidence *for* something.
 ## C. Requirements
 
 ### F-15 — no low-level requirements
+**Advanced 2026-09-27 (W-8 steps 1 and 2).** The level above them and their
+format exist. `docs/sysml/13-item-requirements.sysml` holds **51 high-level
+requirements** (`H.MEM`, `H.OBJ`, `H.SCHED`, `H.IRQ`, `H.DMA`, `H.TRAP`,
+`H.BOOT`, `H.QUOTA`, `H.FAIL`), decomposed from the eight objectives of
+SECURITY-TARGET §8.2 and ASR-1 to ASR-8 so that each of the sixteen has at
+least one; and `ItemLowLevel`, whose `unit` the gate resolves to a function
+of the item's product code. **0 low-level requirements** are written: the gate
+reports all 2,335 product functions as named by none (without failing).
+*Still open:* every low-level requirement; W-8 step 3 (`object/`) is next.
+
 **Major.** 33 requirements exist, all at system level (`<'G.1'>` kernel
 threads, `<'G.2'>` address-space scale). DO-178C needs high- and low-level
 requirements with the design between them; 62304 §5.4 needs detailed design
@@ -477,6 +498,14 @@ Specification traced to components.
 49,431 lines of item product code trace to 33 requirements.
 
 ### F-16 — requirements are narrative, not verifiable
+**Advanced 2026-09-27 (W-8 steps 1 and 2).** The item's requirements are no
+longer prose: each of the 51 high-level ones carries a `statement` with
+*shall* about observable behaviour and a pass/fail `criterion`, counted where
+there is a count, and the gate refuses one without either. The 33 goal-level
+requirements of `01-requirements.sysml` stay rationale, as they should: they
+are the parents, not the requirements a test discharges. *Still open:* the
+same for every low-level requirement as it is written.
+
 **Major.** They are prose doc comments (*"Forces: 1:1 kernel threads, a real
 futex, per-thread TLS registers"*) explaining why the system is shaped as it
 is. Excellent design rationale; not requirements with pass/fail criteria that a
