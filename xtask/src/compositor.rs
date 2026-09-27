@@ -4450,8 +4450,8 @@ fn test_fuzzel(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
 ///
 /// Their desktop is not the tree's, so no picture can be required of it:
 /// what is required is that after the keypress `hyprctl layers` lists a
-/// surface in fuzzel's namespace, `launcher`, and that a second `SUPER+R`
-/// takes it away again, which is the script's `pkill -x fuzzel` toggle. The
+/// surface in fuzzel's namespace, `launcher`. The script's own toggle, a
+/// second press running `pkill -x fuzzel`, is not asked (docs/BACKLOG.md). The
 /// screen with fuzzel on it is kept in the build directory as
 /// `fuzzel-user.ppm`. A machine without the user's file, or whose file
 /// binds no `#!/bin/sh` launcher, skips the boot and says so.
@@ -4482,7 +4482,7 @@ fn test_fuzzel_user(arch: Arch, programs: &Programs, args: &Args) -> Result<()> 
     }
     println!(
         "  {arch}: the user's SUPER R ran their own {script} unchanged, which opened fuzzel on their \
-         fuzzel.ini, and closed it again"
+         fuzzel.ini"
     );
     Ok(())
 }
@@ -4544,10 +4544,9 @@ fn fuzzel_user_setup(arch: Arch) -> Result<Option<(String, Carried, String)>> {
     Ok(Some((config, carried, script)))
 }
 
-/// Presses the user's own bind twice through QMP and returns the transcript:
-/// once to open fuzzel (proven by `hyprctl layers` naming its `launcher`
-/// namespace, and a screendump to `dump`), and once more to run the script's
-/// own `pkill -x fuzzel` toggle and take it away again.
+/// Presses the user's own bind through QMP and returns the transcript: fuzzel
+/// must open, proven by `hyprctl layers` naming its `launcher` namespace, and
+/// the screen is dumped to `dump`.
 fn drive_fuzzel_user(
     arch: Arch,
     port: u16,
@@ -4589,7 +4588,7 @@ fn drive_fuzzel_user(
         ));
     }
     std::thread::sleep(Duration::from_secs(3));
-    qmp.screendump(None, dump)?;
+    qmp.screendump(Some(DEVICE_ID), dump)?;
     println!("  {arch}: fuzzel is up; the screen is {}", dump.display());
     // Not asked here: the script's own toggle, a second SUPER R running
     // `pkill -x fuzzel`. That needs `pkill` to find a process by a `comm`
@@ -4615,13 +4614,13 @@ fn drive_fuzzel_user(
 /// Skips, and says why, on a machine with no `~/.config/hypr/hyprland.conf`:
 /// the fix has nothing of the customer's to carry there.
 fn test_everything_desktop(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
-    let Some((config, carried)) = everything_desktop_setup(arch)? else {
+    let Some((config, carried, edid)) = everything_desktop_setup(arch)? else {
         println!(
             "  {arch}: no ~/.config/hypr/hyprland.conf; the --everything desktop boot is skipped"
         );
         return Ok(());
     };
-    let (image, kernel) = judged_image(arch, programs, &config, carried, None, args)?;
+    let (image, kernel) = judged_image(arch, programs, &config, carried, Some(&edid), args)?;
     let port = free_port()?;
     let mut qemu_args = args.clone();
     qemu_args.display = true;
@@ -4644,9 +4643,10 @@ fn test_everything_desktop(arch: Arch, programs: &Programs, args: &Args) -> Resu
 /// The `--everything` desktop's config -- this machine's own `hyprland.conf`
 /// with the boot's own `F12` (`hyprctl layers`) debug bind added -- and the
 /// ports it needs: the dotfiles and fonts [`crate::dotfiles`] carries beside
-/// it, waybar and fuzzel built for `arch`. `None` when there is no such file,
-/// or no busybox to run the desktop's scripts with.
-fn everything_desktop_setup(arch: Arch) -> Result<Option<(String, Carried)>> {
+/// it, waybar and fuzzel built for `arch`, and this machine's monitor's EDID
+/// with the kernel argument that hands it over. `None` when there is no such
+/// file, no such monitor, or no busybox to run the desktop's scripts with.
+fn everything_desktop_setup(arch: Arch) -> Result<Option<(String, Carried, String)>> {
     let mut everything_args = Args {
         everything: true,
         ..Args::default()
@@ -4657,11 +4657,21 @@ fn everything_desktop_setup(arch: Arch) -> Result<Option<(String, Carried)>> {
     let Some(conf_path) = everything_args.config.as_deref() else {
         return Ok(None);
     };
+    // The screen named as run-compositor names it, by this machine's
+    // monitor's EDID: the user's waybar matches its output by that name, and
+    // shows no bar on a screen that is only `Virtual-1`.
+    let Some(edid) = crate::edid::for_run(None)? else {
+        println!("  {arch}: no monitor here for the screen's EDID; the boot is skipped");
+        return Ok(None);
+    };
     let mut ports = crate::dotfiles::carried(Path::new(conf_path))?;
     ports.extend(desktop_programs(arch)?);
+    ports.extend(edid.files);
     ports.extend(crate::fuzzel::files(None)?);
+    // zinc for the terminals to run, as run-compositor carries it.
     let carried = Carried {
         busybox: crate::busybox::installed_program(arch),
+        zinc: crate::zinc::build(arch)?,
         ports,
         ..Carried::none()
     };
@@ -4677,7 +4687,7 @@ fn everything_desktop_setup(arch: Arch) -> Result<Option<(String, Carried)>> {
          bind = , F11, exec, /bin/hyprctl clients\n",
         config.trim_end()
     );
-    Ok(Some((config, carried)))
+    Ok(Some((config, carried, edid.argument)))
 }
 
 /// Presses `F12` (`hyprctl layers`) until waybar's bar is listed, screendumps
@@ -4718,7 +4728,7 @@ fn drive_everything_desktop(
         ));
     }
     std::thread::sleep(Duration::from_secs(2));
-    qmp.screendump(None, dump)?;
+    qmp.screendump(Some(DEVICE_ID), dump)?;
     println!(
         "  {arch}: waybar is up on the --everything desktop; the screen is {}",
         dump.display()
@@ -4746,7 +4756,7 @@ fn drive_everything_desktop(
         ));
     }
     std::thread::sleep(Duration::from_secs(3));
-    qmp.screendump(None, &dump.with_extension("foot.ppm"))?;
+    qmp.screendump(Some(DEVICE_ID), &dump.with_extension("foot.ppm"))?;
     println!("  {arch}: SUPER Q opened term in foot's place");
     press(&mut qmp, &["meta_l", "ret"])?;
     println!("  {arch}: pressed SUPER RETURN, the appended terminal bind");
