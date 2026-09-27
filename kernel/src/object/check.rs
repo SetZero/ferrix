@@ -633,6 +633,8 @@ fn check_a_killed_child_is_not_started(
 /// A child nobody started ends when the last handle to it goes: closed, it is
 /// heard and, once the reaper is quiet, freed; carried in a message nobody
 /// read, it ends when the channel is closed.
+///
+/// Verifies: L.object.95, H.OBJ.8
 fn check_an_unstarted_child_ends_with_its_handles(
     spawner: &Spawner<'_>,
     counter: &mut Counter,
@@ -847,6 +849,8 @@ fn check_two_processes() -> Result<Counter, &'static str> {
 /// first, so the close came before the packet: what lets `devmgr` reset a
 /// device only once its driver's pins are gone. And with nothing but the
 /// handle left, the process is freed.
+///
+/// Verifies: L.object.1, L.object.93, L.object.96
 fn check_a_port_hears_a_process_end(
     side: &Side,
     counter: &mut Counter,
@@ -1334,6 +1338,8 @@ fn connect(sender: &Side, receiver: &Side) -> Result<(Handle, Handle), &'static 
 
 /// Bytes and a VMO handle go from the sender to the receiver, and the handle
 /// that arrives names the object that was sent. Returns that handle.
+///
+/// Verifies: L.object.10, L.object.18
 fn check_a_message_carries_a_handle_across(
     sender: &Side,
     receiver: &Side,
@@ -1399,6 +1405,8 @@ fn check_a_message_carries_a_handle_across(
 
 /// Too little room for the bytes, then for the handle: both refused, the
 /// sizes reported, and the message still there.
+///
+/// Verifies: L.object.14
 fn check_a_read_that_does_not_fit_takes_nothing(
     receiver: &Side,
     far: Handle,
@@ -1481,6 +1489,8 @@ fn check_rights_only_shrink(
 }
 
 /// A send that fails keeps every handle it named, under the same number.
+///
+/// Verifies: L.object.11
 fn check_a_refused_send_keeps_its_handles(
     sender: &Side,
     near: Handle,
@@ -1522,6 +1532,8 @@ fn check_a_refused_send_keeps_its_handles(
 
 /// Writes to a reader that is not reading are told to wait, not queued
 /// without end, and draining makes room again.
+///
+/// Verifies: L.object.13
 fn check_a_full_channel_says_wait(
     sender: &Side,
     near: Handle,
@@ -1574,6 +1586,8 @@ fn check_a_full_channel_says_wait(
 /// told at once: a close used to queue the end behind that drain, and returned
 /// with the channel still open. Stage 10's block ring check quiesced a device
 /// the moment its driver's channel closed and was refused (FX-1004).
+///
+/// Verifies: L.object.4, L.object.6, L.object.17, L.object.20, H.OBJ.16
 fn check_a_closed_peer_frees_what_was_queued(
     sender: &Side,
     near: Handle,
@@ -1626,6 +1640,8 @@ fn check_a_closed_peer_frees_what_was_queued(
 /// whatever they hold. So a VMO with a committed page rides in one of the
 /// queues, and if the refusal ever stops happening, `run`'s frame count is
 /// what fails.
+///
+/// Verifies: L.object.24
 fn check_a_cycle_of_channels_is_refused(
     side: &Side,
     counter: &mut Counter,
@@ -1725,6 +1741,8 @@ fn stage_deadline(side: &Side, nanos: u64) -> Result<(), &'static str> {
 /// wait that only ever polled until its deadline would pass every other part
 /// of this. So the deadline is two minutes, the message arrives after twenty
 /// milliseconds, and the wait has to come back in between.
+///
+/// Verifies: L.object.3, L.object.22, H.OBJ.11
 fn check_a_wait_is_woken_by_what_it_waits_for(counter: &mut Counter) -> Result<(), &'static str> {
     let side = Side::new()?;
     let (near, far) = side.channel()?;
@@ -1862,6 +1880,7 @@ fn waiting_program() -> Result<(Arc<Process>, Arc<Endpoint>), &'static str> {
     Ok((program, far))
 }
 
+/// Verifies: L.object.75, L.object.76, H.OBJ.9
 fn check_a_job_kill_takes_down_a_process_tree(counter: &mut Counter) -> Result<(), &'static str> {
     if arch::USER_SPIN_PROGRAM.is_empty() {
         return Ok(());
@@ -2084,6 +2103,8 @@ pub(crate) fn run_devices() -> Result<DeviceReport, &'static str> {
 ///
 /// On a translated domain the pages must also be unreachable once the pin is
 /// closed. On an untranslated one they stay held, which the console says.
+///
+/// Verifies: L.object.45, L.object.46
 fn check_a_pin_gives_a_device_exactly_its_pages(counter: &mut Counter) -> Result<(), &'static str> {
     let Some(node) = device::devices()
         .iter()
@@ -2309,6 +2330,8 @@ fn reaches(
 /// in which case the mapping half reports nothing mapped. The refusal of a
 /// sub-page aperture runs wherever one exists: the virtio-mmio transports on
 /// ARMv7-A.
+///
+/// Verifies: L.object.43, L.object.44
 fn check_a_device_gives_exactly_its_own_memory(counter: &mut Counter) -> Result<(), &'static str> {
     let side = Side::new()?;
 
@@ -2417,6 +2440,8 @@ fn check_a_device_gives_exactly_its_own_memory(counter: &mut Counter) -> Result<
 /// with a PCI function whose MSI-X table can be minted from, where the vector
 /// is that function's first entry and masking is the entry's own bit, and
 /// ARMv7-A's virtio-mmio transports besides.
+///
+/// Verifies: L.object.35, L.object.36, L.object.37
 fn check_an_interrupt_is_held_until_acknowledged(
     counter: &mut Counter,
 ) -> Result<(), &'static str> {
@@ -2557,6 +2582,8 @@ fn task_stops(task: &Task, deadline: u64) -> Result<(), &'static str> {
 /// The sender exits 0 only if the reply it reads is the secret it wrote into
 /// its VMO, and the receiver could only have read that secret through the
 /// handle it was sent.
+///
+/// Verifies: L.object.10
 fn check_two_programs_talk_over_a_channel(counter: &mut Counter) -> Result<(), &'static str> {
     if arch::USER_NATIVE_PROGRAM.is_empty() {
         return Ok(());
@@ -2620,6 +2647,8 @@ const JOB_CHAIN: usize = 10_000;
 /// Built with one reference at a time, the way a program looping over
 /// `job_create` and `handle_close` would, and dropped from the deepest end. A
 /// recursive drop reaches the guard page long before the end of the chain.
+///
+/// Verifies: L.object.79
 fn check_a_long_chain_of_jobs_is_freed_without_recursion() -> Result<(), &'static str> {
     let root = Job::new_root().map_err(|_| "no memory for a job")?;
     let mut deepest = Arc::clone(&root);
@@ -2648,6 +2677,8 @@ fn job_member() -> Result<Arc<Process>, &'static str> {
 /// (`docs/CGROUPS.md` §2.2), so the count is checked where it changes. The
 /// processes are never started, so a kill releases each at once, and every
 /// reference to them is still held when the job is read: reaped they are not.
+///
+/// Verifies: L.object.63, L.object.73, L.object.88
 fn check_a_job_counts_its_members() -> Result<(), &'static str> {
     let tree = Job::new_root().map_err(|_| "no memory for a job")?;
     let leaf = tree.new_child().map_err(|_| "a live job refused a child")?;
@@ -2696,6 +2727,8 @@ fn check_a_job_counts_its_members() -> Result<(), &'static str> {
 /// `cgroup.kill` ends a job's members and leaves the job usable; `job_kill`
 /// ends them and seals it and everything beneath it. A move a sealed job
 /// refuses leaves the process where it was.
+///
+/// Verifies: L.object.66, L.object.77, L.object.86, L.object.99
 fn check_the_two_kills() -> Result<(), &'static str> {
     let tree = Job::new_root().map_err(|_| "no memory for a job")?;
     let leaf = tree.new_child().map_err(|_| "a live job refused a child")?;
@@ -2746,6 +2779,8 @@ fn check_the_two_kills() -> Result<(), &'static str> {
 /// re-adds an edge the cycle check walks. The race it closes cannot be staged
 /// with one thread, but the path itself can: it must still deliver the right
 /// object once the buffer is good.
+///
+/// Verifies: L.object.15
 fn check_an_endpoint_survives_a_bad_buffer(
     side: &Side,
     counter: &mut Counter,
@@ -2941,6 +2976,8 @@ fn deliver_into_file_pages(
 /// count of such rounds has to move, the read still has to
 /// deliver the bytes and the endpoint that was sent, and the fork's copy of the
 /// pages has to be unchanged.
+///
+/// Verifies: L.object.16
 fn check_an_endpoint_is_read_into_pages_shared_by_fork(
     side: &Side,
     counter: &mut Counter,
@@ -3061,6 +3098,8 @@ fn take_now(side: &Side, port: Handle) -> Result<usize, Errno> {
 /// arriving and for a peer closing. Refusals: a full port, an asynchronous
 /// wait for `WRITABLE`, a port watched through a port, and a registration
 /// through a port handle without `WRITE`.
+///
+/// Verifies: L.object.21, L.object.23, L.object.29, L.object.32, H.OBJ.17
 fn check_ports(side: &Side, counter: &mut Counter) -> Result<(), &'static str> {
     let port = side.handle(nr::PORT_CREATE, &[], "port_create failed")?;
     refused(
@@ -3155,6 +3194,8 @@ fn check_ports(side: &Side, counter: &mut Counter) -> Result<(), &'static str> {
 }
 
 /// What a port refuses.
+///
+/// Verifies: L.object.28
 fn check_port_refusals(
     side: &Side,
     port: Handle,
@@ -3297,6 +3338,8 @@ fn fire_after_a_delay(extra: usize) {
 ///
 /// Called with the interrupt acknowledged, and leaves it acknowledged, bound to
 /// a port that is closed.
+///
+/// Verifies: L.object.38
 fn check_an_interrupt_wakes_its_waiter(
     side: &Side,
     interrupt: Handle,
@@ -3382,6 +3425,8 @@ fn check_an_interrupt_wakes_its_waiter(
 ///
 /// Called with the interrupt freshly acknowledged, so it starts quiet, and
 /// leaves it acknowledged.
+///
+/// Verifies: L.object.39
 fn check_a_bound_interrupt_reaches_its_port(
     side: &Side,
     interrupt: Handle,
@@ -3473,6 +3518,8 @@ fn check_interrupt_create_survives_each_failure(
 
 /// An interrupt that fired while its port was gone is pending, and binding
 /// it to a new port queues its packet there at once.
+///
+/// Verifies: L.object.40
 fn check_a_pending_interrupt_is_queued_when_bound(
     side: &Side,
     interrupt: Handle,
