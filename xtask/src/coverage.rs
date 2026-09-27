@@ -226,10 +226,6 @@ impl Gate {
 /// `test-boot` first: its kernel is the plain build, and the report counts
 /// statements against it. Left out, and why:
 ///
-/// * `test-vfs` off x86-64: its permissions command expects uutils' wording
-///   (`cat: /tmp/dac-private: Permission denied`) and the Arm images carry
-///   busybox's (`cat: can't open ...`), so it fails there with or without the
-///   plugin. Add the Arm architectures back when the expectation is fixed.
 /// * `test-seat` and `test-compositor`: the plugin slows TCG enough that the
 ///   first misses its redraw and the second trips the TLB shootdown's bound
 ///   (`FERRIX-PANIC processor 0 never flushed its TLB for a shootdown`).
@@ -336,7 +332,7 @@ const SUITE: &[Gate] = &[
         "nokaslr",
     ]),
     Gate::new("test-shell", "shell", true),
-    Gate::new("test-vfs", "vfs", true).only(Arch::X86_64),
+    Gate::new("test-vfs", "vfs", true),
     Gate::new("test-net", "net", true),
     Gate::new("test-threads", "threads", false),
     Gate::new("test-pty", "pty", false),
