@@ -218,35 +218,28 @@
     },
     {
       "file": "arch/arm_common/gicv2.rs",
-      "lines": "165",
-      "category": "absent-hardware",
-      "match": "*slot = this_cpu_target(gicd);",
-      "why": "A shared line whose target byte is zero, which delivers it nowhere, given to this core. On AArch64 the UEFI firmware routes every shared line to the boot processor before handing over, so no byte is zero; ARMv7-A's U-Boot routes none, and there the same statement runs on every boot."
-    },
-    {
-      "file": "arch/arm_common/gicv2.rs",
-      "lines": "195",
+      "lines": "236",
       "category": "absent-hardware",
       "match": ".fold(0, |mask, byte| mask | byte)",
       "why": "Reading this core's target bit, which runs only for a zero target byte (line 165). Reached on ARMv7-A on every boot; on AArch64 its firmware leaves no byte zero."
     },
     {
       "file": "arch/arm_common/gicv2.rs",
-      "lines": "419",
+      "lines": "461",
       "category": "absent-hardware",
       "match": "return Err(\"the machine describes no usable GICv2m frame\");",
       "why": "A vector asked of a GICv2 without a `GICv2m` frame. QEMU's `virt` gives every GICv2 one; a machine without one has no MSI vectors, and a device asking for one is refused."
     },
     {
       "file": "arch/arm_common/gicv2.rs",
-      "lines": "426",
+      "lines": "468",
       "category": "defensive",
       "match": "return Err(\"every GICv2m SPI is allocated\");",
       "why": "Every one of the frame's SPIs taken, up to 64. The machine's devices take one each, five at most, and a vector is never given back while its device runs; a machine with more message-signalled vectors than the frame has SPIs would reach it."
     },
     {
       "file": "arch/arm_common/gicv2.rs",
-      "lines": "428",
+      "lines": "470",
       "category": "defensive",
       "match": "if V2M_TAKEN",
       "why": "The row is the retry after a lost compare-exchange: another processor took an SPI between this one's read of the bitmap and its claim. Vectors are taken while device nodes are brought up and drivers started, one at a time, so no allocation races another; the loop keeps the bitmap right if one ever does."
@@ -946,63 +939,63 @@
     },
     {
       "file": "main.rs",
-      "lines": "844",
+      "lines": "865",
       "category": "failure-path",
       "match": "Err(problem) => fatal!(",
       "why": "The failure arm in `bring_up_processors`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `PROCESSOR_DISCOVERY` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves."
     },
     {
       "file": "main.rs",
-      "lines": "872",
+      "lines": "893",
       "category": "failure-path",
       "match": "Err(problem) => fatal!(catalog::STAGE4_SMP, \"stage 4 self-ch",
       "why": "The failure arm in `bring_up_processors`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `STAGE4_SMP` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves."
     },
     {
       "file": "main.rs",
-      "lines": "927",
+      "lines": "948",
       "category": "failure-path",
       "match": "Err(problem) => fatal!(",
       "why": "The failure arm in `start_scheduler`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `STAGE5_SCHEDULER` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves."
     },
     {
       "file": "main.rs",
-      "lines": "1223",
+      "lines": "1244",
       "category": "failure-path",
       "match": "if let Some(missing) = missing {",
       "why": "The failure arm in `register_load`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `LOAD_REGISTRATION` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves."
     },
     {
       "file": "main.rs",
-      "lines": "1293",
+      "lines": "1314",
       "category": "failure-path",
       "match": "Err(problem) => fatal!(",
       "why": "The failure arm in `start_console_input`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `CONSOLE_INPUT` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves."
     },
     {
       "file": "main.rs",
-      "lines": "1300",
+      "lines": "1321",
       "category": "failure-path",
       "match": "Err(problem) => fatal!(",
       "why": "The failure arm in `start_console_input`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `CONSOLE_INPUT` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves."
     },
     {
       "file": "main.rs",
-      "lines": "1325",
+      "lines": "1346",
       "category": "failure-path",
       "match": "Err(problem) => fatal!(",
       "why": "The failure arm in `bring_up_memory`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `MEMORY_BRING_UP` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves."
     },
     {
       "file": "main.rs",
-      "lines": "1386",
+      "lines": "1407",
       "category": "absent-hardware",
       "match": "mebibytes(unreachable)",
       "why": "Reached only on a machine with RAM above the highest address the direct map covers; every QEMU machine the suite boots has less RAM than the direct map spans, so nothing is unreachable to report."
     },
     {
       "file": "main.rs",
-      "lines": "1474",
+      "lines": "1495",
       "category": "absent-hardware",
       "match": "kaslr.source_text()",
       "why": "The layout moved by the loader without a random source: a machine whose firmware offers the loader neither RNG protocol nor instruction. Every QEMU machine the suite boots gives it one (EFI_RNG_PROTOCOL from virtio-rng, or RDRAND/RNDR), so KASLR is always random there."

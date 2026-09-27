@@ -17,6 +17,7 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use ferrix_pci::msix;
+use ferrix_sync::IrqSpinLock;
 
 use crate::irq::Msi;
 use crate::mmio::Mmio;
@@ -75,6 +76,44 @@ static DISTRIBUTOR: AtomicU64 = AtomicU64::new(0);
 
 /// This core's CPU interface registers.
 static CPU_INTERFACE: AtomicU64 = AtomicU64::new(0);
+
+/// Held across every change to part of a distributor word: see [`rmw`].
+///
+/// A leaf. Nothing is taken while it is held, and it is taken with interrupts
+/// masked because [`enable`] is reached from a system call on any core.
+/// [`msi_allocate`]'s caller holds its device's `minted` lock, so the order
+/// is that lock, then this one. [`disable`] never takes it: a clear-enable is
+/// one store, and it runs in interrupt context under `irq`'s `BOUND`.
+static DISTRIBUTOR_RMW: IrqSpinLock<(), crate::arch::Irq> = IrqSpinLock::new(());
+
+/// Spins [`rmw`] makes between its read and its write, so that two cores
+/// racing into it both read before either writes.
+///
+/// **Zero outside the boot check.** Only `check::concurrent_enables` sets it,
+/// for its own rounds, and puts it back to zero: it is how that check makes
+/// the interleaving F-50 was about happen every round rather than rarely.
+static WIDEN_SPINS: AtomicU32 = AtomicU32::new(0);
+
+/// Change part of the distributor word at `register`: read it, apply
+/// `change`, write it back, under [`DISTRIBUTOR_RMW`].
+///
+/// **The only way anything changes part of a distributor word.** Priority
+/// and target registers hold four lines' bytes a word and configuration
+/// sixteen lines' bits, so an unlocked read-modify-write by one core can
+/// write back, over another core's change to a neighbouring line, the value
+/// it read before that change: a target byte lost is a shared interrupt
+/// delivered nowhere, an edge bit lost is an MSI dropped (F-50). Linux holds
+/// `gic_lock` for the same three. Every other distributor access is a whole
+/// word or a write-one store (enable, clear-enable, the SGI register), or a
+/// read at bring-up, or the boot check's.
+fn rmw(gicd: Mmio, register: u64, change: impl FnOnce(u32) -> u32) {
+    let _held = DISTRIBUTOR_RMW.lock();
+    let value = gicd.read32(register);
+    for _ in 0..WIDEN_SPINS.load(Ordering::Relaxed) {
+        core::hint::spin_loop();
+    }
+    gicd.write32(register, change(value));
+}
 
 /// Turn a stored base address into a window.
 fn window(slot: &AtomicU64) -> Mmio {
@@ -143,12 +182,13 @@ pub(crate) fn enable(id: u32) {
 
     // Priority is per interrupt and one byte wide, so this is a read-modify-
     // write of the word holding it rather than a plain store.
-    let register = GICD_IPRIORITYR + u64::from(id & !3);
-    let mut priorities = gicd.read32(register).to_ne_bytes();
-    if let Some(slot) = priorities.get_mut((id % 4) as usize) {
-        *slot = DEFAULT_PRIORITY;
-    }
-    gicd.write32(register, u32::from_ne_bytes(priorities));
+    rmw(gicd, GICD_IPRIORITYR + u64::from(id & !3), |word| {
+        let mut priorities = word.to_ne_bytes();
+        if let Some(slot) = priorities.get_mut((id % 4) as usize) {
+            *slot = DEFAULT_PRIORITY;
+        }
+        u32::from_ne_bytes(priorities)
+    });
 
     // A shared interrupt goes only to the CPU interfaces its target byte
     // names, and nothing in the architecture says what that byte resets to:
@@ -157,14 +197,15 @@ pub(crate) fn enable(id: u32) {
     // that works on AArch64 can be silent on ARMv7-A for no reason the
     // interrupt itself shows. One with no target is given this core.
     if id >= PRIVATE_LINES as u32 {
-        let register = GICD_ITARGETSR + u64::from(id & !3);
-        let mut targets = gicd.read32(register).to_ne_bytes();
-        if let Some(slot) = targets.get_mut((id % 4) as usize)
-            && *slot == 0
-        {
-            *slot = this_cpu_target(gicd);
-        }
-        gicd.write32(register, u32::from_ne_bytes(targets));
+        rmw(gicd, GICD_ITARGETSR + u64::from(id & !3), |word| {
+            let mut targets = word.to_ne_bytes();
+            if let Some(slot) = targets.get_mut((id % 4) as usize)
+                && *slot == 0
+            {
+                *slot = this_cpu_target(gicd);
+            }
+            u32::from_ne_bytes(targets)
+        });
     }
 
     gicd.write32(GICD_ISENABLER + word, bit);
@@ -358,11 +399,12 @@ static V2M_TAKEN: AtomicU64 = AtomicU64::new(0);
 /// is gone before anything samples it, and the interrupt is lost without a
 /// trace. Changed while the line is still disabled, as the architecture asks.
 fn set_edge_triggered(id: u32) {
-    let gicd = window(&DISTRIBUTOR);
-    let register = GICD_ICFGR + u64::from(id / 16) * 4;
     let bit = 1_u32 << (2 * (id % 16) + 1);
-    let value = gicd.read32(register);
-    gicd.write32(register, value | bit);
+    rmw(
+        window(&DISTRIBUTOR),
+        GICD_ICFGR + u64::from(id / 16) * 4,
+        |value| value | bit,
+    );
 }
 
 /// Record the `GICv2m` frame at `phys`. `spis` is `(first identifier, count)`
@@ -447,3 +489,8 @@ pub(crate) fn msi_allocate() -> Result<Msi, &'static str> {
         data: message.data,
     })
 }
+
+// The distributor's concurrent-change check: a child, so that it reaches this
+// driver's registers and its widening hook, and a file of its own, so that it
+// counts as the check it is.
+pub(crate) mod check;

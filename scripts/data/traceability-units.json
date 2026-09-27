@@ -34,6 +34,7 @@
   ],
   "check_code_in_product": {
     "arch::aarch64::check_exception_entry": "The architecture's answer to the generic boot's exception-entry check: nothing to check here, since no exception finds the kernel on a program's stack. Part of the arch interface every architecture provides.",
+    "arch::aarch64::check_distributor": "The architecture's entry to the GICv2 distributor check (arch/arm_common/gicv2/check.rs, F-50), which main.rs calls through the arch interface every architecture provides; it runs the check on a GICv2 and says it did not run on a GICv3.",
     "arch::aarch64::check_machine": "The architecture's entry to its machine check (arch/aarch64/check.rs), which main.rs calls through the arch interface every architecture provides; it runs the check and nothing else.",
     "arch::aarch64::gic::enabled_for_check": "Reads a line's enable back from whichever GIC driver the boot chose, for the machine check's masking case; it needs the driver choice private to gic.rs.",
     "arch::aarch64::gic::gicv3::enabled_for_check": "Reads a GICv3 line's enable bit back for the machine check; it needs the register windows private to gicv3.rs.",

@@ -439,6 +439,8 @@ impl MsixTable {
         // Room to record the vector before it is allocated: an MSI vector is
         // not given back.
         let held = fallible::reserve().map_err(|_| "no memory to record an MSI-X vector")?;
+        // Under `minted`: on a GICv2 this takes the distributor's lock, so
+        // the order is `minted`, then that (`gicv2::DISTRIBUTOR_RMW`).
         let msi = arch::msi_allocate(self.requester)?;
         let at = u64::from(entry) * MSIX_ENTRY_SIZE;
         table.write32(at + ENTRY_ADDRESS_LOW, msi.address as u32);

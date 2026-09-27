@@ -123,6 +123,47 @@ pub(crate) const fn check_machine() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// What the interrupt controller's concurrent-change check found (F-50):
+/// see `arm_common::gicv2::check`.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct DistributorCheck {
+    /// The two neighbouring lines raced, when the check ran.
+    pub(crate) lines: Option<(u32, u32)>,
+    /// Rounds run.
+    pub(crate) rounds: u32,
+    /// Rounds in which a line lost its priority, target or configuration.
+    pub(crate) lost: u32,
+    /// Why the check did not run, when it did not.
+    pub(crate) skipped: Option<&'static str>,
+}
+
+// Two cores changing neighbouring lines of a GICv2 distributor at once lose
+// neither change: after device discovery, so that it can pick lines no
+// device names.
+#[cfg(target_arch = "aarch64")]
+pub(crate) use aarch64::check_distributor;
+#[cfg(target_arch = "arm")]
+pub(crate) use armv7a::check_distributor;
+
+/// The distributor check: x86-64 has no GICv2 to check.
+///
+/// # Errors
+///
+/// None.
+#[cfg(target_arch = "x86_64")]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the Arm architectures' checks return what failed, and callers are shared"
+)]
+pub(crate) const fn check_distributor() -> Result<DistributorCheck, &'static str> {
+    Ok(DistributorCheck {
+        lines: None,
+        rounds: 0,
+        lost: 0,
+        skipped: Some("no GICv2 distributor on this architecture"),
+    })
+}
+
 // The watchdogs a board's firmware leaves running: found at boot, fed once
 // the scheduler can run a task, fired to reset. Only the Pixel 7's today.
 #[cfg(target_arch = "aarch64")]

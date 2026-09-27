@@ -1418,6 +1418,25 @@ pub(crate) fn check_machine() -> Result<(), &'static str> {
     check::check()
 }
 
+/// Two cores changing neighbouring distributor lines at once, on a GICv2:
+/// see `arm_common::gicv2::check`. A GICv3's distributor is another driver's,
+/// and the check says it did not run rather than that it passed.
+///
+/// # Errors
+///
+/// What did not hold.
+pub(crate) fn check_distributor() -> Result<super::DistributorCheck, &'static str> {
+    if gic::is_v3() {
+        return Ok(super::DistributorCheck {
+            skipped: Some(
+                "the GIC is a GICv3, whose distributor the GICv2 driver does not program",
+            ),
+            ..super::DistributorCheck::default()
+        });
+    }
+    crate::arch::arm_common::gicv2::check::concurrent_enables()
+}
+
 /// Stop interrupt `number` being delivered until [`unmask_interrupt`] lets
 /// it through again.
 ///

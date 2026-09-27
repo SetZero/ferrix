@@ -813,6 +813,27 @@ fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>, reserved: &d
         report.refusals,
         device::devices().len(),
     );
+
+    // After publishing, so that it can pick interrupt lines no device names.
+    if checks::run() {
+        match arch::check_distributor() {
+            Ok(arch::DistributorCheck {
+                skipped: Some(why), ..
+            }) => println!("  gic      not checked: {why}"),
+            Ok(check) => {
+                let (first, second) = check.lines.unwrap_or_default();
+                println!(
+                    "  gic      lines {first} and {second} made edge-triggered and enabled by two \
+                     cores at once, {} rounds, {} lost a priority, target or configuration",
+                    check.rounds, check.lost,
+                );
+            }
+            Err(problem) => fatal!(
+                catalog::STAGE10_DISTRIBUTOR,
+                "stage 10 self-check failed: {problem}"
+            ),
+        }
+    }
 }
 
 /// Say how many processors came up, and then what the machine is exposed to:

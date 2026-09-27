@@ -1463,6 +1463,16 @@ pub(crate) fn check_machine() -> Result<(), &'static str> {
     check::check()
 }
 
+/// Two cores changing neighbouring distributor lines at once: see
+/// `arm_common::gicv2::check`.
+///
+/// # Errors
+///
+/// What did not hold.
+pub(crate) fn check_distributor() -> Result<super::DistributorCheck, &'static str> {
+    gicv2::check::concurrent_enables()
+}
+
 /// Stop interrupt `number` being delivered until [`unmask_interrupt`] lets
 /// it through again.
 ///

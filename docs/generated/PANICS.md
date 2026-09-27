@@ -86,6 +86,7 @@ Causes are listed most likely first.
 | [FX-1007](#fx-1007) | an IOMMU faulted DMA that no check provoked |
 | [FX-1008](#fx-1008) | the log core did not serve the kernel log to a driver |
 | [FX-1009](#fx-1009) | a devmgr pid 1 started did not keep device authority to itself |
+| [FX-1010](#fx-1010) | two cores enabling neighbouring interrupt lines lost one's setting |
 | [FX-1101](#fx-1101) | the btrfs disk did not mount and read back as the host wrote it |
 | [FX-1150](#fx-1150) | the net core did not carry a packet round its own loopback |
 | [FX-1151](#fx-1151) | the net ring did not carry a frame between the kernel and a driver |
@@ -1997,6 +1998,33 @@ gives it nothing, and a second devmgr_start while devmgr lives is ALREADY_BOUND.
 
 See: kernel/src/devmgr.rs; kernel/src/object/mod.rs;
 kernel/src/syscall/native.rs; docs/INIT.md §7.3; docs/certification/ITEM.md §5.
+
+<a id="fx-1010"></a>
+
+## FX-1010 — two cores enabling neighbouring interrupt lines lost one's setting
+
+A GICv2 keeps four lines' priorities or targets in one register and sixteen
+lines' trigger configuration in another, so enabling a line or making it
+edge-triggered reads a register other lines share, changes its own part and
+writes it back. `arm_common::gicv2::rmw` holds a lock across the three, and the
+check shows it: two cores make neighbouring idle SPIs edge-triggered and enable
+them at the same moment, held between each read and write so that the race
+happens every round, and both lines must end with their priority, a target and
+the edge bit. A lost target byte is a shared interrupt delivered to no core,
+silently; a lost edge bit is an MSI that never arrives (F-50).
+
+1. A read-modify-write of a distributor word was added or changed outside `rmw`,
+   so it no longer holds `DISTRIBUTOR_RMW` across its read and its write.
+2. `rmw` was changed to take its lock after the read, or to drop it before the
+   write.
+3. The check's lines were not idle: a device or the `GICv2m` frame raised or
+   changed one of them while the check ran, which `idle_word` should have ruled
+   out.
+4. The check could not put its lines back as it found them, or a core never
+   reached its rendezvous.
+
+See: kernel/src/arch/arm_common/gicv2.rs rmw;
+kernel/src/arch/arm_common/gicv2/check.rs; docs/certification/FINDINGS.md F-50.
 
 <a id="fx-1101"></a>
 

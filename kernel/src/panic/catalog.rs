@@ -1642,6 +1642,32 @@ pub(crate) static STAGE10_DEVICES: Explanation = Explanation {
     see: "kernel/src/device.rs publish; kernel/src/pci.rs; docs/ROADMAP.md stage 10",
 };
 
+/// For `check_devices` in `main.rs`, when the GICv2 distributor check fails.
+pub(crate) static STAGE10_DISTRIBUTOR: Explanation = Explanation {
+    code: "FX-1010",
+    title: "two cores enabling neighbouring interrupt lines lost one's setting",
+    meaning: "A GICv2 keeps four lines' priorities or targets in one register and sixteen \
+              lines' trigger configuration in another, so enabling a line or making it \
+              edge-triggered reads a register other lines share, changes its own part and writes \
+              it back. `arm_common::gicv2::rmw` holds a lock across the three, and the check \
+              shows it: two cores make neighbouring idle SPIs edge-triggered and enable them at \
+              the same moment, held between each read and write so that the race happens every \
+              round, and both lines must end with their priority, a target and the edge bit. \
+              A lost target byte is a shared interrupt delivered to no core, silently; a lost \
+              edge bit is an MSI that never arrives (F-50).",
+    causes: &[
+        "A read-modify-write of a distributor word was added or changed outside `rmw`, so \
+         it no longer holds `DISTRIBUTOR_RMW` across its read and its write.",
+        "`rmw` was changed to take its lock after the read, or to drop it before the write.",
+        "The check's lines were not idle: a device or the `GICv2m` frame raised or changed one \
+         of them while the check ran, which `idle_word` should have ruled out.",
+        "The check could not put its lines back as it found them, or a core never reached \
+         its rendezvous.",
+    ],
+    see: "kernel/src/arch/arm_common/gicv2.rs rmw; kernel/src/arch/arm_common/gicv2/check.rs; \
+          docs/certification/FINDINGS.md F-50",
+};
+
 /// For `check_path_calls` in `stages_check.rs`, when `syscall::check::run_paths` fails.
 pub(crate) static STAGE8_PATH_CALLS: Explanation = Explanation {
     code: "FX-0820",
@@ -2498,6 +2524,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE10_DMA_FAULT,
     &LOG_CONTROL,
     &DEVMGR_BY_INIT,
+    &STAGE10_DISTRIBUTOR,
     &STAGE11_MOUNT,
     &NET_CORE,
     &NET_RING,

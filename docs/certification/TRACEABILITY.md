@@ -22,9 +22,9 @@ Coverage evidence recording the checks: x86-64, AArch64, ARMv7-A.
 | Product functions | Count |
 |---|---:|
 | Named by a low-level requirement | 1141 |
-| Accessors, covered by the requirement they serve | 543 |
-| Check code in a product file | 34 |
-| Named by none | 586 |
+| Accessors, covered by the requirement they serve | 545 |
+| Check code in a product file | 35 |
+| Named by none | 587 |
 
 Subsystems whose low-level requirements are complete: `arch::aarch64`, `arch::x86_64`, `claim`, `console`, `device`, `early`, `iommu`, `mm`, `object`, `smp`, `trap`, `user`, `vmap`.
 
@@ -34,6 +34,7 @@ Functions that are checks, or serve only checks, and live in a product file, so 
 
 | Function | Why it is check code |
 |---|---|
+| `arch::aarch64::check_distributor` | The architecture's entry to the GICv2 distributor check (arch/arm_common/gicv2/check.rs, F-50), which main.rs calls through the arch interface every architecture provides; it runs the check on a GICv2 and says it did not run on a GICv3. |
 | `arch::aarch64::check_exception_entry` | The architecture's answer to the generic boot's exception-entry check: nothing to check here, since no exception finds the kernel on a program's stack. Part of the arch interface every architecture provides. |
 | `arch::aarch64::check_machine` | The architecture's entry to its machine check (arch/aarch64/check.rs), which main.rs calls through the arch interface every architecture provides; it runs the check and nothing else. |
 | `arch::aarch64::gic::enabled_for_check` | Reads a line's enable back from whichever GIC driver the boot chose, for the machine check's masking case; it needs the driver choice private to gic.rs. |
