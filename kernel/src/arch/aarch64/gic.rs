@@ -133,12 +133,12 @@ pub(super) const fn described_version(layout: &Layout) -> u8 {
 ///
 /// # Safety
 ///
-/// `gicv2::init`'s contract.
+/// (DEVICE) `gicv2::init`'s contract.
 unsafe fn init_v2(layout: &Layout) -> Result<(), &'static str> {
     if layout.cpu_interface == 0 {
         return Err("the MADT describes a GICv2 with no CPU interface");
     }
-    // SAFETY: the caller's contract is `gicv2::init`'s, and these are the two
+    // SAFETY: (DEVICE) the caller's contract is `gicv2::init`'s, and these are the two
     // register blocks firmware describes, checked above to be a GICv2's.
     unsafe { gicv2::init(layout.distributor, layout.cpu_interface)? };
     // A frame that cannot be used leaves the machine without MSI vectors and
@@ -153,12 +153,12 @@ unsafe fn init_v2(layout: &Layout) -> Result<(), &'static str> {
 ///
 /// # Safety
 ///
-/// `gicv3::init`'s contract.
+/// (DEVICE) `gicv3::init`'s contract.
 unsafe fn init_v3(layout: &Layout) -> Result<(), &'static str> {
     let (base, len) = layout
         .redistributors
         .ok_or("the MADT describes a GICv3 with no redistributor range")?;
-    // SAFETY: the caller's contract is `gicv3::init`'s.
+    // SAFETY: (DEVICE) the caller's contract is `gicv3::init`'s.
     unsafe { gicv3::init(layout.distributor, base, len)? };
     // As with a `GICv2m` frame: an ITS that cannot be used leaves the machine
     // without MSI vectors and nothing else, and `msi_allocate` says why.
@@ -172,16 +172,16 @@ unsafe fn init_v3(layout: &Layout) -> Result<(), &'static str> {
 ///
 /// # Safety
 ///
-/// Both drivers' `init` contract: once, on the boot CPU, after the vector
+/// (DEVICE) Both drivers' `init` contract: once, on the boot CPU, after the vector
 /// table is installed and while interrupts are masked.
 pub(crate) unsafe fn init(acpi: &Acpi<'_, DirectMap>) -> Result<u8, &'static str> {
     let layout = layout(acpi)?;
     let version = match described_version(&layout) {
-        // SAFETY: the caller's contract, passed on.
+        // SAFETY: (DEVICE) the caller's contract, passed on.
         2 => unsafe { init_v2(&layout) }.map(|()| 2)?,
         // A `GICv4` is a GICv3 with virtual interrupts added, which a kernel
         // that is not a hypervisor never touches.
-        // SAFETY: as above.
+        // SAFETY: (DEVICE) as above.
         3 | 4 => unsafe { init_v3(&layout) }.map(|()| 3)?,
         _ => return Err("this GIC is neither a GICv2 nor a GICv3"),
     };
@@ -194,7 +194,7 @@ pub(crate) unsafe fn init(acpi: &Acpi<'_, DirectMap>) -> Result<u8, &'static str
 ///
 /// # Safety
 ///
-/// As [`init`].
+/// (DEVICE) As [`init`].
 pub(crate) unsafe fn init_from_tree(tree: &Fdt<'_>) -> Result<u8, &'static str> {
     let gic = tree
         .interrupt_controller()
@@ -207,7 +207,7 @@ pub(crate) unsafe fn init_from_tree(tree: &Fdt<'_>) -> Result<u8, &'static str> 
             let cpu_interface = gic
                 .cpu_interface()
                 .ok_or("the device tree's GICv2 has no CPU interface")?;
-            // SAFETY: the caller's contract is `gicv2::init`'s.
+            // SAFETY: (DEVICE) the caller's contract is `gicv2::init`'s.
             unsafe { gicv2::init(distributor.address, cpu_interface.address)? };
             if let Some(frame) = tree.gicv2m_frames().next() {
                 let _ = gicv2::init_msi_frame(
@@ -221,7 +221,7 @@ pub(crate) unsafe fn init_from_tree(tree: &Fdt<'_>) -> Result<u8, &'static str> 
             let redistributors = gic
                 .redistributor()
                 .ok_or("the device tree's GICv3 has no redistributor range")?;
-            // SAFETY: the caller's contract is `gicv3::init`'s.
+            // SAFETY: (DEVICE) the caller's contract is `gicv3::init`'s.
             unsafe {
                 gicv3::init(
                     distributor.address,

@@ -9,7 +9,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 /// Wait for an interrupt.
 pub(crate) fn wfi() {
-    // SAFETY: `wfi` is a hint. With interrupts masked it may still return at
+    // SAFETY: (SYSREG) `wfi` is a hint. With interrupts masked it may still return at
     // any time, which is why every caller loops.
     unsafe {
         asm!("wfi", options(nomem, nostack, preserves_flags));
@@ -22,7 +22,7 @@ pub(crate) fn wfi() {
 /// that became pending after the caller masked is not lost: the wait returns
 /// at once, and the unmask after it lets the interrupt be taken.
 pub(crate) fn wait_then_enable_interrupts() {
-    // SAFETY: `wfi` is a hint and `daifclr` only clears the `IRQ` mask bit;
+    // SAFETY: (SYSREG) `wfi` is a hint and `daifclr` only clears the `IRQ` mask bit;
     // the vector table is installed long before this is used.
     unsafe {
         asm!("wfi", "msr daifclr, #0x2", options(nomem, nostack));
@@ -36,7 +36,7 @@ pub(crate) fn wait_then_enable_interrupts() {
 /// before asking — a `dmb` orders memory against memory, and this is memory
 /// against a device.
 pub(crate) fn dsb_ishst() {
-    // SAFETY: a barrier has no effect beyond ordering.
+    // SAFETY: (SYSREG) a barrier has no effect beyond ordering.
     unsafe {
         asm!("dsb ishst", options(nostack, preserves_flags));
     }
@@ -44,7 +44,7 @@ pub(crate) fn dsb_ishst() {
 
 /// Mask every interrupt on this CPU: debug, `SError`, `IRQ` and `FIQ`.
 pub(crate) fn disable_interrupts() {
-    // SAFETY: `daifset` only sets mask bits in `PSTATE`.
+    // SAFETY: (SYSREG) `daifset` only sets mask bits in `PSTATE`.
     unsafe {
         asm!("msr daifset, #0xf", options(nomem, nostack));
     }
@@ -58,7 +58,7 @@ pub(crate) fn disable_interrupts() {
 /// `dsb ishst` the mapping is invalidated *before* it exists, and the fault
 /// that follows points at the access rather than at the omission.
 pub(crate) fn flush_tlb() {
-    // SAFETY: barriers and TLB maintenance have no effect other than ordering
+    // SAFETY: (TRANSLATE) barriers and TLB maintenance have no effect other than ordering
     // and invalidation.
     unsafe {
         asm!(
@@ -80,7 +80,7 @@ pub(crate) fn flush_tlb() {
 /// [`flush_tlb`] narrowed to one page and nothing else. The barriers are that
 /// function's, for its reasons.
 pub(crate) fn flush_tlb_page(address: u64) {
-    // SAFETY: barriers and TLB maintenance have no effect other than ordering
+    // SAFETY: (TRANSLATE) barriers and TLB maintenance have no effect other than ordering
     // and invalidation.
     unsafe {
         asm!(
@@ -130,7 +130,7 @@ pub(crate) fn psci_system_reset() {
 /// One of PSCI's whole-system calls, which take no arguments and either do not
 /// return or return an error in `x0`.
 fn psci_system(function: u64) {
-    // SAFETY: `hvc` with x0 = SYSTEM_OFF or SYSTEM_RESET either does what it
+    // SAFETY: (FIRMWARE) `hvc` with x0 = SYSTEM_OFF or SYSTEM_RESET either does what it
     // names or returns an error in x0. Both are fine; the callers carry on
     // either way.
     unsafe {
@@ -150,13 +150,13 @@ fn psci_system(function: u64) {
 ///
 /// # Safety
 ///
-/// `table` must be the address of a sixteen-entry vector table aligned to 2048
+/// (ENTRY) `table` must be the address of a sixteen-entry vector table aligned to 2048
 /// bytes, every entry of which is real code. Until this is called the CPU is
 /// still using firmware's table, which stopped existing at
 /// `exit_boot_services` — so the window between the hand-off and this call is
 /// one where any fault is unrecoverable.
 pub(crate) unsafe fn write_vbar(table: u64) {
-    // SAFETY: the caller guarantees the table's contents and alignment. The
+    // SAFETY: (ENTRY) the caller guarantees the table's contents and alignment. The
     // `isb` is what makes the write take effect before the next instruction is
     // fetched.
     unsafe {
@@ -176,7 +176,7 @@ pub(crate) unsafe fn write_vbar(table: u64) {
 /// asynchronous abort that stays masked until there is something that could
 /// act on one.
 pub(crate) fn enable_interrupts() {
-    // SAFETY: `daifclr` only clears mask bits in `PSTATE`. The vector table is
+    // SAFETY: (SYSREG) `daifclr` only clears mask bits in `PSTATE`. The vector table is
     // installed long before anything calls this.
     unsafe {
         asm!("msr daifclr, #0x2", options(nomem, nostack));
@@ -189,7 +189,7 @@ pub(crate) fn enable_interrupts() {
 /// interrupts has to put back the state it found, not unconditionally unmask.
 pub(crate) fn read_daif() -> u64 {
     let daif: u64;
-    // SAFETY: reading `DAIF` has no side effects.
+    // SAFETY: (SYSREG) reading `DAIF` has no side effects.
     unsafe {
         asm!("mrs {}, daif", out(reg) daif, options(nomem, nostack, preserves_flags));
     }
@@ -200,12 +200,12 @@ pub(crate) fn read_daif() -> u64 {
 ///
 /// # Safety
 ///
-/// `daif` must be a value a previous [`read_daif`] returned. Writing an
+/// (SYSREG) `daif` must be a value a previous [`read_daif`] returned. Writing an
 /// arbitrary value unmasks exceptions the caller may not be ready for — an
 /// `SError` in particular, which Ferrix keeps masked until there is something
 /// that could act on one.
 pub(crate) unsafe fn write_daif(daif: u64) {
-    // SAFETY: the caller guarantees the value came from `read_daif`.
+    // SAFETY: (SYSREG) the caller guarantees the value came from `read_daif`.
     unsafe {
         asm!("msr daif, {}", in(reg) daif, options(nomem, nostack));
     }
@@ -218,7 +218,7 @@ pub(crate) const TCR_EPD0: u64 = 1 << 7;
 /// means.
 pub(crate) fn read_mair() -> u64 {
     let value: u64;
-    // SAFETY: reading `MAIR_EL1` has no side effects.
+    // SAFETY: (SYSREG) reading `MAIR_EL1` has no side effects.
     unsafe {
         asm!("mrs {}, mair_el1", out(reg) value, options(nomem, nostack, preserves_flags));
     }
@@ -228,7 +228,7 @@ pub(crate) fn read_mair() -> u64 {
 /// Translation control: sizes, granules and walk attributes of both halves.
 pub(crate) fn read_tcr() -> u64 {
     let value: u64;
-    // SAFETY: reading `TCR_EL1` has no side effects.
+    // SAFETY: (SYSREG) reading `TCR_EL1` has no side effects.
     unsafe {
         asm!("mrs {}, tcr_el1", out(reg) value, options(nomem, nostack, preserves_flags));
     }
@@ -239,7 +239,7 @@ pub(crate) fn read_tcr() -> u64 {
 /// the `ASID` above it.
 pub(crate) fn read_ttbr0() -> u64 {
     let value: u64;
-    // SAFETY: reading `TTBR0_EL1` has no side effects.
+    // SAFETY: (SYSREG) reading `TTBR0_EL1` has no side effects.
     unsafe {
         asm!("mrs {}, ttbr0_el1", out(reg) value, options(nomem, nostack, preserves_flags));
     }
@@ -252,7 +252,7 @@ pub(crate) const TTBR_ADDRESS: u64 = 0x0000_FFFF_FFFF_FFFE;
 /// System control: the MMU, the caches, alignment checking.
 pub(crate) fn read_sctlr() -> u64 {
     let value: u64;
-    // SAFETY: reading `SCTLR_EL1` has no side effects.
+    // SAFETY: (SYSREG) reading `SCTLR_EL1` has no side effects.
     unsafe {
         asm!("mrs {}, sctlr_el1", out(reg) value, options(nomem, nostack, preserves_flags));
     }
@@ -312,7 +312,7 @@ static PAN_ON: AtomicBool = AtomicBool::new(false);
 /// Returns whether the processor had PAN.
 pub(crate) fn enable_user_access_protection() -> bool {
     let mmfr1: u64;
-    // SAFETY: reading `ID_AA64MMFR1_EL1` has no side effects.
+    // SAFETY: (SYSREG) reading `ID_AA64MMFR1_EL1` has no side effects.
     unsafe {
         asm!("mrs {}, id_aa64mmfr1_el1", out(reg) mmfr1, options(nomem, nostack, preserves_flags));
     }
@@ -325,7 +325,7 @@ pub(crate) fn enable_user_access_protection() -> bool {
     } else {
         user_caches
     };
-    // SAFETY: clearing `SPAN` only changes whether an exception entry sets
+    // SAFETY: (PROTECT) clearing `SPAN` only changes whether an exception entry sets
     // `PSTATE.PAN`, and `UCT` and `UCI` only whether user mode may read the
     // cache type and maintain its own lines; none alters a mapping or a
     // cache or MMU setting of the kernel's.
@@ -335,7 +335,7 @@ pub(crate) fn enable_user_access_protection() -> bool {
     if !pan {
         return false;
     }
-    // SAFETY: `PAN` was just reported present by `ID_AA64MMFR1_EL1`, and
+    // SAFETY: (PROTECT) `PAN` was just reported present by `ID_AA64MMFR1_EL1`, and
     // setting it only forbids EL1 access to EL0-accessible pages -- which
     // nothing on the ordinary path does.
     unsafe {
@@ -353,7 +353,7 @@ pub(crate) fn enable_user_access_protection() -> bool {
 /// processor walks an installed space.
 pub(crate) fn permit_user_access() {
     if PAN_ON.load(Ordering::Relaxed) {
-        // SAFETY: `msr pan, #0` clears one state bit, and is only reached when
+        // SAFETY: (PROTECT) `msr pan, #0` clears one state bit, and is only reached when
         // the feature was found, without which it would be undefined.
         unsafe {
             asm!(".inst 0xd500409f", options(nomem, nostack, preserves_flags));
@@ -364,7 +364,7 @@ pub(crate) fn permit_user_access() {
 /// Refuse user pages to this processor again.
 pub(crate) fn forbid_user_access() {
     if PAN_ON.load(Ordering::Relaxed) {
-        // SAFETY: `msr pan, #1` sets one state bit, under the same guard.
+        // SAFETY: (PROTECT) `msr pan, #1` sets one state bit, under the same guard.
         unsafe {
             asm!(".inst 0xd500419f", options(nomem, nostack, preserves_flags));
         }
@@ -375,7 +375,7 @@ pub(crate) fn forbid_user_access() {
 /// is log2 of it in words.
 fn data_line() -> u64 {
     let cache_type: u64;
-    // SAFETY: reading `CTR_EL0` has no side effects.
+    // SAFETY: (SYSREG) reading `CTR_EL0` has no side effects.
     unsafe {
         asm!("mrs {}, ctr_el0", out(reg) cache_type, options(nomem, nostack, preserves_flags));
     }
@@ -392,14 +392,14 @@ pub(crate) fn clean_to_poc(start: u64, len: u64) {
     let mut at = start - start % line;
     let end = start.saturating_add(len);
     while at < end {
-        // SAFETY: `dc cvac` writes one line back by virtual address and
+        // SAFETY: (SYSREG) `dc cvac` writes one line back by virtual address and
         // changes no data; the caller's range is mapped.
         unsafe {
             asm!("dc cvac, {}", in(reg) at, options(nostack, preserves_flags));
         }
         at += line;
     }
-    // SAFETY: a barrier, completing the maintenance above before anything
+    // SAFETY: (SYSREG) a barrier, completing the maintenance above before anything
     // after it — in particular the call that starts the core that reads it.
     unsafe {
         asm!("dsb sy", options(nostack, preserves_flags));
@@ -428,7 +428,7 @@ pub(crate) fn clean_to_poc(start: u64, len: u64) {
 /// fault.
 pub(crate) fn sync_instructions(start: u64, len: u64) {
     clean_to_poc(start, len);
-    // SAFETY: barriers and cache maintenance change no data. The second `dsb`
+    // SAFETY: (SYSREG) barriers and cache maintenance change no data. The second `dsb`
     // completes the invalidate on every core before the page can be mapped.
     unsafe {
         asm!(
@@ -451,7 +451,7 @@ pub(crate) fn clean_invalidate_to_poc(start: u64, len: u64) {
     let mut at = start - start % line;
     let end = start.saturating_add(len);
     while at < end {
-        // SAFETY: `dc civac` writes one line back and invalidates it by
+        // SAFETY: (SYSREG) `dc civac` writes one line back and invalidates it by
         // virtual address; its data reaches memory first. The caller's range
         // is mapped.
         unsafe {
@@ -459,7 +459,7 @@ pub(crate) fn clean_invalidate_to_poc(start: u64, len: u64) {
         }
         at += line;
     }
-    // SAFETY: a barrier, completing the maintenance before the memory is
+    // SAFETY: (SYSREG) a barrier, completing the maintenance before the memory is
     // handed over.
     unsafe {
         asm!("dsb sy", options(nostack, preserves_flags));
@@ -470,11 +470,11 @@ pub(crate) fn clean_invalidate_to_poc(start: u64, len: u64) {
 ///
 /// # Safety
 ///
-/// `function` must be a PSCI function taking `a`, `b` and `c`, and what it
+/// (FIRMWARE) `function` must be a PSCI function taking `a`, `b` and `c`, and what it
 /// does must be what the caller intends: `CPU_ON` starts a core executing at
 /// an address the caller chose.
 pub(crate) unsafe fn hvc_call(function: u64, a: u64, b: u64, c: u64) -> u64 {
-    // SAFETY: the caller's guarantee, passed on.
+    // SAFETY: (FIRMWARE) the caller's guarantee, passed on.
     unsafe { hvc_call_x0_x3(function, a, b, c)[0] }
 }
 
@@ -482,9 +482,9 @@ pub(crate) unsafe fn hvc_call(function: u64, a: u64, b: u64, c: u64) -> u64 {
 ///
 /// # Safety
 ///
-/// As [`hvc_call`].
+/// (FIRMWARE) As [`hvc_call`].
 pub(crate) unsafe fn smc_call(function: u64, a: u64, b: u64, c: u64) -> u64 {
-    // SAFETY: the caller's guarantee, passed on.
+    // SAFETY: (FIRMWARE) the caller's guarantee, passed on.
     unsafe { smc_call_x0_x3(function, a, b, c)[0] }
 }
 
@@ -494,10 +494,10 @@ pub(crate) unsafe fn smc_call(function: u64, a: u64, b: u64, c: u64) -> u64 {
 ///
 /// # Safety
 ///
-/// As [`hvc_call`].
+/// (FIRMWARE) As [`hvc_call`].
 pub(crate) unsafe fn hvc_call_x0_x3(function: u64, a: u64, b: u64, c: u64) -> [u64; 4] {
     let mut result = [function, a, b, c];
-    // SAFETY: the caller guarantees the function and its arguments. The SMC
+    // SAFETY: (FIRMWARE) the caller guarantees the function and its arguments. The SMC
     // calling convention lets the callee corrupt every register the C ABI
     // does, which is what the clobber says.
     unsafe {
@@ -518,10 +518,10 @@ pub(crate) unsafe fn hvc_call_x0_x3(function: u64, a: u64, b: u64, c: u64) -> [u
 ///
 /// # Safety
 ///
-/// As [`hvc_call`].
+/// (FIRMWARE) As [`hvc_call`].
 pub(crate) unsafe fn smc_call_x0_x3(function: u64, a: u64, b: u64, c: u64) -> [u64; 4] {
     let mut result = [function, a, b, c];
-    // SAFETY: as `hvc_call_x0_x3`.
+    // SAFETY: (FIRMWARE) as `hvc_call_x0_x3`.
     unsafe {
         asm!(
             "smc #0",
@@ -551,12 +551,12 @@ pub(crate) unsafe fn smc_call_x0_x3(function: u64, a: u64, b: u64, c: u64) -> [u
 ///
 /// # Safety
 ///
-/// Nothing may still be executing or reading through the lower half. The
+/// (TRANSLATE) Nothing may still be executing or reading through the lower half. The
 /// kernel runs entirely in the upper half from its first instruction, so this
 /// holds once the boot stack and the hand-off are being reached through the
 /// direct map, which they are.
 pub(crate) unsafe fn disable_ttbr0() {
-    // SAFETY: the caller guarantees nothing needs the lower half. The `isb`
+    // SAFETY: (TRANSLATE) the caller guarantees nothing needs the lower half. The `isb`
     // makes both writes take effect before the next instruction is fetched;
     // without it the CPU is permitted to walk the old tables for a while yet.
     unsafe {
@@ -589,10 +589,10 @@ pub(crate) unsafe fn disable_ttbr0() {
 ///
 /// # Safety
 ///
-/// `root` must be the physical address of a live translation table for the
+/// (TRANSLATE) `root` must be the physical address of a live translation table for the
 /// lower half, and it must stay live until another root replaces it here.
 pub(crate) unsafe fn write_ttbr0(root: u64) {
-    // SAFETY: the caller guarantees the tables. The `isb` makes both writes
+    // SAFETY: (TRANSLATE) the caller guarantees the tables. The `isb` makes both writes
     // take effect before the next instruction is fetched.
     unsafe {
         asm!(
@@ -623,7 +623,7 @@ pub(crate) unsafe fn write_ttbr0(root: u64) {
 /// process must keep its translations, and one that is about to run this
 /// address space will invalidate as it installs the root.
 pub(crate) fn flush_user_tlb() {
-    // SAFETY: invalidating translations can only cost a re-walk. The `dsb`
+    // SAFETY: (TRANSLATE) invalidating translations can only cost a re-walk. The `dsb`
     // waits for the invalidation and the `isb` keeps the next instruction from
     // being fetched through an entry it removed.
     unsafe {
@@ -643,7 +643,7 @@ pub(crate) fn flush_user_tlb() {
 /// to the interrupt controller, and nothing the kernel does can change it.
 pub(crate) fn read_mpidr() -> u64 {
     let mpidr: u64;
-    // SAFETY: reading `MPIDR_EL1` has no side effects.
+    // SAFETY: (SYSREG) reading `MPIDR_EL1` has no side effects.
     unsafe {
         asm!("mrs {}, mpidr_el1", out(reg) mpidr, options(nomem, nostack, preserves_flags));
     }
@@ -653,7 +653,7 @@ pub(crate) fn read_mpidr() -> u64 {
 /// `ID_AA64PFR0_EL1`: whether the core has floating point and Advanced SIMD.
 pub(crate) fn read_id_aa64pfr0() -> u64 {
     let value: u64;
-    // SAFETY: reading an identification register has no side effects.
+    // SAFETY: (SYSREG) reading an identification register has no side effects.
     unsafe {
         asm!("mrs {}, id_aa64pfr0_el1", out(reg) value, options(nomem, nostack, preserves_flags));
     }
@@ -663,7 +663,7 @@ pub(crate) fn read_id_aa64pfr0() -> u64 {
 /// `ID_AA64ISAR0_EL1`: the first instruction set attribute register.
 pub(crate) fn read_id_aa64isar0() -> u64 {
     let value: u64;
-    // SAFETY: reading an identification register has no side effects.
+    // SAFETY: (SYSREG) reading an identification register has no side effects.
     unsafe {
         asm!("mrs {}, id_aa64isar0_el1", out(reg) value, options(nomem, nostack, preserves_flags));
     }
@@ -673,7 +673,7 @@ pub(crate) fn read_id_aa64isar0() -> u64 {
 /// `ID_AA64ISAR1_EL1`: the second instruction set attribute register.
 pub(crate) fn read_id_aa64isar1() -> u64 {
     let value: u64;
-    // SAFETY: reading an identification register has no side effects.
+    // SAFETY: (SYSREG) reading an identification register has no side effects.
     unsafe {
         asm!("mrs {}, id_aa64isar1_el1", out(reg) value, options(nomem, nostack, preserves_flags));
     }
@@ -696,7 +696,7 @@ const CPACR_FPEN_NO_TRAP: u64 = 0b11 << 20;
 /// Nothing is saved or restored: the kernel is built soft-float and one
 /// program runs at a time, as ARMv7-A's version of this explains.
 pub(crate) fn enable_user_fpu() {
-    // SAFETY: `FPEN` only controls trapping; the kernel does not rely on
+    // SAFETY: (SYSREG) `FPEN` only controls trapping; the kernel does not rely on
     // floating point trapping, and the `isb` makes the change take effect
     // before the next instruction.
     unsafe {
@@ -718,7 +718,7 @@ pub(crate) fn enable_user_fpu() {
 /// A scratch register with no architectural meaning, which is the point: the
 /// hardware never reads it, and EL0 cannot see it.
 pub(crate) fn write_tpidr_el1(value: u64) {
-    // SAFETY: writing a scratch register has no effect beyond the register.
+    // SAFETY: (SYSREG) writing a scratch register has no effect beyond the register.
     unsafe {
         asm!("msr tpidr_el1, {}", in(reg) value, options(nomem, nostack, preserves_flags));
     }
@@ -727,7 +727,7 @@ pub(crate) fn write_tpidr_el1(value: u64) {
 /// Read `TPIDR_EL1`.
 pub(crate) fn read_tpidr_el1() -> u64 {
     let value: u64;
-    // SAFETY: reading a scratch register has no side effects.
+    // SAFETY: (SYSREG) reading a scratch register has no side effects.
     unsafe {
         asm!("mrs {}, tpidr_el1", out(reg) value, options(nomem, nostack, preserves_flags));
     }
@@ -743,7 +743,7 @@ pub(crate) fn read_tpidr_el1() -> u64 {
 #[inline(always)]
 pub(crate) fn frame_pointer() -> u64 {
     let value: u64;
-    // SAFETY: reading a register has no side effects.
+    // SAFETY: (SYSREG) reading a register has no side effects.
     unsafe {
         asm!("mov {}, x29", out(reg) value, options(nomem, nostack, preserves_flags));
     }
@@ -757,7 +757,7 @@ pub(crate) fn frame_pointer() -> u64 {
 /// is stopped.
 pub(crate) fn read_cntfrq() -> u64 {
     let frequency: u64;
-    // SAFETY: reading `CNTFRQ_EL0` has no side effects.
+    // SAFETY: (SYSREG) reading `CNTFRQ_EL0` has no side effects.
     unsafe {
         asm!("mrs {}, cntfrq_el0", out(reg) frequency, options(nomem, nostack, preserves_flags));
     }
@@ -771,7 +771,7 @@ pub(crate) fn read_cntfrq() -> u64 {
 /// timing loop built on that measures something other than what it thinks.
 pub(crate) fn read_cntvct() -> u64 {
     let count: u64;
-    // SAFETY: a barrier and a system register read, neither of which changes
+    // SAFETY: (SYSREG) a barrier and a system register read, neither of which changes
     // any state.
     unsafe {
         asm!(
@@ -793,11 +793,11 @@ pub(crate) fn read_cntvct() -> u64 {
 /// runs this.
 pub(crate) fn allow_user_counter() {
     let control: u64;
-    // SAFETY: reading `CNTKCTL_EL1` has no side effects.
+    // SAFETY: (SYSREG) reading `CNTKCTL_EL1` has no side effects.
     unsafe {
         asm!("mrs {}, cntkctl_el1", out(reg) control, options(nomem, nostack, preserves_flags));
     }
-    // SAFETY: setting `EL0VCTEN` only decides whether user mode may read the
+    // SAFETY: (SYSREG) setting `EL0VCTEN` only decides whether user mode may read the
     // virtual counter; no mapping, interrupt or timer of the kernel's changes.
     unsafe {
         asm!("msr cntkctl_el1, {}", "isb", in(reg) control | CNTKCTL_EL0VCTEN, options(nostack, preserves_flags));
@@ -809,7 +809,7 @@ const CNTKCTL_EL0VCTEN: u64 = 1 << 1;
 
 /// Set the instant the virtual timer fires at.
 pub(crate) fn write_cntv_cval(instant: u64) {
-    // SAFETY: `CNTV_CVAL_EL0` is a comparator. Writing it changes when the
+    // SAFETY: (SYSREG) `CNTV_CVAL_EL0` is a comparator. Writing it changes when the
     // timer's output asserts and nothing else.
     unsafe {
         asm!("msr cntv_cval_el0, {}", in(reg) instant, options(nomem, nostack, preserves_flags));
@@ -818,7 +818,7 @@ pub(crate) fn write_cntv_cval(instant: u64) {
 
 /// Enable or mask the virtual timer.
 pub(crate) fn write_cntv_ctl(control: u64) {
-    // SAFETY: `CNTV_CTL_EL0` holds the timer's enable and mask bits. The `isb`
+    // SAFETY: (SYSREG) `CNTV_CTL_EL0` holds the timer's enable and mask bits. The `isb`
     // makes the write take effect before the next instruction, so a caller
     // that disarms and then returns cannot take one more interrupt.
     unsafe {
@@ -842,7 +842,7 @@ pub(crate) fn write_cntv_ctl(control: u64) {
 /// registers, and none of the others did anything.
 pub(crate) fn enable_gicv3_cpu_interface() -> u64 {
     let sre: u64;
-    // SAFETY: each write configures this core's own view of the interrupt
+    // SAFETY: (SYSREG) each write configures this core's own view of the interrupt
     // controller, and interrupts stay masked in `DAIF` throughout, so nothing
     // is delivered halfway through.
     unsafe {
@@ -868,7 +868,7 @@ pub(crate) fn enable_gicv3_cpu_interface() -> u64 {
 /// `ICC_IAR1_EL1`, whose low 24 bits are its identifier.
 pub(crate) fn read_icc_iar1() -> u64 {
     let value: u64;
-    // SAFETY: the read claims an interrupt, which is what the caller asked
+    // SAFETY: (SYSREG) the read claims an interrupt, which is what the caller asked
     // for, and changes nothing else.
     unsafe {
         asm!("mrs {}, icc_iar1_el1", out(reg) value, options(nostack, preserves_flags));
@@ -878,7 +878,7 @@ pub(crate) fn read_icc_iar1() -> u64 {
 
 /// Retire an interrupt [`read_icc_iar1`] returned, with exactly its value.
 pub(crate) fn write_icc_eoir1(value: u64) {
-    // SAFETY: ends the interrupt the value names on this core, nothing else.
+    // SAFETY: (SYSREG) ends the interrupt the value names on this core, nothing else.
     unsafe {
         asm!("msr icc_eoir1_el1, {}", in(reg) value, options(nostack, preserves_flags));
     }
@@ -890,7 +890,7 @@ pub(crate) fn write_icc_eoir1(value: u64) {
 /// next synchronises, which for an inter-processor interrupt is the whole
 /// point.
 pub(crate) fn write_icc_sgi1r(value: u64) {
-    // SAFETY: raises an interrupt on the cores the value names.
+    // SAFETY: (SYSREG) raises an interrupt on the cores the value names.
     unsafe {
         asm!("msr icc_sgi1r_el1, {}", "isb", in(reg) value, options(nostack, preserves_flags));
     }
@@ -901,7 +901,7 @@ pub(crate) fn write_icc_sgi1r(value: u64) {
 /// kept reporting failure.
 pub(crate) fn hardware_random() -> Option<u64> {
     let isar0: u64;
-    // SAFETY: reading an identification register at EL1 changes nothing.
+    // SAFETY: (SYSREG) reading an identification register at EL1 changes nothing.
     unsafe {
         core::arch::asm!(
             "mrs {}, id_aa64isar0_el1",
@@ -915,7 +915,7 @@ pub(crate) fn hardware_random() -> Option<u64> {
     for _ in 0..10 {
         let value: u64;
         let good: u64;
-        // SAFETY: the identification register says `RNDR` exists. Reading it
+        // SAFETY: (SYSREG) the identification register says `RNDR` exists. Reading it
         // sets the condition flags, clear Z meaning the value is good.
         unsafe {
             core::arch::asm!(

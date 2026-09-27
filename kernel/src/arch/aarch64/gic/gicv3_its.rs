@@ -581,7 +581,7 @@ impl Its {
     /// table the redistributor reads.
     fn enable_property(&self, event: u32) {
         let at = mm::direct_map(self.properties + u64::from(event));
-        // SAFETY: the property table is two frames this driver took for itself
+        // SAFETY: (DMA) the property table is two frames this driver took for itself
         // and never gives back, and `event` is below `VECTORS`, well inside
         // it. Volatile because the redistributor reads the byte.
         unsafe { core::ptr::write_volatile(at as *mut u8, PROPERTY_ENABLED) };
@@ -600,7 +600,7 @@ impl Its {
         let queue = mm::direct_map(self.commands);
         for command in commands {
             for (word, &value) in (0_u64..).zip(command) {
-                // SAFETY: `written` is a multiple of 32 below a page, so these
+                // SAFETY: (DMA) `written` is a multiple of 32 below a page, so these
                 // eight bytes are inside the queue's frame, which this driver
                 // took for itself and never gives back. Volatile because the
                 // ITS reads them.

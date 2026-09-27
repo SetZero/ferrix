@@ -378,13 +378,13 @@ pub(crate) fn fault_signal(frame: &TrapFrame, trap: &crate::trap::Trap) -> (u32,
 ///
 /// # Safety
 ///
-/// Must be called by a user task with its address space installed and its user
+/// (CONTEXT) Must be called by a user task with its address space installed and its user
 /// state loaded, and `regs` must be a frame a system call from that address
 /// space saved. `regs` must live on the running task's kernel stack: its
 /// address becomes `SP_EL1`, and the stack an exception from EL0 lands on is
 /// just above it.
 pub(crate) unsafe fn resume_user(regs: &UserRegs) -> ! {
-    // SAFETY: the caller's guarantee is the assembly's contract.
+    // SAFETY: (CONTEXT) the caller's guarantee is the assembly's contract.
     unsafe { ferrix_resume_user(core::ptr::from_ref(&regs.0)) }
 }
 
@@ -393,13 +393,13 @@ pub(crate) unsafe fn resume_user(regs: &UserRegs) -> ! {
 ///
 /// # Safety
 ///
-/// Must be called by a user task, on its own kernel stack, with its address
+/// (CONTEXT) Must be called by a user task, on its own kernel stack, with its address
 /// space installed; `entry` and `stack` must be addresses inside that space.
 pub(crate) unsafe fn enter_user(entry: u64, stack: u64, argument: u64, abi: crate::trap::Abi) -> ! {
     // One mode of user code on this architecture: every program is entered
     // as [`crate::trap::Abi::Native`], whatever it was asked to be.
     let _ = abi;
-    // SAFETY: the caller's guarantee is the assembly's contract.
+    // SAFETY: (CONTEXT) the caller's guarantee is the assembly's contract.
     unsafe { ferrix_enter_user(entry, stack, argument) }
 }
 
@@ -628,12 +628,12 @@ pub(crate) fn report_trap(frame: &TrapFrame) {
 ///
 /// # Safety
 ///
-/// Must be called on every core, once, before anything on it can fault and
+/// (ENTRY) Must be called on every core, once, before anything on it can fault and
 /// before it unmasks interrupts. One table serves every core: it holds code,
 /// and no per-core state.
 pub(crate) unsafe fn init() {
     let table = (&raw const ferrix_vectors) as u64;
-    // SAFETY: `table` is the vector table in this image, 2048-byte aligned as
+    // SAFETY: (ENTRY) `table` is the vector table in this image, 2048-byte aligned as
     // `VBAR_EL1` requires, and every entry branches to a real save sequence.
     unsafe { cpu::write_vbar(table) };
     // Here because this runs on every core, and `CPACR_EL1` is per core.
@@ -642,7 +642,7 @@ pub(crate) unsafe fn init() {
 
 /// Raise a breakpoint, so the boot self-check can prove the trap path runs.
 pub(crate) fn breakpoint() {
-    // SAFETY: `brk` raises a synchronous exception the vector table handles.
+    // SAFETY: (PROBE) `brk` raises a synchronous exception the vector table handles.
     // Unlike x86-64's `int3`, the link register points *at* this instruction
     // rather than past it, which is why returning needs `advance_past_breakpoint`.
     unsafe {

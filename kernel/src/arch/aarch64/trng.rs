@@ -94,11 +94,11 @@ fn rnd64(conduit: Conduit) -> Option<[u64; 3]> {
 /// One SMCCC call through `conduit`, with its four result registers.
 fn call(conduit: Conduit, function: u64, argument: u64) -> [u64; 4] {
     match conduit {
-        // SAFETY: every function this module calls is a query or a read
+        // SAFETY: (FIRMWARE) every function this module calls is a query or a read
         // SMCCC defines to change no state, and SMCCC is asked for only once
         // PSCI has said it is there to answer.
         Conduit::Hvc => unsafe { cpu::hvc_call_x0_x3(function, argument, 0, 0) },
-        // SAFETY: as above.
+        // SAFETY: (FIRMWARE) as above.
         Conduit::Smc => unsafe { cpu::smc_call_x0_x3(function, argument, 0, 0) },
     }
 }

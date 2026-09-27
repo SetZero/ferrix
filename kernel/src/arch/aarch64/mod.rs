@@ -74,7 +74,7 @@ pub(crate) use smp::{CpuStarter, describe_cpus, hardware_id};
 ///
 /// # Safety
 ///
-/// `address` must be this processor's own `PerCpu` record, which must live for
+/// (SHARED) `address` must be this processor's own `PerCpu` record, which must live for
 /// the rest of the system's life: `cpu_local` hands it back as a reference.
 pub(crate) unsafe fn set_cpu_local(address: u64) {
     cpu::write_tpidr_el1(address);
@@ -84,7 +84,7 @@ pub(crate) unsafe fn set_cpu_local(address: u64) {
 ///
 /// # Safety
 ///
-/// [`set_cpu_local`] must have run on this CPU. Until it has, `TPIDR_EL1`
+/// (SHARED) [`set_cpu_local`] must have run on this CPU. Until it has, `TPIDR_EL1`
 /// holds whatever it held at reset, which the architecture leaves unknown.
 pub(crate) unsafe fn cpu_local() -> u64 {
     cpu::read_tpidr_el1()
@@ -111,10 +111,10 @@ pub(crate) use trap::{
 ///
 /// # Safety
 ///
-/// Must be called exactly once, on the boot CPU, before interrupts are
+/// (ENTRY) Must be called exactly once, on the boot CPU, before interrupts are
 /// unmasked.
 pub(crate) unsafe fn init_traps() {
-    // SAFETY: called once from `kmain`, before anything faults deliberately.
+    // SAFETY: (ENTRY) called once from `kmain`, before anything faults deliberately.
     unsafe { trap::init() };
     // After the vectors, so a fault this turns on is reported rather than
     // taken with no handler, and before user mode so it covers every program.
@@ -1115,10 +1115,10 @@ pub(crate) fn prepare_user_root(root: u64) {
 ///
 /// # Safety
 ///
-/// `root` must root a live set of tables for the lower half, and they must
+/// (TRANSLATE) `root` must root a live set of tables for the lower half, and they must
 /// stay live until another root replaces them on this processor.
 pub(crate) unsafe fn install_user_root(root: u64) {
-    // SAFETY: the caller guarantees the tables are live.
+    // SAFETY: (TRANSLATE) the caller guarantees the tables are live.
     unsafe { cpu::write_ttbr0(root) };
     cpu::flush_user_tlb();
     // Firmware's branch predictor invalidation, if this is another program's
@@ -1136,9 +1136,9 @@ pub(crate) unsafe fn install_user_root(root: u64) {
 ///
 /// # Safety
 ///
-/// Nothing may still need a user address on this processor.
+/// (TRANSLATE) Nothing may still need a user address on this processor.
 pub(crate) unsafe fn uninstall_user_root() {
-    // SAFETY: the caller guarantees no user address is wanted; the kernel is
+    // SAFETY: (TRANSLATE) the caller guarantees no user address is wanted; the kernel is
     // reached entirely through `TTBR1_EL1`.
     unsafe { cpu::disable_ttbr0() };
     cpu::flush_user_tlb();
@@ -1185,10 +1185,10 @@ pub(crate) const fn kernel_write_protected() -> bool {
 ///
 /// # Safety
 ///
-/// Nothing may still be executing or reading through the lower half of the
+/// (TRANSLATE) Nothing may still be executing or reading through the lower half of the
 /// address space. See [`cpu::disable_ttbr0`].
 pub(crate) unsafe fn drop_identity_map(_view: &BootView<'_>) {
-    // SAFETY: the caller guarantees the lower half is unused, and the kernel
+    // SAFETY: (TRANSLATE) the caller guarantees the lower half is unused, and the kernel
     // has been running entirely in the upper half since its first instruction.
     unsafe { cpu::disable_ttbr0() };
     IDENTITY_DROPPED.store(true, Ordering::Relaxed);
@@ -1252,7 +1252,7 @@ pub(crate) fn halt() -> ! {
 ///
 /// # Safety
 ///
-/// Must be called exactly once, on the boot CPU, after [`init_traps`] and
+/// (DEVICE) Must be called exactly once, on the boot CPU, after [`init_traps`] and
 /// while interrupts are masked.
 pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'static str> {
     // ACPI when the loader found an RSDP, which every QEMU boot does; the
@@ -1262,7 +1262,7 @@ pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'st
     // may describe something else.
     let version = if view.raw().rsdp == 0 {
         let tree = crate::fdt::open(view)?;
-        // SAFETY: called once from `kmain`, on the boot CPU, after the vector
+        // SAFETY: (DEVICE) called once from `kmain`, on the boot CPU, after the vector
         // table is installed and with interrupts masked.
         let version = unsafe { gic::init_from_tree(&tree)? };
         timer::init_from_tree(&tree)?;
@@ -1271,7 +1271,7 @@ pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'st
         let firmware = crate::acpi::Firmware::open(view)
             .map_err(|_| "the machine has no readable ACPI tables")?;
         let acpi = firmware.acpi();
-        // SAFETY: as above.
+        // SAFETY: (DEVICE) as above.
         let version = unsafe { gic::init(&acpi)? };
         timer::init(&acpi)?;
         version
@@ -1342,7 +1342,7 @@ pub(crate) fn send_ipi_to_others() -> Result<(), &'static str> {
 #[derive(Debug)]
 pub(crate) struct Irq;
 
-// SAFETY: `disable` masks every interrupt on this CPU and returns the `DAIF`
+// SAFETY: (SHARED) `disable` masks every interrupt on this CPU and returns the `DAIF`
 // value it found; `restore` puts exactly that value back, so nesting two
 // critical sections cannot unmask halfway out of the outer one. `DAIF` is
 // four bits wide and fits a `usize` on every target this kernel builds for.
@@ -1354,7 +1354,7 @@ unsafe impl ferrix_sync::IrqControl for Irq {
     }
 
     fn restore(state: usize) {
-        // SAFETY: `state` is a `DAIF` value this CPU's `disable` returned a
+        // SAFETY: (SYSREG) `state` is a `DAIF` value this CPU's `disable` returned a
         // moment ago, which is exactly `write_daif`'s contract.
         unsafe { cpu::write_daif(state as u64) };
     }

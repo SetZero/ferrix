@@ -356,7 +356,7 @@ impl CpuStarter {
             ..self.template
         };
         let at = crate::mm::direct_map(self.block);
-        // SAFETY: `self.block` is a frame this starter allocated and nothing
+        // SAFETY: (FRAME) `self.block` is a frame this starter allocated and nothing
         // else refers to; the direct map makes it writable, and a frame is
         // aligned for anything.
         unsafe { (at as *mut StartBlock).write(block) };
@@ -426,11 +426,11 @@ pub(super) fn psci_conduit(view: &BootView<'_>) -> Result<Conduit, &'static str>
 /// Make a PSCI call and return its status.
 fn psci(conduit: Conduit, function: u64, a: u64, b: u64, c: u64) -> i32 {
     let status = match conduit {
-        // SAFETY: the only function this module calls is `CPU_ON`, whose
+        // SAFETY: (FIRMWARE) the only function this module calls is `CPU_ON`, whose
         // entry point is the sequence above and whose argument is a start
         // block this module wrote.
         Conduit::Hvc => unsafe { cpu::hvc_call(function, a, b, c) },
-        // SAFETY: as above.
+        // SAFETY: (FIRMWARE) as above.
         Conduit::Smc => unsafe { cpu::smc_call(function, a, b, c) },
     };
     // PSCI returns a 32-bit signed status in the low half of `x0`.
@@ -442,13 +442,13 @@ fn psci(conduit: Conduit, function: u64, a: u64, b: u64, c: u64) -> i32 {
 /// Running in the upper half on its own stack, with every exception masked
 /// and the identity map still installed.
 extern "C" fn secondary_start(record: u64) -> ! {
-    // SAFETY: nothing from here on executes or reads through the lower half.
+    // SAFETY: (TRANSLATE) nothing from here on executes or reads through the lower half.
     // The identity map was for the instructions before the branch here.
     unsafe { cpu::disable_ttbr0() };
     // Disabling the walk does not drop what it already cached: the TLB
     // invalidation does.
     cpu::flush_tlb();
-    // SAFETY: once on this core, before anything on it can fault, with every
+    // SAFETY: (ENTRY) once on this core, before anything on it can fault, with every
     // exception masked.
     unsafe { super::trap::init() };
     super::gic::init_this_cpu();

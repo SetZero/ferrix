@@ -67,13 +67,13 @@ unsafe extern "C" {
 ///
 /// # Safety
 ///
-/// `save` must be the stack-pointer slot of the context calling this, and
+/// (CONTEXT) `save` must be the stack-pointer slot of the context calling this, and
 /// `next` must be a stack pointer that [`prepare_stack`] produced or that an
 /// earlier call to this function saved. No other processor may be running on
 /// either stack, and both must stay mapped for as long as their contexts
 /// exist.
 pub(crate) unsafe fn switch_to(save: *mut u64, next: u64) {
-    // SAFETY: the caller's guarantee is exactly the assembly's contract.
+    // SAFETY: (CONTEXT) the caller's guarantee is exactly the assembly's contract.
     unsafe { ferrix_switch(save, next) };
 }
 
@@ -81,7 +81,7 @@ pub(crate) unsafe fn switch_to(save: *mut u64, next: u64) {
 ///
 /// # Safety
 ///
-/// `top` must be the top of a mapped, writable stack of at least
+/// (CONTEXT) `top` must be the top of a mapped, writable stack of at least
 /// [`FRAME_BYTES`], owned by the caller and not in use.
 pub(crate) unsafe fn prepare_stack(
     top: u64,
@@ -109,7 +109,7 @@ pub(crate) unsafe fn prepare_stack(
     ];
 
     let stack_pointer = top - FRAME_BYTES;
-    // SAFETY: the caller guarantees the stack is mapped, writable and theirs,
+    // SAFETY: (CONTEXT) the caller guarantees the stack is mapped, writable and theirs,
     // and the frame is written entirely inside it.
     unsafe {
         core::ptr::copy_nonoverlapping(frame.as_ptr(), stack_pointer as *mut u64, frame.len());
@@ -151,10 +151,10 @@ impl UserState {
     ///
     /// # Safety
     ///
-    /// The registers must be the calling task's own.
+    /// (CONTEXT) The registers must be the calling task's own.
     pub(crate) unsafe fn capture() -> UserState {
         let mut state = UserState::new();
-        // SAFETY: the caller's guarantee.
+        // SAFETY: (CONTEXT) the caller's guarantee.
         unsafe { save_user_state(&mut state) };
         state
     }
@@ -273,10 +273,10 @@ unsafe extern "C" {
 ///
 /// # Safety
 ///
-/// The registers must belong to the task `state` is for: it was the last task
+/// (CONTEXT) The registers must belong to the task `state` is for: it was the last task
 /// with user state to run on this processor.
 pub(crate) unsafe fn save_user_state(state: &mut UserState) {
-    // SAFETY: `state` is a live, exclusively borrowed `UserState`, whose layout
+    // SAFETY: (CONTEXT) `state` is a live, exclusively borrowed `UserState`, whose layout
     // the assembly's offsets are asserted against.
     unsafe { ferrix_user_save(core::ptr::from_mut(state)) };
 }
@@ -289,10 +289,10 @@ pub(crate) unsafe fn save_user_state(state: &mut UserState) {
 ///
 /// # Safety
 ///
-/// The task `state` belongs to must be the one this processor is switching to.
+/// (CONTEXT) The task `state` belongs to must be the one this processor is switching to.
 pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
     let _ = entry_stack;
-    // SAFETY: as above, and loading user registers cannot affect the kernel,
+    // SAFETY: (CONTEXT) as above, and loading user registers cannot affect the kernel,
     // which uses none of them.
     unsafe { ferrix_user_restore(core::ptr::from_ref(state)) };
 }
@@ -302,9 +302,9 @@ pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
 ///
 /// # Safety
 ///
-/// Must be called by the user task whose registers these are.
+/// (CONTEXT) Must be called by the user task whose registers these are.
 pub(crate) unsafe fn reset_user_state() {
     let fresh = UserState::new();
-    // SAFETY: loading zeroed user registers cannot affect the kernel.
+    // SAFETY: (CONTEXT) loading zeroed user registers cannot affect the kernel.
     unsafe { ferrix_user_restore(core::ptr::from_ref(&fresh)) };
 }

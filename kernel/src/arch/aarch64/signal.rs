@@ -156,7 +156,7 @@ pub(crate) fn setup_signal_frame(
     frame.put_u64(PC, regs.elr)?;
     frame.put_u64(PSTATE, regs.spsr)?;
 
-    // SAFETY: on the running task's own way back to EL0, so the processor
+    // SAFETY: (CONTEXT) on the running task's own way back to EL0, so the processor
     // holds this program's floating-point and SIMD registers.
     let state = unsafe { UserState::capture() };
     let (fpcr, fpsr) = state.fp_control();
@@ -224,7 +224,7 @@ pub(crate) fn restore_signal_frame(
     };
     let mut vectors = [0_u8; 512];
     vectors.copy_from_slice(frame.get(fpsimd + 16, 512)?);
-    // SAFETY: inside the running task's own system call, so the registers are
+    // SAFETY: (CONTEXT) inside the running task's own system call, so the registers are
     // its own; captured to keep the thread pointer as it is.
     let mut state = unsafe { UserState::capture() };
     state.set_fp(
@@ -232,7 +232,7 @@ pub(crate) fn restore_signal_frame(
         u64::from(frame.u32_at(fpsimd + 8)?),
         vectors,
     );
-    // SAFETY: the running task's own registers, loaded from a state whose
+    // SAFETY: (CONTEXT) the running task's own registers, loaded from a state whose
     // thread pointer is the one it already has; the entry stack is unused
     // on this architecture.
     unsafe { switch::restore_user_state(&state, 0) };

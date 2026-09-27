@@ -311,11 +311,11 @@ fn ask_about_this_core(core: Core) -> Firmware {
 /// One SMCCC call through `conduit`; `u64::MAX` (an error) with none.
 fn firmware_call(conduit: u8, function: u64, argument: u64) -> u64 {
     match conduit {
-        // SAFETY: every function this module calls is a query or a
+        // SAFETY: (FIRMWARE) every function this module calls is a query or a
         // workaround SMCCC defines to change no state a caller relies on,
         // asked for only after PSCI said SMCCC is there to answer.
         CONDUIT_HVC => unsafe { cpu::hvc_call(function, argument, 0, 0) },
-        // SAFETY: as above.
+        // SAFETY: (FIRMWARE) as above.
         CONDUIT_SMC => unsafe { cpu::smc_call(function, argument, 0, 0) },
         _ => u64::MAX,
     }
@@ -393,7 +393,7 @@ fn apply(plan: Defences, core: Core, cpu: usize) -> Defences {
     let _ = BHB_LOOPS.fetch_max(core.bhb_loops(), Ordering::Relaxed);
     if plan.contains(Defences::SSBD) && core.ssbs > 0 {
         let sctlr = cpu::read_sctlr();
-        // SAFETY: clearing DSSBS changes only the value `PSTATE.SSBS` takes
+        // SAFETY: (PROTECT) clearing DSSBS changes only the value `PSTATE.SSBS` takes
         // on an exception to EL1, on a core whose ID register says it exists.
         unsafe { write_sctlr(sctlr & !SCTLR_DSSBS) };
         held &= cpu::read_sctlr() & SCTLR_DSSBS == 0;
@@ -747,7 +747,7 @@ pub(crate) fn clamp_index(index: usize, len: usize) -> usize {
         return index;
     }
     let clamped: usize;
-    // SAFETY: three register instructions; no memory, no stack.
+    // SAFETY: (PROTECT) three register instructions; no memory, no stack.
     unsafe {
         asm!(
             "cmp {index}, {len}",
@@ -771,7 +771,7 @@ pub(crate) fn clamp_below(value: u64, end: u64) -> u64 {
 /// `MIDR_EL1`: who designed the core, and which part it is.
 fn read_midr() -> u64 {
     let value: u64;
-    // SAFETY: an ID register read, legal at EL1 on every core.
+    // SAFETY: (SYSREG) an ID register read, legal at EL1 on every core.
     unsafe { asm!("mrs {}, midr_el1", out(reg) value, options(nomem, nostack, preserves_flags)) };
     value
 }
@@ -780,7 +780,7 @@ fn read_midr() -> u64 {
 /// exists.
 fn read_id_aa64pfr1() -> u64 {
     let value: u64;
-    // SAFETY: as `read_midr`.
+    // SAFETY: (SYSREG) as `read_midr`.
     unsafe {
         asm!("mrs {}, id_aa64pfr1_el1", out(reg) value, options(nomem, nostack, preserves_flags));
     }
@@ -791,7 +791,7 @@ fn read_id_aa64pfr1() -> u64 {
 /// is shared across contexts.
 fn read_id_aa64mmfr1() -> u64 {
     let value: u64;
-    // SAFETY: as `read_midr`.
+    // SAFETY: (SYSREG) as `read_midr`.
     unsafe {
         asm!("mrs {}, id_aa64mmfr1_el1", out(reg) value, options(nomem, nostack, preserves_flags));
     }
@@ -802,10 +802,10 @@ fn read_id_aa64mmfr1() -> u64 {
 ///
 /// # Safety
 ///
-/// `value` must be the register's current value with only bits the caller
+/// (PROTECT) `value` must be the register's current value with only bits the caller
 /// has argued changed.
 unsafe fn write_sctlr(value: u64) {
-    // SAFETY: the caller guarantees the value.
+    // SAFETY: (PROTECT) the caller guarantees the value.
     unsafe { asm!("msr sctlr_el1, {}", "isb", in(reg) value, options(nostack, preserves_flags)) };
 }
 
@@ -814,7 +814,7 @@ unsafe fn write_sctlr(value: u64) {
 /// encoding, `S3_3_C4_C2_6`, which the assembler takes without a feature
 /// flag.
 fn clear_ssbs() {
-    // SAFETY: writes one `PSTATE` bit that governs only speculation, on a
+    // SAFETY: (PROTECT) writes one `PSTATE` bit that governs only speculation, on a
     // core whose ID register says the instruction exists.
     unsafe {
         asm!(

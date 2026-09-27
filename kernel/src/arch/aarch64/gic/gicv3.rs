@@ -148,7 +148,7 @@ fn wait_for(mmio: Mmio, register: u64, pending: u32) -> Result<(), &'static str>
 ///
 /// # Safety
 ///
-/// Must be called once, on the boot CPU, after the vector table is installed
+/// (DEVICE) Must be called once, on the boot CPU, after the vector table is installed
 /// and while interrupts are masked: it leaves the controller able to deliver.
 pub(crate) unsafe fn init(
     distributor: u64,

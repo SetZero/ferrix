@@ -51,7 +51,7 @@ const WINDOW: u64 = KERNEL_VMAP_BASE;
 /// mapped one. Zero when the console is the PL011, which keeps its own.
 struct Base(UnsafeCell<u64>);
 
-// SAFETY: early boot is single-threaded — no other CPU has been started and
+// SAFETY: (SHARED) early boot is single-threaded — no other CPU has been started and
 // interrupts are masked — so there is never a second accessor.
 unsafe impl Sync for Base {}
 
@@ -102,18 +102,18 @@ pub(crate) fn is_ns16550() -> bool {
 
 /// Read one of the 16550's byte registers.
 fn read_u8(offset: u64) -> u8 {
-    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    // SAFETY: (SHARED) single-threaded, as documented on the `Sync` impl above.
     let base = unsafe { *BASE.0.get() };
-    // SAFETY: `base` is the port `init` mapped -- `NS16550` is set only after
+    // SAFETY: (DEVICE) `base` is the port `init` mapped -- `NS16550` is set only after
     // it -- and `offset` one of its eight registers, all inside the mapped page.
     unsafe { core::ptr::read_volatile((base + offset) as *const u8) }
 }
 
 /// Write one of the 16550's byte registers.
 fn write_u8(offset: u64, value: u8) {
-    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    // SAFETY: (SHARED) single-threaded, as documented on the `Sync` impl above.
     let base = unsafe { *BASE.0.get() };
-    // SAFETY: as in `read_u8`.
+    // SAFETY: (DEVICE) as in `read_u8`.
     unsafe { core::ptr::write_volatile((base + offset) as *mut u8, value) };
 }
 
@@ -134,7 +134,7 @@ pub(crate) fn init(view: &BootView<'_>, memory: &mut EarlyMemory) -> Result<(), 
     if let Some(port) = view.option("console").and_then(ns16550_port) {
         let page = port & !(PAGE_SIZE - 1);
         memory.map_device(WINDOW, page, PAGE_SIZE)?;
-        // SAFETY: single-threaded, as documented on the `Sync` impl above.
+        // SAFETY: (SHARED) single-threaded, as documented on the `Sync` impl above.
         unsafe { *BASE.0.get() = WINDOW + (port - page) };
         NS16550.store(true, Ordering::Relaxed);
         return Ok(());
@@ -143,7 +143,7 @@ pub(crate) fn init(view: &BootView<'_>, memory: &mut EarlyMemory) -> Result<(), 
         // Device memory, so every byte reaches RAM in order and survives the
         // reset with no cache to be cleaned first.
         memory.map_device(WINDOW, base, size)?;
-        // SAFETY: single-threaded, as documented on the `Sync` impl above.
+        // SAFETY: (SHARED) single-threaded, as documented on the `Sync` impl above.
         unsafe { *BASE.0.get() = WINDOW };
         let capacity = size - RAMOOPS_HEADER;
         // Continue the loader's record rather than start another, so the two
@@ -172,9 +172,9 @@ fn ramoops_append(byte: u8) {
     if length >= RAMOOPS_CAPACITY.load(Ordering::Relaxed) {
         return;
     }
-    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    // SAFETY: (SHARED) single-threaded, as documented on the `Sync` impl above.
     let base = unsafe { *BASE.0.get() };
-    // SAFETY: the byte is inside the zone `init` mapped, past its header and
+    // SAFETY: (DEVICE) the byte is inside the zone `init` mapped, past its header and
     // below its capacity.
     unsafe { core::ptr::write_volatile((base + RAMOOPS_HEADER + length) as *mut u8, byte) };
     let length = length + 1;
@@ -187,18 +187,18 @@ fn ramoops_append(byte: u8) {
 
 /// Read one word of the `ramoops` record's header.
 fn ramoops_read(offset: u64) -> u32 {
-    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    // SAFETY: (SHARED) single-threaded, as documented on the `Sync` impl above.
     let base = unsafe { *BASE.0.get() };
-    // SAFETY: `base` is the zone `init` has just mapped or mapped earlier, and
+    // SAFETY: (DEVICE) `base` is the zone `init` has just mapped or mapped earlier, and
     // `offset` is one of the three header words at its start.
     unsafe { core::ptr::read_volatile((base + offset) as *const u32) }
 }
 
 /// Write one word of the `ramoops` record's header.
 fn ramoops_write(offset: u64, value: u32) {
-    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    // SAFETY: (SHARED) single-threaded, as documented on the `Sync` impl above.
     let base = unsafe { *BASE.0.get() };
-    // SAFETY: as in `ramoops_read`.
+    // SAFETY: (DEVICE) as in `ramoops_read`.
     unsafe { core::ptr::write_volatile((base + offset) as *mut u32, value) };
 }
 
