@@ -145,6 +145,13 @@ pub(crate) fn device_barrier() {
     unsafe { asm!("dsb sy", options(nostack, preserves_flags)) }
 }
 
+/// The processor's free-running counter, when ring 3 may read it: not yet
+/// here. Whether EL0 may read the virtual counter is the kernel's to set, and
+/// until it does a read would fault, so there is none.
+pub(crate) fn counter() -> Option<u64> {
+    None
+}
+
 /// `exit_group(status)`.
 pub(crate) fn exit(status: i32) -> ! {
     // SAFETY: `exit_group` takes no pointer and does not return: the process

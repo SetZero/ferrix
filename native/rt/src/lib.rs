@@ -83,6 +83,15 @@ pub fn exit(status: i32) -> ! {
     arch::exit(status)
 }
 
+/// The processor's free-running counter, when a program may read it: the
+/// TSC on x86-64, and `None` on the Arm architectures until the kernel lets
+/// ring 3 read the virtual counter. For a driver timing its own device, as
+/// the block driver does for the seam's measurement.
+#[must_use]
+pub fn counter() -> Option<u64> {
+    arch::counter()
+}
+
 /// Complete every memory and register access before this before any after
 /// it, as a device sees them: what a driver sharing memory with a device
 /// that does not snoop -- mapped past the caches by a coherent pin --

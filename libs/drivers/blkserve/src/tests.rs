@@ -294,3 +294,48 @@ fn a_broken_device_stops_the_loop() {
         Err(Fault::Device(DeviceError::NeedsReset))
     );
 }
+
+/// The test's counter: advanced by hand between a request's hand-off and its
+/// completion.
+static TICKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1000);
+
+fn ticks() -> u64 {
+    TICKS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[test]
+fn a_timed_loop_says_how_long_the_device_held_each_request() {
+    let mut storage = [Slot::EMPTY; 8];
+    let (serve, mut kernel, _) = pair(FakeDisk::new(4), &mut storage);
+    let mut serve = serve.timed(ticks);
+    kernel.submit(Submission::read(7, 3, 1, 0)).unwrap();
+    kernel.submit(Submission::read(8, 4, 1, 4096)).unwrap();
+    let _ = kernel.publish();
+    assert_eq!(serve.on_bell(), Ok(None));
+
+    let _ = TICKS.fetch_add(250, std::sync::atomic::Ordering::Relaxed);
+    serve.disk.finish(8, Status::Ok, 4096);
+    serve.disk.finish(7, Status::Ok, 4096);
+    let mut out = none();
+    let _ = serve.on_interrupt(&mut out);
+
+    let mut seen = Vec::new();
+    while let Some(done) = kernel.poll().unwrap() {
+        seen.push((done.submission.id, done.device_ticks));
+    }
+    assert_eq!(seen, vec![(8, 250), (7, 250)], "each held for 250 ticks");
+}
+
+#[test]
+fn an_untimed_loop_says_nothing_was_measured() {
+    let mut storage = [Slot::EMPTY; 8];
+    let (mut serve, mut kernel, _) = pair(FakeDisk::new(4), &mut storage);
+    kernel.submit(Submission::read(7, 3, 1, 0)).unwrap();
+    let _ = kernel.publish();
+    assert_eq!(serve.on_bell(), Ok(None));
+    serve.disk.finish(7, Status::Ok, 4096);
+    let mut out = none();
+    let _ = serve.on_interrupt(&mut out);
+    let done = kernel.poll().unwrap().expect("a completion");
+    assert_eq!(done.device_ticks, 0, "zero: not measured");
+}

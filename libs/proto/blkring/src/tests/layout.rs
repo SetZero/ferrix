@@ -122,7 +122,7 @@ fn a_completion_is_24_bytes_laid_out_as_specified() {
         completion::ID,
         completion::BYTES_DONE,
         completion::STATUS,
-        completion::RESERVED,
+        completion::DEVICE_TICKS,
     ];
     assert_eq!(offsets, [0, 8, 16, 20], "completion offsets");
     assert_eq!(COMPLETION_BYTES, 24, "completion size");
@@ -134,7 +134,7 @@ fn a_completion_is_24_bytes_laid_out_as_specified() {
         id: 0x0102_0304_0506_0708,
         bytes_done: 0x1112_1314_1516_1718,
         status: 0x2122_2324,
-        reserved: 0x3132_3334,
+        device_ticks: 0x3132_3334,
     };
     let at = layout.completion_at(0);
     assert_eq!(at, 64 + 2 * 32, "the completions follow the submissions");
@@ -143,7 +143,11 @@ fn a_completion_is_24_bytes_laid_out_as_specified() {
     assert_eq!(bytes[0..8], raw.id.to_le_bytes(), "id");
     assert_eq!(bytes[8..16], raw.bytes_done.to_le_bytes(), "bytes_done");
     assert_eq!(bytes[16..20], raw.status.to_le_bytes(), "status");
-    assert_eq!(bytes[20..24], raw.reserved.to_le_bytes(), "reserved");
+    assert_eq!(
+        bytes[20..24],
+        raw.device_ticks.to_le_bytes(),
+        "device_ticks"
+    );
     assert_eq!(shared.peek(at + 24, 24), [0; 24], "nothing after the entry");
     assert_eq!(RawCompletion::read_from(&memory, at), raw, "round trip");
 }

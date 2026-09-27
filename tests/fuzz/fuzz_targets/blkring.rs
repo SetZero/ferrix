@@ -290,7 +290,9 @@ fn kernel_step(
                 id,
                 bytes_done: u64::from(input.u32()),
                 status: u32::from(input.byte() % 6),
-                reserved: 0,
+                // Anything: the kernel reads it as a measurement and never
+                // judges or acts on it.
+                device_ticks: input.u32(),
             };
             completion.write_to(&mut Mem { shared, honest: Honest::Driver, layout }, layout.completion_at(model.fuzz_tail));
             model.fuzz_tail = model.fuzz_tail.wrapping_add(1);

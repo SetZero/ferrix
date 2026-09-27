@@ -175,7 +175,7 @@ impl<M: RingMemory> DriverSide<M> {
             Err(reason) => {
                 // Refusing it takes a completion slot while this one is, in
                 // effect, held.
-                let staged = self.stage(raw.id, Status::Refused, 0, self.held.saturating_add(1));
+                let staged = self.stage(raw.id, Status::Refused, 0, 0, self.held.saturating_add(1));
                 self.check(staged)?;
                 Consumed::Refused { id: raw.id, reason }
             }
@@ -196,13 +196,29 @@ impl<M: RingMemory> DriverSide<M> {
         status: Status,
         bytes_done: u64,
     ) -> Result<(), CompleteError> {
+        self.complete_timed(id, status, bytes_done, 0)
+    }
+
+    /// [`DriverSide::complete`], saying how many counter ticks the device
+    /// took over the request (`device_ticks`, zero for not measured).
+    ///
+    /// # Errors
+    ///
+    /// As [`DriverSide::complete`].
+    pub fn complete_timed(
+        &mut self,
+        id: u64,
+        status: Status,
+        bytes_done: u64,
+        device_ticks: u32,
+    ) -> Result<(), CompleteError> {
         if let Some(corruption) = self.fault {
             return Err(CompleteError::Corrupt(corruption));
         }
         if self.held == 0 {
             return Err(CompleteError::NotHeld);
         }
-        let staged = self.stage(id, status, bytes_done, self.held);
+        let staged = self.stage(id, status, bytes_done, device_ticks, self.held);
         self.check(staged).map_err(CompleteError::Corrupt)?;
         self.held -= 1;
         Ok(())
@@ -215,6 +231,7 @@ impl<M: RingMemory> DriverSide<M> {
         id: u64,
         status: Status,
         bytes_done: u64,
+        device_ticks: u32,
         holding: u64,
     ) -> Result<(), Corruption> {
         let occupied = self
@@ -232,7 +249,7 @@ impl<M: RingMemory> DriverSide<M> {
             id,
             bytes_done,
             status: status.raw(),
-            reserved: 0,
+            device_ticks,
         };
         let at = self.layout.completion_at(self.completions.tail());
         completion.write_to(&mut self.memory, at);

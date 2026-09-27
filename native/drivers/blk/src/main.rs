@@ -532,12 +532,23 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
         .wait_async(&port, Signals::READABLE, KEY_CONTROL)
         .map_err(|_| Step::Events)?;
 
-    // Serve until STOP, then take the device down.
+    // Serve until STOP, then take the device down. Each request's stay in
+    // the device is timed where the processor's counter can be read, for
+    // the seam's measurement (docs/OPAQUE-KERNEL.md, S0).
     let mut serve: Loop = Serve::new(side, driver);
+    if ferrix_rt::counter().is_some() {
+        serve = serve.timed(ticks);
+    }
     let ended = serve_until(&mut serve, &port, &kernel_port, &control);
     let stopped = matches!(ended, Ok(Ended::Stop));
     teardown(serve, &control, &kernel_port, stopped)?;
     ended.map(|_| ())
+}
+
+/// The processor's counter, for [`Serve::timed`]: zero where it cannot be
+/// read, which the loop is never given.
+fn ticks() -> u64 {
+    ferrix_rt::counter().unwrap_or(0)
 }
 
 /// The device's memory, its bring-up, and what HELLO needs to know: the

@@ -135,6 +135,14 @@ fn trap(number: usize, args: [usize; 6]) -> usize {
     result
 }
 
+/// The processor's time-stamp counter, which ring 3 may read: the TSC, the
+/// counter the kernel's clock counts when it is not the HPET.
+pub(crate) fn counter() -> Option<u64> {
+    // SAFETY: `rdtsc` reads a counter into edx:eax and has no other effect;
+    // nothing clears CR4.TSD, so it does not fault in ring 3.
+    Some(unsafe { core::arch::x86_64::_rdtsc() })
+}
+
 /// Complete every access before this before any after it: x86-64's devices
 /// snoop, so a fence is all a device needs.
 pub(crate) fn device_barrier() {

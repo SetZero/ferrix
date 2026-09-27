@@ -190,6 +190,12 @@ pub struct Serve<M, K, const PENDING: usize> {
     /// Virtio sectors per ring block: the block size over 512.
     sectors_per_block: u64,
     fault: Option<Fault>,
+    /// The processor's free-running counter, when the glue can read one:
+    /// what times each request's stay in the device, for the seam's
+    /// measurement (`docs/OPAQUE-KERNEL.md`, S0). `None` measures nothing.
+    clock: Option<fn() -> u64>,
+    /// When each request queued in the device was handed to it, by id.
+    started: [Option<(u64, u64)>; PENDING],
 }
 
 impl<M, K, const PENDING: usize> fmt::Debug for Serve<M, K, PENDING> {
@@ -218,7 +224,48 @@ impl<M: RingMemory, K: Disk, const PENDING: usize> Serve<M, K, PENDING> {
             pending: Pending::new(),
             sectors_per_block: (block_size / VIRTIO_SECTOR).max(1),
             fault,
+            clock: None,
+            started: [None; PENDING],
         }
+    }
+
+    /// Time each request's stay in the device by `clock`, the processor's
+    /// free-running counter, and say it in the completion's `device_ticks`.
+    #[must_use]
+    pub fn timed(mut self, clock: fn() -> u64) -> Self {
+        self.clock = Some(clock);
+        self
+    }
+
+    /// Note that request `id` went to the device now.
+    fn start(&mut self, id: u64) {
+        let Some(clock) = self.clock else {
+            return;
+        };
+        if let Some(slot) = self.started.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some((id, clock()));
+        }
+    }
+
+    /// The ticks request `id` spent in the device, zero if it was not timed.
+    fn took(&mut self, id: u64) -> u32 {
+        let Some(clock) = self.clock else {
+            return 0;
+        };
+        let Some(slot) = self
+            .started
+            .iter_mut()
+            .find(|slot| slot.is_some_and(|(started, _)| started == id))
+        else {
+            return 0;
+        };
+        let Some((_, at)) = slot.take() else {
+            return 0;
+        };
+        // At least one: zero means "not measured".
+        u32::try_from(clock().saturating_sub(at))
+            .unwrap_or(u32::MAX)
+            .max(1)
     }
 
     /// The ring's side, for HELLO and for a look at what it holds.
@@ -266,7 +313,13 @@ impl<M: RingMemory, K: Disk, const PENDING: usize> Serve<M, K, PENDING> {
             let drained = self.disk.drain(out).map_err(Fault::Device);
             let drained = self.fail(drained)?;
             for completion in out.iter().take(drained.completions) {
-                self.complete(completion.id, status(completion.status), completion.bytes)?;
+                let ticks = self.took(completion.id);
+                self.complete_timed(
+                    completion.id,
+                    status(completion.status),
+                    completion.bytes,
+                    ticks,
+                )?;
             }
             if !drained.more || drained.completions == 0 {
                 break;
@@ -334,7 +387,10 @@ impl<M: RingMemory, K: Disk, const PENDING: usize> Serve<M, K, PENDING> {
     fn hand(&mut self, submission: &Submission) -> Result<Handed, Fault> {
         let request = self.request(submission);
         match self.disk.submit(&request) {
-            Ok(Accepted::Queued { .. }) => Ok(Handed::Taken),
+            Ok(Accepted::Queued { .. }) => {
+                self.start(submission.id);
+                Ok(Handed::Taken)
+            }
             Ok(Accepted::Completed(done)) => {
                 self.complete(done.id, status(done.status), done.bytes)?;
                 Ok(Handed::Taken)
@@ -381,7 +437,17 @@ impl<M: RingMemory, K: Disk, const PENDING: usize> Serve<M, K, PENDING> {
     }
 
     fn complete(&mut self, id: u64, status: RingStatus, bytes: u64) -> Result<(), Fault> {
-        match self.ring.complete(id, status, bytes) {
+        self.complete_timed(id, status, bytes, 0)
+    }
+
+    fn complete_timed(
+        &mut self,
+        id: u64,
+        status: RingStatus,
+        bytes: u64,
+        ticks: u32,
+    ) -> Result<(), Fault> {
+        match self.ring.complete_timed(id, status, bytes, ticks) {
             Ok(()) => Ok(()),
             Err(CompleteError::Corrupt(corruption)) => Err(self.stop(Fault::Ring(corruption))),
             Err(CompleteError::NotHeld) => Err(self.stop(Fault::Protocol)),

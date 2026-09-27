@@ -123,6 +123,10 @@ pub struct Completed {
     pub status: Status,
     /// Bytes the driver says it did, at most the payload length.
     pub bytes_done: u64,
+    /// What the driver says the device took over it, in counter ticks; zero
+    /// when it did not measure. Nothing is checked or trusted of it: it is a
+    /// measurement the seam's row reads (`docs/OPAQUE-KERNEL.md`, S0).
+    pub device_ticks: u32,
 }
 
 /// How the glue learned the ring is over.
@@ -409,6 +413,7 @@ impl<'s, M: RingMemory> KernelSide<'s, M> {
             submission,
             status,
             bytes_done: raw.bytes_done,
+            device_ticks: raw.device_ticks,
         })
     }
 

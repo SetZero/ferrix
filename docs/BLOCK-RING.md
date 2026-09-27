@@ -137,8 +137,16 @@ data_offset + length)` of the data VMO.
 8   8  bytes_done  ≤ the submission's payload length; 0 for FLUSH
 16  4  status      0 OK, 1 IOERR, 2 UNSUPPORTED, 3 REFUSED (failed driver
                    validation), 4 READ_ONLY
-20  4  reserved    zero
+20  4  device_ticks  how long the device held the request, in the ticks of
+                   the processor's free-running counter as the driver read
+                   it; 0 when the driver did not measure
 ```
+
+`device_ticks` (2026-09-27, the seam's measurement in `docs/OPAQUE-KERNEL.md`)
+was a reserved zero before, which no kernel checked, so an older driver's
+completions read as "not measured". The kernel acts on nothing in it: it
+sums the ticks for the `seam` boot line, converted with its own clock's rate
+only when ring 3 reads the same counter (`arch::vdso_can_read_counter`).
 
 ### 3.3 Data VMO
 

@@ -103,8 +103,11 @@ pub mod completion {
     pub const BYTES_DONE: usize = 8;
     /// `status`, `u32`: [`super::Status`].
     pub const STATUS: usize = 16;
-    /// `reserved`, `u32`, zero.
-    pub const RESERVED: usize = 20;
+    /// `device_ticks`, `u32`: how long the device took over the request, in
+    /// the ticks of the processor's free-running counter as the driver read
+    /// it; zero when the driver did not measure. Informational: the kernel
+    /// checks nothing of it and acts on nothing in it.
+    pub const DEVICE_TICKS: usize = 20;
 }
 
 /// What a submission asks the device to do.
@@ -307,8 +310,8 @@ pub struct RawCompletion {
     pub bytes_done: u64,
     /// `status`.
     pub status: u32,
-    /// `reserved`.
-    pub reserved: u32,
+    /// `device_ticks`.
+    pub device_ticks: u32,
 }
 
 impl RawCompletion {
@@ -318,7 +321,7 @@ impl RawCompletion {
             id: memory.read_u64(at.wrapping_add(completion::ID)),
             bytes_done: memory.read_u64(at.wrapping_add(completion::BYTES_DONE)),
             status: memory.read_u32(at.wrapping_add(completion::STATUS)),
-            reserved: memory.read_u32(at.wrapping_add(completion::RESERVED)),
+            device_ticks: memory.read_u32(at.wrapping_add(completion::DEVICE_TICKS)),
         }
     }
 
@@ -327,7 +330,7 @@ impl RawCompletion {
         memory.write_u64(at.wrapping_add(completion::ID), self.id);
         memory.write_u64(at.wrapping_add(completion::BYTES_DONE), self.bytes_done);
         memory.write_u32(at.wrapping_add(completion::STATUS), self.status);
-        memory.write_u32(at.wrapping_add(completion::RESERVED), self.reserved);
+        memory.write_u32(at.wrapping_add(completion::DEVICE_TICKS), self.device_ticks);
     }
 }
 
