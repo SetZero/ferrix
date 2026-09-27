@@ -6,12 +6,14 @@ use std::io::Write;
 use std::process::ExitCode;
 
 use compositor_toolkit::Client;
+use compositor_toolkit::tiny_skia;
 use compositor_waybar::app::App;
 use compositor_waybar::cli::{self, Parsed};
 use compositor_waybar::config::{self, System};
 use compositor_waybar::css::Stylesheet;
 use compositor_waybar::diag::Diagnostics;
 use compositor_waybar::engine::{ImageCache, TextEngine};
+use compositor_waybar::render;
 
 fn say(lines: Vec<String>) {
     let mut err = std::io::stderr().lock();
@@ -29,7 +31,11 @@ fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         Ok(Parsed::Version) => {
-            let _ = writeln!(std::io::stdout(), "Waybar v{} (Ferrix)", env!("CARGO_PKG_VERSION"));
+            let _ = writeln!(
+                std::io::stdout(),
+                "Waybar v{} (Ferrix)",
+                env!("CARGO_PKG_VERSION")
+            );
             return ExitCode::SUCCESS;
         }
         Err(message) => {
@@ -68,11 +74,57 @@ fn main() -> ExitCode {
         }
         return ExitCode::from(1);
     };
-    let engine = TextEngine::system();
+    let mut engine = match &options.fonts_dir {
+        Some(dir) => {
+            let mut fonts = compositor_text::Fonts::new();
+            let _ = fonts.add_dir(dir);
+            TextEngine::with_fonts(fonts)
+        }
+        None => TextEngine::system(),
+    };
+    if let Some(path) = &options.render {
+        let ground = render::colour(&options.over).unwrap_or(tiny_skia::Color::BLACK);
+        let mut images = ImageCache::default();
+        let mut diag = Diagnostics::default();
+        let drawn = render::render(
+            &loaded.root,
+            &sheet,
+            &mut engine,
+            &mut images,
+            &options.output,
+            options.size,
+            ground,
+            &mut diag,
+        );
+        say(diag.drain(options.level));
+        say(engine.diag.drain(options.level));
+        return match drawn.and_then(|picture| {
+            std::fs::write(path, render::ppm(&picture))
+                .map(|()| picture)
+                .map_err(|error| format!("{}: {error}", path.display()))
+        }) {
+            Ok(picture) => {
+                let _ = writeln!(
+                    std::io::stdout(),
+                    "waybar: rendered {}x{} into {}",
+                    picture.width(),
+                    picture.height(),
+                    path.display()
+                );
+                ExitCode::SUCCESS
+            }
+            Err(message) => {
+                say(vec![format!("[error] {message}")]);
+                ExitCode::from(1)
+            }
+        };
+    }
     let client = match Client::connect() {
         Ok(client) => client,
         Err(error) => {
-            say(vec![format!("[error] Bar need to run under Wayland: {error}")]);
+            say(vec![format!(
+                "[error] Bar need to run under Wayland: {error}"
+            )]);
             return ExitCode::from(1);
         }
     };

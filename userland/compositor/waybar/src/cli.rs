@@ -15,7 +15,14 @@ where options are:
   -s, --style <style>                    Style path
   -l, --log-level <trace|debug|info|warning|error|critical|off>
                                          Log level
-  -b, --bar <id>                         Bar id";
+  -b, --bar <id>                         Bar id
+
+Ferrix's own, for a boot's expected picture:
+  --render <file.ppm>                    Draw the first bar into a picture, with no compositor
+  --size <WxH>                           The output --render draws for (default 1024x768)
+  --output <name>                        Its name (default Virtual-1)
+  --over <RRGGBB>                        The ground --render composites the bar over (default 000000)
+  --fonts-dir <dir>                      Take faces from this directory alone";
 
 /// What to run with.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,6 +36,16 @@ pub struct Options {
     /// `-b`: the bar id sway's IPC names; parsed and not used, since the
     /// bar-to-sway link is sway's.
     pub bar: Option<String>,
+    /// `--render`: draw into this picture and exit.
+    pub render: Option<PathBuf>,
+    /// `--size`.
+    pub size: (u32, u32),
+    /// `--output`.
+    pub output: String,
+    /// `--over`.
+    pub over: String,
+    /// `--fonts-dir`.
+    pub fonts_dir: Option<PathBuf>,
 }
 
 /// What the command line asked for.
@@ -53,6 +70,11 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         style: None,
         level: Level::Info,
         bar: None,
+        render: None,
+        size: (1024, 768),
+        output: "Virtual-1".to_owned(),
+        over: "000000".to_owned(),
+        fonts_dir: None,
     };
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
@@ -73,6 +95,18 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
             "-s" | "--style" => options.style = Some(PathBuf::from(value(flag)?)),
             "-l" | "--log-level" => options.level = Level::parse(&value(flag)?),
             "-b" | "--bar" => options.bar = Some(value(flag)?),
+            "--render" => options.render = Some(PathBuf::from(value(flag)?)),
+            "--size" => {
+                let text = value(flag)?;
+                let (w, h) = text
+                    .split_once('x')
+                    .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
+                    .ok_or_else(|| format!("--size wants WxH, not {text}"))?;
+                options.size = (w, h);
+            }
+            "--output" => options.output = value(flag)?,
+            "--over" => options.over = value(flag)?,
+            "--fonts-dir" => options.fonts_dir = Some(PathBuf::from(value(flag)?)),
             other => return Err(format!("Unrecognised token: {other}")),
         }
     }
