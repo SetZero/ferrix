@@ -90,7 +90,106 @@ pub(crate) fn carried(config: &Path) -> Result<Vec<File>> {
         families.extend(families_named(path, text));
     }
     files.extend(fonts(&families));
+    if let Ok(text) = std::fs::read_to_string(config) {
+        files.extend(launchers(&text));
+    }
     Ok(files)
+}
+
+/// The programs the desktop image carries at `/bin/<name>` that a user's
+/// script may name by the path of its build on their own machine.
+const PORTED: [&str; 4] = ["fuzzel", "waybar", "hyprlock", "hypridle"];
+
+/// The commands `bind` lines run with `exec`, `$variables` expanded, as
+/// hyprlang expands them (longest name first).
+fn bound_commands(text: &str) -> Vec<String> {
+    let mut variables: Vec<(String, String)> = Vec::new();
+    let mut found = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        let line = line.split(" #").next().unwrap_or(line);
+        let Some((name, value)) = line.split_once('=') else {
+            continue;
+        };
+        let (name, value) = (name.trim(), value.trim());
+        if let Some(variable) = name.strip_prefix('$') {
+            variables.push((variable.to_owned(), value.to_owned()));
+            variables.sort_by_key(|(name, _)| core::cmp::Reverse(name.len()));
+            continue;
+        }
+        if !name.starts_with("bind") {
+            continue;
+        }
+        // `MODS, key, dispatcher, argument`: the argument may hold commas.
+        let mut fields = value.splitn(4, ',');
+        let (Some(_), Some(_), Some(dispatcher), Some(argument)) =
+            (fields.next(), fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        if dispatcher.trim() != "exec" {
+            continue;
+        }
+        let mut command = argument.trim().to_owned();
+        for (variable, replacement) in &variables {
+            command = command.replace(&format!("${variable}"), replacement);
+        }
+        found.push(command);
+    }
+    found
+}
+
+/// The user's own launcher scripts a bind runs, carried unchanged at the
+/// absolute path the bind names -- `bind = $mainMod, R, exec, $menu` with
+/// `$menu = /home/<user>/.local/bin/hypr-launcher` -- when the program is a
+/// `#!/bin/sh` script, which busybox's `sh` runs as it is. Every absolute
+/// path the script names whose file name is one of [`PORTED`] (its
+/// `FUZZEL=/home/<user>/.local/bin/fuzzel`, a build of their own) becomes a
+/// link to the image's `/bin/<name>`. Nothing else the script names is
+/// carried: a helper that is not there fails as a missing program does,
+/// which the design says for each one.
+fn launchers(config: &str) -> Vec<File> {
+    let mut out: Vec<File> = Vec::new();
+    for command in bound_commands(config) {
+        let Some(program) = command.split_whitespace().next() else {
+            continue;
+        };
+        let Some(relative) = program.strip_prefix('/') else {
+            continue;
+        };
+        let Ok(bytes) = std::fs::read(program) else {
+            continue;
+        };
+        if !bytes.starts_with(b"#!/bin/sh\n") || out.iter().any(|file| file.path == relative) {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        for path in text.split(|c: char| c.is_whitespace() || "\"'=;()<>&|$`".contains(c)) {
+            let Some(name) = Path::new(path).file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let Some(linked) = path.strip_prefix('/') else {
+                continue;
+            };
+            if PORTED.contains(&name) && !out.iter().any(|file| file.path == linked) {
+                out.push(File {
+                    path: linked.to_owned(),
+                    mode: 0o777,
+                    content: Content::Link(format!("/bin/{name}")),
+                });
+            }
+        }
+        println!("  dotfiles: {program}, which a bind runs, carried unchanged");
+        out.push(File {
+            path: relative.to_owned(),
+            mode: 0o755,
+            content: Content::Bytes(bytes),
+        });
+    }
+    out
 }
 
 /// The font the user's lock screen names first -- `font_family` in
@@ -430,6 +529,20 @@ mod tests {
             ["GFS Didot", "Inter"]
         );
         assert!(families_named("waybar/config.jsonc", "{}").is_empty());
+    }
+
+    #[test]
+    fn a_bind_that_runs_a_variable_is_expanded() {
+        let conf = "$mainMod = SUPER\n$menu = /home/u/.local/bin/hypr-launcher\n\
+                    bind = $mainMod, R, exec, $menu\nbindr = $mainMod, SUPER_L, exec, $menu --x\n\
+                    bind = $mainMod, Q, killactive,\nexec-once = /home/u/other\n";
+        assert_eq!(
+            bound_commands(conf),
+            vec![
+                "/home/u/.local/bin/hypr-launcher".to_owned(),
+                "/home/u/.local/bin/hypr-launcher --x".to_owned()
+            ]
+        );
     }
 
     #[test]

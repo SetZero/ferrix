@@ -2629,7 +2629,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are twenty of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 31] = [
+const BOOTS: [(&str, Boot); 32] = [
     ("restart", test_driver_restart),
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
@@ -2661,6 +2661,7 @@ const BOOTS: [(&str, Boot); 31] = [
     ("waybar", test_waybar),
     ("waybar-volume", test_waybar_volume),
     ("fuzzel", test_fuzzel),
+    ("fuzzel-user", test_fuzzel_user),
 ];
 
 /// What the `caption` boot draws: a clock's digits, letters with kerning
@@ -4380,6 +4381,183 @@ fn test_fuzzel(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
         args,
     )?;
     crate::fuzzel::judge(arch, screens.len(), &said)
+}
+
+/// A boot of the user's own launcher bind: `SUPER+R` in their real
+/// `hyprland.conf`, which runs their `hypr-launcher` script, which runs
+/// "their" fuzzel -- `crate::dotfiles` carries the script unchanged and links
+/// the fuzzel it names to `/bin/fuzzel`.
+///
+/// Their desktop is not the tree's, so no picture can be required of it:
+/// what is required is that after the keypress `hyprctl layers` lists a
+/// surface in fuzzel's namespace, `launcher`, and that a second `SUPER+R`
+/// takes it away again, which is the script's `pkill -x fuzzel` toggle. The
+/// screen with fuzzel on it is kept in the build directory as
+/// `fuzzel-user.ppm`. A machine without the user's file, or whose file
+/// binds no `#!/bin/sh` launcher, skips the boot and says so.
+fn test_fuzzel_user(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let Some((config, carried, script)) = fuzzel_user_setup(arch)? else {
+        return Ok(());
+    };
+    let (image, kernel) = judged_image(arch, programs, &config, carried, None, args)?;
+    let port = free_port()?;
+    let mut qemu_args = args.clone();
+    qemu_args.display = true;
+    qemu_args.qmp_port = Some(port);
+    let dump = paths::build_dir(arch).join("fuzzel-user.ppm");
+    let mut said = Vec::new();
+    let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        said = drive_fuzzel_user(arch, port, &dump, watching)?;
+        Ok(())
+    };
+    let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
+    judge_still_running(arch, &said)?;
+    if !said
+        .iter()
+        .any(|line| line.contains(&format!("started {script}")))
+    {
+        return Err(Error::new(format!(
+            "{arch}: hyprix never said it started {script}"
+        )));
+    }
+    println!(
+        "  {arch}: the user's SUPER R ran their own {script} unchanged, which opened fuzzel on their \
+         fuzzel.ini, and closed it again"
+    );
+    Ok(())
+}
+
+/// The user's real config, the image's ports carrying their launcher script
+/// and a built fuzzel, and the script's absolute path -- or `None` when the
+/// machine has no such config or it binds no `#!/bin/sh` launcher, in which
+/// case [`test_fuzzel_user`] skips the boot and says why.
+fn fuzzel_user_setup(arch: Arch) -> Result<Option<(String, Carried, String)>> {
+    let Some(home) = std::env::var_os("HOME") else {
+        println!("  {arch}: no HOME; the user's launcher boot is skipped");
+        return Ok(None);
+    };
+    let conf = Path::new(&home).join(".config/hypr/hyprland.conf");
+    let Ok(text) = std::fs::read_to_string(&conf) else {
+        println!(
+            "  {arch}: no {}; the user's launcher boot is skipped",
+            conf.display()
+        );
+        return Ok(None);
+    };
+    let dotfiles = crate::dotfiles::carried(&conf)?;
+    let Some(script) = dotfiles
+        .iter()
+        .find(|file| {
+            matches!(&file.content, crate::ports::Content::Bytes(bytes) if bytes.starts_with(b"#!/bin/sh"))
+                && !file.path.starts_with(crate::dotfiles::CONFIG_HOME)
+        })
+        .map(|file| format!("/{}", file.path))
+    else {
+        println!("  {arch}: {} binds no #!/bin/sh launcher; the boot is skipped", conf.display());
+        return Ok(None);
+    };
+    let fuzzel = build(arch, "compositor-fuzzel", "fuzzel")?;
+    let bytes = std::fs::read(&fuzzel)
+        .map_err(|error| Error::new(format!("reading {}: {error}", fuzzel.display())))?;
+    let mut ports = dotfiles;
+    ports.push(crate::ports::File {
+        path: "bin/fuzzel".to_owned(),
+        mode: 0o755,
+        content: crate::ports::Content::Bytes(bytes),
+    });
+    ports.extend(crate::fuzzel::files(None)?);
+    let carried = Carried {
+        busybox: crate::busybox::installed_program(arch),
+        ports,
+        ..Carried::none()
+    };
+    if carried.busybox.is_none() {
+        println!(
+            "  {arch}: no busybox on this machine for the script's /bin/sh; the boot is skipped"
+        );
+        return Ok(None);
+    }
+    let config = format!(
+        "{text}\n# Added by `cargo xtask test-compositor --boot fuzzel-user`.\n\
+         bind = , F12, exec, /bin/hyprctl layers\n"
+    );
+    Ok(Some((config, carried, script)))
+}
+
+/// Presses the user's own bind twice through QMP and returns the transcript:
+/// once to open fuzzel (proven by `hyprctl layers` naming its `launcher`
+/// namespace, and a screendump to `dump`), and once more to run the script's
+/// own `pkill -x fuzzel` toggle and take it away again.
+fn drive_fuzzel_user(
+    arch: Arch,
+    port: u16,
+    dump: &Path,
+    watching: &mut Watching<'_>,
+) -> Result<Vec<String>> {
+    let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
+    let up = watching.read_more(Instant::now() + SETTLE, |lines| {
+        lines.iter().any(|line| line.contains(MARKER))
+    })?;
+    if !up && !watching.lines().iter().any(|line| line.contains(MARKER)) {
+        return Err(Error::new(format!(
+            "{arch}: the compositor never printed `{MARKER}`"
+        )));
+    }
+    say_the_marker(watching, arch);
+    std::thread::sleep(Duration::from_secs(5));
+    press(&mut qmp, &["meta_l", "r"])?;
+    println!("  {arch}: pressed SUPER R, the user's own launcher bind");
+    // Asked until fuzzel's surface is listed: the user's fonts are
+    // twenty files, and reading them under emulation takes a while.
+    let listed = |lines: &[String]| {
+        lines
+            .iter()
+            .any(|line| line.contains("namespace: launcher"))
+    };
+    let deadline = Instant::now() + Duration::from_secs(150);
+    let mut open = false;
+    while !open && Instant::now() < deadline {
+        press(&mut qmp, &["f12"])?;
+        open = watching.read_more(Instant::now() + Duration::from_secs(10), |lines| {
+            listed(lines)
+        })?;
+    }
+    if !open {
+        return Err(with_the_transcript(
+            &Error::new(format!("{arch}: SUPER R never put fuzzel's surface up")),
+            watching,
+        ));
+    }
+    std::thread::sleep(Duration::from_secs(3));
+    qmp.screendump(None, dump)?;
+    println!("  {arch}: fuzzel is up; the screen is {}", dump.display());
+    // The script's own toggle: a second press is `pkill -x fuzzel`.
+    let before = watching.lines().len() + watching.after().len();
+    press(&mut qmp, &["meta_l", "r"])?;
+    std::thread::sleep(Duration::from_secs(5));
+    press(&mut qmp, &["f12"])?;
+    let _ = watching.read_more(Instant::now() + Duration::from_secs(10), |lines| {
+        lines.iter().any(|line| line.contains("Layer level"))
+    })?;
+    let _ = watching.read_more(Instant::now() + Duration::from_secs(3), |_| false)?;
+    let said: Vec<String> = watching
+        .lines()
+        .iter()
+        .chain(watching.after())
+        .cloned()
+        .collect();
+    let closed = !said
+        .get(before..)
+        .unwrap_or_default()
+        .iter()
+        .any(|line| line.contains("namespace: launcher"));
+    if !closed {
+        return Err(Error::new(format!(
+            "{arch}: a second SUPER R did not take fuzzel away (the script's pkill -x fuzzel)"
+        )));
+    }
+    println!("  {arch}: a second SUPER R took it away, as the script's pkill toggle does");
+    Ok(said)
 }
 
 /// A fifteenth boot: the screen lock, through `ext-session-lock-v1`.
