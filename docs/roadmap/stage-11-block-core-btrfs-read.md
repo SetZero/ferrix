@@ -120,6 +120,35 @@ reader with its checksums and the page source. What the check compares is a
 checksum per file rather than every byte on the wire, and the checksum is the
 manifest's; a byte wrong anywhere in the stack is a CRC that differs.
 
+**The seam measured, 1 (2026-09-27): what one crossing costs.** After the
+driver check, the kernel reads the pattern disk 1,024 times, 4 KiB at a time,
+one request at a time and then from 32 tasks at once, and times each read
+from the call to its answer (`kernel/src/block_ring/hop_check.rs`, the `seam`
+boot line). The driver times its own submit-to-drain in each completion's
+`device_ticks` where ring 3 can read the kernel's counter: x86-64 today. That
+share holds the device and the interrupt's way up to the driver, so the rest
+understates the seam. `cargo xtask bench-seam` boots a stock Linux kernel
+(Debian 13's cloud kernel, 6.12.107, by SHA-256 from
+`scripts/fetch/fetch-linux-reference.sh`) on the same QEMU machine, IOMMU
+included, and reads the same disk with `dd iflag=direct`. Measured on
+2026-09-27 in pairs, each Linux run straight before its Ferrix run, at host
+loads of 20 to 28. The numbers move with the host's load, so these are the
+ranges over four pairs on x86-64 and one on AArch64:
+
+| Mean 4 KiB read | Stock Linux, driver in ring 0 | Ferrix, driver in ring 3 |
+|---|---|---|
+| x86-64, KVM, depth 1 | 27 to 48 us | 300 to 844 us (p99 1.1 to 5 ms); in one run the driver's submit-to-drain was 159 us of 304 |
+| x86-64, KVM, depth 32 | 243 to 1,773 us | 5.8 to 6.6 ms (p99 156 to 183 ms) |
+| AArch64, TCG, depth 1 | 145 us | 453 us (p50 346, p99 4,031) |
+| AArch64, TCG, depth 32 | 734 us | 12,539 us (p50 4,306, p99 231,038) |
+
+In QEMU a cold disk request costs Ferrix ten to twenty times Linux's on
+x86-64 at depth 1, and three times on AArch64. At depth 32 a stall of 150 to 230 ms
+reaches the 99th percentile on both architectures, which a BACKLOG row now
+owns. Against the second row: a warm build crosses once in thousands of
+system calls, so the hop's cost falls on cold reads, which is where the
+decision of 2026-09-16 put it.
+
 **The seam measured, 2 (2026-09-27): how much of a build crosses it.** The
 kernel counts, from boot:
 - Linux system calls answered;

@@ -47,6 +47,25 @@ the kernel, as it does. A filesystem server in B sees cold fills and
 metadata writes, never the warm path. Row 1, the cost of one crossing, is
 next.
 
+### S0's second result (2026-09-27): the seam measured, 1
+
+One crossing, a 4 KiB disk read through the ring and its ring-3 driver, took
+300 to 844 us on x86-64 under KVM over four runs. Stock Linux, on the same
+QEMU machine with its driver in ring 0, took 27 to 48 us: ten to twenty times
+less. On AArch64 under TCG the figures were 453 us and 145 us. At depth 32 a stall reaches 150 to 230 ms at the 99th percentile
+(a BACKLOG row). What that means for B:
+
+- For files, B is sound as drawn. The page cache takes the warm path, and a
+  server pays the crossing only on cold fills, as the drivers pay it today.
+- For the network stack (S3), B's cost is different in kind. A socket's
+  send and receive would cross to a server on every call, not once per
+  cache fill. At today's hop cost, each is hundreds of microseconds. S3
+  would need the hop itself cut first: batching, the stall fixed, and
+  PCIDs so that a switch stops flushing the TLB. It should be re-measured
+  before it is planned.
+- The stall is a bug whatever is decided, and it costs the drivers already
+  in ring 3 today.
+
 ## 1. What "opaque" means here
 
 The kernel keeps what only a kernel can do:
