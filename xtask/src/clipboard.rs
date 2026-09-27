@@ -37,6 +37,11 @@ const HOST_CAPS: u32 = cap::bit(cap::CLIPBOARD_BY_DEMAND)
     | cap::bit(cap::CLIPBOARD_SELECTION)
     | cap::bit(cap::CLIPBOARD_GRAB_SERIAL);
 
+/// The serial of the host's grab. Not 1: QEMU's serials come from its
+/// clipboard's own count, and a guest that answers every grab with the same
+/// small number loses to any of them.
+const HOST_SERIAL: u32 = 7;
+
 /// How long the guest may take from the compositor being up to the host
 /// holding the guest's text.
 const PATIENCE: Duration = Duration::from_secs(90);
@@ -264,7 +269,7 @@ impl Host<'_> {
                         .map_err(|error| format!("{error:?}"))?;
                     self.send(&Message::ClipboardGrab {
                         selection: Selection::Clipboard,
-                        serial: Some(1),
+                        serial: Some(HOST_SERIAL),
                         types,
                     })?;
                 }
@@ -279,6 +284,19 @@ impl Host<'_> {
                     kind: ClipboardType::Utf8Text,
                     data: text,
                 })?;
+            }
+            Message::ClipboardGrab {
+                selection: Selection::Clipboard,
+                serial,
+                ..
+            } if serial.unwrap_or(0) < HOST_SERIAL => {
+                // What QEMU does with it (`vdagent_clipboard_recv_grab`): a
+                // grab older than the last one is the loser of a race, and
+                // is dropped without a word.
+                return Err(format!(
+                    "the guest grabbed with serial {}, below the host's {HOST_SERIAL}; QEMU would discard it",
+                    serial.unwrap_or(0)
+                ));
             }
             Message::ClipboardGrab {
                 selection: Selection::Clipboard,

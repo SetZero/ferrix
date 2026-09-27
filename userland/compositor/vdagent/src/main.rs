@@ -203,6 +203,9 @@ struct Agent {
     host_owns: bool,
     /// Whether this connection has said its capabilities.
     announced: bool,
+    /// The serial of the last grab either side made, which the next grab
+    /// this agent makes goes past.
+    grab_serial: u32,
     /// When this connection to the port was made.
     connected_at: Instant,
 }
@@ -228,6 +231,7 @@ impl Agent {
             host_owns: false,
             announced: false,
             connected_at: Instant::now(),
+            grab_serial: 0,
         }
     }
 
@@ -332,6 +336,8 @@ impl Agent {
         self.host_owns = false;
         self.announced = false;
         self.connected_at = Instant::now();
+        // QEMU forgets its serials on a new connection's capabilities.
+        self.grab_serial = 0;
         Ok(())
     }
 
@@ -393,10 +399,15 @@ impl Agent {
                 self.announce_once(false);
             }
             Message::ClipboardGrab {
-                selection, types, ..
+                selection,
+                types,
+                serial,
             } => {
                 if selection != Selection::Clipboard {
                     return Ok(());
+                }
+                if let Some(serial) = serial {
+                    self.grab_serial = serial;
                 }
                 self.host_owns = true;
                 say("vdagent: the host grabbed its clipboard");
@@ -592,9 +603,13 @@ impl Agent {
         let Ok(types) = Types::new(&[ClipboardType::Utf8Text]) else {
             return;
         };
-        // A serial only exists when both sides agreed to carry one; zero is
-        // the first this agent has ever sent and loses no race it should win.
-        let serial = self.shape.serial.then_some(0);
+        // A serial only exists when both sides agreed to carry one. It counts
+        // on from the last grab either side made: QEMU discards a guest grab
+        // whose serial is below the last it saw (`vdagent_clipboard_recv_grab`),
+        // so a constant zero lost to every host copy after the first, and the
+        // guest's copies stopped reaching the host.
+        self.grab_serial = self.grab_serial.wrapping_add(1);
+        let serial = self.shape.serial.then_some(self.grab_serial);
         self.send_host(&Message::ClipboardGrab {
             selection: Selection::Clipboard,
             serial,
