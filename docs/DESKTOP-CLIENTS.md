@@ -247,14 +247,30 @@ that lists what of the user's real files is not carried out.
   scrolls), `hyprland/window` (`j/monitors`, `j/workspaces`, `j/clients`,
   the bar's `empty`/`solo` classes), `cpu`, `memory`, `network`, `clock`,
   `pulseaudio`, `tray`.
+* **The bar on the screen** (`app.rs`, `bar.rs`, `engine.rs`): the loop on
+  `userland/compositor/toolkit` -- a layer surface per output the config
+  matches, text through `userland/compositor/text` and `url()` images
+  through `userland/compositor/image`; hover restyles with `:hover` and sets
+  the hand cursor, tooltips open after 500 ms as `xdg_popup`s through
+  `zwlr_layer_surface_v1.get_popup` with their Pango markup, clicks count
+  doubles and triples, scrolls step; `SIGUSR1` toggles the bar and
+  `SIGRTMIN+N` reaches the modules. `tests/against_hyprix.rs` runs hyprix
+  in-process and drives it with a virtual pointer.
+* **`pulseaudio`'s client** (`modules/pulse.rs`): the native protocol over
+  the `pulseaudio` crate's wire format, one connection subscribed and one
+  asking, as libpulse's context behaves.
+* **`--render`** (`render.rs`): the bar drawn with no compositor into a PPM,
+  every module run to its first answer -- the picture a boot of the same
+  files must show.
 
 What the user's file does on Ferrix, line by line where it differs:
 
 * `"output": "Lenovo Group Limited R27qe Gen2 UTP03KBB"` matches no QEMU
   screen, which has no EDID; upstream would draw no bar, and so does this.
   The user chose (2026-09-26) to give QEMU's screen that monitor's own EDID
-  the way Linux overrides one (`drm.edid_firmware=`), in its own landing
-  (branch `edid-override`); with it the line matches as on nazuna.
+  the way Linux overrides one (`drm.edid_firmware=`); that landed, and
+  `run-compositor` gives the screen this machine's monitor's EDID, so the
+  line matches as on nazuna.
 * The ten `custom/ws-N`, `custom/clock` and `custom/logout`'s click run
   `/home/sebastian/.local/bin/hypr-workspaces`, `ba-calendar` and
   `hypr-logout`, Python scripts that are not on Ferrix. `sh` answers 127,
@@ -264,10 +280,14 @@ What the user's file does on Ferrix, line by line where it differs:
   and logout chips have no `exec` and show. What would fill the gap is a
   Rust equivalent of each script; that is the user's call.
 * `pulseaudio`: waybar connects with `PA_CONTEXT_NOFAIL` and shows its
-  starting values until a server answers. Ferrix has no PulseAudio-protocol
-  server yet (`docs/AUDIO.md` §5, U2), so the chip reads `vol 0%`, and says
-  once why. `on-click`'s `wpctl` and `on-click-right`'s `pavucontrol` are not
-  on Ferrix either.
+  starting values until a server answers. Ferrix's own, `pulsed`
+  (`docs/AUDIO.md`, U2d), runs on the desktop only beside Chrome's sound
+  (`run-compositor --everything`), and hyprix then tells every client
+  `PULSE_SERVER`. Its one sink, the card, is its default, and the default
+  sink is all this client reads. Where there is none -- a plain `run-compositor`,
+  the waybar boot -- the chip reads `vol 0%` and says once why. The client
+  has not yet been run against `pulsed`. `on-click`'s `wpctl` and
+  `on-click-right`'s `pavucontrol` are not on Ferrix.
 * `cpu`'s `{load}`: no `/proc/loadavg` on Ferrix and `sysinfo` loads of 0,
   so `0`, said once.
 * `network`: `ethernet` over the default route, the address from the
@@ -285,23 +305,31 @@ matches).
 
 ### Where it stands
 
-2026-09-26: the part that needs no screen is on branch `waybar`, landing as
-its first slice: config, formats, style, layout, painter, modules, the
-probe and upstream's command line (the binary checks both files and says it
-does not draw yet). The user's `style.css` parses with no error.
+2026-09-27: waybar draws the user's bar on the Ferrix desktop. Landed on
+`main`: the part that needs no screen (2026-09-26); hyprix's half -- a
+popup of a layer surface, the pointer reaching layer surfaces, a virtual
+pointer giving the seat a pointer, `lastwindow` in `j/workspaces`; and the
+drawing, the PulseAudio client, `--render` and the boot. `run-compositor`
+carries `/bin/waybar` on every desktop, so the user's `exec-once = waybar`
+starts it.
 
-Next, in order: the drawing on `userland/compositor/toolkit` (on main) with
-`userland/compositor/text` and `userland/compositor/image` as they land -- the bar's layer
-surface per matching output, the pointer (hover, `:hover` restyle, clicks,
-scrolls, the hand cursor), tooltips as `xdg_popup`s through
-`zwlr_layer_surface_v1.get_popup`; hyprix's server refused a parentless
-popup, and the fix is on branch `waybar-popup` (server + hyprix, with
-clients-base's `a_tooltip_hangs_under_the_bar_it_belongs_to` passing against
-it once its client stays connected to the end); branch `waybar-ipc` gives
-`j/workspaces` its `lastwindow`/`lastwindowtitle`, which the title needs.
-Then `xtask` installs `/bin/waybar`, and a `test-compositor` boot runs it
-against a test config whose `output` names QEMU's screen, compared as
-`test-compositor` compares its boots. Then a PulseAudio-protocol client.
+The gate is `cargo xtask test-compositor --boot waybar`: the user's
+`style.css` and `icons/` (read from this machine, never committed) over a
+test config of the tree's (`userland/compositor/waybar/data/boot/`: the
+user's bar with each Python script an `echo` of a fixed answer, and
+`"output": "Virtual-1"`). The host's build draws the same files with
+`--render`, and the guest's screen must show those pixels: all 1024x40
+match on x86_64. The screenshot is `build/x86_64/waybar.ppm`.
+
+With the user's own `config.jsonc` the bar on Ferrix shows the launcher, the
+volume chip (`vol 0%` with no `pulsed`), `ram N%`, the network chip and logout; the
+workspace chips and the clock stay hidden until their scripts exist (the
+list above). The `output` line matches through the EDID override that
+`run-compositor` applies.
+
+Left: whole-pixel text advances in `userland/compositor/text`, where a
+label can sit a pixel from Pango's; the PulseAudio client tried against
+`pulsed` on the desktop.
 
 A text measurement to settle when `userland/compositor/text` lands: the user's
 comment measures `line_height='2.0'` as 10.5 px over and 11.5 under at

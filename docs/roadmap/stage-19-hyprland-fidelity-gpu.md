@@ -1413,18 +1413,25 @@ the GPU path and inside the stated bound under the fallback; two monitors on
 QEMU with independent workspaces; a plugin-shaped extension loaded from the
 configuration.
 
-**Begun -- waybar in Rust, the part that needs no screen (2026-09-26).**
+**waybar in Rust draws the user's bar (2026-09-27).**
 `userland/compositor/waybar` reads the user's own `~/.config/waybar/config.jsonc`
 and `style.css` as waybar does: jsoncpp's JSONC, `src/config.cpp`'s search
 path, `include` merging and `output` matching, libfmt's format strings, a
 GTK3 stylesheet with `@define-color`, `alpha()`, `calc()`, layered `url()`
 and gradient backgrounds and GTK's cascade, GTK's box model and box layout,
 the painter, and every module the user's file names (`custom/*`,
-`hyprland/window`, `cpu`, `memory`, `network`, `pulseaudio`, `tray`, and
-`clock`), each tested against upstream's own rules with a fake host.
-`waybar-probe` reads the real files on the host: the stylesheet parses
-without an error, and only `#tray menu` matches nothing. The drawing waits
-on `userland/compositor/toolkit`, `text` and `image` reaching main.
+`hyprland/window`, `cpu`, `memory`, `network`, `pulseaudio` with a
+PulseAudio-protocol client, `tray`, and `clock`). It draws on the toolkit,
+with `:hover`, the hand cursor, clicks, scrolls and tooltips as popups of
+its layer surface, tested against hyprix in-process. `run-compositor`
+carries it as `/bin/waybar`, and `cargo xtask test-compositor --boot waybar`
+boots it with the user's stylesheet and icons over a test config whose
+scripts print fixed answers: the guest's screen shows exactly the pixels
+the host's `waybar --render` draws from the same files. What is not
+carried out on Ferrix -- the user's three Python scripts, a sound server
+where `pulsed` does not run, load averages, wifi, a D-Bus tray -- is listed
+in `docs/DESKTOP-CLIENTS.md` §3, and `waybar-probe` lists it from the real
+files.
 
 **Where the exit stands (reviewed 2026-09-21).** The existing exit criterion
 is met: `cargo xtask test-compositor` covers the non-GPU path on x86-64 and

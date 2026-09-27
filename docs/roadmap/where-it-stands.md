@@ -112,8 +112,8 @@ second-pass effects; Mesa and `zwp_linux_dmabuf`, for clients that draw on the
 GPU themselves, are priced beside it.
 
 The desktop's own clients -- waybar, fuzzel, hyprlock and hypridle, written in
-Rust -- are begun: fuzzel's core is on `main` (2026-09-26), and the rest is on
-branches.
+Rust -- are begun: fuzzel's core is on `main` (2026-09-26), waybar draws the
+customer's bar on the desktop (2026-09-27), and the rest is on branches.
 
 Stage 21 is bare metal with a card of Ferrix's own, and stage 22 is Steam,
 whose 32-bit x86 ABI is under way (`docs/I386.md`): I1, a 32-bit program
