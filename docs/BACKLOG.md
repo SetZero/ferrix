@@ -147,6 +147,17 @@ scripts/gen/gen-coverage-justification.py` on the rebased tree and commit
 the result: it renumbers the anchors through the diff, drops and prints the
 lines the change edited, and never re-measures.
 
+**Every `unsafe` in the item names its obligation (2026-09-27).** Since
+F-26 closed (1be610fe), `scripts/check/check-unsafe-audit.py` fails `cargo
+xtask check` on an `unsafe` site in the `core` or `item` ring that does not
+name one of the obligations registered in
+`scripts/data/safety-requirements.json` and tabled in
+`docs/certification/SAFETY-MANUAL.md` §2 (CONTEXT, SYSREG, SHARED, ENTRY,
+TRANSLATE, DEVICE, FIRMWARE, PROTECT, KMEM, FRAME, PROBE, DMA, BOOT-DATA,
+USER-COPY): `// SAFETY: (ID) prose` on a block, and `/// (ID) ...` as the
+first line of an `unsafe fn`'s `# Safety`. A new obligation is added to the
+register with the certification consultant, not invented in place.
+
 **Files every landing appends to overlap by function, not by file
 (2026-09-27).** `kernel/src/syscall/check.rs`, the panic catalog,
 `docs/generated/*` and this file change in nearly every landing, and
