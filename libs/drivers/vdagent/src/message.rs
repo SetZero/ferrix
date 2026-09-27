@@ -1,8 +1,8 @@
-//! The messages: a sixteen-byte header, and a body whose layout the agreed
+//! The messages: a twenty-byte header, and a body whose layout the agreed
 //! capabilities decide.
 //!
 //! ```text
-//! header   protocol u32 = 1   type u32   opaque u32   size u32
+//! header   protocol u32 = 1   type u32   opaque u64   size u32
 //!
 //! ANNOUNCE_CAPABILITIES  request u32, then the bitmap as u32 words
 //! CLIPBOARD_GRAB         [selection u8, pad u8 x 3] [serial u32] type u32 ...
@@ -31,8 +31,19 @@ use crate::{Error, part, part_mut, put_u32, u32_at};
 /// `VD_AGENT_PROTOCOL`: the only protocol version there has ever been.
 pub const PROTOCOL: u32 = 1;
 
-/// Bytes of the message header.
-pub const HEADER_BYTES: usize = 16;
+/// Bytes of the message header: `VDAgentMessage` in SPICE's `vd_agent.h`,
+/// packed, with `opaque` a 64-bit word.
+///
+/// It was sixteen, with `opaque` as 32 bits, until QEMU's half was talked to
+/// for the first time on 2026-09-27: every message either way was then
+/// misframed -- QEMU said "`vdagent_chr_recv_chunk`: Oops: 0+24 > 21" for the
+/// agent's capabilities, and the agent read QEMU's as too long -- so the
+/// clipboard worked inside the guest and never reached the host or came from
+/// it.
+pub const HEADER_BYTES: usize = 20;
+
+/// Where the header's `size` field is, after the 64-bit `opaque`.
+pub const SIZE_AT: usize = 16;
 
 /// Bytes of a selection field and its padding.
 const SELECTION_BYTES: usize = 4;
@@ -377,7 +388,7 @@ impl<'a> Message<'a> {
             return Err(Error::Protocol(protocol));
         }
         let kind = u32_at(bytes, 4)?;
-        let size = u32_at(bytes, 12)? as usize;
+        let size = u32_at(bytes, SIZE_AT)? as usize;
         let body = bytes.get(HEADER_BYTES..HEADER_BYTES + size).ok_or({
             Error::Short {
                 want: HEADER_BYTES + size,
@@ -517,7 +528,8 @@ impl<'a> Message<'a> {
         // `opaque`: SPICE's file transfers put an id here; nothing this crate
         // carries uses it.
         put_u32(out, 8, 0)?;
-        put_u32(out, 12, u32::try_from(body_len).unwrap_or(u32::MAX))?;
+        put_u32(out, 12, 0)?;
+        put_u32(out, SIZE_AT, u32::try_from(body_len).unwrap_or(u32::MAX))?;
 
         let body = part_mut(out, HEADER_BYTES, HEADER_BYTES + body_len)?;
         // The padding after a selection number, and the whole body of a

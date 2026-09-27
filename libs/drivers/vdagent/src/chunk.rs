@@ -24,7 +24,7 @@
 //! paragraph exists so that nobody sets it to [`SERVER_PORT`] in the belief
 //! that something will change.
 
-use crate::message::HEADER_BYTES;
+use crate::message::{HEADER_BYTES, SIZE_AT};
 use crate::{Error, part, part_mut, put_u32, u32_at};
 
 /// Bytes of a chunk header.
@@ -231,7 +231,7 @@ impl<'a> Reassembler<'a> {
                     self.state = State::Broken;
                     return Err(Error::Protocol(protocol));
                 }
-                let size = u32_at(self.buffer, 12)? as usize;
+                let size = u32_at(self.buffer, SIZE_AT)? as usize;
                 if HEADER_BYTES + size > self.buffer.len() {
                     self.state = State::Broken;
                     return Err(Error::TooLong {

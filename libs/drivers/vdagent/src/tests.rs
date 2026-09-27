@@ -4,7 +4,7 @@
 use crate::Error;
 use crate::chunk::{self, Reassembler};
 use crate::message::{
-    AGENT_CAPS, ClipboardType, HEADER_BYTES, Message, Selection, Shape, Types, cap,
+    AGENT_CAPS, ClipboardType, HEADER_BYTES, Message, SIZE_AT, Selection, Shape, Types, cap,
 };
 
 /// A message encodes and decodes back to itself, under each shape.
@@ -146,7 +146,7 @@ fn a_grab_keeps_the_types_it_understands() {
     ];
     bytes[..4].copy_from_slice(&1_u32.to_le_bytes());
     bytes[4..8].copy_from_slice(&crate::message::CLIPBOARD_GRAB.to_le_bytes());
-    bytes[12..16].copy_from_slice(&(body.len() as u32).to_le_bytes());
+    bytes[SIZE_AT..SIZE_AT + 4].copy_from_slice(&(body.len() as u32).to_le_bytes());
     bytes[HEADER_BYTES..HEADER_BYTES + body.len()].copy_from_slice(&body);
 
     let decoded = Message::decode(&bytes[..HEADER_BYTES + body.len()], Shape::QEMU_CLIPBOARD)
@@ -167,7 +167,7 @@ fn an_unimplemented_message_is_carried_not_refused() {
     let mut bytes = [0_u8; HEADER_BYTES + 12];
     bytes[..4].copy_from_slice(&1_u32.to_le_bytes());
     bytes[4..8].copy_from_slice(&1_u32.to_le_bytes()); // VD_AGENT_MOUSE_STATE
-    bytes[12..16].copy_from_slice(&12_u32.to_le_bytes());
+    bytes[SIZE_AT..SIZE_AT + 4].copy_from_slice(&12_u32.to_le_bytes());
     assert_eq!(
         Message::decode(&bytes, Shape::QEMU_CLIPBOARD),
         Ok(Message::Other {
@@ -205,7 +205,7 @@ fn an_empty_announcement_is_no_capabilities() {
     let mut bytes = [0_u8; HEADER_BYTES + 4];
     bytes[..4].copy_from_slice(&1_u32.to_le_bytes());
     bytes[4..8].copy_from_slice(&crate::message::ANNOUNCE_CAPABILITIES.to_le_bytes());
-    bytes[12..16].copy_from_slice(&4_u32.to_le_bytes());
+    bytes[SIZE_AT..SIZE_AT + 4].copy_from_slice(&4_u32.to_le_bytes());
     bytes[HEADER_BYTES..].copy_from_slice(&1_u32.to_le_bytes());
     assert_eq!(
         Message::decode(&bytes, Shape::QEMU_CLIPBOARD),
@@ -368,7 +368,7 @@ fn a_message_too_large_breaks_the_stream() {
     let message = &mut header[chunk::HEADER..];
     message[..4].copy_from_slice(&1_u32.to_le_bytes());
     message[4..8].copy_from_slice(&crate::message::CLIPBOARD.to_le_bytes());
-    message[12..16].copy_from_slice(&100_000_u32.to_le_bytes());
+    message[SIZE_AT..SIZE_AT + 4].copy_from_slice(&100_000_u32.to_le_bytes());
 
     let mut buffer = [0_u8; 64];
     let mut assembler = Reassembler::new(&mut buffer);
@@ -443,4 +443,34 @@ fn the_mime_types_are_the_compositors() {
         "what `userland/compositor/clip` offers"
     );
     assert_eq!(ClipboardType::None.mime(), None, "the absence of a type");
+}
+
+/// The header is SPICE's `VDAgentMessage` byte for byte, as QEMU's
+/// `ui/vdagent.c` reads it: protocol, type, a 64-bit opaque word, then the
+/// size, twenty bytes before the body. A sixteen-byte header with a 32-bit
+/// opaque word -- what this crate wrote before 2026-09-27 -- made QEMU read
+/// the capability request as the size and drop every message.
+#[test]
+fn the_header_is_vd_agent_h_s_twenty_bytes() {
+    let message = Message::AnnounceCapabilities {
+        request: true,
+        caps: 0x0000_0020,
+    };
+    let mut out = [0_u8; 64];
+    let len = message.encode(Shape::QEMU_CLIPBOARD, &mut out).unwrap();
+    assert_eq!(
+        &out[..len],
+        &[
+            1, 0, 0, 0, // protocol
+            6, 0, 0, 0, // VD_AGENT_ANNOUNCE_CAPABILITIES
+            0, 0, 0, 0, 0, 0, 0, 0, // opaque, 64 bits
+            8, 0, 0, 0, // size of what follows
+            1, 0, 0, 0, // request
+            0x20, 0, 0, 0, // the capability word
+        ][..]
+    );
+    assert_eq!(
+        Message::decode(&out[..len], Shape::QEMU_CLIPBOARD).unwrap(),
+        message
+    );
 }
