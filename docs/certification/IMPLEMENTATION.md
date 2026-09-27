@@ -1019,6 +1019,97 @@ What this slice found, for review:
   from the pilot's lessons, in about 15 minutes; merging their overlaps,
   the high-level additions, review and tagging took about an hour.
 
+**Step 4, the `console` slice, done 2026-09-27.** 41 low-level
+requirements, `L.console.1` to `L.console.41`, in
+`docs/sysml/23-console-requirements.sysml`, one package each for the
+kernel's lines, a program's output and the transmit ring, failure reports and
+the recent-output ring, input, the kernel log and the screen console, and a
+`Ports` package for the two Arm functions that choose the console,
+`arch::aarch64::console::ramoops_zone` and `arch::armv7a::console::chosen`
+(with `forced`, `first_enabled` and `Port`'s two), whose checks test console
+behaviour; the rest of each port is its arch slice's. **12 are verified**,
+by 7 check functions and 1 xtask gate newly tagged: `console/log_check.rs`'s
+`wrap_overrun_and_partial` (`.26` to `.28`), `two_writers` (`.25`, `.29`)
+and `console_records` (`.31`, `.32`, `.34`), `service_check.rs`'s
+`the_last_line_is_kept_for_a_failure_report` (`.17`),
+`arch/aarch64/check.rs`'s `check_ramoops_zones` (`.40`),
+`arch/armv7a/check.rs`'s `check_chosen` (`.41`), and xtask's
+`init_file::judge_k7_read`, the FX-1501 line on the port after a panic boot
+(`.14`); `log_check::run` carries `H.TRAP.13`. **29 need a check** and are
+the baseline's `L.console.*`. Of console's 74 product functions 62 are a
+requirement's unit (19 of them accessors named as an entry point), 10
+accessors and 2 check code -- `console::input::check` and
+`console::output::check`, which read their rings' private state; as child
+modules (`console/input/check.rs`, as `object/pin/check.rs` was made) they
+could be tagged and would verify `.20`, `.9` and `.10`. **0 are named by
+none**, and the gate holds `console` as complete. Doc-comment lines only:
+nothing moved. The item's functions named by none go from 925 to 874 of
+2,346 (console's 45 and the six Arm choice functions).
+
+The high level grew from 88 to 95, by behaviour no requirement said, with no
+split. **`H.BOOT.9` is proposed, not only added**: the kernel log is
+readable by privileged programs and the Pixel 7's USB driver, and F-31's
+KASLR half is worth only as much as nothing they read gives the layout away,
+so the log shall hold no slide and no kernel address -- no high-level
+requirement said so; parent O.ISOLATE, as `H.BOOT.3`. Its criterion (the
+whole log searched for every address the serial log printed) has no check;
+`L.console.34`, a line sent unlogged is not in the log, is verified. The
+other six: `H.TRAP.13`, a read of a log ring hands only recorded bytes in
+order and counts exactly what it skips (T.CONFUSE path 6; verified by
+`log_check::run`); `H.TRAP.14`, a program's output reaches the port as
+written, and `H.TRAP.15`, the log holds what the console sends -- both under
+`G.5`, since the console's program-facing half serves the system-call
+surface rather than an objective; `H.SCHED.10`, the console holds a
+processor with interrupts masked only for bounded work, and `H.SCHED.11`, a
+writer that may sleep sleeps for room and one that may not never does (both
+O.QUOTA); and `H.FAIL.4`, a report gets past a lock nobody will release.
+The kernel's lines out and a person's bytes in are the x86-64 slice's
+`H.BOOT.8`, which the console's port-side requirements refine rather than
+repeat. 44 of the 95 are verified. Of the log's other properties,
+privileged reading is `syslog(2)`'s and `logctl`'s, outside the item, and
+recording with no lock, no allocation and no wake, which is what makes it
+safe in a panic, is `L.console.35`, which no check tests.
+
+The 29 that need a check, as check-writing work: nothing sent or recorded
+before the port is ready (`.1`); a line whole under concurrent writers and a
+poller after the ring (`.2`, `.3`); `write_bytes` against `write_raw` on the
+port (`.4`); a writer that may not wait, one that waits for room, the chunk
+rule and the log written once (`.5` to `.8`); the burst and the transmit
+interrupt, whose check exists in a product file (`.9`, `.10`); the wake at
+half, a stalled port, `drain` (`.11` to `.13`); **a report past a lock held
+for good, and `drain` bounded in a report (`.15`, `.16`)**, which want a
+boot that expects its panic, as smp's stuck-processor cases do; the recent
+ring's kernel-only rule and bounds (`.18`, `.19`); the receive ring, whose
+check is in a product file, its wake, the handler's bound, `init` and
+`read_byte` (`.20` to `.24`); a cursor ahead of the newest byte (`.30`);
+a kernel line in the log (`.33`); recording that never waits (`.35`); and
+the screen console, none of whose behaviour a check reads (`.36` to `.39`).
+`next_chunk` (`.7`) and `Board::new` (`.37`) are pure functions a small
+check could cover in minutes.
+
+What this slice found, for review:
+
+* **`service_check::a_write_that_may_not_wait_is_queued` asserts nothing**:
+  its doc says the line is the proof, and no gate reads the line, so it
+  cannot carry `.5`.
+* **`output::check` proves less than its line suggests on QEMU**: an emulated
+  port is never full, so the transmit interrupt's share is whatever the
+  writer's one burst left; the full-ring and waiting paths are not reached
+  on any boot.
+* **The smp boot line reported one round where 100 ran** (fixed here):
+  `smp::check::contended` wrote its round into `Report::rounds`, which
+  `everywhere` had set to 100, so the `smp` line said *1 rounds of work*;
+  contended now keeps its own `counter_round`, and x86-64 prints *100 rounds
+  of work on every processor* and *shares overlapping in round 1*.
+* **Time.** About 75 minutes of agent time: fifteen reading console's 1,900
+  lines and the checks that reach it across the tree, twenty for the 41
+  requirements and the high-level ones, fifteen for tags, the smp fix and
+  its boots, and twenty-five for the documents and a rebase over the x86-64
+  slice, which had landed first and taken six of the high-level ids this
+  slice had drafted (they are renumbered; no tag had named them) and
+  written `H.BOOT.8`, the console's session, which replaced two drafted
+  here.
+
 49,431 lines of item product code trace to 33 system-level requirements, and no
 test names a requirement id.
 

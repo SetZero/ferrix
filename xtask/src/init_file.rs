@@ -281,6 +281,8 @@ fn judge_k7_write(lines: &[String]) -> std::result::Result<(), String> {
 
 /// Whether the second K7 boot read back what the first wrote, and init's
 /// exit then panicked.
+///
+/// Verifies: L.console.14
 fn judge_k7_read(after: &[String]) -> std::result::Result<(), String> {
     let wanted = format!("k7: read back: {K7_TEXT}");
     if !after.iter().any(|line| line.trim() == wanted) {

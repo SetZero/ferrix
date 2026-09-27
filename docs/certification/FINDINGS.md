@@ -530,6 +530,18 @@ negative control recorded in a commit message; of the 77 high-level ones
 **33** are verified (`H.SCHED.6` and `H.MEM.19` added). *Still open:* the
 other subsystems, 171 baselined requirements, the run-time column.
 
+**Advanced 2026-09-27 (W-8 step 4, `console`).** 204 check functions, host
+tests and xtask gates name a requirement. Of console's 41 low-level
+requirements **12 are verified** -- the log ring's wrap, overrun, partial
+read and racing writers, what the console records and keeps out of the log,
+the recent-output ring, a failure report's line on the port, and the Arm
+ports' console choices -- and 29 are in the baseline, among them a report
+written past a lock nobody releases and every case of the transmit ring;
+two checks that would verify three more, `console::input::check` and
+`console::output::check`, live in product files. Of the 95 high-level ones
+**44** are verified (`H.TRAP.13`, a log read, added). *Still open:* the
+other subsystems, 275 baselined requirements, the run-time column.
+
 **Major.** The boot gates assert rich properties — 2,387 mappings swept for
 W^X, 16 of 16 interrupt deliveries waking their waiter — but nothing links an
 assertion to a requirement id. `docs/sysml/` has 33 requirements and 32
@@ -588,6 +600,15 @@ functions 38 are a requirement's unit, 17 accessors and 2 check code
 `smp` as complete. Item-wide, 1,145 of 2,345 product functions are still
 named by none. *Still open:* the remaining subsystems.
 
+**Advanced 2026-09-27 (W-8 step 4, `console`).** 41 more: `L.console.1` to
+`L.console.41` in `docs/sysml/23-console-requirements.sysml`, two of them
+on the Arm ports' console choice. Of console's 74 product functions 62 are
+a requirement's unit, 10 accessors and 2 check code
+(`console::input::check`, `console::output::check`); **0 are named by
+none**, and the gate holds `console` as complete. Item-wide, 874 of 2,346
+product functions are still named by none. *Still open:* the remaining
+subsystems.
+
 **Major.** 33 requirements exist, all at system level (`<'G.1'>` kernel
 threads, `<'G.2'>` address-space scale). DO-178C needs high- and low-level
 requirements with the design between them; 62304 §5.4 needs detailed design
@@ -633,6 +654,16 @@ that nothing said -- `H.SCHED.6` (each processor finds its own record),
 processor comes up) -- 77 high-level now. `H.FAIL.1`'s statement promises
 the other processors stopped, which its criterion does not test; the split
 is proposed in IMPLEMENTATION.md W-8.
+
+**Advanced 2026-09-27 (W-8 step 4, `console`).** The 41 `L.console.*`
+requirements carry both. Seven high-level ones say what the console does
+that nothing said, 95 high-level now: `H.BOOT.9`, the kernel log holds no
+slide and no kernel address (F-31's KASLR half, under O.ISOLATE: proposed,
+since no requirement covered it); `H.TRAP.13`, a read of a log ring
+(verified); `H.TRAP.14` and `H.TRAP.15`, a program's output and the log as
+written; `H.SCHED.10` and `H.SCHED.11`, the console's holds with interrupts
+masked and its writers' sleep; `H.FAIL.4`, a report past a held lock. The
+port's lines out and bytes in refine the x86-64 slice's `H.BOOT.8`.
 
 **Major.** They are prose doc comments (*"Forces: 1:1 kernel threads, a real
 futex, per-thread TLS registers"*) explaining why the system is shaped as it

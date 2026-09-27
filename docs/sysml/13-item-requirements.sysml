@@ -528,6 +528,32 @@ package FerrixItemRequirements {
                 gettimeofday and time through the vDSO finds each answer between
                 system calls made on either side: exit 120.";
             attribute :>> parent = "G.5";
+        // H.SCHED.10 and H.SCHED.11 were added by W-8 step 4 (console): the
+        // processor time console output may take, which no requirement said.
+        requirement <'H.SCHED.10'> consoleHoldsAreBounded : ItemHighLevel {
+            attribute :>> statement = "Console output shall hold a processor with
+                interrupts masked only for bounded work: a writer shall put at most 64
+                bytes into the port and queue at most 2,048 bytes of a task's write
+                per hold of the port's lock, and the port's interrupt shall make at
+                most 68 passes, each taking at most 8,192 received bytes and giving
+                the port at most 64.";
+            attribute :>> criterion = "Across a task's 16 KiB write on a port with an
+                interrupt, 0 holds of the port's lock put more than 64 bytes into the
+                port or queue more than 2,048; a port that never reports itself empty
+                lets its interrupt handler return after 68 passes.";
+            attribute :>> parent = "O.QUOTA";
+        }
+        requirement <'H.SCHED.11'> consoleWritersSleepForRoom : ItemHighLevel {
+            attribute :>> statement = "A task writing to the console that may sleep
+                shall sleep while the fixed 4,096-byte transmit ring has no room for
+                its next chunk, and a writer that may not sleep shall never sleep on
+                the console.";
+            attribute :>> criterion = "A task writing 16 KiB faster than the port
+                sends sleeps at least once while the ring never holds more than 4,096
+                bytes, and every byte reaches the port in order; a program's write
+                made with a spin lock held returns without sleeping and its line
+                reaches the port.";
+            attribute :>> parent = "O.QUOTA";
         }
     }
 
@@ -779,6 +805,42 @@ package FerrixItemRequirements {
                 exactly the running architecture's decodes to getpid, and
                 dispatching it answers a pid above zero.";
             attribute :>> parent = "O.VALIDATE";
+        // H.TRAP.13 to H.TRAP.15 were added by W-8 step 4 (console): the kernel
+        // log, which syslog(2) and a log control channel read (T.CONFUSE path 6
+        // of VULNERABILITY-ANALYSIS.md), and a program's output on the console.
+        requirement <'H.TRAP.13'> logReadsStayInTheLog : ItemHighLevel {
+            attribute :>> statement = "A read of a log ring -- the kernel log is one
+                -- shall copy into the reader's buffer, up to its length, only bytes
+                the ring recorded, in order from the reader's cursor or from the
+                oldest byte kept if that is later, and shall count as lost exactly
+                the bytes it skips or finds replaced while it copied.";
+            attribute :>> criterion = "On a 64-byte ring of the log check's own given
+                100 bytes, a reader at 0 is told 37 lost and given the last 63 in
+                order across a 10-byte read and a longer one, and 200 bytes later is
+                told 137 lost and given 63; while two writers record 20,000 bytes each
+                into a 256-byte ring, a reader reads only bytes they wrote, and the
+                bytes it read and was told it lost come to exactly 40,000 (the `log`
+                line).";
+            attribute :>> parent = ("O.VALIDATE", "O.ISOLATE");
+        }
+        requirement <'H.TRAP.14'> programOutputAsWritten : ItemHighLevel {
+            attribute :>> statement = "A program's write to the console shall reach
+                the port byte for byte in the order written, each bare newline as CRLF
+                unless the program turned output processing off.";
+            attribute :>> criterion = "A write of text holding bare newlines reaches
+                the port with CRLF for each, and the same write with output processing
+                off with LF alone, every other byte the same and in order.";
+            attribute :>> parent = "G.5";
+        }
+        requirement <'H.TRAP.15'> theLogHoldsWhatWasSent : ItemHighLevel {
+            attribute :>> statement = "The kernel log shall hold every byte the
+                console is given to send, a kernel line or a program's output, as it
+                was written and before a newline becomes CRLF, except the lines the
+                kernel sends unlogged.";
+            attribute :>> criterion = "Over a boot, the kernel log read from its
+                oldest byte holds, in order and without CRs, every kernel line the
+                serial log holds but the unlogged ones, and every program's output.";
+            attribute :>> parent = "G.5";
         }
     }
 
@@ -862,6 +924,19 @@ package FerrixItemRequirements {
                 FERRIX-BOOT-OK from the serial port, and test-jobs's 18 typed steps
                 each have their answer after them.";
             attribute :>> parent = "O.FAILSAFE";
+        // Added by W-8 step 4 (console): the KASLR half of F-31 is worth only as
+        // much as nothing a program reads gives the layout away, and the kernel
+        // log is readable (console::write_unlogged says which lines stay out).
+        requirement <'H.BOOT.9'> theLogHoldsNoLayout : ItemHighLevel {
+            attribute :>> statement = "The kernel log shall hold neither the KASLR
+                slide nor any kernel virtual address the kernel prints: a panic's
+                slide and backtrace, a fatal trap's registers, stage 2's placement of
+                the image, the direct map and the page array, and the sweeps' failure
+                lines shall go to the port and never into the log.";
+            attribute :>> criterion = "After a boot, and after a panic with a
+                backtrace, the kernel log read whole holds 0 occurrences of the slide
+                or of any image, direct-map or vmap address the serial log printed.";
+            attribute :>> parent = "O.ISOLATE";
         }
     }
 
@@ -992,6 +1067,17 @@ package FerrixItemRequirements {
             attribute :>> criterion = "A kernel thread that recurses past its stack
                 ends the boot in a report naming the fault -- on x86-64 a double fault
                 taken on its own stack (FX-9004) -- on each architecture, 3 of 3.";
+            attribute :>> parent = ("O.FAILSAFE", "ASR-6");
+        }
+        // Added by W-8 step 4 (console): the port every diagnostic above is
+        // printed on, when whatever holds its lock never lets go.
+        requirement <'H.FAIL.4'> reportsGetPastAHeldLock : ItemHighLevel {
+            attribute :>> statement = "Once a failure report has begun, a line the
+                kernel writes shall reach the console port after a bounded wait even
+                when the port's lock is held and will never be released.";
+            attribute :>> criterion = "A report begun while another context holds the
+                port's lock for good reaches the port whole, after at most 10,000,000
+                attempts at the lock, on each architecture, 3 of 3.";
             attribute :>> parent = ("O.FAILSAFE", "ASR-6");
         }
     }

@@ -382,6 +382,8 @@ fn an_unanswered_call_is_reported_by_name() {
 
 /// The recent-output ring a failure report and the screen console read back
 /// holds the last line printed, as it was printed.
+///
+/// Verifies: L.console.17
 fn the_last_line_is_kept_for_a_failure_report() -> Result<(), &'static str> {
     const LINE: &str = "  services the console keeps this line for a failure report\n";
     crate::console::println!("{}", LINE.trim_end());

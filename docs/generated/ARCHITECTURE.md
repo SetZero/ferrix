@@ -15,12 +15,6 @@ _Generated from docs/sysml/. Every element carries the maturity keyword the mode
   - [Memory](#memory)
   - [Objects](#objects)
   - [Scheduling](#scheduling)
-  - [Interrupts](#interrupts)
-  - [Direct memory access](#direct-memory-access)
-  - [Traps](#traps)
-  - [Boot](#boot)
-  - [Quotas](#quotas)
-  - [Failure](#failure)
 - [Structure](#structure)
   - [The machine](#the-machine)
   - [Interfaces between the big pieces](#interfaces-between-the-big-pieces)
@@ -118,8 +112,9 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixMemoryRequirements` | `17-memory-requirements.sysml` | What each unit of the item's memory management does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies), in two id spaces. |
 | `FerrixX8664Requirements` | `18-x86-64-requirements.sysml` | What each unit of kernel/src/arch/x86_64/, kernel/src/trap.rs and kernel/src/syscall/mod.rs's dispatcher does, as `ItemLowLevel` requirements (part 13 defines the format): the descriptor tables and which selectors ring 3 may hold, the context switch and the user state it carries, starting processors, the paranoid entries, the speculation defences, the counter and timer, both ABIs' signal frames, SYSCALL and int $0x80, the exception gates and what a fault becomes, and which calls reach which answer. |
 | `FerrixSmpRequirements` | `22-smp-requirements.sysml` | What each unit of kernel/src/smp.rs does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): finding the processors and giving each a record it finds itself by, starting the secondaries, the inter-processor interrupt, the TLB shootdown -- whole and scoped, and the bound on how long it waits -- grace periods, stopping the other processors for a panic, and the scheduler's kick. The start sequences themselves, the per-processor register and the interrupt controller are each architecture's (kernel/src/arch/\<isa>/smp.rs), and belong to the arch slices; this is the architecture-independent half above them. |
+| `FerrixConsoleRequirements` | `23-console-requirements.sysml` | What each unit of kernel/src/console.rs and kernel/src/console/ does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): the kernel's lines to the port, whole and in order; the way a failure report gets past a lock nobody will release; the recent-output ring a panic screen draws; the transmit ring and the writers who queue into it, wait for room or poll; the receive ring the port's interrupt fills; the kernel log every byte is recorded in, what it promises a reader and what it keeps out; and the boot console drawn on the framebuffer. The ports themselves are each architecture's (kernel/src/arch/\<isa>/console.rs) and belong to the arch slices; the two of their functions that decide \*which\* console the kernel writes to, and whose checks test that, are here too (`Ports`), at the coordinator's asking. |
 
-20 files, 78 packages, 4500 elements, 209 relations. Model digest `deb95303a9ee0d29`.
+21 files, 86 packages, 4741 elements, 210 relations. Model digest `1841d0c642c8c9a0`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -296,103 +291,6 @@ Processor time: the fair class, placement and sleep. ASR-8 (partially met: the i
 | `H.SCHED.9` | A clock read through the vDSO shall answer as the system call would, between system calls made on either side of it. | A program reading each of the 7 clocks, gettimeofday and time through the vDSO finds each answer between system calls made on either side: exit 120. | `G.5` |
 
 9 requirements.
-
-### Interrupts
-
-Interrupt lines given to ring-3 drivers as objects: O.CAPABILITY and ASR-3 for who receives one, O.QUOTA for what an unacknowledged or unclaimed line can cost.
-
-| Id | Statement | Criterion | Parent |
-| --- | --- | --- | --- |
-| `H.IRQ.1` | An interrupt on a line bound to an Interrupt object shall be delivered only to that object, waking the task waiting on it. | 16 of 16 deliveries end their wait by waking it (the `wake` line), and no other waiter is woken. | `O.CAPABILITY, ASR-3` |
-| `H.IRQ.2` | A line bound to an Interrupt object shall stay masked from its delivery until the holder acknowledges it, and shall be masked when the object is destroyed. | A line held from delivery to acknowledgement is delivered once and 0 times more before the acknowledgement; after the last handle to its object closes, the line is masked. | `O.CAPABILITY, O.QUOTA` |
-| `H.IRQ.3` | An interrupt on a line no object and no kernel handler holds shall be masked and counted, and delivered to nobody. | A delivery provoked on a line nobody holds leaves the line masked and the unclaimed count one higher, with 0 deliveries (the `edges` line). | `O.QUOTA` |
-
-3 requirements.
-
-### Direct memory access
-
-Devices driven from ring 3 through apertures and IOMMU domains: O.DMA and ASR-4 (FDP_ACF.1, FDP_IFF.1). ARMv7-A's reference board has no IOMMU, so these hold on x86-64 and AArch64 only (AoU-6). H.DMA.6 and H.DMA.7 are split from H.DMA.2, and H.DMA.8 from H.DMA.3, so that one check can prove each (W-8's iommu slice). That a pin is made only through a device handle the driver holds is H.OBJ.1 and H.OBJ.2's: vmo_pin is a native call like any other.
-
-| Id | Statement | Criterion | Parent |
-| --- | --- | --- | --- |
-| `H.DMA.1` | Where a translating IOMMU is present, every PCI function the kernel enumerates shall be placed behind a unit before its driver starts, and a function no unit covers shall be reported. | The boot counts N functions behind units, 0 bypassing and 0 unresolved (the `iommu` line), with VT-d on x86-64 and SMMUv3 on AArch64. | `O.DMA, ASR-4` |
-| `H.DMA.2` | A device write to an address outside its domain shall be refused by the unit and recorded as a fault against the device's stream and the page it addressed. | A device made to write a page its translated domain does not map has the write recorded by its unit as a write by its stream to that page: 1 or more out-of-domain writes faulted (the `pci` line) on x86-64 and AArch64. | `O.DMA, ASR-4` |
-| `H.DMA.6` | A boot shall end with no DMA fault recorded that no check provoked. | Last before the success marker, the audit reads every translating unit's records and counts 0 faults no check provoked, unit events and overflows included (the `iommu` audit line). | `O.DMA, ASR-4` |
-| `H.DMA.7` | A device write its unit refuses shall reach no memory. | A device made to write a frame the kernel holds and its domain does not map leaves every byte of the frame as it was. | `O.DMA, ASR-4` |
-| `H.DMA.3` | A device's domain shall translate a frame's address only while the frame is pinned into it, and shall refuse a pin of nothing and the unpin of a pin another domain took. | Pages pinned through a translated domain are found at their device addresses while pinned and not after; a pin of no frames and an unpin by another domain are refused (the `iommu` pin line's 2 refusals as specified). | `O.DMA, ASR-4` |
-| `H.DMA.8` | Unpinning shall complete the unit's invalidation before the frame or a table the unpin emptied is reused, and a unit that never completes it shall leave both held. | A table an unpin empties returns to the frame allocator only after the unit has answered the invalidation that covers it, and a unit made never to answer keeps the pin's frames and the table out of the allocator. | `O.DMA, ASR-4` |
-| `H.DMA.4` | Frames a driver pinned shall not be reused after the driver dies until its replacement announces itself, and the frames so held shall be bounded. | A dead driver's pin is quarantined, a pin past the quarantine's cap is refused and taken again once the quarantine is released, and a live driver's pin is given back (the `iommu` quarantine line). | `O.DMA, O.QUOTA` |
-| `H.DMA.5` | A driver shall reach device registers only through an I/O mapping of an aperture it holds, and an aperture that is not whole pages or that covers an MSI-X table shall be withheld. | The `devices` line counts the apertures withheld for partial pages and for MSI-X ranges; a mapping of a withheld range is refused; a program reaches only the aperture it was given (the `handles` line). | `O.DMA, O.CAPABILITY, ASR-4` |
-
-8 requirements.
-
-### Traps
-
-The system call boundary and the exceptions a program raises: O.VALIDATE and ASR-7 (FPT_TDC.1), with O.ISOLATE for what a program may leave in the registers the kernel is entered with.
-
-| Id | Statement | Criterion | Parent |
-| --- | --- | --- | --- |
-| `H.TRAP.1` | Every pointer and length a system call is given shall be checked to lie wholly within the user half before any access through it, and a range that does not shall be refused with EFAULT. | Each system call given a kernel-half pointer, a range that wraps past the user half's end and a null pointer is refused EFAULT, with 0 accesses made. | `O.VALIDATE, ASR-7` |
-| `H.TRAP.2` | An access to user memory on a system call's behalf that meets an unmapped or protected page shall return EFAULT to the caller and shall not fault the kernel. | Copies to an unmapped and to a read-only user page, and from an unmapped one, each return EFAULT, and the boot goes on to FERRIX-BOOT-OK. | `O.VALIDATE, ASR-7` |
-| `H.TRAP.3` | Every table index a program chooses shall be clamped at the system call boundary so that it cannot be used out of bounds under speculation, and each processor's speculation controls shall be applied and read back. | The boot reads the speculation defences back on every one of the N online processors (the `cpu` line), and the `--mitigations off` build is the only one without the clamps. | `O.ISOLATE, O.VALIDATE` |
-| `H.TRAP.4` | A processor exception a user-mode instruction raises shall end in a signal to the faulting thread, the one Linux sends for it, and shall not stop the kernel. | A divide error, an invalid opcode, an unmapped read, a privileged instruction, a floating-point exception and a read past a mapped file's end end their programs with SIGFPE, SIGILL, SIGSEGV, SIGSEGV, SIGFPE and SIGBUS, 6 of 6 (the `fault` line). | `O.ISOLATE, ASR-1` |
-| `H.TRAP.5` | Restoring a signal frame a program supplies shall not raise its privilege: the restored mode, segment selectors, interrupt masks and I/O privilege shall be the user's whatever the frame holds, and a return address outside the user half shall be refused. | A sigreturn through frames asking for kernel mode, masked interrupts, I/O privilege and a kernel-half return address resumes the program in user mode with user flags, or ends it with SIGSEGV, on each architecture: 0 in kernel mode. | `O.VALIDATE, O.ISOLATE, ASR-7` |
-| `H.TRAP.6` | On every entry from user mode the kernel shall establish its own stack and per-processor state before using either, whatever the program left in its registers, including for an exception taken on the entry path itself. | Breakpoints on the system call entry and on its return, and an NMI taken with interrupts masked, each run on the kernel's own stack with its own per-processor base, and the program exits 42 (the `debug` and `nmi` lines, x86-64). | `O.ISOLATE, O.FAILSAFE` |
-| `H.TRAP.7` | A program shall load only the segment selectors meant for user mode: one naming a kernel descriptor, the TSS, the LDT or a forged thread-local descriptor shall be refused. x86-64 only. | 7 user selectors load at RPL 3 and 18 others are refused (the `gdt` line). | `O.ISOLATE, O.VALIDATE` |
-| `H.TRAP.8` | A 32-bit x86 program shall run in ring 3 in compatibility mode, in Linux's user segments and its own thread-local descriptors, and shall enter the kernel only through int $0x80, answered as i386 Linux answers it. x86-64 only. | An ELF32 i386 program's calls through int $0x80 answer as i386 Linux's do and it exits 42; a 64-bit program's int $0x80 is an i386 call; SYSCALL from 32-bit code answers -ENOSYS or is #UD, and SYSENTER ends the program (the first `i386` line). | `O.ISOLATE, G.5` |
-| `H.TRAP.9` | A 64-bit program's signal handler shall be entered on a frame in Linux's layout, and its return shall resume the registers and mask the frame holds. | The 64-bit signal program's SA_SIGINFO handler is entered with the signal, the siginfo and the ucontext, a register it changes through the frame comes back through rt_sigreturn, and the mask after the return is empty: exit 77 (the `signals` line). | `G.3` |
-| `H.TRAP.10` | A program's registers shall pass the kernel as its ABI says: a call's arguments are read from its argument registers and its result returned in its return register, a fork child resumes from its parent's registers with the call answering zero, and a program started or replaced begins at its entry with its start argument and no kernel value in any register. | A call with six arguments answers from all six; a fork child's registers are its parent's with the return register zero; a program started with an argument finds it, and one that ORs its registers on entry finds nothing else set, for each ABI. | `G.4, G.5` |
-| `H.TRAP.11` | A system call number no table carries shall be refused with ENOSYS, never answered by a handler or a fault. | 0xDEAD, usize::MAX and usize::MAX - 1, each dispatched as a native call through the registered entry, are answered -38, 3 of 3. | `O.VALIDATE` |
-| `H.TRAP.12` | A system call's number shall be decoded through the table of the architecture it was built for. | Of getpid's numbers in the three tables, exactly the running architecture's decodes to getpid, and dispatching it answers a pid above zero. | `O.VALIDATE` |
-
-12 requirements.
-
-### Boot
-
-What the kernel does with what it is handed before anything runs above it, and what a boot claims: O.FAILSAFE and ASR-6 (FPT_FLS.1), and O.ISOLATE for the layout.
-
-| Id | Statement | Criterion | Parent |
-| --- | --- | --- | --- |
-| `H.BOOT.1` | Before using what the loader hands over, the kernel shall verify the memory map, the page tables and its own placement, and shall halt with a diagnostic if any check fails. | Stage 1 reports the hand-off verified on every architecture; a hand-off with a field made inconsistent ends in the catalogued panic, not in a boot. | `O.FAILSAFE, ASR-6` |
-| `H.BOOT.2` | Every boot shall run every stage's self-checks unless told not to, and shall print FERRIX-BOOT-OK only when all of them passed; a boot that skipped them shall end with FERRIX-BOOT-UNCHECKED instead. | `cargo xtask test-boot` finds FERRIX-BOOT-OK on each architecture; a boot with `ferrix.checks=skip` ends with FERRIX-BOOT-UNCHECKED and never prints FERRIX-BOOT-OK. | `O.FAILSAFE, ASR-6` |
-| `H.BOOT.3` | The kernel shall run with its image, direct map and vmap arena at the offsets the loader drew from the firmware's random-number protocol, and shall verify the move at stage 1. | Two boots of one image report two different layouts (`cargo xtask test-kaslr`), and stage 1 verifies the slide each reports. | `O.ISOLATE` |
-| `H.BOOT.4` | The kernel shall refuse an ACPI table or a device tree whose declared length is shorter than its header or reaches beyond the memory mapped for it, rather than read past it. | The ACPI and device-tree parsers' host tests feed truncated, oversized and misaligned tables and each is refused with its error, 0 read out of bounds; the kernel refuses a table outside the direct map. | `O.FAILSAFE, ASR-6` |
-| `H.BOOT.5` | Every processor firmware describes shall be running kernel code on its own per-processor record before the scheduler starts, or the boot shall halt with a diagnostic saying which step failed. | On each configuration `cargo xtask test-boot` boots, the `cpus` line counts as many processors online as firmware described (4 of 4 on x86-64 and AArch64, 2 of 2 on ARMv7-A at `--smp 2`); a secondary made never to report in ends the boot in FX-0402. | `O.FAILSAFE, ASR-6` |
-| `H.BOOT.6` | When init exits and ferrix.onexit asks for nothing else, the machine shall power itself off after the console has drained. | After init exits, QEMU exits by itself within the grace, with status 0 or 33, and init's exit line is in the log. | `O.FAILSAFE` |
-| `H.BOOT.7` | When init exits and ferrix.onexit=reset asks for it, the machine shall restart from firmware after the console has drained. | Under ferrix.onexit=reset the kernel says it is resetting and the loader's banner is printed again after it. | `O.FAILSAFE` |
-| `H.BOOT.8` | The serial console shall carry the kernel's lines out, and a person's typed bytes in to the program reading them, in order and without waiting unboundedly on the port. | test-boot reads every stage's line and FERRIX-BOOT-OK from the serial port, and test-jobs's 18 typed steps each have their answer after them. | `O.FAILSAFE` |
-
-8 requirements.
-
-### Quotas
-
-What a job, with every job beneath it, may hold at once: O.QUOTA (FRU_RSA.1), against T.EXHAUST.
-
-| Id | Statement | Criterion | Parent |
-| --- | --- | --- | --- |
-| `H.QUOTA.1` | Creating a task in a job that, with the jobs beneath it, holds its task limit shall be refused, and no task shall be counted beyond the limit. | A fork loop in a job limited to 8 tasks is refused at the limit, 0 tasks beyond it (the `quota` line). | `O.QUOTA` |
-| `H.QUOTA.2` | A job's programs shall not hold more memory than the job's limit, counting the frames of their address spaces and their page tables together with every job beneath it; a sibling job shall be unaffected. | Faults in a job limited to 48 pages' worth are refused when the next page would not fit, and the refusal is counted, while a sibling job faults 48 pages in (the `quota` line). | `O.QUOTA` |
-| `H.QUOTA.3` | Creating a channel or a port in a job at its object limit shall be refused, and no object shall be counted beyond the limit. | Object creation in a job limited to 5 objects is refused at the limit, 0 objects beyond it (the `quota` line). | `O.QUOTA` |
-| `H.QUOTA.4` | Every charge against a job shall be returned when the resource it paid for is freed, and a job's quota slot shall be given back when the job goes. | After the quota checks every counter of their jobs is back to zero, and as many quota slots are in use as before them (the `quota` line). | `O.QUOTA` |
-| `H.QUOTA.5` | A limit set on a job shall bound it together with every job beneath it, and a charge refused at any level shall leave no level charged. | A charge that would pass a grandparent's limit is refused although the child's own limit allows it, and each level's counter reads as before the attempt. | `O.QUOTA` |
-| `H.QUOTA.6` | A user page fault refused by a job's memory limit shall end a process in the job whose limit was full or beneath it, never one outside it, count the kill in that job and every job above it, and retry the fault. | A program writing 8 MiB in a job limited to 1 MiB ends by SIGKILL while a larger process in a sibling job lives; exactly 1 process is killed; memory.events counts one OOM kill in the job and its parent and none in the sibling. | `G.8, O.QUOTA` |
-| `H.QUOTA.7` | The kernel heap the Linux personality keeps for a job's programs shall be charged against the job's memory limit, and every byte of it returned when it is freed; a sibling job shall be unaffected. | At a 32 KiB limit each kind of personality object is refused one past its count with ENOMEM (ENOLCK for a lock) while a sibling makes one, and with them gone every byte charged has come back (the `kmem` line). | `O.QUOTA` |
-| `H.QUOTA.8` | A creation the task limit refuses shall be answered as Linux and the native ABI answer it -- a fork with EAGAIN, a native process_create with SHOULD_WAIT -- and the refused process shall never start. | A fork past pids.max is answered EAGAIN and counted in pids.events; process_create into a job at its task limit is answered SHOULD_WAIT and the job's task count is unchanged. | `O.QUOTA` |
-| `H.QUOTA.9` | Creating a VMO, a job or a pin in a job at its object limit shall be refused with NO_MEMORY, and each shall be counted as an object for as long as it exists. | In a job limited to 5 objects and holding 5, vmo_create, job_create and vmo_pin are each refused NO_MEMORY, 0 objects counted beyond the limit, and the job holds 0 once they are all closed. | `O.QUOTA` |
-
-9 requirements.
-
-### Failure
-
-The safe state and what brings the kernel to it: O.FAILSAFE and ASR-6 (FPT_FLS.1). SAFETY-MANUAL.md §3 defines the safe state.
-
-| Id | Statement | Criterion | Parent |
-| --- | --- | --- | --- |
-| `H.FAIL.1` | On a failed internal consistency check the kernel shall stop every other processor, print a diagnostic naming the failure and its catalogued explanation, and halt without returning to user mode. | A boot told to panic at its end (`ferrix.onexit=panic`) ends with the FX-1501 report and no program output after it; every panic site in the item has a catalogue entry (`check-panic-audit.py`). | `O.FAILSAFE, ASR-6` |
-| `H.FAIL.2` | The allocator every kernel stack comes from shall give each an unmapped guard page directly below and above it. | A kernel stack allocated, written at its first and last word and freed has the page below and the page above it untranslated, and gives back every frame it took. | `O.FAILSAFE, ASR-6` |
-| `H.FAIL.3` | A kernel stack overflow shall end in the halt and diagnostic of the safe state, never in a write below the stack. | A kernel thread that recurses past its stack ends the boot in a report naming the fault -- on x86-64 a double fault taken on its own stack (FX-9004) -- on each architecture, 3 of 3. | `O.FAILSAFE, ASR-6` |
-
-3 requirements.
 
 ## Structure
 
@@ -4405,6 +4303,47 @@ flowchart LR
 | `L.smp.30` | `aPanicAsksTheOthersToStop` | — | — | — |
 | `L.smp.31` | `aProcessorStopsWhereItLooks` | — | — | — |
 | `L.smp.32` | `aKickReachesItsTarget` | — | — | — |
+| `L.console.1` | `nothingBeforeThePort` | — | — | — |
+| `L.console.2` | `aLineIsWholeOnThePort` | — | — | — |
+| `L.console.3` | `aPollerGoesAfterTheRing` | — | — | — |
+| `L.console.4` | `aProgramsBytesAsWritten` | — | — | — |
+| `L.console.5` | `aWriterThatMayNotWaitDoesNot` | — | — | — |
+| `L.console.6` | `aTasksWriteWaitsForRoom` | — | — | — |
+| `L.console.7` | `chunksEndAtANewline` | — | — | — |
+| `L.console.8` | `aWriteIsLoggedOnce` | — | — | — |
+| `L.console.9` | `thePortTakesABurst` | — | — | — |
+| `L.console.10` | `theInterruptSendsTheRest` | — | — | — |
+| `L.console.11` | `writersWakeAtHalf` | — | — | — |
+| `L.console.12` | `aStalledPortIsPolledOut` | — | — | — |
+| `L.console.13` | `drainSendsEverything` | — | — | — |
+| `L.console.14` | `aReportReachesThePort` | — | — | — |
+| `L.console.15` | `aReportPassesAHeldLock` | — | — | — |
+| `L.console.16` | `drainInAReportIsBounded` | — | — | — |
+| `L.console.17` | `theLastLinesAreKept` | — | — | — |
+| `L.console.18` | `onlyKernelLinesAreKept` | — | — | — |
+| `L.console.19` | `theRecentRingIsBounded` | — | — | — |
+| `L.console.20` | `theInputRingKeepsOrder` | — | — | — |
+| `L.console.21` | `aReaderIsWoken` | — | — | — |
+| `L.console.22` | `theHandlerIsBounded` | — | — | — |
+| `L.console.23` | `theInterruptIsInstalledFirst` | — | — | — |
+| `L.console.24` | `aReadTakesFromTheRing` | — | — | — |
+| `L.console.25` | `theCountIsExact` | — | — | — |
+| `L.console.26` | `aWrappedRingKeepsItsLast` | — | — | — |
+| `L.console.27` | `aLateReaderIsToldWhatItLost` | — | — | — |
+| `L.console.28` | `aPartialReadResumes` | — | — | — |
+| `L.console.29` | `racingWritersNeverMix` | — | — | — |
+| `L.console.30` | `aCursorAheadIsBroughtBack` | — | — | — |
+| `L.console.31` | `aProgramsOutputIsLogged` | — | — | — |
+| `L.console.32` | `aReportIsLogged` | — | — | — |
+| `L.console.33` | `kernelLinesAreLogged` | — | — | — |
+| `L.console.34` | `anUnloggedLineIsKeptOut` | — | — | — |
+| `L.console.35` | `recordingNeverWaits` | — | — | — |
+| `L.console.36` | `theScreenStartsWhenAsked` | — | — | — |
+| `L.console.37` | `theBoardFitsTheScreen` | — | — | — |
+| `L.console.38` | `glyphsGoWhereTheCursorIs` | — | — | — |
+| `L.console.39` | `theScreenStopsForGood` | — | — | — |
+| `L.console.40` | `aRamoopsZoneIsReadOrRefused` | — | — | — |
+| `L.console.41` | `theTreeChoosesThePort` | — | — | — |
 
 A design rule is upheld by a gate rather than allocated to a part, so the P and N families are expected to be verified but untraced. A goal requirement is traced by the dependency the stage that discharges it draws.
 

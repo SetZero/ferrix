@@ -14,19 +14,19 @@ Coverage evidence recording the checks: none yet.
 
 | Level | Written | Named by a check | Unverified, in the baseline |
 |---|---:|---:|---:|
-| High (`H.*`) | 88 | 43 | 45 |
-| Low (`L.*`) | 477 | 282 | 195 |
+| High (`H.*`) | 95 | 44 | 51 |
+| Low (`L.*`) | 518 | 294 | 224 |
 
-748 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
+816 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
 
 | Product functions | Count |
 |---|---:|
-| Named by a low-level requirement | 748 |
-| Accessors, covered by the requirement they serve | 647 |
-| Check code in a product file | 26 |
-| Named by none | 927 |
+| Named by a low-level requirement | 816 |
+| Accessors, covered by the requirement they serve | 628 |
+| Check code in a product file | 28 |
+| Named by none | 876 |
 
-Subsystems whose low-level requirements are complete: `arch::x86_64`, `early`, `iommu`, `mm`, `object`, `smp`, `trap`, `user`, `vmap`.
+Subsystems whose low-level requirements are complete: `arch::x86_64`, `console`, `early`, `iommu`, `mm`, `object`, `smp`, `trap`, `user`, `vmap`.
 
 ### Check code in product files
 
@@ -44,6 +44,8 @@ Functions that are checks, or serve only checks, and live in a product file, so 
 | `arch::x86_64::speculation::check` | The x86-64 half of arch::speculation_check::check (machine::check), with no product caller: it runs VERW once to show the exit paths' operand is accepted. It reaches speculation.rs's private plan. |
 | `arch::x86_64::speculation::clear_cpu_buffers` | Called only by speculation::check, to run VERW once for the boot check. |
 | `arch::x86_64::trap::breakpoint` | Its only callers are main.rs's check_breakpoint, which raises int3 twice for stage 3's check. |
+| `console::input::check` | The receive ring's check (FX-0305, the `input` line), run from main.rs before the port's interrupt is installed. It fills and empties RING and reads HELD and OVERRUNS, private to input.rs; as a child module, console/input/check.rs, it could read them and verify L.console.20. |
+| `console::output::check` | The transmit check (FX-0504, the `output` line), run from main.rs once tasks can wait. It reads BY_INTERRUPT, BY_WRITER, HELD and waits on WRITERS, private to output.rs; as a child module, console/output/check.rs, it could read them and verify L.console.9 and L.console.10. |
 | `early::EarlyMemory::read_physical_byte` | Stage 1's check_direct_map in main.rs reads the image's first bytes through it; nothing else calls it. It stays while that check is in main.rs. |
 | `early::EarlyMemory::translate` | Called only by stage 1's checks in main.rs (check_early_mapper, check_no_early_window_wraps); it reads EarlyMemory's private walk state. |
 | `mm::FrameWindow::kept` | A check's frame window: frames kept since it opened. Every caller is a check file; it reads Held, which reads the heap and route counters private to mm.rs. |
@@ -72,22 +74,22 @@ Each system-level requirement, and the high-level requirements that name it as t
 | ASR-3 | `H.OBJ.1`, `H.OBJ.2`, `H.OBJ.3`, `H.OBJ.4`, `H.OBJ.5`, `H.OBJ.6`, `H.OBJ.14`, `H.OBJ.15`, `H.IRQ.1` |
 | ASR-4 | `H.DMA.1`, `H.DMA.2`, `H.DMA.6`, `H.DMA.7`, `H.DMA.3`, `H.DMA.8`, `H.DMA.5` |
 | ASR-5 | `H.MEM.6` |
-| ASR-6 | `H.BOOT.1`, `H.BOOT.2`, `H.BOOT.4`, `H.BOOT.5`, `H.FAIL.1`, `H.FAIL.2`, `H.FAIL.3` |
+| ASR-6 | `H.BOOT.1`, `H.BOOT.2`, `H.BOOT.4`, `H.BOOT.5`, `H.FAIL.1`, `H.FAIL.2`, `H.FAIL.3`, `H.FAIL.4` |
 | ASR-7 | `H.TRAP.1`, `H.TRAP.2`, `H.TRAP.5` |
 | ASR-8 | `H.SCHED.1`, `H.SCHED.2`, `H.SCHED.3`, `H.SCHED.5` |
 | G.1 | `H.SCHED.1`, `H.SCHED.4`, `H.SCHED.5`, `H.SCHED.7`, `H.SCHED.8` |
 | G.3 | `H.TRAP.9` |
 | G.4 | `H.OBJ.13`, `H.TRAP.10` |
-| G.5 | `H.SCHED.9`, `H.TRAP.8`, `H.TRAP.10` |
+| G.5 | `H.SCHED.9`, `H.TRAP.8`, `H.TRAP.10`, `H.TRAP.14`, `H.TRAP.15` |
 | G.7 | `H.OBJ.11`, `H.OBJ.17` |
 | G.8 | `H.OBJ.12`, `H.QUOTA.6` |
 | O.CAPABILITY | `H.OBJ.1`, `H.OBJ.2`, `H.OBJ.3`, `H.OBJ.4`, `H.OBJ.5`, `H.OBJ.6`, `H.OBJ.7`, `H.OBJ.8`, `H.OBJ.9`, `H.OBJ.11`, `H.OBJ.14`, `H.OBJ.15`, `H.OBJ.16`, `H.OBJ.17`, `H.IRQ.1`, `H.IRQ.2`, `H.DMA.5` |
 | O.DMA | `H.DMA.1`, `H.DMA.2`, `H.DMA.6`, `H.DMA.7`, `H.DMA.3`, `H.DMA.8`, `H.DMA.4`, `H.DMA.5` |
-| O.FAILSAFE | `H.TRAP.6`, `H.BOOT.1`, `H.BOOT.2`, `H.BOOT.4`, `H.BOOT.5`, `H.BOOT.6`, `H.BOOT.7`, `H.BOOT.8`, `H.FAIL.1`, `H.FAIL.2`, `H.FAIL.3` |
-| O.ISOLATE | `H.MEM.1`, `H.MEM.2`, `H.MEM.3`, `H.MEM.7`, `H.MEM.8`, `H.MEM.10`, `H.MEM.12`, `H.MEM.14`, `H.MEM.15`, `H.MEM.16`, `H.MEM.17`, `H.MEM.18`, `H.MEM.19`, `H.OBJ.13`, `H.SCHED.6`, `H.SCHED.7`, `H.SCHED.8`, `H.TRAP.3`, `H.TRAP.4`, `H.TRAP.5`, `H.TRAP.6`, `H.TRAP.7`, `H.TRAP.8`, `H.BOOT.3` |
-| O.QUOTA | `H.MEM.9`, `H.MEM.11`, `H.OBJ.7`, `H.OBJ.8`, `H.OBJ.9`, `H.OBJ.10`, `H.OBJ.12`, `H.OBJ.16`, `H.SCHED.2`, `H.SCHED.3`, `H.IRQ.2`, `H.IRQ.3`, `H.DMA.4`, `H.QUOTA.1`, `H.QUOTA.2`, `H.QUOTA.3`, `H.QUOTA.4`, `H.QUOTA.5`, `H.QUOTA.6`, `H.QUOTA.7`, `H.QUOTA.8`, `H.QUOTA.9` |
+| O.FAILSAFE | `H.TRAP.6`, `H.BOOT.1`, `H.BOOT.2`, `H.BOOT.4`, `H.BOOT.5`, `H.BOOT.6`, `H.BOOT.7`, `H.BOOT.8`, `H.FAIL.1`, `H.FAIL.2`, `H.FAIL.3`, `H.FAIL.4` |
+| O.ISOLATE | `H.MEM.1`, `H.MEM.2`, `H.MEM.3`, `H.MEM.7`, `H.MEM.8`, `H.MEM.10`, `H.MEM.12`, `H.MEM.14`, `H.MEM.15`, `H.MEM.16`, `H.MEM.17`, `H.MEM.18`, `H.MEM.19`, `H.OBJ.13`, `H.SCHED.6`, `H.SCHED.7`, `H.SCHED.8`, `H.TRAP.3`, `H.TRAP.4`, `H.TRAP.5`, `H.TRAP.6`, `H.TRAP.7`, `H.TRAP.8`, `H.TRAP.13`, `H.BOOT.3`, `H.BOOT.9` |
+| O.QUOTA | `H.MEM.9`, `H.MEM.11`, `H.OBJ.7`, `H.OBJ.8`, `H.OBJ.9`, `H.OBJ.10`, `H.OBJ.12`, `H.OBJ.16`, `H.SCHED.2`, `H.SCHED.3`, `H.SCHED.10`, `H.SCHED.11`, `H.IRQ.2`, `H.IRQ.3`, `H.DMA.4`, `H.QUOTA.1`, `H.QUOTA.2`, `H.QUOTA.3`, `H.QUOTA.4`, `H.QUOTA.5`, `H.QUOTA.6`, `H.QUOTA.7`, `H.QUOTA.8`, `H.QUOTA.9` |
 | O.SCRUB | `H.MEM.6` |
-| O.VALIDATE | `H.TRAP.1`, `H.TRAP.2`, `H.TRAP.3`, `H.TRAP.5`, `H.TRAP.7`, `H.TRAP.11`, `H.TRAP.12` |
+| O.VALIDATE | `H.TRAP.1`, `H.TRAP.2`, `H.TRAP.3`, `H.TRAP.5`, `H.TRAP.7`, `H.TRAP.11`, `H.TRAP.12`, `H.TRAP.13` |
 | O.WXN | `H.MEM.4`, `H.MEM.5`, `H.MEM.10`, `H.MEM.13`, `H.MEM.18` |
 
 ## High-level requirements
@@ -151,6 +153,8 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `H.SCHED.7` | A thread's thread-local segment descriptors and data selectors shall be its own whenever it runs in ring 3, never another thread's. x86-64 only. | Two i386 programs pinned to one processor, with one descriptor slot and selector but bases 4 bytes apart, each read their own word through %gs 200 times across sched_yield: both exit 42. | O.ISOLATE, G.1 | `kernel/src/arch/x86_64/trap/check.rs::check_thread_areas` | not measured | not built | not built |
 | `H.SCHED.8` | The user-mode state a trap does not save -- the FS and GS bases and the x87 and SSE registers -- shall be the running task's own whenever it runs in ring 3, inherited by a fork child and reset by an execve. | Two programs pinned to one processor, each with its own FS and GS bases and XMM, MXCSR and x87 control values, read back their own across N yields: 0 mismatches; a fork child reads its parent's, and an execve'd image the reset values. | O.ISOLATE, G.1 | *baselined* | — | — | — |
 | `H.SCHED.9` | A clock read through the vDSO shall answer as the system call would, between system calls made on either side of it. | A program reading each of the 7 clocks, gettimeofday and time through the vDSO finds each answer between system calls made on either side: exit 120. | G.5 | `kernel/src/syscall/vdso_check.rs::check_a_program_reads_the_clock_through_it` | not measured | not measured | not measured |
+| `H.SCHED.10` | Console output shall hold a processor with interrupts masked only for bounded work: a writer shall put at most 64 bytes into the port and queue at most 2,048 bytes of a task's write per hold of the port's lock, and the port's interrupt shall make at most 68 passes, each taking at most 8,192 received bytes and giving the port at most 64. | Across a task's 16 KiB write on a port with an interrupt, 0 holds of the port's lock put more than 64 bytes into the port or queue more than 2,048; a port that never reports itself empty lets its interrupt handler return after 68 passes. | O.QUOTA | *baselined* | — | — | — |
+| `H.SCHED.11` | A task writing to the console that may sleep shall sleep while the fixed 4,096-byte transmit ring has no room for its next chunk, and a writer that may not sleep shall never sleep on the console. | A task writing 16 KiB faster than the port sends sleeps at least once while the ring never holds more than 4,096 bytes, and every byte reaches the port in order; a program's write made with a spin lock held returns without sleeping and its line reaches the port. | O.QUOTA | *baselined* | — | — | — |
 
 ### Interrupts (`H.IRQ`)
 
@@ -189,6 +193,9 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `H.TRAP.10` | A program's registers shall pass the kernel as its ABI says: a call's arguments are read from its argument registers and its result returned in its return register, a fork child resumes from its parent's registers with the call answering zero, and a program started or replaced begins at its entry with its start argument and no kernel value in any register. | A call with six arguments answers from all six; a fork child's registers are its parent's with the return register zero; a program started with an argument finds it, and one that ORs its registers on entry finds nothing else set, for each ABI. | G.4, G.5 | *baselined* | — | — | — |
 | `H.TRAP.11` | A system call number no table carries shall be refused with ENOSYS, never answered by a handler or a fault. | 0xDEAD, usize::MAX and usize::MAX - 1, each dispatched as a native call through the registered entry, are answered -38, 3 of 3. | O.VALIDATE | `kernel/src/syscall/check.rs::check_an_unknown_number_is_enosys` | not measured | not measured | not measured |
 | `H.TRAP.12` | A system call's number shall be decoded through the table of the architecture it was built for. | Of getpid's numbers in the three tables, exactly the running architecture's decodes to getpid, and dispatching it answers a pid above zero. | O.VALIDATE | `kernel/src/syscall/check.rs::check_the_right_table_was_compiled_in` | not measured | not measured | not measured |
+| `H.TRAP.13` | A read of a log ring -- the kernel log is one -- shall copy into the reader's buffer, up to its length, only bytes the ring recorded, in order from the reader's cursor or from the oldest byte kept if that is later, and shall count as lost exactly the bytes it skips or finds replaced while it copied. | On a 64-byte ring of the log check's own given 100 bytes, a reader at 0 is told 37 lost and given the last 63 in order across a 10-byte read and a longer one, and 200 bytes later is told 137 lost and given 63; while two writers record 20,000 bytes each into a 256-byte ring, a reader reads only bytes they wrote, and the bytes it read and was told it lost come to exactly 40,000 (the `log` line). | O.VALIDATE, O.ISOLATE | `kernel/src/console/log_check.rs::run` | not measured | not measured | not measured |
+| `H.TRAP.14` | A program's write to the console shall reach the port byte for byte in the order written, each bare newline as CRLF unless the program turned output processing off. | A write of text holding bare newlines reaches the port with CRLF for each, and the same write with output processing off with LF alone, every other byte the same and in order. | G.5 | *baselined* | — | — | — |
+| `H.TRAP.15` | The kernel log shall hold every byte the console is given to send, a kernel line or a program's output, as it was written and before a newline becomes CRLF, except the lines the kernel sends unlogged. | Over a boot, the kernel log read from its oldest byte holds, in order and without CRs, every kernel line the serial log holds but the unlogged ones, and every program's output. | G.5 | *baselined* | — | — | — |
 
 ### Boot (`H.BOOT`)
 
@@ -202,6 +209,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `H.BOOT.6` | When init exits and ferrix.onexit asks for nothing else, the machine shall power itself off after the console has drained. | After init exits, QEMU exits by itself within the grace, with status 0 or 33, and init's exit line is in the log. | O.FAILSAFE | `xtask/src/init_file.rs::test` | xtask gate | xtask gate | xtask gate |
 | `H.BOOT.7` | When init exits and ferrix.onexit=reset asks for it, the machine shall restart from firmware after the console has drained. | Under ferrix.onexit=reset the kernel says it is resetting and the loader's banner is printed again after it. | O.FAILSAFE | `xtask/src/qemu.rs::reset_problem` | xtask gate | xtask gate | xtask gate |
 | `H.BOOT.8` | The serial console shall carry the kernel's lines out, and a person's typed bytes in to the program reading them, in order and without waiting unboundedly on the port. | test-boot reads every stage's line and FERRIX-BOOT-OK from the serial port, and test-jobs's 18 typed steps each have their answer after them. | O.FAILSAFE | *baselined* | — | — | — |
+| `H.BOOT.9` | The kernel log shall hold neither the KASLR slide nor any kernel virtual address the kernel prints: a panic's slide and backtrace, a fatal trap's registers, stage 2's placement of the image, the direct map and the page array, and the sweeps' failure lines shall go to the port and never into the log. | After a boot, and after a panic with a backtrace, the kernel log read whole holds 0 occurrences of the slide or of any image, direct-map or vmap address the serial log printed. | O.ISOLATE | *baselined* | — | — | — |
 
 ### Quotas (`H.QUOTA`)
 
@@ -224,6 +232,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `H.FAIL.1` | On a failed internal consistency check the kernel shall stop every other processor, print a diagnostic naming the failure and its catalogued explanation, and halt without returning to user mode. | A boot told to panic at its end (`ferrix.onexit=panic`) ends with the FX-1501 report and no program output after it; every panic site in the item has a catalogue entry (`check-panic-audit.py`). | O.FAILSAFE, ASR-6 | *baselined* | — | — | — |
 | `H.FAIL.2` | The allocator every kernel stack comes from shall give each an unmapped guard page directly below and above it. | A kernel stack allocated, written at its first and last word and freed has the page below and the page above it untranslated, and gives back every frame it took. | O.FAILSAFE, ASR-6 | `kernel/src/mm/check.rs::check_stacks` | not measured | not measured | not measured |
 | `H.FAIL.3` | A kernel stack overflow shall end in the halt and diagnostic of the safe state, never in a write below the stack. | A kernel thread that recurses past its stack ends the boot in a report naming the fault -- on x86-64 a double fault taken on its own stack (FX-9004) -- on each architecture, 3 of 3. | O.FAILSAFE, ASR-6 | *baselined* | — | — | — |
+| `H.FAIL.4` | Once a failure report has begun, a line the kernel writes shall reach the console port after a bounded wait even when the port's lock is held and will never be released. | A report begun while another context holds the port's lock for good reaches the port whole, after at most 10,000,000 attempts at the lock, on each architecture, 3 of 3. | O.FAILSAFE, ASR-6 | *baselined* | — | — | — |
 
 ## Low-level requirements
 
@@ -276,6 +285,8 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `L.object.32` | A registration shall not fire before a signal it asked for is asserted, and shall fire once when one is, reporting it with its key, and not again. | A registration does not fire before its signal, fires once on the message that asserts it with its key and READABLE, and a second write fires nothing. | H.OBJ.17 | `object::port::trigger`, `object::port::deliver`, `object::port::Observer::fire`, `object::port::register` | `kernel/src/object/check.rs::check_ports` | not measured | not measured | not measured |
 | `L.object.33` | trigger shall fire only the registrations whose signals the change asserts, leaving every other listed. | A message fires the registration waiting for READABLE and not the one waiting for PEER_CLOSED listed ahead of it. | H.OBJ.17 | `object::port::trigger` | `kernel/src/object/edge_check.rs::check_a_change_fires_only_what_wants_it` | not measured | not measured | not measured |
 | `L.object.34` | register shall refuse a registration as full when the object already holds 64, counted after dropping those whose port has gone. | The 65th registration on one object is refused SHOULD_WAIT; after its ports are closed the object takes 64 again. | H.OBJ.10 | `object::port::register` | *baselined* | — | — | — |
+| `L.console.40` | ramoops_zone shall read the loader's `console=ramoops,<base>,<size>` as a zone only when both numbers are hexadecimal with a 0x prefix, no third field follows, the base is a page's and the size is more than the record's 12-byte header. | `ramoops,0x9ff00000,0x40000` is read as the zone at 0x9ff00000 of 0x40000 bytes; a base not a page's, a 12-byte zone, a missing size, a third field, a number without 0x and `ttyAMA0` are each refused: 0 of 6 taken (the AArch64 `machine` line). | H.BOOT.1 | `arch::aarch64::console::ramoops_zone` | `kernel/src/arch/aarch64/check.rs::check_ramoops_zones` | not built | not measured | not built |
+| `L.console.41` | chosen shall take the port a `console=` in the device tree's bootargs names, where the tree has that port with registers; else the port stdout-path names; else the first port the kernel drives that the tree has not turned off. | Of 4 trees built for the check, `console=pl011` against a stdout-path naming the USART gives the PL011; a `console=ttyS0` falls through to stdout-path's PL011; no stdout-path gives the first port not disabled; a lone STM32 USART gives it: 4 of 4 (the ARMv7-A `machine` line). | H.BOOT.8 | `arch::armv7a::console::chosen`, `arch::armv7a::console::forced`, `arch::armv7a::console::first_enabled`, `arch::armv7a::console::Port::of`, `arch::armv7a::console::Port::named` | `kernel/src/arch/armv7a/check.rs::check_chosen` | not built | not built | not measured |
 
 ### Interrupts
 
@@ -919,10 +930,81 @@ Each system-level requirement, and the high-level requirements that name it as t
 |---|---|---|---|---|---|---|---|---|
 | `L.smp.32` | interrupt_one shall interrupt the online processor it names, and every other processor where the architecture cannot address it alone, where that processor is not online, or before the processors are known. | On x86-64 a kick to processor 2 raises its inter-processor interrupt count by 1 and the others' by 0; a kick to a processor that is not online raises every other online processor's. | H.SCHED.1 | `smp::interrupt_one` | *baselined* | — | — | — |
 
+### Lines
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.console.1` | write_as, emit and drain shall send nothing to the port, and record nothing in the kernel log, the recent-output ring or the screen, until mark_ready has said the port is configured. | A line and a program's write made before mark_ready leave the port untouched and the kernel log's and the recent-output ring's counts where they were; the same made after it raise both. | H.BOOT.8 | `console::write_as`, `console::emit`, `console::drain`, `console::mark_ready` | *baselined* | — | — | — |
+| `L.console.2` | write_as shall put a formatted line into the transmit ring or the port under one hold of the port's lock, each bare newline as CRLF, so that no other writer's bytes fall inside it. | 1,000 lines of 200 bytes printed from every processor at once reach the port each whole and ending in CRLF: 0 lines with another writer's bytes inside. | H.BOOT.8 | `console::write`, `console::write_as`, `console::Writer::new`, `console::Writer::bytes`, `console::Writer::write_str`, `console::Writer::finish` | *baselined* | — | — | — |
+| `L.console.3` | A writer that may not queue -- the port's interrupt not installed, its processor's interrupts masked, or a failure report begun -- shall first poll out everything the transmit ring holds, then write its own bytes straight to the port. | With bytes queued in the transmit ring, a line printed with interrupts masked reaches the port after every one of them, and the ring is empty when the print returns. | H.BOOT.8 | `console::may_queue`, `console::Writer::new`, `console::Writer::put`, `console::output::Transmit::flush` | *baselined* | — | — | — |
+
+### ProgramOutput
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.console.4` | emit shall send a program's bytes to the port in the order given, each bare newline as CRLF for write_bytes and every byte as it is for write_raw. | A write_bytes of text holding bare newlines, and a write_raw of the same, reach the port with CRLF for each newline in the first and LF alone in the second, every other byte the same and in order. | H.TRAP.14 | `console::write_bytes`, `console::write_raw`, `console::emit`, `console::Writer::bytes` | *baselined* | — | — | — |
+| `L.console.5` | emit shall send a program's bytes through write_waiting only from a task that may sleep, and otherwise queue them without waiting, Transmit::queue polling the oldest queued byte out to the port to make room when the ring is full. | A program's write made with a spin lock held returns without sleeping and its line reaches the port; with the ring full, each byte it queues sends one queued byte first and counts it as polled. | H.SCHED.11 | `console::emit`, `console::output::Transmit::queue` | *baselined* | — | — | — |
+| `L.console.6` | write_waiting shall queue a task's write only when the ring has room for the whole of the next chunk, and otherwise sleep until the ring drains to half or a tenth of a second passes, never polling out bytes other writers queued. | A task writing 16 KiB to a port that sends slower than it writes sleeps at least once, the ring never holds more than 4,096 bytes, 0 bytes are polled out by it, and every byte reaches the port in order. | H.SCHED.11 | `console::output::write_waiting`, `console::output::try_queue`, `console::output::Transmit::room` | *baselined* | — | — | — |
+| `L.console.7` | next_chunk shall take the whole of what is left when it costs at most 2,048 bytes on the wire, a newline sent as CRLF costing two; otherwise the longest part within that cost that ends in a newline, or failing one the longest part within it. | What is left of 100 bytes is taken whole; of 3,000 bytes with newlines at the 1,000th and 2,500th, the first 1,000; of 3,000 bytes with none, 2,048; with CRLF asked for, each newline counted as 2 in the cost. | H.SCHED.10 | `console::output::next_chunk` | *baselined* | — | — | — |
+| `L.console.8` | try_queue shall record a chunk in the kernel log once, when it is queued, and never for a try that found no room. | A task's write that finds the ring without room twice before it is queued appears in the kernel log exactly once. | H.TRAP.15 | `console::output::try_queue` | *baselined* | — | — | — |
+| `L.console.9` | Transmit::pump shall give the port no more than it reports room for and no more than 64 bytes, never waiting for room, and charge them to the count of whoever pumped. | A task's line of 172 bytes on the wire, written on a port with an interrupt, has all but at most 64 of them sent by the transmit interrupt (the `output` line). | H.SCHED.10 | `console::output::Transmit::pump`, `console::output::by_writer` | *baselined* | — | — | — |
+| `L.console.10` | The port's interrupt shall give the port what it has room for of the transmit ring, and settle shall keep the port's transmit interrupt enabled exactly while the ring holds bytes, so that what a writer left is sent with no further write. | A task's write left in the ring is sent within 2 seconds with no further write and 0 stalls polled out (the `output` line). | H.BOOT.8, H.TRAP.14 | `console::output::on_interrupt`, `console::output::Transmit::settle`, `console::output::start`, `console::input::on_interrupt` | *baselined* | — | — | — |
+| `L.console.11` | settle shall ask for waiting writers to be woken when the ring drains from above half its length to half or less, and a writer shall wake them only after it has dropped the port's lock. | A task waiting for room in a full ring is woken once the ring holds 2,048 bytes or fewer, and not while it holds more. | H.SCHED.11 | `console::output::Transmit::settle`, `console::output::wake_writers`, `console::Writer::finish` | *baselined* | — | — | — |
+| `L.console.12` | unstall shall poll the transmit ring out to the port, and count a stall, when the port has taken none of its bytes for a tenth of a second. | With the port's transmit interrupt suppressed, a line queued reaches the port at the first write made after 100 ms, and the stall count rises by 1. | H.BOOT.8, H.TRAP.14 | `console::output::Transmit::unstall`, `console::output::stalls` | *baselined* | — | — | — |
+| `L.console.13` | drain shall poll out everything the transmit ring holds and then wait for the port to have sent it before it returns. | A line printed just before drain and a power off reaches the port whole, on each architecture, 3 of 3. | H.FAIL.1 | `console::drain` | *baselined* | — | — | — |
+
+### FailureReports
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.console.14` | Once begin_panic has been called, write_as shall write through write_panicking, which, when it gets the port's lock, sends the line straight to the port. | A boot told to panic at its end (`ferrix.onexit=panic`) shows the FX-1501 line on the port after init's exit (`cargo xtask test-init-file`). | H.FAIL.1 | `console::begin_panic`, `console::write_as`, `console::write_panicking` | `xtask/src/init_file.rs::judge_k7_read` | xtask gate | xtask gate | xtask gate |
+| `L.console.15` | write_panicking shall try the port's lock at most 10,000,000 times and then send the line straight to the port without it, recorded in the kernel log if asked, leaving what was queued in the ring. | A report written while another context holds the port's lock for good reaches the port whole after at most 10,000,000 attempts, and is in the kernel log. | H.FAIL.4 | `console::write_panicking`, `console::Unlocked::write_str` | *baselined* | — | — | — |
+| `L.console.16` | During a failure report, drain shall try the port's lock at most 10,000,000 times, leave the ring as it is if it never gets it, and wait for the port either way. | drain called during a report while another context holds the port's lock for good returns after at most 10,000,000 attempts, having waited for the port to empty. | H.FAIL.4 | `console::drain` | *baselined* | — | — | — |
+| `L.console.17` | recent shall give back, oldest byte first, the most recent bytes of the kernel's own lines as they were printed. | A line printed is found as printed, its newline without the CR, in the last 1,024 bytes recent copies out. | H.FAIL.1 | `console::remember`, `console::recent`, `console::Writer::bytes`, `console::Unlocked::write_str` | `kernel/src/service_check.rs::the_last_line_is_kept_for_a_failure_report` | not measured | not measured | not measured |
+| `L.console.18` | Writer::bytes shall keep a kernel line, logged or not, in the recent-output ring and on the screen console, and a program's output in neither. | After a program's write of a marker line and a kernel line, the last 4,096 bytes recent gives hold the kernel line and not the marker. | H.FAIL.1 | `console::Writer::bytes`, `console::Kind::remembered` | *baselined* | — | — | — |
+| `L.console.19` | recent shall copy at most its buffer's length and at most the 4,096 bytes the ring keeps, and a writer racing it shall leave a byte stale at worst. | recent into a 16-byte buffer copies 16 bytes; into an 8,192-byte buffer after 10,000 bytes printed, 4,096, the last printed; with another processor printing throughout, every copy stays within those bounds. | H.FAIL.1 | `console::recent`, `console::remember` | *baselined* | — | — | — |
+
+### Input
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.console.20` | receive shall move what the port gives into the receive ring in order, dropping and counting every byte that finds it full, and pop and has_input shall give the reader those bytes in order and say without a lock whether any are held. | 4,099 bytes offered to the empty ring come back as the first 4,096 in order, a 4,097th pop finds nothing, has_input says so before and after, and the overrun count rises by exactly 3 (the `input` line). | H.BOOT.8 | `console::input::receive`, `console::input::pop`, `console::input::Ring::push`, `console::input::Ring::pop`, `console::input::has_input`, `console::input::overruns` | *baselined* | — | — | — |
+| `L.console.21` | receive shall wake the input's waiters, after it has dropped the ring's lock, whenever it added a byte. | A task waiting for input with the ring empty is woken by the first byte the port receives, within the interrupt that took it. | H.BOOT.8 | `console::input::receive`, `console::input::waiters` | *baselined* | — | — | — |
+| `L.console.22` | receive shall take at most 8,192 bytes from the port per call, and on_interrupt shall make at most 68 passes of receiving and transmitting, stopping at the first the port says nothing is pending after. | A port that never reports itself empty lets the handler return after 68 passes of at most 8,192 received bytes each; a port with nothing pending after the first pass, after 1. | H.SCHED.10 | `console::input::on_interrupt`, `console::input::receive` | *baselined* | — | — | — |
+| `L.console.23` | init shall register the port's receive interrupt and mark input and output interrupt-driven before it enables the line; answer None, installing nothing, when the machine gives the port no interrupt this kernel can take; and refuse when the interrupt is already held. | On QEMU's x86-64, AArch64 and ARMv7-A machines the `input` line says the port receives by an interrupt; a second init of the same number is refused with nothing changed; a machine whose port has no interrupt leaves input polled. | H.BOOT.8 | `console::input::init`, `console::output::start` | *baselined* | — | — | — |
+| `L.console.24` | read_byte shall take from the receive ring once the receive interrupt is installed, and poll the port only until then. | Before init a byte comes through the poll; after it, a byte received by interrupt comes through the ring and the poll is called 0 times. | H.BOOT.8 | `console::input::read_byte`, `console::input::interrupt_driven` | *baselined* | — | — | — |
+
+### Log
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.console.25` | Ring::record shall claim exactly one place per byte, so that the ring's count of bytes recorded is exact however many writers race. | Two writers recording 20,000 bytes each at once, on two processors where there are two, leave the ring's count at exactly 40,000. | H.TRAP.15 | `console::log::Ring::record`, `console::log::Ring::record_byte`, `console::log::Ring::slot` | `kernel/src/console/log_check.rs::two_writers` | not measured | not measured | not measured |
+| `L.console.26` | A ring of N bytes written past its length shall keep its last N - 1 bytes in order, and unread shall count exactly those for a reader at its start. | A 64-byte ring given 100 bytes answers unread 63 for a cursor at 0, and its reads from there give the last 63 bytes in order. | H.TRAP.13 | `console::log::Ring::read`, `console::log::Ring::copy_from`, `console::log::Ring::slot`, `console::log::Ring::unread`, `console::log::Ring::oldest_at` | `kernel/src/console/log_check.rs::wrap_overrun_and_partial` | not measured | not measured | not measured |
+| `L.console.27` | read shall move a cursor behind the oldest byte kept up to it and report exactly the bytes it skipped as lost. | A reader at 0 of a 64-byte ring given 100 bytes is told 37 lost; caught up and then 200 bytes behind, it is told 137 lost and given the 63 kept. | H.TRAP.13 | `console::log::Ring::read`, `console::log::Ring::oldest_at` | `kernel/src/console/log_check.rs::wrap_overrun_and_partial` | not measured | not measured | not measured |
+| `L.console.28` | read shall copy no more than the reader's buffer holds and move the cursor past exactly what it copied, so that the next read goes on from there. | A 10-byte read with 63 unread leaves 53 unread, and the next read gives those 53 in order with 0 lost and 0 left unread. | H.TRAP.13 | `console::log::Ring::read`, `console::log::Ring::unread` | `kernel/src/console/log_check.rs::wrap_overrun_and_partial` | not measured | not measured | not measured |
+| `L.console.29` | read shall hand a reader only bytes writers recorded, dropping and counting as lost any a writer replaced while they were being copied, so that every byte recorded is either read or counted lost. | While two writers record 20,000 bytes each into a 256-byte ring, a reader reading 97 bytes at a time reads only bytes they wrote, and the bytes it read and was told it lost come to exactly 40,000. | H.TRAP.13 | `console::log::Ring::read`, `console::log::Ring::copy_from`, `console::log::Ring::record_byte` | `kernel/src/console/log_check.rs::two_writers` | not measured | not measured | not measured |
+| `L.console.30` | read shall bring a cursor ahead of the newest byte back to it, copying nothing and reporting nothing lost. | A read at a cursor 1,000 past the ring's count copies 0 bytes, reports 0 lost and leaves the cursor at the count. | H.TRAP.13 | `console::log::Ring::read` | *baselined* | — | — | — |
+| `L.console.31` | A task's write to the console shall be recorded in the kernel log as the task wrote it, without the CR the port is sent. | A task's write of a line is found, byte for byte and with no CR, in the last 4,096 bytes of the kernel log. | H.TRAP.15 | `console::output::try_queue`, `console::Writer::bytes`, `console::Kind::logged`, `console::log::record` | `kernel/src/console/log_check.rs::console_records` | not measured | not measured | not measured |
+| `L.console.32` | write_panicking, asked to log, shall record the line in the kernel log when it writes it under the port's lock. | A line written through write_panicking with logging asked for, the panicking flag not set, is found in the last 4,096 bytes of the kernel log. | H.TRAP.15 | `console::write_panicking`, `console::Writer::bytes` | `kernel/src/console/log_check.rs::console_records` | not measured | not measured | not measured |
+| `L.console.33` | write shall record a kernel line in the kernel log as printed, before its newline becomes CRLF. | A line printed with println! is found, without a CR, in the last 4,096 bytes of the kernel log. | H.TRAP.15 | `console::write`, `console::write_as`, `console::Writer::bytes` | *baselined* | — | — | — |
+| `L.console.34` | write_unlogged shall keep its line out of the kernel log. | A line sent with println_unlogged! is not in the last 4,096 bytes of the kernel log, read after it was sent. | H.BOOT.9 | `console::write_unlogged`, `console::Kind::logged`, `console::Writer::bytes` | `kernel/src/console/log_check.rs::console_records` | not measured | not measured | not measured |
+| `L.console.35` | record shall take no lock, allocate nothing and wake no reader, so that a writer recording in any context, a panic's included, is never held up by the log. | A byte recorded from an interrupt handler, from the idle task and from a failure report written while another processor holds every lock the kernel has is recorded, with 0 heap allocations and 0 wakes. | H.FAIL.1 | `console::log::record`, `console::log::Ring::record`, `console::log::Ring::record_byte` | *baselined* | — | — | — |
+
+### Screen
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.console.36` | screen::start shall draw the console only when the command line holds ferrix.fbcon and there is a framebuffer: clear it, and draw what recent keeps of the lines printed before, from the first whole one. | A boot without ferrix.fbcon leaves the framebuffer as firmware left it; one with it shows the boot's earlier lines from a line's start, and every later kernel line. | H.FAIL.1 | `console::screen::start`, `console::screen::put` | *baselined* | — | — | — |
+| `L.console.37` | Board::new shall pick the largest glyph scale up to 4 that leaves at least 60 columns, inside the margins and the top inset, and refuse a surface with room for no column or fewer than 2 rows. | A 1080-pixel-wide surface gets scale 2 and 65 columns; a 640-pixel one, scale 1; a surface 20 pixels high is refused. | H.FAIL.1 | `console::screen::Board::new` | *baselined* | — | — | — |
+| `L.console.38` | Board::put shall ignore a CR, start a new row at a newline, advance a tab to the next stop of eight, draw a printable byte and draw anything else as the replacement character, wrapping at the last column and from the bottom row to the top, and keep the row after the newest line blank. | Drawn on a board of 3 rows, a line with a tab, a CR and a byte 0x01 puts its glyphs at the columns the rule gives, the replacement glyph for 0x01, and after a fourth newline the text is on row 1 with row 2 blank. | H.FAIL.1 | `console::screen::Board::put`, `console::screen::Board::glyph`, `console::screen::Board::newline`, `console::screen::Board::clear_row` | *baselined* | — | — | — |
+| `L.console.39` | screen::stop shall stop the screen console for good and wait a bounded time for a draw in flight to finish, and a byte that finds the board taken shall not be drawn. | After stop, 0 bytes are drawn; stop called by a processor part way through a draw returns after at most 1,000,000 attempts at the board. | H.FAIL.1 | `console::screen::stop`, `console::screen::put` | *baselined* | — | — | — |
+
 ## Checks and what they verify
 
 | Check | Kind | Verifies |
 |---|---|---|
+| `kernel/src/arch/aarch64/check.rs::check_ramoops_zones` | kernel | L.console.40 |
+| `kernel/src/arch/armv7a/check.rs::check_chosen` | kernel | L.console.41 |
 | `kernel/src/arch/speculation_check.rs::check` | kernel | L.x86_64.28, L.x86_64.29, L.x86_64.31 |
 | `kernel/src/arch/speculation_check.rs::check_clamp` | kernel | L.x86_64.30 |
 | `kernel/src/arch/x86_64/gdt/check.rs::run` | kernel | L.x86_64.1, H.TRAP.7 |
@@ -938,6 +1020,10 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `kernel/src/arch/x86_64/trap/check.rs::check_thread_areas` | kernel | L.x86_64.7, L.x86_64.8, H.SCHED.7 |
 | `kernel/src/arch/x86_64/trap/check.rs::run` | kernel | L.x86_64.60, L.x86_64.77, L.trap.1, L.x86_64.78, L.x86_64.103, H.TRAP.4 |
 | `kernel/src/audit/check.rs::booted` | kernel | L.iommu.44 |
+| `kernel/src/console/log_check.rs::console_records` | kernel | L.console.31, L.console.32, L.console.34 |
+| `kernel/src/console/log_check.rs::run` | kernel | H.TRAP.13 |
+| `kernel/src/console/log_check.rs::two_writers` | kernel | L.console.25, L.console.29 |
+| `kernel/src/console/log_check.rs::wrap_overrun_and_partial` | kernel | L.console.26, L.console.27, L.console.28 |
 | `kernel/src/fs/cgroupfs/controllers_check.rs::check_the_files` | kernel | L.object.52, L.object.61 |
 | `kernel/src/fs/cgroupfs/delegation_check.rs::check_a_removed_cgroup` | kernel | L.object.69 |
 | `kernel/src/fs/cgroupfs/native_check.rs::check_a_native_child_is_shown` | kernel | L.object.68 |
@@ -1024,6 +1110,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `kernel/src/sched/check.rs::sleeping` | kernel | L.x86_64.91 |
 | `kernel/src/service_check.rs::a_dropped_domain_gives_its_stream_back` | kernel | L.iommu.14 |
 | `kernel/src/service_check.rs::faults_and_domains_read_as_recorded` | kernel | L.iommu.13, L.iommu.34 |
+| `kernel/src/service_check.rs::the_last_line_is_kept_for_a_failure_report` | kernel | L.console.17 |
 | `kernel/src/smp/check.rs::everywhere` | kernel | H.SCHED.6, L.smp.3, L.smp.11 |
 | `kernel/src/smp/check.rs::everywhere` | kernel | L.x86_64.18, L.x86_64.19, L.x86_64.86, L.x86_64.102 |
 | `kernel/src/smp/check.rs::grace` | kernel | H.MEM.19, L.smp.29 |
@@ -1112,6 +1199,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `libs/kernel/objects/src/tests.rs::replace_closes_the_original_and_cannot_add_rights` | host | H.OBJ.14 |
 | `libs/kernel/sched/src/tests.rs::something_waiting_is_decided_on_within_a_slice` | host | L.sched.1 |
 | `libs/kernel/sched/src/tests.rs::yielding_alone_leaves_the_request_as_it_was` | host | L.sched.2 |
+| `xtask/src/init_file.rs::judge_k7_read` | gate | L.console.14 |
 | `xtask/src/init_file.rs::test` | gate | L.x86_64.98, H.BOOT.6 |
 | `xtask/src/jobs.rs::test_jobs` | gate | L.x86_64.115 |
 | `xtask/src/qemu.rs::entropy_problem` | gate | L.x86_64.113 |

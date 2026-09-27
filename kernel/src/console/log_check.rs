@@ -73,6 +73,8 @@ pub(crate) struct Report {
 /// # Errors
 ///
 /// The first property that did not hold, as a sentence.
+///
+/// Verifies: H.TRAP.13
 pub(crate) fn run() -> Result<Report, &'static str> {
     let (kept, lost) = wrap_overrun_and_partial()?;
     let (read_racing, processors) = two_writers()?;
@@ -88,6 +90,8 @@ pub(crate) fn run() -> Result<Report, &'static str> {
 
 /// Wrap, overrun, a partial read and the unread count, on [`SMALL_RING`].
 /// Answers the bytes kept and the bytes reported lost.
+///
+/// Verifies: L.console.26, L.console.27, L.console.28
 fn wrap_overrun_and_partial() -> Result<(usize, u64), &'static str> {
     let ring = &SMALL_RING;
     let pattern: Vec<u8> = (0..=255u8).cycle().take(100).collect();
@@ -138,6 +142,8 @@ fn wrap_overrun_and_partial() -> Result<(usize, u64), &'static str> {
 /// Two writers on [`RACE_RING`], on two processors when there are two, with
 /// this task reading as they write. Answers the bytes read meanwhile and how
 /// many processors the writers had.
+///
+/// Verifies: L.console.25, L.console.29
 fn two_writers() -> Result<(u64, usize), &'static str> {
     let online = crate::smp::topology().map_or(1, crate::smp::Topology::online);
     let (first, second) = if online >= 2 { (0, 1) } else { (0, 0) };
@@ -227,6 +233,8 @@ const UNLOGGED: &str = "  log      a line sent unlogged, as one that says where 
                         on the port, not in the log";
 
 /// What the console records in the kernel log, and what it keeps out.
+///
+/// Verifies: L.console.31, L.console.32, L.console.34
 fn console_records() -> Result<(), &'static str> {
     if !crate::sched::may_block() {
         return Err("the log check ran where a task's write could not wait");

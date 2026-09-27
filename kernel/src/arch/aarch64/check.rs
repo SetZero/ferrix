@@ -220,6 +220,8 @@ fn check_frames_render() -> Result<(), &'static str> {
 
 /// The loader's `console=ramoops,<address>,<size>`, read or refused.
 /// Returns how many values were tried.
+///
+/// Verifies: L.console.40
 fn check_ramoops_zones() -> Result<usize, &'static str> {
     use super::console::ramoops_zone;
 

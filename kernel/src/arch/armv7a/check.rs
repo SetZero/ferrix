@@ -435,6 +435,8 @@ fn check_refusals() -> Result<usize, &'static str> {
 /// # Errors
 ///
 /// A tree that does not parse, or one whose console is another port.
+///
+/// Verifies: L.console.41
 fn check_chosen(trees: &[(Vec<u8>, u64)]) -> Result<usize, &'static str> {
     for (blob, address) in trees {
         let tree =
