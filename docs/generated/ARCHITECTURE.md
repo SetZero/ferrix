@@ -116,8 +116,9 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixSchedRequirements` | `15-sched-requirements.sysml` | What each unit of kernel/src/sched/ does, as `ItemLowLevel` requirements (part 13 defines the format, part 14's pilot settled how they are cut). The scheduling decision itself is `libs/kernel/sched`'s `RunQueue`, an EEVDF queue the kernel's per-processor queue wraps; its host tests are the checks, and each requirement names the kernel function that carries the behaviour into the item as its `unit`. |
 | `FerrixIommuRequirements` | `16-iommu-requirements.sysml` | What each unit of kernel/src/iommu.rs and kernel/src/iommu/ does, as `ItemLowLevel` requirements (part 13 defines the format): where firmware puts each PCI function's DMA, the units the kernel turns translation on for, the domains a driver pins pages into, the gate a wait on a unit is made through, and the faults a unit records. The pins a program makes through a handle, and the quarantine a dead driver's pins go to, are object/'s (part 14, `L.object.45` to `L.object.49`); this is the domain side under them. |
 | `FerrixMemoryRequirements` | `17-memory-requirements.sysml` | What each unit of the item's memory management does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies), in two id spaces. |
+| `FerrixSmpRequirements` | `22-smp-requirements.sysml` | What each unit of kernel/src/smp.rs does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): finding the processors and giving each a record it finds itself by, starting the secondaries, the inter-processor interrupt, the TLB shootdown -- whole and scoped, and the bound on how long it waits -- grace periods, stopping the other processors for a panic, and the scheduler's kick. The start sequences themselves, the per-processor register and the interrupt controller are each architecture's (kernel/src/arch/\<isa>/smp.rs), and belong to the arch slices; this is the architecture-independent half above them. |
 
-18 files, 53 packages, 3614 elements, 207 relations. Model digest `88ee3d2fe02c0187`.
+19 files, 61 packages, 3794 elements, 208 relations. Model digest `9e7af9549dc8daff`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -247,8 +248,9 @@ Address spaces, the frames under them and the mappings that reach them: O.ISOLAT
 | `H.MEM.16` | After a fork, a write by the child to a MAP_SHARED mapping shall be visible to the parent, and its write to a MAP_PRIVATE mapping shall not. | The `shared` program exits 62 (its MAP_SHARED write reached the parent and its MAP_PRIVATE write did not). | `O.ISOLATE, ASR-1` |
 | `H.MEM.17` | A frame taken out of a translation, of a user address space or of the kernel's, shall not return to the frame allocator until the TLB invalidation that covers it has been made on every processor that may hold the translation. | A frame an unmap, a decommit or a replace takes out of a translation that another processor has cached is still allocated until that processor's shootdown returns: 0 frames freed before it, on every architecture. | `O.ISOLATE, ASR-1` |
 | `H.MEM.18` | The kernel shall refuse to map a device window or a native VMO executable into a user address space, and shall map the vDSO's data page read-only. | An executable device window and an executable vmo_map are each refused, 0 mapped; the vDSO's data page reads back not writable, and a write to it faults. | `O.WXN, O.ISOLATE` |
+| `H.MEM.19` | Once a grace period the kernel waits for has ended, no read-side section that was running on any processor when the wait began shall still be running. | A writer that replaces an object every other online processor is reading, waits a grace period and poisons the replaced one, 100 times over, leaves 0 reads of a poisoned object among more than 0 reads (the `grace` line). | `O.ISOLATE, ASR-1` |
 
-18 requirements.
+19 requirements.
 
 ### Objects
 
@@ -287,8 +289,9 @@ Processor time: the fair class, placement and sleep. ASR-8 (partially met: the i
 | `H.SCHED.3` | Under contention a job shall receive processor time in proportion to its weight, whatever the number of tasks in it. | One task alone in a job keeps half of a processor, within the check's stated tolerance, against eight tasks in a sibling job of equal weight (the `quota` line). | `O.QUOTA, ASR-8` |
 | `H.SCHED.4` | A task shall run only on the processors its affinity mask allows. | Spinners confined to processors 0 and 1, twice as many as there are online processors, are seen running on no other processor: 0 violations. | `G.1` |
 | `H.SCHED.5` | A task that sleeps for a duration shall not be woken before the duration has passed, and shall be woken within twenty times it. | A 20 ms sleep returns after at least 20 ms and at most 400 ms (the `sleep` line). | `G.1, ASR-8` |
+| `H.SCHED.6` | Code running on a processor shall find, through that processor's per-processor register, the record that names that processor and no other. | In 100 rounds of work run on every online processor at once, each processor runs each round once and the record its register gives it names its own hardware identifier every time: 0 misplaced runs (the `smp` line). | `O.ISOLATE, ASR-1` |
 
-5 requirements.
+6 requirements.
 
 ### Interrupts
 
@@ -345,8 +348,9 @@ What the kernel does with what it is handed before anything runs above it, and w
 | `H.BOOT.2` | Every boot shall run every stage's self-checks unless told not to, and shall print FERRIX-BOOT-OK only when all of them passed; a boot that skipped them shall end with FERRIX-BOOT-UNCHECKED instead. | `cargo xtask test-boot` finds FERRIX-BOOT-OK on each architecture; a boot with `ferrix.checks=skip` ends with FERRIX-BOOT-UNCHECKED and never prints FERRIX-BOOT-OK. | `O.FAILSAFE, ASR-6` |
 | `H.BOOT.3` | The kernel shall run with its image, direct map and vmap arena at the offsets the loader drew from the firmware's random-number protocol, and shall verify the move at stage 1. | Two boots of one image report two different layouts (`cargo xtask test-kaslr`), and stage 1 verifies the slide each reports. | `O.ISOLATE` |
 | `H.BOOT.4` | The kernel shall refuse an ACPI table or a device tree whose declared length is shorter than its header or reaches beyond the memory mapped for it, rather than read past it. | The ACPI and device-tree parsers' host tests feed truncated, oversized and misaligned tables and each is refused with its error, 0 read out of bounds; the kernel refuses a table outside the direct map. | `O.FAILSAFE, ASR-6` |
+| `H.BOOT.5` | Every processor firmware describes shall be running kernel code on its own per-processor record before the scheduler starts, or the boot shall halt with a diagnostic saying which step failed. | On each configuration `cargo xtask test-boot` boots, the `cpus` line counts as many processors online as firmware described (4 of 4 on x86-64 and AArch64, 2 of 2 on ARMv7-A at `--smp 2`); a secondary made never to report in ends the boot in FX-0402. | `O.FAILSAFE, ASR-6` |
 
-4 requirements.
+5 requirements.
 
 ### Quotas
 
@@ -4228,6 +4232,38 @@ flowchart LR
 | `L.user.103` | `aDiskFilesPageIsReadBeforeItIsMapped` | — | — | — |
 | `L.user.104` | `aFaultIsResolvedWithNoPreemptionLockHeld` | — | — | — |
 | `L.user.105` | `anUnmapFreesNothingBeforeItsShootdown` | — | — | — |
+| `L.smp.1` | `impossibleListsAreRefused` | — | — | — |
+| `L.smp.2` | `theBootProcessorIsZero` | — | — | — |
+| `L.smp.3` | `eachProcessorFindsItsOwnRecord` | — | — | — |
+| `L.smp.4` | `noRecordBeforeItIsInstalled` | — | — | — |
+| `L.smp.5` | `aWrongRecordHalts` | — | — | — |
+| `L.smp.6` | `aReportNamesOnlyARealRecord` | — | — | — |
+| `L.smp.7` | `everySecondaryComesUp` | — | — | — |
+| `L.smp.8` | `aSilentSecondaryIsAnError` | — | — | — |
+| `L.smp.9` | `speculationIsDecidedFirst` | — | — | — |
+| `L.smp.10` | `theInterruptIsHeldFirst` | — | — | — |
+| `L.smp.11` | `anInterruptWakesASecondary` | — | — | — |
+| `L.smp.12` | `aNewcomerIsCovered` | — | — | — |
+| `L.smp.13` | `theSchedulerTakesEveryProcessor` | — | — | — |
+| `L.smp.14` | `aShootdownReachesEveryProcessor` | — | — | — |
+| `L.smp.15` | `oneShootdownAtATime` | — | — | — |
+| `L.smp.16` | `aWaiterAnswersWhereItIs` | — | — | — |
+| `L.smp.17` | `aProcessorThatNeverAnswersIsFatal` | — | — | — |
+| `L.smp.18` | `aStoppedHolderIsFatal` | — | — | — |
+| `L.smp.19` | `theInterruptIsSentAgain` | — | — | — |
+| `L.smp.20` | `theShootdownRulesAreAsserted` | — | — | — |
+| `L.smp.21` | `farBehindFlushesEverything` | — | — | — |
+| `L.smp.22` | `aScopedRequestIsReadByItsSet` | — | — | — |
+| `L.smp.23` | `aScopedShootdownReachesItsSet` | — | — | — |
+| `L.smp.24` | `aScopedShootdownGivesBackItsTables` | — | — | — |
+| `L.smp.25` | `nobodyToAskIsAskedNothing` | — | — | — |
+| `L.smp.26` | `pageSetsStopAtTheCeiling` | — | — | — |
+| `L.smp.27` | `aMaskKeepsWhoJoined` | — | — | — |
+| `L.smp.28` | `setsAreJoined` | — | — | — |
+| `L.smp.29` | `aGracePeriodOutlastsEveryReader` | — | — | — |
+| `L.smp.30` | `aPanicAsksTheOthersToStop` | — | — | — |
+| `L.smp.31` | `aProcessorStopsWhereItLooks` | — | — | — |
+| `L.smp.32` | `aKickReachesItsTarget` | — | — | — |
 
 A design rule is upheld by a gate rather than allocated to a part, so the P and N families are expected to be verified but untraced. A goal requirement is traced by the dependency the stage that discharges it draws.
 

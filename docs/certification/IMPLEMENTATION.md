@@ -811,6 +811,88 @@ at the space level (`.105`).
   per layer, from the pilot's lessons, in about 20 minutes; review, the
   high-level splits and tagging took about as long again.
 
+**Step 4, the `smp` slice, done 2026-09-27.** 32 low-level requirements,
+`L.smp.1` to `L.smp.32`, in `docs/sysml/22-smp-requirements.sysml`, one
+package each for the processors and their records, bring-up, the whole-TLB
+shootdown and its bounds, the scoped shootdown, grace periods, stopping for
+a panic and the scheduler's kick. The start sequences under them,
+`arch/<isa>/smp.rs`, are the arch slices'. **9 are verified**, by 4 check
+functions newly tagged in `smp/check.rs` (`everywhere`, `page_sets`,
+`grace`, `migrating_shootdown`) and one id added to each of 3 tagged
+already (`unlink_and_shoot`, `shootdown`, and `user/rmap_check.rs`'s
+`protect_under_child`); **23 need a check** and are the baseline's
+`L.smp.*`. Of smp's 57 product functions 38 are a requirement's unit (3 of
+them accessors named as an entry point: `patience`,
+`TlbPages::addresses`, `is_everything`), 17 accessors and 2 check code --
+`run_everywhere` and `next_job`, how stage 4's checks hand work to every
+processor, which stay because `secondary_main`'s product loop reads the
+same state; **0 are named by none**, and the gate holds `smp` as complete.
+Doc-comment lines only: nothing moved. smp's 37 functions named by none
+(35 now a unit, 2 check code) leave the item with 1,145 of 2,345 on the
+main this was rebased onto.
+
+The high level grew from 74 to 77, by behaviour no requirement said, with
+no split: `H.SCHED.6`, each processor finds its own record through its
+register (verified by `everywhere`); `H.MEM.19`, a grace period outlasts
+every read-side section running when it began (verified by `grace`); and
+`H.BOOT.5`, every processor firmware describes is running on its own record
+before the scheduler starts, or the boot halts (no check). 33 of the 77 are
+verified.
+
+The 23 that need a check, as check-writing work: the topology's refusals
+of an empty list, a repeated identifier and a list without the boot
+processor, and its numbering (`.1`, `.2`);
+`this_cpu` before the boot record is installed (`.4`); the record checks
+that halt a processor, and `this_cpu_for_report` (`.5`, `.6`); every
+secondary online (`.7`) -- the `cpus` line says it on every boot and
+`bring_up_processors` halts with FX-0406 otherwise, but no gate reads the
+line, and one xtask condition would verify `.7` and `H.BOOT.5` at once --
+and a secondary that never reports in (`.8`); the side-channel defences
+decided before the first secondary (`.9`) and the IPI handler registered
+before it (`.10`); a newcomer's online-then-flush handshake (`.12`); the
+scheduler taking every secondary over (`.13`: the `tasks` check requires 2
+processors, not N); one shootdown at a time (`.15`); **the bound on a wait
+for a processor that never answers (`.17`), proved only by the negative
+control in commit 94dee288's message**, a scratch edit that made processor
+2 stop answering and ended the boot in FX-0001 after 1.8 s under KVM, 5.1 s
+under tcg and 32 s under the coverage plugin, **and the bound on the turn
+(`.18`), proved by nothing** (commit 237d2426: making a holder stop with the
+turn in hand breaks what would release it); the interrupt re-sent every 10
+ms (`.19`); the two shootdown rules, which are debug assertions (`.20`);
+`service_tlb`'s whole flush for a processor far behind, and
+`scoped_request`'s answer to members and non-members (`.21`, `.22`); a
+scoped shootdown with nobody to ask (`.25`); `add_cpus` (`.28`);
+`stop_others` and where a processor looks for the stop (`.30`, `.31`); and
+the scheduler's kick reaching its one target (`.32`). Every stuck-processor
+case needs the same thing, a boot that expects its panic -- as
+`test-init-file`'s `ferrix.onexit=panic` boot does -- with a kernel switch
+that makes one processor stop answering.
+
+What this slice found, for review:
+
+* **Grace periods have no product caller.** `synchronize` and
+  `read_section` are called only by stage 4's `grace` check; `irq.rs` names
+  the handler unregistration they are for, which nothing does yet. The
+  answering half runs on every boot (`on_ipi`, `secondary_main`), so they
+  are traced as product code under `H.MEM.19`, not listed as check code;
+  whether an unused mechanism belongs in the item is DO-178C's deactivated
+  code question for the item's owner.
+* **`H.FAIL.1` says the kernel stops every other processor, and its
+  criterion does not test it.** `L.smp.30` and `.31` refine that half and
+  have no check; the split (`H.FAIL.1` keeping the report, a new one taking
+  the stop) is proposed for the failure slice, not made here, since no one
+  check proves either half today.
+* **`migrating_shootdown` proves `.16` on x86-64 only**: on the Arm pair,
+  whose invalidation is broadcast, and with fewer than 3 processors it
+  returns without testing, and the matrix will still show it reached there.
+  `.16`'s statement says "where invalidation is not broadcast".
+* **Stage 4's exit criterion, `contended`, proves `crate::sync::SpinLock`**,
+  not smp, and is left untagged for the slice that writes `sync`.
+* **Time.** About 40 minutes of agent time from the first read to the
+  gates: fifteen reading smp.rs's 1,500 lines and its 850 of checks with the
+  commits behind the bounds, fifteen for the 32 requirements and three
+  high-level ones, ten for tags, the baseline and the documents.
+
 49,431 lines of item product code trace to 33 system-level requirements, and no
 test names a requirement id.
 

@@ -472,7 +472,7 @@ fn take_pages_away(programs: &Programs<'_>) -> Result<u32, &'static str> {
 /// child. A protect that took the entry down without telling the child's
 /// processor lets the write through, and the child answers.
 ///
-/// Verifies: L.user.88
+/// Verifies: L.user.88, L.smp.23
 fn protect_under_child(programs: &Programs<'_>) -> Result<(), &'static str> {
     let [_, child] = programs.processes;
     let (_, written) = programs.probe(CHILD)?;

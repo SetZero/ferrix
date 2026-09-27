@@ -14,19 +14,19 @@ Coverage evidence recording the checks: none yet.
 
 | Level | Written | Named by a check | Unverified, in the baseline |
 |---|---:|---:|---:|
-| High (`H.*`) | 74 | 31 | 43 |
-| Low (`L.*`) | 316 | 212 | 104 |
+| High (`H.*`) | 77 | 33 | 44 |
+| Low (`L.*`) | 348 | 221 | 127 |
 
-492 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
+530 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
 
 | Product functions | Count |
 |---|---:|
-| Named by a low-level requirement | 492 |
-| Accessors, covered by the requirement they serve | 657 |
-| Check code in a product file | 14 |
-| Named by none | 1182 |
+| Named by a low-level requirement | 530 |
+| Accessors, covered by the requirement they serve | 654 |
+| Check code in a product file | 16 |
+| Named by none | 1145 |
 
-Subsystems whose low-level requirements are complete: `early`, `iommu`, `mm`, `object`, `user`, `vmap`.
+Subsystems whose low-level requirements are complete: `early`, `iommu`, `mm`, `object`, `smp`, `user`, `vmap`.
 
 ### Check code in product files
 
@@ -46,6 +46,8 @@ Functions that are checks, or serve only checks, and live in a product file, so 
 | `mm::unlinked::UnlinkedTables::frames` | The frames a list holds, for smp/check.rs's check that an unmap's tables are still held; it reads the list's private links. |
 | `object::as_if_draining_elsewhere` | Runs a check's closure as though another context were draining disposed objects (object/check.rs, block_ring/check.rs). It sets the DISPOSING flag dispose reads, which is private to object/mod.rs. |
 | `object::process::Exit::for_check` | An end no process has, for object/pin/check.rs's check_quarantine; it needs Exit's private constructor. |
+| `smp::next_job` | The work run_everywhere handed out that a secondary has not done yet. Only stage 4's checks hand work out (smp/check.rs); secondary_main, product code, calls this in its wait loop until the scheduler takes the processor over, so it stays beside that loop and the JOB state both read. |
+| `smp::run_everywhere` | Runs a function on every online processor at once and waits for each: how stage 4's checks run on every processor, and nothing else calls it. It writes the JOB state secondary_main's product loop reads through next_job, so moving it into smp/check.rs would leave the product loop reading a check file's state. |
 | `vmap::check_failed_device_map` | A check, called from mm/check.rs's check_vmap, that a device mapping failing part way leaves nothing mapped. It uses vmap.rs's private reserve, release and map_reserved; moved into a check file it verifies L.mm.52. |
 | `vmap::check_invariants` | The arena's consistency check, called from mm/check.rs's check_vmap; it reads the private ARENA. Moved into a check file it verifies L.mm.53. |
 
@@ -55,12 +57,12 @@ Each system-level requirement, and the high-level requirements that name it as t
 
 | System | Decomposed into |
 |---|---|
-| ASR-1 | `H.MEM.1`, `H.MEM.2`, `H.MEM.3`, `H.MEM.7`, `H.MEM.8`, `H.MEM.12`, `H.MEM.14`, `H.MEM.15`, `H.MEM.16`, `H.MEM.17`, `H.TRAP.4` |
+| ASR-1 | `H.MEM.1`, `H.MEM.2`, `H.MEM.3`, `H.MEM.7`, `H.MEM.8`, `H.MEM.12`, `H.MEM.14`, `H.MEM.15`, `H.MEM.16`, `H.MEM.17`, `H.MEM.19`, `H.SCHED.6`, `H.TRAP.4` |
 | ASR-2 | `H.MEM.4`, `H.MEM.5`, `H.MEM.13` |
 | ASR-3 | `H.OBJ.1`, `H.OBJ.2`, `H.OBJ.3`, `H.OBJ.4`, `H.OBJ.5`, `H.OBJ.6`, `H.OBJ.14`, `H.OBJ.15`, `H.IRQ.1` |
 | ASR-4 | `H.DMA.1`, `H.DMA.2`, `H.DMA.6`, `H.DMA.7`, `H.DMA.3`, `H.DMA.8`, `H.DMA.5` |
 | ASR-5 | `H.MEM.6` |
-| ASR-6 | `H.BOOT.1`, `H.BOOT.2`, `H.BOOT.4`, `H.FAIL.1`, `H.FAIL.2`, `H.FAIL.3` |
+| ASR-6 | `H.BOOT.1`, `H.BOOT.2`, `H.BOOT.4`, `H.BOOT.5`, `H.FAIL.1`, `H.FAIL.2`, `H.FAIL.3` |
 | ASR-7 | `H.TRAP.1`, `H.TRAP.2`, `H.TRAP.5` |
 | ASR-8 | `H.SCHED.1`, `H.SCHED.2`, `H.SCHED.3`, `H.SCHED.5` |
 | G.1 | `H.SCHED.1`, `H.SCHED.4`, `H.SCHED.5` |
@@ -69,8 +71,8 @@ Each system-level requirement, and the high-level requirements that name it as t
 | G.8 | `H.OBJ.12`, `H.QUOTA.6` |
 | O.CAPABILITY | `H.OBJ.1`, `H.OBJ.2`, `H.OBJ.3`, `H.OBJ.4`, `H.OBJ.5`, `H.OBJ.6`, `H.OBJ.7`, `H.OBJ.8`, `H.OBJ.9`, `H.OBJ.11`, `H.OBJ.14`, `H.OBJ.15`, `H.OBJ.16`, `H.OBJ.17`, `H.IRQ.1`, `H.IRQ.2`, `H.DMA.5` |
 | O.DMA | `H.DMA.1`, `H.DMA.2`, `H.DMA.6`, `H.DMA.7`, `H.DMA.3`, `H.DMA.8`, `H.DMA.4`, `H.DMA.5` |
-| O.FAILSAFE | `H.TRAP.6`, `H.BOOT.1`, `H.BOOT.2`, `H.BOOT.4`, `H.FAIL.1`, `H.FAIL.2`, `H.FAIL.3` |
-| O.ISOLATE | `H.MEM.1`, `H.MEM.2`, `H.MEM.3`, `H.MEM.7`, `H.MEM.8`, `H.MEM.10`, `H.MEM.12`, `H.MEM.14`, `H.MEM.15`, `H.MEM.16`, `H.MEM.17`, `H.MEM.18`, `H.OBJ.13`, `H.TRAP.3`, `H.TRAP.4`, `H.TRAP.5`, `H.TRAP.6`, `H.TRAP.7`, `H.BOOT.3` |
+| O.FAILSAFE | `H.TRAP.6`, `H.BOOT.1`, `H.BOOT.2`, `H.BOOT.4`, `H.BOOT.5`, `H.FAIL.1`, `H.FAIL.2`, `H.FAIL.3` |
+| O.ISOLATE | `H.MEM.1`, `H.MEM.2`, `H.MEM.3`, `H.MEM.7`, `H.MEM.8`, `H.MEM.10`, `H.MEM.12`, `H.MEM.14`, `H.MEM.15`, `H.MEM.16`, `H.MEM.17`, `H.MEM.18`, `H.MEM.19`, `H.OBJ.13`, `H.SCHED.6`, `H.TRAP.3`, `H.TRAP.4`, `H.TRAP.5`, `H.TRAP.6`, `H.TRAP.7`, `H.BOOT.3` |
 | O.QUOTA | `H.MEM.9`, `H.MEM.11`, `H.OBJ.7`, `H.OBJ.8`, `H.OBJ.9`, `H.OBJ.10`, `H.OBJ.12`, `H.OBJ.16`, `H.SCHED.2`, `H.SCHED.3`, `H.IRQ.2`, `H.IRQ.3`, `H.DMA.4`, `H.QUOTA.1`, `H.QUOTA.2`, `H.QUOTA.3`, `H.QUOTA.4`, `H.QUOTA.5`, `H.QUOTA.6`, `H.QUOTA.7`, `H.QUOTA.8`, `H.QUOTA.9` |
 | O.SCRUB | `H.MEM.6` |
 | O.VALIDATE | `H.TRAP.1`, `H.TRAP.2`, `H.TRAP.3`, `H.TRAP.5`, `H.TRAP.7` |
@@ -100,6 +102,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `H.MEM.16` | After a fork, a write by the child to a MAP_SHARED mapping shall be visible to the parent, and its write to a MAP_PRIVATE mapping shall not. | The `shared` program exits 62 (its MAP_SHARED write reached the parent and its MAP_PRIVATE write did not). | O.ISOLATE, ASR-1 | `kernel/src/syscall/check.rs::check_a_shared_mapping_is_shared_across_fork` | not measured | not measured | not measured |
 | `H.MEM.17` | A frame taken out of a translation, of a user address space or of the kernel's, shall not return to the frame allocator until the TLB invalidation that covers it has been made on every processor that may hold the translation. | A frame an unmap, a decommit or a replace takes out of a translation that another processor has cached is still allocated until that processor's shootdown returns: 0 frames freed before it, on every architecture. | O.ISOLATE, ASR-1 | *baselined* | — | — | — |
 | `H.MEM.18` | The kernel shall refuse to map a device window or a native VMO executable into a user address space, and shall map the vDSO's data page read-only. | An executable device window and an executable vmo_map are each refused, 0 mapped; the vDSO's data page reads back not writable, and a write to it faults. | O.WXN, O.ISOLATE | *baselined* | — | — | — |
+| `H.MEM.19` | Once a grace period the kernel waits for has ended, no read-side section that was running on any processor when the wait began shall still be running. | A writer that replaces an object every other online processor is reading, waits a grace period and poisons the replaced one, 100 times over, leaves 0 reads of a poisoned object among more than 0 reads (the `grace` line). | O.ISOLATE, ASR-1 | `kernel/src/smp/check.rs::grace` | not measured | not measured | not measured |
 
 ### Objects (`H.OBJ`)
 
@@ -132,6 +135,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `H.SCHED.3` | Under contention a job shall receive processor time in proportion to its weight, whatever the number of tasks in it. | One task alone in a job keeps half of a processor, within the check's stated tolerance, against eight tasks in a sibling job of equal weight (the `quota` line). | O.QUOTA, ASR-8 | *baselined* | — | — | — |
 | `H.SCHED.4` | A task shall run only on the processors its affinity mask allows. | Spinners confined to processors 0 and 1, twice as many as there are online processors, are seen running on no other processor: 0 violations. | G.1 | *baselined* | — | — | — |
 | `H.SCHED.5` | A task that sleeps for a duration shall not be woken before the duration has passed, and shall be woken within twenty times it. | A 20 ms sleep returns after at least 20 ms and at most 400 ms (the `sleep` line). | G.1, ASR-8 | *baselined* | — | — | — |
+| `H.SCHED.6` | Code running on a processor shall find, through that processor's per-processor register, the record that names that processor and no other. | In 100 rounds of work run on every online processor at once, each processor runs each round once and the record its register gives it names its own hardware identifier every time: 0 misplaced runs (the `smp` line). | O.ISOLATE, ASR-1 | `kernel/src/smp/check.rs::everywhere` | not measured | not measured | not measured |
 
 ### Interrupts (`H.IRQ`)
 
@@ -174,6 +178,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `H.BOOT.2` | Every boot shall run every stage's self-checks unless told not to, and shall print FERRIX-BOOT-OK only when all of them passed; a boot that skipped them shall end with FERRIX-BOOT-UNCHECKED instead. | `cargo xtask test-boot` finds FERRIX-BOOT-OK on each architecture; a boot with `ferrix.checks=skip` ends with FERRIX-BOOT-UNCHECKED and never prints FERRIX-BOOT-OK. | O.FAILSAFE, ASR-6 | *baselined* | — | — | — |
 | `H.BOOT.3` | The kernel shall run with its image, direct map and vmap arena at the offsets the loader drew from the firmware's random-number protocol, and shall verify the move at stage 1. | Two boots of one image report two different layouts (`cargo xtask test-kaslr`), and stage 1 verifies the slide each reports. | O.ISOLATE | *baselined* | — | — | — |
 | `H.BOOT.4` | The kernel shall refuse an ACPI table or a device tree whose declared length is shorter than its header or reaches beyond the memory mapped for it, rather than read past it. | The ACPI and device-tree parsers' host tests feed truncated, oversized and misaligned tables and each is refused with its error, 0 read out of bounds; the kernel refuses a table outside the direct map. | O.FAILSAFE, ASR-6 | *baselined* | — | — | — |
+| `H.BOOT.5` | Every processor firmware describes shall be running kernel code on its own per-processor record before the scheduler starts, or the boot shall halt with a diagnostic saying which step failed. | On each configuration `cargo xtask test-boot` boots, the `cpus` line counts as many processors online as firmware described (4 of 4 on x86-64 and AArch64, 2 of 2 on ARMv7-A at `--smp 2`); a secondary made never to report in ends the boot in FX-0402. | O.FAILSAFE, ASR-6 | *baselined* | — | — | — |
 
 ### Quotas (`H.QUOTA`)
 
@@ -625,6 +630,73 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `L.user.104` | fault shall stop a debug kernel, naming the outermost lock's site, when it is asked to resolve a fault while a lock that disables preemption is held. | In a debug build, a fault asked for while a spin lock is held stops the kernel with the assertion's message and that lock's file and line. | H.FAIL.1 | `user::space::fault_requested`, `user::space::AddressSpace::fault` | *baselined* | — | — | — |
 | `L.user.105` | unmap shall give back no page of its range, and no page table it emptied, before the shootdown covering them has returned from every processor in the space's set. | On a machine with two processors or more, a page a program on another processor keeps reading is unmapped from this one; its frame, claimed back and poisoned the moment it is free, is never what the program reads: 0 poisoned reads, and the program faults. | H.MEM.7, H.MEM.17 | `user::space::AddressSpace::unmap`, `user::space::AddressSpace::take_down`, `user::space::AddressSpace::give_back`, `user::space::AddressSpace::begin_shootdown`, `user::space::AddressSpace::shoot` | *baselined* | — | — | — |
 
+### Processors
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.smp.1` | Topology::from_described shall refuse a processor list that is empty, that names one hardware identifier twice, or that does not name the processor running it. | Described lists that are empty, that hold one identifier twice and that omit the boot processor's identifier are each refused with its own error, 0 accepted; a list of 4 distinct identifiers including the boot one is accepted. | H.BOOT.5 | `smp::Topology::from_described`, `smp::discover` | *baselined* | — | — | — |
+| `L.smp.2` | Topology::from_described shall give the boot processor logical number 0 and the others 1 to N-1 in table order, one record each that holds its own address, with only the boot processor's record online. | A described list of 4 identifiers whose boot identifier is third yields 4 records, the boot identifier's at index 0 and the other three at 1 to 3 in table order, each record's own address in its first word, and 1 online. | H.BOOT.5 | `smp::Topology::from_described` | *baselined* | — | — | — |
+| `L.smp.3` | On every processor that has installed its record, this_cpu shall return the record that names that processor's hardware identifier. | In 100 rounds of work run on every online processor at once, each processor runs each round once and the record this_cpu gives it names its own hardware identifier every time: 0 misplaced runs (the `smp` line). | H.SCHED.6 | `smp::this_cpu`, `smp::discover`, `smp::install_secondary_record` | `kernel/src/smp/check.rs::everywhere` | not measured | not measured | not measured |
+| `L.smp.4` | this_cpu shall return nothing until the boot processor has installed its record, and shall not read the per-processor register before then. | Called before discover, this_cpu returns None with the register holding a value that is no record's address; after discover it returns the boot processor's record. | H.SCHED.6 | `smp::this_cpu` | *baselined* | — | — | — |
+| `L.smp.5` | discover and secondary_main shall halt a processor whose register does not lead to its own record, whose record does not hold its own address or lead back to itself by its logical number, or names another processor's hardware identifier; and a secondary that arrives with an address that is no processor's record shall halt. | A secondary started with another processor's record address, and one started with an address that is no record's, each end the boot in their catalogued panic (FX-0405, FX-0404); a boot processor record made to name another hardware identifier ends the boot in FX-0401. | H.SCHED.6, H.FAIL.1 | `smp::check_this_cpu`, `smp::discover`, `smp::secondary_main`, `smp::install_secondary_record` | *baselined* | — | — | — |
+| `L.smp.6` | this_cpu_for_report shall name the processor whose record's address the register holds, and otherwise say that the processor has not installed a record or that no other processor was started, without following the register. | With the register holding a processor's record address the report names that processor; holding any other value, it answers with the no-record sentence; before discover, with the boot-processor sentence; 0 reads through the register's value. | H.FAIL.1 | `smp::this_cpu_for_report` | *baselined* | — | — | — |
+
+### BringUp
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.smp.7` | start_secondaries shall start every processor the topology lists but the boot one, one at a time, each on a kernel stack of its own, and shall return only once each has reported itself online. | On each configuration `cargo xtask test-boot` boots, the `cpus` line counts as many processors online as firmware described (4 of 4 on x86-64 and AArch64, 2 of 2 on ARMv7-A at `--smp 2`). | H.BOOT.5 | `smp::start_secondaries`, `smp::wait_until_online`, `smp::secondary_main` | *baselined* | — | — | — |
+| `L.smp.8` | start_secondaries shall fail, and leave the architecture's start block in place, when a processor it started has not reported itself online within one second. | A secondary made never to set its online flag ends the boot in FX-0402 with the never-reported-in sentence 1 s or more after it was started, and the start block is not freed. | H.BOOT.5 | `smp::start_secondaries`, `smp::wait_until_online` | *baselined* | — | — | — |
+| `L.smp.9` | start_secondaries shall apply the side-channel defences on the boot processor before it starts any other processor, on a machine with one processor as well. | The boot processor's speculation controls read back as decided before the first secondary's start is requested, on each architecture, and with `--smp 1`. | H.TRAP.3 | `smp::start_secondaries` | *baselined* | — | — | — |
+| `L.smp.10` | start_secondaries shall register the inter-processor interrupt's handler before any secondary starts, and shall fail if another handler holds its line. | 0 inter-processor interrupts are counted unclaimed across a boot; with the line registered beforehand, start_secondaries fails with the line-taken sentence and starts no processor. | H.SCHED.1 | `smp::start_secondaries` | *baselined* | — | — | — |
+| `L.smp.11` | A secondary waiting in secondary_main shall take an inter-processor interrupt sent to it, count it, and look for work when it returns. | In 100 rounds of work handed to every online processor, each processor runs each round once and every secondary takes 1 or more inter-processor interrupts (the `smp` line). | H.SCHED.1 | `smp::on_ipi`, `smp::secondary_main` | `kernel/src/smp/check.rs::everywhere` | not measured | not measured | not measured |
+| `L.smp.12` | secondary_main shall mark its processor online before it reads the shootdown generation, and flush its TLB after, so that a shootdown racing its arrival either waits for it or is covered by that flush; and shall answer every grace period requested before it came online. | A secondary held between reading the generation and flushing while a shootdown is taken reads, once let go, the translation the shootdown changed; a grace period requested before it came online completes without its interrupt. | H.MEM.12 | `smp::secondary_main` | *baselined* | — | — | — |
+| `L.smp.13` | Once the scheduler has started, secondary_main shall hand its processor to the scheduler's idle loop and not return to waiting for work. | After sched::init, tasks pinned one to each online processor all run, each on its own processor: N of N. | H.SCHED.1 | `smp::secondary_main` | *baselined* | — | — | — |
+
+### Shootdown
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.smp.14` | When flush_tlb_everywhere returns, no online processor shall still translate through an entry it held before it was called. | Over 20 rounds in which every online processor reads a kernel page and the page is then moved to another frame, every processor reads the page's new value each round: 0 stale reads (the `tlb` line), on each architecture. | H.MEM.12 | `smp::flush_tlb_everywhere`, `smp::service_tlb`, `smp::on_ipi`, `smp::wait_for` | `kernel/src/smp/check.rs::shootdown` | not measured | not measured | not measured |
+| `L.smp.15` | take_turn shall let one shootdown hold the turn at a time, and a processor waiting for it shall answer the shootdowns of others while it waits. | Two processors each requesting a shootdown while a third holds the turn both complete once it is let go, one after the other: 0 generations taken by two holders at once, and 0 waits for the turn ending in FX-0001. | H.MEM.12 | `smp::take_turn`, `smp::flush_tlb_everywhere` | *baselined* | — | — | — |
+| `L.smp.16` | Where invalidation is not broadcast, a task waiting for the shootdown turn shall answer shootdowns for the processor it is running on at each moment, never for one it has left. | On x86-64 with 3 or more processors online, a task waiting for the turn that moves to another processor answers a generation requested with no interrupt on the processor it moved to, and the processor it left is not recorded as answering (the `migrate` line). | H.MEM.17 | `smp::as_this_cpu`, `smp::take_turn`, `smp::service_tlb` | `kernel/src/smp/check.rs::migrating_shootdown` | not measured | not measured | not measured |
+| `L.smp.17` | wait_for shall stop the kernel in the safe state, naming the processor, once its wall-clock bound has passed and it has asked patience's count of polls, and not before both. | A processor made to stop answering its interrupt ends the boot in FX-0001 naming it, after 1 s or more and 16,777,216 polls or more, under tcg and under KVM. | H.FAIL.1 | `smp::wait_for`, `smp::patience` | *baselined* | — | — | — |
+| `L.smp.18` | take_turn shall stop the kernel in the safe state when the shootdown generation has stood still for 4 s and patience's count of polls while it waits for the turn, and shall start its count again whenever the generation moves. | A holder made to stop with the turn in hand ends the boot in FX-0003 after 4 s or more; a holder that keeps taking generations for longer than that is waited for. | H.FAIL.1 | `smp::take_turn`, `smp::patience` | *baselined* | — | — | — |
+| `L.smp.19` | wait_for shall send its interrupt again every 10 ms while a processor it waits for has not answered. | With a processor's first interrupt dropped, the shootdown still completes, the processor answering the second. | H.MEM.12 | `smp::wait_for` | *baselined* | — | — | — |
+| `L.smp.20` | A shootdown shall be refused with a diagnostic when it is requested holding a lock that disables preemption, or, once tasks run, when it would wait for another processor with interrupts masked. | A shootdown requested holding a SpinLock, and one that would wait for another processor with interrupts masked, each stop the kernel with the assertion naming the rule, in a build with debug assertions. | H.FAIL.1 | `smp::shootdown_requested`, `smp::shootdown_waits_for_others`, `smp::flush_tlb_everywhere`, `smp::invalidate_pages` | *baselined* | — | — | — |
+| `L.smp.21` | service_tlb shall flush the whole TLB of a processor more than one generation behind, or whose generation's request is not a scoped one or was rewritten while it was read, and shall record the latest generation answered without taking back a later one. | A processor two generations behind, one a generation behind a whole-TLB request, and one reading a scoped request whose generation changes under the read each flush the whole TLB; tlb_seen after each is the latest generation, never less than a value recorded meanwhile. | H.MEM.17 | `smp::service_tlb`, `smp::scoped_request` | *baselined* | — | — | — |
+
+### ScopedShootdown
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.smp.22` | scoped_request shall give a processor in a scoped request's set that request's pages, or the whole TLB where it asks for more than the ceiling, and a processor outside the set nothing to invalidate. | For a request of 3 pages to processors 1 and 3, processor 1 is given the 3 pages and processor 2 none; for a request of the whole TLB, a member is given everything. | H.MEM.17 | `smp::scoped_request`, `smp::service_tlb` | *baselined* | — | — | — |
+| `L.smp.23` | flush_tlb_pages shall invalidate the pages it names on the online processors in its set other than the one it runs on before it returns. | On a machine with two processors or more, a child that wrote a shared page and holds still on its processor has the page protected read-only from this one, whose scoped shootdown names the child's processor: the child's next write ends it with SIGSEGV, 11, instead of answering (the `rmap` line), on each architecture. | H.MEM.17 | `smp::flush_tlb_pages`, `smp::invalidate_pages`, `smp::service_tlb`, `smp::scoped_request`, `smp::wait_for` | `kernel/src/user/rmap_check.rs::protect_under_child` | not measured | not measured | not measured |
+| `L.smp.24` | flush_tlb_pages shall give back every page table its pages hold once its invalidation has returned, and none before it is called. | Of the tables an unmap_in emptied, 0 are given back before flush_tlb_pages is called and every one is given back by it, its list left empty, with an empty set of processors. | H.MEM.7 | `smp::flush_tlb_pages` | `kernel/src/smp/check.rs::unlink_and_shoot` | not measured | not measured | not measured |
+| `L.smp.25` | invalidate_pages shall interrupt no processor when there is nothing to invalidate, when its set is empty, before the processors are discovered, when this processor is the only one online or where invalidation is broadcast, and shall invalidate the pages on this processor itself in the last three. | Each of those five calls raises the unsent count by 1 or leaves it (nothing to invalidate) and sends 0 interrupts; after the last three a translation of the named page cached before is gone on this processor. | H.MEM.17 | `smp::invalidate_pages`, `smp::flush_here`, `smp::TlbPages::is_empty` | *baselined* | — | — | — |
+| `L.smp.26` | A TlbPages shall list each page asked for once, up to 33 pages, ask for the whole TLB past that, and when merged with another shall list both sets' pages once each and ask for the whole TLB if either did. | 33 pages added by range and one again by an address inside it list 33 pages; 34 by range ask for everything; two sets of 1 and 2 pages sharing one merge to 2 pages in order; a merge with a set asking for everything asks for everything. | H.MEM.17 | `smp::TlbPages::add`, `smp::TlbPages::add_range`, `smp::TlbPages::add_all`, `smp::TlbPages::addresses`, `smp::TlbPages::is_everything` | `kernel/src/smp/check.rs::page_sets` | not measured | not measured | not measured |
+| `L.smp.27` | A CpuMask's snapshot shall hold every processor that joined it and has not left since. | A mask joined by processors 0 and 3 and left by 0 snapshots as 3 alone. | H.MEM.17 | `smp::CpuMask::join`, `smp::CpuMask::leave`, `smp::CpuMask::snapshot` | `kernel/src/smp/check.rs::page_sets` | not measured | not measured | not measured |
+| `L.smp.28` | add_cpus shall add every processor of one set to another and remove none. | {0, 2} added to {1, 2} gives {0, 1, 2}; the empty set added changes nothing. | H.MEM.17 | `smp::add_cpus` | *baselined* | — | — | — |
+
+### GracePeriods
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.smp.29` | synchronize shall return only once every online processor has been outside a read-side section since it was called. | A writer that replaces an object every other online processor is reading in read_section, synchronizes and poisons the replaced one, 100 times over, leaves 0 reads of a poisoned object among more than 0 reads (the `grace` line). | H.MEM.19 | `smp::synchronize`, `smp::read_section`, `smp::answer_grace`, `smp::on_ipi`, `smp::wait_for` | `kernel/src/smp/check.rs::grace` | not measured | not measured | not measured |
+
+### Stopping
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.smp.30` | stop_others shall set the stop request and interrupt every other online processor, and return how many it asked: none before the processors are discovered. | A panic on one of N online processors reports N-1 asked (the `stopped` line), and 0 before discovery. | H.FAIL.1 | `smp::stop_others` | *baselined* | — | — | — |
+| `L.smp.31` | Once a panic has asked every processor to stop, a processor shall halt on its next inter-processor interrupt, and on its next poll while it waits for the shootdown turn or for other processors' answers. | With a panic on one processor while the others are idle, waiting for the turn and waiting for answers, each other processor halts: 0 lines printed and 0 shootdowns completed by them after the report begins. | H.FAIL.1 | `smp::halt_if_stopping`, `smp::on_ipi`, `smp::take_turn`, `smp::wait_for` | *baselined* | — | — | — |
+
+### Kick
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.smp.32` | interrupt_one shall interrupt the online processor it names, and every other processor where the architecture cannot address it alone, where that processor is not online, or before the processors are known. | On x86-64 a kick to processor 2 raises its inter-processor interrupt count by 1 and the others' by 0; a kick to a processor that is not online raises every other online processor's. | H.SCHED.1 | `smp::interrupt_one` | *baselined* | — | — | — |
+
 ## Checks and what they verify
 
 | Check | Kind | Verifies |
@@ -710,9 +782,13 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `kernel/src/object/quota_check.rs::run` | kernel | L.object.53, H.QUOTA.4 |
 | `kernel/src/service_check.rs::a_dropped_domain_gives_its_stream_back` | kernel | L.iommu.14 |
 | `kernel/src/service_check.rs::faults_and_domains_read_as_recorded` | kernel | L.iommu.13, L.iommu.34 |
-| `kernel/src/smp/check.rs::shootdown` | kernel | H.MEM.12, L.mm.28 |
+| `kernel/src/smp/check.rs::everywhere` | kernel | H.SCHED.6, L.smp.3, L.smp.11 |
+| `kernel/src/smp/check.rs::grace` | kernel | H.MEM.19, L.smp.29 |
+| `kernel/src/smp/check.rs::migrating_shootdown` | kernel | L.smp.16 |
+| `kernel/src/smp/check.rs::page_sets` | kernel | L.smp.26, L.smp.27 |
+| `kernel/src/smp/check.rs::shootdown` | kernel | H.MEM.12, L.mm.28, L.smp.14 |
 | `kernel/src/smp/check.rs::tables_wait_for_their_shootdown` | kernel | H.MEM.7 |
-| `kernel/src/smp/check.rs::unlink_and_shoot` | kernel | L.mm.23, L.mm.39 |
+| `kernel/src/smp/check.rs::unlink_and_shoot` | kernel | L.mm.23, L.mm.39, L.smp.24 |
 | `kernel/src/syscall/check.rs::a_shared_futex_crosses_a_fork` | kernel | L.user.78 |
 | `kernel/src/syscall/check.rs::check_a_copy_on_write_page_is_copied_for_the_side_that_writes` | kernel | H.MEM.8, L.user.61 |
 | `kernel/src/syscall/check.rs::check_a_shared_mapping_is_shared_across_fork` | kernel | H.MEM.16, L.user.62 |
@@ -773,7 +849,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `kernel/src/user/rmap_check.rs::check` | kernel | L.user.32 |
 | `kernel/src/user/rmap_check.rs::decommit_under_both` | kernel | L.user.16, L.user.90 |
 | `kernel/src/user/rmap_check.rs::hold_under_both` | kernel | L.user.23 |
-| `kernel/src/user/rmap_check.rs::protect_under_child` | kernel | L.user.88 |
+| `kernel/src/user/rmap_check.rs::protect_under_child` | kernel | L.user.88, L.smp.23 |
 | `kernel/src/user/rmap_check.rs::replace_under_both` | kernel | L.user.17 |
 | `libs/kernel/objects/src/tests.rs::a_closed_handle_stays_stale_when_its_slot_is_reused` | host | H.OBJ.4 |
 | `libs/kernel/objects/src/tests.rs::a_slot_whose_generations_run_out_is_retired_rather_than_wrapped` | host | H.OBJ.15 |

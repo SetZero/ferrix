@@ -315,6 +315,8 @@ fn write_side() {
 /// reader holds what it loaded for a while before reading it, so a writer
 /// that poisoned early would find one still holding, and that reader would
 /// read the poison.
+///
+/// Verifies: H.MEM.19, L.smp.29
 fn grace(topology: &Topology, report: &mut Report) -> Result<(), &'static str> {
     let first = Box::into_raw(Box::new(Payload {
         value: AtomicU64::new(LIVE),
@@ -378,6 +380,8 @@ fn read_probe(_me: &'static PerCpu) {
 /// own before it sends one shootdown for both (`user::vmo`), and a merged set
 /// that dropped the caller's "everything" would leave pages cached on the
 /// processors that ran it.
+///
+/// Verifies: L.smp.26, L.smp.27
 fn page_sets() -> Result<(), &'static str> {
     use super::{PAGE_FLUSH_CEILING, TlbPages};
 
@@ -462,7 +466,7 @@ fn tables_wait_for_their_shootdown() -> Result<(), &'static str> {
 /// [`tables_wait_for_their_shootdown`] over the tree at `root`, mapping and
 /// unmapping `phys` at a user address the tree has nothing else under.
 ///
-/// Verifies: L.mm.23, L.mm.39
+/// Verifies: L.mm.23, L.mm.39, L.smp.24
 fn unlink_and_shoot(root: u64, phys: u64) -> Result<(), &'static str> {
     use super::TlbPages;
 
@@ -507,7 +511,7 @@ fn unlink_and_shoot(root: u64, phys: u64) -> Result<(), &'static str> {
 /// which is what a missing shootdown looks like in a running kernel, and
 /// exactly what this counts.
 ///
-/// Verifies: H.MEM.12, L.mm.28
+/// Verifies: H.MEM.12, L.mm.28, L.smp.14
 fn shootdown(report: &mut Report) -> Result<(), &'static str> {
     const ROUNDS: u64 = 20;
 
@@ -590,6 +594,8 @@ fn tally_run(me: &'static PerCpu) {
 /// to sleep and being woken, and the way that goes wrong is a lost wake-up: an
 /// interrupt that arrives between a processor deciding to sleep and sleeping.
 /// That is a race, and one round would have to be lucky to lose it.
+///
+/// Verifies: H.SCHED.6, L.smp.3, L.smp.11
 fn everywhere(topology: &Topology, report: &mut Report) -> Result<(), &'static str> {
     const ROUNDS: u64 = 100;
 
@@ -738,6 +744,8 @@ fn spin_for(nanos: u64) {
 ///
 /// If the task never moves, never answers where it is, or answers for the
 /// processor it left.
+///
+/// Verifies: L.smp.16
 pub(crate) fn migrating_shootdown(
     topology: &Topology,
 ) -> Result<Option<(usize, usize)>, &'static str> {

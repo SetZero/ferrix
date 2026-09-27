@@ -240,6 +240,18 @@ package FerrixItemRequirements {
                 not writable, and a write to it faults.";
             attribute :>> parent = ("O.WXN", "O.ISOLATE");
         }
+        // Added by W-8 step 4 (smp): what a grace period promises, which no
+        // requirement above said.
+        requirement <'H.MEM.19'> gracePeriodsOutlastReaders : ItemHighLevel {
+            attribute :>> statement = "Once a grace period the kernel waits for has
+                ended, no read-side section that was running on any processor when
+                the wait began shall still be running.";
+            attribute :>> criterion = "A writer that replaces an object every other
+                online processor is reading, waits a grace period and poisons the
+                replaced one, 100 times over, leaves 0 reads of a poisoned object
+                among more than 0 reads (the `grace` line).";
+            attribute :>> parent = ("O.ISOLATE", "ASR-1");
+        }
     }
 
     package Objects {
@@ -474,6 +486,18 @@ package FerrixItemRequirements {
             attribute :>> criterion = "A 20 ms sleep returns after at least 20 ms and
                 at most 400 ms (the `sleep` line).";
             attribute :>> parent = ("G.1", "ASR-8");
+        }
+        // Added by W-8 step 4 (smp): the per-processor record everything that
+        // runs on a processor finds itself by, which no requirement above said.
+        requirement <'H.SCHED.6'> eachProcessorFindsItsOwnRecord : ItemHighLevel {
+            attribute :>> statement = "Code running on a processor shall find,
+                through that processor's per-processor register, the record that
+                names that processor and no other.";
+            attribute :>> criterion = "In 100 rounds of work run on every online
+                processor at once, each processor runs each round once and the record
+                its register gives it names its own hardware identifier every time: 0
+                misplaced runs (the `smp` line).";
+            attribute :>> parent = ("O.ISOLATE", "ASR-1");
         }
     }
 
@@ -717,6 +741,19 @@ package FerrixItemRequirements {
                 feed truncated, oversized and misaligned tables and each is refused
                 with its error, 0 read out of bounds; the kernel refuses a table
                 outside the direct map.";
+            attribute :>> parent = ("O.FAILSAFE", "ASR-6");
+        }
+        // Added by W-8 step 4 (smp): the processors a boot claims, which no
+        // requirement above said.
+        requirement <'H.BOOT.5'> everyProcessorComesUp : ItemHighLevel {
+            attribute :>> statement = "Every processor firmware describes shall be
+                running kernel code on its own per-processor record before the
+                scheduler starts, or the boot shall halt with a diagnostic saying
+                which step failed.";
+            attribute :>> criterion = "On each configuration `cargo xtask test-boot`
+                boots, the `cpus` line counts as many processors online as firmware
+                described (4 of 4 on x86-64 and AArch64, 2 of 2 on ARMv7-A at `--smp
+                2`); a secondary made never to report in ends the boot in FX-0402.";
             attribute :>> parent = ("O.FAILSAFE", "ASR-6");
         }
     }

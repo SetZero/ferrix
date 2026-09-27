@@ -96,8 +96,8 @@ boundary.
 | Writable mappings of the kernel's text | **0**, every mapping of its frames swept each boot; the direct map's alias was one until 2026-09-26 (F-34) |
 | Assembly | 500 lines, 22 allow-listed sites, outside the Pixel 7 loader |
 | Cargo features in `kernel/`/`boot/uefi/` | 0 |
-| Requirements of the item, each with a statement, a pass/fail criterion and its parent, gated | **74** high-level (`H.*`) decomposing all 8 objectives and all 8 ASRs; **313** low-level (104 `L.object.*`, 43 `L.iommu.*`, 61 `L.mm.*`, 105 `L.user.*`); **240** named by a check that proves each whole, 147 in the baseline of the unverified (TRACEABILITY.md, W-8) |
-| Product functions of the item no low-level requirement names | **0** of 258 in `object/`, of 95 in `iommu` and of 297 in `mm`, `vmap`, `early` and `user`, where a new one fails the build (object/: 173 named, 83 accessors, 2 check code; iommu: 76 named, 19 accessors; memory: 236 named, 49 accessors, 12 check code); 1,178 of 2,330 item-wide, the subsystems still to write (F-15) |
+| Requirements of the item, each with a statement, a pass/fail criterion and its parent, gated | **77** high-level (`H.*`) decomposing all 8 objectives and all 8 ASRs; **348** low-level (104 `L.object.*`, 44 `L.iommu.*`, 61 `L.mm.*`, 105 `L.user.*`, 32 `L.smp.*`, 2 `L.sched.*`); **254** named by a check that proves each whole, 171 in the baseline of the unverified (TRACEABILITY.md, W-8) |
+| Product functions of the item no low-level requirement names | **0** of 261 in `object/`, of 96 in `iommu`, of 297 in `mm`, `vmap`, `early` and `user` and of 57 in `smp`, where a new one fails the build (object/: 175 named, 84 accessors, 2 check code; iommu: 77 named, 19 accessors; memory: 236 named, 49 accessors, 12 check code; smp: 38 named, 17 accessors, 2 check code); 1,145 of 2,345 item-wide, the subsystems still to write (F-15) |
 
 The coverage rows were measured on 2026-09-27 over the item as W-5 left it,
 the Linux dispatcher's routing and five of the personality's files in the load
@@ -174,9 +174,9 @@ and to the side-channel defences behind `ferrix_mitigations_off`.
 
 *Missing:* every planning document — PSAC, SDP, SVP, SCMP, SQAP — none drafted.
 Low-level requirements (F-15) and requirements-to-test traceability (F-14),
-which are the spine of the standard: the gate, 74 high-level
-requirements and the 313 low-level ones of `object/`, `iommu`, `mm` and `user`
-exist, 240 of them named by a check (W-8); the other subsystems' low level and their tags do not. Tool qualification (F-17 to F-19).
+which are the spine of the standard: the gate, 77 high-level
+requirements and the 348 low-level ones of `object/`, `iommu`, `mm`, `user`, `smp` and `sched`
+exist, 254 of them named by a check (W-8); the other subsystems' low level and their tags do not. Tool qualification (F-17 to F-19).
 
 *Honest gap:* this is the furthest of the four, because DO-178C wants a
 document set that does not exist rather than a property the code lacks.
@@ -233,9 +233,9 @@ In order of value per unit of effort:
    assert rich properties; they need requirement ids attached and low-level
    requirements to attach them to. This one piece of work unblocks DAL C,
    62304 §5.4 and `ADV_TDS.3`. Since 2026-09-27 the format, the gate, the
-   74 high-level requirements, the pilot subsystem, `object/` (103
-   low-level, 81 verified), `iommu` (43, 16 verified) and memory, `mm` and
-   `user` (166, 111 verified), are in place; the other subsystems' low level and
+   77 high-level requirements, the pilot subsystem, `object/` (103
+   low-level, 81 verified), `iommu` (43, 16 verified), memory, `mm` and
+   `user` (166, 111 verified), and `smp` (32, 9 verified), are in place; the other subsystems' low level and
    tags, copying the pilot's corrected format, are what is left.
 2. **Cover the 77, 146 and 130 statements that still need a test (F-10)**, on
    x86-64, AArch64 and ARMv7-A. Every gate counts on every architecture, and

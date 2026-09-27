@@ -33,6 +33,7 @@ tooling that can check a model for consistency where it cannot check prose.
 | `14-object-requirements.sysml` | `FerrixObjectRequirements` | The low-level requirements of `kernel/src/object/` (`L.object.<n>`), the pilot of W-8: each names the functions that carry it as its `unit` and the `H.*` it refines. One file per subsystem follows it. |
 | `15-sched-requirements.sysml` | `FerrixSchedRequirements` | The low-level requirements of `kernel/src/sched/` (`L.sched.<n>`), started with the two FX-0502's fix created: a decision within a slice while anything waits, and a lone yield that asks for nothing. |
 | `17-memory-requirements.sysml` | `FerrixMemoryRequirements` | The low-level requirements of the item's memory management: `L.mm.<n>` for the kernel's own (`mm.rs`, `mm/`, `vmap.rs`, `early.rs`) and `L.user.<n>` for a program's (`user/vmo.rs`, `user/space.rs`), in the pilot's format. |
+| `22-smp-requirements.sysml` | `FerrixSmpRequirements` | The low-level requirements of `kernel/src/smp.rs` (`L.smp.<n>`): the processors and their records, bring-up, the whole-TLB and scoped shootdowns and the bounds on their waits, grace periods, stopping for a panic and the scheduler's kick, in the pilot's format. |
 
 ## Reading it
 

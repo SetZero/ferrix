@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "88ee3d2fe02c0187f1137b6fc40b43e6519ed0879eaf96f1f9b9958540c68c25",
+  "digest": "9e7af9549dc8daff6adf1943132618bbe38adc5eb8ca828d76e8f974e675e39f",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -73,11 +73,15 @@
     {
       "path": "docs/sysml/17-memory-requirements.sysml",
       "synopsis": "Ferrix — SysML v2 model, part 17: the low-level requirements of memory.\n\nWhat each unit of the item's memory management does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies), in two id spaces.\n\n- `L.mm.<n>`: the kernel's own memory -- kernel/src/mm.rs and mm/ (the frame allocator's glue, the heap, the kernel's page tables, the allocation reserve, page tables unlinked and waiting for their shootdown), vmap.rs (the kernel address arena, device windows and kernel stacks) and early.rs (the mapper stage 1 runs before there is an allocator); - `L.user.<n>`: what a program's memory is made of -- kernel/src/user/ vmo.rs (memory objects: their pages, copy-on-write, sharing and retirement) and user/space.rs (address spaces: mappings, faults, protection, unmapping and its shootdown, and the charge for them).\n\nTwo id spaces rather than one, because they are two layers: nothing in `L.user` is reached before the kernel's own memory is up, and a check of a user address space is not evidence for the kernel's. Ids are flat within each, the package gives the file, and they are never renumbered once a check names them.\n\nThe frame, heap, paging and vma arithmetic itself is libs/kernel/frame, heap, paging and vma, whose host tests verify it; nothing here restates them. What is here is what the kernel does with them.\n\nThe pilot's rules hold: a requirement names every function that carries its behaviour; it is no broader than one check can prove, and where the checks that exist each prove a part it is split; an accessor needs no requirement of its own; and check code living in a product file is listed in scripts/data/traceability-units.json, not required."
+    },
+    {
+      "path": "docs/sysml/22-smp-requirements.sysml",
+      "synopsis": "Ferrix — SysML v2 model, part 22: the low-level requirements of smp.\n\nWhat each unit of kernel/src/smp.rs does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): finding the processors and giving each a record it finds itself by, starting the secondaries, the inter-processor interrupt, the TLB shootdown -- whole and scoped, and the bound on how long it waits -- grace periods, stopping the other processors for a panic, and the scheduler's kick. The start sequences themselves, the per-processor register and the interrupt controller are each architecture's (kernel/src/arch/<isa>/smp.rs), and belong to the arch slices; this is the architecture-independent half above them.\n\nThe pilot's rules hold: a requirement names every function that carries its behaviour as its `unit`; one check proves a whole requirement, so a requirement is no broader than one check can prove; a statement says no more than its criterion tests; an accessor needs no requirement of its own; check code living in a product file is listed in scripts/data/traceability-units.json, not required -- here `run_everywhere` and `next_job`, the way stage 4's checks hand work to every processor, which nothing else uses.\n\nWhat proves what. Stage 4's checks in smp/check.rs run on every processor at once: `everywhere` (100 rounds of work, each processor's record against its hardware, the interrupts the secondaries took), `page_sets`, `tables_wait_for_their_shootdown`, `shootdown` (a page moved under every processor 20 times), `grace`, and after the scheduler starts `migrating_shootdown`. The scoped shootdown reaching another processor is proved from user mode by user/rmap_check.rs's protect step. The bound on a wait for a processor that never answers is proved only by the negative control recorded in commit 94dee288, a scratch edit that made one processor stop answering, and the bound on the shootdown turn by nothing at all (commit 237d2426 says why): no boot check makes a processor stuck, because the boot test counts the panic that follows as a failure. They wait in the baseline with the rest of what no check proves; docs/certification/IMPLEMENTATION.md W-8 lists it.\n\nIds are `L.smp.<n>`, numbered through the subsystem; the package gives the part of it. They are never renumbered once a check names them."
     }
   ],
   "summary": {
-    "packages": 53,
-    "elements": 3614,
+    "packages": 61,
+    "elements": 3794,
     "maturity": {
       "implemented": 273,
       "inProgress": 11,
@@ -85,7 +89,7 @@
       "planned": 37
     },
     "deferred": 20,
-    "relations": 207,
+    "relations": 208,
     "figures": 20,
     "unparsed": 0
   },
@@ -20759,6 +20763,52 @@
                   }
                 }
               ]
+            },
+            {
+              "name": "gracePeriodsOutlastReaders",
+              "qualifiedName": "FerrixItemRequirements::Memory::gracePeriodsOutlastReaders",
+              "kind": "requirement",
+              "shortName": "H.MEM.19",
+              "type": "ItemHighLevel",
+              "source": {
+                "file": "docs/sysml/13-item-requirements.sysml",
+                "line": 245
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixItemRequirements::Memory::gracePeriodsOutlastReaders",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"Once a grace period the kernel waits for has ended, no read-side section that was running on any processor when the wait began shall still be running.\"",
+                  "source": {
+                    "file": "docs/sysml/13-item-requirements.sysml",
+                    "line": 248
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixItemRequirements::Memory::gracePeriodsOutlastReaders",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A writer that replaces an object every other online processor is reading, waits a grace period and poisons the replaced one, 100 times over, leaves 0 reads of a poisoned object among more than 0 reads (the `grace` line).\"",
+                  "source": {
+                    "file": "docs/sysml/13-item-requirements.sysml",
+                    "line": 252
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixItemRequirements::Memory::gracePeriodsOutlastReaders",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"O.ISOLATE\", \"ASR-1\")",
+                  "source": {
+                    "file": "docs/sysml/13-item-requirements.sysml",
+                    "line": 253
+                  }
+                }
+              ]
             }
           ]
         },
@@ -20769,7 +20819,7 @@
           "doc": "Handles, rights and the objects they name: O.CAPABILITY and ASR-3 (FDP_ACC.1, FDP_ACF.1, FMT_MSA.1, FMT_MSA.3).",
           "source": {
             "file": "docs/sysml/13-item-requirements.sysml",
-            "line": 245
+            "line": 257
           },
           "children": [
             {
@@ -20780,7 +20830,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 249
+                "line": 261
               },
               "children": [
                 {
@@ -20791,7 +20841,7 @@
                   "value": "\"A native call shall act on an object only through a handle in the calling process's own handle table, and shall refuse a value naming no live handle there with BAD_HANDLE.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 252
+                    "line": 264
                   }
                 },
                 {
@@ -20802,7 +20852,7 @@
                   "value": "\"Every native call given a value never issued, a value from another process's table and a value closed earlier is refused BAD_HANDLE: 0 of them act on an object.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 255
+                    "line": 267
                   }
                 },
                 {
@@ -20813,7 +20863,7 @@
                   "value": "(\"O.CAPABILITY\", \"ASR-3\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 256
+                    "line": 268
                   }
                 }
               ]
@@ -20826,7 +20876,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 258
+                "line": 270
               },
               "children": [
                 {
@@ -20837,7 +20887,7 @@
                   "value": "\"A native call shall be refused with WRONG_TYPE when its handle names an object of another type, and with ACCESS_DENIED unless its handle carries every right the operation requires.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 262
+                    "line": 274
                   }
                 },
                 {
@@ -20848,7 +20898,7 @@
                   "value": "\"For each native operation that requires a right, a call through a handle lacking it is refused ACCESS_DENIED, and a call through a handle of the wrong type WRONG_TYPE; 0 are performed.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 266
+                    "line": 278
                   }
                 },
                 {
@@ -20859,7 +20909,7 @@
                   "value": "(\"O.CAPABILITY\", \"ASR-3\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 267
+                    "line": 279
                   }
                 }
               ]
@@ -20872,7 +20922,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 269
+                "line": 281
               },
               "children": [
                 {
@@ -20883,7 +20933,7 @@
                   "value": "\"Duplicating a handle shall need the DUPLICATE right and yield rights that are a subset of the source's; asking for a right the source lacks shall be refused with ACCESS_DENIED.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 272
+                    "line": 284
                   }
                 },
                 {
@@ -20894,7 +20944,7 @@
                   "value": "\"A duplicate of a handle without DUPLICATE is refused ACCESS_DENIED; one asking for a right the source lacks is refused ACCESS_DENIED and the source keeps its rights; a narrower copy is made with the rights asked for.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 276
+                    "line": 288
                   }
                 },
                 {
@@ -20905,7 +20955,7 @@
                   "value": "(\"O.CAPABILITY\", \"ASR-3\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 277
+                    "line": 289
                   }
                 }
               ]
@@ -20918,7 +20968,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 279
+                "line": 291
               },
               "children": [
                 {
@@ -20929,7 +20979,7 @@
                   "value": "\"A handle value shall stop naming its object when the handle is closed or transferred, and shall not name the object its slot holds next.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 282
+                    "line": 294
                   }
                 },
                 {
@@ -20940,7 +20990,7 @@
                   "value": "\"A value whose handle was closed is refused BAD_HANDLE, on a get and on a second close, after its slot is reused, and the reused slot issues a new value.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 285
+                    "line": 297
                   }
                 },
                 {
@@ -20951,7 +21001,7 @@
                   "value": "(\"O.CAPABILITY\", \"ASR-3\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 286
+                    "line": 298
                   }
                 }
               ]
@@ -20964,7 +21014,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 288
+                "line": 300
               },
               "children": [
                 {
@@ -20975,7 +21025,7 @@
                   "value": "\"A handle shall pass from one process to another only inside a channel message, leaving the sender's table in the same step, and a write that is refused shall leave every handle it carried with the sender.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 292
+                    "line": 304
                   }
                 },
                 {
@@ -20986,7 +21036,7 @@
                   "value": "\"After a write carrying handles each is refused BAD_HANDLE in the sender and works in the reader; writes refused PEER_CLOSED, TOO_BIG and SHOULD_WAIT leave every carried handle usable by the sender; a handle without TRANSFER is refused ACCESS_DENIED.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 297
+                    "line": 309
                   }
                 },
                 {
@@ -20997,7 +21047,7 @@
                   "value": "(\"O.CAPABILITY\", \"ASR-3\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 298
+                    "line": 310
                   }
                 }
               ]
@@ -21010,7 +21060,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 300
+                "line": 312
               },
               "children": [
                 {
@@ -21021,7 +21071,7 @@
                   "value": "\"A process shall start holding no handle but the bootstrap handle its creator explicitly passes, and a fork shall not copy the native handle table.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 303
+                    "line": 315
                   }
                 },
                 {
@@ -21032,7 +21082,7 @@
                   "value": "\"A created process holds 0 handles before it starts and exactly 1 after a start that passed a bootstrap; a forked child's native handle table is empty.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 306
+                    "line": 318
                   }
                 },
                 {
@@ -21043,7 +21093,7 @@
                   "value": "(\"O.CAPABILITY\", \"ASR-3\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 307
+                    "line": 319
                   }
                 }
               ]
@@ -21056,7 +21106,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 309
+                "line": 321
               },
               "children": [
                 {
@@ -21067,7 +21117,7 @@
                   "value": "\"A process's handle table shall hold at most 4096 handles, refuse an insertion past that with NO_HANDLES, and lose nothing it could not deliver.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 312
+                    "line": 324
                   }
                 },
                 {
@@ -21078,7 +21128,7 @@
                   "value": "\"Duplicating until refused ends in NO_HANDLES with at most 4096 held; a channel read and a VMO create into the full table are refused NO_HANDLES and the message stays queued (the `refusals` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 316
+                    "line": 328
                   }
                 },
                 {
@@ -21089,7 +21139,7 @@
                   "value": "(\"O.CAPABILITY\", \"O.QUOTA\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 317
+                    "line": 329
                   }
                 }
               ]
@@ -21102,7 +21152,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 319
+                "line": 331
               },
               "children": [
                 {
@@ -21113,7 +21163,7 @@
                   "value": "\"An object shall be destroyed when the last handle to it closes.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 321
+                    "line": 333
                   }
                 },
                 {
@@ -21124,7 +21174,7 @@
                   "value": "\"One object of each kind, made and its last handle closed, is destroyed by the time the close returns or the drain after it ends: 0 of them outlive it, and 0 frames are leaked.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 325
+                    "line": 337
                   }
                 },
                 {
@@ -21135,7 +21185,7 @@
                   "value": "(\"O.CAPABILITY\", \"O.QUOTA\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 326
+                    "line": 338
                   }
                 }
               ]
@@ -21148,7 +21198,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 328
+                "line": 340
               },
               "children": [
                 {
@@ -21159,7 +21209,7 @@
                   "value": "\"Killing a job shall end every process in it and in every job beneath it.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 330
+                    "line": 342
                   }
                 },
                 {
@@ -21170,7 +21220,7 @@
                   "value": "\"4 processes in a tree of three jobs are all ended by two kills, and each wait on them is woken (the `jobs` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 333
+                    "line": 345
                   }
                 },
                 {
@@ -21181,7 +21231,7 @@
                   "value": "(\"O.CAPABILITY\", \"O.QUOTA\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 334
+                    "line": 346
                   }
                 }
               ]
@@ -21194,7 +21244,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 345
+                "line": 357
               },
               "children": [
                 {
@@ -21205,7 +21255,7 @@
                   "value": "\"Every queue a program can fill in the kernel shall be bounded -- a channel end's unread messages at 256, a port's user packets at 1024, an object's port registrations at 64 -- and an addition past the bound shall be refused without being queued.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 349
+                    "line": 361
                   }
                 },
                 {
@@ -21216,7 +21266,7 @@
                   "value": "\"Writing to a channel nobody reads is refused SHOULD_WAIT at its bound, and queueing on a port nobody takes from is refused SHOULD_WAIT at exactly 1024 packets, 0 queued past either bound, and draining the channel makes room again; the 65th registration on one object is refused.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 354
+                    "line": 366
                   }
                 },
                 {
@@ -21227,7 +21277,7 @@
                   "value": "\"O.QUOTA\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 355
+                    "line": 367
                   }
                 }
               ]
@@ -21240,7 +21290,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 357
+                "line": 369
               },
               "children": [
                 {
@@ -21251,7 +21301,7 @@
                   "value": "\"A wait on an object shall end when a signal it waits for is asserted, at once if one already is, and shall not end before its deadline while none is.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 360
+                    "line": 372
                   }
                 },
                 {
@@ -21262,7 +21312,7 @@
                   "value": "\"A wait on an empty channel end with a zero deadline times out; one with a two-minute deadline is ended by a message written 20 ms later, not before it, and reports READABLE; a wait for PEER_CLOSED on an end whose peer has closed returns at once.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 365
+                    "line": 377
                   }
                 },
                 {
@@ -21273,7 +21323,7 @@
                   "value": "(\"G.7\", \"O.CAPABILITY\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 366
+                    "line": 378
                   }
                 }
               ]
@@ -21286,7 +21336,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 368
+                "line": 380
               },
               "children": [
                 {
@@ -21297,7 +21347,7 @@
                   "value": "\"The job tree shall be the cgroup v2 hierarchy: every process in exactly one job, a job populated exactly while it or a job beneath it has a member not yet released, and a job refusing a process or a child that its killed or removed state, its limits or the no-internal-process rule forbid.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 373
+                    "line": 385
                   }
                 },
                 {
@@ -21308,7 +21358,7 @@
                   "value": "\"A new process is in the root job and a fork's child in its parent's; a job empties at its last member's release and wakes its waiters; a move a job refuses leaves the process where it was; a removed job takes neither a process nor a child; a child past cgroup.max.depth or cgroup.max.descendants is refused.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 378
+                    "line": 390
                   }
                 },
                 {
@@ -21319,7 +21369,7 @@
                   "value": "(\"G.8\", \"O.QUOTA\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 379
+                    "line": 391
                   }
                 }
               ]
@@ -21332,7 +21382,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 381
+                "line": 393
               },
               "children": [
                 {
@@ -21343,7 +21393,7 @@
                   "value": "\"A pid shall name at most one process at a time, and a pid given back shall not be handed out again before allocation has come round the whole range past it.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 384
+                    "line": 396
                   }
                 },
                 {
@@ -21354,7 +21404,7 @@
                   "value": "\"Allocating through the whole range wraps to 300 and passes over a pid still held: 0 pids handed out twice and none below 300 after the wrap.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 387
+                    "line": 399
                   }
                 },
                 {
@@ -21365,7 +21415,7 @@
                   "value": "(\"G.4\", \"O.ISOLATE\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 388
+                    "line": 400
                   }
                 }
               ]
@@ -21378,7 +21428,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 390
+                "line": 402
               },
               "children": [
                 {
@@ -21389,7 +21439,7 @@
                   "value": "\"Replacing a handle shall close the source and yield rights that are a subset of its; asking for a right the source lacks shall be refused with ACCESS_DENIED and leave the source as it was.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 394
+                    "line": 406
                   }
                 },
                 {
@@ -21400,7 +21450,7 @@
                   "value": "\"A replace asking for a right not held is refused ACCESS_DENIED and the source keeps its rights; a narrower replace closes the source and leaves one handle, with the rights asked for.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 398
+                    "line": 410
                   }
                 },
                 {
@@ -21411,7 +21461,7 @@
                   "value": "(\"O.CAPABILITY\", \"ASR-3\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 399
+                    "line": 411
                   }
                 }
               ]
@@ -21424,7 +21474,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 401
+                "line": 413
               },
               "children": [
                 {
@@ -21435,7 +21485,7 @@
                   "value": "\"A slot whose generations are all used shall be retired, so that no handle value is ever issued twice.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 403
+                    "line": 415
                   }
                 },
                 {
@@ -21446,7 +21496,7 @@
                   "value": "\"After every generation of one slot has been issued and closed, the next handle comes from another slot, and 0 of the values issued before it are issued again or resolve.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 406
+                    "line": 418
                   }
                 },
                 {
@@ -21457,7 +21507,7 @@
                   "value": "(\"O.CAPABILITY\", \"ASR-3\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 407
+                    "line": 419
                   }
                 }
               ]
@@ -21470,7 +21520,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 409
+                "line": 421
               },
               "children": [
                 {
@@ -21481,7 +21531,7 @@
                   "value": "\"The peer of a destroyed channel end shall observe PEER_CLOSED from the moment the close returns, and what the destroyed end held shall be freed.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 412
+                    "line": 424
                   }
                 },
                 {
@@ -21492,7 +21542,7 @@
                   "value": "\"After one end of a channel holding a queued VMO is closed, a read and a write on the survivor are refused PEER_CLOSED, 2 of 2, and 0 frames are leaked.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 415
+                    "line": 427
                   }
                 },
                 {
@@ -21503,7 +21553,7 @@
                   "value": "(\"O.CAPABILITY\", \"O.QUOTA\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 416
+                    "line": 428
                   }
                 }
               ]
@@ -21516,7 +21566,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 418
+                "line": 430
               },
               "children": [
                 {
@@ -21527,7 +21577,7 @@
                   "value": "\"A port registration shall queue exactly one packet, with its key and the asserted signals it asked for, when one of them is first asserted, at once if one already is.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 421
+                    "line": 433
                   }
                 },
                 {
@@ -21538,7 +21588,7 @@
                   "value": "\"A registration does not fire before its signal, fires once on the message that asserts it and not on a second, fires at once for a state already true, and fires when the peer closes for PEER_CLOSED, each packet with its key.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 425
+                    "line": 437
                   }
                 },
                 {
@@ -21549,7 +21599,7 @@
                   "value": "(\"G.7\", \"O.CAPABILITY\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 426
+                    "line": 438
                   }
                 }
               ]
@@ -21563,7 +21613,7 @@
           "doc": "Processor time: the fair class, placement and sleep. ASR-8 (partially met: the item has no admission control for real-time work, AoU-4, so none is required here) and O.QUOTA's share of a processor (FRU_RSA.1's refinement).",
           "source": {
             "file": "docs/sysml/13-item-requirements.sysml",
-            "line": 430
+            "line": 442
           },
           "children": [
             {
@@ -21574,7 +21624,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 436
+                "line": 448
               },
               "children": [
                 {
@@ -21585,7 +21635,7 @@
                   "value": "\"Every runnable task shall run: no task shall stay runnable without being scheduled while processors are online.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 438
+                    "line": 450
                   }
                 },
                 {
@@ -21596,7 +21646,7 @@
                   "value": "\"1000 threads spawned across the online processors all run to completion within the check's deadline (the `tasks` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 441
+                    "line": 453
                   }
                 },
                 {
@@ -21607,7 +21657,7 @@
                   "value": "(\"G.1\", \"ASR-8\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 442
+                    "line": 454
                   }
                 }
               ]
@@ -21620,7 +21670,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 444
+                "line": 456
               },
               "children": [
                 {
@@ -21631,7 +21681,7 @@
                   "value": "\"Among processor-bound tasks of equal weight on one processor, no task's service shall lag its fair share by more than one scheduling slice plus the timer overruns served in the window.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 448
+                    "line": 460
                   }
                 },
                 {
@@ -21642,7 +21692,7 @@
                   "value": "\"With 12 spinners on every processor, each processor's worst lag is at or below that bound (the `fair` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 450
+                    "line": 462
                   }
                 },
                 {
@@ -21653,7 +21703,7 @@
                   "value": "(\"ASR-8\", \"O.QUOTA\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 451
+                    "line": 463
                   }
                 }
               ]
@@ -21666,7 +21716,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 453
+                "line": 465
               },
               "children": [
                 {
@@ -21677,7 +21727,7 @@
                   "value": "\"Under contention a job shall receive processor time in proportion to its weight, whatever the number of tasks in it.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 456
+                    "line": 468
                   }
                 },
                 {
@@ -21688,7 +21738,7 @@
                   "value": "\"One task alone in a job keeps half of a processor, within the check's stated tolerance, against eight tasks in a sibling job of equal weight (the `quota` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 459
+                    "line": 471
                   }
                 },
                 {
@@ -21699,7 +21749,7 @@
                   "value": "(\"O.QUOTA\", \"ASR-8\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 460
+                    "line": 472
                   }
                 }
               ]
@@ -21712,7 +21762,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 462
+                "line": 474
               },
               "children": [
                 {
@@ -21723,7 +21773,7 @@
                   "value": "\"A task shall run only on the processors its affinity mask allows.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 464
+                    "line": 476
                   }
                 },
                 {
@@ -21734,7 +21784,7 @@
                   "value": "\"Spinners confined to processors 0 and 1, twice as many as there are online processors, are seen running on no other processor: 0 violations.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 467
+                    "line": 479
                   }
                 },
                 {
@@ -21745,7 +21795,7 @@
                   "value": "\"G.1\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 468
+                    "line": 480
                   }
                 }
               ]
@@ -21758,7 +21808,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 470
+                "line": 482
               },
               "children": [
                 {
@@ -21769,7 +21819,7 @@
                   "value": "\"A task that sleeps for a duration shall not be woken before the duration has passed, and shall be woken within twenty times it.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 473
+                    "line": 485
                   }
                 },
                 {
@@ -21780,7 +21830,7 @@
                   "value": "\"A 20 ms sleep returns after at least 20 ms and at most 400 ms (the `sleep` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 475
+                    "line": 487
                   }
                 },
                 {
@@ -21791,7 +21841,53 @@
                   "value": "(\"G.1\", \"ASR-8\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 476
+                    "line": 488
+                  }
+                }
+              ]
+            },
+            {
+              "name": "eachProcessorFindsItsOwnRecord",
+              "qualifiedName": "FerrixItemRequirements::Scheduling::eachProcessorFindsItsOwnRecord",
+              "kind": "requirement",
+              "shortName": "H.SCHED.6",
+              "type": "ItemHighLevel",
+              "source": {
+                "file": "docs/sysml/13-item-requirements.sysml",
+                "line": 492
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixItemRequirements::Scheduling::eachProcessorFindsItsOwnRecord",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"Code running on a processor shall find, through that processor's per-processor register, the record that names that processor and no other.\"",
+                  "source": {
+                    "file": "docs/sysml/13-item-requirements.sysml",
+                    "line": 495
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixItemRequirements::Scheduling::eachProcessorFindsItsOwnRecord",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"In 100 rounds of work run on every online processor at once, each processor runs each round once and the record its register gives it names its own hardware identifier every time: 0 misplaced runs (the `smp` line).\"",
+                  "source": {
+                    "file": "docs/sysml/13-item-requirements.sysml",
+                    "line": 499
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixItemRequirements::Scheduling::eachProcessorFindsItsOwnRecord",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"O.ISOLATE\", \"ASR-1\")",
+                  "source": {
+                    "file": "docs/sysml/13-item-requirements.sysml",
+                    "line": 500
                   }
                 }
               ]
@@ -21805,7 +21901,7 @@
           "doc": "Interrupt lines given to ring-3 drivers as objects: O.CAPABILITY and ASR-3 for who receives one, O.QUOTA for what an unacknowledged or unclaimed line can cost.",
           "source": {
             "file": "docs/sysml/13-item-requirements.sysml",
-            "line": 480
+            "line": 504
           },
           "children": [
             {
@@ -21816,7 +21912,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 485
+                "line": 509
               },
               "children": [
                 {
@@ -21827,7 +21923,7 @@
                   "value": "\"An interrupt on a line bound to an Interrupt object shall be delivered only to that object, waking the task waiting on it.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 488
+                    "line": 512
                   }
                 },
                 {
@@ -21838,7 +21934,7 @@
                   "value": "\"16 of 16 deliveries end their wait by waking it (the `wake` line), and no other waiter is woken.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 490
+                    "line": 514
                   }
                 },
                 {
@@ -21849,7 +21945,7 @@
                   "value": "(\"O.CAPABILITY\", \"ASR-3\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 491
+                    "line": 515
                   }
                 }
               ]
@@ -21862,7 +21958,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 493
+                "line": 517
               },
               "children": [
                 {
@@ -21873,7 +21969,7 @@
                   "value": "\"A line bound to an Interrupt object shall stay masked from its delivery until the holder acknowledges it, and shall be masked when the object is destroyed.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 496
+                    "line": 520
                   }
                 },
                 {
@@ -21884,7 +21980,7 @@
                   "value": "\"A line held from delivery to acknowledgement is delivered once and 0 times more before the acknowledgement; after the last handle to its object closes, the line is masked.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 499
+                    "line": 523
                   }
                 },
                 {
@@ -21895,7 +21991,7 @@
                   "value": "(\"O.CAPABILITY\", \"O.QUOTA\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 500
+                    "line": 524
                   }
                 }
               ]
@@ -21908,7 +22004,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 502
+                "line": 526
               },
               "children": [
                 {
@@ -21919,7 +22015,7 @@
                   "value": "\"An interrupt on a line no object and no kernel handler holds shall be masked and counted, and delivered to nobody.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 504
+                    "line": 528
                   }
                 },
                 {
@@ -21930,7 +22026,7 @@
                   "value": "\"A delivery provoked on a line nobody holds leaves the line masked and the unclaimed count one higher, with 0 deliveries (the `edges` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 507
+                    "line": 531
                   }
                 },
                 {
@@ -21941,7 +22037,7 @@
                   "value": "\"O.QUOTA\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 508
+                    "line": 532
                   }
                 }
               ]
@@ -21955,7 +22051,7 @@
           "doc": "Devices driven from ring 3 through apertures and IOMMU domains: O.DMA and ASR-4 (FDP_ACF.1, FDP_IFF.1). ARMv7-A's reference board has no IOMMU, so these hold on x86-64 and AArch64 only (AoU-6). H.DMA.6 and H.DMA.7 are split from H.DMA.2, and H.DMA.8 from H.DMA.3, so that one check can prove each (W-8's iommu slice). That a pin is made only through a device handle the driver holds is H.OBJ.1 and H.OBJ.2's: vmo_pin is a native call like any other.",
           "source": {
             "file": "docs/sysml/13-item-requirements.sysml",
-            "line": 512
+            "line": 536
           },
           "children": [
             {
@@ -21966,7 +22062,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 522
+                "line": 546
               },
               "children": [
                 {
@@ -21977,7 +22073,7 @@
                   "value": "\"Where a translating IOMMU is present, every PCI function the kernel enumerates shall be placed behind a unit before its driver starts, and a function no unit covers shall be reported.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 526
+                    "line": 550
                   }
                 },
                 {
@@ -21988,7 +22084,7 @@
                   "value": "\"The boot counts N functions behind units, 0 bypassing and 0 unresolved (the `iommu` line), with VT-d on x86-64 and SMMUv3 on AArch64.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 529
+                    "line": 553
                   }
                 },
                 {
@@ -21999,7 +22095,7 @@
                   "value": "(\"O.DMA\", \"ASR-4\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 530
+                    "line": 554
                   }
                 }
               ]
@@ -22012,7 +22108,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 532
+                "line": 556
               },
               "children": [
                 {
@@ -22023,7 +22119,7 @@
                   "value": "\"A device write to an address outside its domain shall be refused by the unit and recorded as a fault against the device's stream and the page it addressed.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 535
+                    "line": 559
                   }
                 },
                 {
@@ -22034,7 +22130,7 @@
                   "value": "\"A device made to write a page its translated domain does not map has the write recorded by its unit as a write by its stream to that page: 1 or more out-of-domain writes faulted (the `pci` line) on x86-64 and AArch64.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 539
+                    "line": 563
                   }
                 },
                 {
@@ -22045,7 +22141,7 @@
                   "value": "(\"O.DMA\", \"ASR-4\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 540
+                    "line": 564
                   }
                 }
               ]
@@ -22058,7 +22154,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 542
+                "line": 566
               },
               "children": [
                 {
@@ -22069,7 +22165,7 @@
                   "value": "\"A boot shall end with no DMA fault recorded that no check provoked.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 544
+                    "line": 568
                   }
                 },
                 {
@@ -22080,7 +22176,7 @@
                   "value": "\"Last before the success marker, the audit reads every translating unit's records and counts 0 faults no check provoked, unit events and overflows included (the `iommu` audit line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 548
+                    "line": 572
                   }
                 },
                 {
@@ -22091,7 +22187,7 @@
                   "value": "(\"O.DMA\", \"ASR-4\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 549
+                    "line": 573
                   }
                 }
               ]
@@ -22104,7 +22200,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 551
+                "line": 575
               },
               "children": [
                 {
@@ -22115,7 +22211,7 @@
                   "value": "\"A device write its unit refuses shall reach no memory.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 553
+                    "line": 577
                   }
                 },
                 {
@@ -22126,7 +22222,7 @@
                   "value": "\"A device made to write a frame the kernel holds and its domain does not map leaves every byte of the frame as it was.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 556
+                    "line": 580
                   }
                 },
                 {
@@ -22137,7 +22233,7 @@
                   "value": "(\"O.DMA\", \"ASR-4\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 557
+                    "line": 581
                   }
                 }
               ]
@@ -22150,7 +22246,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 559
+                "line": 583
               },
               "children": [
                 {
@@ -22161,7 +22257,7 @@
                   "value": "\"A device's domain shall translate a frame's address only while the frame is pinned into it, and shall refuse a pin of nothing and the unpin of a pin another domain took.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 562
+                    "line": 586
                   }
                 },
                 {
@@ -22172,7 +22268,7 @@
                   "value": "\"Pages pinned through a translated domain are found at their device addresses while pinned and not after; a pin of no frames and an unpin by another domain are refused (the `iommu` pin line's 2 refusals as specified).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 566
+                    "line": 590
                   }
                 },
                 {
@@ -22183,7 +22279,7 @@
                   "value": "(\"O.DMA\", \"ASR-4\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 567
+                    "line": 591
                   }
                 }
               ]
@@ -22196,7 +22292,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 569
+                "line": 593
               },
               "children": [
                 {
@@ -22207,7 +22303,7 @@
                   "value": "\"Unpinning shall complete the unit's invalidation before the frame or a table the unpin emptied is reused, and a unit that never completes it shall leave both held.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 572
+                    "line": 596
                   }
                 },
                 {
@@ -22218,7 +22314,7 @@
                   "value": "\"A table an unpin empties returns to the frame allocator only after the unit has answered the invalidation that covers it, and a unit made never to answer keeps the pin's frames and the table out of the allocator.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 576
+                    "line": 600
                   }
                 },
                 {
@@ -22229,7 +22325,7 @@
                   "value": "(\"O.DMA\", \"ASR-4\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 577
+                    "line": 601
                   }
                 }
               ]
@@ -22242,7 +22338,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 579
+                "line": 603
               },
               "children": [
                 {
@@ -22253,7 +22349,7 @@
                   "value": "\"Frames a driver pinned shall not be reused after the driver dies until its replacement announces itself, and the frames so held shall be bounded.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 582
+                    "line": 606
                   }
                 },
                 {
@@ -22264,7 +22360,7 @@
                   "value": "\"A dead driver's pin is quarantined, a pin past the quarantine's cap is refused and taken again once the quarantine is released, and a live driver's pin is given back (the `iommu` quarantine line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 586
+                    "line": 610
                   }
                 },
                 {
@@ -22275,7 +22371,7 @@
                   "value": "(\"O.DMA\", \"O.QUOTA\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 587
+                    "line": 611
                   }
                 }
               ]
@@ -22288,7 +22384,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 589
+                "line": 613
               },
               "children": [
                 {
@@ -22299,7 +22395,7 @@
                   "value": "\"A driver shall reach device registers only through an I/O mapping of an aperture it holds, and an aperture that is not whole pages or that covers an MSI-X table shall be withheld.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 592
+                    "line": 616
                   }
                 },
                 {
@@ -22310,7 +22406,7 @@
                   "value": "\"The `devices` line counts the apertures withheld for partial pages and for MSI-X ranges; a mapping of a withheld range is refused; a program reaches only the aperture it was given (the `handles` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 596
+                    "line": 620
                   }
                 },
                 {
@@ -22321,7 +22417,7 @@
                   "value": "(\"O.DMA\", \"O.CAPABILITY\", \"ASR-4\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 597
+                    "line": 621
                   }
                 }
               ]
@@ -22335,7 +22431,7 @@
           "doc": "The system call boundary and the exceptions a program raises: O.VALIDATE and ASR-7 (FPT_TDC.1), with O.ISOLATE for what a program may leave in the registers the kernel is entered with.",
           "source": {
             "file": "docs/sysml/13-item-requirements.sysml",
-            "line": 601
+            "line": 625
           },
           "children": [
             {
@@ -22346,7 +22442,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 606
+                "line": 630
               },
               "children": [
                 {
@@ -22357,7 +22453,7 @@
                   "value": "\"Every pointer and length a system call is given shall be checked to lie wholly within the user half before any access through it, and a range that does not shall be refused with EFAULT.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 610
+                    "line": 634
                   }
                 },
                 {
@@ -22368,7 +22464,7 @@
                   "value": "\"Each system call given a kernel-half pointer, a range that wraps past the user half's end and a null pointer is refused EFAULT, with 0 accesses made.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 613
+                    "line": 637
                   }
                 },
                 {
@@ -22379,7 +22475,7 @@
                   "value": "(\"O.VALIDATE\", \"ASR-7\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 614
+                    "line": 638
                   }
                 }
               ]
@@ -22392,7 +22488,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 616
+                "line": 640
               },
               "children": [
                 {
@@ -22403,7 +22499,7 @@
                   "value": "\"An access to user memory on a system call's behalf that meets an unmapped or protected page shall return EFAULT to the caller and shall not fault the kernel.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 619
+                    "line": 643
                   }
                 },
                 {
@@ -22414,7 +22510,7 @@
                   "value": "\"Copies to an unmapped and to a read-only user page, and from an unmapped one, each return EFAULT, and the boot goes on to FERRIX-BOOT-OK.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 622
+                    "line": 646
                   }
                 },
                 {
@@ -22425,7 +22521,7 @@
                   "value": "(\"O.VALIDATE\", \"ASR-7\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 623
+                    "line": 647
                   }
                 }
               ]
@@ -22438,7 +22534,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 625
+                "line": 649
               },
               "children": [
                 {
@@ -22449,7 +22545,7 @@
                   "value": "\"Every table index a program chooses shall be clamped at the system call boundary so that it cannot be used out of bounds under speculation, and each processor's speculation controls shall be applied and read back.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 629
+                    "line": 653
                   }
                 },
                 {
@@ -22460,7 +22556,7 @@
                   "value": "\"The boot reads the speculation defences back on every one of the N online processors (the `cpu` line), and the `--mitigations off` build is the only one without the clamps.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 632
+                    "line": 656
                   }
                 },
                 {
@@ -22471,7 +22567,7 @@
                   "value": "(\"O.ISOLATE\", \"O.VALIDATE\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 633
+                    "line": 657
                   }
                 }
               ]
@@ -22484,7 +22580,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 635
+                "line": 659
               },
               "children": [
                 {
@@ -22495,7 +22591,7 @@
                   "value": "\"A processor exception a user-mode instruction raises shall end in a signal to the faulting thread, the one Linux sends for it, and shall not stop the kernel.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 638
+                    "line": 662
                   }
                 },
                 {
@@ -22506,7 +22602,7 @@
                   "value": "\"A divide error, an invalid opcode, an unmapped read, a privileged instruction, a floating-point exception and a read past a mapped file's end end their programs with SIGFPE, SIGILL, SIGSEGV, SIGSEGV, SIGFPE and SIGBUS, 6 of 6 (the `fault` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 642
+                    "line": 666
                   }
                 },
                 {
@@ -22517,7 +22613,7 @@
                   "value": "(\"O.ISOLATE\", \"ASR-1\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 643
+                    "line": 667
                   }
                 }
               ]
@@ -22530,7 +22626,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 645
+                "line": 669
               },
               "children": [
                 {
@@ -22541,7 +22637,7 @@
                   "value": "\"Restoring a signal frame a program supplies shall not raise its privilege: the restored mode, segment selectors, interrupt masks and I/O privilege shall be the user's whatever the frame holds, and a return address outside the user half shall be refused.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 650
+                    "line": 674
                   }
                 },
                 {
@@ -22552,7 +22648,7 @@
                   "value": "\"A sigreturn through frames asking for kernel mode, masked interrupts, I/O privilege and a kernel-half return address resumes the program in user mode with user flags, or ends it with SIGSEGV, on each architecture: 0 in kernel mode.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 654
+                    "line": 678
                   }
                 },
                 {
@@ -22563,7 +22659,7 @@
                   "value": "(\"O.VALIDATE\", \"O.ISOLATE\", \"ASR-7\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 655
+                    "line": 679
                   }
                 }
               ]
@@ -22576,7 +22672,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 657
+                "line": 681
               },
               "children": [
                 {
@@ -22587,7 +22683,7 @@
                   "value": "\"On every entry from user mode the kernel shall establish its own stack and per-processor state before using either, whatever the program left in its registers, including for an exception taken on the entry path itself.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 661
+                    "line": 685
                   }
                 },
                 {
@@ -22598,7 +22694,7 @@
                   "value": "\"Breakpoints on the system call entry and on its return, and an NMI taken with interrupts masked, each run on the kernel's own stack with its own per-processor base, and the program exits 42 (the `debug` and `nmi` lines, x86-64).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 665
+                    "line": 689
                   }
                 },
                 {
@@ -22609,7 +22705,7 @@
                   "value": "(\"O.ISOLATE\", \"O.FAILSAFE\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 666
+                    "line": 690
                   }
                 }
               ]
@@ -22622,7 +22718,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 668
+                "line": 692
               },
               "children": [
                 {
@@ -22633,7 +22729,7 @@
                   "value": "\"A program shall load only the segment selectors meant for user mode: one naming a kernel descriptor, the TSS, the LDT or a forged thread-local descriptor shall be refused. x86-64 only.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 672
+                    "line": 696
                   }
                 },
                 {
@@ -22644,7 +22740,7 @@
                   "value": "\"7 user selectors load at RPL 3 and 18 others are refused (the `gdt` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 674
+                    "line": 698
                   }
                 },
                 {
@@ -22655,7 +22751,7 @@
                   "value": "(\"O.ISOLATE\", \"O.VALIDATE\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 675
+                    "line": 699
                   }
                 }
               ]
@@ -22669,7 +22765,7 @@
           "doc": "What the kernel does with what it is handed before anything runs above it, and what a boot claims: O.FAILSAFE and ASR-6 (FPT_FLS.1), and O.ISOLATE for the layout.",
           "source": {
             "file": "docs/sysml/13-item-requirements.sysml",
-            "line": 679
+            "line": 703
           },
           "children": [
             {
@@ -22680,7 +22776,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 684
+                "line": 708
               },
               "children": [
                 {
@@ -22691,7 +22787,7 @@
                   "value": "\"Before using what the loader hands over, the kernel shall verify the memory map, the page tables and its own placement, and shall halt with a diagnostic if any check fails.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 687
+                    "line": 711
                   }
                 },
                 {
@@ -22702,7 +22798,7 @@
                   "value": "\"Stage 1 reports the hand-off verified on every architecture; a hand-off with a field made inconsistent ends in the catalogued panic, not in a boot.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 690
+                    "line": 714
                   }
                 },
                 {
@@ -22713,7 +22809,7 @@
                   "value": "(\"O.FAILSAFE\", \"ASR-6\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 691
+                    "line": 715
                   }
                 }
               ]
@@ -22726,7 +22822,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 693
+                "line": 717
               },
               "children": [
                 {
@@ -22737,7 +22833,7 @@
                   "value": "\"Every boot shall run every stage's self-checks unless told not to, and shall print FERRIX-BOOT-OK only when all of them passed; a boot that skipped them shall end with FERRIX-BOOT-UNCHECKED instead.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 697
+                    "line": 721
                   }
                 },
                 {
@@ -22748,7 +22844,7 @@
                   "value": "\"`cargo xtask test-boot` finds FERRIX-BOOT-OK on each architecture; a boot with `ferrix.checks=skip` ends with FERRIX-BOOT-UNCHECKED and never prints FERRIX-BOOT-OK.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 700
+                    "line": 724
                   }
                 },
                 {
@@ -22759,7 +22855,7 @@
                   "value": "(\"O.FAILSAFE\", \"ASR-6\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 701
+                    "line": 725
                   }
                 }
               ]
@@ -22772,7 +22868,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 703
+                "line": 727
               },
               "children": [
                 {
@@ -22783,7 +22879,7 @@
                   "value": "\"The kernel shall run with its image, direct map and vmap arena at the offsets the loader drew from the firmware's random-number protocol, and shall verify the move at stage 1.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 706
+                    "line": 730
                   }
                 },
                 {
@@ -22794,7 +22890,7 @@
                   "value": "\"Two boots of one image report two different layouts (`cargo xtask test-kaslr`), and stage 1 verifies the slide each reports.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 709
+                    "line": 733
                   }
                 },
                 {
@@ -22805,7 +22901,7 @@
                   "value": "\"O.ISOLATE\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 710
+                    "line": 734
                   }
                 }
               ]
@@ -22818,7 +22914,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 712
+                "line": 736
               },
               "children": [
                 {
@@ -22829,7 +22925,7 @@
                   "value": "\"The kernel shall refuse an ACPI table or a device tree whose declared length is shorter than its header or reaches beyond the memory mapped for it, rather than read past it.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 715
+                    "line": 739
                   }
                 },
                 {
@@ -22840,7 +22936,7 @@
                   "value": "\"The ACPI and device-tree parsers' host tests feed truncated, oversized and misaligned tables and each is refused with its error, 0 read out of bounds; the kernel refuses a table outside the direct map.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 719
+                    "line": 743
                   }
                 },
                 {
@@ -22851,7 +22947,53 @@
                   "value": "(\"O.FAILSAFE\", \"ASR-6\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 720
+                    "line": 744
+                  }
+                }
+              ]
+            },
+            {
+              "name": "everyProcessorComesUp",
+              "qualifiedName": "FerrixItemRequirements::Boot::everyProcessorComesUp",
+              "kind": "requirement",
+              "shortName": "H.BOOT.5",
+              "type": "ItemHighLevel",
+              "source": {
+                "file": "docs/sysml/13-item-requirements.sysml",
+                "line": 748
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixItemRequirements::Boot::everyProcessorComesUp",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"Every processor firmware describes shall be running kernel code on its own per-processor record before the scheduler starts, or the boot shall halt with a diagnostic saying which step failed.\"",
+                  "source": {
+                    "file": "docs/sysml/13-item-requirements.sysml",
+                    "line": 752
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixItemRequirements::Boot::everyProcessorComesUp",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"On each configuration `cargo xtask test-boot` boots, the `cpus` line counts as many processors online as firmware described (4 of 4 on x86-64 and AArch64, 2 of 2 on ARMv7-A at `--smp 2`); a secondary made never to report in ends the boot in FX-0402.\"",
+                  "source": {
+                    "file": "docs/sysml/13-item-requirements.sysml",
+                    "line": 756
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixItemRequirements::Boot::everyProcessorComesUp",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"O.FAILSAFE\", \"ASR-6\")",
+                  "source": {
+                    "file": "docs/sysml/13-item-requirements.sysml",
+                    "line": 757
                   }
                 }
               ]
@@ -22865,7 +23007,7 @@
           "doc": "What a job, with every job beneath it, may hold at once: O.QUOTA (FRU_RSA.1), against T.EXHAUST.",
           "source": {
             "file": "docs/sysml/13-item-requirements.sysml",
-            "line": 724
+            "line": 761
           },
           "children": [
             {
@@ -22876,7 +23018,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 728
+                "line": 765
               },
               "children": [
                 {
@@ -22887,7 +23029,7 @@
                   "value": "\"Creating a task in a job that, with the jobs beneath it, holds its task limit shall be refused, and no task shall be counted beyond the limit.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 731
+                    "line": 768
                   }
                 },
                 {
@@ -22898,7 +23040,7 @@
                   "value": "\"A fork loop in a job limited to 8 tasks is refused at the limit, 0 tasks beyond it (the `quota` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 733
+                    "line": 770
                   }
                 },
                 {
@@ -22909,7 +23051,7 @@
                   "value": "\"O.QUOTA\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 734
+                    "line": 771
                   }
                 }
               ]
@@ -22922,7 +23064,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 736
+                "line": 773
               },
               "children": [
                 {
@@ -22933,7 +23075,7 @@
                   "value": "\"A job's programs shall not hold more memory than the job's limit, counting the frames of their address spaces and their page tables together with every job beneath it; a sibling job shall be unaffected.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 740
+                    "line": 777
                   }
                 },
                 {
@@ -22944,7 +23086,7 @@
                   "value": "\"Faults in a job limited to 48 pages' worth are refused when the next page would not fit, and the refusal is counted, while a sibling job faults 48 pages in (the `quota` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 744
+                    "line": 781
                   }
                 },
                 {
@@ -22955,7 +23097,7 @@
                   "value": "\"O.QUOTA\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 745
+                    "line": 782
                   }
                 }
               ]
@@ -22968,7 +23110,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 747
+                "line": 784
               },
               "children": [
                 {
@@ -22979,7 +23121,7 @@
                   "value": "\"Creating a channel or a port in a job at its object limit shall be refused, and no object shall be counted beyond the limit.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 750
+                    "line": 787
                   }
                 },
                 {
@@ -22990,7 +23132,7 @@
                   "value": "\"Object creation in a job limited to 5 objects is refused at the limit, 0 objects beyond it (the `quota` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 752
+                    "line": 789
                   }
                 },
                 {
@@ -23001,7 +23143,7 @@
                   "value": "\"O.QUOTA\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 753
+                    "line": 790
                   }
                 }
               ]
@@ -23014,7 +23156,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 755
+                "line": 792
               },
               "children": [
                 {
@@ -23025,7 +23167,7 @@
                   "value": "\"Every charge against a job shall be returned when the resource it paid for is freed, and a job's quota slot shall be given back when the job goes.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 758
+                    "line": 795
                   }
                 },
                 {
@@ -23036,7 +23178,7 @@
                   "value": "\"After the quota checks every counter of their jobs is back to zero, and as many quota slots are in use as before them (the `quota` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 761
+                    "line": 798
                   }
                 },
                 {
@@ -23047,7 +23189,7 @@
                   "value": "\"O.QUOTA\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 762
+                    "line": 799
                   }
                 }
               ]
@@ -23060,7 +23202,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 764
+                "line": 801
               },
               "children": [
                 {
@@ -23071,7 +23213,7 @@
                   "value": "\"A limit set on a job shall bound it together with every job beneath it, and a charge refused at any level shall leave no level charged.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 767
+                    "line": 804
                   }
                 },
                 {
@@ -23082,7 +23224,7 @@
                   "value": "\"A charge that would pass a grandparent's limit is refused although the child's own limit allows it, and each level's counter reads as before the attempt.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 770
+                    "line": 807
                   }
                 },
                 {
@@ -23093,7 +23235,7 @@
                   "value": "\"O.QUOTA\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 771
+                    "line": 808
                   }
                 }
               ]
@@ -23106,7 +23248,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 774
+                "line": 811
               },
               "children": [
                 {
@@ -23117,7 +23259,7 @@
                   "value": "\"A user page fault refused by a job's memory limit shall end a process in the job whose limit was full or beneath it, never one outside it, count the kill in that job and every job above it, and retry the fault.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 778
+                    "line": 815
                   }
                 },
                 {
@@ -23128,7 +23270,7 @@
                   "value": "\"A program writing 8 MiB in a job limited to 1 MiB ends by SIGKILL while a larger process in a sibling job lives; exactly 1 process is killed; memory.events counts one OOM kill in the job and its parent and none in the sibling.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 782
+                    "line": 819
                   }
                 },
                 {
@@ -23139,7 +23281,7 @@
                   "value": "(\"G.8\", \"O.QUOTA\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 783
+                    "line": 820
                   }
                 }
               ]
@@ -23152,7 +23294,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 786
+                "line": 823
               },
               "children": [
                 {
@@ -23163,7 +23305,7 @@
                   "value": "\"The kernel heap the Linux personality keeps for a job's programs shall be charged against the job's memory limit, and every byte of it returned when it is freed; a sibling job shall be unaffected.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 790
+                    "line": 827
                   }
                 },
                 {
@@ -23174,7 +23316,7 @@
                   "value": "\"At a 32 KiB limit each kind of personality object is refused one past its count with ENOMEM (ENOLCK for a lock) while a sibling makes one, and with them gone every byte charged has come back (the `kmem` line).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 794
+                    "line": 831
                   }
                 },
                 {
@@ -23185,7 +23327,7 @@
                   "value": "\"O.QUOTA\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 795
+                    "line": 832
                   }
                 }
               ]
@@ -23198,7 +23340,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 798
+                "line": 835
               },
               "children": [
                 {
@@ -23209,7 +23351,7 @@
                   "value": "\"A creation the task limit refuses shall be answered as Linux and the native ABI answer it -- a fork with EAGAIN, a native process_create with SHOULD_WAIT -- and the refused process shall never start.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 802
+                    "line": 839
                   }
                 },
                 {
@@ -23220,7 +23362,7 @@
                   "value": "\"A fork past pids.max is answered EAGAIN and counted in pids.events; process_create into a job at its task limit is answered SHOULD_WAIT and the job's task count is unchanged.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 805
+                    "line": 842
                   }
                 },
                 {
@@ -23231,7 +23373,7 @@
                   "value": "\"O.QUOTA\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 806
+                    "line": 843
                   }
                 }
               ]
@@ -23244,7 +23386,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 808
+                "line": 845
               },
               "children": [
                 {
@@ -23255,7 +23397,7 @@
                   "value": "\"Creating a VMO, a job or a pin in a job at its object limit shall be refused with NO_MEMORY, and each shall be counted as an object for as long as it exists.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 811
+                    "line": 848
                   }
                 },
                 {
@@ -23266,7 +23408,7 @@
                   "value": "\"In a job limited to 5 objects and holding 5, vmo_create, job_create and vmo_pin are each refused NO_MEMORY, 0 objects counted beyond the limit, and the job holds 0 once they are all closed.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 815
+                    "line": 852
                   }
                 },
                 {
@@ -23277,7 +23419,7 @@
                   "value": "\"O.QUOTA\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 816
+                    "line": 853
                   }
                 }
               ]
@@ -23291,7 +23433,7 @@
           "doc": "The safe state and what brings the kernel to it: O.FAILSAFE and ASR-6 (FPT_FLS.1). SAFETY-MANUAL.md §3 defines the safe state.",
           "source": {
             "file": "docs/sysml/13-item-requirements.sysml",
-            "line": 820
+            "line": 857
           },
           "children": [
             {
@@ -23302,7 +23444,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 824
+                "line": 861
               },
               "children": [
                 {
@@ -23313,7 +23455,7 @@
                   "value": "\"On a failed internal consistency check the kernel shall stop every other processor, print a diagnostic naming the failure and its catalogued explanation, and halt without returning to user mode.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 828
+                    "line": 865
                   }
                 },
                 {
@@ -23324,7 +23466,7 @@
                   "value": "\"A boot told to panic at its end (`ferrix.onexit=panic`) ends with the FX-1501 report and no program output after it; every panic site in the item has a catalogue entry (`check-panic-audit.py`).\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 832
+                    "line": 869
                   }
                 },
                 {
@@ -23335,7 +23477,7 @@
                   "value": "(\"O.FAILSAFE\", \"ASR-6\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 833
+                    "line": 870
                   }
                 }
               ]
@@ -23348,7 +23490,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 835
+                "line": 872
               },
               "children": [
                 {
@@ -23359,7 +23501,7 @@
                   "value": "\"The allocator every kernel stack comes from shall give each an unmapped guard page directly below and above it.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 838
+                    "line": 875
                   }
                 },
                 {
@@ -23370,7 +23512,7 @@
                   "value": "\"A kernel stack allocated, written at its first and last word and freed has the page below and the page above it untranslated, and gives back every frame it took.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 841
+                    "line": 878
                   }
                 },
                 {
@@ -23381,7 +23523,7 @@
                   "value": "(\"O.FAILSAFE\", \"ASR-6\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 842
+                    "line": 879
                   }
                 }
               ]
@@ -23394,7 +23536,7 @@
               "type": "ItemHighLevel",
               "source": {
                 "file": "docs/sysml/13-item-requirements.sysml",
-                "line": 845
+                "line": 882
               },
               "children": [
                 {
@@ -23405,7 +23547,7 @@
                   "value": "\"A kernel stack overflow shall end in the halt and diagnostic of the safe state, never in a write below the stack.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 847
+                    "line": 884
                   }
                 },
                 {
@@ -23416,7 +23558,7 @@
                   "value": "\"A kernel thread that recurses past its stack ends the boot in a report naming the fault -- on x86-64 a double fault taken on its own stack (FX-9004) -- on each architecture, 3 of 3.\"",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 850
+                    "line": 887
                   }
                 },
                 {
@@ -23427,7 +23569,7 @@
                   "value": "(\"O.FAILSAFE\", \"ASR-6\")",
                   "source": {
                     "file": "docs/sysml/13-item-requirements.sysml",
-                    "line": 851
+                    "line": 888
                   }
                 }
               ]
@@ -41768,6 +41910,1925 @@
           ]
         }
       ]
+    },
+    {
+      "name": "FerrixSmpRequirements",
+      "qualifiedName": "FerrixSmpRequirements",
+      "kind": "package",
+      "source": {
+        "file": "docs/sysml/22-smp-requirements.sysml",
+        "line": 42
+      },
+      "children": [
+        {
+          "name": "Processors",
+          "qualifiedName": "FerrixSmpRequirements::Processors",
+          "kind": "package",
+          "doc": "The processors firmware describes, the record each is given, and how code finds the record of the processor it runs on.",
+          "source": {
+            "file": "docs/sysml/22-smp-requirements.sysml",
+            "line": 45
+          },
+          "children": [
+            {
+              "name": "impossibleListsAreRefused",
+              "qualifiedName": "FerrixSmpRequirements::Processors::impossibleListsAreRefused",
+              "kind": "requirement",
+              "shortName": "L.smp.1",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 49
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::impossibleListsAreRefused",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"Topology::from_described shall refuse a processor list that is empty, that names one hardware identifier twice, or that does not name the processor running it.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 52
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::impossibleListsAreRefused",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Described lists that are empty, that hold one identifier twice and that omit the boot processor's identifier are each refused with its own error, 0 accepted; a list of 4 distinct identifiers including the boot one is accepted.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 56
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::impossibleListsAreRefused",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.5\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 57
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::impossibleListsAreRefused",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::Topology::from_described\", \"smp::discover\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 58
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theBootProcessorIsZero",
+              "qualifiedName": "FerrixSmpRequirements::Processors::theBootProcessorIsZero",
+              "kind": "requirement",
+              "shortName": "L.smp.2",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 60
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::theBootProcessorIsZero",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"Topology::from_described shall give the boot processor logical number 0 and the others 1 to N-1 in table order, one record each that holds its own address, with only the boot processor's record online.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 64
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::theBootProcessorIsZero",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A described list of 4 identifiers whose boot identifier is third yields 4 records, the boot identifier's at index 0 and the other three at 1 to 3 in table order, each record's own address in its first word, and 1 online.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 68
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::theBootProcessorIsZero",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.5\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 69
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::theBootProcessorIsZero",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"smp::Topology::from_described\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 70
+                  }
+                }
+              ]
+            },
+            {
+              "name": "eachProcessorFindsItsOwnRecord",
+              "qualifiedName": "FerrixSmpRequirements::Processors::eachProcessorFindsItsOwnRecord",
+              "kind": "requirement",
+              "shortName": "L.smp.3",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 72
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::eachProcessorFindsItsOwnRecord",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"On every processor that has installed its record, this_cpu shall return the record that names that processor's hardware identifier.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 75
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::eachProcessorFindsItsOwnRecord",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"In 100 rounds of work run on every online processor at once, each processor runs each round once and the record this_cpu gives it names its own hardware identifier every time: 0 misplaced runs (the `smp` line).\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 79
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::eachProcessorFindsItsOwnRecord",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.6\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 80
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::eachProcessorFindsItsOwnRecord",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::this_cpu\", \"smp::discover\", \"smp::install_secondary_record\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 82
+                  }
+                }
+              ]
+            },
+            {
+              "name": "noRecordBeforeItIsInstalled",
+              "qualifiedName": "FerrixSmpRequirements::Processors::noRecordBeforeItIsInstalled",
+              "kind": "requirement",
+              "shortName": "L.smp.4",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 84
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::noRecordBeforeItIsInstalled",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"this_cpu shall return nothing until the boot processor has installed its record, and shall not read the per-processor register before then.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 87
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::noRecordBeforeItIsInstalled",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Called before discover, this_cpu returns None with the register holding a value that is no record's address; after discover it returns the boot processor's record.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 90
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::noRecordBeforeItIsInstalled",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.6\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 91
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::noRecordBeforeItIsInstalled",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"smp::this_cpu\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 92
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aWrongRecordHalts",
+              "qualifiedName": "FerrixSmpRequirements::Processors::aWrongRecordHalts",
+              "kind": "requirement",
+              "shortName": "L.smp.5",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 94
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::aWrongRecordHalts",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"discover and secondary_main shall halt a processor whose register does not lead to its own record, whose record does not hold its own address or lead back to itself by its logical number, or names another processor's hardware identifier; and a secondary that arrives with an address that is no processor's record shall halt.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 100
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::aWrongRecordHalts",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A secondary started with another processor's record address, and one started with an address that is no record's, each end the boot in their catalogued panic (FX-0405, FX-0404); a boot processor record made to name another hardware identifier ends the boot in FX-0401.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 105
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::aWrongRecordHalts",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "(\"H.SCHED.6\", \"H.FAIL.1\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 106
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::aWrongRecordHalts",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::check_this_cpu\", \"smp::discover\", \"smp::secondary_main\", \"smp::install_secondary_record\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 108
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aReportNamesOnlyARealRecord",
+              "qualifiedName": "FerrixSmpRequirements::Processors::aReportNamesOnlyARealRecord",
+              "kind": "requirement",
+              "shortName": "L.smp.6",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 110
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::aReportNamesOnlyARealRecord",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"this_cpu_for_report shall name the processor whose record's address the register holds, and otherwise say that the processor has not installed a record or that no other processor was started, without following the register.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 114
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::aReportNamesOnlyARealRecord",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"With the register holding a processor's record address the report names that processor; holding any other value, it answers with the no-record sentence; before discover, with the boot-processor sentence; 0 reads through the register's value.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 118
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::aReportNamesOnlyARealRecord",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.FAIL.1\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 119
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Processors::aReportNamesOnlyARealRecord",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"smp::this_cpu_for_report\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 120
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "BringUp",
+          "qualifiedName": "FerrixSmpRequirements::BringUp",
+          "kind": "package",
+          "doc": "Starting the secondaries, and what each does as it arrives: the handshakes that let a shootdown or a grace period racing its arrival cover it, and the wait for work until the scheduler takes the processor over.",
+          "source": {
+            "file": "docs/sysml/22-smp-requirements.sysml",
+            "line": 124
+          },
+          "children": [
+            {
+              "name": "everySecondaryComesUp",
+              "qualifiedName": "FerrixSmpRequirements::BringUp::everySecondaryComesUp",
+              "kind": "requirement",
+              "shortName": "L.smp.7",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 130
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::everySecondaryComesUp",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"start_secondaries shall start every processor the topology lists but the boot one, one at a time, each on a kernel stack of its own, and shall return only once each has reported itself online.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 134
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::everySecondaryComesUp",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"On each configuration `cargo xtask test-boot` boots, the `cpus` line counts as many processors online as firmware described (4 of 4 on x86-64 and AArch64, 2 of 2 on ARMv7-A at `--smp 2`).\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 138
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::everySecondaryComesUp",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.5\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 139
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::everySecondaryComesUp",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::start_secondaries\", \"smp::wait_until_online\", \"smp::secondary_main\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 141
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aSilentSecondaryIsAnError",
+              "qualifiedName": "FerrixSmpRequirements::BringUp::aSilentSecondaryIsAnError",
+              "kind": "requirement",
+              "shortName": "L.smp.8",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 143
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::aSilentSecondaryIsAnError",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"start_secondaries shall fail, and leave the architecture's start block in place, when a processor it started has not reported itself online within one second.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 146
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::aSilentSecondaryIsAnError",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A secondary made never to set its online flag ends the boot in FX-0402 with the never-reported-in sentence 1 s or more after it was started, and the start block is not freed.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 149
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::aSilentSecondaryIsAnError",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.5\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 150
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::aSilentSecondaryIsAnError",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::start_secondaries\", \"smp::wait_until_online\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 151
+                  }
+                }
+              ]
+            },
+            {
+              "name": "speculationIsDecidedFirst",
+              "qualifiedName": "FerrixSmpRequirements::BringUp::speculationIsDecidedFirst",
+              "kind": "requirement",
+              "shortName": "L.smp.9",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 153
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::speculationIsDecidedFirst",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"start_secondaries shall apply the side-channel defences on the boot processor before it starts any other processor, on a machine with one processor as well.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 156
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::speculationIsDecidedFirst",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The boot processor's speculation controls read back as decided before the first secondary's start is requested, on each architecture, and with `--smp 1`.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 159
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::speculationIsDecidedFirst",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.TRAP.3\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 160
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::speculationIsDecidedFirst",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"smp::start_secondaries\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 161
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theInterruptIsHeldFirst",
+              "qualifiedName": "FerrixSmpRequirements::BringUp::theInterruptIsHeldFirst",
+              "kind": "requirement",
+              "shortName": "L.smp.10",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 163
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::theInterruptIsHeldFirst",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"start_secondaries shall register the inter-processor interrupt's handler before any secondary starts, and shall fail if another handler holds its line.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 166
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::theInterruptIsHeldFirst",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"0 inter-processor interrupts are counted unclaimed across a boot; with the line registered beforehand, start_secondaries fails with the line-taken sentence and starts no processor.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 170
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::theInterruptIsHeldFirst",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.1\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 171
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::theInterruptIsHeldFirst",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"smp::start_secondaries\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 172
+                  }
+                }
+              ]
+            },
+            {
+              "name": "anInterruptWakesASecondary",
+              "qualifiedName": "FerrixSmpRequirements::BringUp::anInterruptWakesASecondary",
+              "kind": "requirement",
+              "shortName": "L.smp.11",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 174
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::anInterruptWakesASecondary",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A secondary waiting in secondary_main shall take an inter-processor interrupt sent to it, count it, and look for work when it returns.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 177
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::anInterruptWakesASecondary",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"In 100 rounds of work handed to every online processor, each processor runs each round once and every secondary takes 1 or more inter-processor interrupts (the `smp` line).\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 180
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::anInterruptWakesASecondary",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.1\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 181
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::anInterruptWakesASecondary",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::on_ipi\", \"smp::secondary_main\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 182
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aNewcomerIsCovered",
+              "qualifiedName": "FerrixSmpRequirements::BringUp::aNewcomerIsCovered",
+              "kind": "requirement",
+              "shortName": "L.smp.12",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 184
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::aNewcomerIsCovered",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"secondary_main shall mark its processor online before it reads the shootdown generation, and flush its TLB after, so that a shootdown racing its arrival either waits for it or is covered by that flush; and shall answer every grace period requested before it came online.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 189
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::aNewcomerIsCovered",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A secondary held between reading the generation and flushing while a shootdown is taken reads, once let go, the translation the shootdown changed; a grace period requested before it came online completes without its interrupt.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 193
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::aNewcomerIsCovered",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.12\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 194
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::aNewcomerIsCovered",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"smp::secondary_main\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 195
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theSchedulerTakesEveryProcessor",
+              "qualifiedName": "FerrixSmpRequirements::BringUp::theSchedulerTakesEveryProcessor",
+              "kind": "requirement",
+              "shortName": "L.smp.13",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 197
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::theSchedulerTakesEveryProcessor",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"Once the scheduler has started, secondary_main shall hand its processor to the scheduler's idle loop and not return to waiting for work.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 200
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::theSchedulerTakesEveryProcessor",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"After sched::init, tasks pinned one to each online processor all run, each on its own processor: N of N.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 202
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::theSchedulerTakesEveryProcessor",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.1\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 203
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::BringUp::theSchedulerTakesEveryProcessor",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"smp::secondary_main\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 204
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Shootdown",
+          "qualifiedName": "FerrixSmpRequirements::Shootdown",
+          "kind": "package",
+          "doc": "Dropping stale translations from every processor's TLB: the whole-TLB shootdown, the turn that keeps shootdowns one at a time, the wait for every processor's answer and its bound. The Arm pair invalidates by broadcast in hardware, so the waits here are x86-64's.",
+          "source": {
+            "file": "docs/sysml/22-smp-requirements.sysml",
+            "line": 208
+          },
+          "children": [
+            {
+              "name": "aShootdownReachesEveryProcessor",
+              "qualifiedName": "FerrixSmpRequirements::Shootdown::aShootdownReachesEveryProcessor",
+              "kind": "requirement",
+              "shortName": "L.smp.14",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 215
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::aShootdownReachesEveryProcessor",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"When flush_tlb_everywhere returns, no online processor shall still translate through an entry it held before it was called.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 218
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::aShootdownReachesEveryProcessor",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Over 20 rounds in which every online processor reads a kernel page and the page is then moved to another frame, every processor reads the page's new value each round: 0 stale reads (the `tlb` line), on each architecture.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 222
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::aShootdownReachesEveryProcessor",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.12\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 223
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::aShootdownReachesEveryProcessor",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::flush_tlb_everywhere\", \"smp::service_tlb\", \"smp::on_ipi\", \"smp::wait_for\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 225
+                  }
+                }
+              ]
+            },
+            {
+              "name": "oneShootdownAtATime",
+              "qualifiedName": "FerrixSmpRequirements::Shootdown::oneShootdownAtATime",
+              "kind": "requirement",
+              "shortName": "L.smp.15",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 227
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::oneShootdownAtATime",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"take_turn shall let one shootdown hold the turn at a time, and a processor waiting for it shall answer the shootdowns of others while it waits.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 230
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::oneShootdownAtATime",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Two processors each requesting a shootdown while a third holds the turn both complete once it is let go, one after the other: 0 generations taken by two holders at once, and 0 waits for the turn ending in FX-0001.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 234
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::oneShootdownAtATime",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.12\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 235
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::oneShootdownAtATime",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::take_turn\", \"smp::flush_tlb_everywhere\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 236
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aWaiterAnswersWhereItIs",
+              "qualifiedName": "FerrixSmpRequirements::Shootdown::aWaiterAnswersWhereItIs",
+              "kind": "requirement",
+              "shortName": "L.smp.16",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 238
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::aWaiterAnswersWhereItIs",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"Where invalidation is not broadcast, a task waiting for the shootdown turn shall answer shootdowns for the processor it is running on at each moment, never for one it has left.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 242
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::aWaiterAnswersWhereItIs",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"On x86-64 with 3 or more processors online, a task waiting for the turn that moves to another processor answers a generation requested with no interrupt on the processor it moved to, and the processor it left is not recorded as answering (the `migrate` line).\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 247
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::aWaiterAnswersWhereItIs",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.17\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 248
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::aWaiterAnswersWhereItIs",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::as_this_cpu\", \"smp::take_turn\", \"smp::service_tlb\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 250
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aProcessorThatNeverAnswersIsFatal",
+              "qualifiedName": "FerrixSmpRequirements::Shootdown::aProcessorThatNeverAnswersIsFatal",
+              "kind": "requirement",
+              "shortName": "L.smp.17",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 252
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::aProcessorThatNeverAnswersIsFatal",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"wait_for shall stop the kernel in the safe state, naming the processor, once its wall-clock bound has passed and it has asked patience's count of polls, and not before both.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 255
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::aProcessorThatNeverAnswersIsFatal",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A processor made to stop answering its interrupt ends the boot in FX-0001 naming it, after 1 s or more and 16,777,216 polls or more, under tcg and under KVM.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 258
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::aProcessorThatNeverAnswersIsFatal",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.FAIL.1\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 259
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::aProcessorThatNeverAnswersIsFatal",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::wait_for\", \"smp::patience\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 260
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aStoppedHolderIsFatal",
+              "qualifiedName": "FerrixSmpRequirements::Shootdown::aStoppedHolderIsFatal",
+              "kind": "requirement",
+              "shortName": "L.smp.18",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 262
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::aStoppedHolderIsFatal",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"take_turn shall stop the kernel in the safe state when the shootdown generation has stood still for 4 s and patience's count of polls while it waits for the turn, and shall start its count again whenever the generation moves.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 266
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::aStoppedHolderIsFatal",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A holder made to stop with the turn in hand ends the boot in FX-0003 after 4 s or more; a holder that keeps taking generations for longer than that is waited for.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 269
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::aStoppedHolderIsFatal",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.FAIL.1\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 270
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::aStoppedHolderIsFatal",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::take_turn\", \"smp::patience\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 271
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theInterruptIsSentAgain",
+              "qualifiedName": "FerrixSmpRequirements::Shootdown::theInterruptIsSentAgain",
+              "kind": "requirement",
+              "shortName": "L.smp.19",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 273
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::theInterruptIsSentAgain",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"wait_for shall send its interrupt again every 10 ms while a processor it waits for has not answered.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 275
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::theInterruptIsSentAgain",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"With a processor's first interrupt dropped, the shootdown still completes, the processor answering the second.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 277
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::theInterruptIsSentAgain",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.12\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 278
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::theInterruptIsSentAgain",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"smp::wait_for\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 279
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theShootdownRulesAreAsserted",
+              "qualifiedName": "FerrixSmpRequirements::Shootdown::theShootdownRulesAreAsserted",
+              "kind": "requirement",
+              "shortName": "L.smp.20",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 281
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::theShootdownRulesAreAsserted",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A shootdown shall be refused with a diagnostic when it is requested holding a lock that disables preemption, or, once tasks run, when it would wait for another processor with interrupts masked.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 285
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::theShootdownRulesAreAsserted",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A shootdown requested holding a SpinLock, and one that would wait for another processor with interrupts masked, each stop the kernel with the assertion naming the rule, in a build with debug assertions.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 289
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::theShootdownRulesAreAsserted",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.FAIL.1\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 290
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::theShootdownRulesAreAsserted",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::shootdown_requested\", \"smp::shootdown_waits_for_others\", \"smp::flush_tlb_everywhere\", \"smp::invalidate_pages\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 293
+                  }
+                }
+              ]
+            },
+            {
+              "name": "farBehindFlushesEverything",
+              "qualifiedName": "FerrixSmpRequirements::Shootdown::farBehindFlushesEverything",
+              "kind": "requirement",
+              "shortName": "L.smp.21",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 295
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::farBehindFlushesEverything",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"service_tlb shall flush the whole TLB of a processor more than one generation behind, or whose generation's request is not a scoped one or was rewritten while it was read, and shall record the latest generation answered without taking back a later one.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 300
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::farBehindFlushesEverything",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A processor two generations behind, one a generation behind a whole-TLB request, and one reading a scoped request whose generation changes under the read each flush the whole TLB; tlb_seen after each is the latest generation, never less than a value recorded meanwhile.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 305
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::farBehindFlushesEverything",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.17\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 306
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Shootdown::farBehindFlushesEverything",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::service_tlb\", \"smp::scoped_request\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 307
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "ScopedShootdown",
+          "qualifiedName": "FerrixSmpRequirements::ScopedShootdown",
+          "kind": "package",
+          "doc": "The shootdown for a change to one address space: the pages that changed, on the processors that may hold that space's translations, and the page tables it gives back afterwards (finding F-36). The mask an address space keeps of those processors is here too.",
+          "source": {
+            "file": "docs/sysml/22-smp-requirements.sysml",
+            "line": 311
+          },
+          "children": [
+            {
+              "name": "aScopedRequestIsReadByItsSet",
+              "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aScopedRequestIsReadByItsSet",
+              "kind": "requirement",
+              "shortName": "L.smp.22",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 318
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aScopedRequestIsReadByItsSet",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"scoped_request shall give a processor in a scoped request's set that request's pages, or the whole TLB where it asks for more than the ceiling, and a processor outside the set nothing to invalidate.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 322
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aScopedRequestIsReadByItsSet",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"For a request of 3 pages to processors 1 and 3, processor 1 is given the 3 pages and processor 2 none; for a request of the whole TLB, a member is given everything.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 325
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aScopedRequestIsReadByItsSet",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.17\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 326
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aScopedRequestIsReadByItsSet",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::scoped_request\", \"smp::service_tlb\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 327
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aScopedShootdownReachesItsSet",
+              "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aScopedShootdownReachesItsSet",
+              "kind": "requirement",
+              "shortName": "L.smp.23",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 329
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aScopedShootdownReachesItsSet",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"flush_tlb_pages shall invalidate the pages it names on the online processors in its set other than the one it runs on before it returns.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 332
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aScopedShootdownReachesItsSet",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"On a machine with two processors or more, a child that wrote a shared page and holds still on its processor has the page protected read-only from this one, whose scoped shootdown names the child's processor: the child's next write ends it with SIGSEGV, 11, instead of answering (the `rmap` line), on each architecture.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 338
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aScopedShootdownReachesItsSet",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.17\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 339
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aScopedShootdownReachesItsSet",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::flush_tlb_pages\", \"smp::invalidate_pages\", \"smp::service_tlb\", \"smp::scoped_request\", \"smp::wait_for\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 341
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aScopedShootdownGivesBackItsTables",
+              "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aScopedShootdownGivesBackItsTables",
+              "kind": "requirement",
+              "shortName": "L.smp.24",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 343
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aScopedShootdownGivesBackItsTables",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"flush_tlb_pages shall give back every page table its pages hold once its invalidation has returned, and none before it is called.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 346
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aScopedShootdownGivesBackItsTables",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Of the tables an unmap_in emptied, 0 are given back before flush_tlb_pages is called and every one is given back by it, its list left empty, with an empty set of processors.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 349
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aScopedShootdownGivesBackItsTables",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.7\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 350
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aScopedShootdownGivesBackItsTables",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"smp::flush_tlb_pages\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 351
+                  }
+                }
+              ]
+            },
+            {
+              "name": "nobodyToAskIsAskedNothing",
+              "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::nobodyToAskIsAskedNothing",
+              "kind": "requirement",
+              "shortName": "L.smp.25",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 353
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::nobodyToAskIsAskedNothing",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"invalidate_pages shall interrupt no processor when there is nothing to invalidate, when its set is empty, before the processors are discovered, when this processor is the only one online or where invalidation is broadcast, and shall invalidate the pages on this processor itself in the last three.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 358
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::nobodyToAskIsAskedNothing",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Each of those five calls raises the unsent count by 1 or leaves it (nothing to invalidate) and sends 0 interrupts; after the last three a translation of the named page cached before is gone on this processor.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 362
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::nobodyToAskIsAskedNothing",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.17\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 363
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::nobodyToAskIsAskedNothing",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::invalidate_pages\", \"smp::flush_here\", \"smp::TlbPages::is_empty\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 365
+                  }
+                }
+              ]
+            },
+            {
+              "name": "pageSetsStopAtTheCeiling",
+              "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::pageSetsStopAtTheCeiling",
+              "kind": "requirement",
+              "shortName": "L.smp.26",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 367
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::pageSetsStopAtTheCeiling",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A TlbPages shall list each page asked for once, up to 33 pages, ask for the whole TLB past that, and when merged with another shall list both sets' pages once each and ask for the whole TLB if either did.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 371
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::pageSetsStopAtTheCeiling",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"33 pages added by range and one again by an address inside it list 33 pages; 34 by range ask for everything; two sets of 1 and 2 pages sharing one merge to 2 pages in order; a merge with a set asking for everything asks for everything.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 375
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::pageSetsStopAtTheCeiling",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.17\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 376
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::pageSetsStopAtTheCeiling",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::TlbPages::add\", \"smp::TlbPages::add_range\", \"smp::TlbPages::add_all\", \"smp::TlbPages::addresses\", \"smp::TlbPages::is_everything\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 379
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aMaskKeepsWhoJoined",
+              "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aMaskKeepsWhoJoined",
+              "kind": "requirement",
+              "shortName": "L.smp.27",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 381
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aMaskKeepsWhoJoined",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A CpuMask's snapshot shall hold every processor that joined it and has not left since.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 383
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aMaskKeepsWhoJoined",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A mask joined by processors 0 and 3 and left by 0 snapshots as 3 alone.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 385
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aMaskKeepsWhoJoined",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.17\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 386
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::aMaskKeepsWhoJoined",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::CpuMask::join\", \"smp::CpuMask::leave\", \"smp::CpuMask::snapshot\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 388
+                  }
+                }
+              ]
+            },
+            {
+              "name": "setsAreJoined",
+              "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::setsAreJoined",
+              "kind": "requirement",
+              "shortName": "L.smp.28",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 390
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::setsAreJoined",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"add_cpus shall add every processor of one set to another and remove none.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 392
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::setsAreJoined",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"{0, 2} added to {1, 2} gives {0, 1, 2}; the empty set added changes nothing.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 394
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::setsAreJoined",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.17\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 395
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::ScopedShootdown::setsAreJoined",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"smp::add_cpus\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 396
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "GracePeriods",
+          "qualifiedName": "FerrixSmpRequirements::GracePeriods",
+          "kind": "package",
+          "doc": "Read-side sections and the wait for every one of them to end: what lets a writer free an object it has unpublished. Nothing in the product calls synchronize yet (kernel/src/irq.rs names the handler unregistration it is for); stage 4's grace check does.",
+          "source": {
+            "file": "docs/sysml/22-smp-requirements.sysml",
+            "line": 400
+          },
+          "children": [
+            {
+              "name": "aGracePeriodOutlastsEveryReader",
+              "qualifiedName": "FerrixSmpRequirements::GracePeriods::aGracePeriodOutlastsEveryReader",
+              "kind": "requirement",
+              "shortName": "L.smp.29",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 406
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::GracePeriods::aGracePeriodOutlastsEveryReader",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"synchronize shall return only once every online processor has been outside a read-side section since it was called.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 409
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::GracePeriods::aGracePeriodOutlastsEveryReader",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A writer that replaces an object every other online processor is reading in read_section, synchronizes and poisons the replaced one, 100 times over, leaves 0 reads of a poisoned object among more than 0 reads (the `grace` line).\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 413
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::GracePeriods::aGracePeriodOutlastsEveryReader",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.19\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 414
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::GracePeriods::aGracePeriodOutlastsEveryReader",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::synchronize\", \"smp::read_section\", \"smp::answer_grace\", \"smp::on_ipi\", \"smp::wait_for\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 416
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Stopping",
+          "qualifiedName": "FerrixSmpRequirements::Stopping",
+          "kind": "package",
+          "doc": "What a panic asks of the other processors, and where they look.",
+          "source": {
+            "file": "docs/sysml/22-smp-requirements.sysml",
+            "line": 420
+          },
+          "children": [
+            {
+              "name": "aPanicAsksTheOthersToStop",
+              "qualifiedName": "FerrixSmpRequirements::Stopping::aPanicAsksTheOthersToStop",
+              "kind": "requirement",
+              "shortName": "L.smp.30",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 423
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Stopping::aPanicAsksTheOthersToStop",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"stop_others shall set the stop request and interrupt every other online processor, and return how many it asked: none before the processors are discovered.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 426
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Stopping::aPanicAsksTheOthersToStop",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A panic on one of N online processors reports N-1 asked (the `stopped` line), and 0 before discovery.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 428
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Stopping::aPanicAsksTheOthersToStop",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.FAIL.1\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 429
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Stopping::aPanicAsksTheOthersToStop",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"smp::stop_others\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 430
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aProcessorStopsWhereItLooks",
+              "qualifiedName": "FerrixSmpRequirements::Stopping::aProcessorStopsWhereItLooks",
+              "kind": "requirement",
+              "shortName": "L.smp.31",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 432
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Stopping::aProcessorStopsWhereItLooks",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"Once a panic has asked every processor to stop, a processor shall halt on its next inter-processor interrupt, and on its next poll while it waits for the shootdown turn or for other processors' answers.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 436
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Stopping::aProcessorStopsWhereItLooks",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"With a panic on one processor while the others are idle, waiting for the turn and waiting for answers, each other processor halts: 0 lines printed and 0 shootdowns completed by them after the report begins.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 440
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Stopping::aProcessorStopsWhereItLooks",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.FAIL.1\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 441
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Stopping::aProcessorStopsWhereItLooks",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"smp::halt_if_stopping\", \"smp::on_ipi\", \"smp::take_turn\", \"smp::wait_for\")",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 443
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Kick",
+          "qualifiedName": "FerrixSmpRequirements::Kick",
+          "kind": "package",
+          "doc": "The interrupt the scheduler sends a processor it has given work.",
+          "source": {
+            "file": "docs/sysml/22-smp-requirements.sysml",
+            "line": 447
+          },
+          "children": [
+            {
+              "name": "aKickReachesItsTarget",
+              "qualifiedName": "FerrixSmpRequirements::Kick::aKickReachesItsTarget",
+              "kind": "requirement",
+              "shortName": "L.smp.32",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/22-smp-requirements.sysml",
+                "line": 450
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Kick::aKickReachesItsTarget",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"interrupt_one shall interrupt the online processor it names, and every other processor where the architecture cannot address it alone, where that processor is not online, or before the processors are known.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 454
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Kick::aKickReachesItsTarget",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"On x86-64 a kick to processor 2 raises its inter-processor interrupt count by 1 and the others' by 0; a kick to a processor that is not online raises every other online processor's.\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 458
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Kick::aKickReachesItsTarget",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.1\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 459
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixSmpRequirements::Kick::aKickReachesItsTarget",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"smp::interrupt_one\"",
+                  "source": {
+                    "file": "docs/sysml/22-smp-requirements.sysml",
+                    "line": 460
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
   ],
   "relations": [
@@ -43940,6 +46001,16 @@
       "origin": "FerrixMemoryRequirements",
       "file": "docs/sysml/17-memory-requirements.sysml",
       "line": 36
+    },
+    {
+      "kind": "import",
+      "source": "FerrixSmpRequirements",
+      "targets": [
+        "FerrixItemRequirements::*"
+      ],
+      "origin": "FerrixSmpRequirements",
+      "file": "docs/sysml/22-smp-requirements.sysml",
+      "line": 43
     }
   ],
   "figures": [

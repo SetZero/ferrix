@@ -522,6 +522,14 @@ check and the W^X and sealed sweeps moved from `main.rs` and `mm.rs` into
 check proving one half, became `H.MEM.7` and `H.MEM.12`, one each. *Still
 open:* the other subsystems, 147 baselined requirements, the run-time column.
 
+**Advanced 2026-09-27 (W-8 step 4, `smp`).** 158 check functions, host
+tests and xtask gates name a requirement. Of smp's 32 low-level
+requirements **9 are verified** and 23 are in the baseline, among them the
+bound on a wait for a processor that never answers, proved only by a
+negative control recorded in a commit message; of the 77 high-level ones
+**33** are verified (`H.SCHED.6` and `H.MEM.19` added). *Still open:* the
+other subsystems, 171 baselined requirements, the run-time column.
+
 **Major.** The boot gates assert rich properties — 2,387 mappings swept for
 W^X, 16 of 16 interrupt deliveries waking their waiter — but nothing links an
 assertion to a requirement id. `docs/sysml/` has 33 requirements and 32
@@ -573,6 +581,13 @@ accessors and 12 check code; **0 are named by none**, and the gate holds the
 four as complete. Item-wide, 1,178 of 2,330 product functions are still
 named by none. *Still open:* the remaining subsystems.
 
+**Advanced 2026-09-27 (W-8 step 4, `smp`).** 32 more: `L.smp.1` to
+`L.smp.32` in `docs/sysml/22-smp-requirements.sysml`. Of smp's 57 product
+functions 38 are a requirement's unit, 17 accessors and 2 check code
+(`run_everywhere`, `next_job`); **0 are named by none**, and the gate holds
+`smp` as complete. Item-wide, 1,145 of 2,345 product functions are still
+named by none. *Still open:* the remaining subsystems.
+
 **Major.** 33 requirements exist, all at system level (`<'G.1'>` kernel
 threads, `<'G.2'>` address-space scale). DO-178C needs high- and low-level
 requirements with the design between them; 62304 §5.4 needs detailed design
@@ -610,6 +625,14 @@ executable at once as on Linux (`H.MEM.18` says what the kernel does refuse
 a program). Splits by the one-check rule: `H.MEM.5` (and `H.MEM.13`),
 `H.MEM.7` (`H.MEM.12`, `H.MEM.17`), `H.MEM.8` (`H.MEM.16`), `H.FAIL.2`
 (`H.FAIL.3`); new: `H.MEM.14`, `H.MEM.15`. 74 high-level now.
+
+**Advanced 2026-09-27 (W-8 step 4, `smp`).** The 32 `L.smp.*` requirements
+carry both. No split was forced; three high-level ones say what smp does
+that nothing said -- `H.SCHED.6` (each processor finds its own record),
+`H.MEM.19` (grace periods outlast readers), `H.BOOT.5` (every described
+processor comes up) -- 77 high-level now. `H.FAIL.1`'s statement promises
+the other processors stopped, which its criterion does not test; the split
+is proposed in IMPLEMENTATION.md W-8.
 
 **Major.** They are prose doc comments (*"Forces: 1:1 kernel threads, a real
 futex, per-thread TLS registers"*) explaining why the system is shaped as it
