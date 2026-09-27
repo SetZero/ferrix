@@ -1163,7 +1163,8 @@ pub(crate) fn dispatch(
             TimeWidth::Wide
         }
         _ => TimeWidth::Native,
-    };
+    }
+    .in_abi(abi);
     Some(match call {
         Syscall::RtSigprocmask => sys_rt_sigprocmask(thread, a[0] as u32, a[1], a[2], a[3]),
         Syscall::Sigaltstack => sys_sigaltstack(thread, a[0], a[1], sp, abi),
@@ -1176,11 +1177,12 @@ pub(crate) fn dispatch(
             poll::sys_ppoll(thread, a[0], a[1], a[2], a[3], a[4], width)
         }
         Syscall::Pselect6 | Syscall::Pselect6Time64 => {
-            poll::sys_pselect6(thread, a[0] as i32, [a[1], a[2], a[3]], a[4], a[5], width)
+            let sets = [a[1], a[2], a[3]];
+            poll::sys_pselect6(thread, a[0] as i32, sets, a[4], a[5], width, word_of(abi))
         }
         Syscall::EpollPwait => epoll::sys_epoll_pwait(thread, *a),
         Syscall::EpollPwait2 => epoll::sys_epoll_pwait2(thread, *a),
-        _ => time::sleep_dispatch(call, a, thread).unwrap_or(Err(Errno::ENOSYS)),
+        _ => time::sleep_dispatch(call, a, thread, abi).unwrap_or(Err(Errno::ENOSYS)),
     })
 }
 

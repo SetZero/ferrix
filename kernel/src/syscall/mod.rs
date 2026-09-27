@@ -48,6 +48,7 @@
 
 pub(crate) mod attributes;
 pub(crate) mod check;
+pub(crate) mod compat;
 pub(crate) mod credentials;
 pub(crate) mod deliver;
 pub(crate) mod epoll;

@@ -966,7 +966,7 @@ fn set(
     stage_spec(process, page, interval, value, width)?;
     let answer = match width {
         TimeWidth::Native => settime_by_number(process, page, timer, flags),
-        TimeWidth::Wide => calls::sys_timerfd_settime(
+        TimeWidth::Wide | TimeWidth::Compat | TimeWidth::CompatWide => calls::sys_timerfd_settime(
             process,
             timer,
             flags,
@@ -993,7 +993,9 @@ fn get(
             Syscall::TimerfdGettime,
             [timer as u64, page + AT_OLD, 0, 0, 0, 0],
         ),
-        TimeWidth::Wide => calls::sys_timerfd_gettime(process, timer, page + AT_OLD, width),
+        TimeWidth::Wide | TimeWidth::Compat | TimeWidth::CompatWide => {
+            calls::sys_timerfd_gettime(process, timer, page + AT_OLD, width)
+        }
     };
     if answer != Ok(0) {
         return Err("timerfd_gettime was refused");

@@ -212,6 +212,7 @@
         "render/**",
         "syscall/attributes.rs",
         "syscall/check.rs",
+        "syscall/compat.rs",
         "syscall/credentials.rs",
         "syscall/deliver.rs",
         "syscall/epoll.rs",

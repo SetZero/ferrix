@@ -53,7 +53,6 @@ pub(crate) fn dispatch(
         Syscall::Getrlimit => sys_getrlimit(process, a[0] as u32, a[1]),
         Syscall::Setrlimit => sys_setrlimit(process, a[0] as u32, a[1]),
         Syscall::Prlimit64 => sys_prlimit64(process, int(a[0]), a[1] as u32, a[2], a[3]),
-        Syscall::SchedGetaffinity => sys_sched_getaffinity(process, int(a[0]), a[1] as u32, a[2]),
         Syscall::SchedSetaffinity => sys_sched_setaffinity(process, int(a[0]), a[1] as u32, a[2]),
         Syscall::SchedGetparam => sys_sched_getparam(process, int(a[0]), a[1]),
         Syscall::SchedSetparam => sys_sched_setparam(process, int(a[0]), a[1]),
@@ -263,16 +262,19 @@ fn online_cpus() -> Vec<usize> {
 /// does; the glibc wrapper zeroes the rest of the caller's buffer and returns
 /// zero itself, and a handler that returned zero would have it zero the whole
 /// mask. The length must cover every processor and be a whole number of
-/// `unsigned long`s, which is how `kernel/sched/syscalls.c` refuses a buffer
-/// that could not hold the answer.
+/// the caller's `unsigned long`s, `word` bytes each, which is how
+/// `kernel/sched/syscalls.c` and its compat twin in `kernel/compat.c` refuse
+/// a buffer that could not hold the answer. The count returned is this
+/// kernel's mask size at either width, as both of Linux's are.
 pub(crate) fn sys_sched_getaffinity(
     process: &Process,
     pid: i32,
     len: u32,
     at: u64,
+    word: usize,
 ) -> Result<usize, Errno> {
     let len = usize::try_from(len).map_err(|_| Errno::EINVAL)?;
-    if len.saturating_mul(8) < smp::count() || len % WORD != 0 {
+    if len.saturating_mul(8) < smp::count() || len % word != 0 {
         return Err(Errno::EINVAL);
     }
     let _target = subject(process, pid)?;

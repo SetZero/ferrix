@@ -67,8 +67,6 @@ const POLLFD_BYTES: usize = 8;
 /// Bytes in a native word: an `fd_set` is an array of `unsigned long`, and
 /// `pselect6`'s signal argument is two of them.
 const WORD_BYTES: usize = size_of::<usize>();
-/// Bits in one.
-const WORD_BITS: usize = WORD_BYTES * 8;
 
 /// Nanoseconds in a second, in a millisecond and in a microsecond.
 const NANOS_PER_SECOND: u64 = 1_000_000_000;
@@ -142,24 +140,40 @@ pub(crate) fn sys_select(
     sets: [u64; 3],
     timeout: u64,
 ) -> Result<usize, Errno> {
+    let native = (TimeWidth::Native, WORD_BYTES);
+    sys_select_at_width(process, nfds, sets, timeout, native)
+}
+
+/// [`sys_select`] with the `timeval` of `width` and the sets' `unsigned
+/// long`s of `word` bytes: an i386 program's `_newselect` passes 32-bit ones
+/// of both, and musl calls it for any timeout whose seconds fit.
+pub(crate) fn sys_select_at_width(
+    process: &Process,
+    nfds: i32,
+    sets: [u64; 3],
+    timeout: u64,
+    (width, word): (TimeWidth, usize),
+) -> Result<usize, Errno> {
     let limit = if timeout == 0 {
         None
     } else {
-        Some(read_timeval(process, timeout)?)
+        Some(read_timeval(process, timeout, width)?)
     };
     let deadline = limit.map(|nanos| now().saturating_add(nanos));
-    let answer = select(process, nfds, sets, deadline);
+    let answer = select(process, nfds, sets, deadline, word);
     if let (Some(nanos), Some(deadline)) = (limit, deadline)
         && nanos != 0
     {
-        write_timeval(process, timeout, remaining(deadline));
+        write_timeval(process, timeout, width, remaining(deadline));
     }
     answer
 }
 
-/// `pselect6` and ARMv7-A's `pselect6_time64`: as `select`, with `timeout` a
+/// `pselect6` and the 32-bit `pselect6_time64`: as `select`, with `timeout` a
 /// `struct timespec` of `width`, and `sigmask` null or the address of a
 /// `{ const sigset_t *set; size_t size; }` pair naming the mask to wait under.
+/// The pair and the sets' `unsigned long`s are `word` bytes each: four for
+/// an i386 program on this 64-bit kernel.
 ///
 /// # Errors
 ///
@@ -173,6 +187,7 @@ pub(crate) fn sys_pselect6(
     timeout: u64,
     sigmask: u64,
     width: TimeWidth,
+    word: usize,
 ) -> Result<usize, Errno> {
     let process = thread.process();
     let limit = if timeout == 0 {
@@ -184,12 +199,12 @@ pub(crate) fn sys_pselect6(
         None
     } else {
         let mut pair = [0_u8; 16];
-        let pair = pair.get_mut(..WORD_BYTES * 2).ok_or(Errno::EINVAL)?;
+        let pair = pair.get_mut(..word * 2).ok_or(Errno::EINVAL)?;
         uaccess::copy_from_user(process.space(), sigmask, pair).map_err(|_| Errno::EFAULT)?;
-        read_sigset(process, word(pair, 0), word(pair, WORD_BYTES))?
+        read_sigset(process, word_at(pair, 0, word), word_at(pair, word, word))?
     };
     let deadline = limit.map(|nanos| now().saturating_add(nanos));
-    let answer = with_sigmask(thread, mask, || select(process, nfds, sets, deadline));
+    let answer = with_sigmask(thread, mask, || select(process, nfds, sets, deadline, word));
     if let (Some(nanos), Some(deadline)) = (limit, deadline)
         && nanos != 0
     {
@@ -254,9 +269,9 @@ pub(crate) fn read_timespec(
         .saturating_add(nanos))
 }
 
-/// Read a `struct timeval` of native words as nanoseconds.
-fn read_timeval(process: &Process, at: u64) -> Result<u64, Errno> {
-    let (seconds, micros) = read_pair(process, at, TimeWidth::Native)?;
+/// Read a `struct timeval` of `width` as nanoseconds.
+fn read_timeval(process: &Process, at: u64, width: TimeWidth) -> Result<u64, Errno> {
+    let (seconds, micros) = read_pair(process, at, width)?;
     let seconds = u64::try_from(seconds).map_err(|_| Errno::EINVAL)?;
     let micros = u64::try_from(micros).map_err(|_| Errno::EINVAL)?;
     Ok(seconds
@@ -267,7 +282,7 @@ fn read_timeval(process: &Process, at: u64) -> Result<u64, Errno> {
 
 /// Whether a time structure of `width` is two 64-bit fields here.
 fn is_wide(width: TimeWidth) -> bool {
-    width == TimeWidth::Wide || WORD_BYTES == 8
+    width.field_bytes() == 8
 }
 
 /// Read two signed fields of `width`: a `timespec` or a `timeval`. The
@@ -320,12 +335,12 @@ fn write_timespec(process: &Process, at: u64, width: TimeWidth, nanos: u64) {
     );
 }
 
-/// Write `nanos` back as a `struct timeval` of native words.
-fn write_timeval(process: &Process, at: u64, nanos: u64) {
+/// Write `nanos` back as a `struct timeval` of `width`.
+fn write_timeval(process: &Process, at: u64, width: TimeWidth, nanos: u64) {
     write_pair(
         process,
         at,
-        TimeWidth::Native,
+        width,
         nanos / NANOS_PER_SECOND,
         nanos % NANOS_PER_SECOND / NANOS_PER_MICRO,
     );
@@ -336,13 +351,10 @@ fn remaining(deadline: u64) -> u64 {
     deadline.saturating_sub(now())
 }
 
-/// The native word at `offset`, zero-extended.
-fn word(bytes: &[u8], offset: usize) -> u64 {
+/// The `width`-byte word at `offset`, zero-extended.
+fn word_at(bytes: &[u8], offset: usize, width: usize) -> u64 {
     let mut eight = [0_u8; 8];
-    for (slot, byte) in eight
-        .iter_mut()
-        .zip(bytes.iter().skip(offset).take(WORD_BYTES))
-    {
+    for (slot, byte) in eight.iter_mut().zip(bytes.iter().skip(offset).take(width)) {
         *slot = *byte;
     }
     u64::from_le_bytes(eight)
@@ -500,18 +512,21 @@ pub(crate) fn select_sets(readiness: Readiness) -> [bool; 3] {
 /// `nfds` beyond the descriptor table's limit is cut to the limit, as Linux
 /// cuts it to its table's size, and only the words that cover `nfds` bits are
 /// read and written: bits past `nfds` in the last word are ignored going in
-/// and cleared coming out. The sets are written back when the call succeeds,
-/// including with zero on a timeout, and left alone when it fails.
+/// and cleared coming out. A word is the caller's `unsigned long`, `word`
+/// bytes, so a 32-bit program's set is never read or written past its end.
+/// The sets are written back when the call succeeds, including with zero on
+/// a timeout, and left alone when it fails.
 fn select(
     process: &Process,
     nfds: i32,
     sets: [u64; 3],
     deadline: Option<u64>,
+    word: usize,
 ) -> Result<usize, Errno> {
     let asked = usize::try_from(nfds).map_err(|_| Errno::EINVAL)?;
     let table = usize::try_from(process.files().lock().limit()).map_err(|_| Errno::EINVAL)?;
     let count = asked.min(table);
-    let bytes = count.div_ceil(WORD_BITS) * WORD_BYTES;
+    let bytes = count.div_ceil(word * 8) * word;
 
     let mut wanted: [Option<Vec<u8>>; 3] = [None, None, None];
     for (slot, &at) in wanted.iter_mut().zip(&sets) {

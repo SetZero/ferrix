@@ -1718,6 +1718,430 @@ pub mod i386 {
     pub const TKILL: usize = 238;
     /// Send a signal to one thread of a given process.
     pub const TGKILL: usize = 270;
+    /// Open a file by path.
+    pub const OPEN: usize = 5;
+    /// Create a file, or truncate it, and open it for writing.
+    pub const CREAT: usize = 8;
+    /// Create a hard link.
+    pub const LINK: usize = 9;
+    /// Remove a directory entry.
+    pub const UNLINK: usize = 10;
+    /// Execute a program, reading `argv` and `envp` as arrays of 32-bit
+    /// pointers.
+    pub const EXECVE: usize = 11;
+    /// Change the working directory by path.
+    pub const CHDIR: usize = 12;
+    /// Create a file, device node, pipe or socket name by path.
+    pub const MKNOD: usize = 14;
+    /// Change a file's mode by path.
+    pub const CHMOD: usize = 15;
+    /// Reposition a file descriptor's offset by a 32-bit signed `off_t`.
+    pub const LSEEK: usize = 19;
+    /// Attach a file system.
+    pub const MOUNT: usize = 21;
+    /// Check a path's accessibility for the real user.
+    pub const ACCESS: usize = 33;
+    /// Flush all file systems.
+    pub const SYNC: usize = 36;
+    /// Rename a file.
+    pub const RENAME: usize = 38;
+    /// Create a directory.
+    pub const MKDIR: usize = 39;
+    /// Remove an empty directory.
+    pub const RMDIR: usize = 40;
+    /// Create a pipe, returning two file descriptors.
+    pub const PIPE: usize = 42;
+    /// Move the program break, the classic heap boundary.
+    pub const BRK: usize = 45;
+    /// Detach a file system.
+    pub const UMOUNT2: usize = 52;
+    /// Device-specific control. Only the requests whose argument reads the same
+    /// at both widths reach a handler; see the kernel's `syscall::compat`.
+    pub const IOCTL: usize = 54;
+    /// Manipulate a file descriptor's flags and locks, with the 16-byte 32-bit
+    /// `flock`.
+    pub const FCNTL: usize = 55;
+    /// Set a process's process-group identifier.
+    pub const SETPGID: usize = 57;
+    /// Set the file mode creation mask.
+    pub const UMASK: usize = 60;
+    /// Change the calling process's root directory.
+    pub const CHROOT: usize = 61;
+    /// Return the calling process's process-group identifier.
+    pub const GETPGRP: usize = 65;
+    /// Start a new session, with the caller as its leader.
+    pub const SETSID: usize = 66;
+    /// Set the host name `uname` reports.
+    pub const SETHOSTNAME: usize = 74;
+    /// Create a symbolic link.
+    pub const SYMLINK: usize = 83;
+    /// Read a symbolic link's target.
+    pub const READLINK: usize = 85;
+    /// Remove a mapping.
+    pub const MUNMAP: usize = 91;
+    /// Set a file's length by path, from a 32-bit signed `off_t`.
+    pub const TRUNCATE: usize = 92;
+    /// Set an open file's length, from a 32-bit signed `off_t`.
+    pub const FTRUNCATE: usize = 93;
+    /// Change an open file's mode.
+    pub const FCHMOD: usize = 94;
+    /// Read the nice value of a process, process group or user.
+    pub const GETPRIORITY: usize = 96;
+    /// Set the nice value of a process, process group or user.
+    pub const SETPRIORITY: usize = 97;
+    /// Flush a file's data and metadata to storage.
+    pub const FSYNC: usize = 118;
+    /// Set the NIS domain name `uname` reports.
+    pub const SETDOMAINNAME: usize = 121;
+    /// Change the protection of a mapping.
+    pub const MPROTECT: usize = 125;
+    /// Return a process's process-group identifier.
+    pub const GETPGID: usize = 132;
+    /// Change the working directory to an open directory.
+    pub const FCHDIR: usize = 133;
+    /// Reposition a file descriptor's offset, with the offset split across two
+    /// registers and the result written through a pointer: `_llseek`, for the
+    /// reason ARMv7-A has it.
+    pub const LLSEEK: usize = 140;
+    /// Take or release an advisory lock on a whole open file.
+    pub const FLOCK: usize = 143;
+    /// Flush a file-backed mapping to its file.
+    pub const MSYNC: usize = 144;
+    /// Scatter-read into a 32-bit `iovec` array.
+    pub const READV: usize = 145;
+    /// Gather-write from a 32-bit `iovec` array.
+    pub const WRITEV: usize = 146;
+    /// Return a process's session identifier.
+    pub const GETSID: usize = 147;
+    /// Flush a file's data, and only the metadata needed to read it back.
+    pub const FDATASYNC: usize = 148;
+    /// Set a thread's scheduling parameters.
+    pub const SCHED_SETPARAM: usize = 154;
+    /// Read a thread's scheduling parameters.
+    pub const SCHED_GETPARAM: usize = 155;
+    /// Set a thread's scheduling policy and parameters.
+    pub const SCHED_SETSCHEDULER: usize = 156;
+    /// Read a thread's scheduling policy.
+    pub const SCHED_GETSCHEDULER: usize = 157;
+    /// Report the highest priority a scheduling policy allows.
+    pub const SCHED_GET_PRIORITY_MAX: usize = 159;
+    /// Report the lowest priority a scheduling policy allows.
+    pub const SCHED_GET_PRIORITY_MIN: usize = 160;
+    /// Resize, and possibly move, an existing mapping.
+    pub const MREMAP: usize = 163;
+    /// Wait for events on a set of file descriptors.
+    pub const POLL: usize = 168;
+    /// Operate on per-process control settings, such as the thread name.
+    pub const PRCTL: usize = 172;
+    /// Read at an offset without moving the file position, the offset in two
+    /// registers, low word first, with no alignment to an even register.
+    pub const PREAD64: usize = 180;
+    /// Write at an offset without moving the file position, the offset in two
+    /// registers as `pread64`'s is.
+    pub const PWRITE64: usize = 181;
+    /// Read the current working directory into a buffer.
+    pub const GETCWD: usize = 183;
+    /// Read a thread's capability sets.
+    pub const CAPGET: usize = 184;
+    /// Set a thread's capability sets.
+    pub const CAPSET: usize = 185;
+    /// Map files or anonymous memory, with the file offset counted in 4096-byte
+    /// units. *Not* interchangeable with [`super::Syscall::Mmap`], i386's
+    /// number 90, which takes a pointer to its arguments and is not carried.
+    pub const MMAP2: usize = 192;
+    /// Set a file's length by path, with the length split across two registers,
+    /// low word first.
+    pub const TRUNCATE64: usize = 193;
+    /// Set an open file's length, with the length split across two registers,
+    /// low word first.
+    pub const FTRUNCATE64: usize = 194;
+    /// Change a file's owner by path without following a final symlink, with
+    /// 32-bit identifiers. The 16-bit `lchown` at 16 is not carried.
+    pub const LCHOWN32: usize = 198;
+    /// Set the real and effective user identifiers.
+    pub const SETREUID32: usize = 203;
+    /// Set the real and effective group identifiers.
+    pub const SETREGID32: usize = 204;
+    /// Read the supplementary group list.
+    pub const GETGROUPS32: usize = 205;
+    /// Replace the supplementary group list.
+    pub const SETGROUPS32: usize = 206;
+    /// Change an open file's owner.
+    pub const FCHOWN32: usize = 207;
+    /// Set the real, effective and saved user identifiers.
+    pub const SETRESUID32: usize = 208;
+    /// Read the real, effective and saved user identifiers.
+    pub const GETRESUID32: usize = 209;
+    /// Set the real, effective and saved group identifiers.
+    pub const SETRESGID32: usize = 210;
+    /// Read the real, effective and saved group identifiers.
+    pub const GETRESGID32: usize = 211;
+    /// Change a file's owner by path.
+    pub const CHOWN32: usize = 212;
+    /// Set the user identifier.
+    pub const SETUID32: usize = 213;
+    /// Set the group identifier.
+    pub const SETGID32: usize = 214;
+    /// Set the user identifier used for file access checks.
+    pub const SETFSUID32: usize = 215;
+    /// Set the group identifier used for file access checks.
+    pub const SETFSGID32: usize = 216;
+    /// Make another mount the root, and move the old root beneath it.
+    pub const PIVOT_ROOT: usize = 217;
+    /// Advise the kernel about future use of a memory range.
+    pub const MADVISE: usize = 219;
+    /// Read directory entries in the 64-bit layout.
+    pub const GETDENTS64: usize = 220;
+    /// Manipulate a file descriptor's flags and locks, with i386's packed
+    /// 24-byte `flock64`. musl calls it for every `fcntl`, not only the locking
+    /// commands.
+    pub const FCNTL64: usize = 221;
+    /// Start reading a file into the page cache, the offset in two registers,
+    /// low word first.
+    pub const READAHEAD: usize = 225;
+    /// Set an extended attribute by path, following symbolic links.
+    pub const SETXATTR: usize = 226;
+    /// Set an extended attribute by path, on a symbolic link itself.
+    pub const LSETXATTR: usize = 227;
+    /// Set an extended attribute of an open file.
+    pub const FSETXATTR: usize = 228;
+    /// Read an extended attribute by path, following symbolic links.
+    pub const GETXATTR: usize = 229;
+    /// Read an extended attribute by path, of a symbolic link itself.
+    pub const LGETXATTR: usize = 230;
+    /// Read an extended attribute of an open file.
+    pub const FGETXATTR: usize = 231;
+    /// List extended attribute names by path, following symbolic links.
+    pub const LISTXATTR: usize = 232;
+    /// List extended attribute names by path, of a symbolic link itself.
+    pub const LLISTXATTR: usize = 233;
+    /// List extended attribute names of an open file.
+    pub const FLISTXATTR: usize = 234;
+    /// Remove an extended attribute by path, following symbolic links.
+    pub const REMOVEXATTR: usize = 235;
+    /// Remove an extended attribute by path, from a symbolic link itself.
+    pub const LREMOVEXATTR: usize = 236;
+    /// Remove an extended attribute of an open file.
+    pub const FREMOVEXATTR: usize = 237;
+    /// Copy data between two file descriptors, with a 64-bit offset argument.
+    pub const SENDFILE64: usize = 239;
+    /// Register the address cleared and woken on thread exit.
+    pub const SET_TID_ADDRESS: usize = 258;
+    /// Create an epoll set, the size a hint that is ignored.
+    pub const EPOLL_CREATE: usize = 254;
+    /// Add, modify or remove a file descriptor in an epoll set.
+    pub const EPOLL_CTL: usize = 255;
+    /// Wait for events on an epoll set.
+    pub const EPOLL_WAIT: usize = 256;
+    /// Make an inotify instance, with no flags.
+    pub const INOTIFY_INIT: usize = 291;
+    /// Watch a path on an inotify instance.
+    pub const INOTIFY_ADD_WATCH: usize = 292;
+    /// Remove a watch from an inotify instance.
+    pub const INOTIFY_RM_WATCH: usize = 293;
+    /// Open a file relative to a directory file descriptor.
+    pub const OPENAT: usize = 295;
+    /// Create a directory relative to a directory file descriptor.
+    pub const MKDIRAT: usize = 296;
+    /// Create a file, device node, pipe or socket name relative to a directory
+    /// file descriptor.
+    pub const MKNODAT: usize = 297;
+    /// Change a file's owner relative to a directory file descriptor.
+    pub const FCHOWNAT: usize = 298;
+    /// Remove a directory entry relative to a directory file descriptor.
+    pub const UNLINKAT: usize = 301;
+    /// Rename relative to directory file descriptors.
+    pub const RENAMEAT: usize = 302;
+    /// Create a hard link relative to directory file descriptors.
+    pub const LINKAT: usize = 303;
+    /// Create a symbolic link relative to a directory file descriptor.
+    pub const SYMLINKAT: usize = 304;
+    /// Read a symbolic link relative to a directory file descriptor.
+    pub const READLINKAT: usize = 305;
+    /// Change a file's mode relative to a directory file descriptor.
+    pub const FCHMODAT: usize = 306;
+    /// Check accessibility relative to a directory file descriptor.
+    pub const FACCESSAT: usize = 307;
+    /// Detach parts of the calling process's shared execution context.
+    pub const UNSHARE: usize = 310;
+    /// Move bytes between a pipe and another descriptor inside the kernel.
+    pub const SPLICE: usize = 313;
+    /// Report the processor and NUMA node the caller is running on.
+    pub const GETCPU: usize = 318;
+    /// Wait on an epoll set with a signal mask.
+    pub const EPOLL_PWAIT: usize = 319;
+    /// Create a signalfd, or change one's mask, with no flags.
+    pub const SIGNALFD: usize = 321;
+    /// Create a timer that expires into a descriptor.
+    pub const TIMERFD_CREATE: usize = 322;
+    /// Create an eventfd with no flags.
+    pub const EVENTFD: usize = 323;
+    /// Allocate or deallocate space in a file, the offset and length each in
+    /// two registers, low word first.
+    pub const FALLOCATE: usize = 324;
+    /// Create a signalfd, or change one's mask, with flags.
+    pub const SIGNALFD4: usize = 327;
+    /// Create an eventfd with flags.
+    pub const EVENTFD2: usize = 328;
+    /// Create an epoll set with flags.
+    pub const EPOLL_CREATE1: usize = 329;
+    /// Create a pipe with flags.
+    pub const PIPE2: usize = 331;
+    /// Make an inotify instance, with flags.
+    pub const INOTIFY_INIT1: usize = 332;
+    /// Read and set a resource limit of any process in one call.
+    pub const PRLIMIT64: usize = 340;
+    /// Flush the file system holding an open file.
+    pub const SYNCFS: usize = 344;
+    /// Move the calling thread into an existing namespace.
+    pub const SETNS: usize = 346;
+    /// Rename with flags, such as `RENAME_NOREPLACE`.
+    pub const RENAMEAT2: usize = 353;
+    /// Fill a buffer with random bytes.
+    pub const GETRANDOM: usize = 355;
+    /// Create an anonymous file living in memory.
+    pub const MEMFD_CREATE: usize = 356;
+    /// Execute a program relative to a directory file descriptor, reading
+    /// `argv` and `envp` as arrays of 32-bit pointers.
+    pub const EXECVEAT: usize = 358;
+    /// Issue a process-wide memory barrier.
+    pub const MEMBARRIER: usize = 375;
+    /// Copy a range of one regular file into another inside the kernel.
+    pub const COPY_FILE_RANGE: usize = 377;
+    /// Stat a file with an explicit field mask and 64-bit timestamps.
+    pub const STATX: usize = 383;
+    /// Read a clock into a 64-bit `timespec`. musl has been time64 since 1.2,
+    /// so this, not [`super::Syscall::ClockGettime`], is what a current 32-bit
+    /// binary calls.
+    pub const CLOCK_GETTIME64: usize = 403;
+    /// Set a clock from a 64-bit `timespec`.
+    pub const CLOCK_SETTIME64: usize = 404;
+    /// Read a clock's resolution into a 64-bit `timespec`.
+    pub const CLOCK_GETRES_TIME64: usize = 406;
+    /// Sleep against a chosen clock, with 64-bit `timespec` arguments.
+    pub const CLOCK_NANOSLEEP_TIME64: usize = 407;
+    /// Read a timerfd's time left and interval into 64-bit `timespec`s.
+    pub const TIMERFD_GETTIME64: usize = 410;
+    /// Arm or disarm a timerfd from 64-bit `timespec`s.
+    pub const TIMERFD_SETTIME64: usize = 411;
+    /// Set a file's times from two 64-bit `timespec`s.
+    pub const UTIMENSAT_TIME64: usize = 412;
+    /// Poll with a signal mask and a 64-bit `timespec`. The 32-bit `ppoll` at
+    /// 309 is not carried: its timeout is two `long`s.
+    pub const PPOLL_TIME64: usize = 414;
+    /// Wait on, or wake, a futex, with a 64-bit `timespec` timeout. and the one
+    /// a time64 musl's locks actually reach.
+    pub const FUTEX_TIME64: usize = 422;
+    /// Report the blocked signals that are pending.
+    pub const RT_SIGPENDING: usize = 176;
+    /// Sleep until a signal arrives.
+    pub const PAUSE: usize = 29;
+    /// Make a pidfd: a descriptor for a process, readable once it has ended.
+    pub const PIDFD_OPEN: usize = 434;
+    /// Open a file from a versioned argument structure.
+    pub const OPENAT2: usize = 437;
+    /// Check accessibility with flags, the form musl now prefers.
+    pub const FACCESSAT2: usize = 439;
+    /// Wait on an epoll set with a signal mask and a nanosecond timeout.
+    pub const EPOLL_PWAIT2: usize = 441;
+    /// Report a filesystem's usage by path into the packed 84-byte
+    /// `struct statfs64`, which is ARMv7-A's too.
+    pub const STATFS64: usize = 268;
+    /// Report the usage of an open file's filesystem, as [`STATFS64`].
+    pub const FSTATFS64: usize = 269;
+    /// Report uptime, load and memory into the 64-byte 32-bit `struct
+    /// sysinfo`.
+    pub const SYSINFO: usize = 116;
+    /// Restart, halt or power off the machine.
+    pub const REBOOT: usize = 88;
+    /// Read or clear the kernel log.
+    pub const SYSLOG: usize = 103;
+    /// Set a thread's processor mask.
+    pub const SCHED_SETAFFINITY: usize = 241;
+    /// Read a thread's processor mask, in a buffer a whole number of 32-bit
+    /// words long.
+    pub const SCHED_GETAFFINITY: usize = 242;
+    /// Wait for descriptors with a signal mask and a 64-bit `timespec`, the
+    /// sets and the mask pair in 32-bit words. The 32-bit `pselect6` at 308
+    /// and `_newselect` at 142 are not carried: their timeouts are `long`s.
+    pub const PSELECT6_TIME64: usize = 413;
+    /// Report process times into four 32-bit `clock_t`s.
+    pub const TIMES: usize = 43;
+    /// Report resource use into the 72-byte 32-bit `struct rusage`.
+    pub const GETRUSAGE: usize = 77;
+    /// Sleep for a relative time in two 32-bit fields. musl calls it for any
+    /// request whose seconds fit, before `clock_nanosleep_time64`.
+    pub const NANOSLEEP: usize = 162;
+    /// Sleep against a chosen clock, with 32-bit `timespec`s.
+    pub const CLOCK_NANOSLEEP: usize = 267;
+    /// Wait on, or wake, a futex, with a 32-bit `timespec` timeout: what musl's
+    /// timed waits call whenever the seconds fit.
+    pub const FUTEX: usize = 240;
+    /// Read a clock into a 32-bit `timespec`.
+    pub const CLOCK_GETTIME: usize = 265;
+    /// Read a clock's resolution into a 32-bit `timespec`.
+    pub const CLOCK_GETRES: usize = 266;
+    /// Set a clock from a 32-bit `timespec`.
+    pub const CLOCK_SETTIME: usize = 264;
+    /// Poll with a signal mask and a 32-bit `timespec`.
+    pub const PPOLL: usize = 309;
+    /// Wait for descriptor sets with a signal mask and a 32-bit `timespec`.
+    pub const PSELECT6: usize = 308;
+    /// Wait for descriptor sets with a 32-bit `timeval`: `select`, whose older
+    /// number 82 takes a block of arguments in memory and is not carried.
+    pub const NEWSELECT: usize = 142;
+    /// Set a file's times from two 32-bit `timespec`s.
+    pub const UTIMENSAT: usize = 320;
+    /// Arm or disarm a timerfd from 32-bit `timespec`s.
+    pub const TIMERFD_SETTIME: usize = 325;
+    /// Read a timerfd's time left and interval into 32-bit `timespec`s.
+    pub const TIMERFD_GETTIME: usize = 326;
+    /// Read the wall clock into a 32-bit `timeval`.
+    pub const GETTIMEOFDAY: usize = 78;
+    /// Set the wall clock from a 32-bit `timeval`.
+    pub const SETTIMEOFDAY: usize = 79;
+    /// Read the wall clock in whole seconds, as a 32-bit `time_t`.
+    pub const TIME: usize = 13;
+    /// Read or adjust the clock discipline through the 128-byte
+    /// `old_timex32`.
+    pub const ADJTIMEX: usize = 124;
+    /// [`ADJTIMEX`] for a named clock.
+    pub const CLOCK_ADJTIME: usize = 343;
+    /// [`ADJTIMEX`] for a named clock, through the 208-byte `__kernel_timex`.
+    pub const CLOCK_ADJTIME64: usize = 405;
+    /// Deliver `SIGALRM` after a number of seconds. i386 kept it where ARM's
+    /// EABI dropped it, and musl calls it.
+    pub const ALARM: usize = 27;
+    /// Create a socket.
+    pub const SOCKET: usize = 359;
+    /// Create a connected pair of sockets.
+    pub const SOCKETPAIR: usize = 360;
+    /// Bind a socket to an address.
+    pub const BIND: usize = 361;
+    /// Connect a socket to an address.
+    pub const CONNECT: usize = 362;
+    /// Mark a socket as accepting connections.
+    pub const LISTEN: usize = 363;
+    /// Accept a connection, with flags for the new descriptor.
+    pub const ACCEPT4: usize = 364;
+    /// Read a socket option; a `timeval` option is two 32-bit fields.
+    pub const GETSOCKOPT: usize = 365;
+    /// Set a socket option; a `timeval` option is two 32-bit fields.
+    pub const SETSOCKOPT: usize = 366;
+    /// Read a socket's own address.
+    pub const GETSOCKNAME: usize = 367;
+    /// Read the address a socket is connected to.
+    pub const GETPEERNAME: usize = 368;
+    /// Send a message, to an address if one is given.
+    pub const SENDTO: usize = 369;
+    /// Send a message described by a 32-bit `msghdr`.
+    pub const SENDMSG: usize = 370;
+    /// Receive a message and the address it came from.
+    pub const RECVFROM: usize = 371;
+    /// Receive a message described by a 32-bit `msghdr`.
+    pub const RECVMSG: usize = 372;
+    /// Shut down one or both directions of a connection.
+    pub const SHUTDOWN: usize = 373;
 }
 
 /// An architecture-neutral system call.
@@ -1732,10 +2156,10 @@ pub enum Syscall {
     Read,
     /// Write bytes to a file descriptor.
     Write,
-    /// Open a file by path. x86-64 and ARMv7-A only.
+    /// Open a file by path. x86-64, ARMv7-A and i386 only.
     Open,
-    /// Create a file, or truncate it, and open it for writing. x86-64 and
-    /// ARMv7-A only.
+    /// Create a file, or truncate it, and open it for writing. x86-64, ARMv7-A
+    /// and i386 only.
     Creat,
     /// Open a file relative to a directory file descriptor.
     Openat,
@@ -1769,13 +2193,13 @@ pub enum Syscall {
     Fstatat64,
     /// Stat a file with an explicit field mask and 64-bit timestamps.
     Statx,
-    /// Wait for events on a set of file descriptors. x86-64 and ARMv7-A only.
+    /// Wait for events on a set of file descriptors. x86-64, ARMv7-A and i386 only.
     Poll,
     /// Poll with a signal mask and a `timespec` timeout.
     Ppoll,
-    /// Poll with a signal mask and a 64-bit `timespec`. ARMv7-A only: the timeout
+    /// Poll with a signal mask and a 64-bit `timespec`. ARMv7-A and i386 only: the timeout
     /// is a pair of 64-bit fields rather than the 32-bit pair [`Syscall::Ppoll`]
-    /// takes on that architecture.
+    /// takes on those architectures.
     PpollTime64,
     /// Wait for readiness on sets of file descriptors, with a `timeval` timeout.
     /// x86-64 and ARMv7-A only; ARMv7-A calls it `_newselect`.
@@ -1783,19 +2207,19 @@ pub enum Syscall {
     /// Wait for readiness on descriptor sets, with a signal mask and a `timespec`.
     Pselect6,
     /// Wait for readiness on descriptor sets, with a signal mask and a 64-bit
-    /// `timespec`. ARMv7-A only.
+    /// `timespec`. ARMv7-A and i386 only.
     Pselect6Time64,
     /// Reposition a file descriptor's offset.
     Lseek,
     /// Reposition a file descriptor's offset, with the offset split across two
-    /// registers and the result written through a pointer. ARMv7-A only, because
+    /// registers and the result written through a pointer. ARMv7-A and i386 only, because
     /// a 32-bit register cannot carry a 64-bit offset and the return register
     /// cannot carry one back.
     Llseek,
     /// Map files or anonymous memory into the address space.
     Mmap,
     /// Map files or anonymous memory, with the file offset counted in 4096-byte
-    /// units. ARMv7-A only, and *not* interchangeable with [`Syscall::Mmap`]: the
+    /// units. ARMv7-A and i386 only, and *not* interchangeable with [`Syscall::Mmap`]: the
     /// sixth argument must be multiplied by 4096 before use, and a handler that
     /// forgets maps the wrong part of the file.
     Mmap2,
@@ -1824,12 +2248,12 @@ pub enum Syscall {
     /// calls that resume with a remaining time rather than from the top.
     RestartSyscall,
     /// Return from a handler installed without `SA_SIGINFO`, whose frame has
-    /// no `siginfo`. ARMv7-A only: musl and glibc both point a plain handler's
+    /// no `siginfo`. ARMv7-A and i386 only: musl and glibc both point a plain handler's
     /// restorer at it there, where the 64-bit machines have only the `rt` form.
     Sigreturn,
     /// Replace the signal mask and wait for a signal.
     RtSigsuspend,
-    /// Sleep until a signal arrives. x86-64 and ARMv7-A only.
+    /// Sleep until a signal arrives. x86-64, ARMv7-A and i386 only.
     Pause,
     /// Report the blocked signals that are pending.
     RtSigpending,
@@ -1852,13 +2276,13 @@ pub enum Syscall {
     Readv,
     /// Write from several buffers in one call.
     Writev,
-    /// Check a path's accessibility for the real user. x86-64 and ARMv7-A only.
+    /// Check a path's accessibility for the real user. x86-64, ARMv7-A and i386 only.
     Access,
     /// Check accessibility relative to a directory file descriptor.
     Faccessat,
     /// Check accessibility with flags, the form musl now prefers.
     Faccessat2,
-    /// Create a pipe, returning two file descriptors. x86-64 and ARMv7-A only.
+    /// Create a pipe, returning two file descriptors. x86-64, ARMv7-A and i386 only.
     Pipe,
     /// Create a pipe with flags.
     Pipe2,
@@ -1866,7 +2290,7 @@ pub enum Syscall {
     SchedYield,
     /// Duplicate a file descriptor onto the lowest free number.
     Dup,
-    /// Duplicate a file descriptor onto a chosen number. x86-64 and ARMv7-A only.
+    /// Duplicate a file descriptor onto a chosen number. x86-64, ARMv7-A and i386 only.
     Dup2,
     /// Duplicate a file descriptor onto a chosen number with flags.
     Dup3,
@@ -1874,24 +2298,24 @@ pub enum Syscall {
     Nanosleep,
     /// Read a clock.
     ClockGettime,
-    /// Read a clock into a 64-bit `timespec`. ARMv7-A only. musl has been time64
+    /// Read a clock into a 64-bit `timespec`. ARMv7-A and i386 only. musl has been time64
     /// since 1.2, so this, not [`Syscall::ClockGettime`], is what a current
     /// 32-bit binary calls.
     ClockGettime64,
     /// Read a clock's resolution.
     ClockGetres,
-    /// Read a clock's resolution into a 64-bit `timespec`. ARMv7-A only.
+    /// Read a clock's resolution into a 64-bit `timespec`. ARMv7-A and i386 only.
     ClockGetresTime64,
     /// Sleep against a chosen clock, optionally until an absolute time.
     ClockNanosleep,
-    /// Sleep against a chosen clock, with 64-bit `timespec` arguments. ARMv7-A
-    /// only.
+    /// Sleep against a chosen clock, with 64-bit `timespec` arguments. ARMv7-A and
+    /// i386 only.
     ClockNanosleepTime64,
     /// Set the wall clock, the obsolete predecessor of `clock_settime`.
     Settimeofday,
     /// Set a clock.
     ClockSettime,
-    /// Set a clock from a 64-bit `timespec`. ARMv7-A only.
+    /// Set a clock from a 64-bit `timespec`. ARMv7-A and i386 only.
     ClockSettime64,
     /// Read or tune the system clock's discipline.
     Adjtimex,
@@ -1924,7 +2348,7 @@ pub enum Syscall {
     /// Copy data between two file descriptors inside the kernel.
     Sendfile,
     /// Copy data between two file descriptors, with a 64-bit offset argument.
-    /// ARMv7-A's form of [`Syscall::Sendfile`].
+    /// The 32-bit form of [`Syscall::Sendfile`].
     Sendfile64,
     /// Move bytes between a pipe and another descriptor inside the kernel.
     Splice,
@@ -1993,10 +2417,10 @@ pub enum Syscall {
     Clone,
     /// Create a process or thread from a versioned argument structure.
     Clone3,
-    /// Create a child process sharing nothing. x86-64 and ARMv7-A only.
+    /// Create a child process sharing nothing. x86-64, ARMv7-A and i386 only.
     Fork,
     /// Create a child sharing the address space, suspending the parent.
-    /// x86-64 and ARMv7-A only.
+    /// x86-64, ARMv7-A and i386 only.
     Vfork,
     /// Replace the current process image with a program.
     Execve,
@@ -2047,7 +2471,7 @@ pub enum Syscall {
     /// Manipulate a file descriptor's flags and locks.
     Fcntl,
     /// Manipulate a file descriptor's flags and locks, with 64-bit `flock64`
-    /// structures. ARMv7-A only; musl calls it for every `fcntl`, not only the
+    /// structures. ARMv7-A and i386 only; musl calls it for every `fcntl`, not only the
     /// locking commands.
     Fcntl64,
     /// Take or release an advisory lock on a whole open file.
@@ -2063,12 +2487,12 @@ pub enum Syscall {
     /// Set a file's length by path.
     Truncate,
     /// Set a file's length by path, with the length split across two registers.
-    /// ARMv7-A only.
+    /// ARMv7-A and i386 only.
     Truncate64,
     /// Set an open file's length.
     Ftruncate,
     /// Set an open file's length, with the length split across two registers.
-    /// ARMv7-A only.
+    /// ARMv7-A and i386 only.
     Ftruncate64,
     /// Read the current working directory into a buffer.
     Getcwd,
@@ -2076,60 +2500,60 @@ pub enum Syscall {
     Chdir,
     /// Change the working directory to an open directory.
     Fchdir,
-    /// Rename a file. x86-64 and ARMv7-A only.
+    /// Rename a file. x86-64, ARMv7-A and i386 only.
     Rename,
     /// Rename relative to directory file descriptors.
     Renameat,
     /// Rename with flags, such as `RENAME_NOREPLACE`.
     Renameat2,
-    /// Create a directory. x86-64 and ARMv7-A only.
+    /// Create a directory. x86-64, ARMv7-A and i386 only.
     Mkdir,
     /// Create a directory relative to a directory file descriptor.
     Mkdirat,
-    /// Create a file, device node, pipe or socket name. x86-64 and ARMv7-A
+    /// Create a file, device node, pipe or socket name. x86-64, ARMv7-A and i386
     /// only.
     Mknod,
     /// Create a file, device node, pipe or socket name relative to a
     /// directory file descriptor.
     Mknodat,
-    /// Remove an empty directory. x86-64 and ARMv7-A only.
+    /// Remove an empty directory. x86-64, ARMv7-A and i386 only.
     Rmdir,
-    /// Remove a directory entry. x86-64 and ARMv7-A only.
+    /// Remove a directory entry. x86-64, ARMv7-A and i386 only.
     Unlink,
     /// Remove a directory entry relative to a directory file descriptor.
     Unlinkat,
-    /// Create a symbolic link. x86-64 and ARMv7-A only.
+    /// Create a symbolic link. x86-64, ARMv7-A and i386 only.
     Symlink,
     /// Create a symbolic link relative to a directory file descriptor.
     Symlinkat,
-    /// Create a hard link. x86-64 and ARMv7-A only.
+    /// Create a hard link. x86-64, ARMv7-A and i386 only.
     Link,
     /// Create a hard link relative to directory file descriptors.
     Linkat,
-    /// Read a symbolic link's target. x86-64 and ARMv7-A only.
+    /// Read a symbolic link's target. x86-64, ARMv7-A and i386 only.
     Readlink,
     /// Read a symbolic link relative to a directory file descriptor.
     Readlinkat,
-    /// Change a file's mode by path. x86-64 and ARMv7-A only.
+    /// Change a file's mode by path. x86-64, ARMv7-A and i386 only.
     Chmod,
     /// Change an open file's mode.
     Fchmod,
     /// Change a file's mode relative to a directory file descriptor.
     Fchmodat,
-    /// Change a file's owner by path. x86-64 and ARMv7-A only.
+    /// Change a file's owner by path. x86-64, ARMv7-A and i386 only.
     Chown,
     /// Change an open file's owner.
     Fchown,
     /// Change a file's owner relative to a directory file descriptor.
     Fchownat,
     /// Change a file's owner by path without following a final symlink.
-    /// x86-64 and ARMv7-A only.
+    /// x86-64, ARMv7-A and i386 only.
     Lchown,
     /// Set a file's access and modification times from two `timespec`s of
     /// this architecture's `long` width.
     Utimensat,
     /// Set a file's access and modification times from two 64-bit
-    /// `timespec`s. ARMv7-A only.
+    /// `timespec`s. ARMv7-A and i386 only.
     UtimensatTime64,
     /// Set the file mode creation mask.
     Umask,
@@ -2183,7 +2607,7 @@ pub enum Syscall {
     Capget,
     /// Set a thread's capability sets.
     Capset,
-    /// Return the calling process's process-group identifier. x86-64 and ARMv7-A only.
+    /// Return the calling process's process-group identifier. x86-64, ARMv7-A and i386 only.
     Getpgrp,
     /// Start a new session, with the caller as its leader.
     Setsid,
@@ -2193,7 +2617,7 @@ pub enum Syscall {
     Getdents64,
     /// Wait on, or wake, a futex; the primitive under every musl lock.
     Futex,
-    /// Wait on, or wake, a futex, with a 64-bit `timespec` timeout. ARMv7-A only,
+    /// Wait on, or wake, a futex, with a 64-bit `timespec` timeout. ARMv7-A and i386 only,
     /// and the one a time64 musl's locks actually reach.
     FutexTime64,
     /// Register the address cleared and woken on thread exit.
@@ -2263,26 +2687,26 @@ pub enum Syscall {
     EpollCreate1,
     /// Add, modify or remove a file descriptor in an epoll set.
     EpollCtl,
-    /// Wait for events on an epoll set. x86-64 and ARMv7-A only; AArch64 has
+    /// Wait for events on an epoll set. x86-64, ARMv7-A and i386 only; AArch64 has
     /// only [`Syscall::EpollPwait`].
     EpollWait,
     /// Wait on an epoll set with a signal mask.
     EpollPwait,
-    /// Create an epoll set, the size a hint. x86-64 and ARMv7-A only.
+    /// Create an epoll set, the size a hint. x86-64, ARMv7-A and i386 only.
     EpollCreate,
     /// Wait on an epoll set with a signal mask and a `struct timespec`
     /// timeout of two 64-bit words on every architecture.
     EpollPwait2,
     /// Create an eventfd with flags.
     Eventfd2,
-    /// Create an eventfd with no flags. x86-64 and ARMv7-A only.
+    /// Create an eventfd with no flags. x86-64, ARMv7-A and i386 only.
     Eventfd,
     /// Create a signalfd, or change one's mask, with flags.
     Signalfd4,
-    /// Create a signalfd, or change one's mask, with no flags. x86-64 and
-    /// ARMv7-A only.
+    /// Create a signalfd, or change one's mask, with no flags. x86-64, ARMv7-A
+    /// and i386 only.
     Signalfd,
-    /// Make an inotify instance, with no flags. x86-64 and ARMv7-A only.
+    /// Make an inotify instance, with no flags. x86-64, ARMv7-A and i386 only.
     InotifyInit,
     /// Make an inotify instance, with flags.
     InotifyInit1,
@@ -2301,11 +2725,11 @@ pub enum Syscall {
     /// Read a timerfd's time left and interval, as a native-width
     /// `itimerspec`.
     TimerfdGettime,
-    /// [`Syscall::TimerfdSettime`] with 64-bit `timespec` fields. ARMv7-A
-    /// only: a time64 musl calls this, not the 32-bit form.
+    /// [`Syscall::TimerfdSettime`] with 64-bit `timespec` fields. ARMv7-A and
+    /// i386 only: a time64 musl calls this, not the 32-bit form.
     TimerfdSettime64,
-    /// [`Syscall::TimerfdGettime`] with 64-bit `timespec` fields. ARMv7-A
-    /// only.
+    /// [`Syscall::TimerfdGettime`] with 64-bit `timespec` fields. ARMv7-A and
+    /// i386 only.
     TimerfdGettime64,
     /// Issue a process-wide memory barrier.
     Membarrier,
@@ -2319,14 +2743,14 @@ pub enum Syscall {
     Umount2,
     /// Report file system statistics by path.
     Statfs,
-    /// Report file system statistics by path, into `struct statfs64`. ARMv7-A
-    /// only, and it takes the structure's size as an explicit second argument,
+    /// Report file system statistics by path, into `struct statfs64`. ARMv7-A and
+    /// i386 only, and it takes the structure's size as an explicit second argument,
     /// which [`Syscall::Statfs`] does not.
     Statfs64,
     /// Report file system statistics for an open file.
     Fstatfs,
     /// Report file system statistics for an open file, into `struct statfs64`.
-    /// ARMv7-A only, with the same explicit size argument as
+    /// ARMv7-A and i386 only, with the same explicit size argument as
     /// [`Syscall::Statfs64`].
     Fstatfs64,
     /// Set an extended attribute by path, following symbolic links.
@@ -2387,7 +2811,7 @@ pub const ARM_PRIVATE_END: usize = arm::ARM_SET_TLS + 1;
 
 /// One past the highest number [`from_i386`] translates. As
 /// [`X86_64_END`], and it moves up as calls are mapped.
-pub const I386_END: usize = i386::DUP3 + 1;
+pub const I386_END: usize = i386::EPOLL_PWAIT2 + 1;
 
 /// Translate an x86-64 system call number.
 ///
@@ -3432,40 +3856,273 @@ fn arm_signals_and_scheduling(nr: usize) -> Option<Syscall> {
 /// once its handler has been read for that (`docs/I386.md` §3.2).
 #[must_use]
 pub fn from_i386(nr: usize) -> Option<Syscall> {
+    // Asked in turn, for the reason given on `from_aarch64`.
+    i386_early(nr)
+        .or_else(|| i386_middle(nr))
+        .or_else(|| i386_ids_and_at_family(nr))
+        .or_else(|| i386_recent(nr))
+}
+
+/// i386 numbers 0 to 99: the calls inherited from the first Linux table --
+/// process lifetime, descriptors and paths.
+fn i386_early(nr: usize) -> Option<Syscall> {
     let call = match nr {
         i386::RESTART_SYSCALL => Syscall::RestartSyscall,
         i386::EXIT => Syscall::Exit,
+        i386::FORK => Syscall::Fork,
         i386::READ => Syscall::Read,
         i386::WRITE => Syscall::Write,
+        i386::OPEN => Syscall::Open,
         i386::CLOSE => Syscall::Close,
+        i386::CREAT => Syscall::Creat,
+        i386::LINK => Syscall::Link,
+        i386::UNLINK => Syscall::Unlink,
+        i386::EXECVE => Syscall::Execve,
+        i386::CHDIR => Syscall::Chdir,
+        i386::MKNOD => Syscall::Mknod,
+        i386::CHMOD => Syscall::Chmod,
+        i386::LSEEK => Syscall::Lseek,
         i386::GETPID => Syscall::Getpid,
+        i386::MOUNT => Syscall::Mount,
+        i386::PAUSE => Syscall::Pause,
+        i386::ACCESS => Syscall::Access,
+        i386::SYNC => Syscall::Sync,
+        i386::KILL => Syscall::Kill,
+        i386::RENAME => Syscall::Rename,
+        i386::MKDIR => Syscall::Mkdir,
+        i386::RMDIR => Syscall::Rmdir,
         i386::DUP => Syscall::Dup,
+        i386::PIPE => Syscall::Pipe,
+        i386::TIMES => Syscall::Times,
+        i386::BRK => Syscall::Brk,
+        i386::UMOUNT2 => Syscall::Umount2,
+        i386::IOCTL => Syscall::Ioctl,
+        i386::FCNTL => Syscall::Fcntl,
+        i386::SETPGID => Syscall::Setpgid,
+        i386::UMASK => Syscall::Umask,
+        i386::CHROOT => Syscall::Chroot,
         i386::DUP2 => Syscall::Dup2,
         i386::GETPPID => Syscall::Getppid,
-        i386::UNAME => Syscall::Uname,
-        i386::SCHED_YIELD => Syscall::SchedYield,
-        i386::GETUID32 => Syscall::Getuid,
-        i386::GETGID32 => Syscall::Getgid,
-        i386::GETEUID32 => Syscall::Geteuid,
-        i386::GETEGID32 => Syscall::Getegid,
-        i386::GETTID => Syscall::Gettid,
-        i386::SET_THREAD_AREA => Syscall::SetThreadArea,
-        i386::GET_THREAD_AREA => Syscall::GetThreadArea,
-        i386::EXIT_GROUP => Syscall::ExitGroup,
-        i386::DUP3 => Syscall::Dup3,
-        i386::FORK => Syscall::Fork,
-        i386::KILL => Syscall::Kill,
+        i386::GETPGRP => Syscall::Getpgrp,
+        i386::SETSID => Syscall::Setsid,
+        i386::SETHOSTNAME => Syscall::Sethostname,
+        i386::GETRUSAGE => Syscall::Getrusage,
+        i386::SYMLINK => Syscall::Symlink,
+        i386::READLINK => Syscall::Readlink,
+        i386::REBOOT => Syscall::Reboot,
+        i386::MUNMAP => Syscall::Munmap,
+        i386::TRUNCATE => Syscall::Truncate,
+        i386::FTRUNCATE => Syscall::Ftruncate,
+        i386::FCHMOD => Syscall::Fchmod,
+        i386::GETPRIORITY => Syscall::Getpriority,
+        i386::SETPRIORITY => Syscall::Setpriority,
+        i386::GETTIMEOFDAY => Syscall::Gettimeofday,
+        i386::SETTIMEOFDAY => Syscall::Settimeofday,
+        i386::TIME => Syscall::Time,
+        i386::ALARM => Syscall::Alarm,
+        _ => return None,
+    };
+    Some(call)
+}
+
+/// i386 numbers 100 to 199: signals, memory, scheduling and the 64-bit
+/// file offsets.
+fn i386_middle(nr: usize) -> Option<Syscall> {
+    let call = match nr {
+        i386::SYSLOG => Syscall::Syslog,
         i386::WAIT4 => Syscall::Wait4,
+        i386::SYSINFO => Syscall::Sysinfo,
+        i386::FSYNC => Syscall::Fsync,
         i386::SIGRETURN => Syscall::Sigreturn,
         i386::CLONE => Syscall::Clone,
+        i386::SETDOMAINNAME => Syscall::Setdomainname,
+        i386::UNAME => Syscall::Uname,
+        i386::MPROTECT => Syscall::Mprotect,
+        i386::GETPGID => Syscall::Getpgid,
+        i386::FCHDIR => Syscall::Fchdir,
+        i386::LLSEEK => Syscall::Llseek,
+        i386::FLOCK => Syscall::Flock,
+        i386::MSYNC => Syscall::Msync,
+        i386::READV => Syscall::Readv,
+        i386::WRITEV => Syscall::Writev,
+        i386::GETSID => Syscall::Getsid,
+        i386::FDATASYNC => Syscall::Fdatasync,
+        i386::SCHED_SETPARAM => Syscall::SchedSetparam,
+        i386::SCHED_GETPARAM => Syscall::SchedGetparam,
+        i386::SCHED_SETSCHEDULER => Syscall::SchedSetscheduler,
+        i386::SCHED_GETSCHEDULER => Syscall::SchedGetscheduler,
+        i386::SCHED_YIELD => Syscall::SchedYield,
+        i386::SCHED_GET_PRIORITY_MAX => Syscall::SchedGetPriorityMax,
+        i386::SCHED_GET_PRIORITY_MIN => Syscall::SchedGetPriorityMin,
+        i386::MREMAP => Syscall::Mremap,
+        i386::POLL => Syscall::Poll,
+        i386::PRCTL => Syscall::Prctl,
         i386::RT_SIGRETURN => Syscall::RtSigreturn,
         i386::RT_SIGACTION => Syscall::RtSigaction,
         i386::RT_SIGPROCMASK => Syscall::RtSigprocmask,
+        i386::RT_SIGPENDING => Syscall::RtSigpending,
         i386::RT_SIGSUSPEND => Syscall::RtSigsuspend,
+        i386::PREAD64 => Syscall::Pread64,
+        i386::PWRITE64 => Syscall::Pwrite64,
+        i386::GETCWD => Syscall::Getcwd,
+        i386::CAPGET => Syscall::Capget,
+        i386::CAPSET => Syscall::Capset,
         i386::SIGALTSTACK => Syscall::Sigaltstack,
         i386::VFORK => Syscall::Vfork,
+        i386::MMAP2 => Syscall::Mmap2,
+        i386::TRUNCATE64 => Syscall::Truncate64,
+        i386::FTRUNCATE64 => Syscall::Ftruncate64,
+        i386::LCHOWN32 => Syscall::Lchown,
+        i386::GETUID32 => Syscall::Getuid,
+        i386::NANOSLEEP => Syscall::Nanosleep,
+        i386::NEWSELECT => Syscall::Select,
+        i386::ADJTIMEX => Syscall::Adjtimex,
+        _ => return None,
+    };
+    Some(call)
+}
+
+/// i386 numbers 200 to 299: the `32` credential forms, threads, epoll and
+/// the clocks.
+fn i386_ids_and_at_family(nr: usize) -> Option<Syscall> {
+    let call = match nr {
+        i386::GETGID32 => Syscall::Getgid,
+        i386::GETEUID32 => Syscall::Geteuid,
+        i386::GETEGID32 => Syscall::Getegid,
+        i386::SETREUID32 => Syscall::Setreuid,
+        i386::SETREGID32 => Syscall::Setregid,
+        i386::GETGROUPS32 => Syscall::Getgroups,
+        i386::SETGROUPS32 => Syscall::Setgroups,
+        i386::FCHOWN32 => Syscall::Fchown,
+        i386::SETRESUID32 => Syscall::Setresuid,
+        i386::GETRESUID32 => Syscall::Getresuid,
+        i386::SETRESGID32 => Syscall::Setresgid,
+        i386::GETRESGID32 => Syscall::Getresgid,
+        i386::CHOWN32 => Syscall::Chown,
+        i386::SETUID32 => Syscall::Setuid,
+        i386::SETGID32 => Syscall::Setgid,
+        i386::SETFSUID32 => Syscall::Setfsuid,
+        i386::SETFSGID32 => Syscall::Setfsgid,
+        i386::PIVOT_ROOT => Syscall::PivotRoot,
+        i386::MADVISE => Syscall::Madvise,
+        i386::GETDENTS64 => Syscall::Getdents64,
+        i386::FCNTL64 => Syscall::Fcntl64,
+        i386::GETTID => Syscall::Gettid,
+        i386::READAHEAD => Syscall::Readahead,
+        i386::SETXATTR => Syscall::Setxattr,
+        i386::LSETXATTR => Syscall::Lsetxattr,
+        i386::FSETXATTR => Syscall::Fsetxattr,
+        i386::GETXATTR => Syscall::Getxattr,
+        i386::LGETXATTR => Syscall::Lgetxattr,
+        i386::FGETXATTR => Syscall::Fgetxattr,
+        i386::LISTXATTR => Syscall::Listxattr,
+        i386::LLISTXATTR => Syscall::Llistxattr,
+        i386::FLISTXATTR => Syscall::Flistxattr,
+        i386::REMOVEXATTR => Syscall::Removexattr,
+        i386::LREMOVEXATTR => Syscall::Lremovexattr,
+        i386::FREMOVEXATTR => Syscall::Fremovexattr,
         i386::TKILL => Syscall::Tkill,
+        i386::SENDFILE64 => Syscall::Sendfile64,
+        i386::SCHED_SETAFFINITY => Syscall::SchedSetaffinity,
+        i386::SCHED_GETAFFINITY => Syscall::SchedGetaffinity,
+        i386::SET_THREAD_AREA => Syscall::SetThreadArea,
+        i386::GET_THREAD_AREA => Syscall::GetThreadArea,
+        i386::EXIT_GROUP => Syscall::ExitGroup,
+        i386::EPOLL_CREATE => Syscall::EpollCreate,
+        i386::EPOLL_CTL => Syscall::EpollCtl,
+        i386::EPOLL_WAIT => Syscall::EpollWait,
+        i386::SET_TID_ADDRESS => Syscall::SetTidAddress,
+        i386::STATFS64 => Syscall::Statfs64,
+        i386::FSTATFS64 => Syscall::Fstatfs64,
         i386::TGKILL => Syscall::Tgkill,
+        i386::INOTIFY_INIT => Syscall::InotifyInit,
+        i386::INOTIFY_ADD_WATCH => Syscall::InotifyAddWatch,
+        i386::INOTIFY_RM_WATCH => Syscall::InotifyRmWatch,
+        i386::OPENAT => Syscall::Openat,
+        i386::MKDIRAT => Syscall::Mkdirat,
+        i386::MKNODAT => Syscall::Mknodat,
+        i386::FCHOWNAT => Syscall::Fchownat,
+        i386::CLOCK_NANOSLEEP => Syscall::ClockNanosleep,
+        i386::FUTEX => Syscall::Futex,
+        i386::CLOCK_GETTIME => Syscall::ClockGettime,
+        i386::CLOCK_GETRES => Syscall::ClockGetres,
+        i386::CLOCK_SETTIME => Syscall::ClockSettime,
+        _ => return None,
+    };
+    Some(call)
+}
+
+/// i386 numbers 300 and up: the `at` family, the descriptor-making calls
+/// and the time64 set.
+fn i386_recent(nr: usize) -> Option<Syscall> {
+    let call = match nr {
+        i386::UNLINKAT => Syscall::Unlinkat,
+        i386::RENAMEAT => Syscall::Renameat,
+        i386::LINKAT => Syscall::Linkat,
+        i386::SYMLINKAT => Syscall::Symlinkat,
+        i386::READLINKAT => Syscall::Readlinkat,
+        i386::FCHMODAT => Syscall::Fchmodat,
+        i386::FACCESSAT => Syscall::Faccessat,
+        i386::UNSHARE => Syscall::Unshare,
+        i386::SPLICE => Syscall::Splice,
+        i386::GETCPU => Syscall::Getcpu,
+        i386::EPOLL_PWAIT => Syscall::EpollPwait,
+        i386::SIGNALFD => Syscall::Signalfd,
+        i386::TIMERFD_CREATE => Syscall::TimerfdCreate,
+        i386::EVENTFD => Syscall::Eventfd,
+        i386::FALLOCATE => Syscall::Fallocate,
+        i386::SIGNALFD4 => Syscall::Signalfd4,
+        i386::EVENTFD2 => Syscall::Eventfd2,
+        i386::EPOLL_CREATE1 => Syscall::EpollCreate1,
+        i386::DUP3 => Syscall::Dup3,
+        i386::PIPE2 => Syscall::Pipe2,
+        i386::INOTIFY_INIT1 => Syscall::InotifyInit1,
+        i386::PRLIMIT64 => Syscall::Prlimit64,
+        i386::SYNCFS => Syscall::Syncfs,
+        i386::SETNS => Syscall::Setns,
+        i386::RENAMEAT2 => Syscall::Renameat2,
+        i386::GETRANDOM => Syscall::Getrandom,
+        i386::MEMFD_CREATE => Syscall::MemfdCreate,
+        i386::EXECVEAT => Syscall::Execveat,
+        i386::MEMBARRIER => Syscall::Membarrier,
+        i386::COPY_FILE_RANGE => Syscall::CopyFileRange,
+        i386::STATX => Syscall::Statx,
+        i386::CLOCK_GETTIME64 => Syscall::ClockGettime64,
+        i386::CLOCK_SETTIME64 => Syscall::ClockSettime64,
+        i386::CLOCK_GETRES_TIME64 => Syscall::ClockGetresTime64,
+        i386::CLOCK_NANOSLEEP_TIME64 => Syscall::ClockNanosleepTime64,
+        i386::TIMERFD_GETTIME64 => Syscall::TimerfdGettime64,
+        i386::TIMERFD_SETTIME64 => Syscall::TimerfdSettime64,
+        i386::UTIMENSAT_TIME64 => Syscall::UtimensatTime64,
+        i386::PSELECT6_TIME64 => Syscall::Pselect6Time64,
+        i386::PPOLL_TIME64 => Syscall::PpollTime64,
+        i386::FUTEX_TIME64 => Syscall::FutexTime64,
+        i386::PIDFD_OPEN => Syscall::PidfdOpen,
+        i386::OPENAT2 => Syscall::Openat2,
+        i386::FACCESSAT2 => Syscall::Faccessat2,
+        i386::EPOLL_PWAIT2 => Syscall::EpollPwait2,
+        i386::PPOLL => Syscall::Ppoll,
+        i386::PSELECT6 => Syscall::Pselect6,
+        i386::UTIMENSAT => Syscall::Utimensat,
+        i386::TIMERFD_SETTIME => Syscall::TimerfdSettime,
+        i386::TIMERFD_GETTIME => Syscall::TimerfdGettime,
+        i386::CLOCK_ADJTIME => Syscall::ClockAdjtime,
+        i386::CLOCK_ADJTIME64 => Syscall::ClockAdjtime64,
+        i386::SOCKET => Syscall::Socket,
+        i386::SOCKETPAIR => Syscall::Socketpair,
+        i386::BIND => Syscall::Bind,
+        i386::CONNECT => Syscall::Connect,
+        i386::LISTEN => Syscall::Listen,
+        i386::ACCEPT4 => Syscall::Accept4,
+        i386::GETSOCKOPT => Syscall::Getsockopt,
+        i386::SETSOCKOPT => Syscall::Setsockopt,
+        i386::GETSOCKNAME => Syscall::Getsockname,
+        i386::GETPEERNAME => Syscall::Getpeername,
+        i386::SENDTO => Syscall::Sendto,
+        i386::SENDMSG => Syscall::Sendmsg,
+        i386::RECVFROM => Syscall::Recvfrom,
+        i386::RECVMSG => Syscall::Recvmsg,
+        i386::SHUTDOWN => Syscall::Shutdown,
         _ => return None,
     };
     Some(call)

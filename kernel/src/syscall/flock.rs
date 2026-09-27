@@ -78,7 +78,8 @@ use ferrix_vfs::{OpenFile, Whence};
 
 use crate::sched::WaitQueue;
 use crate::sync::SpinLock;
-use crate::syscall::fd;
+use crate::syscall::{fd, signal};
+use crate::trap::Abi;
 
 pub(crate) mod check;
 use crate::syscall::process::Process;
@@ -356,7 +357,8 @@ struct Layout {
     wide: bool,
 }
 
-/// `struct flock` on a 64-bit build, and `struct flock64` on every build.
+/// `struct flock` on a 64-bit build, and `struct flock64` for every program
+/// but an i386 one.
 const WIDE_FLOCK: Layout = Layout {
     size: 32,
     start: 8,
@@ -364,12 +366,22 @@ const WIDE_FLOCK: Layout = Layout {
     wide: true,
 };
 
-/// `struct flock` on ARMv7-A: 32-bit offsets, no padding.
+/// `struct flock` on ARMv7-A and i386: 32-bit offsets, no padding.
 const NARROW_FLOCK: Layout = Layout {
     size: 16,
     start: 4,
     pid: 12,
     wide: false,
+};
+
+/// `struct flock64` for an i386 program: x86-32 aligns a `long long` to four,
+/// so `l_start` follows the two `short`s directly and nothing pads the end --
+/// Linux's `compat_flock64`, packed under `__ARCH_NEED_COMPAT_FLOCK64_PACKED`.
+const I386_FLOCK64: Layout = Layout {
+    size: 24,
+    start: 4,
+    pid: 20,
+    wide: true,
 };
 
 /// What a record-lock command asks.
@@ -398,17 +410,22 @@ struct Flock {
     pid: i32,
 }
 
-/// What `cmd` is to `call`, or `None` if it is not a record-lock command
-/// there.
+/// What `cmd` is to `call` from a program of `abi`, or `None` if it is not a
+/// record-lock command there.
 ///
-/// The plain commands read `struct flock`, whose offsets are a `long`. On a
-/// 32-bit build only `fcntl64` has the `64` commands and the OFD ones, which
+/// The plain commands read `struct flock`, whose offsets are a `long`. For a
+/// 32-bit program only `fcntl64` has the `64` commands and the OFD ones, which
 /// read `struct flock64` -- Linux's `do_fcntl` takes `F_OFD_*` only where a
 /// long is 64 bits, and says 32-bit architectures must use `fcntl64` -- so
 /// plain `fcntl` gets `EINVAL` for them from `fd::sys_fcntl`, as on Linux.
-fn command(cmd: u32, call: Syscall) -> Option<(Request, bool, Layout)> {
-    let narrow = size_of::<usize>() == 4;
+fn command(cmd: u32, call: Syscall, abi: Abi) -> Option<(Request, bool, Layout)> {
+    let narrow = signal::word_of(abi) == 4;
     let plain = if narrow { NARROW_FLOCK } else { WIDE_FLOCK };
+    let flock64 = if abi == Abi::Compat {
+        I386_FLOCK64
+    } else {
+        WIDE_FLOCK
+    };
     let wide_call = !narrow || call == Syscall::Fcntl64;
     let request = match cmd {
         F_GETLK | F_GETLK64 | F_OFD_GETLK => Request::Get,
@@ -419,17 +436,17 @@ fn command(cmd: u32, call: Syscall) -> Option<(Request, bool, Layout)> {
     match cmd {
         F_GETLK | F_SETLK | F_SETLKW => Some((request, false, plain)),
         F_GETLK64 | F_SETLK64 | F_SETLKW64 if narrow && wide_call => {
-            Some((request, false, WIDE_FLOCK))
+            Some((request, false, flock64))
         }
-        F_OFD_GETLK | F_OFD_SETLK | F_OFD_SETLKW if wide_call => Some((request, true, WIDE_FLOCK)),
+        F_OFD_GETLK | F_OFD_SETLK | F_OFD_SETLKW if wide_call => Some((request, true, flock64)),
         _ => None,
     }
 }
 
 /// Whether `fcntl` or `fcntl64` with `cmd` is a record-lock command, which
 /// [`sys_fcntl_lock`] answers.
-pub(crate) fn is_record_lock(cmd: u32, call: Syscall) -> bool {
-    command(cmd, call).is_some()
+pub(crate) fn is_record_lock(cmd: u32, call: Syscall, abi: Abi) -> bool {
+    command(cmd, call, abi).is_some()
 }
 
 /// `fcntl(fd, F_GETLK | F_SETLK | F_SETLKW, lock)`, the `64` forms, and the
@@ -452,12 +469,13 @@ pub(crate) fn sys_fcntl_lock(
     cmd: u32,
     arg: u64,
     call: Syscall,
+    abi: Abi,
 ) -> Result<usize, Errno> {
     let file = fd::file(process, fd)?;
     if file.is_path() {
         return Err(Errno::EBADF);
     }
-    let (request, ofd, layout) = command(cmd, call).ok_or(Errno::EINVAL)?;
+    let (request, ofd, layout) = command(cmd, call, abi).ok_or(Errno::EINVAL)?;
     let mut raw = [0_u8; 32];
     let bytes = raw.get_mut(..layout.size).ok_or(Errno::EINVAL)?;
     uaccess::copy_from_user(process.space(), arg, bytes).map_err(|_| Errno::EFAULT)?;

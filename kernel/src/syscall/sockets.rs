@@ -71,6 +71,7 @@ use crate::syscall::attributes::int;
 use crate::syscall::fd;
 use crate::syscall::process::Process;
 use crate::syscall::uaccess;
+use crate::trap::Abi;
 
 /// One past the last socket type: `SOCK_MAX` in `linux/net.h`.
 const SOCK_MAX: u32 = 11;
@@ -104,8 +105,16 @@ pub(crate) fn dispatch(
     call: Syscall,
     a: &[u64; 6],
     process: &Process,
+    abi: Abi,
 ) -> Option<Result<usize, Errno>> {
     let descriptor = fd::arg(a[0]);
+    // An i386 program's `msghdr`, `cmsghdr`, `iovec` and `timeval` are made of
+    // 32-bit words on this 64-bit kernel, as every program's are on ARMv7-A.
+    let width = if abi == Abi::Compat {
+        Width::Bits32
+    } else {
+        NATIVE
+    };
     let answer = match call {
         Syscall::Socket => sys_socket(process, int(a[0]), a[1] as u32, int(a[2])),
         Syscall::Socketpair => sys_socketpair(process, int(a[0]), a[1] as u32, int(a[2]), a[3]),
@@ -127,13 +136,15 @@ pub(crate) fn dispatch(
             name_length(a[4], a[5]),
         ),
         Syscall::Recvfrom => sys_recvfrom(process, descriptor, a[1], a[2], a[3] as u32, a[4], a[5]),
-        Syscall::Sendmsg => sys_sendmsg(process, descriptor, a[1], a[2] as u32),
-        Syscall::Recvmsg => sys_recvmsg(process, descriptor, a[1], a[2] as u32),
+        Syscall::Sendmsg => sys_sendmsg(process, descriptor, a[1], a[2] as u32, width),
+        Syscall::Recvmsg => sys_recvmsg(process, descriptor, a[1], a[2] as u32, width),
         Syscall::Getsockopt => {
-            sys_getsockopt(process, descriptor, int(a[1]), int(a[2]), a[3], a[4])
+            let option = (int(a[1]), int(a[2]));
+            sys_getsockopt(process, descriptor, option, a[3], a[4], width)
         }
         Syscall::Setsockopt => {
-            sys_setsockopt(process, descriptor, int(a[1]), int(a[2]), a[3], int(a[4]))
+            let option = (int(a[1]), int(a[2]));
+            sys_setsockopt(process, descriptor, option, a[3], int(a[4]), width)
         }
         _ => return None,
     };
@@ -935,24 +946,30 @@ fn sys_recvfrom(
     Ok(received_count(&socket, received, flags))
 }
 
-/// A program's `struct msghdr`.
-fn read_header(process: &Process, at: u64) -> Result<MsgHdr, Errno> {
+/// A program's `struct msghdr`, of `width`.
+fn read_header(process: &Process, at: u64, width: Width) -> Result<MsgHdr, Errno> {
     let mut bytes = [0_u8; MsgHdr::size(Width::Bits64)];
-    let header = bytes.get_mut(..MsgHdr::size(NATIVE)).ok_or(Errno::EINVAL)?;
+    let header = bytes.get_mut(..MsgHdr::size(width)).ok_or(Errno::EINVAL)?;
     uaccess::copy_from_user(process.space(), at, header).map_err(|_| Errno::EFAULT)?;
-    MsgHdr::decode(header, NATIVE).ok_or(Errno::EINVAL)
+    MsgHdr::decode(header, width).ok_or(Errno::EINVAL)
 }
 
 /// A message's iovecs, as (address, length) pairs: `EMSGSIZE` past
 /// `UIO_MAXIOV`, `EINVAL` for a length that would make the total negative,
 /// `EFAULT` for a buffer outside the user half, and the lengths clamped so the
-/// total stays within `MAX_RW_COUNT` -- `import_iovec`'s rules.
-fn iovecs(process: &Process, message: &MsgHdr) -> Result<Vec<(u64, usize)>, Errno> {
+/// total stays within `MAX_RW_COUNT` -- `import_iovec`'s rules. A length is
+/// negative by the program's `ssize_t`, which `width` says the size of.
+fn iovecs(process: &Process, message: &MsgHdr, width: Width) -> Result<Vec<(u64, usize)>, Errno> {
     if message.iov_len > UIO_MAXIOV {
         return Err(Errno::EMSGSIZE);
     }
     let count = usize::try_from(message.iov_len).map_err(|_| Errno::EMSGSIZE)?;
-    let word = NATIVE.bytes();
+    let word = width.bytes();
+    let most = if width == Width::Bits32 {
+        i32::MAX as u64
+    } else {
+        i64::MAX as u64
+    };
     let raw = copy_in(process, message.iov, count * word * 2)?;
     let mut segments = Vec::new();
     segments
@@ -961,9 +978,9 @@ fn iovecs(process: &Process, message: &MsgHdr) -> Result<Vec<(u64, usize)>, Errn
     let mut total = 0_usize;
     for index in 0..count {
         let at = index * word * 2;
-        let base = NATIVE.word(&raw, at).ok_or(Errno::EINVAL)?;
-        let length = NATIVE.word(&raw, at + word).ok_or(Errno::EINVAL)?;
-        if isize::try_from(length).is_err() {
+        let base = width.word(&raw, at).ok_or(Errno::EINVAL)?;
+        let length = width.word(&raw, at + word).ok_or(Errno::EINVAL)?;
+        if length > most {
             return Err(Errno::EINVAL);
         }
         let length = usize::try_from(length)
@@ -987,7 +1004,12 @@ fn iovecs(process: &Process, message: &MsgHdr) -> Result<Vec<(u64, usize)>, Errn
 ///
 /// The files are cloned out of the descriptor table under its lock and dropped,
 /// if the send is refused, after it.
-fn control(process: &Process, message: &MsgHdr, socket: &Any) -> Result<Option<Passed>, Errno> {
+fn control(
+    process: &Process,
+    message: &MsgHdr,
+    socket: &Any,
+    width: Width,
+) -> Result<Option<Passed>, Errno> {
     if message.control_len == 0 {
         return Ok(None);
     }
@@ -999,7 +1021,7 @@ fn control(process: &Process, message: &MsgHdr, socket: &Any) -> Result<Option<P
     let mut descriptors: Vec<i32> = Vec::new();
     let mut rights = false;
     let mut credentials: Option<Ucred> = None;
-    for entry in ControlMessages::new(&control, NATIVE) {
+    for entry in ControlMessages::new(&control, width) {
         let entry = entry.map_err(|_| Errno::EINVAL)?;
         if entry.level != SOL_SOCKET {
             continue;
@@ -1093,11 +1115,11 @@ fn named_credentials(process: &Process, data: &[u8]) -> Result<Ucred, Errno> {
 fn deliver_files(
     process: &Process,
     passed: &Passed,
-    at: u64,
-    capacity: usize,
+    (at, capacity): (u64, usize),
     flags: u32,
+    width: Width,
 ) -> Result<(usize, bool), Errno> {
-    let header = CmsgHdr::size(NATIVE);
+    let header = CmsgHdr::size(width);
     let room = if at == 0 {
         0
     } else {
@@ -1122,13 +1144,13 @@ fn deliver_files(
         return Ok((0, truncated));
     }
     let data_len = installed.len() * size_of::<i32>();
-    let mut bytes = zeroed(cmsg_len(data_len, NATIVE))?;
+    let mut bytes = zeroed(cmsg_len(data_len, width))?;
     CmsgHdr {
-        len: cmsg_len(data_len, NATIVE) as u64,
+        len: cmsg_len(data_len, width) as u64,
         level: SOL_SOCKET,
         kind: SCM_RIGHTS,
     }
-    .encode(&mut bytes, NATIVE)
+    .encode(&mut bytes, width)
     .ok_or(Errno::EINVAL)?;
     for (index, descriptor) in installed.iter().enumerate() {
         let slot = bytes
@@ -1137,7 +1159,7 @@ fn deliver_files(
         slot.copy_from_slice(&descriptor.to_le_bytes());
     }
     uaccess::copy_to_user(process.space(), at, &bytes).map_err(|_| Errno::EFAULT)?;
-    Ok((cmsg_space(data_len, NATIVE).min(capacity), truncated))
+    Ok((cmsg_space(data_len, width).min(capacity), truncated))
 }
 
 /// `sendmsg`: the message's buffers gathered into one send.
@@ -1146,12 +1168,13 @@ fn sys_sendmsg(
     descriptor: i32,
     header: u64,
     flags: u32,
+    width: Width,
 ) -> Result<usize, Errno> {
     if flags & MSG_CMSG_COMPAT != 0 {
         return Err(Errno::EINVAL);
     }
     let (file, socket) = socket_of(process, descriptor)?;
-    let message = read_header(process, header)?;
+    let message = read_header(process, header, width)?;
     let name_length = name_length_of(&message)?;
     check_destination(&socket, name_length)?;
     if flags & MSG_OOB != 0 {
@@ -1162,8 +1185,8 @@ fn sys_sendmsg(
     } else {
         Some(read_address(process, message.name, name_length)?)
     };
-    let segments = iovecs(process, &message)?;
-    let passed = control(process, &message, &socket)?;
+    let segments = iovecs(process, &message, width)?;
+    let passed = control(process, &message, &socket, width)?;
     let total = segments
         .iter()
         .map(|&(_, length)| length)
@@ -1186,6 +1209,41 @@ fn sys_sendmsg(
     }
 }
 
+/// A Unix socket's control messages for `recvmsg`, into the `capacity` bytes
+/// at `control`: the sender's credentials if the socket asked for them, then
+/// the files that came with the bytes, in the order Linux's `scm_recv` writes
+/// them. Answers the bytes used and whether anything was cut.
+fn unix_control(
+    process: &Process,
+    unix: &Socket,
+    passed: Option<&Passed>,
+    (control, capacity): (u64, usize),
+    (flags, width): (u32, Width),
+) -> Result<(usize, bool), Errno> {
+    let (mut used, mut cut) = if unix.passes_credentials() {
+        let sender = fs::socket::sender_of(passed);
+        let stamp = inet::Control {
+            level: SOL_SOCKET,
+            kind: SCM_CREDENTIALS,
+            data: sender.to_bytes().to_vec(),
+        };
+        write_control(process, (control, capacity), &[stamp], width)?
+    } else {
+        (0, false)
+    };
+    if let Some(passed) = passed.filter(|passed| !passed.files().is_empty()) {
+        let at = if control == 0 {
+            0
+        } else {
+            control.saturating_add(used as u64)
+        };
+        let (more, dropped) = deliver_files(process, passed, (at, capacity - used), flags, width)?;
+        used += more;
+        cut |= dropped;
+    }
+    Ok((used, cut))
+}
+
 /// `recvmsg`: one receive scattered over the message's buffers, with its
 /// length fields and flags written back, and the descriptors that came with
 /// the bytes installed. A peer without a name reports an address of length
@@ -1195,17 +1253,18 @@ fn sys_recvmsg(
     descriptor: i32,
     header: u64,
     flags: u32,
+    width: Width,
 ) -> Result<usize, Errno> {
     if flags & MSG_CMSG_COMPAT != 0 {
         return Err(Errno::EINVAL);
     }
     let (file, socket) = socket_of(process, descriptor)?;
-    let message = read_header(process, header)?;
+    let message = read_header(process, header, width)?;
     let _ = name_length_of(&message)?;
     if flags & MSG_OOB != 0 {
         return Err(Errno::EOPNOTSUPP);
     }
-    let segments = iovecs(process, &message)?;
+    let segments = iovecs(process, &message, width)?;
     let total = segments
         .iter()
         .map(|&(_, length)| length)
@@ -1244,41 +1303,26 @@ fn sys_recvmsg(
         write_address(
             process,
             message.name,
-            field(MsgHdr::name_len_offset(NATIVE)),
+            field(MsgHdr::name_len_offset(width)),
             &encoded,
             capacity,
         )?;
     }
     let control_capacity = usize::try_from(message.control_len).unwrap_or(usize::MAX);
     let (control_used, control_truncated) = match &socket {
-        Any::Unix(unix) => {
-            // The sender first and the files after, in the order Linux's
-            // `scm_recv` writes them.
-            let (mut used, mut cut) = if unix.passes_credentials() {
-                let sender = fs::socket::sender_of(passed.as_ref());
-                let stamp = inet::Control {
-                    level: SOL_SOCKET,
-                    kind: SCM_CREDENTIALS,
-                    data: sender.to_bytes().to_vec(),
-                };
-                write_control(process, message.control, control_capacity, &[stamp])?
-            } else {
-                (0, false)
-            };
-            if let Some(passed) = passed.as_ref().filter(|passed| !passed.files().is_empty()) {
-                let at = if message.control == 0 {
-                    0
-                } else {
-                    message.control.saturating_add(used as u64)
-                };
-                let (more, dropped) =
-                    deliver_files(process, passed, at, control_capacity - used, flags)?;
-                used += more;
-                cut |= dropped;
-            }
-            (used, cut)
-        }
-        _ => write_control(process, message.control, control_capacity, &control)?,
+        Any::Unix(unix) => unix_control(
+            process,
+            unix,
+            passed.as_ref(),
+            (message.control, control_capacity),
+            (flags, width),
+        )?,
+        _ => write_control(
+            process,
+            (message.control, control_capacity),
+            &control,
+            width,
+        )?,
     };
     // Every file not installed is closed here, with the table unlocked.
     drop(passed);
@@ -1287,12 +1331,12 @@ fn sys_recvmsg(
         if truncated { MSG_TRUNC } else { 0 } | if control_truncated { MSG_CTRUNC } else { 0 };
     uaccess::put_u32(
         process.space(),
-        field(MsgHdr::flags_offset(NATIVE)),
+        field(MsgHdr::flags_offset(width)),
         message_flags,
     )?;
     uaccess::put_word(
         process.space(),
-        field(MsgHdr::control_len_offset(NATIVE)),
+        field(MsgHdr::control_len_offset(width)),
         control_used as u64,
     )?;
     Ok(received_count(&socket, received, flags))
@@ -1306,11 +1350,11 @@ fn sys_recvmsg(
 /// message was cut.
 fn write_control(
     process: &Process,
-    control: u64,
-    capacity: usize,
+    (control, capacity): (u64, usize),
     messages: &[inet::Control],
+    width: Width,
 ) -> Result<(usize, bool), Errno> {
-    let header = CmsgHdr::size(NATIVE);
+    let header = CmsgHdr::size(width);
     let mut used = 0_usize;
     let mut cut = false;
     for message in messages {
@@ -1319,7 +1363,7 @@ fn write_control(
             cut = true;
             continue;
         }
-        let whole = cmsg_len(message.data.len(), NATIVE);
+        let whole = cmsg_len(message.data.len(), width);
         let length = whole.min(left);
         cut |= length < whole;
         let mut bytes = vec![0_u8; length];
@@ -1328,15 +1372,15 @@ fn write_control(
             level: message.level,
             kind: message.kind,
         }
-        .encode(&mut bytes, NATIVE)
+        .encode(&mut bytes, width)
         .ok_or(Errno::EINVAL)?;
-        let data_at = cmsg_align(header, NATIVE);
+        let data_at = cmsg_align(header, width);
         for (slot, byte) in bytes.iter_mut().skip(data_at).zip(message.data.iter()) {
             *slot = *byte;
         }
         uaccess::copy_to_user(process.space(), control.saturating_add(used as u64), &bytes)
             .map_err(|_| Errno::EFAULT)?;
-        used = used.saturating_add(cmsg_space(message.data.len(), NATIVE).min(left));
+        used = used.saturating_add(cmsg_space(message.data.len(), width).min(left));
     }
     Ok((used, cut))
 }
@@ -1346,14 +1390,14 @@ fn write_control(
 fn sys_getsockopt(
     process: &Process,
     descriptor: i32,
-    level: i32,
-    name: i32,
+    (level, name): (i32, i32),
     value: u64,
     length: u64,
+    width: Width,
 ) -> Result<usize, Errno> {
     let (_file, socket) = socket_of(process, descriptor)?;
     let capacity = buffer_length(process, length)?;
-    let bytes = socket.get_option(level, name, NATIVE)?;
+    let bytes = socket.get_option(level, name, width)?;
     let shown = bytes.get(..capacity.min(bytes.len())).unwrap_or_default();
     uaccess::copy_to_user(process.space(), value, shown).map_err(|_| Errno::EFAULT)?;
     uaccess::put_u32(
@@ -1369,14 +1413,14 @@ fn sys_getsockopt(
 fn sys_setsockopt(
     process: &Process,
     descriptor: i32,
-    level: i32,
-    name: i32,
+    (level, name): (i32, i32),
     value: u64,
     length: i32,
+    width: Width,
 ) -> Result<usize, Errno> {
     let length = usize::try_from(length).map_err(|_| Errno::EINVAL)?;
     let (_file, socket) = socket_of(process, descriptor)?;
     let bytes = copy_in(process, value, length.min(MAX_OPTION))?;
-    socket.set_option(level, name, &bytes, NATIVE)?;
+    socket.set_option(level, name, &bytes, width)?;
     Ok(0)
 }

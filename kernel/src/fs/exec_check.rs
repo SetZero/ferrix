@@ -465,7 +465,9 @@ fn fork_and_exec_self() -> Result<i32, &'static str> {
 fn exec_self(_argument: usize) {
     let staged = STAGED_CALL.lock().take();
     let outcome = match (process::current(), staged) {
-        (Some(me), Some((path, argv))) => exec::sys_execve(&me, path, argv, 0).map(|_| ()),
+        (Some(me), Some((path, argv))) => {
+            exec::sys_execve(&me, path, argv, 0, size_of::<usize>()).map(|_| ())
+        }
         _ => Err(ExecveError::Refused(Errno::EINVAL)),
     };
     match outcome {

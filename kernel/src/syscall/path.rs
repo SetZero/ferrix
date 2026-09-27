@@ -56,6 +56,7 @@ use crate::syscall::process::Process;
 use crate::syscall::time::TimeWidth;
 use crate::syscall::uaccess;
 use crate::syscall::{SyscallArgs, stat};
+use crate::trap::Abi;
 
 /// Answer `call` if it is one of this module's or [`stat`]'s.
 ///
@@ -69,7 +70,7 @@ pub(crate) fn dispatch(
     let a = &args.args;
     describe(call, a, process)
         .or_else(|| change(call, a, process))
-        .or_else(|| attributes(call, a, process))
+        .or_else(|| attributes(call, a, process, args.abi))
 }
 
 /// The calls that report on a name without changing anything.
@@ -126,7 +127,13 @@ fn change(call: Syscall, a: &[u64; 6], process: &Process) -> Option<Result<usize
 }
 
 /// The calls that change what `stat` reports, and the mask on new modes.
-fn attributes(call: Syscall, a: &[u64; 6], process: &Process) -> Option<Result<usize, Errno>> {
+/// `abi` lays out `utimensat`'s `timespec`s.
+fn attributes(
+    call: Syscall,
+    a: &[u64; 6],
+    process: &Process,
+    abi: Abi,
+) -> Option<Result<usize, Errno>> {
     let answer = match call {
         Syscall::Umask => usize::try_from(process.set_umask(word(a[0]))).map_err(|_| Errno::EINVAL),
         Syscall::Chmod => sys_fchmodat(process, AT_FDCWD, a[0], word(a[1])),
@@ -136,16 +143,13 @@ fn attributes(call: Syscall, a: &[u64; 6], process: &Process) -> Option<Result<u
         Syscall::Lchown => sys_fchownat(process, AT_FDCWD, a[0], (a[1], a[2]), AT_SYMLINK_NOFOLLOW),
         Syscall::Fchownat => sys_fchownat(process, int(a[0]), a[1], (a[2], a[3]), word(a[4])),
         Syscall::Fchown => sys_fchown(process, int(a[0]), (a[1], a[2])),
-        Syscall::Utimensat => sys_utimensat(
-            process,
-            int(a[0]),
-            a[1],
-            a[2],
-            word(a[3]),
-            TimeWidth::Native,
-        ),
+        Syscall::Utimensat => {
+            let width = TimeWidth::Native.in_abi(abi);
+            sys_utimensat(process, int(a[0]), a[1], a[2], word(a[3]), width)
+        }
         Syscall::UtimensatTime64 => {
-            sys_utimensat(process, int(a[0]), a[1], a[2], word(a[3]), TimeWidth::Wide)
+            let width = TimeWidth::Wide.in_abi(abi);
+            sys_utimensat(process, int(a[0]), a[1], a[2], word(a[3]), width)
         }
         _ => return None,
     };
@@ -787,10 +791,7 @@ fn read_times(
     if at == 0 {
         return Ok(([Some(now), Some(now)], false));
     }
-    let field = match width {
-        TimeWidth::Native => size_of::<usize>(),
-        TimeWidth::Wide => size_of::<u64>(),
-    };
+    let field = width.field_bytes();
     let mut bytes = [0_u8; 32];
     let raw = bytes.get_mut(..field * 4).ok_or(Errno::EINVAL)?;
     uaccess::copy_from_user(process.space(), at, raw).map_err(|_| Errno::EFAULT)?;
@@ -800,9 +801,9 @@ fn read_times(
     for (index, slot) in times.iter_mut().enumerate() {
         let tv_sec = signed_field(raw, index * 2 * field, field)?;
         let tv_nsec = signed_field(raw, (index * 2 + 1) * field, field)?;
-        // A 64-bit `tv_nsec` on a 32-bit build keeps its low half, as
+        // A 64-bit `tv_nsec` from a 32-bit program keeps its low half, as
         // `get_timespec64` does: the rest is padding a libc need not write.
-        let tv_nsec = if field > size_of::<usize>() {
+        let tv_nsec = if field == 8 && width.long_is_32() {
             i64::from(tv_nsec as i32)
         } else {
             tv_nsec

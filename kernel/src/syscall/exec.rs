@@ -602,8 +602,9 @@ pub(crate) fn sys_execve(
     path: u64,
     argv: u64,
     envp: u64,
+    word: usize,
 ) -> Result<(u64, u64, Abi), ExecveError> {
-    execve_at(process, AT_FDCWD, path, argv, envp, 0)
+    execve_at(process, AT_FDCWD, path, argv, envp, 0, word)
 }
 
 /// `execveat`: [`sys_execve`], with a relative path resolved from the
@@ -623,11 +624,14 @@ pub(crate) fn sys_execveat(
     argv: u64,
     envp: u64,
     flags: u32,
+    word: usize,
 ) -> Result<(u64, u64, Abi), ExecveError> {
-    execve_at(process, dirfd, path, argv, envp, flags)
+    execve_at(process, dirfd, path, argv, envp, flags, word)
 }
 
-/// The one body of `execve` and `execveat`. See [`sys_execve`].
+/// The one body of `execve` and `execveat`. See [`sys_execve`]. `word` is
+/// the width of the caller's `argv` and `envp` pointers: four for a 32-bit
+/// program, whatever the program it runs will be.
 fn execve_at(
     process: &Process,
     dirfd: i32,
@@ -635,6 +639,7 @@ fn execve_at(
     argv: u64,
     envp: u64,
     flags: u32,
+    word: usize,
 ) -> Result<(u64, u64, Abi), ExecveError> {
     if flags & !(AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW) != 0 {
         return Err(Errno::EINVAL.into());
@@ -648,8 +653,8 @@ fn execve_at(
     }
 
     let mut budget = STARTUP_BYTES;
-    let mut args = read_strings(space, argv, &mut budget)?;
-    let env = read_strings(space, envp, &mut budget)?;
+    let mut args = read_strings(space, argv, word, &mut budget)?;
+    let env = read_strings(space, envp, word, &mut budget)?;
 
     // The caller's own root and working directory, so a relative path after
     // `cd` resolves from there, and its identity, which the walk and the
@@ -855,15 +860,20 @@ fn empty_user_half(space: &AddressSpace) -> Result<(), SpaceError> {
 }
 
 /// Read a `NULL`-terminated array of string pointers from the program, as
-/// `argv` and `envp` are passed, charging each string to `budget`.
+/// `argv` and `envp` are passed, `word` bytes a pointer, charging each string
+/// to `budget`.
 ///
 /// A null array is an empty one, which Linux accepts for both.
-fn read_strings(space: &AddressSpace, at: u64, budget: &mut usize) -> Result<Vec<Vec<u8>>, Errno> {
+fn read_strings(
+    space: &AddressSpace,
+    at: u64,
+    word: usize,
+    budget: &mut usize,
+) -> Result<Vec<Vec<u8>>, Errno> {
     let mut strings = Vec::new();
     if at == 0 {
         return Ok(strings);
     }
-    let word = size_of::<usize>();
     let stride = word as u64;
     let mut slot = at;
     loop {

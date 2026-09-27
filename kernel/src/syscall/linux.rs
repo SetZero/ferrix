@@ -30,15 +30,15 @@ use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{AT_FDCWD, O_CREAT, O_TRUNC, O_WRONLY};
 
 use super::{
-    Personality, attributes, credentials, epoll, eventfd, exec, family, fd, file, flock, fsctl,
-    futex, kill, limits, memfd, memory, namespace, path, poll, process, signal, signalfd, sockets,
-    system, thread, thread_area, time, timerfd, unanswered,
+    Personality, attributes, compat, credentials, epoll, eventfd, exec, family, fd, file, flock,
+    fsctl, futex, kill, limits, memfd, memory, namespace, path, poll, process, signal, signalfd,
+    sockets, system, thread, thread_area, time, timerfd, unanswered,
 };
 use crate::arch;
 use crate::sched;
 use crate::syscall::memory::{MmapRequest, OffsetUnit};
 use crate::syscall::process::Process;
-use crate::trap::{Outcome, SyscallArgs};
+use crate::trap::{Abi, Outcome, SyscallArgs};
 
 /// `creat`'s flags: it is `open` with these, by its definition in POSIX and
 /// in `fs/open.c`.
@@ -65,6 +65,18 @@ impl Personality for Linux {
 /// has to end in a value.
 fn dispatch(call: Syscall, args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Outcome {
     crate::fs::seam::syscall();
+    // A 32-bit program's register pairs and 32-bit `off_t`s, rewritten into
+    // the layout every handler below reads (`compat`).
+    let normalized;
+    let args = if args.abi == Abi::Compat {
+        normalized = SyscallArgs {
+            args: compat::normalize(call, args.args),
+            ..*args
+        };
+        &normalized
+    } else {
+        args
+    };
     // Resolved once, here, rather than reached for inside each handler: the
     // handlers take `&Process` so that the boot self-check can call them
     // against a process it built itself, months before a program can.
@@ -106,10 +118,12 @@ fn dispatch(call: Syscall, args: &SyscallArgs, regs: Option<&arch::UserRegs>) ->
             return Outcome::Return(Errno::ESRCH.as_return_value());
         };
         let a = args.args;
+        let word = signal::word_of(args.abi);
         let entered = if matches!(call, Syscall::Execveat) {
-            exec::sys_execveat(caller, fd::arg(a[0]), a[1], a[2], a[3], truncate(a[4]))
+            let flags = truncate(a[4]);
+            exec::sys_execveat(caller, fd::arg(a[0]), a[1], a[2], a[3], flags, word)
         } else {
-            exec::sys_execve(caller, a[0], a[1], a[2])
+            exec::sys_execve(caller, a[0], a[1], a[2], word)
         };
         return match entered {
             Ok((entry, stack, abi)) => Outcome::Enter { entry, stack, abi },
@@ -219,21 +233,24 @@ fn stateless(call: Syscall, args: &SyscallArgs) -> Option<Result<usize, Errno>> 
 /// The calls that reshape or read the caller's address space.
 fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<usize, Errno> {
     let a = args.args;
-    if let Some(answer) = descriptors(call, &a, process) {
+    // The two `timespec` forms, as this call's ABI lays them out.
+    let native = time::TimeWidth::Native.in_abi(args.abi);
+    let wide = time::TimeWidth::Wide.in_abi(args.abi);
+    if let Some(answer) = descriptors(call, &a, process, args.abi) {
         return answer;
     }
     if let Some(answer) = path::dispatch(call, args, process) {
         return answer;
     }
-    if let Some(answer) = fsctl::dispatch(call, &a, process) {
+    if let Some(answer) = fsctl::dispatch(call, &a, process, args.abi) {
         return answer;
     }
     let answer = attributes::dispatch(call, &a, process)
         .or_else(|| limits::dispatch(call, &a, process))
         .or_else(|| credentials::dispatch(call, &a, process))
-        .or_else(|| sockets::dispatch(call, &a, process))
+        .or_else(|| sockets::dispatch(call, &a, process, args.abi))
         .or_else(|| system::dispatch(call, &a, process))
-        .or_else(|| time::dispatch(call, &a, process))
+        .or_else(|| time::dispatch(call, &a, process, args.abi))
         .or_else(|| kill::dispatch(call, &a, process));
     if let Some(answer) = answer {
         return answer;
@@ -272,24 +289,29 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::SetTidAddress => Ok(set_tid_address(process, a[0])),
         Syscall::SetThreadArea => thread_area::sys_set_thread_area(process, a[0]),
         Syscall::GetThreadArea => thread_area::sys_get_thread_area(process, a[0]),
-        Syscall::ClockGettime => {
-            time::sys_clock_gettime(process, a[0], a[1], time::TimeWidth::Native)
-        }
-        Syscall::ClockGetres => {
-            time::sys_clock_getres(process, a[0], a[1], time::TimeWidth::Native)
-        }
-        Syscall::ClockGetresTime64 => {
-            time::sys_clock_getres(process, a[0], a[1], time::TimeWidth::Wide)
-        }
-        Syscall::ClockGettime64 => {
-            time::sys_clock_gettime(process, a[0], a[1], time::TimeWidth::Wide)
-        }
-        Syscall::Gettimeofday => time::sys_gettimeofday(process, a[0], a[1]),
-        Syscall::Time => time::sys_time(process, a[0]),
+        Syscall::ClockGettime => time::sys_clock_gettime(process, a[0], a[1], native),
+        Syscall::ClockGetres => time::sys_clock_getres(process, a[0], a[1], native),
+        Syscall::ClockGetresTime64 => time::sys_clock_getres(process, a[0], a[1], wide),
+        Syscall::ClockGettime64 => time::sys_clock_gettime(process, a[0], a[1], wide),
+        Syscall::Gettimeofday => time::sys_gettimeofday_at_width(process, a[0], a[1], native),
+        Syscall::Time => time::sys_time_at_width(process, a[0], signal::word_of(args.abi)),
         Syscall::Getrandom => time::sys_getrandom(process, a[0], a[1], a[2]),
         Syscall::Uname => system::sys_uname(process, a[0]),
+        Syscall::SchedGetaffinity => {
+            let word = signal::word_of(args.abi);
+            limits::sys_sched_getaffinity(process, fd::arg(a[0]), truncate(a[1]), a[2], word)
+        }
+        Syscall::Times => time::sys_times(process, a[0], signal::word_of(args.abi)),
+        Syscall::Getrusage => {
+            time::sys_getrusage(process, fd::arg(a[0]), a[1], signal::word_of(args.abi))
+        }
+        Syscall::Sysinfo => system::sys_sysinfo_at_width(process, a[0], signal::word_of(args.abi)),
         Syscall::Poll => poll::sys_poll(process, a[0], a[1], a[2] as i32),
-        Syscall::Select => poll::sys_select(process, a[0] as i32, [a[1], a[2], a[3]], a[4]),
+        Syscall::Select => {
+            let sets = [a[1], a[2], a[3]];
+            let word = signal::word_of(args.abi);
+            poll::sys_select_at_width(process, a[0] as i32, sets, a[4], (native, word))
+        }
         Syscall::Wait4 => {
             family::sys_wait4(process, a[0] as i32, a[1], truncate(a[2]), a[3], args.abi)
         }
@@ -307,8 +329,8 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::Getpgrp => family::sys_getpgid(process, 0),
         Syscall::Getsid => family::sys_getsid(process, a[0] as i32),
         Syscall::Setsid => family::sys_setsid(process),
-        Syscall::Futex => futex::sys_futex(process, &a, time::TimeWidth::Native),
-        Syscall::FutexTime64 => futex::sys_futex(process, &a, time::TimeWidth::Wide),
+        Syscall::Futex => futex::sys_futex(process, &a, native),
+        Syscall::FutexTime64 => futex::sys_futex(process, &a, wide),
         Syscall::RtSigaction => {
             signal::sys_rt_sigaction(process, truncate(a[0]), a[1], a[2], a[3], args.abi)
         }
@@ -320,9 +342,16 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
 ///
 /// A table of its own, like [`stateless`], so that `None` means "not one of
 /// mine" and the two can be read separately. Every descriptor is narrowed to
-/// the ABI's 32-bit `int` here, once, by [`fd::arg`].
-fn descriptors(call: Syscall, a: &[u64; 6], process: &Process) -> Option<Result<usize, Errno>> {
+/// the ABI's 32-bit `int` here, once, by [`fd::arg`]. `abi` says how wide the
+/// caller's pointers and `long`s are in memory.
+fn descriptors(
+    call: Syscall,
+    a: &[u64; 6],
+    process: &Process,
+    abi: Abi,
+) -> Option<Result<usize, Errno>> {
     let fd = fd::arg(a[0]);
+    let word = signal::word_of(abi);
     let answer = match call {
         Syscall::Openat => fd::sys_openat(process, fd, a[1], truncate(a[2]), truncate(a[3])),
         Syscall::Open => fd::sys_openat(process, AT_FDCWD, a[0], truncate(a[1]), truncate(a[2])),
@@ -330,8 +359,8 @@ fn descriptors(call: Syscall, a: &[u64; 6], process: &Process) -> Option<Result<
         Syscall::Close => fd::sys_close(process, fd),
         Syscall::Read => file::sys_read(process, fd, a[1], a[2]),
         Syscall::Write => file::sys_write(process, fd, a[1], a[2]),
-        Syscall::Readv => file::sys_readv(process, fd, a[1], a[2]),
-        Syscall::Writev => file::sys_writev(process, fd, a[1], a[2]),
+        Syscall::Readv => file::sys_readv_at_width(process, fd, a[1], a[2], word),
+        Syscall::Writev => file::sys_writev_at_width(process, fd, a[1], a[2], word),
         Syscall::Pread64 => file::sys_pread64(process, fd, a[1], a[2], wide(a, 3)),
         Syscall::Pwrite64 => file::sys_pwrite64(process, fd, a[1], a[2], wide(a, 3)),
         Syscall::Lseek => fd::sys_lseek(process, fd, native_signed(a[1]), truncate(a[2])),
@@ -339,12 +368,15 @@ fn descriptors(call: Syscall, a: &[u64; 6], process: &Process) -> Option<Result<
         Syscall::Dup => fd::sys_dup(process, fd),
         Syscall::Dup2 => fd::sys_dup2(process, fd, fd::arg(a[1])),
         Syscall::Dup3 => fd::sys_dup3(process, fd, fd::arg(a[1]), truncate(a[2])),
-        Syscall::Fcntl | Syscall::Fcntl64 if flock::is_record_lock(truncate(a[1]), call) => {
-            flock::sys_fcntl_lock(process, fd, truncate(a[1]), a[2], call)
+        Syscall::Fcntl | Syscall::Fcntl64 if flock::is_record_lock(truncate(a[1]), call, abi) => {
+            flock::sys_fcntl_lock(process, fd, truncate(a[1]), a[2], call, abi)
         }
         Syscall::Fcntl | Syscall::Fcntl64 => fd::sys_fcntl(process, fd, truncate(a[1]), a[2]),
         Syscall::Ftruncate => fd::sys_ftruncate(process, fd, native_signed(a[1])),
         Syscall::Ftruncate64 => fd::sys_ftruncate(process, fd, wide(a, 1)),
+        Syscall::Ioctl if abi == Abi::Compat && !compat::ioctl_passes(truncate(a[1])) => {
+            Err(Errno::ENOTTY)
+        }
         Syscall::Ioctl => fd::sys_ioctl(process, fd, truncate(a[1]), a[2]),
         Syscall::Flock => flock::sys_flock(process, fd, truncate(a[1])),
         Syscall::MemfdCreate => memfd::sys_memfd_create(process, a[0], truncate(a[1])),
@@ -360,25 +392,21 @@ fn descriptors(call: Syscall, a: &[u64; 6], process: &Process) -> Option<Result<
         Syscall::TimerfdCreate => {
             timerfd::sys_timerfd_create(process, attributes::int(a[0]), truncate(a[1]))
         }
-        Syscall::TimerfdSettime => timerfd::sys_timerfd_settime(
-            process,
-            fd,
-            truncate(a[1]),
-            [a[2], a[3]],
-            time::TimeWidth::Native,
-        ),
-        Syscall::TimerfdSettime64 => timerfd::sys_timerfd_settime(
-            process,
-            fd,
-            truncate(a[1]),
-            [a[2], a[3]],
-            time::TimeWidth::Wide,
-        ),
+        Syscall::TimerfdSettime => {
+            let width = time::TimeWidth::Native.in_abi(abi);
+            timerfd::sys_timerfd_settime(process, fd, truncate(a[1]), [a[2], a[3]], width)
+        }
+        Syscall::TimerfdSettime64 => {
+            let width = time::TimeWidth::Wide.in_abi(abi);
+            timerfd::sys_timerfd_settime(process, fd, truncate(a[1]), [a[2], a[3]], width)
+        }
         Syscall::TimerfdGettime => {
-            timerfd::sys_timerfd_gettime(process, fd, a[1], time::TimeWidth::Native)
+            let width = time::TimeWidth::Native.in_abi(abi);
+            timerfd::sys_timerfd_gettime(process, fd, a[1], width)
         }
         Syscall::TimerfdGettime64 => {
-            timerfd::sys_timerfd_gettime(process, fd, a[1], time::TimeWidth::Wide)
+            let width = time::TimeWidth::Wide.in_abi(abi);
+            timerfd::sys_timerfd_gettime(process, fd, a[1], width)
         }
         Syscall::EpollCreate1 => epoll::sys_epoll_create1(process, truncate(a[0])),
         Syscall::EpollCreate => epoll::sys_epoll_create(process, fd::arg(a[0])),

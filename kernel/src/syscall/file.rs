@@ -136,8 +136,20 @@ pub(crate) fn sys_readv(
     iov: u64,
     entries: u64,
 ) -> Result<usize, Errno> {
+    sys_readv_at_width(process, fd, iov, entries, size_of::<usize>())
+}
+
+/// [`sys_readv`] for a program whose `iovec` is two `word`-byte words: a
+/// 32-bit program's is eight bytes on a 64-bit kernel.
+pub(crate) fn sys_readv_at_width(
+    process: &Process,
+    fd: i32,
+    iov: u64,
+    entries: u64,
+    word: usize,
+) -> Result<usize, Errno> {
     let file = fd::file(process, fd)?;
-    let segments = read_iovecs(process, iov, entries)?;
+    let segments = read_iovecs(process, iov, entries, word)?;
     if segments.is_empty() {
         return if file.readable() {
             Ok(0)
@@ -174,8 +186,19 @@ pub(crate) fn sys_writev(
     iov: u64,
     entries: u64,
 ) -> Result<usize, Errno> {
+    sys_writev_at_width(process, fd, iov, entries, size_of::<usize>())
+}
+
+/// [`sys_writev`] for a program whose `iovec` is two `word`-byte words.
+pub(crate) fn sys_writev_at_width(
+    process: &Process,
+    fd: i32,
+    iov: u64,
+    entries: u64,
+    word: usize,
+) -> Result<usize, Errno> {
     let file = fd::file(process, fd)?;
-    let segments = read_iovecs(process, iov, entries)?;
+    let segments = read_iovecs(process, iov, entries, word)?;
     // Nothing to write asks nothing of the file, as Linux's `writev` does not:
     // empty segments on /dev/full are 0, where `write` of nothing is ENOSPC.
     if segments.iter().all(|&(_, len)| len == 0) {
@@ -384,9 +407,14 @@ fn empty_write(file: &OpenFile, position: Position) -> Result<(), Errno> {
     Ok(())
 }
 
-/// Read and check a program's `iovec` array: at most `IOV_MAX` entries, and a
-/// total that fits a non-negative return value.
-fn read_iovecs(process: &Process, iov: u64, entries: u64) -> Result<Vec<(u64, u64)>, Errno> {
+/// Read and check a program's `iovec` array of `word`-byte words: at most
+/// `IOV_MAX` entries, and a total that fits a non-negative return value.
+fn read_iovecs(
+    process: &Process,
+    iov: u64,
+    entries: u64,
+    word: usize,
+) -> Result<Vec<(u64, u64)>, Errno> {
     if entries > IOV_MAX {
         return Err(Errno::EINVAL);
     }
@@ -397,35 +425,40 @@ fn read_iovecs(process: &Process, iov: u64, entries: u64) -> Result<Vec<(u64, u6
         .map_err(|_| Errno::ENOMEM)?;
     let mut total = 0_u64;
     for index in 0..entries as u64 {
-        let (base, len) = read_iovec(process, iov, index)?;
+        let (base, len) = read_iovec(process, iov, index, word)?;
         total = total.checked_add(len).ok_or(Errno::EINVAL)?;
         segments.push((base, len));
     }
     // Linux refuses a total that will not fit in the return value rather than
     // reporting a negative count, which a caller would read as an error
-    // number. Measured against this architecture's word, not 64 bits.
-    if isize::try_from(total).is_err() {
+    // number. Measured against the program's word, not 64 bits: a 32-bit
+    // program's `ssize_t` is 32.
+    let most = if word < 8 {
+        i32::MAX as u64
+    } else {
+        isize::MAX as u64
+    };
+    if total > most {
         return Err(Errno::EINVAL);
     }
     Ok(segments)
 }
 
-/// Read one `struct iovec` out of the program's array, as native words.
-fn read_iovec(process: &Process, iov: u64, index: u64) -> Result<(u64, u64), Errno> {
-    let word = size_of::<usize>() as u64;
-    let stride = word * 2;
+/// Read one `struct iovec` out of the program's array, as `word`-byte words.
+fn read_iovec(process: &Process, iov: u64, index: u64, word: usize) -> Result<(u64, u64), Errno> {
+    let width = word as u64;
+    let stride = width * 2;
     let at = iov
         .checked_add(index.checked_mul(stride).ok_or(Errno::EINVAL)?)
         .ok_or(Errno::EINVAL)?;
-    let base = read_word(process, at)?;
-    let len = read_word(process, at.checked_add(word).ok_or(Errno::EINVAL)?)?;
+    let base = read_word(process, at, word)?;
+    let len = read_word(process, at.checked_add(width).ok_or(Errno::EINVAL)?, word)?;
     Ok((base, len))
 }
 
-/// One pointer-sized little-endian word from the program's memory.
-fn read_word(process: &Process, at: u64) -> Result<u64, Errno> {
+/// One `width`-byte little-endian word from the program's memory.
+fn read_word(process: &Process, at: u64, width: usize) -> Result<u64, Errno> {
     let mut bytes = [0_u8; 8];
-    let width = size_of::<usize>();
     let slot = bytes.get_mut(..width).ok_or(Errno::EINVAL)?;
     uaccess::copy_from_user(process.space(), at, slot).map_err(|_| Errno::EFAULT)?;
     Ok(u64::from_le_bytes(bytes))

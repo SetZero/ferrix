@@ -35,7 +35,6 @@ use crate::syscall::credentials;
 use crate::syscall::fd;
 use crate::syscall::process::Process;
 use crate::syscall::time::{self, CLOCK_BOOTTIME_ALARM, CLOCK_REALTIME_ALARM, TimeWidth};
-use crate::syscall::uaccess::WORD;
 
 /// Nanoseconds in a second.
 const NANOS: u64 = 1_000_000_000;
@@ -130,11 +129,7 @@ fn timer_of(process: &Process, fd: i32) -> Result<Arc<TimerFd>, Errno> {
 
 /// Bytes in one `timespec` of the call's width.
 fn timespec_bytes(width: TimeWidth) -> u64 {
-    if width == TimeWidth::Wide || WORD == 8 {
-        16
-    } else {
-        8
-    }
+    width.field_bytes() as u64 * 2
 }
 
 /// Read an `itimerspec`: the interval's and the value's second and

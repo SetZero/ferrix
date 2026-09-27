@@ -2034,6 +2034,7 @@ fn pselect_answers(process: &Process, page: u64) -> Result<(), &'static str> {
             page + SELECT_TIME,
             page + SELECT_PACK,
             TimeWidth::Native,
+            size_of::<usize>(),
         ))
     };
     let mask_at = usize::try_from(page + SELECT_MASK).map_err(|_| "an impossible address")?;
@@ -3157,7 +3158,14 @@ fn reported_flock(on: &Process, at: u64) -> Result<(i16, i64, i64, i32), &'stati
 /// One record-lock command on `on`, through `fcntl64` -- which a 64-bit build
 /// reads exactly as `fcntl` -- with its structure at `at`.
 fn record_lock(on: &Process, fd: i32, cmd: u32, at: u64) -> Result<usize, Errno> {
-    crate::syscall::flock::sys_fcntl_lock(on, fd, cmd, at, ferrix_linux_abi::nr::Syscall::Fcntl64)
+    crate::syscall::flock::sys_fcntl_lock(
+        on,
+        fd,
+        cmd,
+        at,
+        ferrix_linux_abi::nr::Syscall::Fcntl64,
+        crate::trap::Abi::Native,
+    )
 }
 
 /// Record locks follow Linux.
@@ -7779,7 +7787,7 @@ fn check_affinity_names_the_running_processors(
     const WORD: usize = size_of::<usize>();
 
     poison_user(process, page, 64)?;
-    let written = sys_sched_getaffinity(process, 0, 64, page)
+    let written = sys_sched_getaffinity(process, 0, 64, page, WORD)
         .map_err(|_| "sched_getaffinity with a 64-byte mask was refused")?;
     if written != crate::smp::count().div_ceil(WORD * 8) * WORD {
         return Err("sched_getaffinity did not return whole words covering every processor");
@@ -7800,7 +7808,7 @@ fn check_affinity_names_the_running_processors(
         return Err("the affinity mask does not have one bit per running processor");
     }
     refuses(
-        sys_sched_getaffinity(process, 0, WORD as u32 - 1, page),
+        sys_sched_getaffinity(process, 0, WORD as u32 - 1, page, WORD),
         Errno::EINVAL,
         "an affinity length that is not whole words was accepted",
     )?;
@@ -8772,7 +8780,7 @@ fn check_what_a_name_refuses(process: &Process, page: u64) -> Result<(), &'stati
 
 /// One socket call, through the dispatcher every socket call arrives by.
 fn socket_call(process: &Process, call: Call, a: &[u64; 6]) -> Result<usize, Errno> {
-    sockets::dispatch(call, a, process).unwrap_or(Err(Errno::ENOSYS))
+    sockets::dispatch(call, a, process, crate::trap::Abi::Native).unwrap_or(Err(Errno::ENOSYS))
 }
 
 /// A descriptor as the call argument it arrives as.

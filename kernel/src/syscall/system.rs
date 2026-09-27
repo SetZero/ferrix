@@ -152,7 +152,6 @@ pub(crate) fn dispatch(
     process: &Process,
 ) -> Option<Result<usize, Errno>> {
     let answer = match call {
-        Syscall::Sysinfo => sys_sysinfo(process, a[0]),
         Syscall::Sethostname => sys_sethostname(process, a[0], int(a[1])),
         Syscall::Setdomainname => sys_setdomainname(process, a[0], int(a[1])),
         Syscall::Getcpu => sys_getcpu(process, a[0], a[1]),
@@ -238,7 +237,12 @@ pub(crate) fn forget_hostname() {
 /// rounded to a word. 112 on the 64-bit pair and 64 on ARMv7-A; checked with
 /// `sizeof` and `offsetof` against the header compiled for x86-64 and for
 /// `arm-linux-gnueabihf` (AArch64 is LP64 with no override of it).
-pub(crate) const SYSINFO_SIZE: usize = (WORD * 11 + 20).next_multiple_of(WORD);
+pub(crate) const SYSINFO_SIZE: usize = sysinfo_size(WORD);
+
+/// [`SYSINFO_SIZE`] for a program whose `long` is `word` bytes.
+const fn sysinfo_size(word: usize) -> usize {
+    (word * 11 + 20).next_multiple_of(word)
+}
 const _: () = assert!(
     SYSINFO_SIZE == if WORD == 8 { 112 } else { 64 },
     "struct sysinfo is 112 bytes on LP64 and 64 on ILP32"
@@ -282,11 +286,24 @@ pub(crate) mod sysinfo_at {
 /// Uptime rounds up, as Linux's does, so a machine that has been up for any
 /// time at all has been up for at least a second.
 pub(crate) fn sys_sysinfo(process: &Process, at: u64) -> Result<usize, Errno> {
+    sys_sysinfo_at_width(process, at, WORD)
+}
+
+/// [`sys_sysinfo`] into the layout of a program whose `long` is `word` bytes:
+/// an i386 program's is ARMv7-A's 64 bytes, Linux's `compat_sysinfo`.
+pub(crate) fn sys_sysinfo_at_width(
+    process: &Process,
+    at: u64,
+    word: usize,
+) -> Result<usize, Errno> {
+    // Every field offset in `sysinfo_at` is a whole number of native words,
+    // and the same number of words at any width: rescale it.
+    let field = |native: usize| native / WORD * word;
     let nanos = time::now_nanos();
     let uptime = nanos / 1_000_000_000 + u64::from(!nanos.is_multiple_of(1_000_000_000));
     let total_pages = mm::managed_frames();
     let free_pages = mm::free_frames();
-    let word_max = if WORD == 8 {
+    let word_max = if word == 8 {
         u64::MAX
     } else {
         u64::from(u32::MAX)
@@ -300,35 +317,35 @@ pub(crate) fn sys_sysinfo(process: &Process, at: u64) -> Result<usize, Errno> {
     drop(live);
 
     let mut bytes = [0_u8; 112];
-    let buffer = bytes.get_mut(..SYSINFO_SIZE).ok_or(Errno::EINVAL)?;
+    let buffer = bytes.get_mut(..sysinfo_size(word)).ok_or(Errno::EINVAL)?;
     let mut put = |at: usize, value: &[u8]| {
         if let Some(slot) = buffer.get_mut(at..at + value.len()) {
             slot.copy_from_slice(value);
         }
     };
-    let word = |value: u64| value.to_le_bytes();
+    let long = |value: u64| value.to_le_bytes();
     put(
-        sysinfo_at::UPTIME,
-        word(uptime).get(..WORD).unwrap_or_default(),
+        field(sysinfo_at::UPTIME),
+        long(uptime).get(..word).unwrap_or_default(),
     );
     put(
-        sysinfo_at::TOTALRAM,
-        word(total).get(..WORD).unwrap_or_default(),
+        field(sysinfo_at::TOTALRAM),
+        long(total).get(..word).unwrap_or_default(),
     );
     put(
-        sysinfo_at::FREERAM,
-        word(free).get(..WORD).unwrap_or_default(),
+        field(sysinfo_at::FREERAM),
+        long(free).get(..word).unwrap_or_default(),
     );
     let (_, loads) = crate::fs::procfs::loadavg::now();
     for (index, load) in loads.into_iter().enumerate() {
         let shifted = load << (SI_LOAD_SHIFT - ferrix_procfs::loadavg::FSHIFT);
         put(
-            sysinfo_at::LOADS + index * WORD,
-            word(shifted).get(..WORD).unwrap_or_default(),
+            field(sysinfo_at::LOADS) + index * word,
+            long(shifted).get(..word).unwrap_or_default(),
         );
     }
-    put(sysinfo_at::PROCS, &procs.to_le_bytes());
-    put(sysinfo_at::MEM_UNIT, &unit.to_le_bytes());
+    put(field(sysinfo_at::PROCS), &procs.to_le_bytes());
+    put(field(sysinfo_at::MEM_UNIT), &unit.to_le_bytes());
     uaccess::copy_to_user(process.space(), at, buffer).map_err(|_| Errno::EFAULT)?;
     Ok(0)
 }

@@ -24,6 +24,7 @@ use crate::syscall::process::Process;
 use crate::syscall::signal::RestartBlock;
 use crate::syscall::thread::Thread;
 use crate::syscall::uaccess::{self, WORD};
+use crate::trap::Abi;
 
 /// Nanoseconds in a second.
 const NANOS: u64 = 1_000_000_000;
@@ -42,13 +43,52 @@ const CLOCK_TAI: u32 = 11;
 /// The reason `clock_gettime` and `clock_gettime64` are separate calls on
 /// ARMv7-A: the first writes two `long`s, which are 32 bits there, and the
 /// second writes two 64-bit fields whatever the architecture. On the 64-bit
-/// pair both come out the same.
+/// pair both come out the same -- except to an i386 program, whose `long` is
+/// 32 bits on this 64-bit kernel too: [`TimeWidth::in_abi`] gives the two
+/// forms it passes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TimeWidth {
     /// Two `long`s: this architecture's pointer width.
     Native,
     /// Two 64-bit fields.
     Wide,
+    /// An i386 program's two `long`s: Linux's `old_timespec32` and
+    /// `old_timeval32`, 32 bits each.
+    Compat,
+    /// An i386 program's `__kernel_timespec`: two 64-bit fields, of which
+    /// `tv_nsec`'s upper half is padding, as for any 32-bit program.
+    CompatWide,
+}
+
+impl TimeWidth {
+    /// This width as a call that came in by `abi` passes it: an i386
+    /// program's `long` is 32 bits.
+    pub(crate) const fn in_abi(self, abi: Abi) -> TimeWidth {
+        match (self, abi) {
+            (TimeWidth::Native, Abi::Compat) => TimeWidth::Compat,
+            (TimeWidth::Wide, Abi::Compat) => TimeWidth::CompatWide,
+            (width, _) => width,
+        }
+    }
+
+    /// Bytes in each of the two fields.
+    pub(crate) const fn field_bytes(self) -> usize {
+        match self {
+            TimeWidth::Native => WORD,
+            TimeWidth::Wide | TimeWidth::CompatWide => 8,
+            TimeWidth::Compat => 4,
+        }
+    }
+
+    /// Whether the caller's `long` is 32 bits, so that a 64-bit `tv_nsec`
+    /// keeps only its low half, as `get_timespec64` keeps it for a 32-bit
+    /// program: the rest is padding a libc need not write.
+    pub(crate) const fn long_is_32(self) -> bool {
+        match self {
+            TimeWidth::Native | TimeWidth::Wide => WORD == 4,
+            TimeWidth::Compat | TimeWidth::CompatWide => true,
+        }
+    }
 }
 
 /// Nanoseconds since the high-resolution counter started.
@@ -120,16 +160,18 @@ pub(crate) fn sleep_dispatch(
     call: Syscall,
     a: &[u64; 6],
     thread: &Thread,
+    abi: Abi,
 ) -> Option<Result<usize, Errno>> {
-    use TimeWidth::{Native, Wide};
+    let native = TimeWidth::Native.in_abi(abi);
+    let wide = TimeWidth::Wide.in_abi(abi);
     let answer = match call {
         Syscall::RestartSyscall => sys_restart_syscall(thread),
-        Syscall::Nanosleep => sys_nanosleep(thread, a[0], a[1]),
+        Syscall::Nanosleep => sys_nanosleep_at_width(thread, a[0], a[1], native),
         Syscall::ClockNanosleep => {
-            sys_clock_nanosleep(thread, int(a[0]), a[1], [a[2], a[3]], Native)
+            sys_clock_nanosleep(thread, int(a[0]), a[1], [a[2], a[3]], native)
         }
         Syscall::ClockNanosleepTime64 => {
-            sys_clock_nanosleep(thread, int(a[0]), a[1], [a[2], a[3]], Wide)
+            sys_clock_nanosleep(thread, int(a[0]), a[1], [a[2], a[3]], wide)
         }
         _ => return None,
     };
@@ -143,17 +185,17 @@ pub(crate) fn dispatch(
     call: Syscall,
     a: &[u64; 6],
     process: &Process,
+    abi: Abi,
 ) -> Option<Result<usize, Errno>> {
-    use TimeWidth::{Native, Wide};
+    let native = TimeWidth::Native.in_abi(abi);
+    let wide = TimeWidth::Wide.in_abi(abi);
     let answer = match call {
-        Syscall::Times => sys_times(process, a[0]),
-        Syscall::Getrusage => sys_getrusage(process, int(a[0]), a[1]),
-        Syscall::ClockSettime => sys_clock_settime(process, int(a[0]), a[1], Native),
-        Syscall::ClockSettime64 => sys_clock_settime(process, int(a[0]), a[1], Wide),
-        Syscall::Settimeofday => sys_settimeofday(process, a[0], a[1]),
-        Syscall::Adjtimex => sys_adjtimex(process, a[0]),
-        Syscall::ClockAdjtime => sys_clock_adjtime(process, int(a[0]), a[1], Native),
-        Syscall::ClockAdjtime64 => sys_clock_adjtime(process, int(a[0]), a[1], Wide),
+        Syscall::ClockSettime => sys_clock_settime(process, int(a[0]), a[1], native),
+        Syscall::ClockSettime64 => sys_clock_settime(process, int(a[0]), a[1], wide),
+        Syscall::Settimeofday => sys_settimeofday(process, a[0], a[1], native),
+        Syscall::Adjtimex => sys_adjtimex(process, a[0], native),
+        Syscall::ClockAdjtime => sys_clock_adjtime(process, int(a[0]), a[1], native),
+        Syscall::ClockAdjtime64 => sys_clock_adjtime(process, int(a[0]), a[1], wide),
         _ => return None,
     };
     Some(answer)
@@ -253,15 +295,19 @@ pub(crate) fn process_runtime(process: &Process) -> u64 {
 /// but not ignored: Linux copies out its `struct timezone`, two `int`s that are
 /// zero until `settimeofday` sets them, and a program that passes one reads it.
 pub(crate) fn sys_gettimeofday(process: &Process, tv: u64, tz: u64) -> Result<usize, Errno> {
+    sys_gettimeofday_at_width(process, tv, tz, TimeWidth::Native)
+}
+
+/// [`sys_gettimeofday`] into a `timeval` of `width`.
+pub(crate) fn sys_gettimeofday_at_width(
+    process: &Process,
+    tv: u64,
+    tz: u64,
+    width: TimeWidth,
+) -> Result<usize, Errno> {
     if tv != 0 {
         let nanos = realtime_nanos();
-        write_pair(
-            process,
-            tv,
-            nanos / NANOS,
-            (nanos % NANOS) / 1_000,
-            TimeWidth::Native,
-        )?;
+        write_pair(process, tv, nanos / NANOS, (nanos % NANOS) / 1_000, width)?;
     }
     if tz != 0 {
         uaccess::copy_to_user(process.space(), tz, &[0_u8; 8]).map_err(|_| Errno::EFAULT)?;
@@ -276,10 +322,23 @@ pub(crate) fn sys_gettimeofday(process: &Process, tv: u64, tz: u64) -> Result<us
 /// than the seconds, which is `kernel/time/time.c`'s order. Reachable only on
 /// x86-64, the one table with a number for it.
 pub(crate) fn sys_time(process: &Process, tloc: u64) -> Result<usize, Errno> {
+    sys_time_at_width(process, tloc, WORD)
+}
+
+/// [`sys_time`] into a `time_t` of `word` bytes: an i386 program's is 32
+/// bits, `old_time32_t`, which the answer is too.
+pub(crate) fn sys_time_at_width(process: &Process, tloc: u64, word: usize) -> Result<usize, Errno> {
     let seconds = realtime_nanos() / NANOS;
+    let seconds = if word == 4 {
+        u64::from(u32::try_from(seconds).map_err(|_| Errno::EOVERFLOW)?)
+    } else {
+        seconds
+    };
     let answer = usize::try_from(seconds).map_err(|_| Errno::EOVERFLOW)?;
     if tloc != 0 {
-        uaccess::put_word(process.space(), tloc, seconds)?;
+        let bytes = seconds.to_le_bytes();
+        let slot = bytes.get(..word).ok_or(Errno::EINVAL)?;
+        uaccess::copy_to_user(process.space(), tloc, slot).map_err(|_| Errno::EFAULT)?;
     }
     Ok(answer)
 }
@@ -292,8 +351,7 @@ pub(crate) fn write_pair(
     second: u64,
     width: TimeWidth,
 ) -> Result<(), Errno> {
-    let native_is_wide = size_of::<usize>() == 8;
-    if width == TimeWidth::Wide || native_is_wide {
+    if width.field_bytes() == 8 {
         let mut bytes = [0_u8; 16];
         let fields = first.to_le_bytes().into_iter().chain(second.to_le_bytes());
         for (slot, byte) in bytes.iter_mut().zip(fields) {
@@ -324,16 +382,16 @@ pub(crate) fn read_pair(
     at: u64,
     width: TimeWidth,
 ) -> Result<(i64, i64), Errno> {
-    if width == TimeWidth::Wide || WORD == 8 {
+    if width.field_bytes() == 8 {
         let mut bytes = [0_u8; 16];
         uaccess::copy_from_user(process.space(), at, &mut bytes).map_err(|_| Errno::EFAULT)?;
         let (first, second) = bytes.split_at(8);
         let first = i64::from_le_bytes(first.try_into().map_err(|_| Errno::EFAULT)?);
         let second = i64::from_le_bytes(second.try_into().map_err(|_| Errno::EFAULT)?);
-        let second = if WORD == 8 {
-            second
-        } else {
+        let second = if width.long_is_32() {
             i64::from(second as i32)
+        } else {
+            second
         };
         return Ok((first, second));
     }
@@ -417,10 +475,22 @@ pub(crate) fn sys_restart_syscall(thread: &Thread) -> Result<usize, Errno> {
 /// `nanosleep`: a relative sleep, in a native-width `timespec` (ARMv7-A has no
 /// `time64` form of this call; its libc uses `clock_nanosleep_time64`).
 pub(crate) fn sys_nanosleep(thread: &Thread, req: u64, rem: u64) -> Result<usize, Errno> {
-    let (seconds, nanos) = read_pair(thread.process(), req, TimeWidth::Native)?;
+    sys_nanosleep_at_width(thread, req, rem, TimeWidth::Native)
+}
+
+/// [`sys_nanosleep`] with both `timespec`s of `width`: an i386 program's
+/// `nanosleep` takes two 32-bit fields, and musl calls it, not
+/// `clock_nanosleep_time64`, for any request whose seconds fit.
+pub(crate) fn sys_nanosleep_at_width(
+    thread: &Thread,
+    req: u64,
+    rem: u64,
+    width: TimeWidth,
+) -> Result<usize, Errno> {
+    let (seconds, nanos) = read_pair(thread.process(), req, width)?;
     let length = nanos_of(seconds, nanos)?;
     let deadline = crate::timer::now_nanos().saturating_add(length);
-    sleep_until(thread, deadline, rem, TimeWidth::Native)
+    sleep_until(thread, deadline, rem, width)
 }
 
 /// `TIMER_ABSTIME`: the request is a time on the clock, not a duration.
@@ -485,10 +555,10 @@ const USER_HZ: u64 = 100;
 /// pair and 16 on ARMv7-A, by `sizeof` against `linux/times.h` compiled for
 /// x86-64 and `arm-linux-gnueabihf`. A null buffer is legal and asks only for
 /// the ticks. The ticks are what a shell's `time` subtracts, so they are real.
-pub(crate) fn sys_times(process: &Process, at: u64) -> Result<usize, Errno> {
+pub(crate) fn sys_times(process: &Process, at: u64, word: usize) -> Result<usize, Errno> {
     if at != 0 {
         let zeros = [0_u8; 32];
-        let tms = zeros.get(..WORD * 4).ok_or(Errno::EFAULT)?;
+        let tms = zeros.get(..word * 4).ok_or(Errno::EFAULT)?;
         uaccess::copy_to_user(process.space(), at, tms).map_err(|_| Errno::EFAULT)?;
     }
     Ok((now_nanos() / (NANOS / USER_HZ)) as usize)
@@ -498,15 +568,21 @@ pub(crate) fn sys_times(process: &Process, at: u64) -> Result<usize, Errno> {
 ///
 /// `struct rusage` is two `timeval`s and fourteen `long`s, eighteen native
 /// words: 144 bytes on the 64-bit pair and 72 on ARMv7-A, by `sizeof` against
-/// `linux/resource.h` for x86-64 and `arm-linux-gnueabihf`. `RUSAGE_SELF` (0),
+/// `linux/resource.h` for x86-64 and `arm-linux-gnueabihf`, and 72 for an
+/// i386 program, whose words are `word` bytes. `RUSAGE_SELF` (0),
 /// `RUSAGE_CHILDREN` (-1) and `RUSAGE_THREAD` (1) are accepted; anything else
 /// is `EINVAL` before the buffer is touched.
-pub(crate) fn sys_getrusage(process: &Process, who: i32, at: u64) -> Result<usize, Errno> {
+pub(crate) fn sys_getrusage(
+    process: &Process,
+    who: i32,
+    at: u64,
+    word: usize,
+) -> Result<usize, Errno> {
     if !matches!(who, -1..=1) {
         return Err(Errno::EINVAL);
     }
     let zeros = [0_u8; 144];
-    let usage = zeros.get(..WORD * 18).ok_or(Errno::EFAULT)?;
+    let usage = zeros.get(..word * 18).ok_or(Errno::EFAULT)?;
     uaccess::copy_to_user(process.space(), at, usage).map_err(|_| Errno::EFAULT)?;
     Ok(0)
 }
@@ -554,12 +630,18 @@ pub(crate) fn sys_clock_settime(
 /// checked (up to and including 1 000 000, which the next check then
 /// refuses), the timezone is read, the time is checked as a settable time,
 /// the timezone's minutes-west checked to within fifteen hours, and only then
-/// is anything set. Both pointers may be null.
-pub(crate) fn sys_settimeofday(process: &Process, tv: u64, tz: u64) -> Result<usize, Errno> {
+/// is anything set. Both pointers may be null. The `timeval` is `width`'s:
+/// an i386 program's is two 32-bit fields.
+pub(crate) fn sys_settimeofday(
+    process: &Process,
+    tv: u64,
+    tz: u64,
+    width: TimeWidth,
+) -> Result<usize, Errno> {
     let time = if tv == 0 {
         None
     } else {
-        let (seconds, micros) = read_pair(process, tv, TimeWidth::Native)?;
+        let (seconds, micros) = read_pair(process, tv, width)?;
         if !(0..=1_000_000).contains(&micros) {
             return Err(Errno::EINVAL);
         }
@@ -593,11 +675,7 @@ pub(crate) fn sys_settimeofday(process: &Process, tv: u64, tz: u64) -> Result<us
 /// `arm-linux-gnueabihf`, where `struct timex` is 208 and 128 and
 /// `struct __kernel_timex` 208 on both.
 fn timex_size(width: TimeWidth) -> usize {
-    if width == TimeWidth::Wide || WORD == 8 {
-        208
-    } else {
-        128
-    }
+    if width.field_bytes() == 8 { 208 } else { 128 }
 }
 
 /// `ADJ_ADJTIME`: the old `adjtime` interface, riding on `adjtimex`.
@@ -667,8 +745,10 @@ fn adjust(
 /// A query returns `TIME_OK` with every field but `modes` zeroed: no offset,
 /// no frequency correction, no error estimate. That is a description of a
 /// clock nobody is disciplining, and it is what `adjtimex -p` has to print.
-pub(crate) fn sys_adjtimex(process: &Process, at: u64) -> Result<usize, Errno> {
-    adjust(process, at, TimeWidth::Native, Ok(()), true)
+/// `width` picks the structure: an i386 program's is the 128-byte
+/// `old_timex32`.
+pub(crate) fn sys_adjtimex(process: &Process, at: u64, width: TimeWidth) -> Result<usize, Errno> {
+    adjust(process, at, width, Ok(()), true)
 }
 
 /// `clock_adjtime` and `clock_adjtime64`: `adjtimex` for a named clock.

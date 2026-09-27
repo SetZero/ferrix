@@ -81,6 +81,7 @@ use crate::syscall::credentials;
 use crate::syscall::path::{self, Target};
 use crate::syscall::process::Process;
 use crate::syscall::{fd, pipe, uaccess};
+use crate::trap::Abi;
 
 /// The `mount` flags that ask to change a mount rather than make one. See the
 /// module documentation.
@@ -99,9 +100,18 @@ pub(crate) fn dispatch(
     call: Syscall,
     a: &[u64; 6],
     process: &Process,
+    abi: Abi,
 ) -> Option<Result<usize, Errno>> {
     let fd = fd::arg(a[0]);
     let answer = match call {
+        // i386's `compat_statfs64` is the same packed record, but Linux takes
+        // only its own size from a 32-bit x86 program: the unpacked 88 bytes
+        // are an ARM entry's allowance for musl's ARM `struct statfs`.
+        Syscall::Statfs64 | Syscall::Fstatfs64
+            if abi == Abi::Compat && a[1] != StatfsLayout::Packed64.size() as u64 =>
+        {
+            Err(Errno::EINVAL)
+        }
         Syscall::Pipe => pipe::sys_pipe2(process, a[0], 0),
         Syscall::Pipe2 => pipe::sys_pipe2(process, a[0], super::linux::truncate(a[1])),
         Syscall::Sendfile | Syscall::Sendfile64 => {
@@ -181,7 +191,8 @@ fn write_statfs(
 
 /// `statfs64`'s size argument: the kernel's packed structure, or musl's
 /// unpacked one, which Linux's ARM entry code takes as the same thing. Checked
-/// before the path is looked at, as on Linux.
+/// before the path is looked at, as on Linux; an i386 program's is narrowed
+/// to the packed size alone in [`dispatch`].
 fn statfs64_size(size: u64) -> Result<(), Errno> {
     let size = usize::try_from(size).map_err(|_| Errno::EINVAL)?;
     if size == StatfsLayout::Packed64.size() || size == ARM_STATFS64_UNPACKED_SIZE {
@@ -204,7 +215,7 @@ pub(crate) fn sys_fstatfs(process: &Process, fd: i32, buf: u64) -> Result<usize,
     write_statfs(process, buf, &target, native_layout())
 }
 
-/// `statfs64`, ARMv7-A's, into the packed `struct statfs64`.
+/// `statfs64`, ARMv7-A's and i386's, into the packed `struct statfs64`.
 pub(crate) fn sys_statfs64(
     process: &Process,
     at: u64,
@@ -216,7 +227,7 @@ pub(crate) fn sys_statfs64(
     write_statfs(process, buf, &target, StatfsLayout::Packed64)
 }
 
-/// `fstatfs64`, ARMv7-A's.
+/// `fstatfs64`, ARMv7-A's and i386's.
 pub(crate) fn sys_fstatfs64(
     process: &Process,
     fd: i32,
