@@ -8,17 +8,20 @@
 //! `$PULSE_SERVER`, else `$XDG_RUNTIME_DIR/pulse/native`, else
 //! `/run/pulse/native`.
 //!
+//! With a server, [`super::pulse`] asks it for the default sink and source
+//! and listens for their changes; a scroll changes the volume by
+//! `scroll-step` up to `max-volume`, unless `on-scroll-up`/`-down` say
+//! otherwise, as `Pulseaudio::handleScroll` does.
+//!
 //! Ferrix's own sound server is not there yet (`docs/AUDIO.md` §5: the
-//! PulseAudio-protocol server is U2, after the kernel's L5-L7), so on
-//! Ferrix the module shows `vol 0%` exactly as waybar would, and says once
-//! that no server is there. The format logic -- `format-muted`,
-//! `format-bluetooth`, `format-source`, `states`, `{icon}` from
-//! `format-icons` keyed by the port -- is here and tested; the protocol
-//! client that fills it in from a server is not written yet.
+//! PulseAudio-protocol server is U2), so on Ferrix the module shows
+//! `vol 0%` exactly as waybar would, says once that no server is there, and
+//! looks again every five seconds, as libpulse's `PA_CONTEXT_NOFAIL` does.
 
 use std::time::Duration;
 
-use super::{Common, Host, Module, TimerKey};
+use super::pulse::{Asking, Listening};
+use super::{Common, Host, Module, Scroll, TimerKey, WatchKey};
 use crate::fmt::{Args, format};
 use crate::json::Value;
 use crate::view::{ModuleView, Shape};
@@ -51,18 +54,25 @@ pub struct Pulseaudio {
     sink: Sink,
     timer: Option<TimerKey>,
     view: ModuleView,
+    server: Option<(Asking, Listening, WatchKey)>,
 }
 
-/// Where libpulse looks for the server.
+/// Where libpulse looks for the server: `$PULSE_SERVER` (a `unix:` one),
+/// `$PULSE_RUNTIME_PATH/pulse/native`, `$XDG_RUNTIME_DIR/pulse/native`,
+/// else the system socket.
 #[must_use]
 pub fn server_path(host: &dyn Host) -> String {
-    if let Some(server) = host.var("PULSE_SERVER") {
-        return server.strip_prefix("unix:").unwrap_or(&server).to_owned();
+    if let Some(server) = host.var("PULSE_SERVER")
+        && let Some(path) = server.strip_prefix("unix:")
+    {
+        return path.to_owned();
     }
-    match host.var("XDG_RUNTIME_DIR") {
-        Some(dir) if !dir.is_empty() => format!("{dir}/pulse/native"),
-        _ => "/run/pulse/native".to_owned(),
+    for variable in ["PULSE_RUNTIME_PATH", "XDG_RUNTIME_DIR"] {
+        if let Some(dir) = host.var(variable).filter(|dir| !dir.is_empty()) {
+            return format!("{dir}/pulse/native");
+        }
     }
+    "/run/pulse/native".to_owned()
 }
 
 impl Pulseaudio {
@@ -75,6 +85,7 @@ impl Pulseaudio {
             sink: Sink::default(),
             timer: None,
             view,
+            server: None,
         }
     }
 
@@ -160,13 +171,48 @@ impl Pulseaudio {
     }
 
     fn probe(&mut self, host: &mut dyn Host) {
-        let path = server_path(host);
-        host.diag().once(
-            "pulseaudio-server",
-            format!(
-                "pulseaudio: no PulseAudio server at {path}: Ferrix has no sound server yet, so the module shows waybar's starting values until one appears"
-            ),
-        );
+        let path = std::path::PathBuf::from(server_path(host));
+        match Asking::open(&path).and_then(|asking| Ok((asking, Listening::open(&path)?))) {
+            Ok((mut asking, listening)) => {
+                host.diag()
+                    .info(format!("pulseaudio: connected to {}", path.display()));
+                let watch = host.watch(listening.fd());
+                match asking.sink() {
+                    Ok(sink) => self.show(sink, host),
+                    Err(error) => host.diag().warn(format!("pulseaudio: {error}")),
+                }
+                self.server = Some((asking, listening, watch));
+            }
+            Err(error) => {
+                host.diag().once(
+                    "pulseaudio-server",
+                    format!(
+                        "pulseaudio: no PulseAudio server at {} ({error}): the module shows waybar's starting values until one appears",
+                        path.display()
+                    ),
+                );
+                self.timer = Some(host.timer(Duration::from_secs(5)));
+            }
+        }
+    }
+
+    fn requery(&mut self, host: &mut dyn Host) {
+        let answer = self.server.as_mut().map(|(asking, _, _)| asking.sink());
+        match answer {
+            Some(Ok(sink)) => self.show(sink, host),
+            Some(Err(error)) => {
+                host.diag()
+                    .warn(format!("pulseaudio: the server went away: {error}"));
+                self.lost(host);
+            }
+            None => {}
+        }
+    }
+
+    fn lost(&mut self, host: &mut dyn Host) {
+        if let Some((_, _, watch)) = self.server.take() {
+            host.unwatch(watch);
+        }
         self.timer = Some(host.timer(Duration::from_secs(5)));
     }
 }
@@ -190,8 +236,62 @@ impl Module for Pulseaudio {
         if self.timer != Some(timer) {
             return false;
         }
+        self.timer = None;
         self.probe(host);
-        false
+        true
+    }
+
+    fn readable(&mut self, host: &mut dyn Host, watch: WatchKey) -> bool {
+        let Some((_, listening, mine)) = self.server.as_mut() else {
+            return false;
+        };
+        if *mine != watch {
+            return false;
+        }
+        let (changed, open) = listening.read();
+        if !open {
+            host.diag()
+                .warn("pulseaudio: the server went away".to_owned());
+            self.lost(host);
+            return true;
+        }
+        if changed {
+            self.requery(host);
+        }
+        changed
+    }
+
+    fn scroll(&mut self, host: &mut dyn Host, scroll: Scroll) -> bool {
+        let config = &self.common.config;
+        let named = match scroll {
+            Scroll::Up => "on-scroll-up",
+            Scroll::Down => "on-scroll-down",
+            Scroll::Left => "on-scroll-left",
+            Scroll::Right => "on-scroll-right",
+        };
+        if config.get(named).is_string() {
+            self.common.run_scroll(host, scroll);
+            return false;
+        }
+        let step = config.get("scroll-step").as_f64().unwrap_or(1.0);
+        let max = config.get("max-volume").as_f64().unwrap_or(100.0);
+        let Some((asking, _, _)) = self.server.as_mut() else {
+            return false;
+        };
+        let now = f64::from(asking.volume().unwrap_or(0));
+        let wanted = match scroll {
+            Scroll::Up => (now + step).min(max),
+            Scroll::Down => (now - step).max(0.0),
+            _ => return false,
+        };
+        #[expect(clippy::cast_possible_truncation, reason = "a volume in percent")]
+        #[expect(clippy::cast_sign_loss, reason = "clamped at zero")]
+        let wanted = wanted.round().clamp(0.0, f64::from(u16::MAX)) as u16;
+        if let Err(error) = asking.set_volume(wanted) {
+            host.diag().warn(format!("pulseaudio: {error}"));
+        }
+        self.requery(host);
+        true
     }
 }
 

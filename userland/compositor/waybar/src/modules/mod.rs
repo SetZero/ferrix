@@ -15,6 +15,7 @@ pub mod clock;
 pub mod custom;
 pub mod hyprland;
 pub mod network;
+pub mod pulse;
 pub mod pulseaudio;
 pub mod system;
 pub mod tray;
@@ -29,6 +30,8 @@ use crate::view::{ModuleView, Shape};
 pub type ChildKey = u64;
 /// A timer the host set, by its key.
 pub type TimerKey = u64;
+/// A descriptor the host watches, by its key.
+pub type WatchKey = u64;
 
 /// What a module can ask of the bar's loop.
 pub trait Host {
@@ -44,6 +47,10 @@ pub trait Host {
     fn timer(&mut self, after: Duration) -> TimerKey;
     /// Forget a timer.
     fn cancel(&mut self, timer: TimerKey);
+    /// Say when `fd` is readable, as [`Module::readable`].
+    fn watch(&mut self, fd: i32) -> WatchKey;
+    /// Stop watching.
+    fn unwatch(&mut self, watch: WatchKey);
     /// A file's text, `None` if it cannot be read.
     fn read(&mut self, path: &str) -> Option<String>;
     /// Seconds since some fixed point, for rates.
@@ -437,6 +444,10 @@ pub trait Module {
     fn signal(&mut self, _host: &mut dyn Host, _signal: i32) -> bool {
         false
     }
+    /// A descriptor it watches is readable.
+    fn readable(&mut self, _host: &mut dyn Host, _watch: WatchKey) -> bool {
+        false
+    }
     /// A line of Hyprland's event socket: `name>>data`.
     fn hyprland_event(&mut self, _host: &mut dyn Host, _name: &str, _data: &str) -> bool {
         false
@@ -569,6 +580,11 @@ pub mod fake {
         fn cancel(&mut self, timer: TimerKey) {
             let _ = self.timers.remove(&timer);
         }
+        fn watch(&mut self, _fd: i32) -> super::WatchKey {
+            self.next += 1;
+            self.next
+        }
+        fn unwatch(&mut self, _watch: super::WatchKey) {}
         fn read(&mut self, path: &str) -> Option<String> {
             self.files.get(path).cloned()
         }

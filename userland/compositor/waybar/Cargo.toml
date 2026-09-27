@@ -23,6 +23,11 @@ name = "waybar-probe"
 path = "src/bin/probe.rs"
 
 [dependencies]
+# The PulseAudio native protocol's wire format, for the pulseaudio module's
+# volume, mute and description: the crate Ferrix's own sound server is
+# planned on (docs/AUDIO.md, U2), pure Rust, MIT. Its protocol module is
+# used synchronously; nothing of its async client is.
+pulseaudio = "0.3.1"
 # The rasteriser the bar's CSS boxes are drawn with: the one version the
 # workspace pins (userland/compositor/render's reasons), so the foundation's glyphs
 # and images and this crate's boxes are one tiny-skia.
