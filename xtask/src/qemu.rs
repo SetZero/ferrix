@@ -1594,10 +1594,12 @@ fn attach_clipboard(command: &mut Command, arch: Arch, args: &Args) {
     if !args.clipboard || arch == Arch::Armv7a {
         return;
     }
-    let _ = command.args([
-        "-chardev",
-        "qemu-vdagent,id=vdagent,name=vdagent,clipboard=on,mouse=off",
-    ]);
+    // `test-clipboard` is the host itself, over a socket it listens on.
+    let chardev = match &args.clipboard_socket {
+        Some(path) => format!("socket,id=vdagent,path={}", path.display()),
+        None => "qemu-vdagent,id=vdagent,name=vdagent,clipboard=on,mouse=off".to_owned(),
+    };
+    let _ = command.args(["-chardev", &chardev]);
     let _ = command.args([
         "-device",
         "virtio-serial-pci,id=vdagent-bus,disable-legacy=on,iommu_platform=on",

@@ -66,6 +66,7 @@ mod busybox;
 mod cargo;
 mod check;
 mod chrome;
+mod clipboard;
 mod compositor;
 mod console;
 mod coverage;
@@ -178,6 +179,7 @@ COMMANDS:
                   started from a file by ferrix.init=; under busybox, require reboot(2) to commit /data
     test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs and applets
     test-net      Boot with a network device and require busybox to configure it and fetch a file
+    test-clipboard  Boot the desktop with its clipboard port on a socket xtask speaks vdagent over, and carry text both ways
     test-adb      Boot adbd with a network, and drive it with this machine's adb: shell, push, pull, forward, reboot
     test-display  Boot userland/compositor/blank as init with a virtio-gpu, and require its colour on every pixel
     test-compositor  Boot userland/compositor/hyprix as init with a virtio-gpu, and require its background on every pixel
@@ -416,6 +418,7 @@ fn run() -> Result<()> {
         "test-vfs" => test_vfs(&args),
         "test-net" => test_net(&args),
         "test-adb" => adbd::test_adb(&args, program_for),
+        "test-clipboard" => clipboard::test_clipboard(&args),
         "test-display" => display::test_display(&args),
         "run-compositor" => compositor::run_compositor(&args),
         "run-badapple" => badapple::run_badapple(&args),

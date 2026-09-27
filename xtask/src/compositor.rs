@@ -58,7 +58,7 @@ use crate::{Error, Result};
 const BACKGROUND: [u8; 3] = [0x11, 0x11, 0x11];
 
 /// What the compositor prints once it is on a screen, followed by the mode.
-const MARKER: &str = "hyprix: card0";
+pub(crate) const MARKER: &str = "hyprix: card0";
 
 /// What it prints instead when it could not start.
 const FAILED: &str = "hyprix: failed";
@@ -1250,6 +1250,24 @@ fn wait_for(watching: &mut Watching<'_>, awaiting: &[&str]) -> Result<()> {
 /// Build the bootable image for one boot: the compositor as init, the
 /// client, `hyprctl` and the plugin in the initramfs, and the configuration
 /// beside them.
+/// A desktop image whose compositor starts with `config`, and its kernel,
+/// for a gate beside `test-compositor` that needs the compositor, its
+/// programs and a shell to run them in sequence: `test-clipboard`. zinc and
+/// nothing else of what a watched boot carries.
+///
+/// # Errors
+///
+/// A build that failed.
+pub(crate) fn desktop_image(arch: Arch, config: &str, args: &Args) -> Result<(PathBuf, PathBuf)> {
+    let programs = Programs::build(arch)?;
+    let carried = Carried {
+        busybox: None,
+        zinc: crate::zinc::build(arch)?,
+        ports: Vec::new(),
+    };
+    build_image(arch, &programs, config, carried, args)
+}
+
 fn build_image(
     arch: Arch,
     programs: &Programs,

@@ -29,6 +29,9 @@ ferrix-cpio.workspace = true
 # adb's message format, for `test-adb`'s check that a forward reaches the
 # guest: it speaks one CNXN through it with the bytes adbd itself decodes.
 ferrix-adb.workspace = true
+# vdagent's framing and messages, for `test-clipboard`'s host half: it speaks
+# the protocol to the guest's agent with the bytes the agent itself decodes.
+ferrix-vdagent.workspace = true
 
 [lints]
 workspace = true

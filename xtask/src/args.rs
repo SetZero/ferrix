@@ -222,6 +222,10 @@ pub(crate) struct Args {
     /// the reason `net` gives: it puts another device on the bus, and the bus
     /// a check enumerates should be the bus it has always enumerated.
     pub(crate) clipboard: bool,
+    /// For `test-clipboard`: the clipboard port's far end is a Unix socket
+    /// at this path that xtask listens on and speaks vdagent over, instead of
+    /// QEMU's own `qemu-vdagent`.
+    pub(crate) clipboard_socket: Option<std::path::PathBuf>,
     /// `--audio BACKEND`: a virtio-snd card on the bus, its far end QEMU's
     /// audio backend `BACKEND` -- `pipewire` or `pa` to hear it on a Linux
     /// host, `wav:PATH` to write what the guest plays to a file

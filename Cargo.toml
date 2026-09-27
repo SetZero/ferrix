@@ -126,6 +126,7 @@ ferrix-renderctl = { path = "libs/proto/renderctl" }
 ferrix-inputctl = { path = "libs/proto/inputctl" }
 ferrix-sndctl = { path = "libs/proto/sndctl" }
 ferrix-adb = { path = "libs/proto/adb" }
+ferrix-vdagent = { path = "libs/drivers/vdagent" }
 ferrix-logctl = { path = "libs/proto/logctl" }
 ferrix-bootinfo = { path = "libs/proto/bootinfo" }
 ferrix-elf = { path = "libs/platform/elf" }
