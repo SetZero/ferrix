@@ -296,7 +296,7 @@ fn interface(name: &str) -> Option<Interface> {
         // SAFETY: `ifreq` is plain data; all zeros is a valid value.
         let mut ifreq: libc::ifreq = unsafe { core::mem::zeroed() };
         for (slot, &byte) in ifreq.ifr_name.iter_mut().zip(bytes) {
-            *slot = byte.cast_signed();
+            *slot = libc::c_char::from_ne_bytes([byte]);
         }
         // libc types the `SIOCGIF*` numbers `c_ulong` but musl's `ioctl`
         // takes a `c_int`; every one fits in either.
@@ -325,7 +325,11 @@ fn interface(name: &str) -> Option<Interface> {
             }
             // sockaddr_in: family, port, then the address.
             let octets = address.sa_data;
-            let byte = |at: usize| octets.get(at).map_or(0, |b| b.cast_unsigned());
+            let byte = |at: usize| {
+                octets
+                    .get(at)
+                    .map_or(0, |b| u8::from_ne_bytes(b.to_ne_bytes()))
+            };
             Some(std::net::Ipv4Addr::new(byte(2), byte(3), byte(4), byte(5)))
         })
     };

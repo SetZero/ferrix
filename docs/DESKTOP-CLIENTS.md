@@ -322,7 +322,10 @@ test config of the tree's (`userland/compositor/waybar/data/boot/`: the
 user's bar with each Python script an `echo` of a fixed answer, and
 `"output": "Virtual-1"`). The host's build draws the same files with
 `--render`, and the guest's screen must show those pixels: all 1024x40
-match on x86_64. The screenshot is `build/x86_64/waybar.ppm`.
+match on x86_64, and on aarch64 too, exactly, though that boot allows two a
+channel (2026-09-27). The screenshot is `build/<arch>/waybar.ppm`. The
+first aarch64 run found that `libc::c_char` is `u8` there, which the
+interface ioctls had taken for `i8`; both boots pass on aarch64 now.
 
 With the user's own `config.jsonc` the bar on Ferrix shows the launcher, the
 volume chip (`vol 0%` with no `pulsed`), `ram N%`, the network chip and logout; the
