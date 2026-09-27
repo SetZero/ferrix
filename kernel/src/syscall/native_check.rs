@@ -928,6 +928,8 @@ fn answered(side: &Side) -> Result<(u64, u64, u64, u128), &'static str> {
 /// ring that does not exist are refused; a read into a buffer nothing maps
 /// is refused and counts nothing as read; and the handle, holding neither
 /// `DUPLICATE` nor `TRANSFER`, can be neither copied nor sent.
+///
+/// Verifies: H.AUD.9
 fn the_audit_record_is_read_by_its_handle_alone(
     side: &Side,
     report: &mut Report,

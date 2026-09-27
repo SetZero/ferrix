@@ -297,6 +297,30 @@ refusal and back to zero, and its `kmem` line fills a limited job with each
 kind of heap in turn until `ENOMEM`, with a sibling unrefused and every
 byte given back.
 
+### 1.7 The audit record — F-21b
+
+The audit record ([AUDIT.md](AUDIT.md)) allocates nothing: its two rings and
+the boot's pinned records are 288 KiB of static storage on every
+architecture, and a record is a 64-byte copy and two counters under a leaf
+`IrqSpinLock` (§1.1's count is unchanged). A record is made only where the
+TSF decides something -- a refusal, a grant, an end, a quiesce, a change --
+never on the path of a call that succeeds.
+
+What a record costs, as every boot's `audit` line measures it on a store of
+its own, 4,096 records of each kind, 2026-09-27:
+
+| | kept (a grant) | counted past its budget (a refusal flood) |
+|---|---:|---:|
+| x86-64, KVM | 21 ns | 22 ns |
+| x86-64, TCG | 115 ns | 130 ns |
+| AArch64, TCG | 277 ns | 1,047 ns |
+| ARMv7-A, TCG | 233 ns | 236 ns |
+
+KVM's figure is the one to read: TCG's are emulation, and its AArch64
+exclusive-monitor loop makes the refusal's second lock the slow one. A flood
+costs no more per refusal than a grant, since past its 64 a second a refusal
+is a counter bumped under the ring's lock, not a record written.
+
 ---
 
 ## 2. Worst-case execution time — F-24

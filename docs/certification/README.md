@@ -28,7 +28,7 @@ specific, measured, and mostly documents rather than code.
 * [SAFETY-MANUAL.md](SAFETY-MANUAL.md) — the out-of-context argument: assumed requirements, safe state, eleven assumptions of use, element failure analysis
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
 * [FINDINGS.md](FINDINGS.md) — the audit register, 15 open findings and 33 closed
-* [AUDIT.md](AUDIT.md) — the design of a minimal security audit (F-21b's FAU half), not built
+* [AUDIT.md](AUDIT.md) — the security audit of the TSF's own decisions, built and claimed (F-21b)
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
 * [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) — AVA_VAN.4 over the seven threats; six residual vulnerabilities
 * [SPECULATION.md](SPECULATION.md) — the side-channel defences, per architecture, behind one build switch, and what they cost
@@ -147,9 +147,10 @@ describes Ferrix, not the TOE (F-15). The TSF no longer names the load ring anyw
 (`ADV_INT.2`; F-07, F-09 and F-33 closed), but the gate reads names, not types, and
 the crate root is exempt by file (SECURITY-TARGET §9.6). The side-channel defences and KASLR are built and on by
 default (F-31, closed), but there is no cache partitioning and no KPTI, so a
-program with a timer can still find the kernel and time a neighbour (V-06). And the TOE claims neither audit nor
-authentication (F-21b), which is defensible for an isolation kernel and is why
-no Protection Profile is claimed. FRU_RSA.1 is built as refined -- a job's
+program with a timer can still find the kernel and time a neighbour (V-06). And the TOE claims no
+authentication, which is the environment's (OE.AUTH), and is why no
+Protection Profile is claimed; it claims audit of its own decisions (F-21b,
+closed). FRU_RSA.1 is built as refined -- a job's
 memory, the kernel heap the Linux personality holds for it included, its
 native objects and tasks capped, and a processor shared by job weight rather
 than capped -- so T.EXHAUST is resisted; what remains is per-task state the

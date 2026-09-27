@@ -843,6 +843,8 @@ fn recorded(lines: &[String], event: &str, with: &str) -> bool {
 /// boot has it (the checks run), and the decisions only a boot with init
 /// makes -- the starter and the reader's handle given to pid 1, devmgr
 /// started by it, and `/` switched with pid 1 moved -- each in the file.
+///
+/// Verifies: H.AUD.10
 fn audit_read_back(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
     let lines = audit_lines(at)?;
     let id = lines
@@ -899,6 +901,8 @@ fn audit_read_back(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<
 /// as one line a run the ring overwrote. So init's last read must be where
 /// the kernel saw it stop, and every record from there to the power action
 /// must be on the console.
+///
+/// Verifies: H.AUD.11
 fn judge_audit_power(after: &[String]) -> std::result::Result<(), String> {
     const TOLD: &str = "audit    power action 1 recorded as record ";
     let Some(at) = after.iter().rposition(|line| line.contains(TOLD)) else {
@@ -963,6 +967,8 @@ fn judge_audit_power(after: &[String]) -> std::result::Result<(), String> {
 /// A boot with `ferrix.checks=skip` records that its self-checks were
 /// skipped (AUDIT.md §6), which no check inside that boot can see: its own
 /// `svc audit` shows the checks' configuration record saying 0.
+///
+/// Verifies: H.AUD.12
 fn checks_skipped(
     arch: Arch,
     args: &Args,

@@ -1080,6 +1080,155 @@ package FerrixItemRequirements {
         }
     }
 
+    package Audit {
+        doc /* The audit record of the TSF's own decisions: O.AUDIT (FAU_GEN.1,
+             * FAU_GEN.2, FAU_SAR.1, FAU_SAR.2, FAU_STG.1, FAU_STG.4), for
+             * P.ACCOUNTABILITY. docs/certification/AUDIT.md is the design. */
+
+        requirement <'H.AUD.1'> gaplessAndStarted : ItemHighLevel {
+            attribute :>> statement = "Each audit ring shall number its records
+                from zero without a gap, the high-value ring's first being the
+                start-up record with the boot's whole audit id and both ring
+                lengths; a second start shall change nothing, and a reader asking
+                for a record the ring overwrote shall be moved on and told exactly
+                how many it lost.";
+            attribute :>> criterion = "On a store of four high-value records, the
+                start-up record is number 0 and carries the id and lengths; a
+                second start is refused; after six grants a read from 0 copies
+                records 3 to 6 and reports 3 lost; a read of two from 3 resumes at
+                5.";
+            attribute :>> parent = "O.AUDIT";
+        }
+        requirement <'H.AUD.2'> theBootsRecordsPinned : ItemHighLevel {
+            attribute :>> statement = "The first eight system records shall stay
+                readable, numbered as the high-value ring numbered them, however
+                far that ring has wrapped, and no record after them shall join
+                them.";
+            attribute :>> criterion = "Nine system records and a grant in a ring
+                of four: the boot records read back 0, 1, 2, 3, 5, 6, 7, 8, the
+                ring reports records lost, and a read of the boot records from 6
+                copies 3 and resumes at 9.";
+            attribute :>> parent = "O.AUDIT";
+        }
+        requirement <'H.AUD.3'> refusalsKeptApart : ItemHighLevel {
+            attribute :>> statement = "A refusal shall be kept in the refusal ring
+                and a record of every other class in the high-value ring, so that
+                no flood of refusals can overwrite a grant.";
+            attribute :>> criterion = "One record of each of the six classes: the
+                refusal alone in the refusal ring, the other five in the
+                high-value ring in the order made.";
+            attribute :>> parent = "O.AUDIT";
+        }
+        requirement <'H.AUD.4'> aBudgetIsItsMakers : ItemHighLevel {
+            attribute :>> statement = "A job shall be charged, for the fairness of
+                the refusal ring, to the budget its maker gave it: its parent's
+                for a job its members could make themselves, its own otherwise.";
+            attribute :>> criterion = "An anonymous job and one inside it are
+                charged to their unit, a cgroup made in a delegated unit to that
+                unit, and a cgroup root made in a unit to itself: 6 jobs' budgets
+                as given.";
+            attribute :>> parent = "O.AUDIT";
+        }
+        requirement <'H.AUD.5'> aFloodIsCounted : ItemHighLevel {
+            attribute :>> statement = "Past 64 refusals charged to one budget in a
+                second, the TSF shall count that budget's further refusals rather
+                than keep them, and write the count once the second has ended,
+                while another budget's refusals and every grant are kept.";
+            attribute :>> criterion = "104 refusals from a unit's three jobs keep
+                64 between them and, once the second has ended, one suppressed
+                record counting 40 under the unit; the delegated unit's refusal in
+                the same second is kept, and a grant made before is still read
+                with none lost.";
+            attribute :>> parent = "O.AUDIT";
+        }
+        requirement <'H.AUD.6'> anEvictedCountIsWritten : ItemHighLevel {
+            attribute :>> statement = "A budget whose fairness window is taken to
+                make room for another shall have its count written, not
+                dropped.";
+            attribute :>> criterion = "A budget one over its limit, then 32 more
+                budgets: the first's window is closed and its suppressed record
+                counts 1.";
+            attribute :>> parent = "O.AUDIT";
+        }
+        requirement <'H.AUD.7'> theConfigurationRecorded : ItemHighLevel {
+            attribute :>> statement = "The boot shall start its audit record with
+                the start-up record of the id reads answer, and record whether its
+                self-checks run, who starts devmgr, the mitigations it was built
+                with and the KASLR state, as bring-up read them.";
+            attribute :>> criterion = "The kernel's boot records begin with the
+                start-up record, its id the one reads answer and its lengths 512
+                and 4096, and hold the 4 configuration records with bring-up's
+                values; the boot is not yet recorded as brought up.";
+            attribute :>> parent = "O.AUDIT";
+        }
+        requirement <'H.AUD.8'> everyDecisionRecorded : ItemHighLevel {
+            attribute :>> statement = "Each decision the TSF makes at a recording
+                site -- a call its rights refused, a widening refused, a limit's
+                refusal, a process made, a job given for a cgroup, a control
+                channel given, a job killed, a cgroup killed, an OOM kill, a device
+                quiesced, a limit set by handle or by cgroup file, a DMA fault --
+                shall be recorded with its outcome and the subject that made it,
+                the kernel for the decisions it makes alone.";
+            attribute :>> criterion = "At the end of a boot with checks, the
+                record holds each of the 12 events the boot's checks provoke, and
+                DMA_FAULT where an IOMMU translates, with the outcome of its class
+                and its subject; none of the OOM kill, the quiesce and the fault
+                names a process; the boot is recorded as brought up.";
+            attribute :>> parent = "O.AUDIT";
+        }
+        requirement <'H.AUD.9'> readByItsHandleAlone : ItemHighLevel {
+            attribute :>> statement = "The audit record shall be read only through
+                the audit handle with READ, which can be neither duplicated nor
+                sent; a read shall copy whole records from a cursor, and a read
+                that copies none or cannot copy them out shall leave the cursor,
+                the buffer and the reader's position where they were.";
+            attribute :>> criterion = "A handle with pid 1's rights reads the boot
+                records, the start-up record first with the kernel's id; a count
+                of 0 copies nothing and moves nothing; a read into unmapped memory
+                is FAULT and counts nothing read; a handle without READ,
+                a channel end and a ring that does not exist are refused; the
+                handle is not duplicated and not sent.";
+            attribute :>> parent = "O.AUDIT";
+        }
+        requirement <'H.AUD.10'> keptOnTheVolume : ItemHighLevel {
+            attribute :>> statement = "A boot with init shall keep its audit record
+                on the root volume in a file named by the boot's audit id, holding
+                the start-up record, the configuration, and the decisions only a
+                boot with init makes.";
+            attribute :>> criterion = "svc audit reads back the start-up record
+                with the id init named the file by, the checks' configuration as
+                run, STARTER_GIVEN, READER_GIVEN, DEVMGR_STARTED by pid 1 and
+                ROOT_SWITCHED with pid 1 moved.";
+            attribute :>> parent = "O.AUDIT";
+        }
+        requirement <'H.AUD.11'> nothingLostAtPowerOff : ItemHighLevel {
+            attribute :>> statement = "Every record up to a power action shall be
+                in the reader's file or on the console: the kernel shall record the
+                power action last, say how far the reader read, and print every
+                record past that, and a run the ring overwrote as one line.";
+            attribute :>> criterion = "At test-init's power-off, init's last read
+                is where the kernel saw it stop, and every number from there to
+                the power action is printed as unread or in a lost run.";
+            attribute :>> parent = "O.AUDIT";
+        }
+        requirement <'H.AUD.12'> anUncheckedBootSaysSo : ItemHighLevel {
+            attribute :>> statement = "A boot that skips its self-checks shall
+                record that it did, where a reader outside it can see.";
+            attribute :>> criterion = "A boot with ferrix.checks=skip, read back
+                through svc audit, holds the checks' configuration record with
+                value 0.";
+            attribute :>> parent = "O.AUDIT";
+        }
+        requirement <'H.AUD.13'> aRecordsLayout : ItemHighLevel {
+            attribute :>> statement = "An audit record shall be 64 bytes, each
+                field little-endian at a fixed offset, so that a reader decodes
+                what the kernel wrote.";
+            attribute :>> criterion = "A record of distinct bytes encodes to them
+                in order at the offsets the layout names and decodes back equal.";
+            attribute :>> parent = "O.AUDIT";
+        }
+    }
+
     package Failure {
         doc /* The safe state and what brings the kernel to it: O.FAILSAFE and
              * ASR-6 (FPT_FLS.1). SAFETY-MANUAL.md §3 defines the safe state. */

@@ -200,10 +200,13 @@ and no hardware backstop for ASR-1 (PAN is an ARMv8.1 feature; the Cortex-A7 is
 ARMv7-A, so the software bound check in `uaccess` is the only barrier). An
 integrator requiring either on that architecture shall not use it.
 
-### AoU-7 — no audit and no authentication
-The element provides no security event log and no identification or
-authentication; POSIX credentials live in the uncertified load. An integrator
-needing either shall provide it above the element. (Finding F-21b.)
+### AoU-7 — no authentication, and an audit of the element's own decisions only
+The element provides no identification or authentication; POSIX credentials
+live in the uncertified load. It records its own security decisions
+([AUDIT.md](AUDIT.md)) against its processes and jobs, not people, and keeps
+them only where its reader, pid 1, writes them. An integrator needing
+authentication, or an audit of what people did, shall provide it above the
+element. (Finding F-21b.)
 
 ### AoU-8 — the configuration is the one in §1
 The claims hold for the reference configuration and no other. Changing the

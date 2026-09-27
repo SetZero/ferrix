@@ -128,7 +128,10 @@ and all are assumed hostile, which is the central design claim being made.
 | A.AUTH | The authentication service of [docs/AUTH.md](../AUTH.md), `authd`, and the programs that act on its verdict (`login`, `su`, `sessiond`, the compositor) are competently built, as A.ADMIN has image composition. They rely on the TOE for O.ISOLATE, O.CAPABILITY and O.SCRUB, and on the Linux personality's uid model and its `SO_PEERCRED`, both in the uncertified load ring. |
 
 ### 3.4 Organisational security policies
-None claimed.
+
+| Id | Policy |
+|---|---|
+| P.ACCOUNTABILITY | The decisions the TSF makes for and against the subjects it attests -- a call refused, authority handed over, a process or job ended from outside, a device quiesced or refused an access, TSF data changed, and the configuration the TOE booted in -- are recorded so that they can be reviewed afterwards, and a review can tell a lost record from one never made. |
 
 ---
 
@@ -146,6 +149,7 @@ None claimed.
 | O.QUOTA | Bound the memory, objects and CPU a job may consume. | T.EXHAUST |
 | O.VALIDATE | Validate every user-supplied pointer, length and handle at the system-call boundary before use. | T.CONFUSE, T.MEMORY |
 | O.FAILSAFE | On detecting an inconsistent internal state, halt rather than continue. | T.ESCALATE |
+| O.AUDIT | Record each decision P.ACCOUNTABILITY names where the TSF makes it, in storage only the TSF writes, numbered so that a gap shows, with the boot's configuration among the records; let only the holder of a read-only capability read them. | P.ACCOUNTABILITY |
 
 ### 4.2 For the operational environment
 
@@ -157,6 +161,7 @@ None claimed.
 | OE.HARDWARE | MMU, IOMMU and interrupt controller conform to specification (A.HARDWARE). |
 | OE.PROCESSOR | The TOE runs, built `--mitigations on`, only on a processor whose boot log reports no side-channel hazard uncovered (A.PROCESSOR). |
 | OE.AUTH | People are identified and authenticated by `authd`, which alone holds credentials, in ring 3 and outside the TOE, and security-relevant events of that kind are recorded in its audit log ([docs/AUTH.md](../AUTH.md) §3.6) (A.AUTH). |
+| OE.AUDIT_STORE | The audit records the TOE's reader has written to the root volume (`/var/log/audit/<id>.bin`) are protected, kept and reviewed by the operational environment: the TOE claims nothing for them once written ([AUDIT.md](AUDIT.md) §7), as A.ADMIN has image composition. |
 
 ---
 
@@ -237,7 +242,81 @@ maximum would additionally leave a processor idle while work waits.
 **None claimed.** See §9.1.
 
 ### FAU — security audit
-**None claimed.** See §9.1.
+
+The design and its reasoning are [AUDIT.md](AUDIT.md); what follows is the
+claim.
+
+**FAU_GEN.1** Audit data generation. The TSF shall be able to generate an
+audit record of the following auditable events: a) start-up of the audit
+functions -- **the start-up record, and, as the last record before a power
+action, the power action**; b) **the TOE's configuration at start-up:
+`ferrix.checks`, `ferrix.devmgr`, the mitigations and KASLR**; c) **a
+native call its handle's rights refused, a widening of rights refused, a
+charge a job's limit refused, a native process made, a job handle given for
+a cgroup, a device's control channel given, `devmgr` started through the
+starter, the starter and the audit handle given to pid 1, a job killed, a
+cgroup killed, an OOM kill, a device quiesced, a DMA fault an IOMMU
+reported, a limit set through a job's handle or a cgroup's file, and the
+switch of `/`**. The TSF shall record within each audit record: the date
+and time of the event -- **nanoseconds since boot on the TSF's counter** --,
+type of event, subject identity, and the outcome of the event; and **what
+the decision was about and the event's detail**.
+
+*Refinement.* A call's ordinary success is not an auditable event: authority
+handed over and TSF data changed are (AUDIT.md §1). A refusal past its
+budget's 64 a second is counted in one *suppressed n* record rather than
+recorded itself (AUDIT.md §3). A DMA fault is recorded when the TSF reads
+it from the unit -- the boot's checks and a domain's own reads do; after
+boot the fault interrupt is masked, so a fault in the field is refused by the
+unit and not recorded until something reads it
+([VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md), "Faults after boot").
+
+**FAU_GEN.2** User identity association. The TSF shall be able to associate
+each auditable event with the identity of the **process and job, as the
+TSF attests them,** that caused the event.
+
+*Refinement.* "User" is refined to the TOE's own subjects. The uid the Linux
+personality gives is carried beside them, marked as the personality's, and
+is never the TSF's identity of the subject: people are identified outside
+the TOE (OE.AUTH). FAU_GEN.2's dependency, FIA_UID.1, is unmet by design:
+the subjects it names are the TSF's own process and job, which need no
+identification, and people are identified under OE.AUTH and A.AUTH.
+
+**FAU_SAR.1** Audit review. The TSF shall provide **the holder of the audit
+handle, which the TSF gives pid 1 alone** with the capability to read **all
+audit records, the boot's own pinned apart**, from the audit records. The
+TSF shall provide the audit records in a manner suitable for the user to
+interpret the information: **64 fixed bytes a record in
+`libs/proto/audit`'s layout, which `svc audit` decodes.**
+
+**FAU_SAR.2** Restricted audit review. The TSF shall prohibit all users read
+access to the audit records, except those users that have been granted
+explicit read-access: **the holder of the audit handle, which carries `READ`
+alone and so can be neither duplicated nor sent.**
+
+**FAU_STG.1** Protected audit trail storage. The TSF shall protect the
+stored audit records in the audit trail from unauthorised deletion. The TSF
+shall be able to *prevent* unauthorised modifications to the stored audit
+records in the audit trail.
+
+*Refinement.* The audit trail is the TSF's two rings: nothing but the TSF
+writes them, and no call deletes or changes a record. The records once
+written to the volume are OE.AUDIT_STORE's.
+
+**FAU_STG.4** Prevention of audit data loss. The TSF shall *overwrite the
+oldest stored audit records* and **count the records overwritten, and
+report the gap in the numbers and its count to the reader,** if the audit
+trail is full.
+
+*Refinement.* A full ring is one ring of the two: a flood of refusals fills
+the refusal ring alone and never overwrites a grant (AUDIT.md §3). The other
+two selections are declined deliberately: *ignore audited events* or
+*prevent audited events* when full would let an attacker fill the store
+first and then act unrecorded, and a TSF that stopped instead would make
+audit a lever for T.EXHAUST. FAU_STG.3 is not claimed: the TSF raises no
+alarm on a potential loss, and the reader learns of one from the gap.
+
+FPT_STM.1 (above) is the time stamp of each record.
 
 ---
 
@@ -264,6 +343,7 @@ How the TOE meets each objective, with the evidence that exists today.
 | O.QUOTA | A quota slot per job in `kernel/src/object/quota.rs`, charged hierarchically at every task, frame and native object a job's programs make and uncharged wherever each goes (the frame record keeps its slot); the kernel heap the Linux personality holds for its programs charged as memory, in bytes, by a `libs/kernel/kmem` token kept in each object (F-37); a per-job weight applied to each task's in `sched`. Set by `job_set_limit` or cgroupfs. What is bounded otherwise is in §9.7. | `object/quota_check.rs`, every boot: *"a fork loop refused at its job's 8 tasks; faults refused at 47 pages (3 of them page tables, beside 512 bytes of its regions' heap) while a sibling job faulted in 48; objects refused at 5; one task alone in its job kept 50.0% of a processor against eight in another; every counter back to zero and every quota slot given back"*; `fs/kmem_check.rs`, every boot: *"at a 32 KiB memory limit a job made 34 files, 14 pipes, 5 socket pairs, 70 descriptors in flight, 128 epoll registrations, 31 eventfds, 255 regions of one mapping and 454 record locks, and was refused one more of each -- ENOMEM, ENOLCK for a lock -- while a sibling made one; every byte of heap charged came back"* (x86-64, 2026-09-26); eight negative controls (W-13, W-15) |
 | O.VALIDATE | `kernel/src/syscall/uaccess.rs`, backed on x86-64 by SMEP and SMAP since 2026-09-25, and on AArch64 by PAN where the CPU has it. The reference `cortex-a72` does not, and ARMv7-A cannot (V-01). | `syscall/check.rs`, 9,537 lines, 427 refusal assertions; the boot reports *SMEP on, SMAP on* |
 | O.FAILSAFE | `kernel/src/panic.rs` with a catalogue of explanations. | `scripts/check/check-panic-audit.py`; `gen-panic-catalog.py --check` |
+| O.AUDIT | `kernel/src/audit.rs`, in the core ring: two rings of static storage under leaf `IrqSpinLock`s, fairness per budget, the boot's own records pinned; a record at each decision's site; `Object::Audit` and `audit_read`, the handle only pid 1 holds; init keeping the records in `/var/log/audit/<id>.bin` ([AUDIT.md](AUDIT.md)). | `audit/check.rs`, every boot: the store on stores of its own and the kernel's, and at the end of boot *"13 kinds of decision the boot's checks made are recorded, each with its outcome and the subject that decided it"* (x86-64, 2026-09-27), with a negative control for every recording site; `syscall/native_check.rs`: the handle reads, refuses without `READ` and cannot be sent; `test-init`: the record read back from the volume, the power-off's number, and a `ferrix.checks=skip` boot's record read from outside; `H.AUD.1` to `H.AUD.13` |
 
 ---
 
@@ -272,7 +352,9 @@ How the TOE meets each objective, with the evidence that exists today.
 ### 8.1 Threats to objectives
 Each threat in §3.2 is countered by at least one objective in §4.1, as the
 *Counters* column records. T.MEMORY and T.ESCALATE are each countered by more
-than one, since they are the threats the TOE exists to address.
+than one, since they are the threats the TOE exists to address. O.AUDIT
+counters no threat: it meets P.ACCOUNTABILITY, the one policy of §3.4, and
+nothing else is claimed to meet it.
 
 ### 8.2 Objectives to SFRs
 
@@ -286,6 +368,7 @@ than one, since they are the threats the TOE exists to address.
 | O.QUOTA | FRU_RSA.1 |
 | O.VALIDATE | FPT_TDC.1 |
 | O.FAILSAFE | FPT_FLS.1 |
+| O.AUDIT | FAU_GEN.1, FAU_GEN.2, FAU_SAR.1, FAU_SAR.2, FAU_STG.1, FAU_STG.4, FPT_STM.1 |
 
 ### 8.3 Why EAL5 is the right claim
 §2.2. The three arguments that carry it: the TOE is 51,525 lines and 100%
@@ -302,21 +385,19 @@ review notes cannot.
 
 Stated here rather than discovered by an evaluator.
 
-### 9.1 Two SFR families are deliberately absent
-There is **no audit function** (FAU) at all, and **no identification or
-authentication** (FIA) inside the TOE — POSIX credentials live in
-`syscall/credentials.rs`, which is in the uncertified load ring.
+### 9.1 Identification and authentication are the environment's
+There is **no identification or authentication** (FIA) inside the TOE —
+POSIX credentials live in `syscall/credentials.rs`, which is in the
+uncertified load ring. For a TOE of this type that is defensible: it is an
+isolation kernel, and identity is a personality concern. It is also why no
+OS Protection Profile can be claimed (§2.3).
 
-For a TOE of this type that is defensible: it is an isolation kernel, and
-identity is a personality concern. It is also why no OS Protection Profile can
-be claimed (§2.3), and an evaluator would press hard on whether a TOE that
-cannot record a security-relevant event can meaningfully claim EAL5.
-
-[AUDIT.md](AUDIT.md) designs the audit this TOE would claim: FAU_GEN.1 at
-the TSF's own decisions, FAU_GEN.2 refined to the process and job the TSF
-attests, FAU_SAR.1 and .2 through a read-only capability, FAU_STG.1 with
-overwrite and why it is neither FAU_STG.3 nor .4, and FPT_STM.1. It is not
-built, and nothing of it is claimed here until it is (F-21b).
+Audit (FAU) is claimed since 2026-09-27 (§5, [AUDIT.md](AUDIT.md), F-21b),
+for the TSF's own decisions and with the TSF's own subjects: a process and
+a job, not a person. What a person did is `authd`'s to record. The TOE's
+records, once its reader has written them to the volume, are
+OE.AUDIT_STORE's; a boot with no reader keeps the rings' last records and
+prints any a power action would lose.
 
 Their counterparts are the operational environment's since 2026-09-26:
 OE.AUTH and A.AUTH (§3.3, §4.2). `authd` identifies and authenticates

@@ -2309,13 +2309,16 @@ fn start_audit(view: &BootView<'_>) {
             "  audit    {} records kept of a wrapped ring and {} reported lost, resumed after a \
              partial read; {} jobs charged to their maker's budget; {} of a unit's refusals \
              from three of its jobs kept and {} counted as suppressed, another unit's kept, \
-             grants untouched; {} configuration items read back",
+             grants untouched; {} configuration items read back; a record costs {} ns kept, \
+             {} ns counted past its budget",
             report.kept,
             report.lost,
             report.budgets,
             report.flood_kept,
             report.suppressed,
             report.configs,
+            report.grant_nanos,
+            report.refusal_nanos,
         ),
         Err(problem) => fatal!(catalog::AUDIT_STORE, "audit self-check failed: {problem}"),
     }

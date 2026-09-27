@@ -14,7 +14,7 @@ Coverage evidence recording the checks: none yet.
 
 | Level | Written | Named by a check | Unverified, in the baseline |
 |---|---:|---:|---:|
-| High (`H.*`) | 99 | 47 | 52 |
+| High (`H.*`) | 112 | 60 | 52 |
 | Low (`L.*`) | 553 | 320 | 233 |
 
 865 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
@@ -83,6 +83,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | G.5 | `H.SCHED.9`, `H.TRAP.8`, `H.TRAP.10`, `H.TRAP.14`, `H.TRAP.15` |
 | G.7 | `H.OBJ.11`, `H.OBJ.17` |
 | G.8 | `H.OBJ.12`, `H.QUOTA.6` |
+| O.AUDIT | `H.AUD.1`, `H.AUD.2`, `H.AUD.3`, `H.AUD.4`, `H.AUD.5`, `H.AUD.6`, `H.AUD.7`, `H.AUD.8`, `H.AUD.9`, `H.AUD.10`, `H.AUD.11`, `H.AUD.12`, `H.AUD.13` |
 | O.CAPABILITY | `H.OBJ.1`, `H.OBJ.2`, `H.OBJ.3`, `H.OBJ.4`, `H.OBJ.5`, `H.OBJ.6`, `H.OBJ.7`, `H.OBJ.8`, `H.OBJ.9`, `H.OBJ.11`, `H.OBJ.14`, `H.OBJ.15`, `H.OBJ.16`, `H.OBJ.17`, `H.IRQ.1`, `H.IRQ.2`, `H.DMA.5`, `H.DEV.1` |
 | O.DMA | `H.DMA.1`, `H.DMA.2`, `H.DMA.6`, `H.DMA.7`, `H.DMA.3`, `H.DMA.8`, `H.DMA.4`, `H.DMA.5`, `H.DEV.2`, `H.DEV.4` |
 | O.FAILSAFE | `H.TRAP.6`, `H.BOOT.1`, `H.BOOT.2`, `H.BOOT.4`, `H.BOOT.5`, `H.BOOT.6`, `H.BOOT.7`, `H.BOOT.8`, `H.FAIL.1`, `H.FAIL.2`, `H.FAIL.3`, `H.FAIL.4` |
@@ -250,6 +251,24 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `H.QUOTA.7` | The kernel heap the Linux personality keeps for a job's programs shall be charged against the job's memory limit, and every byte of it returned when it is freed; a sibling job shall be unaffected. | At a 32 KiB limit each kind of personality object is refused one past its count with ENOMEM (ENOLCK for a lock) while a sibling makes one, and with them gone every byte charged has come back (the `kmem` line). | O.QUOTA | `kernel/src/fs/kmem_check.rs::run` | not measured | not measured | not measured |
 | `H.QUOTA.8` | A creation the task limit refuses shall be answered as Linux and the native ABI answer it -- a fork with EAGAIN, a native process_create with SHOULD_WAIT -- and the refused process shall never start. | A fork past pids.max is answered EAGAIN and counted in pids.events; process_create into a job at its task limit is answered SHOULD_WAIT and the job's task count is unchanged. | O.QUOTA | *baselined* | — | — | — |
 | `H.QUOTA.9` | Creating a VMO, a job or a pin in a job at its object limit shall be refused with NO_MEMORY, and each shall be counted as an object for as long as it exists. | In a job limited to 5 objects and holding 5, vmo_create, job_create and vmo_pin are each refused NO_MEMORY, 0 objects counted beyond the limit, and the job holds 0 once they are all closed. | O.QUOTA | *baselined* | — | — | — |
+
+### Audit (`H.AUD`)
+
+| Id | Statement | Criterion | Parent | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|
+| `H.AUD.1` | Each audit ring shall number its records from zero without a gap, the high-value ring's first being the start-up record with the boot's whole audit id and both ring lengths; a second start shall change nothing, and a reader asking for a record the ring overwrote shall be moved on and told exactly how many it lost. | On a store of four high-value records, the start-up record is number 0 and carries the id and lengths; a second start is refused; after six grants a read from 0 copies records 3 to 6 and reports 3 lost; a read of two from 3 resumes at 5. | O.AUDIT | `kernel/src/audit/check.rs::start_and_wrap` | not measured | not measured | not measured |
+| `H.AUD.2` | The first eight system records shall stay readable, numbered as the high-value ring numbered them, however far that ring has wrapped, and no record after them shall join them. | Nine system records and a grant in a ring of four: the boot records read back 0, 1, 2, 3, 5, 6, 7, 8, the ring reports records lost, and a read of the boot records from 6 copies 3 and resumes at 9. | O.AUDIT | `kernel/src/audit/check.rs::pinned` | not measured | not measured | not measured |
+| `H.AUD.3` | A refusal shall be kept in the refusal ring and a record of every other class in the high-value ring, so that no flood of refusals can overwrite a grant. | One record of each of the six classes: the refusal alone in the refusal ring, the other five in the high-value ring in the order made. | O.AUDIT | `kernel/src/audit/check.rs::routing` | not measured | not measured | not measured |
+| `H.AUD.4` | A job shall be charged, for the fairness of the refusal ring, to the budget its maker gave it: its parent's for a job its members could make themselves, its own otherwise. | An anonymous job and one inside it are charged to their unit, a cgroup made in a delegated unit to that unit, and a cgroup root made in a unit to itself: 6 jobs' budgets as given. | O.AUDIT | `kernel/src/audit/check.rs::budgets` | not measured | not measured | not measured |
+| `H.AUD.5` | Past 64 refusals charged to one budget in a second, the TSF shall count that budget's further refusals rather than keep them, and write the count once the second has ended, while another budget's refusals and every grant are kept. | 104 refusals from a unit's three jobs keep 64 between them and, once the second has ended, one suppressed record counting 40 under the unit; the delegated unit's refusal in the same second is kept, and a grant made before is still read with none lost. | O.AUDIT | `kernel/src/audit/check.rs::fairness` | not measured | not measured | not measured |
+| `H.AUD.6` | A budget whose fairness window is taken to make room for another shall have its count written, not dropped. | A budget one over its limit, then 32 more budgets: the first's window is closed and its suppressed record counts 1. | O.AUDIT | `kernel/src/audit/check.rs::crowded` | not measured | not measured | not measured |
+| `H.AUD.7` | The boot shall start its audit record with the start-up record of the id reads answer, and record whether its self-checks run, who starts devmgr, the mitigations it was built with and the KASLR state, as bring-up read them. | The kernel's boot records begin with the start-up record, its id the one reads answer and its lengths 512 and 4096, and hold the 4 configuration records with bring-up's values; the boot is not yet recorded as brought up. | O.AUDIT | `kernel/src/audit/check.rs::kernel_store` | not measured | not measured | not measured |
+| `H.AUD.8` | Each decision the TSF makes at a recording site -- a call its rights refused, a widening refused, a limit's refusal, a process made, a job given for a cgroup, a control channel given, a job killed, a cgroup killed, an OOM kill, a device quiesced, a limit set by handle or by cgroup file, a DMA fault -- shall be recorded with its outcome and the subject that made it, the kernel for the decisions it makes alone. | At the end of a boot with checks, the record holds each of the 12 events the boot's checks provoke, and DMA_FAULT where an IOMMU translates, with the outcome of its class and its subject; none of the OOM kill, the quiesce and the fault names a process; the boot is recorded as brought up. | O.AUDIT | `kernel/src/audit/check.rs::booted` | not measured | not measured | not measured |
+| `H.AUD.9` | The audit record shall be read only through the audit handle with READ, which can be neither duplicated nor sent; a read shall copy whole records from a cursor, and a read that copies none or cannot copy them out shall leave the cursor, the buffer and the reader's position where they were. | A handle with pid 1's rights reads the boot records, the start-up record first with the kernel's id; a count of 0 copies nothing and moves nothing; a read into unmapped memory is FAULT and counts nothing read; a handle without READ, a channel end and a ring that does not exist are refused; the handle is not duplicated and not sent. | O.AUDIT | `kernel/src/syscall/native_check.rs::the_audit_record_is_read_by_its_handle_alone` | not measured | not measured | not measured |
+| `H.AUD.10` | A boot with init shall keep its audit record on the root volume in a file named by the boot's audit id, holding the start-up record, the configuration, and the decisions only a boot with init makes. | svc audit reads back the start-up record with the id init named the file by, the checks' configuration as run, STARTER_GIVEN, READER_GIVEN, DEVMGR_STARTED by pid 1 and ROOT_SWITCHED with pid 1 moved. | O.AUDIT | `xtask/src/init.rs::audit_read_back` | xtask gate | xtask gate | xtask gate |
+| `H.AUD.11` | Every record up to a power action shall be in the reader's file or on the console: the kernel shall record the power action last, say how far the reader read, and print every record past that, and a run the ring overwrote as one line. | At test-init's power-off, init's last read is where the kernel saw it stop, and every number from there to the power action is printed as unread or in a lost run. | O.AUDIT | `xtask/src/init.rs::judge_audit_power` | xtask gate | xtask gate | xtask gate |
+| `H.AUD.12` | A boot that skips its self-checks shall record that it did, where a reader outside it can see. | A boot with ferrix.checks=skip, read back through svc audit, holds the checks' configuration record with value 0. | O.AUDIT | `xtask/src/init.rs::checks_skipped` | xtask gate | xtask gate | xtask gate |
+| `H.AUD.13` | An audit record shall be 64 bytes, each field little-endian at a fixed offset, so that a reader decodes what the kernel wrote. | A record of distinct bytes encodes to them in order at the offsets the layout names and decodes back equal. | O.AUDIT | `libs/proto/audit/src/tests.rs::a_record_is_its_sixty_four_bytes_in_order_little_endian` | host test | host test | host test |
 
 ### Failure (`H.FAIL`)
 
@@ -1095,7 +1114,14 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `kernel/src/arch/x86_64/trap/check.rs::check_signals_and_fork` | kernel | L.x86_64.15, L.x86_64.47, L.x86_64.64, L.x86_64.73 |
 | `kernel/src/arch/x86_64/trap/check.rs::check_thread_areas` | kernel | L.x86_64.7, L.x86_64.8, H.SCHED.7 |
 | `kernel/src/arch/x86_64/trap/check.rs::run` | kernel | L.x86_64.60, L.x86_64.77, L.trap.1, L.x86_64.78, L.x86_64.103, H.TRAP.4 |
-| `kernel/src/audit/check.rs::booted` | kernel | L.iommu.44 |
+| `kernel/src/audit/check.rs::booted` | kernel | L.iommu.44, H.AUD.8 |
+| `kernel/src/audit/check.rs::budgets` | kernel | H.AUD.4 |
+| `kernel/src/audit/check.rs::crowded` | kernel | H.AUD.6 |
+| `kernel/src/audit/check.rs::fairness` | kernel | H.AUD.5 |
+| `kernel/src/audit/check.rs::kernel_store` | kernel | H.AUD.7 |
+| `kernel/src/audit/check.rs::pinned` | kernel | H.AUD.2 |
+| `kernel/src/audit/check.rs::routing` | kernel | H.AUD.3 |
+| `kernel/src/audit/check.rs::start_and_wrap` | kernel | H.AUD.1 |
 | `kernel/src/block_ring/check.rs::described` | kernel | L.device.10 |
 | `kernel/src/block_ring/check.rs::refusals` | kernel | L.quiesce.1 |
 | `kernel/src/block_ring/check.rs::round` | kernel | L.quiesce.2, H.DEV.2, H.DEV.4 |
@@ -1236,6 +1262,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `kernel/src/syscall/native_check.rs::a_full_table_refuses_and_loses_nothing` | kernel | L.object.82, L.object.92, H.OBJ.7 |
 | `kernel/src/syscall/native_check.rs::a_log_reader_its_binding_does_not_allow_is_refused` | kernel | L.device.12 |
 | `kernel/src/syscall/native_check.rs::a_send_that_would_walk_too_far_is_refused` | kernel | L.object.26 |
+| `kernel/src/syscall/native_check.rs::the_audit_record_is_read_by_its_handle_alone` | kernel | H.AUD.9 |
 | `kernel/src/syscall/unmap_check.rs::check_an_unmap_waits_for_a_copy_holding_its_page` | kernel | L.user.63 |
 | `kernel/src/syscall/vdso_check.rs::check_a_program_reads_the_clock_through_it` | kernel | L.x86_64.41, H.SCHED.9 |
 | `kernel/src/syscall/vdso_check.rs::check_the_mapping` | kernel | L.user.76 |
@@ -1293,7 +1320,11 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `libs/kernel/objects/src/tests.rs::replace_closes_the_original_and_cannot_add_rights` | host | H.OBJ.14 |
 | `libs/kernel/sched/src/tests.rs::something_waiting_is_decided_on_within_a_slice` | host | L.sched.1 |
 | `libs/kernel/sched/src/tests.rs::yielding_alone_leaves_the_request_as_it_was` | host | L.sched.2 |
+| `libs/proto/audit/src/tests.rs::a_record_is_its_sixty_four_bytes_in_order_little_endian` | host | H.AUD.13 |
+| `xtask/src/init.rs::audit_read_back` | gate | H.AUD.10 |
+| `xtask/src/init.rs::checks_skipped` | gate | H.AUD.12 |
 | `xtask/src/init.rs::devmgr_by_init` | gate | L.quiesce.4 |
+| `xtask/src/init.rs::judge_audit_power` | gate | H.AUD.11 |
 | `xtask/src/init_file.rs::judge_k7_read` | gate | L.console.14 |
 | `xtask/src/init_file.rs::test` | gate | L.x86_64.98, H.BOOT.6 |
 | `xtask/src/jobs.rs::test_jobs` | gate | L.x86_64.115 |

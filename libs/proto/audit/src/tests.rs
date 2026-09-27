@@ -53,6 +53,7 @@ fn codes_are_numbered_within_a_class() {
     assert!(record.is(SUPPRESSED));
 }
 
+/// Verifies: H.AUD.13
 #[test]
 fn a_record_is_its_sixty_four_bytes_in_order_little_endian() {
     let mut record = Record {

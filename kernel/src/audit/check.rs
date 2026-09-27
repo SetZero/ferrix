@@ -66,6 +66,10 @@ static FAIR: Small = Store::new();
 static CROWDED: Small = Store::new();
 static ROUTED: Store<8, 8> = Store::new();
 static PINNED: Store<4, 4> = Store::new();
+static TIMED: Store<64, 64> = Store::new();
+
+/// Records the cost measurement makes of each kind.
+const TIMED_RECORDS: u32 = 4096;
 
 /// The id the check's stores start with.
 const CHECK_ID: u128 = 0x0123_4567_89AB_CDEF_FEDC_BA98_7654_3210;
@@ -104,6 +108,10 @@ pub(crate) struct Report {
     pub(crate) suppressed: u32,
     /// Configuration records found in the kernel's store.
     pub(crate) configs: usize,
+    /// What one record costs, in nanoseconds on the kernel's counter: a
+    /// grant kept, and a refusal past its budget's limit, counted.
+    pub(crate) grant_nanos: u64,
+    pub(crate) refusal_nanos: u64,
 }
 
 /// The jobs the budget and fairness checks refuse from.
@@ -206,6 +214,7 @@ pub(crate) fn run(expected: &Expected) -> Result<Report, &'static str> {
     let (flood_kept, suppressed) = fairness(&tree)?;
     crowded()?;
     let configs = kernel_store(expected)?;
+    let (grant_nanos, refusal_nanos) = cost();
     Ok(Report {
         kept,
         lost,
@@ -213,10 +222,14 @@ pub(crate) fn run(expected: &Expected) -> Result<Report, &'static str> {
         flood_kept,
         suppressed,
         configs,
+        grant_nanos,
+        refusal_nanos,
     })
 }
 
 /// Start-up, the gapless numbering, loss and a partial read, on [`SMALL`].
+///
+/// Verifies: H.AUD.1
 fn start_and_wrap() -> Result<(usize, u64), &'static str> {
     if !SMALL.start(10, CHECK_ID) {
         return Err("a store's first start was refused");
@@ -271,6 +284,8 @@ fn start_and_wrap() -> Result<(usize, u64), &'static str> {
 /// first eight system records stay readable as the boot records, numbered
 /// as the ring numbered them, the ninth and the grant do not join them, and
 /// the ring itself has moved on.
+///
+/// Verifies: H.AUD.2
 fn pinned() -> Result<(), &'static str> {
     let _ = PINNED.start(0, CHECK_ID);
     let system = Event::new(Class::System, 7);
@@ -312,6 +327,8 @@ fn pinned() -> Result<(), &'static str> {
 
 /// One event of every class, on [`ROUTED`]: each refusal in the refusal
 /// ring, each of the other five in the high-value ring, in the order made.
+///
+/// Verifies: H.AUD.3
 fn routing() -> Result<(), &'static str> {
     let classes = [
         Class::Refused,
@@ -381,6 +398,8 @@ fn tree() -> Result<Tree, &'static str> {
 
 /// Each job kept the budget its maker gave it, through two levels of
 /// anonymous jobs.
+///
+/// Verifies: H.AUD.4
 fn budgets(tree: &Tree) -> Result<usize, &'static str> {
     let wants = [
         (&tree.unit, &tree.unit),
@@ -404,6 +423,8 @@ fn budgets(tree: &Tree) -> Result<usize, &'static str> {
 /// delegated unit's worker refuses once, and a grant is made before the
 /// flood, on [`FAIR`]: the unit keeps the limit between its three jobs and
 /// the rest is counted.
+///
+/// Verifies: H.AUD.5
 fn fairness(tree: &Tree) -> Result<(usize, u32), &'static str> {
     let _ = FAIR.start(0, CHECK_ID);
     grant(&FAIR, 1, 1);
@@ -453,6 +474,8 @@ fn fairness(tree: &Tree) -> Result<(usize, u32), &'static str> {
 /// More budgets than there are fairness slots, on [`CROWDED`]: the one that
 /// finds every slot taken closes the window begun first, and that budget's
 /// count is written, not dropped.
+///
+/// Verifies: H.AUD.6
 fn crowded() -> Result<(), &'static str> {
     let _ = CROWDED.start(0, CHECK_ID);
     // Budget 1 goes over by one, then 32 more budgets take a slot each; the
@@ -473,8 +496,55 @@ fn crowded() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// What a record costs, on [`TIMED`] (`docs/certification/AUDIT.md` §5,
+/// `MEMORY-AND-TIMING.md`): [`TIMED_RECORDS`] grants, each kept, and as
+/// many refusals charged to one budget, all but the first 64 counted rather
+/// than kept -- the flood the fairness is for. A measurement, not a check:
+/// the boot line says it, and the record's cost is claimed from it.
+fn cost() -> (u64, u64) {
+    let _ = TIMED.start(0, CHECK_ID);
+    let began = crate::timer::now_nanos();
+    for n in 0..TIMED_RECORDS {
+        let _ = TIMED.record_at(
+            u64::from(n),
+            GRANT,
+            Outcome::Done,
+            0,
+            Subject::KERNEL,
+            Target::NONE,
+            [n, 0, 0],
+        );
+    }
+    let granted = crate::timer::now_nanos().saturating_sub(began);
+    let flooder = Subject {
+        pid: 7,
+        uid: NO_UID,
+        job: 9,
+        budget: 9,
+    };
+    let began = crate::timer::now_nanos();
+    for n in 0..TIMED_RECORDS {
+        let _ = TIMED.record_at(
+            u64::from(n),
+            REFUSAL,
+            Outcome::Refused,
+            -1,
+            flooder,
+            Target::NONE,
+            [n, 0, 0],
+        );
+    }
+    let refused = crate::timer::now_nanos().saturating_sub(began);
+    (
+        granted / u64::from(TIMED_RECORDS),
+        refused / u64::from(TIMED_RECORDS),
+    )
+}
+
 /// The kernel's store: started, with its id, and the configuration bring-up
 /// read.
+///
+/// Verifies: H.AUD.7
 fn kernel_store(expected: &Expected) -> Result<usize, &'static str> {
     let mut out = vec![Record::EMPTY; BOOT_RECORDS];
     let read = super::read(Which::Boot, 0, &mut out);
@@ -590,7 +660,7 @@ pub(crate) struct Booted {
 /// The end-of-boot check: see the module's header. Answers how many events
 /// were found.
 ///
-/// Verifies: L.iommu.44
+/// Verifies: L.iommu.44, H.AUD.8
 ///
 /// # Errors
 ///

@@ -4,7 +4,8 @@ The design for finding F-21b: *"there is no FAU family at all ... an
 evaluator would press on whether a TOE that cannot record a
 security-relevant event can claim EAL5."* It says what the TOE records,
 where, who reads it, what it costs, and how the build proves it. It is
-being built in three slices (§8); the first, the store, is in.
+built (§8, three slices, 2026-09-27) and claimed in the Security Target
+(§5, under O.AUDIT), and F-21b is closed.
 
 The TOE is an isolation kernel, and identity is the personality's
 (SECURITY-TARGET §9.1). This keeps that split. The item records what *it*
@@ -127,11 +128,14 @@ was before any reader exists.
 
 When a ring is full its oldest record is overwritten and its lost counter
 counts it; the reader sees the gap in sequence numbers and the count. This
-is FAU_STG.1 (protected storage: nothing but the TSF writes it). It is **not**
-FAU_STG.3 or FAU_STG.4, and deliberately. Refusing new events when full
-(FAU_STG.4's drop-newest) lets an attacker fill the store first and then act
-unrecorded; stopping the TSF when full would make audit a denial-of-service
-lever (T.EXHAUST). Overwrite keeps the newest, and the two rings and the
+is FAU_STG.1 (protected storage: nothing but the TSF writes it) and
+FAU_STG.4 with its selection *overwrite the oldest stored audit records*,
+the overwritten counted and the gap reported to the reader. FAU_STG.4's
+other selections are declined deliberately: ignoring or preventing audited
+events when full lets an attacker fill the store first and then act
+unrecorded, and stopping the TSF when full would make audit a
+denial-of-service lever (T.EXHAUST). FAU_STG.3 is not claimed: no alarm is
+raised, and a reader learns of a loss from the gap. Overwrite keeps the newest, and the two rings and the
 fairness rule keep a refusal flood from reaching what matters.
 
 Persistence is outside the TOE: a reader writes records to disk.
@@ -194,8 +198,9 @@ and a record it submits can never claim a TSF class.
 * Memory: 288 KiB fixed (the two rings), all three architectures.
 * Time: on the recorded paths only, which are refusals and grants, not the
   hot path of a call that succeeds. One uncontended spinlock and a 64-byte
-  store, estimated at 50 to 150 ns under KVM, and measured on the boot's own
-  check before the claim is made (MEMORY-AND-TIMING.md gains a row).
+  store, estimated at 50 to 150 ns under KVM and measured at 21 ns (22 for
+  a refusal counted past its budget) on every boot's own check
+  (MEMORY-AND-TIMING.md §1.7).
 * Code: an `audit` module in the item, about 400 lines; one `record` call at
   each of about 25 sites; the `Audit` object kind and `audit_read` in the
   native ABI; init's reader, about 200 lines.
@@ -234,14 +239,16 @@ check names the missing event; widen `Object::Audit` to `TRANSFER`, and the
 check that it cannot be written into a channel fails. `test-init` requires
 `audit.service` to have written the boot's refusals to the volume.
 
-## 7. What the ST would then claim, and still not
+## 7. What the ST claims, and does not
 
 Claimed: FAU_GEN.1 (the events of §1, at the TSF's decisions, with audit
 start-up and shutdown), FAU_GEN.2 refined to the TSF's own subjects (process
 and job; the uid carried beside them as personality data), FAU_SAR.1 and
-FAU_SAR.2 (the capability), FAU_STG.1 (only the TSF writes the rings), and
-FPT_STM.1 for the timestamps. Not claimed: FAU_STG.3 and FAU_STG.4 (overflow
-overwrites rather than stopping, by design), FAU_SEL (no selection: every
+FAU_SAR.2 (the capability), FAU_STG.1 (only the TSF writes the rings),
+FAU_STG.4 (overwrite the oldest, counted), and FPT_STM.1 for the
+timestamps. FAU_GEN.2's dependency FIA_UID.1 is unmet by design: its
+subjects are the TSF's own, and people are identified under OE.AUTH and
+A.AUTH. Not claimed: FAU_STG.3 (no alarm; the gap is the report), FAU_SEL (no selection: every
 §1 event is always recorded), FAU_SAA (no analysis in the TOE), and the
 integrity of records once written to disk, which is the environment's
 (OE.AUDIT_STORE, a new objective for the environment).
@@ -286,8 +293,11 @@ Three slices, each reviewed before it lands:
    `devmgr_start`, the starter, the root switch and a power action happen
    only in `test-init`'s boots or at shutdown, and are read back there in
    slice 3.
-3. **The reader**: `Object::Audit` and `audit_read`, init's
-   `audit.service` writing `/var/log/audit/<boot>.bin`, the xtask gate that
-   reads a `ferrix.checks=skip` boot's record from outside, the measured cost
-   in `MEMORY-AND-TIMING.md`, and the Security Target's claims (§7) with
-   their `H.AUD` requirements traced to the checks.
+3. **The reader** (built): `Object::Audit` and `audit_read`, init keeping
+   `/var/log/audit/<id>.bin` (§4), `svc audit`, `test-init` reading the
+   record back and a `ferrix.checks=skip` boot's from outside, and nothing
+   before a power action lost without a console line. Then the measured
+   cost (MEMORY-AND-TIMING.md §1.7) and the Security Target's claims (§7)
+   under O.AUDIT and P.ACCOUNTABILITY, with thirteen `H.AUD` requirements
+   in `docs/sysml/13-item-requirements.sysml`, each verified by the check
+   that proves it whole.
