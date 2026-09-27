@@ -253,6 +253,14 @@ impl Manager {
             return;
         };
         let Some(role) = slot.spawning.take() else {
+            // No run waits for it: the one that asked ended first, and its
+            // cgroup may be gone. Left alone it would run unsupervised, so
+            // it is ended, as systemd ends what a stopped unit leaves.
+            self.emit(Action::Signal {
+                unit,
+                signal: Signal::KILL,
+                whom: Whom::Process(pid),
+            });
             return;
         };
         slot.populated = true;
@@ -656,6 +664,10 @@ impl Manager {
         };
         slot.deadline = None;
         slot.started = false;
+        // A spawn asked for and not yet answered belongs to this run, which
+        // has ended: its answer, if it comes, must not start the unit again
+        // with no cgroup to run in.
+        slot.spawning = None;
         let result = slot.result.unwrap_or(Ended::Success);
         let restarting = !slot.stopping && !asked && !shutting_down;
         let decision = match slot.policy.as_mut() {
