@@ -10,114 +10,27 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | Module | x86_64 | aarch64 | armv7a | Files |
 |---|---:|---:|---:|---:|
-| [`arch/aarch64`](#archaarch64) | - | 284 | - | 12 |
-| [`arch/armv7a`](#archarmv7a) | - | - | 196 | 9 |
-| [`iommu`](#iommu) | 90 | 134 | 175 | 3 |
-| [`object`](#object) | 129 | 159 | 165 | 8 |
-| [`user`](#user) | 151 | 157 | 160 | 2 |
-| [`sched`](#sched) | 68 | 136 | 130 | 4 |
-| [`syscall`](#syscall) | 60 | 116 | 116 | 4 |
-| [`console`](#console) | 72 | 83 | 87 | 4 |
-| [`mm`](#mm) | 41 | 72 | 85 | 1 |
-| [`main`](#main) | 68 | 66 | 72 | 1 |
-| [`devmgr`](#devmgr) | 16 | 56 | 45 | 1 |
-| [`smp`](#smp) | - | 42 | 39 | 1 |
-| [`vmap`](#vmap) | 27 | 34 | 38 | 1 |
-| [`trap`](#trap) | - | 35 | 34 | 1 |
-| [`arch/arm_common`](#archarm_common) | - | 22 | 28 | 2 |
-| [`init`](#init) | 15 | 17 | 15 | 1 |
-| [`claim`](#claim) | 4 | 9 | 11 | 1 |
-| [`power`](#power) | 4 | 10 | 8 | 1 |
-| [`early`](#early) | 1 | 4 | 9 | 1 |
-| [`irq`](#irq) | 6 | 9 | 6 | 1 |
-| [`signal_frame`](#signal_frame) | - | 8 | 3 | 1 |
-| [`arch`](#arch) | - | 7 | 7 | 1 |
-| [`mmio`](#mmio) | 2 | 7 | 5 | 1 |
-| [`timer`](#timer) | - | 4 | 6 | 1 |
-| [`hooks`](#hooks) | 2 | 4 | 4 | 1 |
-| [`random`](#random) | - | 4 | 1 | 1 |
-| [`sync`](#sync) | 1 | 2 | 1 | 1 |
-| **Total** | **757** | **1481** | **1446** | 66 |
-
----
-
-## `arch/aarch64`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `arch/aarch64/mod.rs` | `core` | - | 52 | - | 52 | 79, 89, 98, 124, 139, 153, 223, 808, 946, 951, 966, 974, 988, 999, 1012, 1056, 1071, 1095, 1108, 1130, 1143-1145, 1148, 1154, 1160, 1177, 1180-1181, 1217, 1222, 1229, 1235, 1240, 1252, 1267, 1273, 1279, 1284, 1289, 1294, 1299, 1304, 1320, 1329, 1332, 1334, 1342, 1347, 1360, 1373, 1378 |
-| `arch/aarch64/cpu.rs` | `core` | - | 49 | - | 49 | 17, 30, 43, 51, 72, 95, 111, 128, 170, 184, 197, 212, 226, 236, 247, 260, 310, 316, 321, 333, 336, 343, 346, 381, 415, 467, 478, 489, 526, 562, 590, 603, 613, 623, 633, 665, 677, 687, 717, 737, 746, 761, 794, 806, 814, 826, 850, 858, 863 |
-| `arch/aarch64/trap.rs` | `core` | - | 48 | - | 48 | 33, 40, 42, 44, 46, 48, 50, 52, 59, 68, 115, 121, 123, 126, 309, 311, 318-319, 324-325, 330, 362, 365-370, 373, 543-544, 546, 548, 570-571, 587, 590, 596-597, 603-604, 608, 610, 614, 617, 623, 639, 659 |
-| `arch/aarch64/gic.rs` | `core` | - | 30 | - | 30 | 125-126, 157, 186, 198-200, 202-203, 205, 207-208, 211-213, 215, 221-222, 226, 232-233, 239-240, 268-269, 274, 283, 292, 316, 336 |
-| `arch/aarch64/console.rs` | `core` | - | 29 | - | 29 | 95-99, 109, 111-112, 115, 134, 139, 143, 146-147, 153, 169, 192, 199, 217, 223, 240, 244, 258, 271-272, 286, 303, 314, 324 |
-| `arch/aarch64/smp.rs` | `core` | - | 17 | - | 17 | 67, 70, 110-112, 114-118, 120, 131, 397-399, 401, 414 |
-| `arch/aarch64/speculation.rs` | `core` | - | 16 | - | 16 | 233, 283, 298, 303, 398-400, 518, 520, 568-569, 571, 598, 620, 690, 701 |
-| `arch/aarch64/gic/gicv3_its.rs` | `core` | - | 13 | - | 13 | 266, 401, 411, 413, 473, 480, 500, 503, 538, 545, 583, 620, 632 |
-| `arch/aarch64/gic/gicv3.rs` | `core` | - | 12 | - | 12 | 136, 241, 247, 268, 343-345, 347, 360-361, 366, 375 |
-| `arch/aarch64/switch.rs` | `core` | - | 7 | - | 7 | 118, 160, 165-166, 183, 188, 304 |
-| `arch/aarch64/timer.rs` | `core` | - | 7 | - | 7 | 55-56, 74, 79, 84, 102, 107 |
-| `arch/aarch64/signal.rs` | `core` | - | 4 | - | 4 | 90, 97, 114, 117 |
-
----
-
-## `arch/armv7a`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `arch/armv7a/mod.rs` | `core` | - | - | 50 | 50 | 57, 67, 76, 113, 124, 137, 153, 155, 229, 851, 973, 1016, 1027, 1040, 1079, 1089, 1120, 1145, 1165, 1187-1189, 1193, 1205, 1223, 1266, 1271, 1278, 1284, 1289, 1299, 1313, 1319, 1325, 1330, 1335, 1340, 1345, 1350, 1366, 1375, 1380, 1388, 1391, 1393, 1403, 1414, 1417, 1420, 1423 |
-| `arch/armv7a/cpu.rs` | `core` | - | - | 47 | 47 | 39, 47, 60, 70, 96, 119, 141, 151, 160, 165, 181, 212, 273, 282, 298, 308, 318, 332, 363, 395, 434, 461, 471, 491, 505, 515, 534, 547, 557, 583, 593, 604, 621, 634, 670, 695, 706, 708, 713, 715, 720, 722, 734, 747, 777, 790, 805 |
-| `arch/armv7a/trap.rs` | `core` | - | - | 46 | 46 | 42, 47, 49, 51, 53, 55, 58, 60, 68, 73, 319, 321, 328-329, 335, 341, 367-370, 372-374, 376, 378, 552, 557, 569, 584, 593-594, 599, 607, 613, 621, 623, 627-633, 638, 644, 677 |
-| `arch/armv7a/console.rs` | `core` | - | - | 13 | 13 | 38, 42, 51, 144-146, 156, 158-159, 161, 175, 178, 198 |
-| `arch/armv7a/switch.rs` | `core` | - | - | 12 | 12 | 114, 171, 190, 195, 200, 206, 219, 228, 244, 385, 406, 414 |
-| `arch/armv7a/smp.rs` | `core` | - | - | 9 | 9 | 157, 160, 168, 172, 188, 463, 503, 515, 522 |
-| `arch/armv7a/signal.rs` | `core` | - | - | 7 | 7 | 106, 113, 118, 126, 133, 153, 195 |
-| `arch/armv7a/speculation.rs` | `core` | - | - | 7 | 7 | 73-74, 100, 126, 134, 140, 144 |
-| `arch/armv7a/timer.rs` | `core` | - | - | 5 | 5 | 53, 58, 63, 79, 84 |
-
----
-
-## `iommu`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `iommu.rs` | `core` | 83 | 86 | 148 | 6 | 262, 345, 428, 930, 947-948 |
-| `iommu/smmuv3.rs` | `core` | - | 33 | - | 33 | 175, 178, 180, 182, 184, 186, 191, 194, 198, 203, 208, 211, 213, 215, 238, 304, 313, 338-339, 381, 385, 399-400, 406, 442, 445, 460, 470, 475, 489, 544, 577-578 |
-| `iommu/gate.rs` | `core` | 7 | 15 | 27 | 7 | 40, 43, 45, 85, 119, 123-124 |
-
----
-
-## `object`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `object/job.rs` | `core` | 35 | 44 | 47 | 3 | 148, 177, 179 |
-| `object/process.rs` | `core` | 23 | 39 | 41 | 7 | 68, 75, 77, 86, 89, 92, 296 |
-| `object/port.rs` | `core` | 29 | 15 | 17 | 0 | - |
-| `object/channel.rs` | `core` | 11 | 22 | 21 | 0 | - |
-| `object/interrupt.rs` | `core` | 13 | 17 | 17 | 0 | - |
-| `object/mod.rs` | `core` | 9 | 12 | 12 | 8 | 58, 60, 62, 64, 66, 68, 70, 72 |
-| `object/pin.rs` | `core` | 6 | 8 | 7 | 5 | 43-46, 79 |
-| `object/io_mapping.rs` | `core` | 3 | 2 | 3 | 0 | - |
-
----
-
-## `user`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `user/space.rs` | `core` | 110 | 107 | 108 | 5 | 237, 1500, 1925-1926, 2412 |
-| `user/vmo.rs` | `core` | 41 | 50 | 52 | 2 | 172, 189 |
-
----
-
-## `sched`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `sched/task.rs` | `core` | 24 | 59 | 59 | 9 | 61, 89, 91, 93, 98, 100, 105, 119, 125 |
-| `sched/mod.rs` | `core` | 32 | 45 | 37 | 2 | 250, 2258 |
-| `sched/queue.rs` | `core` | 6 | 21 | 22 | 3 | 254-255, 303 |
-| `sched/wait.rs` | `core` | 6 | 11 | 12 | 0 | - |
+| [`syscall`](#syscall) | 27 | 23 | 22 | 2 |
+| [`user`](#user) | 6 | 22 | 26 | 2 |
+| [`trap`](#trap) | - | 25 | 25 | 1 |
+| [`arch/aarch64`](#archaarch64) | - | 24 | - | 2 |
+| [`object`](#object) | 17 | 19 | 18 | 7 |
+| [`arch/x86_64`](#archx86_64) | 11 | - | - | 3 |
+| [`console`](#console) | 3 | 10 | 3 | 4 |
+| [`devmgr`](#devmgr) | - | 7 | 6 | 1 |
+| [`vmap`](#vmap) | 2 | - | 5 | 1 |
+| [`mm`](#mm) | 1 | 1 | 4 | 1 |
+| [`smp`](#smp) | - | 4 | 4 | 1 |
+| [`early`](#early) | - | - | 3 | 1 |
+| [`main`](#main) | 3 | 3 | 3 | 1 |
+| [`sched`](#sched) | 2 | 3 | 3 | 2 |
+| [`init`](#init) | 2 | 2 | 2 | 1 |
+| [`random`](#random) | 2 | 2 | 2 | 1 |
+| [`arch/armv7a`](#archarmv7a) | - | - | 1 | 1 |
+| [`iommu`](#iommu) | 1 | 1 | 1 | 1 |
+| [`signal_frame`](#signal_frame) | - | - | 1 | 1 |
+| [`timer`](#timer) | - | - | 1 | 1 |
+| **Total** | **77** | **146** | **130** | 35 |
 
 ---
 
@@ -125,61 +38,17 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `syscall/native.rs` | `item` | 49 | 50 | 57 | 5 | 272, 396, 582, 1006, 1256 |
-| `syscall/uaccess.rs` | `core` | 1 | 46 | 40 | 1 | 69 |
-| `syscall/program.rs` | `item` | 9 | 16 | 15 | 4 | 77-78, 80, 82 |
-| `syscall/mod.rs` | `item` | 1 | 4 | 4 | 1 | 191 |
+| `syscall/native.rs` | `item` | 24 | 19 | 20 | 16 | 804, 1262, 1274-1276, 1278, 1286-1287, 1290-1291, 1496-1497, 1501-1503, 1505 |
+| `syscall/program.rs` | `item` | 3 | 4 | 2 | 1 | 89 |
 
 ---
 
-## `console`
+## `user`
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `console/screen.rs` | `core` | 44 | 40 | 41 | 38 | 86-88, 93-95, 98, 114, 116, 123, 127-128, 130, 135-137, 142-144, 146, 152-154, 159-160, 177, 180-181, 184, 188, 192-193, 195, 208-209, 211, 225, 227 |
-| `console/input.rs` | `core` | 8 | 18 | 18 | 1 | 283 |
-| `console.rs` | `core` | 9 | 11 | 14 | 6 | 177, 184, 241, 267, 327, 330 |
-| `console/output.rs` | `core` | 11 | 14 | 14 | 0 | - |
-
----
-
-## `mm`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `mm.rs` | `core` | 41 | 72 | 85 | 0 | - |
-
----
-
-## `main`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `main.rs` | `item` | 68 | 66 | 72 | 0 | - |
-
----
-
-## `devmgr`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `devmgr.rs` | `item` | 16 | 56 | 45 | 1 | 658 |
-
----
-
-## `smp`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `smp.rs` | `core` | 0 | 42 | 39 | 0 | - |
-
----
-
-## `vmap`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `vmap.rs` | `core` | 27 | 34 | 38 | 3 | 111, 113, 115 |
+| `user/space.rs` | `core` | 6 | 22 | 25 | 4 | 2677, 2706, 2722, 2724 |
+| `user/vmo.rs` | `core` | 0 | 0 | 1 | 0 | - |
 
 ---
 
@@ -187,40 +56,83 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `trap.rs` | `core` | 0 | 35 | 34 | 0 | - |
+| `trap.rs` | `core` | 0 | 25 | 25 | 0 | - |
 
 ---
 
-## `arch/arm_common`
+## `arch/aarch64`
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `arch/arm_common/gicv2.rs` | `core` | - | 22 | 16 | 14 | 208-210, 213-214, 216, 229-230, 235, 310, 388, 399, 406, 408 |
-| `arch/arm_common/pl011.rs` | `core` | - | - | 12 | 12 | 70-71, 106, 131, 137, 154, 158, 171-172, 182, 192, 209 |
+| `arch/aarch64/console.rs` | `core` | - | 14 | - | 14 | 116-117, 128, 131, 137, 158, 160, 195, 201, 246, 250-251, 287, 360 |
+| `arch/aarch64/trng.rs` | `core` | - | 10 | - | 10 | 51, 55-56, 60-61, 63, 74, 77, 83, 85 |
 
 ---
 
-## `init`
+## `object`
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `init.rs` | `item` | 15 | 17 | 15 | 4 | 120-121, 280, 282 |
+| `object/oom.rs` | `core` | 5 | 6 | 5 | 5 | 169, 201, 205, 208, 213 |
+| `object/process.rs` | `core` | 5 | 5 | 4 | 3 | 128, 191-192 |
+| `object/channel.rs` | `core` | 4 | 4 | 4 | 4 | 311-313, 318 |
+| `object/mod.rs` | `core` | 2 | 2 | 2 | 2 | 248, 252 |
+| `object/port.rs` | `core` | 0 | 0 | 2 | 0 | - |
+| `object/pin.rs` | `core` | 0 | 1 | 0 | 0 | - |
+| `object/quota.rs` | `core` | 1 | 1 | 1 | 1 | 623 |
 
 ---
 
-## `claim`
+## `arch/x86_64`
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `claim.rs` | `core` | 4 | 9 | 11 | 4 | 116, 121-122, 157 |
+| `arch/x86_64/syscall.rs` | `core` | 6 | - | - | 6 | 512, 559, 562-563, 565, 572 |
+| `arch/x86_64/mod.rs` | `core` | 3 | - | - | 3 | 1190-1191, 1195 |
+| `arch/x86_64/switch.rs` | `core` | 2 | - | - | 2 | 383, 392 |
 
 ---
 
-## `power`
+## `console`
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `power.rs` | `item` | 4 | 10 | 8 | 3 | 96-97, 137 |
+| `console.rs` | `core` | 0 | 5 | 2 | 0 | - |
+| `console/screen.rs` | `core` | 3 | 2 | 0 | 0 | - |
+| `console/output.rs` | `core` | 0 | 2 | 0 | 0 | - |
+| `console/input.rs` | `core` | 0 | 1 | 1 | 0 | - |
+
+---
+
+## `devmgr`
+
+| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
+|---|---|---:|---:|---:|---:|---|
+| `devmgr.rs` | `item` | 0 | 7 | 6 | 0 | - |
+
+---
+
+## `vmap`
+
+| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
+|---|---|---:|---:|---:|---:|---|
+| `vmap.rs` | `core` | 2 | 0 | 5 | 0 | - |
+
+---
+
+## `mm`
+
+| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
+|---|---|---:|---:|---:|---:|---|
+| `mm.rs` | `core` | 1 | 1 | 4 | 1 | 699 |
+
+---
+
+## `smp`
+
+| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
+|---|---|---:|---:|---:|---:|---|
+| `smp.rs` | `core` | 0 | 4 | 4 | 0 | - |
 
 ---
 
@@ -228,55 +140,32 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `early.rs` | `core` | 1 | 4 | 9 | 0 | - |
+| `early.rs` | `core` | 0 | 0 | 3 | 0 | - |
 
 ---
 
-## `irq`
+## `main`
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `irq.rs` | `core` | 6 | 9 | 6 | 3 | 56, 59, 139 |
+| `main.rs` | `item` | 3 | 3 | 3 | 2 | 323, 1574 |
 
 ---
 
-## `signal_frame`
+## `sched`
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `signal_frame.rs` | `core` | 0 | 8 | 3 | 0 | - |
+| `sched/mod.rs` | `core` | 2 | 3 | 2 | 2 | 1242, 1932 |
+| `sched/task.rs` | `core` | 0 | 0 | 1 | 0 | - |
 
 ---
 
-## `arch`
+## `init`
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `arch/speculation.rs` | `core` | 0 | 7 | 7 | 0 | - |
-
----
-
-## `mmio`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `mmio.rs` | `core` | 2 | 7 | 5 | 2 | 15, 18 |
-
----
-
-## `timer`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `timer.rs` | `core` | 0 | 4 | 6 | 0 | - |
-
----
-
-## `hooks`
-
-| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
-|---|---|---:|---:|---:|---:|---|
-| `hooks.rs` | `core` | 2 | 4 | 4 | 2 | 49, 51 |
+| `init.rs` | `item` | 2 | 2 | 2 | 2 | 243, 363 |
 
 ---
 
@@ -284,13 +173,37 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `random.rs` | `item` | 0 | 4 | 1 | 0 | - |
+| `random.rs` | `item` | 2 | 2 | 2 | 2 | 87-88 |
 
 ---
 
-## `sync`
+## `arch/armv7a`
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `sync.rs` | `core` | 1 | 2 | 1 | 1 | 36 |
+| `arch/armv7a/mod.rs` | `core` | - | - | 1 | 1 | 1291 |
+
+---
+
+## `iommu`
+
+| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
+|---|---|---:|---:|---:|---:|---|
+| `iommu.rs` | `core` | 1 | 1 | 1 | 1 | 1218 |
+
+---
+
+## `signal_frame`
+
+| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
+|---|---|---:|---:|---:|---:|---|
+| `signal_frame.rs` | `core` | 0 | 0 | 1 | 0 | - |
+
+---
+
+## `timer`
+
+| File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
+|---|---|---:|---:|---:|---:|---|
+| `timer.rs` | `core` | 0 | 0 | 1 | 0 | - |
 
