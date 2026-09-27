@@ -602,15 +602,23 @@ fn advances_are_the_faces_own() {
     assert!(close(run.ascent, 1854.0));
     assert!(close(run.descent, 434.0));
     assert!(close(run.px, 2048.0));
-    // 16 points is 21⅓ pixels.
+    // 16 points is 21⅓ pixels, where H's 15.40 is placed as a whole 15, as
+    // Pango rounds each glyph's advance, and its ascent and descent too.
     let small = fonts.resolve(&FontDescription::new(
         &["Liberation Sans"],
         Size::Points(16.0),
     ));
     assert!(close(
         fonts.measure(&small, "H"),
-        1479.0 * (64.0 / 3.0) / 2048.0
+        (1479.0_f32 * (64.0 / 3.0) / 2048.0).round()
     ));
+    assert!(close(fonts.measure(&small, "HHH"), 45.0));
+    let small_run = fonts.shape(&small, "H");
+    assert!(close(
+        small_run.ascent,
+        (1854.0_f32 * (64.0 / 3.0) / 2048.0).round()
+    ));
+    assert!(close(small_run.descent, 5.0));
     assert!(fonts.shape(&font, "").glyphs.is_empty());
 }
 
@@ -1176,4 +1184,36 @@ fn probe_host_fonts() {
         again.faces().len(),
         start.elapsed()
     );
+}
+
+/// Pango's own widths on nazuna (1.57, 96 dpi, GTK3's `font-size: 15px` on
+/// Ubuntu, `~/.local/share/ferrix/logs/waybar/pango-reference.txt`): a
+/// line of each is 17 high with its baseline at 14.
+#[test]
+#[ignore = "reads the host's Ubuntu font; run by hand"]
+fn widths_are_pangos_on_the_hosts_ubuntu() {
+    let mut fonts = Fonts::system();
+    for (description, text, width) in [
+        ("Ubuntu 15px", " ", 3.0),
+        ("Ubuntu 15px", "vol 0%", 44.0),
+        ("Ubuntu 15px", "cpu 19%", 57.0),
+        ("Ubuntu 15px", "ram 25%", 59.0),
+        ("Ubuntu 15px", "eth 0.0b/s", 67.0),
+        ("Ubuntu 15px", "abc", 24.0),
+        ("Ubuntu Bold 15px", "1", 8.0),
+        ("Ubuntu Bold 15px", "10", 16.0),
+    ] {
+        let font = fonts.resolve(&FontDescription::pango(description));
+        let run = fonts.shape(&font, text);
+        assert!(
+            close(run.width, width),
+            "{description} {text:?}: {}",
+            run.width
+        );
+        assert!(
+            close(run.ascent, 14.0) && close(run.descent, 3.0),
+            "{text:?}"
+        );
+        assert!(close(fonts.metrics(&font).approximate_digit_width, 8.0));
+    }
 }

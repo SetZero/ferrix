@@ -180,15 +180,37 @@ fn scale_of(face: &ttf_parser::Face<'_>, px: f32) -> f32 {
     px / f32::from(face.units_per_em().max(1))
 }
 
+/// Whether glyph positions are whole pixels, and so how a caller asks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Positions {
+    /// Each advance and offset rounded to a whole pixel, as Pango places
+    /// glyphs by default (`pango_context_set_round_glyph_positions`, on
+    /// unless a program turns it off, which GTK3 and hyprlock do not).
+    Whole,
+    /// `HarfBuzz`'s own fractions, for Pango's `approximate_char_width`,
+    /// which is measured without the rounding.
+    Fractional,
+}
+
 /// `text` shaped in one face: glyph, cluster (a byte offset from `base`),
 /// and advance and offsets in pixels.
+///
+/// Pango on nazuna (1.57, GTK3's `font-size: 15px` on Ubuntu) measures
+/// `vol 0%` 44 wide, `abc` 24 and a space 3: each glyph's advance rounded
+/// on its own, which `HarfBuzz`'s 44.50, 23.46 and 3.44 become only when
+/// every glyph is rounded first. So `Positions::Whole` rounds each glyph.
 fn shape_in(
     face: &rustybuzz::Face<'_>,
     id: FaceId,
     text: &str,
     base: usize,
     px: f32,
+    positions: Positions,
 ) -> Vec<Shaped> {
+    let place = |value: f32| match positions {
+        Positions::Whole => value.round(),
+        Positions::Fractional => value,
+    };
     let scale = scale_of(face, px);
     let mut buffer = rustybuzz::UnicodeBuffer::new();
     buffer.push_str(text);
@@ -202,9 +224,9 @@ fn shape_in(
             face: id,
             id: u16::try_from(info.glyph_id).unwrap_or(0),
             cluster: base + info.cluster as usize,
-            advance: position.x_advance as f32 * scale,
-            x_offset: position.x_offset as f32 * scale,
-            y_offset: position.y_offset as f32 * scale,
+            advance: place(position.x_advance as f32 * scale),
+            x_offset: place(position.x_offset as f32 * scale),
+            y_offset: place(position.y_offset as f32 * scale),
         })
         .collect()
 }
@@ -679,8 +701,8 @@ impl Fonts {
             let parsed = open(&data, index, face.instance())?;
             let scale = scale_of(&parsed, px);
             Some((
-                f32::from(parsed.ascender()) * scale,
-                -f32::from(parsed.descender()) * scale,
+                (f32::from(parsed.ascender()) * scale).round(),
+                (-f32::from(parsed.descender()) * scale).round(),
             ))
         });
         let _ = self.vertical.insert(key, found);
@@ -718,18 +740,20 @@ impl Fonts {
             return fallback_metrics(px);
         };
         let scale = scale_of(&parsed, px);
-        let ascent = f32::from(parsed.ascender()) * scale;
-        let descent = -f32::from(parsed.descender()) * scale;
-        let line_gap = f32::from(parsed.line_gap()).max(0.0) * scale;
+        // Hinted metrics, as Pango's are under GTK3 and cairo's defaults:
+        // whole pixels (Ubuntu at 15 px: 13.98 and 2.84 are 14 and 3).
+        let ascent = (f32::from(parsed.ascender()) * scale).round();
+        let descent = (-f32::from(parsed.descender()) * scale).round();
+        let line_gap = (f32::from(parsed.line_gap()).max(0.0) * scale).round();
         let lines = decoration_of(&parsed, px);
-        let sample: f32 = shape_in(&parsed, face, SAMPLE, 0, px)
+        let sample: f32 = shape_in(&parsed, face, SAMPLE, 0, px, Positions::Fractional)
             .iter()
             .map(|glyph| glyph.advance)
             .sum();
         let digit = ('0'..='9')
             .filter_map(|character| parsed.glyph_index(character))
             .filter_map(|glyph| parsed.glyph_hor_advance(glyph))
-            .map(|advance| f32::from(advance) * scale)
+            .map(|advance| (f32::from(advance) * scale).round())
             .fold(0.0_f32, f32::max);
         Metrics {
             ascent,
@@ -860,7 +884,7 @@ impl Fonts {
     ) -> Option<Vec<Shaped>> {
         let (data, index) = self.load(face)?;
         let parsed = open(&data, index, face.instance())?;
-        Some(shape_in(&parsed, face, text, base, px))
+        Some(shape_in(&parsed, face, text, base, px, Positions::Whole))
     }
 
     /// Shaped glyphs placed along a run.

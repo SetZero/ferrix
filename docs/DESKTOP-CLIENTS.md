@@ -327,9 +327,9 @@ workspace chips and the clock stay hidden until their scripts exist (the
 list above). The `output` line matches through the EDID override that
 `run-compositor` applies.
 
-Left: whole-pixel text advances in `userland/compositor/text`, where a
-label can sit a pixel from Pango's; the PulseAudio client tried against
-`pulsed` on the desktop.
+Text is placed in whole pixels as Pango places it (2026-09-27), so a
+label's width is GTK's. Left: the PulseAudio client tried against `pulsed`
+on the desktop.
 
 A text measurement to settle when `userland/compositor/text` lands: the user's
 comment measures `line_height='2.0'` as 10.5 px over and 11.5 under at
@@ -635,16 +635,18 @@ shell says it does, and the program reports it.
   and measured `line_height='2.0'` on Ubuntu at 15pt as 11.2 pixels above and
   below, which is the user's own measurement of their waybar tooltips. Not
   done: colour glyphs (Noto Color Emoji draws nothing), bidi reordering,
-  instancing on axes other than `wght`, a font cache on disk
-  (`Fonts::system()` scans every time), and **hinted metrics**: Pango on
-  nazuna (1.57, 96 dpi, GTK3's `font-size: 15px` on Ubuntu) rounds every
-  advance to a whole pixel -- `vol 0%` is 44 wide, `cpu 19%` 57, ascent 14,
-  descent 3 -- where this crate keeps HarfBuzz's fractional advances, so a
-  bar's modules can sit a pixel from GTK's. The waybar stream's reference
-  numbers are in `~/.local/share/ferrix/logs/waybar/pango-reference.txt`;
-  rounding the advances in `Fonts::shape` (as `hint-metrics` does) is the
-  change, about a point.
+  instancing on axes other than `wght`, and a font cache on disk
+  (`Fonts::system()` scans every time). **Whole-pixel metrics landed
+  2026-09-27**: Pango on nazuna (1.57, 96 dpi, GTK3's `font-size: 15px` on
+  Ubuntu) rounds each glyph's advance and offsets to a whole pixel, and the
+  ascent and descent -- `vol 0%` is 44 wide, `cpu 19%` 57, `abc` 24, a line
+  17 with its baseline at 14 -- and `Fonts::shape` now does the same, where
+  it kept HarfBuzz's fractions (44.50, 23.46). All eight of the reference
+  numbers in `~/.local/share/ferrix/logs/waybar/pango-reference.txt` match
+  (`widths_are_pangos_on_the_hosts_ubuntu`, ignored: it reads the host's
+  Ubuntu). `approximate_char_width` stays fractional, as Pango's is.
 * **The dotfiles and fonts carried by `run-compositor --config` (§2.5), and
   the `caption` boot (§2.6), are on `main`** (2026-09-26): on x86_64 the
-  caption's 565x80 pixels, drawn in the user's Ubuntu Light, are the ones the
-  host draws.
+  caption's 564x80 pixels (565 before text was placed in whole pixels,
+  2026-09-27), drawn in the user's Ubuntu Light, are the ones the host
+  draws.
