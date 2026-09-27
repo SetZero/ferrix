@@ -132,9 +132,11 @@ def load_manifest() -> dict:
 
 
 def kernel_files() -> list[str]:
-    """Every kernel source file, as a path relative to kernel/src."""
+    """Every kernel source file, as a path relative to kernel/src, with `/`
+    between its parts on every host: the manifest's patterns and the module
+    tree are written that way."""
     return sorted(
-        str(path.relative_to(KERNEL_SRC)) for path in KERNEL_SRC.rglob("*.rs")
+        path.relative_to(KERNEL_SRC).as_posix() for path in KERNEL_SRC.rglob("*.rs")
     )
 
 
