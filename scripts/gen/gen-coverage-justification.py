@@ -556,6 +556,11 @@ def main() -> int:
     for problem in problems:
         print(f"gen-coverage-justification: {problem}", file=sys.stderr)
     if problems:
+        print(
+            "gen-coverage-justification: if a change to the kernel moved these lines, carry the\n"
+            "  evidence's anchors with `python3 scripts/gen/carry-coverage.py` and run the generator.",
+            file=sys.stderr,
+        )
         return 1
 
     outputs = {

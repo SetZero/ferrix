@@ -251,6 +251,17 @@ so it is not part of `cargo xtask check`. Adding `--json` and `--residual` to
 the printed command regenerates the evidence, and
 `scripts/gen/gen-coverage-justification.py` the two documents from it.
 
+**Between measurements.** The evidence names statements by file and line, so a
+change that moves a line in the item leaves an anchor on the wrong statement,
+and `--check` fails rather than let an argument drift. A landing that changes
+the item carries the anchors with `scripts/gen/carry-coverage.py`, which maps
+each line through a diff from the tree the evidence was written on: a line the
+change left alone keeps its place and its argument at its new number, and a
+line it edited or removed is dropped and printed -- it is unmeasured now, and
+an argument for the old text is no evidence for the new. The figures stay as
+measured until the next run of the suite, which takes in the new code and
+holds it to the floor.
+
 **What this supports.** DO-178C table A-7 objective 5 at DAL C asks for
 statement coverage. This is that measurement, for ring-0 code, on every
 architecture and both profiles in the reference configuration, without
