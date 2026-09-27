@@ -11,23 +11,19 @@
 set -eu
 repo=SetZero/ferrix
 
-# The description is the first thing search engines and GitHub search index.
-# 350 characters at most; the first ~120 show in search results.
+# Keep the public description short enough to read in repository search.
 gh repo edit "$repo" \
-  --description "A Rust operating system that runs rustc and builds itself. Own kernel, ring-3 drivers, btrfs, libc, shell and Wayland desktop; runs Linux programs and Chrome. Built by AI agents." \
+  --description "Experimental Rust operating system running unmodified Linux apps on its own kernel, with restartable userland drivers and a Wayland desktop." \
   --homepage "https://setzero.github.io/ferrix/" \
   --enable-discussions \
   --enable-issues \
   --enable-wiki=false
 
-# Topics: GitHub allows 20. These are the ones people browse
-# (github.com/topics/<name>) for this kind of project.
-gh repo edit "$repo" \
-  --add-topic rust --add-topic operating-system --add-topic kernel --add-topic osdev \
-  --add-topic hobby-os --add-topic uefi --add-topic x86-64 --add-topic aarch64 \
-  --add-topic armv7 --add-topic qemu --add-topic wayland --add-topic wayland-compositor \
-  --add-topic btrfs --add-topic linux-compatibility --add-topic self-hosting --add-topic iommu \
-  --add-topic libc --add-topic zsh --add-topic ai-agents --add-topic claude
+# A focused set of topics helps people browsing the relevant topic pages.
+# PUT replaces the old topic list, so stale niche tags do not accumulate.
+gh api -X PUT "repos/$repo/topics" --input - <<'JSON'
+{"names":["rust","operating-system","osdev","kernel","rust-kernel","linux-compatibility","userland","wayland","btrfs","qemu","aarch64","ai-agents"]}
+JSON
 
 # Pages from Actions (the Website workflow deploys it).
 gh api -X POST "repos/$repo/pages" -f build_type=workflow >/dev/null 2>&1 \
