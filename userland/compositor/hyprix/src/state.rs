@@ -6288,9 +6288,10 @@ pub(crate) fn start(
     instance: Option<&str>,
 ) -> Result<u32, String> {
     let words = crate::command::words(command)?;
+    let (assigned, words) = crate::command::assignments(&words);
     let (program, arguments) = words
         .split_first()
-        .ok_or_else(|| "an empty command".to_owned())?;
+        .ok_or_else(|| "only assignments, and no program".to_owned())?;
     let mut child = std::process::Command::new(program);
     let _ = child.args(arguments).env("WAYLAND_DISPLAY", socket);
     // The environment Hyprland gives everything it starts
@@ -6325,6 +6326,9 @@ pub(crate) fn start(
     if let Ok(env) = CHILD_ENV.lock() {
         let _ = child.envs(env.iter().map(|(name, value)| (name, value)));
     }
+    // The command's own `NAME=value` words, after those: in `sh` they are
+    // this one program's, over whatever it would otherwise inherit.
+    let _ = child.envs(assigned);
     let pid = child
         .spawn()
         .map(|child| child.id())

@@ -454,6 +454,15 @@ pub(crate) fn volume_for(arch: Arch) -> Result<std::path::PathBuf> {
 pub(crate) const WINDOW_ENV: &str = "env = HOME,/dev/shm\nenv = XDG_RUNTIME_DIR,/tmp\n\
      env = FONTCONFIG_FILE,/usr/share/ferrix/fonts/fonts.conf\n";
 
+/// [`WINDOW_ENV`] on a desktop with other clients: all but the home, which
+/// [`WINDOW_HOME`] gives Chrome alone. As an `env =` line it moved every
+/// program's home, and the user's waybar found no `~/.config/waybar`.
+pub(crate) const DESKTOP_ENV: &str = "env = XDG_RUNTIME_DIR,/tmp\n\
+     env = FONTCONFIG_FILE,/usr/share/ferrix/fonts/fonts.conf\n";
+
+/// Chrome's home on such a desktop, as words before its command.
+pub(crate) const WINDOW_HOME: &str = "HOME=/dev/shm";
+
 /// Whether the volume `image` has `libpulse`, in the tree
 /// `scripts/fetch/fetch-chrome.sh` keeps beside it: a volume fetched before
 /// 2026-09-27 has not, and on it Chrome's sound can only be ALSA's, which a
@@ -724,6 +733,10 @@ mod tests {
         let conf = String::from_utf8_lossy(FONT_FILES[0].1);
         assert_eq!(FONT_FILES[0].0, "fonts.conf");
         assert!(WINDOW_ENV.contains(&format!("env = FONTCONFIG_FILE,/{FONTS}/fonts.conf\n")));
+        assert_eq!(
+            WINDOW_ENV,
+            format!("env = {}\n{DESKTOP_ENV}", WINDOW_HOME.replacen('=', ",", 1))
+        );
         assert!(conf.contains(&format!("<dir>/{FONTS}</dir>")));
         assert!(conf.contains("<include ignore_missing=\"yes\">/etc/fonts/fonts.conf</include>"));
         let paths: Vec<_> = window_files().into_iter().map(|file| file.path).collect();

@@ -4681,6 +4681,15 @@ fn everything_desktop_setup(arch: Arch) -> Result<Option<(String, Carried, Strin
         );
         return Ok(None);
     }
+    // Chrome's lines as run-compositor adds them, so its environment is the
+    // one the user's clients get; Chrome itself is not carried, and fails to
+    // start as any missing program does.
+    let chrome = Args {
+        chrome: true,
+        everything: true,
+        ..Args::default()
+    };
+    let config = with_chrome(config, &chrome, arch);
     let config = format!(
         "{}\n# Added by `cargo xtask test-compositor --boot everything-desktop`.\n\
          bind = , F12, exec, /bin/hyprctl layers\n\
@@ -6259,11 +6268,15 @@ fn with_chrome(config: String, args: &Args, arch: Arch) -> String {
     if !args.chrome {
         return config;
     }
-    let command = crate::chrome::window_command_for(arch, CHROME_WELCOME_PAGE);
+    let command = format!(
+        "{} {}",
+        crate::chrome::WINDOW_HOME,
+        crate::chrome::window_command_for(arch, CHROME_WELCOME_PAGE)
+    );
     format!(
         "{config}\n# Added by `cargo xtask run-compositor --chrome`.\n{}{}exec-once = {command}\n\
          bind = SUPER, B, exec, {command}\n",
-        crate::chrome::WINDOW_ENV,
+        crate::chrome::DESKTOP_ENV,
         crate::chrome::window_library_path(crate::chrome::on_ferrousli(args))
     )
 }

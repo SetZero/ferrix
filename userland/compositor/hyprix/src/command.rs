@@ -8,7 +8,9 @@
 //! `\`, `$` or `` ` ``, and a backslash outside quotes keeps the character
 //! after it. Nothing is expanded -- no `$variable`, glob or `~` -- and there
 //! are no pipes or redirections; a line that wants those can say
-//! `sh -c '...'`. Chrome's `--user-agent` is what asked for it.
+//! `sh -c '...'`. Chrome's `--user-agent` is what asked for it. Leading
+//! `NAME=value` words set the program's environment, as they do before a
+//! command in `sh` ([`assignments`]).
 
 /// The words of `command`, or why it has none.
 ///
@@ -72,9 +74,36 @@ pub fn words(command: &str) -> Result<Vec<String>, String> {
     Ok(words)
 }
 
+/// The leading `NAME=value` words of `words`, which `sh` takes as the
+/// program's environment rather than as the program, and the words after
+/// them. `NAME` is a shell name: a letter or `_`, then letters, digits or `_`.
+/// Unlike `sh`, a quoted `'NAME=value'` counts too: the quoting is gone by
+/// now.
+#[must_use]
+pub fn assignments(words: &[String]) -> (Vec<(String, String)>, &[String]) {
+    let mut assigned = Vec::new();
+    let mut rest = words;
+    while let Some((word, after)) = rest.split_first() {
+        let Some((name, value)) = word.split_once('=') else {
+            break;
+        };
+        let mut characters = name.chars();
+        let named = characters
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+            && characters.all(|next| next.is_ascii_alphanumeric() || next == '_');
+        if !named {
+            break;
+        }
+        assigned.push((name.to_owned(), value.to_owned()));
+        rest = after;
+    }
+    (assigned, rest)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::words;
+    use super::{assignments, words};
 
     fn split(command: &str) -> Vec<String> {
         words(command).unwrap()
@@ -121,6 +150,26 @@ mod tests {
     #[test]
     fn nothing_is_expanded() {
         assert_eq!(split("echo $HOME ~ *"), ["echo", "$HOME", "~", "*"]);
+    }
+
+    #[test]
+    fn leading_assignments_are_the_environment() {
+        let line = split("HOME=/dev/shm _X1= chrome --flag=1 A=b");
+        let (assigned, rest) = assignments(&line);
+        assert_eq!(
+            assigned,
+            [
+                ("HOME".to_owned(), "/dev/shm".to_owned()),
+                ("_X1".to_owned(), String::new())
+            ]
+        );
+        assert_eq!(rest, ["chrome", "--flag=1", "A=b"]);
+        let line = split("1A=b prog");
+        assert_eq!(assignments(&line).1, ["1A=b", "prog"]);
+        let line = split("=b prog");
+        assert_eq!(assignments(&line).1, ["=b", "prog"]);
+        let line = split("A=b");
+        assert!(assignments(&line).1.is_empty());
     }
 
     #[test]
