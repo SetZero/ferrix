@@ -123,7 +123,12 @@ of the phone's own crosvm from a launcher app, which shows a desktop in that
 VM with Chromium on it (2026-09-27); during a native boot a USB serial port
 streams the kernel log (2026-09-26). The kernel's certification
 set (`docs/certification/`) closed F-23, F-31 and F-35 on 2026-09-26: fallible
-allocation, side-channel defences with KASLR, and job quotas.
+allocation, side-channel defences with KASLR, and job quotas. On 2026-09-27
+it closed F-21b with an audit record of the TSF's own decisions, claimed in the
+Security Target; measured the certified item's statement coverage at 90.1%,
+89.9% and 84.5% on x86-64, AArch64 and ARMv7-A; and traced 602 low-level
+requirements, 396 of them verified by a named check. Its register stands at 15
+findings open and 38 closed.
 
 Stage 17's display iteration is done: `/dev/dri/card0` served by a ring-3
 virtio-gpu driver, with `cargo xtask test-display` requiring a compositor's

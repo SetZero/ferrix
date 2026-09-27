@@ -1340,6 +1340,35 @@ unintended function" report is empty; F-16 when every requirement has a
 unverified requirements is empty and the matrix shows each verified on all
 three architectures or argued as architecture-specific.
 
+**Where W-8 stands, 2026-09-27 wind-down** (main 4636a412). 112 high-level
+and 602 low-level requirements; 396 named by a check, 318 in the baseline,
+247 tagged checks. Of the item's 2,308 product functions, 1,141 are a
+requirement's unit, 545 accessors and 35 check code, and 587 are named by
+none. Complete (the gate fails on an unnamed function): `arch::aarch64`,
+`arch::x86_64`, `claim`, `console`, `device`, `early`, `iommu`, `mm`,
+`object`, `smp`, `trap`, `user`, `vmap`. Model files 14 to 20, 22 and 23 are
+written; 21 (boot) has its first landing, 21a, which moved main.rs's stage
+checks into `stages_check.rs`.
+
+*In flight, each with the certification consultant's conditions in
+`~/.local/share/ferrix/cert-consultant/reviews.md`:*
+- **21b** (ferrix-15's audit/init session): file 21's requirements for the
+  crate root, init, power, random and the self-check switch, with new
+  `H.BOOT.10` to `.14`, `random::check` moved to `random/check.rs`, and F-51
+  closed. `H.BOOT.14` also becomes a parent of `L.aarch64.44` to `.46`. The
+  list is agreed; the diff is not yet reviewed.
+- **21c**: `devmgr`'s 33 functions as their own package of file 21. Not
+  started.
+- **24** (ferrix-55b's virtio/seam session): `arch/armv7a` and
+  `arch/arm_common`, written after F-48 and F-49 are fixed, with every
+  requirement stating the correct behaviour.
+
+*Not started:* the load-facing and remaining core modules the gate does not
+yet hold complete (`sched`, `syscall/native.rs`, `audit`, `pci`, `irq`,
+`timer`, `panic` and others; `--report` lists the unnamed functions by
+module). Proposed and not done: widen `H.SCHED.8` to each architecture's
+FP/SIMD state (file 19 left AArch64's under `H.SCHED.1`).
+
 ---
 
 ## W-9 — Vulnerability analysis against the ST threat model

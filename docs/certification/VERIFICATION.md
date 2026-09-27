@@ -105,18 +105,17 @@ two waits skipped since 2026-09-27: EDK2's boot menu, by a `Timeout` of 0 in
 the fresh variable store xtask writes (`xtask/src/uefi_vars.rs`), and U-Boot's
 autoboot countdown, by an environment in flash that is U-Boot's own
 compiled-in default with `bootdelay=0` and nothing else changed
-(`xtask/src/uboot_env.rs`). x86-64 measured on main at
-9076655c and carried to c14846aa across the kernel relayout, which moved files
-without changing a statement of the item; AArch64 and ARMv7-A measured again
+(`xtask/src/uboot_env.rs`). x86-64 measured again on 2026-09-27 at e5f3110f
+(11532464); AArch64 and ARMv7-A measured again
 on 2026-09-27 at 9e196852, with `test-vfs` in their suite and the trap
 check's read past a mapped file's end:
 
 | Ring | x86-64 | AArch64 | ARMv7-A |
 |---|---:|---:|---:|
-| `core` | 5,092 / 5,649 — 90.1% | 5,293 / 5,779 — 91.6% | 4,742 / 5,585 — 84.9% |
-| `item` | 1,631 / 1,859 — 87.7% | 1,531 / 1,808 — 84.7% | 1,509 / 1,815 — 83.1% |
-| **Certified item** | **6,723 / 7,508 — 89.5%** | **6,824 / 7,587 — 89.9%** | **6,251 / 7,400 — 84.5%** |
-| `load` (not claimed) | 9,231 / 12,989 — 71.1% | 9,377 / 13,718 — 68.4% | 9,463 / 13,775 — 68.7% |
+| `core` | 5,253 / 5,787 — 90.8% | 5,293 / 5,779 — 91.6% | 4,742 / 5,585 — 84.9% |
+| `item` | 1,649 / 1,877 — 87.9% | 1,531 / 1,808 — 84.7% | 1,509 / 1,815 — 83.1% |
+| **Certified item** | **6,902 / 7,664 — 90.1%** | **6,824 / 7,587 — 89.9%** | **6,251 / 7,400 — 84.5%** |
+| `load` (not claimed) | 9,598 / 13,745 — 69.8% | 9,377 / 13,718 — 68.4% | 9,463 / 13,775 — 68.7% |
 
 The Arm pair's figures are a little below their previous measurement (90.2%
 and 84.8%) although the suite reached more: in between, init's start of
@@ -303,9 +302,9 @@ statement coverage. This is that measurement, for ring-0 code, on every
 architecture and both profiles in the reference configuration, without
 modifying the toolchain.
 
-**What it does not.** 89.5%, 89.9% and 84.5% are not 100%. The residual is
-enumerated and sorted, and 75 of x86-64's 766 statements, 145 of AArch64's 763
-and 163 of ARMv7-A's 1,149 still need a test rather than an argument (F-10). Decision
+**What it does not.** 90.1%, 89.9% and 84.5% are not 100%. The residual is
+enumerated and sorted, and 94 of x86-64's 725 statements, 144 of AArch64's 725
+and 163 of ARMv7-A's 1,110 still need a test rather than an argument (F-10). Decision
 coverage, which DAL C does not require and DAL B and A do, is measured of
 object code in §3.6 and is far short; there is no MC/DC (F-13).
 

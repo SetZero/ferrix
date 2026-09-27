@@ -8,6 +8,18 @@ would close it.
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
+**Numbers reserved and not yet filed (2026-09-27).** Each is a defect already
+confirmed, whose entry lands with its fix: **F-46**, xtask's power-off gates
+taking a triple fault after the marker as a power-off; the fix is built on
+branch `f46-power-off` (1694e217, a `FERRIX-POWER-OFF` line the gates
+require) and parked there, its negative controls run and logged, to be
+rebased and reviewed. **F-49**, ARMv7-A's
+`psci_system` not declaring `r12` clobbered where `psci_call` does; not yet
+fixed. **F-51**, the manifest's `checks.rs` test-file pattern counting the
+self-check switch (`kernel/src/checks.rs`, product code) as verification;
+closes with W-8's boot slice 21b. Until they are filed the tally above does
+not count them.
+
 **Severity.** *Blocking* — a rating cannot be claimed while it stands.
 *Major* — a named objective is unmet. *Moderate* — an objective is partially
 met or met without evidence. *Minor* — a defect with no objective attached yet.
@@ -330,7 +342,7 @@ only `debug_hook`, which its own handler runs. The boot's lines are unchanged.
 
 ## B. Verification
 
-### F-10 — statement coverage is 84.8–90.2%, not 100%
+### F-10 — statement coverage is 84.5–90.1%, not 100%
 **Major**, re-measured 2026-09-26 on main at a6d505a2, with KASLR. Every boot
 gate that exercises the item now contributes, on every architecture: the
 certified item is 5,103 of 6,828 statements on x86-64 (74.7%), 5,189 of 7,041
@@ -383,8 +395,8 @@ the Arm figures above predate the tool's fixes.
 
 **All three, 2026-09-27** (on main at c14846aa, measured on 9076655c and
 carried across the kernel relayout, which moved files without changing a
-statement of the item): x86-64 **6,902 of 7,664, 90.1%** (re-measured 2026-09-27 on e5f3110f); AArch64 **6,876
-of 7,622, 90.2%** (re-measured after the PL011 merge, ad339d3c); ARMv7-A **6,296 of 7,427, 84.8%**. Three passes wrote
+statement of the item): x86-64 **6,902 of 7,664, 90.1%** (re-measured 2026-09-27 on e5f3110f); AArch64 **6,824
+of 7,587, 89.9%** and ARMv7-A **6,251 of 7,400, 84.5%** (both re-measured 2026-09-27 at 9e196852). Three passes wrote
 the checks, one per part of the item, and the suite measured them together:
 
 * *The memory layer and the objects* (`user/`, `object/`, `mm`, `vmap`,
