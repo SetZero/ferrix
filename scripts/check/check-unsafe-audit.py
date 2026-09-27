@@ -404,17 +404,19 @@ def main() -> int:
         for path in sorted(directory.rglob("*.rs")):
             if "target" in path.parts:
                 continue
-            label = str(path.relative_to(ROOT))
+            # `/` between the parts on every host, as the manifest and the
+            # baseline name files.
+            label = path.relative_to(ROOT).as_posix()
             found, sites, blocks = scan(path.read_text(encoding="utf-8"), label)
             problems.extend(found)
             if blocks:
-                crate = str(path.relative_to(ROOT).parent).split("src")[0].rstrip("/\\")
+                crate = path.relative_to(ROOT).parent.as_posix().split("src")[0].rstrip("/")
                 per_crate[crate] = per_crate.get(crate, 0) + blocks
             for site in sites:
                 for ident in site.ids:
                     if ident not in obligations:
                         unknown.append(f"{label}:{site.line}: ({ident}) is no obligation id")
-            rel = str(path.relative_to(KERNEL_SRC)) if path.is_relative_to(KERNEL_SRC) else None
+            rel = path.relative_to(KERNEL_SRC).as_posix() if path.is_relative_to(KERNEL_SRC) else None
             if rel in item:
                 item_sites += len(sites)
                 for site in sites:
