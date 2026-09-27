@@ -15,7 +15,7 @@ Coverage evidence recording the checks: none yet.
 | Level | Written | Named by a check | Unverified, in the baseline |
 |---|---:|---:|---:|
 | High (`H.*`) | 77 | 33 | 44 |
-| Low (`L.*`) | 348 | 221 | 127 |
+| Low (`L.*`) | 349 | 225 | 124 |
 
 530 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
 
@@ -24,7 +24,7 @@ Coverage evidence recording the checks: none yet.
 | Named by a low-level requirement | 530 |
 | Accessors, covered by the requirement they serve | 654 |
 | Check code in a product file | 16 |
-| Named by none | 1145 |
+| Named by none | 1146 |
 
 Subsystems whose low-level requirements are complete: `early`, `iommu`, `mm`, `object`, `smp`, `user`, `vmap`.
 
@@ -215,7 +215,8 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `L.object.5` | dispose shall hold at most one queued object's drop on the stack at a time, however deeply objects are nested in one another's queues. | A chain of N channel ends, each queued unread in the next's inbox, is freed from its outermost end with N in the thousands and no guard-page fault, every frame given back. | H.OBJ.8, H.FAIL.2 | `object::dispose`, `object::Object::drops_at_once` | *baselined* | — | — | — |
 | `L.object.6` | dispose shall close a channel end whose last reference it holds before it returns, even while another context is draining disposed objects, so that the peer sees PEER_CLOSED from the moment the close returns (FX-1004). | A close made while another context is marked as draining is followed at once by a write and a read on the peer, each refused PEER_CLOSED, 2 of 2. | H.OBJ.16 | `object::dispose` | `kernel/src/object/check.rs::check_a_closed_peer_frees_what_was_queued` | not measured | not measured | not measured |
 | `L.object.7` | defer shall queue an object for the drainer and, when the queue cannot grow, drop it where it is while fewer than four such drops are under way, so that no object is given up while a drop in place is still allowed. | Across the allocation-failure rounds, every nth fallible allocation failing for several n, 0 objects are given up (abandoned() reads 0) and every frame comes back. | H.MEM.11 | `object::defer`, `object::abandoned` | `kernel/src/object/alloc_check.rs::run` | not measured | not measured | not measured |
-| `L.object.8` | defer shall give an object up, and count it, only when the queue cannot grow and four drops in place are already under way, and shall neither recurse further nor stop the kernel. | With the orphan queue refused its growth and four in-place drops nested, a fifth deferred object is counted as given up (abandoned() rises by 1) and the kernel runs on. | H.MEM.11, H.FAIL.2 | `object::defer` | *baselined* | — | — | — |
+| `L.object.8` | defer shall give an object up, and count it, only when the queue cannot grow and four drops in place are already under way, and shall neither recurse further nor stop the kernel: the one exception to H.OBJ.8, an object that outlives its last handle, bounded by the depth and counted by abandoned(). | With the orphan queue refused its growth and four in-place drops nested, a fifth deferred object is counted as given up (abandoned() rises by 1) and the kernel runs on. | H.MEM.11 | `object::defer` | `kernel/src/object/alloc_check.rs::give_up` | not measured | not measured | not measured |
+| `L.object.105` | defer shall drop an object where it is, and give nothing up, when the orphan queue cannot grow and fewer than four drops in place are under way. | A close of a job handle with the orphan queue's one growth refused answers success, the job is gone when it returns, and abandoned() stays 0. | H.MEM.11, H.OBJ.8 | `object::defer` | `kernel/src/object/alloc_check.rs::check_a_close_without_queue_room_drops_in_place` | not measured | not measured | not measured |
 
 ### Channels
 
@@ -310,7 +311,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `L.object.59` | A Charge shall be taken from the job when the object it pays for is made, refusing the object when a limit would be passed, and given back when the object is dropped. | Objects in a job limited to 5 are refused at exactly 5, a channel's two ends together; with them dropped the job holds 0. | H.QUOTA.3, H.QUOTA.4 | `object::quota::Charge::to`, `object::quota::Charge::drop`, `object::quota::Charge::running` | `kernel/src/object/quota_check.rs::check_objects` | not measured | not measured | not measured |
 | `L.object.60` | effective shall scale a task's weight, at each level from its job up, by the job's weight over the job's load, and adjust shall keep each job's load the weight of its runnable tasks and busy children. | One spinning task alone in a job keeps about half a processor against eight in another job; with the tasks gone every job's load reads 0. | H.SCHED.3 | `object::quota::effective`, `object::quota::adjust` | `kernel/src/object/quota_check.rs::check_the_processor` | not measured | not measured | not measured |
 | `L.object.61` | Job::set_cpu_weight shall make the job's weight the value written. | cpu.weight written 300 through cgroupfs reads back 300 from the job. | H.SCHED.3 | `object::quota::Quota::set_weight`, `object::job::Job::set_cpu_weight`, `object::job::Job::cpu_weight` | `kernel/src/fs/cgroupfs/controllers_check.rs::check_the_files` | not measured | not measured | not measured |
-| `L.object.62` | Quota::set_weight shall clamp the weight to 1 to 10000, and change a busy job's contribution to its parent's load at once. | A weight of 0 is stored as 1 and one of 20000 as 10000; setting a busy job's weight changes its parent's load by the difference of the scaled weights. | H.SCHED.3 | `object::quota::Quota::set_weight` | *baselined* | — | — | — |
+| `L.object.62` | Quota::set_weight shall clamp the weight to 1 to 10000, and change a busy job's contribution to its parent's load at once. | A weight of 0 is stored as 1 and one of 20000 as 10000; setting a busy job's weight changes its parent's load by the difference of the scaled weights. | H.SCHED.3 | `object::quota::Quota::set_weight` | `kernel/src/object/quota_check.rs::check_the_weight` | not measured | not measured | not measured |
 
 ### Jobs
 
@@ -367,7 +368,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `L.object.100` | A user fault refused by a memory limit shall end, with the kill's status, a process of the job whose limit was full or beneath it and none outside it, count the kill there, and retry the fault. | A program writing 8 MiB in a job limited to 1 MiB ends by SIGKILL, exactly 1 process killed, while a process with more resident memory in a sibling job lives. | H.QUOTA.6 | `object::oom::user_fault`, `object::oom::out_of_memory`, `object::oom::kill_within`, `object::oom::at_or_above`, `object::quota::at_limit` | `kernel/src/fs/cgroupfs/oom_check.rs::check_the_kill` | not measured | not measured | not measured |
 | `L.object.101` | Among the live processes of the full job and the jobs beneath it, kill_within shall choose the one with the most resident pages, and never pid 1. | With three processes of 1, 4 and 2 MiB resident in the full job, the one of 4 MiB is killed; with pid 1 the largest, the next largest is. | H.QUOTA.6 | `object::oom::kill_within`, `object::oom::at_or_above` | *baselined* | — | — | — |
 | `L.object.102` | A fault that failed for want of memory with no limit full, or with nothing killable in the full job, shall fail as it would without the OOM kill and kill nothing. | A fault refused with every limit unset kills 0 processes and ends its program with SIGSEGV; a system call's fault there answers EFAULT. | H.QUOTA.6 | `object::oom::out_of_memory`, `object::oom::fault`, `object::oom::kill_within` | *baselined* | — | — | — |
-| `L.object.103` | A victim that has ended and closed everything, whose address space no live process shares, shall have that space emptied at once rather than at its parent's wait, and a fault that finds a victim still ending shall wait and retry, killing no second process. | Two faults at one full limit while the first victim is ending kill 1 process, and the job's memory use falls by the victim's resident pages before its parent waits. | H.QUOTA.6 | `object::oom::kill_within`, `object::oom::shared_with_the_living` | *baselined* | — | — | — |
+| `L.object.103` | A victim that has ended and closed everything, whose address space no live process shares, shall have that space emptied at once rather than at its parent's wait, and a fault that finds a victim still ending shall wait and retry, killing no second process. | Two faults at one full limit while the first victim is ending kill 1 process, and the job's memory use falls by the victim's resident pages before its parent waits. | H.QUOTA.6 | `object::oom::kill_within`, `object::oom::shared_with_the_living` | `kernel/src/object/quota_check.rs::check_an_ended_victim_is_emptied` | not measured | not measured | not measured |
 
 ### Decisions
 
@@ -737,8 +738,10 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `kernel/src/mm/check.rs::frames_hammer` | kernel | L.mm.4 |
 | `kernel/src/mm/check.rs::memory_check` | kernel | H.MEM.14, L.mm.13 |
 | `kernel/src/mm/check.rs::sweep_w_xor_x` | kernel | H.MEM.4, L.mm.32 |
+| `kernel/src/object/alloc_check.rs::check_a_close_without_queue_room_drops_in_place` | kernel | L.object.105 |
 | `kernel/src/object/alloc_check.rs::check_a_section_completes_on_the_reserve` | kernel | L.mm.35 |
 | `kernel/src/object/alloc_check.rs::check_a_teardown_needs_no_memory` | kernel | L.user.19 |
+| `kernel/src/object/alloc_check.rs::give_up` | kernel | L.object.8 |
 | `kernel/src/object/alloc_check.rs::round` | kernel | L.object.30 |
 | `kernel/src/object/alloc_check.rs::run` | kernel | L.object.7, H.MEM.11 |
 | `kernel/src/object/check.rs::check_a_bound_interrupt_reaches_its_port` | kernel | L.object.39 |
@@ -775,10 +778,12 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `kernel/src/object/edge_check.rs::check_subtree_control` | kernel | L.object.71 |
 | `kernel/src/object/pin/check.rs::check_quarantine` | kernel | L.object.47, L.object.48, L.object.49, H.DMA.4 |
 | `kernel/src/object/quota_check.rs::check_a_fork_bomb_meets_its_limit` | kernel | L.object.57, L.object.81, L.object.83, L.object.85, H.QUOTA.1 |
+| `kernel/src/object/quota_check.rs::check_an_ended_victim_is_emptied` | kernel | L.object.103 |
 | `kernel/src/object/quota_check.rs::check_memory` | kernel | H.QUOTA.2, L.mm.8, L.object.55, L.user.99 |
 | `kernel/src/object/quota_check.rs::check_objects` | kernel | L.object.9, L.object.27, L.object.59, H.QUOTA.3 |
 | `kernel/src/object/quota_check.rs::check_the_counters` | kernel | L.object.50, L.object.51, L.object.64 |
 | `kernel/src/object/quota_check.rs::check_the_processor` | kernel | L.object.60 |
+| `kernel/src/object/quota_check.rs::check_the_weight` | kernel | L.object.62 |
 | `kernel/src/object/quota_check.rs::run` | kernel | L.object.53, H.QUOTA.4 |
 | `kernel/src/service_check.rs::a_dropped_domain_gives_its_stream_back` | kernel | L.iommu.14 |
 | `kernel/src/service_check.rs::faults_and_domains_read_as_recorded` | kernel | L.iommu.13, L.iommu.34 |

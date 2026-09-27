@@ -118,7 +118,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixMemoryRequirements` | `17-memory-requirements.sysml` | What each unit of the item's memory management does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies), in two id spaces. |
 | `FerrixSmpRequirements` | `22-smp-requirements.sysml` | What each unit of kernel/src/smp.rs does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): finding the processors and giving each a record it finds itself by, starting the secondaries, the inter-processor interrupt, the TLB shootdown -- whole and scoped, and the bound on how long it waits -- grace periods, stopping the other processors for a panic, and the scheduler's kick. The start sequences themselves, the per-processor register and the interrupt controller are each architecture's (kernel/src/arch/\<isa>/smp.rs), and belong to the arch slices; this is the architecture-independent half above them. |
 
-19 files, 61 packages, 3794 elements, 208 relations. Model digest `9e7af9549dc8daff`.
+19 files, 61 packages, 3799 elements, 208 relations. Model digest `d5d8167fb9473494`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -3924,6 +3924,7 @@ flowchart LR
 | `L.object.6` | `aChannelEndClosesAtOnce` | — | — | — |
 | `L.object.7` | `nothingGivenUpWhileMemoryServes` | — | — | — |
 | `L.object.8` | `givenUpOnlyPastTheDepth` | — | — | — |
+| `L.object.105` | `droppedInPlaceWithoutQueueRoom` | — | — | — |
 | `L.object.9` | `aPairIsTwoObjects` | — | — | — |
 | `L.object.10` | `messagesReachThePeer` | — | — | — |
 | `L.object.11` | `aRefusedTakeMovesNothing` | — | — | — |

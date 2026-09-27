@@ -170,7 +170,7 @@ static DISPOSING: AtomicBool = AtomicBool::new(false);
 static DROPPING_IN_PLACE: AtomicUsize = AtomicUsize::new(0);
 
 /// How deep drops in place may nest before an object is given up instead.
-const IN_PLACE_DEPTH: usize = 4;
+pub(crate) const IN_PLACE_DEPTH: usize = 4;
 
 /// Objects given up, because [`ORPHANS`] could not grow and drops in place
 /// were already [`IN_PLACE_DEPTH`] deep: see [`defer`].

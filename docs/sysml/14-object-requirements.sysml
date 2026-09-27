@@ -119,11 +119,23 @@ package FerrixObjectRequirements {
         requirement <'L.object.8'> givenUpOnlyPastTheDepth : ItemLowLevel {
             attribute :>> statement = "defer shall give an object up, and count it,
                 only when the queue cannot grow and four drops in place are already
-                under way, and shall neither recurse further nor stop the kernel.";
+                under way, and shall neither recurse further nor stop the kernel:
+                the one exception to H.OBJ.8, an object that outlives its last
+                handle, bounded by the depth and counted by abandoned().";
             attribute :>> criterion = "With the orphan queue refused its growth and
                 four in-place drops nested, a fifth deferred object is counted as
                 given up (abandoned() rises by 1) and the kernel runs on.";
-            attribute :>> parent = ("H.MEM.11", "H.FAIL.2");
+            attribute :>> parent = "H.MEM.11";
+            attribute :>> unit = "object::defer";
+        }
+        requirement <'L.object.105'> droppedInPlaceWithoutQueueRoom : ItemLowLevel {
+            attribute :>> statement = "defer shall drop an object where it is, and
+                give nothing up, when the orphan queue cannot grow and fewer than
+                four drops in place are under way.";
+            attribute :>> criterion = "A close of a job handle with the orphan
+                queue's one growth refused answers success, the job is gone when it
+                returns, and abandoned() stays 0.";
+            attribute :>> parent = ("H.MEM.11", "H.OBJ.8");
             attribute :>> unit = "object::defer";
         }
     }

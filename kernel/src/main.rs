@@ -288,7 +288,6 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
             "stage 2 self-check failed: {problem}"
         );
     }
-
     say_booted();
 
     // After the marker, on purpose: see `init`. Returns at once when nothing
@@ -369,6 +368,9 @@ fn say_booted() {
         [u32::from(checks::run()), 0, 0],
     );
     if checks::run() {
+        // After every check that counts what was given back, since it loses
+        // memory on purpose.
+        check_a_give_up();
         // Last before the marker, so every driver the boot starts has run: a
         // DMA fault its unit recorded and nothing provoked fails the boot
         // here rather than sitting unread in the unit's record.
@@ -1238,6 +1240,23 @@ fn check_allocation_failure() {
          NO_MEMORY, the rest succeeded, nothing leaked; {} allocations served from a reserve; \
          {} pages decommitted with none",
         report.calls, report.injected, report.refused, report.drawn, report.torn_down,
+    );
+}
+
+/// `defer` giving an object up past the in-place depth, counted, with the
+/// kernel running on (L.object.8). Halts rather than returning.
+fn check_a_give_up() {
+    let given_up = match object::alloc_check::give_up() {
+        Ok(given_up) => given_up,
+        Err(problem) => fatal!(
+            catalog::STAGE9_ALLOCATION,
+            "allocation failure self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  give-up  a close {} drops deep in place with no memory gave up {given_up} object, \
+         counted, and the kernel ran on",
+        object::IN_PLACE_DEPTH
     );
 }
 

@@ -592,6 +592,15 @@ its process ends before it is placed); a started process held by its task
 (`.97`); and the OOM kill's choice of victim, its fallbacks and the emptying
 of an ended victim (`.101` to `.103`).
 
+Closed since, by the F-10 coverage slices of 2026-09-27: `.92`'s first half
+(above); `.8`, a give-up past the in-place depth, by
+`alloc_check::give_up`, which loses its chain's last end on purpose and so
+runs after every check that counts what was given back, last before the
+boot's marker; `.62`, by `quota_check::check_the_weight`; and `.103`, by
+`quota_check::check_an_ended_victim_is_emptied`, which drives the faults'
+retries a step at a time. `.105` was added for what `defer` does below the
+depth, a drop in place, with its check `check_a_close_without_queue_room_drops_in_place`.
+
 What the pilot taught, for the slices that copy it:
 
 * **One check proves a whole requirement.** A `Verifies:` tag credits the

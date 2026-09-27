@@ -16,8 +16,9 @@ use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_vma::VmaFlags;
 
 use crate::object::job::{Job, KILLED_STATUS};
+use crate::object::oom;
 use crate::object::port::Port;
-use crate::object::quota::{self, Resource};
+use crate::object::quota::{self, DEFAULT_WEIGHT, MAX_WEIGHT, MIN_WEIGHT, Resource};
 use crate::sched::{self, Task};
 use crate::syscall::process::{self, Process};
 use crate::syscall::registry;
@@ -61,6 +62,8 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         check_memory(&tree, &mut report)?;
         report.objects = check_objects(&tree)?;
         report.alone_share = check_the_processor(&tree)?;
+        check_the_weight(&tree)?;
+        check_an_ended_victim_is_emptied(&tree)?;
         if Resource::ALL
             .iter()
             .any(|&resource| tree.usage(resource).is_none_or(|usage| usage.used != 0))
@@ -376,4 +379,143 @@ fn check_the_processor(tree: &Arc<Job>) -> Result<u64, &'static str> {
         return Err("tasks gone and still counted in their jobs' processor load");
     }
     Ok(share)
+}
+
+/// A job's weight as its parent's load counts it: `cpu.weight` 100 is one
+/// task at nice 0.
+fn scaled(weight: u32) -> i64 {
+    i64::from(weight) * i64::from(ferrix_sched::NICE_0_WEIGHT) / i64::from(DEFAULT_WEIGHT)
+}
+
+/// `cpu.weight` is clamped to 1 to 10,000, and setting a busy job's weight
+/// changes its parent's load at once, by the difference of the two weights
+/// as the scheduler scales them, while an idle job's changes nothing.
+///
+/// Verifies: L.object.62
+fn check_the_weight(tree: &Arc<Job>) -> Result<(), &'static str> {
+    let parent = tree.new_child().map_err(|_| "a job refused a child")?;
+    let busy = parent.new_child().map_err(|_| "a job refused a child")?;
+    let _ = busy.set_cpu_weight(0);
+    let low = busy.cpu_weight();
+    let _ = busy.set_cpu_weight(20_000);
+    let high = busy.cpu_weight();
+    if low != MIN_WEIGHT || high != MAX_WEIGHT {
+        return Err("cpu.weight was not clamped to 1 to 10,000");
+    }
+    let _ = busy.set_cpu_weight(DEFAULT_WEIGHT);
+    if quota::load(parent.quota_index()) != 0 {
+        return Err("an idle job's weight counted in its parent's load");
+    }
+
+    let cpu = crate::smp::topology().map_or(0, |topology| topology.online().saturating_sub(1));
+    STOP.store(false, Ordering::Release);
+    SPINNING.store(0, Ordering::Release);
+    let task = sched::spawn_in_group("weight", spin, 0, cpu, busy.quota_index())?;
+    let started = crate::timer::now_nanos();
+    while SPINNING.load(Ordering::Acquire) == 0 {
+        if crate::timer::now_nanos().saturating_sub(started) > 5_000_000_000 {
+            STOP.store(true, Ordering::Release);
+            return Err("the weight check's spinner never started");
+        }
+        sched::sleep_for(1_000_000);
+    }
+    let before = quota::load(parent.quota_index());
+    let _ = busy.set_cpu_weight(4 * DEFAULT_WEIGHT);
+    let after = quota::load(parent.quota_index());
+    STOP.store(true, Ordering::Release);
+    sched::wait_until_gone(&task, 5_000_000_000)?;
+    drop(task);
+    if before != scaled(DEFAULT_WEIGHT) {
+        return Err("a busy job's weight was not its parent's load");
+    }
+    if after != scaled(4 * DEFAULT_WEIGHT) {
+        return Err("a busy job's new weight did not reach its parent's load at once");
+    }
+    if quota::load(parent.quota_index()) != 0 || quota::load(busy.quota_index()) != 0 {
+        return Err("a task gone and its job still counted in the processor load");
+    }
+    Ok(())
+}
+
+/// A fault at a full memory limit whose victim is still ending waits and
+/// kills nobody else, and once the victim has let go of everything, the next
+/// fault empties its space -- before any parent's wait -- and goes in.
+///
+/// Driven a step at a time through [`oom::out_of_memory`], as a fault's
+/// retries drive it: the victim is a process of the check's own, kept
+/// ending by a thread it counts until the check lets it go.
+///
+/// Verifies: L.object.103
+fn check_an_ended_victim_is_emptied(tree: &Arc<Job>) -> Result<(), &'static str> {
+    const VICTIM_PAGES: u64 = 32;
+    const BASE: u64 = 0x40_0000;
+    let job = tree.new_child().map_err(|_| "a job refused a child")?;
+    let victim = member_of(&job)?;
+    let faulter = member_of(&job)?;
+    let used = |job: &Job| job.usage(Resource::Memory).map_or(0, |usage| usage.used);
+    let (checked, _) = as_task_of(&job, || -> Result<(), &'static str> {
+        let _ = victim
+            .space()
+            .map_anonymous(BASE, VICTIM_PAGES * PAGE_SIZE, VmaFlags::READ_WRITE)
+            .map_err(|_| "no mapping for the OOM check's victim")?;
+        for page in 0..VICTIM_PAGES {
+            victim
+                .space()
+                .fault(BASE + page * PAGE_SIZE, Access::WRITE)
+                .map_err(|_| "the OOM check's victim could not fault its memory in")?;
+        }
+        let _ = faulter
+            .space()
+            .map_anonymous(BASE, PAGE_SIZE, VmaFlags::READ_WRITE)
+            .map_err(|_| "no mapping for the OOM check's faulter")?;
+        // Full: the faulter's first frame is past the limit.
+        let _ = job.set_limit(Resource::Memory, used(&job));
+        let full = used(&job);
+        let refused = || {
+            faulter
+                .space()
+                .fault(BASE, Access::WRITE)
+                .is_err_and(|error| oom::is_charge_refusal(&error))
+        };
+        let kills = oom::kills();
+        victim.thread_starting();
+
+        if !refused() || oom::out_of_memory(faulter.space()) != oom::Answer::Retry {
+            return Err("a fault at a full limit did not kill and retry");
+        }
+        if !victim.is_terminated() || faulter.is_terminated() {
+            return Err("the scoped OOM kill did not choose the process with the most resident");
+        }
+        if !refused() || oom::out_of_memory(faulter.space()) != oom::Answer::Retry {
+            return Err("a fault finding its job's victim still ending did not wait and retry");
+        }
+        if oom::kills().wrapping_sub(kills) != 1 || faulter.is_terminated() {
+            return Err("a fault while the victim was ending killed a second process");
+        }
+        if used(&job) != full {
+            return Err("an ending victim's memory was given back before it let go");
+        }
+
+        victim.thread_gone(true);
+        if !refused() || oom::out_of_memory(faulter.space()) != oom::Answer::Retry {
+            return Err("a fault after the victim let go did not retry");
+        }
+        if used(&job).saturating_add(VICTIM_PAGES * PAGE_SIZE) > full {
+            return Err("an ended victim's memory was not given back before its parent's wait");
+        }
+        faulter
+            .space()
+            .fault(BASE, Access::WRITE)
+            .map_err(|_| "the fault after the victim's memory came back was refused")?;
+        Ok(())
+    });
+    for process in [&victim, &faulter] {
+        process::kill(process, KILLED_STATUS);
+    }
+    drop((victim, faulter));
+    checked?;
+    if used(&job) != 0 {
+        return Err("the OOM check's processes gone and their memory still charged");
+    }
+    Ok(())
 }

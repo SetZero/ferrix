@@ -29,6 +29,9 @@
 //!   more pages than one chunk from the stack holds, from an object a
 //!   process maps, so that phase two asks the space with no list to keep it
 //!   in -- and no translation to a page it gave back may be left.
+//! * **A close needs no memory.** A close whose object would be queued for
+//!   disposal, with the queue refused its growth, drops the object where it
+//!   is, and gives nothing up.
 
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
@@ -109,6 +112,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let mut report = check_the_native_calls_survive()?;
     report.drawn = drawn;
     report.torn_down = check_a_teardown_needs_no_memory()?;
+    check_a_close_without_queue_room_drops_in_place()?;
     let frame = mm::allocate_frames(0).ok_or("no frame for the sweep's window")?;
     let swept = crate::user::alloc_check::run(frame);
     mm::deallocate_frames(frame, 0);
@@ -124,6 +128,46 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         return Err("an object was given up rather than disposed of");
     }
     Ok(report)
+}
+
+/// A close whose object is queued for disposal, with no memory for the
+/// queue to grow, drops the object where it is instead: the job the handle
+/// named is gone when the close returns, the one allocation the close made
+/// was the one refused, and nothing is given up.
+///
+/// The orphan queue is emptied by taking it whole, so a close finds it with
+/// no room and grows it; a close that found room left by another
+/// processor's disposal made no allocation to refuse, and is tried again.
+///
+/// Verifies: L.object.105
+fn check_a_close_without_queue_room_drops_in_place() -> Result<(), &'static str> {
+    let me = crate::sched::current_id().ok_or("the checking task is not running")?;
+    for _ in 0..4 {
+        let side = Side::new()?;
+        let job = Job::new_root().map_err(|_| "no memory for a job to close")?;
+        let gone = Arc::downgrade(&job);
+        let handle = side
+            .process
+            .with_handles(|table| table.insert(Object::Job(job), Rights::JOB))
+            .map_err(|_| "no room for a job to close")?;
+        fallible::inject_once(me, 1, false);
+        let closed = side.call(nr::HANDLE_CLOSE, &[reg(handle)]);
+        let refused = fallible::stop_injecting();
+        side.close_everything();
+        if closed.is_err() {
+            return Err("a close with no memory for the orphan queue failed");
+        }
+        if gone.upgrade().is_some() {
+            return Err("a job whose queueing was refused outlived its close");
+        }
+        if object::abandoned() != 0 {
+            return Err("an object whose queueing was refused was given up, not dropped");
+        }
+        if refused == 1 {
+            return Ok(());
+        }
+    }
+    Err("four closes of a job never grew the orphan queue")
 }
 
 /// An `Arc`, a large `Arc` and a run of map inserts complete with the heap
@@ -560,4 +604,69 @@ fn send(
         made.open.push(copy);
     }
     Ok(sent)
+}
+
+/// `defer` gives an object up, counted, only past [`object::IN_PLACE_DEPTH`]
+/// drops in place, and the kernel runs on: a chain of channel ends, each
+/// queued unread in the one before's inbox, closed from its outermost end
+/// with every allocation failing, so that each end the close defers is
+/// dropped in place inside the drop of the one before, until the one past
+/// the depth is given up. How many were given up: one.
+///
+/// The one check that loses memory on purpose -- the end given up, and its
+/// channel, are never freed -- so it runs last of all, after every check
+/// that counts what the heap or the frame allocator gave back. A checked
+/// boot keeps that one object for its whole life, and [`object::abandoned`]
+/// reads 1 after the marker. Nothing after the marker reads it, and the
+/// leak checks that run later count what their own work gave back, from
+/// before it to after, which the object is outside.
+///
+/// Verifies: L.object.8
+pub(crate) fn give_up() -> Result<u64, &'static str> {
+    // `dispose` closes an end at once and defers only what its messages
+    // carry, so down the chain every other end is deferred: the outermost
+    // closed, then a deferred one dropped in place and the one it carries
+    // closed at once, `IN_PLACE_DEPTH` times, and the last deferred one
+    // given up, with nothing past it.
+    const ENDS: usize = 2 * object::IN_PLACE_DEPTH + 2;
+    let me = crate::sched::current_id().ok_or("the checking task is not running")?;
+    if object::abandoned() != 0 {
+        return Err("an object was given up before the give-up check");
+    }
+    let side = Side::new()?;
+    let mut ends = Vec::new();
+    for _ in 0..ENDS {
+        let _ = side
+            .call(nr::CHANNEL_CREATE, &[PAIR])
+            .map_err(|_| "channel_create failed for the give-up chain")?;
+        let writer = Handle(side.get_u32(PAIR)?);
+        let reader = Handle(side.get_u32(PAIR + 4)?);
+        ends.push((writer, reader));
+    }
+    // Each reader after the first goes into the inbox of the one before.
+    for pair in ends.windows(2) {
+        let [(writer, _), (_, next)] = pair else {
+            continue;
+        };
+        side.put(SENT, &next.0.to_ne_bytes())?;
+        let _ = side
+            .call(nr::CHANNEL_WRITE, &[reg(*writer), PAYLOAD, 0, SENT, 1])
+            .map_err(|_| "a write into the give-up chain failed")?;
+    }
+    for (writer, _) in &ends {
+        let _ = side.call(nr::HANDLE_CLOSE, &[reg(*writer)]);
+    }
+    let (_, outermost) = *ends.first().ok_or("the give-up chain is empty")?;
+    fallible::inject(me, 1);
+    let closed = side.call(nr::HANDLE_CLOSE, &[reg(outermost)]);
+    let _ = fallible::stop_injecting();
+    side.close_everything();
+    if closed.is_err() {
+        return Err("a close with every allocation failing failed");
+    }
+    let given_up = object::abandoned();
+    if given_up != 1 {
+        return Err("a chain one past the in-place depth did not give up exactly one object");
+    }
+    Ok(given_up)
 }
