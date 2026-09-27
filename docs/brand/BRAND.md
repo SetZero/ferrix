@@ -43,9 +43,8 @@ JetBrains Mono on the web for code and terminal output.
 - **Claims come with their proof.** Every headline names the gate that checks
   it, or quotes that gate's log. Write "runs `rustc`", not "supports Rust
   development".
-- **Say that it is built by AI, plainly and early.** The project is
-  interesting *because* of it, and readers who find out on their own feel
-  misled.
+- **Describe how it is built plainly.** Keep the AI-agent process in the
+  project story and documentation, after explaining what Ferrix does.
 - **Numbers, not adjectives.** Write "850k lines of Rust, none vendored" rather
   than "massive", and "11 days" rather than "incredibly fast".
 - **Honest about limits.** It is not a daily driver. Say so before someone asks.
@@ -55,7 +54,7 @@ Website hero:
 * Eyebrow: *Ferrix · an experimental Rust OS*
 * Headline: *Linux apps without Linux.*
 
-The first paragraph explains the headline: tested Linux programs run unchanged
+The README banner uses the same headline. The first paragraph explains it: tested Linux programs run unchanged
 on Ferrix's own Rust kernel. Disk, network, graphics and input drivers are
 separate processes that can restart after a crash. Name working programs as
 evidence; explain the human project owner's role in the "Who wrote it"
