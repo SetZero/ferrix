@@ -49,6 +49,8 @@ pub(super) fn run(harness: &mut Harness, process: &Arc<Process>) -> Checked<u32>
 
 /// Each limit file takes, refuses and reads back as Linux's does, and the
 /// job reads what was written.
+///
+/// Verifies: L.object.52, L.object.61
 fn check_the_files(harness: &mut Harness) -> Checked<()> {
     for (file, written, read) in [
         (&b"/check-q/pids.max"[..], &b"max\n"[..], &b"max\n"[..]),
