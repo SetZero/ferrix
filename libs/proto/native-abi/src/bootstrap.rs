@@ -37,7 +37,14 @@
 //!   has been moved onto it, and [`ROOT_IN_MEMORY`] when `/` stays the
 //!   tmpfs. No handles.
 //!
-//! A boot without the option writes neither, and pid 1 reads only the hello.
+//! A boot without the option writes neither.
+//!
+//! # The audit record's reader
+//!
+//! [`AUDIT_MAGIC`], written after the hello on every boot, carries one
+//! handle: the audit record's (`docs/certification/AUDIT.md` §4), with
+//! `READ` and nothing else, so it can never leave pid 1's table. Its `u32`
+//! is 1. Only the first program is given it.
 
 /// The first four bytes of the message.
 pub const INIT_HELLO_MAGIC: [u8; 4] = *b"FXIN";
@@ -72,6 +79,9 @@ pub fn init_hello_version(message: &[u8]) -> Option<u32> {
 
 /// The magic of the message carrying `devmgr`'s starter.
 pub const DEVMGR_STARTER_MAGIC: [u8; 4] = *b"FXDS";
+
+/// The magic of the message carrying the audit record's handle.
+pub const AUDIT_MAGIC: [u8; 4] = *b"FXAU";
 
 /// The magic of the message saying where `/` is.
 pub const ROOT_MAGIC: [u8; 4] = *b"FXRT";

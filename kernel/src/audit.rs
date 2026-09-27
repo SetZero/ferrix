@@ -80,8 +80,8 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 pub(crate) use ferrix_audit::{
     BOOTED, CGROUP_KILLED, CGROUP_LIMIT, CONFIG, CONTROL, Class, Config, DELEGATED, DEVMGR_STARTED,
     DMA_FAULT, Event, JOB_KILLED, LIMIT, LIMIT_SET, NO_UID, OOM_KILLED, Outcome, POWER,
-    PROCESS_MADE, QUIESCED, RIGHTS, ROOT_SWITCHED, Record, STARTER_GIVEN, SUPPRESSED, WIDEN,
-    saturated, target,
+    PROCESS_MADE, QUIESCED, READER_GIVEN, RIGHTS, ROOT_SWITCHED, Record, STARTER_GIVEN, SUPPRESSED,
+    WIDEN, saturated, target,
 };
 use ferrix_sync::IrqSpinLock;
 
@@ -241,14 +241,17 @@ impl<const N: usize> Ring<N> {
         }
     }
 
-    /// Keep `record` as the next number, over the oldest when full.
-    fn put(&mut self, mut record: Record) {
-        record.sequence = self.next;
-        let slot = (self.next % Self::LENGTH) as usize;
+    /// Keep `record` as the next number, over the oldest when full, and
+    /// answer the number it was given.
+    fn put(&mut self, mut record: Record) -> u64 {
+        let number = self.next;
+        record.sequence = number;
+        let slot = (number % Self::LENGTH) as usize;
         if let Some(kept) = self.records.get_mut(slot) {
             *kept = record;
         }
-        self.next = self.next.wrapping_add(1);
+        self.next = number.wrapping_add(1);
+        number
     }
 
     /// Copy records from number `from` on into `out`, as many as fit and
@@ -295,9 +298,8 @@ impl<const N: usize> High<N> {
 
     /// Keep `record` in the ring, and a system record among the first
     /// [`BOOT_RECORDS`] pinned as well, with the number the ring gave it.
-    fn put(&mut self, record: Record) {
-        let number = self.ring.next;
-        self.ring.put(record);
+    fn put(&mut self, record: Record) -> u64 {
+        let number = self.ring.put(record);
         if record.class == Class::System as u16
             && let Some(slot) = self.boot.get_mut(self.pinned)
         {
@@ -307,6 +309,7 @@ impl<const N: usize> High<N> {
             };
             self.pinned += 1;
         }
+        number
     }
 
     /// Copy the pinned records from number `from` on into `out`: those the
@@ -370,17 +373,16 @@ impl<const N: usize> Refusals<N> {
     }
 
     /// Keep `record`, a refusal charged to `budget`, if the budget's window
-    /// has room; count it otherwise.
-    fn keep(&mut self, now: u64, budget: u64, record: Record) {
+    /// has room, and answer its number; count it otherwise.
+    fn keep(&mut self, now: u64, budget: u64, record: Record) -> Option<u64> {
         let at = self.window_of(now, budget);
-        let Some(window) = self.windows.get_mut(at) else {
-            return;
-        };
+        let window = self.windows.get_mut(at)?;
         if window.kept < PER_BUDGET_PER_SECOND {
             window.kept += 1;
-            self.ring.put(record);
+            Some(self.ring.put(record))
         } else {
             window.suppressed = window.suppressed.saturating_add(1);
+            None
         }
     }
 
@@ -446,7 +448,7 @@ impl<const N: usize> Refusals<N> {
                 job: closed.budget,
                 budget: closed.budget,
             };
-            self.ring.put(record_of(
+            let _ = self.ring.put(record_of(
                 now,
                 SUPPRESSED,
                 Outcome::Refused,
@@ -514,7 +516,7 @@ impl<const H: usize, const R: usize> Store<H, R> {
         self.id[1].store((id >> 64) as u64, Ordering::Release);
         if let Some(mut record) = Record::start(id, H, R) {
             record.time = now;
-            self.high.lock().put(record);
+            let _ = self.high.lock().put(record);
         }
         true
     }
@@ -539,12 +541,12 @@ impl<const H: usize, const R: usize> Store<H, R> {
         subject: Subject,
         target: Target,
         detail: [u32; 3],
-    ) {
+    ) -> Option<u64> {
         let record = record_of(now, event, outcome, status, subject, target, detail);
         if event.class == Class::Refused {
-            self.refusals.lock().keep(now, subject.budget, record);
+            self.refusals.lock().keep(now, subject.budget, record)
         } else {
-            self.high.lock().put(record);
+            Some(self.high.lock().put(record))
         }
     }
 
@@ -589,6 +591,19 @@ pub(crate) fn record(
     target: Target,
     detail: [u32; 3],
 ) {
+    let _ = record_numbered(event, outcome, status, subject, target, detail);
+}
+
+/// [`record`], answering the number its ring gave the record, or `None` for
+/// a refusal the fairness counted instead of keeping.
+pub(crate) fn record_numbered(
+    event: Event,
+    outcome: Outcome,
+    status: i16,
+    subject: Subject,
+    target: Target,
+    detail: [u32; 3],
+) -> Option<u64> {
     STORE.record_at(
         crate::timer::now_nanos(),
         event,
@@ -597,7 +612,7 @@ pub(crate) fn record(
         subject,
         target,
         detail,
-    );
+    )
 }
 
 /// Record one item of the boot's configuration.
@@ -693,16 +708,80 @@ pub(crate) fn oom_killed(pid: u32, limited: u64, resident: u64) {
 }
 
 /// Record `subject` asking for power action `action` (`ferrix_audit::power`),
-/// just before it is taken.
+/// just before it is taken, and say its number on the console: nothing can
+/// read the record once the machine is off, so the console line is what
+/// shows it was made, beside init's last read, which stops just short of it
+/// (`docs/certification/AUDIT.md` §4).
+///
+/// And every high-value record the reader has not read -- made between its
+/// last read and this -- goes to the console too, one line each, where the
+/// console's log keeps it: nothing made after the reader's last read is lost
+/// without a trace. A reader that read just before asking for the power
+/// action leaves none, or the few a device's driver made meanwhile.
 pub(crate) fn power(subject: Subject, action: u32) {
-    record(
+    let number = record_numbered(
         POWER,
         Outcome::Done,
         0,
         subject,
         Target::NONE,
         [action, 0, 0],
+    )
+    .unwrap_or(0);
+    let read = READ_THROUGH.load(Ordering::Acquire);
+    crate::console::println!(
+        "  audit    power action {action} recorded as record {number}; the reader read the \
+         high-value ring through {read}"
     );
+    let end = STORE.high.lock().ring.next;
+    let mut unread = [Record::EMPTY; 1];
+    let mut at = read;
+    while at < end {
+        let (copied, next, lost) = STORE.high.lock().ring.read(at, &mut unread);
+        if lost > 0 {
+            // Overwritten before anyone read it -- a boot with no reader
+            // keeps only the last of them: one line for the run, not none.
+            crate::console::println!("  audit    lost #{}..#{}", at, at + lost - 1);
+        }
+        let [record] = unread;
+        if copied == 0 {
+            break;
+        }
+        crate::console::println!(
+            "  audit    unread #{} {} pid {} job {} target {}:{} detail {} {} {}",
+            record.sequence,
+            record.event_name(),
+            record.pid,
+            record.job,
+            record.target_kind,
+            record.target(),
+            record.detail[0],
+            record.detail[1],
+            record.detail[2],
+        );
+        at = next;
+    }
+}
+
+/// How far the reader has read the high-value ring, for the native boot
+/// check: a read whose copy out failed must not move it.
+pub(crate) fn read_through_now() -> u64 {
+    READ_THROUGH.load(Ordering::Acquire)
+}
+
+/// How far the reader -- the holder of the audit handle, through
+/// `audit_read` -- has read the high-value ring: the number it reads from
+/// next. The power action says it, and prints what lies past it.
+static READ_THROUGH: AtomicU64 = AtomicU64::new(0);
+
+/// Note that the reader has read the high-value ring up to `next`.
+pub(crate) fn read_through(next: u64) {
+    let _ = READ_THROUGH.fetch_max(next, Ordering::AcqRel);
+}
+
+/// The boot's audit id, 0 before the store starts.
+pub(crate) fn id() -> u128 {
+    STORE.id()
 }
 
 /// Read the kernel's store: see [`Store::read_at`].

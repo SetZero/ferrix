@@ -113,6 +113,10 @@ pub const SOUND_CONTROL_CREATE: usize = 0x1050;
 pub const LOG_CONTROL_CREATE: usize = 0x1051;
 /// [`NativeCall::DevmgrStart`].
 pub const DEVMGR_START: usize = 0x1052;
+/// [`NativeCall::AuditRead`].
+pub const AUDIT_READ: usize = 0x1053;
+/// The most records one [`NativeCall::AuditRead`] copies.
+pub const AUDIT_READ_MAX: u64 = 64;
 /// The largest name [`NativeCall::ProcessCreate`] takes, in bytes.
 pub const PROCESS_NAME_MAX: usize = 32;
 
@@ -355,10 +359,26 @@ pub enum NativeCall {
     /// `ALREADY_BOUND` while a `devmgr` it started lives; `BAD_STATE` after
     /// one ended, until every driver it started has ended too.
     DevmgrStart,
+    /// `audit_read(audit, which, buffer, count, answer)`: copy the audit
+    /// record's whole records of ring `which` ([`crate::types::AUDIT_HIGH`],
+    /// [`crate::types::AUDIT_REFUSALS`] or [`crate::types::AUDIT_BOOT`])
+    /// numbered `from` or later into `buffer`, 64 bytes each as
+    /// `libs/proto/audit` lays them out, at most `count` and at most
+    /// [`AUDIT_READ_MAX`]. `answer` is [`crate::types::AUDIT_ANSWER_WORDS`]
+    /// 64-bit words in the machine's order, and its second word is `from` on
+    /// the way in, so that a sequence number is 64 bits on every
+    /// architecture; the kernel then writes all five: how many were copied,
+    /// the number to read from next, how many between `from` and the first
+    /// copied the ring no longer held, and the boot's 128-bit audit id, low
+    /// word first. A `count` of zero copies nothing and answers `from` as
+    /// the next number. Needs `READ` on an audit handle, which only pid 1 is
+    /// given (`docs/certification/AUDIT.md` §4). Never blocks: a reader
+    /// polls.
+    AuditRead,
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 45] = [
+pub const ALL: [NativeCall; 46] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -404,6 +424,7 @@ pub const ALL: [NativeCall; 45] = [
     NativeCall::SoundControlCreate,
     NativeCall::LogControlCreate,
     NativeCall::DevmgrStart,
+    NativeCall::AuditRead,
 ];
 
 /// Whether `number` is in the native range at all.
@@ -464,6 +485,7 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         SOUND_CONTROL_CREATE => NativeCall::SoundControlCreate,
         LOG_CONTROL_CREATE => NativeCall::LogControlCreate,
         DEVMGR_START => NativeCall::DevmgrStart,
+        AUDIT_READ => NativeCall::AuditRead,
         _ => return None,
     };
     Some(call)
@@ -518,5 +540,6 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::SoundControlCreate => SOUND_CONTROL_CREATE,
         NativeCall::LogControlCreate => LOG_CONTROL_CREATE,
         NativeCall::DevmgrStart => DEVMGR_START,
+        NativeCall::AuditRead => AUDIT_READ,
     }
 }

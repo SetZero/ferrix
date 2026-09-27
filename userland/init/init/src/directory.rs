@@ -36,7 +36,8 @@ use ferrix_native::{
     Deadline, Error, Handle, Object, OwnedHandle, Requested, Rights, Signals, vmo,
 };
 use ferrix_native_abi::bootstrap::{
-    DEVMGR_STARTER_MAGIC, ROOT_MAGIC, ROOT_SWITCHED, init_hello_version, read_after_hello,
+    AUDIT_MAGIC, DEVMGR_STARTER_MAGIC, ROOT_MAGIC, ROOT_SWITCHED, init_hello_version,
+    read_after_hello,
 };
 use ferrix_native_abi::directory::{Kind, MAX_MESSAGE, Message};
 use ferrix_native_abi::types::{PACKET_SIGNAL, PROCESS_EXITED, PROCESS_KILLED};
@@ -71,6 +72,9 @@ pub(crate) struct Directory {
     /// The starter the kernel gave pid 1, with which it asks the kernel to
     /// start `devmgr`.
     starter: Option<OwnedHandle<Native>>,
+    /// The audit record's handle, with `READ` alone, until the reader takes
+    /// it (`docs/certification/AUDIT.md` §4).
+    audit: Option<OwnedHandle<Native>>,
     /// What the kernel said about `/`, until the caller takes it: whether
     /// it is the root volume now.
     root: Option<bool>,
@@ -126,6 +130,7 @@ impl Directory {
         let mut directory = Directory {
             own,
             starter: None,
+            audit: None,
             root: None,
             port,
             watched: BTreeMap::new(),
@@ -146,7 +151,7 @@ impl Directory {
     }
 
     /// Read what waits on pid 1's own channel after the hello: devmgr's
-    /// starter, and where `/` is.
+    /// starter, the audit record's handle, and where `/` is.
     fn read_own(&mut self) {
         let Some(own) = &self.own else {
             return;
@@ -161,10 +166,17 @@ impl Directory {
             let handle = (got.handles == 1).then(|| OwnedHandle::from_raw(Native, handles[0]));
             match (said, handle) {
                 (Some((DEVMGR_STARTER_MAGIC, _)), Some(starter)) => self.starter = Some(starter),
+                (Some((AUDIT_MAGIC, _)), Some(audit)) => self.audit = Some(audit),
                 (Some((ROOT_MAGIC, value)), None) => self.root = Some(value == ROOT_SWITCHED),
                 _ => {}
             }
         }
+    }
+
+    /// The audit record's handle, if the kernel gave pid 1 one and nothing
+    /// has taken it yet.
+    pub(crate) fn take_audit(&mut self) -> Option<OwnedHandle<Native>> {
+        self.audit.take()
     }
 
     /// Whether the kernel gave pid 1 devmgr's starter.

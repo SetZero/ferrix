@@ -22,9 +22,9 @@ Coverage evidence recording the checks: none yet.
 | Product functions | Count |
 |---|---:|
 | Named by a low-level requirement | 865 |
-| Accessors, covered by the requirement they serve | 621 |
+| Accessors, covered by the requirement they serve | 624 |
 | Check code in a product file | 28 |
-| Named by none | 832 |
+| Named by none | 837 |
 
 Subsystems whose low-level requirements are complete: `arch::x86_64`, `claim`, `console`, `device`, `early`, `iommu`, `mm`, `object`, `smp`, `trap`, `user`, `vmap`.
 

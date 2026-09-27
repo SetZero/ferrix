@@ -470,6 +470,7 @@ fn answer(call: NativeCall, caller: &dyn Host, a: [u64; 6]) -> Result<usize, Err
         | NativeCall::ProcessGive
         | NativeCall::PortFd => served(call, caller, &a),
         NativeCall::DevmgrStart => crate::devmgr::devmgr_start(caller, &a),
+        NativeCall::AuditRead => audit_read(process, handle(a[0]), a[1], a[2], a[3], a[4]),
         NativeCall::ProcessBootstrap => process_bootstrap(process),
         NativeCall::ProcessStatus => process_status(process, handle(a[0]), a[1]),
         NativeCall::DeviceInfo => device_info(process, handle(a[0]), a[1]),
@@ -1379,6 +1380,93 @@ fn job_get_quota(process: &Process, job: Handle, resource: u64, out: u64) -> Res
     Ok(0)
 }
 
+/// `audit_read`: copy records of an audit ring to the holder of the audit
+/// record's handle (`docs/certification/AUDIT.md` §4). The records are read
+/// under the ring's leaf lock into a buffer of the kernel's, and copied out
+/// after it is let go; the cursor comes in, and goes back out, in the
+/// answer's second word, so it is 64 bits on every architecture. A count
+/// of zero reads nothing and answers the cursor it was given.
+fn audit_read(
+    process: &Process,
+    handle: Handle,
+    which: u64,
+    buffer: u64,
+    count: u64,
+    answer: u64,
+) -> Result<usize, Errno> {
+    let which = audit_ring(process, handle, which)?;
+    let mut words = [0_u8; types::AUDIT_ANSWER_WORDS * 8];
+    uaccess::copy_from_user(process.space(), answer, &mut words).map_err(fault)?;
+    let from = words
+        .get(8..16)
+        .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+        .map_or(0, u64::from_ne_bytes);
+    let count = usize::try_from(count.min(nr::AUDIT_READ_MAX)).unwrap_or(0);
+    let read = if count == 0 {
+        audit::Read {
+            copied: 0,
+            next: from,
+            lost: 0,
+            id: audit::id(),
+        }
+    } else {
+        copy_records(process, which, from, buffer, count)?
+    };
+    let told = [
+        read.copied as u64,
+        read.next,
+        read.lost,
+        read.id as u64,
+        (read.id >> 64) as u64,
+    ];
+    for (chunk, value) in words.chunks_exact_mut(8).zip(told) {
+        chunk.copy_from_slice(&value.to_ne_bytes());
+    }
+    uaccess::copy_to_user(process.space(), answer, &words).map_err(fault)?;
+    Ok(0)
+}
+
+/// The ring `which` names, if `handle` is the audit record's with `READ`.
+fn audit_ring(process: &Process, handle: Handle, which: u64) -> Result<audit::Which, Errno> {
+    process.with_handles(|table| match table.get(handle) {
+        Ok((Object::Audit, rights)) if rights.contains(Rights::READ) => Ok(()),
+        Ok((Object::Audit, _)) => Err(status::ACCESS_DENIED),
+        Ok(_) => Err(status::WRONG_TYPE),
+        Err(_) => Err(status::BAD_HANDLE),
+    })?;
+    match which {
+        types::AUDIT_HIGH => Ok(audit::Which::High),
+        types::AUDIT_REFUSALS => Ok(audit::Which::Refusals),
+        types::AUDIT_BOOT => Ok(audit::Which::Boot),
+        _ => Err(status::INVALID_ARGS),
+    }
+}
+
+/// Read up to `count` records of `which` from `from` into a buffer of the
+/// kernel's, under the ring's lock, and copy them to `buffer` after it.
+fn copy_records(
+    process: &Process,
+    which: audit::Which,
+    from: u64,
+    buffer: u64,
+    count: usize,
+) -> Result<audit::Read, Errno> {
+    let mut records =
+        fallible::try_filled(audit::Record::EMPTY, count).map_err(|_| status::NO_MEMORY)?;
+    let read = audit::read(which, from, &mut records);
+    let mut at = buffer;
+    for record in records.iter().take(read.copied) {
+        uaccess::copy_to_user(process.space(), at, &record.to_bytes()).map_err(fault)?;
+        at = at.wrapping_add(ferrix_audit::RECORD_BYTES as u64);
+    }
+    // Only once every record is out: a copy that faulted gave the reader
+    // none of them, and the power action must still print them as unread.
+    if which == audit::Which::High {
+        audit::read_through(read.next);
+    }
+    Ok(read)
+}
+
 /// The largest ELF image `process_create` reads out of a VMO: sixteen
 /// mebibytes, copied into the kernel's own memory before it is loaded.
 const MAX_IMAGE_BYTES: u64 = 16 << 20;
@@ -2224,7 +2312,8 @@ fn observe(target: &Object, observer: Observer) -> Option<Result<(), PortError>>
         | Object::Interrupt(_)
         | Object::IoMapping(_)
         | Object::Pin(_)
-        | Object::Starter => None,
+        | Object::Starter
+        | Object::Audit => None,
     }
 }
 

@@ -86,6 +86,12 @@ pub(crate) enum Object {
     /// The one there is goes into pid 1's table with `MANAGE` and no other
     /// right: it is neither duplicated nor sent, and goes when pid 1 goes.
     Starter,
+    /// The capability to read the audit record
+    /// (`docs/certification/AUDIT.md` §4): a token with nothing in it, as
+    /// the record is the kernel's one store. Pid 1 is given the one there
+    /// is, with `READ` and no other right, so it is neither duplicated nor
+    /// sent; `audit_read` answers the holder, and nobody else can ask.
+    Audit,
 }
 
 /// A queue nothing is woken on, for objects whose signals never change.
@@ -110,7 +116,8 @@ impl Object {
             | Object::Pin(_)
             | Object::Process(_)
             | Object::Port(_)
-            | Object::Starter => Signals::NONE,
+            | Object::Starter
+            | Object::Audit => Signals::NONE,
         }
     }
 
@@ -131,7 +138,8 @@ impl Object {
             | Object::Device(_)
             | Object::IoMapping(_)
             | Object::Pin(_)
-            | Object::Starter => &QUIET,
+            | Object::Starter
+            | Object::Audit => &QUIET,
         }
     }
 }
@@ -300,7 +308,8 @@ impl Object {
             | Object::IoMapping(_)
             | Object::Pin(_)
             | Object::Port(_)
-            | Object::Starter => true,
+            | Object::Starter
+            | Object::Audit => true,
             Object::Channel(_) | Object::Job(_) | Object::Process(_) => false,
         }
     }

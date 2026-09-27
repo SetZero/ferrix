@@ -22,7 +22,7 @@
 use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::nr;
 use ferrix_native_abi::signals::Signals;
-use ferrix_native_abi::types::ProcessStatus;
+use ferrix_native_abi::types::{self, ProcessStatus};
 
 use crate::call::{Call, Syscall};
 use crate::error::{Error, decode, decode_handle, decode_unit};
@@ -151,6 +151,65 @@ pub fn start_devmgr<S: Syscall>(
         job.syscall(),
         handle,
     )))
+}
+
+/// What one [`audit_read`] answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuditRead {
+    /// Records copied to the front of the buffer, 64 bytes each.
+    pub copied: usize,
+    /// The number to read from next.
+    pub next: u64,
+    /// Records between the number asked for and the first copied that the
+    /// ring no longer held.
+    pub lost: u64,
+    /// The boot's audit id.
+    pub id: u128,
+}
+
+/// `audit_read`: copy records of the audit ring `which`
+/// (`types::AUDIT_HIGH`, `AUDIT_REFUSALS`, `AUDIT_BOOT`) numbered `from` or
+/// later into `buffer`, as many whole 64-byte records as fit, at most
+/// `nr::AUDIT_READ_MAX` (`docs/certification/AUDIT.md` §4).
+///
+/// # Errors
+///
+/// [`Error::AccessDenied`] without `READ`, [`Error::WrongType`] for a
+/// handle that is not the audit record's, [`Error::InvalidArgs`] for a
+/// `which` that names no ring.
+pub fn audit_read<S: Syscall>(
+    sys: S,
+    audit: &OwnedHandle<S>,
+    which: u64,
+    from: u64,
+    buffer: &mut [u8],
+) -> Result<AuditRead, Error> {
+    let count = (buffer.len() / 64).min(nr::AUDIT_READ_MAX as usize);
+    let mut answer = [0_u8; types::AUDIT_ANSWER_WORDS * 8];
+    if let Some(slot) = answer.get_mut(8..16) {
+        slot.copy_from_slice(&from.to_ne_bytes());
+    }
+    decode_unit(
+        Call::new(nr::AUDIT_READ)
+            .value(register(audit.raw()))
+            .value(which as usize)
+            .output(buffer)
+            .value(count)
+            .output(&mut answer)
+            .make(sys),
+    )?;
+    let word = |at: usize| {
+        answer
+            .get(at * 8..at * 8 + 8)
+            .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+            .map_or(0, u64::from_ne_bytes)
+    };
+    Ok(AuditRead {
+        copied: usize::try_from(word(0)).unwrap_or(0),
+        next: word(1),
+        lost: word(2),
+        id: u128::from(word(3)) | (u128::from(word(4)) << 64),
+    })
 }
 
 /// `process_give`: move `bootstrap` into the bootstrap slot of the caller's

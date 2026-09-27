@@ -24,6 +24,7 @@ use std::io::{self, Read as _, Write as _};
 use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
 
+use ferrix_audit::{NO_UID, RECORD_BYTES, Record};
 use ferrix_svc_proto::control::{Answer, Call, Framer, SOCKET, UnitStatus};
 
 /// What went wrong, and the exit status for it.
@@ -46,7 +47,7 @@ impl Failure {
 const USAGE: &str = "usage: svc status [unit] | list [--failed] | start|stop|restart|reload unit... \
 | isolate target | reset-failed [unit] | poweroff | reboot | log unit [-n N] | daemon-reload \
 | enable|disable|mask|unmask unit... | set-property unit Key=value... [--persistent] \
-| scope --unit NAME [--slice SLICE] PID... | top";
+| scope --unit NAME [--slice SLICE] PID... | top | audit";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -191,8 +192,66 @@ fn run(args: &[String]) -> Result<u8, Failure> {
         "set-property" => set_property(rest),
         "scope" => scope(rest),
         "top" if rest.is_empty() => top(),
+        "audit" if rest.is_empty() => audit(),
         _ => Err(Failure::new(2, USAGE)),
     }
+}
+
+/// Where init keeps the audit record, one file a boot named by its id
+/// (`docs/certification/AUDIT.md` §4).
+const AUDIT_DIRECTORY: &str = "/var/log/audit";
+
+/// `svc audit`: the newest boot's audit record, one line a record, in the
+/// order init wrote them.
+fn audit() -> Result<u8, Failure> {
+    let newest = fs::read_dir(AUDIT_DIRECTORY)
+        .map_err(|error| Failure::new(1, format!("{AUDIT_DIRECTORY}: {error}")))?
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".bin"))
+        .max_by_key(|entry| entry.metadata().and_then(|meta| meta.modified()).ok())
+        .ok_or_else(|| Failure::new(1, format!("{AUDIT_DIRECTORY}: no record yet")))?;
+    let bytes = fs::read(newest.path())
+        .map_err(|error| Failure::new(1, format!("{}: {error}", newest.path().display())))?;
+    let mut out = io::stdout().lock();
+    for chunk in bytes.chunks_exact(RECORD_BYTES) {
+        let Ok(chunk) = <&[u8; RECORD_BYTES]>::try_from(chunk) else {
+            continue;
+        };
+        let _ = writeln!(out, "{}", describe(&Record::from_bytes(chunk)));
+    }
+    Ok(0)
+}
+
+/// One record as a line: its ring's number, its event, who, what about,
+/// and the rest.
+fn describe(record: &Record) -> String {
+    let mut line = format!(
+        "#{} {} {}.{:09} pid {} job {}",
+        record.sequence,
+        record.event_name(),
+        record.time / 1_000_000_000,
+        record.time % 1_000_000_000,
+        record.pid,
+        record.job,
+    );
+    if record.uid != NO_UID {
+        line.push_str(&format!(" uid {}", record.uid));
+    }
+    if let Some((id, high, refusals)) = record.start_fields() {
+        line.push_str(&format!(" id {id:032x} rings {high} {refusals}"));
+        return line;
+    }
+    line.push_str(&format!(
+        " outcome {} status {} target {}:{} detail {} {} {}",
+        record.outcome,
+        record.status,
+        record.target_kind,
+        record.target(),
+        record.detail[0],
+        record.detail[1],
+        record.detail[2],
+    ));
+    line
 }
 
 /// `svc status unit`.

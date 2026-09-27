@@ -1,4 +1,6 @@
-use super::{CONFIG, Class, Event, MAX_RING, NO_UID, RECORD_BYTES, Record, START, SUPPRESSED};
+use super::{
+    CONFIG, Class, Event, MAX_RING, NAMED, NO_UID, RECORD_BYTES, Record, START, SUPPRESSED,
+};
 
 /// Ids that exercise every word of the 128 bits.
 const IDS: [u128; 5] = [
@@ -89,4 +91,24 @@ fn a_negative_status_survives_the_bytes() {
     let mut record = Record::EMPTY;
     record.status = -13;
     assert_eq!(Record::from_bytes(&record.to_bytes()).status, -13);
+}
+
+#[test]
+fn every_event_has_one_name_and_an_unknown_one_says_so() {
+    for (at, (event, name)) in NAMED.iter().enumerate() {
+        let clashes = NAMED
+            .iter()
+            .skip(at + 1)
+            .filter(|(other, _)| other == event)
+            .count();
+        assert_eq!(clashes, 0, "{name} is named twice");
+        let mut record = Record::EMPTY;
+        record.class = event.class as u16;
+        record.code = event.code;
+        assert_eq!(record.event_name(), *name);
+    }
+    let mut stranger = Record::EMPTY;
+    stranger.class = Class::Device as u16;
+    stranger.code = 77;
+    assert_eq!(stranger.event_name(), "UNKNOWN");
 }

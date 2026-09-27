@@ -20,6 +20,8 @@ ferrix-svc-proto = { path = "../../../libs/init/svc-proto" }
 # wrappers over them.
 ferrix-native = { path = "../../../libs/proto/native" }
 ferrix-native-abi = { path = "../../../libs/proto/native-abi" }
+# The audit record's layout, for the reader (docs/certification/AUDIT.md §4).
+ferrix-audit = { path = "../../../libs/proto/audit" }
 
 [lints]
 workspace = true

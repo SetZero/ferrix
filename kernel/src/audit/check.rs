@@ -126,7 +126,7 @@ struct Tree {
 
 /// A job's refusal at `now`, charged to its budget.
 fn refuse<const H: usize, const R: usize>(store: &Store<H, R>, now: u64, job: &Job) {
-    store.record_at(
+    let _ = store.record_at(
         now,
         REFUSAL,
         Outcome::Refused,
@@ -147,7 +147,7 @@ fn refuse<const H: usize, const R: usize>(store: &Store<H, R>, now: u64, job: &J
 
 /// A refusal at `now` charged to `budget` directly, for the slots check.
 fn refuse_as(store: &Small, now: u64, budget: u64) {
-    store.record_at(
+    let _ = store.record_at(
         now,
         REFUSAL,
         Outcome::Refused,
@@ -165,7 +165,7 @@ fn refuse_as(store: &Small, now: u64, budget: u64) {
 
 /// A grant at `now`, numbered `n` in its detail.
 fn grant(store: &Small, now: u64, n: u32) {
-    store.record_at(
+    let _ = store.record_at(
         now,
         GRANT,
         Outcome::Done,
@@ -276,7 +276,7 @@ fn pinned() -> Result<(), &'static str> {
     let system = Event::new(Class::System, 7);
     for at in 1..=9_u64 {
         let event = if at == 4 { GRANT } else { system };
-        PINNED.record_at(
+        let _ = PINNED.record_at(
             at,
             event,
             Outcome::Done,
@@ -322,7 +322,7 @@ fn routing() -> Result<(), &'static str> {
         Class::System,
     ];
     for (at, class) in (1_u64..).zip(classes) {
-        ROUTED.record_at(
+        let _ = ROUTED.record_at(
             at,
             Event::new(class, 9),
             Outcome::Done,

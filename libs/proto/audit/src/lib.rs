@@ -108,6 +108,10 @@ pub const DEVMGR_STARTED: Event = Event::new(Class::Granted, 4);
 /// subject: the target is pid 1.
 pub const STARTER_GIVEN: Event = Event::new(Class::Granted, 5);
 
+/// The audit record's handle given to pid 1 on its bootstrap channel, with
+/// the kernel as subject: the target is pid 1.
+pub const READER_GIVEN: Event = Event::new(Class::Granted, 6);
+
 /// A job ended by `job_kill`: the target is the job.
 pub const JOB_KILLED: Event = Event::new(Class::Ended, 1);
 
@@ -181,6 +185,32 @@ pub mod power {
     /// A panic asked for when init exits (`ferrix.onexit=panic`).
     pub const PANIC: u32 = 4;
 }
+
+/// Every event this crate names, with its name.
+pub const NAMED: [(Event, &str); 22] = [
+    (START, "START"),
+    (CONFIG, "CONFIG"),
+    (BOOTED, "BOOTED"),
+    (ROOT_SWITCHED, "ROOT_SWITCHED"),
+    (POWER, "POWER"),
+    (SUPPRESSED, "SUPPRESSED"),
+    (RIGHTS, "RIGHTS"),
+    (WIDEN, "WIDEN"),
+    (LIMIT, "LIMIT"),
+    (PROCESS_MADE, "PROCESS_MADE"),
+    (DELEGATED, "DELEGATED"),
+    (CONTROL, "CONTROL"),
+    (DEVMGR_STARTED, "DEVMGR_STARTED"),
+    (STARTER_GIVEN, "STARTER_GIVEN"),
+    (READER_GIVEN, "READER_GIVEN"),
+    (JOB_KILLED, "JOB_KILLED"),
+    (CGROUP_KILLED, "CGROUP_KILLED"),
+    (OOM_KILLED, "OOM_KILLED"),
+    (QUIESCED, "QUIESCED"),
+    (DMA_FAULT, "DMA_FAULT"),
+    (LIMIT_SET, "LIMIT_SET"),
+    (CGROUP_LIMIT, "CGROUP_LIMIT"),
+];
 
 /// What a record's target names, in its `target_kind`.
 pub mod target {
@@ -345,6 +375,16 @@ impl Record {
         let high = (self.detail[2] >> 16) as usize;
         let refusals = (self.detail[2] & 0xFFFF) as usize;
         Some((id, high, refusals))
+    }
+
+    /// Its event's name, as a reader prints it: the constant's, or
+    /// `UNKNOWN` for a class and code this crate does not know.
+    #[must_use]
+    pub fn event_name(&self) -> &'static str {
+        NAMED
+            .iter()
+            .find(|(event, _)| self.is(*event))
+            .map_or("UNKNOWN", |(_, name)| name)
     }
 
     /// Its bytes as a reader is given them.

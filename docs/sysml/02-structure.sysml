@@ -1244,7 +1244,7 @@ package FerrixStructure {
         #implemented part audit : LibraryCrate {
             attribute :>> path = "libs/proto/audit";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 6;
+            attribute :>> hostTests = 7;
             doc /* The audit record's 64-byte layout, shared by the kernel's
                  * store (kernel/src/audit.rs) and the reader it hands the
                  * records to (docs/certification/AUDIT.md §2): the classes,

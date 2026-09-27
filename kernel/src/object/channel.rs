@@ -527,7 +527,8 @@ fn queued_endpoints(endpoint: &Arc<Endpoint>) -> Option<Vec<Arc<Endpoint>>> {
             // A process handle holds how the process ended, not its table.
             | Object::Process(_)
             | Object::Port(_)
-            | Object::Starter => None,
+            | Object::Starter
+            | Object::Audit => None,
         });
     for queued in carried {
         // Once each, and no more than the walk could use: an inbox can hold

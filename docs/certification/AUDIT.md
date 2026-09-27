@@ -143,17 +143,45 @@ A capability, as the log core's reader and L12's starter are:
 * The kernel gives pid 1 one `Object::Audit` handle on its K2 channel (`FXAU`,
   after the hello), with `READ` and nothing else -- not duplicable, not sent.
   Only the holder can read, which is FAU_SAR.2.
-* `audit_read(audit, ring, buffer, from_sequence)` copies whole records of
-  one ring from the given sequence number, and answers the next number, that
-  ring's lost count since the reader's last call, and the boot's audit id: a
-  random 128-bit number drawn at start-up and recorded in the start-up
-  record, so that records of different boots can never be spliced into one
-  sequence on disk. It never blocks; `object_wait_async` on the handle
-  signals `READABLE` when records are waiting.
-* Init runs a reader as a unit (`audit.service`), handing it the handle over
-  its bootstrap channel, which writes the records to
-  `/var/log/audit/<boot>.bin` on the root volume and to its journal. It is a
-  uid of its own, not root, once AUTH phase 2 has uids for services.
+* `audit_read(audit, which, buffer, count, answer)` copies whole records of
+  one ring -- the high-value ring, the refusals, or the boot's own pinned
+  records -- numbered from a cursor on, at most 64 a call, and answers the
+  next number, the records between the cursor and the first copied that the
+  ring no longer held, and the boot's audit id: a random 128-bit number
+  drawn at start-up and recorded in the start-up record, so that records of
+  different boots can never be spliced into one sequence on disk. The cursor
+  travels in the answer's memory, so it is 64 bits on every architecture. A
+  count of zero copies nothing and leaves the cursor where it was.
+* **It never blocks, and nothing signals it.** A record is made where no
+  port may be woken -- inside the heap, under the ring's leaf lock, in an
+  IOMMU's fault path -- so the reader polls, **once a second**. What a ring
+  overwrote between two polls is never lost silently: it shows in the file
+  as a gap in the numbers and in the reader's lost count.
+* **The reader is init, for now** (the certification review, 2026-09-27).
+  Pid 1 keeps the handle and, once `/` is settled -- the root volume after
+  L12's switch, or at once when the kernel started `devmgr` -- copies every
+  record into `/var/log/audit/<id>.bin`, the id in hex, 64 bytes a record as
+  `libs/proto/audit` lays them out: the boot records first, then the
+  high-value ring passing over the numbers they already wrote, then the
+  refusals. It reads a last time as it goes down -- after the first `sync`
+  and the unmounts, before `/` is made read-only -- so that as little as
+  possible is made after it. The power action's own record, which no
+  reader can read once the machine is off, the kernel says on the console
+  by the number its ring gave it, with how far it saw the reader read the
+  high-value ring -- counted only once a read's records are all copied out,
+  so a read that faulted counts nothing -- and it prints every record past
+  that, one line each (`audit    unread #N ...`), and a run the ring
+  overwrote before anyone read it as one line (`audit    lost #a..#b`): a
+  driver still starting after a `devmgr` restart can make some after the
+  last read, and a boot with no reader keeps only the ring's last, and
+  either way they reach the console's log rather than going without a
+  trace. `test-init` requires init's last read to be where the kernel saw
+  it stop, and every record from there to the power action to be on the
+  console. With authentication's services uids (AUTH phase 2) the reader
+  becomes `audit.service`, a user of its own, and init hands it the handle;
+  the handle stays `READ` alone and untransferable, so the interim widens
+  nothing later.
+* `svc audit` prints the newest boot's file, one decoded record a line.
 * A boot without init has no reader, and the ring keeps the last 4096 events,
   readable from a crash dump.
 

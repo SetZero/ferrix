@@ -301,8 +301,11 @@ fn a_port_descriptor_sits_in_the_port_block() {
 #[test]
 fn the_messages_after_the_hello_read_back() {
     use crate::bootstrap::{
-        DEVMGR_STARTER_MAGIC, ROOT_MAGIC, ROOT_SWITCHED, after_hello, read_after_hello,
+        AUDIT_MAGIC, DEVMGR_STARTER_MAGIC, ROOT_MAGIC, ROOT_SWITCHED, after_hello, read_after_hello,
     };
+    let audit = after_hello(AUDIT_MAGIC, 1);
+    assert_eq!(&audit[..4], b"FXAU");
+    assert_eq!(read_after_hello(&audit), Some((AUDIT_MAGIC, 1)));
     let starter = after_hello(DEVMGR_STARTER_MAGIC, 1);
     assert_eq!(&starter[..4], b"FXDS");
     assert_eq!(read_after_hello(&starter), Some((DEVMGR_STARTER_MAGIC, 1)));

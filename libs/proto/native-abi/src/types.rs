@@ -93,6 +93,22 @@ pub const JOB_CPU_WEIGHT: u64 = 3;
 /// for one.
 pub const UNLIMITED: u64 = u64::MAX;
 
+/// [`crate::nr::NativeCall::AuditRead`]'s `which`: the high-value ring --
+/// grants, ends, device events, changes and the system's records.
+pub const AUDIT_HIGH: u64 = 0;
+
+/// [`crate::nr::NativeCall::AuditRead`]'s `which`: the refusal ring.
+pub const AUDIT_REFUSALS: u64 = 1;
+
+/// [`crate::nr::NativeCall::AuditRead`]'s `which`: the first eight system
+/// records, pinned where nothing else reaches them, numbered as the
+/// high-value ring numbered them.
+pub const AUDIT_BOOT: u64 = 2;
+
+/// The words [`crate::nr::NativeCall::AuditRead`] writes to its answer:
+/// copied, next, lost, and the audit id's low and high halves.
+pub const AUDIT_ANSWER_WORDS: usize = 5;
+
 /// Where one of a device's virtio register blocks lies, as `device_info`
 /// reports it and a driver's START carries it: the page-aligned physical
 /// start of the pages holding it, inside one of the device's apertures, the

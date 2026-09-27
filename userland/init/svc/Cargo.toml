@@ -9,6 +9,8 @@ publish.workspace = true
 
 [dependencies]
 ferrix-svc-proto = { path = "../../../libs/init/svc-proto" }
+# The audit record's layout, for `svc audit`.
+ferrix-audit = { path = "../../../libs/proto/audit" }
 
 [lints]
 workspace = true

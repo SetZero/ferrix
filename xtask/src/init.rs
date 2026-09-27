@@ -663,6 +663,7 @@ fn test_arch(arch: Arch, args: &Args, checker: &Checker) -> Result<()> {
     failures.extend(judge_units(after).err());
     failures.extend(judge_flaky(after).err());
     failures.extend(judge_shutdown(after).err());
+    failures.extend(judge_audit_power(after).err());
     if !failures.is_empty() {
         let mut message = format!("{arch}: init did not do what §15 requires:\n");
         for failure in &failures {
@@ -677,6 +678,12 @@ fn test_arch(arch: Arch, args: &Args, checker: &Checker) -> Result<()> {
         return Err(Error::new(message));
     }
     checker.run(&volume, arch)?;
+    // The boot that skips its self-checks records that it did, which only a
+    // reader outside it can see (AUDIT.md §6): once, on x86-64, since the
+    // record is the same code on every architecture.
+    if arch == Arch::X86_64 {
+        checks_skipped(arch, args, &loader, &kernel, &archive)?;
+    }
     println!(
         "  {arch}: init booted multi-user.target, gave the console a session, spent a failing \
          service's budget, ended a service's grandchild with its cgroup, answered svc, waited for \
@@ -800,10 +807,211 @@ fn after_stage_one(at: &mut Watching<'_>, failures: &mut Vec<String>, sshd: bool
     resources(at, failures)?;
     directory(at, failures)?;
     devmgr_by_init(at, failures)?;
+    audit_read_back(at, failures)?;
     if sshd {
         sshd_activated(at, failures)?;
     }
     power_off(at, failures)
+}
+
+/// `svc audit` and what it prints, one record a line.
+fn audit_lines(at: &mut Watching<'_>) -> Result<Vec<String>> {
+    let before = at.after().len();
+    at.type_in(b"svc audit; echo audit-done\n")?;
+    let deadline = Instant::now() + PATIENCE;
+    let _ = at.read_more(deadline, |lines| {
+        lines
+            .get(before..)
+            .unwrap_or_default()
+            .iter()
+            .any(|line| line.trim() == "audit-done")
+    })?;
+    Ok(at.after().get(before..).unwrap_or_default().to_vec())
+}
+
+/// Whether a line of `svc audit` is a record of `event` saying `with`.
+fn recorded(lines: &[String], event: &str, with: &str) -> bool {
+    let named = format!(" {event} ");
+    lines
+        .iter()
+        .any(|line| line.contains(&named) && line.contains(with))
+}
+
+/// The audit record (`docs/certification/AUDIT.md` §4, slice 3): init keeps
+/// it in `/var/log/audit/<id>.bin` on the volume, and `svc audit` reads it
+/// back: the start-up record with the boot's id, the configuration as this
+/// boot has it (the checks run), and the decisions only a boot with init
+/// makes -- the starter and the reader's handle given to pid 1, devmgr
+/// started by it, and `/` switched with pid 1 moved -- each in the file.
+fn audit_read_back(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
+    let lines = audit_lines(at)?;
+    let id = lines
+        .iter()
+        .find(|line| line.contains(" START "))
+        .and_then(|line| line.split(" id ").nth(1))
+        .and_then(|rest| rest.split_whitespace().next())
+        .map(str::to_owned);
+    let Some(id) = id else {
+        failures.push("svc audit showed no start-up record with the boot's audit id".into());
+        return Ok(());
+    };
+    let file = format!("/var/log/audit/{id}.bin");
+    if !has(&everything(at), &file) {
+        failures.push(format!(
+            "init never said it keeps the audit record in {file}, the start-up record's id"
+        ));
+    }
+    for (event, with, what) in [
+        (
+            "CONFIG",
+            "detail 1 1 0",
+            "the checks' configuration, as run",
+        ),
+        (
+            "STARTER_GIVEN",
+            "target 2:1",
+            "devmgr's starter given to pid 1",
+        ),
+        (
+            "READER_GIVEN",
+            "target 2:1",
+            "the audit record's handle given to pid 1",
+        ),
+        ("DEVMGR_STARTED", "pid 1 ", "devmgr started by pid 1"),
+        (
+            "ROOT_SWITCHED",
+            "detail 1 0 0",
+            "/ switched with pid 1 moved",
+        ),
+    ] {
+        if !recorded(&lines, event, with) {
+            failures.push(format!("the audit record read back has no {event}: {what}"));
+        }
+    }
+    Ok(())
+}
+
+/// The power action is the last record, and nothing made before it is
+/// lost: init reads the audit record a last time as it goes down, and the
+/// kernel, recording the power action, says how far it saw the reader read
+/// and prints every high-value record past that on the console -- those a
+/// driver made after the last read, the power action's own among them, and
+/// as one line a run the ring overwrote. So init's last read must be where
+/// the kernel saw it stop, and every record from there to the power action
+/// must be on the console.
+fn judge_audit_power(after: &[String]) -> std::result::Result<(), String> {
+    const TOLD: &str = "audit    power action 1 recorded as record ";
+    let Some(at) = after.iter().rposition(|line| line.contains(TOLD)) else {
+        return Err("the kernel never said it recorded the power-off".into());
+    };
+    let told = after
+        .get(at)
+        .and_then(|line| line.split(TOLD).nth(1))
+        .unwrap_or_default();
+    let mut numbers = told
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|word| !word.is_empty())
+        .filter_map(|word| word.parse::<u64>().ok());
+    let (Some(record), Some(seen)) = (numbers.next(), numbers.next()) else {
+        return Err(format!(
+            "the power-off's audit line does not parse: `{told}`"
+        ));
+    };
+    let read = after
+        .get(..at)
+        .unwrap_or_default()
+        .iter()
+        .rev()
+        .find_map(|line| line.split("high-value ring next ").nth(1))
+        .and_then(|rest| rest.split(',').next())
+        .and_then(|next| next.trim().parse::<u64>().ok())
+        .ok_or("init never said how far it read the audit record before power-off")?;
+    if read != seen {
+        return Err(format!(
+            "init said it read the audit record to {read}, and the kernel saw it read to {seen}"
+        ));
+    }
+    // Every record from where the reader stopped to the power action is on
+    // the console: printed as unread, or in a run the ring overwrote.
+    let mut shown: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+    for line in after.iter().skip(at + 1) {
+        if let Some(rest) = line.split("audit    unread #").nth(1) {
+            let number = rest
+                .split_whitespace()
+                .next()
+                .and_then(|n| n.parse::<u64>().ok());
+            shown.extend(number);
+        } else if let Some(rest) = line.split("audit    lost #").nth(1) {
+            let mut ends = rest
+                .trim()
+                .split("..#")
+                .filter_map(|n| n.parse::<u64>().ok());
+            if let (Some(first), Some(last)) = (ends.next(), ends.next()) {
+                shown.extend(first..=last);
+            }
+        }
+    }
+    if let Some(missing) = (seen..=record).find(|number| !shown.contains(number)) {
+        return Err(format!(
+            "the power-off was record {record} and the reader read to {seen}, but the kernel \
+             never printed record {missing}"
+        ));
+    }
+    Ok(())
+}
+
+/// A boot with `ferrix.checks=skip` records that its self-checks were
+/// skipped (AUDIT.md §6), which no check inside that boot can see: its own
+/// `svc audit` shows the checks' configuration record saying 0.
+fn checks_skipped(
+    arch: Arch,
+    args: &Args,
+    loader: &Path,
+    kernel: &Path,
+    archive: &[u8],
+) -> Result<()> {
+    let options = format!("{} ferrix.checks=skip\n", command_line().trim_end());
+    let image = fat::write_image_with(arch, loader, kernel, archive, Some(&options))?;
+    let volume = btrfs_disk::blank_copy(VOLUME)?;
+    let mut with_volume = args.clone();
+    with_volume.data_image = Some(volume);
+    with_volume.data_image_kept = true;
+    println!("  {arch}: booting again with ferrix.checks=skip, to read that it was recorded");
+    let mut failures: Vec<String> = Vec::new();
+    let _ = qemu::watch_then(
+        arch,
+        &image,
+        kernel,
+        &with_volume,
+        qemu::UNCHECKED_MARKER,
+        |at| {
+            let deadline = Instant::now() + PATIENCE * 2;
+            let up = at.read_more(deadline, |lines| {
+                has(lines, "multi-user.target: active") && has(lines, BANNER)
+            })?;
+            if !up {
+                failures.push("the unchecked boot never reached a getty".into());
+                return Ok(());
+            }
+            thread::sleep(SETTLE);
+            let lines = audit_lines(at)?;
+            if !recorded(&lines, "CONFIG", "detail 1 0 0") {
+                failures.push(
+                    "a boot with ferrix.checks=skip did not record that its checks were skipped"
+                        .into(),
+                );
+            }
+            at.type_in(b"svc poweroff\n")?;
+            let deadline = Instant::now() + PATIENCE * 4;
+            let _ = at.read_more(deadline, |lines| has(lines, POWER_DOWN))?;
+            Ok(())
+        },
+    )?;
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::new(format!("{arch}: {}", failures.join("; "))))
+    }
 }
 
 /// The directory (L8, stage five): the kernel greeted init on its

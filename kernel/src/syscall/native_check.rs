@@ -23,14 +23,16 @@ use ferrix_native_abi::nr;
 use ferrix_native_abi::rights::{Rights, SAME_RIGHTS};
 use ferrix_native_abi::status;
 use ferrix_native_abi::types::{
-    CHANNEL_MAX_HANDLES, JOB_CPU_WEIGHT, JOB_MEMORY, JOB_OBJECTS, JOB_TASKS, UNLIMITED,
+    self, CHANNEL_MAX_HANDLES, JOB_CPU_WEIGHT, JOB_MEMORY, JOB_OBJECTS, JOB_TASKS, UNLIMITED,
 };
 
 use crate::arch;
 use crate::object::check::{SCRATCH, Side, reg};
 use crate::object::job::{self, Job};
+use crate::object::process::Host as _;
 use crate::object::{HANDLE_LIMIT, Object};
 use crate::syscall::image::{self, Shape};
+use crate::syscall::native;
 
 /// Where each call's user memory is, in the side's scratch region.
 const PAIR: u64 = SCRATCH + 0x100;
@@ -60,6 +62,11 @@ const QUOTA_AT: u64 = SCRATCH + 0x520;
 /// How many handles a message carries into a table with no memory to grow:
 /// more than a table that has held one handle has room for without growing.
 const CARRIED: usize = 8;
+/// `audit_read`'s answer, and the records it copies.
+const AUDIT_ANSWER: u64 = SCRATCH + 0x540;
+const AUDIT_RECORDS: u64 = SCRATCH + 0x1000;
+/// How many records the check asks `audit_read` for.
+const AUDIT_ASKED: u64 = 16;
 
 /// What the checks did, for the boot log.
 #[derive(Debug, Default)]
@@ -103,6 +110,7 @@ fn checks(side: &Side, report: &mut Report) -> Result<(), &'static str> {
     a_bootstrap_without_memory_is_kept(report)?;
     a_delivery_without_memory_is_kept(side, report)?;
     a_write_without_memory_keeps_its_handles(side, report)?;
+    the_audit_record_is_read_by_its_handle_alone(side, report)?;
     Ok(())
 }
 
@@ -885,4 +893,141 @@ fn a_write_without_memory_keeps_its_handles(
     }
     report.refusals += kept;
     Ok(())
+}
+
+/// Stage `audit_read`'s answer with `from` in its second word.
+fn stage_answer(side: &Side, from: u64) -> Result<(), &'static str> {
+    let mut words = [0_u8; types::AUDIT_ANSWER_WORDS * 8];
+    if let Some(slot) = words.get_mut(8..16) {
+        slot.copy_from_slice(&from.to_ne_bytes());
+    }
+    side.put(AUDIT_ANSWER, &words)
+}
+
+/// `audit_read`'s answer: copied, next, lost, and the audit id.
+fn answered(side: &Side) -> Result<(u64, u64, u64, u128), &'static str> {
+    let bytes = side.get(AUDIT_ANSWER, types::AUDIT_ANSWER_WORDS * 8)?;
+    let word = |at: usize| {
+        bytes
+            .get(at * 8..at * 8 + 8)
+            .and_then(|word| <[u8; 8]>::try_from(word).ok())
+            .map_or(0, u64::from_ne_bytes)
+    };
+    Ok((
+        word(0),
+        word(1),
+        word(2),
+        u128::from(word(3)) | (u128::from(word(4)) << 64),
+    ))
+}
+
+/// The audit record's handle (`docs/certification/AUDIT.md` §4), with the
+/// rights pid 1 is given it with: it reads the pinned boot records, the start-up record first with the
+/// id the kernel holds; a count of zero copies nothing and leaves the cursor
+/// where it was; a handle without `READ`, another object's handle and a
+/// ring that does not exist are refused; a read into a buffer nothing maps
+/// is refused and counts nothing as read; and the handle, holding neither
+/// `DUPLICATE` nor `TRANSFER`, can be neither copied nor sent.
+fn the_audit_record_is_read_by_its_handle_alone(
+    side: &Side,
+    report: &mut Report,
+) -> Result<(), &'static str> {
+    let core = side.process.core();
+    let reader = native::insert_new(core, Object::Audit, crate::init::AUDIT_RIGHTS)
+        .ok()
+        .and_then(|value| u32::try_from(value).ok())
+        .map(Handle)
+        .ok_or("could not give the check an audit handle")?;
+    let read = |handle: Handle, which: u64, count: u64| {
+        side.call(
+            nr::AUDIT_READ,
+            &[reg(handle), which, AUDIT_RECORDS, count, AUDIT_ANSWER],
+        )
+    };
+    stage_answer(side, 0)?;
+    if read(reader, types::AUDIT_BOOT, AUDIT_ASKED) != Ok(0) {
+        return Err("audit_read on the audit record's handle was refused");
+    }
+    let (copied, next, lost, id) = answered(side)?;
+    let first = side.get(AUDIT_RECORDS, ferrix_audit::RECORD_BYTES)?;
+    let first = <[u8; ferrix_audit::RECORD_BYTES]>::try_from(first.as_slice())
+        .map(|bytes| ferrix_audit::Record::from_bytes(&bytes))
+        .map_err(|_| "a short read")?;
+    let started = first
+        .start_fields()
+        .is_some_and(|(started, _, _)| started == id);
+    if copied == 0 || next != copied || lost != 0 || id != crate::audit::id() || !started {
+        return Err(
+            "audit_read did not answer the boot records, the start-up record first with the kernel's id",
+        );
+    }
+    // A count of zero: nothing copied, the cursor where it was, the buffer
+    // as it was left.
+    side.put(AUDIT_RECORDS, &[0xA5; ferrix_audit::RECORD_BYTES])?;
+    stage_answer(side, 5)?;
+    if read(reader, types::AUDIT_HIGH, 0) != Ok(0) {
+        return Err("audit_read of no records was refused");
+    }
+    let (copied, next, _, _) = answered(side)?;
+    let untouched = side
+        .get(AUDIT_RECORDS, ferrix_audit::RECORD_BYTES)?
+        .iter()
+        .all(|&byte| byte == 0xA5);
+    if copied != 0 || next != 5 || !untouched {
+        return Err("audit_read of no records copied some, or moved the cursor");
+    }
+    refused(
+        read(reader, 7, 1),
+        status::INVALID_ARGS,
+        "audit_read of a ring that does not exist was answered",
+        report,
+    )?;
+    // A read whose buffer nothing maps is refused, and leaves how far the
+    // reader has read where it was: the records were never handed over.
+    let through = crate::audit::read_through_now();
+    stage_answer(side, 0)?;
+    refused(
+        side.call(
+            nr::AUDIT_READ,
+            &[reg(reader), types::AUDIT_HIGH, UNMAPPED, 1, AUDIT_ANSWER],
+        ),
+        status::FAULT,
+        "audit_read into a buffer nothing maps was answered",
+        report,
+    )?;
+    if crate::audit::read_through_now() != through {
+        return Err("a read that could not copy its records out counted them as read");
+    }
+    let waiter = native::insert_new(core, Object::Audit, Rights::WAIT)
+        .ok()
+        .and_then(|value| u32::try_from(value).ok())
+        .map(Handle)
+        .ok_or("could not give the check a second audit handle")?;
+    refused(
+        read(waiter, types::AUDIT_BOOT, 1),
+        status::ACCESS_DENIED,
+        "audit_read on a handle without READ was answered",
+        report,
+    )?;
+    let (end, _other) = channel(side)?;
+    refused(
+        read(end, types::AUDIT_BOOT, 1),
+        status::WRONG_TYPE,
+        "audit_read on a channel end was answered",
+        report,
+    )?;
+    refused(
+        side.call(nr::HANDLE_DUPLICATE, &[reg(reader), u64::from(SAME_RIGHTS)]),
+        status::ACCESS_DENIED,
+        "the audit record's handle was duplicated",
+        report,
+    )?;
+    put_handles(side, &[reader])?;
+    side.put(BYTES, b"x")?;
+    refused(
+        side.call(nr::CHANNEL_WRITE, &[reg(end), BYTES, 1, HANDLES, 1]),
+        status::ACCESS_DENIED,
+        "the audit record's handle was sent",
+        report,
+    )
 }

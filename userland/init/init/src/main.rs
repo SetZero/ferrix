@@ -26,6 +26,7 @@
 //! looked at.
 
 mod admin;
+mod audit;
 mod cgroup;
 mod control;
 mod directory;
@@ -169,6 +170,9 @@ struct Init {
     /// Under `ferrix.devmgr=init` (§7.3, L12): whether the boot waits for
     /// the kernel to say where `/` is, having started only `devmgr.service`.
     awaiting_root: bool,
+    /// The audit record's reader, once `/` is settled
+    /// (`docs/certification/AUDIT.md` §4).
+    audit: Option<audit::Reader>,
 }
 
 /// The unit that runs `devmgr` when pid 1 starts it (§7.3), and the program
@@ -299,8 +303,9 @@ impl Init {
         } else {
             Event::Boot
         };
-        Ok(Init {
+        let mut init = Init {
             awaiting_root,
+            audit: None,
             directory,
             manager,
             epoll,
@@ -317,7 +322,13 @@ impl Init {
             readiness: Readiness::default(),
             forking: BTreeMap::new(),
             sockets: Sockets::default(),
-        })
+        };
+        // `/` is settled already when the kernel started devmgr itself: the
+        // audit record's reader starts now, and otherwise once it is.
+        if !awaiting_root {
+            init.start_audit();
+        }
+        Ok(init)
     }
 
     /// Step, act and wait, for as long as the machine runs.
@@ -337,7 +348,12 @@ impl Init {
                 .groups
                 .next_try()
                 .map(|at| at.saturating_duration_since(std::time::Instant::now()));
-            let timeout = match manager.into_iter().chain(groups).min() {
+            let audit = self.audit.as_ref().map(|reader| {
+                reader
+                    .next_read()
+                    .saturating_duration_since(std::time::Instant::now())
+            });
+            let timeout = match manager.into_iter().chain(groups).chain(audit).min() {
                 None => -1,
                 Some(wait) => {
                     // Rounded up, so a timer is never looked at early.
@@ -408,6 +424,42 @@ impl Init {
         for (unit, error) in self.groups.retry() {
             let name = self.display(unit);
             say(&format!("{name}: removing its cgroup: {error}"));
+        }
+        if self
+            .audit
+            .as_ref()
+            .is_some_and(|reader| reader.next_read() <= std::time::Instant::now())
+        {
+            self.read_audit();
+        }
+    }
+
+    /// Start reading the audit record into a file on `/`, now that it is
+    /// settled, if the kernel gave pid 1 the handle.
+    fn start_audit(&mut self) {
+        let Some(handle) = self.directory.as_mut().and_then(Directory::take_audit) else {
+            return;
+        };
+        match audit::Reader::open(handle) {
+            Ok(reader) => {
+                say(&reader.said());
+                self.audit = Some(reader);
+            }
+            Err(error) => say(&format!("audit: the record cannot be kept: {error}")),
+        }
+    }
+
+    /// Read the audit record's rings into the file. A reader that fails
+    /// says so and stops, rather than saying it every second.
+    fn read_audit(&mut self) {
+        let Some(reader) = self.audit.as_mut() else {
+            return;
+        };
+        if let Err(error) = reader.read() {
+            say(&format!(
+                "audit: reading the record failed, and stopped: {error}"
+            ));
+            self.audit = None;
         }
     }
 
@@ -592,7 +644,7 @@ impl Init {
                 }
             }
             Action::Reply { client, reply } => self.reply(client, reply),
-            Action::Power(action) => power(action),
+            Action::Power(action) => power(action, self.audit.as_mut()),
         }
     }
 
@@ -891,6 +943,7 @@ impl Init {
         } else {
             say("/ stays in memory");
         }
+        self.start_audit();
         if std::mem::take(&mut self.awaiting_root) {
             self.queue.push_back(Event::Boot);
         }
@@ -1399,29 +1452,21 @@ fn mount_options(options: &str) -> (libc::c_ulong, String) {
     (flags, data.join(","))
 }
 
-/// §8.2's steps 2 and 3: `sync`, `/` and `/data` read-only, the rest
-/// unmounted in reverse order, and `reboot(2)`. A remount the kernel
-/// refuses is said and passed over: `reboot(2)` commits `/` and `/data`
-/// itself (K7).
-fn power(action: PowerAction) -> ! {
+/// §8.2's steps 2 and 3: `sync`, the rest unmounted in reverse order, the
+/// audit record read a last time onto the volume, `sync` again, `/` and
+/// `/data` read-only, and `reboot(2)`. A remount the kernel refuses is said
+/// and passed over: `reboot(2)` commits `/` and `/data` itself (K7).
+///
+/// The audit record's last read is as late as a write to `/` can be, so
+/// that as little as possible is made after it: what is, the kernel prints
+/// on the console with the power action's own record (AUDIT.md §4).
+fn power(action: PowerAction, audit: Option<&mut audit::Reader>) -> ! {
     sys::sync();
     let table = fs::read_to_string("/proc/self/mounts").unwrap_or_default();
     let targets: Vec<&str> = table
         .lines()
         .filter_map(|line| line.split_whitespace().nth(1))
         .collect();
-    for target in ["/", "/data"] {
-        if !targets.contains(&target) {
-            continue;
-        }
-        let Ok(path) = CString::new(target) else {
-            continue;
-        };
-        let flags = libc::MS_REMOUNT | libc::MS_RDONLY;
-        if let Err(error) = sys::mount(c"none", &path, c"none", flags, None) {
-            say(&format!("remounting {target} read-only: {error}"));
-        }
-    }
     let mut kept = Vec::new();
     for target in targets.iter().rev() {
         if matches!(*target, "/" | "/data") {
@@ -1437,7 +1482,25 @@ fn power(action: PowerAction) -> ! {
     if !kept.is_empty() {
         say(&format!("still mounted, and left so: {}", kept.join(" ")));
     }
+    if let Some(reader) = audit {
+        match reader.read() {
+            Ok(()) => say(&reader.said()),
+            Err(error) => say(&format!("audit: the last read failed: {error}")),
+        }
+    }
     sys::sync();
+    for target in ["/", "/data"] {
+        if !targets.contains(&target) {
+            continue;
+        }
+        let Ok(path) = CString::new(target) else {
+            continue;
+        };
+        let flags = libc::MS_REMOUNT | libc::MS_RDONLY;
+        if let Err(error) = sys::mount(c"none", &path, c"none", flags, None) {
+            say(&format!("remounting {target} read-only: {error}"));
+        }
+    }
     let command = match action {
         PowerAction::Poweroff => libc::RB_POWER_OFF,
         PowerAction::Reboot => libc::RB_AUTOBOOT,

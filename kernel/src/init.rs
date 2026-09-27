@@ -73,11 +73,13 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::convert::Infallible;
 use core::fmt;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_bootinfo::{BootView, option_in};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_native_abi::bootstrap::{
-    DEVMGR_STARTER_MAGIC, ROOT_IN_MEMORY, ROOT_MAGIC, ROOT_SWITCHED, after_hello, init_hello,
+    AUDIT_MAGIC, DEVMGR_STARTER_MAGIC, ROOT_IN_MEMORY, ROOT_MAGIC, ROOT_SWITCHED, after_hello,
+    init_hello,
 };
 use ferrix_native_abi::rights::Rights;
 use ferrix_sync::Once;
@@ -234,12 +236,55 @@ fn next_bootstrap() -> Option<Transfer> {
             );
         }
     }
+    give_audit(&kernel_end);
     let last = CHANNEL.lock().replace(kernel_end);
     // Through `dispose`, with the lock let go: what the last program sent the
     // kernel and nobody read may carry handles.
     crate::object::dispose(last.map(Object::Channel));
     Some((Object::Channel(program_end), Rights::CHANNEL))
 }
+
+/// Give the first program -- pid 1 -- the audit record's handle, with `READ`
+/// alone, after the hello (`docs/certification/AUDIT.md` §4): never
+/// duplicated or sent, so it stays in pid 1's table and goes with it. Given
+/// once; a later program of a command list gets none.
+fn give_audit(kernel_end: &Arc<Endpoint>) {
+    if AUDIT_GIVEN.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let written = fallible::try_to_vec(&after_hello(AUDIT_MAGIC, 1))
+        .and_then(|message| Ok((message, fallible::try_with_capacity(1)?)))
+        .map_err(|_| ())
+        .and_then(|(message, mut transfers): (Vec<u8>, Vec<Transfer>)| {
+            let _ = fallible::push_within(&mut transfers, (Object::Audit, AUDIT_RIGHTS));
+            kernel_end
+                .write(message, 1, || Ok::<Vec<Transfer>, Infallible>(transfers))
+                .map_err(|_| ())
+        });
+    if written.is_err() {
+        println!("  init     the audit record's handle could not be written; nothing will read it");
+        return;
+    }
+    crate::audit::record(
+        crate::audit::READER_GIVEN,
+        crate::audit::Outcome::Done,
+        0,
+        crate::audit::Subject::KERNEL,
+        crate::audit::Target {
+            kind: crate::audit::target::PROCESS,
+            id: u64::from(crate::object::process::INIT_PID),
+        },
+        [0; 3],
+    );
+}
+
+/// Whether pid 1 has been given the audit record's handle.
+static AUDIT_GIVEN: AtomicBool = AtomicBool::new(false);
+
+/// The rights pid 1's audit handle carries: `READ`, and neither `DUPLICATE`
+/// nor `TRANSFER`, so it never leaves pid 1's table. The native boot check
+/// makes its handle with these, so a widening here fails it.
+pub(crate) const AUDIT_RIGHTS: Rights = Rights::READ;
 
 /// Tell pid 1 where `/` is, on its bootstrap channel: the root volume, with
 /// pid 1 moved onto it, or still the tmpfs (`ferrix.devmgr=init`, L12). Said

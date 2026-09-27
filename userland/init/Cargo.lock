@@ -12,6 +12,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-audit"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-linux-abi"
 version = "0.1.0"
 
@@ -56,6 +60,7 @@ dependencies = [
 name = "init"
 version = "0.1.0"
 dependencies = [
+ "ferrix-audit",
  "ferrix-native",
  "ferrix-native-abi",
  "ferrix-svc",
@@ -73,5 +78,6 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 name = "svc"
 version = "0.1.0"
 dependencies = [
+ "ferrix-audit",
  "ferrix-svc-proto",
 ]
