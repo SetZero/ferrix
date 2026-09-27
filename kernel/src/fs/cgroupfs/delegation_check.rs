@@ -261,6 +261,8 @@ fn judge_moves(harness: &Harness, who: &Access, process: &Process) -> Checked<u3
 /// A cgroup `rmdir` removed takes neither a process nor a child, through a
 /// directory looked up while it was there: `ENODEV`, as Linux answers once
 /// the cgroup is dead.
+///
+/// Verifies: L.object.69
 fn check_a_removed_cgroup(harness: &mut Harness) -> Checked<()> {
     harness
         .mkdir(b"/check-r")
