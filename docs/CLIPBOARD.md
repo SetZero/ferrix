@@ -145,7 +145,7 @@ Two layers, both little-endian:
 
 ```
 VDIChunkHeader   port: u32, size: u32          the port field; the bytes after
-VDAgentMessage   protocol: u32 = 1, type: u32, opaque: u32, size: u32, data
+VDAgentMessage   protocol: u32 = 1, type: u32, opaque: u64, size: u32, data
 ```
 
 A message is cut into chunks of at most **1024** bytes of payload each, which
@@ -343,10 +343,39 @@ nothing from the kernel and are pure host-tested logic.
 | 3 | the virtio-console device protocol | `libs/drivers/virtio/src/console.rs` | landed |
 | 4 | the console driver library | `libs/drivers/virtio-console` | landed |
 | 5 | the driver and its socket, and `devmgr`'s kind | `native/drivers/vport`, `native/devmgr` | landed |
-| 6 | the agent | `userland/compositor/vdagent` | to do |
+| 6 | the agent | `userland/compositor/vdagent` | landed |
 | 7 | paste and copy in the terminal | `userland/compositor/term` | to do |
 | 8a | `--clipboard`: the device on the bus | `xtask` | landed |
-| 8b | starting the agent, and `test-clipboard` | `xtask` | to do |
+| 8b | starting the agent (landed with 6), and `test-clipboard` (to do) | `xtask` | half |
+
+**Where it stands, 2026-09-27 (ferrix-e4).** The agent landed, and with it
+the clipboard works both ways through QEMU 10.2.1's `qemu-vdagent` and its
+VNC server: a VNC viewer's copy reaches `clip paste` in the guest, and a
+guest `clip copy` reaches the viewer. Talking to QEMU for the first time
+found three things the design had not met:
+
+* **The header is twenty bytes.** `VDAgentMessage`'s `opaque` is 64 bits;
+  `libs/drivers/vdagent` wrote it as 32, so every message either way was
+  misframed ("vdagent_chr_recv_chunk: Oops: 0+24 > 21" on the host). The
+  crate now has a test holding it to `vd_agent.h` byte for byte.
+* **QEMU closes the port on purpose** once the first capabilities have
+  crossed, to reset its serial state, and opens it again only after the
+  guest's end has closed. `libs/drivers/virtio-console` now answers each of
+  the host's `PORT_OPEN` messages with its own of the same value, and the
+  agent takes the port up again when `vport` lets its connection go.
+* **QEMU 10 resets on every capabilities message after the first**, by
+  closing the port again, so the agent says its capabilities once a
+  connection: in answer to the host's, or unprompted after two seconds.
+
+And a viewer sees the guest's clipboard only if it speaks the extended
+clipboard (pseudo-encoding `0xc0a1e5ce`): QEMU's VNC server never sends a
+plain `ServerCutText`. TigerVNC and the other common viewers speak it; a
+bare RFB client, like the one that first reported the clipboard broken,
+does not. `clip --primary paste` with nothing selected waits its 20 seconds
+and says so -- the host offers no primary selection -- which is the wait
+`test-compositor`'s side-by-side `clip copy` and `clip paste` rely on.
+
+Left: `test-clipboard` (8b) and the terminal's paste (7).
 
 Landings 1 to 5 and 8a are on `main`: the guest now has a driver that opens
 the port and offers it at `/tmp/vport`, and what is left is the two programs
