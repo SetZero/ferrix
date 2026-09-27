@@ -8,7 +8,7 @@
   ],
   "arch": "x86_64",
   "profile": "debug",
-  "unreached": 725,
+  "unreached": 724,
   "files": {
     "iommu/smmuv3.rs": {
       "ring": "core",
@@ -250,7 +250,6 @@
         872,
         927,
         1004,
-        1112,
         1170,
         1223,
         1293,
@@ -946,8 +945,8 @@
     "random.rs": {
       "ring": "item",
       "lines": [
-        87,
-        88
+        89,
+        90
       ]
     },
     "arch/x86_64/smp.rs": {

@@ -844,7 +844,7 @@ fn recorded(lines: &[String], event: &str, with: &str) -> bool {
 /// makes -- the starter and the reader's handle given to pid 1, devmgr
 /// started by it, and `/` switched with pid 1 moved -- each in the file.
 ///
-/// Verifies: H.AUD.10
+/// Verifies: H.AUD.10, `L.boot.22`, `L.boot.24`
 fn audit_read_back(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
     let lines = audit_lines(at)?;
     let id = lines
@@ -968,7 +968,7 @@ fn judge_audit_power(after: &[String]) -> std::result::Result<(), String> {
 /// skipped (AUDIT.md §6), which no check inside that boot can see: its own
 /// `svc audit` shows the checks' configuration record saying 0.
 ///
-/// Verifies: H.AUD.12
+/// Verifies: H.AUD.12, `L.boot.2`
 fn checks_skipped(
     arch: Arch,
     args: &Args,

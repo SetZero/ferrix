@@ -982,6 +982,67 @@ package FerrixItemRequirements {
                 or of any image, direct-map or vmap address the serial log printed.";
             attribute :>> parent = "O.ISOLATE";
         }
+        requirement <'H.BOOT.10'> theClockStartsFromFirmware : ItemHighLevel {
+            attribute :>> statement = "The realtime clock programs read shall start
+                from the time firmware gives, or at the epoch where it gives none,
+                and the boot shall say which. It is not the audit record's time
+                stamp, which is the monotonic counter since boot.";
+            attribute :>> criterion = "The clock line names firmware's clock with the
+                seconds it read, or says CLOCK_REALTIME starts at the epoch.";
+            attribute :>> parent = "G.5";
+        }
+        requirement <'H.BOOT.11'> theLoadIsRegistered : ItemHighLevel {
+            attribute :>> statement = "Every interface through which the item reaches
+                the load ring shall be registered before it is used, and a boot with
+                one missing shall stop with an explanation rather than go on.";
+            attribute :>> criterion = "The hooks lines count the flushes, board
+                bindings, init's launcher, devmgr's reader, the boot mode and the
+                native calls answered; a boot missing one stops with the load
+                registration explanation.";
+            attribute :>> parent = "O.FAILSAFE";
+            doc /* ITEM.md's registered-hook rule (F-04, F-07, F-08): the item
+                 * names nothing above it, and learns of it only by what the
+                 * load ring registers at bring-up. */
+        }
+        requirement <'H.BOOT.12'> theRootFromTheInitramfs : ItemHighLevel {
+            attribute :>> statement = "The root filesystem shall be built from the
+                initramfs the loader handed over, or be an empty tmpfs where there
+                is none, and the boot shall say which.";
+            attribute :>> criterion = "The initrd line gives what was unpacked and
+                whether its check ran, or says none was handed over.";
+            attribute :>> parent = "G.5";
+        }
+        requirement <'H.BOOT.13'> pid1IsHandedItsAuthority : ItemHighLevel {
+            attribute :>> statement = "The authority pid 1 alone is given -- its
+                bootstrap channel, devmgr's starter under ferrix.devmgr=init, the
+                audit record's handle, and word of where / is -- shall reach it by
+                handle on that channel, once.";
+            attribute :>> criterion = "Pid 1's channel carries the hello first; the
+                starter and the audit handle are recorded as given to pid 1; the
+                switch of / is recorded with pid 1 moved.";
+            attribute :>> parent = "O.CAPABILITY";
+        }
+        requirement <'H.BOOT.14'> theKernelsRandomness : ItemHighLevel {
+            attribute :>> statement = "The kernel's random generator, which
+                programs draw from (AT_RANDOM, getrandom, their own layout), shall
+                be seeded from firmware, the TRNG, the processor and jitter before
+                any program runs, and two reads of it shall differ.";
+            attribute :>> criterion = "The random line says the generator is seeded
+                and from what; two reads of 64 bytes differ, the first not all
+                zeros.";
+            attribute :>> parent = "O.ISOLATE";
+            doc /* Distinct from H.BOOT.3, the loader's draw for the kernel's own
+                 * layout. */
+        }
+        requirement <'H.BOOT.15'> pid1AsNamed : ItemHighLevel {
+            attribute :>> statement = "The kernel shall start pid 1 from the program
+                ferrix.init names, from a built-in program where none is named or
+                the named one cannot start, and say which.";
+            attribute :>> criterion = "A boot with ferrix.init naming a script starts
+                it under its interpreter; a name the image lacks is said and the
+                built-in program runs.";
+            attribute :>> parent = "G.5";
+        }
     }
 
     package Quotas {

@@ -6,7 +6,7 @@ The statements in the certified item that the measured suite did not reach, on e
 
 | Architecture | Profile | Unreached | Argued | Hardware absent | Needs a test |
 |---|---|---:|---:|---:|---:|
-| x86_64 | debug | 725 | 405 | 226 | **94** |
+| x86_64 | debug | 724 | 404 | 226 | **94** |
 | aarch64 | debug | 726 | 369 | 213 | **144** |
 | armv7a | debug | 1110 | 513 | 434 | **163** |
 
@@ -16,12 +16,12 @@ The statements in the certified item that the measured suite did not reach, on e
 
 ## x86_64
 
-**725** unreached statements, debug profile.
+**724** unreached statements, debug profile.
 
 | Category | Statements | Share |
 |---|---:|---:|
 | Unreachable on the measured architecture | 182 | 25% |
-| Reached only when the kernel is stopping | 141 | 19% |
+| Reached only when the kernel is stopping | 140 | 19% |
 | Reached only when something has already failed | 73 | 10% |
 | Run, and credited to another line | 9 | 1% |
 | Hardware the measured machine does not have | 226 | 31% |
@@ -40,13 +40,13 @@ Justified. These statements belong to another architecture or another board, and
 | 1 | `item` | `init.rs` |
 | 1 | `item` | `power.rs` |
 
-### x86_64: Reached only when the kernel is stopping — 141 statements
+### x86_64: Reached only when the kernel is stopping — 140 statements
 
 Justified. The panic report, its catalogue and the backtrace walker run when the kernel has already decided to stop. Exercising them means crashing deliberately, which only `test-shell`'s `ferrix.onexit=panic` boot does -- and a passing run that reached the rest would be a failing run.
 
 | Statements | Ring | File |
 |---:|---|---|
-| 23 | `item` | `main.rs` |
+| 22 | `item` | `main.rs` |
 | 22 | `core` | `sched/mod.rs` |
 | 18 | `core` | `trap.rs` |
 | 17 | `core` | `mm.rs` |
@@ -161,7 +161,7 @@ Justified, line by line. The statement runs, and a test shows what it does, but 
 | 1 | `core` | `claim.rs` |
 | 1 | `core` | `mm.rs` |
 
-### x86_64: argued line by line — 306 statements
+### x86_64: argued line by line — 305 statements
 
 From `coverage-argued-x86_64.json`. Each row is one argument, for the lines it names and no others; the category is the one it is counted in above.
 
@@ -292,7 +292,6 @@ From `coverage-argued-x86_64.json`. Each row is one argument, for the lines it n
 | `main.rs` | 872 | Reached only when the kernel is stopping | The failure arm in `bring_up_processors`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `STAGE4_SMP` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves. |
 | `main.rs` | 927 | Reached only when the kernel is stopping | The failure arm in `start_scheduler`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `STAGE5_SCHEDULER` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves. |
 | `main.rs` | 1004 | Reached only when the kernel is stopping | The failure arm in `start_scheduler`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `STAGE4_SMP` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves. |
-| `main.rs` | 1112 | Reached only when the kernel is stopping | The failure arm in `report_clock_and_random`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `RANDOM_GENERATOR` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves. |
 | `main.rs` | 1223 | Reached only when the kernel is stopping | The failure arm in `register_load`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `LOAD_REGISTRATION` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves. |
 | `main.rs` | 1293 | Reached only when the kernel is stopping | The failure arm in `start_console_input`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `CONSOLE_INPUT` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves. |
 | `main.rs` | 1300 | Reached only when the kernel is stopping | The failure arm in `start_console_input`: it runs only when the bring-up or self-check it follows has reported a property broken, and it stops the machine with the catalogue's `CONSOLE_INPUT` and FERRIX-PANIC. A passing boot is by definition one that never takes it; making it run means breaking what that step proves. |

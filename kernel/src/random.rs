@@ -37,6 +37,8 @@ use ferrix_crng::{Crng, KEY_BYTES};
 use crate::arch;
 use crate::sync::SpinLock;
 
+pub(crate) mod check;
+
 /// The one generator.
 static RNG: SpinLock<Crng> = SpinLock::new(Crng::new());
 
@@ -128,20 +130,4 @@ pub(crate) fn fill(bytes: &mut [u8]) {
         rng.mix(&arch::counter_now().to_le_bytes());
         rng.fill(piece);
     }
-}
-
-/// The boot check: two reads differ from each other and from zero, and the
-/// generator's state has moved between them.
-pub(crate) fn check() -> Result<(), &'static str> {
-    let mut first = [0_u8; 64];
-    let mut second = [0_u8; 64];
-    fill(&mut first);
-    fill(&mut second);
-    if first == second {
-        return Err("two reads of the random generator were the same");
-    }
-    if first.iter().all(|&byte| byte == 0) {
-        return Err("a read of the random generator was all zeros");
-    }
-    Ok(())
 }

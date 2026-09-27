@@ -705,11 +705,11 @@ pub(crate) static CONSOLE_LOG: Explanation = Explanation {
     see: "kernel/src/console/log_check.rs; kernel/src/console/log.rs; kernel/src/console.rs",
 };
 
-/// For `kmain` in `main.rs`, when `random::check` fails.
+/// For `kmain` in `main.rs`, when `random::check::run` fails.
 pub(crate) static RANDOM_GENERATOR: Explanation = Explanation {
     code: "FX-0306",
     title: "the random number generator repeated itself",
-    meaning: "`random::check` reads the generator twice, after `random::init` seeded it from \
+    meaning: "`random::check::run` reads the generator twice, after `random::init` seeded it from \
               firmware, the CPU and timer jitter, and requires the two reads to differ and \
               neither to be all zeros. `getrandom`, `/dev/urandom` and every program's \
               `AT_RANDOM` read this generator: one that repeats hands every program the same \

@@ -112,10 +112,11 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixMemoryRequirements` | `17-memory-requirements.sysml` | What each unit of the item's memory management does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies), in two id spaces. |
 | `FerrixX8664Requirements` | `18-x86-64-requirements.sysml` | What each unit of kernel/src/arch/x86_64/, kernel/src/trap.rs and kernel/src/syscall/mod.rs's dispatcher does, as `ItemLowLevel` requirements (part 13 defines the format): the descriptor tables and which selectors ring 3 may hold, the context switch and the user state it carries, starting processors, the paranoid entries, the speculation defences, the counter and timer, both ABIs' signal frames, SYSCALL and int $0x80, the exception gates and what a fault becomes, and which calls reach which answer. |
 | `FerrixDeviceRequirements` | `20-device-requirements.sysml` | What each unit of kernel/src/claim.rs and kernel/src/device.rs does, and the quiesce in kernel/src/syscall/native.rs, as `ItemLowLevel` requirements (part 13 defines the format): a device claimed through its core's control channels, the number its node is published under, the apertures and vectors a node hands out and nothing past them, the MSI-X vectors it mints, the bus mastering a quiesce turns off, and the quiesce itself, which waits out every core that serves the device before the next driver is given it. The objects a driver holds for a device -- its mapping, its interrupt, its pins -- are object/'s (part 14); the domain under them is iommu's (part 16). |
+| `FerrixBootRequirements` | `21-boot-requirements.sysml` | What each unit of the kernel's bring-up does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 the lessons they follow): the crate root's own functions -- the entry, the stages kmain runs in order and the end of boot -- and init.rs, power.rs, random.rs and checks.rs. The stage checks main.rs used to hold moved to stages_check.rs (21a), where a tag may go on them; what here also brings something up stays, with a requirement for what it brings up. devmgr.rs is 21c. |
 | `FerrixSmpRequirements` | `22-smp-requirements.sysml` | What each unit of kernel/src/smp.rs does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): finding the processors and giving each a record it finds itself by, starting the secondaries, the inter-processor interrupt, the TLB shootdown -- whole and scoped, and the bound on how long it waits -- grace periods, stopping the other processors for a panic, and the scheduler's kick. The start sequences themselves, the per-processor register and the interrupt controller are each architecture's (kernel/src/arch/\<isa>/smp.rs), and belong to the arch slices; this is the architecture-independent half above them. |
 | `FerrixConsoleRequirements` | `23-console-requirements.sysml` | What each unit of kernel/src/console.rs and kernel/src/console/ does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): the kernel's lines to the port, whole and in order; the way a failure report gets past a lock nobody will release; the recent-output ring a panic screen draws; the transmit ring and the writers who queue into it, wait for room or poll; the receive ring the port's interrupt fills; the kernel log every byte is recorded in, what it promises a reader and what it keeps out; and the boot console drawn on the framebuffer. The ports themselves are each architecture's (kernel/src/arch/\<isa>/console.rs) and belong to the arch slices; the two of their functions that decide \*which\* console the kernel writes to, and whose checks test that, are here too (`Ports`), at the coordinator's asking. |
 
-22 files, 92 packages, 4990 elements, 211 relations. Model digest `6726fcd3c793af0f`.
+23 files, 98 packages, 5195 elements, 212 relations. Model digest `dda036f8f449ab08`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -4307,6 +4308,41 @@ flowchart LR
 | `L.quiesce.3` | `itWaitsOutADeadDriver` | — | — | — |
 | `L.quiesce.4` | `aRestartedManagerQuiesces` | — | — | — |
 | `L.quiesce.5` | `theWaitHasAnEnd` | — | — | — |
+| `L.boot.1` | `theMarkerAfterTheChecks` | — | — | — |
+| `L.boot.2` | `anUncheckedBootSaysSo` | — | — | — |
+| `L.boot.3` | `aFailedHandOffStops` | — | — | — |
+| `L.boot.4` | `memoryFromTheHandOff` | — | — | — |
+| `L.boot.5` | `earlyMemoryFinished` | — | — | — |
+| `L.boot.6` | `theClockStarted` | — | — | — |
+| `L.boot.7` | `processorsBroughtUp` | — | — | — |
+| `L.boot.8` | `schedulerStarted` | — | — | — |
+| `L.boot.9` | `consoleInputInstalled` | — | — | — |
+| `L.boot.10` | `theLoadRegistered` | — | — | — |
+| `L.boot.11` | `theAuditStarted` | — | — | — |
+| `L.boot.12` | `theRootBuilt` | — | — | — |
+| `L.boot.13` | `pciEnumerated` | — | — | — |
+| `L.boot.14` | `devicesPublished` | — | — | — |
+| `L.boot.15` | `theKernelStartsDevmgr` | — | — | — |
+| `L.boot.16` | `theDriverServesItsDisk` | — | — | — |
+| `L.boot.17` | `aVolumeWrittenAndReadBack` | — | — | — |
+| `L.boot.18` | `theNetCoreStarted` | — | — | — |
+| `L.boot.19` | `devmgrLeftToPid1` | — | — | — |
+| `L.boot.20` | `theFirstLauncherStands` | — | — | — |
+| `L.boot.21` | `theHelloFirst` | — | — | — |
+| `L.boot.22` | `pid1GivenItsHandles` | — | — | — |
+| `L.boot.23` | `givenOnce` | — | — | — |
+| `L.boot.24` | `theSwitchRecorded` | — | — | — |
+| `L.boot.25` | `pid1ToldWhereRootIs` | — | — | — |
+| `L.boot.26` | `pid1AsNamed` | — | — | — |
+| `L.boot.27` | `aMissingInitIsSaid` | — | — | — |
+| `L.boot.28` | `theDefaultOrder` | — | — | — |
+| `L.boot.29` | `committedBeforeItStops` | — | — | — |
+| `L.boot.30` | `resetWhenAsked` | — | — | — |
+| `L.boot.31` | `anUnknownOnexitPowersOff` | — | — | — |
+| `L.boot.32` | `theBootModeWord` | — | — | — |
+| `L.boot.33` | `seededBeforePrograms` | — | — | — |
+| `L.boot.34` | `twoReadsDiffer` | — | — | — |
+| `L.boot.35` | `aMisspeltValueRunsEveryCheck` | — | — | — |
 | `L.smp.1` | `impossibleListsAreRefused` | — | — | — |
 | `L.smp.2` | `theBootProcessorIsZero` | — | — | — |
 | `L.smp.3` | `eachProcessorFindsItsOwnRecord` | — | — | — |

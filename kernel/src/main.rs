@@ -1109,7 +1109,7 @@ fn report_clock_and_random(view: &BootView<'_>) {
             seeding.cpu_words
         );
     }
-    if let Err(problem) = random::check() {
+    if let Err(problem) = random::check::run() {
         fatal!(
             catalog::RANDOM_GENERATOR,
             "random generator check failed: {problem}"

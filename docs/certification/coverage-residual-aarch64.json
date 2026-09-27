@@ -929,8 +929,8 @@
     "random.rs": {
       "ring": "item",
       "lines": [
-        87,
-        88
+        89,
+        90
       ]
     },
     "object/interrupt.rs": {

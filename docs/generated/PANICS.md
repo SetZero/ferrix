@@ -551,9 +551,9 @@ See: kernel/src/console/input.rs check; kernel/src/irq.rs register.
 
 ## FX-0306 — the random number generator repeated itself
 
-`random::check` reads the generator twice, after `random::init` seeded it from
-firmware, the CPU and timer jitter, and requires the two reads to differ and
-neither to be all zeros. `getrandom`, `/dev/urandom` and every program's
+`random::check::run` reads the generator twice, after `random::init` seeded it
+from firmware, the CPU and timer jitter, and requires the two reads to differ
+and neither to be all zeros. `getrandom`, `/dev/urandom` and every program's
 `AT_RANDOM` read this generator: one that repeats hands every program the same
 stack canary and every TLS session the same key.
 

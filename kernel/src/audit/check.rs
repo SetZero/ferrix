@@ -544,7 +544,7 @@ fn cost() -> (u64, u64) {
 /// The kernel's store: started, with its id, and the configuration bring-up
 /// read.
 ///
-/// Verifies: H.AUD.7
+/// Verifies: H.AUD.7, L.boot.11
 fn kernel_store(expected: &Expected) -> Result<usize, &'static str> {
     let mut out = vec![Record::EMPTY; BOOT_RECORDS];
     let read = super::read(Which::Boot, 0, &mut out);

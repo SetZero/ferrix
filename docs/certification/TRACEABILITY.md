@@ -14,19 +14,19 @@ Coverage evidence recording the checks: x86-64, AArch64, ARMv7-A.
 
 | Level | Written | Named by a check | Unverified, in the baseline |
 |---|---:|---:|---:|
-| High (`H.*`) | 112 | 60 | 52 |
-| Low (`L.*`) | 553 | 320 | 233 |
+| High (`H.*`) | 118 | 60 | 58 |
+| Low (`L.*`) | 588 | 331 | 257 |
 
-865 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
+925 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
 
 | Product functions | Count |
 |---|---:|
-| Named by a low-level requirement | 865 |
-| Accessors, covered by the requirement they serve | 625 |
+| Named by a low-level requirement | 925 |
+| Accessors, covered by the requirement they serve | 619 |
 | Check code in a product file | 28 |
-| Named by none | 792 |
+| Named by none | 739 |
 
-Subsystems whose low-level requirements are complete: `arch::x86_64`, `claim`, `console`, `device`, `early`, `iommu`, `mm`, `object`, `smp`, `trap`, `user`, `vmap`.
+Subsystems whose low-level requirements are complete: `(root)`, `arch::x86_64`, `checks`, `claim`, `console`, `device`, `early`, `init`, `iommu`, `mm`, `object`, `power`, `random`, `smp`, `trap`, `user`, `vmap`.
 
 ### Check code in product files
 
@@ -80,14 +80,14 @@ Each system-level requirement, and the high-level requirements that name it as t
 | G.1 | `H.SCHED.1`, `H.SCHED.4`, `H.SCHED.5`, `H.SCHED.7`, `H.SCHED.8` |
 | G.3 | `H.TRAP.9` |
 | G.4 | `H.OBJ.13`, `H.TRAP.10` |
-| G.5 | `H.SCHED.9`, `H.TRAP.8`, `H.TRAP.10`, `H.TRAP.14`, `H.TRAP.15` |
+| G.5 | `H.SCHED.9`, `H.TRAP.8`, `H.TRAP.10`, `H.TRAP.14`, `H.TRAP.15`, `H.BOOT.10`, `H.BOOT.12`, `H.BOOT.15` |
 | G.7 | `H.OBJ.11`, `H.OBJ.17` |
 | G.8 | `H.OBJ.12`, `H.QUOTA.6` |
 | O.AUDIT | `H.AUD.1`, `H.AUD.2`, `H.AUD.3`, `H.AUD.4`, `H.AUD.5`, `H.AUD.6`, `H.AUD.7`, `H.AUD.8`, `H.AUD.9`, `H.AUD.10`, `H.AUD.11`, `H.AUD.12`, `H.AUD.13` |
-| O.CAPABILITY | `H.OBJ.1`, `H.OBJ.2`, `H.OBJ.3`, `H.OBJ.4`, `H.OBJ.5`, `H.OBJ.6`, `H.OBJ.7`, `H.OBJ.8`, `H.OBJ.9`, `H.OBJ.11`, `H.OBJ.14`, `H.OBJ.15`, `H.OBJ.16`, `H.OBJ.17`, `H.IRQ.1`, `H.IRQ.2`, `H.DMA.5`, `H.DEV.1` |
+| O.CAPABILITY | `H.OBJ.1`, `H.OBJ.2`, `H.OBJ.3`, `H.OBJ.4`, `H.OBJ.5`, `H.OBJ.6`, `H.OBJ.7`, `H.OBJ.8`, `H.OBJ.9`, `H.OBJ.11`, `H.OBJ.14`, `H.OBJ.15`, `H.OBJ.16`, `H.OBJ.17`, `H.IRQ.1`, `H.IRQ.2`, `H.DMA.5`, `H.DEV.1`, `H.BOOT.13` |
 | O.DMA | `H.DMA.1`, `H.DMA.2`, `H.DMA.6`, `H.DMA.7`, `H.DMA.3`, `H.DMA.8`, `H.DMA.4`, `H.DMA.5`, `H.DEV.2`, `H.DEV.4` |
-| O.FAILSAFE | `H.TRAP.6`, `H.BOOT.1`, `H.BOOT.2`, `H.BOOT.4`, `H.BOOT.5`, `H.BOOT.6`, `H.BOOT.7`, `H.BOOT.8`, `H.FAIL.1`, `H.FAIL.2`, `H.FAIL.3`, `H.FAIL.4` |
-| O.ISOLATE | `H.MEM.1`, `H.MEM.2`, `H.MEM.3`, `H.MEM.7`, `H.MEM.8`, `H.MEM.10`, `H.MEM.12`, `H.MEM.14`, `H.MEM.15`, `H.MEM.16`, `H.MEM.17`, `H.MEM.18`, `H.MEM.19`, `H.OBJ.13`, `H.SCHED.6`, `H.SCHED.7`, `H.SCHED.8`, `H.TRAP.3`, `H.TRAP.4`, `H.TRAP.5`, `H.TRAP.6`, `H.TRAP.7`, `H.TRAP.8`, `H.TRAP.13`, `H.BOOT.3`, `H.BOOT.9` |
+| O.FAILSAFE | `H.TRAP.6`, `H.BOOT.1`, `H.BOOT.2`, `H.BOOT.4`, `H.BOOT.5`, `H.BOOT.6`, `H.BOOT.7`, `H.BOOT.8`, `H.BOOT.11`, `H.FAIL.1`, `H.FAIL.2`, `H.FAIL.3`, `H.FAIL.4` |
+| O.ISOLATE | `H.MEM.1`, `H.MEM.2`, `H.MEM.3`, `H.MEM.7`, `H.MEM.8`, `H.MEM.10`, `H.MEM.12`, `H.MEM.14`, `H.MEM.15`, `H.MEM.16`, `H.MEM.17`, `H.MEM.18`, `H.MEM.19`, `H.OBJ.13`, `H.SCHED.6`, `H.SCHED.7`, `H.SCHED.8`, `H.TRAP.3`, `H.TRAP.4`, `H.TRAP.5`, `H.TRAP.6`, `H.TRAP.7`, `H.TRAP.8`, `H.TRAP.13`, `H.BOOT.3`, `H.BOOT.9`, `H.BOOT.14` |
 | O.QUOTA | `H.MEM.9`, `H.MEM.11`, `H.OBJ.7`, `H.OBJ.8`, `H.OBJ.9`, `H.OBJ.10`, `H.OBJ.12`, `H.OBJ.16`, `H.SCHED.2`, `H.SCHED.3`, `H.SCHED.10`, `H.SCHED.11`, `H.IRQ.2`, `H.IRQ.3`, `H.DMA.4`, `H.QUOTA.1`, `H.QUOTA.2`, `H.QUOTA.3`, `H.QUOTA.4`, `H.QUOTA.5`, `H.QUOTA.6`, `H.QUOTA.7`, `H.QUOTA.8`, `H.QUOTA.9` |
 | O.SCRUB | `H.MEM.6` |
 | O.VALIDATE | `H.TRAP.1`, `H.TRAP.2`, `H.TRAP.3`, `H.TRAP.5`, `H.TRAP.7`, `H.TRAP.11`, `H.TRAP.12`, `H.TRAP.13` |
@@ -237,6 +237,12 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `H.BOOT.7` | When init exits and ferrix.onexit=reset asks for it, the machine shall restart from firmware after the console has drained. | Under ferrix.onexit=reset the kernel says it is resetting and the loader's banner is printed again after it. | O.FAILSAFE | `xtask/src/qemu.rs::reset_problem` | xtask gate | xtask gate | xtask gate |
 | `H.BOOT.8` | The serial console shall carry the kernel's lines out, and a person's typed bytes in to the program reading them, in order and without waiting unboundedly on the port. | test-boot reads every stage's line and FERRIX-BOOT-OK from the serial port, and test-jobs's 18 typed steps each have their answer after them. | O.FAILSAFE | *baselined* | — | — | — |
 | `H.BOOT.9` | The kernel log shall hold neither the KASLR slide nor any kernel virtual address the kernel prints: a panic's slide and backtrace, a fatal trap's registers, stage 2's placement of the image, the direct map and the page array, and the sweeps' failure lines shall go to the port and never into the log. | After a boot, and after a panic with a backtrace, the kernel log read whole holds 0 occurrences of the slide or of any image, direct-map or vmap address the serial log printed. | O.ISOLATE | *baselined* | — | — | — |
+| `H.BOOT.10` | The realtime clock programs read shall start from the time firmware gives, or at the epoch where it gives none, and the boot shall say which. It is not the audit record's time stamp, which is the monotonic counter since boot. | The clock line names firmware's clock with the seconds it read, or says CLOCK_REALTIME starts at the epoch. | G.5 | *baselined* | — | — | — |
+| `H.BOOT.11` | Every interface through which the item reaches the load ring shall be registered before it is used, and a boot with one missing shall stop with an explanation rather than go on. | The hooks lines count the flushes, board bindings, init's launcher, devmgr's reader, the boot mode and the native calls answered; a boot missing one stops with the load registration explanation. | O.FAILSAFE | *baselined* | — | — | — |
+| `H.BOOT.12` | The root filesystem shall be built from the initramfs the loader handed over, or be an empty tmpfs where there is none, and the boot shall say which. | The initrd line gives what was unpacked and whether its check ran, or says none was handed over. | G.5 | *baselined* | — | — | — |
+| `H.BOOT.13` | The authority pid 1 alone is given -- its bootstrap channel, devmgr's starter under ferrix.devmgr=init, the audit record's handle, and word of where / is -- shall reach it by handle on that channel, once. | Pid 1's channel carries the hello first; the starter and the audit handle are recorded as given to pid 1; the switch of / is recorded with pid 1 moved. | O.CAPABILITY | *baselined* | — | — | — |
+| `H.BOOT.14` | The kernel's random generator, which programs draw from (AT_RANDOM, getrandom, their own layout), shall be seeded from firmware, the TRNG, the processor and jitter before any program runs, and two reads of it shall differ. | The random line says the generator is seeded and from what; two reads of 64 bytes differ, the first not all zeros. | O.ISOLATE | *baselined* | — | — | — |
+| `H.BOOT.15` | The kernel shall start pid 1 from the program ferrix.init names, from a built-in program where none is named or the named one cannot start, and say which. | A boot with ferrix.init naming a script starts it under its interpreter; a name the image lacks is said and the built-in program runs. | G.5 | *baselined* | — | — | — |
 
 ### Quotas (`H.QUOTA`)
 
@@ -969,6 +975,66 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `L.quiesce.4` | The kernel shall quiesce every device a dead devmgr's drivers served before a devmgr started again is handed them. | Restarting devmgr.service starts a second devmgr, which is given the devices and starts their drivers. | H.DEV.4 | `syscall::native::quiesce` | `xtask/src/init.rs::devmgr_by_init` | xtask gate | xtask gate | xtask gate |
 | `L.quiesce.5` | A quiesce whose device a core has not let go within its patience shall answer TIMED_OUT, and one whose DMA cannot be turned off BAD_STATE. | A quiesce with a core that never lets go answers TIMED_OUT; one on a function whose configuration space cannot be mapped answers BAD_STATE. | H.DEV.4 | `syscall::native::quiesce_while` | *baselined* | — | — | — |
 
+### Entry
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.boot.1` | When every self-check of stages 1 to 12 has run and passed, the boot shall print FERRIX-BOOT-OK stages 1-12 as its last line before init starts. | test-boot reaches FERRIX-BOOT-OK stages 1-12, with no panic before it, on the architecture it boots. | H.BOOT.2 | `_start`, `kmain`, `say_booted` | `xtask/src/qemu.rs::test_boot_lines` | xtask gate | xtask gate | xtask gate |
+| `L.boot.2` | A boot with ferrix.checks=skip shall print FERRIX-BOOT-UNCHECKED stages 1-12 where the success marker would be. | test-init's boot with ferrix.checks=skip reaches FERRIX-BOOT-UNCHECKED. | H.BOOT.2 | `say_booted`, `checks::run` | `xtask/src/init.rs::checks_skipped` | xtask gate | xtask gate | xtask gate |
+| `L.boot.3` | A stage 1 check of the loader's hand-off, its page tables or the kernel's layout that fails shall stop the boot with the stage 1 explanation before anything uses what it checked. | A boot handed a hand-off, a table or a layout that fails one of stage 1's checks stops at stage 1 with that explanation. | H.BOOT.1 | `self_check`, `report`, `report_layout`, `check_early_mapper`, `framebuffer_bytes` | *baselined* | — | — | — |
+| `L.boot.4` | bring_up_memory shall start the frame allocator and the heap from the memory map the hand-off gave, say what they manage, and stop the boot if either cannot start. | The frames line gives the memory managed and free; a memory map with nothing usable stops the boot. | H.BOOT.1 | `bring_up_memory` | *baselined* | — | — | — |
+| `L.boot.5` | finish_memory shall take down the loader's identity map, then sweep every mapping for W^X, then give early boot's memory back, in that order, and stop the boot if any step fails. | After the identity map is gone the sweep finds no mapping writable and executable, and the memory early boot held is back in the allocator. | H.MEM.4 | `finish_memory` | *baselined* | — | — | — |
+| `L.boot.6` | The boot shall start the realtime clock from firmware's time, or at the epoch where firmware has none, after stage 3's timer check when the checks run, and say which. | The clock line names firmware's clock and its seconds, or says CLOCK_REALTIME starts at the epoch. | H.BOOT.10 | `check_timer_and_start_clocks`, `report_stage3`, `report_clock_and_random`, `report_clocks`, `report_clocks_and_power` | *baselined* | — | — | — |
+| `L.boot.7` | bring_up_processors shall start every processor firmware describes and stop the boot if one does not come online, then say how many are online and what each is exposed to. | The cpus line gives as many online as described; a processor that never comes online stops the boot. | H.BOOT.5 | `bring_up_processors`, `report_processors` | *baselined* | — | — | — |
+| `L.boot.8` | start_scheduler shall start the scheduler on every online processor and stop the boot if it cannot. | Every online processor runs a task after start_scheduler; a scheduler that cannot start stops the boot. | H.SCHED.1 | `start_scheduler` | *baselined* | — | — | — |
+| `L.boot.9` | start_console_input shall install the port's receive interrupt before interrupts are first enabled, so that a byte already waiting reaches the input ring. | A byte the port held before interrupts were enabled is read from the input ring. | H.BOOT.8 | `start_console_input` | *baselined* | — | — | — |
+| `L.boot.10` | register_load shall register every interface the item reaches the load ring through, and stop the boot with the load registration explanation if one is missing or a list is full. | The hooks lines count what was registered; a boot with one registration missing stops with the load registration explanation. | H.BOOT.11 | `register_load` | *baselined* | — | — | — |
+| `L.boot.11` | start_audit shall start the audit record with the boot's audit id and record whether the self-checks run, who starts devmgr, the mitigations and the KASLR state, as bring-up read them. | The kernel's boot records begin with the start-up record of the id reads answer, and hold the 4 configuration records with bring-up's values. | H.AUD.7 | `start_audit` | `kernel/src/audit/check.rs::kernel_store` | reached | reached | reached |
+| `L.boot.12` | check_filesystems shall build the root from the initramfs, stop the boot if it cannot, and say what was unpacked and whether its check ran. | The initrd line gives the directories, files and links unpacked and verified true, or says the root is an empty tmpfs. | H.BOOT.12 | `check_filesystems`, `report_initrd` | *baselined* | — | — | — |
+| `L.boot.13` | check_pci shall enumerate every PCI function the firmware's hosts describe, and stop the boot if enumeration fails. | The pci line counts the functions found under each host, or says no host is described. | H.DMA.1 | `check_pci` | *baselined* | — | — | — |
+| `L.boot.14` | check_devices shall publish a device node for every function found, each holding exactly its apertures and vectors, and stop the boot if publishing fails. | The devices line counts the nodes, apertures and vectors published; a node that would hand out more stops the boot. | H.DMA.5 | `check_devices` | *baselined* | — | — | — |
+| `L.boot.15` | Without ferrix.devmgr=init, check_block_ring shall have the kernel start devmgr with every device, and stop the boot if devmgr cannot start. | The devmgr line counts the devices, drivers started and failed; an image without devmgr says so. | H.BOOT.2 | `check_block_ring`, `check_devmgr` | *baselined* | — | — | — |
+| `L.boot.16` | check_driver shall have the block driver serve the test disk through the block ring with the IOMMU on, and leave it running for what mounts it next. | Sectors read through the registry come back as xtask wrote them; a machine without the disk says so. | H.BOOT.2 | `check_driver` | *baselined* | — | — | — |
+| `L.boot.17` | check_btrfs_write shall mount a blank btrfs volume writable, write it, remount it, and read back what it wrote. | Every byte written is read back after the remount; a machine without the third disk says so. | H.BOOT.2 | `check_btrfs_write` | *baselined* | — | — | — |
+| `L.boot.18` | check_net shall start the net core's task, and stop the boot if it cannot. | The net core's task runs; one that cannot start stops the boot with the net core explanation. | H.BOOT.2 | `check_net` | *baselined* | — | — | — |
+| `L.boot.19` | Under ferrix.devmgr=init, check_block_ring shall start no driver itself, make the drivers' job for pid 1's devmgr, and switch / once devmgr has reported. | The devmgr line says it is left to pid 1, and / switches after devmgr reports. | H.BOOT.13 | `check_block_ring` | *baselined* | — | — | — |
+
+### Init
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.boot.20` | The first launcher registered shall be the one init is started with; a later registration shall change nothing. | A second registration leaves the first launcher in place. | H.BOOT.11 | `init::register_launcher`, `init::has_launcher` | *baselined* | — | — | — |
+| `L.boot.21` | A bootstrap channel shall hold the kernel's hello, and only it, when the program is given its end. | Pid 1's bootstrap channel holds one message, the hello with version 1 and no handles, and its peer is open. | H.BOOT.13 | `init::bootstrap_channel` | `kernel/src/syscall/init_calls_check.rs::check_the_kernel_greets_init` | reached | reached | reached |
+| `L.boot.22` | The first program shall be given devmgr's starter, under ferrix.devmgr=init, and the audit record's handle on its bootstrap channel. | The audit record read back in test-init holds STARTER_GIVEN and READER_GIVEN naming pid 1. | H.BOOT.13 | `init::next_bootstrap`, `init::give_audit` | `xtask/src/init.rs::audit_read_back` | xtask gate | xtask gate | xtask gate |
+| `L.boot.23` | The starter and the audit record's handle shall be given once: a later program of a command list gets neither. | A second program started by the kernel finds neither on its channel. | H.BOOT.13 | `init::next_bootstrap`, `init::give_audit` | *baselined* | — | — | — |
+| `L.boot.24` | notify_root shall record where / is: the root volume with pid 1 moved onto it, or the tmpfs. | The audit record read back in test-init holds ROOT_SWITCHED with pid 1 moved. | H.BOOT.13 | `init::notify_root` | `xtask/src/init.rs::audit_read_back` | xtask gate | xtask gate | xtask gate |
+| `L.boot.25` | notify_root shall tell pid 1 on its bootstrap channel where / is, once. | Pid 1 reads one root message after the hello, with the value the switch reached. | H.BOOT.13 | `init::notify_root` | *baselined* | — | — | — |
+| `L.boot.26` | ferrix.init shall name the file pid 1 is started from, a #! script running under its interpreter. | A boot with ferrix.init naming a #!/bin/sh script runs the script and reports the status it exited with. | H.BOOT.15 | `init::read_option`, `init::run`, `init::run_file`, `init::start`, `init::Failure::fmt` | `xtask/src/init_file.rs::test` | xtask gate | xtask gate | xtask gate |
+| `L.boot.27` | A file ferrix.init names that cannot be started shall be said on one line, and the built-in program shall run instead. | A boot naming a file the image lacks says it could not be started and runs the built-in program. | H.BOOT.15 | `init::run`, `init::run_built_in`, `init::Refusal::fmt` | *baselined* | — | — | — |
+| `L.boot.28` | With nothing named, the kernel shall run the built-in program or commands, then /sbin/init if the image has one, then nothing. | A boot with no ferrix.init runs the built-in program; an image with /sbin/init and nothing built in runs it. | H.BOOT.15 | `init::run_default`, `init::run_built_in`, `init::run_commands`, `init::parse`, `init::Argv::fmt`, `init::no_memory` | *baselined* | — | — | — |
+
+### Power
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.boot.29` | Every flush a filesystem registered shall be committed, in the order registered, before the machine stops, whoever stops it. | A file written to /data and powered off with poweroff -f -n, which does not sync, is read back on the next boot. | H.BOOT.6 | `power::register_flush`, `power::flushes`, `power::sync_disks` | `xtask/src/init_file.rs::test` | xtask gate | xtask gate | xtask gate |
+| `L.boot.30` | With ferrix.onexit=reset the kernel shall say so at boot and reset the machine when init exits. | The power line arms the reset, and the machine resets after init exits. | H.BOOT.7 | `power::init`, `power::finish` | `xtask/src/qemu.rs::reset_problem` | xtask gate | xtask gate | xtask gate |
+| `L.boot.31` | A ferrix.onexit value the kernel does not know shall be said and ignored, and the machine powered off when init exits. | A boot with ferrix.onexit=halt says it is not understood and powers off. | H.BOOT.6 | `power::init`, `power::finish` | *baselined* | — | — | — |
+| `L.boot.32` | A word reboot(2) passes shall go to the boot mode a board registered, and be said as changing nothing where none is. | On the STM32MP157D-DK1, reboot with a word sets the boot mode U-Boot reads; elsewhere the word is said to change nothing. | H.BOOT.7 | `power::register_boot_mode`, `power::has_boot_mode`, `power::request_boot_mode` | *baselined* | — | — | — |
+
+### Random
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.boot.33` | random::init shall seed the generator from firmware's seed, the TRNG, the processor and timer jitter, and say whether it reached full seeding and from what. | The random line says seeded with its bits and their sources, or NOT SEEDED with how far it got. | H.BOOT.14 | `random::init` | *baselined* | — | — | — |
+| `L.boot.34` | Two reads of the generator shall differ, and a read shall not be all zeros. | Two reads of 64 bytes differ, and the first is not all zeros. | H.BOOT.14 | `random::fill` | `kernel/src/random/check.rs::run` | not built | not built | not built |
+
+### Checks
+
+| Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
+|---|---|---|---|---|---|---|---|---|
+| `L.boot.35` | A ferrix.checks value the kernel does not know shall be said, and every self-check shall run. | A boot with ferrix.checks=skipp says the value is not understood before it reaches FERRIX-BOOT-OK. | H.BOOT.2 | `checks::init` | `xtask/src/init_file.rs::test` | xtask gate | xtask gate | xtask gate |
+
 ### BringUp
 
 | Id | Statement | Criterion | Parent | Unit | Verified by | x86-64 | AArch64 | ARMv7-A |
@@ -1118,7 +1184,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `kernel/src/audit/check.rs::budgets` | kernel | H.AUD.4 |
 | `kernel/src/audit/check.rs::crowded` | kernel | H.AUD.6 |
 | `kernel/src/audit/check.rs::fairness` | kernel | H.AUD.5 |
-| `kernel/src/audit/check.rs::kernel_store` | kernel | H.AUD.7 |
+| `kernel/src/audit/check.rs::kernel_store` | kernel | H.AUD.7, L.boot.11 |
 | `kernel/src/audit/check.rs::pinned` | kernel | H.AUD.2 |
 | `kernel/src/audit/check.rs::routing` | kernel | H.AUD.3 |
 | `kernel/src/audit/check.rs::start_and_wrap` | kernel | H.AUD.1 |
@@ -1217,6 +1283,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `kernel/src/object/quota_check.rs::check_the_processor` | kernel | L.object.60 |
 | `kernel/src/object/quota_check.rs::check_the_weight` | kernel | L.object.62 |
 | `kernel/src/object/quota_check.rs::run` | kernel | L.object.53, H.QUOTA.4 |
+| `kernel/src/random/check.rs::run` | kernel | L.boot.34 |
 | `kernel/src/sched/check.rs::many_tasks` | kernel | L.x86_64.17 |
 | `kernel/src/sched/check.rs::sleeping` | kernel | L.x86_64.91 |
 | `kernel/src/service_check.rs::a_claim_is_refused_while_its_driver_lives` | kernel | L.claim.1, L.claim.5 |
@@ -1256,6 +1323,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `kernel/src/syscall/check.rs::check_two_programs_take_turns_on_one_processor` | kernel | L.x86_64.59, L.x86_64.79 |
 | `kernel/src/syscall/init_calls_check.rs::check_an_end_closes_it` | kernel | L.object.90 |
 | `kernel/src/syscall/init_calls_check.rs::check_execve_seals_and_keeps` | kernel | L.object.91 |
+| `kernel/src/syscall/init_calls_check.rs::check_the_kernel_greets_init` | kernel | L.boot.21 |
 | `kernel/src/syscall/init_calls_check.rs::give_and_take` | kernel | L.object.89 |
 | `kernel/src/syscall/init_calls_check.rs::process_statuses` | kernel | L.object.94 |
 | `kernel/src/syscall/native_check.rs::a_clock_asked_for_badly_is_refused` | kernel | L.device.13 |
@@ -1321,15 +1389,15 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `libs/kernel/sched/src/tests.rs::something_waiting_is_decided_on_within_a_slice` | host | L.sched.1 |
 | `libs/kernel/sched/src/tests.rs::yielding_alone_leaves_the_request_as_it_was` | host | L.sched.2 |
 | `libs/proto/audit/src/tests.rs::a_record_is_its_sixty_four_bytes_in_order_little_endian` | host | H.AUD.13 |
-| `xtask/src/init.rs::audit_read_back` | gate | H.AUD.10 |
-| `xtask/src/init.rs::checks_skipped` | gate | H.AUD.12 |
+| `xtask/src/init.rs::audit_read_back` | gate | H.AUD.10, L.boot.22, L.boot.24 |
+| `xtask/src/init.rs::checks_skipped` | gate | H.AUD.12, L.boot.2 |
 | `xtask/src/init.rs::devmgr_by_init` | gate | L.quiesce.4 |
 | `xtask/src/init.rs::judge_audit_power` | gate | H.AUD.11 |
 | `xtask/src/init_file.rs::judge_k7_read` | gate | L.console.14 |
-| `xtask/src/init_file.rs::test` | gate | L.x86_64.98, H.BOOT.6 |
+| `xtask/src/init_file.rs::test` | gate | L.x86_64.98, H.BOOT.6, L.boot.26, L.boot.29, L.boot.35 |
 | `xtask/src/jobs.rs::test_jobs` | gate | L.x86_64.115 |
 | `xtask/src/qemu.rs::entropy_problem` | gate | L.x86_64.113 |
 | `xtask/src/qemu.rs::fault_problem` | gate | L.iommu.7, L.iommu.10, L.iommu.35, L.iommu.36, H.DMA.2 |
 | `xtask/src/qemu.rs::iommu_problem` | gate | L.iommu.2 |
-| `xtask/src/qemu.rs::reset_problem` | gate | L.x86_64.99, H.BOOT.7 |
-| `xtask/src/qemu.rs::test_boot_lines` | gate | L.x86_64.97 |
+| `xtask/src/qemu.rs::reset_problem` | gate | L.x86_64.99, H.BOOT.7, L.boot.30 |
+| `xtask/src/qemu.rs::test_boot_lines` | gate | L.x86_64.97, L.boot.1 |

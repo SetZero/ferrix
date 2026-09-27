@@ -142,6 +142,8 @@ const HELLO_ROOM: u64 = 64;
 
 /// K2: init's bootstrap, given as pid 1 is given it, holds one message, the
 /// kernel's hello, and its peer is open. The version read.
+///
+/// Verifies: L.boot.21
 fn check_the_kernel_greets_init() -> Result<u32, &'static str> {
     let (kernel_end, program_end) =
         init::bootstrap_channel().ok_or("no memory for init's bootstrap channel")?;

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "6726fcd3c793af0f1d9d7373144eef6b63dae7cb07758e32ffaca0cdd72b6110",
+  "digest": "dda036f8f449ab0807df6546470790d18adee147580b2333b5223424c41b4858",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -83,6 +83,10 @@
       "synopsis": "Ferrix — SysML v2 model, part 20: the low-level requirements of a device's claim, its node, and its quiesce.\n\nWhat each unit of kernel/src/claim.rs and kernel/src/device.rs does, and the quiesce in kernel/src/syscall/native.rs, as `ItemLowLevel` requirements (part 13 defines the format): a device claimed through its core's control channels, the number its node is published under, the apertures and vectors a node hands out and nothing past them, the MSI-X vectors it mints, the bus mastering a quiesce turns off, and the quiesce itself, which waits out every core that serves the device before the next driver is given it. The objects a driver holds for a device -- its mapping, its interrupt, its pins -- are object/'s (part 14); the domain under them is iommu's (part 16).\n\nThe format and its rules are the object/ pilot's (W-8 step 3): a requirement names every function that carries its behaviour as its `unit`; one check proves a whole requirement; a statement says no more than its criterion tests; an accessor needs no requirement of its own.\n\nWhat proves what. The claims and numbers are proved by service_check.rs, on claims of its own. A node's rules are proved on every boot, before the nodes are published, by device/check.rs, which `device::publish` runs. The quiesce is proved by block_ring/check.rs, which drives `device_quiesce` through a driver's life and death on the first PCI function, and by xtask's `test-init`, which restarts `devmgr`. What no check proves waits in the baseline as check-writing work.\n\nIds are `L.claim.<n>`, `L.device.<n>` and `L.quiesce.<n>`, numbered through each part; `L.quiesce` names the behaviour, whose units are in syscall/native.rs."
     },
     {
+      "path": "docs/sysml/21-boot-requirements.sysml",
+      "synopsis": "Ferrix — SysML v2 model, part 21: the low-level requirements of the boot.\n\nWhat each unit of the kernel's bring-up does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 the lessons they follow): the crate root's own functions -- the entry, the stages kmain runs in order and the end of boot -- and init.rs, power.rs, random.rs and checks.rs. The stage checks main.rs used to hold moved to stages_check.rs (21a), where a tag may go on them; what here also brings something up stays, with a requirement for what it brings up. devmgr.rs is 21c.\n\nOne requirement per behaviour one check can pass or fail. Where no check proves one yet it waits in the baseline as check-writing work.\n\nIds are `L.boot.<n>`; the package gives the file."
+    },
+    {
       "path": "docs/sysml/22-smp-requirements.sysml",
       "synopsis": "Ferrix — SysML v2 model, part 22: the low-level requirements of smp.\n\nWhat each unit of kernel/src/smp.rs does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): finding the processors and giving each a record it finds itself by, starting the secondaries, the inter-processor interrupt, the TLB shootdown -- whole and scoped, and the bound on how long it waits -- grace periods, stopping the other processors for a panic, and the scheduler's kick. The start sequences themselves, the per-processor register and the interrupt controller are each architecture's (kernel/src/arch/<isa>/smp.rs), and belong to the arch slices; this is the architecture-independent half above them.\n\nThe pilot's rules hold: a requirement names every function that carries its behaviour as its `unit`; one check proves a whole requirement, so a requirement is no broader than one check can prove; a statement says no more than its criterion tests; an accessor needs no requirement of its own; check code living in a product file is listed in scripts/data/traceability-units.json, not required -- here `run_everywhere` and `next_job`, the way stage 4's checks hand work to every processor, which nothing else uses.\n\nWhat proves what. Stage 4's checks in smp/check.rs run on every processor at once: `everywhere` (100 rounds of work, each processor's record against its hardware, the interrupts the secondaries took), `page_sets`, `tables_wait_for_their_shootdown`, `shootdown` (a page moved under every processor 20 times), `grace`, and after the scheduler starts `migrating_shootdown`. The scoped shootdown reaching another processor is proved from user mode by user/rmap_check.rs's protect step. The bound on a wait for a processor that never answers is proved only by the negative control recorded in commit 94dee288, a scratch edit that made one processor stop answering, and the bound on the shootdown turn by nothing at all (commit 237d2426 says why): no boot check makes a processor stuck, because the boot test counts the panic that follows as a failure. They wait in the baseline with the rest of what no check proves; docs/certification/IMPLEMENTATION.md W-8 lists it.\n\nIds are `L.smp.<n>`, numbered through the subsystem; the package gives the part of it. They are never renumbered once a check names them."
     },
@@ -92,8 +96,8 @@
     }
   ],
   "summary": {
-    "packages": 92,
-    "elements": 4990,
+    "packages": 98,
+    "elements": 5195,
     "maturity": {
       "implemented": 273,
       "inProgress": 11,
@@ -101,7 +105,7 @@
       "planned": 37
     },
     "deferred": 20,
-    "relations": 211,
+    "relations": 212,
     "figures": 20,
     "unparsed": 0
   },
@@ -23981,6 +23985,284 @@
                               }
                             }
                           ]
+                        },
+                        {
+                          "name": "theClockStartsFromFirmware",
+                          "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::theClockStartsFromFirmware",
+                          "kind": "requirement",
+                          "shortName": "H.BOOT.10",
+                          "type": "ItemHighLevel",
+                          "source": {
+                            "file": "docs/sysml/13-item-requirements.sysml",
+                            "line": 985
+                          },
+                          "children": [
+                            {
+                              "name": "",
+                              "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::theClockStartsFromFirmware",
+                              "kind": "attribute",
+                              "redefines": "statement",
+                              "value": "\"The realtime clock programs read shall start from the time firmware gives, or at the epoch where it gives none, and the boot shall say which. It is not the audit record's time stamp, which is the monotonic counter since boot.\"",
+                              "source": {
+                                "file": "docs/sysml/13-item-requirements.sysml",
+                                "line": 989
+                              }
+                            },
+                            {
+                              "name": "",
+                              "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::theClockStartsFromFirmware",
+                              "kind": "attribute",
+                              "redefines": "criterion",
+                              "value": "\"The clock line names firmware's clock with the seconds it read, or says CLOCK_REALTIME starts at the epoch.\"",
+                              "source": {
+                                "file": "docs/sysml/13-item-requirements.sysml",
+                                "line": 991
+                              }
+                            },
+                            {
+                              "name": "",
+                              "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::theClockStartsFromFirmware",
+                              "kind": "attribute",
+                              "redefines": "parent",
+                              "value": "\"G.5\"",
+                              "source": {
+                                "file": "docs/sysml/13-item-requirements.sysml",
+                                "line": 992
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "name": "theLoadIsRegistered",
+                          "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::theLoadIsRegistered",
+                          "kind": "requirement",
+                          "shortName": "H.BOOT.11",
+                          "type": "ItemHighLevel",
+                          "doc": "ITEM.md's registered-hook rule (F-04, F-07, F-08): the item names nothing above it, and learns of it only by what the load ring registers at bring-up.",
+                          "source": {
+                            "file": "docs/sysml/13-item-requirements.sysml",
+                            "line": 994
+                          },
+                          "children": [
+                            {
+                              "name": "",
+                              "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::theLoadIsRegistered",
+                              "kind": "attribute",
+                              "redefines": "statement",
+                              "value": "\"Every interface through which the item reaches the load ring shall be registered before it is used, and a boot with one missing shall stop with an explanation rather than go on.\"",
+                              "source": {
+                                "file": "docs/sysml/13-item-requirements.sysml",
+                                "line": 997
+                              }
+                            },
+                            {
+                              "name": "",
+                              "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::theLoadIsRegistered",
+                              "kind": "attribute",
+                              "redefines": "criterion",
+                              "value": "\"The hooks lines count the flushes, board bindings, init's launcher, devmgr's reader, the boot mode and the native calls answered; a boot missing one stops with the load registration explanation.\"",
+                              "source": {
+                                "file": "docs/sysml/13-item-requirements.sysml",
+                                "line": 1001
+                              }
+                            },
+                            {
+                              "name": "",
+                              "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::theLoadIsRegistered",
+                              "kind": "attribute",
+                              "redefines": "parent",
+                              "value": "\"O.FAILSAFE\"",
+                              "source": {
+                                "file": "docs/sysml/13-item-requirements.sysml",
+                                "line": 1002
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "name": "theRootFromTheInitramfs",
+                          "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::theRootFromTheInitramfs",
+                          "kind": "requirement",
+                          "shortName": "H.BOOT.12",
+                          "type": "ItemHighLevel",
+                          "source": {
+                            "file": "docs/sysml/13-item-requirements.sysml",
+                            "line": 1007
+                          },
+                          "children": [
+                            {
+                              "name": "",
+                              "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::theRootFromTheInitramfs",
+                              "kind": "attribute",
+                              "redefines": "statement",
+                              "value": "\"The root filesystem shall be built from the initramfs the loader handed over, or be an empty tmpfs where there is none, and the boot shall say which.\"",
+                              "source": {
+                                "file": "docs/sysml/13-item-requirements.sysml",
+                                "line": 1010
+                              }
+                            },
+                            {
+                              "name": "",
+                              "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::theRootFromTheInitramfs",
+                              "kind": "attribute",
+                              "redefines": "criterion",
+                              "value": "\"The initrd line gives what was unpacked and whether its check ran, or says none was handed over.\"",
+                              "source": {
+                                "file": "docs/sysml/13-item-requirements.sysml",
+                                "line": 1012
+                              }
+                            },
+                            {
+                              "name": "",
+                              "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::theRootFromTheInitramfs",
+                              "kind": "attribute",
+                              "redefines": "parent",
+                              "value": "\"G.5\"",
+                              "source": {
+                                "file": "docs/sysml/13-item-requirements.sysml",
+                                "line": 1013
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "name": "pid1IsHandedItsAuthority",
+                          "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::pid1IsHandedItsAuthority",
+                          "kind": "requirement",
+                          "shortName": "H.BOOT.13",
+                          "type": "ItemHighLevel",
+                          "source": {
+                            "file": "docs/sysml/13-item-requirements.sysml",
+                            "line": 1015
+                          },
+                          "children": [
+                            {
+                              "name": "",
+                              "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::pid1IsHandedItsAuthority",
+                              "kind": "attribute",
+                              "redefines": "statement",
+                              "value": "\"The authority pid 1 alone is given -- its bootstrap channel, devmgr's starter under ferrix.devmgr=init, the audit record's handle, and word of where / is -- shall reach it by handle on that channel, once.\"",
+                              "source": {
+                                "file": "docs/sysml/13-item-requirements.sysml",
+                                "line": 1019
+                              }
+                            },
+                            {
+                              "name": "",
+                              "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::pid1IsHandedItsAuthority",
+                              "kind": "attribute",
+                              "redefines": "criterion",
+                              "value": "\"Pid 1's channel carries the hello first; the starter and the audit handle are recorded as given to pid 1; the switch of / is recorded with pid 1 moved.\"",
+                              "source": {
+                                "file": "docs/sysml/13-item-requirements.sysml",
+                                "line": 1022
+                              }
+                            },
+                            {
+                              "name": "",
+                              "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::pid1IsHandedItsAuthority",
+                              "kind": "attribute",
+                              "redefines": "parent",
+                              "value": "\"O.CAPABILITY\"",
+                              "source": {
+                                "file": "docs/sysml/13-item-requirements.sysml",
+                                "line": 1023
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "name": "theKernelsRandomness",
+                          "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::theKernelsRandomness",
+                          "kind": "requirement",
+                          "shortName": "H.BOOT.14",
+                          "type": "ItemHighLevel",
+                          "doc": "Distinct from H.BOOT.3, the loader's draw for the kernel's own layout.",
+                          "source": {
+                            "file": "docs/sysml/13-item-requirements.sysml",
+                            "line": 1025
+                          },
+                          "children": [
+                            {
+                              "name": "",
+                              "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::theKernelsRandomness",
+                              "kind": "attribute",
+                              "redefines": "statement",
+                              "value": "\"The kernel's random generator, which programs draw from (AT_RANDOM, getrandom, their own layout), shall be seeded from firmware, the TRNG, the processor and jitter before any program runs, and two reads of it shall differ.\"",
+                              "source": {
+                                "file": "docs/sysml/13-item-requirements.sysml",
+                                "line": 1029
+                              }
+                            },
+                            {
+                              "name": "",
+                              "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::theKernelsRandomness",
+                              "kind": "attribute",
+                              "redefines": "criterion",
+                              "value": "\"The random line says the generator is seeded and from what; two reads of 64 bytes differ, the first not all zeros.\"",
+                              "source": {
+                                "file": "docs/sysml/13-item-requirements.sysml",
+                                "line": 1032
+                              }
+                            },
+                            {
+                              "name": "",
+                              "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::theKernelsRandomness",
+                              "kind": "attribute",
+                              "redefines": "parent",
+                              "value": "\"O.ISOLATE\"",
+                              "source": {
+                                "file": "docs/sysml/13-item-requirements.sysml",
+                                "line": 1033
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "name": "pid1AsNamed",
+                          "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::pid1AsNamed",
+                          "kind": "requirement",
+                          "shortName": "H.BOOT.15",
+                          "type": "ItemHighLevel",
+                          "source": {
+                            "file": "docs/sysml/13-item-requirements.sysml",
+                            "line": 1037
+                          },
+                          "children": [
+                            {
+                              "name": "",
+                              "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::pid1AsNamed",
+                              "kind": "attribute",
+                              "redefines": "statement",
+                              "value": "\"The kernel shall start pid 1 from the program ferrix.init names, from a built-in program where none is named or the named one cannot start, and say which.\"",
+                              "source": {
+                                "file": "docs/sysml/13-item-requirements.sysml",
+                                "line": 1040
+                              }
+                            },
+                            {
+                              "name": "",
+                              "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::pid1AsNamed",
+                              "kind": "attribute",
+                              "redefines": "criterion",
+                              "value": "\"A boot with ferrix.init naming a script starts it under its interpreter; a name the image lacks is said and the built-in program runs.\"",
+                              "source": {
+                                "file": "docs/sysml/13-item-requirements.sysml",
+                                "line": 1043
+                              }
+                            },
+                            {
+                              "name": "",
+                              "qualifiedName": "FerrixItemRequirements::Scheduling::Traps::Boot::consoleCarriesTheSession::pid1AsNamed",
+                              "kind": "attribute",
+                              "redefines": "parent",
+                              "value": "\"G.5\"",
+                              "source": {
+                                "file": "docs/sysml/13-item-requirements.sysml",
+                                "line": 1044
+                              }
+                            }
+                          ]
                         }
                       ]
                     },
@@ -23991,7 +24273,7 @@
                       "doc": "What a job, with every job beneath it, may hold at once: O.QUOTA (FRU_RSA.1), against T.EXHAUST.",
                       "source": {
                         "file": "docs/sysml/13-item-requirements.sysml",
-                        "line": 987
+                        "line": 1048
                       },
                       "children": [
                         {
@@ -24002,7 +24284,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 991
+                            "line": 1052
                           },
                           "children": [
                             {
@@ -24013,7 +24295,7 @@
                               "value": "\"Creating a task in a job that, with the jobs beneath it, holds its task limit shall be refused, and no task shall be counted beyond the limit.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 994
+                                "line": 1055
                               }
                             },
                             {
@@ -24024,7 +24306,7 @@
                               "value": "\"A fork loop in a job limited to 8 tasks is refused at the limit, 0 tasks beyond it (the `quota` line).\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 996
+                                "line": 1057
                               }
                             },
                             {
@@ -24035,7 +24317,7 @@
                               "value": "\"O.QUOTA\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 997
+                                "line": 1058
                               }
                             }
                           ]
@@ -24048,7 +24330,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 999
+                            "line": 1060
                           },
                           "children": [
                             {
@@ -24059,7 +24341,7 @@
                               "value": "\"A job's programs shall not hold more memory than the job's limit, counting the frames of their address spaces and their page tables together with every job beneath it; a sibling job shall be unaffected.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1003
+                                "line": 1064
                               }
                             },
                             {
@@ -24070,7 +24352,7 @@
                               "value": "\"Faults in a job limited to 48 pages' worth are refused when the next page would not fit, and the refusal is counted, while a sibling job faults 48 pages in (the `quota` line).\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1007
+                                "line": 1068
                               }
                             },
                             {
@@ -24081,7 +24363,7 @@
                               "value": "\"O.QUOTA\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1008
+                                "line": 1069
                               }
                             }
                           ]
@@ -24094,7 +24376,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1010
+                            "line": 1071
                           },
                           "children": [
                             {
@@ -24105,7 +24387,7 @@
                               "value": "\"Creating a channel or a port in a job at its object limit shall be refused, and no object shall be counted beyond the limit.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1013
+                                "line": 1074
                               }
                             },
                             {
@@ -24116,7 +24398,7 @@
                               "value": "\"Object creation in a job limited to 5 objects is refused at the limit, 0 objects beyond it (the `quota` line).\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1015
+                                "line": 1076
                               }
                             },
                             {
@@ -24127,7 +24409,7 @@
                               "value": "\"O.QUOTA\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1016
+                                "line": 1077
                               }
                             }
                           ]
@@ -24140,7 +24422,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1018
+                            "line": 1079
                           },
                           "children": [
                             {
@@ -24151,7 +24433,7 @@
                               "value": "\"Every charge against a job shall be returned when the resource it paid for is freed, and a job's quota slot shall be given back when the job goes.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1021
+                                "line": 1082
                               }
                             },
                             {
@@ -24162,7 +24444,7 @@
                               "value": "\"After the quota checks every counter of their jobs is back to zero, and as many quota slots are in use as before them (the `quota` line).\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1024
+                                "line": 1085
                               }
                             },
                             {
@@ -24173,7 +24455,7 @@
                               "value": "\"O.QUOTA\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1025
+                                "line": 1086
                               }
                             }
                           ]
@@ -24186,7 +24468,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1027
+                            "line": 1088
                           },
                           "children": [
                             {
@@ -24197,7 +24479,7 @@
                               "value": "\"A limit set on a job shall bound it together with every job beneath it, and a charge refused at any level shall leave no level charged.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1030
+                                "line": 1091
                               }
                             },
                             {
@@ -24208,7 +24490,7 @@
                               "value": "\"A charge that would pass a grandparent's limit is refused although the child's own limit allows it, and each level's counter reads as before the attempt.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1033
+                                "line": 1094
                               }
                             },
                             {
@@ -24219,7 +24501,7 @@
                               "value": "\"O.QUOTA\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1034
+                                "line": 1095
                               }
                             }
                           ]
@@ -24232,7 +24514,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1037
+                            "line": 1098
                           },
                           "children": [
                             {
@@ -24243,7 +24525,7 @@
                               "value": "\"A user page fault refused by a job's memory limit shall end a process in the job whose limit was full or beneath it, never one outside it, count the kill in that job and every job above it, and retry the fault.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1041
+                                "line": 1102
                               }
                             },
                             {
@@ -24254,7 +24536,7 @@
                               "value": "\"A program writing 8 MiB in a job limited to 1 MiB ends by SIGKILL while a larger process in a sibling job lives; exactly 1 process is killed; memory.events counts one OOM kill in the job and its parent and none in the sibling.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1045
+                                "line": 1106
                               }
                             },
                             {
@@ -24265,7 +24547,7 @@
                               "value": "(\"G.8\", \"O.QUOTA\")",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1046
+                                "line": 1107
                               }
                             }
                           ]
@@ -24278,7 +24560,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1049
+                            "line": 1110
                           },
                           "children": [
                             {
@@ -24289,7 +24571,7 @@
                               "value": "\"The kernel heap the Linux personality keeps for a job's programs shall be charged against the job's memory limit, and every byte of it returned when it is freed; a sibling job shall be unaffected.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1053
+                                "line": 1114
                               }
                             },
                             {
@@ -24300,7 +24582,7 @@
                               "value": "\"At a 32 KiB limit each kind of personality object is refused one past its count with ENOMEM (ENOLCK for a lock) while a sibling makes one, and with them gone every byte charged has come back (the `kmem` line).\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1057
+                                "line": 1118
                               }
                             },
                             {
@@ -24311,7 +24593,7 @@
                               "value": "\"O.QUOTA\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1058
+                                "line": 1119
                               }
                             }
                           ]
@@ -24324,7 +24606,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1061
+                            "line": 1122
                           },
                           "children": [
                             {
@@ -24335,7 +24617,7 @@
                               "value": "\"A creation the task limit refuses shall be answered as Linux and the native ABI answer it -- a fork with EAGAIN, a native process_create with SHOULD_WAIT -- and the refused process shall never start.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1065
+                                "line": 1126
                               }
                             },
                             {
@@ -24346,7 +24628,7 @@
                               "value": "\"A fork past pids.max is answered EAGAIN and counted in pids.events; process_create into a job at its task limit is answered SHOULD_WAIT and the job's task count is unchanged.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1068
+                                "line": 1129
                               }
                             },
                             {
@@ -24357,7 +24639,7 @@
                               "value": "\"O.QUOTA\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1069
+                                "line": 1130
                               }
                             }
                           ]
@@ -24370,7 +24652,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1071
+                            "line": 1132
                           },
                           "children": [
                             {
@@ -24381,7 +24663,7 @@
                               "value": "\"Creating a VMO, a job or a pin in a job at its object limit shall be refused with NO_MEMORY, and each shall be counted as an object for as long as it exists.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1074
+                                "line": 1135
                               }
                             },
                             {
@@ -24392,7 +24674,7 @@
                               "value": "\"In a job limited to 5 objects and holding 5, vmo_create, job_create and vmo_pin are each refused NO_MEMORY, 0 objects counted beyond the limit, and the job holds 0 once they are all closed.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1078
+                                "line": 1139
                               }
                             },
                             {
@@ -24403,7 +24685,7 @@
                               "value": "\"O.QUOTA\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1079
+                                "line": 1140
                               }
                             }
                           ]
@@ -24417,7 +24699,7 @@
                       "doc": "The audit record of the TSF's own decisions: O.AUDIT (FAU_GEN.1, FAU_GEN.2, FAU_SAR.1, FAU_SAR.2, FAU_STG.1, FAU_STG.4), for P.ACCOUNTABILITY. docs/certification/AUDIT.md is the design.",
                       "source": {
                         "file": "docs/sysml/13-item-requirements.sysml",
-                        "line": 1083
+                        "line": 1144
                       },
                       "children": [
                         {
@@ -24428,7 +24710,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1088
+                            "line": 1149
                           },
                           "children": [
                             {
@@ -24439,7 +24721,7 @@
                               "value": "\"Each audit ring shall number its records from zero without a gap, the high-value ring's first being the start-up record with the boot's whole audit id and both ring lengths; a second start shall change nothing, and a reader asking for a record the ring overwrote shall be moved on and told exactly how many it lost.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1094
+                                "line": 1155
                               }
                             },
                             {
@@ -24450,7 +24732,7 @@
                               "value": "\"On a store of four high-value records, the start-up record is number 0 and carries the id and lengths; a second start is refused; after six grants a read from 0 copies records 3 to 6 and reports 3 lost; a read of two from 3 resumes at 5.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1099
+                                "line": 1160
                               }
                             },
                             {
@@ -24461,7 +24743,7 @@
                               "value": "\"O.AUDIT\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1100
+                                "line": 1161
                               }
                             }
                           ]
@@ -24474,7 +24756,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1102
+                            "line": 1163
                           },
                           "children": [
                             {
@@ -24485,7 +24767,7 @@
                               "value": "\"The first eight system records shall stay readable, numbered as the high-value ring numbered them, however far that ring has wrapped, and no record after them shall join them.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1106
+                                "line": 1167
                               }
                             },
                             {
@@ -24496,7 +24778,7 @@
                               "value": "\"Nine system records and a grant in a ring of four: the boot records read back 0, 1, 2, 3, 5, 6, 7, 8, the ring reports records lost, and a read of the boot records from 6 copies 3 and resumes at 9.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1110
+                                "line": 1171
                               }
                             },
                             {
@@ -24507,7 +24789,7 @@
                               "value": "\"O.AUDIT\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1111
+                                "line": 1172
                               }
                             }
                           ]
@@ -24520,7 +24802,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1113
+                            "line": 1174
                           },
                           "children": [
                             {
@@ -24531,7 +24813,7 @@
                               "value": "\"A refusal shall be kept in the refusal ring and a record of every other class in the high-value ring, so that no flood of refusals can overwrite a grant.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1116
+                                "line": 1177
                               }
                             },
                             {
@@ -24542,7 +24824,7 @@
                               "value": "\"One record of each of the six classes: the refusal alone in the refusal ring, the other five in the high-value ring in the order made.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1119
+                                "line": 1180
                               }
                             },
                             {
@@ -24553,7 +24835,7 @@
                               "value": "\"O.AUDIT\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1120
+                                "line": 1181
                               }
                             }
                           ]
@@ -24566,7 +24848,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1122
+                            "line": 1183
                           },
                           "children": [
                             {
@@ -24577,7 +24859,7 @@
                               "value": "\"A job shall be charged, for the fairness of the refusal ring, to the budget its maker gave it: its parent's for a job its members could make themselves, its own otherwise.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1125
+                                "line": 1186
                               }
                             },
                             {
@@ -24588,7 +24870,7 @@
                               "value": "\"An anonymous job and one inside it are charged to their unit, a cgroup made in a delegated unit to that unit, and a cgroup root made in a unit to itself: 6 jobs' budgets as given.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1129
+                                "line": 1190
                               }
                             },
                             {
@@ -24599,7 +24881,7 @@
                               "value": "\"O.AUDIT\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1130
+                                "line": 1191
                               }
                             }
                           ]
@@ -24612,7 +24894,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1132
+                            "line": 1193
                           },
                           "children": [
                             {
@@ -24623,7 +24905,7 @@
                               "value": "\"Past 64 refusals charged to one budget in a second, the TSF shall count that budget's further refusals rather than keep them, and write the count once the second has ended, while another budget's refusals and every grant are kept.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1136
+                                "line": 1197
                               }
                             },
                             {
@@ -24634,7 +24916,7 @@
                               "value": "\"104 refusals from a unit's three jobs keep 64 between them and, once the second has ended, one suppressed record counting 40 under the unit; the delegated unit's refusal in the same second is kept, and a grant made before is still read with none lost.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1141
+                                "line": 1202
                               }
                             },
                             {
@@ -24645,7 +24927,7 @@
                               "value": "\"O.AUDIT\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1142
+                                "line": 1203
                               }
                             }
                           ]
@@ -24658,7 +24940,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1144
+                            "line": 1205
                           },
                           "children": [
                             {
@@ -24669,7 +24951,7 @@
                               "value": "\"A budget whose fairness window is taken to make room for another shall have its count written, not dropped.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1147
+                                "line": 1208
                               }
                             },
                             {
@@ -24680,7 +24962,7 @@
                               "value": "\"A budget one over its limit, then 32 more budgets: the first's window is closed and its suppressed record counts 1.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1150
+                                "line": 1211
                               }
                             },
                             {
@@ -24691,7 +24973,7 @@
                               "value": "\"O.AUDIT\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1151
+                                "line": 1212
                               }
                             }
                           ]
@@ -24704,7 +24986,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1153
+                            "line": 1214
                           },
                           "children": [
                             {
@@ -24715,7 +24997,7 @@
                               "value": "\"The boot shall start its audit record with the start-up record of the id reads answer, and record whether its self-checks run, who starts devmgr, the mitigations it was built with and the KASLR state, as bring-up read them.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1157
+                                "line": 1218
                               }
                             },
                             {
@@ -24726,7 +25008,7 @@
                               "value": "\"The kernel's boot records begin with the start-up record, its id the one reads answer and its lengths 512 and 4096, and hold the 4 configuration records with bring-up's values; the boot is not yet recorded as brought up.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1161
+                                "line": 1222
                               }
                             },
                             {
@@ -24737,7 +25019,7 @@
                               "value": "\"O.AUDIT\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1162
+                                "line": 1223
                               }
                             }
                           ]
@@ -24750,7 +25032,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1164
+                            "line": 1225
                           },
                           "children": [
                             {
@@ -24761,7 +25043,7 @@
                               "value": "\"Each decision the TSF makes at a recording site -- a call its rights refused, a widening refused, a limit's refusal, a process made, a job given for a cgroup, a control channel given, a job killed, a cgroup killed, an OOM kill, a device quiesced, a limit set by handle or by cgroup file, a DMA fault -- shall be recorded with its outcome and the subject that made it, the kernel for the decisions it makes alone.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1171
+                                "line": 1232
                               }
                             },
                             {
@@ -24772,7 +25054,7 @@
                               "value": "\"At the end of a boot with checks, the record holds each of the 12 events the boot's checks provoke, and DMA_FAULT where an IOMMU translates, with the outcome of its class and its subject; none of the OOM kill, the quiesce and the fault names a process; the boot is recorded as brought up.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1176
+                                "line": 1237
                               }
                             },
                             {
@@ -24783,7 +25065,7 @@
                               "value": "\"O.AUDIT\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1177
+                                "line": 1238
                               }
                             }
                           ]
@@ -24796,7 +25078,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1179
+                            "line": 1240
                           },
                           "children": [
                             {
@@ -24807,7 +25089,7 @@
                               "value": "\"The audit record shall be read only through the audit handle with READ, which can be neither duplicated nor sent; a read shall copy whole records from a cursor, and a read that copies none or cannot copy them out shall leave the cursor, the buffer and the reader's position where they were.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1184
+                                "line": 1245
                               }
                             },
                             {
@@ -24818,7 +25100,7 @@
                               "value": "\"A handle with pid 1's rights reads the boot records, the start-up record first with the kernel's id; a count of 0 copies nothing and moves nothing; a read into unmapped memory is FAULT and counts nothing read; a handle without READ, a channel end and a ring that does not exist are refused; the handle is not duplicated and not sent.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1190
+                                "line": 1251
                               }
                             },
                             {
@@ -24829,7 +25111,7 @@
                               "value": "\"O.AUDIT\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1191
+                                "line": 1252
                               }
                             }
                           ]
@@ -24842,7 +25124,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1193
+                            "line": 1254
                           },
                           "children": [
                             {
@@ -24853,7 +25135,7 @@
                               "value": "\"A boot with init shall keep its audit record on the root volume in a file named by the boot's audit id, holding the start-up record, the configuration, and the decisions only a boot with init makes.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1197
+                                "line": 1258
                               }
                             },
                             {
@@ -24864,7 +25146,7 @@
                               "value": "\"svc audit reads back the start-up record with the id init named the file by, the checks' configuration as run, STARTER_GIVEN, READER_GIVEN, DEVMGR_STARTED by pid 1 and ROOT_SWITCHED with pid 1 moved.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1201
+                                "line": 1262
                               }
                             },
                             {
@@ -24875,7 +25157,7 @@
                               "value": "\"O.AUDIT\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1202
+                                "line": 1263
                               }
                             }
                           ]
@@ -24888,7 +25170,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1204
+                            "line": 1265
                           },
                           "children": [
                             {
@@ -24899,7 +25181,7 @@
                               "value": "\"Every record up to a power action shall be in the reader's file or on the console: the kernel shall record the power action last, say how far the reader read, and print every record past that, and a run the ring overwrote as one line.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1208
+                                "line": 1269
                               }
                             },
                             {
@@ -24910,7 +25192,7 @@
                               "value": "\"At test-init's power-off, init's last read is where the kernel saw it stop, and every number from there to the power action is printed as unread or in a lost run.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1211
+                                "line": 1272
                               }
                             },
                             {
@@ -24921,7 +25203,7 @@
                               "value": "\"O.AUDIT\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1212
+                                "line": 1273
                               }
                             }
                           ]
@@ -24934,7 +25216,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1214
+                            "line": 1275
                           },
                           "children": [
                             {
@@ -24945,7 +25227,7 @@
                               "value": "\"A boot that skips its self-checks shall record that it did, where a reader outside it can see.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1216
+                                "line": 1277
                               }
                             },
                             {
@@ -24956,7 +25238,7 @@
                               "value": "\"A boot with ferrix.checks=skip, read back through svc audit, holds the checks' configuration record with value 0.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1219
+                                "line": 1280
                               }
                             },
                             {
@@ -24967,7 +25249,7 @@
                               "value": "\"O.AUDIT\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1220
+                                "line": 1281
                               }
                             }
                           ]
@@ -24980,7 +25262,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1222
+                            "line": 1283
                           },
                           "children": [
                             {
@@ -24991,7 +25273,7 @@
                               "value": "\"An audit record shall be 64 bytes, each field little-endian at a fixed offset, so that a reader decodes what the kernel wrote.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1225
+                                "line": 1286
                               }
                             },
                             {
@@ -25002,7 +25284,7 @@
                               "value": "\"A record of distinct bytes encodes to them in order at the offsets the layout names and decodes back equal.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1227
+                                "line": 1288
                               }
                             },
                             {
@@ -25013,7 +25295,7 @@
                               "value": "\"O.AUDIT\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1228
+                                "line": 1289
                               }
                             }
                           ]
@@ -25027,7 +25309,7 @@
                       "doc": "The safe state and what brings the kernel to it: O.FAILSAFE and ASR-6 (FPT_FLS.1). SAFETY-MANUAL.md §3 defines the safe state.",
                       "source": {
                         "file": "docs/sysml/13-item-requirements.sysml",
-                        "line": 1232
+                        "line": 1293
                       },
                       "children": [
                         {
@@ -25038,7 +25320,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1236
+                            "line": 1297
                           },
                           "children": [
                             {
@@ -25049,7 +25331,7 @@
                               "value": "\"On a failed internal consistency check the kernel shall stop every other processor, print a diagnostic naming the failure and its catalogued explanation, and halt without returning to user mode.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1240
+                                "line": 1301
                               }
                             },
                             {
@@ -25060,7 +25342,7 @@
                               "value": "\"A boot told to panic at its end (`ferrix.onexit=panic`) ends with the FX-1501 report and no program output after it; every panic site in the item has a catalogue entry (`check-panic-audit.py`).\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1244
+                                "line": 1305
                               }
                             },
                             {
@@ -25071,7 +25353,7 @@
                               "value": "(\"O.FAILSAFE\", \"ASR-6\")",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1245
+                                "line": 1306
                               }
                             }
                           ]
@@ -25084,7 +25366,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1247
+                            "line": 1308
                           },
                           "children": [
                             {
@@ -25095,7 +25377,7 @@
                               "value": "\"The allocator every kernel stack comes from shall give each an unmapped guard page directly below and above it.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1250
+                                "line": 1311
                               }
                             },
                             {
@@ -25106,7 +25388,7 @@
                               "value": "\"A kernel stack allocated, written at its first and last word and freed has the page below and the page above it untranslated, and gives back every frame it took.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1253
+                                "line": 1314
                               }
                             },
                             {
@@ -25117,7 +25399,7 @@
                               "value": "(\"O.FAILSAFE\", \"ASR-6\")",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1254
+                                "line": 1315
                               }
                             }
                           ]
@@ -25130,7 +25412,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1257
+                            "line": 1318
                           },
                           "children": [
                             {
@@ -25141,7 +25423,7 @@
                               "value": "\"A kernel stack overflow shall end in the halt and diagnostic of the safe state, never in a write below the stack.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1259
+                                "line": 1320
                               }
                             },
                             {
@@ -25152,7 +25434,7 @@
                               "value": "\"A kernel thread that recurses past its stack ends the boot in a report naming the fault -- on x86-64 a double fault taken on its own stack (FX-9004) -- on each architecture, 3 of 3.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1262
+                                "line": 1323
                               }
                             },
                             {
@@ -25163,7 +25445,7 @@
                               "value": "(\"O.FAILSAFE\", \"ASR-6\")",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1263
+                                "line": 1324
                               }
                             }
                           ]
@@ -25176,7 +25458,7 @@
                           "type": "ItemHighLevel",
                           "source": {
                             "file": "docs/sysml/13-item-requirements.sysml",
-                            "line": 1267
+                            "line": 1328
                           },
                           "children": [
                             {
@@ -25187,7 +25469,7 @@
                               "value": "\"Once a failure report has begun, a line the kernel writes shall reach the console port after a bounded wait even when the port's lock is held and will never be released.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1270
+                                "line": 1331
                               }
                             },
                             {
@@ -25198,7 +25480,7 @@
                               "value": "\"A report begun while another context holds the port's lock for good reaches the port whole, after at most 10,000,000 attempts at the lock, on each architecture, 3 of 3.\"",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1273
+                                "line": 1334
                               }
                             },
                             {
@@ -25209,7 +25491,7 @@
                               "value": "(\"O.FAILSAFE\", \"ASR-6\")",
                               "source": {
                                 "file": "docs/sysml/13-item-requirements.sysml",
-                                "line": 1274
+                                "line": 1335
                               }
                             }
                           ]
@@ -53156,6 +53438,2072 @@
       ]
     },
     {
+      "name": "FerrixBootRequirements",
+      "qualifiedName": "FerrixBootRequirements",
+      "kind": "package",
+      "source": {
+        "file": "docs/sysml/21-boot-requirements.sysml",
+        "line": 17
+      },
+      "children": [
+        {
+          "name": "Entry",
+          "qualifiedName": "FerrixBootRequirements::Entry",
+          "kind": "package",
+          "doc": "kernel/src/main.rs: the entry, kmain's stages, and the end of boot.",
+          "source": {
+            "file": "docs/sysml/21-boot-requirements.sysml",
+            "line": 20
+          },
+          "children": [
+            {
+              "name": "theMarkerAfterTheChecks",
+              "qualifiedName": "FerrixBootRequirements::Entry::theMarkerAfterTheChecks",
+              "kind": "requirement",
+              "shortName": "L.boot.1",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 24
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theMarkerAfterTheChecks",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"When every self-check of stages 1 to 12 has run and passed, the boot shall print FERRIX-BOOT-OK stages 1-12 as its last line before init starts.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 27
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theMarkerAfterTheChecks",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"test-boot reaches FERRIX-BOOT-OK stages 1-12, with no panic before it, on the architecture it boots.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 29
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theMarkerAfterTheChecks",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.2\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 30
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theMarkerAfterTheChecks",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"_start\", \"kmain\", \"say_booted\")",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 31
+                  }
+                }
+              ]
+            },
+            {
+              "name": "anUncheckedBootSaysSo",
+              "qualifiedName": "FerrixBootRequirements::Entry::anUncheckedBootSaysSo",
+              "kind": "requirement",
+              "shortName": "L.boot.2",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 33
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::anUncheckedBootSaysSo",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A boot with ferrix.checks=skip shall print FERRIX-BOOT-UNCHECKED stages 1-12 where the success marker would be.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 36
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::anUncheckedBootSaysSo",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"test-init's boot with ferrix.checks=skip reaches FERRIX-BOOT-UNCHECKED.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 38
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::anUncheckedBootSaysSo",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.2\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 39
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::anUncheckedBootSaysSo",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"say_booted\", \"checks::run\")",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 40
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aFailedHandOffStops",
+              "qualifiedName": "FerrixBootRequirements::Entry::aFailedHandOffStops",
+              "kind": "requirement",
+              "shortName": "L.boot.3",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 42
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::aFailedHandOffStops",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A stage 1 check of the loader's hand-off, its page tables or the kernel's layout that fails shall stop the boot with the stage 1 explanation before anything uses what it checked.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 46
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::aFailedHandOffStops",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A boot handed a hand-off, a table or a layout that fails one of stage 1's checks stops at stage 1 with that explanation.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 49
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::aFailedHandOffStops",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.1\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 50
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::aFailedHandOffStops",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"self_check\", \"report\", \"report_layout\", \"check_early_mapper\", \"framebuffer_bytes\")",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 52
+                  }
+                }
+              ]
+            },
+            {
+              "name": "memoryFromTheHandOff",
+              "qualifiedName": "FerrixBootRequirements::Entry::memoryFromTheHandOff",
+              "kind": "requirement",
+              "shortName": "L.boot.4",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 54
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::memoryFromTheHandOff",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"bring_up_memory shall start the frame allocator and the heap from the memory map the hand-off gave, say what they manage, and stop the boot if either cannot start.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 57
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::memoryFromTheHandOff",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The frames line gives the memory managed and free; a memory map with nothing usable stops the boot.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 59
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::memoryFromTheHandOff",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.1\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 60
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::memoryFromTheHandOff",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"bring_up_memory\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 61
+                  }
+                }
+              ]
+            },
+            {
+              "name": "earlyMemoryFinished",
+              "qualifiedName": "FerrixBootRequirements::Entry::earlyMemoryFinished",
+              "kind": "requirement",
+              "shortName": "L.boot.5",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 63
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::earlyMemoryFinished",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"finish_memory shall take down the loader's identity map, then sweep every mapping for W^X, then give early boot's memory back, in that order, and stop the boot if any step fails.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 67
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::earlyMemoryFinished",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"After the identity map is gone the sweep finds no mapping writable and executable, and the memory early boot held is back in the allocator.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 70
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::earlyMemoryFinished",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.MEM.4\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 71
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::earlyMemoryFinished",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"finish_memory\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 72
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theClockStarted",
+              "qualifiedName": "FerrixBootRequirements::Entry::theClockStarted",
+              "kind": "requirement",
+              "shortName": "L.boot.6",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 74
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theClockStarted",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"The boot shall start the realtime clock from firmware's time, or at the epoch where firmware has none, after stage 3's timer check when the checks run, and say which.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 77
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theClockStarted",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The clock line names firmware's clock and its seconds, or says CLOCK_REALTIME starts at the epoch.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 79
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theClockStarted",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.10\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 80
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theClockStarted",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"check_timer_and_start_clocks\", \"report_stage3\", \"report_clock_and_random\", \"report_clocks\", \"report_clocks_and_power\")",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 82
+                  }
+                }
+              ]
+            },
+            {
+              "name": "processorsBroughtUp",
+              "qualifiedName": "FerrixBootRequirements::Entry::processorsBroughtUp",
+              "kind": "requirement",
+              "shortName": "L.boot.7",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 84
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::processorsBroughtUp",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"bring_up_processors shall start every processor firmware describes and stop the boot if one does not come online, then say how many are online and what each is exposed to.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 88
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::processorsBroughtUp",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The cpus line gives as many online as described; a processor that never comes online stops the boot.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 90
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::processorsBroughtUp",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.5\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 91
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::processorsBroughtUp",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"bring_up_processors\", \"report_processors\")",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 92
+                  }
+                }
+              ]
+            },
+            {
+              "name": "schedulerStarted",
+              "qualifiedName": "FerrixBootRequirements::Entry::schedulerStarted",
+              "kind": "requirement",
+              "shortName": "L.boot.8",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 94
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::schedulerStarted",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"start_scheduler shall start the scheduler on every online processor and stop the boot if it cannot.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 96
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::schedulerStarted",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Every online processor runs a task after start_scheduler; a scheduler that cannot start stops the boot.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 98
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::schedulerStarted",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.SCHED.1\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 99
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::schedulerStarted",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"start_scheduler\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 100
+                  }
+                }
+              ]
+            },
+            {
+              "name": "consoleInputInstalled",
+              "qualifiedName": "FerrixBootRequirements::Entry::consoleInputInstalled",
+              "kind": "requirement",
+              "shortName": "L.boot.9",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 102
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::consoleInputInstalled",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"start_console_input shall install the port's receive interrupt before interrupts are first enabled, so that a byte already waiting reaches the input ring.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 105
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::consoleInputInstalled",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A byte the port held before interrupts were enabled is read from the input ring.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 107
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::consoleInputInstalled",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.8\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 108
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::consoleInputInstalled",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"start_console_input\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 109
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theLoadRegistered",
+              "qualifiedName": "FerrixBootRequirements::Entry::theLoadRegistered",
+              "kind": "requirement",
+              "shortName": "L.boot.10",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 111
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theLoadRegistered",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"register_load shall register every interface the item reaches the load ring through, and stop the boot with the load registration explanation if one is missing or a list is full.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 115
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theLoadRegistered",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The hooks lines count what was registered; a boot with one registration missing stops with the load registration explanation.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 118
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theLoadRegistered",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.11\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 119
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theLoadRegistered",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"register_load\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 120
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theAuditStarted",
+              "qualifiedName": "FerrixBootRequirements::Entry::theAuditStarted",
+              "kind": "requirement",
+              "shortName": "L.boot.11",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 122
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theAuditStarted",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"start_audit shall start the audit record with the boot's audit id and record whether the self-checks run, who starts devmgr, the mitigations and the KASLR state, as bring-up read them.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 126
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theAuditStarted",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The kernel's boot records begin with the start-up record of the id reads answer, and hold the 4 configuration records with bring-up's values.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 129
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theAuditStarted",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.AUD.7\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 130
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theAuditStarted",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"start_audit\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 131
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theRootBuilt",
+              "qualifiedName": "FerrixBootRequirements::Entry::theRootBuilt",
+              "kind": "requirement",
+              "shortName": "L.boot.12",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 133
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theRootBuilt",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"check_filesystems shall build the root from the initramfs, stop the boot if it cannot, and say what was unpacked and whether its check ran.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 136
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theRootBuilt",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The initrd line gives the directories, files and links unpacked and verified true, or says the root is an empty tmpfs.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 139
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theRootBuilt",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.12\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 140
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theRootBuilt",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"check_filesystems\", \"report_initrd\")",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 141
+                  }
+                }
+              ]
+            },
+            {
+              "name": "pciEnumerated",
+              "qualifiedName": "FerrixBootRequirements::Entry::pciEnumerated",
+              "kind": "requirement",
+              "shortName": "L.boot.13",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 143
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::pciEnumerated",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"check_pci shall enumerate every PCI function the firmware's hosts describe, and stop the boot if enumeration fails.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 146
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::pciEnumerated",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The pci line counts the functions found under each host, or says no host is described.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 148
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::pciEnumerated",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.DMA.1\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 149
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::pciEnumerated",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"check_pci\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 150
+                  }
+                }
+              ]
+            },
+            {
+              "name": "devicesPublished",
+              "qualifiedName": "FerrixBootRequirements::Entry::devicesPublished",
+              "kind": "requirement",
+              "shortName": "L.boot.14",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 152
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::devicesPublished",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"check_devices shall publish a device node for every function found, each holding exactly its apertures and vectors, and stop the boot if publishing fails.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 155
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::devicesPublished",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The devices line counts the nodes, apertures and vectors published; a node that would hand out more stops the boot.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 158
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::devicesPublished",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.DMA.5\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 159
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::devicesPublished",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"check_devices\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 160
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theKernelStartsDevmgr",
+              "qualifiedName": "FerrixBootRequirements::Entry::theKernelStartsDevmgr",
+              "kind": "requirement",
+              "shortName": "L.boot.15",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 162
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theKernelStartsDevmgr",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"Without ferrix.devmgr=init, check_block_ring shall have the kernel start devmgr with every device, and stop the boot if devmgr cannot start.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 165
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theKernelStartsDevmgr",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The devmgr line counts the devices, drivers started and failed; an image without devmgr says so.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 167
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theKernelStartsDevmgr",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.2\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 168
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theKernelStartsDevmgr",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"check_block_ring\", \"check_devmgr\")",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 169
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theDriverServesItsDisk",
+              "qualifiedName": "FerrixBootRequirements::Entry::theDriverServesItsDisk",
+              "kind": "requirement",
+              "shortName": "L.boot.16",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 171
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theDriverServesItsDisk",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"check_driver shall have the block driver serve the test disk through the block ring with the IOMMU on, and leave it running for what mounts it next.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 174
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theDriverServesItsDisk",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Sectors read through the registry come back as xtask wrote them; a machine without the disk says so.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 176
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theDriverServesItsDisk",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.2\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 177
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theDriverServesItsDisk",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"check_driver\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 178
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aVolumeWrittenAndReadBack",
+              "qualifiedName": "FerrixBootRequirements::Entry::aVolumeWrittenAndReadBack",
+              "kind": "requirement",
+              "shortName": "L.boot.17",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 180
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::aVolumeWrittenAndReadBack",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"check_btrfs_write shall mount a blank btrfs volume writable, write it, remount it, and read back what it wrote.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 183
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::aVolumeWrittenAndReadBack",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Every byte written is read back after the remount; a machine without the third disk says so.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 185
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::aVolumeWrittenAndReadBack",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.2\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 186
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::aVolumeWrittenAndReadBack",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"check_btrfs_write\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 187
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theNetCoreStarted",
+              "qualifiedName": "FerrixBootRequirements::Entry::theNetCoreStarted",
+              "kind": "requirement",
+              "shortName": "L.boot.18",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 189
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theNetCoreStarted",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"check_net shall start the net core's task, and stop the boot if it cannot.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 191
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theNetCoreStarted",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The net core's task runs; one that cannot start stops the boot with the net core explanation.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 193
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theNetCoreStarted",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.2\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 194
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::theNetCoreStarted",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"check_net\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 195
+                  }
+                }
+              ]
+            },
+            {
+              "name": "devmgrLeftToPid1",
+              "qualifiedName": "FerrixBootRequirements::Entry::devmgrLeftToPid1",
+              "kind": "requirement",
+              "shortName": "L.boot.19",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 197
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::devmgrLeftToPid1",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"Under ferrix.devmgr=init, check_block_ring shall start no driver itself, make the drivers' job for pid 1's devmgr, and switch / once devmgr has reported.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 200
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::devmgrLeftToPid1",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The devmgr line says it is left to pid 1, and / switches after devmgr reports.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 202
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::devmgrLeftToPid1",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.13\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 203
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Entry::devmgrLeftToPid1",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"check_block_ring\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 204
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Init",
+          "qualifiedName": "FerrixBootRequirements::Init",
+          "kind": "package",
+          "doc": "kernel/src/init.rs: starting pid 1, and what it is handed.",
+          "source": {
+            "file": "docs/sysml/21-boot-requirements.sysml",
+            "line": 208
+          },
+          "children": [
+            {
+              "name": "theFirstLauncherStands",
+              "qualifiedName": "FerrixBootRequirements::Init::theFirstLauncherStands",
+              "kind": "requirement",
+              "shortName": "L.boot.20",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 211
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::theFirstLauncherStands",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"The first launcher registered shall be the one init is started with; a later registration shall change nothing.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 214
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::theFirstLauncherStands",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A second registration leaves the first launcher in place.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 216
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::theFirstLauncherStands",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.11\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 217
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::theFirstLauncherStands",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"init::register_launcher\", \"init::has_launcher\")",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 218
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theHelloFirst",
+              "qualifiedName": "FerrixBootRequirements::Init::theHelloFirst",
+              "kind": "requirement",
+              "shortName": "L.boot.21",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 220
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::theHelloFirst",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A bootstrap channel shall hold the kernel's hello, and only it, when the program is given its end.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 222
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::theHelloFirst",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Pid 1's bootstrap channel holds one message, the hello with version 1 and no handles, and its peer is open.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 224
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::theHelloFirst",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.13\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 225
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::theHelloFirst",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"init::bootstrap_channel\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 226
+                  }
+                }
+              ]
+            },
+            {
+              "name": "pid1GivenItsHandles",
+              "qualifiedName": "FerrixBootRequirements::Init::pid1GivenItsHandles",
+              "kind": "requirement",
+              "shortName": "L.boot.22",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 228
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::pid1GivenItsHandles",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"The first program shall be given devmgr's starter, under ferrix.devmgr=init, and the audit record's handle on its bootstrap channel.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 231
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::pid1GivenItsHandles",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The audit record read back in test-init holds STARTER_GIVEN and READER_GIVEN naming pid 1.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 233
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::pid1GivenItsHandles",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.13\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 234
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::pid1GivenItsHandles",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"init::next_bootstrap\", \"init::give_audit\")",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 235
+                  }
+                }
+              ]
+            },
+            {
+              "name": "givenOnce",
+              "qualifiedName": "FerrixBootRequirements::Init::givenOnce",
+              "kind": "requirement",
+              "shortName": "L.boot.23",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 237
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::givenOnce",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"The starter and the audit record's handle shall be given once: a later program of a command list gets neither.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 240
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::givenOnce",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A second program started by the kernel finds neither on its channel.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 242
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::givenOnce",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.13\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 243
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::givenOnce",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"init::next_bootstrap\", \"init::give_audit\")",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 244
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theSwitchRecorded",
+              "qualifiedName": "FerrixBootRequirements::Init::theSwitchRecorded",
+              "kind": "requirement",
+              "shortName": "L.boot.24",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 246
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::theSwitchRecorded",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"notify_root shall record where / is: the root volume with pid 1 moved onto it, or the tmpfs.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 248
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::theSwitchRecorded",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The audit record read back in test-init holds ROOT_SWITCHED with pid 1 moved.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 250
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::theSwitchRecorded",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.13\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 251
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::theSwitchRecorded",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"init::notify_root\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 252
+                  }
+                }
+              ]
+            },
+            {
+              "name": "pid1ToldWhereRootIs",
+              "qualifiedName": "FerrixBootRequirements::Init::pid1ToldWhereRootIs",
+              "kind": "requirement",
+              "shortName": "L.boot.25",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 254
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::pid1ToldWhereRootIs",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"notify_root shall tell pid 1 on its bootstrap channel where / is, once.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 256
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::pid1ToldWhereRootIs",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Pid 1 reads one root message after the hello, with the value the switch reached.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 258
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::pid1ToldWhereRootIs",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.13\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 259
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::pid1ToldWhereRootIs",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"init::notify_root\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 260
+                  }
+                }
+              ]
+            },
+            {
+              "name": "pid1AsNamed",
+              "qualifiedName": "FerrixBootRequirements::Init::pid1AsNamed",
+              "kind": "requirement",
+              "shortName": "L.boot.26",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 262
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::pid1AsNamed",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"ferrix.init shall name the file pid 1 is started from, a #! script running under its interpreter.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 264
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::pid1AsNamed",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A boot with ferrix.init naming a #!/bin/sh script runs the script and reports the status it exited with.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 266
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::pid1AsNamed",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.15\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 267
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::pid1AsNamed",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"init::read_option\", \"init::run\", \"init::run_file\", \"init::start\", \"init::Failure::fmt\")",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 269
+                  }
+                }
+              ]
+            },
+            {
+              "name": "aMissingInitIsSaid",
+              "qualifiedName": "FerrixBootRequirements::Init::aMissingInitIsSaid",
+              "kind": "requirement",
+              "shortName": "L.boot.27",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 271
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::aMissingInitIsSaid",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A file ferrix.init names that cannot be started shall be said on one line, and the built-in program shall run instead.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 274
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::aMissingInitIsSaid",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A boot naming a file the image lacks says it could not be started and runs the built-in program.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 276
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::aMissingInitIsSaid",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.15\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 277
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::aMissingInitIsSaid",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"init::run\", \"init::run_built_in\", \"init::Refusal::fmt\")",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 279
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theDefaultOrder",
+              "qualifiedName": "FerrixBootRequirements::Init::theDefaultOrder",
+              "kind": "requirement",
+              "shortName": "L.boot.28",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 281
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::theDefaultOrder",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"With nothing named, the kernel shall run the built-in program or commands, then /sbin/init if the image has one, then nothing.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 284
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::theDefaultOrder",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A boot with no ferrix.init runs the built-in program; an image with /sbin/init and nothing built in runs it.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 286
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::theDefaultOrder",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.15\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 287
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Init::theDefaultOrder",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"init::run_default\", \"init::run_built_in\", \"init::run_commands\", \"init::parse\", \"init::Argv::fmt\", \"init::no_memory\")",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 290
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Power",
+          "qualifiedName": "FerrixBootRequirements::Power",
+          "kind": "package",
+          "doc": "kernel/src/power.rs: how boot ends.",
+          "source": {
+            "file": "docs/sysml/21-boot-requirements.sysml",
+            "line": 294
+          },
+          "children": [
+            {
+              "name": "committedBeforeItStops",
+              "qualifiedName": "FerrixBootRequirements::Power::committedBeforeItStops",
+              "kind": "requirement",
+              "shortName": "L.boot.29",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 297
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Power::committedBeforeItStops",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"Every flush a filesystem registered shall be committed, in the order registered, before the machine stops, whoever stops it.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 300
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Power::committedBeforeItStops",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A file written to /data and powered off with poweroff -f -n, which does not sync, is read back on the next boot.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 303
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Power::committedBeforeItStops",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.6\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 304
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Power::committedBeforeItStops",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"power::register_flush\", \"power::flushes\", \"power::sync_disks\")",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 306
+                  }
+                }
+              ]
+            },
+            {
+              "name": "resetWhenAsked",
+              "qualifiedName": "FerrixBootRequirements::Power::resetWhenAsked",
+              "kind": "requirement",
+              "shortName": "L.boot.30",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 308
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Power::resetWhenAsked",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"With ferrix.onexit=reset the kernel shall say so at boot and reset the machine when init exits.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 310
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Power::resetWhenAsked",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The power line arms the reset, and the machine resets after init exits.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 312
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Power::resetWhenAsked",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.7\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 313
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Power::resetWhenAsked",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"power::init\", \"power::finish\")",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 314
+                  }
+                }
+              ]
+            },
+            {
+              "name": "anUnknownOnexitPowersOff",
+              "qualifiedName": "FerrixBootRequirements::Power::anUnknownOnexitPowersOff",
+              "kind": "requirement",
+              "shortName": "L.boot.31",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 316
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Power::anUnknownOnexitPowersOff",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A ferrix.onexit value the kernel does not know shall be said and ignored, and the machine powered off when init exits.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 319
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Power::anUnknownOnexitPowersOff",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A boot with ferrix.onexit=halt says it is not understood and powers off.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 321
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Power::anUnknownOnexitPowersOff",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.6\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 322
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Power::anUnknownOnexitPowersOff",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"power::init\", \"power::finish\")",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 323
+                  }
+                }
+              ]
+            },
+            {
+              "name": "theBootModeWord",
+              "qualifiedName": "FerrixBootRequirements::Power::theBootModeWord",
+              "kind": "requirement",
+              "shortName": "L.boot.32",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 325
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Power::theBootModeWord",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A word reboot(2) passes shall go to the boot mode a board registered, and be said as changing nothing where none is.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 328
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Power::theBootModeWord",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"On the STM32MP157D-DK1, reboot with a word sets the boot mode U-Boot reads; elsewhere the word is said to change nothing.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 331
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Power::theBootModeWord",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.7\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 332
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Power::theBootModeWord",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"power::register_boot_mode\", \"power::has_boot_mode\", \"power::request_boot_mode\")",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 334
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Random",
+          "qualifiedName": "FerrixBootRequirements::Random",
+          "kind": "package",
+          "doc": "kernel/src/random.rs: the kernel's generator.",
+          "source": {
+            "file": "docs/sysml/21-boot-requirements.sysml",
+            "line": 338
+          },
+          "children": [
+            {
+              "name": "seededBeforePrograms",
+              "qualifiedName": "FerrixBootRequirements::Random::seededBeforePrograms",
+              "kind": "requirement",
+              "shortName": "L.boot.33",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 341
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Random::seededBeforePrograms",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"random::init shall seed the generator from firmware's seed, the TRNG, the processor and timer jitter, and say whether it reached full seeding and from what.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 344
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Random::seededBeforePrograms",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"The random line says seeded with its bits and their sources, or NOT SEEDED with how far it got.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 346
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Random::seededBeforePrograms",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.14\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 347
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Random::seededBeforePrograms",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"random::init\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 348
+                  }
+                }
+              ]
+            },
+            {
+              "name": "twoReadsDiffer",
+              "qualifiedName": "FerrixBootRequirements::Random::twoReadsDiffer",
+              "kind": "requirement",
+              "shortName": "L.boot.34",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 350
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Random::twoReadsDiffer",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"Two reads of the generator shall differ, and a read shall not be all zeros.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 352
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Random::twoReadsDiffer",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Two reads of 64 bytes differ, and the first is not all zeros.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 354
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Random::twoReadsDiffer",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.14\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 355
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Random::twoReadsDiffer",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"random::fill\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 356
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Checks",
+          "qualifiedName": "FerrixBootRequirements::Checks",
+          "kind": "package",
+          "doc": "kernel/src/checks.rs: ferrix.checks, the self-checks' switch (F-51: product code, counted as verification until 21b).",
+          "source": {
+            "file": "docs/sysml/21-boot-requirements.sysml",
+            "line": 360
+          },
+          "children": [
+            {
+              "name": "aMisspeltValueRunsEveryCheck",
+              "qualifiedName": "FerrixBootRequirements::Checks::aMisspeltValueRunsEveryCheck",
+              "kind": "requirement",
+              "shortName": "L.boot.35",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/21-boot-requirements.sysml",
+                "line": 364
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Checks::aMisspeltValueRunsEveryCheck",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"A ferrix.checks value the kernel does not know shall be said, and every self-check shall run.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 366
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Checks::aMisspeltValueRunsEveryCheck",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"A boot with ferrix.checks=skipp says the value is not understood before it reaches FERRIX-BOOT-OK.\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 368
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Checks::aMisspeltValueRunsEveryCheck",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.2\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 369
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixBootRequirements::Checks::aMisspeltValueRunsEveryCheck",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "\"checks::init\"",
+                  "source": {
+                    "file": "docs/sysml/21-boot-requirements.sysml",
+                    "line": 370
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "FerrixSmpRequirements",
       "qualifiedName": "FerrixSmpRequirements",
       "kind": "package",
@@ -59697,6 +62045,16 @@
       "origin": "FerrixDeviceRequirements",
       "file": "docs/sysml/20-device-requirements.sysml",
       "line": 34
+    },
+    {
+      "kind": "import",
+      "source": "FerrixBootRequirements",
+      "targets": [
+        "FerrixItemRequirements::*"
+      ],
+      "origin": "FerrixBootRequirements",
+      "file": "docs/sysml/21-boot-requirements.sysml",
+      "line": 18
     },
     {
       "kind": "import",

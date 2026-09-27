@@ -69,7 +69,6 @@
   },
   "test_file_patterns": [
     "check.rs",
-    "checks.rs",
     "*_check.rs",
     "fs/btrfs_powerfail.rs"
   ],
@@ -177,6 +176,7 @@
         "pci/**",
         "power.rs",
         "random.rs",
+        "random/**",
         "service_check.rs",
         "stages_check.rs",
         "syscall/mod.rs",

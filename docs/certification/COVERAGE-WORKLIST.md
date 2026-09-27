@@ -175,7 +175,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `random.rs` | `item` | 2 | 2 | 2 | 2 | 87-88 |
+| `random.rs` | `item` | 2 | 2 | 2 | 2 | 89-90 |
 
 ---
 

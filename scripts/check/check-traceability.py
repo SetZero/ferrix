@@ -519,6 +519,17 @@ def read_unit_rules() -> dict:
     }
 
 
+ROOT_MODULE = "(root)"
+
+
+def in_module(unit: str, module: str) -> bool:
+    """Whether `unit` is a function of `module`, as the `complete` list names
+    one: `(root)` is the crate root's own functions, those with no `::`."""
+    if module == ROOT_MODULE:
+        return "::" not in unit
+    return unit == module or unit.startswith(module + "::")
+
+
 def classify_units(located, named: set[str], accessor, rules: dict) -> tuple[Coverage, list[str]]:
     """Sort every product function, and what is wrong with the rules.
 
@@ -554,7 +565,7 @@ def classify_units(located, named: set[str], accessor, rules: dict) -> tuple[Cov
             problems.append(f"{UNIT_RULES.relative_to(ROOT)}: {unit} is listed with no reason")
     for module in rules["complete"]:
         for unit in coverage.unnamed:
-            if unit == module or unit.startswith(module + "::"):
+            if in_module(unit, module):
                 problems.append(
                     f"{unit} is a function of {module}, whose low-level requirements are complete, "
                     f"and no requirement names it: write one (or add it as a unit of the one it "
@@ -1170,6 +1181,16 @@ def self_test() -> list[str]:
     wanted = ["lists m::gone as check code", "m::named is listed as check code", "m::forgotten is a function of m"]
     if len(problems) != 3 or not all(any(w in p for p in problems) for w in wanted):
         failures.append(f"classify: problems {problems}")
+    # `(root)` holds the crate root's functions, and only those: an unnamed
+    # one fails it, a module's does not.
+    rooted = [("kmain", "main.rs", 1), ("say_booted", "main.rs", 2), ("mm::zero_frame", "mm.rs", 1)]
+    coverage, problems = classify_units(
+        rooted, {"kmain"}, lambda rel, line: False, {"complete": [ROOT_MODULE], "check_code_in_product": {}}
+    )
+    if len(problems) != 1 or "say_booted is a function of (root)" not in problems[0]:
+        failures.append(f"classify: (root) problems {problems}")
+    if not in_module("kmain", ROOT_MODULE) or in_module("mm::zero_frame", ROOT_MODULE):
+        failures.append("classify: (root) counted a module's function, or not the root's")
 
     root, _, unparsed = parse_text("t.sysml", _MODEL)
     if unparsed:

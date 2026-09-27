@@ -84,7 +84,7 @@ pub(crate) struct Parts<'a> {
 ///
 /// A boot that panicked or timed out, and every line the judges below want
 /// and did not get, with the serial log's path.
-/// Verifies: `L.x86_64.98`, H.BOOT.6
+/// Verifies: `L.x86_64.98`, H.BOOT.6, `L.boot.26`, `L.boot.29`, `L.boot.35`
 pub(crate) fn test(parts: &Parts<'_>, args: &Args, busybox: bool) -> Result<()> {
     let (arch, kernel) = (parts.arch, parts.kernel);
     let program = parts.program;
@@ -93,14 +93,15 @@ pub(crate) fn test(parts: &Parts<'_>, args: &Args, busybox: bool) -> Result<()> 
 
     println!("  {arch}: starting the shell from {SCRIPT_FILE}, as ferrix.init= names it");
     let script = format!("#!/bin/sh\n{}", shell::SCRIPT);
-    let image = parts.image(
-        &shell,
-        SCRIPT_FILE,
-        &script,
-        &qemu::init_option(SCRIPT_FILE),
-        false,
-    )?;
+    // With `ferrix.checks` misspelt: a value the kernel does not know must
+    // run every check, as no value does, and say so -- never skip them.
+    let options = format!(
+        "{} ferrix.checks={MISSPELT_CHECKS}",
+        qemu::init_option(SCRIPT_FILE)
+    );
+    let image = parts.image(&shell, SCRIPT_FILE, &script, &options, false)?;
     let lines = qemu::watch_to_power_off(arch, &image, kernel, args, SUCCESS_MARKER)?;
+    judge_misspelt_checks(&lines).map_err(|why| failed(arch, &why))?;
     judge_from_file(after_marker(&lines)).map_err(|why| failed(arch, &why))?;
     println!(
         "  {arch}: ferrix.init= started the shell from {SCRIPT_FILE}, and it exited with {}",
@@ -144,6 +145,29 @@ pub(crate) fn test(parts: &Parts<'_>, args: &Args, busybox: bool) -> Result<()> 
         "  {arch}: /data/k7 survived poweroff -f -n, and init's exit panicked with {INIT_EXITED}"
     );
     Ok(())
+}
+
+/// A `ferrix.checks` value the kernel does not know.
+const MISSPELT_CHECKS: &str = "skipp";
+
+/// A boot given [`MISSPELT_CHECKS`] said it did not understand it and ran
+/// every check: its line, before the success marker, which the caller's
+/// `watch` has already required (a boot that skipped them prints another).
+fn judge_misspelt_checks(lines: &[String]) -> std::result::Result<(), String> {
+    let said = format!(
+        "checks   ferrix.checks={MISSPELT_CHECKS} is not understood; every self-check runs"
+    );
+    let before = lines
+        .iter()
+        .position(|line| line.contains(SUCCESS_MARKER))
+        .unwrap_or(lines.len());
+    if lines.iter().take(before).any(|line| line.contains(&said)) {
+        Ok(())
+    } else {
+        Err(format!(
+            "a boot with ferrix.checks={MISSPELT_CHECKS} did not say `{said}` before the marker"
+        ))
+    }
 }
 
 impl Parts<'_> {
