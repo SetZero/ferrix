@@ -55,6 +55,14 @@ pub(crate) struct FrameRequest {
     pub(crate) stack: u64,
     /// The alternate stack, as `uc_stack` records it.
     pub(crate) altstack: StackRecord,
+    /// Where the process's signal return page is, on an architecture that
+    /// has one (ARMv7-A's, `syscall::sigpage`): what a handler without a
+    /// restorer returns through (F-48).
+    #[cfg_attr(
+        not(target_arch = "arm"),
+        expect(dead_code, reason = "only ARMv7-A has a signal return page to read")
+    )]
+    pub(crate) sigpage: Option<u64>,
 }
 
 /// What an architecture read back out of a frame, besides the registers.

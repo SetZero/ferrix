@@ -2656,6 +2656,62 @@ impl AddressSpace {
         Ok(at)
     }
 
+    /// Map the one page of `vmo` wherever there is room, to be read and run
+    /// and never written: code the kernel gives every process with no data
+    /// beside it. What ARMv7-A's signal return page is mapped with, as
+    /// Linux's `sigpage`: the vDSO's placement, and none of its data page.
+    /// Returns where it went.
+    ///
+    /// Like [`AddressSpace::map_shared_code`], the object is the kernel's,
+    /// shared by every process, so the region is shared, `fork` keeps it where
+    /// it was, `mprotect` and `mremap` refuse it, and a program may unmap it
+    /// and loses only its own view.
+    ///
+    /// # Errors
+    ///
+    /// [`SpaceError::BadRange`] for an object that is not one page, and
+    /// [`SpaceError::OutOfMemory`] if there is no room.
+    pub(crate) fn map_code_page(&self, vmo: Arc<Vmo>) -> Result<u64, SpaceError> {
+        if vmo.len_bytes() != PAGE_SIZE {
+            return Err(SpaceError::BadRange);
+        }
+        let mut inner = self.inner.lock();
+        let at = inner
+            .map
+            .find_free(PAGE_SIZE, PAGE_SIZE, None)
+            .ok_or(SpaceError::OutOfMemory)?;
+        if !is_user_address(at)
+            || at
+                .checked_add(PAGE_SIZE)
+                .is_none_or(|end| end > USER_VIRT_END)
+        {
+            return Err(SpaceError::NotUserRange(at));
+        }
+        let range = PageRange::from_len(at, PAGE_SIZE).map_err(|_| SpaceError::BadRange)?;
+        let id = inner.next_id;
+        inner.next_id = inner.next_id.saturating_add(1);
+        self.add_region(
+            &mut inner,
+            NewRegion {
+                id,
+                range,
+                flags: VmaFlags {
+                    shared: true,
+                    execute: true,
+                    ..VmaFlags::READ
+                },
+                backing: Backing::Anonymous { id, offset: 0 },
+                sharing: Sharing::Shared,
+            },
+            vmo,
+        )?;
+        if fallible::insert_into_set(&mut inner.native, id).is_err() {
+            self.abandon_region(&mut inner, id, range);
+            return Err(SpaceError::OutOfMemory);
+        }
+        Ok(at)
+    }
+
     /// Map the two pages of `vmo` wherever there is room: the first to be
     /// read, the second to be read and run. What the Linux personality maps
     /// its vDSO with, a data page and the code that reads it. Returns where
@@ -2671,10 +2727,11 @@ impl AddressSpace {
     ///
     /// [`SpaceError::BadRange`] for an object that is not two pages, and
     /// [`SpaceError::OutOfMemory`] if there is no room.
-    /// Where [`AddressSpace::map_shared_code`] put `vmo` in this space: the
-    /// data page's address, or `None` if it is not mapped here. How a
-    /// signal's delivery finds the vDSO's return trampoline, which the space
-    /// maps once at exec and a fork keeps where it was.
+    /// Where [`AddressSpace::map_shared_code`] or
+    /// [`AddressSpace::map_code_page`] put `vmo` in this space: its first
+    /// page's address, or `None` if it is not mapped here. How a signal's
+    /// delivery finds the vDSO's return trampoline, or ARMv7-A's return page,
+    /// which the space maps once at exec and a fork keeps where it was.
     pub(crate) fn shared_code_at(&self, vmo: &Arc<Vmo>) -> Option<u64> {
         let inner = self.inner.lock();
         let id = inner

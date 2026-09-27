@@ -144,12 +144,13 @@ pub enum DecodeError {
     TooLong,
     /// A tag no record has.
     Tag(u8),
-    /// A boolean or optional-value marker other than 0 or 1.
-    Value(u8),
     /// A string that is not UTF-8.
     Utf8,
     /// Bytes after the last field.
     Trailing,
+    /// A flag -- a boolean, or whether an optional field is there -- that is
+    /// neither 0 nor 1, which no encoding writes.
+    Flag(u8),
 }
 
 /// A record's writer.
@@ -236,14 +237,6 @@ impl Reader<'_> {
         self.take(1)?.first().copied().ok_or(DecodeError::Short)
     }
 
-    fn flag(&mut self) -> Result<bool, DecodeError> {
-        match self.u8()? {
-            0 => Ok(false),
-            1 => Ok(true),
-            value => Err(DecodeError::Value(value)),
-        }
-    }
-
     fn u32(&mut self) -> Result<u32, DecodeError> {
         let bytes = self.take(4)?;
         let array: [u8; 4] = bytes.try_into().map_err(|_| DecodeError::Short)?;
@@ -266,6 +259,16 @@ impl Reader<'_> {
         core::str::from_utf8(bytes)
             .map(String::from)
             .map_err(|_| DecodeError::Utf8)
+    }
+
+    /// A flag, 0 or 1 as the writer writes one: anything else is refused,
+    /// so that every record that decodes encodes back to the same bytes.
+    fn flag(&mut self) -> Result<bool, DecodeError> {
+        match self.u8()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            other => Err(DecodeError::Flag(other)),
+        }
     }
 
     fn opt_str(&mut self) -> Result<Option<String>, DecodeError> {

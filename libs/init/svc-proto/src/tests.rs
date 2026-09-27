@@ -130,17 +130,13 @@ fn bytes_that_are_not_a_record_are_refused() {
         Err(DecodeError::Short)
     );
     assert_eq!(Call::decode(&[3, 1, 0, 0, 0, 0xff]), Err(DecodeError::Utf8));
-    // Only the values emitted by the encoder may decode successfully.
-    assert_eq!(Call::decode(&[2, 126]), Err(DecodeError::Value(126)));
-    assert_eq!(
-        Call::decode(&[1, 2, 0, 0, 0, 0]),
-        Err(DecodeError::Value(2))
-    );
-    assert_eq!(
-        Call::decode(&[17, 0, 0, 0, 0, 0, 0, 0, 0, 2]),
-        Err(DecodeError::Value(2))
-    );
     assert_eq!(Call::decode(&[9, 0]), Err(DecodeError::Trailing));
+    // A flag is 0 or 1, as the writer writes one: CI's fuzzer found
+    // `[2, 0xaf]` decoding as `List { failed: true }` and encoding back as
+    // `[2, 1]` (run 36303812173).
+    assert_eq!(Call::decode(&[2, 0xaf]), Err(DecodeError::Flag(0xaf)));
+    assert_eq!(Call::decode(&[1, 2]), Err(DecodeError::Flag(2)));
+    assert_eq!(Call::decode(&[2, 1]), Ok(Call::List { failed: true }));
     assert_eq!(Answer::decode(&[9]), Err(DecodeError::Tag(9)));
 }
 

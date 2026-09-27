@@ -90,7 +90,18 @@ staged until now.
   and Wine make, which is the smaller subset than it sounds and the larger
   program than it looks. `xwayland_shell_v1` on the compositor's side is a
   table. 40 points as a first guess, most of it the server, counted in
-  stage 19's remainder and not again here.
+  stage 19's remainder and not again here. **Decided 2026-09-27 (customer):
+  the X server is [yserver](https://github.com/joske/yserver)** (Rust,
+  MIT: GLX, DRI3, Present, RENDER, XI2, RandR, SHM, Composite; it runs
+  Plasma, Chromium and Electron), not C Xwayland with xwayland-satellite.
+  yserver has DRM/KMS, nested-on-X11 and headless backends and no Wayland
+  one, so Ferrix adds a rootless Wayland backend behind its backend trait:
+  each top-level X window an `xdg_toplevel` on hyprix, with input and the
+  clipboard bridged. xwayland-satellite (Rust, MPL-2.0) is the reference
+  for how X windows map to xdg surfaces, read and not copied. In order:
+  a feasibility pass (a pinned yserver release, its headless backend built
+  for x86-64 on Ferrix, an X client run against it), a written design for
+  the backend, then the backend in small landings.
 * **Sound.** Playback is done, 2026-09-26 (`docs/AUDIO.md` §8): a
   `virtio-snd` driver in ring 3, the audio core and `/dev/snd`, and Chrome
   playing through them, which `test-audio` and `test-chrome-audio` gate.

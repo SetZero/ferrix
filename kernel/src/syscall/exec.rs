@@ -366,6 +366,13 @@ fn populate(
         Abi::Native => super::vdso::map_into(space),
         Abi::Compat => None,
     };
+    // ARMv7-A's signal return page, where a handler without `SA_RESTORER`
+    // goes back: mapped as the vDSO is, and like it given up rather than
+    // failing the exec if there is no room. Named in no auxiliary vector
+    // entry, as Linux's `sigpage` is not.
+    if loaded.abi == Abi::Native {
+        let _ = super::sigpage::map_into(space);
+    }
     let auxv = [
         (AT_SYSINFO_EHDR, vdso.unwrap_or(0)),
         (AT_HWCAP, hwcap),

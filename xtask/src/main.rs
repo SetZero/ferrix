@@ -120,6 +120,8 @@ mod symbolize;
 mod sysfs;
 mod test_disk;
 mod threads;
+mod uboot_env;
+mod uefi_vars;
 mod uutils;
 mod vfs;
 mod vnc;

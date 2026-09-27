@@ -1597,7 +1597,15 @@ fn qemu_command(
     attach_data_image(&mut command, arch, args);
     let network = attach_network(&mut command, arch, args)?;
 
-    match &firmware {
+    attach_firmware(&mut command, arch, &firmware)?;
+
+    Ok((command, network))
+}
+
+/// The firmware's flash or ROM: EDK2's code and a fresh variable store, or
+/// U-Boot and its environment.
+fn attach_firmware(command: &mut Command, arch: Arch, firmware: &Firmware) -> Result<()> {
+    match firmware {
         Firmware::Pflash { code, vars } => {
             let vars = prepare_vars(arch, code, vars.as_deref())?;
             let _ = command.args([
@@ -1610,13 +1618,35 @@ fn qemu_command(
             ]);
         }
         // U-Boot runs from RAM and keeps no variables: there is no store to
-        // prepare, and so none for a previous run to have poisoned.
+        // prepare, and so none for a previous run to have poisoned. Its
+        // environment is given it, rewritten every boot, with no autoboot
+        // delay (`crate::uboot_env`).
         Firmware::Bios(uboot) => {
             let _ = command.args(["-bios", &display(uboot)]);
+            match std::fs::read(uboot)
+                .ok()
+                .and_then(|bytes| crate::uboot_env::bank(&bytes))
+            {
+                Some(bank) => {
+                    let target = paths::build_dir(arch).join("uboot-env.fd");
+                    std::fs::create_dir_all(paths::build_dir(arch))?;
+                    std::fs::write(&target, bank)?;
+                    let _ = command.args([
+                        "-drive",
+                        &format!(
+                            "if=pflash,unit=1,format=raw,readonly=on,file={}",
+                            display(&target)
+                        ),
+                    ]);
+                }
+                None => println!(
+                    "  {arch}: no default environment found in {}; U-Boot counts down to boot",
+                    display(uboot)
+                ),
+            }
         }
     }
-
-    Ok((command, network))
+    Ok(())
 }
 
 /// A virtio device on PCI, on every machine, for stage 10's enumeration to
@@ -2352,7 +2382,16 @@ fn prepare_vars(arch: Arch, code: &Path, template: Option<&Path>) -> Result<Path
 
     if arch != Arch::X86_64 {
         let code_size = std::fs::metadata(code)?.len() as usize;
+        if contents.is_empty() && arch == Arch::AArch64 {
+            contents = crate::uefi_vars::formatted(code_size);
+        }
         contents.resize(code_size, 0);
+    }
+    // Without the boot menu's five seconds (`crate::uefi_vars`).
+    if arch == Arch::AArch64 && !crate::uefi_vars::without_boot_menu_wait(&mut contents) {
+        println!(
+            "  {arch}: the UEFI variable store is not one xtask knows; firmware waits at its menu"
+        );
     }
 
     std::fs::write(&target, contents)?;
