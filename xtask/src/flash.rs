@@ -29,8 +29,9 @@ const KERNEL_PATH: &str = "FERRIX/KERNEL.ELF";
 /// Where the initramfs goes, beside the kernel.
 const INITRD_PATH: &str = "FERRIX/INITRD.IMG";
 
-/// The kernel as the card gets it: without its debug information or its
-/// symbol table, which the loader never reads and the kernel never looks at
+/// The kernel as the card gets it, and as an image does under
+/// `--strip-kernel` (`fat::set_strip_kernel`): without its debug information
+/// or its symbol table, which the loader never reads and the kernel never looks at
 /// -- neither is in a loaded segment, and a panic prints addresses, which are
 /// resolved on the host against the ELF `build` leaves beside the image,
 /// which keeps all of it (`libs/platform/elf/src/symbols.rs` is `xtask`'s reader).
@@ -50,7 +51,7 @@ const INITRD_PATH: &str = "FERRIX/INITRD.IMG";
 /// take the relocations with the symbol table they index, and the kernel,
 /// built to move, would refuse to start at its link address. That keeps
 /// about 1 MB of relocations and 2 MB of symbols on the card.
-fn card_kernel(kernel: &Path) -> PathBuf {
+pub(crate) fn stripped_kernel(kernel: &Path) -> PathBuf {
     let stripped = kernel.with_extension("stripped.elf");
     let Some(objcopy) = llvm_objcopy() else {
         println!("    llvm-objcopy not found; copying the kernel with its debug information");
@@ -88,7 +89,7 @@ fn keeps_relocations(kernel: &Path) -> bool {
 }
 
 /// The initramfs as the card gets it: every program in it without its debug
-/// information or symbol table, for [`card_kernel`]'s reasons.
+/// information or symbol table, for [`stripped_kernel`]'s reasons.
 ///
 /// The drivers and `devmgr` are built in the tree's `dev` profile, with
 /// debug information, and were 13 MB of the desktop's archive that stripped
@@ -177,7 +178,7 @@ fn llvm_objcopy() -> Option<PathBuf> {
 pub(crate) struct BoardFiles {
     /// The loader, which goes to `EFI/BOOT` under the architecture's name.
     pub(crate) loader: PathBuf,
-    /// The kernel as built, with its debug information: [`card_kernel`]
+    /// The kernel as built, with its debug information: [`stripped_kernel`]
     /// strips the copy the card gets, and a panic's addresses are resolved
     /// against this one.
     pub(crate) kernel: PathBuf,
@@ -236,7 +237,7 @@ pub(crate) fn run(arch: Arch, files: &BoardFiles, args: &Args) -> Result<()> {
     }
 
     copy(loader, &loader_target)?;
-    copy(&card_kernel(kernel), &kernel_target)?;
+    copy(&stripped_kernel(kernel), &kernel_target)?;
     write_defaults(&target, *defaults)?;
     // The same archive an image carries, so a board unpacks what QEMU does,
     // less the programs' symbols.

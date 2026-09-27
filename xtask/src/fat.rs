@@ -11,6 +11,7 @@
 //! semantics.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::paths::{self, Arch};
 use crate::{Error, Result};
@@ -473,6 +474,21 @@ fn directory_entry(name: &[u8; 11], attr: u8, first_cluster: u32, size: u32) -> 
 /// card: the loader reads the file after `CMDLINE.TXT`.
 pub(crate) const DEFAULTS_PATH: &str = "FERRIX/DEFAULTS.TXT";
 
+/// Whether this run's images carry the stripped kernel: `--strip-kernel`.
+static STRIP_KERNEL: AtomicBool = AtomicBool::new(false);
+
+/// Say whether every image this run writes carries the kernel as `flash`
+/// strips it: `main` calls it once, with what `--strip-kernel` said.
+///
+/// Off by default, because an image is otherwise the bytes that were built.
+/// On, the loader's copy of the file is some 6 MB rather than 70 to 130 MB --
+/// it reads the whole ELF into memory before placing its segments -- which
+/// is what lets `--memory` go below about 256 MiB at all. The ELF with
+/// everything in it stays beside the image for resolving a panic's addresses.
+pub(crate) fn set_strip_kernel(strip: bool) {
+    STRIP_KERNEL.store(strip, Ordering::Relaxed);
+}
+
 /// Assemble the bootable image for `arch` from a built loader and kernel, with
 /// the initramfs every image carries: the tree's native programs, and no
 /// `--init` program.
@@ -520,6 +536,13 @@ pub(crate) fn write_image_carrying(
 
     let loader_bytes = std::fs::read(loader)
         .map_err(|error| Error::new(format!("reading {}: {error}", loader.display())))?;
+    let stripped;
+    let kernel = if STRIP_KERNEL.load(Ordering::Relaxed) {
+        stripped = crate::flash::stripped_kernel(kernel);
+        stripped.as_path()
+    } else {
+        kernel
+    };
     let kernel_bytes = std::fs::read(kernel)
         .map_err(|error| Error::new(format!("reading {}: {error}", kernel.display())))?;
 

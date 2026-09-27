@@ -244,7 +244,10 @@ COMMANDS:
 OPTIONS:
     --arch <x86_64|aarch64|armv7a|all>   Target architecture   [default: host]
     --release                            Build with optimisations
-    --mitigations <on|off>               The kernel's side-channel defences [default: on, the
+    --strip-kernel                       Images carry the kernel without its debug information, as
+                                         flash writes it; the loader reads the whole file into
+                                         memory, so a small --memory needs it [default: off]
+    --mitigations <on|off>              The kernel's side-channel defences [default: on, the
                                          certified setting]. off builds with
                                          --cfg ferrix_mitigations_off into target/mitigations-off:
                                          no index clamps, no speculation controls, no barriers
@@ -420,6 +423,8 @@ fn run() -> Result<()> {
     // Every kernel this run builds, whichever command builds it: set once,
     // here, rather than threaded through each of them.
     cargo::set_mitigations(args.mitigations);
+    // And every image it writes, for the same reason.
+    fat::set_strip_kernel(args.strip_kernel);
 
     if args.help {
         println!("{USAGE}");

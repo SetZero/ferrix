@@ -52,6 +52,10 @@ pub(crate) struct Args {
     pub(crate) gdb: bool,
     /// `--fast`: skip the slow half of `check`.
     pub(crate) fast: bool,
+    /// `--strip-kernel`: images carry the kernel without its debug
+    /// information, as `flash` writes it to a card, so that the loader's copy
+    /// of the file fits a small machine's memory. Off unless asked for.
+    pub(crate) strip_kernel: bool,
     /// `--ferrousli`: `check` also runs ferrousli's gates, its own workspace.
     pub(crate) ferrousli: bool,
     /// `--zinc`: `check` also runs zinc's gates, its own workspace.
@@ -402,6 +406,15 @@ impl Args {
         Ok(())
     }
 
+    /// `--release` and `--strip-kernel`: how the kernel is built, and how an
+    /// image carries it.
+    fn build(&mut self, flag: &str) {
+        match flag {
+            "--release" => self.release = true,
+            _ => self.strip_kernel = true,
+        }
+    }
+
     /// `--reset-root`, `--tmpfs-root` and `--btrfs-root`: where `/` is for
     /// the boot, and whether it starts over.
     fn root(&mut self, flag: &str) {
@@ -445,7 +458,7 @@ impl Args {
         while let Some(item) = items.next() {
             match item.as_str() {
                 "-h" | "--help" => args.help = true,
-                "--release" => args.release = true,
+                "--release" | "--strip-kernel" => args.build(&item),
                 "--mitigations" => args.mitigations(&mut items)?,
                 "--gdb" => args.gdb = true,
                 "--fast" => args.fast = true,
@@ -716,6 +729,14 @@ mod tests {
         assert_eq!(args.single_arch().unwrap(), Arch::AArch64);
         assert!(args.release);
         assert_eq!(args.timeout, 30);
+    }
+
+    #[test]
+    fn the_kernel_keeps_its_debug_information_unless_asked() {
+        let args = parse(&["test-boot", "--strip-kernel", "--memory", "16"]).unwrap();
+        assert!(args.strip_kernel);
+        assert_eq!(args.memory, 16);
+        assert!(!parse(&["test-boot"]).unwrap().strip_kernel, "opt-in");
     }
 
     #[test]

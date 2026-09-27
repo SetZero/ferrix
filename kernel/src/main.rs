@@ -338,6 +338,14 @@ fn say_booted() {
         audit::Target::NONE,
         [u32::from(checks::run()), 0, 0],
     );
+    // What a machine has left for its programs once the kernel is up, beside
+    // stage 2's line of what it started with: the number a small machine's
+    // memory is sized by (a `--memory` sweep reads it from each boot).
+    println!(
+        "  memory   {} KiB free of {} KiB managed at the end of boot",
+        mm::free_frames() * 4,
+        mm::managed_frames() * 4,
+    );
     if checks::run() {
         // After every check that counts what was given back, since it loses
         // memory on purpose.
