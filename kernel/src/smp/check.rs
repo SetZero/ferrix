@@ -41,6 +41,9 @@ pub(crate) struct Report {
     pub(crate) expected: u64,
     /// Processors whose increments overlapped another's in time.
     pub(crate) overlapping: u64,
+    /// The round of the contended count that showed them overlapping, or its
+    /// last: a count of its own, since [`Report::rounds`] is `everywhere`'s.
+    pub(crate) counter_round: u64,
     /// Updates the same count lost without the lock.
     pub(crate) lost: u64,
 }
@@ -188,7 +191,7 @@ fn contended(topology: &Topology, report: &mut Report) -> Result<(), &'static st
         report.expected = expected;
         report.overlapping = overlapping as u64;
         report.lost = expected.saturating_sub(UNLOCKED.load(Ordering::Relaxed));
-        report.rounds = round as u64;
+        report.counter_round = round as u64;
         if processors == 1 || overlapping > 0 {
             return Ok(());
         }

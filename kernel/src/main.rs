@@ -1869,7 +1869,7 @@ fn bring_up_processors(view: &BootView<'_>) -> &'static smp::Topology {
         smp.expected,
         smp.overlapping,
         cpus.online(),
-        smp.rounds,
+        smp.counter_round,
         smp.lost,
     );
     println!(
