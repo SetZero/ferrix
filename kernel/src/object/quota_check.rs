@@ -49,6 +49,8 @@ pub(crate) struct Report {
 /// # Errors
 ///
 /// Which property failed.
+///
+/// Verifies: L.object.53, H.QUOTA.4
 pub(crate) fn run() -> Result<Report, &'static str> {
     let slots = quota::live_slots();
     let mut report = Report::default();
@@ -74,6 +76,8 @@ pub(crate) fn run() -> Result<Report, &'static str> {
 
 /// A child's use is its parent's too; a limit refuses at exactly its value,
 /// anywhere above; a refusal takes nothing; everything comes back.
+///
+/// Verifies: L.object.50, L.object.51, L.object.64
 fn check_the_counters(tree: &Arc<Job>) -> Result<(), &'static str> {
     let parent = tree.new_child().map_err(|_| "a job refused a child")?;
     let child = parent.new_child().map_err(|_| "a job refused a child")?;
@@ -113,6 +117,8 @@ fn check_the_counters(tree: &Arc<Job>) -> Result<(), &'static str> {
 /// A task limit refuses a fork loop at the limit, counting the forking
 /// process, while a sibling job forks on; and a move takes its charge with
 /// it.
+///
+/// Verifies: L.object.57, L.object.81, L.object.83, L.object.85, H.QUOTA.1
 fn check_a_fork_bomb_meets_its_limit(tree: &Arc<Job>) -> Result<u64, &'static str> {
     const LIMIT: u64 = 8;
     let bomb = tree.new_child().map_err(|_| "a job refused a child")?;
@@ -182,6 +188,8 @@ fn fork(parent: &Arc<Process>) -> Result<Arc<Process>, &'static str> {
 /// Faulting a user space in as a task of a limited job is refused at its
 /// memory limit, pages and page tables together, while a sibling's faults go
 /// on; and every frame comes back as the spaces go.
+///
+/// Verifies: L.object.55, H.QUOTA.2
 fn check_memory(tree: &Arc<Job>, report: &mut Report) -> Result<(), &'static str> {
     const LIMIT: u64 = 48;
     const BASE: u64 = 0x40_0000;
@@ -258,6 +266,8 @@ fn as_task_of<T>(job: &Job, work: impl FnOnce() -> T) -> (T, bool) {
 
 /// An object limit refuses the object past it, a channel's two ends
 /// together, and an object gone makes room.
+///
+/// Verifies: L.object.9, L.object.27, L.object.59, H.QUOTA.3
 fn check_objects(tree: &Arc<Job>) -> Result<u64, &'static str> {
     const LIMIT: u64 = 5;
     let job = tree.new_child().map_err(|_| "a job refused a child")?;
@@ -310,6 +320,8 @@ const WINDOW_NANOS: u64 = 400_000_000;
 /// One task in its own job keeps about half a processor against eight in
 /// another, where per-task shares would give it a ninth; and the jobs' loads
 /// are empty once the tasks are gone. The share, in tenths of a per cent.
+///
+/// Verifies: L.object.60, H.SCHED.3
 fn check_the_processor(tree: &Arc<Job>) -> Result<u64, &'static str> {
     let crowd = tree.new_child().map_err(|_| "a job refused a child")?;
     let alone = tree.new_child().map_err(|_| "a job refused a child")?;
