@@ -24,7 +24,7 @@ Coverage evidence recording the checks: none yet.
 | Named by a low-level requirement | 173 |
 | Accessors, covered by the requirement they serve | 695 |
 | Check code in a product file | 5 |
-| Named by none | 1484 |
+| Named by none | 1465 |
 
 Subsystems whose low-level requirements are complete: `object`.
 

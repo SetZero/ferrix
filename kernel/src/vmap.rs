@@ -469,7 +469,7 @@ pub(crate) fn free(base: u64) -> Result<(), VmapError> {
 /// would otherwise size the window from the wrapped sum, or stop the kernel
 /// on the overflow check; [`VmapError::KernelImage`] for a range that
 /// touches the kernel's own image, whose text and read-only data have no
-/// writable mapping anywhere (`mm::check_sealed_image`) and which holds no
+/// writable mapping anywhere (`mm::check::check_sealed_image`) and which holds no
 /// device's registers; and whatever [`reserve`] or the mapper refuses.
 pub(crate) fn map_device(phys: u64, len: u64) -> Result<u64, VmapError> {
     let offset = phys % PAGE_SIZE;
@@ -536,7 +536,7 @@ fn unmap_installed(virt: u64, phys: u64, span: u64) {
 /// is how it stays distinguishable from a page the failed call installed.
 ///
 /// Nothing is read or written through either mapping; `phys` is RAM the caller
-/// knows, for the reason `check_device_windows` in `main.rs` gives.
+/// knows, for the reason `check_device_windows` in `mm/check.rs` gives.
 pub(crate) fn check_failed_device_map(phys: u64) -> Result<(), &'static str> {
     let aperture = phys & !(PAGE_SIZE - 1);
     let span = 2 * PAGE_SIZE;

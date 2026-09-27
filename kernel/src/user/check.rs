@@ -448,7 +448,7 @@ fn check_a_region_outside_the_user_half_is_refused() -> Result<(), &'static str>
 /// aperture's, `mmap` of a GPU blob a window's. Neither can name the image
 /// today, since no aperture overlaps the memory map, and a window is a BAR;
 /// this is the refusal that holds if either ever does. The image's text has
-/// no writable mapping anywhere (`mm::check_sealed_image`), and these map
+/// no writable mapping anywhere (`mm::check::check_sealed_image`), and these map
 /// read-write.
 fn check_the_kernel_image_is_no_device_memory() -> Result<(), &'static str> {
     let (image, _) = mm::image_span();

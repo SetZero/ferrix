@@ -432,7 +432,7 @@ pub(crate) static VMAP_ARENA_BRING_UP: Explanation = Explanation {
     see: "kernel/src/vmap.rs init; libs/proto/bootinfo; libs/kernel/vma",
 };
 
-/// For `kmain` in `main.rs`, when `memory_check` fails.
+/// For `check_allocators_and_traps` in `main.rs`, when `mm::check::memory_check` fails.
 pub(crate) static STAGE2_ALLOCATORS: Explanation = Explanation {
     code: "FX-0203",
     title: "the memory allocators failed their self-check",
@@ -459,8 +459,8 @@ pub(crate) static STAGE2_ALLOCATORS: Explanation = Explanation {
          the kernel image was mapped`): the refusal `mm::overlaps_image` makes is gone, or \
          memory bring-up did not record where the image is.",
     ],
-    see: "kernel/src/main.rs memory_check; libs/kernel/frame; libs/kernel/heap; libs/kernel/paging; \
-          kernel/src/vmap.rs; docs/ROADMAP.md stage 2",
+    see: "kernel/src/mm/check.rs memory_check; libs/kernel/frame; libs/kernel/heap; \
+          libs/kernel/paging; kernel/src/vmap.rs; docs/ROADMAP.md stage 2",
 };
 
 /// For `kmain` in `main.rs`, when `finish_memory` fails.
@@ -494,7 +494,7 @@ pub(crate) static STAGE2_FINISH_MEMORY: Explanation = Explanation {
         "The memory map marks no loader or ACPI-reclaimable region inside the range the \
          per-frame array covers, so nothing was reclaimed.",
     ],
-    see: "kernel/src/main.rs finish_memory; kernel/src/mm.rs check_w_xor_x and \
+    see: "kernel/src/main.rs finish_memory; kernel/src/mm/check.rs check_w_xor_x and \
           check_sealed_image; kernel/src/mm.rs reclaim_boot_memory; docs/ROADMAP.md stage 2",
 };
 

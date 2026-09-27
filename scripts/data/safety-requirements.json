@@ -167,7 +167,7 @@
       "id": "FM-9",
       "mitigated_by": [
         "kernel/src/vmap.rs::allocate_stack",
-        "kernel/src/main.rs::check_stacks"
+        "kernel/src/mm/check.rs::check_stacks"
       ]
     },
     {
@@ -392,7 +392,7 @@
       "argued_by": [
         "kernel/src/mm.rs::KernelAllocator",
         "kernel/src/vmap.rs::free_stack",
-        "kernel/src/main.rs::check_stacks"
+        "kernel/src/mm/check.rs::check_stacks"
       ]
     },
     {
@@ -421,7 +421,7 @@
       "argued_by": [
         "kernel/src/user/check.rs::check_the_processor_walks_an_installed_space",
         "kernel/src/arch/x86_64/paranoid/check.rs",
-        "kernel/src/main.rs::check_stacks"
+        "kernel/src/mm/check.rs::check_stacks"
       ]
     }
   ]

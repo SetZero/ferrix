@@ -62,6 +62,7 @@ use ferrix_sync::IrqSpinLock;
 
 use crate::fallible;
 
+pub(crate) mod check;
 mod reserve;
 mod unlinked;
 
@@ -777,7 +778,7 @@ pub(crate) fn root_table() -> u64 {
 
 /// Where physical address `phys` can be read and written: its alias in the
 /// direct map. Read only over the kernel's own text and read-only data, which
-/// the loaders seal there ([`check_sealed_image`]); every frame the allocator
+/// the loaders seal there ([`check::check_sealed_image`]); every frame the allocator
 /// hands out is outside that span, since the image is never freed.
 pub(crate) fn direct_map(phys: u64) -> u64 {
     physmap(phys)
@@ -1258,102 +1259,8 @@ pub(crate) fn permissions_of(virt: u64) -> Option<MapFlags> {
 }
 
 // ---------------------------------------------------------------------------
-// W^X
+// The image's span
 // ---------------------------------------------------------------------------
-
-/// A mapping that is both writable and executable.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct WriteExecute {
-    /// Where it starts.
-    pub(crate) virt: u64,
-    /// How much of the address space it covers.
-    pub(crate) len: u64,
-}
-
-/// What the W^X sweep found.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct WxReport {
-    /// Mappings the hardware can see.
-    pub(crate) leaves: u64,
-    /// Of those, how many are executable at all.
-    pub(crate) executable: u64,
-}
-
-/// Walk the live page tables and require that nothing is writable *and*
-/// executable.
-///
-/// **A measurement of the machine, not of the kernel's intentions.** Every
-/// other check of this kind in the tree asserts that a function was called
-/// with the right flags; this one reads the descriptors the hardware is going
-/// to walk, including the ones the loader wrote and the ones an earlier stage
-/// installed and forgot about. The loader's identity map is exactly such a
-/// mapping — it has to be writable and executable, because the instruction
-/// after the page table switch is fetched through it — so this sweep only
-/// passes once that map has been dropped, which is why the two land in the
-/// same stage.
-///
-/// # Errors
-///
-/// The first offending mapping, which is enough: the fix for one is the fix
-/// for all of them, and reporting the address of the first is what makes it
-/// findable.
-pub(crate) fn check_w_xor_x(view: &BootView<'_>) -> Result<WxReport, WriteExecute> {
-    let mut report = WxReport {
-        leaves: 0,
-        executable: 0,
-    };
-    let mut offender = None;
-
-    // Every root the hardware can translate through, not only the kernel's.
-    // On `AArch64` the identity map is a second regime with its own base
-    // register, so a sweep of the kernel's tables alone would report a clean
-    // machine while the CPU could still fetch from a writable page.
-    let roots = [
-        Some(ROOT_TABLE.load(Ordering::Relaxed)),
-        crate::arch::identity_root(view),
-    ];
-
-    for root in roots.into_iter().flatten() {
-        let outcome = sweep(root, |leaf| {
-            if leaf.flags.execute {
-                report.executable += 1;
-            }
-            if leaf.is_write_execute() {
-                offender = Some(WriteExecute {
-                    virt: leaf.virt.0,
-                    len: leaf.bytes(),
-                });
-                return false;
-            }
-            true
-        });
-        report.leaves += outcome.leaves;
-        if offender.is_some() {
-            break;
-        }
-    }
-
-    match offender {
-        Some(found) => Err(found),
-        None => Ok(report),
-    }
-}
-
-// Where the link script puts the image's first byte and the first byte of its
-// data: everything between the two is text or read-only data. Declared rather
-// than defined, because only their addresses mean anything.
-unsafe extern "C" {
-    static __kernel_start: u8;
-    static __data_start: u8;
-}
-
-/// The physical span of the image's text and read-only data, as its first
-/// byte and a length.
-fn sealed_span(view: &BootView<'_>) -> (u64, u64) {
-    let start = u64::try_from((&raw const __kernel_start).addr()).unwrap_or(u64::MAX);
-    let data = u64::try_from((&raw const __data_start).addr()).unwrap_or(0);
-    (view.raw().kernel_phys, data.saturating_sub(start))
-}
 
 /// Where the kernel image is physically, all of it -- text, read-only data,
 /// data and `.bss` -- as its first byte and a length, learned from the
@@ -1368,7 +1275,7 @@ static IMAGE_LEN: AtomicU64 = AtomicU64::new(0);
 /// before it maps anything: [`crate::vmap::map_device`], a user space's
 /// device and window mappings, and early boot's device windows. The image's
 /// text and read-only data have no writable mapping anywhere
-/// ([`check_sealed_image`]), and a device window is writable, so a window over
+/// ([`check::check_sealed_image`]), and a device window is writable, so a window over
 /// them would undo the seal; its data and `.bss` are RAM the kernel uses
 /// through cacheable mappings, which a device window would alias uncached. No
 /// device's registers are in the image, so nothing is lost by refusing all of
@@ -1401,78 +1308,6 @@ pub(crate) fn image_span() -> (u64, u64) {
         IMAGE_PHYS.load(Ordering::Relaxed),
         IMAGE_LEN.load(Ordering::Relaxed),
     )
-}
-
-/// What the sealed-image sweep found.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct SealReport {
-    /// Bytes of text and read-only data the image holds.
-    pub(crate) bytes: u64,
-    /// Mappings of any of those bytes, the image's own included.
-    pub(crate) mappings: u64,
-}
-
-/// Walk the kernel's tables and require that no mapping of the physical pages
-/// holding the kernel's text and read-only data is writable.
-///
-/// The W^X sweep asks each mapping about itself, and the image mapping passes
-/// it. The direct map is a second mapping of the same frames, never executable
-/// and so never a W^X violation, and until the loaders sealed it it was
-/// writable: a write through the alias changed the code the image mapping
-/// runs. So this asks about the *frames*, whatever maps them — the direct
-/// map, the image, or a device window somebody opened over the image.
-///
-/// And it requires the direct map to alias every byte of the span, which is
-/// what makes a clean result mean something: a sweep that never met the alias
-/// it is looking for would pass on a kernel whose direct map moved.
-///
-/// # Errors
-///
-/// The first writable mapping of a sealed frame, or, as a zero-length
-/// [`WriteExecute`] at the span's direct-map address, a direct map that does
-/// not cover the whole span.
-pub(crate) fn check_sealed_image(view: &BootView<'_>) -> Result<SealReport, WriteExecute> {
-    let (low, bytes) = sealed_span(view);
-    let high = low.saturating_add(bytes);
-    let physmap = PHYSMAP.load(Ordering::Relaxed);
-    let physmap_phys = PHYSMAP_PHYS.load(Ordering::Relaxed);
-
-    let mut report = SealReport { bytes, mappings: 0 };
-    let mut aliased = 0u64;
-    let mut offender = None;
-    let _ = sweep(ROOT_TABLE.load(Ordering::Relaxed), |leaf| {
-        let first = leaf.phys.0;
-        let end = first.saturating_add(leaf.bytes());
-        if end <= low || first >= high {
-            return true;
-        }
-        report.mappings += 1;
-        if leaf.flags.write {
-            offender = Some(WriteExecute {
-                virt: leaf.virt.0,
-                len: leaf.bytes(),
-            });
-            return false;
-        }
-        let direct = first
-            .checked_sub(physmap_phys)
-            .and_then(|offset| physmap.checked_add(offset));
-        if direct == Some(leaf.virt.0) {
-            aliased += end.min(high) - first.max(low);
-        }
-        true
-    });
-
-    if let Some(found) = offender {
-        return Err(found);
-    }
-    if bytes == 0 || aliased != bytes {
-        return Err(WriteExecute {
-            virt: direct_map(low),
-            len: 0,
-        });
-    }
-    Ok(report)
 }
 
 // ---------------------------------------------------------------------------

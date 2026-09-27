@@ -151,8 +151,14 @@
     {
       "file": "kernel/src/main.rs",
       "kind": "memory",
-      "max_sites": 12,
-      "reason": "The boot checks' probes: demand paging, W^X, the guard page, the kernel image's own bytes. Ordinary RAM, read for real because that is what is being proven."
+      "max_sites": 5,
+      "reason": "The boot checks' probes: demand paging and the kernel image's own bytes. Ordinary RAM, read for real because that is what is being proven."
+    },
+    {
+      "file": "kernel/src/mm/check.rs",
+      "kind": "memory",
+      "max_sites": 5,
+      "reason": "Stage 2's boot checks, moved out of main.rs: a vmap page and a kernel stack written and read back to its last word. Ordinary RAM, read for real because that is what is being proven."
     },
     {
       "file": "kernel/src/mm.rs",

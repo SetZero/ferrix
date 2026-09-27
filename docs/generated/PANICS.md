@@ -376,7 +376,7 @@ up as corruption in whichever subsystem first relied on it.
    over the kernel image was mapped`): the refusal `mm::overlaps_image` makes is
    gone, or memory bring-up did not record where the image is.
 
-See: kernel/src/main.rs memory_check; libs/kernel/frame; libs/kernel/heap;
+See: kernel/src/mm/check.rs memory_check; libs/kernel/frame; libs/kernel/heap;
 libs/kernel/paging; kernel/src/vmap.rs; docs/ROADMAP.md stage 2.
 
 <a id="fx-0204"></a>
@@ -410,7 +410,7 @@ the identity map, is not the kernel the boot marker describes.
 6. The memory map marks no loader or ACPI-reclaimable region inside the range
    the per-frame array covers, so nothing was reclaimed.
 
-See: kernel/src/main.rs finish_memory; kernel/src/mm.rs check_w_xor_x and
+See: kernel/src/main.rs finish_memory; kernel/src/mm/check.rs check_w_xor_x and
 check_sealed_image; kernel/src/mm.rs reclaim_boot_memory; docs/ROADMAP.md stage
 2.
 

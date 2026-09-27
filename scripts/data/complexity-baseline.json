@@ -74,11 +74,6 @@
       "lines": 88,
       "recursive": false
     },
-    "main.rs::check_vmap": {
-      "complexity": 19,
-      "lines": 30,
-      "recursive": false
-    },
     "main.rs::kmain": {
       "complexity": 12,
       "lines": 67,
