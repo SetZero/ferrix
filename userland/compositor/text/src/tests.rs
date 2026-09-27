@@ -1186,7 +1186,7 @@ fn probe_host_fonts() {
     );
 }
 
-/// Pango's own widths on nazuna (1.57, 96 dpi, GTK3's `font-size: 15px` on
+/// Pango's own widths on example (1.57, 96 dpi, GTK3's `font-size: 15px` on
 /// Ubuntu, `~/.local/share/ferrix/logs/waybar/pango-reference.txt`): a
 /// line of each is 17 high with its baseline at 14.
 #[test]

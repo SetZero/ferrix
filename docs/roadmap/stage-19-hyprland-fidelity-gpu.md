@@ -100,7 +100,7 @@ always does.
 
 **Done — a person's own configuration, run (2026-09-17).** The test of a
 clone is not a checklist, it is somebody's real file. This one is
-`~/.config/hypr/hyprland.conf` on `nazuna`: 377 lines, 55 binds, two window
+`~/.config/hypr/hyprland.conf` on `example`: 377 lines, 55 binds, two window
 rules, a bar, a dock, a wallpaper daemon and a desktop-effects daemon. It
 runs, with no diagnostic at all, and the screenshot has waybar across the
 top, the wallpaper behind it and a terminal tiled under it with the

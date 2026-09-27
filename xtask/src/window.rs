@@ -739,7 +739,7 @@ fn takes_vnc(text: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// `-audiodev help` as QEMU 10.2.1 and 9.2.4 on nazuna print it.
+    /// `-audiodev help` as QEMU 10.2.1 and 9.2.4 on example print it.
     #[test]
     fn audio_drivers_are_read_from_audiodev_help() {
         let full = "Available audio drivers:\nnone\nalsa\ndbus\njack\noss\npa\npipewire\nsdl\nspice\nwav\n";

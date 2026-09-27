@@ -561,7 +561,7 @@ evdev layouts or the kernel needed a 32-bit fix: `libs/proto/linux-abi` had
 carried both pointer widths from the start. `test-display`, `test-input`,
 `test-seat`, `test-pty`, `test-video` and every boot of `test-compositor`
 pass on ARMv7-A, at four processors and at two. Under TCG on a loaded
-nazuna a full 1024x768 frame took 1.3 to 2 s there, about twice AArch64's
+example a full 1024x768 frame took 1.3 to 2 s there, about twice AArch64's
 0.6 to 0.8 s in the same runs, and the slowest 5.25 s, which is why
 `test-compositor` allows ARMv7-A 10 s a frame under emulation where the
 64-bit machines get 5: fine for a pixel test and nowhere near interactive.

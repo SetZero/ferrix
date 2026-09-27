@@ -36,7 +36,7 @@ On the host (`<empty>` is an empty directory, so no kept wallpaper is found and 
 shows):
 
 ```
-git -C /home/sebastian/Documents/projects/os/ferrix worktree add -b e4-shots .claude/worktrees/e4-shots main
+git -C /home/johndoe/Documents/projects/os/ferrix worktree add -b e4-shots .claude/worktrees/e4-shots main
 FERRIX_WALLPAPERS=<empty> CARGO_TARGET_DIR=<target> \
   cargo xtask run-compositor --arch x86_64 --chrome --release --tmpfs-root --accel kvm \
     --vnc 127.0.0.1:74 --ssh 2374 --layout us

@@ -167,7 +167,7 @@ core's product code names nothing above it.
 One command runs the suite on an architecture and fails below its floor:
 
 ```
-FERRIX_DRCOV=/home/sebastian/Documents/qemu/qemu/build/contrib/plugins/libdrcov.so \
+FERRIX_DRCOV=/home/johndoe/Documents/qemu/qemu/build/contrib/plugins/libdrcov.so \
   cargo xtask coverage --arch x86_64 \
     --init "$HOME/.local/share/ferrix/busybox/{arch}/bin/busybox.static"
 ```

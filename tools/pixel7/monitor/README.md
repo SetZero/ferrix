@@ -67,5 +67,6 @@ cd tools/pixel7/monitor
 cargo run --release            # or: cargo tauri dev
 ```
 
-On nazuna this needs WebKitGTK 4.1, which is installed, and adb and fastboot
-on `PATH`. `PIXEL7_SERIAL` picks another phone than `28171FDH2001RC`.
+On example this needs WebKitGTK 4.1, which is installed, and adb and fastboot
+on `PATH`. The phone is the serial in `PIXEL7_SERIAL`, else the one line of
+`~/.local/share/ferrix/pixel7/serial`.

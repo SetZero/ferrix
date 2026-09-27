@@ -423,7 +423,7 @@ fn the_release_of_an_eaten_key_is_eaten_even_after_the_modifier_went() {
 /// that keysym is the keymap's business: on a German keyboard `z` is where
 /// an American one has `y`. A compositor that resolved every bind against
 /// the US keymap would fire the wrong bind on a German keyboard and give no
-/// reason, and `nazuna`'s own configuration is `kb_layout = de`.
+/// reason, and `example`'s own configuration is `kb_layout = de`.
 #[test]
 fn a_bind_is_resolved_against_the_keymap_the_configuration_asked_for() {
     /// `KEY_Y` in evdev, which a German keymap calls `z`.

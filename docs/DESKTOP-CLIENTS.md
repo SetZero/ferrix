@@ -2,7 +2,7 @@
 
 ## 1. The aim
 
-The customer runs Hyprland on nazuna, and Ferrix's compositor
+The customer runs Hyprland on example, and Ferrix's compositor
 (`userland/compositor/hyprix`) already reads their `~/.config/hypr/hyprland.conf`.
 That file starts `waybar` and `hypridle`, binds fuzzel to `SUPER+R` and
 hyprlock to `SUPER+L`. None of the four is on Ferrix, and all four are C or
@@ -184,7 +184,7 @@ temporary directory, and the clients fall back to the same place.
 The four
 programs are carried as `/bin/waybar`, `/bin/fuzzel`, `/bin/hyprlock`,
 `/bin/hypridle` by one line each in `xtask/src/compositor.rs`'s
-`DESKTOP_CLIENTS`. `--no-dotfiles` carries the file alone. On nazuna the
+`DESKTOP_CLIENTS`. `--no-dotfiles` carries the file alone. On example the
 user's files are 35 and their fonts 20 files, 10.4 MiB: Ubuntu, GFS Didot,
 DejaVu Sans, and the host's `sans-serif` and `monospace`.
 
@@ -270,9 +270,9 @@ What the user's file does on Ferrix, line by line where it differs:
   The user chose (2026-09-26) to give QEMU's screen that monitor's own EDID
   the way Linux overrides one (`drm.edid_firmware=`); that landed, and
   `run-compositor` gives the screen this machine's monitor's EDID, so the
-  line matches as on nazuna.
+  line matches as on example.
 * The ten `custom/ws-N`, `custom/clock` and `custom/logout`'s click run
-  `/home/sebastian/.local/bin/hypr-workspaces`, `ba-calendar` and
+  `/home/johndoe/.local/bin/hypr-workspaces`, `ba-calendar` and
   `hypr-logout`, Python scripts that are not on Ferrix. `sh` answers 127,
   and waybar hides a module whose script fails or prints nothing, so the
   desktop chips and the clock are hidden -- and `ba-calendar daemon` logs
@@ -392,7 +392,7 @@ the border and `[dmenu]`. What differs:
 * `terminal=foot`: foot is not in the desktop image, so a `Terminal=true`
   entry (`top`) fails as fuzzel says a missing program fails:
   `foot top: failed to execute: No such file or directory (2)`, exit 1.
-* The user opens fuzzel through `/home/sebastian/.local/bin/hypr-launcher`
+* The user opens fuzzel through `/home/johndoe/.local/bin/hypr-launcher`
   (SUPER+R, and a bare SUPER tap). That script and its GTK scrim are not
   in the image, so on Ferrix their binds start nothing. `/bin/fuzzel` itself
   works; the wrapper's `--keyboard-focus=on-demand
@@ -418,7 +418,7 @@ Landed: the pure core, `a29407d6` and `02afa6c8` (2026-09-26): config,
 entries, matching, prompt, exec, keys, icons, cache, dmenu, command line,
 geometry and the launcher state, with 66 host tests, and `examples/probe`,
 which reads the real `~/.config/fuzzel/fuzzel.ini` and `.desktop` files on
-the host. Against nazuna's files it finds 144 entries, 67 shown, and ranks
+the host. Against example's files it finds 144 entries, 67 shown, and ranks
 Terminal first for `term`.
 
 On branch `fuzzel-window`: the window, the hyprix focus change, the image's
@@ -724,7 +724,7 @@ shell says it does, and the program reports it.
   unexpectedly (a top-level name no keyword takes is accepted silently; a
   scoped keyword written out in full keeps its full name; a shorthand line
   and a following block are one instance). image renders all fifteen of the
-  user's waybar icons on nazuna (an ignored probe test); JPEG decodes with
+  user's waybar icons on example (an ignored probe test); JPEG decodes with
   zune-jpeg's SIMD off, so it forbids unsafe and is slower than it could be.
 * **`userland/compositor/text` is on `main`** (2026-09-26). 29 host tests on
   the tree's own Liberation and Inter; an ignored probe of the host's fonts
@@ -735,7 +735,7 @@ shell says it does, and the program reports it.
   done: colour glyphs (Noto Color Emoji draws nothing), bidi reordering,
   instancing on axes other than `wght`, and a font cache on disk
   (`Fonts::system()` scans every time). **Whole-pixel metrics landed
-  2026-09-27**: Pango on nazuna (1.57, 96 dpi, GTK3's `font-size: 15px` on
+  2026-09-27**: Pango on example (1.57, 96 dpi, GTK3's `font-size: 15px` on
   Ubuntu) rounds each glyph's advance and offsets to a whole pixel, and the
   ascent and descent -- `vol 0%` is 44 wide, `cpu 19%` 57, `abc` 24, a line
   17 with its baseline at 14 -- and `Fonts::shape` now does the same, where

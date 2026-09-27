@@ -27,7 +27,7 @@ later port forwarding for a debugger. Four were weighed with the owner on
   files, reboot and forwarding in one tool, and it runs over TCP as well as
   USB. **Chosen.**
 
-Done means: with Ferrix running natively on the phone, `adb devices` on nazuna
+Done means: with Ferrix running natively on the phone, `adb devices` on example
 lists it, and `adb shell`, `adb push`, `adb pull`, `adb reboot` and
 `adb forward` work. The same works over TCP (`adb connect`) against Ferrix in
 QEMU and in the phone's crosvm guest, and a gate proves it on every change.
@@ -40,7 +40,7 @@ the serial port (`ferrix-usbdev: reboot`). `adb reboot` replaces it.
 AOSP's `packages/modules/adb/protocol.txt`, `SYNC.TXT` and
 `shell_protocol.h` are the authority. The summary below is from memory, so
 check each value against those files before relying on it. The host's
-`adb` (platform-tools 36 on nazuna) is the real test of every step.
+`adb` (platform-tools 36 on example) is the real test of every step.
 
 * **Messages.** A 24-byte header, little-endian: `command`, `arg0`, `arg1`,
   `data_length`, `data_crc32`, and `magic` (`command ^ 0xFFFFFFFF`), then

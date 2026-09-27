@@ -28,9 +28,19 @@ use tauri::{AppHandle, Emitter};
 
 use crate::helper;
 
-/// The phone, by its serial number.
+/// The phone, by its serial number: `PIXEL7_SERIAL`, else the one line of
+/// `~/.local/share/ferrix/pixel7/serial`, else empty, which no phone matches.
 pub fn serial() -> String {
-    std::env::var("PIXEL7_SERIAL").unwrap_or_else(|_| "28171FDH2001RC".into())
+    std::env::var("PIXEL7_SERIAL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            let home = std::env::var_os("HOME").unwrap_or_default();
+            let file = std::path::Path::new(&home).join(".local/share/ferrix/pixel7/serial");
+            std::fs::read_to_string(file)
+                .map(|s| s.trim().to_owned())
+                .unwrap_or_default()
+        })
 }
 
 /// Where each tick's output ends.

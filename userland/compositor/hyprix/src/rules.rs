@@ -641,7 +641,7 @@ mod tests {
     /// `suppress_event maximize` is recorded against the window, which is
     /// how the compositor knows to ignore what the client asks for.
     ///
-    /// `nazuna`'s first `windowrule` line is exactly this, against every
+    /// `example`'s first `windowrule` line is exactly this, against every
     /// class, and it is only worth writing because the compositor obeys
     /// `set_maximized` by default.
     #[test]

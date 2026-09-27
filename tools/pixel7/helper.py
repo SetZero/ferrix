@@ -41,19 +41,31 @@ import hashlib
 import http.server
 import urllib.parse
 import json
+import os
 import pathlib
 import subprocess
 import threading
 import time
 
 PORT = 47707
-SERIAL = "28171FDH2001RC"
 RUNS = pathlib.Path.home() / ".local/share/ferrix/pixel7"
 HERE = pathlib.Path(__file__).resolve().parent
 MKBOOTIMG = HERE.parent.parent / "boot" / "pixel7" / "mkbootimg.py"
 AVBTOOL = RUNS / "avbtool.py"
 VM_DIR = "/data/local/tmp/ferrix-vm"
 VM_IMAGE = f"{VM_DIR}/ferrix.Image"
+
+
+def default_serial() -> str | None:
+    """The phone's serial: `FERRIX_PIXEL7_SERIAL`, else the one line of
+    `RUNS/serial`. The repository names no phone."""
+    serial = os.environ.get("FERRIX_PIXEL7_SERIAL")
+    if serial:
+        return serial
+    try:
+        return (RUNS / "serial").read_text().strip() or None
+    except OSError:
+        return None
 
 
 def run(*command: str, timeout: float = 60) -> subprocess.CompletedProcess[str]:
@@ -281,8 +293,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--image", type=pathlib.Path, help="boot.img to boot (default: the newest run's)")
     parser.add_argument("--vendor-boot", type=pathlib.Path, default=RUNS / "vendor_boot.img")
-    parser.add_argument("--serial", default=SERIAL)
+    parser.add_argument("--serial", default=default_serial(),
+                        help="the phone's serial (default: FERRIX_PIXEL7_SERIAL, else RUNS/serial)")
     args = parser.parse_args()
+    if not args.serial:
+        parser.error(f"no phone named: pass --serial, set FERRIX_PIXEL7_SERIAL or write {RUNS / 'serial'}")
     phone = Phone(args.serial, args.image, args.vendor_boot)
     threading.Thread(target=phone.keep_reverse, daemon=True).start()
     server = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), handler(phone))

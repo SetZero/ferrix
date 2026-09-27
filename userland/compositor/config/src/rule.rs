@@ -514,7 +514,7 @@ fn matcher(field: &str) -> Result<Matcher, String> {
         "group" => yes_or_no().map(Matcher::Grouped),
         // No window here is XWayland's -- there is no XWayland -- so the
         // rule matches only when it asks for a native one. A real
-        // configuration uses this the way nazuna's does, to keep a rule
+        // configuration uses this the way example's does, to keep a rule
         // off Wayland windows, and a compositor that refused the matcher
         // would cost a person the whole line.
         "xwayland" => yes_or_no().map(Matcher::Xwayland),

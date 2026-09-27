@@ -786,12 +786,12 @@ mod tests {
         let args = parse(&[
             "deploy",
             "--to",
-            "/media/sebastian/bootfs",
+            "/media/johndoe/bootfs",
             "--port",
             "/dev/ttyACM0",
         ])
         .unwrap();
-        assert_eq!(args.to.as_deref(), Some("/media/sebastian/bootfs"));
+        assert_eq!(args.to.as_deref(), Some("/media/johndoe/bootfs"));
         assert_eq!(args.port.as_deref(), Some("/dev/ttyACM0"));
     }
 

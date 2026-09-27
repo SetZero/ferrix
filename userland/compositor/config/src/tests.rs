@@ -1268,7 +1268,7 @@ fn the_states_a_rule_can_match_on() {
 /// The matchers and the effects the merged 0.56 grammar added, which a
 /// real configuration writes.
 ///
-/// `nazuna`'s two `windowrule` lines are `suppress_event maximize,
+/// `example`'s two `windowrule` lines are `suppress_event maximize,
 /// match:class .*` and a `no_focus` line matching on `xwayland`, `pin` and
 /// `float` at once. Before this both were refused outright, and a refused
 /// line is a line that does nothing: the person who wrote it gets a
@@ -1328,7 +1328,7 @@ fn the_matchers_and_effects_of_the_merged_grammar() {
 
     // There is no XWayland here, so a rule that asks for an X11 window
     // matches nothing and one that asks for a native window matches
-    // everything. `nazuna`'s `no_focus` line asks for `xwayland 1`, and
+    // everything. `example`'s `no_focus` line asks for `xwayland 1`, and
     // that line is meant not to fire.
     assert!(
         !WindowRule::parse("no_focus, match:xwayland 1")
@@ -1379,7 +1379,7 @@ fn the_matchers_and_effects_of_the_merged_grammar() {
     }));
     assert!(!state.matches(&base));
 
-    // And the whole of the line `nazuna` writes, which must read and must
+    // And the whole of the line `example` writes, which must read and must
     // not fire.
     let real = WindowRule::parse(
         "no_focus true, match:class ^$, match:title ^$, match:xwayland 1, match:float 1, \

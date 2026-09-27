@@ -133,7 +133,7 @@ Three parts, in the order they can be tested:
   `tests/link.rs` calls all six from a program with no C library, through a
   stub whose `SONAME` is the loader's own name; refusing no TLS library
   fails it with 98 and a `dlsym` that finds nothing with 92. A glibc-built
-  program on nazuna, pointed at ferrousli's `ld.so` and `libc.so.6`,
+  program on example, pointed at ferrousli's `ld.so` and `libc.so.6`,
   `dlopen`s a library, calls into it, and gets `dladdr`'s and `dlerror`'s
   answers through `libc.so.6`.
 

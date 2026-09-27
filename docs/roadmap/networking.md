@@ -486,7 +486,7 @@ a forward before the guest has spoken. The negative control, not committed:
 with the SYN-ACK no longer opening the connection, the first of the three fails
 waiting for the guest's bytes.
 
-A KVM boot on nazuna with `--forward 22022:22` ran `sshdt -b 0.0.0.0 -p 22`
+A KVM boot on example with `--forward 22022:22` ran `sshdt -b 0.0.0.0 -p 22`
 with a public key, and the host's OpenSSH ran `uname -a` and `id` over it and
 opened a session on `/dev/pts/0`. The gateway counted `2 forwarded`. Two things
 showed up that are not SSH's: sshdt warns once that `mlock` is `ENOSYS`, and

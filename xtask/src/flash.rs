@@ -594,8 +594,8 @@ mod tests {
     #[test]
     fn unescapes_the_octal_that_proc_mounts_uses() {
         assert_eq!(
-            unescape("/media/sebastian/NO\\040NAME"),
-            "/media/sebastian/NO NAME"
+            unescape("/media/johndoe/NO\\040NAME"),
+            "/media/johndoe/NO NAME"
         );
         assert_eq!(unescape("/media/plain"), "/media/plain");
         // A trailing backslash is not an escape and must not be eaten.
@@ -636,7 +636,7 @@ mod tests {
     fn the_machines_own_efi_partition_is_never_a_candidate() {
         assert!(starts_with_any(Path::new("/boot/efi"), &["/boot", "/efi"]));
         assert!(!starts_with_any(
-            Path::new("/media/sebastian/bootfs"),
+            Path::new("/media/johndoe/bootfs"),
             &["/boot", "/efi"]
         ));
     }

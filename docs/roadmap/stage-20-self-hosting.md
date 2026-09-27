@@ -21,7 +21,7 @@ loader, the kernel and the native programs and writes the FAT image, with no
 network. The kernel commits the volume on its way to the power-off. The host
 then has `btrfs check --check-data-csum` judge what Ferrix wrote, takes the
 image and the kernel ELF out with `btrfs restore`, and boots that image with
-`test-boot`'s judgement. On nazuna under KVM, with four processors and 8 GiB,
+`test-boot`'s judgement. On example under KVM, with four processors and 8 GiB,
 the build takes about 90 seconds of the guest's time:
 
 ```
@@ -110,7 +110,7 @@ the next step, below.
 
 What the exit needs now:
 
-* **Room for a preempted processor.** Both FX-0001 stops came with nazuna at
+* **Room for a preempted processor.** Both FX-0001 stops came with example at
   a load of 42 to 52 on 24 cores, eight virtual processors deep in a parallel
   build. `smp.rs` already gives a shootdown holder four seconds because "a
   holder preempted on a host with more virtual processors than real ones can

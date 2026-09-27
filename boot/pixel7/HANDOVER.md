@@ -1,6 +1,6 @@
 # Handover: Ferrix on the Pixel 7 (2026-09-26)
 
-For the agent picking this up on nazuna. `README.md` in this directory says
+For the agent picking this up on example. `README.md` in this directory says
 what the loader is. This file is the working state behind it: what is proven
 on the phone, how to drive it, what went wrong, and what to do next, most
 important first. Read **"Never write anything that survives a reset"** before
@@ -122,7 +122,7 @@ None of it is pushed.
   so a run needs nobody at the phone, only the screen does.
 
 * **On `main`**, merged 2026-09-26 by fast-forward after the whole gate row
-  for "anything the image contains" passed on nazuna. **Not pushed**: pushes
+  for "anything the image contains" passed on example. **Not pushed**: pushes
   are the owner's to authorise.
 * **Ferrix boots on the phone to `FERRIX-BOOT-OK stages 1-12`, on one core**,
   and **draws on the screen**: the kernel's panic screen has been seen on the
@@ -146,7 +146,7 @@ None of it is pushed.
   | `83f1f8cf` | `gic::init` split for the complexity floor |
   | `73ef630e` | `arch::init_watchdogs`/`start_watchdogs` facade instead of `cfg`s in generic code |
 
-* **Gate, on nazuna, on `73ef630e` as it was before its last rebase** onto
+* **Gate, on example, on `73ef630e` as it was before its last rebase** onto
   two xtask-only commits (keyboard layout, remote desktop), which reach
   neither kernel nor loader; xtask's clippy and 293 tests passed after that
   rebase. `cargo xtask check` passed every
@@ -159,18 +159,19 @@ None of it is pushed.
 
 ## The phone
 
-Pixel 7, `panther`, serial `28171FDH2001RC`. Stock Android 17, build
+Pixel 7, `panther`; its serial is in `~/.local/share/ferrix/pixel7/serial`.
+Stock Android 17, build
 `CP2A.260705.006`, slot `a`. Bootloader **unlocked**; rooted with Magisk 30.7
 (patched `init_boot_a`); `su` works from `adb shell` (context
 `u:r:magisk:s0`). The owner is at the phone and can press buttons or watch the
 screen when asked. Ask them to watch before any display test, because only a
 human can see the screen.
 
-Tooling on nazuna, all without sudo:
+Tooling on example, all without sudo:
 
 * Google's platform-tools in `~/.local/share/ferrix/pixel7/platform-tools`,
   linked into `~/.local/bin` (`adb`, `fastboot`). Both reach the phone as the
-  desktop user through `uaccess`, with no udev rule needed, and nazuna's adb
+  desktop user through `uaccess`, with no udev rule needed, and example's adb
   key is authorised.
 * In `~/.local/share/ferrix/pixel7/`: the factory zip (SHA-256
   `ed94a24e…0372b0b`), `vendor_boot.img` extracted from it, `avbtool.py`,
@@ -394,7 +395,7 @@ TF-A answers it).
 ## Starting Ferrix from Android
 
 **The button works through the PC** (`tools/pixel7/`, see its README). The app
-"Boot Ferrix" (`dev.ferrix.launcher`) asks `tools/pixel7/helper.py` on nazuna,
+"Boot Ferrix" (`dev.ferrix.launcher`) asks `tools/pixel7/helper.py` on example,
 over `adb reverse`, to run the `fastboot boot` cycle. The owner pressed it on
 2026-09-26: the run reached `FERRIX-BOOT-OK stages 1-12` and Android was back
 74 s later, with the record in `$P/launcher-20260926-144950/`. It needs the

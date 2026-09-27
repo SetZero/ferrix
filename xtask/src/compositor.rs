@@ -368,7 +368,7 @@ const ANIMATED_MOVING: Moving<'static> = Moving {
 ///
 /// Twice that on ARMv7-A, whose frames under `tcg` take about twice
 /// AArch64's in the same runs (1.3 to 2 s against 0.6 to 0.8 s on a loaded
-/// nazuna, 2026-09-23), and whose slowest reached 5.25 s there with the
+/// example, 2026-09-23), and whose slowest reached 5.25 s there with the
 /// host's load average near 11: a bound the 64-bit machines keep a margin
 /// under would fail it on load alone.
 ///

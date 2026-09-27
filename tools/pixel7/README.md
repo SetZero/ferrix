@@ -62,10 +62,10 @@ JAVA_HOME=~/Android/jdk/jdk-21.0.12.1+1 ANDROID_HOME=~/Android/Sdk \
     ~/.gradle/wrapper/dists/gradle-9.8.0-bin/*/gradle-9.8.0/bin/gradle \
     --offline -Dorg.gradle.java.installations.paths=$HOME/Android/jdk/jdk-21.0.12.1+1 \
     assembleDebug
-adb -s 28171FDH2001RC install -r app/build/outputs/apk/debug/app-debug.apk
+adb -s <serial> install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-The system JDK on nazuna is a runtime with no `javac`, which Gradle's Java
+The system JDK on example is a runtime with no `javac`, which Gradle's Java
 compile step needs even in a Kotlin-only app, so `JAVA_HOME` has to name the
 SDK's JDK. The app is `dev.ferrix.launcher`, labelled "Boot Ferrix".
 

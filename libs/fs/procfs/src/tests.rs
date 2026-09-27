@@ -936,7 +936,7 @@ fn a_file_with_no_rows_is_its_header_and_nothing_else() {
 }
 
 /// `fs/proc/loadavg.c`'s line, derived: the averages are the ones btop showed
-/// for nazuna on 2026-09-27, and the fixed-point loads are the ones that
+/// for example on 2026-09-27, and the fixed-point loads are the ones that
 /// print as them.
 #[test]
 fn loadavg_is_linuxs_line() {

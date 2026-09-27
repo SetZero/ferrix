@@ -70,7 +70,7 @@ there. And judge a gate by its exit status and its output — never through
 
 On 2026-09-24 one session split the init and stage 13's cgroups across five
 agents. Six landings went in (22 points) in about two hours, and the one
-that mattered most never started. The nazuna gate summaries, kept under
+that mattered most never started. The example gate summaries, kept under
 `~/.local/share/ferrix/logs/init-gate-*`, show where the time went. Each
 rule below comes from something seen there.
 
@@ -106,8 +106,8 @@ rule below comes from something seen there.
    and file the row with the log's path and the commit. A flake that keeps
    firing is cheaper to fix than to rerun.
 6. **Name what you put in shared places.** Parallel agents share the
-   session's scratch directory and nazuna's home. One agent copied another's
-   `adhoc.sh` to nazuna by mistake, because both scripts had the same name.
+   session's scratch directory and example's home. One agent copied another's
+   `adhoc.sh` to example by mistake, because both scripts had the same name.
    Prefix your scripts, worktrees, refs, target directories and `TMPDIR`
    with your stream's name, and remove only those, by exact name.
 7. **Make agent worktrees by hand.** The Agent tool's `isolation: worktree`

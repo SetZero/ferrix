@@ -52,7 +52,12 @@ FERRIX_PIXEL7_INITRD_DIGEST=$(sha256sum "$initrd" | cut -d' ' -f1) \
 echo "built $out/desktop.Image (scale $scale)"
 
 if [ -n "$push" ]; then
-    serial=${FERRIX_PIXEL7_SERIAL:-28171FDH2001RC}
+    # The phone: FERRIX_PIXEL7_SERIAL, else ~/.local/share/ferrix/pixel7/serial.
+    serial=${FERRIX_PIXEL7_SERIAL:-$(cat "$HOME/.local/share/ferrix/pixel7/serial" 2>/dev/null)}
+    if [ -z "$serial" ]; then
+        echo "no phone named: set FERRIX_PIXEL7_SERIAL or write ~/.local/share/ferrix/pixel7/serial" >&2
+        exit 1
+    fi
     adb -s "$serial" push "$out/desktop.Image" /data/local/tmp/ferrix-vm/desktop.Image
     if [ -n "$chrome" ]; then
         volume=${FERRIX_CHROMIUM_VOLUME:-$HOME/.local/share/ferrix/chromium-arm64}/chromium.img

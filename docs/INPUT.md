@@ -364,7 +364,7 @@ queue, clock and grab state. Nothing here stands in for DRM master's exclusive
 open.
 
 Numbers and layouts go into `libs/proto/linux-abi` (`input` module), from a probe
-compiled on nazuna against `/usr/include/linux/input.h` and
+compiled on example against `/usr/include/linux/input.h` and
 `input-event-codes.h` (`linux-libc-dev` 7.0.0-29.29 today), at both pointer
 widths. The probe is committed as `libs/proto/linux-abi/probe/input.c` and
 `input.sh`, its output as `input-64.txt` and `input-32.txt`, and the numbers
@@ -579,13 +579,13 @@ so a client that cannot compose types nothing rather than the wrong thing.
 
 ## 5. Landings and points
 
-Each is a small landing on main, gated on nazuna. The first four touch no
+Each is a small landing on main, gated on example. The first four touch no
 kernel code. **L1 comes first:** every later landing takes its numbers from
 it.
 
 | # | Landing | Kernel? | Points |
 |---|---|---|---|
-| L1 | `libs/proto/linux-abi::input`: the §3.3 ioctls (with a sample length for the sized ones), `EV_VERSION`, `INPUT_MAJOR`, event types and codes, `*_MAX`/`*_CNT`, the clock ids, and `input_event`, `input_id` and `input_absinfo` layouts at both widths. From a committed probe (`probe/input.c`, `input.sh`, `input-64.txt`, `input-32.txt`) compiled on nazuna against `/usr/include/linux/input.h`, pinned by `src/tests/input.rs` | no | 2 |
+| L1 | `libs/proto/linux-abi::input`: the §3.3 ioctls (with a sample length for the sized ones), `EV_VERSION`, `INPUT_MAJOR`, event types and codes, `*_MAX`/`*_CNT`, the clock ids, and `input_event`, `input_id` and `input_absinfo` layouts at both widths. From a committed probe (`probe/input.c`, `input.sh`, `input-64.txt`, `input-32.txt`) compiled on example against `/usr/include/linux/input.h`, pinned by `src/tests/input.rs` | no | 2 |
 | L2 | `libs/drivers/virtio::input`: configuration queries and the 8-byte event, hostile-device tests, checked against QEMU 9.2.4, fuzzed, its evdev numbers L1's. Landed (493fd843, 0bfb1de4, and the switch to L1's numbers) | no | 2 |
 | L3 | `libs/proto/inputctl`: §3.2's messages and validation, and `queue`: report assembly, per-open queues, `SYN_DROPPED`, grab, clock conversion, state for `EVIOCGKEY`/`EVIOCGABS`. Host-tested, fuzzed | no | 3 |
 | L4 | `libs/drivers/virtio-input`: driver logic over `libs/drivers/virtio-blk`'s traits (bring-up, the queries into `HELLO`, keeping the event queue full, filtering, batching), tested against a simulated device that drops short reports as QEMU does. Landed | no | 3 |
@@ -622,7 +622,7 @@ agreed with them. `ferrix-virtio` depends on `ferrix-linux-abi` for that: a
 `no_std` crate with no dependencies that the kernel, `ferrix-rt` and the fuzz
 crate already link. Its tests now also require the bits QEMU's devices set to
 be L1's codes, and its fuzz target ran 50,283,653 inputs in ten minutes on
-nazuna without a failure. L3 is done, landed on 2026-09-16 as 3aa79e19 to
+example without a failure. L3 is done, landed on 2026-09-16 as 3aa79e19 to
 456719d6: `libs/proto/inputctl` with §3.2's messages, the core's session and §3.1's
 queue, host-tested and fuzzed. Where this document left a
 rule to Linux, it follows `drivers/input/evdev.c` and `input.c`, and it

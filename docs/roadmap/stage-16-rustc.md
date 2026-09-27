@@ -5,7 +5,7 @@ The remaining syscall surface, the memory scale, the process spawn path for
 
 **Exit:** `rustc hello.rs && ./hello` on Ferrix, in CI.
 
-**Met on 2026-09-22,** on nazuna under KVM, with `cargo xtask test-rustc`;
+**Met on 2026-09-22,** on example under KVM, with `cargo xtask test-rustc`;
 the CI job `rustc` runs the same command on every push, and has passed on
 GitHub since its first run there on 2026-09-22. The compiler is not one
 built here. It is the rust-lang.org release of 1.97.1: a glibc

@@ -350,7 +350,7 @@ that a program which asks for isolation now finds out it cannot have it.
   wakes the timer's waiters there. The boot check arms a timer only once a
   blocked read, a `poll` and an `epoll_wait` are each waiting on it, and
   requires the thread's wake to end each wait within a quarter of that
-  second. In the seven boots made for it on nazuna's QEMU -- x86-64,
+  second. In the seven boots made for it on example's QEMU -- x86-64,
   AArch64, and ARMv7-A at four processors and at two -- no waiter came back
   more than 3.5 ms after its deadline, and most within half a millisecond.
   What is not as Linux has it is in `docs/ROADMAP.md`, stage 17.
@@ -524,7 +524,7 @@ What it still says, and none of it stops it: `fallocate` cannot punch a
 hole in a memfd, so foot's buffer pool keeps pages it could give back;
 libxkbcommon finds no `/usr/share/X11/xkb`, which it does not need while the
 compositor hands it the keymap; and foot is ported to x86-64 only. It was
-first run against the compositor on nazuna's own kernel, which proved the
+first run against the compositor on example's own kernel, which proved the
 static build a working Wayland client before the kernel had `timerfd`.
 One thing the test's first version got wrong is worth keeping: it counted
 colours on QEMU's default console, which was the firmware's text screen,
@@ -590,7 +590,7 @@ libraries, fontconfig's configuration and DejaVu, every download pinned by
 its SHA-256. After unpacking, it looks up every library each ELF file on the
 volume needs, which found two -- `libcap` and `libsqlite3` -- that Debian's
 builds need and the development host's did not. The same volume ran Chrome
-on nazuna's own kernel, through a copy whose `PT_INTERP` named the volume's
+on example's own kernel, through a copy whose `PT_INTERP` named the volume's
 loader, before it was tried on Ferrix. It is not on the image: 809 MiB.
 
 **What `cargo xtask test-chrome` requires**, booting 4 GiB with the volume at
@@ -656,7 +656,7 @@ Chrome's `PT_INTERP` names and ferrousli as `/lib/libc.so.6`, with
 `LD_LIBRARY_PATH=/lib:/lib/x86_64-linux-gnu`, so that everything else is
 the volume's. The first run that passed printed the version, `computed
 42`, and wrote a 4796-byte screenshot, with no ANGLE or Vulkan error. Each
-stop was found by running Chrome on nazuna's own kernel first, through a
+stop was found by running Chrome on example's own kernel first, through a
 copy whose `PT_INTERP` names ferrousli's loader, then on Ferrix. In the
 order they were found:
 
@@ -717,7 +717,7 @@ handler's `PT_INTERP` look, `libc.so.6` in `/lib`, and `LD_LIBRARY_PATH`
 given to what the compositor starts. The full browser loads 80 objects
 where the headless shell loads 46 -- cairo, pango, CUPS, GnuTLS, Kerberos
 and what they need -- and opens seven more later. Found by running it on
-nazuna's own kernel first, through a copy whose `PT_INTERP` names
+example's own kernel first, through a copy whose `PT_INTERP` names
 ferrousli's loader, then passing on Ferrix at the first boot:
 
 1. **The loader held 64 objects.** It refused the browser with "too many
@@ -765,7 +765,7 @@ rounds; the volume is 1220 MiB.
 
 Chrome's Ozone layer with `--ozone-platform=wayland` is a Wayland client
 with its own libwayland, and draws through `wl_shm` with `--disable-gpu`. It
-was run against the compositor on nazuna's own kernel first, from the
+was run against the compositor on example's own kernel first, from the
 volume's files, and drew its tab strip, toolbar and page there; the only
 thing it needed was the crash handler's `PT_INTERP` pointed at the volume's
 loader too, which on Ferrix `/lib64` does.
@@ -998,7 +998,7 @@ One run at load 25 had no underrun and no silence but the loop's.
 
 **Real YouTube, over the network, the next night.** A probe kept outside
 the tree (`~/ferrix-logs/chrome-perf/youtube/bench-page-probe.patch` on
-nazuna) lets the bench open any page with `--net`, taking a screen every
+example) lets the bench open any page with `--net`, taking a screen every
 ten seconds. YouTube's embed refuses to play as a page of its own ("error
 153"), and its watch page opens behind a consent dialog. So the probe opens
 a page served from the host (`index.html` beside the patch, served by

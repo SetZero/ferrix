@@ -76,7 +76,7 @@ mod names {
 
 /// A monitor's `EDID` read into the three strings a `desc:` rule matches on.
 ///
-/// The bytes are a real Dell P2418D's base block, which is what `nazuna`'s
+/// The bytes are a real Dell P2418D's base block, which is what `example`'s
 /// own configuration names -- `monitor = desc:Dell Inc. DELL P2418D
 /// MY3ND91J09CT`. A compositor that read the manufacturer's five-bit
 /// letters the wrong way round, or took the product code where a `0xFC`

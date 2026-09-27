@@ -457,7 +457,7 @@ VERIFICATION.md §3.4. The corrected figures, on main at a6d505a2, are 74.7%
 Reproduction, with QEMU's drcov plugin built from its source tree:
 
 ```
-FERRIX_DRCOV=/home/sebastian/Documents/qemu/qemu/build/contrib/plugins/libdrcov.so \
+FERRIX_DRCOV=/home/johndoe/Documents/qemu/qemu/build/contrib/plugins/libdrcov.so \
   cargo xtask coverage --arch x86_64 \
     --init "$HOME/.local/share/ferrix/busybox/{arch}/bin/busybox.static"
 ```

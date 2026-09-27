@@ -195,7 +195,7 @@ enum Positions {
 /// `text` shaped in one face: glyph, cluster (a byte offset from `base`),
 /// and advance and offsets in pixels.
 ///
-/// Pango on nazuna (1.57, GTK3's `font-size: 15px` on Ubuntu) measures
+/// Pango on example (1.57, GTK3's `font-size: 15px` on Ubuntu) measures
 /// `vol 0%` 44 wide, `abc` 24 and a space 3: each glyph's advance rounded
 /// on its own, which `HarfBuzz`'s 44.50, 23.46 and 3.44 become only when
 /// every glyph is rounded first. So `Positions::Whole` rounds each glyph.

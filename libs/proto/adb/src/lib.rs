@@ -4,7 +4,7 @@
 //! `docs/ADB.md` is why Ferrix speaks adb and how much of it. The authority
 //! is AOSP's `packages/modules/adb`: `protocol.txt` for [`message`] and
 //! `SYNC.TXT` for [`sync`]. Every constant here was checked against the host's
-//! `adb` 37 on nazuna, which is the test that matters.
+//! `adb` 37 on example, which is the test that matters.
 //!
 //! * [`message`]: the 24-byte header every message starts with, and the
 //!   banner a device answers `CNXN` with.

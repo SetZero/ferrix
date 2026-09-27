@@ -522,7 +522,7 @@ and fails by the check's own message. Five things cost a gate each today:
   on Linux.
 * A new crate goes into `Cargo.lock` and `tests/fuzz/Cargo.lock`: check with
   `cargo metadata --locked --offline` in both.
-* On nazuna, `pgrep -f` with a pattern that also appears in the calling
+* On example, `pgrep -f` with a pattern that also appears in the calling
   command line matches its own shell.
 
 **Open, and not this stage's.** Two failures of ferrousli's busybox on the

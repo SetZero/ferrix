@@ -442,7 +442,7 @@ replacement will look there. No client in this iteration needs them.
 
 ## 5. Landings and points
 
-Each is a small landing on main, gated on nazuna. The first four touch no
+Each is a small landing on main, gated on example. The first four touch no
 kernel code. **L1 comes first:** every later landing takes its numbers from
 it.
 
@@ -613,7 +613,7 @@ comment. Its tests build QEMU 9.2.4's own answers by hand from
 `virtio_snd.h` and then hostile ones: a short or not-OK response, fewer
 entries than asked, a direction that does not exist, an empty channel
 range, and a transmit completion that wrote anything but its status. The
-`virtio_snd` fuzz target ran 223,434,735 inputs in five minutes on nazuna
+`virtio_snd` fuzz target ran 223,434,735 inputs in five minutes on example
 without a failure.
 
 L3 is done (2026-09-26): `libs/proto/sndctl` is the protocol and the stream.
@@ -638,7 +638,7 @@ Its 30 tests drive the stream with a model program and device: a second of
 a counter written in 700-frame blocks plays whole and in order and drains;
 underrun, drop, reset, close and a driver that lies are each checked; the
 refine answers alsa-lib's `any`, `set_*` and `set_*_near` calls. The
-`sndctl` fuzz target ran 5,047,081 scripts in five minutes on nazuna,
+`sndctl` fuzz target ran 5,047,081 scripts in five minutes on example,
 mixing requests, completions and lies, without breaking a property.
 `ferrix-linux-abi` gained `EBADFD` and `ESTRPIPE`.
 
@@ -732,7 +732,7 @@ that timed out ended the driver. Four changes followed:
 Three things are still open:
 
 * **§3.3's reading of QEMU was of 9.2.4.** The QEMU these runs used is
-  10.2.1: `~/.local/bin` on nazuna links it ahead of `/usr/local/bin`'s
+  10.2.1: `~/.local/bin` on example links it ahead of `/usr/local/bin`'s
   9.2.4, and it is the one that has `pipewire` and `pa`. §6's decision 8 is
   answered by that link for x86-64. AArch64 runs 9.2.4's, and passed.
 * **ARMv7-A has run since 2026-09-26**, in every audio landing's gate at

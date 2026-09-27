@@ -49,7 +49,7 @@ thing this plan solves.
 
 ## 3. The spike: Rust `std` links against ferrousli, and so does uutils
 
-Run on nazuna, 2026-09-17, before the plan was written, because everything
+Run on example, 2026-09-17, before the plan was written, because everything
 here rests on an unproven claim: that Rust's `std` for a glibc target can be
 linked against ferrousli the way busybox's C is.
 

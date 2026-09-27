@@ -204,7 +204,7 @@ after `HELLO` is accepted, as blk registers its disk.
 ### 2.3 The DRM subset
 
 `card0` answers these ioctls. Numbers and layouts go into `libs/proto/linux-abi`
-(`drm` module), from a probe compiled on nazuna against `/usr/include/drm`
+(`drm` module), from a probe compiled on example against `/usr/include/drm`
 (`linux-libc-dev`), at both pointer widths, and pinned by tests. The probe
 source is committed this time.
 
@@ -596,7 +596,7 @@ from `BootInfo`. What changes is what a person sees:
 
 ## 4. Landings and points
 
-Each is a small landing on main, gated on nazuna. The first four touch no
+Each is a small landing on main, gated on example. The first four touch no
 kernel code.
 
 | # | Landing | Kernel? | Points |

@@ -17,7 +17,7 @@ the owner's own word, which the survey shows is not needed.
 
 ## 1. Why, and what done looks like
 
-When the Pixel 7 boots Ferrix natively (`fastboot boot` from nazuna), nothing
+When the Pixel 7 boots Ferrix natively (`fastboot boot` from example), nothing
 reaches the PC until the run is over. Android is gone, Ferrix has no USB, and
 so the phone is off USB for the whole run. Ferrix's console and the stat
 service's samples (`userland/statd/`, `ferrix-statd`) go to the `ramoops` record in RAM,
@@ -26,7 +26,7 @@ loads the record and fills its graphs after the fact. The owner wants them
 live.
 
 Done means: **during a native boot, Ferrix presents a USB serial port (CDC-ACM)
-on the phone's USB-C port, nazuna sees it as `/dev/ttyACM*`, and the monitor
+on the phone's USB-C port, example sees it as `/dev/ttyACM*`, and the monitor
 streams the boot's stages and `ferrix-statd`'s lines from it live**, as it
 already does for a crosvm guest's 16550. The `ramoops` record stays as the
 record of a run that fails before USB is up.
@@ -261,7 +261,7 @@ one vector. devmgr started nothing, since `usbdev` was not yet built in.
 ### Done: the port streams the kernel's log to the monitor (2026-09-26)
 
 What §1 asks for works on the phone. During a native boot Ferrix presents
-a CDC-ACM port on the USB-C port, nazuna sees it as `/dev/ttyACM0`
+a CDC-ACM port on the USB-C port, example sees it as `/dev/ttyACM0`
 (`1209:0001`, "Ferrix console"), and `tools/pixel7/monitor` streams the
 boot and `ferrix-statd`'s samples from it live: its boot card fills stage
 by stage, the Ferrix tab graphs the samples as they arrive, and the port
@@ -307,7 +307,7 @@ What each part is, now on `main`:
 * `tools/pixel7/monitor`: the USB watcher. A monitor started before this
   landed must be rebuilt and restarted to have it.
 
-**ModemManager takes the start of the log.** nazuna's ModemManager opens
+**ModemManager takes the start of the log.** example's ModemManager opens
 every new `ttyACM` to probe it, 4 s after it appears, and holds it until
 the port goes. Holding it open raises DTR, so `usbdev` streams to it, and
 it drops what it reads: in `usblog2` the monitor's record began at

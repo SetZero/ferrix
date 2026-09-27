@@ -29,7 +29,7 @@ boot (one SUITE line).
    green within an hour.
 2. **Steam's X server**: the yserver feasibility pass, then its Wayland
    backend's design (`~/.local/share/ferrix/yserver-ref/FINDINGS.md` on
-   nazuna), then I5b, the Steam client's bootstrapper.
+   example), then I5b, the Steam client's bootstrapper.
 3. **W-8**: 21b, 21c and file 24, then the modules the traceability gate does
    not yet hold complete.
 4. **The desktop**: fuzzel's second-press toggle, hyprlock P1.5, hypridle.
