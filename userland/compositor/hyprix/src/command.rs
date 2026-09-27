@@ -101,9 +101,74 @@ pub fn assignments(words: &[String]) -> (Vec<(String, String)>, &[String]) {
     (assigned, rest)
 }
 
+/// Why a command did not start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotStarted {
+    /// No such file: the program, or a script's `#!` interpreter when the
+    /// program itself is `there`.
+    Missing {
+        /// The program's word, as the command named it.
+        program: String,
+        /// Whether that path exists, so what is missing is its interpreter.
+        there: bool,
+    },
+    /// Any other reason, as a sentence.
+    Other(String),
+}
+
+impl From<String> for NotStarted {
+    fn from(reason: String) -> Self {
+        Self::Other(reason)
+    }
+}
+
+impl core::fmt::Display for NotStarted {
+    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Missing { there: false, .. } => out.write_str("No such file or directory"),
+            Self::Missing { there: true, .. } => {
+                out.write_str("its #! interpreter is not on this system")
+            }
+            Self::Other(reason) => out.write_str(reason),
+        }
+    }
+}
+
+/// The programs already said to be missing, so that a bind pressed on every
+/// click -- `bindn = , mouse:272, exec, <a Python script>` -- is said once,
+/// not once a click. Every other reason is said each time.
+#[derive(Debug, Default)]
+pub struct Missing {
+    said: std::collections::BTreeSet<String>,
+}
+
+impl Missing {
+    /// The line to log for `command` not starting, or `None` when its
+    /// program was already said to be missing.
+    pub fn line(&mut self, command: &str, why: &NotStarted) -> Option<String> {
+        match why {
+            NotStarted::Missing { program, there } => {
+                if !self.said.insert(program.clone()) {
+                    return None;
+                }
+                let what = if *there {
+                    format!("{program}'s #! interpreter is not on this system")
+                } else {
+                    format!("{program} does not exist on this system")
+                };
+                Some(format!(
+                    "hyprix: {what}, so `{command}` did not start; nothing that starts it is \
+                     reported again"
+                ))
+            }
+            NotStarted::Other(reason) => Some(format!("hyprix: {command} did not start: {reason}")),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{assignments, words};
+    use super::{Missing, NotStarted, assignments, words};
 
     fn split(command: &str) -> Vec<String> {
         words(command).unwrap()
@@ -170,6 +235,42 @@ mod tests {
         assert_eq!(assignments(&line).1, ["=b", "prog"]);
         let line = split("A=b");
         assert!(assignments(&line).1.is_empty());
+    }
+
+    #[test]
+    fn a_missing_program_is_said_once_and_other_reasons_every_time() {
+        let mut missing = Missing::default();
+        let fx = NotStarted::Missing {
+            program: "/home/u/.local/bin/fx".to_owned(),
+            there: false,
+        };
+        let press = missing.line("/home/u/.local/bin/fx press", &fx).unwrap();
+        assert!(
+            press.contains("/home/u/.local/bin/fx does not exist on this system"),
+            "{press}"
+        );
+        assert!(
+            press.contains("`/home/u/.local/bin/fx press` did not start"),
+            "{press}"
+        );
+        assert_eq!(missing.line("/home/u/.local/bin/fx release", &fx), None);
+        assert_eq!(missing.line("/home/u/.local/bin/fx press", &fx), None);
+        let script = NotStarted::Missing {
+            program: "/home/u/.local/bin/py".to_owned(),
+            there: true,
+        };
+        let line = missing.line("/home/u/.local/bin/py", &script).unwrap();
+        assert!(
+            line.contains("py's #! interpreter is not on this system"),
+            "{line}"
+        );
+        let denied = NotStarted::Other("Permission denied (os error 13)".to_owned());
+        for _ in 0..2 {
+            assert_eq!(
+                missing.line("/bin/locked", &denied).as_deref(),
+                Some("hyprix: /bin/locked did not start: Permission denied (os error 13)")
+            );
+        }
     }
 
     #[test]

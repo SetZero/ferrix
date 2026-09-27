@@ -198,7 +198,11 @@ fn argument_or<'a>(argument: &'a str, instead: &'a str) -> &'a str {
 fn start(command: &str, around: &mut Around<'_>) -> bool {
     match crate::state::start(command, around.socket, around.instance) {
         Ok(pid) => around.say(&format!("hyprix: started {command} as {pid}")),
-        Err(error) => around.say(&format!("hyprix: {command} did not start: {error}")),
+        Err(error) => {
+            if let Some(line) = crate::state::not_started(command, &error) {
+                around.say(&line);
+            }
+        }
     }
     false
 }

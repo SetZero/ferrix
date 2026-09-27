@@ -473,7 +473,11 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             Ok(pid) => report(&format!("hyprix: started {command} as {pid}")),
             // A program that will not start is the person's to fix, not a
             // reason to have no compositor; Hyprland logs it and carries on.
-            Err(error) => report(&format!("hyprix: {command} did not start: {error}")),
+            Err(error) => {
+                if let Some(line) = not_started(command, &error) {
+                    report(&line);
+                }
+            }
         }
     }
 
@@ -6259,6 +6263,19 @@ fn globals(outputs: usize) -> Globals {
 /// renderer's.
 static CHILD_ENV: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
 
+/// The programs [`not_started`] has said are missing.
+static MISSING: std::sync::LazyLock<std::sync::Mutex<crate::command::Missing>> =
+    std::sync::LazyLock::new(std::sync::Mutex::default);
+
+/// The line to log for `command` not starting, or `None` when it names a
+/// program already said to be missing ([`crate::command::Missing`]).
+pub(crate) fn not_started(command: &str, why: &crate::command::NotStarted) -> Option<String> {
+    match MISSING.lock() {
+        Ok(mut missing) => missing.line(command, why),
+        Err(_) => Some(format!("hyprix: {command} did not start: {why}")),
+    }
+}
+
 /// Read the configuration, or take Hyprland's defaults, and remember its
 /// `env =` pairs for [`start`].
 fn read_config(options: &Options) -> Result<Config, String> {
@@ -6279,14 +6296,14 @@ fn read_config(options: &Options) -> Result<Config, String> {
 ///
 /// # Errors
 ///
-/// A sentence saying why it did not start, which the caller logs: a program
+/// Why it did not start, which the caller logs ([`not_started`]): a program
 /// that will not start is the person's to fix, not a reason to have no
 /// compositor.
 pub(crate) fn start(
     command: &str,
     socket: &std::path::Path,
     instance: Option<&str>,
-) -> Result<u32, String> {
+) -> Result<u32, crate::command::NotStarted> {
     let words = crate::command::words(command)?;
     let (assigned, words) = crate::command::assignments(&words);
     let (program, arguments) = words
@@ -6329,10 +6346,16 @@ pub(crate) fn start(
     // The command's own `NAME=value` words, after those: in `sh` they are
     // this one program's, over whatever it would otherwise inherit.
     let _ = child.envs(assigned);
-    let pid = child
-        .spawn()
-        .map(|child| child.id())
-        .map_err(|error| error.to_string())?;
+    let pid = child.spawn().map(|child| child.id()).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            crate::command::NotStarted::Missing {
+                program: program.clone(),
+                there: program.contains('/') && std::path::Path::new(program).exists(),
+            }
+        } else {
+            crate::command::NotStarted::Other(error.to_string())
+        }
+    })?;
     // Not waited for here: the loop reaps it once it ends
     // (`crate::children`), or it would stay a zombie.
     crate::children::started(pid);
