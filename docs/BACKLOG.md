@@ -589,11 +589,12 @@ otherwise; one a later decision replaced is deleted, and the history keeps it.
   hyprix from the start; installing beside another operating system, not
   only on a wiped disk; and a raw `.img` and a hybrid `.iso`, both attached
   to GitHub releases. The design (21 slices, 162 points) was **approved the
-  same day**, with §10's recommendations taken for decisions 2, 4 and 5:
-  an auto-login `ferrix` live user, Secure Boot off, and a text-mode
-  fallback. For decision 1 the customer wants **the full setup for
+  same day**, with §10's recommendations taken for decisions 2 and 5: an
+  auto-login `ferrix` live user and a text-mode fallback. **Secure Boot is
+  supported** through Ubuntu's Microsoft-signed shim and a Ferrix key the
+  owner enrolls once in MokManager (§5.7, I13, 13 points). For decision 1 the customer wants **the full setup for
   shrinking the other system's partition**: the installer shrinks NTFS,
-  ext4 and btrfs itself (§4.6, S1–S6, 76 points; 238 in all). Order: the
+  ext4 and btrfs itself (§4.6, S1–S6, 76 points; 251 in all). Order: the
   VM path I1–I12 first, S1 beside it, then the PC slices.
 * **2026-09-28 (customer)** The yserver Wayland backend's design
   (`docs/YSERVER.md`, 7 slices, 36 points) is approved. Its code lives on a

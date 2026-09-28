@@ -38,9 +38,8 @@ It is not a package manager, an updater or a recovery tool. It installs the
 system the live medium carries and nothing else; network installs, updates
 of an installed system and repair are later work, not in this design.
 
-It is not a Secure Boot story. Ferrix's loader is not signed, and a machine
-with Secure Boot on refuses it. The first release asks the person to turn
-Secure Boot off, as Arch's image does; §10 decision 4 is how it could change.
+It boots with Secure Boot on, through Ubuntu's Microsoft-signed shim and
+a key of Ferrix's own that the person enrolls once (§5.7).
 
 **Exit of this design:** on x86-64, two gates and one machine.
 
@@ -391,6 +390,49 @@ takes the firmware's keyboard, so it works before any Ferrix driver.
 `EFI/ferrix/MENU.TXT` sets the default and the time-out. With no other
 loader there is no menu and no wait, as today.
 
+### 5.7 Secure Boot, through Ubuntu's shim
+
+A PC with Secure Boot on starts only what Microsoft's UEFI CA signed.
+Ferrix cannot get its loader signed, and it cannot borrow Ubuntu's GRUB:
+in Secure Boot mode that GRUB starts only kernels signed with Canonical's
+key. What it can borrow is **shim**, the small first stage every Linux
+distribution has Microsoft sign. Shim starts a second stage signed by its
+vendor *or by any key the machine's owner has enrolled* in its MokManager.
+That second path is the one Ferrix takes, as Ventoy does (the customer's
+decision of 2026-09-28):
+
+* `scripts/fetch/fetch-shim.sh` takes `shimx64.efi` and `mmx64.efi` (and the
+  `aa64` pair) from Ubuntu's `shim-signed` package, pinned by version and
+  SHA-256, into `~/.local/share/ferrix/shim`. The repository carries none
+  of it. A build without it makes images that need Secure Boot off, and
+  says so.
+* The medium's ESP becomes `EFI/BOOT/BOOTX64.EFI` = shim,
+  `EFI/BOOT/grubx64.efi` = Ferrix's loader (shim starts its second stage by
+  that name), `EFI/BOOT/mmx64.efi`, and `FERRIX.CER` at the root. The
+  installed ESP has the same four in `EFI/ferrix/`, and the boot entry names
+  shim.
+* `xtask` signs the loader Authenticode-style with a Ferrix key, in Rust, as
+  it writes FAT and ISO without host tools. A checkout makes a development
+  key under `~/.local/share/ferrix/keys` on first use; the release workflow
+  signs with a key kept as a GitHub secret, whose certificate is the
+  `FERRIX.CER` that releases carry.
+* The loader checks `KERNEL.ELF` and `INITRD.IMG` before starting them,
+  against a detached Ed25519 signature made with the same release key and a
+  public key built into the loader. It enforces this when the firmware's
+  `SecureBoot` variable is 1, and warns otherwise. Shim's own verify call
+  takes PE images only, and the kernel is an ELF, hence the loader's own.
+* **First boot with Secure Boot on:** shim finds the loader unsigned by
+  Canonical and not yet enrolled, and opens MokManager: *Enroll key from
+  disk* → `FERRIX.CER` → a password → reboot → confirm with that password.
+  `docs/INSTALL.md` shows each screen. The key stays in the firmware's
+  variables, so the installed system boots without asking again.
+* **Revocation.** Microsoft and the distributions revoke old shims through
+  SBAT and `dbx` updates, which Windows Update applies. A revoked shim stops
+  booting on an updated machine, so the fetch script's pin is moved to
+  Ubuntu's newest shim before each release. Ubuntu signs its current shims
+  with both Microsoft's 2011 and 2023 UEFI CAs, which covers machines on
+  either CA.
+
 ## 6. Real PCs
 
 Everything above runs in a VM on virtio. A PC also needs Ferrix to see its
@@ -429,6 +471,7 @@ drivers, with its points a guess.
 | host tests of `partition`, `btrfs-mkfs`, `fat`, `installer-engine` | tables, volumes, and plans, including "no write outside the range", with `btrfs check` and `sgdisk --verify` on what they write | yes |
 | `test-install --arch x86_64` | ISO boots under OVMF, answer file installs on a blank disk, power off, target boots alone to `FERRIX-BOOT-OK` with `/ is btrfs on vda2` | yes |
 | `test-install --beside` | as above on a disk pre-made with an ESP holding a stub `bootmgfw.efi` (an EFI app of ours that prints `OTHER-OS`) and an NTFS-looking partition; after install, both partitions hash unchanged; the menu boots Ferrix, and with a key press the stub | yes |
+| `test-install --secure-boot` | the medium under OVMF's Secure Boot build with Microsoft's keys enrolled; the gate drives MokManager's enrollment over the serial console, installs, and boots the target with Secure Boot on; an image with a tampered `KERNEL.ELF` must stop at the loader | yes, when the shim is fetched |
 | `test-install --arch aarch64` | the first gate on AArch64 | yes |
 | `test-install --usb-live` | the ISO attached as `usb-storage` on `qemu-xhci`, target on `nvme`: H1, H3 and H4 under QEMU | after H4 |
 | `test-install --ahci` | target on QEMU's `ich9-ahci` | after H2 |
@@ -445,8 +488,8 @@ then only tests the machine.
 ## 8. Documentation
 
 `docs/INSTALL.md`, for someone who has never built Ferrix: where to
-download, how to write a stick on Windows, macOS and Linux, turning Secure
-Boot off, what "beside" can and cannot do, and how to boot a VM from the
+download, how to write a stick on Windows, macOS and Linux, enrolling Ferrix's Secure
+Boot key, what "beside" can and cannot do, and how to boot a VM from the
 ISO in QEMU, VirtualBox, virt-manager and UTM. `README.md` and the website
 point at it before they point at `cargo xtask run`.
 
@@ -471,7 +514,8 @@ reference machine boots.
 | I10 | Widgets (§4.5) | 13 |
 | I11 | The graphical installer, its screenshot gate, the live session's autostart and login | 13 |
 | I12 | Release images, checksums, `docs/INSTALL.md`, README and website (§3.3, §8) | 3 |
-| | **VM path** | **89** |
+| I13 | Secure Boot through Ubuntu's shim: fetch, signing, the loader's kernel check, `--secure-boot` gate (§5.7) | 13 |
+| | **VM path** | **102** |
 | S1 | `libs/fs/ntfs`: boot sector, MFT, attributes, run lists, `$Bitmap`; the consistency pass; the refusals (§4.6) | 13 |
 | S2 | `ntfs-resize`: relocation, run-list rewrite, `$Bitmap`/`$BadClus`/backup boot sector, crash-ordered writes | 21 |
 | S3 | `libs/fs/ext4` read and the `ext4-resize` shrink | 21 |
@@ -488,7 +532,7 @@ reference machine boots.
 | H6 | Firmware framebuffer display for hyprix | 5 |
 | H7 | The reference PC's exit, and what it finds | 8 |
 | | **Real PCs** | **73** |
-| | **Total** | **238** |
+| | **Total** | **251** |
 
 At the fleet's measured pace these are days, not weeks; the PC half's
 risk is H0 and H7, which no estimate covers. Shrinking lands after I7 (it
@@ -505,10 +549,8 @@ needs the engine and the gate) and beside the GUI; S1 can start at once.
    product owner may boot it from a stick (`hardware-use` rule: the product
    owner alone decides hardware use; nothing is written to its internal disk
    except in H7, and only beside what is there).
-4. **Secure Boot.** Version 1 asks the person to turn it off. *Recommended.*
-   Booting with it on means shim, signed by Microsoft for a distribution,
-   which Ferrix cannot get today; enrolling Ferrix's own key (as a MOK) is a
-   middle way, at about 8 points.
+4. **Secure Boot.** *Decided 2026-09-28: supported*, through Ubuntu's
+   signed shim and a Ferrix key enrolled once in MokManager (§5.7, I13).
 5. **A text-mode fallback.** The CLI of §4.1 exists anyway for the gates; it
    can gain a menu for machines where the desktop does not come up (2
    points). *Recommended*, since H6 is the only screen a PC is sure of.
@@ -516,6 +558,7 @@ needs the engine and the gate) and beside the GUI; S1 can start at once.
 ## 11. Where it stands
 
 2026-09-28: this design, written, and approved by the customer the same
-day. §10: decisions 2, 4 and 5 as recommended; decision 1 the customer's
-own, a full shrinker (§4.6); decision 3, the reference PC, is open, and the
+day. §10: decisions 2 and 5 as recommended; decision 1 the customer's
+own, a full shrinker (§4.6); decision 4, Secure Boot through Ubuntu's shim
+(§5.7); decision 3, the reference PC, is open, and the
 VM path does not wait on it. I1 is being built.
