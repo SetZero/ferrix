@@ -1,0 +1,13 @@
+[package]
+name = "ferrix-partition"
+description = "GUID partition tables: read one off a disk, write a new one"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

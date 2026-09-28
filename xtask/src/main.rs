@@ -90,6 +90,7 @@ mod init;
 mod init_file;
 mod initramfs;
 mod input;
+mod installer;
 mod jobs;
 mod kaslr;
 mod keyboard;
@@ -213,6 +214,7 @@ COMMANDS:
                   docs/AUTH.md: a wrong password, an unknown account, a user naming another, the throttle
                   (with --sabotage NAME, against an authd with that refusal turned off, which must fail)
     test-restart  Boot a shell beside a device, kill -9 its driver twice, and require it started again each time (--boot gpu|input|net|blk|all; gpu if not given)
+    test-install  Install the live image on a blank disk with ferrix-install, then boot that disk alone (x86_64)
     test-sysfs    Boot a shell beside a card, input devices and a network adapter, read sysfs, and unbind and bind the card through it
     test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count (--i686: the x86-64
                   image runs a 32-bit x86 build of it)
@@ -383,6 +385,7 @@ OPTIONS:
     --ferrousli                          check: also ferrousli's fmt, clippy and tests, debug and release
     --zinc                               check: also zinc's fmt, clippy, tests and pty completion test
     --statd                              build, run, test-boot: carry the stat service at /sbin/ferrix-statd
+    --installer                          build, run: carry /sbin/ferrix-install and its root volume (the live image)
     --adbd                               build, run: carry adbd at /bin/adbd, started by nobody (docs/ADB.md)
     --miri                               check: add CI's Miri steps (needs nightly and miri)
     --reset-root                         run, run-compositor: start the btrfs root over from a fresh install
@@ -424,6 +427,15 @@ fn main() -> ExitCode {
     }
 }
 
+/// `build`: an image for each architecture asked for.
+fn build(args: &Args) -> Result<()> {
+    for arch in args.arches()? {
+        let (image, _) = build_image(arch, args)?;
+        println!("built {}", image.display());
+    }
+    Ok(())
+}
+
 fn run() -> Result<()> {
     let args = Args::parse(std::env::args().skip(1))?;
     // Every kernel this run builds, whichever command builds it: set once,
@@ -443,13 +455,7 @@ fn run() -> Result<()> {
     };
 
     match command {
-        "build" => {
-            for arch in args.arches()? {
-                let (image, _) = build_image(arch, &args)?;
-                println!("built {}", image.display());
-            }
-            Ok(())
-        }
+        "build" => build(&args),
         "run" => run_machine(args),
         "test-btrfs" => btrfs_check::test_btrfs(&args, |arch| build_image(arch, &args)),
         "test-powerfail" => powerfail::test_powerfail(&args, |arch| build_parts(arch, &args)),
@@ -486,6 +492,7 @@ fn run() -> Result<()> {
         "test-restart" => restart::test_restart(&args),
         "bench-seam" => seam::bench_seam(&args),
         "test-sysfs" => sysfs::test_sysfs(&args),
+        "test-install" => installer::test_install(&args),
         "test-threads" => threads::test_threads(&args),
         "coverage" => coverage::run(&args),
         "test-rustc" => rustc::test_rustc(&args),
@@ -773,6 +780,9 @@ fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let mut service: Vec<ports::File> = Vec::new();
     if args.statd {
         service.extend(statd::file(arch)?);
+    }
+    if args.installer {
+        service.extend(installer::files(arch)?.into_iter().flatten());
     }
     if args.adbd {
         service.extend(adbd::file(arch)?);

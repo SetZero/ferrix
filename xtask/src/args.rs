@@ -63,6 +63,14 @@ pub(crate) struct Args {
     /// `--statd`: the image carries the stat service at
     /// `/sbin/ferrix-statd`, for `ferrix.init=` to start.
     pub(crate) statd: bool,
+    /// `--installer`: the image carries `/sbin/ferrix-install` and the root
+    /// volume it writes: the live image (`docs/INSTALLER.md` §11).
+    pub(crate) installer: bool,
+    /// `test-install`'s live disk and target, attached as `vdd` and `vde`.
+    pub(crate) install_disks: Option<(std::path::PathBuf, std::path::PathBuf)>,
+    /// Boot the image as a virtio disk after the others, as an installed
+    /// disk is, rather than on x86-64's AHCI port.
+    pub(crate) boot_virtio: bool,
     /// `--i686`: `test-threads` on x86-64 builds its program for 32-bit x86,
     /// which runs in compatibility mode (`docs/I386.md`, I4).
     pub(crate) i686: bool,
@@ -424,6 +432,14 @@ impl Args {
         }
     }
 
+    /// `--statd` and `--installer`: programs the image carries.
+    fn carry(&mut self, flag: &str) {
+        match flag {
+            "--statd" => self.statd = true,
+            _ => self.installer = true,
+        }
+    }
+
     /// `--reset-root`, `--tmpfs-root` and `--btrfs-root`: where `/` is for
     /// the boot, and whether it starts over.
     fn root(&mut self, flag: &str) {
@@ -473,7 +489,7 @@ impl Args {
                 "--fast" => args.fast = true,
                 "--ferrousli" => args.ferrousli = true,
                 "--zinc" => args.zinc = true,
-                "--statd" => args.statd = true,
+                "--statd" | "--installer" => args.carry(&item),
                 "--i686" => args.i686 = true,
                 "--adbd" => args.adbd = true,
                 "--miri" => args.miri = true,

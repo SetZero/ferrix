@@ -67,17 +67,12 @@ use ferrix_sync::Once;
 use ferrix_vfs::initramfs::{self, makedev};
 use ferrix_vfs::{Access, Context, Errno, FileSystem, Location, OpenFlags, SetAttributes};
 
-use crate::block_ring::VIRTIO_BLK_MAJOR;
 use crate::console::println;
 use crate::fs::{devfs, procfs, sysfs};
 use crate::{fs, sched};
 
 /// The label the root volume carries: `mkfs.btrfs -L ferrix-root`.
 const LABEL: &[u8] = b"ferrix-root";
-
-/// The first disk looked at, `vdd`, and one past the last, `vdh`.
-const FIRST: u32 = 3;
-const END: u32 = 8;
 
 /// Where the volume is mounted in the kernel's own tree.
 const SYSROOT: &[u8] = b"/sysroot";
@@ -136,34 +131,38 @@ pub(crate) fn process_context() -> Context {
 /// Put `/` on the root disk, if this machine has one and nothing asked for
 /// the tmpfs. Says what it did either way.
 pub(crate) fn switch() {
-    let Some(rdev) = (FIRST..END)
-        .map(|index| makedev(VIRTIO_BLK_MAJOR, index * 16))
-        .filter(|&rdev| devfs::block_device(rdev).is_some())
-        .find(|&rdev| is_root(rdev))
+    // Any disk or partition labelled `ferrix-root`: an installed disk's is
+    // its second partition (`docs/INSTALLER.md` §4.2).
+    fs::partitions::scan();
+    let Some(disk) = devfs::disks()
+        .into_iter()
+        .find(|disk| is_root(makedev(disk.major, disk.minor)))
     else {
         return;
     };
+    let rdev = makedev(disk.major, disk.minor);
+    let name = core::str::from_utf8(&disk.name).unwrap_or("?");
     if TMPFS.load(Ordering::Relaxed) {
-        println!("  root     vdd is not used: {OPTION}=tmpfs keeps / in memory");
+        println!("  root     {name} is not used: {OPTION}=tmpfs keeps / in memory");
         return;
     }
     match switch_to(rdev) {
         Ok(Installed::Fresh(bytes)) => println!(
-            "  root     / is btrfs on vdd; the system was installed on it ({} KiB), \
+            "  root     / is btrfs on {name}; the system was installed on it ({} KiB), \
              committed every {} s",
             bytes / 1024,
             COMMIT_INTERVAL / 1_000_000_000
         ),
         Ok(Installed::Kept) => println!(
-            "  root     / is btrfs on vdd, as the last boot left it; committed every {} s",
+            "  root     / is btrfs on {name}, as the last boot left it; committed every {} s",
             COMMIT_INTERVAL / 1_000_000_000
         ),
         Ok(Installed::Nothing) => println!(
-            "  root     / is btrfs on vdd, with no initramfs to install from; committed \
+            "  root     / is btrfs on {name}, with no initramfs to install from; committed \
              every {} s",
             COMMIT_INTERVAL / 1_000_000_000
         ),
-        Err(why) => println!("  root     / stays in memory: vdd {why}"),
+        Err(why) => println!("  root     / stays in memory: {name} {why}"),
     }
 }
 

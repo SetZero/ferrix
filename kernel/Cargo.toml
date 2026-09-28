@@ -42,6 +42,7 @@ ferrix-nettcp.workspace = true
 ferrix-native-abi.workspace = true
 ferrix-objects.workspace = true
 ferrix-paging.workspace = true
+ferrix-partition.workspace = true
 ferrix-pci.workspace = true
 ferrix-procfs.workspace = true
 ferrix-cgroupfs.workspace = true

@@ -46,6 +46,7 @@ pub(crate) mod kmem_check;
 pub(crate) mod memfd_check;
 pub(crate) mod mmap_check;
 mod pages;
+pub(crate) mod partitions;
 pub(crate) mod pidfd;
 pub(crate) mod pipe;
 pub(crate) mod portfd;

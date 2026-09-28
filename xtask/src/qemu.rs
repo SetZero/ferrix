@@ -709,6 +709,26 @@ fn watch(arch: Arch, image: &Path, kernel: &Path, args: &Args, until: &str) -> R
     watch_hooked(arch, image, kernel, args, until, None)
 }
 
+/// Boot, and answer every line up to the first holding `until`. A boot that
+/// panicked or never printed it is an error.
+pub(crate) fn watch_lines(
+    arch: Arch,
+    image: &Path,
+    kernel: &Path,
+    args: &Args,
+    until: &str,
+) -> Result<Vec<String>> {
+    let watched = watch(arch, image, kernel, args, until)?;
+    match watched.verdict {
+        Verdict::Reached => Ok(watched.lines),
+        Verdict::Panicked => Err(panicked(arch, &watched.log)),
+        Verdict::Silent => Err(Error::new(format!(
+            "{arch}: `{until}` never came.\n  Serial output is in {}",
+            watched.log.display()
+        ))),
+    }
+}
+
 /// [`watch`], calling `at_marker` once `until` has been printed, while QEMU
 /// is still running, and returning the lines. The hook sees the lines so far
 /// and may read the ones that follow ([`Watching`]). A boot that panicked or
@@ -1548,12 +1568,14 @@ fn qemu_command(
             //
             // which is harmless and the kind of noise that trains people to
             // skim the boot log.
-            let _ = command.args([
-                "-drive",
-                &format!("format=raw,file={},if=none,id=disk", display(image)),
-                "-device",
-                "ide-hd,drive=disk,bus=ide.0,bootindex=0",
-            ]);
+            if !args.boot_virtio {
+                let _ = command.args([
+                    "-drive",
+                    &format!("format=raw,file={},if=none,id=disk", display(image)),
+                    "-device",
+                    "ide-hd,drive=disk,bus=ide.0,bootindex=0",
+                ]);
+            }
         }
         Arch::AArch64 | Arch::Armv7a => {
             // The same `virt` machine for both: a GICv2, a PL011 at the same
@@ -1593,6 +1615,7 @@ fn qemu_command(
     attach_asked_for(&mut command, arch, args, &binary);
     attach_test_disk(&mut command, arch)?;
     attach_btrfs_disk(&mut command, arch)?;
+    attach_install_disks(&mut command, arch, image, args);
     attach_root_disk(&mut command, arch, args)?;
     attach_data_image(&mut command, arch, args);
     let network = attach_network(&mut command, arch, args)?;
@@ -2073,6 +2096,45 @@ fn attach_data_image(command: &mut Command, arch: Arch, args: &Args) {
         "virtio-blk-pci,drive=btrfsdata,disable-legacy=on,iommu_platform=on"
     };
     let _ = command.args(["-device", device]);
+}
+
+/// `test-install`'s disks, after the three every boot has: the live disk and
+/// the target as `vdd` and `vde`, or the installed disk alone as `vdd`,
+/// booted from (`xtask/src/installer.rs`).
+fn attach_install_disks(command: &mut Command, arch: Arch, image: &Path, args: &Args) {
+    let virtio = |id: &str, boot: bool| {
+        let boot = if boot { ",bootindex=0" } else { "" };
+        format!("virtio-blk-pci,drive={id},disable-legacy=on,iommu_platform=on{boot}")
+    };
+    if args.boot_virtio && arch == Arch::X86_64 {
+        println!("  {arch}: {} as a virtio disk, booted from", display(image));
+        let _ = command.args([
+            "-drive",
+            &format!("file={},if=none,format=raw,id=installed", display(image)),
+            "-device",
+            &virtio("installed", true),
+        ]);
+    }
+    if let Some((live, target)) = &args.install_disks {
+        println!(
+            "  {arch}: live disk {} and target {} as vdd and vde",
+            display(live),
+            display(target)
+        );
+        let _ = command.args([
+            "-drive",
+            &format!(
+                "file={},if=none,format=raw,id=live,readonly=on",
+                display(live)
+            ),
+            "-device",
+            &virtio("live", false),
+            "-drive",
+            &format!("file={},if=none,format=raw,id=target", display(target)),
+            "-device",
+            &virtio("target", false),
+        ]);
+    }
 }
 
 /// Attach the root disk as the fifth virtio device, so it is `vdd` and the

@@ -286,6 +286,7 @@ dependencies = [
  "ferrix-netwire",
  "ferrix-objects",
  "ferrix-paging",
+ "ferrix-partition",
  "ferrix-pci",
  "ferrix-procfs",
  "ferrix-qr",
@@ -410,6 +411,10 @@ dependencies = [
 
 [[package]]
 name = "ferrix-paging"
+version = "0.1.0"
+
+[[package]]
+name = "ferrix-partition"
 version = "0.1.0"
 
 [[package]]

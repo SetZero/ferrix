@@ -570,4 +570,27 @@ needs the engine and the gate) and beside the GUI; S1 can start at once.
 day. §10: decisions 2 and 5 as recommended; decision 1 the customer's
 own, a full shrinker (§4.6); decision 4, Secure Boot through Ubuntu's shim
 (§5.7); decision 3, the reference PC, is open, and the
-VM path does not wait on it. I1 is built (§5.1); I2 is next.
+VM path does not wait on it. I1 is built (§5.1).
+
+**The MVP (2026-09-28, the customer: "land a MVP for now, we need to save
+tokens").** What installs Ferrix in a VM today, built from what exists:
+
+* `build --installer` carries `/sbin/ferrix-install` (`userland/installer`)
+  and the packed empty root volume. The live image is the usual FAT image,
+  attached as a virtio disk.
+* `ferrix-install [--yes] [--from /dev/vdX] /dev/vdY` wipes the target and
+  writes a GPT (`libs/fs/partition`): an ESP that is a byte copy of the live
+  FAT volume, and a root partition holding the 1 GiB `ferrix-root` volume.
+  No mkfs.btrfs (I3) and no FAT writer (I4) were needed.
+* The kernel publishes GPT partitions as disks (`fs/partitions.rs`, once,
+  before the root is looked for) and finds `ferrix-root` on any disk or
+  partition, not only `vdd`..`vdg`. Its first boot installs the system, as
+  for `run`.
+* `cargo xtask test-install` (x86-64) installs from a live disk onto a blank
+  one, then boots the blank one alone as a virtio disk through OVMF and
+  requires `/ is btrfs on vdd2`. Not in `check` yet.
+
+Left for later, in §9's order: a root file system the size of its partition
+(I3), `BLKRRPART`, the ISO and a GPT live image (I6), the boot menu (I8),
+UEFI variables (I9), the graphical installer (I10, I11), Secure Boot (I13),
+shrinking (S1–S6) and real PCs (H0–H7).

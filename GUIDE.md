@@ -156,6 +156,27 @@ window can lose that last half-minute, and nothing more, because a commit is
 all or nothing (stage 12's power-fail test is the evidence). The host can
 read the image too — `btrfs check build/root.img`, or a loop mount on Linux.
 
+### Installing on a disk of its own
+
+`cargo xtask build --arch x86_64 --installer` makes a live image,
+`build/x86_64/ferrix.img`, that also carries `/sbin/ferrix-install`. Attach it
+to a virtual machine with UEFI firmware as a **virtio** disk (virt-manager's
+default), with a second, empty virtio disk of at least 2 GiB, and boot it.
+In the shell:
+
+```
+ferrix-install /dev/vde        # the empty disk; asks before it erases it
+```
+
+It gives the disk a GUID partition table: an EFI system partition with the
+live image's loader, kernel and initramfs, and a partition with the empty
+`ferrix-root` volume. Remove the live disk and boot the new one: the kernel
+finds `ferrix-root` on its second partition and installs the system there,
+as `run` does. This is the MVP of [`docs/INSTALLER.md`](docs/INSTALLER.md):
+virtual machines only, the root file system 1 GiB whatever the disk, and
+no graphical installer yet. `cargo xtask test-install` installs and boots
+the result.
+
 `--reset-root` throws the volume away and installs the system on a new one.
 `--tmpfs-root` boots with `/` in memory instead, as every boot did before,
 and leaves the volume untouched for the next boot that wants it; on a kernel
