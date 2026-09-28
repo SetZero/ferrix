@@ -244,7 +244,6 @@ gates that fail on `main` itself, not flakes, and come before any row below.
 
 | Item | Owner |
 |---|---|
-| `test-vfs` on x86_64 (seen with the musl busybox, 2026-09-28, on steam-i5b rebased onto 187e5b04, which has the installer): its `fdisk -l` step expects no output, and now prints `Disk /dev/vda: 64 MB ...` and `/dev/vdb`, since the installer's b923d7a6 lets a block node open as a file. The expectation in `xtask/src/vfs.rs` ("finding nothing it can open") needs the installer's view; the same run passed on the base before the installer (846a8cf8). Log: `~/ferrix-logs/steam-i5b/gate/re/vfs-musl.log` | open, found by steam-i5b |
 
 ## The path to the goal, in order
 

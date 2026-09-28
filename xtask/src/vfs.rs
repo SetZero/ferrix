@@ -227,8 +227,8 @@ pub(crate) const APPLETS: &[Command] = &[
     },
     // `/proc/partitions`: the disks the boot check's drivers serve, in
     // Linux's format, 64 MiB of 1 KiB blocks at the virtio-blk major; and
-    // `fdisk -l`, which reads it, finding nothing it can open rather than
-    // dying of a signal.
+    // `fdisk -l`, which reads it and opens each disk (`fs/disk_file.rs`),
+    // finding each one's size and no partition table on either.
     Command {
         argv: &["cat", "/proc/partitions"],
         status: 0,
@@ -241,7 +241,12 @@ pub(crate) const APPLETS: &[Command] = &[
     Command {
         argv: &["fdisk", "-l"],
         status: 0,
-        expect: Expect::Nothing,
+        expect: Expect::Lines(&[
+            "Disk /dev/vda: 64 MB, 67108864 bytes, 131072 sectors",
+            "Disk /dev/vda doesn't contain a valid partition table",
+            "Disk /dev/vdb: 128 MB, 134217728 bytes, 262144 sectors",
+            "Disk /dev/vdb doesn't contain a valid partition table",
+        ]),
     },
     // `/proc/stat`: each reader's summary of the CPUs.
     Command {
