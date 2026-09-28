@@ -101,7 +101,14 @@ staged until now.
   for how X windows map to xdg surfaces, read and not copied. In order:
   a feasibility pass (a pinned yserver release, its headless backend built
   for x86-64 on Ferrix, an X client run against it), a written design for
-  the backend, then the backend in small landings.
+  the backend, then the backend in small landings. **The feasibility pass was met
+  on 2026-09-28**: `cargo xtask test-yserver` boots yserver headless on
+  Mesa's lavapipe from the volume `scripts/fetch/fetch-yserver.sh` builds,
+  and `xdpyinfo` reaches it and lists 21 extensions. Ferrix did not change
+  for it. **The design is `docs/YSERVER.md`**, approved the same day: the
+  backend wraps yserver's Vulkan renderer, hands frames to hyprix as
+  `wl_shm` copies until hyprix has dmabuf, and is built in seven slices, 36
+  points, on the customer's fork of yserver.
 * **Sound.** Playback is done, 2026-09-26 (`docs/AUDIO.md` §8): a
   `virtio-snd` driver in ring 3, the audio core and `/dev/snd`, and Chrome
   playing through them, which `test-audio` and `test-chrome-audio` gate.

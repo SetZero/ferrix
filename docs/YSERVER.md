@@ -68,15 +68,16 @@ against Debian 13's `-dev` packages, running on those packages' libraries
 from the data volume. It is not built on ferrousli. That port is a question
 for after Steam runs.
 
-* **The source** is the 1.6.0 tag, pinned by the SHA-256 of its tarball.
-  Ferrix's changes are a patch series in `scripts/data/yserver/` that
-  `scripts/fetch/fetch-yserver.sh` applies, the same way QEMU's patch is
-  carried. The Wayland backend is in the series (decision 1, §8).
+* **The source** is a fork of yserver under the customer's GitHub account
+  (decision 1, §8), branched from the 1.6.0 tag (`0d00e81`) and pinned by
+  commit. Ferrix's changes are commits on the fork, starting with
+  `YSERVER_ALLOW_NO_INPUT`, and the Wayland backend is added there.
+  `scripts/fetch/fetch-yserver.sh` fetches the pinned commit and builds it.
 * **The Wayland client** is Ferrix's own: `compositor-wire`,
-  `compositor-protocol` and `compositor-shm`, path dependencies of yserver's
-  crate. They are MIT, use only std and `libc`, and have already been tested
+  `compositor-protocol` and `compositor-shm`, taken by the fork as git
+  dependencies on this repository at a pinned commit. They are MIT, use only std and `libc`, and have already been tested
   against hyprix. The toolkit's blocking `dispatch` does not fit yserver's
-  loop, so the backend uses the wire layer directly (decision 2).
+  loop, so the backend uses the wire layer directly (decision 2, §8).
 * **The volume** carries the packages listed in the fetch script, pinned by
   Debian's Packages file as `fetch-steamcmd.sh` pins them, plus yserver,
   stripped. `run-compositor --everything` merges it into its volume, as it
@@ -190,8 +191,9 @@ advertised. There are two defaults to add:
 
 ## 6. The tests
 
-* **`test-yserver`** stays as it is now: headless, with `xdpyinfo`. It runs
-  on demand, because it attaches a volume, like `test-steamcmd`.
+* **`test-yserver`** stays as it is now: headless, with `xdpyinfo`, on the
+  volume `fetch-yserver.sh` makes (Y1). It runs on demand, because it
+  attaches a volume, like `test-steamcmd`.
 * **`test-xwindow`** follows `test-foot`. It boots the compositor with yserver
   and runs `xev` from the volume, then:
   * requires the window on the screendump;
@@ -208,7 +210,7 @@ advertised. There are two defaults to add:
 
 | Slice | What | Points |
 |---|---|---|
-| Y1 | `fetch-yserver.sh`: pinned tarball and Packages, the patch series, the volume; `test-yserver` on it | 3 |
+| Y1 | `fetch-yserver.sh`: the fork at a pinned commit, pinned Packages, the build, the volume; `test-yserver` on it | 3 |
 | Y2 | `WaylandBackend` skeleton: connection, fd kind, `WAYLAND-1` output and root size; `xdpyinfo` shows hyprix's size | 5 |
 | Y3 | Top-levels: redirect, `xdg_toplevel`, shm readback, frame callbacks, title and app id; `test-xwindow` sees `xev`'s window | 8 |
 | Y4 | Input and cursor: keys, pointer, wheel, focus, `set_cursor`; `xev` reports the injected events | 5 |
@@ -223,15 +225,19 @@ has run.
 
 ## 8. Decisions for the customer
 
-1. **Where the backend's code lives.** (a) Recommended: a patch series in
-   this repository on top of the pinned release, which keeps the source and
-   the pins in one tree. (b) A fork of yserver under the customer's GitHub
-   account, which is easier to offer upstream later. (c) Offered upstream
-   from the start.
-2. **The Wayland client library.** (a) Recommended: Ferrix's own
-   `compositor-wire` and `compositor-protocol`, which are already tested
-   against hyprix. (b) The `wayland-client` crate, which upstream would more
-   likely accept.
-3. **System V semaphores** (`docs/I386.md` I5). steamcmd carries on without
+Taken on 2026-09-28:
+
+1. **Where the backend's code lives: a fork of yserver on the customer's
+   GitHub account.** It was chosen over a patch series in this repository and
+   over offering it upstream from the start. The fork is easier to offer
+   upstream later.
+2. **The Wayland client library: Ferrix's own** `compositor-wire`,
+   `compositor-protocol` and `compositor-shm`. It was chosen over the
+   `wayland-client` crate.
+3. **The design is approved** for building, starting with Y1.
+
+Still open:
+
+4. **System V semaphores** (`docs/I386.md` I5). steamcmd carries on without
    them. Whether the Steam client does is found out at I5b, and the answer
-   comes back as a decision then, not now.
+   comes back as a decision then.
