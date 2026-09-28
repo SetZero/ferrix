@@ -1,6 +1,7 @@
 # The live installer
 
-Version 1, a draft written on 2026-09-28 for the customer, who decides §10.
+Version 1, written on 2026-09-28 and approved by the customer that day
+(§11).
 The customer asked that day for "a live installer like we know it from
 Linux", and chose, from four questions:
 
@@ -452,5 +453,6 @@ risk is H0 and H7, which no estimate covers.
 
 ## 11. Where it stands
 
-2026-09-28: this design, written; nothing built. The customer's four
-answers are the list at the top.
+2026-09-28: this design, written, and approved by the customer the same
+day. §10: decisions 1, 2, 4 and 5 as recommended; decision 3, the reference
+PC, is open, and the VM path does not wait on it. I1 is being built.

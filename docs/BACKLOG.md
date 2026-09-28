@@ -588,8 +588,11 @@ otherwise; one a later decision replaced is deleted, and the history keeps it.
   firmware-framebuffer display join the plan); a graphical installer on
   hyprix from the start; installing beside another operating system, not
   only on a wiped disk; and a raw `.img` and a hybrid `.iso`, both attached
-  to GitHub releases. The design (21 slices, 162 points) waits on the
-  customer's approval and its §10 decisions before anything is built.
+  to GitHub releases. The design (21 slices, 162 points) was **approved the
+  same day**, with §10's recommendations taken for decisions 1, 2, 4 and 5:
+  no shrinker of our own in version 1, an auto-login `ferrix` live user,
+  Secure Boot off, and a text-mode fallback. Order: the VM path I1–I12
+  first, then the PC slices.
 * **2026-09-28 (customer)** The yserver Wayland backend's design
   (`docs/YSERVER.md`, 7 slices, 36 points) is approved. Its code lives on a
   **fork of yserver on the customer's GitHub account**, pinned by commit in
@@ -834,10 +837,9 @@ otherwise; one a later decision replaced is deleted, and the history keeps it.
 
 ## Waiting on the customer
 
-* The live installer's design, `docs/INSTALLER.md`: approval, and §10's five
-  decisions -- shrinking the other system (recommended: not in version 1),
-  the live session's account, the reference PC, Secure Boot, a text-mode
-  fallback.
+* The live installer's reference PC (`docs/INSTALLER.md` §10 decision 3):
+  which machine H0 and H7 run on, and whether it may be booted from a stick.
+  The VM path does not wait on it.
 * F-43 (`docs/certification/FINDINGS.md`): O.WXN and ASR-2 claim no mapping is
   writable and executable, but a program's own `mmap(PROT_WRITE|PROT_EXEC)` is
   honoured, as on Linux. Enforce W^X for programs (and walk user roots in the
