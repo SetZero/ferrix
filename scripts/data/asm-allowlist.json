@@ -14,7 +14,7 @@
     "'Convenient in assembly' is not a reason. 'Faster in assembly' is not a",
     "reason either -- measure it, then argue it in the entry."
   ],
-  "max_total_lines": 1600,
+  "max_total_lines": 1610,
   "//max_total_lines": [
     "The cap that actually binds. Assembly is a fixed cost here: the list below",
     "is meant to be finished once every architecture boots, and a scheduler, a",
@@ -22,7 +22,9 @@
     "set with headroom, not a target to grow into. It was 800 until",
     "2026-09-27, when the count learned to read raw strings: the tree held",
     "1569 lines, not 733, and had for some time. The cap moved to the truth;",
-    "the assembly did not grow."
+    "the assembly did not grow. 1610 since 2026-09-28, for the device register",
+    "accesses of kernel/src/arch/{aarch64,armv7a}/mmio.rs (their entries say",
+    "why), which the tree at 1595 lines had no room for."
   ],
   "max_ratio": 0.06,
   "//max_ratio": [
@@ -65,6 +67,11 @@
       "reason": "CPU primitives, one instruction each: `dsb`/`isb` are barriers, `tlbi` is TLB maintenance, `wfi` and `msr daifset` are CPU state, and `hvc` is the PSCI call that powers the machine off. Grows with stage 3 (VBAR_EL1, GIC, the generic timer) and must not grow with anything else."
     },
     {
+      "file": "kernel/src/arch/aarch64/mmio.rs",
+      "max_lines": 8,
+      "reason": "Device register access: one ldrb/ldrh/ldr or strb/strh/str with a bare base register per access, six in all. Under KVM a register access traps and the hypervisor emulates it from the fault's syndrome, which a load or store with writeback, or a pair, does not carry; KVM_RUN then fails with ENOSYS and the guest stops without a word. read_volatile says the access happens, not which instruction makes it, and LLVM folded three reads of one PCI command register into a pre-indexed ldrh, which stopped the Pixel 7's crosvm guest in stage 10. Rust has no spelling for 'this load, and no other form of it'; Linux's readl and writel are assembly for the same reason. x86-64 keeps volatile, since KVM there decodes the instruction itself."
+    },
+    {
       "file": "kernel/src/arch/aarch64/smp.rs",
       "max_lines": 58,
       "reason": "The secondary core entry. PSCI CPU_ON starts a core at a physical address with its MMU off, and everything the kernel runs on is in the upper half: the first instructions have to install MAIR/TCR/TTBR0/TTBR1 and turn the MMU on while executing at an address only an identity map makes meaningful, then branch to a virtual one. The loader's switch again, once per core, and no Rust function can be entered with the MMU off and no stack. PSCI starts a core at the highest non-secure level, which on a machine with EL2 -- TF-A on the Pixel 7 -- is EL2, so the sequence first checks CurrentEL and, at EL2, makes EL1 a plain kernel's level (HCR_EL2, CNTHCTL_EL2, CNTVOFF_EL2, CPTR_EL2, HSTR_EL2, VPIDR/VMPIDR_EL2, ICC_SRE_EL2 where ID_AA64PFR0_EL1 says the GIC has system registers, SCTLR_EL1) and drops to it with an eret, as boot/pixel7/src/entry.rs does for the boot core. That drop is the price of starting cores on real firmware rather than QEMU's, and it is register writes and an eret at a physical address: nothing Rust can say. 58 rather than 30 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 2 its quotes were on. Unlike the other eight raised that day, this file had grown: the sequence was 26 lines until the EL2 drop (14ea5636) added 32 while the short count hid it. The Pixel 7's TF-A starts cores at EL2, so those 32 are what starting its secondaries takes."
@@ -88,6 +95,11 @@
       "file": "kernel/src/arch/armv7a/cpu.rs",
       "max_lines": 103,
       "reason": "CPU primitives, one instruction or one short sequence each. Every ARMv7-A system register is a coprocessor 15 transfer, which Rust has no syntax for -- VBAR, SCTLR, TTBCR, TTBR0 and the generic timer's four registers -- and so are the barriers, the TLB maintenance, the cache maintenance (by line to the point of coherency for devices, and ICIALLUIS and BPIALLIS for code a user page is mapped with), cpsid and cpsie, wfi, and the PSCI call, made with whichever of hvc or smc the device tree names. 102 rather than 100 for the code sync, after the three CTR reads became one; 103 for `dma_barrier`'s `dmb osh`, which orders what a DMA master sees and which `fence` does not emit (F-44)."
+    },
+    {
+      "file": "kernel/src/arch/armv7a/mmio.rs",
+      "max_lines": 8,
+      "reason": "AArch64's device register accesses (kernel/src/arch/aarch64/mmio.rs), for the same reason, in ARMv7-A's registers: KVM on a 32-bit Arm host emulates a trapped access from its syndrome as well, and a load or store with writeback carries none."
     },
     {
       "file": "kernel/src/arch/armv7a/smp.rs",

@@ -53,10 +53,10 @@
 
   "files": [
     {
-      "file": "kernel/src/mmio.rs",
+      "file": "kernel/src/arch/x86_64/mmio.rs",
       "kind": "register",
       "max_sites": 8,
-      "reason": "The MMIO accessors themselves. Every memory-mapped register in the kernel goes through these six functions, which is the point: one place says what a device access is, and it is the one place a reviewer has to trust."
+      "reason": "The MMIO accessors themselves, as x86-64 makes them. Every memory-mapped register in the kernel goes through kernel/src/mmio.rs's six functions, and they through these, which is the point: one place says what a device access is, and it is the one place a reviewer has to trust. The Arm pair's are one ldr or str each in assembly (kernel/src/arch/aarch64/mmio.rs and armv7a/mmio.rs, on the assembly allow-list), because KVM there cannot emulate every form of load volatile may compile to; this check reads volatile and port accesses, so those two are held by the assembly budget instead."
     },
     {
       "file": "kernel/src/arch/x86_64/cpu.rs",

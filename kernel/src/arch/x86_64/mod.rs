@@ -6,6 +6,7 @@ pub(crate) mod console;
 mod cpu;
 pub(crate) use cpu::dma_barrier;
 mod gdt;
+pub(crate) mod mmio;
 mod msi;
 mod paranoid;
 mod signal;

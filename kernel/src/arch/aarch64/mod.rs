@@ -5,6 +5,7 @@ pub(crate) mod console;
 mod cpu;
 pub(crate) use cpu::dma_barrier;
 mod gic;
+pub(crate) mod mmio;
 mod signal;
 mod smp;
 pub(super) mod speculation;

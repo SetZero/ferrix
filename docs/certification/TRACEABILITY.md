@@ -15,16 +15,16 @@ Coverage evidence recording the checks: x86-64, AArch64, ARMv7-A.
 | Level | Written | Named by a check | Unverified, in the baseline |
 |---|---:|---:|---:|
 | High (`H.*`) | 112 | 60 | 52 |
-| Low (`L.*`) | 603 | 337 | 266 |
+| Low (`L.*`) | 605 | 337 | 268 |
 
-1142 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
+1154 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
 
 | Product functions | Count |
 |---|---:|
-| Named by a low-level requirement | 1142 |
+| Named by a low-level requirement | 1154 |
 | Accessors, covered by the requirement they serve | 548 |
 | Check code in a product file | 35 |
-| Named by none | 589 |
+| Named by none | 595 |
 
 Subsystems whose low-level requirements are complete: `arch::aarch64`, `arch::x86_64`, `claim`, `console`, `device`, `early`, `iommu`, `mm`, `object`, `smp`, `trap`, `user`, `vmap`.
 
@@ -944,6 +944,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 |---|---|---|---|---|---|---|---|---|
 | `L.trap.4` | system_call shall pass a call to the entry set_syscall_entry registered, and dispatch_with shall answer a native-entry number that no table carries with -ENOSYS, not a handler or a fault. | 0xDEAD, usize::MAX and usize::MAX - 1, each dispatched as a native call through the registered entry, are answered -38, 3 of 3. | H.TRAP.11 | `syscall::dispatch_with`, `trap::system_call`, `trap::set_syscall_entry` | `kernel/src/syscall/check.rs::check_an_unknown_number_is_enosys` | reached | reached | reached |
 | `L.x86_64.119` | decode_syscall shall decode a number through x86-64's own table. | Of getpid's numbers in the three tables, exactly x86-64's decodes to getpid, and dispatching it answers a pid above zero. | H.TRAP.12 | `arch::x86_64::decode_syscall` | `kernel/src/syscall/check.rs::check_the_right_table_was_compiled_in` | reached | reached | reached |
+| `L.x86_64.120` | mmio's read8 to write32 shall each make one volatile access of its width at the address given, never elided, merged or reordered with another volatile access. | Every device the boot drives answers through them, so each architecture's boot test runs them; no check tells a merged access from two. | H.BOOT.2 | `arch::x86_64::mmio::read8`, `arch::x86_64::mmio::write8`, `arch::x86_64::mmio::read16`, `arch::x86_64::mmio::write16`, `arch::x86_64::mmio::read32`, `arch::x86_64::mmio::write32` | *baselined* | — | — | — |
 | `L.syscall.1` | dispatch_with shall send a native-entry number in the native range to native_call, which answers it for the calling task's own process. | Two programs whose every native call is made by SYSCALL -- vmo_create, channel_write with a handle, object_wait_one, channel_read, vmo_read -- each exit 0. | H.OBJ.1 | `syscall::dispatch_with`, `syscall::native_call` | `kernel/src/object/check.rs::check_two_programs_talk_over_a_channel` | reached | reached | reached |
 | `L.syscall.2` | dispatch_with shall answer an int $0x80 number in the native range with -ENOSYS, never as a native call. | An int $0x80 with a number in 0x1000..0x1FFF answers -38. | H.TRAP.12 | `syscall::dispatch_with` | *baselined* | — | — | — |
 | `L.syscall.3` | unanswered shall print a call answered ENOSYS by name while report_unanswered's bound lasts, and nothing once it is spent. | After report_unanswered(1), two unanswered calls print exactly one `syscall ... answered ENOSYS` line. | H.TRAP.11 | `syscall::unanswered` | *baselined* | — | — | — |
@@ -1005,6 +1006,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `L.aarch64.46` | firmware_entropy shall ask the TRNG through the conduit the machine describes PSCI on, and give 0 bytes where it describes none; hardware_random shall give a word only from a core ID_AA64ISAR0_EL1 says has RNDR, and only one RNDR reports valid within ten tries. | The crosvm guest's boot seeds 48 bytes from its TRNG (~/.local/share/ferrix/pixel7/vm-20260926-140648) and QEMU's 0; neither is a check, and RNDR is not asserted. | H.BOOT.3 | `arch::aarch64::firmware_entropy`, `arch::aarch64::trng::fill`, `arch::aarch64::trng::call`, `arch::aarch64::cpu::hvc_call_x0_x3`, `arch::aarch64::cpu::smc_call_x0_x3`, `arch::aarch64::cpu::hardware_random` | *baselined* | — | — | — |
 | `L.aarch64.47` | shutdown and reset shall drain the console and then ask PSCI for SYSTEM_OFF or SYSTEM_RESET, powering off where reset returns and halting where power-off returns. | Every gate's QEMU exits when the boot powers off, and boot-reset's ferrix.onexit=reset is x86-64's; a reset on this architecture is not asserted. | H.BOOT.6, H.BOOT.7 | `arch::aarch64::shutdown`, `arch::aarch64::reset`, `arch::aarch64::cpu::psci_system_off`, `arch::aarch64::cpu::psci_system_reset`, `arch::aarch64::cpu::psci_system` | *baselined* | — | — | — |
 | `L.aarch64.48` | init_watchdogs shall feed once every watchdog the device tree lists that firmware left running, and start_watchdogs shall start the task that keeps feeding them, and nothing where the tree lists none. | The Pixel 7 runs past its watchdogs' timeout; QEMU's tree lists none. Not a check. | H.FAIL.1 | `arch::aarch64::init_watchdogs`, `arch::aarch64::start_watchdogs` | *baselined* | — | — | — |
+| `L.aarch64.50` | mmio's read8, read16 and read32 shall each be one ldrb, ldrh or ldr, and write8, write16 and write32 one strb, strh or str, with a bare base register and no writeback, so that a hypervisor can emulate the access from its fault's syndrome. | No check can fail without it on the machines the suite boots: QEMU's TCG emulates any load or store. The Pixel 7's crosvm guest is the evidence: with read_volatile, LLVM made stage 10's DMA switch check a pre-indexed ldrh, KVM_RUN failed with ENOSYS and the guest stopped with neither boot marker; with these, it boots to init. | H.BOOT.2 | `arch::aarch64::mmio::read8`, `arch::aarch64::mmio::write8`, `arch::aarch64::mmio::read16`, `arch::aarch64::mmio::write16`, `arch::aarch64::mmio::read32`, `arch::aarch64::mmio::write32` | *baselined* | — | — | — |
 
 ### Claims
 

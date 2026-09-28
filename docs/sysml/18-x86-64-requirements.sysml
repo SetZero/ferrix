@@ -1573,6 +1573,18 @@ package FerrixX8664Requirements {
             attribute :>> parent = "H.TRAP.12";
             attribute :>> unit = "arch::x86_64::decode_syscall";
         }
+        requirement <'L.x86_64.120'> registerAccessesAreVolatile : ItemLowLevel {
+            attribute :>> statement = "mmio's read8 to write32 shall each make one
+                volatile access of its width at the address given, never elided,
+                merged or reordered with another volatile access.";
+            attribute :>> criterion = "Every device the boot drives answers through
+                them, so each architecture's boot test runs them; no check tells a
+                merged access from two.";
+            attribute :>> parent = "H.BOOT.2";
+            attribute :>> unit = ("arch::x86_64::mmio::read8", "arch::x86_64::mmio::write8",
+                "arch::x86_64::mmio::read16", "arch::x86_64::mmio::write16",
+                "arch::x86_64::mmio::read32", "arch::x86_64::mmio::write32");
+        }
         requirement <'L.syscall.1'> nativeNumbersReachTheNativeAbi : ItemLowLevel {
             attribute :>> statement = "dispatch_with shall send a native-entry
                 number in the native range to native_call, which answers it for the

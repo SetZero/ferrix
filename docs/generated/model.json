@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "c2ed684e0cf2505dd9ebb564168970d99c102aeed1fbda99a62a8b2ae37fa8b7",
+  "digest": "483719fac52a8225e11cac74bad552a2fbb5c46d1cb1d4a2f41474d4b80bcf9a",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -97,7 +97,7 @@
   ],
   "summary": {
     "packages": 103,
-    "elements": 5251,
+    "elements": 5261,
     "maturity": {
       "implemented": 273,
       "inProgress": 11,
@@ -50886,6 +50886,63 @@
               ]
             },
             {
+              "name": "registerAccessesAreVolatile",
+              "qualifiedName": "FerrixX8664Requirements::Dispatch::registerAccessesAreVolatile",
+              "kind": "requirement",
+              "shortName": "L.x86_64.120",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/18-x86-64-requirements.sysml",
+                "line": 1576
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::registerAccessesAreVolatile",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"mmio's read8 to write32 shall each make one volatile access of its width at the address given, never elided, merged or reordered with another volatile access.\"",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1579
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::registerAccessesAreVolatile",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"Every device the boot drives answers through them, so each architecture's boot test runs them; no check tells a merged access from two.\"",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1582
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::registerAccessesAreVolatile",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.2\"",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1583
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::registerAccessesAreVolatile",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::x86_64::mmio::read8\", \"arch::x86_64::mmio::write8\", \"arch::x86_64::mmio::read16\", \"arch::x86_64::mmio::write16\", \"arch::x86_64::mmio::read32\", \"arch::x86_64::mmio::write32\")",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1586
+                  }
+                }
+              ]
+            },
+            {
               "name": "nativeNumbersReachTheNativeAbi",
               "qualifiedName": "FerrixX8664Requirements::Dispatch::nativeNumbersReachTheNativeAbi",
               "kind": "requirement",
@@ -50893,7 +50950,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1576
+                "line": 1588
               },
               "children": [
                 {
@@ -50904,7 +50961,7 @@
                   "value": "\"dispatch_with shall send a native-entry number in the native range to native_call, which answers it for the calling task's own process.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1579
+                    "line": 1591
                   }
                 },
                 {
@@ -50915,7 +50972,7 @@
                   "value": "\"Two programs whose every native call is made by SYSCALL -- vmo_create, channel_write with a handle, object_wait_one, channel_read, vmo_read -- each exit 0.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1582
+                    "line": 1594
                   }
                 },
                 {
@@ -50926,7 +50983,7 @@
                   "value": "\"H.OBJ.1\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1583
+                    "line": 1595
                   }
                 },
                 {
@@ -50937,7 +50994,7 @@
                   "value": "(\"syscall::dispatch_with\", \"syscall::native_call\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1584
+                    "line": 1596
                   }
                 }
               ]
@@ -50950,7 +51007,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1586
+                "line": 1598
               },
               "children": [
                 {
@@ -50961,7 +51018,7 @@
                   "value": "\"dispatch_with shall answer an int $0x80 number in the native range with -ENOSYS, never as a native call.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1588
+                    "line": 1600
                   }
                 },
                 {
@@ -50972,7 +51029,7 @@
                   "value": "\"An int $0x80 with a number in 0x1000..0x1FFF answers -38.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1590
+                    "line": 1602
                   }
                 },
                 {
@@ -50983,7 +51040,7 @@
                   "value": "\"H.TRAP.12\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1591
+                    "line": 1603
                   }
                 },
                 {
@@ -50994,7 +51051,7 @@
                   "value": "\"syscall::dispatch_with\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1592
+                    "line": 1604
                   }
                 }
               ]
@@ -51007,7 +51064,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1594
+                "line": 1606
               },
               "children": [
                 {
@@ -51018,7 +51075,7 @@
                   "value": "\"unanswered shall print a call answered ENOSYS by name while report_unanswered's bound lasts, and nothing once it is spent.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1597
+                    "line": 1609
                   }
                 },
                 {
@@ -51029,7 +51086,7 @@
                   "value": "\"After report_unanswered(1), two unanswered calls print exactly one `syscall ... answered ENOSYS` line.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1599
+                    "line": 1611
                   }
                 },
                 {
@@ -51040,7 +51097,7 @@
                   "value": "\"H.TRAP.11\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1600
+                    "line": 1612
                   }
                 },
                 {
@@ -51051,7 +51108,7 @@
                   "value": "\"syscall::unanswered\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1601
+                    "line": 1613
                   }
                 }
               ]
@@ -51064,7 +51121,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1603
+                "line": 1615
               },
               "children": [
                 {
@@ -51075,7 +51132,7 @@
                   "value": "\"system_call shall answer ENOSYS with no entry registered, and the first registration shall stand.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1605
+                    "line": 1617
                   }
                 },
                 {
@@ -51086,7 +51143,7 @@
                   "value": "\"With no entry registered, system_call answers -38; a second set_syscall_entry leaves the first in place.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1607
+                    "line": 1619
                   }
                 },
                 {
@@ -51097,7 +51154,7 @@
                   "value": "\"H.TRAP.11\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1608
+                    "line": 1620
                   }
                 },
                 {
@@ -51108,7 +51165,7 @@
                   "value": "(\"trap::system_call\", \"trap::set_syscall_entry\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1609
+                    "line": 1621
                   }
                 }
               ]
@@ -51121,7 +51178,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1611
+                "line": 1623
               },
               "children": [
                 {
@@ -51132,7 +51189,7 @@
                   "value": "\"system_call and dispatch shall regroup the running task after a call or a trap from user mode, so that a process moved to another job runs in it from then on.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1614
+                    "line": 1626
                   }
                 },
                 {
@@ -51143,7 +51200,7 @@
                   "value": "\"After a program writes its pid to another cgroup's cgroup.procs, its next charges land in that job.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1616
+                    "line": 1628
                   }
                 },
                 {
@@ -51154,7 +51211,7 @@
                   "value": "\"H.OBJ.12\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1617
+                    "line": 1629
                   }
                 },
                 {
@@ -51165,7 +51222,7 @@
                   "value": "(\"trap::system_call\", \"trap::dispatch\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1618
+                    "line": 1630
                   }
                 }
               ]
@@ -54090,6 +54147,63 @@
                   "source": {
                     "file": "docs/sysml/19-aarch64-requirements.sysml",
                     "line": 846
+                  }
+                }
+              ]
+            },
+            {
+              "name": "registerAccessesAreEmulable",
+              "qualifiedName": "FerrixAarch64Requirements::Firmware::registerAccessesAreEmulable",
+              "kind": "requirement",
+              "shortName": "L.aarch64.50",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/19-aarch64-requirements.sysml",
+                "line": 848
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::registerAccessesAreEmulable",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"mmio's read8, read16 and read32 shall each be one ldrb, ldrh or ldr, and write8, write16 and write32 one strb, strh or str, with a bare base register and no writeback, so that a hypervisor can emulate the access from its fault's syndrome.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 852
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::registerAccessesAreEmulable",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"No check can fail without it on the machines the suite boots: QEMU's TCG emulates any load or store. The Pixel 7's crosvm guest is the evidence: with read_volatile, LLVM made stage 10's DMA switch check a pre-indexed ldrh, KVM_RUN failed with ENOSYS and the guest stopped with neither boot marker; with these, it boots to init.\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 858
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::registerAccessesAreEmulable",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.BOOT.2\"",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 859
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixAarch64Requirements::Firmware::registerAccessesAreEmulable",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::aarch64::mmio::read8\", \"arch::aarch64::mmio::write8\", \"arch::aarch64::mmio::read16\", \"arch::aarch64::mmio::write16\", \"arch::aarch64::mmio::read32\", \"arch::aarch64::mmio::write32\")",
+                  "source": {
+                    "file": "docs/sysml/19-aarch64-requirements.sysml",
+                    "line": 862
                   }
                 }
               ]

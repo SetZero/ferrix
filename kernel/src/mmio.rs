@@ -3,8 +3,21 @@
 //! A device register is not memory: the read has a side effect, the write must
 //! actually happen, and neither may be merged with its neighbour or hoisted
 //! out of a loop. `read_volatile` and `write_volatile` are how Rust says that,
-//! and this is the one place in the kernel that says it — everything else
-//! names a register through one of these windows.
+//! and this is the one place in the kernel that says it, through
+//! `crate::arch::mmio` — everything else names a register through one of
+//! these windows.
+//!
+//! On Arm, volatile is not enough. Under KVM a register access traps to the
+//! hypervisor, which can only emulate a load or store whose syndrome it can
+//! read: one register, no writeback. Volatile leaves the instruction to
+//! LLVM, which folds the address arithmetic of repeated reads at one offset
+//! into a pre-indexed `ldrh w, [x, #4]!`. Arm64 KVM then fails `KVM_RUN` with
+//! ENOSYS ("Data abort outside memslots with no valid syndrome info"), and
+//! crosvm stops the guest without a word. That is how the Pixel 7's VM
+//! stopped after stage 10's DMA switch check. So each access goes through
+//! `crate::arch::mmio`: on AArch64 and ARMv7-A one `ldr`/`str` in `asm!`,
+//! with nothing but a base register, as Linux's `readl` and `writel` are,
+//! and on x86-64 volatile, since KVM there decodes the instruction itself.
 //!
 //! A window with no base address reads zero and discards writes rather than
 //! dereferencing null. That turns "the controller was never mapped" from
@@ -43,7 +56,7 @@ impl Mmio {
             return 0;
         };
         // SAFETY: (DEVICE) as `read32`; a byte has no alignment to get wrong.
-        unsafe { core::ptr::read_volatile(at as *const u8) }
+        unsafe { crate::arch::mmio::read8(at) }
     }
 
     /// Write an 8-bit register.
@@ -52,7 +65,7 @@ impl Mmio {
             return;
         };
         // SAFETY: (DEVICE) as `read8`.
-        unsafe { core::ptr::write_volatile(at as *mut u8, value) };
+        unsafe { crate::arch::mmio::write8(at, value) };
     }
 
     /// Read a 16-bit register. The caller keeps `offset` even.
@@ -62,7 +75,7 @@ impl Mmio {
         };
         // SAFETY: (DEVICE) as `read32`, with the caller holding the offset to a
         // multiple of two.
-        unsafe { core::ptr::read_volatile(at as *const u16) }
+        unsafe { crate::arch::mmio::read16(at) }
     }
 
     /// Write a 16-bit register. The caller keeps `offset` even.
@@ -71,7 +84,7 @@ impl Mmio {
             return;
         };
         // SAFETY: (DEVICE) as `read16`.
-        unsafe { core::ptr::write_volatile(at as *mut u16, value) };
+        unsafe { crate::arch::mmio::write16(at, value) };
     }
 
     /// Read a 32-bit register.
@@ -81,9 +94,9 @@ impl Mmio {
         };
         // SAFETY: (DEVICE) `at` is inside a window the caller mapped as device memory,
         // and register offsets are naturally aligned by the hardware's own
-        // layout. Volatile because the read may have a side effect and must
-        // not be elided or reordered with its neighbours.
-        unsafe { core::ptr::read_volatile(at as *const u32) }
+        // layout. The access is not elided, merged or reordered with its
+        // neighbours, because the read may have a side effect (the header).
+        unsafe { crate::arch::mmio::read32(at) }
     }
 
     /// Write a 32-bit register.
@@ -92,6 +105,6 @@ impl Mmio {
             return;
         };
         // SAFETY: (DEVICE) as `read32`.
-        unsafe { core::ptr::write_volatile(at as *mut u32, value) };
+        unsafe { crate::arch::mmio::write32(at, value) };
     }
 }

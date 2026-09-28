@@ -256,6 +256,15 @@ pub(crate) use armv7a::dma_barrier;
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::dma_barrier;
 
+// Device register accesses, one instruction each that a hypervisor can
+// emulate; `crate::mmio`'s windows are the only caller.
+#[cfg(target_arch = "aarch64")]
+pub(crate) use aarch64::mmio;
+#[cfg(target_arch = "arm")]
+pub(crate) use armv7a::mmio;
+#[cfg(target_arch = "x86_64")]
+pub(crate) use x86_64::mmio;
+
 // Deciding and applying the side-channel defences, on the boot processor.
 #[cfg(target_arch = "aarch64")]
 pub(crate) use aarch64::init_speculation;

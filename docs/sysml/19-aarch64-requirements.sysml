@@ -845,5 +845,21 @@ package FerrixAarch64Requirements {
             attribute :>> parent = "H.FAIL.1";
             attribute :>> unit = ("arch::aarch64::init_watchdogs", "arch::aarch64::start_watchdogs");
         }
+        requirement <'L.aarch64.50'> registerAccessesAreEmulable : ItemLowLevel {
+            attribute :>> statement = "mmio's read8, read16 and read32 shall each
+                be one ldrb, ldrh or ldr, and write8, write16 and write32 one strb,
+                strh or str, with a bare base register and no writeback, so that a
+                hypervisor can emulate the access from its fault's syndrome.";
+            attribute :>> criterion = "No check can fail without it on the machines
+                the suite boots: QEMU's TCG emulates any load or store. The Pixel
+                7's crosvm guest is the evidence: with read_volatile, LLVM made
+                stage 10's DMA switch check a pre-indexed ldrh, KVM_RUN failed
+                with ENOSYS and the guest stopped with neither boot marker; with
+                these, it boots to init.";
+            attribute :>> parent = "H.BOOT.2";
+            attribute :>> unit = ("arch::aarch64::mmio::read8", "arch::aarch64::mmio::write8",
+                "arch::aarch64::mmio::read16", "arch::aarch64::mmio::write16",
+                "arch::aarch64::mmio::read32", "arch::aarch64::mmio::write32");
+        }
     }
 }
