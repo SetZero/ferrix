@@ -63,6 +63,56 @@ line to its last, and **17.9 s** from that last line to the next boot's image.
 That gap is the 5 s power-off grace, a 2 s trailing read, the stop and the
 next build's cargo invocations. So 56% of test-compositor is not the guest.
 
+## Measured, 2026-09-28: switching the built-in init
+
+On main a0772269, in a worktree and target dir of their own, at load 1.5 to
+9 (`~/ferrix-logs/gate-time/tt-cut1/`: `before-summary.txt`,
+`switch-builds.txt` and a log per step). The kernel step is cargo's own
+"Finished in" for `ferrix-kernel`:
+
+| Build | Kernel step | Load |
+|---|---:|---:|
+| debug, cold (the crate and every dependency), each arch | 16-18 s | 2-4 |
+| debug, init switched, x86_64 (inside test-boot, test-shell, test-vfs) | 1.5-3.3 s | 1.5-5.5 |
+| debug, init switched, aarch64 / armv7a (`build`, with and without `--init`) | 1.5-1.9 s / 1.6-2.3 s | 4-9 |
+| release, cold, x86_64 | 72 s | 7.5 |
+| release, init switched, x86_64 | 69-71 s | 4.5-6 |
+
+A flavour's debug kernel target is 1.2-1.4 GB per arch, 730 MB of it the
+kernel's incremental cache.
+
+x86_64, one after another, on a target dir every flavour had been built in:
+
+| Step | Wall | Load |
+|---|---:|---:|
+| `test-boot` | 12.3 s | 2.0 |
+| `test-shell --init` (Alpine's musl busybox) | 45.1 s | 2.0 |
+| `test-boot` | 12.4 s | 1.5 |
+| `test-vfs --init` (the same) | 15.6 s | 3.3 |
+
+So the gates do not pay what cost 1 below supposed. The image row's gate
+(`check`, `build --release`, the four test-boots, test-init) builds only the
+kernel with no init and never switches; in the stage 7 and 8 row each
+test-shell program and test-vfs is a flavour's first use, which a target
+dir per flavour would make a cold build (16-18 s, not 2 s). Keying the dir
+by the init's digest had problems of its own: test-net's command list holds
+the ports of the host's stub servers, so its digest changes every run and
+each run would make a new dir that is never reused; a rebuilt busybox would
+start cold; and a digest in `--target-dir` enters `builds.rs`'s build keys,
+so test-selfhost's replay would miss whenever the init is an earlier build's
+output, whose bytes Ferrix makes differently. The two variants left, dirs
+per flavour for `--release` only and the init carried in the image rather
+than built into the kernel (a `kernel/` change, for the certification
+consultant), are sound but not worth it today: neither takes time off a
+gate as the gates are.
+
+test-shell's 45 s is not the kernel build (1.5 s). With `--init` it boots
+four times: the built-in script, the same shell started by `ferrix.init=`,
+`poweroff -f -n` after writing `/data/k7`, and reading it back under
+`ferrix.onexit=panic`. Each guest runs about 9.2 s, and the last one's panic
+is followed by the 5 s power-off grace before QEMU is stopped (cost 3). The
+31 s in C above was test-shell with zinc, which boots twice.
+
 ## Where the time goes: the five likely costs
 
 From a read of `xtask/src` and `kernel/src` (file and line in the survey,
@@ -71,11 +121,13 @@ kept in the owner's handover), checked against the timings above:
 1. **The kernel crate rebuilds whenever a gate embeds a different init.**
    `FERRIX_INIT`, `FERRIX_INIT_SCRIPT`, `FERRIX_INIT_COMMANDS` and their
    digests are `rerun-if-env-changed` (`kernel/build.rs`), and every flavour
-   builds into one target dir. So a gate that alternates `test-boot`,
-   `test-shell`, `test-vfs` and `test-net`, or `test-audio`'s three boots,
-   recompiles the whole kernel each time. **Cut:** a target subdirectory
-   per init flavour (keyed by the digest), or the init passed to the image
-   rather than built into the kernel.
+   builds into one target dir. **Measured and dropped** (above, *Measured,
+   2026-09-28*): in the debug profile, which every test gate boots, the
+   rebuild is incremental and costs about 2 s; only a release build pays the whole
+   kernel crate again, about 70 s, and no gate switches flavours in release.
+   A target dir per flavour would turn each flavour's first build into a
+   cold one and win back 2 s only when the same worktree used it again.
+   Cut 1 was dropped by the product owner on 2026-09-28.
 2. **Every `--arch all` loop is sequential**: `build`, `test-boot`,
    `test-init`, `test-compositor`, `test-audio` and `coverage`. The host has
    24 threads and a boot uses 4. **Cut:** run the three arches' boots at
@@ -109,9 +161,10 @@ Also found, smaller or later:
 
 ## Next
 
-Phase 2 in the order the numbers give: (1) per-flavour kernel target dirs,
-(3) stop rather than wait for a finished guest, (2) arches in parallel, then
-(5). Each lands as its own slice under `land.sh`, with before and after from
-this table's method. First, finish measuring on a quiet window the
-coordinator can call: `test-compositor` to its end, `test-net`, and a warm
+Phase 2 in the order the numbers give: (3) stop rather than wait for a
+finished guest, in progress; then (2) arches in parallel; then (5), KVM by
+default on x86-64. Cut 1 was measured and dropped (2026-09-28, above). Each
+lands as its own slice under `land.sh`, with before and after from this
+table's method. Still to measure on a quiet window the coordinator can
+call: `test-compositor` to its end, `test-net`, and a warm
 `test-init --arch all`.
