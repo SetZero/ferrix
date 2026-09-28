@@ -670,7 +670,7 @@ fn execve_at(
     let (mut image, mut exe, mut set_ids) = if path_bytes.is_empty() {
         let file = fd::file(process, dirfd)?;
         let image = open_descriptor(&file, &context.who)?;
-        let set_ids = crate::fs::set_ids_of(&file.inode().metadata());
+        let set_ids = crate::fs::set_ids_on(file.location(), &file.inode().metadata());
         let exe = crate::fs::namespace().path_of(file.location(), &context.root);
         path_bytes = descriptor_path(dirfd, &[]);
         (image, exe, set_ids)
@@ -822,10 +822,11 @@ pub(crate) const fn lost_status() -> i32 {
 ///
 /// # Errors
 ///
-/// `EACCES` for anything but a regular file, as Linux answers, and for one
-/// `who` may not execute; and whatever reopening or reading refuses.
+/// `EACCES` for anything but a regular file, as Linux answers, for one on a
+/// `noexec` mount, and for one `who` may not execute; and whatever reopening
+/// or reading refuses.
 fn open_descriptor(file: &Arc<OpenFile>, who: &Access) -> Result<ProgramFile, Errno> {
-    if file.kind() != FileType::Regular {
+    if file.kind() != FileType::Regular || file.location().mount.no_exec() {
         return Err(Errno::EACCES);
     }
     who.require(&file.inode().metadata(), MAY_EXEC)?;

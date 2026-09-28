@@ -535,6 +535,22 @@ pub const ARM_STATFS64_UNPACKED_SIZE: usize = 88;
 /// answer. From `include/linux/statfs.h` -- not a UAPI header, but its values
 /// are the ABI `statvfs` decodes.
 pub const ST_VALID: u64 = 0x0020;
+/// `f_flags`: the mount is read-only. This and the `ST_*` values after it are
+/// Linux's `flags_by_mnt` answers, the same bits glibc's `<bits/statvfs.h>`
+/// names.
+pub const ST_RDONLY: u64 = 0x0001;
+/// `f_flags`: set-id bits are ignored on the mount.
+pub const ST_NOSUID: u64 = 0x0002;
+/// `f_flags`: device nodes on the mount cannot be opened.
+pub const ST_NODEV: u64 = 0x0004;
+/// `f_flags`: programs on the mount cannot be run.
+pub const ST_NOEXEC: u64 = 0x0008;
+/// `f_flags`: no access times.
+pub const ST_NOATIME: u64 = 0x0400;
+/// `f_flags`: no access times for directories.
+pub const ST_NODIRATIME: u64 = 0x0800;
+/// `f_flags`: access times relative to the modification time.
+pub const ST_RELATIME: u64 = 0x1000;
 
 // ---------------------------------------------------------------------------
 // mount, umount2 and fallocate
@@ -551,6 +567,17 @@ pub const MS_NODEV: u32 = 4;
 pub const MS_NOEXEC: u32 = 8;
 /// `mount`: update access times only when older than the modification time.
 pub const MS_RELATIME: u32 = 1 << 21;
+/// `mount`: keep no access times.
+pub const MS_NOATIME: u32 = 1024;
+/// `mount`: keep no access times for directories.
+pub const MS_NODIRATIME: u32 = 2048;
+/// `mount`: always update access times, overriding the default `relatime`.
+pub const MS_STRICTATIME: u32 = 1 << 24;
+/// `mount`: with `MS_BIND`, the mounts inside too; with a propagation flag,
+/// every mount below.
+pub const MS_REC: u32 = 16384;
+/// `mount`: say less in the kernel log about a failure.
+pub const MS_SILENT: u32 = 32768;
 /// `mount`: change the flags of an existing mount rather than make one.
 pub const MS_REMOUNT: u32 = 32;
 /// `mount`: make a directory visible at a second place.

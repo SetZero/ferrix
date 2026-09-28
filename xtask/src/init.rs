@@ -87,6 +87,11 @@ const POWER_DOWN: &str = "reboot: Power down";
 /// The console's device number as `stat`'s `tty_nr` encodes it: 5:1.
 const CONSOLE_TTY_NR: u32 = 5 << 8 | 1;
 
+/// What init says after each read-only remount of §8.2's step 2 that a write
+/// then found refused with `EROFS`: `/`, the root volume, and `/data`
+/// (finding F-53, which the kernel's `MS_REMOUNT` closed).
+const READ_ONLY_AT_SHUTDOWN: [&str; 2] = ["init     / is read-only", "init     /data is read-only"];
+
 /// The units shutdown must stop, in this order (§15, stage one).
 const STOP_ORDER: [&str; 4] = [
     "multi-user.target: stopped",
@@ -1785,7 +1790,20 @@ fn judge_shutdown(after: &[String]) -> std::result::Result<(), String> {
             ));
         }
     }
-    if !rest.any(|line| line.trim() == POWER_DOWN) {
+    let remaining: Vec<&String> = rest.collect();
+    for want in READ_ONLY_AT_SHUTDOWN {
+        if !remaining.iter().any(|line| line.contains(want)) {
+            let said: Vec<&str> = remaining
+                .iter()
+                .filter(|line| line.contains("read-only"))
+                .map(|line| line.trim())
+                .collect();
+            return Err(format!(
+                "shutdown did not say `{want}` after its remount (F-53); it said {said:?}"
+            ));
+        }
+    }
+    if !remaining.iter().any(|line| line.trim() == POWER_DOWN) {
         return Err(format!("the machine never said `{POWER_DOWN}`"));
     }
     Ok(())
@@ -1837,6 +1855,8 @@ mod tests {
             "  init     getty@console.service: stopped",
             "  init     basic.target: stopped",
             "  init     sysinit.target: stopped",
+            "  init     / is read-only",
+            "  init     /data is read-only",
             "reboot: Power down",
         ]);
         assert_eq!(judge_shutdown(&good), Ok(()));
@@ -1846,11 +1866,25 @@ mod tests {
             "  init     multi-user.target: stopped",
             "  init     basic.target: stopped",
             "  init     sysinit.target: stopped",
+            "  init     / is read-only",
+            "  init     /data is read-only",
             "reboot: Power down",
         ]);
         assert!(judge_shutdown(&swapped).is_err());
-        let no_power = lines(&good.iter().take(5).map(String::as_str).collect::<Vec<_>>());
+        let no_power = lines(&good.iter().take(7).map(String::as_str).collect::<Vec<_>>());
         assert!(judge_shutdown(&no_power).unwrap_err().contains(POWER_DOWN));
+        // F-53's negative control, as the kernel answered before N1.
+        let refused = lines(&[
+            "  init     going down: poweroff.target",
+            "  init     multi-user.target: stopped",
+            "  init     getty@console.service: stopped",
+            "  init     basic.target: stopped",
+            "  init     sysinit.target: stopped",
+            "  init     remounting / read-only: Invalid argument (os error 22)",
+            "  init     remounting /data read-only: Invalid argument (os error 22)",
+            "reboot: Power down",
+        ]);
+        assert!(judge_shutdown(&refused).unwrap_err().contains("F-53"));
     }
 
     #[test]

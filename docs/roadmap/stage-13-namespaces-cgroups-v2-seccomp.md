@@ -132,6 +132,17 @@ certification consultant. Landings N1 to N6 and NP, 39 points, end with
 `test-steam-bootstrap` passing the check as uid 1000; pid, network, IPC,
 UTS and cgroup namespaces, `setns` and seccomp stay out of it.
 
+**Done -- N1, per-mount flags (2026-09-28, 5 points).** `ro`, `nosuid`,
+`nodev` and `noexec` are a mount's own and enforced -- `EROFS` for every
+change through a read-only mount, `EACCES` for a device on a `nodev` one and
+a program on a `noexec` one, `EPERM` for its executable mapping, set-id bits
+ignored under `nosuid`; the memory filesystems mount read-only; `MS_REMOUNT`
+and `MS_REMOUNT | MS_BIND` change a mount's flags, writing its filesystem
+out before it goes read-only, so init's shutdown remount of `/` and `/data`
+now happens (F-53); `/proc/<pid>/mountinfo` exists, and `/proc/mounts` and
+`statfs` show the flags. The `mounts` boot line (FX-0885) and `test-init`'s
+shutdown lines prove it. Next is N2, binds.
+
 **Still to do:** `memory.stat`'s other keys, and a charge past `memory.max`
 reclaiming inside the job before it OOM-kills (M2), then freezing,
 `cpu.max` and `io`. `docs/CGROUPS.md` §7.1 says where each

@@ -2024,6 +2024,39 @@ pub(crate) static STAGE8_EPOLL: Explanation = Explanation {
           poll_changes",
 };
 
+/// For `check_mount_flags` in `stages_check.rs`, when `fs::mount_check::run`
+/// fails.
+pub(crate) static STAGE8_MOUNT_FLAGS: Explanation = Explanation {
+    code: "FX-0885",
+    title: "A mount's flags failed their self-check",
+    meaning: "`fs::mount_check::run` mounts a tmpfs under /tmp by number, fills it and \
+              remounts it ro,nosuid,nodev,noexec. Every change through a path or a descriptor \
+              must then be EROFS -- open for writing, create, mkdir, symlink, unlink (of a \
+              missing name too), rename, chmod, chown, utimensat, truncate, setxattr -- a device \
+              on it EACCES, its program EACCES, an executable mapping of its file EPERM and \
+              mprotect to executable EACCES, and a file opened for writing before the remount \
+              must still write. nosuid alone must leave the program runnable without its \
+              set-user-id bit; read-only alone must open the device for writing and answer \
+              EEXIST for a name that exists. A remount inside a mount is EINVAL and one by uid \
+              1000 EPERM. mountinfo, /proc/<pid>/mounts and statfs's f_flags must show the flags \
+              after each remount, an access-time flag the remount did not name must be kept, \
+              and mountinfo must name the mount as the O_PATH descriptor's /proc link does.",
+    causes: &[
+        "A `Namespace` method or a call in `syscall/` changes a file without asking \
+         `Location::require_writable` first, or asks after a permission check.",
+        "`Namespace::open` no longer refuses a device on a nodev mount, or refuses a device \
+         or a pipe opened for writing on a read-only one.",
+        "`fs::open_program` does not ask `Mount::no_exec` or `set_ids_on`, or `map_file` and \
+         `maps_noexec_file` in `syscall/memory.rs` do not ask `no_exec`.",
+        "`remount_at` in `syscall/fsctl.rs` drops the access-time flags, or accepts a place \
+         that is not a mount's root.",
+        "`render::mountinfo` prints the mount point from a different root than \
+         `/proc/<pid>/fd` does, or `MountFlags::options` misorders the options.",
+    ],
+    see: "kernel/src/fs/mount_check.rs; kernel/src/syscall/fsctl.rs; \
+          libs/fs/vfs/src/namespace.rs; kernel/src/fs/procfs/render.rs",
+};
+
 /// For `check_semaphores` in `stages_check.rs`, when `syscall::sem_check::run`
 /// fails.
 pub(crate) static STAGE7_SEMAPHORES: Explanation = Explanation {
@@ -2547,6 +2580,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE8_EVENTFD,
     &STAGE8_TIMERFD,
     &STAGE8_SIGNALFD,
+    &STAGE8_MOUNT_FLAGS,
     &SYSFS,
     &STAGE9_OBJECTS,
     &STAGE9_ALLOCATION,

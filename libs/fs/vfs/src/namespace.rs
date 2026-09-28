@@ -5,7 +5,7 @@ use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use ferrix_kmem::{Charge, arc_footprint};
 use ferrix_linux_abi::errno::Errno;
@@ -26,9 +26,125 @@ use crate::walk::{LastPart, Walked, up};
 /// source and not to the structure.
 pub const DEFAULT_CACHE: usize = 4096;
 
+/// What one mount allows, apart from what its filesystem does: Linux's
+/// per-mount `MNT_*` flags, which `mount(2)` sets from its `MS_*` flags and
+/// `MS_REMOUNT` changes.
+///
+/// Four are enforced where the operation they govern is decided -- see
+/// [`Location::require_writable`], [`Mount::no_devices`],
+/// [`Mount::no_exec`] and [`Mount::no_set_id`] -- and the three access-time
+/// ones are recorded and shown, and change nothing, because no filesystem
+/// here keeps an access time apart from the others.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MountFlags(u32);
+
+impl MountFlags {
+    /// None: read-write, set-id bits and devices honoured, programs run.
+    pub const NONE: MountFlags = MountFlags(0);
+    /// `MS_RDONLY`: nothing on it may be changed through this mount.
+    pub const READ_ONLY: MountFlags = MountFlags(1);
+    /// `MS_NOSUID`: set-user-id and set-group-id bits are ignored.
+    pub const NOSUID: MountFlags = MountFlags(1 << 1);
+    /// `MS_NODEV`: its device nodes cannot be opened.
+    pub const NODEV: MountFlags = MountFlags(1 << 2);
+    /// `MS_NOEXEC`: nothing on it runs, or is mapped executable.
+    pub const NOEXEC: MountFlags = MountFlags(1 << 3);
+    /// `MS_NOATIME`.
+    pub const NOATIME: MountFlags = MountFlags(1 << 4);
+    /// `MS_NODIRATIME`.
+    pub const NODIRATIME: MountFlags = MountFlags(1 << 5);
+    /// `MS_RELATIME`.
+    pub const RELATIME: MountFlags = MountFlags(1 << 6);
+    /// The access-time flags, which a remount that names none keeps.
+    pub const ATIME: MountFlags = MountFlags((1 << 4) | (1 << 5) | (1 << 6));
+    /// Every flag there is.
+    const ALL: u32 = (1 << 7) - 1;
+
+    /// The flags `bits` holds, from [`MountFlags::bits`].
+    #[must_use]
+    pub const fn from_bits(bits: u32) -> MountFlags {
+        MountFlags(bits & Self::ALL)
+    }
+
+    /// The flags as a word.
+    #[must_use]
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+
+    /// Whether every flag of `other` is set.
+    #[must_use]
+    pub const fn contains(self, other: MountFlags) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    /// Both sets.
+    #[must_use]
+    pub const fn union(self, other: MountFlags) -> MountFlags {
+        MountFlags(self.0 | other.0)
+    }
+
+    /// These, less `other`'s.
+    #[must_use]
+    pub const fn without(self, other: MountFlags) -> MountFlags {
+        MountFlags(self.0 & !other.0)
+    }
+
+    /// `statfs`'s `f_flags` for a mount with these: `ST_VALID` and the
+    /// `ST_*` bit of each flag, Linux's `flags_by_mnt`.
+    #[must_use]
+    pub fn statfs_flags(self) -> u64 {
+        use ferrix_linux_abi::types::{
+            ST_NOATIME, ST_NODEV, ST_NODIRATIME, ST_NOEXEC, ST_NOSUID, ST_RDONLY, ST_RELATIME,
+            ST_VALID,
+        };
+        [
+            (Self::READ_ONLY, ST_RDONLY),
+            (Self::NOSUID, ST_NOSUID),
+            (Self::NODEV, ST_NODEV),
+            (Self::NOEXEC, ST_NOEXEC),
+            (Self::NOATIME, ST_NOATIME),
+            (Self::NODIRATIME, ST_NODIRATIME),
+            (Self::RELATIME, ST_RELATIME),
+        ]
+        .into_iter()
+        .filter(|&(flag, _)| self.contains(flag))
+        .fold(ST_VALID, |bits, (_, bit)| bits | bit)
+    }
+
+    /// The options `/proc/mounts` and `mountinfo` print for them, in
+    /// Linux's order (`show_vfsmnt`, `show_mnt_opts`): `rw` or `ro`, then
+    /// the others that are set.
+    #[must_use]
+    pub fn options(self) -> Vec<u8> {
+        let mut out = Vec::from(if self.contains(Self::READ_ONLY) {
+            &b"ro"[..]
+        } else {
+            &b"rw"[..]
+        });
+        for (flag, name) in [
+            (Self::NOSUID, &b",nosuid"[..]),
+            (Self::NODEV, b",nodev"),
+            (Self::NOEXEC, b",noexec"),
+            (Self::NOATIME, b",noatime"),
+            (Self::NODIRATIME, b",nodiratime"),
+            (Self::RELATIME, b",relatime"),
+        ] {
+            if self.contains(flag) {
+                out.extend_from_slice(name);
+            }
+        }
+        out
+    }
+}
+
 /// A filesystem instance attached to the tree.
 pub struct Mount {
     id: u64,
+    /// Its [`MountFlags`], which a remount changes in place: an atomic, so
+    /// that every check reads them without a lock and sees one remount
+    /// whole.
+    flags: AtomicU32,
     fs: Arc<dyn FileSystem>,
     root: Arc<Dentry>,
     /// The mount it is on and the dentry it covers; `None` for the root.
@@ -71,6 +187,39 @@ impl Mount {
     #[must_use]
     pub fn parker(&self) -> &Arc<dyn Parker> {
         &self.parker
+    }
+
+    /// Its flags, as the last `mount` or remount left them.
+    #[must_use]
+    pub fn flags(&self) -> MountFlags {
+        MountFlags::from_bits(self.flags.load(Ordering::Acquire))
+    }
+
+    /// Whether nothing may be changed through it: `MS_RDONLY`.
+    #[must_use]
+    pub fn read_only(&self) -> bool {
+        self.flags().contains(MountFlags::READ_ONLY)
+    }
+
+    /// Whether its device nodes may not be opened: `MS_NODEV`, Linux's
+    /// `path_nodev`.
+    #[must_use]
+    pub fn no_devices(&self) -> bool {
+        self.flags().contains(MountFlags::NODEV)
+    }
+
+    /// Whether nothing on it may run or be mapped executable: `MS_NOEXEC`,
+    /// Linux's `path_noexec`.
+    #[must_use]
+    pub fn no_exec(&self) -> bool {
+        self.flags().contains(MountFlags::NOEXEC)
+    }
+
+    /// Whether a program on it runs without its set-id bits: `MS_NOSUID`,
+    /// Linux's `mnt_may_suid`.
+    #[must_use]
+    pub fn no_set_id(&self) -> bool {
+        self.flags().contains(MountFlags::NOSUID)
     }
 }
 
@@ -143,6 +292,7 @@ impl Location {
         let dentry = Dentry::named_root(Box::from(name), inode)?;
         let mount = Arc::new(Mount {
             id: DETACHED_MOUNT,
+            flags: AtomicU32::new(0),
             fs,
             root: Arc::clone(&dentry),
             parent: None,
@@ -156,6 +306,27 @@ impl Location {
     #[must_use]
     pub fn is_detached(&self) -> bool {
         self.mount.id == DETACHED_MOUNT
+    }
+
+    /// `EROFS` if its mount is read-only: Linux's `mnt_want_write`, which
+    /// every change to a file through a path or a descriptor asks first.
+    ///
+    /// # Errors
+    ///
+    /// `EROFS`.
+    pub fn require_writable(&self) -> Result<()> {
+        if self.mount.read_only() {
+            Err(Errno::EROFS)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Whether this is the root of its mount, the one place `MS_REMOUNT`
+    /// and `umount2` act on.
+    #[must_use]
+    pub fn is_mount_root(&self) -> bool {
+        Arc::ptr_eq(&self.dentry, &self.mount.root)
     }
 }
 
@@ -250,6 +421,7 @@ impl Namespace {
         // refuse.
         let root = Arc::new(Mount {
             id: 1,
+            flags: AtomicU32::new(0),
             root: Dentry::uncharged_root(fs.root()),
             fs,
             parent: None,
@@ -483,6 +655,50 @@ impl Namespace {
         path
     }
 
+    /// The path from `root` to `at`, or `None` when `at` is not at or below
+    /// `root`: what `mountinfo` prints a mount point as, and how it leaves
+    /// out a mount the reader's root cannot reach, as Linux's
+    /// `seq_path_root` does.
+    #[must_use]
+    pub fn path_within(&self, at: &Location, root: &Location) -> Option<Vec<u8>> {
+        if at.is_detached() {
+            return None;
+        }
+        let mut here = at.clone();
+        loop {
+            if here.same(root) {
+                return Some(self.path_of(at, root));
+            }
+            let up = up(&here, None);
+            if up.same(&here) {
+                return None;
+            }
+            here = up;
+        }
+    }
+
+    /// The path of `mount`'s root inside its own filesystem: `/` for a
+    /// mount of the whole filesystem, which is every mount until a bind
+    /// mounts a part of one. `mountinfo`'s fourth field.
+    #[must_use]
+    pub fn root_path(mount: &Mount) -> Vec<u8> {
+        let mut parts: Vec<Box<[u8]>> = Vec::new();
+        let mut here = Arc::clone(&mount.root);
+        while let Some(parent) = here.parent() {
+            parts.push(here.name());
+            here = parent;
+        }
+        if parts.is_empty() {
+            return Vec::from(&b"/"[..]);
+        }
+        let mut path = Vec::new();
+        for part in parts.iter().rev() {
+            path.push(b'/');
+            path.extend_from_slice(part);
+        }
+        path
+    }
+
     // -- Opening ------------------------------------------------------------
 
     /// `openat`.
@@ -565,6 +781,22 @@ impl Namespace {
                 want |= MAY_WRITE;
             }
             ctx.who.require(&inode.metadata(), want)?;
+            // Linux's `may_open` and `do_dentry_open`, in that order: a
+            // device on a `nodev` mount is `EACCES`, and writing anything
+            // but a device, a pipe or a socket through a read-only mount is
+            // `EROFS` -- those three are not the filesystem's to change.
+            let special = matches!(
+                kind,
+                FileType::CharDevice | FileType::BlockDevice | FileType::Fifo | FileType::Socket
+            );
+            if matches!(kind, FileType::CharDevice | FileType::BlockDevice)
+                && walked.found.mount.no_devices()
+            {
+                return Err(Errno::EACCES);
+            }
+            if (flags.write || flags.truncate) && !special {
+                walked.found.require_writable()?;
+            }
         }
         if flags.truncate && flags.write && kind == FileType::Regular {
             inode.set_len(0)?;
@@ -593,6 +825,10 @@ impl Namespace {
         if walked.found.dentry.inode().is_some() {
             return Err(Errno::EEXIST);
         }
+        // A name that exists is `EEXIST` whatever the mount; a new one on a
+        // read-only mount is `EROFS` before any permission is asked, as
+        // Linux's `filename_create` has it.
+        walked.parent.require_writable()?;
         let dir = walked.parent.inode()?;
         let dir_meta = dir.metadata();
         ctx.who.may_create(&dir_meta)?;
@@ -714,6 +950,7 @@ impl Namespace {
         if dest.found.dentry.inode().is_some() {
             return Err(Errno::EEXIST);
         }
+        dest.parent.require_writable()?;
         if !Arc::ptr_eq(&source.found.mount, &dest.parent.mount) {
             return Err(Errno::EXDEV);
         }
@@ -732,6 +969,7 @@ impl Namespace {
     pub fn unlink(&self, ctx: &Context, start: Option<&Location>, path: &[u8]) -> Result<()> {
         let walked = self.walk(ctx, Self::start(ctx, start), path, false)?;
         let name = walked.name_or(Errno::EISDIR)?;
+        walked.parent.require_writable()?;
         let inode = walked.found.inode()?;
         ctx.who
             .may_delete(&walked.parent.inode()?.metadata(), &inode.metadata())?;
@@ -764,6 +1002,7 @@ impl Namespace {
             LastPart::DotDot => return Err(Errno::ENOTEMPTY),
             LastPart::Root => return Err(Errno::EBUSY),
         };
+        walked.parent.require_writable()?;
         let inode = walked.found.inode()?;
         ctx.who
             .may_delete(&walked.parent.inode()?.metadata(), &inode.metadata())?;
@@ -800,13 +1039,16 @@ impl Namespace {
         let dest = self.walk(ctx, Self::start(ctx, new.0), new.1, false)?;
         let old_name = source.name_or(Errno::EBUSY)?;
         let new_name = dest.name_or(Errno::EBUSY)?;
+        // `do_renameat2`'s order: across mounts is `EXDEV`, and a read-only
+        // mount `EROFS`, before either name is looked at.
+        if !Arc::ptr_eq(&source.parent.mount, &dest.parent.mount) {
+            return Err(Errno::EXDEV);
+        }
+        source.parent.require_writable()?;
         let moving = source.found.inode()?;
         let moving_meta = moving.metadata();
         let moving_dir = moving_meta.kind == FileType::Directory;
 
-        if !Arc::ptr_eq(&source.parent.mount, &dest.parent.mount) {
-            return Err(Errno::EXDEV);
-        }
         if source.is_mountpoint() || dest.is_mountpoint() {
             return Err(Errno::EBUSY);
         }
@@ -875,6 +1117,7 @@ impl Namespace {
     ///
     /// Whatever the filesystem refuses.
     pub fn set_attributes(&self, at: &Location, change: &SetAttributes) -> Result<()> {
+        at.require_writable()?;
         at.inode()?.set_attributes(change)
     }
 
@@ -887,7 +1130,10 @@ impl Namespace {
     pub fn truncate(&self, at: &Location, len: u64) -> Result<()> {
         let inode = at.inode()?;
         match inode.metadata().kind {
-            FileType::Regular => inode.set_len(len),
+            FileType::Regular => {
+                at.require_writable()?;
+                inode.set_len(len)
+            }
             FileType::Directory => Err(Errno::EISDIR),
             _ => Err(Errno::EINVAL),
         }
@@ -902,6 +1148,20 @@ impl Namespace {
     /// `ENOTDIR` if `at` is not a directory, `EBUSY` if something is already
     /// mounted exactly there, `ENOMEM` past the job's memory limit.
     pub fn mount(&self, fs: Arc<dyn FileSystem>, at: &Location) -> Result<Arc<Mount>> {
+        self.mount_with(fs, at, MountFlags::NONE)
+    }
+
+    /// Mount `fs` on the directory `at` with `flags`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Namespace::mount`].
+    pub fn mount_with(
+        &self,
+        fs: Arc<dyn FileSystem>,
+        at: &Location,
+        flags: MountFlags,
+    ) -> Result<Arc<Mount>> {
         if at.inode()?.metadata().kind != FileType::Directory {
             return Err(Errno::ENOTDIR);
         }
@@ -916,6 +1176,7 @@ impl Namespace {
         }
         let mount = Arc::new(Mount {
             id: self.next_mount.fetch_add(1, Ordering::Relaxed),
+            flags: AtomicU32::new(flags.bits()),
             root,
             fs,
             parent: Some((Arc::clone(&at.mount), Arc::clone(&at.dentry))),
@@ -925,6 +1186,21 @@ impl Namespace {
         let _ = mounts.insert(key, Arc::clone(&mount));
         at.dentry.add_mount();
         Ok(mount)
+    }
+
+    /// Give the mount whose root `at` is the flags `flags`: `MS_REMOUNT`.
+    /// The flags replace the old ones whole; which to keep is the caller's
+    /// to decide, as `mount(2)`'s rules say.
+    ///
+    /// # Errors
+    ///
+    /// `EINVAL` if `at` is not the root of a mount.
+    pub fn remount(&self, at: &Location, flags: MountFlags) -> Result<()> {
+        if !at.is_mount_root() {
+            return Err(Errno::EINVAL);
+        }
+        at.mount.flags.store(flags.bits(), Ordering::Release);
+        Ok(())
     }
 
     /// Unmount the filesystem whose root `at` is.

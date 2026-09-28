@@ -669,6 +669,9 @@ pub(crate) fn sys_getcwd(process: &Process, buf: u64, size: u64) -> Result<usize
 /// rules `chmod` and `chown` follow, from `Access::check_change`.
 fn set(process: &Process, target: &Target, change: &SetAttributes) -> Result<usize, Errno> {
     let metadata = target.stat()?.metadata;
+    // `chmod_common` and its kin: a read-only mount is `EROFS` before the
+    // caller's right to the change is asked.
+    target.location().require_writable()?;
     let change = context(process).who.check_change(&metadata, change)?;
     fs::namespace().set_attributes(target.location(), &change)?;
     inotify::node_event(target.location(), inotify::IN_ATTRIB);

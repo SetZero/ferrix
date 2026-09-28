@@ -77,6 +77,9 @@ pub(super) fn check_programs() {
     // the root, whose context the check's process is made in.
     check_semaphores();
 
+    // A mount's own flags, enforced and shown; under /tmp, after the root.
+    check_mount_flags();
+
     // Stage 9's objects, driven through the native handlers between two
     // processes this check builds. After stage 7 because it shares the
     // dispatch path and the user copy layer, and here rather than under a
@@ -227,6 +230,26 @@ pub(super) fn check_semaphores() {
          from another job once its maker had ended; a job refused ENOSPC at {} sets while a \
          sibling made one",
         checked.calls, checked.refusals, checked.waits, checked.per_job,
+    );
+}
+
+/// A mount's own flags: `ro`, `nodev`, `noexec` and `nosuid` enforced,
+/// `MS_REMOUNT` changing them, and `mountinfo`, `mounts` and `statfs`
+/// showing them (`docs/NAMESPACES.md`, N1).
+pub(super) fn check_mount_flags() {
+    let checked = match fs::mount_check::run() {
+        Ok(checked) => checked,
+        Err(problem) => fatal!(
+            catalog::STAGE8_MOUNT_FLAGS,
+            "mount flag self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  mounts   {} calls answered as Linux answers them, {} of them refusals: a read-only \
+         mount EROFS for every change, nodev EACCES, noexec EACCES and its mappings EPERM, \
+         nosuid ignoring a set-user-id bit; remounts only at a mount's root and only by root; \
+         mountinfo naming each as its descriptor link does",
+        checked.calls, checked.refusals,
     );
 }
 

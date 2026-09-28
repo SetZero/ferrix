@@ -471,6 +471,72 @@ fn a_devtmpfs_mounts_line_is_what_linux_printed() {
 }
 
 #[test]
+fn mountinfo_lines_are_what_linux_printed() {
+    // Two lines of the host's own `/proc/self/mountinfo` (Linux 7.0), less
+    // the `shared:` tags, which no mount here ever has.
+    let proc = mounts::MountInfo {
+        id: 28,
+        parent: 34,
+        device: 25,
+        root: b"/",
+        point: b"/proc",
+        options: b"rw,nosuid,nodev,noexec,relatime",
+        fstype: b"proc",
+        source: b"proc",
+        super_options: b"rw",
+    };
+    let out = rendered(|out| mounts::render_info(out, &proc));
+    assert_eq!(
+        show(&out),
+        show(b"28 34 0:25 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw\n"),
+        "the host's /proc"
+    );
+    let dev = mounts::MountInfo {
+        id: 29,
+        parent: 34,
+        device: 7,
+        root: b"/",
+        point: b"/dev",
+        options: b"rw,nosuid,relatime",
+        fstype: b"devtmpfs",
+        source: b"udev",
+        super_options: b"rw,size=27073364k,nr_inodes=6768341,mode=755,inode64",
+    };
+    let out = rendered(|out| mounts::render_info(out, &dev));
+    assert_eq!(
+        show(&out),
+        show(
+            b"29 34 0:7 / /dev rw,nosuid,relatime - devtmpfs udev rw,size=27073364k,nr_inodes=6768341,mode=755,inode64\n"
+        ),
+        "the host's /dev"
+    );
+
+    // A large device number splits as `makedev` packs it, and a bind's root
+    // and a point with a space in it are escaped.
+    let awkward = mounts::MountInfo {
+        id: 7,
+        parent: 1,
+        // `makedev(74565, 490565)`, as glibc packs it.
+        device: ((74_565_u64 & 0xfff) << 8)
+            | ((74_565_u64 & !0xfff) << 32)
+            | (490_565_u64 & 0xff)
+            | ((490_565_u64 & !0xff) << 12),
+        root: b"/etc dir",
+        point: b"/new root/etc",
+        options: b"ro,nosuid,nodev",
+        fstype: b"tmpfs",
+        source: b"tmpfs",
+        super_options: b"rw",
+    };
+    let out = rendered(|out| mounts::render_info(out, &awkward));
+    assert_eq!(
+        show(&out),
+        "7 1 74565:490565 /etc\\040dir /new\\040root/etc ro,nosuid,nodev - tmpfs tmpfs rw\n",
+        "escapes and a wide device"
+    );
+}
+
+#[test]
 fn filesystems_lines_are_what_linux_printed() {
     // Three lines of the host's `/proc/filesystems`, in its order, and one
     // for a filesystem that needs a block device.

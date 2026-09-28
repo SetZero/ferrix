@@ -296,6 +296,12 @@ impl<D: BlockHandle> FileSystem for Btrfs<D> {
         self.shared.dev_no
     }
 
+    /// The reader never writes: stage 11's mount, which only `MS_RDONLY`
+    /// reaches.
+    fn read_only(&self) -> bool {
+        true
+    }
+
     /// Sizes from the superblock, in sectors.
     ///
     /// Linux derives free space from each block group's space info, which

@@ -17,14 +17,14 @@ use ferrix_procfs::kstat::{self, CpuTimes, Kstat};
 use ferrix_procfs::loadavg::{self as loadavg_text, Loadavg};
 use ferrix_procfs::maps::{self, Mapping, Width};
 use ferrix_procfs::meminfo::{self, Meminfo};
-use ferrix_procfs::mounts::{self, Mount};
+use ferrix_procfs::mounts::{self, Mount, MountInfo};
 use ferrix_procfs::net as procfs_net;
 use ferrix_procfs::partitions::{self, Partition};
 use ferrix_procfs::stat::{self, Stat};
 use ferrix_procfs::status::{self, State, Status};
 use ferrix_procfs::sysctl;
 use ferrix_vfs::fd::MAX_LIMIT;
-use ferrix_vfs::{Errno, Location, Namespace, OpenFile, Result};
+use ferrix_vfs::{Errno, Location, MountFlags, Namespace, OpenFile, Result};
 
 use super::{Kernel, ThreadOf};
 use crate::arch;
@@ -192,9 +192,9 @@ pub(super) fn meminfo(_: &Kernel) -> Result<Vec<u8>> {
 /// `/proc/mounts`, with each mount point as the reader's root sees it.
 ///
 /// The source is the filesystem's own name, which is what Linux shows for a
-/// filesystem with no device. The options are `rw` alone: nothing here is
-/// mounted read-only, and nothing enforces `nosuid`, `nodev` or `noexec`, so
-/// printing them would promise what the kernel does not do.
+/// filesystem with no device. The options are the mount's own flags, each of
+/// which the kernel enforces (`ferrix_vfs::MountFlags`), and `ro` for a
+/// filesystem that takes no writes whatever the mount says.
 pub(super) fn mounts(_: &Kernel) -> Result<Vec<u8>> {
     let ns = fs::namespace();
     let root = process::current().map_or_else(
@@ -224,13 +224,72 @@ fn mounts_from(ns: &Namespace, root: &Location) -> Result<Vec<u8>> {
         };
         let point = ns.path_of(&at, root);
         let name = mount.filesystem().name().as_bytes();
+        let options = shown_flags(&mount).options();
         mounts::render(
             &mut out,
             &Mount {
                 source: name,
                 point: &point,
                 fstype: name,
-                options: b"rw",
+                options: &options,
+            },
+        );
+    }
+    Ok(out)
+}
+
+/// A mount's flags as `/proc/mounts` shows them: its own, and read-only too
+/// when its filesystem takes no writes, as Linux's `show_vfsmnt` prints
+/// `ro` for either.
+fn shown_flags(mount: &ferrix_vfs::Mount) -> MountFlags {
+    if mount.filesystem().read_only() {
+        mount.flags().union(MountFlags::READ_ONLY)
+    } else {
+        mount.flags()
+    }
+}
+
+/// `/proc/<pid>/mountinfo`: every mount the process's root can reach, in the
+/// order they were made -- so a mount's parent comes before it -- each with
+/// its id, its parent's, its root inside its filesystem and its point from
+/// that root. A mount the root cannot reach is left out, as Linux's
+/// `seq_path_root` leaves it out; the namespace's root mount, above a root
+/// that `/` was switched to, is one.
+pub(super) fn mountinfo(process: &Process) -> Result<Vec<u8>> {
+    let ns = fs::namespace();
+    let root = process.fs_context().lock().root.clone();
+    let mut all = ns.mounts();
+    all.sort_unstable_by_key(|mount| mount.id());
+    let mut out = Vec::new();
+    for mount in &all {
+        let at = Location {
+            dentry: Arc::clone(mount.root()),
+            mount: Arc::clone(mount),
+        };
+        let Some(point) = ns.path_within(&at, &root) else {
+            continue;
+        };
+        let parent = mount.parent().map_or(mount.id(), |(above, _)| above.id());
+        let inside = Namespace::root_path(mount);
+        let options = mount.flags().options();
+        let name = mount.filesystem().name().as_bytes();
+        let super_options: &[u8] = if mount.filesystem().read_only() {
+            b"ro"
+        } else {
+            b"rw"
+        };
+        mounts::render_info(
+            &mut out,
+            &MountInfo {
+                id: mount.id(),
+                parent,
+                device: mount.filesystem().device(),
+                root: &inside,
+                point: &point,
+                options: &options,
+                fstype: name,
+                source: name,
+                super_options,
             },
         );
     }

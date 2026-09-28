@@ -74,16 +74,28 @@ impl StatfsLayout {
     ///
     /// `f_frsize` is the block size and `f_flags` is `ST_VALID`, as Linux
     /// fills them for a filesystem that gives neither: nothing here has a
-    /// fragment size of its own, and no mount carries a flag `statfs` reports.
+    /// fragment size of its own. The system calls use
+    /// [`StatfsLayout::encode_with_flags`], with the mount's flags.
     ///
     /// # Errors
     ///
     /// `EOVERFLOW` for a value the layout's field is too narrow for.
     pub fn encode(self, stat: &StatFs) -> Result<Vec<u8>> {
+        self.encode_with_flags(stat, ST_VALID)
+    }
+
+    /// As [`StatfsLayout::encode`], with `f_flags` as `flags` says: what a
+    /// mount's own flags make it (`MountFlags::statfs_flags`), as Linux's
+    /// `flags_by_mnt` does.
+    ///
+    /// # Errors
+    ///
+    /// As [`StatfsLayout::encode`].
+    pub fn encode_with_flags(self, stat: &StatFs, flags: u64) -> Result<Vec<u8>> {
         match self {
-            StatfsLayout::Wide => Ok(wide(stat)),
-            StatfsLayout::Narrow => narrow(stat),
-            StatfsLayout::Packed64 => packed64(stat),
+            StatfsLayout::Wide => Ok(wide(stat, flags)),
+            StatfsLayout::Narrow => narrow(stat, flags),
+            StatfsLayout::Packed64 => packed64(stat, flags),
         }
     }
 }
@@ -135,7 +147,7 @@ fn narrowed_count(value: u64) -> Result<u32> {
 }
 
 /// The 64-bit `struct statfs`.
-fn wide(stat: &StatFs) -> Vec<u8> {
+fn wide(stat: &StatFs, flags: u64) -> Vec<u8> {
     encode!(
         Statfs {
             f_type: signed(stat.magic),
@@ -147,7 +159,7 @@ fn wide(stat: &StatFs) -> Vec<u8> {
             f_ffree: signed(stat.files_free),
             f_namelen: signed(stat.name_max),
             f_frsize: signed(stat.block_size),
-            f_flags: signed(ST_VALID),
+            f_flags: signed(flags),
             ..Statfs::default()
         },
         Statfs,
@@ -159,7 +171,7 @@ fn wide(stat: &StatFs) -> Vec<u8> {
 }
 
 /// ARMv7-A's `struct statfs`.
-fn narrow(stat: &StatFs) -> Result<Vec<u8>> {
+fn narrow(stat: &StatFs, flags: u64) -> Result<Vec<u8>> {
     Ok(encode!(
         ArmStatfs {
             f_type: narrowed(stat.magic)?,
@@ -171,7 +183,7 @@ fn narrow(stat: &StatFs) -> Result<Vec<u8>> {
             f_ffree: narrowed_count(stat.files_free)?,
             f_namelen: narrowed(stat.name_max)?,
             f_frsize: narrowed(stat.block_size)?,
-            f_flags: narrowed(ST_VALID)?,
+            f_flags: narrowed(flags)?,
             ..ArmStatfs::default()
         },
         ArmStatfs,
@@ -184,7 +196,7 @@ fn narrow(stat: &StatFs) -> Result<Vec<u8>> {
 
 /// ARMv7-A's packed `struct statfs64`. Only the type and the two sizes can
 /// overflow, which is the check Linux's `do_statfs64` makes.
-fn packed64(stat: &StatFs) -> Result<Vec<u8>> {
+fn packed64(stat: &StatFs, flags: u64) -> Result<Vec<u8>> {
     Ok(encode!(
         ArmStatfs64 {
             f_type: narrowed(stat.magic)?,
@@ -196,7 +208,7 @@ fn packed64(stat: &StatFs) -> Result<Vec<u8>> {
             f_ffree: stat.files_free,
             f_namelen: narrowed(stat.name_max)?,
             f_frsize: narrowed(stat.block_size)?,
-            f_flags: narrowed(ST_VALID)?,
+            f_flags: narrowed(flags)?,
             ..ArmStatfs64::default()
         },
         ArmStatfs64,

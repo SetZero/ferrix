@@ -43,15 +43,38 @@
 //! kernel was built without; they are added to [`filesystem_named`] as they
 //! arrive.
 //!
-//! The per-mount flags `MS_NOSUID`, `MS_NODEV`, `MS_NOEXEC`, `MS_RELATIME`
-//! and the rest of the access-time ones are accepted for every type and do
-//! nothing, because there is nothing yet for any of them to switch off: no
-//! program runs set-user-ID, and no access time is kept apart from the others.
-//! `/proc/mounts` does not print them, for the same reason. The options string
-//! -- tmpfs's `size=`, procfs's `hidepid=` -- is not read for any type, so an
-//! option is never refused and never has an effect. Changing an existing mount --
-//! `MS_REMOUNT`, `MS_BIND`, `MS_MOVE` and the propagation flags -- is `EINVAL`,
-//! because the mount table has no operation that does it.
+//! # Per-mount flags, enforced
+//!
+//! `MS_RDONLY`, `MS_NOSUID`, `MS_NODEV` and `MS_NOEXEC` are the mount's own
+//! (`ferrix_vfs::MountFlags`), for every type, and each is enforced where the
+//! operation it governs is decided: a change through a read-only mount is
+//! `EROFS` (the VFS), a device on a `nodev` one `EACCES` (the VFS's `open`), a
+//! program on a `noexec` one `EACCES` and its executable mapping `EPERM`
+//! (`fs::open_program`, `memory`), and a set-id bit on a `nosuid` one is
+//! ignored (`fs::open_program`). `MS_NOATIME`, `MS_NODIRATIME` and
+//! `MS_RELATIME` are recorded and shown and change nothing, since no access
+//! time is kept apart from the others; a new mount gets only the ones asked
+//! for, not Linux's default `relatime`, because none of them is kept.
+//! `/proc/mounts`, `/proc/<pid>/mountinfo` and `statfs`'s `f_flags` show them.
+//!
+//! `MS_REMOUNT` changes them on the mount whose root the target is, and
+//! `MS_REMOUNT | MS_BIND` does the same, as Linux's `do_reconfigure_mnt`; a
+//! remount that names no access-time flag keeps the old one. No filesystem
+//! here keeps flags apart from its mounts, so a plain remount's read-only is
+//! the mount's too; before a mount goes read-only its filesystem is written
+//! out, as `umount2` writes it, so a btrfs `/` or `/data` remounted read-only
+//! at shutdown is committed and then takes no more writes (finding F-53:
+//! `docs/INIT.md` §8.2 said init did this, and until then the kernel refused
+//! the remount). Linux refuses a read-only remount while a file is open for
+//! writing (`EBUSY`); nothing here counts writers, so it is accepted, and a
+//! file already open for writing goes on writing, as it would through a
+//! read-only bind.
+//!
+//! The options string -- tmpfs's `size=`, procfs's `hidepid=` -- is not read
+//! for any type, so an option is never refused and never has an effect.
+//! `MS_BIND`, `MS_MOVE` and the propagation flags are `EINVAL`, because the
+//! mount table has no operation that does them yet (`docs/NAMESPACES.md`,
+//! N2).
 //!
 //! # No extended attributes
 //!
@@ -67,12 +90,13 @@ use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{
     ARM_STATFS64_UNPACKED_SIZE, AT_FDCWD, AT_SYMLINK_NOFOLLOW, FALLOC_FL_KEEP_SIZE, MNT_DETACH,
-    MNT_EXPIRE, MNT_FORCE, MS_BIND, MS_MGC_MSK, MS_MGC_VAL, MS_MOVE, MS_PRIVATE, MS_RDONLY,
-    MS_REMOUNT, MS_SHARED, MS_SLAVE, MS_UNBINDABLE, UMOUNT_NOFOLLOW,
+    MNT_EXPIRE, MNT_FORCE, MS_BIND, MS_MGC_MSK, MS_MGC_VAL, MS_MOVE, MS_NOATIME, MS_NODEV,
+    MS_NODIRATIME, MS_NOEXEC, MS_NOSUID, MS_PRIVATE, MS_RDONLY, MS_RELATIME, MS_REMOUNT, MS_SHARED,
+    MS_SLAVE, MS_STRICTATIME, MS_UNBINDABLE, UMOUNT_NOFOLLOW,
 };
 use ferrix_vfs::access::{MAY_EXEC, MAY_WRITE};
 use ferrix_vfs::statfs::StatfsLayout;
-use ferrix_vfs::{FileSystem, FileType};
+use ferrix_vfs::{FileSystem, FileType, Location, MountFlags};
 
 use crate::fs;
 use crate::fs::devfs::Devfs;
@@ -83,17 +107,36 @@ use crate::syscall::process::Process;
 use crate::syscall::{fd, pipe, uaccess};
 use crate::trap::Abi;
 
-/// The `mount` flags that ask to change a mount rather than make one. See the
-/// module documentation.
-///
-/// `MS_RDONLY` is judged per filesystem rather than here: a program that
-/// mounts read-only relies on writes failing, so the memory filesystems, which
-/// cannot refuse a write, refuse the flag with `EINVAL`, while btrfs, which
-/// cannot accept one, requires it. The other per-mount flags -- `nosuid`,
-/// `nodev`, `noexec`, the access-time ones, `MS_SILENT` -- are accepted,
-/// because there is nothing yet for any of them to switch off.
+/// The `mount` flags that ask for an operation the mount table does not have
+/// yet: a bind, a move, and the propagation changes. See the module
+/// documentation.
 const REFUSED_MOUNT_FLAGS: u32 =
-    MS_REMOUNT | MS_BIND | MS_MOVE | MS_UNBINDABLE | MS_PRIVATE | MS_SLAVE | MS_SHARED;
+    MS_BIND | MS_MOVE | MS_UNBINDABLE | MS_PRIVATE | MS_SLAVE | MS_SHARED;
+
+/// The access-time flags, which a remount naming none of them keeps.
+const ATIME_FLAGS: u32 = MS_NOATIME | MS_NODIRATIME | MS_RELATIME | MS_STRICTATIME;
+
+/// A mount's own flags from `mount`'s, as Linux's `path_mount` separates
+/// them: `MS_STRICTATIME` is the absence of the other two access-time ones.
+fn mount_flags(flags: u32) -> MountFlags {
+    [
+        (MS_RDONLY, MountFlags::READ_ONLY),
+        (MS_NOSUID, MountFlags::NOSUID),
+        (MS_NODEV, MountFlags::NODEV),
+        (MS_NOEXEC, MountFlags::NOEXEC),
+        (MS_NOATIME, MountFlags::NOATIME),
+        (MS_NODIRATIME, MountFlags::NODIRATIME),
+        (MS_RELATIME, MountFlags::RELATIME),
+    ]
+    .into_iter()
+    .filter(|&(bit, _)| flags & bit != 0)
+    .fold(MountFlags::NONE, |set, (_, flag)| set.union(flag))
+    .without(if flags & MS_STRICTATIME != 0 {
+        MountFlags::RELATIME.union(MountFlags::NOATIME)
+    } else {
+        MountFlags::NONE
+    })
+}
 
 /// The calls this module answers, or `None` for one it does not.
 pub(crate) fn dispatch(
@@ -184,7 +227,14 @@ fn write_statfs(
     target: &Target,
     layout: StatfsLayout,
 ) -> Result<usize, Errno> {
-    let record = layout.encode(&fs::namespace().statfs(target.location()))?;
+    let at = target.location();
+    let flags = at.mount.flags();
+    let flags = if at.mount.filesystem().read_only() {
+        flags.union(MountFlags::READ_ONLY)
+    } else {
+        flags
+    };
+    let record = layout.encode_with_flags(&fs::namespace().statfs(at), flags.statfs_flags())?;
     uaccess::copy_to_user(process.space(), buf, &record).map_err(|_| Errno::EFAULT)?;
     Ok(0)
 }
@@ -331,6 +381,8 @@ pub(crate) fn sys_truncate(process: &Process, at: u64, length: i64) -> Result<us
     let target = path::target(process, AT_FDCWD, at, 0)?;
     let metadata = target.stat()?.metadata;
     if metadata.kind == FileType::Regular {
+        // `vfs_truncate`: a read-only mount is `EROFS` before permission.
+        target.location().require_writable()?;
         path::context(process).who.require(&metadata, MAY_WRITE)?;
     }
     fs::namespace().truncate(target.location(), length)?;
@@ -408,23 +460,23 @@ pub(crate) fn sys_chroot(process: &Process, at: u64) -> Result<usize, Errno> {
 /// lists. `devpts` joins this match when it exists; until then it falls to
 /// `ENODEV` with every name Linux would not know either.
 /// `cgroup2` mounts read-only as well as writable, as on Linux, where a
-/// read-only mount is how a container is shown the tree it may not change;
-/// here the flag is not yet enforced on it.
+/// read-only mount is how a container is shown the tree it may not change.
 fn filesystem_named(
     process: &Process,
     name: &[u8],
     source: u64,
     read_only: bool,
 ) -> Result<Arc<dyn FileSystem>, Errno> {
+    // A read-only memory filesystem is a writable one on a read-only mount:
+    // the flag is the mount's, and the VFS refuses the writes.
     match name {
-        b"tmpfs" | b"proc" | b"devtmpfs" if read_only => Err(Errno::EINVAL),
         b"tmpfs" => Ok(fs::new_tmpfs()?),
         b"proc" => Ok(Arc::new(Procfs::new())),
         b"devtmpfs" => Ok(Arc::new(Devfs::new())),
         b"cgroup2" => Ok(Arc::new(fs::cgroupfs::Cgroupfs::new())),
         // Read-only as well as writable, as on Linux, where a container is
         // shown `/sys` read-only; nothing in it takes a write but `bind` and
-        // `unbind`, and the flag is not yet enforced on them.
+        // `unbind`, which a read-only mount refuses.
         b"sysfs" => Ok(Arc::new(fs::sysfs::Sysfs::new())),
         b"btrfs" => {
             if source == 0 {
@@ -445,14 +497,15 @@ fn filesystem_named(
     }
 }
 
-/// `mount(source, target, type, flags, data)`, for the one kind of mount there
-/// is: a new filesystem on a directory. The options string means nothing to
-/// any filesystem here and is not read, and the source only to btrfs; see the
-/// module documentation.
+/// `mount(source, target, type, flags, data)`: a new filesystem on a
+/// directory, or with `MS_REMOUNT` new flags for the mount whose root the
+/// target is. The options string means nothing to any filesystem here and is
+/// not read, and the source only to btrfs; see the module documentation.
 ///
-/// In Linux's order: the type is copied in before the target is looked up,
-/// the flags are judged after, and the type is only looked for last, with
-/// the source resolved inside it.
+/// In Linux's order (`path_mount`): the type is copied in before the target
+/// is looked up; then the flags the table cannot act on are refused,
+/// privilege is asked, a remount is done, and for a new mount the type is
+/// looked for last, with the source resolved inside it.
 pub(crate) fn sys_mount(
     process: &Process,
     source: u64,
@@ -475,14 +528,45 @@ pub(crate) fn sys_mount(
     } else {
         flags
     };
-    if flags & REFUSED_MOUNT_FLAGS != 0 {
+    let remount = flags & MS_REMOUNT != 0;
+    // A remount ignores the operation flags, as Linux's does: `MS_REMOUNT |
+    // MS_BIND` is one operation, and bwrap passes it.
+    if !remount && flags & REFUSED_MOUNT_FLAGS != 0 {
         return Err(Errno::EINVAL);
     }
     // `may_mount`: `CAP_SYS_ADMIN`.
     credentials::require_privilege(process)?;
+    if remount {
+        return remount_at(&place, flags);
+    }
     let read_only = flags & MS_RDONLY != 0;
     let filesystem = filesystem_named(process, &kind.ok_or(Errno::EINVAL)?, source, read_only)?;
-    let _ = fs::namespace().mount(filesystem, &place)?;
+    let _ = fs::namespace().mount_with(filesystem, &place, mount_flags(flags))?;
+    Ok(0)
+}
+
+/// `MS_REMOUNT`, with or without `MS_BIND`: the mount whose root `place` is
+/// takes the flags `flags` names, keeping its access-time flags if `flags`
+/// names none of them (Linux's `path_mount`).
+///
+/// A mount going read-only has its filesystem written out first, as
+/// `umount2` writes it: a write-out that fails leaves the mount as it was
+/// and answers the error, so nothing is lost silently. `EINVAL` for a place
+/// that is not a mount's root, before anything is written.
+fn remount_at(place: &Location, flags: u32) -> Result<usize, Errno> {
+    if !place.is_mount_root() {
+        return Err(Errno::EINVAL);
+    }
+    let mut wanted = mount_flags(flags);
+    if flags & ATIME_FLAGS == 0 {
+        let old = place.mount.flags();
+        let kept_atime = old.without(old.without(MountFlags::ATIME));
+        wanted = wanted.union(kept_atime);
+    }
+    if wanted.contains(MountFlags::READ_ONLY) && !place.mount.read_only() {
+        place.mount.filesystem().sync()?;
+    }
+    fs::namespace().remount(place, wanted)?;
     Ok(0)
 }
 
@@ -539,14 +623,35 @@ fn no_attributes(call: Syscall) -> Result<usize, Errno> {
     }
 }
 
+/// Whether `call` changes attributes rather than reading them: what a
+/// read-only mount refuses with `EROFS` first, as Linux's `mnt_want_write`
+/// comes before the filesystem is asked.
+fn changes(call: Syscall) -> bool {
+    matches!(
+        call,
+        Syscall::Setxattr
+            | Syscall::Lsetxattr
+            | Syscall::Fsetxattr
+            | Syscall::Removexattr
+            | Syscall::Lremovexattr
+            | Syscall::Fremovexattr
+    )
+}
+
 /// The path forms, resolved first so a missing file is `ENOENT`.
 fn xattr_at(process: &Process, at: u64, flags: u32, call: Syscall) -> Result<usize, Errno> {
-    let _ = path::target(process, AT_FDCWD, at, flags)?;
+    let target = path::target(process, AT_FDCWD, at, flags)?;
+    if changes(call) {
+        target.location().require_writable()?;
+    }
     no_attributes(call)
 }
 
 /// The descriptor forms, checked first so a closed descriptor is `EBADF`.
 fn xattr_of(process: &Process, fd: i32, call: Syscall) -> Result<usize, Errno> {
-    let _ = usable(process, fd)?;
+    let file = usable(process, fd)?;
+    if changes(call) {
+        file.location().require_writable()?;
+    }
     no_attributes(call)
 }

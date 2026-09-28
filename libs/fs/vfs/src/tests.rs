@@ -717,6 +717,176 @@ fn the_cache_is_bounded() {
 
 // -- Mounts ------------------------------------------------------------------
 
+/// Write access, not creating: what `open(O_WRONLY)` asks.
+const WRITE: OpenFlags = OpenFlags {
+    read: false,
+    write: true,
+    create: false,
+    exclusive: false,
+    truncate: false,
+    append: false,
+    directory: false,
+    nofollow: false,
+    path: false,
+    nonblock: false,
+};
+
+/// `/ro` mounted with `flags` over a tmpfs holding `file`, a directory
+/// `dir`, a character device `null` and a pipe `fifo`, all made before the
+/// flags were set.
+fn flagged(flags: crate::MountFlags) -> (Namespace, Context) {
+    let (ns, ctx) = fresh();
+    ns.mkdir(&ctx, None, b"/ro", 0o755).unwrap();
+    let at = ns.resolve(&ctx, None, b"/ro", true).unwrap();
+    let _ = ns.mount(tmpfs(2), &at).unwrap();
+    write_file(&ns, &ctx, "/ro/file", b"kept");
+    ns.mkdir(&ctx, None, b"/ro/dir", 0o755).unwrap();
+    let null = crate::NewNode::Device {
+        kind: FileType::CharDevice,
+        rdev: makedev(1, 3),
+    };
+    ns.mknod(&ctx, None, b"/ro/null", null, 0o666).unwrap();
+    ns.mknod(&ctx, None, b"/ro/fifo", crate::NewNode::Fifo, 0o666)
+        .unwrap();
+    let root = ns.resolve(&ctx, None, b"/ro", true).unwrap();
+    ns.remount(&root, flags).unwrap();
+    (ns, ctx)
+}
+
+#[test]
+fn a_read_only_mount_refuses_every_change_with_erofs() {
+    let (ns, ctx) = flagged(crate::MountFlags::READ_ONLY);
+    let refused = |what: Result<(), Errno>, why: &str| {
+        assert_eq!(what.unwrap_err(), Errno::EROFS, "{why}");
+    };
+    refused(
+        ns.open(&ctx, None, b"/ro/file", &WRITE, 0).map(drop),
+        "write open",
+    );
+    refused(
+        ns.open(&ctx, None, b"/ro/new", &RW_CREATE, 0o644).map(drop),
+        "create",
+    );
+    refused(ns.mkdir(&ctx, None, b"/ro/d2", 0o755), "mkdir");
+    refused(ns.symlink(&ctx, None, b"/ro/l", b"file"), "symlink");
+    refused(ns.unlink(&ctx, None, b"/ro/file"), "unlink");
+    refused(ns.unlink(&ctx, None, b"/ro/missing"), "unlink of nothing");
+    refused(ns.rmdir(&ctx, None, b"/ro/dir"), "rmdir");
+    refused(
+        ns.rename(
+            &ctx,
+            (None, b"/ro/file"),
+            (None, b"/ro/f2"),
+            RenameMode::Replace,
+        ),
+        "rename",
+    );
+    refused(
+        ns.link(&ctx, (None, b"/ro/file"), false, (None, b"/ro/f3")),
+        "link",
+    );
+    let file = ns.resolve(&ctx, None, b"/ro/file", true).unwrap();
+    refused(ns.truncate(&file, 0), "truncate");
+    let change = crate::SetAttributes {
+        permissions: Some(0o600),
+        ..crate::SetAttributes::default()
+    };
+    refused(ns.set_attributes(&file, &change), "chmod");
+
+    // What Linux still allows: an existing name is EEXIST first, reading
+    // works, and a device or a pipe opens for writing -- they are not the
+    // filesystem's to change.
+    assert_eq!(
+        ns.mkdir(&ctx, None, b"/ro/dir", 0o755).unwrap_err(),
+        Errno::EEXIST
+    );
+    assert_eq!(read_file(&ns, &ctx, "/ro/file").unwrap(), b"kept");
+    assert!(ns.open(&ctx, None, b"/ro/null", &WRITE, 0).is_ok());
+    let fifo = OpenFlags {
+        nonblock: true,
+        read: true,
+        ..WRITE
+    };
+    assert!(ns.open(&ctx, None, b"/ro/fifo", &fifo, 0).is_ok());
+
+    // And a remount read-write gives it all back.
+    let root = ns.resolve(&ctx, None, b"/ro", true).unwrap();
+    ns.remount(&root, crate::MountFlags::NONE).unwrap();
+    ns.mkdir(&ctx, None, b"/ro/d2", 0o755).unwrap();
+    assert!(ns.open(&ctx, None, b"/ro/file", &WRITE, 0).is_ok());
+}
+
+#[test]
+fn a_nodev_mount_refuses_its_devices_with_eacces() {
+    let (ns, ctx) = flagged(crate::MountFlags::NODEV);
+    assert_eq!(
+        ns.open(&ctx, None, b"/ro/null", &READ, 0).unwrap_err(),
+        Errno::EACCES
+    );
+    assert_eq!(read_file(&ns, &ctx, "/ro/file").unwrap(), b"kept");
+    let path_only = OpenFlags {
+        path: true,
+        read: false,
+        ..READ
+    };
+    assert!(ns.open(&ctx, None, b"/ro/null", &path_only, 0).is_ok());
+}
+
+#[test]
+fn a_remount_acts_only_on_a_mount_root_and_shows_its_options() {
+    let all = crate::MountFlags::READ_ONLY
+        .union(crate::MountFlags::NOSUID)
+        .union(crate::MountFlags::NODEV)
+        .union(crate::MountFlags::NOEXEC)
+        .union(crate::MountFlags::RELATIME);
+    let (ns, ctx) = flagged(all);
+    let inside = ns.resolve(&ctx, None, b"/ro/dir", true).unwrap();
+    assert_eq!(
+        ns.remount(&inside, crate::MountFlags::NONE).unwrap_err(),
+        Errno::EINVAL
+    );
+    let root = ns.resolve(&ctx, None, b"/ro", true).unwrap();
+    assert_eq!(root.mount.flags(), all);
+    assert_eq!(
+        root.mount.flags().options(),
+        b"ro,nosuid,nodev,noexec,relatime"
+    );
+    assert_eq!(crate::MountFlags::NONE.options(), b"rw");
+    {
+        use ferrix_linux_abi::types::{
+            ST_NODEV, ST_NOEXEC, ST_NOSUID, ST_RDONLY, ST_RELATIME, ST_VALID,
+        };
+        assert_eq!(
+            root.mount.flags().statfs_flags(),
+            ST_VALID | ST_RDONLY | ST_NOSUID | ST_NODEV | ST_NOEXEC | ST_RELATIME
+        );
+        assert_eq!(crate::MountFlags::NONE.statfs_flags(), ST_VALID);
+    }
+    assert!(root.mount.no_exec() && root.mount.no_set_id() && root.mount.no_devices());
+}
+
+#[test]
+fn a_mount_point_is_shown_from_the_readers_root_or_not_at_all() {
+    let (ns, ctx) = fresh();
+    ns.mkdir(&ctx, None, b"/jail", 0o755).unwrap();
+    ns.mkdir(&ctx, None, b"/jail/mnt", 0o755).unwrap();
+    ns.mkdir(&ctx, None, b"/other", 0o755).unwrap();
+    let inside = ns.resolve(&ctx, None, b"/jail/mnt", true).unwrap();
+    let outside = ns.resolve(&ctx, None, b"/other", true).unwrap();
+    let a = ns.mount(tmpfs(2), &inside).unwrap();
+    let b = ns.mount(tmpfs(3), &outside).unwrap();
+    let jail = ns.resolve(&ctx, None, b"/jail", true).unwrap();
+    let point = |mount: &Arc<crate::Mount>| Location {
+        mount: Arc::clone(mount),
+        dentry: Arc::clone(mount.root()),
+    };
+    assert_eq!(ns.path_within(&point(&a), &jail).unwrap(), b"/mnt");
+    assert_eq!(ns.path_within(&point(&b), &jail), None);
+    assert_eq!(ns.path_within(&point(&b), &ctx.root).unwrap(), b"/other");
+    assert_eq!(ns.path_within(&jail, &jail).unwrap(), b"/");
+    assert_eq!(Namespace::root_path(&a), b"/");
+}
+
 #[test]
 fn a_mount_covers_a_directory_and_dotdot_climbs_out_of_it() {
     let (ns, ctx) = fresh();

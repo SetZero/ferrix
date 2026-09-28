@@ -29,6 +29,7 @@ use ferrix_linux_abi::types::{
     MREMAP_MAYMOVE, MS_ASYNC, MS_INVALIDATE, MS_SYNC, PROT_EXEC, PROT_GROWSDOWN, PROT_GROWSUP,
     PROT_READ, PROT_SEM, PROT_WRITE,
 };
+use ferrix_vfs::OpenFile;
 use ferrix_vma::VmaFlags;
 
 use crate::syscall::fd;
@@ -244,6 +245,11 @@ fn map_file(
     }
     if !file.readable() || (vma.shared && vma.write && !file.writable()) {
         return Err(Errno::EACCES);
+    }
+    // Linux's `do_mmap`: a file on a `noexec` mount is never mapped
+    // executable.
+    if vma.execute && file.location().mount.no_exec() {
+        return Err(Errno::EPERM);
     }
     // The open's own object is asked first: a render node's buffer objects
     // belong to the open, not to the name it was opened by. For a file whose
@@ -507,6 +513,9 @@ pub(crate) fn sys_mprotect(
         return Err(Errno::EINVAL);
     }
     let _layout = process.space().layout();
+    if vma.execute && maps_noexec_file(process, addr, len)? {
+        return Err(Errno::EACCES);
+    }
     process
         .space()
         .protect(addr, len, vma)
@@ -520,6 +529,39 @@ pub(crate) fn sys_mprotect(
             other => refused(other),
         })?;
     Ok(0)
+}
+
+/// Whether any region in `[addr, addr + len)` maps a file on a `noexec`
+/// mount: what Linux's cleared `VM_MAYEXEC` refuses `mprotect(PROT_EXEC)`
+/// on with `EACCES`, so a mapping `mmap` could not have made executable is
+/// not made so afterwards.
+///
+/// # Errors
+///
+/// `ENOMEM` when there is no memory to list the regions' files in.
+fn maps_noexec_file(process: &Process, addr: u64, len: u64) -> Result<bool, Errno> {
+    let end = addr.saturating_add(len);
+    let mut ids = alloc::vec::Vec::new();
+    let listed = process.space().with_regions(|regions| {
+        for region in regions {
+            if region.start < end
+                && addr < region.end
+                && let Some((id, _)) = region.file
+            {
+                ids.try_reserve(1).map_err(|_| Errno::ENOMEM)?;
+                ids.push(id);
+            }
+        }
+        Ok(())
+    });
+    listed?;
+    Ok(ids.into_iter().any(|id| {
+        process
+            .space()
+            .mapped_file(id)
+            .and_then(|file| file.downcast::<OpenFile>().ok())
+            .is_some_and(|file| file.location().mount.no_exec())
+    }))
 }
 
 /// `mremap`.

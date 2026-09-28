@@ -45,6 +45,7 @@ pub(crate) mod inotify;
 pub(crate) mod kmem_check;
 pub(crate) mod memfd_check;
 pub(crate) mod mmap_check;
+pub(crate) mod mount_check;
 mod pages;
 pub(crate) mod partitions;
 pub(crate) mod pidfd;
@@ -317,8 +318,14 @@ pub(crate) fn open_program(
         FileType::Directory => return Err(Errno::EISDIR),
         _ => return Err(Errno::EACCES),
     }
+    // Linux's `do_open_execat`: nothing on a `noexec` mount runs -- the
+    // program, its `#!` interpreter, or its dynamic linker, all of which
+    // come through here.
+    if at.mount.no_exec() {
+        return Err(Errno::EACCES);
+    }
     let exe = ns.path_of(&at, &ctx.root);
-    let set_ids = set_ids_of(&metadata);
+    let set_ids = set_ids_on(&at, &metadata);
     let flags = OpenFlags {
         read: true,
         ..OpenFlags::default()
@@ -353,6 +360,16 @@ pub(crate) fn set_ids_of(metadata: &ferrix_vfs::Metadata) -> SetIds {
     SetIds {
         uid: (metadata.permissions & 0o4000 != 0).then_some(metadata.uid),
         gid: (metadata.permissions & 0o2010 == 0o2010).then_some(metadata.gid),
+    }
+}
+
+/// [`set_ids_of`] for the file at `at`: nothing on a `nosuid` mount, as
+/// Linux's `mnt_may_suid` has it.
+pub(crate) fn set_ids_on(at: &Location, metadata: &ferrix_vfs::Metadata) -> SetIds {
+    if at.mount.no_set_id() {
+        SetIds::NONE
+    } else {
+        set_ids_of(metadata)
     }
 }
 

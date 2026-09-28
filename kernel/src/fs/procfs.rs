@@ -329,7 +329,7 @@ static SYS_KERNEL: [Entry<Kernel>; 6] = [
 ];
 
 /// `/proc/<pid>`.
-pub(crate) static PER_PROCESS: [Entry<Process>; 13] = [
+pub(crate) static PER_PROCESS: [Entry<Process>; 14] = [
     Entry {
         name: b"fd",
         permissions: 0o500,
@@ -346,6 +346,7 @@ pub(crate) static PER_PROCESS: [Entry<Process>; 13] = [
     file(b"stat", render::stat),
     file(b"maps", render::maps),
     file(b"mounts", render::process_mounts),
+    file(b"mountinfo", render::mountinfo),
     file(b"cgroup", render::cgroup),
     Entry {
         name: b"oom_score_adj",
@@ -713,7 +714,8 @@ impl Node {
     /// ([`Inode::splices_out`]), as they may read Linux's where its file has
     /// a `splice_read`. Measured on a 7.0 host: every top-level file and
     /// every value under `/proc/sys` sends but those of `/proc/net`, which
-    /// are `EINVAL`; of a process's files only `mounts` sends, and of a
+    /// are `EINVAL`; of a process's files only `mounts` and `mountinfo` send,
+    /// as Linux's `seq_read_iter` lets them, and of a
     /// thread's none. Linux reads the ones that do not through `seq_read`,
     /// which has no `read_iter` to splice from.
     fn splices(&self) -> bool {
@@ -723,7 +725,7 @@ impl Node {
                 .is_some_and(|(entry, _)| !NET.iter().any(|net| core::ptr::eq(net, entry))),
             Place::Entry(_, index) => PER_PROCESS
                 .get(index)
-                .is_some_and(|entry| entry.name == b"mounts"),
+                .is_some_and(|entry| matches!(entry.name, b"mounts" | b"mountinfo")),
             _ => false,
         }
     }

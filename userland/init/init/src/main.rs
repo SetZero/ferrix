@@ -1452,6 +1452,27 @@ fn mount_options(options: &str) -> (libc::c_ulong, String) {
     (flags, data.join(","))
 }
 
+/// What a write to `target` after its read-only remount found, as a line to
+/// say: `EROFS`, which is what the remount promised (`test-init` requires
+/// the line), or a file made after all, which is then removed again.
+fn read_only_probe(target: &str) -> String {
+    let probe = format!("{}/.init-read-only-probe", target.trim_end_matches('/'));
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
+        Err(error) if error.raw_os_error() == Some(libc::EROFS) => {
+            format!("{target} is read-only")
+        }
+        Err(error) => format!("remounting {target} read-only: a write found {error}"),
+        Ok(_) => {
+            let _ = fs::remove_file(&probe);
+            format!("remounting {target} read-only: it still takes writes")
+        }
+    }
+}
+
 /// §8.2's steps 2 and 3: `sync`, the rest unmounted in reverse order, the
 /// audit record read a last time onto the volume, `sync` again, `/` and
 /// `/data` read-only, and `reboot(2)`. A remount the kernel refuses is said
@@ -1497,8 +1518,9 @@ fn power(action: PowerAction, audit: Option<&mut audit::Reader>) -> ! {
             continue;
         };
         let flags = libc::MS_REMOUNT | libc::MS_RDONLY;
-        if let Err(error) = sys::mount(c"none", &path, c"none", flags, None) {
-            say(&format!("remounting {target} read-only: {error}"));
+        match sys::mount(c"none", &path, c"none", flags, None) {
+            Err(error) => say(&format!("remounting {target} read-only: {error}")),
+            Ok(()) => say(&read_only_probe(target)),
         }
     }
     let command = match action {

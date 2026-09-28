@@ -299,6 +299,13 @@ pub trait FileSystem: Send + Sync + fmt::Debug {
         Ok(())
     }
 
+    /// Whether the filesystem itself takes no writes, whatever the mount
+    /// says: what `mountinfo`'s last field shows as `ro`, Linux's
+    /// `sb_rdonly`. The default is writable.
+    fn read_only(&self) -> bool {
+        false
+    }
+
     /// What `statfs` reports.
     ///
     /// The default knows nothing: no magic number, no counts, and the name

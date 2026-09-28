@@ -71,6 +71,7 @@ Causes are listed most likely first.
 | [FX-0882](#fx-0882) | eventfd failed its self-check |
 | [FX-0883](#fx-0883) | timerfd failed its self-check |
 | [FX-0884](#fx-0884) | signalfd failed its self-check |
+| [FX-0885](#fx-0885) | A mount's flags failed their self-check |
 | [FX-0890](#fx-0890) | sysfs did not show the machine's devices as Linux shows them |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-0902](#fx-0902) | an allocation failure was not survived |
@@ -1557,6 +1558,39 @@ and must leave no frame behind.
 See: kernel/src/fs/signalfd_check.rs; kernel/src/fs/signalfd.rs;
 kernel/src/syscall/signalfd.rs; kernel/src/syscall/signal.rs;
 kernel/src/syscall/process.rs notify_signal; kernel/src/fs/wake.rs.
+
+<a id="fx-0885"></a>
+
+## FX-0885 — A mount's flags failed their self-check
+
+`fs::mount_check::run` mounts a tmpfs under /tmp by number, fills it and
+remounts it ro,nosuid,nodev,noexec. Every change through a path or a descriptor
+must then be EROFS -- open for writing, create, mkdir, symlink, unlink (of a
+missing name too), rename, chmod, chown, utimensat, truncate, setxattr -- a
+device on it EACCES, its program EACCES, an executable mapping of its file EPERM
+and mprotect to executable EACCES, and a file opened for writing before the
+remount must still write. nosuid alone must leave the program runnable without
+its set-user-id bit; read-only alone must open the device for writing and answer
+EEXIST for a name that exists. A remount inside a mount is EINVAL and one by uid
+1000 EPERM. mountinfo, /proc/<pid>/mounts and statfs's f_flags must show the
+flags after each remount, an access-time flag the remount did not name must be
+kept, and mountinfo must name the mount as the O_PATH descriptor's /proc link
+does.
+
+1. A `Namespace` method or a call in `syscall/` changes a file without asking
+   `Location::require_writable` first, or asks after a permission check.
+2. `Namespace::open` no longer refuses a device on a nodev mount, or refuses a
+   device or a pipe opened for writing on a read-only one.
+3. `fs::open_program` does not ask `Mount::no_exec` or `set_ids_on`, or
+   `map_file` and `maps_noexec_file` in `syscall/memory.rs` do not ask
+   `no_exec`.
+4. `remount_at` in `syscall/fsctl.rs` drops the access-time flags, or accepts a
+   place that is not a mount's root.
+5. `render::mountinfo` prints the mount point from a different root than
+   `/proc/<pid>/fd` does, or `MountFlags::options` misorders the options.
+
+See: kernel/src/fs/mount_check.rs; kernel/src/syscall/fsctl.rs;
+libs/fs/vfs/src/namespace.rs; kernel/src/fs/procfs/render.rs.
 
 <a id="fx-0890"></a>
 

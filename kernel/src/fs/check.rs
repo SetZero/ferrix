@@ -2741,8 +2741,8 @@ fn check_a_second_devtmpfs(process: &Process, page: u64) -> Result<(), &'static 
 fn check_both_are_listed_and_unmount(process: &Process, page: u64) -> Result<(), &'static str> {
     let listing = read_mounts(process, page)?;
     for line in [
-        &b"proc /tmp/stage8-proc proc rw 0 0\n"[..],
-        b"devtmpfs /tmp/stage8-dev devtmpfs rw 0 0\n",
+        &b"proc /tmp/stage8-proc proc rw,nosuid,nodev,noexec,relatime 0 0\n"[..],
+        b"devtmpfs /tmp/stage8-dev devtmpfs rw,nosuid,relatime 0 0\n",
     ] {
         if !listing.windows(line.len()).any(|window| window == line) {
             return Err("/proc/mounts does not list a proc or devtmpfs mount as Linux prints it");

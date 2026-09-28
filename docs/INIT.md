@@ -753,6 +753,12 @@ reverse dependency order, each unit by its own `KillMode=`. Then init:
    reverse order;
 3. calls `reboot(2)`.
 
+Each remount of step 2 is checked by a write after it, which must be
+refused with `EROFS`; init then says `/ is read-only` (and the same for
+`/data`), and `test-init` requires both lines. Until 2026-09-28 the kernel
+refused `MS_REMOUNT` and init only said so (finding F-53, closed by
+`docs/NAMESPACES.md`'s N1).
+
 A process in no service does not survive step 1: it is in some cgroup, and
 every cgroup but init's is killed. The cgroup tree is what makes "stop
 everything" mean everything.

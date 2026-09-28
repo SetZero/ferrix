@@ -7,8 +7,7 @@ normally runs. This is the first half of stage 13's namespaces
 (`docs/roadmap/stage-13-namespaces-cgroups-v2-seccomp.md`); pid, network,
 IPC, UTS, cgroup and time namespaces, `setns` and seccomp stay out of it.
 
-Status: **design, waiting for the certification consultant's review.** No
-kernel code is written before that review says yes (§10).
+Status: **reviewed and being built** (§12): N1 landed 2026-09-28.
 
 ---
 
@@ -700,7 +699,8 @@ with a cost entry), driven through the system-call layer as a program's
 calls would be, each with a negative control run once and quoted in the
 commit, never committed:
 
-* flags: a read-only bind refuses `open(O_WRONLY)`, `mkdir`, `unlink`,
+* flags (built in N1 as the `mounts` boot line, FX-0885,
+  `fs/mount_check.rs`, on a tmpfs mount; N2 repeats them on a bind): a read-only bind refuses `open(O_WRONLY)`, `mkdir`, `unlink`,
   `rename`, `chmod`, `truncate` with `EROFS`; `nodev` refuses a device;
   `noexec` refuses `execve` and `mmap(PROT_EXEC)`; `nosuid` runs a set-uid
   file as the caller;
@@ -812,6 +812,13 @@ and the records (`docs/AUTH.md`'s OE.AUTH note,
 `docs/certification/VULNERABILITY-ANALYSIS.md`'s entry). The depth, mount
 and F-37 limits and the lock order were accepted as written; U7 and U8
 were accepted, with their cost named (§4). No finding id was opened for
-the design. The customer's decisions are in §11. N1 is being built on
-branch `steam-userns`; each landing's diff goes to the consultant before
-`land.sh take`.
+the design. The customer's decisions are in §11. **N1 landed (2026-09-28)**:
+per-mount flags enforced, `MS_REMOUNT`, `mountinfo`, closing F-53; N2 is
+next, on branch `steam-userns`. Each landing's diff goes to the consultant
+before `land.sh take`.
+
+**For N2 (interim reviewer, N1's review, 2026-09-29):** once binds exist,
+a plain `MS_REMOUNT` read-only must reach the whole filesystem -- every
+bind of it -- and only `MS_REMOUNT | MS_BIND` the one mount, as on Linux;
+or the difference is written down here. Either way a boot check covers
+it. M3's flag locking (CVE-2014-5206, -5207) stays N5's.
