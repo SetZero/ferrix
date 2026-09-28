@@ -7,11 +7,14 @@
 //! Chrome does. With no DRM card it starts headless and renders through
 //! Vulkan on the CPU, Mesa's lavapipe; with no input device it starts only
 //! when `YSERVER_ALLOW_NO_INPUT` says so, which a patch of Ferrix's adds.
-//! The volume's `yserver/run.sh` starts it on `:1`, runs `xdpyinfo` against
+//! [`RUN`], carried in the image, starts it on `:1`, runs `xdpyinfo` against
 //! it, and prints the server's log.
 //!
-//! The volume is made outside the tree for now, while the pass decides what
-//! a fetch script would pin: `FERRIX_YSERVER_VOLUME` names the image.
+//! `scripts/fetch/fetch-yserver.sh` builds yserver from the customer's fork
+//! and makes the volume (docs/YSERVER.md §3). It carries no `ferrix-root`
+//! label, so the kernel mounts it at `/data`, under QEMU's `snapshot=on`.
+//! The gate needs no network, but it attaches a volume, so it runs on demand
+//! as `test-steamcmd` does and is not in the image row.
 
 use crate::args::Args;
 use crate::paths::Arch;
@@ -31,11 +34,38 @@ const LINKS: &[(&str, &str)] = &[
     ("usr/share/drirc.d", "/data/usr/share/drirc.d"),
 ];
 
-/// The script: the volume's own, whose status says whether `xdpyinfo`
-/// reached the server.
+/// Where [`RUN`] is in the image.
+const RUN_PATH: &str = "bin/yserver-test";
+
+/// yserver on `:1` with no card and no input device, then `xdpyinfo`
+/// against it, then the server's log. Run by busybox's `sh`, whose `&` and
+/// `$!` it uses; its status is `xdpyinfo`'s.
+const RUN: &str = r#"export PATH=/bin:/data/usr/bin HOME=/tmp XDG_RUNTIME_DIR=/tmp RUST_LOG=info
+export YSERVER_ALLOW_NO_INPUT=1 YSERVER_ALLOW_SOFTWARE_VULKAN=1
+/data/yserver/yserver :1 -nolisten tcp > /tmp/yserver.log 2>&1 &
+server=$!
+waited=0
+while [ ! -S /tmp/.X11-unix/X1 ] && [ $waited -lt 120 ]; do
+    sleep 1
+    waited=$((waited + 1))
+done
+echo "yserver-gate: the socket was there after ${waited}s"
+DISPLAY=:1 xdpyinfo > /tmp/xdpyinfo.txt 2>&1
+status=$?
+echo "yserver-gate: xdpyinfo exited $status"
+cat /tmp/xdpyinfo.txt
+kill $server
+sleep 2
+echo "yserver-gate: the server's log follows"
+cat /tmp/yserver.log
+exit $status
+"#;
+
+/// The script: [`RUN`], whose status says whether `xdpyinfo` reached the
+/// server.
 const SCRIPT: &str = r#"export PATH=/bin HOME=/tmp
-[ -x /data/yserver/run.sh ] || exit 3
-busybox sh /data/yserver/run.sh || exit 4
+[ -x /data/yserver/yserver ] || exit 3
+busybox sh /bin/yserver-test || exit 4
 exit 17
 "#;
 
@@ -45,15 +75,23 @@ const STATUS: i32 = 17;
 /// Memory for the guest: lavapipe and a 130 MiB server.
 const MEMORY: u32 = 2048;
 
-/// The volume, from `FERRIX_YSERVER_VOLUME` or where the feasibility pass
-/// writes it.
+/// Where `scripts/fetch/fetch-yserver.sh` writes, unless
+/// `FERRIX_YSERVER_VOLUME` names another directory.
+///
+/// # Errors
+///
+/// The volume has not been made.
 fn volume() -> Result<std::path::PathBuf> {
-    let image = match std::env::var_os("FERRIX_YSERVER_VOLUME") {
-        Some(image) => std::path::PathBuf::from(image),
-        None => crate::paths::volume_directory("yserver-ref")?.join("vol/yserver.img"),
+    let directory = match std::env::var_os("FERRIX_YSERVER_VOLUME") {
+        Some(directory) => std::path::PathBuf::from(directory),
+        None => crate::paths::volume_directory("yserver")?,
     };
+    let image = directory.join("yserver.img");
     if !image.is_file() {
-        return Err(Error::new(format!("{} is not there", image.display())));
+        return Err(Error::new(format!(
+            "{} is not there: scripts/fetch/fetch-yserver.sh makes it",
+            image.display()
+        )));
     }
     Ok(image)
 }
@@ -84,7 +122,13 @@ pub(crate) fn test_yserver(args: &Args) -> Result<()> {
     let bytes = std::fs::read(&shell)
         .map_err(|error| Error::new(format!("reading {}: {error}", shell.display())))?;
     let busybox = busybox::program(arch)?;
-    let archive = initramfs::build(Some(&busybox), &natives, Some(&bytes), &rustc::files(LINKS))?;
+    let mut files = rustc::files(LINKS);
+    files.push(crate::ports::File {
+        path: RUN_PATH.to_owned(),
+        mode: 0o755,
+        content: crate::ports::Content::Bytes(RUN.as_bytes().to_vec()),
+    });
+    let archive = initramfs::build(Some(&busybox), &natives, Some(&bytes), &files)?;
     let image = fat::write_image_with(arch, &loader, &kernel, &archive, None)?;
 
     println!(
@@ -101,9 +145,15 @@ pub(crate) fn test_yserver(args: &Args) -> Result<()> {
             println!("  {arch}: xdpyinfo reached yserver on Ferrix");
             Ok(())
         }
-        Some("3") => Err(Error::new(format!("{arch}: /data/yserver/run.sh is not there"))),
+        Some("3") => Err(Error::new(format!(
+            "{arch}: /data/yserver/yserver is not there: is the volume attached?"
+        ))),
+        Some("4") => Err(Error::new(format!(
+            "{arch}: xdpyinfo did not reach yserver; the `yserver-gate:` lines and the \
+             server's log say why"
+        ))),
         other => Err(Error::new(format!(
-            "{arch}: the yserver script ended with {other:?}; its `yserver-feas:` lines say how"
+            "{arch}: the yserver script ended with {other:?}"
         ))),
     }
 }
