@@ -125,8 +125,18 @@ fn starts(line: &str, want: &str) -> bool {
     line.contains(want)
 }
 
+/// `test-sem`, and `test-threads`, the other musl program booted as init,
+/// which shares its arm of `main`'s dispatch.
+pub(crate) fn run(command: &str, args: &Args) -> Result<()> {
+    if command == "test-sem" {
+        test_sem(args)
+    } else {
+        crate::threads::test_threads(args)
+    }
+}
+
 /// The test on every architecture asked for.
-pub(crate) fn test_sem(args: &Args) -> Result<()> {
+fn test_sem(args: &Args) -> Result<()> {
     for arch in args.arches()? {
         let log = paths::build_dir(arch).join("serial.log");
 

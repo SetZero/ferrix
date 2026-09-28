@@ -437,7 +437,6 @@ fn check_filesystems(view: &BootView<'_>) {
     stages_check::check_memfd();
     stages_check::check_epoll();
     stages_check::check_eventfd();
-    stages_check::check_semaphores();
     stages_check::check_timerfd();
     stages_check::check_program_files();
     stages_check::check_signalfd();

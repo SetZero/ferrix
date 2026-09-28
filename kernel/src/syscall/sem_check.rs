@@ -290,7 +290,7 @@ fn op(id: i32, sops: &[SemBuf], undo: &UndoList) -> Result<usize, Errno> {
 }
 
 /// Count `answer` against `expected`, a refusal if it is an error.
-fn expect<T: PartialEq>(
+fn expect<T: PartialEq + Copy>(
     report: &mut Report,
     answer: Result<T, Errno>,
     expected: Result<T, Errno>,
@@ -335,7 +335,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
 
 /// `semget` by key: made, found, refused as Linux refuses.
 fn keys(report: &mut Report) -> Result<(), &'static str> {
-    const KEY: i32 = 0x5e_3a_0001;
+    const KEY: i32 = 0x5e3a_0001;
     let made = sem::semget(&root(), KEY, 2, flags::CREAT | flags::EXCL | 0o600)
         .map_err(|_| "sem: a keyed set was not made")?;
     let held = Held(made);

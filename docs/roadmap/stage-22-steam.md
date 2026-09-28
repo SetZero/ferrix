@@ -58,7 +58,8 @@ staged until now.
   `/proc/cpuinfo`, and a certificate bundle on its volume. Still to do: the
   client's bootstrapper (I5b), which needs XWayland for its window;
   System V semaphores, which steamcmd asks for through `ipc` and carries on
-  without, waiting for the customer; `modify_ldt` for 32-bit Wine.
+  without and the client does not -- built 2026-09-28 (`test-sem`,
+  `docs/I386.md`); `modify_ldt` for 32-bit Wine.
 * **glibc's place, taken.** The dynamic linking stage's third part, glibc's
   names, with Steam as its stress test: `ld-linux` and `libc.so.6` requested
   by name, `dlopen` from the client and from every Steam runtime library,

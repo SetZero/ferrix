@@ -55,6 +55,7 @@ Causes are listed most likely first.
 | [FX-0601](#fx-0601) | the memory a process is built from failed its self-check |
 | [FX-0602](#fx-0602) | a page taken from a mapped object stayed reachable, or was not taken as it should be |
 | [FX-0701](#fx-0701) | the system call dispatch path failed its self-check |
+| [FX-0702](#fx-0702) | System V semaphores failed their self-check |
 | [FX-0801](#fx-0801) | the root filesystem could not be built |
 | [FX-0802](#fx-0802) | the root filesystem failed its self-check |
 | [FX-0810](#fx-0810) | a new process could not be given the console as descriptors 0, 1 and 2 |
@@ -1040,6 +1041,38 @@ would pass every host test and answer a program's `write` with a different call.
 
 See: kernel/src/syscall/check.rs run; kernel/src/syscall/mod.rs dispatch;
 libs/proto/linux-abi; docs/ROADMAP.md stage 7.
+
+<a id="fx-0702"></a>
+
+## FX-0702 — System V semaphores failed their self-check
+
+`syscall::sem_check::run` makes semaphore sets through the functions `semget`,
+`semop`, `semtimedop` and `semctl` reach. A key must find its set, and IPC_EXCL,
+a missing key, a size past the set's or SEMMSL, and a stranger's access to a set
+of mode 0600 are refused as Linux refuses them. SETVAL, GETVAL, SETALL, GETALL
+and GETPID must agree; a call half of whose operations could go must leave none
+done; IPC_NOWAIT, ERANGE, EFBIG and EACCES as Linux. IPC_STAT must put the mode
+and sem_nsems where the UAPI headers do in the 32-bit, x86-64 and generic
+layouts, and IPC_SET must hand the set over. A process that took one with
+SEM_UNDO and was killed must give it back. A waiter task must be ended by an
+increment, by SETVAL to zero, by an interruption (EINTR), by its deadline
+(EAGAIN, not before it) and by IPC_RMID (EIDRM), and the job it ran in must hold
+no heap after each. A job must be refused ENOSPC at its per-job bound while a
+sibling makes one, and every set the check made must be gone.
+
+1. `attempt` or `revert` leaves an operation of a refused call done, or
+   `run_queue` does not complete a waiter that can go now.
+2. A waiter's `Pending` record is not taken off the queue on the way out, so its
+   charge outlives it and GETNCNT still counts it.
+3. `Ticket::answer` stores the result without waking the task, or `wait` returns
+   before re-reading the ticket under the set's lock.
+4. `Process::release` no longer calls `sem::exit`, or `exit` looks for the undo
+   record under a different owner.
+5. `encode_semid` writes a field at an offset another layout uses.
+6. `create` counts the sets of every job, or of none, against the per-job bound.
+
+See: kernel/src/syscall/sem_check.rs; kernel/src/syscall/sem.rs;
+kernel/src/syscall/process.rs Process::release.
 
 <a id="fx-0801"></a>
 

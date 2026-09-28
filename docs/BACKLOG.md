@@ -864,12 +864,10 @@ otherwise; one a later decision replaced is deleted, and the history keeps it.
   the names. Each has a draft answer the design assumes meanwhile; L11 to
   L13 wait on them.
 * Whether deleting busybox (S8, `docs/UUTILS.md` §8.3) is wanted at all.
-* System V semaphores for Steam (i386 `ipc` 117, `semget`/`semctl`, still
-  `ENOSYS`): steamcmd survives without them, printing a `threadtools`
-  assertion; whether the Steam client does is untested (`docs/I386.md`, I5).
-  **Answered 2026-09-28 (I5b):** the client does not -- it waits forever
-  after "Thread synchronization object is unuseable", before any download;
-  the customer decided to build them (branch `steam-sysv-sem`).
+* ~~System V semaphores for Steam~~ **decided 2026-09-28: build.** The
+  client does not survive without them -- it waits forever after "Thread
+  synchronization object is unuseable", before any download (I5b); built on
+  branch `steam-sysv-sem` (`syscall/sem.rs`, `test-sem`, `docs/I386.md`).
 * User namespaces for Steam (I5b of `docs/I386.md`): scout's requirements
   check refuses a kernel without them ("Steam now requires user namespaces
   to be enabled", exit 71, fatal in `steam.sh`), and the client's UI,
@@ -890,14 +888,11 @@ otherwise; one a later decision replaced is deleted, and the history keeps it.
   `bootloaders/pixel7/mkbootimg.py`, which is now `boot/pixel7/`: a boot it
   builds fails until it is restarted. Restarting it was refused to an agent,
   as interfering with a running workload; it needs the customer's hand.
-* System V IPC for Steam (ferrix-41, I5 of `docs/I386.md`): steamcmd's
-  anonymous login calls `semget` and `semctl` -- through `ipc` (117) on
-  i386 -- which are `ENOSYS` by the stage 7 decision (futexes, pipes and
-  `MAP_SHARED` stand in). On Ferrix steamcmd logs in without them, printing
-  a `threadtools` assertion each time (`test-steamcmd`, 2026-09-27);
-  whether the full client does is not known yet.
-  Implementing SysV semaphores (and likely shared memory, for Steam's
-  overlay) reverses that decision, so it waits for the customer's word.
+* System V IPC for Steam (ferrix-41, I5 of `docs/I386.md`): **decided
+  2026-09-28: build the semaphores**, which the Steam client cannot run
+  without; built on `steam-sysv-sem`. Shared memory (likely for Steam's
+  overlay) and message queues are still `ENOSYS` and would each be a new
+  decision.
 
 ---
 

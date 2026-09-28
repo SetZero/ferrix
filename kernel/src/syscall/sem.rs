@@ -1027,14 +1027,13 @@ fn encode_semid(set: &Set, state: &State, layout: Layout) -> Vec<u8> {
     put(20, &state.perm.mode.to_le_bytes());
     put(24, &(seq as u16).to_le_bytes());
     let (otime, ctime, nsems, narrow) = layout.fields();
+    // Each time as eight bytes: a 64-bit field, or a 32-bit one's low half
+    // and then its `_high` half.
+    put(otime, &state.otime.to_le_bytes());
+    put(ctime, &state.ctime.to_le_bytes());
     if narrow {
-        // Low half, then high half: `sem_otime` and `sem_otime_high`.
-        put(otime, &state.otime.to_le_bytes());
-        put(ctime, &state.ctime.to_le_bytes());
         put(nsems, &(set.nsems as u32).to_le_bytes());
     } else {
-        put(otime, &state.otime.to_le_bytes());
-        put(ctime, &state.ctime.to_le_bytes());
         put(nsems, &(set.nsems as u64).to_le_bytes());
     }
     out

@@ -73,6 +73,10 @@ pub(super) fn check_programs() {
     // root was built because they work under /tmp.
     check_path_calls();
 
+    // System V semaphores, through the functions their calls reach; after
+    // the root, whose context the check's process is made in.
+    check_semaphores();
+
     // Stage 9's objects, driven through the native handlers between two
     // processes this check builds. After stage 7 because it shares the
     // dispatch path and the user copy layer, and here rather than under a

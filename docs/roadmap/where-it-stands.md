@@ -38,7 +38,7 @@ boot (one SUITE line).
 
 **Waiting on the customer** (`docs/BACKLOG.md`, *Waiting on the customer*):
 F-43 (W^X for programs, or a narrower claim), the Common Criteria version
-(F-52), FMT_SMF.1 and FMT_MTD.1, System V semaphores for Steam, and whether
+(F-52), FMT_SMF.1 and FMT_MTD.1, and whether
 the customer's Python desktop scripts are rewritten for Ferrix. Hardware
 confirmations (F-44 on the Pixel 7, F-48 and F-50 on the DK1) wait for the
 product owner's word in daytime.

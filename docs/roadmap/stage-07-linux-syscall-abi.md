@@ -264,9 +264,15 @@ and `clock_nanosleep`, `times` and `getrusage`, setting the real-time clock,
 an empty log, `reboot` powering off, and every socket call for a family that is
 not `AF_UNIX` refused as Linux without that address family refuses it. Their checks run in the handler group
 with every structure's buffer poisoned beyond its end. Still `ENOSYS`, each
-said so at its arm: swap, modules, System V IPC (shared memory, message
-queues and semaphores, each named in every architecture's table), `acct`,
-`vhangup` and `rseq`.
+said so at its arm: swap, modules, System V shared memory and message
+queues (each named in every architecture's table), `acct`, `vhangup` and
+`rseq`. System V semaphores were among them until 2026-09-28, when the
+customer decided to build them for the Steam client: `syscall/sem.rs`
+answers `semget`, `semop`, `semtimedop` and `semctl` on every architecture
+and i386's `ipc` (`docs/I386.md`), with `SEM_UNDO` paid at exit, each set,
+undo record and blocked caller charged to its job (F-37) and at most
+32,000 sets a job; the boot's `sem` line and `cargo xtask test-sem` prove
+it.
 **Credentials and file locks.** A process has real, effective, saved and
 filesystem user and group ids and a supplementary group list. Fork copies
 them; exec keeps them and makes the saved and filesystem ids the effective
