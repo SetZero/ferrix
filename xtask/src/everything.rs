@@ -18,9 +18,13 @@
 //! runs everything built against the older, where the newer is kept and the
 //! choice is said.
 //!
-//! steamcmd's tree, when it has been fetched, is merged in last. Its i386
+//! steamcmd's tree, when it has been fetched, is merged in next. Its i386
 //! glibc is under paths neither of the other two uses, so it adds files and
-//! clashes with none.
+//! clashes with none. yserver's, the X server's (`docs/YSERVER.md`, Y7), comes
+//! last when `scripts/fetch/fetch-yserver.sh` has made it: trixie's libraries
+//! again, with the server at `/yserver/yserver`. Where it holds libstdc++'s
+//! gdb pretty-printers of gcc 14 beside the rustc volume's of gcc 16, the ones
+//! of the newer libstdc++ the volume keeps are kept ([`pretty_printers`]).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -36,6 +40,9 @@ const SPARE_MIB: u64 = 1024 + 512;
 /// Room for what steamcmd writes beside itself: the update it downloads and
 /// unpacks on its first run, and what a login keeps.
 const STEAMCMD_SPARE_MIB: u64 = 512;
+
+/// Room for the X server's log and its clients' files.
+const YSERVER_SPARE_MIB: u64 = 256;
 
 /// The volume, made or made again from the two trees when it is missing or
 /// older than either of the images they were packed into.
@@ -62,6 +69,7 @@ pub(crate) fn volume() -> Result<PathBuf> {
             ))
         })?;
     let steamcmd = steamcmd()?;
+    let yserver = yserver()?;
     let directory = directory()?;
     let image = directory.join("everything.img");
     let mut images = vec![&rustc_image, &chrome_image];
@@ -69,6 +77,10 @@ pub(crate) fn volume() -> Result<PathBuf> {
     if let Some((steamcmd_image, steamcmd_tree)) = &steamcmd {
         images.push(steamcmd_image);
         trees.push(steamcmd_tree);
+    }
+    if let Some((yserver_image, yserver_tree)) = &yserver {
+        images.push(yserver_image);
+        trees.push(yserver_tree);
     }
     let newest = images
         .into_iter()
@@ -114,6 +126,9 @@ pub(crate) fn volume() -> Result<PathBuf> {
     let mut size = bytes.div_ceil(1 << 20) + SPARE_MIB;
     if steamcmd.is_some() {
         size += STEAMCMD_SPARE_MIB;
+    }
+    if yserver.is_some() {
+        size += YSERVER_SPARE_MIB;
     }
     let _ = std::fs::remove_file(&stamp);
     let _ = std::fs::remove_file(&image);
@@ -204,6 +219,26 @@ fn steamcmd() -> Result<Option<(PathBuf, PathBuf)>> {
     Ok(Some((image, tree)))
 }
 
+/// yserver's image and the tree beside it, or `None` when it has not been
+/// made: the desktop is whole without an X server, and says how to add one.
+pub(crate) fn yserver() -> Result<Option<(PathBuf, PathBuf)>> {
+    let Ok(image) = crate::yserver::volume() else {
+        println!("  everything: no X server; scripts/fetch/fetch-yserver.sh adds yserver");
+        return Ok(None);
+    };
+    let tree = image
+        .parent()
+        .map(|directory| directory.join("tree"))
+        .filter(|tree| tree.join("yserver/yserver").is_file())
+        .ok_or_else(|| {
+            Error::new(format!(
+                "no tree with yserver beside {}: scripts/fetch/fetch-yserver.sh keeps one there",
+                image.display()
+            ))
+        })?;
+    Ok(Some((image, tree)))
+}
+
 /// `~/.local/share/ferrix/everything`, or `FERRIX_EVERYTHING_VOLUME`.
 ///
 /// Beside the two volumes by default, which is what lets the tree be hard
@@ -243,11 +278,11 @@ fn merge(from: &Path, into: &Path) -> Result<u64> {
                     .and_then(|there| newer_soname(&target, there, &link))
                 {
                     Some(Keep::There) => {
-                        say_kept(&target, "the rustc volume's");
+                        say_kept(&target, "the earlier volume's, the newer runtime");
                         continue;
                     }
                     Some(Keep::Here) => {
-                        say_kept(&target, "the Chrome volume's");
+                        say_kept(&target, "the later volume's, the newer runtime");
                         remove(&target)?;
                     }
                     None => return Err(clash(&target)),
@@ -269,13 +304,17 @@ fn merge(from: &Path, into: &Path) -> Result<u64> {
                 if same_contents(&source, &target)? {
                     continue;
                 }
+                if pretty_printers(&target) {
+                    say_kept(&target, "the first volume's, beside the newer libstdc++");
+                    continue;
+                }
                 match newer_runtime(&target, &target, &source)? {
                     Some(Keep::There) => {
-                        say_kept(&target, "the rustc volume's");
+                        say_kept(&target, "the earlier volume's, the newer runtime");
                         continue;
                     }
                     Some(Keep::Here) => {
-                        say_kept(&target, "the Chrome volume's");
+                        say_kept(&target, "the later volume's, the newer runtime");
                         // Its bytes were counted when the other copy came.
                         remove(&target)?;
                         link_or_copy(&source, &target)?;
@@ -326,18 +365,29 @@ fn link_or_copy(source: &Path, target: &Path) -> Result<()> {
 /// Which of two copies at one path the volume keeps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Keep {
-    /// The one already there: the rustc volume's, merged first.
+    /// The one already there: an earlier volume's, the rustc volume's first.
     There,
-    /// The one arriving: the Chrome volume's.
+    /// The one arriving: a later volume's, Chrome's or yserver's.
     Here,
 }
 
-/// Say which copy of a runtime the volume took, in one line.
+/// Say which copy of a file the volume took, and why, in one line.
 fn say_kept(path: &Path, whose: &str) {
     println!(
-        "  everything: {}: the two volumes differ; kept {whose}, the newer runtime",
+        "  everything: {}: two volumes differ; kept {whose}",
         path.display()
     );
+}
+
+/// Whether `path` is one of libstdc++'s gdb pretty-printers
+/// (`usr/share/gcc/python/`), Python that gdb loads for the libstdc++ it
+/// debugs, and nothing runs otherwise. Two volumes' libstdc++6 packages of
+/// different gcc each ship theirs, and the ones already there came with the
+/// rustc volume, merged first, whose libstdc++ is the newer that
+/// [`newer_runtime`] keeps.
+fn pretty_printers(path: &Path) -> bool {
+    path.to_str()
+        .is_some_and(|path| path.contains("/usr/share/gcc/python/"))
 }
 
 /// The GCC runtime, by file-name prefix, and the prefix of the symbol
@@ -546,6 +596,23 @@ mod tests {
             PathBuf::from("libwayland-server.so.0.24.0")
         );
         for root in [rustc, chrome, into] {
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    /// yserver's tree, on 2026-09-28: gcc 14's pretty-printers where the
+    /// rustc volume has gcc 16's.
+    #[test]
+    fn libstdcxx_pretty_printers_keep_the_first_volumes() {
+        let printers = "usr/share/gcc/python/libstdcxx/v6/printers.py";
+        let rustc = tree("printers-rustc", &[(printers, b"gcc 16")], &[]);
+        let yserver = tree("printers-yserver", &[(printers, b"gcc 14")], &[]);
+        let into = tree("printers-into", &[], &[]);
+        create_dir(&into).unwrap();
+        let _ = merge(&rustc, &into).unwrap();
+        let _ = merge(&yserver, &into).unwrap();
+        assert_eq!(std::fs::read(into.join(printers)).unwrap(), b"gcc 16");
+        for root in [rustc, yserver, into] {
             let _ = std::fs::remove_dir_all(root);
         }
     }

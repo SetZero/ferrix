@@ -159,6 +159,9 @@ debs=(
     "pool/main/libx/libxkbcommon/libxkbcommon-dev_1.7.0-2_amd64.deb b62327152ae59bec442c0d7ae893520a3a3a2381100c83332e4a3497157ce5ec"
     "pool/main/libx/libxkbcommon/libxkbcommon0_1.7.0-2_amd64.deb f75ee544f55acc6a271debfab3ea4ae0458afc89d81cfe1a71137e07d4895b86"
     "pool/main/libx/libxkbfile/libxkbfile1_1.1.0-1+b4_amd64.deb 989b61e0eb7f1f99d0e969a5957e9a857a95941d5c0e86d5e2b502008b4ac28e"
+    # The build the rustc volume has (2026-09-28), so --everything's merged
+    # volume holds one libxml2; security's deb13u1 was superseded.
+    "pool/main/libx/libxml2/libxml2_2.12.7+dfsg+really2.9.14-2.1+deb13u3_amd64.deb e0c6b63ce4602a036a526f60fe5e6c1586710688058d98fc1001b9b3147b7efd"
     "pool/main/libx/libxmu/libxmu6_1.1.3-3+b4_amd64.deb cfdf1dee8f9abd87f503222fc8b04a30ce820fb1255247b7c3a28ff9c244431a"
     "pool/main/libx/libxmu/libxmuu1_1.1.3-3+b4_amd64.deb 6b5f537905421599e962a8cec68c84f06d506e143fc70b0b570380b3c4901678"
     "pool/main/libx/libxpm/libxpm4_3.5.17-1+deb13u1_amd64.deb d2f8933b552e7a282bbc32bc7545628195c4a3692a20ad0e232cc5fee9130790"
@@ -207,7 +210,6 @@ security_debs=(
     "pool/updates/main/libp/libpng1.6/libpng-dev_1.6.48-1+deb13u5_amd64.deb 9027d5ace59ce266124c87054302805f49f9cb1ec4a6c8264a64596c7916fbff"
     "pool/updates/main/libp/libpng1.6/libpng16-16t64_1.6.48-1+deb13u5_amd64.deb 2465b4e9fa85cff54dc10a6da3e64074d8d9292c86e4a8f989b809d6b158e97e"
     "pool/updates/main/u/util-linux/libuuid1_2.41.5-0+deb13u1_amd64.deb c1bf4c4c3ff48c57fabf93307dfb56996b60cfa33927afc4158b5db36fb2721e"
-    "pool/updates/main/libx/libxml2/libxml2_2.12.7+dfsg+really2.9.14-2.1+deb13u1_amd64.deb b4743a0fd8e86379ec2bdfb6b97b99fb1c92a925e538920052316814470e99f8"
     "pool/updates/main/l/linux/linux-libc-dev_6.12.101-1_all.deb e776ef48b89af0409c6bcd2e8a7e14a3d75d0842b9fd3dc767b7822a0b0950e2"
     "pool/updates/main/u/util-linux/uuid-dev_2.41.5-0+deb13u1_amd64.deb cb7d7db20e5d91193c2c6629a3f4aa917e3bc558c72b7f2db7203bcfa9a3ba1b"
 )
