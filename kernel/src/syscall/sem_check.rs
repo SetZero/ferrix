@@ -325,6 +325,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     {
         let tree = Job::new_root().map_err(|_| "sem: no memory for a job")?;
         waits(&mut report, &tree)?;
+        reopened(&mut report, &tree)?;
         report.per_job = per_job(&tree)?;
     }
     if sem::sets_in_use() != before {
@@ -652,6 +653,95 @@ fn layouts(report: &mut Report) -> Result<(), &'static str> {
         return Err("sem: IPC_INFO's semmsl, semopm or semvmx was wrong");
     }
     report.calls += 1;
+    Ok(())
+}
+
+/// A keyed set made in one job by a process that held it with `SEM_UNDO`
+/// and has ended, found by its key and used from another job by a new
+/// process, as the Steam client finds its mutex when it restarts: `EEXIST`
+/// to `IPC_EXCL`, the set to a plain `semget`, the value its undo left,
+/// the ended process as its last operator, and the set its to remove and
+/// make again.
+fn reopened(report: &mut Report, tree: &Arc<Job>) -> Result<(), &'static str> {
+    const KEY: i32 = 0x5e3a_813e;
+    let first_job = tree.new_child().map_err(|_| "sem: a job refused a child")?;
+    let second_job = tree.new_child().map_err(|_| "sem: a job refused a child")?;
+    let first = process::new_for_check().map_err(|_| "sem: no process for the reopen")?;
+    let caller = Caller::of(&first);
+    let made = as_task_of(&first_job, || {
+        let id = sem::semget(&caller, KEY, 1, flags::CREAT | flags::EXCL | 0o600)?;
+        let _ = ctl(id, 0, cmd::SETVAL, 1);
+        let taken = vec![SemBuf::new(0, -1, flags::UNDO)];
+        sem::semop(&caller, first.sem_undo(), id, taken, None, &Never).map(|_| id)
+    })
+    .map_err(|_| "sem: the first process could not make and take its set")?;
+    let held = Held(made);
+    let first_pid = first.pid();
+    process::kill(&first, 0);
+    drop(first);
+    let second = process::new_for_check().map_err(|_| "sem: no process for the reopen")?;
+    let caller = Caller::of(&second);
+    let r = &mut *report;
+    as_task_of(&second_job, || -> Result<(), &'static str> {
+        let again = sem::semget(&caller, KEY, 1, flags::CREAT | flags::EXCL | 0o600);
+        expect(
+            r,
+            again,
+            Err(Errno::EEXIST),
+            "sem: IPC_EXCL on an ended process's key was not EEXIST",
+        )?;
+        expect(
+            r,
+            sem::semget(&caller, KEY, 1, 0o600),
+            Ok(made),
+            "sem: a new process in another job did not find the set by its key",
+        )?;
+        let read = |command| {
+            sem::semctl(
+                &caller,
+                &Buffer::new(),
+                Layout::Narrow,
+                made,
+                0,
+                command | cmd::IPC_64,
+                0,
+            )
+        };
+        expect(
+            r,
+            read(cmd::GETVAL),
+            Ok(1),
+            "sem: the ended process's SEM_UNDO was not paid",
+        )?;
+        expect(
+            r,
+            read(cmd::GETNCNT),
+            Ok(0),
+            "sem: GETNCNT counted a waiter nobody is",
+        )?;
+        expect(
+            r,
+            read(cmd::GETPID),
+            Ok(first_pid as usize),
+            "sem: GETPID did not name the ended process",
+        )?;
+        let mine = vec![SemBuf::new(0, -1, flags::UNDO)];
+        expect(
+            r,
+            sem::semop(&caller, second.sem_undo(), made, mine, Some(0), &Never),
+            Ok(0),
+            "sem: a new process could not take the set",
+        )?;
+        Ok(())
+    })?;
+    process::kill(&second, 0);
+    drop(second);
+    drop(held);
+    for job in [&first_job, &second_job] {
+        if job.usage(Resource::Kernel).map_or(0, |usage| usage.used) != 0 {
+            return Err("sem: a removed set's heap, or an undo record's, was still charged");
+        }
+    }
     Ok(())
 }
 

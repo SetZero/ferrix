@@ -223,7 +223,8 @@ pub(super) fn check_semaphores() {
     println!(
         "  sem      {} semaphore calls answered as Linux answers them, {} of them refusals; {} \
          blocked semops ended by an increment, SETVAL, EINTR, their deadline and EIDRM, each \
-         job's heap back; SEM_UNDO paid at exit; a job refused ENOSPC at {} sets while a \
+         job's heap back; SEM_UNDO paid at exit, and the set found by its key and taken \
+         from another job once its maker had ended; a job refused ENOSPC at {} sets while a \
          sibling made one",
         checked.calls, checked.refusals, checked.waits, checked.per_job,
     );

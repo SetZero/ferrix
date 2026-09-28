@@ -5,7 +5,8 @@
 //! through `ipc` (117), as the Steam client's glibc does -- and booted as
 //! init. It forks children that contend for a `SEM_UNDO` mutex, kills one
 //! holding it, waits for zero, and is interrupted and removed out of a
-//! blocked `semop`. It prints a line per step and `sem: all ok`, and exits
+//! blocked `semop`, and reopens by key the sets an ended process made, as
+//! the Steam client does when it restarts. It prints a line per step and `sem: all ok`, and exits
 //! 0; this requires every one of those lines, in order, and the status.
 //!
 //! Then the negative control: the same program with the killed child's
@@ -45,6 +46,7 @@ const STEPS: &[&str] = &[
     "sem: zero ok",
     "sem: eintr ok",
     "sem: eidrm ok",
+    "sem: reopen ok",
     "sem: all ok",
 ];
 

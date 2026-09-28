@@ -1054,11 +1054,12 @@ and GETPID must agree; a call half of whose operations could go must leave none
 done; IPC_NOWAIT, ERANGE, EFBIG and EACCES as Linux. IPC_STAT must put the mode
 and sem_nsems where the UAPI headers do in the 32-bit, x86-64 and generic
 layouts, and IPC_SET must hand the set over. A process that took one with
-SEM_UNDO and was killed must give it back. A waiter task must be ended by an
-increment, by SETVAL to zero, by an interruption (EINTR), by its deadline
-(EAGAIN, not before it) and by IPC_RMID (EIDRM), and the job it ran in must hold
-no heap after each. A job must be refused ENOSPC at its per-job bound while a
-sibling makes one, and every set the check made must be gone.
+SEM_UNDO and was killed must give it back, and a keyed set it held must be found
+by its key, read and taken by a new process in another job. A waiter task must
+be ended by an increment, by SETVAL to zero, by an interruption (EINTR), by its
+deadline (EAGAIN, not before it) and by IPC_RMID (EIDRM), and the job it ran in
+must hold no heap after each. A job must be refused ENOSPC at its per-job bound
+while a sibling makes one, and every set the check made must be gone.
 
 1. `attempt` or `revert` leaves an operation of a refused call done, or
    `run_queue` does not complete a waiter that can go now.

@@ -395,8 +395,124 @@ fn eidrm() -> Step {
     Ok(())
 }
 
+/// `semget(key, 1, flags)`, or the errno negated.
+fn get(key: libc::key_t, flags: c_int) -> c_int {
+    // SAFETY: plain integers.
+    let id = unsafe { libc::semget(key, 1, flags) };
+    if id < 0 { -errno() } else { id }
+}
+
+/// Steam's restarted client, as a host trace of it shows: a first process
+/// makes a 0666 set and a 0600 mutex, holds the mutex with `SEM_UNDO`, and
+/// exits; a second finds both by key, reads `GETNCNT`, `GETZCNT` and
+/// `GETPID`, finds that process gone, removes the mutex and makes it again,
+/// and tries the first set without waiting. Its exit status is the step
+/// that failed, and the child's errno says why.
+fn second_owner(first: libc::pid_t, keys: (libc::key_t, libc::key_t)) -> c_int {
+    let (shared, mutex) = keys;
+    if get(shared, IPC_CREAT | 0o2000 | 0o666) != -libc::EEXIST {
+        return 10;
+    }
+    let shared_id = get(shared, 0o666);
+    if shared_id < 0 {
+        return 11;
+    }
+    if ctl(shared_id, 0, GETNCNT, 0) != 0 || ctl(shared_id, 0, GETZCNT, 0) != 0 {
+        return 12;
+    }
+    if ctl(shared_id, 0, GETPID, 0) != first {
+        return 13;
+    }
+    if ctl(shared_id, 0, SETVAL, 0) != 0 {
+        return 14;
+    }
+    if get(mutex, IPC_CREAT | 0o2000 | 0o600) != -libc::EEXIST {
+        return 15;
+    }
+    let mutex_id = get(mutex, 0o600);
+    if mutex_id < 0 || ctl(mutex_id, 0, GETVAL, 0) != 1 {
+        return 16;
+    }
+    if ctl(mutex_id, 0, GETNCNT, 0) != 0 || ctl(mutex_id, 0, GETPID, 0) != first {
+        return 17;
+    }
+    // SAFETY: a probe of a pid that has gone.
+    let start = Instant::now();
+    loop {
+        // SAFETY: a probe of a pid that has gone.
+        let answer = unsafe { libc::kill(first, 0) };
+        if answer == -1 && errno() == libc::ESRCH {
+            break;
+        }
+        if start.elapsed() > Duration::from_secs(3) {
+            say(&format!("sem: kill(first, 0) answered {answer} for 3 s after its reap"));
+            return 18;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    say(&format!("sem: kill(first, 0) was ESRCH after {:?}", start.elapsed()));
+    if ctl(mutex_id, 0, IPC_RMID, 0) != 0 {
+        return 19;
+    }
+    let again = get(mutex, IPC_CREAT | 0o2000 | 0o600);
+    if again < 0 || ctl(again, 0, SETVAL, 1) != 0 {
+        return 20;
+    }
+    if op(again, 0, -1, SEM_UNDO) != 0 || op(again, 0, 1, SEM_UNDO) != 0 {
+        return 21;
+    }
+    if op(shared_id, 0, -1, IPC_NOWAIT) != -1 || errno() != libc::EAGAIN {
+        return 22;
+    }
+    remove(again);
+    remove(shared_id);
+    0
+}
+
+/// **reopen**: sets made by a process that has gone, found by key and used
+/// by a new one, as the Steam client's restart does.
+fn reopen() -> Step {
+    const SHARED: libc::key_t = 0x5e3a_17d9;
+    const MUTEX: libc::key_t = 0x5e3a_813e;
+    let first = fork_with(|| {
+        let shared = get(SHARED, IPC_CREAT | 0o2000 | 0o666);
+        let mutex = get(MUTEX, IPC_CREAT | 0o2000 | 0o600);
+        if shared < 0
+            || mutex < 0
+            || ctl(shared, 0, SETVAL, 0) != 0
+            || ctl(mutex, 0, SETVAL, 1) != 0
+        {
+            return 2;
+        }
+        if op(mutex, 0, -1, SEM_UNDO) != 0 || op(mutex, 0, 1, SEM_UNDO) != 0 {
+            return 3;
+        }
+        // Held as it exits: the undo gives it back.
+        if op(mutex, 0, -1, SEM_UNDO) != 0 {
+            return 4;
+        }
+        42
+    })?;
+    let status = reap(first);
+    if status != 42 {
+        return Err(format!("the first owner ended with {status}"));
+    }
+    let second = fork_with(|| {
+        let step = second_owner(first, (SHARED, MUTEX));
+        if step != 0 {
+            say(&format!("sem: reopen failed at {step}, errno {}", errno()));
+        }
+        step
+    })?;
+    let status = reap(second);
+    if status != 0 {
+        return Err(format!("the second owner failed at step {status}"));
+    }
+    Ok(())
+}
+
 fn main() {
-    let steps: [Named; 8] = [
+    let steps: [Named; 9] = [
         ("create", create),
         ("nowait", nowait),
         ("timeout", timeout),
@@ -405,6 +521,7 @@ fn main() {
         ("zero", zero),
         ("eintr", eintr),
         ("eidrm", eidrm),
+        ("reopen", reopen),
     ];
     for (name, step) in steps {
         if let Err(what) = step() {
