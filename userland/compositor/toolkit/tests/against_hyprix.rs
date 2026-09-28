@@ -432,3 +432,32 @@ fn open_tooltip(
         )
         .ok()
 }
+
+#[test]
+fn a_cursor_picture_is_taken_replaced_and_given_up_without_a_protocol_error() {
+    let (answer, _) = with_compositor("cursor-image", 2000, |socket| {
+        let mut client = Client::connect_to(socket).map_err(|error| error.to_string())?;
+        let _window = client
+            .toplevel(&ToplevelOptions {
+                title: "cursor".to_owned(),
+                app_id: "toolkit-test".to_owned(),
+                size: (100, 100),
+            })
+            .map_err(|error| error.to_string())?;
+        let arrow = [0xff_u8; 2 * 3 * 4];
+        assert!(
+            client.set_cursor_image(2, 2, (0, 0), &arrow).is_err(),
+            "six pixels are not two by two"
+        );
+        client
+            .set_cursor_image(2, 3, (1, 1), &arrow)
+            .map_err(|error| error.to_string())?;
+        client
+            .set_cursor_image(3, 2, (0, 1), &arrow)
+            .map_err(|error| error.to_string())?;
+        let _ = client.roundtrip().map_err(|error| error.to_string())?;
+        client.set_cursor(compositor_toolkit::CursorShape::default());
+        client.roundtrip().map_err(|error| error.to_string())
+    });
+    let _ = answer.expect("the compositor took every request");
+}

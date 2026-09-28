@@ -238,10 +238,25 @@ struct Seat {
     input_serial: u32,
     cursor: CursorShape,
     hidden: bool,
+    /// A picture of the program's own that stands for the pointer, which
+    /// [`Client::set_cursor_image`] gave and [`Client::set_cursor`] ends.
+    image: Option<CursorImage>,
     /// An axis event being put together until `wl_pointer.frame`.
     axis: Option<Axis>,
     /// What `axis_value120` has sent that is not yet a whole click.
     residue: (i32, i32),
+}
+
+/// A cursor drawn by the program: a surface of the seat's own and the one
+/// buffer it shows.
+#[derive(Debug)]
+struct CursorImage {
+    surface: ObjectId,
+    buffer: ObjectId,
+    pool: ObjectId,
+    /// The buffer's bytes, kept mapped until the buffer is replaced.
+    shared: Shared,
+    hot: (i32, i32),
 }
 
 /// An axis event being put together.
@@ -1008,8 +1023,90 @@ impl Client {
     pub fn set_cursor(&mut self, shape: CursorShape) {
         self.seat.cursor = shape;
         self.seat.hidden = false;
+        if let Some(image) = self.seat.image.take() {
+            self.drop_cursor_image(image, true);
+        }
         let result = self.apply_cursor();
         self.defer(result);
+    }
+
+    /// Show a picture of the program's own for the pointer over this
+    /// client's surfaces (`wl_pointer.set_cursor` with a surface), as an X
+    /// server does with its clients' cursors. `pixels` is `width` × `height`
+    /// in `wl_shm`'s ARGB8888, premultiplied: four bytes a pixel, blue first
+    /// in memory. `hot` is the point of it that is the pointer's position.
+    /// It stays, across the pointer leaving and coming back, until the next
+    /// call or [`Client::set_cursor`].
+    ///
+    /// # Errors
+    ///
+    /// A size of zero, `pixels` of another length, or shared memory that
+    /// cannot be made.
+    pub fn set_cursor_image(
+        &mut self,
+        width: u32,
+        height: u32,
+        hot: (i32, i32),
+        pixels: &[u8],
+    ) -> Result<(), Error> {
+        let len = buffer::length(width, height)
+            .filter(|&len| len == pixels.len())
+            .ok_or_else(|| {
+                Error::Other(format!(
+                    "a {width}x{height} cursor of {} bytes",
+                    pixels.len()
+                ))
+            })?;
+        let surface = match self.seat.image.as_ref() {
+            Some(image) => image.surface,
+            None => {
+                let (compositor, version) = self.global("wl_compositor")?;
+                let surface = self.make(&wl::WL_SURFACE, version, Role::Quiet);
+                self.send(
+                    compositor,
+                    wl_compositor::request::CREATE_SURFACE,
+                    &[Arg::NewId(surface)],
+                )?;
+                surface
+            }
+        };
+        // ARGB8888 is wl_shm format 0.
+        let (pool, buffer, mut shared) = self.shm_buffer(width, height, len, 0, Role::Quiet)?;
+        shared.bytes_mut().copy_from_slice(pixels);
+        self.send(
+            surface,
+            wl_surface::request::ATTACH,
+            &[Arg::Object(buffer), Arg::Int(0), Arg::Int(0)],
+        )?;
+        self.send(
+            surface,
+            wl_surface::request::DAMAGE,
+            &[Arg::Int(0), Arg::Int(0), int(width), int(height)],
+        )?;
+        self.send(surface, wl_surface::request::COMMIT, &[])?;
+        let image = CursorImage {
+            surface,
+            buffer,
+            pool,
+            shared,
+            hot,
+        };
+        if let Some(old) = self.seat.image.replace(image) {
+            self.drop_cursor_image(old, false);
+        }
+        self.seat.hidden = false;
+        self.apply_cursor()
+    }
+
+    /// Let go of a cursor picture's buffer, and of its surface too when the
+    /// picture is not being replaced.
+    fn drop_cursor_image(&mut self, image: CursorImage, surface: bool) {
+        self.destroy_object(image.buffer, wl_buffer::request::DESTROY);
+        self.destroy_object(image.pool, wl_shm_pool::request::DESTROY);
+        drop(image.shared);
+        if surface {
+            self.destroy_object(image.surface, wl_surface::request::DESTROY);
+        }
     }
 
     /// Hide the pointer over this client's surfaces (`wl_pointer.set_cursor`
@@ -1039,6 +1136,19 @@ impl Client {
                 )?;
             }
             return Ok(());
+        }
+        if let (Some(pointer), Some(image)) = (self.seat.pointer, self.seat.image.as_ref()) {
+            let (surface, (x, y)) = (image.surface, image.hot);
+            return self.send(
+                pointer,
+                wl_pointer::request::SET_CURSOR,
+                &[
+                    Arg::Uint(serial),
+                    Arg::Object(surface),
+                    Arg::Int(x),
+                    Arg::Int(y),
+                ],
+            );
         }
         if let Some(device) = self.seat.cursor_device {
             self.send(
