@@ -58,6 +58,8 @@ pub(crate) struct Report {
     pub(crate) regions: usize,
     /// Record locks one open file description holds, on every other byte.
     pub(crate) locks: usize,
+    /// System V semaphore sets of one semaphore each.
+    pub(crate) sets: usize,
 }
 
 /// Run every kind.
@@ -84,6 +86,9 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         report.eventfds = kind(&tree, "eventfds", |_| fs::eventfd::create(0, false, true))?;
         report.regions = regions(&tree)?;
         report.locks = locks(&tree)?;
+        report.sets = kind(&tree, "semaphore sets", |_| {
+            crate::syscall::sem_check::private_set(1, 0o600)
+        })?;
         if Resource::ALL
             .iter()
             .any(|&resource| tree.usage(resource).is_none_or(|usage| usage.used != 0))

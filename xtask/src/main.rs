@@ -9,6 +9,7 @@
 //! cargo xtask test-shell --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask test-vfs  --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask test-threads --arch all [--i686] [--timeout SECONDS]
+//! cargo xtask test-sem --arch all [--i686] [--timeout SECONDS]
 //! cargo xtask test-rustc [--accel kvm] [--memory M] [--timeout SECONDS]
 //! cargo xtask test-selfhost [--accel kvm] [--release] [--smp N] [--memory M] [--timeout SECONDS] [--plan DIR]
 //! cargo xtask builds-execute --plan DIR
@@ -112,6 +113,7 @@ mod rustc;
 mod seam;
 mod seat;
 mod selfhost;
+mod sem;
 mod serial;
 mod sha256;
 mod shell;
@@ -220,6 +222,8 @@ COMMANDS:
     test-sysfs    Boot a shell beside a card, input devices and a network adapter, read sysfs, and unbind and bind the card through it
     test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count (--i686: the x86-64
                   image runs a 32-bit x86 build of it)
+    test-sem      Boot sem-test as init and require System V semaphores across forks: a SEM_UNDO mutex, undo at a kill,
+                  EINTR, EIDRM and timeouts (--i686: 32-bit x86, through ipc(117), as Steam calls them)
     test-rustc    Attach the rustc volume scripts/fetch/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
     test-chrome   Attach the volume scripts/fetch/fetch-chrome.sh makes, and require headless Chrome to run a page's script and draw it
     test-steamcmd Attach the volume scripts/fetch/fetch-steamcmd.sh makes, and require Valve's 32-bit steamcmd to update itself
@@ -503,6 +507,7 @@ fn run() -> Result<()> {
         "test-sysfs" => sysfs::test_sysfs(&args),
         "test-install" => installer::test_install(&args),
         "test-threads" => threads::test_threads(&args),
+        "test-sem" => sem::test_sem(&args),
         "coverage" => coverage::run(&args),
         "test-rustc" => rustc::test_rustc(&args),
         "test-chrome" | "test-chrome-window" | "test-chrome-audio" => chrome::run(command, &args),

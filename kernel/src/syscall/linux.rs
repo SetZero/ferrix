@@ -31,8 +31,8 @@ use ferrix_linux_abi::types::{AT_FDCWD, O_CREAT, O_TRUNC, O_WRONLY};
 
 use super::{
     Personality, attributes, compat, credentials, epoll, eventfd, exec, family, fd, file, flock,
-    fsctl, futex, kill, limits, memfd, memory, namespace, path, poll, process, signal, signalfd,
-    sockets, system, thread, thread_area, time, timerfd, unanswered,
+    fsctl, futex, kill, limits, memfd, memory, namespace, path, poll, process, sem, signal,
+    signalfd, sockets, system, thread, thread_area, time, timerfd, unanswered,
 };
 use crate::arch;
 use crate::sched;
@@ -285,7 +285,8 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         .or_else(|| sockets::dispatch(call, &a, process, args.abi))
         .or_else(|| system::dispatch(call, &a, process))
         .or_else(|| time::dispatch(call, &a, process, args.abi))
-        .or_else(|| kill::dispatch(call, &a, process));
+        .or_else(|| kill::dispatch(call, &a, process))
+        .or_else(|| sem::dispatch(call, &a, process, args.abi));
     if let Some(answer) = answer {
         return answer;
     }
@@ -294,14 +295,12 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::Swapon | Syscall::Swapoff => Err(Errno::ENOSYS),
         // There are no loadable modules: the kernel is one image.
         Syscall::InitModule | Syscall::FinitModule | Syscall::DeleteModule => Err(Errno::ENOSYS),
-        // No System V IPC. `mmap(MAP_SHARED)` stands in for its shared memory,
-        // pipes and sockets for its message queues, futexes for its semaphores.
-        // Named here so each one is reported by name, not as a number no table
-        // has.
+        // System V IPC's semaphores are answered, in `sem`, above; its shared
+        // memory and message queues are not. `mmap(MAP_SHARED)` stands in for
+        // the first, pipes and sockets for the second. Named here so each one
+        // is reported by name, not as a number no table has.
         Syscall::Shmget | Syscall::Shmat | Syscall::Shmdt | Syscall::Shmctl => Err(Errno::ENOSYS),
         Syscall::Msgget | Syscall::Msgsnd | Syscall::Msgrcv | Syscall::Msgctl => Err(Errno::ENOSYS),
-        Syscall::Semget | Syscall::Semop | Syscall::Semctl => Err(Errno::ENOSYS),
-        Syscall::Semtimedop | Syscall::SemtimedopTime64 => Err(Errno::ENOSYS),
         // No process accounting to switch on.
         Syscall::Acct => Err(Errno::ENOSYS),
         // No controlling terminals to hang up until stage 15's tty layer.

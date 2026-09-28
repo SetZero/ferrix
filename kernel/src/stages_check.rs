@@ -206,6 +206,25 @@ pub(super) fn check_eventfd() {
     );
 }
 
+/// System V semaphores: keys, values, operations, the layouts, `SEM_UNDO`
+/// at exit, every way a blocked `semop` ends, and the per-job bound.
+pub(super) fn check_semaphores() {
+    let checked = match syscall::sem_check::run() {
+        Ok(checked) => checked,
+        Err(problem) => fatal!(
+            catalog::STAGE7_SEMAPHORES,
+            "System V semaphore self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  sem      {} semaphore calls answered as Linux answers them, {} of them refusals; {} \
+         blocked semops ended by an increment, SETVAL, EINTR, their deadline and EIDRM, each \
+         job's heap back; SEM_UNDO paid at exit; a job refused ENOSPC at {} sets while a \
+         sibling made one",
+        checked.calls, checked.refusals, checked.waits, checked.per_job,
+    );
+}
+
 /// Stage 8's timerfd check: flags and clocks, expirations counted, the
 /// settings in both layouts, a clock set, and waiters woken at the deadline.
 pub(super) fn check_timerfd() {
@@ -833,8 +852,9 @@ pub(super) fn check_kernel_memory() {
     println!(
         "  kmem     at a {} KiB memory limit a job made {} files, {} pipes, {} socket pairs, \
          {} descriptors in flight, {} epoll registrations, {} eventfds, {} regions of one \
-         mapping and {} record locks, and was refused one more of each -- ENOMEM, ENOLCK for \
-         a lock -- while a sibling made one; every byte of heap charged came back",
+         mapping, {} record locks and {} semaphore sets, and was refused one more of each -- \
+         ENOMEM, ENOLCK for a lock -- while a sibling made one; every byte of heap charged \
+         came back",
         fs::kmem_check::LIMIT / 1024,
         report.files,
         report.pipes,
@@ -844,6 +864,7 @@ pub(super) fn check_kernel_memory() {
         report.eventfds,
         2 * report.regions + 1,
         report.locks,
+        report.sets,
     );
 }
 

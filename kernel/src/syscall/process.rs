@@ -70,7 +70,7 @@ use crate::syscall::fd;
 use crate::syscall::registry;
 use crate::syscall::signal::{Origin, Posted, Signals};
 use crate::syscall::thread::{self, Thread};
-use crate::syscall::{attributes, futex, kill, uaccess};
+use crate::syscall::{attributes, futex, kill, sem, uaccess};
 use crate::user::space::{AddressSpace, MMAP_MIN_ADDR, SpaceError};
 use ferrix_linux_abi::types::SIGCHLD;
 
@@ -99,6 +99,10 @@ pub(crate) struct Process {
     oom_score_adj: AtomicI32,
     /// What it was started as, which only `/proc` reads.
     identity: SpinLock<Identity>,
+    /// The System V semaphore sets it holds undo records in, applied as it
+    /// is released (`sem::exit`). Its own, never a parent's: a fork child
+    /// owes nothing, as Linux's child without `CLONE_SYSVSEM` owes nothing.
+    sem_undo: sem::UndoList,
     /// Its file descriptors, and the open file descriptions they name.
     ///
     /// A lock of its own for the reason `handles` has one, and one more: a
@@ -339,6 +343,7 @@ impl Process {
             umask: AtomicU32::new(DEFAULT_UMASK),
             oom_score_adj: AtomicI32::new(0),
             identity: SpinLock::new(Identity::default()),
+            sem_undo: sem::UndoList::new(),
             files: fallible::try_arc(SpinLock::new(fd::standard_streams()?))?,
             fs: fallible::try_arc(SpinLock::new(fs::root_disk::process_context()))?,
             state: SpinLock::new(State::new()?),
@@ -707,6 +712,11 @@ impl Process {
     pub(crate) fn with_credentials<R>(&self, change: impl FnOnce(&mut Credentials) -> R) -> R {
         change(&mut self.credentials.lock())
     }
+
+    /// The semaphore sets it holds undo records in.
+    pub(crate) fn sem_undo(&self) -> &sem::UndoList {
+        &self.sem_undo
+    }
 }
 
 /// Round up to a page, or `None` if that would leave the address space.
@@ -984,6 +994,11 @@ impl Process {
             drop(emptied);
             let _ = fs::socket::collect_cycles();
         }
+        // What it owes the semaphore sets it used `SEM_UNDO` on is paid now,
+        // before its parent is told, so a parent's `wait4` sees the sets as
+        // the ending left them, as Linux's `exit_sem` runs before
+        // `exit_notify`. Spin locks and wakes only; see `sem::exit`.
+        sem::exit(&self.sem_undo, self.pid());
         // Nothing of it can run any more, so it leaves its job's count: a job
         // is empty once its last member gets here, not once that member is
         // reaped, which is what `cgroup.events` says on Linux too.

@@ -2032,6 +2032,20 @@ pub mod i386 {
     /// Wait on, or wake, a futex, with a 64-bit `timespec` timeout. and the one
     /// a time64 musl's locks actually reach.
     pub const FUTEX_TIME64: usize = 422;
+    /// Every System V IPC operation, as a call number (`SEMOP`, `SEMGET`,
+    /// `SEMCTL`, `SEMTIMEDOP`, the message and shared-memory ones) with the
+    /// `IPC_64` version in its upper half, and five arguments: what glibc on
+    /// i386 calls for the semaphores, and musl too, having no direct numbers.
+    pub const IPC: usize = 117;
+    /// Create or look up a System V semaphore set: the direct number Linux
+    /// 5.1 gave i386.
+    pub const SEMGET: usize = 393;
+    /// Query or control a System V semaphore set, directly. The `cmd` carries
+    /// `IPC_64` as it does through [`IPC`].
+    pub const SEMCTL: usize = 394;
+    /// Operate on System V semaphores with a 64-bit `timespec` timeout. i386
+    /// has no direct `semop` or 32-bit `semtimedop`; those go through [`IPC`].
+    pub const SEMTIMEDOP_TIME64: usize = 420;
     /// Report the blocked signals that are pending.
     pub const RT_SIGPENDING: usize = 176;
     /// Sleep until a signal arrives.
@@ -2435,6 +2449,9 @@ pub enum Syscall {
     Msgrcv,
     /// Query or control a System V message queue.
     Msgctl,
+    /// i386's one entry for System V IPC: an operation number, the `IPC_64`
+    /// version above it, and that operation's arguments. i386 only.
+    Ipc,
     /// Create or look up a System V semaphore set.
     Semget,
     /// Operate on the semaphores in a System V set.
@@ -4012,6 +4029,7 @@ fn i386_middle(nr: usize) -> Option<Syscall> {
         i386::NEWSELECT => Syscall::Select,
         i386::ADJTIMEX => Syscall::Adjtimex,
         i386::SOCKETCALL => Syscall::Socketcall,
+        i386::IPC => Syscall::Ipc,
         i386::UGETRLIMIT => Syscall::Getrlimit,
         i386::STAT64 => Syscall::Stat64,
         i386::LSTAT64 => Syscall::Lstat64,
@@ -4137,6 +4155,9 @@ fn i386_recent(nr: usize) -> Option<Syscall> {
         i386::PSELECT6_TIME64 => Syscall::Pselect6Time64,
         i386::PPOLL_TIME64 => Syscall::PpollTime64,
         i386::FUTEX_TIME64 => Syscall::FutexTime64,
+        i386::SEMGET => Syscall::Semget,
+        i386::SEMCTL => Syscall::Semctl,
+        i386::SEMTIMEDOP_TIME64 => Syscall::SemtimedopTime64,
         i386::PIDFD_OPEN => Syscall::PidfdOpen,
         i386::OPENAT2 => Syscall::Openat2,
         i386::FACCESSAT2 => Syscall::Faccessat2,

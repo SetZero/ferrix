@@ -79,6 +79,8 @@ pub(crate) mod process;
 pub(crate) mod program;
 pub(crate) mod program_check;
 pub(crate) mod registry;
+pub(crate) mod sem;
+pub(crate) mod sem_check;
 pub(crate) mod signal;
 pub(crate) mod signalfd;
 pub(crate) mod sigpage;

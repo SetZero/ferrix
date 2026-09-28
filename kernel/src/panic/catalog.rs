@@ -2024,6 +2024,40 @@ pub(crate) static STAGE8_EPOLL: Explanation = Explanation {
           poll_changes",
 };
 
+/// For `check_semaphores` in `stages_check.rs`, when `syscall::sem_check::run`
+/// fails.
+pub(crate) static STAGE7_SEMAPHORES: Explanation = Explanation {
+    code: "FX-0702",
+    title: "System V semaphores failed their self-check",
+    meaning: "`syscall::sem_check::run` makes semaphore sets through the functions `semget`, \
+              `semop`, `semtimedop` and `semctl` reach. A key must find its set, and IPC_EXCL, a \
+              missing key, a size past the set's or SEMMSL, and a stranger's access to a set of \
+              mode 0600 are refused as Linux refuses them. SETVAL, GETVAL, SETALL, GETALL and \
+              GETPID must agree; a call half of whose operations could go must leave none done; \
+              IPC_NOWAIT, ERANGE, EFBIG and EACCES as Linux. IPC_STAT must put the mode and \
+              sem_nsems where the UAPI headers do in the 32-bit, x86-64 and generic layouts, and \
+              IPC_SET must hand the set over. A process that took one with SEM_UNDO and was \
+              killed must give it back. A waiter task must be ended by an increment, by SETVAL \
+              to zero, by an interruption (EINTR), by its deadline (EAGAIN, not before it) and by \
+              IPC_RMID (EIDRM), and the job it ran in must hold no heap after each. A job must be \
+              refused ENOSPC at its per-job bound while a sibling makes one, and every set the \
+              check made must be gone.",
+    causes: &[
+        "`attempt` or `revert` leaves an operation of a refused call done, or `run_queue` does \
+         not complete a waiter that can go now.",
+        "A waiter's `Pending` record is not taken off the queue on the way out, so its charge \
+         outlives it and GETNCNT still counts it.",
+        "`Ticket::answer` stores the result without waking the task, or `wait` returns before \
+         re-reading the ticket under the set's lock.",
+        "`Process::release` no longer calls `sem::exit`, or `exit` looks for the undo record \
+         under a different owner.",
+        "`encode_semid` writes a field at an offset another layout uses.",
+        "`create` counts the sets of every job, or of none, against the per-job bound.",
+    ],
+    see: "kernel/src/syscall/sem_check.rs; kernel/src/syscall/sem.rs; \
+          kernel/src/syscall/process.rs Process::release",
+};
+
 /// For `check_eventfd` in `stages_check.rs`, when the eventfd check fails.
 pub(crate) static STAGE8_EVENTFD: Explanation = Explanation {
     code: "FX-0882",
@@ -2509,6 +2543,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE8_MEMFD,
     &STAGE8_EPOLL,
     &STAGE8_EVENTFD,
+    &STAGE7_SEMAPHORES,
     &STAGE8_TIMERFD,
     &STAGE8_SIGNALFD,
     &SYSFS,

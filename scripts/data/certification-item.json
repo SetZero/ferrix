@@ -245,6 +245,8 @@
         "syscall/poll.rs",
         "syscall/process.rs",
         "syscall/registry.rs",
+        "syscall/sem.rs",
+        "syscall/sem_check.rs",
         "syscall/signal.rs",
         "syscall/signalfd.rs",
         "syscall/sigpage.rs",
