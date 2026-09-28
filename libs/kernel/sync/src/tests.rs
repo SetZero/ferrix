@@ -135,9 +135,33 @@ fn debug_of_a_held_lock_does_not_deadlock() {
 /// some of them are descheduled while holding or waiting for the lock.
 const THREADS: usize = 8;
 
+/// Held by each contention test for its whole run, so they take turns.
+///
+/// The test harness runs as many tests at once as there are cores, and two
+/// or three of these at once are twenty threads spinning on four cores: a
+/// ticket lock's handover then waits whole timeslices for a descheduled
+/// waiter, and on CI's four-core runners one run in a few took ten seconds
+/// to nine minutes. One at a time, eight threads still outnumber the cores.
+static CONTENTION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Wait for [`CONTENTION`]; a test that failed holding it poisons nothing
+/// the next one needs.
+fn contend() -> std::sync::MutexGuard<'static, ()> {
+    CONTENTION
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[test]
 fn eight_threads_agree_on_the_count() {
-    const PER_THREAD: usize = 10_000;
+    let _turn = contend();
+    // Past one thread per core, a ticket lock's handover waits for the next
+    // ticket's holder to be scheduled, a timeslice at a time: on CI's
+    // four-core runners the full count took nine minutes, the whole host
+    // test step's length. Fewer increments there still race eight threads,
+    // some descheduled, for the lock.
+    let cores = thread::available_parallelism().map_or(1, usize::from);
+    let per_thread = if cores >= THREADS { 10_000 } else { 2_000 };
 
     // Repeated, because a lost update is a race, and a race that shows up one
     // run in ten is still a bug.
@@ -151,7 +175,7 @@ fn eight_threads_agree_on_the_count() {
                 let start = Arc::clone(&start);
                 thread::spawn(move || {
                     let _ = start.wait();
-                    for _ in 0..PER_THREAD {
+                    for _ in 0..per_thread {
                         *counter.lock() += 1;
                     }
                 })
@@ -163,7 +187,7 @@ fn eight_threads_agree_on_the_count() {
         }
         assert_eq!(
             *counter.lock(),
-            THREADS * PER_THREAD,
+            THREADS * per_thread,
             "attempt {attempt}: an increment was lost, so two threads held the lock at once"
         );
     }
@@ -171,6 +195,7 @@ fn eight_threads_agree_on_the_count() {
 
 #[test]
 fn the_ticket_lock_starves_nobody() {
+    let _turn = contend();
     // A test-and-set lock lets whichever CPU happens to win keep winning, and a
     // thread can wait indefinitely. A ticket lock hands out in arrival order,
     // so acquisitions by different threads must interleave heavily rather than
@@ -265,6 +290,7 @@ fn the_ticket_lock_starves_nobody() {
 
 #[test]
 fn once_runs_its_initialiser_exactly_once() {
+    let _turn = contend();
     static RUNS: AtomicUsize = AtomicUsize::new(0);
     RUNS.store(0, Ordering::SeqCst);
 
@@ -335,6 +361,7 @@ fn a_late_caller_sees_the_value_without_rerunning_the_initialiser() {
 
 #[test]
 fn readers_really_are_concurrent() {
+    let _turn = contend();
     // The whole point of a reader-writer lock: several readers hold it at once.
     // A peak of one would mean it is an expensive mutex.
     let lock = Arc::new(RwSpinLock::new(0usize));
@@ -392,6 +419,7 @@ fn a_reader_excludes_a_writer_but_not_another_reader() {
 
 #[test]
 fn a_writer_is_not_starved_by_a_stream_of_readers() {
+    let _turn = contend();
     // With reader preference, a continuous arrival of readers keeps a waiting
     // writer out forever. This asserts the writer gets in within a bound, which
     // is the property the kernel's mount table will depend on.
@@ -598,6 +626,7 @@ fn a_locked_cell_holds_nothing_until_it_is_set() {
 
 #[test]
 fn a_locked_cell_is_shared_safely() {
+    let _turn = contend();
     let cell: Arc<SpinLockedCell<usize>> = Arc::new(SpinLockedCell::with_value(0));
     let start = Arc::new(Barrier::new(THREADS));
 
@@ -668,6 +697,7 @@ fn a_sleep_lock_debugs_without_waiting() {
 
 #[test]
 fn eight_threads_agree_on_a_sleep_locked_count() {
+    let _turn = contend();
     const THREADS: usize = 8;
     const PER_THREAD: usize = 2_000;
     let lock = Arc::new(SleepLock::new(0_usize, &SpinParker));
@@ -821,6 +851,7 @@ fn an_uncontended_release_never_touches_the_parking() {
 
 #[test]
 fn sleeping_waiters_all_get_their_turn() {
+    let _turn = contend();
     const THREADS: usize = 6;
     const PER_THREAD: usize = 200;
     let parker = CondvarParker::default();
