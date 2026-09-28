@@ -209,12 +209,20 @@ jobs:
           components: rustfmt, clippy
           targets: x86_64-unknown-none, aarch64-unknown-none-softfloat, armv7a-none-eabi, x86_64-unknown-uefi, aarch64-unknown-uefi, armv7-unknown-linux-musleabi
 
+      # Every workspace the check builds. Until 2026-09-28 this named
+      # `compositor`, which the regroup of 2026-09-26 moved under
+      # `userland/`: its target was never saved, and the compositor was
+      # three minutes of compiling on every run.
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
             . -> target
-            compositor -> target
+            userland/compositor -> target
+            userland/init -> target
+            userland/auth -> target
+            userland/media -> target
+            userland/adbd -> target
 
       # `cargo xtask check` first asks whether the commit hooks are armed,
       # which is local configuration a fresh checkout does not have.
@@ -281,7 +289,7 @@ jobs:
         with:
           workspaces: |
             . -> target
-            ferrousli -> target
+            userland/ferrousli -> target
 
       # ferrousli's math tests judge every function against libc-test's
       # tables, read from a checkout at FERROUSLI_LIBC_TEST, never copied
