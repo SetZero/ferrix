@@ -326,15 +326,42 @@ Still open:
 
 ## 9. Where it stands
 
-2026-09-28: Y1 to Y5 are done, 29 of the 36 points.
+2026-09-28, later: Y7 is done too, 31 of the 36 points.
+`run-compositor --everything` merges yserver's volume into its own and
+starts yserver on `:0` as a client of hyprix, from `exec-once`, with
+`DISPLAY=:0` for every program the desktop starts, and floats Steam's
+friends list, settings and offers by a `windowrule`. `test-xwindow` starts
+the server that same way, and requires the `DISPLAY` it gave; with
+`--everything` it runs on the merged volume. Checked with the customer's
+command, headless under KVM over VNC: `xev` from the terminal shows as a
+tiled window beside Chrome. Next are Y6, the clipboard, and I5b. What Y7
+found:
+
+* **Two clashes in the merged volume.** yserver's tree took libxml2 from
+  trixie-security's `deb13u1`, the rustc volume from trixie's `deb13u3`;
+  the pin now takes `deb13u3`, so the volume has one. And libstdc++6 of gcc
+  14 ships its gdb pretty-printers where the rustc volume's gcc 16 has
+  its own; the merge keeps the first volume's, beside the newer libstdc++
+  it keeps anyway. libgcc_s, libatomic and libwayland were already the
+  newer runtime's.
+* **yserver runs through its own loader.** On a desktop whose Chrome runs
+  on ferrousli, `LD_LIBRARY_PATH` names ferrousli's libraries, so the
+  desktop's script unsets it and starts yserver through the volume's
+  `ld-linux-x86-64.so.2 --library-path`.
+* **The gate cannot read a GL screen.** QMP's `screendump` has no surface
+  under `egl-headless`, so `test-xwindow --everything` runs without the 3D
+  card; the customer's command ran with it.
+* **Estimate against spend.** 2 points estimated, about 3 spent: the two
+  clashes, then a gate shared with Y5's.
+
+Before it: Y1 to Y5 were done, 29 of the 36 points.
 `fetch-yserver.sh` pins the fork at `a2b01cf`. X top-levels show on hyprix
 as windows with their titles and classes, take keys, clicks, the wheel,
 the focus and their cursors from it, take the size it tiles them at, float
 as dialogs where they are transients, and close when it closes them
 (`test-xwindow`). Menus, drop-downs and tooltips, X's override-redirect
 windows, show as hyprix's popups where X put them, with their X border
-(Y5b, `test-xwindow`'s menu case). Next are Y6, the clipboard, and Y7,
-yserver in `--everything`. What Y5b found:
+(Y5b, `test-xwindow`'s menu case). What Y5b found:
 
 * **Nothing in hyprix.** A positioner with no constraint adjustment puts a
   popup exactly where X put it, and the popup needs no grab: an X menu

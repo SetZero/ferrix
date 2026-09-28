@@ -2251,7 +2251,7 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
             None => RUN_CONFIG.to_owned(),
         },
     };
-    let config = with_chrome(config, &args, arch);
+    let config = with_yserver(with_chrome(config, &args, arch), &args, arch);
     // A watched boot has a network unless it was told not to: a person at a
     // screen expects a machine that can fetch something, and finding out
     // that `ping` says `bad address` for want of a device is nobody's
@@ -2543,6 +2543,10 @@ fn desktop(
             carried.ports.extend(links);
             if crate::steamcmd::volume().is_ok() {
                 let files = crate::steamcmd::desktop_files(&carried.ports);
+                carried.ports.extend(files);
+            }
+            if arch == Arch::X86_64 && crate::yserver::volume().is_ok() {
+                let files = crate::yserver::desktop_files(&carried.ports);
                 carried.ports.extend(files);
             }
         }
@@ -6327,6 +6331,21 @@ fn with_chrome(config: String, args: &Args, arch: Arch) -> String {
     )
 }
 
+/// What `run-compositor --everything` adds to the desktop's configuration
+/// for the X server, when `scripts/fetch/fetch-yserver.sh` has made its
+/// volume: `crate::yserver::desktop_config`. Only with Chrome, whose flag
+/// `--everything` sets, because that is what puts the merged volume, and so
+/// yserver, on `/data`.
+fn with_yserver(config: String, args: &Args, arch: Arch) -> String {
+    if !(args.everything && args.chrome && arch == Arch::X86_64)
+        || crate::yserver::volume().is_err()
+    {
+        return config;
+    }
+    println!("  {arch}: yserver, the X server, on :0 beside the compositor");
+    format!("{config}\n{}", crate::yserver::desktop_config())
+}
+
 /// How many pixels of a screen are Chrome's page yellow, or none when the
 /// screen is not the compositor's.
 fn yellow_pixels(screen: &Image) -> usize {
@@ -6767,12 +6786,32 @@ pub(crate) fn bench_chrome(args: &Args) -> Result<()> {
     Ok(())
 }
 
+/// `test-xwindow`'s boot: yserver's volume at `/data`, or with
+/// `--everything` the volume `run-compositor --everything` attaches, with
+/// yserver merged into it. Not that desktop's 3D card: QMP's `screendump`
+/// has no surface to read from `egl-headless`.
+fn xwindow_args(args: &Args) -> Result<Args> {
+    let mut args = args.clone();
+    args.gl = false;
+    args.data_image = Some(if args.everything {
+        crate::everything::volume()?
+    } else {
+        crate::yserver::volume()?
+    });
+    if !args.memory_given {
+        args.memory = crate::yserver::MEMORY;
+    }
+    Ok(args)
+}
+
 /// `cargo xtask test-xwindow`: yserver as a client of the compositor, from
 /// the volume `scripts/fetch/fetch-yserver.sh` makes, and `xdpyinfo` and
 /// `xev` against it (docs/YSERVER.md, Y2 to Y4): the root window must be
 /// the compositor's screen, xev's window one of the compositor's, by its
 /// title and class and on the screen, and the pointer, a click, the wheel
-/// and keys put in through QEMU must reach xev as X events.
+/// and keys put in through QEMU must reach xev as X events. yserver is
+/// started as `run-compositor --everything` starts it (Y7), and with
+/// `--everything` the gate attaches that desktop's merged volume.
 ///
 /// # Errors
 ///
@@ -6786,16 +6825,12 @@ pub(crate) fn test_xwindow(args: &Args) -> Result<()> {
             "test-xwindow runs on x86-64 only, as yserver's volume does",
         ));
     }
-    let mut args = args.clone();
-    args.data_image = Some(crate::yserver::volume()?);
-    if !args.memory_given {
-        args.memory = crate::yserver::MEMORY;
-    }
+    let args = xwindow_args(args)?;
     let busybox = gates_busybox(arch).ok_or_else(|| {
         Error::new("test-xwindow needs ~/.local/share/ferrix/busybox/x86_64/bin/busybox.static")
     })?;
     let programs = Programs::build(arch)?;
-    let mut ports = crate::rustc::files(crate::yserver::LINKS);
+    let mut ports = crate::yserver::desktop_files(&[]);
     ports.push(crate::ports::File {
         path: crate::yserver::XWINDOW_PATH.to_owned(),
         mode: 0o644,
@@ -6806,9 +6841,13 @@ pub(crate) fn test_xwindow(args: &Args) -> Result<()> {
         ports,
         ..Carried::none()
     };
+    // yserver is started as the `--everything` desktop starts it; its input
+    // module says each cursor it gives the compositor at debug.
     let config = format!(
-        "# Carried into the initramfs by `cargo xtask test-xwindow`.\n{}exec-once = /bin/busybox sh /{}\n",
+        "# Carried into the initramfs by `cargo xtask test-xwindow`.\n{}\
+         env = RUST_LOG,info,yserver::wayland::input=debug\n{}exec-once = /bin/busybox sh /{}\n",
         crate::chrome::WINDOW_ENV,
+        crate::yserver::desktop_config(),
         crate::yserver::XWINDOW_PATH
     );
     let (image, kernel) = build_image(arch, &programs, &undithered(&config), carried, &args)?;

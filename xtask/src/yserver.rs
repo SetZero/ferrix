@@ -35,6 +35,66 @@ pub(crate) const LINKS: &[(&str, &str)] = &[
     ("usr/share/drirc.d", "/data/usr/share/drirc.d"),
 ];
 
+/// Where [`DESKTOP_SCRIPT`] is in the `--everything` desktop's image.
+const DESKTOP_PATH: &str = "etc/yserver.sh";
+
+/// yserver as the `--everything` desktop's X server on `:0`, a client of
+/// hyprix's (docs/YSERVER.md, Y7), started by the compositor's `exec-once`.
+///
+/// It runs on the volume's own glibc through its loader, named here, rather
+/// than through `/lib64`: that is ferrousli's loader on a desktop whose Chrome
+/// runs on ferrousli, and yserver is built against Debian's glibc. The
+/// `--library-path` takes the place of the `LD_LIBRARY_PATH` that desktop
+/// gives its clients for ferrousli. Its log is `/tmp/yserver.log`, at the
+/// `RUST_LOG` the compositor's configuration gives, or `info`.
+const DESKTOP_SCRIPT: &str = r#"export YSERVER_BACKEND=wayland YSERVER_ALLOW_SOFTWARE_VULKAN=1
+export RUST_LOG="${RUST_LOG:-info}"
+unset LD_LIBRARY_PATH
+exec /data/usr/lib64/ld-linux-x86-64.so.2 --library-path /data/usr/lib/x86_64-linux-gnu \
+    /data/yserver/yserver :0 -nolisten tcp > /tmp/yserver.log 2>&1
+"#;
+
+/// What the `--everything` desktop's configuration gains for yserver: the
+/// server started with the compositor, `DISPLAY` for every program started
+/// from it and its terminals, and Steam's small windows floated. Steam's main
+/// window tiles well; its friends list, settings and offers are better
+/// floated, as Hyprland users float them (docs/YSERVER.md §5).
+pub(crate) fn desktop_config() -> String {
+    format!(
+        "# Added by `cargo xtask run-compositor --everything`: the X server, yserver.\n\
+         env = DISPLAY,:0\n\
+         exec-once = /bin/busybox sh /{DESKTOP_PATH}\n\
+         windowrule = float, match:class ^([Ss]team)$, match:title ^(Friends List|Steam Settings|Special Offers)$\n"
+    )
+}
+
+/// What `run-compositor --everything` adds to the archive for yserver:
+/// [`DESKTOP_SCRIPT`], and [`LINKS`] less any path `carried` already has --
+/// Chrome's and the compiler's name the same Debian's paths.
+pub(crate) fn desktop_files(carried: &[crate::ports::File]) -> Vec<crate::ports::File> {
+    let taken = |path: &str| {
+        carried.iter().any(|file| {
+            file.path == path
+                || file
+                    .path
+                    .strip_prefix(path)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
+    };
+    let links: Vec<(&str, &str)> = LINKS
+        .iter()
+        .copied()
+        .filter(|(path, _)| !taken(path))
+        .collect();
+    let mut files = rustc::files(&links);
+    files.push(crate::ports::File {
+        path: DESKTOP_PATH.to_owned(),
+        mode: 0o644,
+        content: crate::ports::Content::Bytes(DESKTOP_SCRIPT.as_bytes().to_vec()),
+    });
+    files
+}
+
 /// Where [`RUN`] is in the image.
 const RUN_PATH: &str = "bin/yserver-test";
 
@@ -175,9 +235,12 @@ pub(crate) fn test_yserver(args: &Args) -> Result<()> {
 /// Where [`XWINDOW_SCRIPT`] is in `test-xwindow`'s image.
 pub(crate) const XWINDOW_PATH: &str = "etc/xwindow.sh";
 
-/// `test-xwindow`'s script, started by the compositor: yserver as its client
-/// on `:0`, then `xdpyinfo`, whose screen line says whether the root took the
-/// compositor's screen for its own (docs/YSERVER.md, Y2), then `xev`, whose
+/// `test-xwindow`'s script, started by the compositor beside yserver, which
+/// the compositor starts on `:0` as the `--everything` desktop does
+/// ([`desktop_config`], Y7). It waits for the server's socket, says the
+/// `DISPLAY` the compositor gave it, then runs `xdpyinfo`, whose screen line
+/// says whether the root took the compositor's screen for its own
+/// (docs/YSERVER.md, Y2), then `xev`, whose
 /// window must become one of the compositor's (Y3): `hyprctl clients` lists
 /// it, and xtask looks for it on the screen once the script has ended, while
 /// `xev` still runs. xev names its window but gives it no class, so the
@@ -204,17 +267,14 @@ pub(crate) const XWINDOW_PATH: &str = "etc/xwindow.sh";
 /// Every line of its own starts `xwindow:`, and it ends with `xwindow: end`
 /// whatever happened.
 pub(crate) const XWINDOW_SCRIPT: &str = r#"export PATH=/bin:/data/usr/bin HOME=/tmp
-export RUST_LOG=info,yserver::wayland::input=debug
 echo "xwindow: start"
-YSERVER_BACKEND=wayland YSERVER_ALLOW_SOFTWARE_VULKAN=1 /data/yserver/yserver :0 -nolisten tcp \
-    > /tmp/yserver.log 2>&1 &
 waited=0
 while [ ! -S /tmp/.X11-unix/X0 ] && [ $waited -lt 120 ]; do
     sleep 1
     waited=$((waited + 1))
 done
 echo "xwindow: the socket was there after ${waited}s"
-export DISPLAY=:0
+echo "xwindow: DISPLAY is $DISPLAY"
 xdpyinfo > /tmp/xdpyinfo.txt 2>&1
 echo "xwindow: xdpyinfo exited $?"
 grep dimensions: /tmp/xdpyinfo.txt | sed 's/^/xwindow: /'
@@ -333,10 +393,22 @@ const XWINDOW_PICK: &str = "xwindow: pick";
 /// coordinates: right and below the subwindow, on the window itself.
 const XEV_POINT: (usize, usize) = (120, 120);
 
-/// Whether `test-xwindow`'s lines say the root window is the compositor's
-/// screen: `xdpyinfo` reached the server and gave a size that is not the
-/// headless 0×0, and the server said it took that size from the compositor.
+/// Whether `test-xwindow`'s lines say the desktop's X server is up for its
+/// clients and its root window is the compositor's screen: the compositor
+/// gave the script `DISPLAY` `:0` ([`desktop_config`]), `xdpyinfo` reached
+/// the server and gave a size that is not the headless 0×0, and the server
+/// said it took that size from the compositor.
 pub(crate) fn judge_xwindow(arch: Arch, lines: &[String]) -> Result<()> {
+    let display = lines
+        .iter()
+        .find_map(|line| line.split_once("xwindow: DISPLAY is"))
+        .map(|(_, display)| display.trim());
+    if display != Some(":0") {
+        return Err(Error::new(format!(
+            "{arch}: the compositor gave its clients DISPLAY {display:?}, not :0; \
+             the desktop's `env = DISPLAY` did not reach them"
+        )));
+    }
     let dimensions = lines.iter().find_map(|line| {
         let (_, rest) = line.split_once("xwindow:")?;
         let size = rest
@@ -1120,6 +1192,43 @@ KeyRelease event, serial 13, synthetic NO, window 0x200001,
         assert!(judge_menu(Arch::X86_64, &lines, (Some(&blank), Some(&menu))).is_ok());
         assert!(judge_menu(Arch::X86_64, &lines, (Some(&blank), Some(&blank))).is_err());
         assert!(judge_menu(Arch::X86_64, &lines, (Some(&menu), Some(&menu))).is_err());
+    }
+
+    #[test]
+    fn the_root_is_judged_only_with_the_desktops_display() {
+        let lines = |display: &str| -> Vec<String> {
+            [
+                display,
+                "xwindow:   dimensions:    1280x800 pixels (338x211 millimeters)",
+                "[INFO yserver::wayland] the root window is the compositor's screen, 1280x800",
+            ]
+            .iter()
+            .map(|line| (*line).to_owned())
+            .collect()
+        };
+        assert!(judge_xwindow(Arch::X86_64, &lines("xwindow: DISPLAY is :0")).is_ok());
+        assert!(judge_xwindow(Arch::X86_64, &lines("xwindow: DISPLAY is ")).is_err());
+    }
+
+    #[test]
+    fn the_desktop_gets_the_server_and_only_the_links_it_lacks() {
+        let carried = vec![crate::ports::File {
+            path: "usr/share/fonts/truetype".to_owned(),
+            mode: 0o644,
+            content: crate::ports::Content::Bytes(Vec::new()),
+        }];
+        let files = desktop_files(&carried);
+        let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+        assert!(paths.contains(&DESKTOP_PATH));
+        assert!(paths.contains(&"usr/share/X11"));
+        assert!(
+            !paths.contains(&"usr/share/fonts"),
+            "fonts are Chrome's already"
+        );
+        let config = desktop_config();
+        assert!(config.contains("env = DISPLAY,:0\n"));
+        assert!(config.contains(&format!("exec-once = /bin/busybox sh /{DESKTOP_PATH}\n")));
+        assert!(DESKTOP_SCRIPT.contains("/data/usr/lib64/ld-linux-x86-64.so.2 --library-path"));
     }
 
     #[test]
