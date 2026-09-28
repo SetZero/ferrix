@@ -513,6 +513,7 @@ fn run() -> Result<()> {
         "test-chrome" | "test-chrome-window" | "test-chrome-audio" => chrome::run(command, &args),
         "test-steamcmd" | "test-steam-bootstrap" => steamcmd::run(command, &args),
         "test-yserver" | "test-xwindow" => yserver::run(command, &args),
+        "run-steam" => compositor::run_steam(&args),
         "bench-chrome" => compositor::bench_chrome(&args),
         "bench-chrome-video" => compositor::bench_chrome_video(&args),
         "test-selfhost" => selfhost::test_selfhost(&args),
