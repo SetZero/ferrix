@@ -657,7 +657,9 @@ private fun UpdateSection(
             }
             is Update.PcBuild ->
                 "A build from the PC is in place, so it is left alone. ${update.release.tag} is on GitHub " +
-                    "(${megabytes(update.bytes)})." to quiet
+                    "(${megabytes(update.bytes)})" +
+                    (if (update.volume) "; using it replaces Chromium's volume, and its profile with it." else ".") to
+                    quiet
             is Update.Waiting ->
                 "${update.release.tag} is out (${megabytes(update.bytes)}); it waits, ${update.why}." to quiet
             is Update.Downloading ->

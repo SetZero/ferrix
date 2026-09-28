@@ -145,7 +145,8 @@ internal sealed interface Update {
     data object Checking : Update
     data class Current(val tag: String, val edition: Edition) : Update
     data class NoRelease(val edition: Edition, val desktop: Boolean) : Update
-    data class PcBuild(val release: Release, val bytes: Long) : Update
+    /** `bytes` is what "Use <tag>" fetches; `volume`, whether that replaces Chromium's volume. */
+    data class PcBuild(val release: Release, val bytes: Long, val volume: Boolean) : Update
     data class Waiting(val release: Release, val bytes: Long, val why: String, val canForce: Boolean) : Update
     data class Downloading(val release: Release, val label: String, val fraction: Float, val bytes: Long) : Update
     data class Failed(val why: String) : Update
@@ -236,7 +237,14 @@ internal class Updater(context: Context) {
                     canForce = false,
                 )
             }
-            if (!forced && !installed.imageIsOurs) return@withContext Update.PcBuild(release, bytes)
+            // "Use <tag>" fetches what a forced run does, which takes the
+            // PC's volume too: its size, and that it replaces the volume.
+            if (!forced && !installed.imageIsOurs) {
+                val asked = plan(release, installed, forced = true)
+                return@withContext Update.PcBuild(
+                    release, asked.sumOf { it.asset.download }, asked.any { it.name == VOLUME },
+                )
+            }
             if (!forced && metered()) {
                 return@withContext Update.Waiting(release, bytes, "on a metered network", canForce = true)
             }
