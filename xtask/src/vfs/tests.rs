@@ -185,7 +185,26 @@ const APPLETS_ON_X86_64: &[(usize, &[&str])] = &[
             " 254       16     131072 vdb",
         ],
     ),
-    (10, &[]),
+    (
+        10,
+        &[
+            "Disk /dev/vda: 64 MB, 67108864 bytes, 131072 sectors",
+            "8 cylinders, 255 heads, 63 sectors/track",
+            "Units: sectors of 1 * 512 = 512 bytes",
+            "",
+            "Disk /dev/vda doesn't contain a valid partition table",
+            "Disk /dev/vdb: 128 MB, 134217728 bytes, 262144 sectors",
+            "16 cylinders, 255 heads, 63 sectors/track",
+            "Units: sectors of 1 * 512 = 512 bytes",
+            "",
+            "Disk /dev/vdb doesn't contain a valid partition table",
+            "Disk /dev/vdc: 128 MB, 134217728 bytes, 262144 sectors",
+            "16 cylinders, 255 heads, 63 sectors/track",
+            "Units: sectors of 1 * 512 = 512 bytes",
+            "",
+            "Disk /dev/vdc doesn't contain a valid partition table",
+        ],
+    ),
     (
         11,
         &[
