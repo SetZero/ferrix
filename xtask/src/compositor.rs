@@ -1136,6 +1136,9 @@ fn boot_and_dump_carrying(
     let mut taken = Vec::new();
     let mut said = Vec::new();
     let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        // A desktop never powers itself off: once the hook is done with it,
+        // QEMU is stopped rather than waited for.
+        watching.stop_when_done();
         let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
         if let Some(line) = watching
             .lines()
@@ -1222,14 +1225,22 @@ fn boot_and_dump_carrying(
             taken.push(screen);
         }
 
-        if !binds.is_empty() {
+        if !binds.is_empty() && binds_the_asked(config) {
             ask_the_sockets(&mut qmp, watching, arch)?;
         }
         wait_for(watching, wanted.awaiting)?;
         // Whatever else the guest said by now, so that what is checked
         // against the transcript is what the boot actually printed rather
-        // than what had been read when the last picture matched.
-        let _ = watching.read_more(Instant::now() + Duration::from_secs(2), |_| false)?;
+        // than what had been read when the last picture matched. That is
+        // read once the guest goes quiet, except where the compositor's
+        // frame reports are judged -- the pointer's sweep, a slide -- which
+        // come a second or more after the frames they count: those boots
+        // read for the whole two seconds, as every boot used to.
+        if wanted.pointer.is_some() || wanted.moving.is_some() {
+            let _ = watching.read_more(Instant::now() + Duration::from_secs(2), |_| false)?;
+        } else {
+            watching.read_what_was_said(Duration::from_secs(2))?;
+        }
         said = watching
             .lines()
             .iter()
@@ -1424,6 +1435,19 @@ fn say_the_marker(watching: &Watching<'_>, arch: Arch) {
         .find(|line| line.contains(MARKER))
         .map_or("", |line| line.trim());
     println!("  {arch}: {}", marker.trim_start_matches("| ").trim());
+}
+
+/// Whether `config` binds [`ASKED`]'s keys to `hyprctl`, so that pressing
+/// them asks the compositor about itself. A boot whose configuration binds
+/// other keys and not these has nothing to ask with, and pressing them would
+/// only wait out [`SETTLE`] for answers nothing prints.
+fn binds_the_asked(config: &str) -> bool {
+    [
+        "bind = SUPER, C, exec, /bin/hyprctl",
+        "bind = SUPER, W, exec, /bin/hyprctl",
+    ]
+    .iter()
+    .all(|bind| config.lines().any(|line| line.starts_with(bind)))
 }
 
 /// Ask the compositor about itself, from inside the guest.
@@ -2790,6 +2814,7 @@ fn test_caption(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let dump = paths::build_dir(arch).join("caption.ppm");
     let tolerance = if arch == Arch::X86_64 { 0 } else { 2 };
     let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        watching.stop_when_done();
         let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
         let drawn = watching.read_more(Instant::now() + SETTLE, |lines| {
             lines.iter().any(|line| line.contains("caption: drawn"))
@@ -3108,6 +3133,7 @@ fn test_waybar(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let dump = paths::build_dir(arch).join("waybar.ppm");
     let tolerance = if arch == Arch::X86_64 { 0 } else { 2 };
     let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        watching.stop_when_done();
         let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
         waybar_configured(arch, watching)?;
         let deadline = Instant::now() + SETTLE;
@@ -3200,6 +3226,7 @@ fn test_waybar_volume(arch: Arch, programs: &Programs, args: &Args) -> Result<()
     }
     let dump = paths::build_dir(arch).join("waybar-volume.ppm");
     let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        watching.stop_when_done();
         let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
         waybar_configured(arch, watching)?;
         waybar_reads(arch, watching, WAYBAR_CONNECTING, 100)?;
@@ -3479,6 +3506,7 @@ fn test_desktop(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let mut said: Vec<String> = Vec::new();
     let mut screen = None;
     let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        watching.stop_when_done();
         let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
         let _ = watching.read_more(Instant::now() + SETTLE, |lines| {
             lines
@@ -3494,7 +3522,7 @@ fn test_desktop(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
             say_the_marker(watching, arch);
             screen = Some(settle(&mut qmp, &dump, &want)?);
         }
-        let _ = watching.read_more(Instant::now() + Duration::from_secs(2), |_| false)?;
+        watching.read_what_was_said(Duration::from_secs(2))?;
         said = watching
             .lines()
             .iter()
@@ -3610,6 +3638,10 @@ exec-once = /bin/pattern gradient two --after one
 exec-once = /bin/zinc /etc/killgpu
 ";
 
+/// What the kernel says when devmgr has started a killed driver again and it
+/// has published its device.
+const PUBLISHED_AGAIN: &str = "was started again and published";
+
 /// What the compositor says when its card goes, and when it has it back.
 const CARD_WENT: &str = "the card went away";
 const CARD_BACK: &str = "the card is back";
@@ -3654,6 +3686,7 @@ fn test_driver_restart(arch: Arch, programs: &Programs, args: &Args) -> Result<(
     let mut said: Vec<String> = Vec::new();
     let mut screen = None;
     let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        watching.stop_when_done();
         let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
         let ended = |line: &String| {
             line.contains(FAILED)
@@ -3666,8 +3699,18 @@ fn test_driver_restart(arch: Arch, programs: &Programs, args: &Args) -> Result<(
         if back_after_the_last_kill(watching.after()) {
             screen = Some(settle(&mut qmp, &dump, &want)?);
         }
-        // A moment for anything the last return set off to be said.
-        let _ = watching.read_more(Instant::now() + Duration::from_secs(3), |_| false)?;
+        // What the last return set off: devmgr's second `published`, which
+        // races the compositor's saying it has the card back, and anything
+        // else the guest says before it goes quiet.
+        let _ = watching.read_more(Instant::now() + Duration::from_secs(3), |lines| {
+            lines
+                .iter()
+                .filter(|line| line.contains(PUBLISHED_AGAIN))
+                .count()
+                >= 2
+                || lines.iter().any(ended)
+        })?;
+        watching.read_what_was_said(Duration::from_secs(3))?;
         said = watching
             .lines()
             .iter()
@@ -3736,11 +3779,7 @@ fn judge_restart(arch: Arch, said: &[String]) -> Result<()> {
     let wanted = [
         (KILLING, 2, "the script killed the driver twice"),
         (CARD_WENT, 1, "the compositor saw its card go"),
-        (
-            "was started again and published",
-            2,
-            "devmgr started the driver again twice",
-        ),
+        (PUBLISHED_AGAIN, 2, "devmgr started the driver again twice"),
     ];
     let mut missing = Vec::new();
     for (want, times, what) in wanted {
@@ -4110,6 +4149,7 @@ fn test_cursor(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let mut said = Vec::new();
     let mut before = 0;
     let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        watching.stop_when_done();
         let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
         if let Some(line) = watching
             .lines()
@@ -4471,6 +4511,7 @@ fn test_fuzzel_user(arch: Arch, programs: &Programs, args: &Args) -> Result<()> 
     let dump = paths::build_dir(arch).join("fuzzel-user.ppm");
     let mut said = Vec::new();
     let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        watching.stop_when_done();
         said = drive_fuzzel_user(arch, port, &dump, watching)?;
         Ok(())
     };
@@ -4632,6 +4673,7 @@ fn test_everything_desktop(arch: Arch, programs: &Programs, args: &Args) -> Resu
     let dump = paths::build_dir(arch).join("everything-desktop.ppm");
     let mut said = Vec::new();
     let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        watching.stop_when_done();
         said = drive_everything_desktop(arch, port, &dump, watching)?;
         Ok(())
     };
@@ -7561,6 +7603,21 @@ fn judge_chrome_window(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn only_a_configuration_binding_the_asked_keys_is_asked() {
+        // The boots that judge what `hyprctl` answered bind both keys.
+        for config in [
+            super::CONFIG,
+            super::GROUP_CONFIG,
+            super::MONITOR_CONFIG,
+            super::PLUGIN_CONFIG,
+        ] {
+            assert!(super::binds_the_asked(config), "{config}");
+        }
+        // The bar's binds `A` alone: pressing SUPER C there asks nothing.
+        assert!(!super::binds_the_asked(super::BAR_CONFIG));
+    }
 
     #[test]
     fn the_compilers_links_leave_out_a_path_the_archive_has_files_under() {

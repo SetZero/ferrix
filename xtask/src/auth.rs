@@ -45,7 +45,6 @@
 use std::io::{BufRead as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::args::Args;
@@ -106,9 +105,6 @@ const CHANGED: &str = "a second password, set on the guest";
 
 /// How long to wait for one answer; a check under emulation is slow.
 const PATIENCE: Duration = Duration::from_secs(60);
-
-/// How long to leave the shell before its first keystroke.
-const SETTLE: Duration = Duration::from_millis(1500);
 
 /// What the getty prints once it holds the terminal.
 const BANNER: &str = " on /dev/console";
@@ -517,7 +513,10 @@ fn session(
         failures.push("the getty never printed its banner".into());
         return Ok(());
     }
-    thread::sleep(SETTLE);
+    if !at.wait_for_shell(Instant::now() + PATIENCE)? {
+        failures.push("the getty's shell never answered at the console".into());
+        return Ok(());
+    }
     seeded(at, failures, timings)?;
     wrong_and_unknown(at, failures)?;
     alike(at, failures)?;

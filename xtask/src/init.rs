@@ -67,12 +67,12 @@ const UNITS: &str = "userland/init/units";
 /// How long to wait for the answer to one line typed at the prompt.
 const PATIENCE: Duration = Duration::from_secs(30);
 
-/// How long to leave the shell before its first keystroke, and between the
-/// checks that retry.
-const SETTLE: Duration = Duration::from_millis(1500);
+/// How long to wait between the checks that retry.
+const POLL: Duration = Duration::from_millis(500);
 
-/// How many times the grandchild's end is looked for, [`SETTLE`] apart.
-const GONE_TRIES: usize = 20;
+/// How many times the grandchild's end is looked for, [`POLL`] apart: half a
+/// minute in all, as it has always been given.
+const GONE_TRIES: usize = 60;
 
 /// The volume the boot writes and `btrfs check` reads, under `build/`.
 const VOLUME: &str = "init-data.img";
@@ -705,7 +705,10 @@ fn session(at: &mut Watching<'_>, failures: &mut Vec<String>, sshd: bool) -> Res
         failures.push("multi-user.target never became active with a getty on the console".into());
         return Ok(());
     }
-    thread::sleep(SETTLE);
+    if !at.wait_for_shell(Instant::now() + PATIENCE)? {
+        failures.push("the getty's shell never answered at the console".into());
+        return Ok(());
+    }
 
     // Stage one: the shell's own session, read from the kernel.
     match ask(
@@ -787,7 +790,7 @@ fn session(at: &mut Watching<'_>, failures: &mut Vec<String>, sshd: bool) -> Res
                 gone = true;
                 break;
             }
-            thread::sleep(SETTLE);
+            thread::sleep(POLL);
         }
         if !gone {
             failures.push(format!(
@@ -999,7 +1002,10 @@ fn checks_skipped(
                 failures.push("the unchecked boot never reached a getty".into());
                 return Ok(());
             }
-            thread::sleep(SETTLE);
+            if !at.wait_for_shell(Instant::now() + PATIENCE)? {
+                failures.push("the unchecked boot's shell never answered at the console".into());
+                return Ok(());
+            }
             let lines = audit_lines(at)?;
             if !recorded(&lines, "CONFIG", "detail 1 0 0") {
                 failures.push(
@@ -1306,6 +1312,10 @@ fn sockets(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
     Ok(())
 }
 
+/// What `svc status lazy.service` shows once lazy.service has said its
+/// STATUS=.
+const LAZY_STATUS: &str = "Status: \"still-starting\"";
+
 /// Readiness (L7): `notifier.service` became active on its `READY=1` and
 /// shows its last `STATUS=`; `lazy.service`, which never says `READY=1`,
 /// stays activating with its status shown; `daemon.service` forked, and its
@@ -1327,15 +1337,27 @@ fn readiness(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
     }
 
     at.type_in(b"svc start lazy.service &\n")?;
-    thread::sleep(SETTLE);
-    let before = at.after().len();
-    let _ = ask(at, "svc status lazy.service\n", "Status: ")?;
-    let shown: Vec<String> = at
-        .after()
-        .iter()
-        .skip(before)
-        .map(|l| l.trim().to_owned())
-        .collect();
+    // Asked until lazy.service has said its STATUS=, which is what it is
+    // judged at: it never says READY=1, so it must still be activating then.
+    let deadline = Instant::now() + PATIENCE;
+    let shown = loop {
+        let before = at.after().len();
+        let _ = ask(
+            at,
+            "svc status lazy.service; m=lazy; echo \"$m-shown\"\n",
+            "lazy-shown",
+        )?;
+        let shown: Vec<String> = at
+            .after()
+            .iter()
+            .skip(before)
+            .map(|l| l.trim().to_owned())
+            .collect();
+        if shown.iter().any(|line| line == LAZY_STATUS) || Instant::now() >= deadline {
+            break shown;
+        }
+        thread::sleep(POLL);
+    };
     if !shown
         .iter()
         .any(|line| line == "Active: activating (start)")
@@ -1346,10 +1368,7 @@ fn readiness(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
                 .into(),
         );
     }
-    if !shown
-        .iter()
-        .any(|line| line == "Status: \"still-starting\"")
-    {
+    if !shown.iter().any(|line| line == LAZY_STATUS) {
         failures.push("svc status did not show lazy.service's STATUS= before readiness".into());
     }
 

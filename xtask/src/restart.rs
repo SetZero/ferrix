@@ -49,10 +49,6 @@ use crate::{uutils, zinc};
 /// How long to wait for the answer to one line.
 const PATIENCE: Duration = Duration::from_secs(30);
 
-/// How long to give the shell to print its first prompt, and the drivers to
-/// have published, before the first keystroke.
-const SETTLE: Duration = Duration::from_secs(3);
-
 /// What the pid search prints before each pid. Typed with a quote in the
 /// middle, so the echo of the typed line never matches it.
 const PID_TAG: &str = "restart-gate-pid=";
@@ -270,7 +266,12 @@ fn restart_one(
         &booted,
         qemu::SUCCESS_MARKER,
         |watching| {
-            std::thread::sleep(SETTLE);
+            // The shell at its prompt is left there: nothing powers off.
+            watching.stop_when_done();
+            if let Err(failure) = ready(watching, kind) {
+                failures.push(failure);
+                return Ok(());
+            }
             let before = match prepare(watching, kind) {
                 Ok(before) => before,
                 Err(failure) => {
@@ -316,6 +317,36 @@ fn restart_one(
         kind.what()
     );
     Ok(())
+}
+
+/// Wait for what the first keystroke needs: the kind's devices published,
+/// which the kernel says as each driver's READY goes out, and the shell
+/// reading the console.
+fn ready(watching: &mut qemu::Watching<'_>, kind: Kind) -> std::result::Result<(), String> {
+    let deadline = Instant::now() + PATIENCE;
+    let said = |lines: &[String], want: &str| lines.iter().any(|line| line.contains(want));
+    for want in kind.published() {
+        if said(watching.lines(), want) {
+            continue;
+        }
+        let published = watching
+            .read_more(deadline, |lines| said(lines, want))
+            .map_err(|error| error.to_string())?;
+        if !published {
+            return Err(format!(
+                "the {} were never published: no `{want}`",
+                kind.what()
+            ));
+        }
+    }
+    if watching
+        .wait_for_shell(deadline)
+        .map_err(|error| error.to_string())?
+    {
+        Ok(())
+    } else {
+        Err("the shell never answered at the console".to_owned())
+    }
 }
 
 /// What a kind needs before the first kill, and what it must find again

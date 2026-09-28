@@ -823,9 +823,23 @@ pub(crate) struct Watching<'a> {
     /// QEMU's standard input, which `-serial stdio` gives to the guest's
     /// console: what a person at the terminal would type goes here.
     keyboard: Option<&'a mut std::process::ChildStdin>,
-    /// Whether the hook asked for QEMU to be killed at once when it returns,
-    /// rather than given the moment to power off that a finished boot gets.
-    cut: bool,
+    /// How QEMU is ended when the hook returns: given the moment to power
+    /// off that a finished boot gets, unless the hook said otherwise.
+    ending: Ending,
+}
+
+/// How [`finish`] ends QEMU once the hook has returned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ending {
+    /// Give the guest [`POWER_OFF_GRACE`] to power itself off, then ask QEMU
+    /// to stop: a guest on its way down gets to finish.
+    Grace,
+    /// Ask QEMU to stop at once: the check is done with a guest that will
+    /// not power itself off ([`Watching::stop_when_done`]).
+    Stop,
+    /// Kill QEMU at once, with no chance for anything to finish
+    /// ([`Watching::cut_power`]).
+    Cut,
 }
 
 impl std::fmt::Debug for Watching<'_> {
@@ -847,7 +861,25 @@ impl Watching<'_> {
     /// Kill QEMU the moment the hook returns, with no chance for the guest to
     /// finish anything: the power failure `test-powerfail` needs.
     pub(crate) fn cut_power(&mut self) {
-        self.cut = true;
+        self.ending = Ending::Cut;
+    }
+
+    /// Stop QEMU as soon as the hook returns, rather than give the guest
+    /// [`POWER_OFF_GRACE`] to power itself off first: for a guest that never
+    /// will -- a desktop, a shell left at its prompt -- once the check is done
+    /// with it, where the grace is five seconds of waiting for nothing.
+    ///
+    /// Nothing the gate checks is lost. The grace reads no lines, since the
+    /// transcript ends when the hook returns, and a guest that stays up
+    /// powers nothing off in it. QEMU is still asked to stop before it is
+    /// killed, as after the grace, so a coverage run's trace is written the
+    /// same way. A guest that powers off after its hook -- one that was
+    /// told `poweroff`, or whose init exits -- must not ask for this, or its
+    /// power-off would go unrun.
+    pub(crate) fn stop_when_done(&mut self) {
+        if self.ending == Ending::Grace {
+            self.ending = Ending::Stop;
+        }
     }
 
     /// The lines read since, by [`Watching::read_more`].
@@ -917,14 +949,90 @@ impl Watching<'_> {
             let Ok(line) = self.receiver.recv_timeout(remaining) else {
                 return Ok(false);
             };
-            let at = self.started.elapsed().as_secs_f64();
-            println!("  {at:6.2} | {line}");
-            writeln!(self.log, "{at:6.2} | {line}")?;
-            self.after.push(line);
+            self.keep(line)?;
             if enough(&self.after) {
                 return Ok(true);
             }
         }
+    }
+
+    /// Read what the guest has said so far: every line until it has been
+    /// quiet for [`QUIET`], or until `most` has passed.
+    ///
+    /// For a hook that has what it waited for and wants the rest of the
+    /// transcript before it is judged, where a fixed wait of `most` used to
+    /// stand. A line the guest has printed is in the pipe within
+    /// microseconds, so a quiet stretch of this length means it has nothing
+    /// more to say for now; a guest that goes on talking is read for `most`,
+    /// as before.
+    ///
+    /// # Errors
+    ///
+    /// Only a log that could not be written.
+    pub(crate) fn read_what_was_said(&mut self, most: Duration) -> Result<()> {
+        let deadline = Instant::now() + most;
+        loop {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return Ok(());
+            };
+            let Ok(line) = self.receiver.recv_timeout(remaining.min(QUIET)) else {
+                return Ok(());
+            };
+            self.keep(line)?;
+        }
+    }
+
+    /// Wait until a shell reads the console: type a line only a running
+    /// shell answers, and type it again every [`RETYPE`] until one is
+    /// answered or `deadline` passes. Says whether one was.
+    ///
+    /// Where a gate used to wait a fixed while before its first keystroke,
+    /// for the shell to have started and printed its prompt: a prompt ends
+    /// no line, so it never reaches [`Watching::read_more`], and the answer
+    /// to a line typed at it is the first thing that does. A line typed
+    /// before the shell reads is not lost -- the terminal holds it, and the
+    /// shell reads it first -- and one that is lost anyway is typed again.
+    /// Every step after this looks only at lines after its own keystrokes,
+    /// so an answer to a line typed twice is answered twice and harms none.
+    ///
+    /// The line has no quote, so a part of it read on its own opens nothing
+    /// the next line would be read into, and its answer, `42`, is not in
+    /// what the console echoes of it.
+    ///
+    /// # Errors
+    ///
+    /// When there is no console to type at, or a log that could not be
+    /// written.
+    pub(crate) fn wait_for_shell(&mut self, deadline: Instant) -> Result<bool> {
+        const ASK: &[u8] = b"echo xtask-shell-$((6 * 7))\n";
+        const ANSWER: &str = "xtask-shell-42";
+        let before = self.after.len();
+        loop {
+            self.type_in(ASK)?;
+            let retype = (Instant::now() + RETYPE).min(deadline);
+            let answered = self.read_more(retype, |lines| {
+                lines
+                    .get(before..)
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|line| line.contains(ANSWER))
+            })?;
+            if answered {
+                return Ok(true);
+            }
+            if Instant::now() >= deadline {
+                return Ok(false);
+            }
+        }
+    }
+
+    /// Print, log and keep one line read after the marker.
+    fn keep(&mut self, line: String) -> Result<()> {
+        let at = self.started.elapsed().as_secs_f64();
+        println!("  {at:6.2} | {line}");
+        writeln!(self.log, "{at:6.2} | {line}")?;
+        self.after.push(line);
+        Ok(())
     }
 }
 
@@ -1036,7 +1144,7 @@ fn watch_hooked(
     }
     // While QEMU still runs, so the hook can ask it things; a hook that fails
     // still lets QEMU be stopped and the log be kept.
-    let (hooked, cut) = run_hook(
+    let (hooked, ending) = run_hook(
         at_marker,
         verdict,
         &mut lines,
@@ -1045,7 +1153,7 @@ fn watch_hooked(
         started,
         keyboard.as_mut(),
     );
-    let ended = finish(&mut child, verdict != Verdict::Silent, cut)?;
+    let ended = finish(&mut child, verdict != Verdict::Silent, ending)?;
     drop(receiver);
     let _ = reader.join();
     // Before the error below says QEMU's own is "above": joining the sieve's
@@ -1139,7 +1247,7 @@ fn exited_early(
 
 /// Run the marker hook, if there is one and the marker was reached, and
 /// keep whatever lines it read in the transcript. Answers what the hook
-/// answered, and whether it asked for the power to be cut.
+/// answered, and how it asked for QEMU to be ended.
 fn run_hook(
     at_marker: Option<AtMarker<'_>>,
     verdict: Verdict,
@@ -1148,12 +1256,12 @@ fn run_hook(
     log: &mut std::fs::File,
     started: Instant,
     keyboard: Option<&mut std::process::ChildStdin>,
-) -> (Result<()>, bool) {
+) -> (Result<()>, Ending) {
     let Some(hook) = at_marker else {
-        return (Ok(()), false);
+        return (Ok(()), Ending::Grace);
     };
     if verdict != Verdict::Reached {
-        return (Ok(()), false);
+        return (Ok(()), Ending::Grace);
     }
     let mut watching = Watching {
         lines,
@@ -1162,13 +1270,13 @@ fn run_hook(
         started,
         after: Vec::new(),
         keyboard,
-        cut: false,
+        ending: Ending::Grace,
     };
     let answered = hook(&mut watching);
-    let cut = watching.cut;
+    let ending = watching.ending;
     let after = watching.after;
     lines.extend(after);
-    (answered, cut)
+    (answered, ending)
 }
 
 /// The error for a boot that panicked.
@@ -1210,6 +1318,16 @@ pub(crate) fn take_panic_report(
 /// How long a guest that has reached its verdict is given to power itself off.
 const POWER_OFF_GRACE: Duration = Duration::from_secs(5);
 
+/// How long a guest has to have said nothing for
+/// [`Watching::read_what_was_said`] to take it that it has said what it had
+/// to: many times what a line takes to cross the serial port, even under
+/// emulation on a loaded host.
+const QUIET: Duration = Duration::from_millis(500);
+
+/// How long [`Watching::wait_for_shell`] waits for an answer before it types
+/// its line again.
+const RETYPE: Duration = Duration::from_secs(2);
+
 /// How long QEMU is given to exit once it has been asked to.
 const STOP_GRACE: Duration = Duration::from_secs(10);
 
@@ -1228,14 +1346,21 @@ const STOP_GRACE: Duration = Duration::from_secs(10);
 /// measurement (`docs/certification/VERIFICATION.md` §3). The guest sees no
 /// difference: it is stopped either way, after its verdict was read.
 ///
-/// `cut` is `test-powerfail`'s power failure, which is killed at once and
-/// never asked: the point of it is that nothing, QEMU's own block layer
-/// included, gets to finish anything.
-fn finish(child: &mut std::process::Child, decided: bool, cut: bool) -> Result<Ended> {
-    if !cut {
+/// [`Ending::Stop`] skips the grace: the hook said the guest will not power
+/// itself off, so QEMU is asked to stop at once. [`Ending::Cut`] is
+/// `test-powerfail`'s power failure, which is killed at once and never
+/// asked: the point of it is that nothing, QEMU's own block layer included,
+/// gets to finish anything.
+fn finish(child: &mut std::process::Child, decided: bool, ending: Ending) -> Result<Ended> {
+    if ending != Ending::Cut {
         // Give the guest a moment to shut itself down cleanly, so a working
-        // power-off path is exercised rather than always being papered over.
-        if decided && let Some(status) = exited_within(child, POWER_OFF_GRACE)? {
+        // power-off path is exercised rather than always being papered over;
+        // a guest that will not power off is only looked at, not waited for.
+        let grace = match ending {
+            Ending::Grace => POWER_OFF_GRACE,
+            Ending::Stop | Ending::Cut => Duration::ZERO,
+        };
+        if decided && let Some(status) = exited_within(child, grace)? {
             return Ok(Ended {
                 status,
                 powered_off: true,
@@ -1257,19 +1382,22 @@ fn finish(child: &mut std::process::Child, decided: bool, cut: bool) -> Result<E
     })
 }
 
-/// QEMU's status if it exits within `grace`.
+/// QEMU's status if it exits within `grace`; with no grace, if it already
+/// has.
 fn exited_within(
     child: &mut std::process::Child,
     grace: Duration,
 ) -> Result<Option<std::process::ExitStatus>> {
     let deadline = Instant::now() + grace;
-    while Instant::now() < deadline {
+    loop {
         if let Some(status) = child.try_wait()? {
             return Ok(Some(status));
         }
+        if Instant::now() >= deadline {
+            return Ok(None);
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
-    Ok(None)
 }
 
 /// Send QEMU SIGTERM, through `kill(1)` since this program links no libc

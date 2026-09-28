@@ -412,6 +412,7 @@ fn boot(
     let dump = paths::build_dir(arch).join("compositor.ppm");
     let mut said = Vec::new();
     let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        watching.stop_when_done();
         let qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
         if let Some(line) = watching
             .lines()
@@ -437,9 +438,9 @@ fn boot(
             arch,
         };
         steps(&mut running)?;
-        let _ = running
+        running
             .watching
-            .read_more(Instant::now() + Duration::from_secs(2), |_| false)?;
+            .read_what_was_said(Duration::from_secs(2))?;
         said = running
             .watching
             .lines()

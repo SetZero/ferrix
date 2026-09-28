@@ -34,15 +34,14 @@ use crate::{Error, Result, cargo, fat, initramfs, native, ports, qemu, uutils, z
 /// How long to wait for the answer to one line.
 const PATIENCE: Duration = Duration::from_secs(30);
 
-/// How long to give the shell to print its first prompt, and the drivers to
-/// have published, before the first keystroke.
-const SETTLE: Duration = Duration::from_secs(3);
-
 /// What the kernel prints when a request through sysfs is done.
 const ASKED: &str = "asked through sysfs: ";
 
 /// What the kernel prints when a card is published.
 const PUBLISHED: &str = "display  card0 is";
+
+/// What the kernel prints when the first input device is published.
+const KEYBOARD_PUBLISHED: &str = "input    event0 ";
 
 /// A line typed at the shell and the tag its answer is printed after. Each
 /// line prints `sysfs-gate-<tag>` with a quote in the middle of the tag, so
@@ -114,7 +113,12 @@ pub(crate) fn test_sysfs(args: &Args) -> Result<()> {
         &booted,
         qemu::SUCCESS_MARKER,
         |watching| {
-            std::thread::sleep(SETTLE);
+            // The shell at its prompt is left there: nothing powers off.
+            watching.stop_when_done();
+            if let Err(failure) = ready(watching) {
+                failures.push(failure);
+                return Ok(());
+            }
             if let Err(failure) = read_the_tree(watching) {
                 failures.push(failure);
                 return Ok(());
@@ -143,6 +147,33 @@ pub(crate) fn test_sysfs(args: &Args) -> Result<()> {
          driver unbound and bound through it went and came back"
     );
     Ok(())
+}
+
+/// Wait for what the first keystroke needs: the card and the keyboard the
+/// tree is read for published, which the kernel says as each driver's READY
+/// goes out, and the shell reading the console.
+fn ready(watching: &mut qemu::Watching<'_>) -> std::result::Result<(), String> {
+    let deadline = Instant::now() + PATIENCE;
+    let said = |lines: &[String], want: &str| lines.iter().any(|line| line.contains(want));
+    for want in [PUBLISHED, KEYBOARD_PUBLISHED] {
+        if said(watching.lines(), want) {
+            continue;
+        }
+        let published = watching
+            .read_more(deadline, |lines| said(lines, want))
+            .map_err(|error| error.to_string())?;
+        if !published {
+            return Err(format!("the kernel never said `{want}`"));
+        }
+    }
+    if watching
+        .wait_for_shell(deadline)
+        .map_err(|error| error.to_string())?
+    {
+        Ok(())
+    } else {
+        Err("the shell never answered at the console".to_owned())
+    }
 }
 
 /// Type `ask`'s line and wait for its answer: the rest of the first line

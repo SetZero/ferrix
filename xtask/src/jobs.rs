@@ -46,10 +46,16 @@ const BANNER: &str = " on /dev/console";
 /// at once, so the cost is only paid by a step that fails.
 const PATIENCE: Duration = Duration::from_secs(20);
 
-/// How long to leave a foreground job running before typing at it. Long
-/// enough for `sleep` to have been forked, exec'd and put in the terminal's
-/// foreground group, and short beside [`PATIENCE`].
+/// How long to leave a job before typing at it: long enough for `sleep` to
+/// have been forked, exec'd and put in the terminal's foreground group, and
+/// short beside [`PATIENCE`]. Only where nothing on the console says that it
+/// has: once a job is in the foreground, the shell that could be asked is
+/// waiting for it.
 const SETTLE: Duration = Duration::from_millis(1500);
+
+/// How long to wait for the answer to a step typed [`Step::again`] before
+/// typing it again.
+const AGAIN: Duration = Duration::from_millis(500);
 
 /// One step of the session: what to type, and what the guest must say.
 struct Step {
@@ -59,9 +65,13 @@ struct Step {
     wants: &'static [&'static str],
     /// What this step is evidence of, for the message when it fails.
     proves: &'static str,
-    /// Give the guest a moment before the next keystroke: for a job to have
-    /// been forked and exec'd, or for a signal just sent to have arrived.
+    /// Give the guest a moment before the next keystroke, for a job to have
+    /// been forked and exec'd: see [`SETTLE`].
     settle: bool,
+    /// Type the step again until its answer comes, rather than once: for a
+    /// question about something that happens in its own time, such as a
+    /// signal just sent arriving, which the shell answers truly either way.
+    again: bool,
 }
 
 /// The session, in order. Every `wants` is looked for in the lines that
@@ -73,34 +83,40 @@ const SESSION: &[Step] = &[
         wants: &["jobs-gate: the shell reads the console"],
         proves: "the shell is interactive and reads what is typed",
         settle: false,
+        again: false,
     },
     Step {
         keys: b"sleep 30 &\n",
         wants: &["[1]"],
         proves: "a background job is started and announced by number",
         settle: false,
+        again: false,
     },
     Step {
         keys: b"jobs\n",
         wants: &["running", "sleep 30"],
         proves: "the shell keeps a job table",
         settle: false,
+        again: false,
     },
     // A signal sent now is not a death yet. The shell reports what its jobs
     // did at the prompt, so a job killed here is still running when this
     // command's prompt comes round, and is reported at the next one: the
-    // `jobs` below is that next one. zsh without NOTIFY reports the same way.
+    // `jobs` below is that next one, asked again until the death has
+    // arrived. zsh without NOTIFY reports the same way.
     Step {
         keys: b"kill %1\n",
         wants: &[],
         proves: "`kill %1` is accepted for a job that exists",
-        settle: true,
+        settle: false,
+        again: false,
     },
     Step {
         keys: b"jobs\n",
         wants: &["terminated"],
         proves: "the job died of the signal, and the shell says so",
         settle: false,
+        again: true,
     },
     // A pipeline: two processes, one job, one process group. `kill %1`
     // reaches both, which is what the group is for -- a shell that merely
@@ -110,18 +126,21 @@ const SESSION: &[Step] = &[
         wants: &["[1]"],
         proves: "a pipeline is one job",
         settle: true,
+        again: false,
     },
     Step {
         keys: b"kill %1\n",
         wants: &[],
         proves: "`kill %1` is accepted for the pipeline",
-        settle: true,
+        settle: false,
+        again: false,
     },
     Step {
         keys: b"jobs\n",
         wants: &["terminated"],
         proves: "one signal ends a whole pipeline: its processes share a group",
         settle: false,
+        again: true,
     },
     // The foreground job, and the three keystrokes that are the whole point
     // of job control.
@@ -130,60 +149,70 @@ const SESSION: &[Step] = &[
         wants: &[],
         proves: "a foreground job starts",
         settle: true,
+        again: false,
     },
     Step {
         keys: b"\x1a",
         wants: &["suspended"],
         proves: "Ctrl-Z stops the foreground job and the shell says so",
         settle: false,
+        again: false,
     },
     Step {
         keys: b"jobs\n",
         wants: &["suspended", "sleep 30"],
         proves: "a stopped job stays in the table",
         settle: false,
+        again: false,
     },
     Step {
         keys: b"bg\n",
         wants: &["continued"],
         proves: "`bg` continues it without giving it the terminal",
         settle: false,
+        again: false,
     },
     Step {
         keys: b"jobs\n",
         wants: &["running"],
         proves: "it is running again",
         settle: false,
+        again: false,
     },
     Step {
         keys: b"fg\n",
         wants: &["sleep 30"],
         proves: "`fg` names the job it brings back",
         settle: true,
+        again: false,
     },
     Step {
         keys: b"\x03",
         wants: &[],
         proves: "Ctrl-C reaches the foreground job",
         settle: false,
+        again: false,
     },
     Step {
         keys: b"echo jobs-gate: the shell survived the interrupt\n",
         wants: &["jobs-gate: the shell survived the interrupt"],
         proves: "the interrupt ended the job and not the session",
         settle: false,
+        again: false,
     },
     Step {
         keys: b"echo jobs-gate: piped | cat\n",
         wants: &["jobs-gate: piped"],
         proves: "a foreground pipeline runs and the shell takes the terminal back",
         settle: false,
+        again: false,
     },
     Step {
         keys: b"exit\n",
         wants: &[BANNER],
         proves: "the session ends, and init gives the console a new one",
         settle: false,
+        again: false,
     },
 ];
 
@@ -239,25 +268,22 @@ pub(crate) fn test_jobs(args: &Args) -> Result<()> {
         args,
         qemu::SUCCESS_MARKER,
         |watching| {
-            // The shell has to have started and printed a prompt before the
-            // first keystroke: a byte typed at a console nobody is reading
-            // sits in the kernel's ring, and the shell's first read would
-            // take it as the answer to a prompt it had not printed yet. The
-            // getty's banner comes just before the shell starts.
+            // The session never ends the machine: after `exit` init gives the
+            // console a new one.
+            watching.stop_when_done();
+            // The shell has to be reading before the session's first step,
+            // whose answer would otherwise come after a prompt printed late.
+            // The getty's banner comes just before the shell starts.
             let deadline = Instant::now() + PATIENCE;
             let _ = watching.read_more(deadline, |lines| {
                 lines.iter().any(|line| line.contains(BANNER))
             })?;
-            std::thread::sleep(SETTLE);
+            if !watching.wait_for_shell(Instant::now() + PATIENCE)? {
+                failures.push("the getty's shell never answered at the console".to_owned());
+                return Ok(());
+            }
             for step in SESSION {
-                let before = watching.after().len();
-                watching.type_in(step.keys)?;
-                let deadline = Instant::now() + PATIENCE;
-                let wants = step.wants;
-                let found = watching.read_more(deadline, |lines| {
-                    seen_in_order(lines.get(before..).unwrap_or_default(), wants)
-                })?;
-                if !found {
+                if !type_step(watching, step)? {
                     failures.push(format!(
                         "after typing {:?}, the guest never said {:?}\n      ({})",
                         String::from_utf8_lossy(step.keys),
@@ -298,6 +324,26 @@ pub(crate) fn test_jobs(args: &Args) -> Result<()> {
     }
     println!("  {arch}: a person can hold a session with jobs at the serial console");
     Ok(())
+}
+
+/// Type `step`, again where it asks to be, and say whether its answer came.
+fn type_step(watching: &mut qemu::Watching<'_>, step: &Step) -> Result<bool> {
+    let before = watching.after().len();
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        watching.type_in(step.keys)?;
+        let answer = if step.again {
+            (Instant::now() + AGAIN).min(deadline)
+        } else {
+            deadline
+        };
+        let found = watching.read_more(answer, |lines| {
+            seen_in_order(lines.get(before..).unwrap_or_default(), step.wants)
+        })?;
+        if found || Instant::now() >= deadline {
+            return Ok(found);
+        }
+    }
 }
 
 /// Whether `wants` all appear in `lines`, each in a line at or after the one
