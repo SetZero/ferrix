@@ -22,7 +22,7 @@ use crate::{Error, Result, busybox, cargo, fat, initramfs, native, qemu, rustc, 
 
 /// glibc's x86-64 paths and the data files yserver and its libraries name
 /// absolutely, each a link into the volume.
-const LINKS: &[(&str, &str)] = &[
+pub(crate) const LINKS: &[(&str, &str)] = &[
     ("lib64", "/data/usr/lib64"),
     ("lib/x86_64-linux-gnu", "/data/usr/lib/x86_64-linux-gnu"),
     ("usr/lib/x86_64-linux-gnu", "/data/usr/lib/x86_64-linux-gnu"),
@@ -73,7 +73,7 @@ exit 17
 const STATUS: i32 = 17;
 
 /// Memory for the guest: lavapipe and a 130 MiB server.
-const MEMORY: u32 = 2048;
+pub(crate) const MEMORY: u32 = 2048;
 
 /// Where `scripts/fetch/fetch-yserver.sh` writes, unless
 /// `FERRIX_YSERVER_VOLUME` names another directory.
@@ -81,7 +81,7 @@ const MEMORY: u32 = 2048;
 /// # Errors
 ///
 /// The volume has not been made.
-fn volume() -> Result<std::path::PathBuf> {
+pub(crate) fn volume() -> Result<std::path::PathBuf> {
     let directory = match std::env::var_os("FERRIX_YSERVER_VOLUME") {
         Some(directory) => std::path::PathBuf::from(directory),
         None => crate::paths::volume_directory("yserver")?,
@@ -94,6 +94,19 @@ fn volume() -> Result<std::path::PathBuf> {
         )));
     }
     Ok(image)
+}
+
+/// `test-yserver` or `test-xwindow`, by the command's name.
+///
+/// # Errors
+///
+/// As [`test_yserver`] and `crate::compositor::test_xwindow`.
+pub(crate) fn run(command: &str, args: &Args) -> Result<()> {
+    if command == "test-xwindow" {
+        crate::compositor::test_xwindow(args)
+    } else {
+        test_yserver(args)
+    }
 }
 
 /// Boot a shell whose script starts yserver and runs `xdpyinfo` against it.
@@ -154,6 +167,63 @@ pub(crate) fn test_yserver(args: &Args) -> Result<()> {
         ))),
         other => Err(Error::new(format!(
             "{arch}: the yserver script ended with {other:?}"
+        ))),
+    }
+}
+
+/// Where [`XWINDOW_SCRIPT`] is in `test-xwindow`'s image.
+pub(crate) const XWINDOW_PATH: &str = "etc/xwindow.sh";
+
+/// `test-xwindow`'s script, started by the compositor: yserver as its client
+/// on `:0`, then `xdpyinfo`, whose screen line says whether the root took the
+/// compositor's screen for its own (docs/YSERVER.md, Y2). Every line of its
+/// own starts `xwindow:`, and it ends with `xwindow: end` whatever happened.
+pub(crate) const XWINDOW_SCRIPT: &str = r#"export PATH=/bin:/data/usr/bin HOME=/tmp RUST_LOG=info
+echo "xwindow: start"
+YSERVER_BACKEND=wayland YSERVER_ALLOW_SOFTWARE_VULKAN=1 /data/yserver/yserver :0 -nolisten tcp \
+    > /tmp/yserver.log 2>&1 &
+waited=0
+while [ ! -S /tmp/.X11-unix/X0 ] && [ $waited -lt 120 ]; do
+    sleep 1
+    waited=$((waited + 1))
+done
+echo "xwindow: the socket was there after ${waited}s"
+DISPLAY=:0 xdpyinfo > /tmp/xdpyinfo.txt 2>&1
+echo "xwindow: xdpyinfo exited $?"
+grep dimensions: /tmp/xdpyinfo.txt | sed 's/^/xwindow: /'
+sed 's/^/xwindow: yserver: /' /tmp/yserver.log
+echo "xwindow: end"
+"#;
+
+/// The line [`XWINDOW_SCRIPT`] ends with.
+pub(crate) const XWINDOW_END: &str = "xwindow: end";
+
+/// Whether `test-xwindow`'s lines say the root window is the compositor's
+/// screen: `xdpyinfo` reached the server and gave a size that is not the
+/// headless 0×0, and the server said it took that size from the compositor.
+pub(crate) fn judge_xwindow(arch: Arch, lines: &[String]) -> Result<()> {
+    let dimensions = lines.iter().find_map(|line| {
+        let (_, rest) = line.split_once("xwindow:")?;
+        let size = rest
+            .trim()
+            .strip_prefix("dimensions:")?
+            .split_whitespace()
+            .next()?;
+        let (width, height) = size.split_once('x')?;
+        Some((width.parse::<u32>().ok()?, height.parse::<u32>().ok()?))
+    });
+    let took = lines
+        .iter()
+        .find_map(|line| line.split_once("the root window is the compositor's screen, "))
+        .map(|(_, size)| size.trim().to_owned());
+    match (dimensions, took) {
+        (Some((width, height)), Some(said)) if width > 0 && said == format!("{width}x{height}") => {
+            println!("  {arch}: yserver's root is the compositor's screen, {width}x{height}");
+            Ok(())
+        }
+        (dimensions, said) => Err(Error::new(format!(
+            "{arch}: xdpyinfo said the screen is {dimensions:?}, and yserver said it took {said:?} \
+             from the compositor; the `xwindow:` lines say more"
         ))),
     }
 }

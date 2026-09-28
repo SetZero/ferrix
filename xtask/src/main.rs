@@ -222,6 +222,7 @@ COMMANDS:
                   and log in to Steam anonymously, over the network
     test-yserver  Attach the volume scripts/fetch/fetch-yserver.sh makes, start yserver headless on lavapipe and require xdpyinfo
                   to reach it
+    test-xwindow  The same volume, yserver as a client of the compositor, and require its root window to be the screen's size
     test-chrome-window  The same volume, and require Chrome in a window on the compositor, its page on the screen
     test-chrome-audio   The same window on a page playing 440 Hz, and require the tone in QEMU's wav file of the virtio-snd card
     bench-chrome  Chrome in a window, left alone, scrolled and pointed at: processor time, frames and memory per phase
@@ -489,7 +490,7 @@ fn run() -> Result<()> {
         "test-rustc" => rustc::test_rustc(&args),
         "test-chrome" | "test-chrome-window" | "test-chrome-audio" => chrome::run(command, &args),
         "test-steamcmd" => steamcmd::test_steamcmd(&args),
-        "test-yserver" => yserver::test_yserver(&args),
+        "test-yserver" | "test-xwindow" => yserver::run(command, &args),
         "bench-chrome" => compositor::bench_chrome(&args),
         "bench-chrome-video" => compositor::bench_chrome_video(&args),
         "test-selfhost" => selfhost::test_selfhost(&args),

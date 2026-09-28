@@ -73,14 +73,16 @@ for after Steam runs.
   commit. Ferrix's changes are commits on the fork, starting with
   `YSERVER_ALLOW_NO_INPUT`, and the Wayland backend is added there.
   `scripts/fetch/fetch-yserver.sh` fetches the pinned commit and builds it.
-* **The Wayland client** is Ferrix's own: `compositor-wire`,
-  `compositor-protocol` and `compositor-shm`, taken by the fork as git
-  dependencies on this repository at a pinned commit. They are MIT, use only std and `libc`, and have already been tested
-  against hyprix. The toolkit's blocking `dispatch` does not fit yserver's
-  loop, so the backend uses the wire layer directly (decision 2, §8).
-* **The volume** carries the packages listed in the fetch script, pinned by
-  Debian's Packages file as `fetch-steamcmd.sh` pins them, plus yserver,
-  stripped. `run-compositor --everything` merges it into its volume, as it
+* **The Wayland client** is Ferrix's own client runtime,
+  `compositor-toolkit`, over `compositor-wire`, `compositor-protocol` and
+  `compositor-shm` (decision 2, §8). The fork takes it as a git dependency
+  on this repository at a pinned commit. It is MIT, uses only std and
+  `libc`, and has already been tested against hyprix. The toolkit waits in
+  its own `dispatch`, so it hands its socket to yserver's core loop
+  (`Client::as_raw_fd`) and is dispatched with a zero timeout when the
+  socket is readable, which reads without blocking.
+* **The volume** carries the packages listed in the fetch script, each
+  pinned by SHA-256 as `fetch-chrome.sh` pins them, plus yserver, stripped. `run-compositor --everything` merges it into its volume, as it
   already merges steamcmd's.
 
 ## 4. The backend
@@ -194,8 +196,10 @@ advertised. There are two defaults to add:
 * **`test-yserver`** stays as it is now: headless, with `xdpyinfo`, on the
   volume `fetch-yserver.sh` makes (Y1). It runs on demand, because it
   attaches a volume, like `test-steamcmd`.
-* **`test-xwindow`** follows `test-foot`. It boots the compositor with yserver
-  and runs `xev` from the volume, then:
+* **`test-xwindow`** follows `test-foot`. Since Y2 it boots the compositor
+  with yserver as its client and requires `xdpyinfo`'s screen to be the
+  compositor's screen, the size yserver says it took. From Y3 on it also
+  runs `xev` from the volume, then:
   * requires the window on the screendump;
   * injects keys and a click through QMP and requires `xev`'s KeyPress and
     ButtonPress lines;
@@ -210,8 +214,8 @@ advertised. There are two defaults to add:
 
 | Slice | What | Points |
 |---|---|---|
-| Y1 | `fetch-yserver.sh`: the fork at a pinned commit, pinned Packages, the build, the volume; `test-yserver` on it | 3 |
-| Y2 | `WaylandBackend` skeleton: connection, fd kind, `WAYLAND-1` output and root size; `xdpyinfo` shows hyprix's size | 5 |
+| Y1 | `fetch-yserver.sh`: the fork at a pinned commit, pinned packages, the build, the volume; `test-yserver` on it. **Done 2026-09-28** | 3 |
+| Y2 | `WaylandBackend` skeleton: connection, fd kind, `WAYLAND-1` output and root size; `xdpyinfo` shows hyprix's size (`test-xwindow`). **Done 2026-09-28** | 5 |
 | Y3 | Top-levels: redirect, `xdg_toplevel`, shm readback, frame callbacks, title and app id; `test-xwindow` sees `xev`'s window | 8 |
 | Y4 | Input and cursor: keys, pointer, wheel, focus, `set_cursor`; `xev` reports the injected events | 5 |
 | Y5 | Popups, transients, compositor resize and close; the core helpers; the menu case | 8 |

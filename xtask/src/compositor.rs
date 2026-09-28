@@ -6725,6 +6725,75 @@ pub(crate) fn bench_chrome(args: &Args) -> Result<()> {
     Ok(())
 }
 
+/// `cargo xtask test-xwindow`: yserver as a client of the compositor, from
+/// the volume `scripts/fetch/fetch-yserver.sh` makes, and `xdpyinfo` against
+/// it (docs/YSERVER.md, Y2): the root window must be the compositor's
+/// screen.
+///
+/// # Errors
+///
+/// When the volume is missing, the image cannot be built, QEMU cannot be
+/// run, or the root window is not the screen's size.
+pub(crate) fn test_xwindow(args: &Args) -> Result<()> {
+    let arch = Arch::X86_64;
+    if args.arches()?.iter().any(|&asked| asked != arch) {
+        return Err(Error::new(
+            "test-xwindow runs on x86-64 only, as yserver's volume does",
+        ));
+    }
+    let mut args = args.clone();
+    args.data_image = Some(crate::yserver::volume()?);
+    if !args.memory_given {
+        args.memory = crate::yserver::MEMORY;
+    }
+    let busybox = gates_busybox(arch).ok_or_else(|| {
+        Error::new("test-xwindow needs ~/.local/share/ferrix/busybox/x86_64/bin/busybox.static")
+    })?;
+    let programs = Programs::build(arch)?;
+    let mut ports = crate::rustc::files(crate::yserver::LINKS);
+    ports.push(crate::ports::File {
+        path: crate::yserver::XWINDOW_PATH.to_owned(),
+        mode: 0o644,
+        content: crate::ports::Content::Bytes(crate::yserver::XWINDOW_SCRIPT.as_bytes().to_vec()),
+    });
+    let carried = Carried {
+        busybox: Some(PathBuf::from(busybox)),
+        ports,
+        ..Carried::none()
+    };
+    let config = format!(
+        "# Carried into the initramfs by `cargo xtask test-xwindow`.\n{}exec-once = /bin/busybox sh /{}\n",
+        crate::chrome::WINDOW_ENV,
+        crate::yserver::XWINDOW_PATH
+    );
+    let (image, kernel) = build_image(arch, &programs, &undithered(&config), carried, &args)?;
+    let mut qemu_args = args;
+    qemu_args.display = true;
+    let mut said: Vec<String> = Vec::new();
+    let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        let ended = watching.read_more(Instant::now() + CHROME_WINDOW_PATIENCE, |lines| {
+            lines
+                .iter()
+                .any(|line| line.contains(crate::yserver::XWINDOW_END))
+        })?;
+        said = watching
+            .lines()
+            .iter()
+            .chain(watching.after())
+            .cloned()
+            .collect();
+        if !ended {
+            return Err(with_the_transcript(
+                &Error::new(format!("{arch}: the xwindow script never ended")),
+                watching,
+            ));
+        }
+        Ok(())
+    };
+    let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
+    crate::yserver::judge_xwindow(arch, &said)
+}
+
 /// The input of [`BENCH_PHASES`], ten seconds each: nothing, the wheel
 /// turned down and back up, and the pointer swept across the page.
 fn drive_bench(qmp: &mut Qmp, watching: &mut Watching<'_>) -> Result<()> {

@@ -11,7 +11,9 @@
 # xdpyinfo and xev are the clients the tests run against it.
 #
 # The source is the customer's fork of yserver (docs/YSERVER.md §8), pinned
-# by commit: 1.6.0 and Ferrix's commits on top. glslc, which compiles
+# by commit: 1.6.0 and Ferrix's commits on top. It is built with its
+# `wayland` feature, the rootless backend, which takes Ferrix's own Wayland
+# client runtime from this repository on GitHub at the commit the fork pins. glslc, which compiles
 # yserver's shaders during the build, is Debian's too, unpacked into a
 # second tree with its own loader so the host's glibc does not matter.
 #
@@ -37,7 +39,7 @@ out=${FERRIX_YSERVER_VOLUME:-$HOME/.local/share/ferrix/yserver}
 # The fork, and the commit of it that is built. YSERVER_REPO may name a local
 # clone, for a commit not yet pushed.
 repo=${YSERVER_REPO:-https://github.com/SetZero/yserver.git}
-YSERVER_COMMIT=19878bc8ed763cea139336e33388dc2fdf509090
+YSERVER_COMMIT=39fa2d5026d63070a310f138ad2b8b2ae8eda6ef
 # The toolchain Ferrix pins in rust-toolchain.toml.
 toolchain=${YSERVER_TOOLCHAIN:-1.97.1}
 
@@ -288,7 +290,8 @@ fi
     export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=--sysroot=$sysroot"
     export CARGO_TARGET_DIR="$out/target"
     export GLSLC="$out/glslc"
-    cargo "+$toolchain" build --locked --release --target x86_64-unknown-linux-gnu --bin yserver
+    cargo "+$toolchain" build --locked --release --target x86_64-unknown-linux-gnu \
+        --features wayland --bin yserver
 )
 binary="$out/target/x86_64-unknown-linux-gnu/release/yserver"
 
