@@ -2,7 +2,8 @@
 
 The customer's priority one from 2026-09-27: *"we seriously need to bring down
 test run time."* This is phase 1's record -- where a landing gate's time goes --
-and the cuts it points to. Only the Arm firmware waits have been cut since (item 4). Owner: ferrix-90.
+and the cuts it points to. Cut since: the Arm firmware waits (item 4) and
+the waits on finished guests (item 3, "Cut 2"). Owner: ferrix-90.
 
 Targets to argue with (the coordinator's): a standard item gate within 5 min
 on a quiet host, each desktop boot within 60 s, CI green within an hour. The
@@ -138,7 +139,8 @@ kept in the owner's handover), checked against the timings above:
    test-compositor alone. Add 2 s trailing reads in about 22 compositor
    boots, and settle sleeps of 1.5 to 9 s in jobs, init, auth, sysfs and
    restart. **Cut:** a guest the check is done with is stopped, not waited
-   for, and fixed settles become waits on the line they wait for.
+   for, and fixed settles become waits on the line they wait for. **Cut**
+   by the PO session on 2026-09-28, for the gates below ("Cut 2").
 4. **Firmware waits on every Arm boot**: EDK2 5.3 s on aarch64, U-Boot's 2 s
    autoboot on armv7a. **Cut** by ferrix-79 (was ferrix-e4) on 2026-09-27:
    to 0.37 s and 0.18 s (the BACKLOG's done row).
@@ -159,12 +161,107 @@ Also found, smaller or later:
   test-compositor's boots wait for `hyprix:`, not `FERRIX-BOOT-OK`, so they
   could boot with `ferrix.checks=skip`: the checks are proved by test-boot.
 
+## Cut 2: a finished guest stopped, not waited for (2026-09-28)
+
+xtask only; owner the PO session. Each wait was read for what it protects
+(`git log -S` on it) before it was cut; one that protects a check stayed.
+
+- **The power-off grace.** `qemu::finish` gave every guest 5 s to power
+  itself off once its hook returned, then asked QEMU to stop. A guest that
+  powers off -- `test-boot`, `test-shell`, a hook that types `poweroff` and
+  waits for `reboot: Power down` -- is gone in well under a second, so the
+  grace cost those nothing; a guest that never powers off paid all of it,
+  and every one of `test-compositor`'s 33 boots was ended by SIGTERM after
+  the full 5 s. Nothing looked at those 5 s: the transcript ends when the
+  hook returns, and `Ended::powered_off` is read only by
+  `watch_to_power_off`, whose hook waits for the port to close. A hook now
+  says `Watching::stop_when_done()` and QEMU is asked to stop at once --
+  still SIGTERM, so a coverage run's drcov table is written as before. Said
+  by test-compositor's boots (idle's too), test-restart, test-sysfs and
+  test-jobs. Hooks whose guest powers off keep the grace: test-init,
+  test-auth, the K7 boots, and test-audio's, whose WAV QEMU's backend is
+  still writing.
+- **The compositor's trailing 2 s read**, `read_more(|_| false)`, there for
+  "whatever else the guest said by now" (1856fd08): now
+  `Watching::read_what_was_said`, which reads until the guest has been
+  quiet for 0.5 s, 2 s at most. The full 2 s stays where the frame reports
+  it lets in are judged, since they come a second or more apart: the
+  pointer boot's sweep count, the slide's frame bound, and the cursor
+  boot's two reads, which bracket a frame count. The driver-restart boot's
+  3 s is now a wait for devmgr's second `was started again and published`,
+  which races the compositor's `the card is back` and is what
+  `judge_restart` counts, then the same quiet read.
+- **30 s waits for answers nothing printed.** Seven boots -- bar, submap,
+  taskbar, screenshot, lock, typing and fuzzel -- press SUPER C and SUPER W
+  after their pictures
+  and wait out `SETTLE`, 30 s, for `hyprctl clients` to answer. Their
+  configurations do not bind those keys, and none of them judges the
+  answer. `ask_the_sockets` now runs only where the configuration binds
+  both to `hyprctl` (a unit test holds the four that do).
+- **Settles before the first keystroke**: test-restart and test-sysfs 3 s,
+  test-jobs, test-auth and test-init's two boots 1.5 s. Now
+  `Watching::wait_for_shell`, which types `echo xtask-shell-$((6 * 7))`
+  until a line says `xtask-shell-42`, again every 2 s. A prompt ends no
+  line, so the answer is the first thing that shows the shell reads; typed
+  early, the line waits in the terminal. Under TCG it came 1.6 s after the
+  marker. The 3 s were also for "the drivers to have published": restart
+  and sysfs now wait for the kernel's `published` lines they need, which
+  come before the marker.
+- **test-jobs**: the settle after each `kill %1` is gone; the `jobs` after
+  it is typed again every 0.5 s until it says `terminated`. The three before
+  a pipeline's kill, Ctrl-Z and Ctrl-C stay: they wait for a job to be
+  exec'd and hold the terminal, which nothing on the console says, and the
+  shell that could be asked is waiting on that job.
+- **test-init**: lazy.service's 1.5 s is now `svc status` asked until its
+  `STATUS=` shows, and judged there as before; the grandchild's poll is
+  0.5 s apart rather than 1.5 s, for the same 30 s in all.
+
+Measured with `~/ferrix-logs/gate-time/tt2/measure.sh` (the same
+`stamp.py`), each step alone, x86_64 under TCG, before on main a0772269 in
+a worktree of its own and after on the branch, both warm. The host carried
+other sessions' work (a Miri run, Steam's end-to-end): loads as given.
+
+| Step | Before (2 runs) | Load | After (3 or 4 runs) | Load |
+|---|---:|---:|---:|---:|
+| `test-restart` | 23.2, 24.8 s | 4-12 | 17.0, 15.2, 19.8 s | 2.5-15 |
+| `test-sysfs` | 19.4, 27.0 s | 5-15 | 15.2, 13.8, 18.8 s | 3.6-13 |
+| `test-jobs` | 26.2, 35.6 s | 4.5-15 | 23.5, 19.6, 25.8 s | 4.3-12 |
+| `test-init --arch x86_64` | 19.6, 24.9 s | 3.6-12 | 15.8, 16.7, 15.9 s | 6.2-11 |
+| `test-init --arch all`, warm | 55.9 s | 7.3 | 38.6 s | 7.8 |
+| `test-auth --arch x86_64` | 47.6, 49.4 s | 3.6-10 | 46.6, 45.6 s (and a boot hang, below) | 6.8-9.3 |
+| `test-compositor --arch x86_64` | **900 s**, 33 boots | 5.3 | **512, 549, 616 s** (and two failures, below) | 9-18 |
+
+`test-compositor --arch x86_64` ran to its end for the first time, before
+and after. Per boot, the time from the guest's last line to QEMU being
+stopped went from 13.2 s to 0.8 s on average (434 s to 27 s over the 33
+boots); the guest's own time is 11.2 s either way. What is left of a boot's
+15.5 s is the guest and about 4 s of building and starting.
+
+One `test-auth` run hung in the kernel before stage 3, the shape of the
+BACKLOG's open row for that hang; nothing this cut changes runs before the
+marker. Two full `test-compositor` runs failed in the animation boot at
+loads of 20 to 28, with the host saturated by other sessions: once on the
+slowest frame (12.3 s, over the 5 s bound) and once on the slide's last
+picture, both the shapes the BACKLOG's frame-budget row already records
+under load. Run alone, alternating with main, six `--boot animation` runs
+at loads of 20 to 36 all passed, three each.
+
+Not cut, since each waits for something checked: fuzzel-user's 5 s and 3 s
+(boots of the user's own configuration), idle-user's 3 s linger, the cursor
+boot's reads, test-audio's settle and grace. The other gates' hooks
+(test-input, test-pty, test-seat, test-display, test-clipboard, test-adb,
+test-badapple, test-foot, test-vkgears, test-video, the chrome and bench
+boots, `test-compositor --gl`) still take the grace; each can say
+`stop_when_done` once it is read for whether its guest powers off, and its
+gate is run. The grace's 5 s of an idle guest also ran under drcov; they
+checked nothing, but the next coverage re-measure is the one to show
+whether they reached a statement nothing else does.
+
 ## Next
 
 Phase 2 in the order the numbers give: (3) stop rather than wait for a
-finished guest, in progress; then (2) arches in parallel; then (5), KVM by
-default on x86-64. Cut 1 was measured and dropped (2026-09-28, above). Each
-lands as its own slice under `land.sh`, with before and after from this
-table's method. Still to measure on a quiet window the coordinator can
-call: `test-compositor` to its end, `test-net`, and a warm
-`test-init --arch all`.
+finished guest, done for the gates in "Cut 2" above; then (2) arches in
+parallel; then (5), KVM by default on x86-64. Cut 1 was measured and
+dropped (2026-09-28, above). Each lands as its own slice under `land.sh`,
+with before and after from this table's method. Still to measure on a
+quiet window the coordinator can call: `test-net`.
