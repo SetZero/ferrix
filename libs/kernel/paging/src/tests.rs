@@ -1004,7 +1004,12 @@ fn pruning_gives_back_what_a_failed_map_left<E: Encoding>() {
     let (inner, mapper) = Memory::with_root::<E>();
     let below = levels::<E>() - 1;
     let mut memory = Rationed { inner, left: below };
-    let kept = high::<E>(0x7000_0000);
+    // Every hole the prune meets before `kept` scans `kept`'s tables for an
+    // entry, so the cost grows with the square of its slot numbers: at
+    // 0x7000_0000 it is slot 384 of its level-2 table and six minutes per
+    // encoding under Miri. At 2 MiB it is slot 1, with a hole still before
+    // it for the prune to look past.
+    let kept = high::<E>(if cfg!(miri) { 0x20_0000 } else { 0x7000_0000 });
     mapper
         .map_range(
             &mut memory,

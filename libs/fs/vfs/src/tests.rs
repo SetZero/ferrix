@@ -1220,17 +1220,20 @@ fn a_pipe_delivers_bytes_in_order_against_a_model() {
     let mut pipe = open_pipe(PIPE_CAPACITY);
     let mut model = alloc::collections::VecDeque::new();
     let mut state = 0x9E37_79B9_7F4A_7C15_u64;
-    // Under Miri 4000 steps of up to 9000 bytes took hours; 150 still wrap
-    // the ring and cross PIPE_BUF.
-    let steps = if cfg!(miri) { 150 } else { 4000 };
-    for _ in 0..steps {
+    // Every write is a run of this, cut rather than made a byte at a time,
+    // and every read is checked a slice at a time. Byte loops made this test
+    // hours under Miri, the test's own more than the pipe's; now the full
+    // length is seconds there too.
+    let counting: Vec<u8> = (0..9000 + 256).map(|i| i as u8).collect();
+    for _ in 0..4000 {
         state ^= state << 13;
         state ^= state >> 7;
         state ^= state << 17;
         let len = usize::try_from((state >> 8) % 9000).unwrap();
         if state & 1 == 0 {
-            let data: Vec<u8> = (0..len).map(|i| (state as usize + i) as u8).collect();
-            match pipe.write(&data) {
+            let start = usize::from(state as u8);
+            let data = &counting[start..start + len];
+            match pipe.write(data) {
                 WriteOutcome::Wrote(n) => {
                     if data.len() <= PIPE_BUF {
                         assert_eq!(n, data.len(), "a small write was split");
@@ -1245,8 +1248,13 @@ fn a_pipe_delivers_bytes_in_order_against_a_model() {
             let mut buf = vec![0_u8; len];
             match pipe.read(&mut buf) {
                 ReadOutcome::Read(n) => {
-                    let expected: Vec<u8> = model.drain(..n).collect();
-                    assert_eq!(&buf[..n], &expected[..], "bytes came out of order");
+                    let (front, back) = model.as_slices();
+                    let (first, second) = buf[..n].split_at(front.len().min(n));
+                    assert!(
+                        first == &front[..first.len()] && second == &back[..second.len()],
+                        "bytes came out of order"
+                    );
+                    drop(model.drain(..n));
                 }
                 ReadOutcome::WouldBlock => assert!(model.is_empty()),
                 ReadOutcome::EndOfFile => panic!("a writer is open"),

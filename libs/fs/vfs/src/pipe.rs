@@ -221,9 +221,17 @@ impl PipeBuffer {
             };
         }
         let count = buf.len().min(self.data.len());
-        for (slot, byte) in buf.iter_mut().zip(self.data.drain(..count)) {
-            *slot = byte;
+        // A slice at a time rather than a byte at a time: the ring is at most
+        // two runs, and each is one copy.
+        let (front, back) = self.data.as_slices();
+        let mut rest = &mut *buf;
+        for run in [front, back] {
+            let take = run.len().min(rest.len());
+            let (to, after) = rest.split_at_mut(take);
+            to.copy_from_slice(run.get(..take).unwrap_or_default());
+            rest = after;
         }
+        drop(self.data.drain(..count));
         ReadOutcome::Read(count)
     }
 
@@ -274,8 +282,7 @@ impl PipeBuffer {
         if !self.make_room(count) {
             return WriteOutcome::NoMemory;
         }
-        self.data
-            .extend(data.get(..count).unwrap_or_default().iter().copied());
+        self.data.extend(data.get(..count).unwrap_or_default());
         WriteOutcome::Wrote(count)
     }
 

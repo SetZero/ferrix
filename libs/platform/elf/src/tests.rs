@@ -792,10 +792,17 @@ fn parsing_never_panics_on_arbitrary_bytes() {
     // The cheap deterministic version of the fuzz target: walk a known-good
     // image byte by byte, corrupting each in turn, and require that every
     // accessor either answers or errors. The fuzzer searches further; this runs
-    // on every commit.
+    // on every commit. Miri, whose question is the accessors' indexing
+    // rather than which values reach it, tries the two extremes: all five
+    // were most of this crate's time under Miri.
+    let patches: &[u8] = if cfg!(miri) {
+        &[0x00, 0xFF]
+    } else {
+        &[0x00, 0x01, 0x02, 0x7F, 0xFF]
+    };
     for good in [kernel_image(), arm32_kernel_image()] {
         for index in 0..good.len().min(512) {
-            for patch in [0x00u8, 0x01, 0x02, 0x7F, 0xFF] {
+            for &patch in patches {
                 let mut image = good.clone();
                 image[index] = patch;
                 poke_at_everything(&image);
