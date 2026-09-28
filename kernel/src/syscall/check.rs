@@ -8571,6 +8571,7 @@ fn check_unix_sockets(process: &Process, page: u64) -> Result<(), &'static str> 
         .and_then(|()| check_a_message_scatters_and_gathers(process, page))
         .and_then(|()| check_a_stream_read_runs_into_descriptors(process, page))
         .and_then(|()| check_a_name_carries_a_connection(process, page))
+        .and_then(|()| check_an_accepted_socket_blocks_unless_asked(process, page))
         .and_then(|()| check_a_path_carries_a_connection(process, page))
         .and_then(|()| check_what_a_name_refuses(process, page))
         .and_then(|()| check_peer_credentials_are_the_callers(process, page))?;
@@ -8579,7 +8580,8 @@ fn check_unix_sockets(process: &Process, page: u64) -> Result<(), &'static str> 
          records kept their boundaries and MSG_TRUNC their lengths; shutdown ended one \
          direction; a socket reported its type, buffers, credentials and unnamed address; \
          a connection crossed an abstract name and a path, and 6 name calls were refused \
-         as specified; a descriptor travelled with a message, kept its file open in the \
+         as specified; a non-blocking listener's accepted socket blocked, and accept4's \
+         SOCK_NONBLOCK made one that did not; a descriptor travelled with a message, kept its file open in the \
          queue, and was closed when a receive had no room for it; a cycle of sockets in \
          flight was collected at its last close, and one a descriptor reached was kept"
     );
@@ -8883,6 +8885,90 @@ fn a_name_carries_a_connection(
     })();
     let _ = fd::sys_close(process, accepted);
     outcome
+}
+
+/// The abstract name [`check_an_accepted_socket_blocks_unless_asked`] binds.
+const ACCEPTING: &[u8] = b"\0ferrix-boot-check-accept";
+
+/// A socket `accept` takes is non-blocking only when `accept4` asked for it
+/// with `SOCK_NONBLOCK`, never because its listener is, as on Linux: the
+/// listener's `O_NONBLOCK` decides only whether `accept` waits. A server
+/// that accepts on a non-blocking listener and then reads with a timeout --
+/// yserver, hyprix's control socket -- otherwise has its first read answer
+/// `EAGAIN` before the client's bytes arrive, and drops the client.
+///
+/// The listener here is non-blocking, so nothing waits: each connection is
+/// queued before it is taken.
+fn check_an_accepted_socket_blocks_unless_asked(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    let server = unix_socket(process, SOCK_STREAM)?;
+    let first = unix_socket(process, SOCK_STREAM)?;
+    let second = unix_socket(process, SOCK_STREAM)?;
+    let outcome = accepted_sockets_block_unless_asked(process, page, server, [first, second]);
+    for socket in [second, first, server] {
+        let _ = fd::sys_close(process, socket);
+    }
+    outcome
+}
+
+/// [`check_an_accepted_socket_blocks_unless_asked`]'s questions.
+fn accepted_sockets_block_unless_asked(
+    process: &Process,
+    page: u64,
+    server: i32,
+    clients: [i32; 2],
+) -> Result<(), &'static str> {
+    use ferrix_linux_abi::types::O_NONBLOCK;
+
+    let nonblocking = |fd: i32| -> Result<bool, &'static str> {
+        let flags = fd::sys_fcntl(process, fd, F_GETFL, 0)
+            .map_err(|_| "F_GETFL refused an accepted socket")?;
+        Ok(flags & O_NONBLOCK as usize != 0)
+    };
+    let (at, len) = put_unix_address(process, page + ADDRESS, ACCEPTING)?;
+    if socket_call(process, Call::Bind, &[as_arg(server), at, len, 0, 0, 0]) != Ok(0) {
+        return Err("a Unix socket would not take a second abstract name");
+    }
+    if socket_call(process, Call::Listen, &[as_arg(server), 4, 0, 0, 0, 0]) != Ok(0) {
+        return Err("a bound Unix socket would not listen");
+    }
+    if !nonblocking(server)? {
+        return Err("a listener made with SOCK_NONBLOCK did not report O_NONBLOCK");
+    }
+    for (client, flags, want, what) in [
+        (
+            clients[0],
+            0,
+            false,
+            "accept4 without SOCK_NONBLOCK on a non-blocking listener gave a non-blocking socket",
+        ),
+        (
+            clients[1],
+            u64::from(SOCK_NONBLOCK),
+            true,
+            "accept4 with SOCK_NONBLOCK gave a socket without O_NONBLOCK",
+        ),
+    ] {
+        if socket_call(process, Call::Connect, &[as_arg(client), at, len, 0, 0, 0]) != Ok(0) {
+            return Err("a Unix socket would not connect to a listener's abstract name");
+        }
+        let taken = socket_call(process, Call::Accept4, &[as_arg(server), 0, 0, flags, 0, 0])
+            .map_err(|_| "a queued connection was not there to accept4")?;
+        let accepted = i32::try_from(taken).map_err(|_| "accept4 gave no descriptor")?;
+        let got = nonblocking(accepted);
+        let _ = fd::sys_close(process, accepted);
+        if got? != want {
+            return Err(what);
+        }
+    }
+    // With nothing waiting, the non-blocking listener still does not wait.
+    refuses(
+        socket_call(process, Call::Accept4, &[as_arg(server), 0, 0, 0, 0, 0]),
+        Errno::EAGAIN,
+        "accept4 on a non-blocking listener with nothing waiting was not EAGAIN",
+    )
 }
 
 /// The same over a path, which is a node in the filesystem rather than a name

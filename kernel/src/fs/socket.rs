@@ -847,6 +847,13 @@ impl Socket {
 
     /// `accept`: take the oldest waiting connection, and say who made it.
     ///
+    /// `nonblock` is the listener's own `O_NONBLOCK`, which decides only
+    /// whether to wait for a connection. The new socket is non-blocking when
+    /// `accepted_nonblock` says so -- `accept4`'s `SOCK_NONBLOCK` -- and
+    /// never because the listener is, as on Linux: a server that accepts on
+    /// a non-blocking listener and then reads with a timeout must have its
+    /// read wait.
+    ///
     /// # Errors
     ///
     /// `EOPNOTSUPP` for a datagram socket, `EINVAL` for one that is not
@@ -854,6 +861,7 @@ impl Socket {
     pub(crate) fn accept(
         self: &Arc<Socket>,
         nonblock: bool,
+        accepted_nonblock: bool,
     ) -> Result<(Arc<OpenFile>, Vec<u8>), Errno> {
         if self.kind == SocketType::Datagram {
             return Err(Errno::EOPNOTSUPP);
@@ -872,7 +880,7 @@ impl Socket {
                 // for.
                 self.arrivals.wake_all();
                 let address = encode_name(waiting.peer.as_ref());
-                return Ok((open(waiting.socket, nonblock)?, address));
+                return Ok((open(waiting.socket, accepted_nonblock)?, address));
             }
             if nonblock {
                 return Err(Errno::EAGAIN);

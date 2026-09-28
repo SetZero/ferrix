@@ -355,12 +355,19 @@ impl Any {
         }
     }
 
-    /// Take a connection, and say who made it.
-    fn accept(&self, nonblock: bool, owner: (u32, u32)) -> Result<(Arc<OpenFile>, Vec<u8>), Errno> {
+    /// Take a connection, and say who made it: waiting unless `nonblock`,
+    /// the listener's flag, and the new socket non-blocking only when
+    /// `accepted_nonblock`, `accept4`'s.
+    fn accept(
+        &self,
+        nonblock: bool,
+        accepted_nonblock: bool,
+        owner: (u32, u32),
+    ) -> Result<(Arc<OpenFile>, Vec<u8>), Errno> {
         match self {
-            Any::Unix(socket) => socket.accept(nonblock),
+            Any::Unix(socket) => socket.accept(nonblock, accepted_nonblock),
             Any::Netlink(_) | Any::Packet(_) => Err(Errno::EOPNOTSUPP),
-            Any::Inet(socket) => socket.accept(nonblock, owner),
+            Any::Inet(socket) => socket.accept(nonblock, accepted_nonblock, owner),
         }
     }
 }
@@ -765,13 +772,8 @@ fn sys_accept(
     known_flags(flags)?;
     let (file, socket) = socket_of(process, descriptor)?;
     let owner = crate::syscall::path::creator_ids(process);
-    let nonblock = flags & SOCK_NONBLOCK != 0;
-    let (accepted, peer) = socket.accept(file.status().nonblock, owner)?;
-    if nonblock {
-        let mut status = accepted.status();
-        status.nonblock = true;
-        accepted.set_status(status);
-    }
+    let (accepted, peer) =
+        socket.accept(file.status().nonblock, flags & SOCK_NONBLOCK != 0, owner)?;
     let taken = process
         .files()
         .lock()

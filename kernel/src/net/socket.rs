@@ -273,9 +273,14 @@ impl InetSocket {
     }
 
     /// Take a connection that finished its handshake.
+    ///
+    /// `nonblock` is the listener's `O_NONBLOCK`, which decides only whether
+    /// to wait; the new socket is non-blocking when `accepted_nonblock`
+    /// (`accept4`'s `SOCK_NONBLOCK`) says so, as on Linux.
     pub(crate) fn accept(
         &self,
         nonblock: bool,
+        accepted_nonblock: bool,
         owner: (u32, u32),
     ) -> Result<(Arc<OpenFile>, Vec<u8>), Errno> {
         if !self.kind.is_stream() {
@@ -291,7 +296,8 @@ impl InetSocket {
                     let peer = net::core()
                         .with(|stack, _| stack.remote_endpoint(id))
                         .unwrap_or(Endpoint::new(self.unspecified(), 0));
-                    let file = Self::wrap(id, self.family, self.kind, nonblock, owner, charge)?;
+                    let file =
+                        Self::wrap(id, self.family, self.kind, accepted_nonblock, owner, charge)?;
                     return Ok((file, self.encode(peer)));
                 }
                 Err(Error::WouldBlock) if nonblock => return Err(Errno::EAGAIN),

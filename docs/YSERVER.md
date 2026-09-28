@@ -319,8 +319,9 @@ their cursors from it (`test-xwindow`). What Y4 found:
   listener's `O_NONBLOCK` on Ferrix. yserver's listener is non-blocking, so
   a client whose setup had not arrived when yserver first read it was
   dropped, and said `unable to open display`: 3 of 13 `test-xwindow` runs.
-  It is the same bug as hyprix's empty `hyprctl` request, whose P1 row in
-  `docs/BACKLOG.md` has the cause. The fix is the kernel's.
+  It was also hyprix's empty `hyprctl` request. Fixed in the kernel the
+  same day: the listener's flag now decides only whether `accept` waits
+  (12 of 12 runs clean after it).
 * **Estimate against spend.** 5 points estimated, about 5 spent: one
   `test-xwindow` failure, the pick, which led to the first bug, and the
   second run green.

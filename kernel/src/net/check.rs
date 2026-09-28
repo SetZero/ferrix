@@ -226,10 +226,32 @@ fn streams(
         .connect(&encode(address, port), false)
         .map_err(|_| "a connection to a listening port was refused")?;
     let (accepted, peer) = listener
-        .accept(false, (0, 0))
+        .accept(false, false, (0, 0))
         .map_err(|_| "a connection that was made was not accepted")?;
     if peer.is_empty() {
         return Err("an accepted connection has no peer address");
+    }
+    if accepted.status().nonblock {
+        return Err("a connection accepted without SOCK_NONBLOCK is non-blocking");
+    }
+    // A non-blocking listener's accept does not wait, and the socket it takes
+    // is non-blocking only when `accept4` asked for it, as on Linux.
+    for asked in [true, false] {
+        let other = socket(family, InetKind::Stream)?;
+        other
+            .connect(&encode(address, port), false)
+            .map_err(|_| "a second connection to a listening port was refused")?;
+        let (taken, _) = listener
+            .accept(true, asked, (0, 0))
+            .map_err(|_| "a non-blocking accept did not take a finished connection")?;
+        if taken.status().nonblock != asked {
+            return Err(if asked {
+                "a connection accepted with SOCK_NONBLOCK is not non-blocking"
+            } else {
+                "a non-blocking listener gave its accepted connection O_NONBLOCK"
+            });
+        }
+        report.connections += 1;
     }
     let server = of(&accepted).ok_or("an accepted connection is not a socket")?;
     report.connections += 1;
