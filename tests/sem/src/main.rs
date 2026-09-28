@@ -75,6 +75,9 @@ const NSEMS_AT: usize = if cfg!(target_arch = "x86_64") {
 /// A step's failure.
 type Step = Result<(), String>;
 
+/// A named step.
+type Named = (&'static str, fn() -> Step);
+
 /// Print one line at once, so the serial log has it before the next step.
 fn say(line: &str) {
     let mut out = std::io::stdout();
@@ -393,7 +396,7 @@ fn eidrm() -> Step {
 }
 
 fn main() {
-    let steps: [(&str, fn() -> Step); 8] = [
+    let steps: [Named; 8] = [
         ("create", create),
         ("nowait", nowait),
         ("timeout", timeout),
