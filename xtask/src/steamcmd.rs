@@ -158,6 +158,19 @@ pub(crate) fn volume() -> Result<std::path::PathBuf> {
     Ok(image)
 }
 
+/// `test-steamcmd` or `test-steam-bootstrap`, by the command's name.
+///
+/// # Errors
+///
+/// As [`test_steamcmd`] and `crate::steam::test_steam_bootstrap`.
+pub(crate) fn run(command: &str, args: &Args) -> Result<()> {
+    if command == "test-steam-bootstrap" {
+        crate::steam::test_steam_bootstrap(args)
+    } else {
+        test_steamcmd(args)
+    }
+}
+
 /// Boot a shell whose script runs steamcmd until it has logged in.
 ///
 /// # Errors

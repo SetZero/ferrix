@@ -116,6 +116,7 @@ mod sha256;
 mod shell;
 mod ssh;
 mod statd;
+mod steam;
 mod steamcmd;
 mod symbolize;
 mod sysfs;
@@ -222,6 +223,8 @@ COMMANDS:
     test-chrome   Attach the volume scripts/fetch/fetch-chrome.sh makes, and require headless Chrome to run a page's script and draw it
     test-steamcmd Attach the volume scripts/fetch/fetch-steamcmd.sh makes, and require Valve's 32-bit steamcmd to update itself
                   and log in to Steam anonymously, over the network
+    test-steam-bootstrap  Attach the volume scripts/fetch/fetch-steam.sh makes, and require Valve's steam.sh to update the
+                  client and run it until it asks for an X display, over the network
     test-yserver  Attach the volume scripts/fetch/fetch-yserver.sh makes, start yserver headless on lavapipe and require xdpyinfo
                   to reach it
     test-xwindow  The same volume, yserver as a client of the compositor: its root must be the screen's size, and xev's window
@@ -497,7 +500,7 @@ fn run() -> Result<()> {
         "coverage" => coverage::run(&args),
         "test-rustc" => rustc::test_rustc(&args),
         "test-chrome" | "test-chrome-window" | "test-chrome-audio" => chrome::run(command, &args),
-        "test-steamcmd" => steamcmd::test_steamcmd(&args),
+        "test-steamcmd" | "test-steam-bootstrap" => steamcmd::run(command, &args),
         "test-yserver" | "test-xwindow" => yserver::run(command, &args),
         "bench-chrome" => compositor::bench_chrome(&args),
         "bench-chrome-video" => compositor::bench_chrome_video(&args),
