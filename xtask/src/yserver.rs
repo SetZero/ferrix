@@ -176,8 +176,13 @@ pub(crate) const XWINDOW_PATH: &str = "etc/xwindow.sh";
 
 /// `test-xwindow`'s script, started by the compositor: yserver as its client
 /// on `:0`, then `xdpyinfo`, whose screen line says whether the root took the
-/// compositor's screen for its own (docs/YSERVER.md, Y2). Every line of its
-/// own starts `xwindow:`, and it ends with `xwindow: end` whatever happened.
+/// compositor's screen for its own (docs/YSERVER.md, Y2), then `xev`, whose
+/// window must become one of the compositor's (Y3): `hyprctl clients` lists
+/// it, and xtask looks for it on the screen once the script has ended, while
+/// `xev` still runs. xev names its window but gives it no class, so the
+/// script sets `WM_CLASS` once it is up, which is also how a program
+/// renaming its window reaches the compositor. Every line of its own starts `xwindow:`, and it ends
+/// with `xwindow: end` whatever happened.
 pub(crate) const XWINDOW_SCRIPT: &str = r#"export PATH=/bin:/data/usr/bin HOME=/tmp RUST_LOG=info
 echo "xwindow: start"
 YSERVER_BACKEND=wayland YSERVER_ALLOW_SOFTWARE_VULKAN=1 /data/yserver/yserver :0 -nolisten tcp \
@@ -188,9 +193,29 @@ while [ ! -S /tmp/.X11-unix/X0 ] && [ $waited -lt 120 ]; do
     waited=$((waited + 1))
 done
 echo "xwindow: the socket was there after ${waited}s"
-DISPLAY=:0 xdpyinfo > /tmp/xdpyinfo.txt 2>&1
+export DISPLAY=:0
+xdpyinfo > /tmp/xdpyinfo.txt 2>&1
 echo "xwindow: xdpyinfo exited $?"
 grep dimensions: /tmp/xdpyinfo.txt | sed 's/^/xwindow: /'
+xev > /tmp/xev.txt 2>&1 &
+waited=0
+until xwininfo -name "Event Tester" 2>/dev/null | grep -q IsViewable || [ $waited -ge 30 ]; do
+    sleep 1
+    waited=$((waited + 1))
+done
+echo "xwindow: xev's window was viewable after ${waited}s"
+xprop -name "Event Tester" -f WM_CLASS 8s -set WM_CLASS Xev
+xprop -name "Event Tester" WM_NAME WM_CLASS | sed 's/^/xwindow: /'
+sleep 2
+# hyprix answers a request that is slow to arrive as an empty one
+# (docs/BACKLOG.md, P1 flakes), so ask again if it did.
+tries=0
+until /bin/hyprctl clients > /tmp/clients.txt && grep -q '^Window' /tmp/clients.txt \
+    || [ $tries -ge 2 ]; do
+    sleep 1
+    tries=$((tries + 1))
+done
+sed 's/^/xwindow: clients: /' /tmp/clients.txt
 sed 's/^/xwindow: yserver: /' /tmp/yserver.log
 echo "xwindow: end"
 "#;
@@ -225,5 +250,178 @@ pub(crate) fn judge_xwindow(arch: Arch, lines: &[String]) -> Result<()> {
             "{arch}: xdpyinfo said the screen is {dimensions:?}, and yserver said it took {said:?} \
              from the compositor; the `xwindow:` lines say more"
         ))),
+    }
+}
+
+/// What xev calls its window (`WM_NAME`) and the class the script gives it
+/// (`WM_CLASS`), which the compositor's window must have for its title and
+/// app id.
+const XEV_TITLE: &str = "Event Tester";
+/// See [`XEV_TITLE`].
+const XEV_CLASS: &str = "Xev";
+
+/// xev's window as X draws it: white, with a white 50×50 subwindow at
+/// (10, 10) inside a black border 4 pixels wide. The subwindow is drawn into
+/// the top-level's own image only when the server redirects the top-level,
+/// so finding it says the whole subtree reached the compositor.
+const XEV_INNER_AT: usize = 10;
+/// See [`XEV_INNER_AT`].
+const XEV_INNER: usize = 50;
+/// See [`XEV_INNER_AT`].
+const XEV_BORDER: usize = 4;
+
+/// Where on `screen` xev's subwindow's border has its top left corner, if
+/// xev's window is on it.
+pub(crate) fn find_xev(screen: &crate::display::Image) -> Option<(usize, usize)> {
+    let pixel = |x: usize, y: usize| -> Option<&[u8]> {
+        let at = y
+            .checked_mul(screen.width)?
+            .checked_add(x)?
+            .checked_mul(3)?;
+        screen.pixels.get(at..at.checked_add(3)?)
+    };
+    let white = |x: usize, y: usize| pixel(x, y).is_some_and(|rgb| rgb.iter().all(|&c| c >= 0xf0));
+    let black = |x: usize, y: usize| pixel(x, y).is_some_and(|rgb| rgb.iter().all(|&c| c <= 0x10));
+    let ring = XEV_INNER + 2 * XEV_BORDER;
+    let is_xev = |x: usize, y: usize| {
+        black(x, y)
+            && white(x - 1, y)
+            && white(x, y - 1)
+            && (0..ring).all(|along| {
+                (0..XEV_BORDER).all(|across| {
+                    black(x + along, y + across)
+                        && black(x + along, y + ring - 1 - across)
+                        && black(x + across, y + along)
+                        && black(x + ring - 1 - across, y + along)
+                })
+            })
+            && (XEV_BORDER..ring - XEV_BORDER)
+                .all(|row| (XEV_BORDER..ring - XEV_BORDER).all(|column| white(x + column, y + row)))
+            && (1..=XEV_INNER_AT).all(|out| white(x - out, y) && white(x, y - out))
+    };
+    (XEV_INNER_AT..screen.height.saturating_sub(ring))
+        .flat_map(|y| (XEV_INNER_AT..screen.width.saturating_sub(ring)).map(move |x| (x, y)))
+        .find(|&(x, y)| is_xev(x, y))
+}
+
+/// Whether xev's window is one of the compositor's: `hyprctl clients` lists
+/// it with xev's title and class, and the screen shows it, subwindow and all
+/// (docs/YSERVER.md, Y3).
+pub(crate) fn judge_xev(
+    arch: Arch,
+    lines: &[String],
+    screen: Option<&crate::display::Image>,
+    dump: &std::path::Path,
+) -> Result<()> {
+    let clients: Vec<&str> = lines
+        .iter()
+        .filter_map(|line| line.split_once("xwindow: clients:"))
+        .map(|(_, rest)| rest.trim())
+        .collect();
+    let has = |key: &str, value: &str| {
+        clients.iter().any(|line| {
+            line.strip_prefix(key)
+                .and_then(|rest| rest.strip_prefix(':'))
+                .is_some_and(|rest| rest.trim() == value)
+        })
+    };
+    if !has("title", XEV_TITLE) || !has("class", XEV_CLASS) {
+        return Err(Error::new(format!(
+            "{arch}: `hyprctl clients` has no window titled {XEV_TITLE:?} of class \
+             {XEV_CLASS:?}; it said:\n{}",
+            clients.join("\n")
+        )));
+    }
+    let Some(screen) = screen else {
+        return Err(Error::new(format!("{arch}: the boot took no picture")));
+    };
+    match find_xev(screen) {
+        Some((x, y)) => {
+            println!(
+                "  {arch}: xev's window is the compositor's, {XEV_TITLE:?} of {XEV_CLASS:?}, \
+                 its subwindow on the screen at ({x}, {y})"
+            );
+            Ok(())
+        }
+        None => Err(Error::new(format!(
+            "{arch}: xev's window is not on the screen; the last picture is {}",
+            dump.display()
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::display::Image;
+
+    /// A screen of `width` × `height` grey with xev's window drawn at
+    /// (`left`, `top`).
+    fn screen_with_xev(width: usize, height: usize, left: usize, top: usize) -> Image {
+        let mut pixels = vec![0x40; width * height * 3];
+        let mut paint = |x: usize, y: usize, value: u8| {
+            let at = (y * width + x) * 3;
+            pixels[at..at + 3].fill(value);
+        };
+        for y in 0..178 {
+            for x in 0..178 {
+                paint(left + x, top + y, 0xff);
+            }
+        }
+        let ring = XEV_INNER + 2 * XEV_BORDER;
+        for y in 0..ring {
+            for x in 0..ring {
+                let edge = x < XEV_BORDER
+                    || y < XEV_BORDER
+                    || x >= ring - XEV_BORDER
+                    || y >= ring - XEV_BORDER;
+                if edge {
+                    paint(left + XEV_INNER_AT + x, top + XEV_INNER_AT + y, 0);
+                }
+            }
+        }
+        Image {
+            width,
+            height,
+            pixels,
+        }
+    }
+
+    #[test]
+    fn xev_is_found_where_it_is_drawn() {
+        let screen = screen_with_xev(400, 300, 30, 40);
+        assert_eq!(find_xev(&screen), Some((40, 50)));
+    }
+
+    #[test]
+    fn a_white_window_without_the_subwindow_is_not_xev() {
+        let mut screen = screen_with_xev(400, 300, 30, 40);
+        for pixel in screen.pixels.chunks_exact_mut(3) {
+            if pixel == [0, 0, 0] {
+                pixel.fill(0xff);
+            }
+        }
+        assert_eq!(find_xev(&screen), None);
+    }
+
+    #[test]
+    fn the_clients_must_name_xev() {
+        let dump = std::path::Path::new("xwindow.ppm");
+        let screen = screen_with_xev(400, 300, 30, 40);
+        let listed = |lines: &[&str]| -> Vec<String> {
+            lines
+                .iter()
+                .map(|line| format!("xwindow: clients: {line}"))
+                .collect()
+        };
+        let good = listed(&[
+            "Window 1 -> Event Tester:",
+            "\tclass: Xev",
+            "\ttitle: Event Tester",
+        ]);
+        assert!(judge_xev(Arch::X86_64, &good, Some(&screen), dump).is_ok());
+        let untitled = listed(&["\tclass: Xev", "\ttitle: "]);
+        assert!(judge_xev(Arch::X86_64, &untitled, Some(&screen), dump).is_err());
+        assert!(judge_xev(Arch::X86_64, &good, None, dump).is_err());
     }
 }

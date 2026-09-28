@@ -6726,14 +6726,16 @@ pub(crate) fn bench_chrome(args: &Args) -> Result<()> {
 }
 
 /// `cargo xtask test-xwindow`: yserver as a client of the compositor, from
-/// the volume `scripts/fetch/fetch-yserver.sh` makes, and `xdpyinfo` against
-/// it (docs/YSERVER.md, Y2): the root window must be the compositor's
-/// screen.
+/// the volume `scripts/fetch/fetch-yserver.sh` makes, and `xdpyinfo` and
+/// `xev` against it (docs/YSERVER.md, Y2 and Y3): the root window must be
+/// the compositor's screen, and xev's window one of the compositor's, by its
+/// title and class and on the screen.
 ///
 /// # Errors
 ///
 /// When the volume is missing, the image cannot be built, QEMU cannot be
-/// run, or the root window is not the screen's size.
+/// run, the root window is not the screen's size, or xev's window is not
+/// the compositor's.
 pub(crate) fn test_xwindow(args: &Args) -> Result<()> {
     let arch = Arch::X86_64;
     if args.arches()?.iter().any(|&asked| asked != arch) {
@@ -6767,10 +6769,15 @@ pub(crate) fn test_xwindow(args: &Args) -> Result<()> {
         crate::yserver::XWINDOW_PATH
     );
     let (image, kernel) = build_image(arch, &programs, &undithered(&config), carried, &args)?;
+    let port = free_port()?;
     let mut qemu_args = args;
     qemu_args.display = true;
+    qemu_args.qmp_port = Some(port);
+    let dump = paths::build_dir(arch).join("xwindow.ppm");
     let mut said: Vec<String> = Vec::new();
+    let mut screen: Option<Image> = None;
     let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
         let ended = watching.read_more(Instant::now() + CHROME_WINDOW_PATIENCE, |lines| {
             lines
                 .iter()
@@ -6788,10 +6795,25 @@ pub(crate) fn test_xwindow(args: &Args) -> Result<()> {
                 watching,
             ));
         }
-        Ok(())
+        // xev is still running: the screen until its window is on it, or
+        // the time is up.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            qmp.screendump(Some(DEVICE_ID), &dump)?;
+            let bytes = std::fs::read(&dump)
+                .map_err(|error| Error::new(format!("reading {}: {error}", dump.display())))?;
+            let shown = parse_ppm(&bytes)?;
+            let found = crate::yserver::find_xev(&shown).is_some();
+            screen = Some(shown);
+            if found || Instant::now() >= deadline {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
     };
     let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
-    crate::yserver::judge_xwindow(arch, &said)
+    crate::yserver::judge_xwindow(arch, &said)?;
+    crate::yserver::judge_xev(arch, &said, screen.as_ref(), &dump)
 }
 
 /// The input of [`BENCH_PHASES`], ten seconds each: nothing, the wheel

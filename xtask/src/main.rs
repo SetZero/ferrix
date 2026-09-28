@@ -222,7 +222,8 @@ COMMANDS:
                   and log in to Steam anonymously, over the network
     test-yserver  Attach the volume scripts/fetch/fetch-yserver.sh makes, start yserver headless on lavapipe and require xdpyinfo
                   to reach it
-    test-xwindow  The same volume, yserver as a client of the compositor, and require its root window to be the screen's size
+    test-xwindow  The same volume, yserver as a client of the compositor: its root must be the screen's size, and xev's window
+                  one of the compositor's, by title and class and on the screen
     test-chrome-window  The same volume, and require Chrome in a window on the compositor, its page on the screen
     test-chrome-audio   The same window on a page playing 440 Hz, and require the tone in QEMU's wav file of the virtio-snd card
     bench-chrome  Chrome in a window, left alone, scrolled and pointed at: processor time, frames and memory per phase

@@ -118,7 +118,14 @@ again would mean writing an X renderer. What is new sits around the renderer:
 * **Contents.** Every child of the root is redirected inside the server,
   through the COMPOSITE redirect backing that `KmsBackend` already supports
   (`supports_redirect_activation`). One backing then holds a top-level's
-  whole subtree, which is the image the compositor needs.
+  whole subtree, which is the image the compositor needs. As built in Y3,
+  a core helper, `redirect_subwindows_for_server`, makes the record that a
+  client's `RedirectSubwindows(root, Manual)` would make, owned by the
+  server (`SERVER_OWNER`), as Xwayland does for its `serverClient`. The
+  backend calls it on every loop iteration, which also puts it back after
+  a server reset. A client that asks for the same redirect afterwards gets
+  `BadAccess`, as it would under Xwayland. So no X compositing manager runs
+  under this server, and Steam does not need one.
 * **Mapping.** Each window is classified when it maps:
   * a normal window becomes an `xdg_toplevel`. It gets a title from
     `_NET_WM_NAME` or `WM_NAME` and an app id from `WM_CLASS`'s class, and
@@ -146,12 +153,19 @@ again would mean writing an X renderer. What is new sits around the renderer:
 
 ### 4.3 Frames
 
-After each loop iteration, `maybe_composite` no longer flips scanouts.
-Instead it takes each top-level whose backing is damaged and has a frame
-callback due. It reads the damaged rectangles back through the engine's
-`get_image` into that window's `wl_shm` pool of two buffers, then attaches,
-damages and commits. On lavapipe this is one extra copy of memory the CPU
-already drew into.
+After each loop iteration, the backend takes each top-level whose backing
+changed and whose last frame callback has come. It reads the window back
+through the engine's `get_image` into that window's `wl_shm` buffers, then
+attaches, damages, commits and asks for the next frame callback. On lavapipe
+this is one extra copy of memory the CPU already drew into.
+
+As built in Y3, "changed" is the backing's `content_version`, which every
+drawing into it bumps. The whole window is read back and damaged, not the
+damaged rectangles: an idle window costs nothing, and a busy one is read
+once per frame of hyprix's. Reading only the damaged rectangles is the next
+step if a large window turns out to be slow. The headless renderer's own
+composition of the root is left as it was. Under a Manual redirect the
+windows take no part in it.
 
 When hyprix gains `zwp_linux_dmabuf_v1` (stage 19's remainder), the backing's
 existing dmabuf export (`kms/vk/dri3.rs`) replaces the readback, and a GPU
@@ -200,7 +214,13 @@ advertised. There are two defaults to add:
   with yserver as its client and requires `xdpyinfo`'s screen to be the
   compositor's screen, the size yserver says it took. From Y3 on it also
   runs `xev` from the volume, then:
-  * requires the window on the screendump;
+  * requires the window on the screendump (Y3). The test looks for xev's
+    subwindow, a white square in a 4-pixel black border, which reaches
+    hyprix only through the top-level's backing. It also requires
+    `hyprctl clients` to list the window with xev's title, `Event Tester`,
+    and the class `Xev`. xev sets no `WM_CLASS`, so the script sets one
+    with `xprop` once the window is up, which also tests a class that
+    changes after the window is made;
   * injects keys and a click through QMP and requires `xev`'s KeyPress and
     ButtonPress lines;
   * presses the close key and requires the client to exit.
@@ -216,7 +236,7 @@ advertised. There are two defaults to add:
 |---|---|---|
 | Y1 | `fetch-yserver.sh`: the fork at a pinned commit, pinned packages, the build, the volume; `test-yserver` on it. **Done 2026-09-28** | 3 |
 | Y2 | `WaylandBackend` skeleton: connection, fd kind, `WAYLAND-1` output and root size; `xdpyinfo` shows hyprix's size (`test-xwindow`). **Done 2026-09-28** | 5 |
-| Y3 | Top-levels: redirect, `xdg_toplevel`, shm readback, frame callbacks, title and app id; `test-xwindow` sees `xev`'s window | 8 |
+| Y3 | Top-levels: redirect, `xdg_toplevel`, shm readback, frame callbacks, title and app id; `test-xwindow` sees `xev`'s window. **Done 2026-09-28** | 8 |
 | Y4 | Input and cursor: keys, pointer, wheel, focus, `set_cursor`; `xev` reports the injected events | 5 |
 | Y5 | Popups, transients, compositor resize and close; the core helpers; the menu case | 8 |
 | Y6 | Clipboard: core selection hooks, `ext_data_control` bridge, text | 5 |
@@ -245,3 +265,28 @@ Still open:
 4. **System V semaphores** (`docs/I386.md` I5). steamcmd carries on without
    them. Whether the Steam client does is found out at I5b, and the answer
    comes back as a decision then.
+
+## 9. Where it stands
+
+2026-09-28: Y1 to Y3 are done, 16 of the 36 points. `fetch-yserver.sh`
+pins the fork at `0c0e7f8`. The commit after it on the fork's `ferrix`
+branch, `320ed572`, only documents where each piece of the backend lives,
+for the slices that build on it. X top-levels show on hyprix as windows
+with their titles and classes (`test-xwindow`). What Y3 found for the
+slices after it:
+
+* **Sizes.** An X window keeps the size its client gave it. It is drawn at
+  the top left of the window hyprix tiles, and the rest is black.
+  xev's 178×178 window sits in a 982×726 tile. Y5's
+  `configure` → `ConfigureWindow` fixes it. Until then the X pixels are
+  copied one to one, so on a screen scaled above 1 the window shows smaller
+  by that scale.
+* **A yserver bug fixed on the way.** Redirecting a window seeded its
+  backing with each descendant's content but not the descendant's border,
+  so xev's subwindow came out without its black ring. The fork's
+  `6708199` fixes it for any COMPOSITE client, not only this backend.
+* **Close.** `xdg_toplevel.close` is only logged. Y5 makes it
+  `WM_DELETE_WINDOW` or `KillClient`.
+* **Override-redirect windows are not shown yet.** Menus and tooltips have
+  backings of their own, like every child of the root, so Y5 needs only the
+  popup and its placement.
