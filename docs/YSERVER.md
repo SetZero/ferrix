@@ -149,7 +149,14 @@ again would mean writing an X renderer. What is new sits around the renderer:
   becomes a `ConfigureWindow` of the X window, and `close` becomes
   `WM_DELETE_WINDOW`, or `KillClient` for a window without that protocol.
   The core has no call that lets a backend start either, so two small core
-  helpers are added.
+  helpers are added. As built in Y5a, they are `configure_window_for_server`
+  and `close_window_for_server`, each driving the request's own handler as
+  a window manager's request would. A window is shown at its own size
+  rather than the configured one, as Xwayland does, so until the X client
+  has taken the size it shows at the size it has; hyprix stretches it to
+  the tile meanwhile. `WM_TRANSIENT_FOR` naming a shown window makes the
+  new window a dialog of it (`xdg_toplevel.set_parent`, sent before the
+  first commit).
 
 ### 4.3 Frames
 
@@ -225,7 +232,9 @@ focus serial is needed. It carries text only at first (`UTF8_STRING`,
 ## 5. What hyprix needs
 
 Nothing, for §7's first four slices. Every protocol above is already
-advertised. There are two defaults to add:
+advertised. Y5a made hyprix float a dialog, a window with a parent, as
+Hyprland does: configured 0x0 at its first commit, it floats at the size of
+its first buffer, centred over its parent. There are two defaults to add:
 
 * **A window rule for tiling.** hyprix tiles every toplevel, as Hyprland
   tiles X windows by default. Steam's main window tiles well. Its small
@@ -259,9 +268,15 @@ advertised. There are two defaults to add:
     be picked, and the test clicks xev's window again. That window must be
     the one picked, and the server's log must show the cursor it gave hyprix
     changing when `xwininfo` grabbed the pointer;
-  * presses the close key and requires the client to exit (Y5).
+  * after the input, maps a second `xev`, unmaps it with `xdotool`, gives
+    it `WM_TRANSIENT_FOR` naming the first and its own 178×178 back, and
+    maps it again: `hyprctl clients` must list it floating at 178×178
+    (Y5a). The first xev's size in X must be the size hyprix tiled it at,
+    and the screendump white out to the tile's far corner, where the grow
+    exposed it. Then hyprix's `closewindow` on the first xev, which xev
+    hears as `WM_DELETE_WINDOW`, must end it.
 
-  A menu case (`xfontsel`'s menu) is added with slice Y5.
+  A menu case (`xfontsel`'s menu) is added with slice Y5b.
 * Each slice runs `cargo xtask check` before it lands. The tests are
   on-demand boots and do not join the item gate, because test time is the
   customer's first priority.
@@ -274,7 +289,8 @@ advertised. There are two defaults to add:
 | Y2 | `WaylandBackend` skeleton: connection, fd kind, `WAYLAND-1` output and root size; `xdpyinfo` shows hyprix's size (`test-xwindow`). **Done 2026-09-28** | 5 |
 | Y3 | Top-levels: redirect, `xdg_toplevel`, shm readback, frame callbacks, title and app id; `test-xwindow` sees `xev`'s window. **Done 2026-09-28** | 8 |
 | Y4 | Input and cursor: keys, pointer, wheel, focus, `set_cursor`; `xev` reports the injected events. **Done 2026-09-28** | 5 |
-| Y5 | Popups, transients, compositor resize and close; the core helpers; the menu case | 8 |
+| Y5a | Transients, compositor resize and close; the core helpers. **Done 2026-09-28** | 5 |
+| Y5b | Popups; the menu case | 3 |
 | Y6 | Clipboard: core selection hooks, `ext_data_control` bridge, text | 5 |
 | Y7 | yserver in `--everything`: `exec-once`, `DISPLAY`, window rules | 2 |
 
@@ -304,10 +320,44 @@ Still open:
 
 ## 9. Where it stands
 
-2026-09-28: Y1 to Y4 are done, 21 of the 36 points. `fetch-yserver.sh`
-pins the fork at `ef858f2`. X top-levels show on hyprix as windows with
-their titles and classes, and take keys, clicks, the wheel, the focus and
-their cursors from it (`test-xwindow`). What Y4 found:
+2026-09-28: Y1 to Y4 and Y5a are done, 26 of the 36 points.
+`fetch-yserver.sh` pins the fork at `581a990`. X top-levels show on hyprix
+as windows with their titles and classes, take keys, clicks, the wheel,
+the focus and their cursors from it, take the size it tiles them at, float
+as dialogs where they are transients, and close when it closes them
+(`test-xwindow`). Y5b, override-redirect windows as popups, is written on
+the fork's branch `ferrix-y5` and not yet tested. What Y5a found:
+
+* **The toolkit stalled a client with its own poll.** `Client::dispatch`
+  read the socket only when it had no events queued, and `connect` leaves
+  some. yserver's first readiness took those and left the socket unread,
+  and mio's edge-triggered poll never woke again. Under sway, which sends
+  a window's configure and a ping once, no X window was ever shown; hyprix's
+  frame events hid it. The Steam spike found it. Fixed in the toolkit
+  (Ferrix `9c84938e`), and checked on the host: the spike's own commit
+  never maps xev's window under a headless sway, and with only that fix,
+  it does.
+* **Three yserver bugs, fixed for every backend.** A grow exposed black,
+  because a redirected window's backing was seeded from a leaf the resize
+  never repainted (`9053e68`). A window mapped again lost its subwindows'
+  borders, because the background repaint of the map painted over them
+  (same commit). And the setup thread dropped a client whose setup had not
+  arrived yet when its socket came non-blocking from `accept` (`14197fb`),
+  which is how Ferrix hands it on (below).
+* **The kernel's `accept` handed on `O_NONBLOCK`**, where Linux does not;
+  steam-y4 fixed it the same day (`18388c70`). hyprix and yserver no longer
+  depend on it either: hyprix reads a `hyprctl` request as it arrives
+  (`2f651899`) and yserver makes its setup socket blocking.
+* **The spike's RandR fix is on `ferrix`** (`72fde5f`): the synthetic
+  output kept its CRTC across rebuilds, which Chromium needs to find a
+  display.
+* **Estimate against spend.** Y5a was 5 of Y5's 8 points and took about
+  7: the three rendering bugs and the stall were found on the way.
+* **Not done.** Popups (Y5b). `WM_NORMAL_HINTS` is not passed on, so a
+  window with a fixed size is not floated for it as Hyprland would, and a
+  tiled one is asked for a size it may refuse.
+
+What Y4 found:
 
 * **Two yserver bugs, fixed for every backend.** A pointer event
   redirected to a grab carried `child` None, so `xwininfo`, `xprop` and
@@ -333,18 +383,10 @@ their cursors from it (`test-xwindow`). What Y4 found:
 
 What Y3 found for the slices after it:
 
-* **Sizes.** An X window keeps the size its client gave it. It is drawn at
-  the top left of the window hyprix tiles, and the rest is black.
-  xev's 178×178 window sits in a 982×726 tile. Y5's
-  `configure` → `ConfigureWindow` fixes it. Until then the X pixels are
-  copied one to one, so on a screen scaled above 1 the window shows smaller
-  by that scale.
 * **A yserver bug fixed on the way.** Redirecting a window seeded its
   backing with each descendant's content but not the descendant's border,
   so xev's subwindow came out without its black ring. The fork's
   `6708199` fixes it for any COMPOSITE client, not only this backend.
-* **Close.** `xdg_toplevel.close` is only logged. Y5 makes it
-  `WM_DELETE_WINDOW` or `KillClient`.
 * **Override-redirect windows are not shown yet.** Menus and tooltips have
   backings of their own, like every child of the root, so Y5 needs only the
   popup and its placement.

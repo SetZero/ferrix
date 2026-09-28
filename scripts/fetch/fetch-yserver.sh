@@ -8,7 +8,8 @@
 # program against Debian 13's -dev packages, unpacked into a sysroot here, and
 # runs on the same packages' libraries from the volume, as Chrome does. Mesa's
 # lavapipe is its Vulkan on a machine with no GPU for it, and x11-utils'
-# xdpyinfo and xev are the clients the tests run against it.
+# xdpyinfo and xev are the clients the tests run against it, with xdotool to
+# unmap, resize and map a window the way a program would.
 #
 # The source is the customer's fork of yserver (docs/YSERVER.md §8), pinned
 # by commit: 1.6.0 and Ferrix's commits on top. It is built with its
@@ -39,7 +40,7 @@ out=${FERRIX_YSERVER_VOLUME:-$HOME/.local/share/ferrix/yserver}
 # The fork, and the commit of it that is built. YSERVER_REPO may name a local
 # clone, for a commit not yet pushed.
 repo=${YSERVER_REPO:-https://github.com/SetZero/yserver.git}
-YSERVER_COMMIT=ef858f2431857ababab7984064d03b096e119a40
+YSERVER_COMMIT=581a990c55505a11650696973072cca6c8b419ac
 # The toolchain Ferrix pins in rust-toolchain.toml.
 toolchain=${YSERVER_TOOLCHAIN:-1.97.1}
 
@@ -185,6 +186,8 @@ debs=(
     "pool/main/x/xkeyboard-config/xkb-data_2.42-1_all.deb 196ff18533382f64e057ea49df2bb486bd4275a4cc0917361edb560b8756dada"
     "pool/main/z/zlib/zlib1g_1.3.dfsg+really1.3.1-1+b1_amd64.deb 015be740d6236ad114582dea500c1d907f29e16d6db00566ca32fb68d71ac90d"
     "pool/main/z/zlib/zlib1g-dev_1.3.dfsg+really1.3.1-1+b1_amd64.deb 76ed5c858e1aef38b7be93acce5910e457e77bd6271471b9d05fb42e78826224"
+    "pool/main/x/xdotool/libxdo3_3.20160805.1-5.1_amd64.deb d634e25d2b50af140ee9f44bab507fcfb665f3556fd483faefdb56e85598cc12"
+    "pool/main/x/xdotool/xdotool_3.20160805.1-5.1_amd64.deb 98ac8681533b01020c7288fb2e9de403d586747dab48cfd58e04cb00d0c44fb1"
 )
 
 # The same, from the security archive.
