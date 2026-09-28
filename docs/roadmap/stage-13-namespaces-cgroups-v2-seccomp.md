@@ -125,6 +125,13 @@ counts `oom` and `oom_kill` and polls `POLLPRI`; a charge a system call
 makes for an object is still refused `ENOMEM`. The `cgroups` boot line and
 `test-vfs` command 22 prove it; `docs/CGROUPS.md` §7.1 has the semantics.
 
+**Designed -- user and mount namespaces, for Steam (2026-09-28).** The
+customer decided to build the two namespaces Steam's requirements check and
+its pressure-vessel container need: `docs/NAMESPACES.md`, reviewed by the
+certification consultant. Landings N1 to N6 and NP, 39 points, end with
+`test-steam-bootstrap` passing the check as uid 1000; pid, network, IPC,
+UTS and cgroup namespaces, `setns` and seccomp stay out of it.
+
 **Still to do:** `memory.stat`'s other keys, and a charge past `memory.max`
 reclaiming inside the job before it OOM-kills (M2), then freezing,
 `cpu.max` and `io`. `docs/CGROUPS.md` §7.1 says where each

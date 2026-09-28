@@ -876,6 +876,10 @@ otherwise; one a later decision replaced is deleted, and the history keeps it.
   Ferrix answers every namespace flag `EINVAL` (`syscall/namespace.rs`);
   stage 13 parks the init's L13 on namespaces too. `test-steam-bootstrap`
   sets the check aside meanwhile, and says so.
+  **Answered 2026-09-28:** the customer decided to build user and mount
+  namespaces, enough for Steam; designed in `docs/NAMESPACES.md` (landings
+  N1 to N7 and NP, 39 points to N6), reviewed by the certification
+  consultant, branch `steam-userns`.
 * Whether the customer's Python desktop scripts are rewritten for Ferrix:
   `hypr-workspaces` and `ba-calendar` (waybar's workspace chips and clock),
   `hypr-desktop-fx` (pointer effects) and `hypr-dock`. Without them those

@@ -941,6 +941,16 @@ gains, in the words it already uses:
   model and on its `SO_PEERCRED`, both in the uncertified load ring. No
   organisational security policy is needed for this (ferrix-55's review,
   2026-09-26; the TOE claims no FIA or FAU, F-21b).
+
+  **User namespaces (`docs/NAMESPACES.md`, designed 2026-09-28).** Once they
+  exist, "the uid a process runs as" is a *kernel* uid, which a user
+  namespace never changes, and OE.AUTH relies on that design's rule U1:
+  `privileged()`, the check behind every root-only call of the personality,
+  is an effective kernel uid of 0 *in the first user namespace*. A process
+  that is root inside a namespace it made is not root to `authd`, to a
+  file's permissions, or to any root-only call, and `SO_PEERCRED` answers
+  kernel ids translated for the reader, never a namespace's inside id taken
+  for a real one. U2 to U9 and M1 to M8 there are the rest of the argument.
 * **§9.1**, a sentence: FIA and FAU are still absent from the TOE. Their
   environment counterparts are `authd` and its audit log, and on ARMv7-A and
   the DK1 a ring-3 driver can read that service's memory
