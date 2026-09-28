@@ -13,6 +13,7 @@
 //! same `Drop`, which is why a leaked connection is not possible without a
 //! leaked `Arc`.
 
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -128,8 +129,41 @@ pub(crate) struct InetSocket {
 /// socket, and its entry in the stack's table, B-tree nodes being at least
 /// half full.
 fn socket_charge() -> Result<Charge, Errno> {
-    Charge::bytes(arc_footprint::<InetSocket>().saturating_add(2 * size_of::<(u32, NetSocket)>()))
-        .map_err(|_| Errno::ENOMEM)
+    Charge::bytes(
+        arc_footprint::<InetSocket>()
+            .saturating_add(2 * size_of::<(u32, NetSocket)>())
+            .saturating_add(2 * size_of::<(SocketId, FileOf)>()),
+    )
+    .map_err(|_| Errno::ENOMEM)
+}
+
+/// The file a stack socket is open as: its inode number on sockfs and the
+/// user that owns it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FileOf {
+    /// What `/proc/<pid>/fd` spells as `socket:[ino]`.
+    pub(crate) ino: u64,
+    /// Who opened or accepted it.
+    pub(crate) uid: u32,
+}
+
+/// Each stack socket that has a file, by its id.
+///
+/// `/proc/net/tcp` and its siblings print these, because a program that asks
+/// who owns a connection -- `lsof`, `ss -p`, Steam's check of the websocket
+/// its web helper opens -- finds the socket's row there and looks for the
+/// same inode among the processes' descriptors. The stack's own id is not
+/// that number. A socket still in a listener's backlog has no file yet, and
+/// one lingering in `TIME_WAIT` has none any more; neither has an entry, and
+/// Linux prints both inodes as 0 too.
+///
+/// Never taken with the net core held, and the net core is never taken with
+/// this held.
+static FILES: SpinLock<BTreeMap<SocketId, FileOf>> = SpinLock::new(BTreeMap::new());
+
+/// The file `id` is open as, if it has one.
+pub(crate) fn file_of(id: SocketId) -> Option<FileOf> {
+    FILES.lock().get(&id).copied()
 }
 
 impl fmt::Debug for InetSocket {
@@ -145,6 +179,7 @@ impl fmt::Debug for InetSocket {
 
 impl Drop for InetSocket {
     fn drop(&mut self) {
+        let _ = FILES.lock().remove(&self.id);
         net::core().with(|stack, _| stack.close(self.id));
     }
 }
@@ -223,6 +258,7 @@ impl InetSocket {
             }),
             _charge: charge,
         });
+        let _ = FILES.lock().insert(id, FileOf { ino, uid: owner.0 });
         fs::socket::open_on_sockfs(socket, ino, nonblock)
     }
 

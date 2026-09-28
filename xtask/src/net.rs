@@ -660,6 +660,7 @@ pub(crate) fn commands(servers: &Servers, curl: bool, git: bool) -> Vec<Command>
             status: 7,
             expect: Expect::Shaped(&["* (10.0.2.2) at *on eth0"]),
         },
+        socket_owner_command(),
     ];
     if curl {
         commands.extend(curl_commands(http, digest));
@@ -668,6 +669,29 @@ pub(crate) fn commands(servers: &Servers, curl: bool, git: bool) -> Vec<Command>
         commands.push(git_command(http));
     }
     commands
+}
+
+/// Who owns a connection, as `lsof` and Steam's client ask it: the
+/// inode a listener's row in `/proc/net/tcp` names is the one its
+/// process's descriptor links to, and the uid is the one it runs as,
+/// `ferrix` (1000) and not root, so that a row printing 0 for everyone
+/// fails. `su` and `sh -c exec` keep the pid `$!` names. busybox's `nc`
+/// listens on `::`, so the row may be in either table. Port 45679 is
+/// `B26F`.
+const fn socket_owner_command() -> Command {
+    Command {
+        argv: &[
+            "sh",
+            "-c",
+            "su -s /bin/sh ferrix -c 'exec nc -l -p 45679' & p=$!; sleep 1; \
+             set -- $(awk '$2 ~ /:B26F$/ { print $8, $10 }' /proc/net/tcp /proc/net/tcp6); \
+             if [ \"$1\" = 1000 ] && ls -l /proc/$p/fd | grep -q \"socket:\\[$2\\]\"; \
+             then echo tcp-row-names-the-fd-and-its-user; else echo \"row: uid $1 inode $2\"; fi; \
+             kill $p",
+        ],
+        status: 0,
+        expect: Expect::Lines(&["tcp-row-names-the-fd-and-its-user"]),
+    }
 }
 
 /// git's command in [`commands`]: [`git_program`], and the four lines it

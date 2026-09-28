@@ -1127,33 +1127,40 @@ pub(super) fn net_udp6(_: &Kernel) -> Result<Vec<u8>> {
 }
 
 /// The sockets of one protocol and one family, as rows.
+///
+/// A row names the socket's file, as `/proc/<pid>/fd` does, and the user that
+/// owns it; both are looked up after the net core is let go.
 fn inet_sockets(stream: bool, six: bool) -> Vec<procfs_net::Socket> {
-    crate::net::core().with(|stack, _| {
-        stack
-            .sockets()
-            .filter(|(_, socket)| {
-                let is_stream = matches!(
-                    socket,
-                    ferrix_net::Socket::Stream(_) | ferrix_net::Socket::Listen(_)
-                );
-                let is_six = matches!(socket.family(), ferrix_net::Family::V6);
-                // A raw socket is neither TCP's nor UDP's: Linux lists it in
-                // `/proc/net/raw`, which this file tree does not have yet.
-                let is_raw = matches!(socket, ferrix_net::Socket::Raw(_));
-                !is_raw && is_stream == stream && is_six == six
-            })
-            .enumerate()
-            .map(|(slot, (id, socket))| socket_row(slot, id, socket))
-            .collect()
-    })
+    let mut rows: Vec<(ferrix_net::SocketId, procfs_net::Socket)> =
+        crate::net::core().with(|stack, _| {
+            stack
+                .sockets()
+                .filter(|(_, socket)| {
+                    let is_stream = matches!(
+                        socket,
+                        ferrix_net::Socket::Stream(_) | ferrix_net::Socket::Listen(_)
+                    );
+                    let is_six = matches!(socket.family(), ferrix_net::Family::V6);
+                    // A raw socket is neither TCP's nor UDP's: Linux lists it in
+                    // `/proc/net/raw`, which this file tree does not have yet.
+                    let is_raw = matches!(socket, ferrix_net::Socket::Raw(_));
+                    !is_raw && is_stream == stream && is_six == six
+                })
+                .enumerate()
+                .map(|(slot, (id, socket))| (id, socket_row(slot, socket)))
+                .collect()
+        });
+    for (id, row) in &mut rows {
+        if let Some(file) = crate::net::socket::file_of(*id) {
+            row.inode = file.ino;
+            row.uid = file.uid;
+        }
+    }
+    rows.into_iter().map(|(_, row)| row).collect()
 }
 
 /// One socket as a row.
-fn socket_row(
-    slot: usize,
-    id: ferrix_net::SocketId,
-    socket: &ferrix_net::Socket,
-) -> procfs_net::Socket {
+fn socket_row(slot: usize, socket: &ferrix_net::Socket) -> procfs_net::Socket {
     let remote = socket.remote().unwrap_or(ferrix_net::Endpoint::new(
         socket.local().address.unspecified(),
         0,
@@ -1182,7 +1189,7 @@ fn socket_row(
         transmit_queue: transmit,
         receive_queue: receive,
         uid: 0,
-        inode: u64::from(id.0),
+        inode: 0,
     }
 }
 
