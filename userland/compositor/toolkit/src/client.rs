@@ -1182,6 +1182,15 @@ impl Client {
         Ok(self.sources.waker()?)
     }
 
+    /// The compositor's socket, for a program whose own loop does the
+    /// waiting: it polls this for reading and then calls
+    /// [`Client::dispatch`] with a zero timeout, which reads what arrived
+    /// without blocking. yserver's Wayland backend is one (docs/YSERVER.md).
+    #[must_use]
+    pub fn as_raw_fd(&self) -> i32 {
+        self.connection.as_raw_fd()
+    }
+
     /// Send what is queued, wait until something happens or `timeout`
     /// passes (`None` waits for ever), and hand back everything that
     /// happened -- held keys repeating included. An empty list is a timeout.
