@@ -582,6 +582,14 @@ The roadmap's *Burndown* lists that scope.
 Dated, newest first. A decision here is final until the customer says
 otherwise; one a later decision replaced is deleted, and the history keeps it.
 
+* **2026-09-28 (customer)** **A live installer, as Linux distributions
+  have one** (`docs/INSTALLER.md`). The customer chose: real PCs as well as
+  virtual machines (so NVMe, AHCI, xHCI, USB mass storage, i8042 and a
+  firmware-framebuffer display join the plan); a graphical installer on
+  hyprix from the start; installing beside another operating system, not
+  only on a wiped disk; and a raw `.img` and a hybrid `.iso`, both attached
+  to GitHub releases. The design (21 slices, 162 points) waits on the
+  customer's approval and its §10 decisions before anything is built.
 * **2026-09-28 (customer)** The yserver Wayland backend's design
   (`docs/YSERVER.md`, 7 slices, 36 points) is approved. Its code lives on a
   **fork of yserver on the customer's GitHub account**, pinned by commit in
@@ -826,6 +834,10 @@ otherwise; one a later decision replaced is deleted, and the history keeps it.
 
 ## Waiting on the customer
 
+* The live installer's design, `docs/INSTALLER.md`: approval, and §10's five
+  decisions -- shrinking the other system (recommended: not in version 1),
+  the live session's account, the reference PC, Secure Boot, a text-mode
+  fallback.
 * F-43 (`docs/certification/FINDINGS.md`): O.WXN and ASR-2 claim no mapping is
   writable and executable, but a program's own `mmap(PROT_WRITE|PROT_EXEC)` is
   honoured, as on Linux. Enforce W^X for programs (and walk user roots in the
