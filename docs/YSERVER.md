@@ -185,6 +185,35 @@ render node replaces lavapipe. Neither changes the backend's shape.
   buffer and set with `wl_pointer.set_cursor` on each enter and each cursor
   change.
 
+As built in Y4, the seat is its own module on the fork,
+`crates/yserver/src/wayland/input.rs`. Everything reaches X through
+`handle_host_input`, as a KMS server's libinput thread's events do, so
+yserver's grabs, key repeat, XKB and XI2 apply unchanged. It differs from
+the plan above in three places:
+
+* **The keymap.** yserver takes hyprix's layout when it connects: the
+  toolkit reads the keymap hyprix sends, and the server compiles the same
+  layout and variant by name. No `XKB_DEFAULT_LAYOUT` has to be passed.
+  A layout hyprix changes later is not followed, because a new keymap
+  would owe the X clients a MappingNotify.
+* **Hit-testing.** X top-levels keep their root positions, so two of them
+  that hyprix shows apart can overlap in root coordinates. A new core
+  field, `ServerState::pointer_scope`, keeps the hit test to the top-level
+  the pointer is on, as Xwayland's `xwl_xy_to_window` does. Off every X
+  window the pointer is on the root, which sends the last window its
+  `LeaveNotify`.
+* **Focus.** Keyboard enter goes through a new core helper,
+  `set_input_focus_for_server`, which does what a validated SetInputFocus
+  does. Keyboard leave sets the focus to None and releases every key still
+  down. The toolkit's own key repeat is dropped, because the X server
+  repeats a held key itself.
+
+The wheel takes hyprix's clicks where it counts them, else ten units of
+`wl_pointer.axis` a click. The cursor goes through the toolkit's new
+`Client::set_cursor_image` (Ferrix `e348bd13`). Two yserver bugs, found by
+the test and fixed in the core for every backend, are the fork's `ed44c36`
+and `e81b3a5` (§9).
+
 ### 4.5 The clipboard
 
 X selections are handled only inside yserver's core, which has no internal
@@ -222,8 +251,15 @@ advertised. There are two defaults to add:
     with `xprop` once the window is up, which also tests a class that
     changes after the window is made;
   * injects keys and a click through QMP and requires `xev`'s KeyPress and
-    ButtonPress lines;
-  * presses the close key and requires the client to exit.
+    ButtonPress lines (Y4). The pointer is put at (120, 120) in xev's
+    window, then come a left click, a wheel click down and the keys `a` and
+    `z`. xev must report its focus, the pointer's entry, the motion, the
+    press and release of button 1, button 5 and the `a` key, each at
+    (120, 120) give or take 2 pixels. Then `xwininfo` asks for a window to
+    be picked, and the test clicks xev's window again. That window must be
+    the one picked, and the server's log must show the cursor it gave hyprix
+    changing when `xwininfo` grabbed the pointer;
+  * presses the close key and requires the client to exit (Y5).
 
   A menu case (`xfontsel`'s menu) is added with slice Y5.
 * Each slice runs `cargo xtask check` before it lands. The tests are
@@ -237,7 +273,7 @@ advertised. There are two defaults to add:
 | Y1 | `fetch-yserver.sh`: the fork at a pinned commit, pinned packages, the build, the volume; `test-yserver` on it. **Done 2026-09-28** | 3 |
 | Y2 | `WaylandBackend` skeleton: connection, fd kind, `WAYLAND-1` output and root size; `xdpyinfo` shows hyprix's size (`test-xwindow`). **Done 2026-09-28** | 5 |
 | Y3 | Top-levels: redirect, `xdg_toplevel`, shm readback, frame callbacks, title and app id; `test-xwindow` sees `xev`'s window. **Done 2026-09-28** | 8 |
-| Y4 | Input and cursor: keys, pointer, wheel, focus, `set_cursor`; `xev` reports the injected events | 5 |
+| Y4 | Input and cursor: keys, pointer, wheel, focus, `set_cursor`; `xev` reports the injected events. **Done 2026-09-28** | 5 |
 | Y5 | Popups, transients, compositor resize and close; the core helpers; the menu case | 8 |
 | Y6 | Clipboard: core selection hooks, `ext_data_control` bridge, text | 5 |
 | Y7 | yserver in `--everything`: `exec-once`, `DISPLAY`, window rules | 2 |
@@ -268,12 +304,33 @@ Still open:
 
 ## 9. Where it stands
 
-2026-09-28: Y1 to Y3 are done, 16 of the 36 points. `fetch-yserver.sh`
-pins the fork at `0c0e7f8`. The commit after it on the fork's `ferrix`
-branch, `320ed572`, only documents where each piece of the backend lives,
-for the slices that build on it. X top-levels show on hyprix as windows
-with their titles and classes (`test-xwindow`). What Y3 found for the
-slices after it:
+2026-09-28: Y1 to Y4 are done, 21 of the 36 points. `fetch-yserver.sh`
+pins the fork at `ef858f2`. X top-levels show on hyprix as windows with
+their titles and classes, and take keys, clicks, the wheel, the focus and
+their cursors from it (`test-xwindow`). What Y4 found:
+
+* **Two yserver bugs, fixed for every backend.** A pointer event
+  redirected to a grab carried `child` None, so `xwininfo`, `xprop` and
+  `xkill`, which pick a window by the child of a grabbed click on the root,
+  always picked the root (`ed44c36`). Key events carried the root position
+  as their window position (`e81b3a5`). Xorg sets both in
+  `FixUpEventFromWindow`.
+* **A Ferrix bug that drops X clients.** An accepted socket inherits the
+  listener's `O_NONBLOCK` on Ferrix. yserver's listener is non-blocking, so
+  a client whose setup had not arrived when yserver first read it was
+  dropped, and said `unable to open display`: 3 of 13 `test-xwindow` runs.
+  It is the same bug as hyprix's empty `hyprctl` request, whose P1 row in
+  `docs/BACKLOG.md` has the cause. The fix is the kernel's.
+* **Estimate against spend.** 5 points estimated, about 5 spent: one
+  `test-xwindow` failure, the pick, which led to the first bug, and the
+  second run green.
+* **Not done.** Keys held when the keyboard enters a window are not
+  pressed in X (the toolkit does not pass `wl_keyboard.enter`'s keys on).
+  A layout hyprix changes after yserver starts is not followed. Neither
+  `WM_TAKE_FOCUS` nor `_NET_ACTIVE_WINDOW` is sent on focus. Steam may want
+  them, and that is found out at I5b.
+
+What Y3 found for the slices after it:
 
 * **Sizes.** An X window keeps the size its client gave it. It is drawn at
   the top left of the window hyprix tiles, and the rest is black.

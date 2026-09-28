@@ -108,12 +108,14 @@ staged until now.
   for it. **The design is `docs/YSERVER.md`**, approved the same day: the
   backend wraps yserver's Vulkan renderer, hands frames to hyprix as
   `wl_shm` copies until hyprix has dmabuf, and is built in seven slices, 36
-  points, on the customer's fork of yserver. Y1 to Y3 are done the same
-  day, 16 of the 36 points: `fetch-yserver.sh` builds the fork, yserver
+  points, on the customer's fork of yserver. Y1 to Y4 are done the same
+  day, 21 of the 36 points: `fetch-yserver.sh` builds the fork, yserver
   connects to hyprix as a Wayland client with its root window the size of
-  hyprix's screen, and each top-level X window is a window of hyprix's,
-  with its title and class (`cargo xtask test-xwindow` finds xev's window
-  on the screen). Next is Y4, input.
+  hyprix's screen, each top-level X window is a window of hyprix's, with
+  its title and class, and hyprix's keys, pointer, wheel, focus and cursor
+  reach X (`cargo xtask test-xwindow` finds xev's window on the screen and
+  requires xev to report the input put in). Next is Y5, popups, resize and
+  close.
 * **Sound.** Playback is done, 2026-09-26 (`docs/AUDIO.md` §8): a
   `virtio-snd` driver in ring 3, the audio core and `/dev/snd`, and Chrome
   playing through them, which `test-audio` and `test-chrome-audio` gate.
