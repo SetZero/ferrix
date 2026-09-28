@@ -6011,9 +6011,15 @@ fn reconfigure(slots: &mut [Slot], state: &State) {
     for slot in slots.iter_mut() {
         let windows = slot.windows.clone();
         for (toplevel, window) in windows {
-            let Some((width, height, focused)) = sizes.get(&window).copied() else {
+            let Some((mut width, mut height, focused)) = sizes.get(&window).copied() else {
                 continue;
             };
+            // A dialog still choosing its own size (`float_dialog`) is not
+            // told the provisional one it floats at until its first buffer
+            // says what it chose.
+            if slot.unsized_dialogs.contains(&window) {
+                (width, height) = (0, 0);
+            }
             // The states as well as the size: a window that has just been
             // focused is the same size and a different state, and a client
             // that is not told has a title bar that never lights up.
