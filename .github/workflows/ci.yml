@@ -186,21 +186,53 @@ jobs:
         run: scripts/check/check-crate-layering.sh
 
   # ----------------------------------------------------------------
-  # Format, lint and test.
+  # Format, lint and test: `cargo xtask check`, the same command a
+  # landing runs, and so every gate in it -- fmt, the audits, the
+  # generated documents, clippy on the host and once per freestanding
+  # target (`#[cfg(target_arch)]` code is invisible to a lint pass for
+  # the other machine), the host tests and doc tests, the compositor and
+  # the userland programs.
   #
-  # Clippy runs three times: once on the host, where the libraries' tests
-  # live, and once per freestanding target, because `#[cfg(target_arch)]`
-  # code is invisible to a lint pass for the other machine. A kernel that
-  # only ever gets linted for x86 is a kernel whose AArch64 half is
-  # unreviewed.
+  # Until 2026-09-28 a Linux `test` job ran the lints and the host tests
+  # a second time beside it, ten of the run's minutes spent on nothing
+  # the check had not already said.
+  # ----------------------------------------------------------------
+  check:
+    name: cargo xtask check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+          targets: x86_64-unknown-none, aarch64-unknown-none-softfloat, armv7a-none-eabi, x86_64-unknown-uefi, aarch64-unknown-uefi, armv7-unknown-linux-musleabi
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            compositor -> target
+
+      # `cargo xtask check` first asks whether the commit hooks are armed,
+      # which is local configuration a fresh checkout does not have.
+      - name: Arm the commit hooks
+        run: git config core.hooksPath .githooks
+
+      - name: cargo xtask check
+        run: cargo xtask check
+
+  # ----------------------------------------------------------------
+  # The host tests on Windows: the coverage that is actually
+  # OS-specific -- xtask writes a FAT image and drives QEMU, and both of
+  # those behave differently there. fmt, clippy and the doc checks are
+  # platform-portable, and the `check` job runs them.
   # ----------------------------------------------------------------
   test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
+    name: Test (windows-latest)
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
 
@@ -213,81 +245,19 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
 
-      # fmt, clippy and the doc checks are platform-portable, so they run once
-      # on Linux. Windows still builds and runs the tests below, the coverage
-      # that is actually OS-specific -- xtask writes a FAT image and drives
-      # QEMU, and both of those behave differently there.
-      - name: Formatting
-        if: runner.os == 'Linux'
-        run: cargo fmt --all -- --check
-
-      # The native runtime and programs are freestanding like the kernel, so
-      # they are left out of every host step and linted per target below.
-      - name: Clippy (host libraries and xtask)
-        if: runner.os == 'Linux'
-        run: cargo xtask host-clippy
-
-      - name: Clippy (native runtime and programs, x86_64)
-        if: runner.os == 'Linux'
-        run: cargo xtask native-clippy --arch x86_64
-
-      - name: Clippy (native runtime and programs, AArch64)
-        if: runner.os == 'Linux'
-        run: cargo xtask native-clippy --arch aarch64
-
-      - name: Clippy (native runtime and programs, ARMv7-A)
-        if: runner.os == 'Linux'
-        run: cargo xtask native-clippy --arch armv7a
-
-      - name: Clippy (kernel, x86_64)
-        if: runner.os == 'Linux'
-        run: cargo clippy -p ferrix-kernel --target x86_64-unknown-none -- -D warnings
-
-      - name: Clippy (kernel, AArch64)
-        if: runner.os == 'Linux'
-        run: cargo clippy -p ferrix-kernel --target aarch64-unknown-none-softfloat -- -D warnings
-
-      - name: Clippy (loader, x86_64)
-        if: runner.os == 'Linux'
-        run: cargo clippy -p ferrix-boot --target x86_64-unknown-uefi -- -D warnings
-
-      - name: Clippy (loader, AArch64)
-        if: runner.os == 'Linux'
-        run: cargo clippy -p ferrix-boot --target aarch64-unknown-uefi -- -D warnings
-
-      - name: Clippy (kernel, ARMv7-A)
-        if: runner.os == 'Linux'
-        run: cargo clippy -p ferrix-kernel --target armv7a-none-eabi -- -D warnings
-
-      # Not a UEFI target -- rustc has none for 32-bit Arm. The loader is built
-      # as a static PIE for this one and converted to PE32 by xtask; see
-      # docs/arm32.md, decision 2.
-      - name: Clippy (loader, ARMv7-A)
-        if: runner.os == 'Linux'
-        run: cargo clippy -p ferrix-boot --target armv7-unknown-linux-musleabi -- -D warnings
-
       # The freestanding crates cannot run tests -- there is no host to run
       # them on -- which is exactly why the algorithmic core lives in libs/.
       - name: Tests
         run: cargo xtask host-test
 
-      # `cargo test --all-targets` skips doctests; the lint config denies
-      # broken intra-doc links, so run them too.
-      - name: Doc tests
-        if: runner.os == 'Linux'
-        run: cargo xtask host-doctest
-
-      - name: Documentation builds without warnings
-        if: runner.os == 'Linux'
-        run: cargo xtask host-doc
-
   # ----------------------------------------------------------------
   # ferrousli, the C library in Rust, is a cargo workspace of its own,
-  # so the `test` job's `--workspace` never reaches it. Since
-  # 2026-09-13 it is on the goal's path, and this job is its gate:
-  # `cargo xtask check --ferrousli`, the same command a landing runs,
-  # which adds ferrousli's generated-ABI check, fmt, clippy, and its
-  # tests in the debug and release profiles to the whole local gate.
+  # so the host steps' `--workspace` never reaches it. Since 2026-09-13
+  # it is on the goal's path, and this job is its gate: the steps
+  # `cargo xtask check --ferrousli` adds to the whole local gate --
+  # ferrousli's generated-ABI check, fmt, clippy, and its tests in the
+  # debug and release profiles -- beside the `check` job, which runs the
+  # rest. Until 2026-09-28 this job ran the whole gate again first.
   #
   # Seven of its unit tests compare with the glibc the test binary
   # links and skip on any other version than the one their data was
@@ -312,12 +282,6 @@ jobs:
           workspaces: |
             . -> target
             ferrousli -> target
-            compositor -> target
-
-      # `cargo xtask check` first asks whether the commit hooks are armed,
-      # which is local configuration a fresh checkout does not have.
-      - name: Arm the commit hooks
-        run: git config core.hooksPath .githooks
 
       # ferrousli's math tests judge every function against libc-test's
       # tables, read from a checkout at FERROUSLI_LIBC_TEST, never copied
@@ -332,8 +296,8 @@ jobs:
           test "$(git -C "$RUNNER_TEMP/libc-test" rev-parse HEAD)" = "$LIBC_TEST_COMMIT"
           echo "FERROUSLI_LIBC_TEST=$RUNNER_TEMP/libc-test" >> "$GITHUB_ENV"
 
-      - name: cargo xtask check --ferrousli
-        run: cargo xtask check --ferrousli
+      - name: cargo xtask check-ferrousli
+        run: cargo xtask check-ferrousli
 
   # ----------------------------------------------------------------
   # The artefacts: a bootable image per architecture.
@@ -528,10 +492,19 @@ jobs:
   # provenance or aliasing mistake would actually be made, and they are
   # written as pure functions of bytes precisely so this job can reach
   # them.
+  #
+  # Three runners, each taking about a third of the time: in one job the
+  # crates were an hour, interpretation being one thread per crate. Each
+  # step names its part, balanced by the times measured on 2026-09-28;
+  # `cargo xtask miri` runs the same crates side by side locally.
   # ----------------------------------------------------------------
   miri:
-    name: Miri (UB check)
+    name: Miri (UB check, part ${{ matrix.part }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3]
     steps:
       - uses: actions/checkout@v6
 
@@ -547,9 +520,11 @@ jobs:
         run: cargo +nightly miri setup
 
       - name: Miri (ELF reader)
+        if: matrix.part == 1
         run: cargo +nightly miri test -p ferrix-elf --lib
 
       - name: Miri (handoff ABI)
+        if: matrix.part == 1
         run: cargo +nightly miri test -p ferrix-bootinfo --lib
 
       # The initial process stack. Every address in the image is arithmetic on
@@ -557,18 +532,21 @@ jobs:
       # calculations; Miri checks both against the buffer's real provenance
       # rather than against the crate's own idea of where the buffer ends.
       - name: Miri (process stack image)
+        if: matrix.part == 1
         run: cargo +nightly miri test -p ferrix-ustack --lib
 
       # The handle table. Every native system call starts by turning a number
       # a program chose into a slot index, and the table hands objects out by
       # value across `mem::replace`; Miri checks both against real provenance.
       - name: Miri (handle table and message queue)
+        if: matrix.part == 1
         run: cargo +nightly miri test -p ferrix-objects --lib
 
       # The VFS takes up to four inode locks for one rename and hands out
       # dentries through weak references, which is aliasing Miri can see and
       # a test that merely passes cannot.
       - name: Miri (VFS)
+        if: matrix.part == 1
         run: cargo +nightly miri test -p ferrix-vfs --lib
 
       # PCI configuration space. The crate forbids unsafe, so what Miri adds
@@ -576,6 +554,7 @@ jobs:
       # pointer produces is used to index the test bus's buffers, and Miri
       # checks those indices against the buffers' real extent.
       - name: Miri (PCI configuration space)
+        if: matrix.part == 1
         run: cargo +nightly miri test -p ferrix-pci --lib
 
       # The block core. It forbids unsafe too, so again the gain is narrower
@@ -584,6 +563,7 @@ jobs:
       # a dispatch back as a borrow of the entry it just inserted. Miri runs
       # the model-based sequences over exactly that churn.
       - name: Miri (block request queue)
+        if: matrix.part == 1
         run: cargo +nightly miri test -p ferrix-block --lib
 
       # The block ring. The crate forbids unsafe, so as for PCI, what Miri adds
@@ -591,12 +571,14 @@ jobs:
       # memory's and the id table's real extent, including the lockstep tests
       # that race the two sides' want-bell handshakes on real threads.
       - name: Miri (block ring)
+        if: matrix.part == 1
         run: cargo +nightly miri test -p ferrix-blkring --lib
 
       # The native call wrappers. The crate forbids unsafe too; what Miri
       # checks is the tests' kernel writing through each call's borrowed
       # output buffers by address, which is the aliasing a real trap relies on.
       - name: Miri (native call wrappers)
+        if: matrix.part == 1
         run: cargo +nightly miri test -p ferrix-native --lib
 
       # The virtio-blk driver. Its tests run it against a fake device over a
@@ -605,6 +587,7 @@ jobs:
       # thousands of submissions and completions through them; Miri checks
       # each index against the buffer's real extent.
       - name: Miri (virtio-blk driver)
+        if: matrix.part == 2
         run: cargo +nightly miri test -p ferrix-virtio-blk --lib
 
       # The buddy allocator, which every page in the kernel comes from. Its
@@ -614,6 +597,7 @@ jobs:
       # long random workload runs a tenth of its host length here: at full
       # length it alone was nine minutes of interpretation.
       - name: Miri (frame allocator)
+        if: matrix.part == 1
         run: cargo +nightly miri test -p ferrix-frame --lib
 
       # The kernel heap. It keeps its free lists inside the free objects,
@@ -622,6 +606,7 @@ jobs:
       # neighbour. The tests back that trait with real buffers, and Miri checks
       # each link against the buffer it was carved from.
       - name: Miri (heap)
+        if: matrix.part == 2
         run: cargo +nightly miri test -p ferrix-heap --lib
 
       # Fallible construction for the certified item (finding F-23). `try_box`
@@ -630,6 +615,7 @@ jobs:
       # allocator that records and refuses; Miri checks the write, the layout
       # the `Box` is freed with, and the recording allocator itself.
       - name: Miri (fallible construction)
+        if: matrix.part == 1
         run: cargo +nightly miri test -p ferrix-fallible --lib
 
       # Page-table construction for every encoding the kernel builds: the
@@ -637,12 +623,14 @@ jobs:
       # derives each next table's index from the descriptor it just read,
       # which is exactly the arithmetic this job's comment is about.
       - name: Miri (page tables)
+        if: matrix.part == 3
         run: cargo +nightly miri test -p ferrix-paging --lib
 
       # The service manager's pure core. It forbids unsafe, so what Miri
       # adds is the parser's slicing of bytes a unit file chose, and the
       # borrows the loader and the manager take into the unit set.
       - name: Miri (service manager)
+        if: matrix.part == 3
         run: cargo +nightly miri test -p ferrix-svc --lib
 
       # The password hash authd keeps credentials under. It forbids unsafe;
@@ -650,6 +638,7 @@ jobs:
       # block, which a wrong lane length or segment would carry out of the
       # memory it was given.
       - name: Miri (password hash)
+        if: matrix.part == 2
         run: cargo +nightly miri test -p ferrix-argon2 --lib
 
   # ----------------------------------------------------------------
@@ -708,13 +697,24 @@ jobs:
       - name: Search
         # Thirty seconds each: long enough to explore what the diff changed,
         # short enough that the job stays inside a pull request's budget.
+        # One target per core, since each fuzzer is one process: one after
+        # the other, the targets were eighteen minutes. Each target's output
+        # is kept and printed whole when it ends, and every target runs
+        # whichever find something; the step fails if any did.
         run: |
-          for target in $(cargo +nightly fuzz list --fuzz-dir .); do
-            echo "::group::search $target"
-            cargo +nightly fuzz run --fuzz-dir . "$target" \
-              --target x86_64-unknown-linux-gnu -- -max_total_time=30
-            echo "::endgroup::"
-          done
+          search() {
+            log="$RUNNER_TEMP/search-$1.log"
+            if cargo +nightly fuzz run --fuzz-dir . "$1" \
+                --target x86_64-unknown-linux-gnu -- -max_total_time=30 >"$log" 2>&1; then
+              echo "searched $1"
+            else
+              echo "::group::search $1 FAILED"; cat "$log"; echo "::endgroup::"
+              echo "::error::fuzz target $1 found something"
+              return 1
+            fi
+          }
+          export -f search
+          cargo +nightly fuzz list --fuzz-dir . | xargs -P "$(nproc)" -I{} bash -c 'search {}'
         working-directory: tests/fuzz
 
       - name: Keep the crashing input

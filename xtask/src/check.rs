@@ -12,8 +12,21 @@ use crate::paths::{self, Arch};
 use crate::workspace;
 use crate::{Error, Result};
 
+/// `check`, or one of its steps run alone, by the command's name.
+pub(crate) fn command(name: &str, args: &Args) -> Result<()> {
+    match name {
+        "miri" => miri_all(args.jobs),
+        "check-ferrousli" => ferrousli(&paths::workspace_root()),
+        "host-clippy" => host_clippy(),
+        "host-test" => host_test(),
+        "host-doctest" => host_doctest(),
+        "host-doc" => host_doc(),
+        _ => run(args),
+    }
+}
+
 /// Run the gate set.
-pub(crate) fn run(args: &Args) -> Result<()> {
+fn run(args: &Args) -> Result<()> {
     let root = paths::workspace_root();
 
     // First because it is the cheapest, and because it is the gate that says
@@ -187,12 +200,11 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     }
 
     // Opt-in, because it is minutes rather than seconds and needs a nightly
-    // toolchain with the miri component: the same crates, in the same order,
-    // as CI's Miri job, so a UB report can be reproduced before pushing.
+    // toolchain with the miri component: the same crates as CI's Miri job, so
+    // a UB report can be reproduced before pushing. `cargo xtask miri` is the
+    // same step without everything above it.
     if args.miri {
-        for package in MIRI_PACKAGES {
-            step(&format!("miri ({package})"), || miri(package))?;
-        }
+        miri_all(args.jobs)?;
     }
 
     if args.fast {
@@ -707,7 +719,7 @@ fn host_cargo(
     cargo::run(process, what)
 }
 
-/// The crates CI's Miri job interprets, in its order.
+/// The crates CI's Miri jobs interpret, in their order.
 ///
 /// A test below reads `.github/workflows/ci.yml` and fails when the two
 /// disagree, so a step added to one and not the other is found by `cargo
@@ -731,13 +743,104 @@ const MIRI_PACKAGES: [&str; 16] = [
     "ferrix-argon2",
 ];
 
-/// `cargo +nightly miri test -p <package> --lib`.
+/// CI's Miri steps: every crate in [`MIRI_PACKAGES`], `jobs` at a time.
+///
+/// `cargo xtask miri` runs this alone, and `check --miri` last. Miri builds
+/// nothing but each crate's MIR, which takes seconds; the time is all
+/// interpretation, one thread per crate, so the crates run side by side. One
+/// interpreter held at most 400 MiB on 2026-09-28, so eight at once fit
+/// beside everything else a shared host is doing. Each crate's output is kept
+/// and printed whole when it ends, so the logs of crates run together do not
+/// interleave, and every crate runs whichever fail.
+pub(crate) fn miri_all(jobs: Option<u32>) -> Result<()> {
+    step("miri setup", || {
+        cargo::run(miri_command(&["setup"]), "cargo +nightly miri setup")
+    })?;
+    let jobs = jobs.map_or_else(
+        || {
+            std::thread::available_parallelism()
+                .map_or(1, std::num::NonZero::get)
+                .min(8)
+        },
+        |jobs| usize::try_from(jobs).unwrap_or(usize::MAX),
+    );
+    println!(
+        "\n== miri: {} crates, {} at a time",
+        MIRI_PACKAGES.len(),
+        jobs.min(MIRI_PACKAGES.len())
+    );
+    let queue = std::sync::Mutex::new(MIRI_PACKAGES.iter());
+    let failed = std::sync::Mutex::new(Vec::new());
+    let started = std::time::Instant::now();
+    let worker = || {
+        loop {
+            // Its own statement, so the queue's guard is dropped here: in a
+            // `while let` it would live through the crate's whole run, and
+            // the crates would take turns.
+            let next = lock(&queue).next();
+            let Some(package) = next else { break };
+            if !miri_one(package) {
+                lock(&failed).push(*package);
+            }
+        }
+    };
+    std::thread::scope(|scope| {
+        for _ in 0..jobs.min(MIRI_PACKAGES.len()) {
+            let _ = scope.spawn(worker);
+        }
+    });
+    let failed = failed
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let elapsed = started.elapsed().as_secs();
+    if failed.is_empty() {
+        println!(
+            "\n== miri: every crate passed in {}m{:02}s",
+            elapsed / 60,
+            elapsed % 60
+        );
+        Ok(())
+    } else {
+        Err(Error::new(format!("miri failed in {}", failed.join(", "))))
+    }
+}
+
+/// `cargo +nightly miri test -p <package> --lib`, its output printed in one
+/// piece when it ends; whether it passed.
+fn miri_one(package: &str) -> bool {
+    let started = std::time::Instant::now();
+    let output = miri_command(&["test", "-p", package, "--lib"])
+        .stdin(Stdio::null())
+        .output();
+    let elapsed = started.elapsed().as_secs();
+    let took = format!("{}m{:02}s", elapsed / 60, elapsed % 60);
+    match output {
+        Ok(output) if output.status.success() => {
+            println!("miri ({package}): passed in {took}");
+            true
+        }
+        Ok(output) => {
+            println!(
+                "\n== miri ({package}): FAILED after {took}\n{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            false
+        }
+        Err(error) => {
+            println!("miri ({package}): could not run cargo: {error}");
+            false
+        }
+    }
+}
+
+/// `cargo +nightly miri <arguments>` in the workspace.
 ///
 /// Through the rustup proxy by name rather than [`cargo_binary`]: `CARGO` is
 /// the pinned toolchain's own cargo, which does not understand `+nightly`. The
 /// variables the outer cargo exported would otherwise pin the inner one back
 /// to that toolchain.
-fn miri(package: &str) -> Result<()> {
+fn miri_command(arguments: &[&str]) -> Command {
     let mut command = Command::new("cargo");
     let _ = command
         .current_dir(paths::workspace_root())
@@ -745,8 +848,17 @@ fn miri(package: &str) -> Result<()> {
         .env_remove("CARGO")
         .env_remove("RUSTC")
         .env_remove("RUSTDOC")
-        .args(["+nightly", "miri", "test", "-p", package, "--lib"]);
-    cargo::run(command, "cargo +nightly miri test")
+        .args(["+nightly", "miri"])
+        .args(arguments);
+    command
+}
+
+/// A mutex's value, whether or not a thread panicked holding it: the queue
+/// and the failure list stay whole either way.
+fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Announce a gate, run it, and report.

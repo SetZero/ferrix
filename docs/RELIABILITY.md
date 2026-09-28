@@ -169,14 +169,21 @@ becomes a boot test and stays in CI forever after.
 Miri interprets the host tests of the `libs/` crates the kernel leans on
 hardest, checking every borrow, index and pointer against the allocation it
 came from. CI's Miri job names each crate in its own step, with the reason it
-is there; `cargo xtask check --miri` runs the same list locally, and an xtask
-test fails when the two disagree.
+is there, split over three runners; `cargo xtask miri` runs the same list
+locally, the crates side by side and nothing else built (`cargo xtask check
+--miri` runs it after the whole gate), and an xtask test fails when the list
+and the workflow disagree. On 2026-09-28 the local run took four minutes,
+each interpreter under half a gigabyte.
 
-A test that is merely slow under interpretation runs shorter under
-`cfg(miri)` rather than being skipped: the frame allocator's random workload
-runs 2,000 of its 20,000 steps there. A test that cannot run under Miri at all
-gets `#[cfg_attr(miri, ignore)]` with the reason beside it, never a blanket
-skip of the crate.
+A test that is slow under interpretation is first made cheap: Miri charges
+for every step the test itself takes, so a loop that builds or compares its
+data a byte at a time can cost more than the code under test, and a slice
+copy or comparison costs one step. The pipe's model test went from hours to
+seconds that way and now runs its full length under Miri. What is still slow
+runs shorter under `cfg(miri)` rather than being skipped: the frame
+allocator's random workload runs 2,000 of its 20,000 steps there. A test that
+cannot run under Miri at all gets `#[cfg_attr(miri, ignore)]` with the reason
+beside it, never a blanket skip of the crate.
 
 ## Fuzzing
 

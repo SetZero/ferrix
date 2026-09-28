@@ -79,6 +79,9 @@ pub(crate) struct Args {
     pub(crate) adbd: bool,
     /// `--miri`: add CI's Miri steps to `check`.
     pub(crate) miri: bool,
+    /// `--jobs`, how many crates `miri` interprets at once; `None` for as
+    /// many as it picks itself.
+    pub(crate) jobs: Option<u32>,
     /// `--reset`: the image carries `ferrix.onexit=reset` in `CMDLINE.TXT`, and
     /// `test-boot` requires QEMU to see the machine reset rather than power off.
     pub(crate) reset: bool,
@@ -527,7 +530,7 @@ impl Args {
                 "--screens" => args.screens = number(&mut items, "--screens")?,
                 "--arch" => args.arch = Some(value(&mut items, "--arch")?),
                 "--smp" | "--memory" | "--timeout" => args.machine(&item, &mut items)?,
-                "--seeds" => args.seeds = number(&mut items, "--seeds")?,
+                "--seeds" | "--jobs" => args.counts(&item, &mut items)?,
                 "--accel" => args.accel = Some(value(&mut items, "--accel")?),
                 "--to" => args.to = Some(value(&mut items, "--to")?),
                 "--stage" => args.stage = Some(value(&mut items, "--stage")?),
@@ -579,6 +582,15 @@ impl Args {
         }
 
         Ok(args)
+    }
+
+    /// `--seeds` and `--jobs`: how many of something a command makes or runs.
+    fn counts(&mut self, key: &str, items: &mut impl Iterator<Item = String>) -> Result<()> {
+        match key {
+            "--seeds" => self.seeds = number(items, key)?,
+            _ => self.jobs = Some(count(items, key)?),
+        }
+        Ok(())
     }
 
     /// `--smp`, `--memory` and `--timeout`: the machine's size, each
@@ -762,6 +774,14 @@ mod tests {
         assert!(args.strip_kernel);
         assert_eq!(args.memory, 16);
         assert!(!parse(&["test-boot"]).unwrap().strip_kernel, "opt-in");
+    }
+
+    #[test]
+    fn jobs_are_a_count_of_at_least_one() {
+        assert_eq!(parse(&["miri"]).unwrap().jobs, None, "unset picks its own");
+        assert_eq!(parse(&["miri", "--jobs", "3"]).unwrap().jobs, Some(3));
+        assert!(parse(&["miri", "--jobs", "0"]).is_err());
+        assert!(parse(&["miri", "--jobs", "many"]).is_err());
     }
 
     #[test]

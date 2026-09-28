@@ -13,6 +13,7 @@
 //! cargo xtask test-selfhost [--accel kvm] [--release] [--smp N] [--memory M] [--timeout SECONDS] [--plan DIR]
 //! cargo xtask builds-execute --plan DIR
 //! cargo xtask check     [--fast] [--ferrousli] [--zinc] [--miri]
+//! cargo xtask miri      [--jobs N]
 //! cargo xtask remote-desktop [--host DEST] [--config PATH] [--vnc :N] [--send head]
 //!                       [--viewer tigervnc|realvnc] [--layout de] [--no-viewer]
 //!                       [--print-command] [--stop] [-- ARGS...]
@@ -243,6 +244,10 @@ COMMANDS:
     host-test     check's host test step alone, as CI runs it
     host-doctest  check's doc test step alone, as CI runs it
     host-doc      check's documentation step alone, as CI runs it
+    check-ferrousli
+                  check --ferrousli's ferrousli steps alone, as CI runs them
+    miri          CI's Miri steps alone, --jobs crates at a time, building nothing else
+                  (needs a nightly toolchain with miri)
     native-clippy check's clippy of the native programs for --arch, as CI runs it
     model-doc     Regenerate docs/generated/ from the SysML model
     busybox       Build busybox against ferrousli (x86_64) for --init ferrousli
@@ -391,6 +396,7 @@ OPTIONS:
     --installer                          build, run: carry /sbin/ferrix-install and its root volume (the live image)
     --adbd                               build, run: carry adbd at /bin/adbd, started by nobody (docs/ADB.md)
     --miri                               check: add CI's Miri steps (needs nightly and miri)
+    --jobs <N>                           miri: crates interpreted at once, by default one per core up to 8
     --reset-root                         run, run-compositor: start the btrfs root over from a fresh install
     --tmpfs-root                         run, run-compositor: / in memory instead of on the btrfs root disk
     --btrfs-root                         test-chrome-window: / on a btrfs root disk made fresh for the run
@@ -512,11 +518,8 @@ fn run() -> Result<()> {
                 .ok_or_else(|| Error::new("builds-execute needs --plan DIR"))?;
             builds::execute(std::path::Path::new(plan)).map(|_| ())
         }
-        "check" => check::run(&args),
-        "host-clippy" => check::host_clippy(),
-        "host-test" => check::host_test(),
-        "host-doctest" => check::host_doctest(),
-        "host-doc" => check::host_doc(),
+        "check" | "miri" | "check-ferrousli" | "host-clippy" | "host-test" | "host-doctest"
+        | "host-doc" => check::command(command, &args),
         "native-clippy" => args
             .arches()?
             .into_iter()
