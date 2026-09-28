@@ -770,6 +770,28 @@ fn alive(pid: u32) -> Result<Arc<Process>> {
     registry::find(pid).ok_or(Errno::ENOENT)
 }
 
+/// Where following `/proc/<pid>/fd/<fd>` leads: the open file's own location,
+/// for a file a path reached and for a pipe. So a file renamed or deleted
+/// since it was opened opens again, and a pipe opens as a new end of itself,
+/// which is how `/dev/fd/63` from bash's `<(...)` works (`fs::pipe`).
+///
+/// `None` -- the link followed as its text, `socket:[5]` and the like, which
+/// leads nowhere -- for every other object no path reaches: a socket, and an
+/// eventfd, epoll or other anonymous file, which Linux refuses to open again
+/// with `ENXIO` and which here have no second opening to give.
+fn descriptor_location(pid: u32, fd: i32) -> Option<Result<Location>> {
+    let process = match alive(pid) {
+        Ok(process) => process,
+        Err(errno) => return Some(Err(errno)),
+    };
+    let file = process.files().lock().get(fd).map(Arc::clone);
+    let Ok(file) = file else {
+        return Some(Err(Errno::ENOENT));
+    };
+    let location = file.location();
+    (!location.is_detached() || fs::pipe::is_pipe(&file)).then(|| Ok(location.clone()))
+}
+
 /// The ids of a process's threads that have not begun to end, in order; its
 /// own pid alone for a process the kernel made without listing a thread, as
 /// `render::thread_count` counts it.
@@ -992,7 +1014,14 @@ impl Inode for Node {
     /// A process whose program came from no file -- the kernel's own checks,
     /// a built-in init -- has no file to lead to, and its link is followed as
     /// the text it reads as.
+    ///
+    /// `/proc/<pid>/fd/<n>` is one too, as Linux's `proc_fd_link` makes it:
+    /// followed, it is where the open file is, whatever name reaches it now.
+    /// See [`descriptor_location`].
     fn link_location(&self) -> Option<Result<Location>> {
+        if let Place::Descriptor(pid, fd) = self.place {
+            return descriptor_location(pid, fd);
+        }
         let Place::Entry(pid, index) = self.place else {
             return None;
         };

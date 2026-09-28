@@ -301,6 +301,25 @@ const SHM_CURSOR: u64 = (1 << 48) + 6;
 /// in.
 const SHM: &[u8] = b"shm";
 
+/// The symbolic links every Linux `/dev` has, and where each leads: the
+/// caller's descriptor table in procfs. Userspace makes them on Linux --
+/// udev, systemd, an initramfs's `init` -- after mounting devtmpfs; this
+/// `/dev` cannot be written, so it carries them, as it carries `shm`. Bash
+/// opens `/dev/fd/63` for a process substitution, `<(...)` and `>(...)`,
+/// and a script writes to `/dev/stderr` by name.
+static LINKS: [(&[u8], &[u8]); 4] = [
+    (b"fd", b"/proc/self/fd"),
+    (b"stdin", b"/proc/self/fd/0"),
+    (b"stdout", b"/proc/self/fd/1"),
+    (b"stderr", b"/proc/self/fd/2"),
+];
+
+/// `LINKS[index]`'s inode number is this plus its index.
+const LINK_INO_BASE: u64 = 1 << 45;
+
+/// The root's cursor for `LINKS[0]`, after `/dev/snd`'s; the rest follow it.
+const LINK_CURSOR: u64 = (1 << 48) + 10;
+
 /// A devfs instance.
 #[derive(Debug)]
 pub(crate) struct Devfs {
@@ -683,6 +702,8 @@ enum Place {
     /// boot mounts the filesystem that holds the files, and what this node is
     /// for is being somewhere to mount it.
     Shm,
+    /// `LINKS[index]`.
+    Link(usize),
 }
 
 /// A devfs inode.
@@ -712,7 +733,8 @@ impl Node {
             | Place::SoundPcm(_)
             | Place::Pts
             | Place::Slave(_)
-            | Place::Shm => None,
+            | Place::Shm
+            | Place::Link(_) => None,
         }
     }
 }
@@ -788,6 +810,7 @@ impl Inode for Node {
                 permissions: 0o1777,
                 ..directory
             },
+            (Place::Link(index), _) => link_metadata(index, directory),
             (Place::Slave(number), _) => Metadata {
                 atime: self.made,
                 mtime: self.made,
@@ -839,7 +862,13 @@ impl Inode for Node {
     fn is_stream(&self) -> bool {
         !matches!(
             self.place,
-            Place::Root | Place::Dri | Place::Input | Place::Snd | Place::Pts | Place::Shm
+            Place::Root
+                | Place::Dri
+                | Place::Input
+                | Place::Snd
+                | Place::Pts
+                | Place::Shm
+                | Place::Link(_)
         )
     }
 
@@ -1089,6 +1118,12 @@ impl Inode for Node {
                 made: self.made,
             }));
         }
+        if let Some(index) = LINKS.iter().position(|(link, _)| *link == name) {
+            return Ok(Arc::new(Node {
+                place: Place::Link(index),
+                made: self.made,
+            }));
+        }
         if let Some(index) = DEVICES.iter().position(|device| device.name == name) {
             return Ok(node(index, self.made));
         }
@@ -1204,8 +1239,20 @@ impl Inode for Node {
                 return Ok(());
             }
         }
-        emit_snd(cursor, emit);
+        if emit_snd(cursor, emit) {
+            emit_links(cursor, emit);
+        }
         Ok(())
+    }
+
+    fn read_link(&self) -> Result<Vec<u8>> {
+        match self.place {
+            Place::Link(index) => LINKS
+                .get(index)
+                .map(|(_, target)| target.to_vec())
+                .ok_or(Errno::ENOENT),
+            _ => Err(Errno::EINVAL),
+        }
     }
 
     /// A card's pages, which `MODE_MAP_DUMB`'s offsets are into.
@@ -1450,14 +1497,46 @@ fn sound_metadata(place: Place, made: Timespec, directory: Metadata) -> Metadata
     }
 }
 
-/// The root's entry for `/dev/snd`, while a card is published.
-fn emit_snd(cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) {
+/// `LINKS[index]`'s metadata: `directory`'s times and owner, a link's kind.
+fn link_metadata(index: usize, directory: Metadata) -> Metadata {
+    Metadata {
+        ino: LINK_INO_BASE.saturating_add(index as u64),
+        kind: FileType::Symlink,
+        permissions: 0o777,
+        nlink: 1,
+        size: LINKS
+            .get(index)
+            .map_or(0, |(_, target)| target.len() as u64),
+        ..directory
+    }
+}
+
+/// The root's entries for [`LINKS`], from `cursor` on, last in a listing.
+fn emit_links(cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) {
+    let first = usize::try_from(cursor.saturating_sub(LINK_CURSOR)).unwrap_or(usize::MAX);
+    for (index, (name, _)) in LINKS.iter().enumerate().skip(first) {
+        let entry = DirEntry {
+            ino: LINK_INO_BASE.saturating_add(index as u64),
+            kind: FileType::Symlink,
+            name,
+            next: LINK_CURSOR.saturating_add(index as u64 + 1),
+        };
+        if !emit(entry) {
+            return;
+        }
+    }
+}
+
+/// The root's entry for `/dev/snd`, while a card is published; whether the
+/// listing may go on.
+fn emit_snd(cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> bool {
     if cursor <= SND_CURSOR && !crate::audio::card_indices().is_empty() {
-        let _ = emit(DirEntry {
+        return emit(DirEntry {
             ino: SND_INO,
             kind: FileType::Directory,
             name: SND,
             next: SND_CURSOR + 1,
         });
     }
+    true
 }

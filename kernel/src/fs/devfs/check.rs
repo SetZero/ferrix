@@ -35,8 +35,8 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{
-    AT_FDCWD, BLKGETSIZE64, BLKROGET, BLKRRPART, BLKSSZGET, DT_BLK, DT_CHR, DT_DIR, MAP_ANONYMOUS,
-    MAP_PRIVATE, O_PATH, O_RDONLY, O_RDWR, PROT_READ, PROT_WRITE, S_IFBLK, SEEK_END,
+    AT_FDCWD, BLKGETSIZE64, BLKROGET, BLKRRPART, BLKSSZGET, DT_BLK, DT_CHR, DT_DIR, DT_LNK,
+    MAP_ANONYMOUS, MAP_PRIVATE, O_PATH, O_RDONLY, O_RDWR, PROT_READ, PROT_WRITE, S_IFBLK, SEEK_END,
     STATX_BASIC_STATS, Statx, TCGETS,
 };
 use ferrix_vfs::Errno;
@@ -96,6 +96,8 @@ const STATIC_NODES: [&[u8]; 8] = [
 /// there unconditionally, and the one this filesystem does not publish a
 /// device for.
 const SHM: &[u8] = b"shm";
+/// The links every Linux `/dev` has, listed after `shm`, in this order.
+const LINKS: [&[u8]; 4] = [b"fd", b"stdin", b"stdout", b"stderr"];
 
 /// Where `/dev` is staged in the check's page.
 const AT_DEV: u64 = 0;
@@ -851,7 +853,8 @@ fn read_listing(
 }
 
 /// Require a listing to be the character nodes, each once and in order, then
-/// `disks`, each once and in order, and `shm` last, with the kinds they have.
+/// `disks`, each once and in order, then `shm` and the links, with the kinds
+/// they have.
 /// Returns the first disk's inode number, or 0 with none.
 fn expect_listing(
     listed: &Listed,
@@ -863,6 +866,7 @@ fn expect_listing(
         .iter()
         .chain(disks.iter())
         .chain(core::iter::once(&SHM))
+        .chain(LINKS.iter())
         .copied();
     if !names.eq(want) {
         return Err(what);
@@ -874,8 +878,10 @@ fn expect_listing(
                 DT_CHR
             } else if at < last {
                 DT_BLK
-            } else {
+            } else if at == last {
                 DT_DIR
+            } else {
+                DT_LNK
             }
     });
     if !kinds_right {

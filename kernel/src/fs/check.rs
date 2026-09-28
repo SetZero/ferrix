@@ -657,6 +657,13 @@ const AT_ZEROS: u64 = 1168;
 const AT_DEV_NULL: u64 = 1184;
 /// The two `iovec`s the FIFO's `readv` fills, after `/dev/null`'s ten.
 const AT_IOVEC: u64 = 1200;
+/// `/proc/<pid>/fd/<fd>` of a pipe's write end, written at run time: room
+/// for the longest pid and descriptor, after the `iovec`s' 32.
+const AT_FD_PATH: u64 = 1232;
+/// `/dev/stdin`.
+const AT_DEV_STDIN: u64 = 1264;
+/// Where the link `/dev/stdin` is read to.
+const AT_STDIN_LINK: u64 = 1280;
 /// Where `/proc/mounts` is read to, to the end of the page.
 const AT_LISTING: u64 = 1536;
 
@@ -678,6 +685,7 @@ const DEV_ZERO: &[u8] = b"/tmp/stage8-dev/zero\0";
 const MOUNTS: &[u8] = b"/proc/mounts\0";
 const SHM_FILE: &[u8] = b"/dev/shm/stage8\0";
 const DEV_NULL: &[u8] = b"/dev/null\0";
+const DEV_STDIN: &[u8] = b"/dev/stdin\0";
 
 /// The flags an init script mounts `/proc` with.
 const PROC_FLAGS: u32 = MS_NOSUID | MS_NODEV | MS_NOEXEC | MS_RELATIME;
@@ -771,6 +779,7 @@ fn check_the_calls(process: &Process) -> Result<u64, &'static str> {
         (AT_MOUNTS, MOUNTS),
         (AT_SHM_FILE, SHM_FILE),
         (AT_DEV_NULL, DEV_NULL),
+        (AT_DEV_STDIN, DEV_STDIN),
     ] {
         uaccess::copy_to_user(process.space(), page + offset, bytes)
             .map_err(|_| "could not stage the file system call checks")?;
@@ -784,6 +793,9 @@ fn check_the_calls(process: &Process) -> Result<u64, &'static str> {
         })
         .and_then(|piped| check_a_stream_read_takes_all_there_is(process, page).map(|()| piped))
         .and_then(|piped| check_a_fifo_is_one_pipe(process, page).map(|fifo| piped + fifo))
+        .and_then(|piped| {
+            check_a_pipe_opens_again_through_proc(process, page).map(|again| piped + again)
+        })
         .and_then(|bytes| check_statfs_says_tmp_is_tmpfs(process, page).map(|()| bytes))
         .and_then(|bytes| check_truncate_and_fallocate_grow(process, page).map(|()| bytes))
         .and_then(|bytes| check_a_new_file_is_dated_now().map(|()| bytes))
@@ -1391,6 +1403,79 @@ fn check_a_fifo_is_one_pipe(process: &Process, page: u64) -> Result<u64, &'stati
         0,
         "a FIFO's reader would not close",
     )?;
+    Ok(len as u64)
+}
+
+/// A pipe's end opens again through `/proc/<pid>/fd/<fd>`, as bash's
+/// `>(...)` opens `/dev/fd/63`: the new descriptor writes into the same pipe,
+/// the old one can close without ending it, and closing the new one does --
+/// the reopened end holds nothing of the old one open. And `/dev/stdin` is
+/// the link every Linux `/dev` carries to it.
+fn check_a_pipe_opens_again_through_proc(
+    process: &Process,
+    page: u64,
+) -> Result<u64, &'static str> {
+    answers(
+        pipe::sys_pipe2(process, page + AT_FDS, 0),
+        0,
+        "pipe2 was refused",
+    )?;
+    let (reader, writer) = pair(process, page)?;
+    let path = alloc::format!("/proc/{}/fd/{writer}\0", process.pid());
+    uaccess::copy_to_user(process.space(), page + AT_FD_PATH, path.as_bytes())
+        .map_err(|_| "could not stage a pipe's /proc/<pid>/fd path")?;
+    let again = descriptor(
+        fd::sys_openat(process, AT_FDCWD, page + AT_FD_PATH, O_WRONLY, 0),
+        "a pipe's write end would not open again through /proc/<pid>/fd",
+    )?;
+    answers(
+        fd::sys_close(process, writer),
+        0,
+        "a pipe's write end would not close",
+    )?;
+    let len = DATA.len();
+    answers(
+        file::sys_write(process, again, page + AT_DATA, len as u64),
+        len,
+        "a write into a pipe opened through /proc/<pid>/fd came back short",
+    )?;
+    answers(
+        file::sys_read(process, reader, page + AT_BACK, 64),
+        len,
+        "a pipe did not read what its end opened through /proc/<pid>/fd wrote",
+    )?;
+    if read_back(process, page + AT_BACK, len)? != DATA {
+        return Err("a pipe opened through /proc/<pid>/fd gave back different bytes");
+    }
+    answers(
+        fd::sys_close(process, again),
+        0,
+        "a pipe's end opened through /proc/<pid>/fd would not close",
+    )?;
+    answers(
+        file::sys_read(process, reader, page + AT_BACK, 64),
+        0,
+        "a pipe whose writers opened through /proc/<pid>/fd had all closed did not read end of \
+         file",
+    )?;
+    answers(
+        fd::sys_close(process, reader),
+        0,
+        "a pipe's read end would not close",
+    )?;
+    let want = b"/proc/self/fd/0";
+    answers(
+        by_number(
+            process,
+            Syscall::Readlinkat,
+            [CWD, page + AT_DEV_STDIN, page + AT_STDIN_LINK, 32, 0, 0],
+        ),
+        want.len(),
+        "/dev/stdin is not a link of /proc/self/fd/0's length",
+    )?;
+    if read_back(process, page + AT_STDIN_LINK, want.len())? != want {
+        return Err("/dev/stdin does not lead to /proc/self/fd/0");
+    }
     Ok(len as u64)
 }
 

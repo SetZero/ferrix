@@ -541,8 +541,10 @@ fn shared_pipe(key: (u64, u64)) -> Result<Arc<Pipe>, Errno> {
 }
 
 /// An open file of a named pipe, made into an end of the pipe every opener of
-/// that node shares. Anything else -- and a FIFO opened with `O_PATH`, which
-/// is a handle on the name -- comes back as it was.
+/// that node shares; or of an anonymous pipe's end, reached through
+/// `/proc/<pid>/fd`, made into a new end of that pipe. Anything else -- and a
+/// FIFO opened with `O_PATH`, which is a handle on the name -- comes back as
+/// it was.
 ///
 /// # Errors
 ///
@@ -559,18 +561,43 @@ pub(crate) fn attach_fifo(file: Arc<OpenFile>) -> Result<Arc<OpenFile>, Errno> {
     }
     let nonblock = file.status().nonblock;
     let metadata = file.inode().metadata();
+    // An anonymous pipe opened again through `/proc/<pid>/fd/<n>`, as bash's
+    // `<(...)` and `>(...)` open `/dev/fd/63`: the walk arrived at the end
+    // the descriptor holds, and the new end joins that end's pipe, as Linux's
+    // `fifo_open` finds the pipe on the inode.
+    if let Some(end) = end_of(&file) {
+        let pipe = Arc::clone(&end.pipe);
+        // The open file the walk made holds the old end as its inode, which
+        // would count that end in for as long as the new one is open; the
+        // new end gets a location of its own, as `pipe2`'s do.
+        drop((end, file));
+        let end = new_end(&pipe, reads, writes, nonblock, metadata)?;
+        return open_end(end, format!("pipe:[{}]", metadata.ino).as_bytes(), nonblock);
+    }
     let key = (file.location().mount.filesystem().device(), metadata.ino);
     let pipe = shared_pipe(key)?;
+    file.with_io(new_end(&pipe, reads, writes, nonblock, metadata)?)
+}
+
+/// A new end on `pipe`, reading or writing or both, once `open(2)`'s rules
+/// for a FIFO allow it: see [`attach_fifo`].
+fn new_end(
+    pipe: &Arc<Pipe>,
+    reads: bool,
+    writes: bool,
+    nonblock: bool,
+    metadata: Metadata,
+) -> Result<Arc<End>, Errno> {
     let no_reader = pipe.buffer.lock().readers() == 0;
     if writes && !reads && nonblock && no_reader {
         return Err(Errno::ENXIO);
     }
-    let end = End::open(&pipe, reads, writes, metadata)?;
+    let end = End::open(pipe, reads, writes, metadata)?;
     if !nonblock && reads != writes {
         // On failure `end` is dropped, which counts it out again.
-        wait_for_partner(&pipe, reads)?;
+        wait_for_partner(pipe, reads)?;
     }
-    file.with_io(end)
+    Ok(end)
 }
 
 /// Block a FIFO opener until the other kind of end has opened: a writer for a
