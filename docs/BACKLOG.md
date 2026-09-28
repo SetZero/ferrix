@@ -244,7 +244,7 @@ gates that fail on `main` itself, not flakes, and come before any row below.
 
 | Item | Owner |
 |---|---|
-| None known on 2026-09-27: the git and foot port failures were fixed by d567d050 | -- |
+| `test-vfs` on x86_64 (seen with the musl busybox, 2026-09-28, on steam-i5b rebased onto 187e5b04, which has the installer): its `fdisk -l` step expects no output, and now prints `Disk /dev/vda: 64 MB ...` and `/dev/vdb`, since the installer's b923d7a6 lets a block node open as a file. The expectation in `xtask/src/vfs.rs` ("finding nothing it can open") needs the installer's view; the same run passed on the base before the installer (846a8cf8). Log: `~/ferrix-logs/steam-i5b/gate/re/vfs-musl.log` | open, found by steam-i5b |
 
 ## The path to the goal, in order
 
@@ -274,6 +274,7 @@ what is left, ordered by what blocks what.
 | Per-open windows onto the card VMO: a program that mapped `/dev/dri/card0` and closed it can still read what the next opener draws, since the exclusive open does not end a mapping (`docs/DISPLAY.md` §2.3). Until then `card0` is `0660` and root's, accepted for iteration 1 by os-f6 2026-09-16. Each open gets its own view of the card's pages, which comes with stage 19's render node | open, with stage 19's render node | 17, 19 |
 | Trusting a BAR firmware placed but did not enable. **Started 2026-09-19:** `libs/platform/fdt` now reads a host bridge's `ranges` into `PciWindow`s that keep the bus and CPU addresses apart, with `holds`/`translate` and seven host tests (QEMU `virt`'s own three entries among them). Left, in order: the same windows on ACPI machines, which needs the loader to call `EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL.Configuration()` before `ExitBootServices` and carry them in `BootInfo` (a version bump); the vetting itself in `kernel/src/pci.rs` -- whole BAR in one window, window kind, prefetchable one way only, every bridge upstream forwarding and decoding, decoding-on BARs admitted first, unassigned BARs reported as unassigned; and turning decoding on at `IoMapping` creation rather than at enumeration | ferrix-d9 | 10 |
 | CI's Miri step for `libs/fs/btrfs`: CI runs Miri over `libs/fs/block`'s request queue and not over btrfs. Under 15 minutes, with the whole-image tests ignored under Miri | open | 11 |
+| Steam's bootstrapper (I5b, `docs/I386.md`): `cargo xtask test-steam-bootstrap` reaches the client's "Unable to open X11 display" on Ferrix only with scout's requirements check set aside and an i386 semaphore stand-in preloaded (`FERRIX_STEAM_PRELOAD`, 2026-09-28, branch `steam-i5b`, run log `~/ferrix-logs/steam-i5b/run8.log`). Without the stand-in the client waits forever at its System V semaphores, which branch `steam-sysv-sem` is building; the gate passes once they land. Without namespaces the check stays set aside, and the client's UI (`steamwebhelper`, in pressure-vessel) will need them after the display. What the display side needs: GLX from the X server and i386 Mesa beside the client (`glXChooseVisual` failing is fatal), RandR | open | 22 |
 
 ### P1 flakes — seen on a gate, each with its log
 
@@ -300,6 +301,7 @@ log path and commit; a new sighting is added to its row the day it is seen.
 
 | Item | Owner |
 |---|---|
+| Linux gates `/proc/<pid>/fd/<n>`'s magic link (`proc_fd_link`) with `ptrace_may_access`, which refuses a same-uid caller against a non-dumpable or set-user-id target; Ferrix only checks the uid, through the directory's 0500 (found in the certification review of the I5b `/dev/fd` change, 2026-09-28) | open |
 | The user's own launcher script's toggle never takes fuzzel away: in `~/.local/bin/hypr-launcher`, a second `SUPER R` runs `pkill -x fuzzel`, but on Ferrix it starts a second fuzzel instead (seen 2026-09-27 in `test-compositor --boot fuzzel-user`). The desktop image's busybox has `pkill` with `-x`. `Process::comm` (`kernel/src/syscall/process.rs`) should read `fuzzel`, and `/proc`'s process list (`list_root` in `kernel/src/fs/procfs.rs`) is not scoped by job. Neither explains the miss yet. Where to start: a boot that reads the running fuzzel's `/proc/<pid>/stat` and `/comm` and compares them with what `pkill -x` matches. `fuzzel-user` checks only that the bind opens fuzzel. Also check fuzzel's single-instance lock: its path comes from the absolute `WAYLAND_DISPLAY` and cannot be created (`/tmp/fuzzel-/tmp/wayland-1.lock`) | ferrix-d5 |
 | Chrome drops video frames with the host only moderately loaded. `cargo xtask bench-chrome-video --gl --accel kvm` dropped 13–27% of a 720p30 video's frames at a load of 16–27, glibc and ferrousli alike, after the futex buckets (df446dc3), with the guest 14–18% busy. The compositor drew about 45 frames a second, each taking 6–15 ms, mostly its `flip` to QEMU's GPU. Where to start: whether Chrome's `BeginFrame`s follow hyprix's frame callbacks late, so its video compositor misses deadlines, and whether a flip must finish before the next frame callback goes out. Logs: `~/.local/share/ferrix/logs/yt-ab/after-glibc-lowload.log` and `after-ferrousli-1.log` on example; `docs/CHROME.md` §9 | open |
 | A job's processor load can still take in a task after its last leave, found reading the FX-0905 fix (2653b567): a task woken from another processor is joined to its job's load in `Task::set_state`, and if that processor is stalled mid-`join_group` while the task has already exited and left, the join lands after the leave. The quota check's spinners never block, so FX-0905's check cannot see it; the processor share would stay counted for a gone task. Separately, `quota::adjust`'s busy/idle flip can drift across processors, which W-13 (`docs/certification/IMPLEMENTATION.md`) already records. Where to start: make the join and the task's liveness one step, as the FX-0905 fix did for the leave | open |
@@ -865,6 +867,16 @@ otherwise; one a later decision replaced is deleted, and the history keeps it.
 * System V semaphores for Steam (i386 `ipc` 117, `semget`/`semctl`, still
   `ENOSYS`): steamcmd survives without them, printing a `threadtools`
   assertion; whether the Steam client does is untested (`docs/I386.md`, I5).
+  **Answered 2026-09-28 (I5b):** the client does not -- it waits forever
+  after "Thread synchronization object is unuseable", before any download;
+  the customer decided to build them (branch `steam-sysv-sem`).
+* User namespaces for Steam (I5b of `docs/I386.md`): scout's requirements
+  check refuses a kernel without them ("Steam now requires user namespaces
+  to be enabled", exit 71, fatal in `steam.sh`), and the client's UI,
+  `steamwebhelper`, runs in a pressure-vessel (bubblewrap) container.
+  Ferrix answers every namespace flag `EINVAL` (`syscall/namespace.rs`);
+  stage 13 parks the init's L13 on namespaces too. `test-steam-bootstrap`
+  sets the check aside meanwhile, and says so.
 * Whether the customer's Python desktop scripts are rewritten for Ferrix:
   `hypr-workspaces` and `ba-calendar` (waybar's workspace chips and clock),
   `hypr-desktop-fx` (pointer effects) and `hypr-dock`. Without them those
