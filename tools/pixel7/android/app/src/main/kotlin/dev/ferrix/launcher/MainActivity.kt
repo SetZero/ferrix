@@ -3,6 +3,7 @@ package dev.ferrix.launcher
 import android.app.Activity
 import android.content.Context
 import android.content.pm.ActivityInfo
+import android.content.pm.ApplicationInfo
 import android.os.Bundle
 import android.os.Process
 import android.util.Log
@@ -63,6 +64,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -74,6 +78,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -129,11 +134,18 @@ import org.json.JSONObject
  * **Run in a VM** needs no PC and no reboot: Ferrix runs as a guest of the
  * phone's own KVM, through Android's crosvm, started as root, and its console
  * and screen are shown here. The image is the one the helper last put in
- * /data/local/tmp/ferrix-vm.
+ * /data/local/tmp/ferrix-vm, or the desktop the [Updater] keeps there from
+ * GitHub's releases.
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val debuggable = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+        intent.getStringExtra(RELEASES_OVERRIDE)?.takeIf { debuggable }?.let { url ->
+            getSharedPreferences("vm", MODE_PRIVATE).edit().apply {
+                if (url.isEmpty()) remove(RELEASES_OVERRIDE) else putString(RELEASES_OVERRIDE, url)
+            }.apply()
+        }
         enableEdgeToEdge()
         setContent { LauncherTheme { Launcher() } }
     }
@@ -144,7 +156,7 @@ class MainActivity : ComponentActivity() {
 }
 
 private const val HELPER = "http://127.0.0.1:47707"
-private const val VM_DIR = "/data/local/tmp/ferrix-vm"
+internal const val VM_DIR = "/data/local/tmp/ferrix-vm"
 private const val CROSVM = "/apex/com.android.virt/bin/crosvm"
 
 private const val SOCKET = "$VM_DIR/crosvm.sock"
@@ -249,6 +261,9 @@ private fun Launcher() {
     var shell by remember { mutableStateOf(GuestShell()) }
     val scope = rememberCoroutineScope()
     val activity = LocalContext.current as Activity
+    val updater = remember { Updater(activity) }
+    val update by updater.state.collectAsState()
+    var edition by remember { mutableStateOf(updater.edition) }
     val run: () -> Unit = {
         console.clear()
         guest = Guest.Running(null)
@@ -289,6 +304,17 @@ private fun Launcher() {
             while (true) {
                 helper = poll()
                 delay(2000)
+            }
+        }
+    }
+    // A check when the app comes up, and hourly while it is in front. The
+    // check runs in the page's scope rather than this loop's, so that a
+    // download goes on while the app is in the background.
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                if (System.currentTimeMillis() - updater.checked >= CHECK_EVERY) scope.launch { updater.check() }
+                delay(60_000)
             }
         }
     }
@@ -337,7 +363,19 @@ private fun Launcher() {
                 onRun = run,
                 onStop = stop,
                 onFullScreen = { fullScreen = true },
-            )
+            ) {
+                UpdateSection(
+                    update = update,
+                    edition = edition,
+                    onEdition = {
+                        edition = it
+                        updater.edition = it
+                        scope.launch { updater.check() }
+                    },
+                    onCheck = { scope.launch { updater.check() } },
+                    onInstall = { scope.launch { updater.install() } },
+                )
+            }
             Spacer(Modifier.height(8.dp))
             Text(
                 "Booting changes nothing on the phone: Ferrix runs from RAM, sent by " +
@@ -517,6 +555,7 @@ private fun GuestCard(
     onRun: () -> Unit,
     onStop: () -> Unit,
     onFullScreen: () -> Unit,
+    updates: @Composable () -> Unit,
 ) {
     Card(
         shape = RoundedCornerShape(24.dp),
@@ -530,6 +569,7 @@ private fun GuestCard(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            updates()
             when (guest) {
                 is Guest.Running -> {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -563,6 +603,77 @@ private fun GuestCard(
                     Text("Full screen")
                 }
             }
+        }
+    }
+}
+
+/** How often the app asks GitHub for a newer desktop while it is in front. */
+private const val CHECK_EVERY = 60L * 60 * 1000
+
+/**
+ * The desktop the VM boots and how its updates stand: which edition the
+ * phone keeps, the newest release's state, the progress of a download, and
+ * a button when an update waits for a tap. A change of edition is checked
+ * at once, and fetched under the same rules as any update.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun UpdateSection(
+    update: Update,
+    edition: Edition,
+    onEdition: (Edition) -> Unit,
+    onCheck: () -> Unit,
+    onInstall: () -> Unit,
+) {
+    val busy = update is Update.Checking || update is Update.Downloading
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Desktop", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.weight(1f))
+            SingleChoiceSegmentedButtonRow {
+                Edition.entries.forEachIndexed { index, each ->
+                    SegmentedButton(
+                        selected = each == edition,
+                        onClick = { if (each != edition) onEdition(each) },
+                        shape = SegmentedButtonDefaults.itemShape(index, Edition.entries.size),
+                        enabled = !busy,
+                    ) { Text(each.label) }
+                }
+            }
+        }
+        if (update is Update.Downloading) {
+            LinearProgressIndicator(progress = { update.fraction }, modifier = Modifier.fillMaxWidth())
+        } else if (update is Update.Checking) {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+        }
+        val quiet = MaterialTheme.colorScheme.onSurfaceVariant
+        val (text, tint) = when (update) {
+            Update.Unknown -> "Not checked yet." to quiet
+            Update.Checking -> "Asking GitHub for a newer desktop…" to quiet
+            is Update.Current -> "${update.tag} · ${update.edition.label}, the newest release" to Color(0xFF3DDC84)
+            is Update.NoRelease -> {
+                val kept = if (update.desktop) " The phone keeps the desktop it has." else ""
+                "No release carries the ${update.edition.label.lowercase()} desktop yet.$kept" to quiet
+            }
+            is Update.PcBuild ->
+                "A build from the PC is in place, so it is left alone. ${update.release.tag} is on GitHub " +
+                    "(${megabytes(update.bytes)})." to quiet
+            is Update.Waiting ->
+                "${update.release.tag} is out (${megabytes(update.bytes)}); it waits, ${update.why}." to quiet
+            is Update.Downloading ->
+                "Fetching ${update.release.tag}: ${update.label} · ${(update.fraction * 100).toInt()} % of " +
+                    megabytes(update.bytes) to quiet
+            is Update.Failed -> "Could not update: ${update.why}" to MaterialTheme.colorScheme.error
+        }
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = tint)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            when {
+                update is Update.PcBuild -> FilledTonalButton(onClick = onInstall) { Text("Use ${update.release.tag}") }
+                update is Update.Waiting && update.canForce ->
+                    FilledTonalButton(onClick = onInstall) { Text("Download now") }
+            }
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = onCheck, enabled = !busy) { Text("Check now") }
         }
     }
 }

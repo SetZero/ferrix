@@ -11,8 +11,8 @@ android {
         applicationId = "dev.ferrix.launcher"
         minSdk = 31
         targetSdk = 36
-        versionCode = 6
-        versionName = "6"
+        versionCode = 7
+        versionName = "7"
     }
 
     buildFeatures {
@@ -31,4 +31,5 @@ dependencies {
     implementation("androidx.compose.material:material-icons-core:1.7.8")
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
+    testImplementation("junit:junit:4.13.2")
 }

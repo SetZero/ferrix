@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Only to reach the helper on the PC, at 127.0.0.1 through adb reverse. -->
+    <!-- To reach the helper on the PC, at 127.0.0.1 through adb reverse, and
+         GitHub's releases, which the VM's desktop is updated from. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Whether the network is metered: a desktop is fetched by itself only
+         when it is not. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
         android:label="Boot Ferrix"

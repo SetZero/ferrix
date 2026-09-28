@@ -8,6 +8,8 @@ Cargo workspace and the gates.
 |---|---|
 | `android/` | The Android app, "Boot Ferrix" (`dev.ferrix.launcher`): Kotlin and Compose, a Gradle project of its own |
 | `helper.py` | The helper on the PC that the app's Boot button and the monitor ask to boot the phone |
+| `build-desktop.sh` | Builds the VM's desktop, `desktop.Image`, and with `--push` puts it on the phone |
+| `package-release.py` | Packs a desktop for a GitHub release, where the app's updates find it |
 | `monitor/` | The desktop monitor, "Pixel 7 · Ferrix": Tauri 2, a Cargo workspace of its own (`monitor/README.md`) |
 
 The loader these boot, and the phone's state, are in `boot/pixel7`
@@ -116,6 +118,9 @@ The scale is 2 unless given, since 1080x2400 at 1 is text a few millimetres
 high, and the keymap US, which the app's key codes are. Delete
 `desktop.Image` to go back to the console image.
 
+**Updates.** The app keeps `desktop.Image` on the newest GitHub release
+that carries it, with no PC (below, "Updates").
+
 Starting a VM opens it full screen: one bar, with the run's state and a menu
 to pause or resume it, stop it, run it again, or go back, and the console
 under it. The console follows the newest line while the reader is within ten
@@ -218,3 +223,60 @@ pixels, the phone's divided by the monitor's scale, rounded up; the scale is
 the mode's width over the logical width in `hyprix: 1 monitor [card0
 Virtual-1 1080x2400 540x1200]`, and 1 without it. Closing the keyboard sends
 0.
+
+## Updates
+
+Each tagged release carries the desktop in two editions, as a distribution
+has them, and the app keeps the phone on the newest one. The card "Or run it
+in a VM" says which edition the phone keeps and how its updates stand.
+
+| Edition | What the release has for it | Download |
+|---|---|---|
+| **Full** | `ferrix-pixel7-full.Image.gz`, the desktop with Chromium (`build-desktop.sh --chrome`), and `ferrix-pixel7-chromium.img.gz`, Debian's arm64 Chromium volume it runs from | ~17 MB, and ~200 MB for the volume |
+| **Minimal** | `ferrix-pixel7-minimal.Image.gz`, the desktop alone | ~13 MB |
+
+`.github/workflows/release.yml`'s `pixel7` job builds both after the
+release is published, as `build-desktop.sh` does by hand, with ferrousli's
+busybox and the AArch64 ports in them, and `package-release.py` packs them.
+Beside each edition goes `ferrix-pixel7-<edition>.json`, which names each
+asset with the SHA-256 and size of what it unpacks to. A tag with no phone
+build, or one whose job failed, is passed over for the next older one.
+
+The app asks GitHub (`api.github.com/repos/SetZero/ferrix/releases`, no
+token) when it starts and hourly while it is in front, and at "Check now".
+It reads the VM's directory with `su`, as it runs the VM, and then:
+
+- **Newer desktop, unmetered network:** fetched by itself.
+- **Metered network:** it waits, with the size, for "Download now".
+- **A build from the PC** (`build-desktop.sh --push`, which removes the
+  app's record): left alone, with "Use <tag>" to replace it.
+- **Chromium's volume** (Full): fetched when missing, or when the release's
+  pins (the SHA-256 of `scripts/fetch/fetch-chromium-arm64.sh`, since
+  mkfs.btrfs never makes the same image twice) differ from the ones the app
+  installed. A volume the app did not install is the PC's and is kept,
+  unless "Use <tag>" is tapped. Replacing it starts Chromium's profile anew.
+- **Switching edition:** checked at once, under the same rules. Minimal
+  leaves `chromium.img` where it is.
+
+Each file is unpacked as it downloads, into `su cat >` a `.<name>.part`
+beside the VM's files, and hashed on the way. It is renamed into place only
+when its hash and size are the manifest's. A running VM keeps the file it
+opened, so an update takes effect at the next run. The app records what it
+installed in `/data/local/tmp/ferrix-vm/release.json`, which is how it
+tells its own desktop from the PC's.
+
+A debug build can be pointed at another list in GitHub's shape, to try a
+release's assets before a tag publishes them. `package-release.py --serve`
+lists a directory it packed as one release; forward it and give the app the
+URL:
+
+```sh
+tools/pixel7/package-release.py --serve <out-dir>          # port 47708
+adb reverse tcp:47708 tcp:47708
+adb shell am force-stop dev.ferrix.launcher
+adb shell am start -n dev.ferrix.launcher/.MainActivity --es releases http://127.0.0.1:47708/releases
+```
+
+The app reads the extra as it starts, hence the `force-stop`, and keeps it
+until it is given an empty one (`--es releases ''`), which puts it back on
+GitHub. Then "Check now".
