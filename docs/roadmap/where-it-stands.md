@@ -28,11 +28,11 @@ boot (one SUITE line).
    that file. Targets: an item gate in 5 minutes, a desktop boot in 60 s, CI
    green within an hour.
 2. **Steam's X server**: the yserver feasibility pass was met and the design
-   approved on 2026-09-28 (`docs/YSERVER.md`), and Y1 to Y4 and Y5a were
-   done the same day: yserver runs as a client of hyprix, and X windows show
-   on it, take its input, its sizes and its close, and float as dialogs
-   where they are transients. Next come Y5b (menus), Y6 and Y7, then I5b,
-   the Steam client's bootstrapper.
+   approved on 2026-09-28 (`docs/YSERVER.md`), and Y1 to Y5 were done the
+   same day: yserver runs as a client of hyprix, and X windows show on it,
+   take its input, its sizes and its close, float as dialogs where they are
+   transients, and open their menus as its popups. Next come Y6 and Y7,
+   then I5b, the Steam client's bootstrapper.
 3. **W-8**: 21b, 21c and file 24, then the modules the traceability gate does
    not yet hold complete.
 4. **The desktop**: fuzzel's second-press toggle, hyprlock P1.5, hypridle.

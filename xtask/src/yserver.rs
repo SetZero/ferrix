@@ -27,6 +27,7 @@ pub(crate) const LINKS: &[(&str, &str)] = &[
     ("lib/x86_64-linux-gnu", "/data/usr/lib/x86_64-linux-gnu"),
     ("usr/lib/x86_64-linux-gnu", "/data/usr/lib/x86_64-linux-gnu"),
     ("etc/fonts", "/data/etc/fonts"),
+    ("etc/X11", "/data/etc/X11"),
     ("usr/share/fonts", "/data/usr/share/fonts"),
     ("usr/share/fontconfig", "/data/usr/share/fontconfig"),
     ("usr/share/vulkan", "/data/usr/share/vulkan"),
@@ -196,7 +197,10 @@ pub(crate) const XWINDOW_PATH: &str = "etc/xwindow.sh";
 /// first -- unmapped, given `WM_TRANSIENT_FOR` and its own size back, and
 /// mapped again with `xdotool` -- which the compositor must float as a
 /// dialog at that size; `hyprctl clients` again, and each window's size as
-/// X has it; and the compositor's `closewindow` on xev, which must end it.
+/// X has it; the compositor's `closewindow` on xev, which must end it; and
+/// `xfontsel` with its field menu held open through XTEST, between
+/// [`XWINDOW_MENU`] and [`XWINDOW_MENU_OPEN`], at each of which xtask looks
+/// at the screen.
 /// Every line of its own starts `xwindow:`, and it ends with `xwindow: end`
 /// whatever happened.
 pub(crate) const XWINDOW_SCRIPT: &str = r#"export PATH=/bin:/data/usr/bin HOME=/tmp
@@ -282,6 +286,28 @@ if xwininfo -name "Event Tester" > /dev/null 2>&1; then
 else
     echo "xwindow: xev exited after ${waited}s"
 fi
+# A menu (Y5b): xfontsel's field menu, an override-redirect window, which
+# the compositor must show as a popup where X put it. xdotool holds button 1
+# down on the menu's button through XTEST, as a hand would, since the menu
+# is up only while the button is; xtask looks before and while it is.
+xfontsel > /tmp/xfontsel.txt 2>&1 &
+waited=0
+until xwininfo -name xfontsel 2>/dev/null | grep -q IsViewable || [ $waited -ge 30 ]; do
+    sleep 1
+    waited=$((waited + 1))
+done
+echo "xwindow: xfontsel was viewable after ${waited}s"
+sleep 2
+/bin/hyprctl clients | sed 's/^/xwindow: clients: /'
+echo "xwindow: menu"
+sleep 3
+xdotool mousemove --window $(id_of xfontsel) 15 40 mousedown 1
+sleep 2
+xwininfo -root -children | grep -E '^ +0x[0-9a-f]+ \(has no name\)' | sed 's/^/xwindow: menu window: /'
+echo "xwindow: menu open"
+sleep 4
+xdotool mouseup 1
+sleep 1
 sed 's/^/xwindow: xev: /' /tmp/xev.txt
 sed 's/^/xwindow: yserver: /' /tmp/yserver.log
 echo "xwindow: end"
@@ -293,6 +319,12 @@ pub(crate) const XWINDOW_END: &str = "xwindow: end";
 /// The line [`XWINDOW_SCRIPT`] says when xev's window is up and it waits
 /// for the input.
 pub(crate) const XWINDOW_INPUT: &str = "xwindow: input";
+
+/// The line before xfontsel's menu is opened, and the one while it is open:
+/// the script waits three and four seconds after each for xtask to look.
+pub(crate) const XWINDOW_MENU: &str = "xwindow: menu";
+/// See [`XWINDOW_MENU`].
+pub(crate) const XWINDOW_MENU_OPEN: &str = "xwindow: menu open";
 
 /// The line it says when `xwininfo` waits for a window to be picked.
 const XWINDOW_PICK: &str = "xwindow: pick";
@@ -698,6 +730,162 @@ pub(crate) fn judge_windows(
     Ok(())
 }
 
+/// The screen before xfontsel's menu is opened and while it is, taken at
+/// [`XWINDOW_MENU`] and [`XWINDOW_MENU_OPEN`].
+///
+/// # Errors
+///
+/// A screendump that fails.
+pub(crate) fn watch_menu(
+    qmp: &mut crate::display::Qmp,
+    watching: &mut qemu::Watching<'_>,
+    dump: &std::path::Path,
+) -> Result<(Option<crate::display::Image>, Option<crate::display::Image>)> {
+    use std::time::{Duration, Instant};
+    let mut look = |line: &'static str, kept: &str| -> Result<Option<crate::display::Image>> {
+        let seen = watching.read_more(Instant::now() + Duration::from_secs(120), |lines| {
+            lines
+                .iter()
+                .any(|said| said.trim_end().ends_with(line) || said.contains(XWINDOW_END))
+        })?;
+        if !seen {
+            return Ok(None);
+        }
+        // Kept beside the main picture, for a person reading a failure.
+        let kept = dump.with_file_name(kept);
+        qmp.screendump(Some(crate::display::DEVICE_ID), &kept)?;
+        let bytes = std::fs::read(&kept)
+            .map_err(|error| Error::new(format!("reading {}: {error}", kept.display())))?;
+        crate::display::parse_ppm(&bytes).map(Some)
+    };
+    let before = look(XWINDOW_MENU, "xwindow-menu-before.ppm")?;
+    let open = look(XWINDOW_MENU_OPEN, "xwindow-menu-open.ppm")?;
+    Ok((before, open))
+}
+
+/// Where the server says it made its last popup, from its log: its size
+/// and where it hangs from on its parent.
+fn popup_placed(lines: &[String]) -> Option<((i32, i32), (usize, usize))> {
+    lines.iter().rev().find_map(|line| {
+        let (_, rest) = line.split_once("override-redirect window ")?;
+        let (_, rest) = rest.split_once('(')?;
+        let (size, rest) = rest.split_once(')')?;
+        let (width, height) = size.split_once('x')?;
+        let (_, at) = rest.split_once(" at (")?;
+        let (x, rest) = at.split_once(", ")?;
+        let (y, _) = rest.split_once(')')?;
+        Some((
+            (x.trim().parse().ok()?, y.trim().parse().ok()?),
+            (width.parse().ok()?, height.parse().ok()?),
+        ))
+    })
+}
+
+/// How much of a rectangle's outline on `screen` is dark: an Athena menu's
+/// one-pixel black border.
+fn outline_dark(
+    screen: &crate::display::Image,
+    (x, y): (usize, usize),
+    (w, h): (usize, usize),
+) -> f64 {
+    let dark = |px: usize, py: usize| {
+        let at = (py * screen.width + px) * 3;
+        screen
+            .pixels
+            .get(at..at + 3)
+            .is_some_and(|rgb| rgb.iter().all(|&c| c <= 0x40))
+    };
+    let mut points = Vec::new();
+    for px in x..x + w {
+        points.push((px, y));
+        points.push((px, y + h - 1));
+    }
+    for py in y..y + h {
+        points.push((x, py));
+        points.push((x + w - 1, py));
+    }
+    let found = points.iter().filter(|&&(px, py)| dark(px, py)).count();
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a count of pixels on an outline, far below 2^52"
+    )]
+    let share = found as f64 / points.len().max(1) as f64;
+    share
+}
+
+/// Whether xfontsel's menu showed as a popup where X put it (docs/YSERVER.md,
+/// Y5b): the server made one, and the screen has its one-pixel black border
+/// at xfontsel's place on the screen plus the popup's place on xfontsel,
+/// while it is open and not before.
+pub(crate) fn judge_menu(
+    arch: Arch,
+    lines: &[String],
+    (before, open): (
+        Option<&crate::display::Image>,
+        Option<&crate::display::Image>,
+    ),
+) -> Result<()> {
+    let fail = |why: String| {
+        Err(Error::new(format!(
+            "{arch}: {why}; the `xwindow:` lines say more"
+        )))
+    };
+    if !lines
+        .iter()
+        .any(|line| line.contains("xwindow: menu window:"))
+    {
+        return fail("xfontsel's menu never opened in X".to_owned());
+    }
+    let Some(((x, y), size)) = popup_placed(lines) else {
+        return fail("the server made no popup for xfontsel's menu".to_owned());
+    };
+    let windows = listed_windows(lines);
+    let tile = windows
+        .iter()
+        .rev()
+        .find(|(title, _)| title == "xfontsel")
+        .and_then(|(_, fields)| fields.iter().find(|(key, _)| key == "at"))
+        .and_then(|(_, at)| {
+            let (left, top) = at.split_once(',')?;
+            Some((
+                left.trim().parse::<i32>().ok()?,
+                top.trim().parse::<i32>().ok()?,
+            ))
+        });
+    let Some((left, top)) = tile else {
+        return fail("`hyprctl clients` did not place xfontsel".to_owned());
+    };
+    let (Ok(sx), Ok(sy)) = (usize::try_from(left + x), usize::try_from(top + y)) else {
+        return fail(format!(
+            "the popup would be off the screen at ({}, {})",
+            left + x,
+            top + y
+        ));
+    };
+    let (Some(before), Some(open)) = (before, open) else {
+        return fail("the boot took no picture of the menu".to_owned());
+    };
+    let (was, is) = (
+        outline_dark(before, (sx, sy), size),
+        outline_dark(open, (sx, sy), size),
+    );
+    if is < 0.9 || was > 0.5 {
+        return fail(format!(
+            "the menu's {}x{} outline at ({sx}, {sy}) is {:.0}% dark while open and {:.0}% before",
+            size.0,
+            size.1,
+            is * 100.0,
+            was * 100.0
+        ));
+    }
+    println!(
+        "  {arch}: xfontsel's menu is a popup, its {}x{} border on the screen at ({sx}, {sy}), \
+         where X put it on xfontsel",
+        size.0, size.1
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -896,6 +1084,42 @@ KeyRelease event, serial 13, synthetic NO, window 0x200001,
             judge_windows(Arch::X86_64, &tiled_dialog, screen).is_err(),
             "the dialog must float"
         );
+    }
+
+    #[test]
+    fn the_menu_is_found_by_its_outline_where_the_server_put_it() {
+        let lines: Vec<String> = [
+            "xwindow: clients: Window 3 -> xfontsel:",
+            "xwindow: clients: \tat: 21,21",
+            "xwindow: menu window:      0x10004f (has no name): ()  68x448+7+46  +7+46",
+            "xwindow: yserver: [..] wayland: override-redirect window 0x400048 (70x450) is a \
+             popup on 0x40001a at (6, 45)",
+        ]
+        .iter()
+        .map(|line| (*line).to_owned())
+        .collect();
+        assert_eq!(popup_placed(&lines), Some(((6, 45), (70, 450))));
+        let blank = Image {
+            width: 200,
+            height: 600,
+            pixels: vec![0xff; 200 * 600 * 3],
+        };
+        let mut menu = Image {
+            width: 200,
+            height: 600,
+            pixels: vec![0xff; 200 * 600 * 3],
+        };
+        for y in 66..66 + 450 {
+            for x in 27..27 + 70 {
+                if x == 27 || x == 27 + 69 || y == 66 || y == 66 + 449 {
+                    let at = (y * 200 + x) * 3;
+                    menu.pixels[at..at + 3].fill(0);
+                }
+            }
+        }
+        assert!(judge_menu(Arch::X86_64, &lines, (Some(&blank), Some(&menu))).is_ok());
+        assert!(judge_menu(Arch::X86_64, &lines, (Some(&blank), Some(&blank))).is_err());
+        assert!(judge_menu(Arch::X86_64, &lines, (Some(&menu), Some(&menu))).is_err());
     }
 
     #[test]

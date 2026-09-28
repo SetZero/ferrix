@@ -137,7 +137,8 @@ again would mean writing an X renderer. What is new sits around the renderer:
     `xdg_popup` on the top-level that last had the pointer or the keyboard. Its
     positioner uses a 1×1 anchor rectangle at the window's X position,
     relative to that parent, with gravity bottom-right and no constraint
-    adjustment. hyprix places a menu exactly there (`test_menu` checks it).
+    adjustment. hyprix places a menu exactly there (`test-xwindow`'s menu case
+    checks it).
     Subsurfaces are not an option, because hyprix does not draw them.
 * **Coordinates.** Each top-level keeps the position X gave it in root
   coordinates, wherever hyprix actually tiles it. Pointer input is
@@ -274,9 +275,14 @@ its first buffer, centred over its parent. There are two defaults to add:
     (Y5a). The first xev's size in X must be the size hyprix tiled it at,
     and the screendump white out to the tile's far corner, where the grow
     exposed it. Then hyprix's `closewindow` on the first xev, which xev
-    hears as `WM_DELETE_WINDOW`, must end it.
-
-  A menu case (`xfontsel`'s menu) is added with slice Y5b.
+    hears as `WM_DELETE_WINDOW`, must end it;
+  * then opens `xfontsel`'s field menu, holding button 1 down on it
+    through XTEST with `xdotool`, as a hand would (Y5b). The server must
+    log a popup for it, and the screendump must show the menu's one-pixel
+    black border where X put it, at xfontsel's tile plus the popup's place
+    on xfontsel, while the button is down and not before. xfontsel's
+    layout, and so its menu, comes from its app-defaults file, which the
+    image links in from the volume's `/etc/X11`.
 * Each slice runs `cargo xtask check` before it lands. The tests are
   on-demand boots and do not join the item gate, because test time is the
   customer's first priority.
@@ -290,7 +296,7 @@ its first buffer, centred over its parent. There are two defaults to add:
 | Y3 | Top-levels: redirect, `xdg_toplevel`, shm readback, frame callbacks, title and app id; `test-xwindow` sees `xev`'s window. **Done 2026-09-28** | 8 |
 | Y4 | Input and cursor: keys, pointer, wheel, focus, `set_cursor`; `xev` reports the injected events. **Done 2026-09-28** | 5 |
 | Y5a | Transients, compositor resize and close; the core helpers. **Done 2026-09-28** | 5 |
-| Y5b | Popups; the menu case | 3 |
+| Y5b | Popups; the menu case. **Done 2026-09-28** | 3 |
 | Y6 | Clipboard: core selection hooks, `ext_data_control` bridge, text | 5 |
 | Y7 | yserver in `--everything`: `exec-once`, `DISPLAY`, window rules | 2 |
 
@@ -320,13 +326,30 @@ Still open:
 
 ## 9. Where it stands
 
-2026-09-28: Y1 to Y4 and Y5a are done, 26 of the 36 points.
-`fetch-yserver.sh` pins the fork at `581a990`. X top-levels show on hyprix
+2026-09-28: Y1 to Y5 are done, 29 of the 36 points.
+`fetch-yserver.sh` pins the fork at `a2b01cf`. X top-levels show on hyprix
 as windows with their titles and classes, take keys, clicks, the wheel,
 the focus and their cursors from it, take the size it tiles them at, float
 as dialogs where they are transients, and close when it closes them
-(`test-xwindow`). Y5b, override-redirect windows as popups, is written on
-the fork's branch `ferrix-y5` and not yet tested. What Y5a found:
+(`test-xwindow`). Menus, drop-downs and tooltips, X's override-redirect
+windows, show as hyprix's popups where X put them, with their X border
+(Y5b, `test-xwindow`'s menu case). Next are Y6, the clipboard, and Y7,
+yserver in `--everything`. What Y5b found:
+
+* **Nothing in hyprix.** A positioner with no constraint adjustment puts a
+  popup exactly where X put it, and the popup needs no grab: an X menu
+  grabs the pointer inside the server.
+* **A popup shows its X border.** No window manager draws one for an
+  override-redirect window, so the backend reads the border around the
+  content for a popup, and still leaves it out for a top-level.
+* **A dismissed popup stays dismissed** until its X window unmaps: the X
+  client still thinks its menu is up, and making it again would put back
+  what the person just closed.
+* **Estimate against spend.** 3 points, about 3 spent. The one surprise was
+  xfontsel with no layout, since X programs' app-defaults live in
+  `/etc/X11`, which the image did not link from the volume.
+
+What Y5a found:
 
 * **The toolkit stalled a client with its own poll.** `Client::dispatch`
   read the socket only when it had no events queued, and `connect` leaves
@@ -353,7 +376,7 @@ the fork's branch `ferrix-y5` and not yet tested. What Y5a found:
   display.
 * **Estimate against spend.** Y5a was 5 of Y5's 8 points and took about
   7: the three rendering bugs and the stall were found on the way.
-* **Not done.** Popups (Y5b). `WM_NORMAL_HINTS` is not passed on, so a
+* **Not done.** `WM_NORMAL_HINTS` is not passed on, so a
   window with a fixed size is not floated for it as Hyprland would, and a
   tiled one is asked for a size it may refuse.
 

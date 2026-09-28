@@ -8,8 +8,9 @@
 # program against Debian 13's -dev packages, unpacked into a sysroot here, and
 # runs on the same packages' libraries from the volume, as Chrome does. Mesa's
 # lavapipe is its Vulkan on a machine with no GPU for it, and x11-utils'
-# xdpyinfo and xev are the clients the tests run against it, with xdotool to
-# unmap, resize and map a window the way a program would.
+# xdpyinfo, xev and xfontsel are the clients the tests run against it, with
+# xdotool to unmap, resize and map a window, and to hold a menu open, the way
+# a program or a hand would.
 #
 # The source is the customer's fork of yserver (docs/YSERVER.md §8), pinned
 # by commit: 1.6.0 and Ferrix's commits on top. It is built with its
@@ -40,7 +41,7 @@ out=${FERRIX_YSERVER_VOLUME:-$HOME/.local/share/ferrix/yserver}
 # The fork, and the commit of it that is built. YSERVER_REPO may name a local
 # clone, for a commit not yet pushed.
 repo=${YSERVER_REPO:-https://github.com/SetZero/yserver.git}
-YSERVER_COMMIT=581a990c55505a11650696973072cca6c8b419ac
+YSERVER_COMMIT=a2b01cf688f4be7a9a1993de2d849c09595f484b
 # The toolchain Ferrix pins in rust-toolchain.toml.
 toolchain=${YSERVER_TOOLCHAIN:-1.97.1}
 

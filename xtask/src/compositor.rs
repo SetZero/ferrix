@@ -6819,6 +6819,7 @@ pub(crate) fn test_xwindow(args: &Args) -> Result<()> {
     let dump = paths::build_dir(arch).join("xwindow.ppm");
     let mut said: Vec<String> = Vec::new();
     let mut screen: Option<Image> = None;
+    let mut menu: (Option<Image>, Option<Image>) = (None, None);
     let hook = |watching: &mut Watching<'_>| -> Result<()> {
         let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
         let waiting = |marker: &'static str| {
@@ -6851,6 +6852,7 @@ pub(crate) fn test_xwindow(args: &Args) -> Result<()> {
         if let Some((at, size)) = found {
             crate::yserver::drive_xev(&mut qmp, watching, at, size)?;
         }
+        menu = crate::yserver::watch_menu(&mut qmp, watching, &dump)?;
         let ended = watching.read_more(
             Instant::now() + CHROME_WINDOW_PATIENCE,
             waiting(crate::yserver::XWINDOW_END),
@@ -6874,7 +6876,8 @@ pub(crate) fn test_xwindow(args: &Args) -> Result<()> {
     crate::yserver::judge_xwindow(arch, &said)?;
     crate::yserver::judge_xev(arch, &said, screen.as_ref(), &dump)?;
     crate::yserver::judge_xev_input(arch, &said)?;
-    crate::yserver::judge_windows(arch, &said, screen.as_ref())
+    crate::yserver::judge_windows(arch, &said, screen.as_ref())?;
+    crate::yserver::judge_menu(arch, &said, (menu.0.as_ref(), menu.1.as_ref()))
 }
 
 /// The input of [`BENCH_PHASES`], ten seconds each: nothing, the wheel
