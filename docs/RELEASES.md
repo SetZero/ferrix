@@ -6,7 +6,8 @@ read [the roadmap](roadmap/where-it-stands.md).
 
 Milestone tags are annotated and checked by the project owner before they are
 published. The release workflow uses the matching section from this file as
-its notes. See the [discovery plan](marketing/PLAYBOOK.md#what-to-do-next-in-order)
+its notes, and attaches the Pixel 7 app's desktop in its two editions, which
+the app updates the phone from ([tools/pixel7/README.md](../tools/pixel7/README.md#updates)). See the [discovery plan](marketing/PLAYBOOK.md#what-to-do-next-in-order)
 for how future releases should be presented.
 
 ## stage-11.1-network-display-and-threads — 2026-09-16, features at a89aeb25

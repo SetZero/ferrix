@@ -12,7 +12,11 @@
 #             gives the VM as its disk when chromium.img is on the phone;
 #             with --push, the volume is copied there too if it is not
 #   --push    copy desktop.Image to /data/local/tmp/ferrix-vm/ on the phone,
-#             where the app boots it in place of ferrix.Image
+#             where the app boots it in place of ferrix.Image, and stops
+#             the app updating it from GitHub's releases until asked to
+#
+# The release job (.github/workflows/release.yml) runs this too, once per
+# edition: `full` with --chrome, `minimal` without.
 #
 # The keymap is US, since the app turns Android's text into US key codes.
 # CARGO_TARGET_DIR defaults to one of this worktree's own: two worktrees
@@ -59,6 +63,10 @@ if [ -n "$push" ]; then
         exit 1
     fi
     adb -s "$serial" push "$out/desktop.Image" /data/local/tmp/ferrix-vm/desktop.Image
+    # The app's record of the release it installed: gone, the app takes
+    # what is there for this build and does not update it over the top
+    # (README.md, "Updates").
+    adb -s "$serial" shell rm -f /data/local/tmp/ferrix-vm/release.json
     if [ -n "$chrome" ]; then
         volume=${FERRIX_CHROMIUM_VOLUME:-$HOME/.local/share/ferrix/chromium-arm64}/chromium.img
         # The phone's copy is written to: Chromium's profile and caches.
