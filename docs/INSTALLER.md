@@ -222,25 +222,19 @@ boots from.
 
 The page offers three ways, as Ubuntu's does:
 
-* **Install beside `<system>`**, in the largest unpartitioned range of at
-  least 16 GiB, with a slider for how much of it Ferrix takes.
+* **Install beside `<system>`**, with a divider between the two systems that
+  the person drags. Ferrix takes free space first; when that is not enough,
+  the installer **shrinks the other system's partition** to make room
+  (§4.6). The divider stops where the other system's data ends plus a
+  margin, and Ferrix needs at least 16 GiB.
 * **Replace a partition**: pick one, its data is lost, Ferrix goes there.
   The page shows what it holds before it is picked.
 * **Erase the disk.**
 
-What it does **not** do in version 1 is shrink the other system's
-partition. Shrinking NTFS safely means an NTFS implementation Ferrix does
-not have (`ntfsresize` is 2,000 lines of C over libntfs-3g, GPL), and a
-Windows partition that is hibernated, fast-started, or BitLocker-encrypted
-must not be touched at all. The installer detects all three and says so.
-When there is no free space, the page says: shrink the volume in Windows'
-*Disk Management* (or GNOME Disks), then restart the installer. §10
-decision 1 is whether to write a shrinker anyway.
-
 The rule that makes *beside* safe: **no byte outside the chosen range and
 the GPT's own sectors is written**, and the ESP is written only inside
 `EFI/ferrix/`. The gate (§7) checks it by hashing every other partition
-before and after.
+before and after. A shrink is the one exception, and §4.6 is its own rule.
 
 ### 4.5 The graphical installer
 
@@ -267,7 +261,67 @@ as the other clients do, and follow the desktop's theme colours.
 The live session's hyprix config starts the installer on login, and the live
 session logs in without a password as user `ferrix`.
 
-## 5. What the kernel and libraries gain
+### 4.6 Shrinking the other system
+
+The customer asked on 2026-09-28 for the full setup: the installer shrinks
+the other system itself, as Ubuntu's does with `ntfsresize`, rather than
+sending the person to Windows' *Disk Management*. It is the one step in
+this design where a bug loses someone's files, so it is built as its own
+library with its own gates, and it runs as the installer's **first** step,
+before any partition is written, so a refused or failed shrink leaves the
+disk exactly as it was.
+
+**What it shrinks.** A partition's *end* moves toward its start; its start
+never moves, so nothing the other system's boot loader points at changes.
+
+| File system | Who has it | How |
+|---|---|---|
+| NTFS | Windows | `libs/fs/ntfs` reads the MFT, attributes and run lists; `ntfs-resize` moves every cluster past the new end below it, rewrites the run lists that named them, truncates `$Bitmap` and `$BadClus`, moves the backup boot sector to the new last sector, and marks the volume for `chkdsk` on Windows' next start, as `ntfsresize` does |
+| ext4 | most Linux installs | `libs/fs/ext4` and `ext4-resize`, `resize2fs`'s shrink: move blocks and inodes out of the block groups being removed, rewrite extent trees and directory entries that named them, drop the groups, fix the superblock and group descriptors |
+| btrfs | Fedora, openSUSE | `btrfs-write` already allocates chunks; shrinking relocates every chunk past the new end (a balance restricted to them) and then lowers the device's size, as `btrfs filesystem resize` does |
+| anything else | APFS, ZFS, LUKS, LVM, BitLocker | not shrunk; the installer says what it found and offers free space and *Replace* only |
+
+`ntfsresize` and `resize2fs` are GPL and are read as references, never
+copied (Ferrix is MIT); Microsoft's published NTFS structures and the
+Linux kernel's `Documentation/filesystems/ext4` are the specifications.
+
+**When it refuses**, and says why in words the person can act on:
+
+* NTFS: Windows is hibernated or *Fast Startup* left it half-shut (the
+  `hiberfil.sys` signature, the dirty flag); BitLocker (the `-FVE-FS-`
+  signature); the volume is marked dirty; `$LogFile` is not clean; the
+  consistency pass below finds anything. The page tells the person to start
+  Windows, turn Fast Startup off, shut it down fully, and come back.
+* ext4: the journal needs recovery; `needs_recovery` or an orphan list;
+  features the library does not know (it refuses by `incompat` bit, never
+  guesses).
+* btrfs: more than one device, or a profile other than `SINGLE`/`DUP`.
+* Any of them: a bad-sector list the file system recorded, or a read error
+  anywhere during the pass.
+
+**How it stays safe.**
+
+1. **Check before.** A full read-only consistency pass (every MFT record,
+   every run list against `$Bitmap`; every inode's extents against the block
+   bitmaps; `btrfs check`'s tree walk, which `libs/fs/btrfs` has). Anything
+   it cannot account for is a refusal.
+2. **Plan, then write.** The moves are computed in memory first, and the
+   plan is refused if any destination is not free or overlaps a source not
+   yet moved.
+3. **Order the writes so a power cut loses nothing.** Data is copied to its
+   new place and flushed *before* the metadata that points at it changes,
+   and the old place is freed only after that metadata is flushed; a cut in
+   the middle leaves a file system whose pointers all name good data, with
+   some space leaked that `chkdsk`/`e2fsck` recovers. The partition entry in
+   the GPT shrinks last, after the file system's own size is flushed.
+4. **Check after**, with the same pass as step 1, and compare the file tree
+   (names, sizes, and a hash of every file's contents) with the one read
+   before. A mismatch stops the install before Ferrix writes anything, and
+   says so.
+
+A person is shown, before **Install**, in red: "Resizing `<system>` can lose
+data if the power fails. Back up anything you cannot lose."
+
 
 ### 5.1 Block devices from userland
 
@@ -378,6 +432,9 @@ drivers, with its points a guess.
 | `test-install --arch aarch64` | the first gate on AArch64 | yes |
 | `test-install --usb-live` | the ISO attached as `usb-storage` on `qemu-xhci`, target on `nvme`: H1, H3 and H4 under QEMU | after H4 |
 | `test-install --ahci` | target on QEMU's `ich9-ahci` | after H2 |
+| host tests of `ntfs-resize`, `ext4-resize`, btrfs shrink | volumes made by `mkntfs`, `mke2fs` and `mkfs.btrfs`, filled by a seeded generator (fragmented files, sparse files, hard links, ADS and compressed files on NTFS, inline data on ext4), shrunk, then checked by `ntfsresize --check` and `ntfsfix -n`, `e2fsck -fn`, `btrfs check`, and the tree hash of §4.6; plus every refusal case; plus a power cut injected after each flushed write, then the checker | yes |
+| `test-install --shrink` | the `--beside` gate on a disk whose "other system" fills it: NTFS, ext4 and btrfs in turn; the installer shrinks it, the other partition's tree hash is unchanged | yes |
+| `test-install --windows` | a real Windows 11 install (the evaluation image, kept on the build host, never in the repository) shrunk by the installer; then Windows boots, runs its own `chkdsk`, and reaches its desktop | no: needs the image; run before every release that changes the shrinker |
 | `test-compositor --boot installer` | each page's screenshot; a click-through by virtual pointer ends in the same disk as the answer file | yes |
 | the reference PC | §1's exit, by hand, with a log kept in this document | no |
 
@@ -415,6 +472,13 @@ reference machine boots.
 | I11 | The graphical installer, its screenshot gate, the live session's autostart and login | 13 |
 | I12 | Release images, checksums, `docs/INSTALL.md`, README and website (§3.3, §8) | 3 |
 | | **VM path** | **89** |
+| S1 | `libs/fs/ntfs`: boot sector, MFT, attributes, run lists, `$Bitmap`; the consistency pass; the refusals (§4.6) | 13 |
+| S2 | `ntfs-resize`: relocation, run-list rewrite, `$Bitmap`/`$BadClus`/backup boot sector, crash-ordered writes | 21 |
+| S3 | `libs/fs/ext4` read and the `ext4-resize` shrink | 21 |
+| S4 | btrfs shrink on `btrfs-write` | 8 |
+| S5 | The engine's shrink step, the tree-hash check, the GUI's divider and warnings, `test-install --shrink` | 8 |
+| S6 | `test-install --windows` against a real Windows 11 | 5 |
+| | **Shrinking** | **76** |
 | H0 | First boot on the reference PC: serial or screen, ACPI, interrupts, timer (a guess) | 13 |
 | H1 | NVMe | 8 |
 | H2 | AHCI | 8 |
@@ -424,18 +488,16 @@ reference machine boots.
 | H6 | Firmware framebuffer display for hyprix | 5 |
 | H7 | The reference PC's exit, and what it finds | 8 |
 | | **Real PCs** | **73** |
-| | **Total** | **162** |
+| | **Total** | **238** |
 
 At the fleet's measured pace these are days, not weeks; the PC half's
-risk is H0 and H7, which no estimate covers.
+risk is H0 and H7, which no estimate covers. Shrinking lands after I7 (it
+needs the engine and the gate) and beside the GUI; S1 can start at once.
 
 ## 10. For the customer to decide
 
-1. **Shrinking the other system.** Version 1 installs into free space or a
-   partition the person gives up, and tells them to shrink Windows in
-   Windows (§4.4). *Recommended.* The alternative is an NTFS shrinker of our
-   own: unsized, at least 40 points, and the one part of this where a bug
-   loses someone's files.
+1. **Shrinking the other system.** *Decided 2026-09-28: the installer
+   shrinks it itself*, NTFS, ext4 and btrfs (§4.6, slices S1–S6, 76 points).
 2. **The live session's account.** A user `ferrix` with no password, logged
    in automatically, as Ubuntu's live session does. *Recommended.* Or a
    login prompt with a password printed on the boot screen.
@@ -454,5 +516,6 @@ risk is H0 and H7, which no estimate covers.
 ## 11. Where it stands
 
 2026-09-28: this design, written, and approved by the customer the same
-day. §10: decisions 1, 2, 4 and 5 as recommended; decision 3, the reference
-PC, is open, and the VM path does not wait on it. I1 is being built.
+day. §10: decisions 2, 4 and 5 as recommended; decision 1 the customer's
+own, a full shrinker (§4.6); decision 3, the reference PC, is open, and the
+VM path does not wait on it. I1 is being built.
