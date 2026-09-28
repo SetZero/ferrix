@@ -2,10 +2,11 @@
 //! request, and a flush that says when they are durable.
 //!
 //! Stage 11 mounts a btrfs volume from a virtio-blk disk served by a ring-3
-//! driver, and `mount(2)` names that disk by a node in `/dev`. Opening a block
-//! node is `ENXIO` here, as it is for every block number no driver answers, so
-//! a mount does not open it: it resolves the node's `st_rdev` through the
-//! registry in [`crate::fs::devfs`] and reads through the device that returns.
+//! driver, and `mount(2)` names that disk by a node in `/dev`. A mount does
+//! not open the node: it resolves the node's `st_rdev` through the registry
+//! in [`crate::fs::devfs`] and reads through the device that returns. A
+//! program that opens the node reads and writes the same device through
+//! [`crate::fs::disk_file`].
 //! This trait is all that registry knows about a disk, which is what lets it
 //! exist before stage 11's concrete kernel disk does.
 //!

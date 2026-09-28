@@ -3850,3 +3850,30 @@ fn i386s_stat64_is_packed_to_four() {
         assert_eq!(offset, want, "a field of i386's struct stat64");
     }
 }
+
+#[test]
+fn block_requests_match_linux_fs_h() {
+    // `include/uapi/linux/fs.h` of Linux 6.18, as `_IO(0x12, n)`.
+    let io = |nr: u32| (0x12 << 8) | nr;
+    assert_eq!(types::BLKROGET, io(94));
+    assert_eq!(types::BLKRRPART, io(95));
+    assert_eq!(types::BLKGETSIZE, io(96));
+    assert_eq!(types::BLKFLSBUF, io(97));
+    assert_eq!(types::BLKSSZGET, io(104));
+    assert_eq!(types::BLKIOMIN, io(120));
+    assert_eq!(types::BLKIOOPT, io(121));
+    assert_eq!(types::BLKALIGNOFF, io(122));
+    assert_eq!(types::BLKPBSZGET, io(123));
+    assert_eq!(types::BLKROTATIONAL, io(126));
+    // `_IOR(0x12, n, size_t)`: what a 64-bit `blockdev --getsize64` passes.
+    #[cfg(target_pointer_width = "64")]
+    {
+        assert_eq!(types::BLKBSZGET, 0x8008_1270);
+        assert_eq!(types::BLKGETSIZE64, 0x8008_1272);
+    }
+    #[cfg(target_pointer_width = "32")]
+    {
+        assert_eq!(types::BLKBSZGET, 0x8004_1270);
+        assert_eq!(types::BLKGETSIZE64, 0x8004_1272);
+    }
+}

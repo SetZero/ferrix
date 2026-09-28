@@ -452,9 +452,9 @@ fn check_filesystems(view: &BootView<'_>) {
     };
     println!(
         "  devfs    {} nodes numbered as Linux numbers them; zero, null, full and urandom \
-         do what they are for; a disk registered as {}:{} listed, stat'ed, refused open and \
-         found by number, {} sectors read, gone from /dev and /proc/partitions with its \
-         registration; {} frames leaked",
+         do what they are for; a disk registered as {}:{} listed, stat'ed, read as a file, found \
+         by number, {} sectors read, one in memory written as a file, gone from /dev and \
+         /proc/partitions with its registration; {} frames leaked",
         pseudo.devices,
         pseudo.blocks.major,
         pseudo.blocks.minor,

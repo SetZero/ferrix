@@ -6,12 +6,19 @@
 //! all three to what Linux shows: the node listed after the character nodes,
 //! with a listing in pieces neither repeating nor skipping a name across a
 //! registration; `statx` reporting a block device with the registered number
-//! and, as Linux does, a size of zero; `open` refused with `ENXIO` while
-//! `O_PATH` opens; the disk found
+//! and, as Linux does, a size of zero; `O_PATH` opening it; the disk found
 //! by number and its sectors read back; exactly its row in
 //! `/proc/partitions`; clashing names and numbers refused, in order; and,
 //! once the registration is dropped, the node, the lookup and the row gone
 //! while the `Arc` still held answers `EIO` and does not panic.
+//!
+//! In between, the disk opened as a file (`fs::disk_file`, the installer's
+//! way to a disk): `pread` of a range that starts and ends inside sectors,
+//! `lseek` to the end, short reads at and over the end, the `BLK*` requests,
+//! and `O_RDWR` refused because the disk is read-only. Then a writable disk
+//! in memory: `pwrite` of a range that patches two sectors in part, a write
+//! over the end cut short and one at the end refused, `fsync` reaching the
+//! disk's flush, and every byte read back.
 //!
 //! The calls a program makes go in by number, from a process built for the
 //! check, as `fs::check::run_calls` makes them. Like that check it runs
@@ -23,13 +30,14 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::mem::offset_of;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{
-    AT_FDCWD, DT_BLK, DT_CHR, DT_DIR, MAP_ANONYMOUS, MAP_PRIVATE, O_PATH, O_RDONLY, PROT_READ,
-    PROT_WRITE, S_IFBLK, STATX_BASIC_STATS, Statx,
+    AT_FDCWD, BLKGETSIZE64, BLKROGET, BLKRRPART, BLKSSZGET, DT_BLK, DT_CHR, DT_DIR, MAP_ANONYMOUS,
+    MAP_PRIVATE, O_PATH, O_RDONLY, O_RDWR, PROT_READ, PROT_WRITE, S_IFBLK, SEEK_END,
+    STATX_BASIC_STATS, Statx, TCGETS,
 };
 use ferrix_vfs::Errno;
 use ferrix_vfs::dirent;
@@ -101,9 +109,25 @@ const AT_STATX: u64 = 256;
 const AT_LISTING: u64 = 768;
 /// Where `/proc/partitions` is read to.
 const AT_TEXT: u64 = 1024;
+/// The writable disk's node.
+const AT_WRITABLE_NODE: u64 = 96;
+/// Where a disk opened as a file is read to and written from.
+const AT_DATA: u64 = 2048;
 
 const DEV: &[u8] = b"/dev\0";
 const NODE: &[u8] = b"/dev/ferrixcheck0\0";
+const WRITABLE_NODE: &[u8] = b"/dev/ferrixcheck2\0";
+
+/// The writable disk's name and minor.
+const WRITABLE: &[u8] = b"ferrixcheck2";
+const WRITABLE_MINOR: u32 = MINOR + 4;
+/// Its sectors: few, so a write over its end is cheap to set up.
+const WRITABLE_SECTORS: u64 = 4;
+
+/// A read of the check disk that starts 100 bytes into sector 3 and ends
+/// part-way through sector 4.
+const PARTIAL_AT: u64 = 3 * SECTOR as u64 + 100;
+const PARTIAL_LEN: u64 = 700;
 const PROC_PARTITIONS: &[u8] = b"/proc/partitions\0";
 
 /// Room `getdents64` is given per call: the dot entries and three nodes, so
@@ -162,6 +186,80 @@ impl BlockDevice for CheckDisk {
 
     fn read_only(&self) -> bool {
         true
+    }
+}
+
+/// A writable disk in memory: [`WRITABLE_SECTORS`] sectors, zero until
+/// written, counting its flushes.
+#[derive(Debug)]
+struct MemoryDisk {
+    /// Its bytes.
+    bytes: crate::sync::SpinLock<Vec<u8>>,
+    /// How many times it was flushed.
+    flushes: AtomicU32,
+}
+
+impl MemoryDisk {
+    fn new() -> MemoryDisk {
+        MemoryDisk {
+            bytes: crate::sync::SpinLock::new(vec![
+                0;
+                (WRITABLE_SECTORS * u64::from(SECTOR)) as usize
+            ]),
+            flushes: AtomicU32::new(0),
+        }
+    }
+
+    /// The byte range `sector` and `len` name, if it is whole sectors inside.
+    fn range(sector: u64, len: usize) -> Result<core::ops::Range<usize>, Errno> {
+        let size = SECTOR as usize;
+        if len == 0 || !len.is_multiple_of(size) {
+            return Err(Errno::EINVAL);
+        }
+        let start = usize::try_from(sector)
+            .map_err(|_| Errno::EIO)?
+            .checked_mul(size)
+            .ok_or(Errno::EIO)?;
+        let end = start.checked_add(len).ok_or(Errno::EIO)?;
+        if end > (WRITABLE_SECTORS * u64::from(SECTOR)) as usize {
+            return Err(Errno::EIO);
+        }
+        Ok(start..end)
+    }
+}
+
+impl BlockDevice for MemoryDisk {
+    fn read(&self, sector: u64, buf: &mut [u8]) -> Result<(), Errno> {
+        let range = MemoryDisk::range(sector, buf.len())?;
+        buf.copy_from_slice(self.bytes.lock().get(range).ok_or(Errno::EIO)?);
+        Ok(())
+    }
+
+    fn sectors(&self) -> u64 {
+        WRITABLE_SECTORS
+    }
+
+    fn sector_size(&self) -> u32 {
+        SECTOR
+    }
+
+    fn read_only(&self) -> bool {
+        false
+    }
+
+    fn write(&self, sector: u64, buf: &[u8]) -> Result<(), Errno> {
+        let range = MemoryDisk::range(sector, buf.len())?;
+        self.bytes
+            .lock()
+            .get_mut(range)
+            .ok_or(Errno::EIO)?
+            .copy_from_slice(buf);
+        Ok(())
+    }
+
+    fn flush(&self) -> Result<(), Errno> {
+        let _ = self.flushes.fetch_add(1, Ordering::Relaxed);
+        Ok(())
     }
 }
 
@@ -231,6 +329,7 @@ fn check_once(process: &Process) -> Result<u64, &'static str> {
         (AT_DEV, DEV),
         (AT_NODE, NODE),
         (AT_PARTITIONS, PROC_PARTITIONS),
+        (AT_WRITABLE_NODE, WRITABLE_NODE),
     ]
     .into_iter()
     .try_for_each(|(at, bytes)| uaccess::copy_to_user(process.space(), page + at, bytes))
@@ -246,7 +345,8 @@ fn check_once(process: &Process) -> Result<u64, &'static str> {
     outcome
 }
 
-/// Steps 1 to 7: registered, seen, read, refused, gone, dropped.
+/// Steps 1 to 7: registered, seen, read, opened as files, refused, gone,
+/// dropped.
 fn check_the_disk(
     process: &Process,
     page: u64,
@@ -280,6 +380,8 @@ fn check_the_disk(
     if partitions(process, page)? != PARTITIONS {
         return Err("/proc/partitions is not exactly the check disk's row, as Linux prints it");
     }
+    check_read_as_a_file(process, page)?;
+    check_written_as_a_file(process, page)?;
     check_refusals(disk)?;
 
     let held = devfs::block_device(registration.rdev())
@@ -294,7 +396,7 @@ fn check_the_disk(
     Ok(sectors)
 }
 
-/// Step 2: `statx` describes the node, `open` is `ENXIO`, and `O_PATH` opens.
+/// Step 2: `statx` describes the node, and `O_PATH` opens it.
 fn check_the_node(process: &Process, page: u64, listed_ino: u64) -> Result<(), &'static str> {
     let size = size_of::<Statx>();
     let basic = u64::from(STATX_BASIC_STATS);
@@ -326,15 +428,6 @@ fn check_the_node(process: &Process, page: u64, listed_ino: u64) -> Result<(), &
         return Err("the /dev listing and statx disagree about the disk's inode number");
     }
 
-    refuses(
-        by_number(
-            process,
-            Syscall::Openat,
-            [CWD, page + AT_NODE, u64::from(O_RDONLY), 0, 0, 0],
-        ),
-        Errno::ENXIO,
-        "opening the check disk's node was not ENXIO",
-    )?;
     let path = descriptor(
         by_number(
             process,
@@ -347,6 +440,213 @@ fn check_the_node(process: &Process, page: u64, listed_ino: u64) -> Result<(), &
         by_number(process, Syscall::Close, [path, 0, 0, 0, 0, 0]),
         0,
         "an O_PATH descriptor of the check disk's node would not close",
+    )
+}
+
+/// Step 4a: the read-only check disk opened as a file. A read that starts
+/// and ends inside sectors is the pattern's bytes; the end is its size; a
+/// read at the end is empty and one over it short; the `BLK*` requests
+/// answer its geometry, a request it does not know is `ENOTTY`; and it will
+/// not open for writing.
+fn check_read_as_a_file(process: &Process, page: u64) -> Result<(), &'static str> {
+    let size = SECTORS * u64::from(SECTOR);
+    let fd = descriptor(
+        by_number(
+            process,
+            Syscall::Openat,
+            [CWD, page + AT_NODE, u64::from(O_RDONLY), 0, 0, 0],
+        ),
+        "the check disk's node would not open for reading",
+    )?;
+    let outcome = (|| {
+        answers(
+            by_number(
+                process,
+                Syscall::Pread64,
+                positioned(fd, page + AT_DATA, PARTIAL_LEN, PARTIAL_AT),
+            ),
+            PARTIAL_LEN as usize,
+            "a pread inside the check disk did not read all it asked",
+        )?;
+        let got = read_back(process, page + AT_DATA, PARTIAL_LEN as usize)?;
+        let size_of_sector = u64::from(SECTOR);
+        let want = (PARTIAL_AT..PARTIAL_AT + PARTIAL_LEN)
+            .map(|at| pattern(at / size_of_sector, (at % size_of_sector) as usize));
+        if !got.iter().copied().eq(want) {
+            return Err("a pread that starts and ends inside sectors read the wrong bytes");
+        }
+        answers(
+            by_number(
+                process,
+                Syscall::Lseek,
+                [fd, 0, u64::from(SEEK_END), 0, 0, 0],
+            ),
+            size as usize,
+            "lseek to the end of the check disk did not land at its size",
+        )?;
+        answers(
+            by_number(
+                process,
+                Syscall::Pread64,
+                positioned(fd, page + AT_DATA, 16, size),
+            ),
+            0,
+            "a pread at the end of the check disk was not empty",
+        )?;
+        answers(
+            by_number(
+                process,
+                Syscall::Pread64,
+                positioned(fd, page + AT_DATA, 100, size - 10),
+            ),
+            10,
+            "a pread over the end of the check disk was not cut at the end",
+        )?;
+        let ask = |request: u32| {
+            by_number(
+                process,
+                Syscall::Ioctl,
+                [fd, u64::from(request), page + AT_DATA, 0, 0, 0],
+            )
+        };
+        answers(
+            ask(BLKGETSIZE64),
+            0,
+            "BLKGETSIZE64 on the check disk was refused",
+        )?;
+        if le(&read_back(process, page + AT_DATA, 8)?, 0, 8) != Some(size) {
+            return Err("BLKGETSIZE64 did not answer the check disk's size in bytes");
+        }
+        answers(ask(BLKSSZGET), 0, "BLKSSZGET on the check disk was refused")?;
+        if le(&read_back(process, page + AT_DATA, 4)?, 0, 4) != Some(u64::from(SECTOR)) {
+            return Err("BLKSSZGET did not answer the check disk's sector size");
+        }
+        answers(ask(BLKROGET), 0, "BLKROGET on the check disk was refused")?;
+        if le(&read_back(process, page + AT_DATA, 4)?, 0, 4) != Some(1) {
+            return Err("BLKROGET did not say the read-only check disk is read-only");
+        }
+        refuses(
+            ask(BLKRRPART),
+            Errno::EINVAL,
+            "BLKRRPART was not EINVAL with no partition tables",
+        )?;
+        refuses(
+            ask(TCGETS),
+            Errno::ENOTTY,
+            "a terminal's request on a disk was not ENOTTY",
+        )
+    })();
+    let closed = by_number(process, Syscall::Close, [fd, 0, 0, 0, 0, 0]);
+    outcome?;
+    answers(closed, 0, "the check disk's descriptor would not close")?;
+    refuses(
+        by_number(
+            process,
+            Syscall::Openat,
+            [CWD, page + AT_NODE, u64::from(O_RDWR), 0, 0, 0],
+        ),
+        Errno::EACCES,
+        "opening the read-only check disk for writing was not EACCES",
+    )
+}
+
+/// Step 4b: a writable disk opened as a file. A write that patches two
+/// sectors in part leaves the rest of them as they were; one over the end is
+/// cut short, and one at the end is `ENOSPC`; `fsync` flushes the disk; and
+/// what is read back is what was written.
+fn check_written_as_a_file(process: &Process, page: u64) -> Result<(), &'static str> {
+    const AT: u64 = 300;
+    const LEN: u64 = 700;
+    let size = WRITABLE_SECTORS * u64::from(SECTOR);
+    let disk = Arc::new(MemoryDisk::new());
+    let registration = devfs::register_block(
+        WRITABLE,
+        MAJOR,
+        WRITABLE_MINOR,
+        Arc::clone(&disk) as Arc<dyn BlockDevice>,
+    )
+    .map_err(|_| "the writable check disk's registration was refused")?;
+    let written: Vec<u8> = (0..LEN).map(|at| (at as u8).wrapping_mul(7) | 1).collect();
+    uaccess::copy_to_user(process.space(), page + AT_DATA, &written)
+        .map_err(|_| "could not stage the bytes to write")?;
+    let fd = descriptor(
+        by_number(
+            process,
+            Syscall::Openat,
+            [CWD, page + AT_WRITABLE_NODE, u64::from(O_RDWR), 0, 0, 0],
+        ),
+        "the writable check disk would not open for writing",
+    )?;
+    let outcome = (|| {
+        answers(
+            by_number(
+                process,
+                Syscall::Pwrite64,
+                positioned(fd, page + AT_DATA, LEN, AT),
+            ),
+            LEN as usize,
+            "a pwrite that patches two sectors in part did not write all it was given",
+        )?;
+        answers(
+            by_number(
+                process,
+                Syscall::Pwrite64,
+                positioned(fd, page + AT_DATA, 10, size - 4),
+            ),
+            4,
+            "a pwrite over the end of a disk was not cut at the end",
+        )?;
+        refuses(
+            by_number(
+                process,
+                Syscall::Pwrite64,
+                positioned(fd, page + AT_DATA, 10, size),
+            ),
+            Errno::ENOSPC,
+            "a pwrite at the end of a disk was not ENOSPC",
+        )?;
+        answers(
+            by_number(process, Syscall::Fsync, [fd, 0, 0, 0, 0, 0]),
+            0,
+            "fsync of a disk was refused",
+        )?;
+        if disk.flushes.load(Ordering::Relaxed) == 0 {
+            return Err("fsync of a disk did not flush it");
+        }
+        answers(
+            by_number(
+                process,
+                Syscall::Pread64,
+                positioned(fd, page + AT_DATA, size, 0),
+            ),
+            size as usize,
+            "the writable check disk did not read back whole",
+        )?;
+        let got = read_back(process, page + AT_DATA, size as usize)?;
+        let want = (0..size).map(|at| match at {
+            at if (AT..AT + LEN).contains(&at) => {
+                written.get((at - AT) as usize).copied().unwrap_or(0)
+            }
+            at if at >= size - 4 => written
+                .get((at - (size - 4)) as usize)
+                .copied()
+                .unwrap_or(0),
+            _ => 0,
+        });
+        if !got.iter().copied().eq(want) {
+            return Err(
+                "a disk written as a file did not read back as written, around the writes too",
+            );
+        }
+        Ok(())
+    })();
+    let closed = by_number(process, Syscall::Close, [fd, 0, 0, 0, 0, 0]);
+    drop(registration);
+    outcome?;
+    answers(
+        closed,
+        0,
+        "the writable check disk's descriptor would not close",
     )
 }
 
@@ -622,6 +922,17 @@ fn read_text(process: &Process, page: u64, file: u64) -> Result<Vec<u8>, &'stati
 /// Make `call` by its number, as a program on this architecture would.
 fn by_number(process: &Process, call: Syscall, args: [u64; 6]) -> Result<usize, Errno> {
     syscall_check::call_by_number(process, call, args)
+}
+
+/// `pread64` and `pwrite64`'s registers as a program on this architecture
+/// passes them: on a 32-bit one the 64-bit offset is a pair of registers
+/// starting at an even one, so the fourth is padding.
+fn positioned(fd: u64, buf: u64, len: u64, offset: u64) -> [u64; 6] {
+    if size_of::<usize>() == 8 {
+        [fd, buf, len, offset, 0, 0]
+    } else {
+        [fd, buf, len, 0, offset & 0xFFFF_FFFF, offset >> 32]
+    }
 }
 
 /// Require a handler to have answered `want`.

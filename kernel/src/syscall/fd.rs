@@ -542,6 +542,10 @@ pub(crate) fn sys_ioctl(
     if let Some(control) = crate::audio::pcm::control_of(file.io()) {
         return crate::audio::pcm::control_ioctl(process, &control, request, arg);
     }
+    // An open disk (`docs/INSTALLER.md` §5.1): its geometry and a flush.
+    if let Some(disk) = fs::disk_file::of(file.io()) {
+        return fs::disk_file::ioctl(process, &disk, request, arg);
+    }
     // A pseudoterminal, by which end of it the descriptor holds.
     if let Some(master) = fs::pty::master_of(file.io()) {
         return tty::master_ioctl(process, &master, request, arg);

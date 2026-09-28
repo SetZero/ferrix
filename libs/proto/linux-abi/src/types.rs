@@ -1533,6 +1533,51 @@ pub const FIONBIO: u32 = 0x5421;
 pub const FIONCLEX: u32 = 0x5450;
 /// Set the descriptor's close-on-exec flag: any file.
 pub const FIOCLEX: u32 = 0x5451;
+
+// Block devices' requests, from `include/uapi/linux/fs.h`. Type `0x12`;
+// the ones built with `_IO` carry no size, and the two built with
+// `_IOR(.., size_t)` carry the pointer width in bits 16 to 29, so they are
+// `0x8008_12xx` on the 64-bit architectures and `0x8004_12xx` on ARMv7-A.
+
+/// Whether the disk refuses writes, as an `int`: `_IO(0x12, 94)`.
+pub const BLKROGET: u32 = 0x125E;
+/// Read the partition table again: `_IO(0x12, 95)`.
+pub const BLKRRPART: u32 = 0x125F;
+/// The size in 512-byte sectors, as an `unsigned long`: `_IO(0x12, 96)`.
+pub const BLKGETSIZE: u32 = 0x1260;
+/// Write back and drop what is cached of the disk: `_IO(0x12, 97)`.
+pub const BLKFLSBUF: u32 = 0x1261;
+/// The logical sector size, as an `int`: `_IO(0x12, 104)`.
+pub const BLKSSZGET: u32 = 0x1268;
+/// The block size the page cache uses, as an `int`: `_IOR(0x12, 112, size_t)`,
+/// although the kernel writes an `int` there.
+pub const BLKBSZGET: u32 = ior_size_t(112);
+/// The size in bytes, as a `u64`: `_IOR(0x12, 114, size_t)`.
+pub const BLKGETSIZE64: u32 = ior_size_t(114);
+/// The smallest I/O the disk does without a read-modify-write, as an
+/// `unsigned int`: `_IO(0x12, 120)`.
+pub const BLKIOMIN: u32 = 0x1278;
+/// The I/O size the disk does best, as an `unsigned int`: `_IO(0x12, 121)`.
+pub const BLKIOOPT: u32 = 0x1279;
+/// How far the first aligned sector is from the start, as an `int`:
+/// `_IO(0x12, 122)`.
+pub const BLKALIGNOFF: u32 = 0x127A;
+/// The physical sector size, as an `unsigned int`: `_IO(0x12, 123)`.
+pub const BLKPBSZGET: u32 = 0x127B;
+/// Whether the disk is a spinning one, as an `unsigned short`:
+/// `_IO(0x12, 126)`.
+pub const BLKROTATIONAL: u32 = 0x127E;
+
+/// `_IOR(0x12, number, size_t)` for this build's pointer width.
+const fn ior_size_t(number: u32) -> u32 {
+    // `_IOC_READ` is 2, in the top two bits.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "usize is at most 8 bytes, so the cast cannot truncate"
+    )]
+    let size = size_of::<usize>() as u32;
+    (2 << 30) | (size << 16) | (0x12 << 8) | number
+}
 /// The same request as [`FIONREAD`], under its terminal name.
 pub const TIOCINQ: u32 = FIONREAD;
 /// Give up the controlling terminal.

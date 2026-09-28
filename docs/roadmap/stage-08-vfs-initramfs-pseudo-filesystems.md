@@ -157,7 +157,7 @@ none. With them, `pwdx`,
 process now has a pid from a registry that finds a live process by it.
 
 ```
-  devfs    7 nodes numbered as Linux numbers them; zero, null, full and urandom do what they are for; a disk registered as 254:250 listed, stat'ed, refused open and found by number, 2 sectors read, gone from /dev and /proc/partitions with its registration; 0 frames leaked
+  devfs    7 nodes numbered as Linux numbers them; zero, null, full and urandom do what they are for; a disk registered as 254:250 listed, stat'ed, read as a file, found by number, 2 sectors read, one in memory written as a file, gone from /dev and /proc/partitions with its registration; 0 frames leaked
   procfs   36 names listed and walked back to, 4 maps lines parsed, 2 of them named; cwd and root read as getcwd; 8 /proc/sys values read, a host name written there reached uname; partitions empty with no block devices
   procstat /proc/stat read twice 50 ms apart: a cpu line for each of 4 processors, 21 ticks advanced, no counter went backwards
 ```

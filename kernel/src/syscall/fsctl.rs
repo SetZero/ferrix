@@ -281,6 +281,11 @@ pub(crate) fn sys_fsync(process: &Process, fd: i32, data_only: bool) -> Result<u
             file.location().inode()?.fsync(data_only)?;
             Ok(0)
         }
+        // A disk's descriptor flushes the disk (`fs::disk_file`).
+        FileType::BlockDevice if fs::disk_file::of(file.io()).is_some() => {
+            file.io().fsync(data_only)?;
+            Ok(0)
+        }
         _ => Err(Errno::EINVAL),
     }
 }

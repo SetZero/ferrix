@@ -891,8 +891,10 @@ impl Inode for Node {
     /// name reaches, while `stat` still reports this node's number. A disk's
     /// node does not open: a mount reaches the disk by number.
     fn open(&self) -> Result<Option<Arc<dyn Inode>>> {
+        // A disk is opened by [`attach_device`], which knows whether the open
+        // is for writing: a read-only disk refuses only that.
         if let Place::Block(_) = self.place {
-            return Err(Errno::ENXIO);
+            return Ok(None);
         }
         if let Place::Card(index) = self.place {
             let card = crate::display::card(index).ok_or(Errno::ENXIO)?;
@@ -1343,16 +1345,20 @@ pub(crate) fn open_char_device(rdev: u64) -> Result<Arc<dyn Inode>> {
 ///
 /// # Errors
 ///
-/// `ENXIO` for a character number no device here has, and for every block
-/// device, registered or not: a mount reaches a disk through
-/// [`block_device`], and nothing reads a block node's descriptor yet.
+/// `ENXIO` for a character or block number no device here has, and
+/// `EACCES` for a disk that refuses writes opened for writing. A block node
+/// opens as its disk (`fs::disk_file`), wherever the node is.
 pub(crate) fn attach_device(file: Arc<OpenFile>) -> Result<Arc<OpenFile>> {
     if file.is_path() {
         return Ok(file);
     }
     match file.kind() {
         FileType::CharDevice => {}
-        FileType::BlockDevice => return Err(Errno::ENXIO),
+        FileType::BlockDevice => {
+            let rdev = file.inode().metadata().rdev;
+            let disk = fs::disk_file::DiskFile::open(rdev, file.writable())?;
+            return file.with_io(disk);
+        }
         _ => return Ok(file),
     }
     let inode = file.inode();

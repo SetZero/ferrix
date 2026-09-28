@@ -35,6 +35,7 @@ pub(crate) mod check;
 pub(crate) mod console;
 pub(crate) mod data_disk;
 pub(crate) mod devfs;
+pub(crate) mod disk_file;
 pub(crate) mod epoll;
 pub(crate) mod epoll_check;
 pub(crate) mod eventfd;

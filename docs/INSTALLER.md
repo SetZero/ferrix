@@ -328,9 +328,18 @@ data if the power fails. Back up anything you cannot lose."
 `pwrite`, `lseek` (with `SEEK_END` giving the size), `fsync`, and the
 `ioctl`s the installer and busybox use: `BLKGETSIZE64`, `BLKSSZGET`,
 `BLKPBSZGET`, `BLKRRPART`, `BLKFLSBUF`. I/O goes through the block core to
-the driver's ring, as a mounted filesystem's does. Opening a disk that has a
-mounted partition for writing is `EBUSY`, and a partition's node is limited
-to its range, as on Linux. Only root opens them.
+the driver's ring, as a mounted filesystem's does. A partition's node is
+limited to its range, as on Linux (I2). Like Linux without `O_EXCL`, opening
+a disk with something mounted from it is allowed, and not coherent with the
+mount; the engine refuses such a disk itself (I5).
+
+*Built (I1, 2026-09-28):* `kernel/src/fs/disk_file.rs`. Reads and writes of
+any byte range, with a read-modify-write for a sector covered in part;
+`EACCES` for writing a read-only disk; `ENOSPC` for a write at the end;
+`fsync` as the disk's flush; `BLKGETSIZE64`, `BLKGETSIZE`, `BLKSSZGET`,
+`BLKPBSZGET`, `BLKBSZGET`, `BLKIOMIN`, `BLKIOOPT`, `BLKALIGNOFF`,
+`BLKROGET`, `BLKROTATIONAL` and `BLKFLSBUF`; `BLKRRPART` is `EINVAL` until
+I2. Held by devfs's boot check on all three architectures (FX-0830).
 
 ### 5.2 Partitions
 
@@ -561,4 +570,4 @@ needs the engine and the gate) and beside the GUI; S1 can start at once.
 day. §10: decisions 2 and 5 as recommended; decision 1 the customer's
 own, a full shrinker (§4.6); decision 4, Secure Boot through Ubuntu's shim
 (§5.7); decision 3, the reference PC, is open, and the
-VM path does not wait on it. I1 is being built.
+VM path does not wait on it. I1 is built (§5.1); I2 is next.

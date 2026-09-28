@@ -5197,9 +5197,10 @@ mod paths {
 
     /// `mknodat` makes character and block device nodes with the number it
     /// was given and the umask applied; a character node opens as the devfs
-    /// device with its number, whatever filesystem it is on; a number devfs
-    /// does not have, and every block device, is `ENXIO` on open but not with
-    /// `O_PATH`; and a directory is still `EPERM`. Returns the nodes made.
+    /// device with its number, whatever filesystem it is on; a character
+    /// number devfs does not have, and a block number no disk has, is `ENXIO`
+    /// on open but not with `O_PATH`; and a directory is still `EPERM`.
+    /// Returns the nodes made.
     fn check_device_nodes_open_by_number(p: &mut Paths<'_>) -> Result<usize, &'static str> {
         let directory = p.path(b"/tmp/pathcheck/dir")?;
         if p.call(

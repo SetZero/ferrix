@@ -1862,9 +1862,12 @@ pub(crate) static STAGE8_PSEUDO_FILESYSTEMS: Explanation = Explanation {
               requires each to do what it is for and to carry the number Linux gives it. It \
               registers a small in-memory disk and, by system call number, requires /dev to \
               list it after the character nodes without repeating or skipping a name across a \
-              registration, stat to report a block device with its number and size, open to \
-              be ENXIO while O_PATH opens, block_device to find it by number and read its \
-              sectors, /proc/partitions to hold exactly its row, a clashing name or number to \
+              registration, stat to report a block device with its number and size, O_PATH to \
+              open it, the disk opened as a file to answer pread inside sectors, lseek to its \
+              end and the BLK requests as Linux does and to refuse O_RDWR with EACCES, a \
+              writable disk in memory to take a pwrite patching two sectors in part, cut one \
+              over its end, refuse one at it with ENOSPC and flush on fsync, block_device to \
+              find it by number and read its sectors, /proc/partitions to hold exactly its row, a clashing name or number to \
               be refused, and, once the registration is dropped, the node, the lookup and the \
               row to be gone while the held device answers EIO; twice, with no frame and no \
               cached dentry left behind by the second run. It then runs a task in a process of its own and requires /proc/self to name that \
