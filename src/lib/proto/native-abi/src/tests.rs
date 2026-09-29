@@ -1,4 +1,4 @@
-//! What the ABI promises, held against itself and against `libs/proto/linux-abi`.
+//! What the ABI promises, held against itself and against `src/lib/proto/linux-abi`.
 
 use core::mem::{offset_of, size_of};
 

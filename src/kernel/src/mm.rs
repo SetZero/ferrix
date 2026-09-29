@@ -6,7 +6,7 @@
 //! 1. the buddy allocator is given every usable frame firmware reported, and
 //! 2. `alloc` starts working, so `Box`, `Vec` and `BTreeMap` exist.
 //!
-//! Both allocators themselves live in `libs/` — see `ferrix_frame` and
+//! Both allocators themselves live in `src/lib/` — see `ferrix_frame` and
 //! `ferrix_heap` — where they are ordinary Rust that `cargo test`, Miri and a
 //! fuzzer can drive. What is here is the part that genuinely needs a machine:
 //! deciding where the per-frame array goes, and reaching physical memory
@@ -1365,7 +1365,7 @@ pub(crate) unsafe fn reclaim_boot_memory(view: &BootView<'_>) -> Reclaimed {
 /// map there is a whole second translation regime that is switched off at
 /// `TCR_EL1`, so there is nothing to clear. A `cfg` here would be the first
 /// crack in the rule that says architecture differences live under
-/// `kernel/src/arch/`.
+/// `src/kernel/src/arch/`.
 ///
 /// The one operation that cannot be expressed as unmapping a range: dropping
 /// the loader's identity map on x86-64 means removing *everything* below the

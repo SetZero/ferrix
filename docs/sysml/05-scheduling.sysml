@@ -11,7 +11,7 @@ package FerrixScheduling {
     private import FerrixLifecycle::*;
 
     // -----------------------------------------------------------------------
-    // Synchronisation (libs/kernel/sync)
+    // Synchronisation (src/lib/kernel/sync)
     // -----------------------------------------------------------------------
 
     #implemented part def TicketSpinLock {
@@ -39,7 +39,7 @@ package FerrixScheduling {
     }
 
     // -----------------------------------------------------------------------
-    // Interrupts and time (kernel/src/irq.rs, kernel/src/timer.rs)
+    // Interrupts and time (src/kernel/src/irq.rs, src/kernel/src/timer.rs)
     // -----------------------------------------------------------------------
 
     #implemented part def IrqTable {
@@ -51,7 +51,7 @@ package FerrixScheduling {
              * here is the number. Nothing is ever unregistered: stage 10's
              * Interrupt objects register one kernel handler per line for
              * good and find the line's holder in a table of their own
-             * (kernel/src/object/interrupt.rs), so the grace period a
+             * (src/kernel/src/object/interrupt.rs), so the grace period a
              * removal would need is never paid. */
         attribute slots : Natural = 1024;
         attribute delivered : Natural;
@@ -82,7 +82,7 @@ package FerrixScheduling {
     }
 
     // -----------------------------------------------------------------------
-    // Processors (kernel/src/smp.rs)
+    // Processors (src/kernel/src/smp.rs)
     // -----------------------------------------------------------------------
 
     #implemented part def PerCpu {
@@ -148,7 +148,7 @@ package FerrixScheduling {
     enum def TaskState { Runnable; Blocked; Dead; }
 
     enum def SchedClass {
-        doc /* Highest first. libs/kernel/sched names Fair and Idle today; the
+        doc /* Highest first. src/lib/kernel/sched names Fair and Idle today; the
              * real-time classes are stage 14's. */
         Edf;
         Fifo;
@@ -161,9 +161,9 @@ package FerrixScheduling {
 
     #implemented part def Task {
         @stage { number = 5; }
-        doc /* kernel/src/sched/task.rs: a kernel thread — a guard-paged stack,
+        doc /* src/kernel/src/sched/task.rs: a kernel thread — a guard-paged stack,
              * a saved stack pointer, and the bookkeeping that says where it
-             * is. Everything about choosing between tasks is libs/kernel/sched's.
+             * is. Everything about choosing between tasks is src/lib/kernel/sched's.
              * The saved stack pointer is touched only by the CPU that holds
              * the owning run queue's lock at that moment. From stage 6 also a
              * user thread, 1:1, forced by the ABI; one of the nine kernel
@@ -206,7 +206,7 @@ package FerrixScheduling {
     #implemented part def UserThread {
         @stage { number = 6; }
         doc /* A line of execution through a program, as the scheduler sees
-             * it: kernel/src/sched/task.rs's UserThread trait. The thread
+             * it: src/kernel/src/sched/task.rs's UserThread trait. The thread
              * itself is the personality's -- its id, its signals, the address
              * to clear when it ends are none of the scheduler's business --
              * so the scheduler asks it one thing, the process it runs in, to
@@ -216,7 +216,7 @@ package FerrixScheduling {
 
     #implemented part def Tasks {
         @stage { number = 5; }
-        doc /* kernel/src/sched/mod.rs: spawn, spawn_on, exit, yield, sleep,
+        doc /* src/kernel/src/sched/mod.rs: spawn, spawn_on, exit, yield, sleep,
              * wake, reap. Preemption happens only on the way out of an
              * interrupt: the timer sets need_resched and returns, and the trap
              * path decides once the controller has been told the interrupt is
@@ -270,7 +270,7 @@ package FerrixScheduling {
 
     #implemented part def WaitQueue {
         @stage { number = 5; }
-        doc /* kernel/src/sched/wait.rs. The lost wake-up between a waiter and
+        doc /* src/kernel/src/sched/wait.rs. The lost wake-up between a waiter and
              * a waker is closed by order: a waiter marks itself blocked and
              * joins the queue before its last look at the condition; a waker
              * takes the same lock, so it either sees the waiter or made the
@@ -300,7 +300,7 @@ package FerrixScheduling {
 
     #implemented part def Runqueue {
         @stage { number = 5; }
-        doc /* kernel/src/sched/queue.rs: one per CPU, one plain SpinLock taken
+        doc /* src/kernel/src/sched/queue.rs: one per CPU, one plain SpinLock taken
              * with interrupts masked and handed across the switch. Tickless:
              * the timer is armed for the end of the running task's slice or
              * the first sleeper's wake-up, whichever is first, and not at all
@@ -336,7 +336,7 @@ package FerrixScheduling {
 
     #implemented part def EevdfRunQueue {
         @stage { number = 5; }
-        doc /* libs/kernel/sched: entities with weight and virtual runtime; the
+        doc /* src/lib/kernel/sched: entities with weight and virtual runtime; the
              * queue's virtual time is the weight-average; an entity is
              * eligible when its virtual runtime is at or behind it; the pick
              * is the eligible entity with the earliest virtual deadline. The
@@ -359,7 +359,7 @@ package FerrixScheduling {
 
     #implemented part def LoadAverage {
         @stage { number = 5; }
-        doc /* libs/kernel/sched/balance.rs. A geometric decay with a 33-millisecond
+        doc /* src/lib/kernel/sched/balance.rs. A geometric decay with a 33-millisecond
              * half-life, in the shape of Linux's PELT, measuring *weighted
              * demand* rather than occupancy — a processor is either running
              * something or it is not, so "busy" saturates at one task and says
@@ -446,7 +446,7 @@ package FerrixScheduling {
 
     #implemented part def SchedulingDomain {
         @stage { number = 5; }
-        doc /* libs/kernel/sched/domain.rs. CPUs are partitioned into domains, each
+        doc /* src/lib/kernel/sched/domain.rs. CPUs are partitioned into domains, each
              * in one of three modes, changeable at runtime. Per domain, not
              * global: a four-core machine runs a HardRt partition on one core
              * and Throughput on the other three, with rustc on the latter.
@@ -513,9 +513,9 @@ package FerrixScheduling {
         #implemented part loadBalancing : LoadBalancing {
             doc /* Stage 5 left nothing beyond work stealing by an idle
                  * processor; Placement and Balancing above were added after
-                 * it: kernel/src/sched/mod.rs's balance(), at most every 16
+                 * it: src/kernel/src/sched/mod.rs's balance(), at most every 16
                  * milliseconds per processor, pulling and pushing over
-                 * libs/kernel/sched's arithmetic. */
+                 * src/lib/kernel/sched's arithmetic. */
         }
         #planned part fifoRr : FifoRrClass { @stage { number = 14; } }
         #planned part edf : EdfClass { @stage { number = 14; } }
@@ -525,7 +525,7 @@ package FerrixScheduling {
             @stage { number = 7; }
             doc /* Linux sched_setscheduler: SCHED_FIFO/RR to the soft-RT
                  * classes, SCHED_DEADLINE to EDF, SCHED_OTHER/BATCH/IDLE to
-                 * fair. kernel/src/syscall/limits.rs answers it today with
+                 * fair. src/kernel/src/syscall/limits.rs answers it today with
                  * the one policy there is a class for: SCHED_OTHER at
                  * priority zero is accepted and every other policy is EINVAL,
                  * refused rather than accepted and ignored, until stage 14
@@ -556,7 +556,7 @@ package FerrixScheduling {
 
     #implemented part def Futex {
         @stage { number = 7; }
-        doc /* kernel/src/syscall/futex.rs: wait, wake and requeue, plain and
+        doc /* src/kernel/src/syscall/futex.rs: wait, wake and requeue, plain and
              * with a bitset, with the word read and the waiter listed under
              * one table lock so no wake is lost, and the read under it
              * never faulting. One table. A private futex is keyed by

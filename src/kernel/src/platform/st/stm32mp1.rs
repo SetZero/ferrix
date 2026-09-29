@@ -3,7 +3,7 @@
 //!
 //! The DK boards drive HDMI from the chip's LTDC through a Silicon Image
 //! `SiI9022` bridge on an I2C bus (`docs/DISPLAY.md` §6). The driver,
-//! `native/drivers/ltdc`, programs both controllers; what it cannot do is what every
+//! `src/user/native/drivers/display/stm32-ltdc`, programs both controllers; what it cannot do is what every
 //! peripheral on the chip shares -- the RCC's clock gates and the GPIO banks'
 //! pin multiplexing -- and a driver that could write those could stop the
 //! memory controller's clock or take the console's pins. So the kernel does
@@ -759,7 +759,7 @@ const FORCED_MASK: u32 = 0xFF;
 /// `reboot --firmware-setup`.
 ///
 /// Recovery runs U-Boot's `altbootcmd` before the autoboot, and the board's
-/// environment makes that stop at the prompt (`docs/stm32mp157-dk.md`), which
+/// environment makes that stop at the prompt (`docs/vendor/st/stm32mp157-dk.md`), which
 /// is what `firmware` means.
 const BOOT_MODES: [(&str, u32, &str); 5] = [
     (

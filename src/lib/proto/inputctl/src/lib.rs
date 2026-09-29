@@ -4,7 +4,7 @@
 //!
 //! `docs/INPUT.md` §3.1 and §3.2 are the specification. Events are small and
 //! rare next to a disk's traffic, so there is no ring: one control channel per
-//! device, carrying fixed little-endian messages in `libs/proto/displayctl`'s shape.
+//! device, carrying fixed little-endian messages in `src/lib/proto/displayctl`'s shape.
 //!
 //! [`message`] is the bytes: every message a fixed structure, decoded
 //! strictly. [`session`] is the core's half of the conversation for one
@@ -22,7 +22,7 @@
 //! to Linux — the drop rule, what a read returns, what a grab refuses, which
 //! events change the state — the rule is Linux's `drivers/input/evdev.c` and
 //! `drivers/input/input.c`, read at the commits named in each module and cited
-//! by function. Where both are silent, the crate follows `libs/proto/displayctl`:
+//! by function. Where both are silent, the crate follows `src/lib/proto/displayctl`:
 //! fixed capacity, reserved bytes that must be zero, a session that stays
 //! broken once a driver lies. Where this crate departs from `docs/INPUT.md`
 //! because Linux does otherwise, the item says so.

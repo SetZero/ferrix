@@ -2,7 +2,7 @@
  * Print libwayland's own compiled interface tables, so the tables generated
  * from the XML can be required to match them.
  *
- * `scripts/gen/gen-wayland-protocol.py` reads the same XML `wayland-scanner`
+ * `tools/common/gen/gen-wayland-protocol.py` reads the same XML `wayland-scanner`
  * reads, and could read it wrong: an opcode off by one, an argument type
  * confused, a nullable flag dropped. Nothing in the generator would notice.
  * This links against the real `wl_*_interface` structures -- libwayland's own

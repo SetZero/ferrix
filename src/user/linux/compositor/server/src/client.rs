@@ -872,7 +872,7 @@ struct Capture {
 /// How far one wheel click scrolls, in surface coordinates.
 ///
 /// libinput reports a click as 15 units and every toolkit expects that, so
-/// `userland/compositor/hyprix`'s devices turn a wheel notch into this much distance
+/// `src/user/linux/compositor/hyprix`'s devices turn a wheel notch into this much distance
 /// -- and this is where it is turned back, because `wl_pointer`'s own unit
 /// for a click is 120 and a client reads the two together.
 const WHEEL_STEP: f64 = 15.0;

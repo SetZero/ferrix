@@ -58,8 +58,8 @@ itself, which requires a general-purpose OS with a browser, a compositor and a
 self-hosting toolchain — the opposite of a frozen, analysable configuration.
 
 The item is a **51,525-line subset of the kernel**, defined in
-[`scripts/data/certification-item.json`](../../scripts/data/certification-item.json) and
-enforced on every build by `scripts/check/check-item-boundary.py`. Memory protection,
+[`tools/common/data/certification-item.json`](../../tools/common/data/certification-item.json) and
+enforced on every build by `tools/common/check/check-item-boundary.py`. Memory protection,
 scheduling, capability objects, the trap and syscall entry paths, the IOMMU,
 SMP and device enumeration are inside; the VFS, btrfs, the network stack, the
 Linux personality -- its dispatcher, `mmap`, `futex` and threads included --
@@ -95,7 +95,7 @@ boundary.
 | KASLR | kernel image, direct map and vmap arena **moved every boot**: 18, 16 and 17 bits on the 64-bit pair, 11, 8 and 9 on ARMv7-A; off with the same switch |
 | Writable mappings of the kernel's text | **0**, every mapping of its frames swept each boot; the direct map's alias was one until 2026-09-26 (F-34) |
 | Assembly | 500 lines, 22 allow-listed sites, outside the Pixel 7 loader |
-| Cargo features in `kernel/`/`boot/uefi/` | 0 |
+| Cargo features in `src/kernel/`/`src/boot/common/uefi/` | 0 |
 | Requirements of the item, each with a statement, a pass/fail criterion and its parent, gated | **95** high-level (`H.*`) decomposing all 8 objectives and all 8 ASRs; **518** low-level (105 `L.object.*`, 44 `L.iommu.*`, 61 `L.mm.*`, 105 `L.user.*`, 32 `L.smp.*`, 2 `L.sched.*`, 119 `L.x86_64.*`, 6 `L.trap.*`, 3 `L.syscall.*`, 41 `L.console.*`); **338** named by a check that proves each whole, 275 in the baseline of the unverified (TRACEABILITY.md, W-8) |
 | Product functions of the item no low-level requirement names | **0** of 261 in `object/`, of 96 in `iommu`, of 297 in `mm`, `vmap`, `early` and `user`, of 57 in `smp` and of 74 in `console`, where a new one fails the build (object/: 175 named, 84 accessors, 2 check code; iommu: 77 named, 19 accessors; memory: 236 named, 49 accessors, 12 check code; smp: 38 named, 17 accessors, 2 check code; console: 62 named, 10 accessors, 2 check code); 874 of 2,346 item-wide, the subsystems still to write (F-15) |
 

@@ -1,7 +1,7 @@
 //! The Wayland side, and the loop that waits on it and on `loginctl`.
 //!
 //! Upstream's `CHypridle::run` and `enterEventLoop`, over
-//! `userland/compositor/toolkit`: one `ext_idle_notification_v1` for each listener,
+//! `src/user/linux/compositor/toolkit`: one `ext_idle_notification_v1` for each listener,
 //! made with `get_input_idle_notification` where inhibitors are to be
 //! ignored and `get_idle_notification` otherwise; a
 //! `hyprland_lock_notification_v1` when the compositor has the notifier;

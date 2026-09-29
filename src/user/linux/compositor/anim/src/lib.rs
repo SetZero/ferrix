@@ -14,7 +14,7 @@
 //!
 //! # What is read from the configuration
 //!
-//! `userland/compositor/config` keeps `bezier` and `animation` lines as they were
+//! `src/user/linux/compositor/config` keeps `bezier` and `animation` lines as they were
 //! written, because what they mean is this crate's business. [`read`] turns
 //! them into the curves and the tree, reporting each line it could not use
 //! the way Hyprland reports one -- as a diagnostic, with the rest of the file

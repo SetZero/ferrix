@@ -29,7 +29,7 @@ else), or the cgroup namespace. The namespace comes with the rest of stage
 
 ## 2. What the job has to become
 
-Today (read from `kernel/src/object/job.rs` and the process code on
+Today (read from `src/kernel/src/object/job.rs` and the process code on
 2026-09-23):
 
 * only `process_create` puts a process in a job, so every Linux process is in
@@ -53,7 +53,7 @@ root of its own, becomes a child of the root named `drivers.slice`, the name
 `Process` gains `membership: SpinLock<Arc<Job>>`, held strongly: a process
 keeps its job alive, as a Linux task keeps its `css_set`. `fork` reads the
 parent's job under the parent's membership lock and joins the child to it
-before the child is published (`kernel/src/syscall/family.rs`, before the
+before the child is published (`src/kernel/src/syscall/family.rs`, before the
 `processes` insert in `clone_with`). So a fork and a move of its parent are
 ordered: the child lands in the job the parent was in when the fork took the
 lock, and never half in one and half in the other. `process_create` joins the
@@ -129,11 +129,11 @@ locks are taken (FX-0503's rule, `crate::sync::SpinLock`).
 
 ## 3. cgroupfs
 
-A new in-kernel filesystem, `kernel/src/fs/cgroupfs.rs`, registered as
-`cgroup2` in `filesystem_named` (`kernel/src/syscall/fsctl.rs`, where the
+A new in-kernel filesystem, `src/kernel/src/fs/cgroupfs.rs`, registered as
+`cgroup2` in `filesystem_named` (`src/kernel/src/syscall/fsctl.rs`, where the
 comment already says it joins that match) and listed in `/proc/filesystems`.
 Every text it reads or writes is parsed and rendered by a new
-`libs/fs/cgroupfs`, a pure crate with host tests and a fuzzer. That covers
+`src/lib/fs/cgroupfs`, a pure crate with host tests and a fuzzer. That covers
 `+memory -cpu` lists, `max` or a byte count, `quota period`, `key value`
 tables and the pid lists.
 
@@ -222,7 +222,7 @@ descriptor past `INT_MAX` or a `struct clone_args` shorter than
 `POLLPRI` (and `EPOLLPRI`) once after every change, and `select` reports it
 in the exception set. Nothing polled priority before G3, so, as built:
 
-* `Readiness` (`libs/fs/vfs/src/node.rs`) has `priority`, false for every file
+* `Readiness` (`src/lib/fs/vfs/src/node.rs`) has `priority`, false for every file
   but `cgroup.events`;
 * `poll` and `ppoll` map it to `POLLPRI` (`poll::revents`), `select` to the
   exception set (`poll::select_sets`, Linux's `POLLEX_SET`), and `epoll` to
@@ -275,7 +275,7 @@ the delegatee limits what it makes. **A child's limit is a number, not a
 guarantee**: it may be set above its parent's, and binds nothing beyond it,
 because every job's use is charged to each of its ancestors
 (`object::quota`) and the tightest limit on the way up refuses first. The
-check is `kernel/src/fs/cgroupfs/limits_check.rs`, the `limits` boot line.
+check is `src/kernel/src/fs/cgroupfs/limits_check.rs`, the `limits` boot line.
 
 ## 6. Where each thing is charged
 
@@ -287,7 +287,7 @@ of 2026-09-23 found these:
 | `pids` (tasks, as Linux counts) | `clone_with` and `process_create` for a process, `clone_thread` for a thread, before the pid is allocated | `Drop for Process` and `release_thread` |
 | `memory` | `mm::allocate_frames` callers on the user path: `commit_page` (anonymous and file faults), the copy-on-write copies, the fork copies of held pages, `write_page`/`hold`, and the page-cache fill in `fs/pages.rs` | the frame's free, from the owner recorded at charge |
 | `cpu` | the scheduler's entity for the job (§7, S1) | — |
-| `io` | a block request `Part` carries the job that submitted it (`libs/fs/block/src/schedule.rs` already names this as stage 13's place) | — |
+| `io` | a block request `Part` carries the job that submitted it (`src/lib/fs/block/src/schedule.rs` already names this as stage 13's place) | — |
 
 **Memory has no owner today.** A VMO carries no charge, and `AddressSpace::
 resident_pages` is computed on demand. So landing M1 gives each committed
@@ -309,14 +309,14 @@ and still over. That is the scoped OOM kill of stage 13's exit, and the one
 ## 7. The landings
 
 In story points, each landing gated by what it names. The kernel's in-boot
-checks are the pattern `kernel/src/syscall/check.rs` sets; a user-level
+checks are the pattern `src/kernel/src/syscall/check.rs` sets; a user-level
 check runs in `test-shell` with zinc and uutils. The G landings are what
 `docs/INIT.md` needs before init boots.
 
 | | Landing | Gives | Gate | Points |
 |---|---|---|---|---|
 | G1 | Every process in one job: root job, `membership`, fork inherits, `live`/`busy_children` counts, names and ids, the `cgroup.kill` kill beside `job_kill`, `drivers.slice` | C2's inheritance, C5's mechanism | boot checks: a fork's child in its parent's job; populated flips at the last exit, not the reap; a killed forking loop ends | 8 |
-| G2 | `libs/fs/cgroupfs` and cgroupfs: mount, `mkdir`/`rmdir`, `cgroup.procs` read and move, `cgroup.kill`, `cgroup.events` (without `POLLPRI`), `subtree_control` with no controllers yet, `/proc/<pid>/cgroup` | C1, C2, C5 | host tests, Miri and the `cgroupfs_write` fuzzer; the `cgroups` boot check, which drives cgroupfs through the VFS as a program's calls would (mount, `mkdir`, a move by pid, `/proc/<pid>/cgroup`, `cgroup.events`, `cgroup.kill`, the limits, nine refusals), and its negative control, a `cgroup.kill` that does not kill. The user-level run moved to G4, whose delegation needs a user anyway | 8 |
+| G2 | `src/lib/fs/cgroupfs` and cgroupfs: mount, `mkdir`/`rmdir`, `cgroup.procs` read and move, `cgroup.kill`, `cgroup.events` (without `POLLPRI`), `subtree_control` with no controllers yet, `/proc/<pid>/cgroup` | C1, C2, C5 | host tests, Miri and the `cgroupfs_write` fuzzer; the `cgroups` boot check, which drives cgroupfs through the VFS as a program's calls would (mount, `mkdir`, a move by pid, `/proc/<pid>/cgroup`, `cgroup.events`, `cgroup.kill`, the limits, nine refusals), and its negative control, a `cgroup.kill` that does not kill. The user-level run moved to G4, whose delegation needs a user anyway | 8 |
 | G3 | `POLLPRI` through `Readiness`, `poll`, `select`, `epoll`; `cgroup.events` pollable | C4 | boot check: an `epoll` on `cgroup.events` wakes at the last exit and not before | 3 |
 | G4 | `CLONE_INTO_CGROUP`; delegation by ownership; the no-internal-process rule | C3, C7 | `test-shell` as a non-root user in a chowned subtree; a refused move outside it | 5 |
 | G5 | `EMPTY`; `job_for_cgroup`; native jobs as `job-<id>`; `devmgr`'s jobs under `drivers.slice` | C8 | boot check: a native wait for `EMPTY` fires with the populated flip; `test-restart` still passes | 3 |
@@ -324,9 +324,9 @@ check runs in `test-shell` with zinc and uutils. The G landings are what
 | M1 | `memory` charging: `memory.current`, `memory.max`, `memory.events`, `memory.stat` (anon, file); the scoped OOM kill | C6 | a process past `memory.max` in one cgroup killed, a sibling untouched | 13 |
 | M2 | Reclaim: clean page-cache pages, scoped to a job and global, and `memory.high`, which reclaims above it | stage 13's reclaim | a `memory.high` job's file pages evicted and read back identical | 13 |
 | F1 | `cgroup.freeze`, over the stopped state processes already have | C4's `frozen` | a frozen job's members stop and resume | 3 |
-| S1 | `cpu.weight`: a group entity per job in `libs/kernel/sched`'s EEVDF, hierarchical | C6 | host tests of shares; a boot check of two busy cgroups at 1:3 weights within 10% | 13 |
+| S1 | `cpu.weight`: a group entity per job in `src/lib/kernel/sched`'s EEVDF, hierarchical | C6 | host tests of shares; a boot check of two busy cgroups at 1:3 weights within 10% | 13 |
 | S2 | `cpu.max`: bandwidth per period, throttling a group's entity | C6 | a `cpu.max 20000 100000` job held near 20% | 8 |
-| B1 | `io.weight` in `libs/fs/block`'s scheduler | C6 | host tests of the dispatch shares | 5 |
+| B1 | `io.weight` in `src/lib/fs/block`'s scheduler | C6 | host tests of the dispatch shares | 5 |
 
 G1 to G5 are **27 points**, and they are all `docs/INIT.md`'s first boot
 waits on. Its landings L1 and L2 are host-only and can run beside them. The
@@ -361,7 +361,7 @@ to `pids.max` and `memory.max`, which exist since 2026-09-26.
 work order W-13 built them as the job quotas the Security Target claims
 (`docs/certification/IMPLEMENTATION.md`, "As built", has the design and
 where it moved from this document's). A job's counters are a slot in
-`kernel/src/object/quota.rs`, charged hierarchically; cgroupfs's
+`src/kernel/src/object/quota.rs`, charged hierarchically; cgroupfs's
 `pids.max`, `pids.current`, `pids.events`, `memory.max`, `memory.current`,
 `memory.events` and `cpu.weight` read and write that slot, and a native job
 handle reaches the same through `job_set_limit` and `job_get_quota`.
@@ -372,7 +372,7 @@ included, and the frame record keeps the slot, so every free uncharges; a
 charge past `memory.max` is refused like running out of memory, since
 there is no reclaim or scoped OOM kill yet; and `cpu.weight` scales each
 task's weight by its job's weight over its job's load instead of adding a
-group entity to `libs/kernel/sched` -- Linux's own per-processor approximation of
+group entity to `src/lib/kernel/sched` -- Linux's own per-processor approximation of
 a group's share, one task alone in its job keeping 50.0% of a processor
 against eight in another at boot. `BUILT` is `cpu memory pids`, so the
 no-internal-process rule is reachable, and its host tests have a boot path.
@@ -396,7 +396,7 @@ Linux would reclaim them under pressure -- M2's to fix. `test-vfs` command
 21 fills `/tmp` from a shell 256 KiB under its `memory.max` and reads the
 three files.
 
-**M1's scoped OOM kill, as built (2026-09-26).** `kernel/src/object/oom.rs`.
+**M1's scoped OOM kill, as built (2026-09-26).** `src/kernel/src/object/oom.rs`.
 A charge a system call makes for an object past `memory.max` is still
 refused `ENOMEM`. A page of a program's own memory -- its fault, or one a
 system call faults in for it, as `read` into a fresh buffer does -- whose
@@ -431,7 +431,7 @@ killed), and `memory.events` polling the wrong queue (the wait ended by
 its recheck) each fail by the check's own message.
 
 **G3, as built (3 points).** §4 says what it is. The `cgroups` boot check
-(`kernel/src/fs/cgroupfs/events_check.rs`) gives a cgroup two members, reads
+(`src/kernel/src/fs/cgroupfs/events_check.rs`) gives a cgroup two members, reads
 its `cgroup.events`, and puts it in an epoll set asking `EPOLLPRI`; a task
 waits on the set as `epoll_wait` does. The first member's release must leave
 the waiter asleep, the last must wake it with `EPOLLPRI` and its cookie, by
@@ -442,7 +442,7 @@ negative control, `EventsFile::poll_queues` naming no queue, fails by the
 check's own message ("ended by its recheck, not by the release's wake").
 
 **G4, as built (5 points).** §3.1 and §3.2 say what it is. Its checks are
-under the `cgroups` boot line (`kernel/src/fs/cgroupfs/delegation_check.rs`):
+under the `cgroups` boot line (`src/kernel/src/fs/cgroupfs/delegation_check.rs`):
 a program, `arch::USER_INTO_CGROUP_PROGRAM` on all three architectures,
 starts a child with `CLONE_INTO_CGROUP` that reads `0::/check-g` from
 `/proc/self/cgroup` first thing, and gets `EBADF` for a descriptor not open
@@ -473,7 +473,7 @@ waiting for `TERMINATED`, so one for `EMPTY` waits on for the members to
 end. `job_for_cgroup` judges the caller, not whoever opened the
 descriptor, since it makes a new capability rather than using the file:
 `DUPLICATE`, `TRANSFER` and `WAIT` to a reader of `cgroup.procs`, and
-`MANAGE` too to a writer. The check (`kernel/src/fs/cgroupfs/native_check.rs`,
+`MANAGE` too to a writer. The check (`src/kernel/src/fs/cgroupfs/native_check.rs`,
 under the `cgroups` boot line) drives it through the native dispatch; its
 negative control, `notify` firing no registration, fails by the check's own
 message ("the last member's release fired no EMPTY packet with its key").
@@ -483,8 +483,8 @@ there.
 **What the next session does first, and where each starts.**
 
 * **P1, `pids`** (3 points), done as written below but for the charge's
-  place, which is the core's `Process::new`. `BUILT` in `kernel/src/fs/cgroupfs.rs` gains
-  `pids`, and `libs/fs/cgroupfs`'s `files` a table of controller files beside
+  place, which is the core's `Process::new`. `BUILT` in `src/kernel/src/fs/cgroupfs.rs` gains
+  `pids`, and `src/lib/fs/cgroupfs`'s `files` a table of controller files beside
   the base ones (`pids.max`, `pids.current`, `pids.events`), each listed
   only where the parent's `subtree_control` enables it. The charge is per
   task, hierarchical, and taken where §6 says: in `clone_with` for the job
@@ -544,7 +544,7 @@ carry today's sightings. The init's open decisions are `docs/INIT.md` §14,
   frame charged to no job, which the charge check must catch by name.
 * **`POLLPRI` is new to every poll path.** G3 adds it as a field that is
   false everywhere except `cgroup.events`, so a mistake shows only there.
-* **Group scheduling (S1)** is the largest change to `libs/kernel/sched` since
+* **Group scheduling (S1)** is the largest change to `src/lib/kernel/sched` since
   EEVDF. It is last on purpose: init, and the stage's exit, need none of it.
 
 ## 9. What the customer decides

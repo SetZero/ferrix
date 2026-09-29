@@ -30,7 +30,7 @@
 //! * Colours are premultiplied, as Wayland's are and the software renderer's
 //!   are, so an opacity is one multiply of all four channels.
 //! * A shape is cut in pixels, all or nothing, by the superellipse
-//!   `userland/compositor/render` cuts its corners with: the GPU's frame and the
+//!   `src/user/linux/compositor/render` cuts its corners with: the GPU's frame and the
 //!   software one differ at a corner by a pixel's rounding and no more.
 
 /// An upper bound on any shader here, in TGSI tokens: how much room

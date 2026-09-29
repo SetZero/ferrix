@@ -13,7 +13,7 @@ use ferrix_elf::Elf;
 
 /// What a backtrace line in a panic report begins with, after indentation.
 ///
-/// `kernel/src/panic.rs` writes it, and the test
+/// `src/kernel/src/panic.rs` writes it, and the test
 /// `the_kernel_writes_the_label_this_reads` holds the two together.
 pub(crate) const TRACE_LABEL: &str = "trace";
 
@@ -22,7 +22,7 @@ pub(crate) const TRACE_LABEL: &str = "trace";
 /// And how far the image it describes had moved in the boot being read: a
 /// backtrace gives the addresses the kernel ran at, and with KASLR those are
 /// not the addresses in the ELF. The panic report says the slide on a line
-/// before its trace (`kernel/src/panic.rs`), and [`Symbolizer::annotate`]
+/// before its trace (`src/kernel/src/panic.rs`), and [`Symbolizer::annotate`]
 /// takes it from there.
 #[derive(Debug)]
 pub(crate) struct Symbolizer {

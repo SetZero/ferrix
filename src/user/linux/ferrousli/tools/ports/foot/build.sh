@@ -5,7 +5,7 @@
 # client on Ferrix's compositor, proving the client libraries a browser
 # needs for a fraction of a browser's cost.
 #
-#     tools/ports/foot/build.sh [--arch <arch>]    # from userland/ferrousli/
+#     tools/ports/foot/build.sh [--arch <arch>]    # from src/user/linux/ferrousli/
 #
 # Installs, under $FERRIX_PORTS (see ../common.sh):
 #   <arch>/bin/foot, <arch>/bin/footclient

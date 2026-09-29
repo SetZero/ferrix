@@ -2,7 +2,7 @@
  * Print the exact bytes libwayland puts on the socket, so this crate's
  * encoder can be required to produce the same ones.
  *
- * `userland/compositor/wire` writes Wayland's wire format from the protocol and from
+ * `src/user/linux/compositor/wire` writes Wayland's wire format from the protocol and from
  * connection.c rather than from libwayland's binary, so nothing in it is
  * checked against a real implementation by construction. This probe is the
  * check: it drives a real libwayland client and a real libwayland server

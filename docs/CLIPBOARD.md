@@ -23,7 +23,7 @@ it on the host. This document specifies the whole path:
   SPICE guest agent has used since 2010;
 * **the protocol on it**, SPICE's vdagent, of which this implements the
   clipboard messages and nothing else;
-* **the driver**, `native/drivers/vport`, which owns the device and offers the port as
+* **the driver**, `src/user/native/drivers/console/vport`, which owns the device and offers the port as
   a Unix socket. There is no kernel in this path at all, and §5 is why;
 * **the agent**, a program that is a `ext-data-control` client on one side and
   the port's reader on the other;
@@ -62,7 +62,7 @@ because the rejected ones look cheaper until the viewer is asked about.
    Ferrix from another machine, over VNC or from a QEMU window on a host whose
    build has GTK, has their clipboard joined by QEMU itself.
 2. **A bridge over the network**, guest TCP to a listener in `xtask`, which
-   already terminates the guest's TCP on the host (`xtask/src/gateway/`). It
+   already terminates the guest's TCP on the host (`tools/common/xtask/src/gateway/`). It
    needs no driver and would have been days rather than weeks — but the
    clipboard it joins is the *QEMU host's*, which is the wrong machine for
    anyone whose viewer is elsewhere. It also works only on a boot `xtask`
@@ -98,7 +98,7 @@ from source: `CONFIG_GTK_CLIPBOARD` undefined). In a window the port then
 carried nothing, and `run-compositor --everything` had no clipboard. So on a
 Wayland host a watched boot (`run`, `run-compositor`) gives the port a socket
 chardev instead, and xtask is the host half for the whole run
-(`xtask/src/clipboard/host.rs`): what `wl-paste --watch` reports is grabbed
+(`tools/common/xtask/src/clipboard/host.rs`): what `wl-paste --watch` reports is grabbed
 into the guest -- or on GNOME, whose compositor offers `wl-paste --watch` no protocol, what the X11 selection holds, read through GTK as an Xwayland client, which needs no focus -- and what the guest copies goes to `wl-copy`. The serials are
 kept as `ui/vdagent.c` keeps them, and the guest's own copy coming back from
 `wl-paste --watch` is not grabbed back into the guest. Without
@@ -211,7 +211,7 @@ protocol, QEMU maps it to nothing, and the agent refuses it.
 
 Types: `UTF8_TEXT` (1) is version 1's whole vocabulary, mapped to the MIME
 type `text/plain;charset=utf-8` that the compositor's clipboard already
-carries (`userland/compositor/clip`). `IMAGE_PNG` (2) is §7(b).
+carries (`src/user/linux/compositor/clip`). `IMAGE_PNG` (2) is §7(b).
 
 | Message | Number | Meaning |
 |---|---|---|
@@ -247,16 +247,16 @@ device in devfs. **That is no longer the plan, and none of it will be built.**
 The reason is a property of this kernel that the first draft did not know.
 Every process gets all three of a native handle table, a POSIX file
 descriptor table and a VFS namespace -- `Process::with_pid` in
-`kernel/src/syscall/process.rs` builds them for every process there is, not
+`src/kernel/src/syscall/process.rs` builds them for every process there is, not
 for Linux ones only. And the system call dispatcher takes the native ABI
 **by number range, before any Linux table is asked**
-(`kernel/src/syscall/mod.rs`, `dispatch`). So the two ABIs are not two kinds
+(`src/kernel/src/syscall/mod.rs`, `dispatch`). So the two ABIs are not two kinds
 of process. They are two ranges of number, and one program may use both.
 
 `ferrix-rt` has in fact been doing exactly this since it was written: a
 native program's `exit` is Linux's `exit_group`, called with a Linux number
 through the same instruction as every native call
-(`native/rt/src/arch/x86_64.rs`). The trick this design turns on is already in
+(`src/user/native/rt/src/arch/x86_64.rs`). The trick this design turns on is already in
 the tree, on every architecture, in the runtime every driver links.
 
 So a driver may hold a device through native handles *and* create a Unix
@@ -272,7 +272,7 @@ character device -- another port, or a program that expects the Linux name --
 
 ## 6. The two programs
 
-**`native/drivers/vport`** is the driver, started by `devmgr` for PCI id `0x1043` like
+**`src/user/native/drivers/console/vport`** is the driver, started by `devmgr` for PCI id `0x1043` like
 any other. It is a native program: it takes the device in START, maps the
 register blocks, negotiates the features of §3.1, sets up the four queues of
 §3.2 and walks the control conversation of §3.3 until the port named
@@ -305,26 +305,26 @@ from its first seconds (`docs/COMPOSITOR-DAMAGE-HANDOFF.md` §2.8).
 
 `devmgr` needs one change beyond its table, and it is not optional. A driver
 that does not publish to a kernel subsystem is currently **killed** and
-counted as failed (`native/devmgr/src/main.rs`, after `await_published`), and
+counted as failed (`src/user/native/devmgr/src/main.rs`, after `await_published`), and
 `test-boot` requires `failed 0`. `vport` publishes to no subsystem because it
 has none, so it needs a kind of its own that is started and not waited for.
 
-**`userland/compositor/vdagent`** is the agent, an ordinary `std` program beside the
+**`src/user/linux/compositor/vdagent`** is the agent, an ordinary `std` program beside the
 compositor's other clients. It connects to `vport`'s socket on one side and
-to the Wayland socket on the other, and it is where `libs/drivers/vdagent` and
+to the Wayland socket on the other, and it is where `src/lib/drivers/console/vdagent` and
 `ext-data-control` meet: a host grab becomes a `create_data_source`,
 `offer`, `set_selection`; a guest `selection` event becomes a grab, and the
 host's request for the data is answered from a pipe. It reuses
-`userland/compositor/wire` and the client half of `userland/compositor/clip`, which is why the
+`src/user/linux/compositor/wire` and the client half of `src/user/linux/compositor/clip`, which is why the
 agent is `std` and the driver is not.
 
 ## 6a. The terminal
 
 Copy and paste has to be reachable from a keyboard or it is not a feature a
-person has. `userland/compositor/term` had **no clipboard code of any kind** when this was written --
+person has. `src/user/linux/compositor/term` had **no clipboard code of any kind** when this was written --
 no `wl_data_device`, no paste -- so `CTRL`+`SHIFT`+`V` in a Ferrix terminal
 would do nothing even with every part above built and working. That was
-found by reading `userland/compositor/term/src/client.rs` after a person tried exactly
+found by reading `src/user/linux/compositor/term/src/client.rs` after a person tried exactly
 that key and nothing happened.
 
 So the terminal binds `wl_data_device`: `CTRL`+`SHIFT`+`V` asks for the
@@ -349,7 +349,7 @@ finished until the key works.
   to paint into a corner, so the driver carries the one port it needs and a
   second would be a change to one program. Nothing is owed here now.
 * **(d) The agent's name and its start.** **Settled by §5 and §6:**
-  `userland/compositor/vdagent`, a `std` program beside the compositor's other
+  `src/user/linux/compositor/vdagent`, a `std` program beside the compositor's other
   clients, started as an `exec-once` the way the terminal and the wallpaper
   are. It exits quietly when the socket is not there, so a boot without
   `--clipboard` is a boot without a clipboard and not a boot with an error.
@@ -368,12 +368,12 @@ nothing from the kernel and are pure host-tested logic.
 | # | What | Where | State |
 |---|---|---|---|
 | 1 | this document | `docs/CLIPBOARD.md` | landed |
-| 2 | the vdagent protocol, encode and decode | `libs/drivers/vdagent` | landed |
-| 3 | the virtio-console device protocol | `libs/drivers/virtio/src/console.rs` | landed |
-| 4 | the console driver library | `libs/drivers/virtio-console` | landed |
-| 5 | the driver and its socket, and `devmgr`'s kind | `native/drivers/vport`, `native/devmgr` | landed |
-| 6 | the agent | `userland/compositor/vdagent` | landed |
-| 7 | paste and copy in the terminal | `userland/compositor/term` | landed |
+| 2 | the vdagent protocol, encode and decode | `src/lib/drivers/console/vdagent` | landed |
+| 3 | the virtio-console device protocol | `src/lib/drivers/virtio/src/console.rs` | landed |
+| 4 | the console driver library | `src/lib/drivers/console/virtio-console` | landed |
+| 5 | the driver and its socket, and `devmgr`'s kind | `src/user/native/drivers/console/vport`, `src/user/native/devmgr` | landed |
+| 6 | the agent | `src/user/linux/compositor/vdagent` | landed |
+| 7 | paste and copy in the terminal | `src/user/linux/compositor/term` | landed |
 | 8a | `--clipboard`: the device on the bus | `xtask` | landed |
 | 8b | starting the agent, and `test-clipboard` | `xtask` | landed |
 
@@ -384,12 +384,12 @@ guest `clip copy` reaches the viewer. Talking to QEMU for the first time
 found three things the design had not met:
 
 * **The header is twenty bytes.** `VDAgentMessage`'s `opaque` is 64 bits;
-  `libs/drivers/vdagent` wrote it as 32, so every message either way was
+  `src/lib/drivers/console/vdagent` wrote it as 32, so every message either way was
   misframed ("vdagent_chr_recv_chunk: Oops: 0+24 > 21" on the host). The
   crate now has a test holding it to `vd_agent.h` byte for byte.
 * **QEMU closes the port on purpose** once the first capabilities have
   crossed, to reset its serial state, and opens it again only after the
-  guest's end has closed. `libs/drivers/virtio-console` now answers each of
+  guest's end has closed. `src/lib/drivers/console/virtio-console` now answers each of
   the host's `PORT_OPEN` messages with its own of the same value, and the
   agent takes the port up again when `vport` lets its connection go.
 * **QEMU 10 resets on every capabilities message after the first**, by
@@ -465,7 +465,7 @@ A person's own check, which no gate can make, is
 **And that check can be made on this machine**, which §2 and the paragraph
 above would suggest it cannot. The QEMU on `PATH` here is a headless build
 whose `-display help` offers only `none`, `spice-app` and `dbus`, and that is
-what made VNC the fallback (`xtask/src/window.rs`). But there is a second
+what made VNC the fallback (`tools/common/xtask/src/window.rs`). But there is a second
 QEMU on this host, built from source at
 `~/Documents/qemu/qemu/build`, and it has `gtk`, `egl-headless` and `curses`
 as well as the `qemu-vdagent` chardev. `FERRIX_QEMU` names it:

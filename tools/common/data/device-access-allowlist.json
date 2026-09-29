@@ -1,8 +1,8 @@
 {
   "//": [
-    "Every place under kernel/ that reads or writes something the compiler is",
+    "Every place under src/kernel/ that reads or writes something the compiler is",
     "not allowed to optimise away, and what kind of thing it is. Enforced by",
-    "scripts/check/check-device-access.py and argued in docs/ARCHITECTURE.md §1, §7.",
+    "tools/common/check/check-device-access.py and argued in docs/ARCHITECTURE.md §1, §7.",
     "",
     "The claim being held is structural: the kernel enumerates buses, and the",
     "code that drives a device lives in ring 3 behind an IoMapping and an IOMMU",
@@ -34,14 +34,14 @@
   ],
 
   "register_paths": [
-    "kernel/src/arch/",
-    "kernel/src/iommu/",
-    "kernel/src/pci/",
-    "kernel/src/mmio.rs",
-    "kernel/src/block_ring/",
-    "kernel/src/net_ring/",
-    "kernel/src/early.rs",
-    "kernel/src/panic/screen.rs"
+    "src/kernel/src/arch/",
+    "src/kernel/src/iommu/",
+    "src/kernel/src/pci/",
+    "src/kernel/src/mmio.rs",
+    "src/kernel/src/block_ring/",
+    "src/kernel/src/net_ring/",
+    "src/kernel/src/early.rs",
+    "src/kernel/src/panic/screen.rs"
   ],
   "//register_paths": [
     "The sites ARCHITECTURE.md §1 and §7 permit a device register to be touched:",
@@ -53,139 +53,139 @@
 
   "files": [
     {
-      "file": "kernel/src/arch/x86_64/mmio.rs",
+      "file": "src/kernel/src/arch/x86_64/mmio.rs",
       "kind": "register",
       "max_sites": 8,
-      "reason": "The MMIO accessors themselves, as x86-64 makes them. Every memory-mapped register in the kernel goes through kernel/src/mmio.rs's six functions, and they through these, which is the point: one place says what a device access is, and it is the one place a reviewer has to trust. The Arm pair's are one ldr or str each in assembly (kernel/src/arch/aarch64/mmio.rs and armv7a/mmio.rs, on the assembly allow-list), because KVM there cannot emulate every form of load volatile may compile to; this check reads volatile and port accesses, so those two are held by the assembly budget instead."
+      "reason": "The MMIO accessors themselves, as x86-64 makes them. Every memory-mapped register in the kernel goes through src/kernel/src/mmio.rs's six functions, and they through these, which is the point: one place says what a device access is, and it is the one place a reviewer has to trust. The Arm pair's are one ldr or str each in assembly (src/kernel/src/arch/aarch64/mmio.rs and armv7a/mmio.rs, on the assembly allow-list), because KVM there cannot emulate every form of load volatile may compile to; this check reads volatile and port accesses, so those two are held by the assembly budget instead."
     },
     {
-      "file": "kernel/src/arch/x86_64/cpu.rs",
+      "file": "src/kernel/src/arch/x86_64/cpu.rs",
       "kind": "register",
       "max_sites": 8,
       "reason": "The x86 port primitives, inb/outb/inl/outl, and the asm that implements them. A port cannot be reached by a pointer; the instruction is the only spelling."
     },
     {
-      "file": "kernel/src/arch/x86_64/clock.rs",
+      "file": "src/kernel/src/arch/x86_64/clock.rs",
       "kind": "register",
       "max_sites": 8,
       "reason": "The PIT, calibrating the TSC at boot. A timer is an architectural service the scheduler needs before any driver could run, so it stays in the kernel; §1 permits timers."
     },
     {
-      "file": "kernel/src/arch/x86_64/mod.rs",
+      "file": "src/kernel/src/arch/x86_64/mod.rs",
       "kind": "register",
       "max_sites": 5,
       "reason": "The keyboard controller's reset pulse, the last resort when a triple fault is the alternative, and the 0x80 post code used as an I/O delay."
     },
     {
-      "file": "kernel/src/arch/x86_64/console.rs",
+      "file": "src/kernel/src/arch/x86_64/console.rs",
       "kind": "register",
       "max_sites": 3,
       "reason": "The 16550's data and status ports. The kernel's own console: a panic that cannot print is a panic nobody can read, so this cannot wait for a ring-3 driver."
     },
     {
-      "file": "kernel/src/arch/arm_common/pl011.rs",
+      "file": "src/kernel/src/arch/arm_common/pl011.rs",
       "kind": "register",
       "max_sites": 3,
       "reason": "The PL011's data and flag registers, the AArch64 and ARMv7-A console. As the 16550 above."
     },
     {
-      "file": "kernel/src/arch/arm_common/stm32_usart.rs",
+      "file": "src/kernel/src/arch/arm_common/stm32_usart.rs",
       "kind": "register",
       "max_sites": 3,
       "reason": "The STM32MP157's USART, the DK1's console. As the 16550 above."
     },
     {
-      "file": "kernel/src/arch/aarch64/console.rs",
+      "file": "src/kernel/src/arch/aarch64/console.rs",
       "kind": "register",
       "max_sites": 5,
       "reason": "The AArch64 console's own windows, reached before the MMIO accessors are usable: the ramoops record's header words and its byte store, and the byte registers of the 16550 that is the only console crosvm gives the Pixel 7's guest. The PL011 is arm_common/pl011.rs's, shared with ARMv7-A. 5 rather than 3 for the 16550, which the owner allowed on 2026-09-26."
     },
     {
-      "file": "kernel/src/pci/virtio.rs",
+      "file": "src/kernel/src/pci/virtio.rs",
       "kind": "register",
       "max_sites": 4,
       "reason": "virtio configuration space in a function's BAR, read during enumeration and by the boot check that proves a translated domain works. §7 permits the kernel to enumerate; the driver that then runs the device is in ring 3. The four sites are that check's ring memory, shared with the device rather than a register: a byte and a whole u16 each way, the u16 one access because the device reads and writes the ring's indices concurrently (F-45)."
     },
     {
-      "file": "kernel/src/iommu/vtd.rs",
+      "file": "src/kernel/src/iommu/vtd.rs",
       "kind": "shared",
       "max_sites": 3,
       "reason": "Root and context table entries in RAM the VT-d unit walks itself. Volatile because the unit observes the write, not because the address is a register."
     },
     {
-      "file": "kernel/src/object/pin.rs",
+      "file": "src/kernel/src/object/pin.rs",
       "kind": "shared",
       "max_sites": 1,
       "reason": "A quarantined pin's pages, read whole as they enter the quarantine and as they leave it, to count those a device wrote after its driver died. RAM a device may still write, not a register: volatile because the device may be writing it at the time."
     },
     {
-      "file": "kernel/src/iommu/smmuv3.rs",
+      "file": "src/kernel/src/iommu/smmuv3.rs",
       "kind": "shared",
       "max_sites": 3,
       "reason": "Stream table entries in RAM the SMMUv3 walks itself. As vtd.rs."
     },
     {
-      "file": "kernel/src/arch/aarch64/gic/gicv3_its.rs",
+      "file": "src/kernel/src/arch/aarch64/gic/gicv3_its.rs",
       "kind": "shared",
       "max_sites": 3,
       "reason": "The GICv3 ITS's command queue and the LPI property table, in RAM the ITS and the redistributor read themselves. As smmuv3.rs: volatile because the interrupt controller observes the write, not because the address is a register."
     },
     {
-      "file": "kernel/src/block_ring/mod.rs",
+      "file": "src/kernel/src/block_ring/mod.rs",
       "kind": "shared",
       "max_sites": 4,
       "reason": "The block ring's pages, which the ring-3 driver maps too. The protocol gives each byte one writer; volatile says the other side's writes are real. This is the seam working as designed, not a breach of it."
     },
     {
-      "file": "kernel/src/net_ring/mod.rs",
+      "file": "src/kernel/src/net_ring/mod.rs",
       "kind": "shared",
       "max_sites": 5,
       "reason": "The net ring's pages. As block_ring."
     },
     {
-      "file": "kernel/src/user/check.rs",
+      "file": "src/kernel/src/user/check.rs",
       "kind": "memory",
       "max_sites": 13,
       "reason": "Stage 6's boot checks: a page written and read back to prove a mapping, an alias, or a fault. Volatile so the compiler cannot decide the check proved itself."
     },
     {
-      "file": "kernel/src/stages_check.rs",
+      "file": "src/kernel/src/stages_check.rs",
       "kind": "memory",
       "max_sites": 5,
       "reason": "The boot checks' probes: demand paging and the kernel image's own bytes. Ordinary RAM, read for real because that is what is being proven."
     },
     {
-      "file": "kernel/src/mm/check.rs",
+      "file": "src/kernel/src/mm/check.rs",
       "kind": "memory",
       "max_sites": 5,
       "reason": "Stage 2's boot checks, moved out of main.rs: a vmap page and a kernel stack written and read back to its last word. Ordinary RAM, read for real because that is what is being proven."
     },
     {
-      "file": "kernel/src/mm.rs",
+      "file": "src/kernel/src/mm.rs",
       "kind": "memory",
       "max_sites": 5,
       "reason": "Page table entries, through the direct map. The MMU walks them, which is why a write cannot be sunk; no device is involved."
     },
     {
-      "file": "kernel/src/early.rs",
+      "file": "src/kernel/src/early.rs",
       "kind": "memory",
       "max_sites": 4,
       "reason": "Page table entries and physical bytes before the kernel's own mappings exist. As mm.rs, earlier."
     },
     {
-      "file": "kernel/src/smp/check.rs",
+      "file": "src/kernel/src/smp/check.rs",
       "kind": "memory",
       "max_sites": 4,
       "reason": "Stage 4's cross-processor markers: a word one processor writes and another reads, which must not be held in a register."
     },
     {
-      "file": "kernel/src/user/rmap_check.rs",
+      "file": "src/kernel/src/user/rmap_check.rs",
       "kind": "memory",
       "max_sites": 4,
       "reason": "The reverse map check's poison word, written through one mapping and read through another."
     },
     {
-      "file": "kernel/src/backtrace.rs",
+      "file": "src/kernel/src/backtrace.rs",
       "kind": "memory",
       "max_sites": 2,
       "reason": "Reading a stack word while walking frames, where the frame may be corrupt and the read must not be reordered with the fault handling around it."

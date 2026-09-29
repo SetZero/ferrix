@@ -1,6 +1,6 @@
 //! Doorbells: what to ring, and what counts as having rung.
 //!
-//! The same discipline `libs/proto/blkring`'s doorbells keep, and for the same
+//! The same discipline `src/lib/proto/blkring`'s doorbells keep, and for the same
 //! reason; see this crate's root for why it is a second copy rather than a
 //! shared one.
 //!

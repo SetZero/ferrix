@@ -5,7 +5,7 @@
 //! `blurfinish` in `src/renderer/Shaders.hpp`): contrast and brightening,
 //! `passes` five-tap downsamples each ending in the vibrancy boost, as many
 //! eight-tap upsamples, then noise, darkening, the alpha boost and, for a
-//! shadow, the colour. `userland/compositor/render` has the same blur over the
+//! shadow, the colour. `src/user/linux/compositor/render` has the same blur over the
 //! compositor's opaque frame; this one keeps alpha, which a shadow is made
 //! of and an opaque canvas has none of.
 //!

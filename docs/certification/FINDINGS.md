@@ -16,7 +16,7 @@ require) and parked there, its negative controls run and logged, to be
 rebased and reviewed. **F-49**, ARMv7-A's
 `psci_system` not declaring `r12` clobbered where `psci_call` does; not yet
 fixed. **F-51**, the manifest's `checks.rs` test-file pattern counting the
-self-check switch (`kernel/src/checks.rs`, product code) as verification;
+self-check switch (`src/kernel/src/checks.rs`, product code) as verification;
 closes with W-8's boot slice 21b. Until they are filed the tally above does
 not count them.
 
@@ -41,9 +41,9 @@ of use, which is how every general-purpose certified kernel handles them.
 
 ## A. Boundary integrity
 
-Measured by `scripts/check/check-item-boundary.py`; **no upward references**, from
+Measured by `tools/common/check/check-item-boundary.py`; **no upward references**, from
 94 in 28 files when the audit began. The debt register in
-`scripts/data/certification-item.json` is empty since W-5 closed F-07, F-09 and F-33
+`tools/common/data/certification-item.json` is empty since W-5 closed F-07, F-09 and F-33
 (2026-09-26), and stays, empty, so that a new upward reference has to be argued
 into it against a finding. `main.rs`'s 38 edges into the load are recorded
 beside it, not in it: they are the composition root's ([ITEM.md](ITEM.md) §2).
@@ -83,7 +83,7 @@ The finding was that the core named `syscall::process` -- 2,229 lines of
 the core isolates, and the type lived in the personality. It was 10
 references: 2 from the core and 8 from the item ring.
 
-The core half is now `kernel/src/object/process.rs`: the address space, the
+The core half is now `src/kernel/src/object/process.rs`: the address space, the
 pid, the start time, the handle table, the job, and how the process ended,
 with `ProcessRef`, `Control` and the pid table. The POSIX process contains it
 and adds the descriptor table, the filesystem context, the signal state,
@@ -102,13 +102,13 @@ POSIX thread's signals, the Linux loader -- which is not the core-concept
 defect this finding described. They are refiled where the register already
 describes them: five under F-09 and `syscall/native.rs`'s under F-07.
 
-*Verified by:* no `F-01` entry in `scripts/data/certification-item.json`, and
+*Verified by:* no `F-01` entry in `tools/common/data/certification-item.json`, and
 nothing under `object/` or `sched/` naming `syscall::` in `check-item-
 boundary.py --report`; the full boot gate row, `test-threads` and `test-jobs`.
 
 ### F-02 — the trap return path calls signal delivery directly
 **Closed 2026-09-25.** Six of the seven references are gone. The frame types
-`arch/*/signal.rs` needs moved to `kernel/src/signal_frame.rs` in the core, and
+`arch/*/signal.rs` needs moved to `src/kernel/src/signal_frame.rs` in the core, and
 the three functions the trap return called are now reached through
 `crate::trap::ReturnPath` — a struct of three function pointers the personality
 registers at boot, held in an `AtomicPtr` rather than a lock because it is read
@@ -143,7 +143,7 @@ architectures with the fault path exercised: the `signal pid N ended by signal
 11` lines still print, with the right pids.
 
 ### F-03 — architecture modules name the personality's `StatLayout`
-**Closed 2026-09-25.** The `StatLayout` enum moved to `kernel/src/arch/mod.rs`,
+**Closed 2026-09-25.** The `StatLayout` enum moved to `src/kernel/src/arch/mod.rs`,
 beside the other ABI facts the facade carries; its `impl` stayed in
 `syscall/stat.rs`, which is legal within a crate. Data in the core, behaviour
 in the personality, and the dependency now points downward. 62 upward
@@ -158,7 +158,7 @@ the three from the item that reached the same board for its boot mode
 The registry now keeps a list of `BoardBinding`s: a binding number, a
 `prepare` function that answers with registers, an interrupt, a DMA shape and
 a line for the log, and the one clock a driver may set, if there is one. The
-list is a `Hooks` (`kernel/src/hooks.rs`, core), a handful of `Once` cells
+list is a `Hooks` (`src/kernel/src/hooks.rs`, core), a handful of `Once` cells
 read without a lock, because board support waits on the timer while it
 prepares a device. `stm32mp1::install` registers the display, the USB host and
 the GPU, in the order their nodes were published before, and hands power the
@@ -182,7 +182,7 @@ are unchanged.
 **Closed 2026-09-25.** Only the `StillServed` enum was wanted, and it belongs
 to the claim rather than to the ring: a quiesce asks whether anything still
 serves a node, and the answer must not depend on which uncertified subsystem
-happens to be serving it. Moved to `kernel/src/claim.rs`; `block_ring`,
+happens to be serving it. Moved to `src/kernel/src/claim.rs`; `block_ring`,
 `render`, `display` and `native` now answer with the core's type.
 
 ### F-06 — core names two item-ring modules
@@ -467,7 +467,7 @@ instrumenting conditions.
 
 **Measured 2026-09-27** (main at 88d9ce39, debug profile, the §3.1 suite):
 decision coverage of the item's *object code*, from the drcov traces the
-statement figure already uses, by `scripts/gen/decision-coverage.py`. A
+statement figure already uses, by `tools/common/gen/decision-coverage.py`. A
 conditional branch has taken both ways when executed blocks began at its
 target and at its fall-through. Of the certified item's conditional branches,
 leaving out the guards -- the overflow, bounds, `unwrap`, assertion and
@@ -496,7 +496,7 @@ method's reach.
 
 ### F-14 — tests are not traced to requirements
 **Advanced 2026-09-27 (W-8 steps 1 and 2).** The trace exists as a gate:
-`scripts/check/check-traceability.py`, in `cargo xtask check`, reads the
+`tools/common/check/check-traceability.py`, in `cargo xtask check`, reads the
 `/// Verifies:` tags on check functions, fails on an id no requirement
 defines, and holds the unverified requirements in a baseline that may only
 shrink; TRACEABILITY.md is generated from it with, per architecture, whether
@@ -687,8 +687,8 @@ test can be written against and an assessor can check.
 ## D. Tools
 
 ### F-17 — the compiler is unqualified
-**Major.** `rustc 1.97.1`, pinned exactly, no unstable features in `kernel/` or
-`boot/uefi/` — good practice, and not qualification evidence.
+**Major.** `rustc 1.97.1`, pinned exactly, no unstable features in `src/kernel/` or
+`src/boot/common/uefi/` — good practice, and not qualification evidence.
 
 Ferrocene is the concrete route: a qualified Rust toolchain with evidence
 packages for IEC 62304 Class C, IEC 61508 SIL 4 and ISO 26262 ASIL D. Adopting
@@ -931,7 +931,7 @@ executable writable. It was found by the KASLR work (F-31). KASLR moves the
 direct map but not the image's physical placement, so a disclosure of the
 direct map's base was enough to find the alias.
 
-*Now:* both loaders (`boot/uefi/` and the Pixel 7 loader) cut each direct-map run
+*Now:* both loaders (`src/boot/common/uefi/` and the Pixel 7 loader) cut each direct-map run
 around the physical span of the image's non-writable segments
 (`ferrix_bootinfo::read_only_span` and `split_run`, host-tested) and map that
 span `KERNEL_RODATA`. `.data` and `.bss` stay writable in the alias: they are
@@ -1092,7 +1092,7 @@ runnable tasks took *n* shares. T.EXHAUST was *not resisted* but for CPU per
 task.
 
 *Now:* every job below the tree's root has a quota slot in a table of atomics
-(`kernel/src/object/quota.rs`), charged hierarchically -- a limit anywhere
+(`src/kernel/src/object/quota.rs`), charged hierarchically -- a limit anywhere
 above refuses, and a refused charge takes nothing -- and set through a job
 handle (`job_set_limit`, `job_get_quota`) or cgroupfs:
 
@@ -1142,7 +1142,7 @@ allocations, which share the heap, stop the machine when it is gone (V-05).
 *Now:* the job's memory counter is in bytes, and the kernel heap its
 programs hold is charged to it beside their frames, against the one limit
 -- as cgroup v2 folds `kmem` into `memory.max`. A charge is a token from
-`libs/kernel/kmem` made where the allocation is, to the job of the task whose call
+`src/lib/kernel/kmem` made where the allocation is, to the job of the task whose call
 made it, and kept inside what it pays for, so every path that frees the
 object frees the charge. A job at its limit is refused the object with
 `ENOMEM` before anything changes. An audit of every allocation in the load
@@ -1313,7 +1313,7 @@ whatever the delegating job was given; what fails is `FRU_RSA.1` for the
 delegated job itself, the bound its unit file asked for.
 
 *Now:* a job right of its own, `SET_LIMIT` (`1 << 7` in
-`libs/proto/native-abi`), which `job_set_limit` requires instead of `MANAGE`
+`src/lib/proto/native-abi`), which `job_set_limit` requires instead of `MANAGE`
 (`syscall/native.rs`). `Rights::JOB` carries it, so a job `job_create` makes
 and the handles root and init hold have it. `job_for_cgroup` grants it only
 with `MANAGE`, and only when the caller may also write the cgroup's
@@ -1357,7 +1357,7 @@ private file mapping maps the file's frame read only and copies on the first
 write, and the file still read its original bytes when traced.
 
 *Now:* `mprotect` making a private region writable marks it copy-on-write
-(`libs/kernel/vma`'s `protect`), merging and splitting regions keep the mark,
+(`src/lib/kernel/vma`'s `protect`), merging and splitting regions keep the mark,
 and the next write gives the writer a copy of its own.
 
 *Checked by the build:* stage 6 (`user/check.rs`) writes a private page, makes
@@ -1366,7 +1366,7 @@ own translation: the child must get a copy, the parent's frame must keep its
 value, and no frame may leak. With `protect` not marking the region
 (scratch, AArch64) the boot stops at *"a write to a page a fork left read-only
 and mprotect made writable reached the other process's page"*. A host test in
-`libs/kernel/vma` holds the mark itself.
+`src/lib/kernel/vma` holds the mark itself.
 ### F-42 — a write refused for memory closed the handles it carried
 **Found and closed 2026-09-27** (found by the F-10 coverage work on
 `object/channel.rs`, ferrix-90: the arm `Endpoint::write` called
@@ -1390,7 +1390,7 @@ nothing, and the push after it cannot be refused for memory.
 `a_write_without_memory_keeps_its_handles`) writes a message carrying a
 handle into a fresh channel with each of the write's first allocations
 failed in turn, and requires every `NO_MEMORY` to leave the handle in the
-sender's table and nothing queued. A host test in `libs/kernel/objects`
+sender's table and nothing queued. A host test in `src/lib/kernel/objects`
 holds `reserve` itself.
 
 
@@ -1492,11 +1492,11 @@ as AoU-5. [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) §1 has the design.
 code, and every one fatal. `KernelAllocator::alloc` returns null on failure,
 and there is no `#[alloc_error_handler]` in the tree, so a `Box::new`, `Arc::new`,
 `Vec::push` or map insert that met an empty heap reached Rust's default
-handler and aborted. `libs/kernel/heap` reported `OutOfMemory` properly, and the
+handler and aborted. `src/lib/kernel/heap` reported `OutOfMemory` properly, and the
 `GlobalAlloc` adapter above it threw the distinction away. The obvious fix is
 unavailable: `#[alloc_error_handler]`, `Box::try_new`, `Arc::try_new` and
 `BTreeMap::try_insert` are unstable, verified against the pinned 1.97.1, and
-`kernel/` uses no unstable features. Only `Vec::try_reserve` is stable.
+`src/kernel/` uses no unstable features. Only `Vec::try_reserve` is stable.
 
 The count also missed the worst of it. The scheduler allocated a tree node on
 every enqueue, and so allocated from interrupt context and with the run queue
@@ -1504,14 +1504,14 @@ locked: a wake-up from an interrupt handler could stop the machine.
 
 *Now:* fallible construction built from stable parts, used at every site.
 
-* `libs/kernel/fallible` makes `Box`, `Vec`, `VecDeque` and `String` fallible:
+* `src/lib/kernel/fallible` makes `Box`, `Vec`, `VecDeque` and `String` fallible:
   `try_box` allocates through the global allocator and builds the box with
   `Box::from_raw`, which `Box`'s documentation makes part of its contract,
   and the rest reserve with `try_reserve` before they grow. Host-tested
   against a recording allocator, and run under Miri in CI.
 * `Arc` and the ordered maps allocate inside `alloc` with layouts it does not
   publish, and cannot be made fallible. They run in a *reserved section*
-  (`kernel/src/mm/reserve.rs`), which first fills this processor's reserve to
+  (`src/kernel/src/mm/reserve.rs`), which first fills this processor's reserve to
   16 objects of every size class and fails there, before anything starts. A
   heap refusal inside the section is then served from the reserve. The depth
   argument is in the module: one `Arc` is one allocation of a layout
@@ -1521,7 +1521,7 @@ locked: a wake-up from an interrupt handler could stop the machine.
   native call, `ENOMEM` from a Linux one, `EAGAIN` from `madvise`, or a
   refused step at bring-up. Each task lends the scheduler its own queue nodes,
   so queueing, picking and waking allocate nothing
-  (`libs/kernel/sched/tests/no_allocation.rs`).
+  (`src/lib/kernel/sched/tests/no_allocation.rs`).
   Taking pages out of an object needs no memory once its list has room. A
   decommit that cannot be refused falls back to 32 pages at a time from the
   stack, and asks the spaces that map the object one at a time when there is
@@ -1532,14 +1532,14 @@ locked: a wake-up from an interrupt handler could stop the machine.
   after it can only be the load's, whose allocations stay infallible, and it
   is FX-0008.
 
-*Checked by the build:* `scripts/check/check-fallible-alloc.py`, the "fallible
+*Checked by the build:* `tools/common/check/check-fallible-alloc.py`, the "fallible
 allocation" step of `cargo xtask check`, finds every call to an allocating
 standard-library API in the item's product code and fails on one that is not
 argued. `NOALLOC:` says the call cannot allocate: room was reserved, or the
 type only looks like a collection. `FALLIBLE:` names a fallible call the
 pattern cannot tell apart, and `FATAL-ALLOC:` marks a bring-up site. It
 read 0 unmarked, 31 `NOALLOC`, 13 `FALLIBLE` and 73 `FATAL-ALLOC` in the item,
-with an empty ratchet baseline, `scripts/data/fallible-alloc-baseline.json`.
+with an empty ratchet baseline, `tools/common/data/fallible-alloc-baseline.json`.
 
 **The hole, found the same day.** `syscall::signal::Signals::default` built
 its tables with `vec![..; NSIG]`, and so did the `Queue` under every thread.
@@ -1582,8 +1582,8 @@ recovery for the load: its allocations still stop the machine (AoU-5).
 The gate's docstring lists what it cannot see, and each was checked by other
 means:
 
-* **Allocation inside a library the item calls.** `libs/kernel/vma`, `libs/kernel/objects`,
-  `libs/kernel/sched` and `libs/kernel/sync` were converted with the item. The other
+* **Allocation inside a library the item calls.** `src/lib/kernel/vma`, `src/lib/kernel/objects`,
+  `src/lib/kernel/sched` and `src/lib/kernel/sync` were converted with the item. The other
   libraries allocate nothing on the item's paths, except behind the load's
   interfaces, where the allocation is the load's.
 * **`.clone()` of a collection.** The item's 18 clones were audited by hand,
@@ -1618,8 +1618,8 @@ including btrfs and a TCP stack is not a project; over the 38,989-line `core`
 ring, with no recursion anywhere, it is at least conceivable.
 
 ### F-25 — no complexity, unit-size or recursion limits
-**Closed 2026-09-25** by `scripts/check/check-complexity.py`, a ratchet over
-`scripts/data/complexity-baseline.json` in the shape the item-boundary gate uses:
+**Closed 2026-09-25** by `tools/common/check/check-complexity.py`, a ratchet over
+`tools/common/data/complexity-baseline.json` in the shape the item-boundary gate uses:
 47 of the item's 1,887 functions sit above a floor, and the gate fails when one
 gets worse, when a new one appears, or when a stale entry is left behind.
 
@@ -1643,7 +1643,7 @@ of the item's functions, 17%, were not measured at all** -- 73 of `sched/mod.rs`
 functions and 71 of `main.rs`'s 76 among them. `main.rs::say_booted` scored
 102 lines because it had swallowed everything up to the next string that
 happened to pair; it has seven. The gate now reads source through
-`scripts/check/rustlex.py`, a lexer shared with the item-boundary gate that knows
+`tools/common/check/rustlex.py`, a lexer shared with the item-boundary gate that knows
 nested comments, raw, byte and C strings, continuations, and a char literal
 from a lifetime, and every run starts with its self-test. Re-measured, the
 baseline went from 34 entries to 47: twelve functions that were always over a
@@ -1669,7 +1669,7 @@ to the requirement or hazard that justifies it.
 and 120 `unsafe fn`s, in the `core` and `item` rings, self-tests included --
 opens its `SAFETY:` comment or its `# Safety` section with an obligation id,
 `// SAFETY: (TRANSLATE) ...`. The ids are a closed set of fourteen, derived by
-sorting what the sites do, registered in `scripts/data/safety-requirements.json`
+sorting what the sites do, registered in `tools/common/data/safety-requirements.json`
 with the ASR, FM or AoU each serves and the code that argues it, and tabled in
 [SAFETY-MANUAL.md](SAFETY-MANUAL.md) §2. Measured on the closing tree: 123
 `CONTEXT`, 118 `SYSREG`, 87 `SHARED`, 66 `ENTRY`, 60 `TRANSLATE`, 55
@@ -1678,7 +1678,7 @@ with the ASR, FM or AoU each serves and the code that argues it, and tabled in
 
 *What says so in the build:* `check-unsafe-audit.py` refuses an id the register
 does not define anywhere in the tree, and holds the item's untagged sites to
-`scripts/data/unsafe-trace-baseline.json`, which is empty -- so a new unsafe
+`tools/common/data/unsafe-trace-baseline.json`, which is empty -- so a new unsafe
 site in the item without an id fails `cargo xtask check`.
 `check-safety-requirements.py` holds the manual's table and the register to
 each other and resolves every obligation's evidence.
@@ -1732,7 +1732,7 @@ native runtime; `docs/BACKLOG.md` keeps the row.
 an Arm core does, so no boot gate can fail without the barrier, and this
 closes on the argument. What the build holds: `Rings::barrier` calls
 `arch::dma_barrier`; `the_driver_publishes_descriptors_before_the_available_index`
-in `libs/drivers/virtio` holds that the queue calls its barrier between the
+in `src/lib/drivers/virtio` holds that the queue calls its barrier between the
 descriptors and the index; and the release kernels put a `dmb osh` there
 (the commit that closed it shows where). A run on real Arm is left for when
 the hardware may be used, and only the Pixel 7's crosvm can give it: the DK1
@@ -1843,7 +1843,7 @@ An implementation that gives only the byte accessors no longer compiles.
 
 *Checked by the build:* a `compile_fail` doctest on `QueueMemory` (a
 byte-only implementation must not compile);
-`the_shared_fields_are_touched_whole` in `libs/drivers/virtio`, which records
+`the_shared_fields_are_touched_whole` in `src/lib/drivers/virtio`, which records
 every access over 600 requests, both indices wrapping, and fails on a byte
 access to any of the six shared fields; and `every_shared_field_is_even`, over
 every queue size. The item's accessors compile to one `movzwl` or `movw` on
@@ -1855,7 +1855,7 @@ and was checked by building it.
 ### F-53 — init's read-only remount at shutdown was refused, and the docs said it happened
 **Found and closed 2026-09-28** (found by the certification consultant's
 review of `docs/NAMESPACES.md`, reading `docs/INIT.md` §8.2 against
-`kernel/src/syscall/fsctl.rs`; closed by that design's landing N1).
+`src/kernel/src/syscall/fsctl.rs`; closed by that design's landing N1).
 
 *Was:* **Minor** (the consultant's "low"). `docs/INIT.md` §8.2, step 2, says
 init "calls `sync`, remounts `/` and `/data` read-only" before `reboot(2)`.
@@ -1924,10 +1924,10 @@ provisions offer Linux is unavailable to a kernel this young.
 ## Closed
 
 ### F-00 — the kernel had no structural coverage measurement
-**Closed 2026-09-25** by `scripts/gen/coverage-report.py` and the
+**Closed 2026-09-25** by `tools/common/gen/coverage-report.py` and the
 `FERRIX_QEMU_PLUGIN` hook. Superseded by F-10 to F-13, which are about the
 *level* of coverage rather than its absence.
 
 ### F-0A — the certified item's SOUP was unenumerated
-**Closed 2026-09-25** by `scripts/gen/gen-soup.py`, which measured it as empty and
+**Closed 2026-09-25** by `tools/common/gen/gen-soup.py`, which measured it as empty and
 now fails the build if that stops being true.

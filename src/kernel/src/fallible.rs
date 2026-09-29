@@ -1,7 +1,7 @@
 //! Allocation that reports failure, for the certified item (finding F-23).
 //!
 //! The certified item allocates through this module and nowhere else, and
-//! `scripts/check/check-fallible-alloc.py` holds it to that: a call to an
+//! `tools/common/check/check-fallible-alloc.py` holds it to that: a call to an
 //! allocating standard-library API in the item's product code fails the
 //! build unless it is argued at the site. Everything here returns
 //! [`AllocError`] when memory has run out, and each caller turns that into
@@ -12,7 +12,7 @@
 //! allocation:
 //!
 //! * `Box`, `Vec`, `VecDeque` and `String` are made fallible directly, from
-//!   stable parts, in `libs/kernel/fallible` where the host tests and Miri reach
+//!   stable parts, in `src/lib/kernel/fallible` where the host tests and Miri reach
 //!   them. They are re-exported here unchanged.
 //! * `Arc` and the ordered maps allocate inside `alloc` and cannot be. They
 //!   run inside a reserved section (`mm/reserve.rs`): this processor's

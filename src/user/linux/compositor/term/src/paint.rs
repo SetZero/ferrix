@@ -1,7 +1,7 @@
 //! Drawing a grid into a window's buffer.
 //!
 //! The font is Hack, at 20 pixels per em in a 12x24 cell: `font.rs`, which
-//! `scripts/gen/gen-term-font.py` rasterises from the TrueType outlines vendored
+//! `tools/common/gen/gen-term-font.py` rasterises from the TrueType outlines vendored
 //! in `font/`. The panic screen's 8x16 bitmap is the right font for a panic --
 //! no filesystem, no allocator, every byte a byte of kernel image -- and the
 //! wrong one for the thing a person reads all day, which is why the terminal

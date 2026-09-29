@@ -159,7 +159,7 @@ impl Fat32 {
         let cluster = self.next_free;
         if cluster >= self.cluster_count + ROOT_CLUSTER {
             return Err(Error::new(
-                "FAT32 image is full; raise IMAGE_BYTES in xtask/src/fat.rs",
+                "FAT32 image is full; raise IMAGE_BYTES in tools/common/xtask/src/fat.rs",
             ));
         }
         self.next_free += 1;
@@ -523,7 +523,7 @@ pub(crate) fn write_image_with(
 
 /// [`write_image_with`], and the image's own options in `FERRIX/DEFAULTS.TXT`
 /// when there are any: the file `flash` writes beside a card owner's
-/// `CMDLINE.TXT`, which the loader appends after it (`boot/uefi/src/main.rs`).
+/// `CMDLINE.TXT`, which the loader appends after it (`src/boot/common/uefi/src/main.rs`).
 pub(crate) fn write_image_carrying(
     arch: Arch,
     loader: &Path,

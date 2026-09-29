@@ -1,10 +1,10 @@
 #!/bin/sh
-# Assemble the website into _site/ (or $1): the pages in website/, plus the
+# Assemble the website into _site/ (or $1): the pages in docs/website/, plus the
 # images, which live once in docs/brand/ because the README uses them too.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
-brand="$here/../docs/brand"
-out=${1:-"$here/../_site"}
+brand="$here/../brand"
+out=${1:-"$here/../../_site"}
 rm -rf "$out"
 mkdir -p "$out/assets"
 cp "$here"/*.html "$here"/*.css "$here"/robots.txt "$here"/sitemap.xml "$here"/site.webmanifest "$out/"

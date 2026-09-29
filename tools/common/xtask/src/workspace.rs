@@ -9,7 +9,7 @@
 //! test job went red while `cargo xtask check` stayed green.
 //!
 //! Now there is no list. A freestanding member is one at `boot`, at
-//! `boot/pixel7`, at `kernel` or under `native/`, read from the workspace manifest; `cargo xtask check` and
+//! `src/boot/vendor/google/pixel7`, at `kernel` or under `src/user/native/`, read from the workspace manifest; `cargo xtask check` and
 //! CI both ask this module, through the same commands. And a member anywhere
 //! else whose `src/main.rs` says `#![no_main]` is refused, so a new program
 //! put in the wrong place fails the gate on the machine that added it.
@@ -20,10 +20,14 @@ use std::path::Path;
 use crate::{Error, Result};
 
 /// Where freestanding members live, relative to the workspace root.
-const FREESTANDING_PLACES: &[&str] = &["boot/uefi", "boot/pixel7", "kernel"];
+const FREESTANDING_PLACES: &[&str] = &[
+    "src/boot/common/uefi",
+    "src/boot/vendor/google/pixel7",
+    "src/kernel",
+];
 
 /// The directory freestanding native programs live under.
-const NATIVE_PLACE: &str = "native/";
+const NATIVE_PLACE: &str = "src/user/native/";
 
 /// The workspace's members, sorted by what the host can do with them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,7 +36,7 @@ pub(crate) struct Members {
     pub(crate) host: Vec<String>,
     /// The loader and the kernel, by package name.
     pub(crate) kernel_and_loader: Vec<String>,
-    /// The native runtime and programs under `native/`, by package name.
+    /// The native runtime and programs under `src/user/native/`, by package name.
     pub(crate) native: Vec<String>,
 }
 
@@ -79,8 +83,8 @@ pub(crate) fn members(root: &Path) -> Result<Members> {
         } else if is_freestanding_program(&directory) {
             return Err(Error::new(format!(
                 "workspace member `{member}` is a freestanding program (its src/main.rs is \
-                 #![no_main]) outside boot, kernel and native/. The host gates build every other \
-                 member as a test harness, which fails for it; move it under native/"
+                 #![no_main]) outside boot, kernel and src/user/native/. The host gates build every other \
+                 member as a test harness, which fails for it; move it under src/user/native/"
             )));
         } else {
             sorted.host.push(name);
@@ -164,11 +168,11 @@ mod tests {
     #[test]
     fn a_freestanding_program_outside_user_is_refused() {
         let root = std::env::temp_dir().join(format!("ferrix-workspace-{}", std::process::id()));
-        let program = root.join("libs").join("stray");
+        let program = root.join("src").join("lib").join("stray");
         std::fs::create_dir_all(program.join("src")).expect("a scratch workspace");
         std::fs::write(
             root.join("Cargo.toml"),
-            "[workspace]\nmembers = [\"libs/stray\"]\n",
+            "[workspace]\nmembers = [\"src/lib/stray\"]\n",
         )
         .expect("the manifest");
         std::fs::write(program.join("Cargo.toml"), "[package]\nname = \"stray\"\n")
@@ -180,16 +184,16 @@ mod tests {
         .expect("the program");
         let answer = members(&root);
         let _ = std::fs::remove_dir_all(&root);
-        let error = answer.expect_err("a #![no_main] program under libs/ is refused");
-        assert!(error.to_string().contains("libs/stray"), "{error}");
+        let error = answer.expect_err("a #![no_main] program under src/lib/ is refused");
+        assert!(error.to_string().contains("src/lib/stray"), "{error}");
     }
 
     #[test]
     fn members_are_read_past_comments_and_commas() {
-        let manifest = "[workspace]\nmembers = [\n    # a comment, \"not\" a member\n    \"libs/a\",\n    \"user/b\", \"kernel\"\n]\n";
+        let manifest = "[workspace]\nmembers = [\n    # a comment, \"not\" a member\n    \"src/lib/a\",\n    \"user/b\", \"kernel\"\n]\n";
         assert_eq!(
             member_paths(manifest).expect("a list"),
-            ["libs/a", "user/b", "kernel"]
+            ["src/lib/a", "user/b", "kernel"]
         );
     }
 

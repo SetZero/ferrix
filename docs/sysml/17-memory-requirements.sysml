@@ -5,13 +5,13 @@
  * requirements (part 13 defines the format, part 14 is the pilot this
  * copies), in two id spaces.
  *
- *  - `L.mm.<n>`: the kernel's own memory -- kernel/src/mm.rs and mm/ (the
+ *  - `L.mm.<n>`: the kernel's own memory -- src/kernel/src/mm.rs and mm/ (the
  *    frame allocator's glue, the heap, the kernel's page tables, the
  *    allocation reserve, page tables unlinked and waiting for their
  *    shootdown), vmap.rs (the kernel address arena, device windows and
  *    kernel stacks) and early.rs (the mapper stage 1 runs before there is an
  *    allocator);
- *  - `L.user.<n>`: what a program's memory is made of -- kernel/src/user/
+ *  - `L.user.<n>`: what a program's memory is made of -- src/kernel/src/user/
  *    vmo.rs (memory objects: their pages, copy-on-write, sharing and
  *    retirement) and user/space.rs (address spaces: mappings, faults,
  *    protection, unmapping and its shootdown, and the charge for them).
@@ -22,7 +22,7 @@
  * each, the package gives the file, and they are never renumbered once a
  * check names them.
  *
- * The frame, heap, paging and vma arithmetic itself is libs/kernel/frame,
+ * The frame, heap, paging and vma arithmetic itself is src/lib/kernel/frame,
  * heap, paging and vma, whose host tests verify it; nothing here restates
  * them. What is here is what the kernel does with them.
  *
@@ -30,16 +30,16 @@
  * its behaviour; it is no broader than one check can prove, and where the
  * checks that exist each prove a part it is split; an accessor needs no
  * requirement of its own; and check code living in a product file is listed
- * in scripts/data/traceability-units.json, not required.
+ * in tools/common/data/traceability-units.json, not required.
  */
 package FerrixMemoryRequirements {
     private import FerrixItemRequirements::*;
 
     package MemoryManagement {
-        doc /* kernel/src/mm.rs: the frame allocator's interface, the kernel heap's
+        doc /* src/kernel/src/mm.rs: the frame allocator's interface, the kernel heap's
              * page supply and allocator, the kernel's and other trees' page tables,
              * and frame zeroing and copying. The buddy allocator and the heap
-             * themselves are libs/kernel/frame and libs/kernel/heap, whose host tests
+             * themselves are src/lib/kernel/frame and src/lib/kernel/heap, whose host tests
              * prove them; nothing here restates them. The frame windows at the end
              * of the file serve the checks only (mm-draft-A-notes.md). */
 
@@ -421,7 +421,7 @@ package FerrixMemoryRequirements {
     }
 
     package AllocationReserve {
-        doc /* kernel/src/mm/reserve.rs: each processor's allocation reserve, which
+        doc /* src/kernel/src/mm/reserve.rs: each processor's allocation reserve, which
              * lets an Arc or a map insert that has started finish (finding F-23). */
 
         requirement <'L.mm.35'> aSectionCompletesOnTheReserve : ItemLowLevel {
@@ -475,7 +475,7 @@ package FerrixMemoryRequirements {
     }
 
     package UnlinkedTables {
-        doc /* kernel/src/mm/unlinked.rs: page tables an unmap has unlinked from a
+        doc /* src/kernel/src/mm/unlinked.rs: page tables an unmap has unlinked from a
              * live tree, held from the allocator until the shootdown or the unit's
              * invalidation that covers them (finding F-36). */
 
@@ -515,7 +515,7 @@ package FerrixMemoryRequirements {
     }
 
     package KernelArena {
-        doc /* kernel/src/vmap.rs: the kernel's dynamic address space -- anonymous
+        doc /* src/kernel/src/vmap.rs: the kernel's dynamic address space -- anonymous
              * allocations, device windows, buffers and guard-paged kernel stacks.
              * check_failed_device_map and check_invariants are check code in this
              * product file (mm-draft-A-notes.md). */
@@ -696,7 +696,7 @@ package FerrixMemoryRequirements {
     }
 
     package EarlyMemory {
-        doc /* kernel/src/early.rs: physical memory and page tables before there is
+        doc /* src/kernel/src/early.rs: physical memory and page tables before there is
              * a frame allocator -- the loader's tables extended from a pool of
              * sixteen frames in .bss. read_physical_byte and translate serve only
              * stage 1's checks, which are in main.rs (mm-draft-A-notes.md). */
@@ -750,7 +750,7 @@ package FerrixMemoryRequirements {
     }
 
     package VirtualMemoryObjects {
-        doc /* kernel/src/user/vmo.rs: the pageable memory object -- a sparse
+        doc /* src/kernel/src/user/vmo.rs: the pageable memory object -- a sparse
              * list of frames committed on first touch, shared by a fork until
              * a write copies, held in place for a device, moved by mremap, cut
              * by a file's truncation -- and the three phases a page leaves it
@@ -1315,7 +1315,7 @@ package FerrixMemoryRequirements {
     }
 
     package AddressSpaces {
-        doc /* kernel/src/user/space.rs: a process's address space -- the region
+        doc /* src/kernel/src/user/space.rs: a process's address space -- the region
              * map and the page tables under it, the mappings of VMOs, files,
              * devices and windows, demand faults and copy-on-write, protect,
              * unmap, mremap and madvise, and the shootdown every takedown of a

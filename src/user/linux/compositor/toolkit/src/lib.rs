@@ -1,8 +1,8 @@
 //! The Wayland client runtime Ferrix's desktop clients share.
 //!
-//! `userland/compositor/term`, `userland/compositor/lock` and `userland/compositor/pattern` each speak
-//! Wayland by hand over `userland/compositor/wire`: fixed object ids, a registry read
-//! into a map, a `Reader` loop, a memfd from `userland/compositor/shm`. That is the
+//! `src/user/linux/compositor/term`, `src/user/linux/compositor/lock` and `src/user/linux/compositor/pattern` each speak
+//! Wayland by hand over `src/user/linux/compositor/wire`: fixed object ids, a registry read
+//! into a map, a `Reader` loop, a memfd from `src/user/linux/compositor/shm`. That is the
 //! right size for a test client that makes five objects. waybar, fuzzel,
 //! hyprlock and hypridle make surfaces on every screen, follow screens as
 //! they come and go, read the keyboard and the pointer, run programs and

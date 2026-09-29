@@ -4,8 +4,8 @@
 The kernel's allocator returns null when memory has run out, and every
 ordinary `Box`, `Arc`, `Vec` or map turns that null into the allocation error
 handler, which stops the machine. So in the certified item -- the `core` and
-`item` rings of `scripts/data/certification-item.json`, product code only -- every
-allocation goes through `kernel/src/fallible.rs`, which reports failure as an
+`item` rings of `tools/common/data/certification-item.json`, product code only -- every
+allocation goes through `src/kernel/src/fallible.rs`, which reports failure as an
 error its caller can return. This gate is what keeps that true: it finds calls
 to the standard library's allocating APIs in the item's source and fails when
 one is not argued.
@@ -13,7 +13,7 @@ one is not argued.
 What it looks for
 -----------------
 
-Token patterns in source whose comments and literals `scripts/check/rustlex.py` has
+Token patterns in source whose comments and literals `tools/common/check/rustlex.py` has
 blanked:
 
   constructors  `Box::new`, `Arc::new`, `Arc::new_cyclic`, `Rc::new`, their
@@ -56,7 +56,7 @@ separately is worse than none:
     written (docs/certification/MEMORY-AND-TIMING.md section 1).
   * **Conversions.** `.into()` from a `&str` to a `String`, a slice to a `Vec`,
     and `?` converting into a boxed error allocate invisibly.
-  * **Callees.** A call into `libs/` or into the uncertified load that
+  * **Callees.** A call into `src/lib/` or into the uncertified load that
     allocates is not the item's source and is not scanned here -- except
     the load files in `REACHED` below, which the item's own native calls run
     to make a process or a thread, and which are scanned as the item is.
@@ -84,15 +84,15 @@ comments directly above that line, says one of:
 The ratchet
 -----------
 
-Like the other gates over the item: `scripts/data/fallible-alloc-baseline.json`
+Like the other gates over the item: `tools/common/data/fallible-alloc-baseline.json`
 records, per file, the flagged calls that carry no marker. A file may improve
 freely; a new unmarked call fails the build, and so does an entry that has
 shrunk without being re-recorded, so a converted site cannot leave an
 allowance behind. The target is an empty baseline.
 
-    python3 scripts/check/check-fallible-alloc.py
-    python3 scripts/check/check-fallible-alloc.py --report     # every site, and the markers
-    python3 scripts/check/check-fallible-alloc.py --record     # rewrite the baseline
+    python3 tools/common/check/check-fallible-alloc.py
+    python3 tools/common/check/check-fallible-alloc.py --report     # every site, and the markers
+    python3 tools/common/check/check-fallible-alloc.py --record     # rewrite the baseline
 """
 
 from __future__ import annotations
@@ -108,9 +108,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import rustlex  # noqa: E402  (after the path insert)
 
-ROOT = Path(__file__).resolve().parent.parent.parent
-KERNEL_SRC = ROOT / "kernel" / "src"
-BASELINE = ROOT / "scripts" / "data" / "fallible-alloc-baseline.json"
+ROOT = Path(__file__).resolve().parent.parent.parent.parent
+KERNEL_SRC = ROOT / "src" / "kernel" / "src"
+BASELINE = ROOT / "tools" / "common" / "data" / "fallible-alloc-baseline.json"
 
 # The toolkit itself: the one place the infallible APIs are called on
 # purpose, each inside a reserved section or behind a fallible reservation.
@@ -275,7 +275,7 @@ def scan_source(source: str, defaults: frozenset[str] = frozenset()) -> list[dic
 
 def load_gate():
     spec = importlib.util.spec_from_file_location(
-        "boundary", ROOT / "scripts" / "check" / "check-item-boundary.py"
+        "boundary", ROOT / "tools" / "common" / "check" / "check-item-boundary.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -476,7 +476,7 @@ def main() -> int:
                     "//": [
                         "Calls to allocating standard-library APIs in the certified",
                         "item's product code that carry no NOALLOC or FATAL-ALLOC",
-                        "marker, per file, as scripts/check/check-fallible-alloc.py counts",
+                        "marker, per file, as tools/common/check/check-fallible-alloc.py counts",
                         "them. A debt register for finding F-23, not an allowance:",
                         "a count may only fall, and the gate fails when one rises,",
                         "when a new file appears, or when one has fallen without",
@@ -502,7 +502,7 @@ def main() -> int:
     if grown:
         print(
             "fallible-alloc: infallible allocation added to the certified item.\n"
-            "  Use kernel/src/fallible.rs, or argue the site with NOALLOC: or\n"
+            "  Use src/kernel/src/fallible.rs, or argue the site with NOALLOC: or\n"
             "  FATAL-ALLOC: (see this script's docstring):",
             file=sys.stderr,
         )

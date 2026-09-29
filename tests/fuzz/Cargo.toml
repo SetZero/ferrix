@@ -9,47 +9,47 @@ cargo-fuzz = true
 
 # Its own workspace, so `cargo fuzz` can pick its own profile and its
 # sanitizer-instrumented build does not disturb the main target directory.
-# `scripts/check/check-crate-layering.sh` knows to skip a manifest that declares one.
+# `tools/common/check/check-crate-layering.sh` knows to skip a manifest that declares one.
 [workspace]
 
 [dependencies]
 libfuzzer-sys = "0.4"
-ferrix-acpi = { path = "../../libs/platform/acpi" }
-ferrix-cpio = { path = "../../libs/fs/cpio" }
-ferrix-argon2 = { path = "../../libs/crypto/argon2" }
-ferrix-auth-proto = { path = "../../libs/proto/auth-proto" }
-ferrix-elf = { path = "../../libs/platform/elf" }
-ferrix-fdt = { path = "../../libs/platform/fdt" }
-ferrix-frame = { path = "../../libs/kernel/frame" }
-ferrix-ustack = { path = "../../libs/kernel/ustack" }
-ferrix-linux-abi = { path = "../../libs/proto/linux-abi" }
-ferrix-native-abi = { path = "../../libs/proto/native-abi" }
-ferrix-objects = { path = "../../libs/kernel/objects" }
-ferrix-sync = { path = "../../libs/kernel/sync" }
-ferrix-vfs = { path = "../../libs/fs/vfs" }
-ferrix-pci = { path = "../../libs/platform/pci" }
-ferrix-btrfs = { path = "../../libs/fs/btrfs" }
-ferrix-block = { path = "../../libs/fs/block", features = ["model"] }
-ferrix-blkring = { path = "../../libs/proto/blkring" }
-ferrix-virtio = { path = "../../libs/drivers/virtio" }
-ferrix-displayctl = { path = "../../libs/proto/displayctl" }
-ferrix-renderctl = { path = "../../libs/proto/renderctl" }
-ferrix-inputctl = { path = "../../libs/proto/inputctl" }
-ferrix-sndctl = { path = "../../libs/proto/sndctl" }
-ferrix-virtio-blk = { path = "../../libs/drivers/virtio-blk" }
-ferrix-virtio-net = { path = "../../libs/drivers/virtio-net" }
-ferrix-virtio-gpu = { path = "../../libs/drivers/virtio-gpu" }
-ferrix-virtio-input = { path = "../../libs/drivers/virtio-input" }
-ferrix-netwire = { path = "../../libs/network/netwire" }
-ferrix-nettcp = { path = "../../libs/network/nettcp" }
-ferrix-net = { path = "../../libs/network/net" }
-ferrix-netlink = { path = "../../libs/network/netlink" }
-ferrix-cgroupfs = { path = "../../libs/fs/cgroupfs" }
-ferrix-sysfs = { path = "../../libs/fs/sysfs" }
-ferrix-svc = { path = "../../libs/init/svc" }
-ferrix-svc-proto = { path = "../../libs/init/svc-proto" }
-compositor-config = { path = "../../userland/compositor/config" }
-compositor-wire = { path = "../../userland/compositor/wire" }
+ferrix-acpi = { path = "../../src/lib/platform/acpi" }
+ferrix-cpio = { path = "../../src/lib/fs/cpio" }
+ferrix-argon2 = { path = "../../src/lib/crypto/argon2" }
+ferrix-auth-proto = { path = "../../src/lib/proto/auth-proto" }
+ferrix-elf = { path = "../../src/lib/platform/elf" }
+ferrix-fdt = { path = "../../src/lib/platform/fdt" }
+ferrix-frame = { path = "../../src/lib/kernel/frame" }
+ferrix-ustack = { path = "../../src/lib/kernel/ustack" }
+ferrix-linux-abi = { path = "../../src/lib/proto/linux-abi" }
+ferrix-native-abi = { path = "../../src/lib/proto/native-abi" }
+ferrix-objects = { path = "../../src/lib/kernel/objects" }
+ferrix-sync = { path = "../../src/lib/kernel/sync" }
+ferrix-vfs = { path = "../../src/lib/fs/vfs" }
+ferrix-pci = { path = "../../src/lib/platform/pci" }
+ferrix-btrfs = { path = "../../src/lib/fs/btrfs" }
+ferrix-block = { path = "../../src/lib/fs/block", features = ["model"] }
+ferrix-blkring = { path = "../../src/lib/proto/blkring" }
+ferrix-virtio = { path = "../../src/lib/drivers/virtio" }
+ferrix-displayctl = { path = "../../src/lib/proto/displayctl" }
+ferrix-renderctl = { path = "../../src/lib/proto/renderctl" }
+ferrix-inputctl = { path = "../../src/lib/proto/inputctl" }
+ferrix-sndctl = { path = "../../src/lib/proto/sndctl" }
+ferrix-virtio-blk = { path = "../../src/lib/drivers/block/virtio-blk" }
+ferrix-virtio-net = { path = "../../src/lib/drivers/net/virtio-net" }
+ferrix-virtio-gpu = { path = "../../src/lib/drivers/display/virtio-gpu" }
+ferrix-virtio-input = { path = "../../src/lib/drivers/input/virtio-input" }
+ferrix-netwire = { path = "../../src/lib/network/netwire" }
+ferrix-nettcp = { path = "../../src/lib/network/nettcp" }
+ferrix-net = { path = "../../src/lib/network/net" }
+ferrix-netlink = { path = "../../src/lib/network/netlink" }
+ferrix-cgroupfs = { path = "../../src/lib/fs/cgroupfs" }
+ferrix-sysfs = { path = "../../src/lib/fs/sysfs" }
+ferrix-svc = { path = "../../src/lib/init/svc" }
+ferrix-svc-proto = { path = "../../src/lib/init/svc-proto" }
+compositor-config = { path = "../../src/user/linux/compositor/config" }
+compositor-wire = { path = "../../src/user/linux/compositor/wire" }
 
 [[bin]]
 name = "elf_parse"

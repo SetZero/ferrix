@@ -295,7 +295,7 @@ impl Stack {
         };
         body.copy_from_slice(quote);
         // RFC 4443: the four bytes after the code are unused and are part of
-        // the body as `libs/network/netwire` counts it, whose header is the type, the
+        // the body as `src/lib/network/netwire` counts it, whose header is the type, the
         // code and the checksum. Leaving them out makes a message whose
         // checksum is taken over a different length than the receiver takes
         // it over, which is a packet nobody can read.

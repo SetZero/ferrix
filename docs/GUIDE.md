@@ -40,13 +40,13 @@ built and booted its first x86-64 image the next day.
 
 Changes land after their tests pass. Changes to the boot image also run the
 boot test on all three architectures. The working rules, including the
-mistakes behind them, are in [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
-The [roadmap](docs/roadmap/README.md) and [backlog](docs/BACKLOG.md) show
+mistakes behind them, are in [docs/CONVENTIONS.md](CONVENTIONS.md).
+The [roadmap](roadmap/README.md) and [backlog](BACKLOG.md) show
 what each session owns and what is left.
 
 ## What exists today
 
-[The roadmap](docs/roadmap/README.md) is the authority; its *Where it stands* is
+[The roadmap](roadmap/README.md) is the authority; its *Where it stands* is
 kept current with every landing. In short:
 
 * **The kernel.** Stages 0–12 are in the boot test on all three
@@ -72,16 +72,16 @@ kept current with every landing. In short:
 * **Networking.** Sockets, a net core and a ring-3 virtio-net driver: `curl`
   fetches over HTTPS and `git` clones inside the guest, and `sshdt` serves
   SSH from it.
-* **A userland of its own.** [ferrousli](userland/ferrousli/README.md), a C library
-  written in Rust; [zinc](userland/zinc/README.md), a zsh-compatible shell that runs
+* **A userland of its own.** [ferrousli](../src/user/linux/ferrousli/README.md), a C library
+  written in Rust; [zinc](../src/user/linux/zinc/README.md), a zsh-compatible shell that runs
   oh-my-zsh and is `/bin/sh`; the uutils family for the utilities
-  ([what is left of busybox](docs/UUTILS.md) is fourteen names).
-* **A desktop.** [hyprix](userland/compositor/README.md), a Hyprland-shaped Wayland
+  ([what is left of busybox](UUTILS.md) is fourteen names).
+* **A desktop.** [hyprix](../src/user/linux/compositor/README.md), a Hyprland-shaped Wayland
   compositor written from scratch, reads a real `hyprland.conf`, tiles
   windows, and composites on the host GPU through virgl
-  ([docs/GPU.md](docs/GPU.md)); a terminal running zinc opens at boot.
+  ([docs/GPU.md](GPU.md)); a terminal running zinc opens at boot.
 * **A board.** ARMv7-A is the Cortex-A7 of the STM32MP157, and Ferrix boots
-  an STM32MP157D-DK1 from its SD card ([the board guide](docs/stm32mp157-dk.md)).
+  an STM32MP157D-DK1 from its SD card ([the board guide](vendor/st/stm32mp157-dk.md)).
 
 Still to come, in the roadmap's order: the rest of stage 19 (XWayland and the
 second-pass effects), namespaces, seccomp and the rest of cgroups (13),
@@ -106,11 +106,11 @@ The assembly that does exist is confined to constructs the machine defines
 before a Rust function could run: installing a translation regime and jumping
 to an address that did not exist a moment earlier, trap and system-call entry,
 the context switch, and CPU primitives with no Rust spelling. `docs/ASSEMBLY.md` is
-the argument for each one; `scripts/check/check-asm-budget.py` fails the build on
+the argument for each one; `tools/common/check/check-asm-budget.py` fails the build on
 any site that is not on the list, on a file over its budget, and on an entry
 that has gone stale.
 
-The allow-list and line counts live in `scripts/check/check-asm-budget.py`.
+The allow-list and line counts live in `tools/common/check/check-asm-budget.py`.
 
 ## Getting started
 
@@ -127,14 +127,14 @@ cargo xtask check                             # every gate CI runs
 
 `run` boots the system: `/sbin/init` is pid 1, a getty gives the serial
 console a zinc session, and `svc` drives it -- `svc status`, `svc list`,
-`svc log <unit>`, `svc poweroff` ([`docs/INIT.md`](docs/INIT.md)). Given
+`svc log <unit>`, `svc poweroff` ([`docs/INIT.md`](INIT.md)). Given
 `--init <program>`, that program is pid 1 instead, as it asks.
 
 `--accel auto` boots on the host processor instead of QEMU's interpreter —
 `whpx` on Windows, `kvm` on Linux, `hvf` on macOS, and `tcg` when there is
 none or when the guest is not the host's architecture. Worth running before
 believing a change to page tables or invalidation, for the reason
-[Reliability](docs/RELIABILITY.md) gives: an interpreted `MMU` has no `TLB`, so
+[Reliability](RELIABILITY.md) gives: an interpreted `MMU` has no `TLB`, so
 a stale translation is a bug the default gate structurally cannot see. `run`
 uses `auto` unless it is given `--accel` or `--gdb`; the tests keep `tcg`.
 Under `whpx` the guest gets one processor unless `--smp` says otherwise:
@@ -172,7 +172,7 @@ It gives the disk a GUID partition table: an EFI system partition with the
 live image's loader, kernel and initramfs, and a partition with the empty
 `ferrix-root` volume. Remove the live disk and boot the new one: the kernel
 finds `ferrix-root` on its second partition and installs the system there,
-as `run` does. This is the MVP of [`docs/INSTALLER.md`](docs/INSTALLER.md):
+as `run` does. This is the MVP of [`docs/INSTALLER.md`](INSTALLER.md):
 virtual machines only, the root file system 1 GiB whatever the disk, and
 no graphical installer yet. `cargo xtask test-install` installs and boots
 the result.
@@ -185,13 +185,13 @@ the volume, so their `/` is the tmpfs and what is on it cannot change what a
 test sees.
 
 On x86-64, `run` and `run-compositor` also attach the stage 16 rustc sysroot
-when `scripts/fetch/fetch-rustc-sysroot.sh` has made
+when `tools/common/fetch/fetch-rustc-sysroot.sh` has made
 `~/.local/share/ferrix/rustc/rustc.img` (or `$FERRIX_RUSTC_SYSROOT/rustc.img`).
 The kernel mounts that btrfs disk at `/data`; QEMU's snapshot mode keeps
 guest writes from changing the source disk. The default system installs links
 for glibc and gcc, plus `/bin/rustc`, `/bin/cargo` and `/bin/cc`, so
 the Rust toolchain is on the PATH in an interactive shell or desktop terminal.
-Run `scripts/fetch/fetch-rustc-sysroot.sh` again to add Cargo and the standard
+Run `tools/common/fetch/fetch-rustc-sysroot.sh` again to add Cargo and the standard
 libraries Ferrix's own image is built against to a sysroot made before
 them. Boots with the toolchain use 4 GiB RAM unless `--memory` overrides
 it. Without the fetched disk, those boots still start and say why rustc is
@@ -261,11 +261,11 @@ which starts `sh -i` on the console, and in the initramfs at `/bin/busybox`
 with every applet linked beside it, so `ls /proc`, `cat /proc/self/maps` and
 `top` work where you type them. Where zinc is built (below), `sh` is zinc's
 rather than busybox's, and on x86-64 the uutils family owns the names it
-provides; busybox keeps the rest, which [docs/UUTILS.md](docs/UUTILS.md) §8
+provides; busybox keeps the rest, which [docs/UUTILS.md](UUTILS.md) §8
 counts down.
 
 The busybox Ferrix is measured with is built against
-[ferrousli](userland/ferrousli/README.md), this repository's C library, and
+[ferrousli](../src/user/linux/ferrousli/README.md), this repository's C library, and
 `--init ferrousli` names it. It is x86-64 only for now.
 
 On Windows, once, from PowerShell:
@@ -288,7 +288,7 @@ cargo xtask run --arch x86_64 --init ferrousli   # boot to a busybox shell
 
 Quit QEMU with `Ctrl-A x`.
 
-`cargo xtask busybox` runs `userland/ferrousli/tools/busybox/build.sh`, or on Windows
+`cargo xtask busybox` runs `src/user/linux/ferrousli/tools/busybox/build.sh`, or on Windows
 `build-windows.sh` in Git for Windows' bash. Either downloads busybox 1.37.0
 and Alpine's configuration for it, both checked against pinned sums, builds
 ferrousli and busybox against it under `~/.local/share/ferrix/busybox/ferrousli`
@@ -297,7 +297,7 @@ installs `x86_64/bin/busybox.static` there, where `--init ferrousli` looks. On
 Windows clang cross-compiles and links it, Strawberry Perl's gcc and gmake run
 busybox's own build, and the kernel headers busybox includes come from Alpine's
 `linux-headers` package, pinned the same way. It takes a few minutes the first
-time. Run it again after `userland/ferrousli/` changes; `--init ferrousli` uses whatever
+time. Run it again after `src/user/linux/ferrousli/` changes; `--init ferrousli` uses whatever
 it last installed.
 
 `cargo xtask test-shell --arch x86_64 --init ferrousli` runs a script in that
@@ -309,7 +309,7 @@ and glibc builds they check alongside.
 
 ### zinc, a zsh-compatible shell
 
-`build` and `run` with a program also put [zinc](userland/zinc/README.md) in the
+`build` and `run` with a program also put [zinc](../src/user/linux/zinc/README.md) in the
 initramfs, at `/bin/zinc` with `/bin/zsh` beside it: a zsh-compatible shell
 written in Rust, whose goal is to run oh-my-zsh. It is `/bin/sh` as well, so
 the shell the kernel starts is zinc. It is built for x86-64 and AArch64 by `cargo` alone, against the
@@ -347,12 +347,12 @@ cargo xtask test-display --arch x86_64                  # the same, judged pixel
 window. The window starts on the firmware's console (VGA on x86-64, ramfb on
 AArch64), where the loader draws; the card is the other console in the
 window's View menu. `--init blank` builds the compositor's first program,
-[`userland/compositor/blank`](userland/compositor/README.md), and boots it as init: it opens
+[`src/user/linux/compositor/blank`](../src/user/linux/compositor/README.md), and boots it as init: it opens
 `/dev/dri/card0` through Ferrix's Linux DRM subset, sets the preferred mode
 (1024×768) and fills the screen with one colour, `#1E1E2E`. Its serial
 line says `compositor: scanout ...`, or why it failed. There is no input and
-no windows yet; [the display design](docs/DISPLAY.md) says what comes next,
-and [the GPU decision](docs/GPU.md) how the pixels leave the CPU.
+no windows yet; [the display design](DISPLAY.md) says what comes next,
+and [the GPU decision](GPU.md) how the pixels leave the CPU.
 x86-64 and AArch64 only: QEMU's ARMv7-A `virt` machine has no virtio-gpu.
 
 `test-display` boots the same program with QEMU's window off, asks QEMU for a
@@ -370,16 +370,16 @@ cargo xtask run-compositor --arch x86_64 --no-gl     # the same, drawn in softwa
 ```
 
 `run-compositor` boots `/sbin/init`, which starts
-[`userland/compositor/hyprix`](userland/compositor/README.md) as `hyprix.service` of
+[`src/user/linux/compositor/hyprix`](../src/user/linux/compositor/README.md) as `hyprix.service` of
 `graphical.target`, on a virtio-gpu card, and puts each program it starts
 in a scope of its own (`svc list` shows them as `app-*.scope`): the compositor reads a `hyprland.conf`, listens on a
 Wayland socket, tiles what connects to it and puts the frame on the screen.
 The configuration it writes into the initramfs starts a terminal first --
 `exec-once = /bin/term /bin/zinc` -- so the boot ends at a shell prompt rather
-than at a picture. [`userland/compositor/term`](userland/compositor/README.md) is the terminal,
+than at a picture. [`src/user/linux/compositor/term`](../src/user/linux/compositor/README.md) is the terminal,
 a character grid with the escape sequences a shell actually sends, and it runs
 the program it is given on a pseudoterminal; that program is
-[zinc](userland/zinc/README.md), with the busybox applets, the uutils and the ported
+[zinc](../src/user/linux/zinc/README.md), with the busybox applets, the uutils and the ported
 programs the image carries beside it.
 
 What the keyboard does, in the configuration it writes itself:
@@ -387,7 +387,7 @@ What the keyboard does, in the configuration it writes itself:
 | keys | |
 |---|---|
 | `SUPER`+`RETURN` | another terminal running zinc |
-| `SUPER`+`P` | a `userland/compositor/pattern` client, the picture the gates tile |
+| `SUPER`+`P` | a `src/user/linux/compositor/pattern` client, the picture the gates tile |
 | `SUPER`+`Q` | close the focused window |
 | `SUPER`+`F`, `SUPER`+`V` | fullscreen, floating |
 | `SUPER`+`H`, `SUPER`+`L` | move the focus; with `SHIFT`, move the window |
@@ -403,12 +403,12 @@ the screen, 1920x1080 when not given. The boot has a network unless
 reaches the host's own resolver -- and `--vnc <DISPLAY>` serves the screen at
 e.g. `:0` rather than opening a window, which is what a machine reached over
 `ssh` wants. `--gl` asks QEMU for `virtio-gpu-gl-pci`, the 3D card, with this
-host's GPU behind it through virglrenderer; [the GPU decision](docs/GPU.md)
+host's GPU behind it through virglrenderer; [the GPU decision](GPU.md)
 says what that gives and what it does not, and `FERRIX_QEMU` names a QEMU
 that is not the one on `PATH`. A screen served over VNC gets the 3D card
 without being asked, where a QEMU on `PATH` has it and the host has a render
 node to draw on, because a video wallpaper is 38 frames a second in software
-and 61 on the GPU ([§3.9](docs/GPU.md)); `--no-gl` keeps it in software, and a
+and 61 on the GPU ([§3.9](GPU.md)); `--no-gl` keeps it in software, and a
 window on this host keeps the 2D card unless `--gl` asks.
 
 The wallpaper comes from this machine's pictures and from nowhere else.
@@ -450,7 +450,7 @@ rather than fatal.
 The client damages the rows that changed rather than the screen, and waits
 for a frame callback before drawing the next one, so a wallpaper under a
 full-screen window stops playing on its own -- what `mpvpaper-stop` is for.
-[The display design](docs/DISPLAY.md) says what it costs, which on a machine
+[The display design](DISPLAY.md) says what it costs, which on a machine
 that has to emulate is about a frame a second, and says why that is the
 compositor rather than the video.
 
@@ -545,7 +545,7 @@ today's. `remote-desktop` does all four from a file of answers.
 cargo xtask remote-desktop
 ```
 
-Copy [`scripts/data/remote-desktop.toml.example`](scripts/data/remote-desktop.toml.example)
+Copy [`tools/common/data/remote-desktop.toml.example`](../tools/common/data/remote-desktop.toml.example)
 to `~/.config/ferrix/remote.toml` -- or to `remote-desktop.toml` here, which
 git ignores, or anywhere and name it with `--config` or `$FERRIX_REMOTE` --
 and fill in the one key that has no default:
@@ -695,7 +695,7 @@ for, since every device a boot does not need is one fewer on the bus, and
 several of them exist to assert exactly what a machine enumerates.
 
 The same shape for `run`, which boots a program of your choosing rather than
-the compositor -- here `userland/compositor/blank`, and `--init ferrousli` or a path
+the compositor -- here `src/user/linux/compositor/blank`, and `--init ferrousli` or a path
 to a busybox for a shell instead:
 
 ```
@@ -709,13 +709,13 @@ anyway; `run` is the one command that wants it said.
 bus with the port SPICE's agent protocol uses, and QEMU's own half of that
 protocol behind it, so the wire between the guest and the clipboard of
 whoever is watching is there and QEMU is talking on it. In the guest, the
-ring-3 driver `native/drivers/vport` opens the port and offers it at `/tmp/vport`, but
+ring-3 driver `src/user/native/drivers/console/vport` opens the port and offers it at `/tmp/vport`, but
 **nothing speaks the agent protocol over it yet** -- the vdagent program and
 the terminal's paste are still to come, so copy and paste between Ferrix and
 the host does not work, and pressing `CTRL`+`V` will do nothing across that
 boundary.
 Copy and paste *between two Ferrix programs* is a different path and does
-work. [The clipboard design](docs/CLIPBOARD.md) is the whole plan and §8
+work. [The clipboard design](CLIPBOARD.md) is the whole plan and §8
 says which parts of it are built.
 
 ### On an STM32MP157-DK1 board
@@ -723,7 +723,7 @@ says which parts of it are built.
 The same ARMv7-A image boots the STM32MP157D-DK1 from its SD card, under
 mainline TF-A, OP-TEE and U-Boot. The whole story — building that firmware,
 partitioning the card, and what to do when a boot goes wrong — is in
-[the board guide](docs/stm32mp157-dk.md); this is the short version.
+[the board guide](vendor/st/stm32mp157-dk.md); this is the short version.
 
 **Once.** A card with the firmware on it (the guide's step 1), both boot
 switches on the underside **ON**, a micro-USB cable into the **ST-LINK** port and
@@ -796,23 +796,22 @@ itself instead.
 
 ## Layout
 
-The tree is grouped by what each part is. [docs/LAYOUT.md](docs/LAYOUT.md)
+The tree is grouped by what each part is. [docs/LAYOUT.md](LAYOUT.md)
 has every directory, which group a new crate goes in, and what lives outside
 the repository.
 
 | Path | What |
 |---|---|
-| `boot/` | The loaders: `boot/uefi/` for x86-64, AArch64 and ARMv7-A, `boot/pixel7/` for the phone. |
-| `kernel/` | The kernel. |
-| `libs/` | Architecture-neutral logic, nearly sixty crates in eight groups: `proto`, `kernel`, `platform`, `fs`, `network`, `drivers`, `init`, `crypto`. Host-testable **by design** — it is the only code `cargo test`, Miri and the fuzzers can reach. |
-| `native/` | Ring-3 programs on the native ABI: the runtime, `devmgr`, and one process per driver under `native/drivers/`. |
-| `userland/` | Linux-ABI programs, each its own workspace: [the compositor](userland/compositor/README.md), [the init](userland/init/README.md), [zinc](userland/zinc/README.md), statd and [ferrousli](userland/ferrousli/README.md), the C library. |
-| `tests/` | The fuzz targets over `libs/`, and test programs that live outside any one crate. |
+| `src/boot/` | The loaders: `src/boot/common/uefi/` for x86-64, AArch64 and ARMv7-A, `src/boot/vendor/google/pixel7/` for the phone. |
+| `src/kernel/` | The kernel. |
+| `src/lib/` | Architecture-neutral logic, nearly sixty crates in eight groups: `proto`, `kernel`, `platform`, `fs`, `network`, `drivers`, `init`, `crypto`. Host-testable **by design** — it is the only code `cargo test`, Miri and the fuzzers can reach. Drivers are grouped by function: `block`, `net`, `display`, `gpu`, `input`, `usb`, `sound`, `console`. |
+| `src/user/native/` | Ring-3 programs on the native ABI: the runtime, `devmgr`, and one process per driver under `src/user/native/drivers/<function>/`. |
+| `src/user/linux/` | Linux-ABI programs, each its own workspace: [the compositor](../src/user/linux/compositor/README.md), [the init](../src/user/linux/init/README.md), [zinc](../src/user/linux/zinc/README.md), statd and [ferrousli](../src/user/linux/ferrousli/README.md), the C library. |
+| `tests/` | The fuzz targets over `src/lib/`, and test programs that live outside any one crate. |
+| `tools/common/` | Everything that runs on the host: `xtask/` the build driver (cross-compiles every half, writes the images, drives QEMU and every `test-*` gate), `check/` the quality gates, `gen/` the generators, `fetch/` the pinned downloads, `test/` hand-run test drivers, `data/` the allow-lists and baselines. |
+| `tools/vendor/` | Host tools for one vendor's hardware: the Pixel 7 launcher and monitor. |
 | `assets/` | Fonts that ship in the image. |
-| `xtask/` | Host build driver: cross-compiles every half, converts the 32-bit loader from ELF to PE, writes the FAT32 image and initramfs, drives QEMU and every `test-*` gate. |
-| `scripts/` | `check/` the quality gates, `gen/` the generators, `fetch/` the pinned downloads, `test/` hand-run test drivers, `data/` the allow-lists and baselines. |
-| `tools/` | Host applications for particular hardware: the Pixel 7 launcher and monitor. |
-| `docs/` | [Layout](docs/LAYOUT.md) · [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/roadmap/README.md) · [Backlog](docs/BACKLOG.md) · [Assembly](docs/ASSEMBLY.md) · [Reliability](docs/RELIABILITY.md) · [Boot log](docs/BOOT-LOG.md) · [Display](docs/DISPLAY.md) · [GPU](docs/GPU.md) · [Conventions](docs/CONVENTIONS.md) · [SysML v2 model](docs/sysml/README.md) |
+| `docs/` | [Layout](LAYOUT.md) · [Architecture](ARCHITECTURE.md) · [Roadmap](roadmap/README.md) · [Backlog](BACKLOG.md) · [Assembly](ASSEMBLY.md) · [Reliability](RELIABILITY.md) · [Boot log](BOOT-LOG.md) · [Display](DISPLAY.md) · [GPU](GPU.md) · [Conventions](CONVENTIONS.md) · [SysML v2 model](sysml/README.md) |
 
 ## Quality gates
 
@@ -822,7 +821,7 @@ Miri, fuzzing, and a lint table that denies `unwrap`, `expect`, `panic!`,
 `unreachable!` and unchecked indexing in production code — a kernel that cannot
 go on says so with `fatal!`, which names the catalog entry explaining the
 failure — with every exemption argued at the site and checked by
-`scripts/check/check-panic-audit.py`.
+`tools/common/check/check-panic-audit.py`.
 
 Three gates are this project's own:
 
@@ -831,7 +830,7 @@ Three gates are this project's own:
   kernel cannot, because writing a page table entry *is* the program. So unsafe
   is not forbidden here, it is made expensive: a `SAFETY:` comment on every
   block, one unsafe operation per block, a `# Safety` section on every unsafe
-  function, and `scripts/check/check-unsafe-audit.py` in CI so that a clippy release
+  function, and `tools/common/check/check-unsafe-audit.py` in CI so that a clippy release
   which softens a nursery lint cannot quietly retire the rule.
 * **The boot test.** Everything else checks the source. This one boots it, on
   every architecture. An OS that compiles and does not boot is not a passing

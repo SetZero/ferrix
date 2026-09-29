@@ -7,10 +7,10 @@ those covers a file *written* on a Windows machine by a tool that translates
 newlines -- Python's `write_text` does, silently -- and neither is checked
 until something breaks.
 
-Something did: a CRLF in `scripts/check/check-crate-layering.sh` made its `#!` line
+Something did: a CRLF in `tools/common/check/check-crate-layering.sh` made its `#!` line
 unparseable, and bash reported
 
-    scripts/check/check-crate-layering.sh: line 25: $'\r': command not found
+    tools/common/check/check-crate-layering.sh: line 25: $'\r': command not found
 
 which names neither the file's real problem nor the line that has it. That is
 the whole argument for this gate: the failure mode is obscure and the check is
@@ -30,7 +30,7 @@ reported but never rewritten, because turning it into LF would insert a real
 line break into whatever comment or string literal is holding it, and only the
 author knows which of the two was meant.
 
-Usage:  python3 scripts/check/check-line-endings.py [--fix]
+Usage:  python3 tools/common/check/check-line-endings.py [--fix]
 """
 
 from __future__ import annotations
@@ -98,7 +98,7 @@ def main() -> int:
     _ = parser.add_argument("--fix", action="store_true", help="rewrite offenders as LF")
     args = parser.parse_args()
 
-    root = pathlib.Path(__file__).resolve().parent.parent.parent
+    root = pathlib.Path(__file__).resolve().parent.parent.parent.parent
     offenders = []
     strays = []
     checked = 0
@@ -140,7 +140,7 @@ def main() -> int:
         for name in offenders:
             print(f"{name}: has CRLF line endings", file=sys.stderr)
         print(file=sys.stderr)
-        print("Run `python3 scripts/check/check-line-endings.py --fix`.", file=sys.stderr)
+        print("Run `python3 tools/common/check/check-line-endings.py --fix`.", file=sys.stderr)
         print(
             "A CRLF in a shell script makes its `#!` line unparseable, and the "
             "error names neither\nthe file nor the cause.",

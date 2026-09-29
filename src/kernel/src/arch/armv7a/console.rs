@@ -4,7 +4,7 @@
 //! whole reason this module exists between the facade and a driver: QEMU's
 //! `virt` and most Arm development boards have a PL011, and the STM32MP157 has
 //! ST's own USART at an address of its own. Both drivers are in
-//! `kernel/src/arch/` beside the GIC; what is here is how the machine's
+//! `src/kernel/src/arch/` beside the GIC; what is here is how the machine's
 //! description says which one it has, the `write_byte` and `read_byte` the
 //! kernel's console calls without having to know, and which interrupt the port
 //! receives on.

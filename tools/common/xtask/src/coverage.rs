@@ -4,8 +4,8 @@
 //! VERIFICATION.md` §3).
 //!
 //! The measurement is QEMU's `drcov` TCG plugin, named by
-//! `FERRIX_QEMU_PLUGIN`, and `scripts/gen/coverage-report.py`, which reads the
-//! trace against the kernel's DWARF line table; `scripts/gen/decision-coverage.py`
+//! `FERRIX_QEMU_PLUGIN`, and `tools/common/gen/coverage-report.py`, which reads the
+//! trace against the kernel's DWARF line table; `tools/common/gen/decision-coverage.py`
 //! reads the same traces for decision coverage (§3.6). Two things about a suite of
 //! gates make that harder than one boot:
 //!
@@ -520,11 +520,11 @@ fn report(arch: Arch, directory: &Path) -> Result<()> {
     ];
     arguments.extend(traces.iter().map(|trace| trace.display().to_string()));
     println!(
-        "\n  coverage: {arch}: python3 scripts/gen/coverage-report.py {}",
+        "\n  coverage: {arch}: python3 tools/common/gen/coverage-report.py {}",
         arguments.join(" ")
     );
     let borrowed: Vec<&str> = arguments.iter().map(String::as_str).collect();
-    let statements = crate::check::python_with("scripts/gen/coverage-report.py", &borrowed);
+    let statements = crate::check::python_with("tools/common/gen/coverage-report.py", &borrowed);
 
     // Decision coverage from the same traces (finding F-13): reported, with
     // no floor yet, whether or not the statements met theirs.
@@ -537,11 +537,11 @@ fn report(arch: Arch, directory: &Path) -> Result<()> {
     ];
     decisions.extend(traces.iter().map(|trace| trace.display().to_string()));
     println!(
-        "\n  coverage: {arch}: python3 scripts/gen/decision-coverage.py {}",
+        "\n  coverage: {arch}: python3 tools/common/gen/decision-coverage.py {}",
         decisions.join(" ")
     );
     let borrowed: Vec<&str> = decisions.iter().map(String::as_str).collect();
-    let decided = crate::check::python_with("scripts/gen/decision-coverage.py", &borrowed);
+    let decided = crate::check::python_with("tools/common/gen/decision-coverage.py", &borrowed);
     statements.and(decided)
 }
 

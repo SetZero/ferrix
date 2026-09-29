@@ -2,7 +2,7 @@
 //! speaker, and both found again -- the picture in a screendump, the song in
 //! the file QEMU wrote of what the sound card played.
 //!
-//! `userland/media/badapple` runs as init with a virtio-gpu and a
+//! `src/user/linux/media/badapple` runs as init with a virtio-gpu and a
 //! virtio-snd whose far end is QEMU's `wav` backend. It decodes the song's
 //! AAC track itself, converts it to 48 kHz and plays it; it shows the video,
 //! converted by the host into `.bav`, frame by frame by the sound card's
@@ -24,7 +24,7 @@
 //!   `negative-control`, which shows every shade inverted: the picture check
 //!   must fail on every pixel.
 //!
-//! The video is not in the repository: `scripts/fetch/fetch-badapple.sh`
+//! The video is not in the repository: `tools/common/fetch/fetch-badapple.sh`
 //! downloads the original upload, whose hash is [`SOURCE_SHA256`], and this
 //! converts it once, with ffmpeg and `bav-pack`, into the directory it was
 //! fetched to.
@@ -55,7 +55,7 @@ const NEGATIVE_SECONDS: u32 = 3;
 
 /// The original upload (niconico sm8628149, 2009), as archive.org keeps it.
 const SOURCE: &str = "sm8628149.mp4";
-/// Its SHA-256, which `scripts/fetch/fetch-badapple.sh` checks too.
+/// Its SHA-256, which `tools/common/fetch/fetch-badapple.sh` checks too.
 const SOURCE_SHA256: &str = "75d2261d1f75da80a3ba899641def55230c5f8564a310df3cbbe88b8c0ea2abb";
 /// Snap the near-black and near-white to black and white before packing:
 /// the source's compression noise in the flat areas would otherwise be most
@@ -103,7 +103,7 @@ fn source(dir: &Path) -> Result<PathBuf> {
     let path = dir.join(SOURCE);
     let bytes = std::fs::read(&path).map_err(|error| {
         Error::new(format!(
-            "{}: {error}; scripts/fetch/fetch-badapple.sh fetches it",
+            "{}: {error}; tools/common/fetch/fetch-badapple.sh fetches it",
             path.display()
         ))
     })?;
@@ -126,8 +126,8 @@ fn pack_tool() -> Result<PathBuf> {
     let target_dir = paths::target_dir().join("media").join("host");
     let program = target_dir.join("release").join("bav-pack");
     crate::builds::Build::cargo(
-        "cargo build (userland/media, bav-pack) for the host",
-        paths::workspace_root().join("userland/media"),
+        "cargo build (src/user/linux/media, bav-pack) for the host",
+        paths::workspace_root().join("src/user/linux/media"),
     )
     .args(["build", "--release", "-p", "media-bav", "--bin", "bav-pack"])
     .env("CARGO_TARGET_DIR", &target_dir)
@@ -196,7 +196,7 @@ fn prepared(dir: &Path, source: &Path, tool: &Path) -> Result<(PathBuf, PathBuf)
     Ok((video, song))
 }
 
-/// Build `userland/media/badapple` for `arch`, with the negative control or
+/// Build `src/user/linux/media/badapple` for `arch`, with the negative control or
 /// without.
 fn build_player(arch: Arch, negative: bool) -> Result<PathBuf> {
     let target = crate::display::target(arch)
@@ -205,11 +205,11 @@ fn build_player(arch: Arch, negative: bool) -> Result<PathBuf> {
     let target_dir = paths::target_dir()
         .join("media")
         .join(format!("badapple-{flavour}"));
-    println!("  building userland/media/badapple ({flavour}) for {target}");
+    println!("  building src/user/linux/media/badapple ({flavour}) for {target}");
     let program = target_dir.join(target).join("release").join("badapple");
     let mut build = crate::builds::Build::cargo(
-        format!("cargo build (userland/media/badapple, {flavour}) --target {target}"),
-        paths::workspace_root().join("userland/media"),
+        format!("cargo build (src/user/linux/media/badapple, {flavour}) --target {target}"),
+        paths::workspace_root().join("src/user/linux/media"),
     )
     .args([
         "build",
@@ -604,7 +604,7 @@ pub(crate) fn on_the_desktop(
     }
     if !media_dir()?.join(SOURCE).is_file() {
         println!(
-            "  {arch}: no Bad Apple!! on this desktop: scripts/fetch/fetch-badapple.sh fetches it"
+            "  {arch}: no Bad Apple!! on this desktop: tools/common/fetch/fetch-badapple.sh fetches it"
         );
         return Ok(config);
     }

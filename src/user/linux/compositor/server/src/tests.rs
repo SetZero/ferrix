@@ -1,7 +1,7 @@
 //! What a client's requests do, and what breaking the rules gets.
 //!
 //! The bytes here are built with `compositor_wire`'s writer, which
-//! `userland/compositor/wire`'s own probe has already shown to be libwayland's bytes,
+//! `src/user/linux/compositor/wire`'s own probe has already shown to be libwayland's bytes,
 //! so a test that writes a request writes the one a real client would.
 
 use std::time::Duration;
@@ -1828,7 +1828,7 @@ fn a_window_keeps_the_title_and_app_id_hyprctl_prints() {
 // ---------------------------------------------------------------------------
 // The interfaces a real toolkit asks for
 //
-// Every one of these was written because `userland/compositor/hyprix/probe/
+// Every one of these was written because `src/user/linux/compositor/hyprix/probe/
 // real-client.sh` ran a third-party terminal against the compositor and it
 // stopped: first because `wl_data_device_manager` was not offered at all,
 // then because `wl_subcompositor.get_subsurface` was offered and not

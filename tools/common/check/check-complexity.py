@@ -8,7 +8,7 @@ exemption justified, the assembly budget, the device-access seam, the crate
 layering, the item boundary -- and none of them bounded how complicated a
 single function may be. This is finding F-25.
 
-Scope is the certified item as `scripts/data/certification-item.json` defines it:
+Scope is the certified item as `tools/common/data/certification-item.json` defines it:
 the `core` and `item` rings, product code only. The uncertified load above them
 carries no assurance claim and is measured but not enforced, so the numbers can
 be compared.
@@ -40,15 +40,15 @@ Three measures
 The ratchet
 -----------
 
-Like `scripts/check/check-item-boundary.py`: measure, record what exists, refuse
-growth. `scripts/data/complexity-baseline.json` holds every function in the item
+Like `tools/common/check/check-item-boundary.py`: measure, record what exists, refuse
+growth. `tools/common/data/complexity-baseline.json` holds every function in the item
 over a threshold, with its score. An entry may improve or disappear freely; a
 new one, or an existing one getting worse, fails the build. Stale entries fail
 too, so a simplified function cannot leave a permanent allowance behind.
 
-    python3 scripts/check/check-complexity.py
-    python3 scripts/check/check-complexity.py --report     # the distribution
-    python3 scripts/check/check-complexity.py --record     # rewrite the baseline
+    python3 tools/common/check/check-complexity.py
+    python3 tools/common/check/check-complexity.py --report     # the distribution
+    python3 tools/common/check/check-complexity.py --record     # rewrite the baseline
 """
 
 from __future__ import annotations
@@ -64,9 +64,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import rustlex  # noqa: E402  (after the path insert)
 
-ROOT = Path(__file__).resolve().parent.parent.parent
-KERNEL_SRC = ROOT / "kernel" / "src"
-BASELINE = ROOT / "scripts" / "data" / "complexity-baseline.json"
+ROOT = Path(__file__).resolve().parent.parent.parent.parent
+KERNEL_SRC = ROOT / "src" / "kernel" / "src"
+BASELINE = ROOT / "tools" / "common" / "data" / "complexity-baseline.json"
 
 # Only functions at or above these are recorded; below them the tree is not
 # interesting and a baseline listing every small function would be unreadable.
@@ -88,7 +88,7 @@ BRANCH = re.compile(
 def strip(source: str) -> str:
     """Source with comments and literal contents blanked, length preserved.
 
-    `scripts/check/rustlex.py` does the work, and why it has to is its docstring:
+    `tools/common/check/rustlex.py` does the work, and why it has to is its docstring:
     the regular expressions this function used before mis-paired quotes after
     a `\\`-newline continuation, so `main.rs::say_booted` scored 102 lines
     and swallowed `register_load`, and the word "for" in a panic message
@@ -188,7 +188,7 @@ def measure_source(source: str) -> list[dict]:
 
 def load_gate():
     spec = importlib.util.spec_from_file_location(
-        "boundary", ROOT / "scripts" / "check" / "check-item-boundary.py"
+        "boundary", ROOT / "tools" / "common" / "check" / "check-item-boundary.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -337,7 +337,7 @@ def main() -> int:
                 {
                     "//": [
                         "Functions in the certified item at or above the floors in",
-                        "scripts/check/check-complexity.py, with the scores they had when",
+                        "tools/common/check/check-complexity.py, with the scores they had when",
                         "recorded. A debt register, not an allowance: an entry may",
                         "improve or vanish freely, and the gate fails when one gets",
                         "worse, when a new one appears, or when a stale entry is",
@@ -360,7 +360,7 @@ def main() -> int:
 
     if not BASELINE.exists():
         print(
-            "complexity: no baseline. Run `python3 scripts/check/check-complexity.py "
+            "complexity: no baseline. Run `python3 tools/common/check/check-complexity.py "
             "--record` and commit it.",
             file=sys.stderr,
         )

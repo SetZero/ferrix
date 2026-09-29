@@ -9,7 +9,7 @@ publish.workspace = true
 
 [dependencies]
 ferrix-auth-client = { path = "../client" }
-ferrix-auth-proto = { path = "../../../libs/proto/auth-proto" }
+ferrix-auth-proto = { path = "../../../../lib/proto/auth-proto" }
 
 [lints]
 workspace = true

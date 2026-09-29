@@ -1,7 +1,7 @@
 # How to edit the roadmap
 
 The roadmap was one file, `docs/ROADMAP.md`, until it passed 7,600 lines and
-stopped being readable. On 2026-09-26 `scripts/gen/split-roadmap.py` cut it
+stopped being readable. On 2026-09-26 `tools/common/gen/split-roadmap.py` cut it
 into this directory, one file a section, in the order it had and with its
 text unchanged; each section's headings went up one level, so each file has
 one `#` heading.
@@ -30,7 +30,7 @@ If you change a stage's `#` heading -- its ✅, or the size after the `·` --
 run
 
 ```
-python3 scripts/gen/split-roadmap.py index
+python3 tools/common/gen/split-roadmap.py index
 ```
 
 That rewrites the three generated parts from the headings: `SUMMARY.md`'s
@@ -56,7 +56,7 @@ anchor, so `check`, below, will name any link that pointed at the old one.
 ## Checking
 
 ```
-python3 scripts/gen/split-roadmap.py check
+python3 tools/common/gen/split-roadmap.py check
 ```
 
 It fails when a file here is missing from `SUMMARY.md`, when a relative link
@@ -68,14 +68,14 @@ of `cargo xtask check`; run it whenever you change this directory.
 ## Reading it
 
 ```
-scripts/gen/build-roadmap-book.sh
+tools/common/gen/build-roadmap-book.sh
 ```
 
 builds the website with [mdBook](https://rust-lang.github.io/mdBook/)
 (`cargo install mdbook --locked` if it isn't installed) into
 `docs/roadmap/book/`, which is not committed. `index.html` opens on the
 overview with every stage in the sidebar, and `print.html` is the whole
-roadmap on one page. `python3 scripts/gen/split-roadmap.py join` prints the
+roadmap on one page. `python3 tools/common/gen/split-roadmap.py join` prints the
 old single file, put back together, for anyone who wants to grep it or feed
 it to pandoc.
 
@@ -99,11 +99,11 @@ git checkout --ours docs/ROADMAP.md && git add docs/ROADMAP.md
 git rebase --continue
 
 # 3. Once the rebase has finished, carry the edits across.
-python3 scripts/gen/split-roadmap.py reapply <branch>-pre-split
+python3 tools/common/gen/split-roadmap.py reapply <branch>-pre-split
 
 # 4. Look, check, commit, and drop the saved tip.
 git diff
-python3 scripts/gen/split-roadmap.py check
+python3 tools/common/gen/split-roadmap.py check
 git commit -am "Carry <branch>'s roadmap edits into docs/roadmap/"
 git branch -D <branch>-pre-split
 ```

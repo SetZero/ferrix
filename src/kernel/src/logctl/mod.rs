@@ -5,9 +5,9 @@
 //! Pixel 7 booted natively the console is a record in RAM that Android reads
 //! back after the run; the phone's USB serial port, driven from ring 3 by
 //! `usbdev`, is how the boot's lines and `ferrix-statd`'s output reach the
-//! host while it runs (`docs/PIXEL7-USB-HANDOVER.md`, phase 4). So the driver
+//! host while it runs (`docs/vendor/google/pixel7/USB-HANDOVER.md`, phase 4). So the driver
 //! asks for the log with `log_control_create` on its device, and this module
-//! answers its READs with DATA from the log, `libs/proto/logctl`'s protocol.
+//! answers its READs with DATA from the log, `src/lib/proto/logctl`'s protocol.
 //!
 //! # Who may read
 //!

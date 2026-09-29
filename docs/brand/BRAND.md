@@ -1,7 +1,7 @@
 # Ferrix brand
 
 The shareable logo, colours and reusable copy are collected in the
-[press and brand kit](../../marketing/README.md).
+[press and brand kit](../marketing/README.md).
 
 ## The mark
 
@@ -18,7 +18,7 @@ structure with something running hot inside, and it stays legible down to a
 | `social-preview.png` | 1280×640: GitHub's social preview, and the website's `og:image` |
 | `screenshots/` | real captures of Ferrix, each described in `screenshots/CAPTIONS.md` |
 
-The PNGs are rendered from HTML by `python3 scripts/gen/gen-brand-images.py`
+The PNGs are rendered from HTML by `python3 tools/common/gen/gen-brand-images.py`
 with the tree's own fonts. Change the copy there, not in an image editor.
 
 ## Colour

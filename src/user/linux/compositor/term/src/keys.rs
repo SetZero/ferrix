@@ -7,7 +7,7 @@
 //! The key arrives as an evdev code on `wl_keyboard.key`, and what it means
 //! is the keymap's to say. A client from elsewhere would read the keymap the
 //! compositor sends it and ask libxkbcommon; this one asks
-//! `userland/compositor/xkb`, which *is* that keymap -- the compositor sends what
+//! `src/user/linux/compositor/xkb`, which *is* that keymap -- the compositor sends what
 //! that crate holds, so the terminal and the compositor cannot disagree
 //! about what a key is.
 
@@ -17,7 +17,7 @@
 /// terminal has bytes for. `None` for a key that sends nothing, which is
 /// what a modifier does.
 ///
-/// What a keysym's character is belongs to `userland/compositor/xkb`, not here: X11
+/// What a keysym's character is belongs to `src/user/linux/compositor/xkb`, not here: X11
 /// names a keysym rather than spelling it, so `minus` is a hyphen and
 /// `exclam` is an exclamation mark. This used to take a name of one
 /// character as that character and let every other name fall through to

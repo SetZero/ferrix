@@ -3,8 +3,8 @@
  * One script for all three architectures. The layout within the image is the
  * same on each; where the image goes is not -- the 64-bit pair link it in the
  * top 2 GiB, ARMv7-A at 0xf0000000 -- so KERNEL_VIRT_BASE is not defined here.
- * `kernel/build.rs` defines it per word width with `--defsym`, from the same
- * number as KERNEL_VIRT_BASE in libs/proto/bootinfo, and the loader refuses to start
+ * `src/kernel/build.rs` defines it per word width with `--defsym`, from the same
+ * number as KERNEL_VIRT_BASE in src/lib/proto/bootinfo, and the loader refuses to start
  * a kernel linked anywhere else. A build that forgets the definition fails to
  * link rather than producing an image at address zero.
  *
@@ -49,7 +49,7 @@ SECTIONS
         *(.srodata .srodata.*)
     } :rodata
     /* A static PIE's relocation table, which the loader applies before the
-     * kernel runs (KASLR; kernel/build.rs says which builds are PIEs). Loaded,
+     * kernel runs (KASLR; src/kernel/build.rs says which builds are PIEs). Loaded,
      * because lld places an allocated section only in a segment, but read
      * only by the loader: some 200 KiB of read-only data nothing else looks
      * at. There is no PT_DYNAMIC -- the loader finds the table by section
@@ -66,7 +66,7 @@ SECTIONS
     . = ALIGN(4096);
     /* Everything below this is text or read-only data, which the loader maps
      * read only in the direct map as well as in the image, and which the
-     * kernel's boot sweep requires no mapping to write (kernel/src/mm.rs
+     * kernel's boot sweep requires no mapping to write (src/kernel/src/mm.rs
      * check_sealed_image). */
     .data : ALIGN(4096) {
         __data_start = .;

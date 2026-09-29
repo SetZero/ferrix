@@ -759,7 +759,7 @@ fn trigger_of(layout: &'static Layout, key: &Key) -> Option<Trigger> {
 ///
 /// They are, and this says so rather than leaving it to be noticed: XKB
 /// declares `Shift`, `Lock`, `Control` and `Mod1` to `Mod5` in that order,
-/// and `userland/compositor/config`'s `Mods` numbers them the same way.
+/// and `src/user/linux/compositor/config`'s `Mods` numbers them the same way.
 const _: () = {
     assert!(Mods::SHIFT == generated::SHIFT);
     assert!(Mods::CAPS == generated::LOCK);

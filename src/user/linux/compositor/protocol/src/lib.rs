@@ -1,7 +1,7 @@
 //! The Wayland protocols the compositor speaks.
 //!
 //! Every interface here is a table generated from the protocol's own XML by
-//! `scripts/gen/gen-wayland-protocol.py`, which `cargo xtask check` runs with
+//! `tools/common/gen/gen-wayland-protocol.py`, which `cargo xtask check` runs with
 //! `--check` so a hand edit cannot drift from the file it came from. The XML
 //! is vendored under `protocols/`, not read from the machine: a table built
 //! from whatever `wayland-protocols` the builder happened to have installed

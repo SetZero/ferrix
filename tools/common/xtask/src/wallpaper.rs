@@ -3,7 +3,7 @@
 //!
 //! A desktop somebody is looking at has a wallpaper. Ferrix has no JPEG
 //! decoder and no video decoder, and carrying either to show one picture is
-//! the wrong trade; what it has is `userland/compositor/pattern --wallpaper`, a
+//! the wrong trade; what it has is `src/user/linux/compositor/pattern --wallpaper`, a
 //! background layer surface that shows raw `XRGB8888` rows behind a
 //! twelve-byte header. So a picture is converted on a machine that can, once,
 //! and kept.
@@ -78,7 +78,7 @@ const KINDS: [&str; 9] = [
     "jpg", "jpeg", "png", "webp", "gif", "bmp", "mp4", "webm", "mkv",
 ];
 
-/// The file `userland/compositor/pattern --wallpaper` is given: `--wallpaper <name>`
+/// The file `src/user/linux/compositor/pattern --wallpaper` is given: `--wallpaper <name>`
 /// if one was asked for, and otherwise one of the kept pictures, a different
 /// one from run to run. One cut for a screen of `size` where there is one,
 /// since the client copies that and scales any other.
@@ -292,9 +292,9 @@ fn recut(bytes: &[u8], size: (u32, u32)) -> Option<Vec<u8>> {
 /// What a run found to put behind the desktop.
 #[derive(Debug)]
 pub(crate) enum Chosen {
-    /// A picture, which `userland/compositor/pattern --wallpaper` shows.
+    /// A picture, which `src/user/linux/compositor/pattern --wallpaper` shows.
     Still(Vec<u8>),
-    /// A video's frames, which `userland/compositor/pattern --video` plays, and which
+    /// A video's frames, which `src/user/linux/compositor/pattern --video` plays, and which
     /// is what `mpvpaper` is started for on a Linux desktop.
     Moving(Vec<u8>),
 }
@@ -611,7 +611,7 @@ fn convert(source: &str, name: &str, (width, height): (u32, u32)) -> Option<Vec<
 /// The small IVF is checked in rather than encoded by the gate, so CI needs
 /// neither `ffmpeg` nor an AV1 encoder. The client scales it to the screen.
 pub(crate) fn fixture() -> Vec<u8> {
-    include_bytes!("../../userland/compositor/pattern/tests/fixtures/tiny.ivf").to_vec()
+    include_bytes!("../../../../src/user/linux/compositor/pattern/tests/fixtures/tiny.ivf").to_vec()
 }
 
 /// Whether `name` is kept as a wallpaper that moves.

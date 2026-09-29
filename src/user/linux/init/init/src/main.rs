@@ -1,4 +1,4 @@
-//! `/sbin/init`: pid 1, around `libs/init/svc`'s manager (`docs/INIT.md`).
+//! `/sbin/init`: pid 1, around `src/lib/init/svc`'s manager (`docs/INIT.md`).
 //!
 //! The manager is a pure state machine: [`Manager::step`] takes what
 //! happened and returns what to do. This program is everything around it

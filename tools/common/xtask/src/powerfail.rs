@@ -13,7 +13,7 @@
 //!    part of a consistent volume and not a fault.
 //! 3. `ferrix.btrfs=replay`: the guest mounts the disk again, which replays
 //!    the log, checks every file whose trailer says its body was promised
-//!    (`kernel/src/fs/btrfs_powerfail.rs` says why that is a sound thing to
+//!    (`src/kernel/src/fs/btrfs_powerfail.rs` says why that is a sound thing to
 //!    ask), and unmounts.
 //! 4. Host `btrfs check` again, which must find nothing.
 //!
@@ -23,7 +23,7 @@
 //! path's ordering, cut at a real moment, but it is gentler than a power
 //! failure, which may lose any write not yet flushed. The adversarial version
 //! of the same test — every write after the last flush kept or dropped at
-//! random, thousands of cuts — is `libs/fs/btrfs-write`'s `powerfail` tests.
+//! random, thousands of cuts — is `src/lib/fs/btrfs-write`'s `powerfail` tests.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

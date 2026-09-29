@@ -18,7 +18,7 @@ records the address every executed block starts at. So a branch took its
 "taken" outcome if some block starts at its target, and its "not taken"
 outcome if some block starts at its fall-through.
 
-    python3 scripts/gen/decision-coverage.py --arch x86_64 \\
+    python3 tools/common/gen/decision-coverage.py --arch x86_64 \\
         --elf build/coverage/x86_64/ferrix-kernel-<hash>.elf \\
         --drcov build/coverage/x86_64/*.drcov
 
@@ -43,8 +43,8 @@ not measured, never as covered.
 Each branch is attributed to the file and line the line table gives its
 address -- the innermost source, so a branch of an inlined kernel function is
 that function's, not its caller's -- and to a ring by the boundary gate's
-classifier, as a statement is. A branch in a file outside `kernel/src`
-(`core`, `alloc`, the `libs/` crates) is outside the item, as its statements
+classifier, as a statement is. A branch in a file outside `src/kernel/src`
+(`core`, `alloc`, the `src/lib/` crates) is outside the item, as its statements
 are; the report says how many there were.
 
 The unit is the *object-code* branch. A source decision the compiler copied --
@@ -127,14 +127,14 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 
 def load_statement_tool():
     """`coverage-report.py`, whose trace, ELF and line-table readers this
     shares, so that the two figures read the traces the same way."""
     spec = importlib.util.spec_from_file_location(
-        "coverage_report", ROOT / "scripts" / "gen" / "coverage-report.py"
+        "coverage_report", ROOT / "tools" / "common" / "gen" / "coverage-report.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -864,7 +864,7 @@ def main() -> int:
                         "when executed blocks began at its target and at its",
                         "fall-through. `guards` are branches one of whose",
                         "successors runs straight into a panic. Written by",
-                        "scripts/gen/decision-coverage.py; VERIFICATION.md 3.6.",
+                        "tools/common/gen/decision-coverage.py; VERIFICATION.md 3.6.",
                     ],
                     "arch": args.arch,
                     "profile": profile,

@@ -16,7 +16,7 @@ Four outputs, one pass:
 
 The diagrams are drawn twice from one graph and never by hand: the Markdown
 carries each figure as a Mermaid fence, which GitHub renders itself, and the
-HTML carries the same figure laid out by `scripts/gen/sysml/layout.py` and inlined
+HTML carries the same figure laid out by `tools/common/gen/sysml/layout.py` and inlined
 as SVG, because that page has to open from a file:// path. The `.svg` files are
 that second drawing, written out separately for anything that wants one figure
 rather than the document.
@@ -32,10 +32,10 @@ hostname, a path outside the repository, or a tool version. What identifies a
 build is the digest of the inputs, which is printed and embedded.
 
 Usage:
-    python3 scripts/gen/gen-arch-doc.py              # write the outputs
-    python3 scripts/gen/gen-arch-doc.py --check      # fail if they are stale
-    python3 scripts/gen/gen-arch-doc.py --out DIR    # write somewhere else
-    python3 scripts/gen/gen-arch-doc.py --lenient    # tolerate unparsed lines
+    python3 tools/common/gen/gen-arch-doc.py              # write the outputs
+    python3 tools/common/gen/gen-arch-doc.py --check      # fail if they are stale
+    python3 tools/common/gen/gen-arch-doc.py --out DIR    # write somewhere else
+    python3 tools/common/gen/gen-arch-doc.py --lenient    # tolerate unparsed lines
 """
 
 from __future__ import annotations
@@ -58,13 +58,13 @@ JSON = "model.json"
 DIAGRAMS = "diagrams"
 
 BANNER = (
-    "Generated from docs/sysml/ by scripts/gen/gen-arch-doc.py. Do not edit: "
+    "Generated from docs/sysml/ by tools/common/gen/gen-arch-doc.py. Do not edit: "
     "change the model and regenerate with `cargo xtask model-doc`."
 )
 
 
 def repository_root() -> pathlib.Path:
-    return pathlib.Path(__file__).resolve().parent.parent.parent
+    return pathlib.Path(__file__).resolve().parent.parent.parent.parent
 
 
 def build(root: pathlib.Path, lenient: bool) -> tuple[dict[str, str], object]:
@@ -83,7 +83,7 @@ def build(root: pathlib.Path, lenient: bool) -> tuple[dict[str, str], object]:
         for element in model.unparsed[:20]:
             print(f"  {element.source}:{element.line}: {element.raw}", file=sys.stderr)
         print(
-            "\nTeach scripts/gen/sysml/parser.py the construct, or pass --lenient to "
+            "\nTeach tools/common/gen/sysml/parser.py the construct, or pass --lenient to "
             "generate anyway.",
             file=sys.stderr,
         )
@@ -148,7 +148,7 @@ def check(outputs: dict[str, str], out_dir: pathlib.Path) -> int:
         print("gen-arch-doc: the generated document does not match the model.\n")
         for line in stale:
             print(f"  {line}")
-        print("\nRun `cargo xtask model-doc` (or python3 scripts/gen/gen-arch-doc.py) and commit the result.")
+        print("\nRun `cargo xtask model-doc` (or python3 tools/common/gen/gen-arch-doc.py) and commit the result.")
         return 1
     return 0
 

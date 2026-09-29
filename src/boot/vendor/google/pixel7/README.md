@@ -3,7 +3,7 @@
 A second stage that starts Ferrix on a Pixel 7 (`panther`, Tensor G2 /
 gs201). The phone's own bootloader, ABL, is signed and stays; with the
 bootloader unlocked it will boot an Android boot image whose kernel is this
-program, which is to do for Ferrix what `boot/uefi/` does under UEFI.
+program, which is to do for Ferrix what `src/boot/common/uefi/` does under UEFI.
 
 **Where it stands (2026-09-25):** Ferrix boots on the phone to
 `FERRIX-BOOT-OK stages 1-12`, on one core. Branch `pixel7/stage3` gave the
@@ -23,7 +23,7 @@ FERRIX_PIXEL7_KERNEL=$K FERRIX_PIXEL7_KERNEL_DIGEST=$(sha256sum "$K" | cut -d' '
 FERRIX_PIXEL7_INITRD=$I FERRIX_PIXEL7_INITRD_DIGEST=$(sha256sum "$I" | cut -d' ' -f1) \
     cargo build -p ferrix-boot-pixel7 --target aarch64-unknown-none-softfloat --release
 llvm-objcopy -O binary target/aarch64-unknown-none-softfloat/release/ferrix-boot-pixel7 Image
-python3 boot/pixel7/mkbootimg.py Image boot.img
+python3 src/boot/vendor/google/pixel7/mkbootimg.py Image boot.img
 avbtool add_hash_footer --image boot.img --partition_size 67108864 \
         --partition_name boot --algorithm NONE
 ```
@@ -71,7 +71,7 @@ session, including why the phone last reset.
 | Entry | EL2, MMU and caches off, `HCR_EL2` = `0x80000002` |
 | EL2 to EL1 | works with the sequence in `src/entry.rs` |
 | Generic timer | 24.576 MHz |
-| Watchdogs | both **running** at hand-off (`WTCON` bit 5); the kernel feeds them (`kernel/src/platform/google/gs201/watchdog.rs`) and ends a boot by firing one |
+| Watchdogs | both **running** at hand-off (`WTCON` bit 5); the kernel feeds them (`src/kernel/src/platform/google/gs201/watchdog.rs`) and ends a boot by firing one |
 | Reboot reason | the PMU register at `0x18060810` ignores a non-secure write |
 | Panel | DSI **command mode**, TE-triggered; ABL masks the trigger before hand-off, so a framebuffer write shows only once `TRIG_CON` is unmasked |
 | Display | DECON0 running; window 5 from DPP0; framebuffer 1080 x 2400 at `0xfac00000`, bytes B, G, R, unused (measured); display SysMMU reads as off |
@@ -87,5 +87,5 @@ would need, besides this loader building a `BootInfo`:
 * ~~PSCI's conduit (`smc`) from the device tree rather than the FADT~~ --
   done with the above; secondaries still need an entry that starts at EL2;
 * ~~the watchdogs stopped~~ -- fed instead, so a hang still resets the phone
-  with its log: `kernel/src/platform/google/gs201/watchdog.rs`;
+  with its log: `src/kernel/src/platform/google/gs201/watchdog.rs`;
 * and, to be useful, drivers: there is no virtio here.

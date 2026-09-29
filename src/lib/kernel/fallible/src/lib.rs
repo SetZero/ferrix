@@ -18,7 +18,7 @@
 //! ordered maps cannot be made fallible from outside the standard library at
 //! all: their allocation happens inside `alloc` with a layout nobody else can
 //! name. The kernel covers those with a per-processor reserve that the global
-//! allocator falls back on (`kernel/src/fallible.rs`), and what that reserve
+//! allocator falls back on (`src/kernel/src/fallible.rs`), and what that reserve
 //! must hold is computed here, where it can be checked against the pinned
 //! standard library: [`arc_layout`] is the one allocation `Arc::new` makes,
 //! and [`btree_node_bound`] bounds the nodes a map insert makes. The tests in

@@ -26,7 +26,7 @@
 # ~/.local/share/ferrix/steamcmd/steamcmd.img). Needs curl, sha256sum,
 # dpkg-deb, tar, readelf and mkfs.btrfs; no root.
 #
-# Usage: scripts/fetch/fetch-steamcmd.sh
+# Usage: tools/common/fetch/fetch-steamcmd.sh
 
 set -euo pipefail
 

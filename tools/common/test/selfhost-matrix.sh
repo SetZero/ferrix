@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Stage 20's exit: every test, booting only what Ferrix compiled.
 #
-#     scripts/test/selfhost-matrix.sh record DIR    # the matrix, writing DIR/plan
+#     tools/common/test/selfhost-matrix.sh record DIR    # the matrix, writing DIR/plan
 #     cargo xtask test-selfhost --accel kvm --plan DIR
 #                                              # Ferrix makes every build in it
-#     scripts/test/selfhost-matrix.sh replay DIR    # the matrix again, every build
+#     tools/common/test/selfhost-matrix.sh replay DIR    # the matrix again, every build
 #                                              # answered from DIR/store
 #
 # Each row is a test command of the gate matrix, run with
-# FERRIX_BUILDS=record:DIR or replay:DIR/store (xtask/src/builds.rs). Both
+# FERRIX_BUILDS=record:DIR or replay:DIR/store (tools/common/xtask/src/builds.rs). Both
 # runs use a home of their own, DIR/home, so that the programs the script
 # builds install -- busybox, uutils and the ports, which a replay puts back
 # from the store -- never reach the ones other checkouts on this machine use.
@@ -25,7 +25,7 @@ case $mode in
     replay) builds=replay:$dir/store ;;
     *) echo "selfhost-matrix: $mode is neither record nor replay" >&2; exit 2 ;;
 esac
-cd "$(dirname "$0")/../.." || exit 2
+cd "$(dirname "$0")/../../.." || exit 2
 
 # A build's key names what it runs and reads, not the tree it compiles, so a
 # plan and its store belong to the tree they were recorded on: its hash, so

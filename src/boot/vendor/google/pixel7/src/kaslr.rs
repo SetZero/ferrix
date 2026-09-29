@@ -1,6 +1,6 @@
 //! Where the kernel image, the direct map and the vmap arena go this boot.
 //!
-//! `boot/uefi/src/kaslr.rs`'s choice, over `ferrix_bootinfo`'s same slots, with
+//! `src/boot/common/uefi/src/kaslr.rs`'s choice, over `ferrix_bootinfo`'s same slots, with
 //! the one source of randomness this phone has for it: TF-A's True Random
 //! Number Generator, asked through SMCCC `TRNG_RND64` (Arm DEN0098), the way
 //! Android's `smccc_trng` driver and the kernel's own seeding ask it. ABL's 8
@@ -8,7 +8,7 @@
 //!
 //! No other source stands in. With no TRNG, and with `nokaslr` on the command
 //! line, everything stays at its fixed address and the log says why. A
-//! cycle counter would be guessable, and `boot/uefi/` reports one as not KASLR,
+//! cycle counter would be guessable, and `src/boot/common/uefi/` reports one as not KASLR,
 //! so this loader does not offer one at all. A fixed-address kernel, one
 //! built `--mitigations off`, cannot move and stays too.
 //!
@@ -178,7 +178,7 @@ fn place(
     })
 }
 
-/// The boot log's lines, as `boot/uefi/` prints them. They go only to the
+/// The boot log's lines, as `src/boot/common/uefi/` prints them. They go only to the
 /// `ramoops` record and the screen, which only a person reads; SPECULATION.md
 /// §6 argues why that is not a leak to the programs the layout is hidden from.
 fn report(choice: &Choice) {

@@ -1,6 +1,6 @@
 [package]
 name = "init"
-description = "/sbin/init: the event loop and the Linux backends around libs/init/svc's manager"
+description = "/sbin/init: the event loop and the Linux backends around src/lib/init/svc's manager"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,16 +12,16 @@ publish.workspace = true
 # library std already links, or raw system calls through its `syscall`.
 libc = "0.2.189"
 # The manager: unit files, the graph, operations, every kind's state machine.
-ferrix-svc = { path = "../../../libs/init/svc" }
+ferrix-svc = { path = "../../../../lib/init/svc" }
 # The control socket's records and the readiness lines.
-ferrix-svc-proto = { path = "../../../libs/init/svc-proto" }
+ferrix-svc-proto = { path = "../../../../lib/init/svc-proto" }
 # The native calls, for bootstrap channels, native services and the
 # directory (docs/INIT.md §6): the numbers and layouts, and the typed
 # wrappers over them.
-ferrix-native = { path = "../../../libs/proto/native" }
-ferrix-native-abi = { path = "../../../libs/proto/native-abi" }
+ferrix-native = { path = "../../../../lib/proto/native" }
+ferrix-native-abi = { path = "../../../../lib/proto/native-abi" }
 # The audit record's layout, for the reader (docs/certification/AUDIT.md §4).
-ferrix-audit = { path = "../../../libs/proto/audit" }
+ferrix-audit = { path = "../../../../lib/proto/audit" }
 
 [lints]
 workspace = true

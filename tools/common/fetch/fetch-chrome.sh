@@ -8,7 +8,7 @@
 # ANGLE and SwiftShader beside it. It loads forty libraries of the system's
 # -- glib, NSS, D-Bus, the X11 client libraries, gbm, udev, ALSA and what
 # those load -- which are Debian 13's here, as are the glibc and the loader
-# that run it: the same glibc scripts/fetch/fetch-rustc-sysroot.sh pins. That is
+# that run it: the same glibc tools/common/fetch/fetch-rustc-sysroot.sh pins. That is
 # the fast way to a browser on Ferrix; ferrousli standing in for that glibc
 # is the other, and the same volume serves both.
 #
@@ -28,7 +28,7 @@
 # ~/.local/share/ferrix/chrome/chrome.img). Needs curl, sha256sum, dpkg-deb,
 # unzip, readelf and mkfs.btrfs; no root.
 #
-# Usage: scripts/fetch/fetch-chrome.sh
+# Usage: tools/common/fetch/fetch-chrome.sh
 
 set -euo pipefail
 

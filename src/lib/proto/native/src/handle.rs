@@ -9,7 +9,7 @@
 //!
 //! `std`'s `OwnedFd::from_raw_fd` is `unsafe`, because a descriptor number is
 //! reused as soon as it is closed: adopting one you do not own can close a file
-//! somebody else opens later. A handle is different. `libs/kernel/objects` gives a
+//! somebody else opens later. A handle is different. `src/lib/kernel/objects` gives a
 //! slot a new generation every time it is reused and retires it rather than
 //! wrap, so a value once closed never names anything again; adopting a handle
 //! you do not own can close a handle somebody else holds — a logic error, the

@@ -16,24 +16,24 @@ drivers run as separate processes that can restart after a crash. Ferrix is a
 research project; authentication and parts of process isolation are still in
 progress.
 
-The [README](../README.md) has boot commands. The [technical guide](../GUIDE.md)
+The [README](../../README.md) has boot commands. The [technical guide](../GUIDE.md)
 shows how to reproduce the compiler and image-build tests. Check the
-[roadmap](../docs/roadmap/where-it-stands.md) before describing work in
+[roadmap](../roadmap/where-it-stands.md) before describing work in
 progress as finished.
 
 ## Logo and images
 
 - [Logo mark (SVG)](logo.svg): the vector mark on a transparent background.
-- [Dark banner](../docs/brand/banner-dark.png) and [light banner](../docs/brand/banner-light.png): README headers.
-- [Social preview](../docs/brand/social-preview.png): a wide image for shared links.
-- [Screenshots](../docs/brand/screenshots/CAPTIONS.md): real captures, with notes on how they were made.
-- [Favicon](../docs/brand/favicon.svg): the mark on a dark tile, for small icons.
+- [Dark banner](../brand/banner-dark.png) and [light banner](../brand/banner-light.png): README headers.
+- [Social preview](../brand/social-preview.png): a wide image for shared links.
+- [Screenshots](../brand/screenshots/CAPTIONS.md): real captures, with notes on how they were made.
+- [Favicon](../brand/favicon.svg): the mark on a dark tile, for small icons.
 
 Use the SVG mark with the word “Ferrix” set beside it. Keep its proportions,
 leave some space around it, and use it on a background where the grey outline
 remains visible. The mark is the existing Ferrix logo; it is not a substitute
 for the project's name in running text. The source asset also lives at
-[`docs/brand/logo-mark.svg`](../docs/brand/logo-mark.svg); the two SVG files
+[`docs/brand/logo-mark.svg`](../brand/logo-mark.svg); the two SVG files
 should remain identical.
 
 ## Visual identity
@@ -48,8 +48,8 @@ should remain identical.
 
 Use Inter for display and body text. Use JetBrains Mono for code on the web;
 the generated banners use Liberation Mono. The fonts bundled in
-[`assets/fonts`](../assets/fonts) are the ones used for repository artwork.
-The [brand notes](../docs/brand/BRAND.md) cover the image sources and other
+[`assets/fonts`](../../assets/fonts) are the ones used for repository artwork.
+The [brand notes](../brand/BRAND.md) cover the image sources and other
 colour tokens.
 
 ## Voice
@@ -63,4 +63,4 @@ process when explaining the project, after explaining what Ferrix does.
 
 For a press mention, link to the [website](https://setzero.github.io/ferrix/)
 and [source repository](https://github.com/SetZero/ferrix). Ferrix is MIT
-licensed; see [LICENSE](../LICENSE) for the terms.
+licensed; see [LICENSE](../../LICENSE) for the terms.

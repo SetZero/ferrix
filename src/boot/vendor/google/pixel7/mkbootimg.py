@@ -9,7 +9,7 @@ tree, and the loader ignores both except for the tree. The header is
 `struct boot_img_hdr_v4` from AOSP's `system/tools/mkbootimg`.
 
 Usage:
-    python3 boot/pixel7/mkbootimg.py <Image> <boot.img> [--cmdline TEXT]
+    python3 src/boot/vendor/google/pixel7/mkbootimg.py <Image> <boot.img> [--cmdline TEXT]
 
 Then, with the bootloader unlocked, `fastboot boot boot.img` runs it once
 without writing anything to the phone.

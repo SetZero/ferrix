@@ -2,7 +2,7 @@
 //! dispatcher of its own.
 //!
 //! Hyprland's plugins are shared objects loaded into the compositor;
-//! `userland/compositor/hyprix`'s `plugins` module says why this one is a program and
+//! `src/user/linux/compositor/hyprix`'s `plugins` module says why this one is a program and
 //! what the protocol is. This is the smallest plugin that does something a
 //! person can see:
 //!

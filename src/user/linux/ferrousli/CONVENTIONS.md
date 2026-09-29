@@ -1,6 +1,6 @@
 # Ferrousli conventions
 
-Ferrix's [conventions](../../docs/CONVENTIONS.md) apply here too: a commit names
+Ferrix's [conventions](../../../../docs/CONVENTIONS.md) apply here too: a commit names
 one author and carries no `Co-authored-by` or tool trailer; commit from a
 worktree of your own; read `git diff --cached --stat` before every commit. The
 rules below are particular to this library.

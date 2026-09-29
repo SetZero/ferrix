@@ -4,20 +4,20 @@
 #   1. The loader and the kernel are two programs that meet at one struct.
 #      `boot` must never link `ferrix-kernel` and the kernel must never link
 #      the loader; everything they agree on lives in `ferrix-bootinfo`.
-#   2. `libs/*` is host-testable, architecture-neutral logic. That is the whole
+#   2. `src/lib/*` is host-testable, architecture-neutral logic. That is the whole
 #      reason it exists -- it is the code `cargo test`, Miri and the fuzzers can
 #      reach -- so it must depend on neither the kernel nor the loader, and must
 #      contain no `#[cfg(target_arch)]`.
-#   2a. `native/*` is ring-3 programs: the native runtime, devmgr, drivers. A
-#      program may use `libs/*` and never the kernel or the loader, and neither
+#   2a. `src/user/native/*` is ring-3 programs: the native runtime, devmgr, drivers. A
+#      program may use `src/lib/*` and never the kernel or the loader, and neither
 #      of those may link a program. Its `target_arch` conditionals live under
 #      its own `src/arch/`.
 #   3. Architecture code is reached through the `crate::arch` facade and never
 #      by name. Generic kernel code that says `arch::x86_64::` compiles on one
 #      machine and breaks the other, and the break is discovered by whoever
 #      next builds for AArch64 rather than by whoever wrote it.
-#   4. `#[cfg(target_arch)]` appears only under `kernel/src/arch/` and
-#      `boot/uefi/src/arch/`. This is rule 3's teeth: without it, "the facade" is a
+#   4. `#[cfg(target_arch)]` appears only under `src/kernel/src/arch/` and
+#      `src/boot/common/uefi/src/arch/`. This is rule 3's teeth: without it, "the facade" is a
 #      naming convention that erodes one conditional at a time.
 #   5. Every workspace member inherits the workspace lint table.
 #
@@ -29,7 +29,7 @@
 
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/../.."
+cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 
 status=0
 
@@ -42,7 +42,7 @@ have() { cargo metadata --no-deps --format-version 1 2>/dev/null | grep -q "\"na
 # check at all.
 #
 # Only edges that ship (`--edges normal`). A `[dev-dependencies]` entry is not
-# part of the artifact: `libs/platform/elf` may legitimately pull in a test-only crate,
+# part of the artifact: `src/lib/platform/elf` may legitimately pull in a test-only crate,
 # and that says nothing about what the kernel links.
 resolve() {
     local crate="$1"
@@ -115,14 +115,14 @@ forbid ferrix-netlink  "netlink messages" "ferrix-kernel|ferrix-boot"
 # ---------------------------------------------------------------------------
 # 2a. Ring-3 programs sit beside the kernel, never in it.
 #
-# A crate under `native/` -- the native runtime, devmgr, a driver -- runs in user
-# mode. It may use any `libs/` crate, `libs/proto/native-abi` above all, and nothing
+# A crate under `src/user/native/` -- the native runtime, devmgr, a driver -- runs in user
+# mode. It may use any `src/lib/` crate, `src/lib/proto/native-abi` above all, and nothing
 # of the kernel or the loader, whose code cannot run there. Neither of those may
-# link a `native/` crate either: that would be ring-3 code in ring 0. The names
+# link a `src/user/native/` crate either: that would be ring-3 code in ring 0. The names
 # come from each manifest's `[package]`, so a new program is covered without an
 # edit here.
 # ---------------------------------------------------------------------------
-user_crates=$(find native -name Cargo.toml -not -path '*/target/*' 2>/dev/null | sort \
+user_crates=$(find src/user/native -name Cargo.toml -not -path '*/target/*' 2>/dev/null | sort \
     | xargs -r sed -n '/^\[package\]/,/^\[/s/^name = "\(.*\)"$/\1/p' \
     | paste -sd '|' - || true)
 if [[ -n "$user_crates" ]]; then
@@ -141,14 +141,14 @@ forbid ferrix-blkserve "block driver serve loop" "ferrix-kernel|ferrix-boot"
 # ---------------------------------------------------------------------------
 # 3. Generic kernel code reaches architecture code through the facade.
 #
-# `kernel/src/arch/mod.rs` is the facade and is where the architecture names
+# `src/kernel/src/arch/mod.rs` is the facade and is where the architecture names
 # are supposed to appear -- the three architectures', and the drivers the Arm
-# pair share; everything else under kernel/src must go through it.
+# pair share; everything else under src/kernel/src must go through it.
 # ---------------------------------------------------------------------------
-if [[ -d kernel/src ]]; then
-    offenders=$(grep -rnE '(crate::)?arch::(x86_64|aarch64|armv7a|arm_common)::' kernel/src \
+if [[ -d src/kernel/src ]]; then
+    offenders=$(grep -rnE '(crate::)?arch::(x86_64|aarch64|armv7a|arm_common)::' src/kernel/src \
         --include='*.rs' \
-        | grep -v '^kernel/src/arch/' || true)
+        | grep -v '^src/kernel/src/arch/' || true)
     if [[ -n "$offenders" ]]; then
         echo "LAYERING VIOLATION: generic kernel code names an architecture module directly:" >&2
         echo "$offenders" | sed 's/^/    /' >&2
@@ -166,16 +166,16 @@ fi
 # they are properties both of our targets share, and asserting one is fine
 # anywhere. `target_os` likewise: xtask is a host program.
 #
-# A native program under `native/` follows the same rule: its crate's
-# `src/arch/` is the facade, as `kernel/src/arch/` is the kernel's.
+# A native program under `src/user/native/` follows the same rule: its crate's
+# `src/arch/` is the facade, as `src/kernel/src/arch/` is the kernel's.
 # ---------------------------------------------------------------------------
-offenders=$(grep -rnE 'cfg[^)]*target_arch' kernel/src boot/uefi/src libs native 2>/dev/null \
+offenders=$(grep -rnE 'cfg[^)]*target_arch' src/kernel/src src/boot/common/uefi/src src/lib src/user/native 2>/dev/null \
     --include='*.rs' \
-    | grep -vE '^(kernel/src/arch/|boot/uefi/src/arch/|native/(drivers/)?[^/]+/src/arch/)' || true)
+    | grep -vE '^(src/kernel/src/arch/|src/boot/common/uefi/src/arch/|src/user/native/(drivers/[^/]+/)?[^/]+/src/arch/)' || true)
 if [[ -n "$offenders" ]]; then
     echo "LAYERING VIOLATION: target_arch conditional outside an arch directory:" >&2
     echo "$offenders" | sed 's/^/    /' >&2
-    echo "    Architecture differences belong in kernel/src/arch/<arch>/ behind" >&2
+    echo "    Architecture differences belong in src/kernel/src/arch/<arch>/ behind" >&2
     echo "    the facade, not as a conditional in generic code." >&2
     status=1
 else
@@ -201,7 +201,7 @@ while IFS= read -r manifest; do
         echo >&2 "        workspace = true"
         status=1
     fi
-done < <(find boot kernel libs user xtask -name Cargo.toml -not -path '*/target/*' 2>/dev/null | sort)
+done < <(find src/boot src/kernel src/lib src/user/native tools/common/xtask -name Cargo.toml -not -path '*/target/*' 2>/dev/null | sort)
 
 if [[ $status -ne 0 ]]; then
     echo >&2

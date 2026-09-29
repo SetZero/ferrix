@@ -2,7 +2,7 @@
 //! the return register zero, and read back register by register.
 //!
 //! Verification, not the entry: a file of its own so that the manifest counts
-//! it as the test it is (`scripts/data/certification-item.json`,
+//! it as the test it is (`tools/common/data/certification-item.json`,
 //! `test_file_patterns`). A child of the entry's module, so it can make a
 //! [`UserRegs`] from a frame, which nothing outside this architecture can.
 //!

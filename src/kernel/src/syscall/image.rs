@@ -282,7 +282,7 @@ fn write_header(
 }
 
 /// One program header. The two classes reorder the fields as well as widening
-/// them, which is the thing this and `libs/platform/elf` have to agree about.
+/// them, which is the thing this and `src/lib/platform/elf` have to agree about.
 fn write_phdr(file: &mut [u8], class: Class, at: usize, phdr: &Phdr) {
     match class {
         Class::Elf32 => {

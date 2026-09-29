@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! FERRIX-PANIC stage 3 self-check failed: the timer never fired
-//!   at        kernel/src/main.rs:152:23
+//!   at        src/kernel/src/main.rs:152:23
 //!   on        processor 0 (hardware id 0x0)
 //!   stopped   this processor halts here, and 3 more were asked to
 //!   kaslr     slide 0x23912000
@@ -18,7 +18,7 @@
 //!   code      FX-0302  the timer interrupt did not arrive as programmed
 //!   means     ...
 //!   causes    1. ...
-//!   see       kernel/src/main.rs timer_check; docs/ROADMAP.md stage 3
+//!   see       src/kernel/src/main.rs timer_check; docs/ROADMAP.md stage 3
 //! ```
 //!
 //! The marker and the message share the first line because that is the line

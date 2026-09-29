@@ -12,7 +12,7 @@ The last test is the one that matters most: the real model parses with nothing
 left unrecognised. It fails the moment `docs/sysml/` uses something the reader
 does not know, which is exactly when the document would start losing content.
 
-Usage:  python3 scripts/gen/sysml/tests.py
+Usage:  python3 tools/common/gen/sysml/tests.py
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from sysml import diagrams, document, emit_json, figure, layout  # noqa: E402
 from sysml import render_html, render_markdown, render_mermaid, render_svg, sections  # noqa: E402
 from sysml.model import humanise  # noqa: E402
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent.parent.parent
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent.parent.parent
 
 
 def parse(text: str):
@@ -281,13 +281,13 @@ class HtmlEscaping(unittest.TestCase):
 
     def test_a_maturity_keyword_is_rendered_as_a_badge(self):
         self.assertIn('class="mat mat-implemented"', render_html.inline([document.c("#implemented")]))
-        self.assertIn("<code>", render_html.inline([document.c("libs/kernel/sched")]))
+        self.assertIn("<code>", render_html.inline([document.c("src/lib/kernel/sched")]))
 
 
 class Prose(unittest.TestCase):
     def test_backtick_spans_in_model_prose_become_code_runs(self):
-        parts = sections.prose("Reached by `libs/platform/fdt` at stage 1.")
-        self.assertEqual(parts[1], document.c("libs/platform/fdt"))
+        parts = sections.prose("Reached by `src/lib/platform/fdt` at stage 1.")
+        self.assertEqual(parts[1], document.c("src/lib/platform/fdt"))
 
     def test_an_unbalanced_backtick_stays_literal(self):
         parts = sections.prose("a ` b")
@@ -696,8 +696,8 @@ class TheRealModel(unittest.TestCase):
 
 
 def _generator():
-    """`scripts/gen/gen-arch-doc.py`, imported despite the hyphen in its name."""
-    path = ROOT / "scripts" / "gen" / "gen-arch-doc.py"
+    """`tools/common/gen/gen-arch-doc.py`, imported despite the hyphen in its name."""
+    path = ROOT / "tools" / "common" / "gen" / "gen-arch-doc.py"
     spec = importlib.util.spec_from_file_location("gen_arch_doc", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

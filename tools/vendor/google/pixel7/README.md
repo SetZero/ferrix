@@ -12,7 +12,7 @@ Cargo workspace and the gates.
 | `package-release.py` | Packs a desktop for a GitHub release, where the app's updates find it |
 | `monitor/` | The desktop monitor, "Pixel 7 · Ferrix": Tauri 2, a Cargo workspace of its own (`monitor/README.md`) |
 
-The loader these boot, and the phone's state, are in `boot/pixel7`
+The loader these boot, and the phone's state, are in `src/boot/vendor/google/pixel7`
 (`HANDOVER.md` there).
 
 ## The app and the helper
@@ -26,7 +26,7 @@ the PC that the first one needs:
   about 6 seconds to `FERRIX-BOOT-OK`.
 
 The phone cannot start Ferrix by itself. Its kernel has no `kexec`, and
-nothing may be flashed (`boot/pixel7/HANDOVER.md`, "Never write anything that survives
+nothing may be flashed (`src/boot/vendor/google/pixel7/HANDOVER.md`, "Never write anything that survives
 a reset"). What starts Ferrix is `fastboot boot` from a PC, so the button asks
 the PC. The phone has to be plugged into it, and nothing on the phone is
 changed: Ferrix runs from RAM, and its watchdog brings Android back about 75
@@ -41,8 +41,8 @@ helper: adb reboot bootloader → fastboot stage vendor_boot.img → fastboot bo
 ### The helper
 
 ```sh
-python3 tools/pixel7/helper.py              # the newest $P/*/boot.img
-python3 tools/pixel7/helper.py --image PATH # a given one
+python3 tools/vendor/google/pixel7/helper.py              # the newest $P/*/boot.img
+python3 tools/vendor/google/pixel7/helper.py --image PATH # a given one
 ```
 
 `P` is `~/.local/share/ferrix/pixel7`, where `vendor_boot.img` and the run
@@ -59,7 +59,7 @@ The Gradle project here builds offline from the cache PhoneLink's build left,
 with the SDK in `~/Android/Sdk` and a JDK that has `javac`:
 
 ```sh
-cd tools/pixel7/android
+cd tools/vendor/google/pixel7/android
 JAVA_HOME=~/Android/jdk/jdk-21.0.12.1+1 ANDROID_HOME=~/Android/Sdk \
     ~/.gradle/wrapper/dists/gradle-9.8.0-bin/*/gradle-9.8.0/bin/gradle \
     --offline -Dorg.gradle.java.installations.paths=$HOME/Android/jdk/jdk-21.0.12.1+1 \
@@ -89,7 +89,7 @@ cd /data/local/tmp/ferrix-vm && /apex/com.android.virt/bin/crosvm run \
 
 With `desktop.Image` beside it, the app boots that instead, with
 `-p ferrix.checks=skip`; with `chromium.img` too
-(`scripts/fetch/fetch-chromium-arm64.sh`, pushed by
+(`tools/common/fetch/fetch-chromium-arm64.sh`, pushed by
 `build-desktop.sh --chrome --push`), it adds three blank 1 MiB disks and then
 the volume, so that the volume is `vdd`, the first disk Ferrix mounts at
 `/data`.
@@ -111,7 +111,7 @@ powers off at the end of its run, and crosvm exits.
 
 **The desktop.** When `desktop.Image` is beside `ferrix.Image`, the app boots
 it instead: the loader wrapping a kernel and initramfs whose init is the
-compositor. `tools/pixel7/build-desktop.sh <dir> [scale] [--push]` builds it
+compositor. `tools/vendor/google/pixel7/build-desktop.sh <dir> [scale] [--push]` builds it
 (`cargo xtask flash --compositor --size 1080x2400 --scale 2 --layout us
 --wallpaper none`, then the loader) and with `--push` copies it to the phone.
 The scale is 2 unless given, since 1080x2400 at 1 is text a few millimetres
@@ -251,7 +251,7 @@ It reads the VM's directory with `su`, as it runs the VM, and then:
 - **A build from the PC** (`build-desktop.sh --push`, which removes the
   app's record): left alone, with "Use <tag>" to replace it.
 - **Chromium's volume** (Full): fetched when missing, or when the release's
-  pins (the SHA-256 of `scripts/fetch/fetch-chromium-arm64.sh`, since
+  pins (the SHA-256 of `tools/common/fetch/fetch-chromium-arm64.sh`, since
   mkfs.btrfs never makes the same image twice) differ from the ones the app
   installed. A volume the app did not install is the PC's and is kept,
   unless "Use <tag>" is tapped. Replacing it starts Chromium's profile anew.
@@ -271,7 +271,7 @@ lists a directory it packed as one release; forward it and give the app the
 URL:
 
 ```sh
-tools/pixel7/package-release.py --serve <out-dir>          # port 47708
+tools/vendor/google/pixel7/package-release.py --serve <out-dir>          # port 47708
 adb reverse tcp:47708 tcp:47708
 adb shell am force-stop dev.ferrix.launcher
 adb shell am start -n dev.ferrix.launcher/.MainActivity --es releases http://127.0.0.1:47708/releases

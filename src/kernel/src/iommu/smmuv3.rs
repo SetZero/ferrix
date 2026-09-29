@@ -11,7 +11,7 @@
 //!   stream with no domain reaches nothing;
 //! * **stage-2 translation** for an attached stream: its domain's VMID, 39 bits
 //!   of input address from level 1 over a 4 KiB granule, 40 bits of output,
-//!   `AArch64` tables — `libs/kernel/paging`'s [`ArmStage2`] — and faults recorded;
+//!   `AArch64` tables — `src/lib/kernel/paging`'s [`ArmStage2`] — and faults recorded;
 //! * **the command queue**, for `CFGI_STE`, `TLBI_S12_VMALL` and `SYNC`,
 //!   polled rather than signalled;
 //! * **the event queue**, enabled so a fault is recorded, and read when the

@@ -1,7 +1,7 @@
 //! The x86-64 vDSO's code: `clock_gettime`, `gettimeofday` and `time`.
 //!
 //! Assembled into the kernel's read-only data, never run where it is: the
-//! Linux personality copies the bytes into the image `libs/kernel/vdso` lays out,
+//! Linux personality copies the bytes into the image `src/lib/kernel/vdso` lays out,
 //! at `CODE_AT`, and a program runs them wherever that page lands. So
 //! nothing in them may name an address. Each function finds the data page by
 //! its own address -- `lea` of the code's first byte, less `CODE_AT` and a
@@ -14,7 +14,7 @@
 //! # The arithmetic
 //!
 //! The kernel's clock is `counter * 1e9 / hz` in 128 bits
-//! (`kernel/src/timer.rs`), and this is the same number: `mul` leaves the
+//! (`src/kernel/src/timer.rs`), and this is the same number: `mul` leaves the
 //! 128-bit product in `rdx:rax` and `div` divides it by the frequency. The
 //! quotient fits in 64 bits for five hundred years of uptime, past which
 //! `div` would fault; the kernel's own answer saturates there instead. The

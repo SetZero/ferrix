@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Hold the boundary of the certified item.
 
-`scripts/data/certification-item.json` says which kernel files are inside the thing
+`tools/common/data/certification-item.json` says which kernel files are inside the thing
 four assurance ratings attach to. That file is the scope of every artifact in
 `docs/certification`: the Security Target's TOE, the hazard analysis's safety
 item, the traceability matrix, the coverage obligation. A boundary that lives
@@ -11,7 +11,7 @@ So this gate asserts three things.
 
   1. **Every kernel source file is classified.** A file in no ring fails the
      build. Without this the item grows by accretion -- somebody writes
-     `kernel/src/thing.rs`, nobody decides whether it is trusted, and the
+     `src/kernel/src/thing.rs`, nobody decides whether it is trusted, and the
      answer defaults to whatever the reader assumes. A new file should cost
      one line of JSON and the thought that goes with it.
 
@@ -46,7 +46,7 @@ continuation, so whole stretches of code were read as string.
 
 It now resolves names the way the compiler does, minus type checking:
 
-  * `scripts/check/rustlex.py` masks comments and literals exactly, so only code is
+  * `tools/common/check/rustlex.py` masks comments and literals exactly, so only code is
     read;
   * each file's module path comes from where it sits (`main.rs` is the root,
     `a/mod.rs` and `a.rs` are `a`, `a/b.rs` is `a::b`), and inline `mod x { }`
@@ -91,9 +91,9 @@ every one of them (docs/certification/ITEM.md, section 2).
 
 Run it directly, or as part of `cargo xtask check`:
 
-    python3 scripts/check/check-item-boundary.py
-    python3 scripts/check/check-item-boundary.py --report     # sizes and every edge
-    python3 scripts/check/check-item-boundary.py --self-test  # the resolver's cases
+    python3 tools/common/check/check-item-boundary.py
+    python3 tools/common/check/check-item-boundary.py --report     # sizes and every edge
+    python3 tools/common/check/check-item-boundary.py --self-test  # the resolver's cases
 
 Every run starts with the self-tests of the lexer and of the resolver, so a
 change that breaks either fails the gate rather than quietly measuring less.
@@ -113,9 +113,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import rustlex  # noqa: E402  (after the path insert)
 
-ROOT = Path(__file__).resolve().parent.parent.parent
-MANIFEST = ROOT / "scripts" / "data" / "certification-item.json"
-KERNEL_SRC = ROOT / "kernel" / "src"
+ROOT = Path(__file__).resolve().parent.parent.parent.parent
+MANIFEST = ROOT / "tools" / "common" / "data" / "certification-item.json"
+KERNEL_SRC = ROOT / "src" / "kernel" / "src"
 
 IDENT = re.compile(r"(?:r#)?[^\W\d]\w*\Z")
 # Keywords that define a named item, which a path's last segment may name.
@@ -132,7 +132,7 @@ def load_manifest() -> dict:
 
 
 def kernel_files() -> list[str]:
-    """Every kernel source file, as a path relative to kernel/src, with `/`
+    """Every kernel source file, as a path relative to src/kernel/src, with `/`
     between its parts on every host: the manifest's patterns and the module
     tree are written that way."""
     return sorted(

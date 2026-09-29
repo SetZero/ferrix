@@ -12,10 +12,10 @@
 //!
 //! One thing has no AArch64 counterpart. The kernel half is translated
 //! through `TTBR1` with `TTBCR.T1SZ = 1`, whose level-1 table is two entries
-//! indexed by address bit 30, while `libs/kernel/paging` indexes the same root by
+//! indexed by address bit 30, while `src/lib/kernel/paging` indexes the same root by
 //! bits 31:30 and so puts `0x8000_0000` in entry 2. `TTBR1` therefore holds
 //! the root's address plus sixteen — what Linux calls `TTBR1_OFFSET` — and a
-//! test in `libs/kernel/paging` pins the half of that arithmetic that lives there.
+//! test in `src/lib/kernel/paging` pins the half of that arithmetic that lives there.
 
 use core::arch::{asm, global_asm};
 use core::slice;
@@ -192,7 +192,7 @@ fn memory_model() -> u32 {
 //
 // Everything in it is register-only and position-independent: no branch leaves
 // it except the last, no literal pool, no address loaded from memory. That is
-// what lets a copy run anywhere, and `xtask/src/pe.rs` refuses a loader whose
+// what lets a copy run anywhere, and `tools/common/xtask/src/pe.rs` refuses a loader whose
 // block has a relocation inside it or does not fit one page.
 //
 // On entry: r0 the boot info, r1 and r2 MAIR0 and MAIR1, r3 TTBCR, r4 and r5

@@ -1,6 +1,6 @@
 //! Kernel memory held for a program, charged to its job.
 //!
-//! The job quotas (`kernel/src/object/quota.rs`, certification finding F-35)
+//! The job quotas (`src/kernel/src/object/quota.rs`, certification finding F-35)
 //! charge a job for the frames of its programs' memory, their native objects
 //! and their tasks. What they left out is the kernel heap a program drives
 //! through the Linux personality and the libraries under it -- a file's

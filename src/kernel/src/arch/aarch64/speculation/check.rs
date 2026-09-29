@@ -4,7 +4,7 @@
 //! recorded that it needs it.
 //!
 //! Verification, not the defences: a file of its own so that the manifest
-//! counts it as the test it is (`scripts/data/certification-item.json`,
+//! counts it as the test it is (`tools/common/data/certification-item.json`,
 //! `test_file_patterns`) and a `Verifies:` tag can go on it. A child of
 //! `speculation`, so that it reads the tables and records that are private
 //! there.

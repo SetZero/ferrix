@@ -24,14 +24,14 @@ package FerrixAssurance {
     }
 
     #implemented verification hooksArmed : Gate {
-        attribute :>> command = "python3 scripts/check/check-commit-authors.py --hooks";
+        attribute :>> command = "python3 tools/common/check/check-commit-authors.py --hooks";
         doc /* The first gate in cargo xtask check: fails when this clone has
              * not run `git config core.hooksPath .githooks`, so the missing
              * line reports itself rather than waiting to be noticed. */
         objective { verify aGateNeedsNoArming; }
     }
     #implemented verification commitAuthorship : Gate {
-        attribute :>> command = "python3 scripts/check/check-commit-authors.py BASE HEAD";
+        attribute :>> command = "python3 tools/common/check/check-commit-authors.py BASE HEAD";
         doc /* The One-author-per-commit CI job, over the range a push or pull
              * request adds and never the whole tree, so public history that
              * already carries a trailer cannot make the gate permanent red.
@@ -46,39 +46,39 @@ package FerrixAssurance {
         attribute :>> command = "cargo fmt --all -- --check";
     }
     #implemented verification lineEndings : Gate {
-        attribute :>> command = "python3 scripts/check/check-line-endings.py";
+        attribute :>> command = "python3 tools/common/check/check-line-endings.py";
         doc /* A CRLF in a shell script makes its shebang unparseable. */
     }
     #implemented verification assemblyAllowList : Gate {
-        attribute :>> command = "python3 scripts/check/check-asm-budget.py";
-        doc /* Fails on an assembly site not in scripts/data/asm-allowlist.json, on
+        attribute :>> command = "python3 tools/common/check/check-asm-budget.py";
+        doc /* Fails on an assembly site not in tools/common/data/asm-allowlist.json, on
              * a file over its budget, and on a stale entry. Reports the Rust
              * share on every run. */
         objective { verify assemblyOnlyWhereTheMachineDefinesIt; }
     }
     #implemented verification deviceAccessAllowList : Gate {
-        attribute :>> command = "python3 scripts/check/check-device-access.py";
+        attribute :>> command = "python3 tools/common/check/check-device-access.py";
         doc /* The seam docs/ARCHITECTURE.md §7 is built on: the kernel
              * enumerates devices and drives none, so a register access in
              * the wrong file fails the build rather than waiting for a
              * review. */
     }
     #implemented verification unsafeAudit : Gate {
-        attribute :>> command = "python3 scripts/check/check-unsafe-audit.py";
+        attribute :>> command = "python3 tools/common/check/check-unsafe-audit.py";
         doc /* Every unsafe block has a SAFETY comment and one operation;
              * every unsafe fn a Safety section. Prints the per-crate count so
              * growth is noticed rather than happening. */
         objective { verify unsafeIsExpensive; }
     }
     #implemented verification panicAudit : Gate {
-        attribute :>> command = "python3 scripts/check/check-panic-audit.py";
+        attribute :>> command = "python3 tools/common/check/check-panic-audit.py";
         doc /* Every panic-lint exemption is an #[expect] whose reason begins
              * AUDIT:. expect fails once the lint stops firing, so a site
              * refactored into safety loses its exemption. */
         objective { verify noReachablePanic; }
     }
     #implemented verification traceability : Gate {
-        attribute :>> command = "python3 scripts/check/check-traceability.py --check";
+        attribute :>> command = "python3 tools/common/check/check-traceability.py --check";
         doc /* The certified item's requirements (part 13) against their
              * parents, their units and the checks that name them with
              * `/// Verifies:`. Fails on an id no requirement defines, a
@@ -88,38 +88,38 @@ package FerrixAssurance {
              * Writes docs/certification/TRACEABILITY.md. */
     }
     #implemented verification architectureDocument : Gate {
-        attribute :>> command = "python3 scripts/gen/sysml/tests.py && python3 scripts/gen/gen-arch-doc.py --check";
+        attribute :>> command = "python3 tools/common/gen/sysml/tests.py && python3 tools/common/gen/gen-arch-doc.py --check";
         doc /* docs/generated is generated from this model and committed; a
              * model edited without regenerating fails here. */
     }
     #implemented verification waylandProtocolTables : Gate {
-        attribute :>> command = "python3 scripts/gen/gen-wayland-protocol.py --check";
+        attribute :>> command = "python3 tools/common/gen/gen-wayland-protocol.py --check";
         doc /* The compositor's interface tables against the protocol XML
              * vendored beside them. */
     }
     #implemented verification xkbTables : Gate {
-        attribute :>> command = "python3 scripts/gen/gen-xkb-tables.py --check";
+        attribute :>> command = "python3 tools/common/gen/gen-xkb-tables.py --check";
         doc /* The keymap every client is handed, and its modifier bits,
              * against libxkbcommon's own output through a committed probe. */
     }
     #implemented verification panicFont : Gate {
-        attribute :>> command = "python3 scripts/gen/gen-font.py --check";
+        attribute :>> command = "python3 tools/common/gen/gen-font.py --check";
         doc /* The panic screen's font against the BDF committed beside it. */
     }
     #implemented verification terminalFont : Gate {
-        attribute :>> command = "python3 scripts/gen/gen-term-font.py --check";
+        attribute :>> command = "python3 tools/common/gen/gen-term-font.py --check";
         doc /* The terminal's font, rasterised from the TrueType faces
              * committed beside it by a rasteriser in the repository, so the
              * result is byte-identical on every checkout. */
     }
     #implemented verification panicCatalog : Gate {
-        attribute :>> command = "python3 scripts/gen/gen-panic-catalog.py --check";
+        attribute :>> command = "python3 tools/common/gen/gen-panic-catalog.py --check";
         doc /* The explanations a panic prints, rendered into a document that
              * goes stale the moment an entry changes without it. */
     }
     #implemented verification crateLayering : Gate {
-        attribute :>> command = "scripts/check/check-crate-layering.sh";
-        doc /* libs/ depend on nothing above them; generic kernel code names
+        attribute :>> command = "tools/common/check/check-crate-layering.sh";
+        doc /* src/lib/ depend on nothing above them; generic kernel code names
              * no architecture; cfg(target_arch) only under arch/. */
         objective { verify pureFunctionsInLibs; verify oneArchFacade; }
     }
@@ -135,7 +135,7 @@ package FerrixAssurance {
     }
     #implemented verification hostTests : Gate {
         attribute :>> command = "cargo test --workspace --exclude ferrix-kernel --exclude ferrix-boot";
-        doc /* 1950 unit tests across libs/ on 2026-09-23 (about 520 when
+        doc /* 1950 unit tests across src/lib/ on 2026-09-23 (about 520 when
              * this gate was first written down), plus doc tests and xtask's
              * 242. */
     }
@@ -148,7 +148,7 @@ package FerrixAssurance {
     }
     #implemented verification miri : Gate {
         attribute :>> command = "cargo miri test";
-        doc /* libs/platform/elf, bootinfo, ustack, objects, vfs, pci, block, blkring, native, virtio-blk, frame, heap and paging. cargo xtask check --miri runs the same list,
+        doc /* src/lib/platform/elf, bootinfo, ustack, objects, vfs, pci, block, blkring, native, virtio-blk, frame, heap and paging. cargo xtask check --miri runs the same list,
              * and an xtask test holds it to the workflow. A test too slow to
              * interpret runs shorter under cfg(miri) rather than being
              * ignored. */
@@ -192,7 +192,7 @@ package FerrixAssurance {
              * ratio is a backstop and the target is the direction of travel:
              * reached by writing the operating system, not by shrinking the
              * vector table. 303 lines and about 99.2% Rust when this was
-             * written, across fifteen sites; scripts/data/asm-allowlist.json now
+             * written, across fifteen sites; tools/common/data/asm-allowlist.json now
              * names twenty-four: the x86-64 SYSCALL entry and the native
              * runtime's three (docs/ASSEMBLY.md, A native program), the
              * Pixel 7's loader entry, the x86-64 vDSO and the three
@@ -203,36 +203,36 @@ package FerrixAssurance {
         attribute maxRatio : Real = 0.06;
         attribute targetRatio : Real = 0.001;
         attribute sites : AssemblySite[24] = (
-            AssemblySite(file = "boot/uefi/src/arch/x86_64.rs", maxLines = 30),
-            AssemblySite(file = "boot/uefi/src/arch/aarch64.rs", maxLines = 60),
-            AssemblySite(file = "boot/uefi/src/arch/armv7a.rs", maxLines = 63),
-            AssemblySite(file = "kernel/src/arch/x86_64/cpu.rs", maxLines = 100),
-            AssemblySite(file = "kernel/src/arch/aarch64/cpu.rs", maxLines = 100),
-            AssemblySite(file = "kernel/src/arch/armv7a/cpu.rs", maxLines = 102),
-            AssemblySite(file = "kernel/src/arch/x86_64/trap.rs", maxLines = 171),
-            AssemblySite(file = "kernel/src/arch/aarch64/trap.rs", maxLines = 145),
-            AssemblySite(file = "kernel/src/arch/armv7a/trap.rs", maxLines = 130),
-            AssemblySite(file = "kernel/src/arch/x86_64/smp.rs", maxLines = 41),
-            AssemblySite(file = "kernel/src/arch/aarch64/smp.rs", maxLines = 58),
-            AssemblySite(file = "kernel/src/arch/armv7a/smp.rs", maxLines = 40),
-            AssemblySite(file = "kernel/src/arch/x86_64/switch.rs", maxLines = 32),
-            AssemblySite(file = "kernel/src/arch/aarch64/switch.rs", maxLines = 75),
-            AssemblySite(file = "kernel/src/arch/armv7a/switch.rs", maxLines = 67),
-            AssemblySite(file = "kernel/src/arch/x86_64/syscall.rs", maxLines = 118),
-            AssemblySite(file = "native/rt/src/arch/x86_64.rs", maxLines = 20),
-            AssemblySite(file = "native/rt/src/arch/aarch64.rs", maxLines = 20),
-            AssemblySite(file = "native/rt/src/arch/armv7a.rs", maxLines = 20),
-            AssemblySite(file = "boot/pixel7/src/entry.rs", maxLines = 130),
-            AssemblySite(file = "kernel/src/arch/x86_64/vdso.rs", maxLines = 120),
-            AssemblySite(file = "kernel/src/arch/x86_64/speculation.rs", maxLines = 16),
-            AssemblySite(file = "kernel/src/arch/aarch64/speculation.rs", maxLines = 16),
-            AssemblySite(file = "kernel/src/arch/armv7a/speculation.rs", maxLines = 16)
+            AssemblySite(file = "src/boot/common/uefi/src/arch/x86_64.rs", maxLines = 30),
+            AssemblySite(file = "src/boot/common/uefi/src/arch/aarch64.rs", maxLines = 60),
+            AssemblySite(file = "src/boot/common/uefi/src/arch/armv7a.rs", maxLines = 63),
+            AssemblySite(file = "src/kernel/src/arch/x86_64/cpu.rs", maxLines = 100),
+            AssemblySite(file = "src/kernel/src/arch/aarch64/cpu.rs", maxLines = 100),
+            AssemblySite(file = "src/kernel/src/arch/armv7a/cpu.rs", maxLines = 102),
+            AssemblySite(file = "src/kernel/src/arch/x86_64/trap.rs", maxLines = 171),
+            AssemblySite(file = "src/kernel/src/arch/aarch64/trap.rs", maxLines = 145),
+            AssemblySite(file = "src/kernel/src/arch/armv7a/trap.rs", maxLines = 130),
+            AssemblySite(file = "src/kernel/src/arch/x86_64/smp.rs", maxLines = 41),
+            AssemblySite(file = "src/kernel/src/arch/aarch64/smp.rs", maxLines = 58),
+            AssemblySite(file = "src/kernel/src/arch/armv7a/smp.rs", maxLines = 40),
+            AssemblySite(file = "src/kernel/src/arch/x86_64/switch.rs", maxLines = 32),
+            AssemblySite(file = "src/kernel/src/arch/aarch64/switch.rs", maxLines = 75),
+            AssemblySite(file = "src/kernel/src/arch/armv7a/switch.rs", maxLines = 67),
+            AssemblySite(file = "src/kernel/src/arch/x86_64/syscall.rs", maxLines = 118),
+            AssemblySite(file = "src/user/native/rt/src/arch/x86_64.rs", maxLines = 20),
+            AssemblySite(file = "src/user/native/rt/src/arch/aarch64.rs", maxLines = 20),
+            AssemblySite(file = "src/user/native/rt/src/arch/armv7a.rs", maxLines = 20),
+            AssemblySite(file = "src/boot/vendor/google/pixel7/src/entry.rs", maxLines = 130),
+            AssemblySite(file = "src/kernel/src/arch/x86_64/vdso.rs", maxLines = 120),
+            AssemblySite(file = "src/kernel/src/arch/x86_64/speculation.rs", maxLines = 16),
+            AssemblySite(file = "src/kernel/src/arch/aarch64/speculation.rs", maxLines = 16),
+            AssemblySite(file = "src/kernel/src/arch/armv7a/speculation.rs", maxLines = 16)
         );
         #implemented attribute syscallEntrySites : AssemblySite[1] {
             @stage { number = 6; }
             doc /* The SYSCALL / SVC trampolines: the last entries the list was
                  * meant to gain. Only x86-64 needed one,
-                 * kernel/src/arch/x86_64/syscall.rs, in the list above: on the
+                 * src/kernel/src/arch/x86_64/syscall.rs, in the list above: on the
                  * Arm pair svc arrives through the vector table already
                  * there. */
         }
@@ -255,22 +255,22 @@ package FerrixAssurance {
     }
 
     part libsReach : LayerReach {
-        attribute :>> layer = "libs/";
+        attribute :>> layer = "src/lib/";
         attribute :>> reach = (TestReach::CargoTest, TestReach::Miri, TestReach::Fuzzer);
     }
     part bootReach : LayerReach {
-        attribute :>> layer = "boot/uefi/";
+        attribute :>> layer = "src/boot/common/uefi/";
         attribute :>> reach = (TestReach::QemuBoot);
     }
     part kernelReach : LayerReach {
-        attribute :>> layer = "kernel/";
+        attribute :>> layer = "src/kernel/";
         attribute :>> reach = (TestReach::QemuBoot);
         doc /* Miri cannot interpret a privileged instruction and a fuzzer
              * cannot drive a page-fault handler, which is the whole argument
-             * for libs/. */
+             * for src/lib/. */
     }
     part xtaskReach : LayerReach {
-        attribute :>> layer = "xtask/";
+        attribute :>> layer = "tools/common/xtask/";
         attribute :>> reach = (TestReach::CargoTest);
     }
 
@@ -291,7 +291,7 @@ package FerrixAssurance {
         doc /* Kill QEMU at a random point inside a transaction, remount,
              * replay, btrfs check again, over hundreds of seeds: cargo xtask
              * test-powerfail. Its adversarial half, every unflushed write
-             * kept or dropped at random, is libs/fs/btrfs-write's powerfail
+             * kept or dropped at random, is src/lib/fs/btrfs-write's powerfail
              * tests. The test a CoW filesystem actually has to pass. */
         subject os : Ferrix;
         attribute seeds : Natural;
@@ -375,7 +375,7 @@ package FerrixAssurance {
     }
     #implemented verification def PtyTest {
         @stage { number = 18; }
-        doc /* cargo xtask test-pty: userland/compositor/term --headless runs a program
+        doc /* cargo xtask test-pty: src/user/linux/compositor/term --headless runs a program
              * on a pseudoterminal pair, and what it wrote comes back through
              * the master and the terminal's grid. */
         subject os : Ferrix;

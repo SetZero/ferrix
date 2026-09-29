@@ -7,7 +7,7 @@
     "The manual is an out-of-context safety argument: an integrator reads it and",
     "designs against it. A claim in it that quietly stopped being true would be",
     "worse than no manual, because it would be believed. So every claim names",
-    "its evidence here, and scripts/check/check-safety-requirements.py fails the build",
+    "its evidence here, and tools/common/check/check-safety-requirements.py fails the build",
     "when an id in the manual is missing from this file, when a claim names",
     "evidence that no longer exists, or when the two disagree about which ids",
     "exist at all.",
@@ -23,13 +23,13 @@
       "statement": "A partition shall not read or write memory belonging to another partition or to the element.",
       "status": "met",
       "implemented_by": [
-        "kernel/src/user/space.rs",
-        "kernel/src/arch/x86_64/cpu.rs::enable_user_access_protection",
-        "kernel/src/arch/aarch64/cpu.rs::enable_user_access_protection"
+        "src/kernel/src/user/space.rs",
+        "src/kernel/src/arch/x86_64/cpu.rs::enable_user_access_protection",
+        "src/kernel/src/arch/aarch64/cpu.rs::enable_user_access_protection"
       ],
       "demonstrated_by": [
-        "kernel/src/user/check.rs::check_the_processor_walks_an_installed_space",
-        "kernel/src/user/check.rs::check_a_region_outside_the_user_half_is_refused"
+        "src/kernel/src/user/check.rs::check_the_processor_walks_an_installed_space",
+        "src/kernel/src/user/check.rs::check_a_region_outside_the_user_half_is_refused"
       ]
     },
     {
@@ -37,11 +37,11 @@
       "statement": "No mapping shall be simultaneously writable and executable.",
       "status": "met",
       "implemented_by": [
-        "kernel/src/mm.rs",
-        "kernel/src/main.rs::finish_memory"
+        "src/kernel/src/mm.rs",
+        "src/kernel/src/main.rs::finish_memory"
       ],
       "demonstrated_by": [
-        "kernel/src/panic/catalog.rs::STAGE2_FINISH_MEMORY"
+        "src/kernel/src/panic/catalog.rs::STAGE2_FINISH_MEMORY"
       ]
     },
     {
@@ -49,11 +49,11 @@
       "statement": "A partition shall reach a resource only through a capability it holds.",
       "status": "met",
       "implemented_by": [
-        "kernel/src/object/mod.rs",
-        "kernel/src/object/channel.rs"
+        "src/kernel/src/object/mod.rs",
+        "src/kernel/src/object/channel.rs"
       ],
       "demonstrated_by": [
-        "kernel/src/object/check.rs"
+        "src/kernel/src/object/check.rs"
       ]
     },
     {
@@ -61,11 +61,11 @@
       "statement": "A device shall not access memory outside the region its driver was granted.",
       "status": "met on x86-64 and AArch64; not provided on ARMv7-A (AoU-6)",
       "implemented_by": [
-        "kernel/src/iommu/vtd.rs",
-        "kernel/src/iommu/smmuv3.rs"
+        "src/kernel/src/iommu/vtd.rs",
+        "src/kernel/src/iommu/smmuv3.rs"
       ],
       "demonstrated_by": [
-        "kernel/src/iommu/gate.rs::waits_with_interrupts_on"
+        "src/kernel/src/iommu/gate.rs::waits_with_interrupts_on"
       ]
     },
     {
@@ -73,10 +73,10 @@
       "statement": "Memory released by one partition shall not be readable by the next.",
       "status": "met",
       "implemented_by": [
-        "kernel/src/mm.rs::zero_frame"
+        "src/kernel/src/mm.rs::zero_frame"
       ],
       "demonstrated_by": [
-        "kernel/src/user/check.rs::check_a_committed_page_is_zeroed"
+        "src/kernel/src/user/check.rs::check_a_committed_page_is_zeroed"
       ]
     },
     {
@@ -84,11 +84,11 @@
       "statement": "On detecting an inconsistent internal state, the element shall enter its safe state rather than continue.",
       "status": "met",
       "implemented_by": [
-        "kernel/src/panic.rs",
-        "kernel/src/panic/catalog.rs"
+        "src/kernel/src/panic.rs",
+        "src/kernel/src/panic/catalog.rs"
       ],
       "demonstrated_by": [
-        "scripts/check/check-panic-audit.py"
+        "tools/common/check/check-panic-audit.py"
       ]
     },
     {
@@ -96,10 +96,10 @@
       "statement": "Data supplied by a partition shall be validated before use.",
       "status": "met",
       "implemented_by": [
-        "kernel/src/syscall/uaccess.rs"
+        "src/kernel/src/syscall/uaccess.rs"
       ],
       "demonstrated_by": [
-        "kernel/src/syscall/check.rs"
+        "src/kernel/src/syscall/check.rs"
       ]
     },
     {
@@ -107,10 +107,10 @@
       "statement": "Admission of a real-time workload shall be refused when the set is unschedulable.",
       "status": "partially met -- no worst-case execution time is claimed (AoU-4)",
       "implemented_by": [
-        "kernel/src/sched/mod.rs"
+        "src/kernel/src/sched/mod.rs"
       ],
       "demonstrated_by": [
-        "kernel/src/sched/check.rs"
+        "src/kernel/src/sched/check.rs"
       ]
     }
   ],
@@ -118,64 +118,64 @@
     {
       "id": "FM-1",
       "mitigated_by": [
-        "kernel/src/user/space.rs"
+        "src/kernel/src/user/space.rs"
       ]
     },
     {
       "id": "FM-2",
       "mitigated_by": [
-        "kernel/src/mm.rs"
+        "src/kernel/src/mm.rs"
       ]
     },
     {
       "id": "FM-3",
       "mitigated_by": [
-        "kernel/src/object/mod.rs"
+        "src/kernel/src/object/mod.rs"
       ]
     },
     {
       "id": "FM-4",
       "mitigated_by": [
-        "kernel/src/iommu.rs"
+        "src/kernel/src/iommu.rs"
       ]
     },
     {
       "id": "FM-5",
       "mitigated_by": [
-        "kernel/src/mm.rs::zero_frame"
+        "src/kernel/src/mm.rs::zero_frame"
       ]
     },
     {
       "id": "FM-6",
       "mitigated_by": [
-        "kernel/src/panic.rs"
+        "src/kernel/src/panic.rs"
       ]
     },
     {
       "id": "FM-7",
       "mitigated_by": [
-        "kernel/src/object/job.rs"
+        "src/kernel/src/object/job.rs"
       ]
     },
     {
       "id": "FM-8",
       "mitigated_by": [
-        "kernel/src/sched/queue.rs"
+        "src/kernel/src/sched/queue.rs"
       ]
     },
     {
       "id": "FM-9",
       "mitigated_by": [
-        "kernel/src/vmap.rs::allocate_stack",
-        "kernel/src/mm/check.rs::check_stacks"
+        "src/kernel/src/vmap.rs::allocate_stack",
+        "src/kernel/src/mm/check.rs::check_stacks"
       ]
     },
     {
       "id": "FM-10",
       "mitigated_by": [
-        "kernel/src/smp.rs::wait_for",
-        "kernel/src/smp.rs::patience",
-        "kernel/src/smp.rs::take_turn"
+        "src/kernel/src/smp.rs::wait_for",
+        "src/kernel/src/smp.rs::patience",
+        "src/kernel/src/smp.rs::take_turn"
       ]
     }
   ],
@@ -200,8 +200,8 @@
     "AoU above it serves and to the code that argues it. Every unsafe block,",
     "unsafe impl and unsafe fn in the core and item rings names one, as",
     "`// SAFETY: (ID)` or at the head of its `# Safety` section;",
-    "scripts/check/check-unsafe-audit.py resolves the id and holds the untagged",
-    "remainder to scripts/data/unsafe-trace-baseline.json. The manual tables",
+    "tools/common/check/check-unsafe-audit.py resolves the id and holds the untagged",
+    "remainder to tools/common/data/unsafe-trace-baseline.json. The manual tables",
     "the same set in section 2."
   ],
   "unsafe_obligations": [
@@ -216,9 +216,9 @@
         "FM-6"
       ],
       "argued_by": [
-        "kernel/src/mmio.rs",
-        "kernel/src/device/check.rs::check_exclusive",
-        "scripts/check/check-device-access.py"
+        "src/kernel/src/mmio.rs",
+        "src/kernel/src/device/check.rs::check_exclusive",
+        "tools/common/check/check-device-access.py"
       ]
     },
     {
@@ -230,9 +230,9 @@
         "FM-6"
       ],
       "argued_by": [
-        "kernel/src/arch/x86_64/cpu.rs",
-        "kernel/src/arch/aarch64/cpu.rs",
-        "kernel/src/arch/armv7a/cpu.rs"
+        "src/kernel/src/arch/x86_64/cpu.rs",
+        "src/kernel/src/arch/aarch64/cpu.rs",
+        "src/kernel/src/arch/armv7a/cpu.rs"
       ]
     },
     {
@@ -245,11 +245,11 @@
         "AoU-11"
       ],
       "argued_by": [
-        "kernel/src/arch/x86_64/cpu.rs::enable_user_access_protection",
-        "kernel/src/arch/aarch64/cpu.rs::enable_user_access_protection",
-        "kernel/src/arch/x86_64/speculation.rs",
-        "kernel/src/arch/aarch64/speculation.rs",
-        "kernel/src/arch/armv7a/speculation.rs",
+        "src/kernel/src/arch/x86_64/cpu.rs::enable_user_access_protection",
+        "src/kernel/src/arch/aarch64/cpu.rs::enable_user_access_protection",
+        "src/kernel/src/arch/x86_64/speculation.rs",
+        "src/kernel/src/arch/aarch64/speculation.rs",
+        "src/kernel/src/arch/armv7a/speculation.rs",
         "docs/certification/SPECULATION.md"
       ]
     },
@@ -264,10 +264,10 @@
         "FM-2"
       ],
       "argued_by": [
-        "kernel/src/user/space.rs",
-        "kernel/src/mm.rs",
-        "kernel/src/main.rs::finish_memory",
-        "kernel/src/user/check.rs::check_the_processor_walks_an_installed_space"
+        "src/kernel/src/user/space.rs",
+        "src/kernel/src/mm.rs",
+        "src/kernel/src/main.rs::finish_memory",
+        "src/kernel/src/user/check.rs::check_the_processor_walks_an_installed_space"
       ]
     },
     {
@@ -280,10 +280,10 @@
         "AoU-12"
       ],
       "argued_by": [
-        "kernel/src/iommu/vtd.rs",
-        "kernel/src/iommu/smmuv3.rs",
-        "kernel/src/object/pin.rs",
-        "kernel/src/iommu/gate.rs::waits_with_interrupts_on"
+        "src/kernel/src/iommu/vtd.rs",
+        "src/kernel/src/iommu/smmuv3.rs",
+        "src/kernel/src/object/pin.rs",
+        "src/kernel/src/iommu/gate.rs::waits_with_interrupts_on"
       ]
     },
     {
@@ -297,9 +297,9 @@
         "FM-5"
       ],
       "argued_by": [
-        "kernel/src/mm.rs::zero_frame",
-        "kernel/src/user/vmo.rs",
-        "kernel/src/user/check.rs::check_a_committed_page_is_zeroed"
+        "src/kernel/src/mm.rs::zero_frame",
+        "src/kernel/src/user/vmo.rs",
+        "src/kernel/src/user/check.rs::check_a_committed_page_is_zeroed"
       ]
     },
     {
@@ -312,9 +312,9 @@
         "FM-1"
       ],
       "argued_by": [
-        "kernel/src/syscall/uaccess.rs::copy_from_user",
-        "kernel/src/syscall/uaccess.rs::copy_to_user",
-        "kernel/src/syscall/check.rs"
+        "src/kernel/src/syscall/uaccess.rs::copy_from_user",
+        "src/kernel/src/syscall/uaccess.rs::copy_to_user",
+        "src/kernel/src/syscall/check.rs"
       ]
     },
     {
@@ -327,10 +327,10 @@
         "FM-9"
       ],
       "argued_by": [
-        "kernel/src/arch/x86_64/switch.rs::switch_to",
-        "kernel/src/arch/aarch64/switch.rs::switch_to",
-        "kernel/src/arch/armv7a/switch.rs::switch_to",
-        "kernel/src/sched/mod.rs::check_invariants"
+        "src/kernel/src/arch/x86_64/switch.rs::switch_to",
+        "src/kernel/src/arch/aarch64/switch.rs::switch_to",
+        "src/kernel/src/arch/armv7a/switch.rs::switch_to",
+        "src/kernel/src/sched/mod.rs::check_invariants"
       ]
     },
     {
@@ -344,11 +344,11 @@
         "FM-9"
       ],
       "argued_by": [
-        "kernel/src/arch/x86_64/trap.rs",
-        "kernel/src/arch/x86_64/gdt.rs",
-        "kernel/src/arch/x86_64/syscall.rs",
-        "kernel/src/arch/aarch64/trap.rs",
-        "kernel/src/arch/armv7a/trap.rs"
+        "src/kernel/src/arch/x86_64/trap.rs",
+        "src/kernel/src/arch/x86_64/gdt.rs",
+        "src/kernel/src/arch/x86_64/syscall.rs",
+        "src/kernel/src/arch/aarch64/trap.rs",
+        "src/kernel/src/arch/armv7a/trap.rs"
       ]
     },
     {
@@ -360,9 +360,9 @@
         "AoU-2"
       ],
       "argued_by": [
-        "kernel/src/arch/aarch64/cpu.rs::hvc_call",
-        "kernel/src/arch/armv7a/cpu.rs::psci_call",
-        "kernel/src/arch/x86_64/mod.rs::reset"
+        "src/kernel/src/arch/aarch64/cpu.rs::hvc_call",
+        "src/kernel/src/arch/armv7a/cpu.rs::psci_call",
+        "src/kernel/src/arch/x86_64/mod.rs::reset"
       ]
     },
     {
@@ -374,10 +374,10 @@
         "FM-6"
       ],
       "argued_by": [
-        "libs/proto/bootinfo/src/lib.rs::validate",
-        "kernel/src/acpi.rs",
-        "kernel/src/fdt.rs",
-        "kernel/src/stages_check.rs::check_direct_map"
+        "src/lib/proto/bootinfo/src/lib.rs::validate",
+        "src/kernel/src/acpi.rs",
+        "src/kernel/src/fdt.rs",
+        "src/kernel/src/stages_check.rs::check_direct_map"
       ]
     },
     {
@@ -390,9 +390,9 @@
         "FM-9"
       ],
       "argued_by": [
-        "kernel/src/mm.rs::KernelAllocator",
-        "kernel/src/vmap.rs::free_stack",
-        "kernel/src/mm/check.rs::check_stacks"
+        "src/kernel/src/mm.rs::KernelAllocator",
+        "src/kernel/src/vmap.rs::free_stack",
+        "src/kernel/src/mm/check.rs::check_stacks"
       ]
     },
     {
@@ -404,10 +404,10 @@
         "FM-6"
       ],
       "argued_by": [
-        "libs/kernel/sync/src/lib.rs::lock_manually",
-        "kernel/src/sched/task.rs",
-        "kernel/src/smp.rs",
-        "kernel/src/sched/mod.rs::check_invariants"
+        "src/lib/kernel/sync/src/lib.rs::lock_manually",
+        "src/kernel/src/sched/task.rs",
+        "src/kernel/src/smp.rs",
+        "src/kernel/src/sched/mod.rs::check_invariants"
       ]
     },
     {
@@ -419,9 +419,9 @@
         "ASR-6"
       ],
       "argued_by": [
-        "kernel/src/user/check.rs::check_the_processor_walks_an_installed_space",
-        "kernel/src/arch/x86_64/paranoid/check.rs",
-        "kernel/src/mm/check.rs::check_stacks"
+        "src/kernel/src/user/check.rs::check_the_processor_walks_an_installed_space",
+        "src/kernel/src/arch/x86_64/paranoid/check.rs",
+        "src/kernel/src/mm/check.rs::check_stacks"
       ]
     }
   ]

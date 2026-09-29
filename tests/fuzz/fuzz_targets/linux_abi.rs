@@ -1,4 +1,4 @@
-//! Fuzz the structures `libs/proto/linux-abi` reads out of a program's memory.
+//! Fuzz the structures `src/lib/proto/linux-abi` reads out of a program's memory.
 //!
 //! Every system call that takes a pointer hands the kernel bytes a stranger
 //! wrote: a socket address, a `msghdr` and its control buffer, credentials,

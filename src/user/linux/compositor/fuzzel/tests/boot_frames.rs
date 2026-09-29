@@ -5,9 +5,9 @@
 //! then has `/bin/vkbd` type `pat`, and requires QEMU's screendump to be
 //! these pictures pixel for pixel. They are made the way the guest makes
 //! them: fuzzel's own drawing of the same entries (`data/applications`) with
-//! the same font and icons, composited by `userland/compositor/render` as the
+//! the same font and icons, composited by `src/user/linux/compositor/render` as the
 //! compositor composites a layer surface on the overlay layer, centred where
-//! `userland/compositor/layout` puts one with no anchor. The images are blessed with
+//! `src/user/linux/compositor/layout` puts one with no anchor. The images are blessed with
 //! `COMPOSITOR_RENDER_BLESS=1` and kept with the renderer's.
 
 // An integration test's helpers are not inside a `#[test]` function, so the
@@ -95,7 +95,7 @@ fn entries(config: &Config) -> Vec<desktop::Application> {
 fn frame(config: &Config, launcher: &Launcher) -> (Vec<u8>, u32, u32) {
     let mut fonts = compositor_text::Fonts::new();
     let font = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../assets/fonts/liberation/LiberationSerif-Regular.ttf");
+        .join("../../../../../assets/fonts/liberation/LiberationSerif-Regular.ttf");
     assert_eq!(fonts.add_file(&font), 1, "{}", font.display());
     // `dpi-aware=no`: 96 DPI at scale 1, whatever the screen reports.
     let scaling = Scaling {

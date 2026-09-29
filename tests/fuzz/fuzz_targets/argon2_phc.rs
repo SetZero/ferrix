@@ -1,5 +1,5 @@
 //! Fuzz the stored-hash string `authd` reads back from its store
-//! (`libs/crypto/argon2`'s `phc`): any bytes a damaged or edited file holds.
+//! (`src/lib/crypto/argon2`'s `phc`): any bytes a damaged or edited file holds.
 //!
 //! Parsing must never panic, a string that parses must print back as the
 //! same string, and one whose costs are small enough is checked against a

@@ -1,7 +1,7 @@
 # Stage 13 — Namespaces, cgroups v2, seccomp  ·  *month*
 
 All eight namespaces, the unified hierarchy with `cpu`/`memory`/`io`/`pids`,
-cgroupfs, and classic-BPF seccomp with the interpreter in `libs/`.
+cgroupfs, and classic-BPF seccomp with the interpreter in `src/lib/`.
 
 **Exit:** an unprivileged user namespace runs a process whose pid is 1 inside
 it, under a memory limit that triggers scoped reclaim and a scoped OOM kill,
@@ -31,7 +31,7 @@ and a microkernel keeps the jobs if it drops cgroupfs.
 **Designed (2026-09-23): `docs/CGROUPS.md`.** Every process is in exactly
 one job, and a fork inherits it. A job counts its live members, so
 "populated" flips at the last exit, not the reap. cgroupfs is an in-kernel
-view of the job tree, with its text formats in a pure `libs/fs/cgroupfs`.
+view of the job tree, with its text formats in a pure `src/lib/fs/cgroupfs`.
 `POLLPRI` is new to `poll`, `select` and `epoll` for `cgroup.events`. A job
 asserts a native `EMPTY` signal, and memory is charged per page to a job,
 with an OOM kill scoped to it.
@@ -59,7 +59,7 @@ Linux keeps off the root kept off it. `cgroup.procs` lists and moves,
 `cgroup.kill` ends a subtree and leaves it usable, `cgroup.events` reads
 `populated` exactly, `cgroup.max.depth`, `cgroup.max.descendants` and
 `cgroup.stat` hold, and `/proc/<pid>/cgroup` says `0::/path`. Every text and
-every write's parse is `libs/fs/cgroupfs`, pinned against Linux's by host tests,
+every write's parse is `src/lib/fs/cgroupfs`, pinned against Linux's by host tests,
 Miri and a fuzzer (`cgroupfs_write`). The boot check drives it through the VFS
 under the `cgroups` line.
 
@@ -94,7 +94,7 @@ clears when a process arrives, and a port registration for it fires at the
 flip that empties the job. `job_for_cgroup` (0x102A) gives a handle to the
 job behind a cgroupfs directory descriptor, with `WAIT` for whoever may
 read its `cgroup.procs` and `MANAGE` as well for whoever may write it; no
-call goes the other way. `libs/proto/native` wraps it as `job::for_cgroup`. The
+call goes the other way. `src/lib/proto/native` wraps it as `job::for_cgroup`. The
 `cgroups` boot check asks for the handle as root and as uid 1000, and
 requires a registration for `EMPTY` to stay quiet through one member's
 release and fire at the last, with `cgroup.events` already `populated 0`;

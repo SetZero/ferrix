@@ -3,9 +3,9 @@
 //!
 //! The phone's USB-C port is a Synopsys DWC3 (`usb@11210000`, and the
 //! `synopsys,dwc3` child that shares its window), which the phone's tree
-//! puts in device mode. `native/drivers/usbdev` drives it, presenting a USB serial
+//! puts in device mode. `src/user/native/drivers/usb/usbdev` drives it, presenting a USB serial
 //! port to whatever the phone is plugged into
-//! (`docs/PIXEL7-USB-HANDOVER.md`).
+//! (`docs/vendor/google/pixel7/USB-HANDOVER.md`).
 //!
 //! What the chip shares with it -- the HSI0 power domain the controller, its
 //! PHY and HSI0's clock unit sit in, and the PMU's PHY isolation control --

@@ -2,7 +2,7 @@
 # Builds curl 8.22.0 with mbedTLS 3.6.7 as a static program against
 # ferrousli, and fetches the CA certificates it verifies servers with.
 #
-#     tools/ports/curl/build.sh [--arch <arch>]    # from userland/ferrousli/
+#     tools/ports/curl/build.sh [--arch <arch>]    # from src/user/linux/ferrousli/
 #
 # Installs, under $FERRIX_PORTS (see ../common.sh):
 #   <arch>/bin/curl

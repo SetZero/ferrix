@@ -19,7 +19,7 @@
 # Needs curl, sha256sum and tar. A mirror other than dl-cdn.alpinelinux.org
 # can be named with ALPINE_MIRROR.
 #
-# Usage: scripts/fetch/fetch-alpine-i386-busybox.sh
+# Usage: tools/common/fetch/fetch-alpine-i386-busybox.sh
 
 set -euo pipefail
 

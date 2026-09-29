@@ -1112,7 +1112,7 @@ fn record_provoked(stream: u32, page: u64) {
 /// while the probe's record was pending. That is the price of never failing
 /// a boot on the probe's own faults on a unit that records each; `xtask`
 /// still fails such a run, since QEMU traces `vtd_dmar_fault` for every
-/// fault before it decides whether to record it (`xtask/src/dma_faults.rs`).
+/// fault before it decides whether to record it (`tools/common/xtask/src/dma_faults.rs`).
 fn provoked(fault: Fault) -> bool {
     matches!(fault.cause, Cause::Access | Cause::Overflow)
         && PROVOKED

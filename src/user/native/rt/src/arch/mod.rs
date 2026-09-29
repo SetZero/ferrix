@@ -1,6 +1,6 @@
 //! The instructions a native program cannot say in Rust, per architecture.
 //!
-//! Four things, each allow-listed in `scripts/data/asm-allowlist.json`:
+//! Four things, each allow-listed in `tools/common/data/asm-allowlist.json`:
 //!
 //! * `_start`, because a process is *entered*, not called: the kernel drops to
 //!   user mode at the entry point with a stack pointer and registers it chose,
@@ -25,8 +25,8 @@
 //! of its own stack. A caller in `crate::linux` therefore names an operation
 //! and never an architecture.
 //!
-//! This is the facade: the one place under `native/` that selects on
-//! `target_arch`, for the reason `kernel/src/arch/mod.rs` is the kernel's.
+//! This is the facade: the one place under `src/user/native/` that selects on
+//! `target_arch`, for the reason `src/kernel/src/arch/mod.rs` is the kernel's.
 
 #[cfg(target_arch = "aarch64")]
 mod aarch64;

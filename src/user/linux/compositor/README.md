@@ -23,7 +23,7 @@ names the part of Hyprland or hyprlang it follows.
   library allowed, from stage 18. libwayland is linked by one thing and
   never by the compositor: `wire/probe/wire.c`, a probe that runs on the
   development host to print the bytes a real implementation sends, the way
-  `libs/proto/linux-abi/probe` prints the kernel's numbers.
+  `src/lib/proto/linux-abi/probe` prints the kernel's numbers.
 * **Headless pixel tests are the everyday gate.** Rendering into a buffer on
   the host and comparing pixels is the same comparison stage 17 and 18's
   exit tests make against QEMU's screendump.
@@ -62,7 +62,7 @@ names the part of Hyprland or hyprlang it follows.
 * **`protocol`** is the interface tables: what each interface's requests and
   events are called, at which opcode, with which argument types, and every
   enumeration value. Generated from the protocol XML by
-  `scripts/gen/gen-wayland-protocol.py`, which `cargo xtask check` runs with
+  `tools/common/gen/gen-wayland-protocol.py`, which `cargo xtask check` runs with
   `--check`. The XML is vendored under `protocol/protocols/` rather than read
   from the machine, so the tables cannot change under the compositor without
   a commit. `probe/interfaces.c` links against libwayland's own compiled
@@ -146,13 +146,13 @@ names the part of Hyprland or hyprlang it follows.
   frame on a screen. Nothing in it parses a file, works out a layout, draws a
   pixel or decodes a message -- the crates above do those -- so it is the loop
   that joins them and the two places the compositor touches the world: a
-  client's shared memory, and the screen. The screen is `userland/compositor/drm`'s
+  client's shared memory, and the screen. The screen is `src/user/linux/compositor/drm`'s
   card, with two dumb buffers drawn into in turn and shown with a page flip;
   `--headless WxH` draws into memory instead, and `--dump <dir>` writes each
   frame as a PPM. `debug:overlay = 1`, in the configuration or by `hyprctl
   keyword`, draws Hyprland's frames-per-second counter over the first
   screen's top left corner, a port of its `src/debug/Overlay.cpp` written in
-  Spleen, `libs/kernel/fbtext`'s face (`hyprix/src/overlay.rs`).
+  Spleen, `src/lib/kernel/fbtext`'s face (`hyprix/src/overlay.rs`).
   On Ferrix it is `hyprix.service` under `/sbin/init` (`docs/INIT.md`,
   L10), no longer pid 1, and each program it starts is asked into a scope of
   its own, `app.slice/app-<name>-<pid>.scope` (`hyprix/src/scope.rs`).
@@ -166,7 +166,7 @@ names the part of Hyprland or hyprlang it follows.
 * **`term`** is the terminal: a character grid with the escape sequences a
   shell and its programs actually send, drawn with Hack -- rasterised from
   the TrueType faces in `term/font/` into coverage cells by
-  `scripts/gen/gen-term-font.py`, and blended a pixel at a time -- into a
+  `tools/common/gen/gen-term-font.py`, and blended a pixel at a time -- into a
   `wl_shm` buffer. It starts a program on a pseudoterminal with
   the slave for its session and its three descriptors, and `--headless` runs
   one with no window at all, which is what `cargo xtask test-pty` boots.

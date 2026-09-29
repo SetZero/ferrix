@@ -2,7 +2,7 @@
 //! standard requests, and a CDC-ACM serial port as the one function.
 //!
 //! The Pixel 7 is to show up on a PC as `/dev/ttyACM*` while it runs Ferrix
-//! natively (`docs/PIXEL7-USB-HANDOVER.md`). Its controller, a DWC3, is
+//! natively (`docs/vendor/google/pixel7/USB-HANDOVER.md`). Its controller, a DWC3, is
 //! driven by `ferrix-dwc3`; nothing here knows it. A controller driver
 //! needs only three things from the function it carries, and [`Function`]
 //! is those three:

@@ -4,7 +4,7 @@
 //! `READ` alone. Init keeps it here and, once `/` is settled, copies every
 //! record into `/var/log/audit/<id>.bin` -- the boot's audit id in hex, so
 //! two boots' records can never be mixed in one file -- 64 bytes each, as
-//! `libs/proto/audit` lays them out. It asks once a second: the kernel
+//! `src/lib/proto/audit` lays them out. It asks once a second: the kernel
 //! signals nothing, since a record is made where no port may be woken, and
 //! whatever a ring overwrote between two reads shows in the file as a gap in
 //! its numbers and is counted here. And it reads a last time just before it

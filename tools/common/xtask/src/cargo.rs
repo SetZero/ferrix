@@ -17,7 +17,7 @@ use crate::{Error, Result};
 ///
 /// On the 64-bit pair that is what rustc produced. On ARMv7-A rustc produces
 /// an ELF static PIE, and the `.efi` is written beside it by `pe::convert` —
-/// which checks the ELF against `boot/uefi/linker/armv7a.ld`'s contract, so a
+/// which checks the ELF against `src/boot/common/uefi/linker/armv7a.ld`'s contract, so a
 /// loader that breaks it fails the build rather than the boot.
 pub(crate) fn build_loader(arch: Arch, release: bool) -> Result<PathBuf> {
     let name = if arch.loader_is_elf() {
@@ -63,7 +63,7 @@ pub(crate) fn set_mitigations(setting: Mitigations) {
 /// The `--config` that builds the kernel for `target` without its
 /// side-channel defences, and without KASLR: the static relocation model,
 /// which on x86-64 is the code the kernel was built as before it moved, and
-/// which `kernel/build.rs` links at its fixed address.
+/// which `src/kernel/build.rs` links at its fixed address.
 ///
 /// A `--config` array is *appended* to the one in `.cargo/config.toml`, so the
 /// per-target flags [`refuse_inherited_rustflags`] protects are kept and the
@@ -157,7 +157,7 @@ pub(crate) fn build_kernel_with_init(
 /// `vfs::encode` wrote, in place of a shell.
 ///
 /// Named by path rather than carried in the variable, for the reason
-/// `kernel/build.rs` gives: the list is full of NULs.
+/// `src/kernel/build.rs` gives: the list is full of NULs.
 pub(crate) fn build_kernel_with_commands(
     arch: Arch,
     release: bool,

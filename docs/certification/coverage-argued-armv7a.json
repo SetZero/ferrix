@@ -18,28 +18,28 @@
       "lines": "178",
       "category": "other-architecture",
       "match": "}",
-      "why": "The end of `write_byte`, to which this build attributes the jump out of its arm for ST's USART, the STM32MP157's console. QEMU's `virt` has a PL011; the USART is the DK1 board's, whose driver `arch/stm32_usart.rs` is argued as that board's as a whole. Which port a tree makes the console is held by the stage 3 machine check to four trees, one an STM32MP15's; the board boots on this port (docs/stm32mp157-dk.md, \"What is actually verified\")."
+      "why": "The end of `write_byte`, to which this build attributes the jump out of its arm for ST's USART, the STM32MP157's console. QEMU's `virt` has a PL011; the USART is the DK1 board's, whose driver `arch/stm32_usart.rs` is argued as that board's as a whole. Which port a tree makes the console is held by the stage 3 machine check to four trees, one an STM32MP15's; the board boots on this port (docs/vendor/st/stm32mp157-dk.md, \"What is actually verified\")."
     },
     {
       "file": "arch/armv7a/console.rs",
       "lines": "83",
       "category": "other-architecture",
       "match": "Port::Stm32 => stm32_usart::init(memory, registers.address)?,",
-      "why": "Mapping ST's USART, the STM32MP157's console, when the device tree names one. A command typed at busybox's prompt ran on the board (docs/stm32mp157-dk.md, \"What is actually verified\")."
+      "why": "Mapping ST's USART, the STM32MP157's console, when the device tree names one. A command typed at busybox's prompt ran on the board (docs/vendor/st/stm32mp157-dk.md, \"What is actually verified\")."
     },
     {
       "file": "arch/armv7a/cpu.rs",
       "lines": "181",
       "category": "absent-hardware",
       "match": "asm!(",
-      "why": "PSCI `SYSTEM_OFF` or `SYSTEM_RESET` through the secure monitor. QEMU's `virt` without EL3 firmware answers PSCI itself through `hvc`, and its tree says so; the DK1's TF-A and OP-TEE answer through `smc`, and the board powers off and resets through this call (`ferrix.onexit=reset` resets the board to U-Boot, docs/stm32mp157-dk.md, \"What is actually verified\")."
+      "why": "PSCI `SYSTEM_OFF` or `SYSTEM_RESET` through the secure monitor. QEMU's `virt` without EL3 firmware answers PSCI itself through `hvc`, and its tree says so; the DK1's TF-A and OP-TEE answer through `smc`, and the board powers off and resets through this call (`ferrix.onexit=reset` resets the board to U-Boot, docs/vendor/st/stm32mp157-dk.md, \"What is actually verified\")."
     },
     {
       "file": "arch/armv7a/cpu.rs",
       "lines": "796",
       "category": "absent-hardware",
       "match": "asm!(",
-      "why": "A PSCI call through the secure monitor, `CPU_ON` for a secondary. As line 181: QEMU answers by `hvc`; the DK1's secure firmware by `smc`, through which the board starts its second processor (`2 online`, docs/stm32mp157-dk.md, \"What is actually verified\")."
+      "why": "A PSCI call through the secure monitor, `CPU_ON` for a secondary. As line 181: QEMU answers by `hvc`; the DK1's secure firmware by `smc`, through which the board starts its second processor (`2 online`, docs/vendor/st/stm32mp157-dk.md, \"What is actually verified\")."
     },
     {
       "file": "arch/armv7a/mod.rs",
@@ -67,14 +67,14 @@
       "lines": "161, 165",
       "category": "absent-hardware",
       "match": "return Ok(Described {",
-      "why": "`nosmp`, read on this architecture from `/chosen/bootargs` as U-Boot's `bootargs` sets it (docs/stm32mp157-dk.md: `setenv bootargs 'nosmp'`). QEMU's U-Boot passes no bootargs and the suite cannot give it any; the loader's command line, which the suite can write, is not where this architecture looks. AArch64 reads it from the loader, and its suite boots it (`boot-nosmp`)."
+      "why": "`nosmp`, read on this architecture from `/chosen/bootargs` as U-Boot's `bootargs` sets it (docs/vendor/st/stm32mp157-dk.md: `setenv bootargs 'nosmp'`). QEMU's U-Boot passes no bootargs and the suite cannot give it any; the loader's command line, which the suite can write, is not where this architecture looks. AArch64 reads it from the loader, and its suite boots it (`boot-nosmp`)."
     },
     {
       "file": "arch/armv7a/smp.rs",
       "lines": "177",
       "category": "absent-hardware",
       "match": "None => psci,",
-      "why": "A processor node with no `enable-method`, taken to mean PSCI where the tree has a `/psci` node, as Linux does on this architecture. QEMU's tree names `psci` on every processor; the STM32MP157's `/cpus` nodes carry none, and the DK1 starts both processors through this rule (`2 online`, docs/stm32mp157-dk.md, \"What is actually verified\")."
+      "why": "A processor node with no `enable-method`, taken to mean PSCI where the tree has a `/psci` node, as Linux does on this architecture. QEMU's tree names `psci` on every processor; the STM32MP157's `/cpus` nodes carry none, and the DK1 starts both processors through this rule (`2 online`, docs/vendor/st/stm32mp157-dk.md, \"What is actually verified\")."
     },
     {
       "file": "arch/armv7a/smp.rs",
@@ -1537,7 +1537,7 @@
       "lines": "132",
       "category": "failure-path",
       "match": "Job::new_tree_root().unwrap_or_else(|_| {",
-      "why": "The root job is made once, by bring-up, before any program exists to be told memory ran out; the allocation is FATAL-ALLOC by design (`scripts/check/check-fallible-alloc.py` lists it) and this is the panic it ends in. A run reaching it is a boot that ran out of memory before its first program."
+      "why": "The root job is made once, by bring-up, before any program exists to be told memory ran out; the allocation is FATAL-ALLOC by design (`tools/common/check/check-fallible-alloc.py` lists it) and this is the panic it ends in. A run reaching it is a boot that ran out of memory before its first program."
     },
     {
       "file": "object/pin.rs",
@@ -1915,7 +1915,7 @@
       "lines": "2758",
       "category": "defensive",
       "match": "return Err(SpaceError::NotUserRange(at));",
-      "why": "`map_shared_code`'s refusal of a place outside the user half, as `map_anywhere`'s is. `find_free` answers only places inside the map's window (its contract, `libs/kernel/vma/src/lib.rs`), and a space's window is `MMAP_MIN_ADDR..USER_VIRT_END` when built (`AddressSpace::new`) and never raised past `USER_VIRT_END` after (`set_ceiling` refuses it), so the place found is always inside the half; the check keeps the rule where the mapping is made rather than in the map's contract."
+      "why": "`map_shared_code`'s refusal of a place outside the user half, as `map_anywhere`'s is. `find_free` answers only places inside the map's window (its contract, `src/lib/kernel/vma/src/lib.rs`), and a space's window is `MMAP_MIN_ADDR..USER_VIRT_END` when built (`AddressSpace::new`) and never raised past `USER_VIRT_END` after (`set_ceiling` refuses it), so the place found is always inside the half; the check keeps the rule where the mapping is made rather than in the map's contract."
     },
     {
       "file": "user/vmo.rs",

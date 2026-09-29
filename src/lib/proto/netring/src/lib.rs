@@ -3,11 +3,11 @@
 //!
 //! `docs/ARCHITECTURE.md` §7 runs drivers in user processes and says the data
 //! path to them *"is not per-request IPC. Driver and kernel share a descriptor
-//! ring in a VMO and ring a doorbell; requests batch."* `libs/proto/blkring` is that
+//! ring in a VMO and ring a doorbell; requests batch."* `src/lib/proto/blkring` is that
 //! ring for block devices; this is the one for network devices, and
 //! `docs/NET-RING.md` is its specification.
 //!
-//! # Why it is not `libs/proto/blkring` with a different entry
+//! # Why it is not `src/lib/proto/blkring` with a different entry
 //!
 //! A block request carries anything from a sector to a megabyte, so the block
 //! ring has an allocator: the kernel picks a `data_offset` for every
@@ -20,7 +20,7 @@
 //! else's packet.
 //!
 //! The index discipline below -- private indices, checked reads of the peer's,
-//! the want-bell handshake -- is the same discipline `libs/proto/blkring` keeps, and
+//! the want-bell handshake -- is the same discipline `src/lib/proto/blkring` keeps, and
 //! this is a second implementation of it rather than a shared one. That is a
 //! deliberate debt with a reason: extracting it would refactor a subsystem
 //! that is shipped, fuzzed and on the boot path, in the same landing as a new
@@ -36,7 +36,7 @@
 //! | Driver port | driver | kernel: exactly `WRITE \| TRANSFER` | submission doorbell |
 //! | Kernel completion port | kernel | driver: exactly `WRITE` | completion doorbell |
 //!
-//! Rights at handoff are exact, for `libs/proto/blkring`'s reason: a `DUPLICATE` on
+//! Rights at handoff are exact, for `src/lib/proto/blkring`'s reason: a `DUPLICATE` on
 //! a VMO would let the kernel's handle be copied.
 //!
 //! # The ring VMO

@@ -18,7 +18,7 @@ Ferrix is still experimental. Authentication and parts of process isolation
 are unfinished, so it is not ready to be your everyday OS.
 
 [Boot Ferrix](#boot-ferrix) · [See what works](#what-works) ·
-[Read the technical guide](GUIDE.md) · [Visit the website](https://setzero.github.io/ferrix/)
+[Read the technical guide](docs/GUIDE.md) · [Visit the website](https://setzero.github.io/ferrix/)
 
 ![Ferrix's Wayland desktop with Chrome, btop and a terminal](docs/brand/screenshots/desktop-hero.png)
 
@@ -66,7 +66,7 @@ cargo xtask run --arch x86_64
 ```
 
 That opens a serial console. For the desktop, run `cargo xtask run-compositor`.
-The [technical guide](GUIDE.md#getting-started) covers firmware requirements,
+The [technical guide](docs/GUIDE.md#getting-started) covers firmware requirements,
 other architectures, Windows, graphics options and the extra downloads needed
 for Chrome and the Rust toolchain. Quit QEMU with `Ctrl-A`, then `x`.
 
@@ -79,7 +79,7 @@ cargo xtask test-boot --arch all
 ```
 
 Other tests compile a program with an unmodified `rustc` inside Ferrix and boot
-an x86-64 image built inside Ferrix. The [guide](GUIDE.md#proof-you-can-run)
+an x86-64 image built inside Ferrix. The [guide](docs/GUIDE.md#proof-you-can-run)
 has the commands and serial output. These tests demonstrate specific working
 paths; they are not a claim that every Linux app works.
 
@@ -91,6 +91,6 @@ sets priorities, and changes have to pass their tests before landing. The
 and what changed afterward. Human contributions are welcome; see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Ferrix is MIT licensed. [Explore the code and component docs](GUIDE.md#layout),
-[get the logo and press kit](marketing/README.md), or
+Ferrix is MIT licensed. [Explore the code and component docs](docs/GUIDE.md#layout),
+[get the logo and press kit](docs/marketing/README.md), or
 [open an issue](https://github.com/SetZero/ferrix/issues).

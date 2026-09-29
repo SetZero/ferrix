@@ -1,7 +1,7 @@
 //! Network wire formats, read and written as bytes.
 //!
 //! The roadmap's networking section puts the byte-level half of the net core in
-//! `libs/`, host-tested and fuzzed before the kernel calls it, for the reason
+//! `src/lib/`, host-tested and fuzzed before the kernel calls it, for the reason
 //! the continuous rule gives: a packet is bytes someone else chose. This crate
 //! is the first of that half — the headers. The TCP state machine, netlink and
 //! virtio-net's device protocol are crates of their own that build on it.

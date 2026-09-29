@@ -6,7 +6,7 @@
 //! # What runs where
 //!
 //! The guest is a real boot with a virtio-net device: the ring-3 driver in
-//! `native/drivers/net`, the net ring, `libs/network/net`'s stack, and busybox on top of it.
+//! `src/user/native/drivers/net/virtio-net`, the net ring, `src/lib/network/net`'s stack, and busybox on top of it.
 //! The other end of the wire is [`crate::gateway`], and the servers the guest
 //! talks to are in this file, in threads of this process, bound to the host's
 //! loopback on ports the kernel chose. The gateway maps `10.0.2.2` to that

@@ -29,7 +29,7 @@ CI is the half that does not.
 1. `.githooks/commit-msg` — refuses the trailer as the message is written.
 2. `.githooks/pre-push` — refuses it again over the range being pushed.
 3. `.github/workflows/ci.yml` → the **One author per commit** job, which runs
-   `scripts/check/check-commit-authors.py` over the range a push or PR adds. This one
+   `tools/common/check/check-commit-authors.py` over the range a push or PR adds. This one
    needs no local setup and cannot be skipped with `--no-verify`.
 
 Hooks 1 and 2 are inert until a clone runs, once:
@@ -130,10 +130,13 @@ rule below comes from something seen there.
 ## Where a new file goes
 
 [LAYOUT.md](LAYOUT.md) says which directory each kind of thing belongs in:
-a new lib in the `libs/` group it is, a ring-3 driver under
-`native/drivers/`, a Linux program under `userland/`, a script under the
-`scripts/` role it has. Nothing new goes at the top level without adding
-it there, and scratch files never go in a checkout at all.
+a new lib in the `src/lib/` group it is, a driver's logic and process
+under the same function in `src/lib/drivers/` and
+`src/user/native/drivers/`, a Linux program under `src/user/linux/`, a
+script or host program under the `tools/common/` role it has, and anything
+for one vendor's hardware under `vendor/<vendor>/<device>/`. Nothing new
+goes at the top level without adding it there, and scratch files never go
+in a checkout at all.
 
 ## Before calling a change done
 

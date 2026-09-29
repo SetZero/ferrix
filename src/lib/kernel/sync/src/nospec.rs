@@ -14,7 +14,7 @@
 //! libraries -- the native ABI's handle table in `ferrix-objects` and the
 //! descriptor table in `ferrix-vfs` -- which cannot use the kernel's own
 //! version: that one is a line of assembly per architecture in
-//! `kernel/src/arch/*/speculation.rs`, and a library here may contain neither
+//! `src/kernel/src/arch/*/speculation.rs`, and a library here may contain neither
 //! assembly nor an architecture conditional.
 //!
 //! # What makes this arithmetic rather than a branch

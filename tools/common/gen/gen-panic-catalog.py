@@ -2,7 +2,7 @@
 """Render the panic catalog into a document, and check it on the way.
 
 A kernel panic prints the site's own sentence and, when the site names one, an
-entry from `kernel/src/panic/catalog.rs`: a stable code, a title, what the
+entry from `src/kernel/src/panic/catalog.rs`: a stable code, a title, what the
 failed check establishes, and the likely causes. That file is the source of
 truth, because it is what the machine prints. This writes the same entries as
 `docs/generated/PANICS.md`, so they can be read, searched and linked without a
@@ -19,11 +19,11 @@ Validated before anything is written, and failing either way:
     moment they most need to be sent somewhere.
 
 The document is committed, and `--check` regenerates it into memory and
-compares, in the manner of `scripts/gen/gen-arch-doc.py`.
+compares, in the manner of `tools/common/gen/gen-arch-doc.py`.
 
 Usage:
-    python3 scripts/gen/gen-panic-catalog.py            # write the document
-    python3 scripts/gen/gen-panic-catalog.py --check    # fail if it is stale
+    python3 tools/common/gen/gen-panic-catalog.py            # write the document
+    python3 tools/common/gen/gen-panic-catalog.py --check    # fail if it is stale
 """
 
 from __future__ import annotations
@@ -34,9 +34,9 @@ import re
 import sys
 import textwrap
 
-SOURCE = pathlib.Path("kernel/src/panic/catalog.rs")
+SOURCE = pathlib.Path("src/kernel/src/panic/catalog.rs")
 OUTPUT = pathlib.Path("docs/generated/PANICS.md")
-COMMAND = "python3 scripts/gen/gen-panic-catalog.py"
+COMMAND = "python3 tools/common/gen/gen-panic-catalog.py"
 
 CODE = re.compile(r"FX-\d{4}")
 STATIC = re.compile(
@@ -60,7 +60,7 @@ class CatalogError(Exception):
 
 
 def repository_root() -> pathlib.Path:
-    return pathlib.Path(__file__).resolve().parent.parent.parent
+    return pathlib.Path(__file__).resolve().parent.parent.parent.parent
 
 
 def unescape(body: str, where: str) -> str:
@@ -191,7 +191,7 @@ def render(entries: list[dict], names: list[str]) -> str:
     lines = [
         "# Ferrix — panic codes",
         "",
-        f"> Generated from {SOURCE.as_posix()} by scripts/gen/gen-panic-catalog.py. Do not edit: "
+        f"> Generated from {SOURCE.as_posix()} by tools/common/gen/gen-panic-catalog.py. Do not edit: "
         f"change the catalog and regenerate with `{COMMAND}`.",
         "",
         wrap(

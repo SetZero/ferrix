@@ -1,4 +1,4 @@
-//! `pa-tone SOCKET`: a second of `userland/compositor/tone`'s counter, played
+//! `pa-tone SOCKET`: a second of `src/user/linux/compositor/tone`'s counter, played
 //! over the `PulseAudio` protocol (`docs/AUDIO.md`, U2b).
 //!
 //! It does what a libpulse client does with the simple API: `AUTH`,

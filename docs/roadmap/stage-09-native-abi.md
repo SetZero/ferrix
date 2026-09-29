@@ -7,7 +7,7 @@ what stage 10 is written against.
 **Done — the ABI written down, and the table under it.** Host-tested, fuzzed
 and under Miri, and reached from the kernel by everything below.
 
-* `libs/proto/native-abi` — the numbers, handle values, rights, signals, error names
+* `src/lib/proto/native-abi` — the numbers, handle values, rights, signals, error names
   and `repr(C)` layouts. One number table on every architecture, in
   `0x1000..=0x1FFF`, held clear of all three Linux tables by a test rather than
   by a comment. No argument is wider than a register — anything that must be
@@ -15,7 +15,7 @@ and under Miri, and reached from the kernel by everything below.
   the way sixteen Linux calls do there. Failures are `errno`, each native
   failure a distinct one, so a musl program making a native call reads an `errno`
   it can name. Rights live on handles and only shrink, decided in one function.
-* `libs/kernel/objects` — the handle table and a channel's message queue. A handle is
+* `src/lib/kernel/objects` — the handle table and a channel's message queue. A handle is
   a slot and a generation, and a slot is retired rather than let its
   generation wrap, so a closed handle *never* names anything again: the
   `handle_table` fuzz target checks that after every operation, against a
@@ -47,14 +47,14 @@ architectures.**
   a reader frees a VMO still queued in it; a send that would leave two
   channels queued in each other is refused; and the frame count says nothing
   leaked.
-* `libs/kernel/objects` now keeps every handle value below 2^31. A new handle comes
+* `src/lib/kernel/objects` now keeps every handle value below 2^31. A new handle comes
   back in the register an `errno` does, and on a 32-bit machine a larger value
   reads as negative.
 * **A send that would close a cycle of channels is refused.** Endpoints keep
   each other alive only through their queues, so two endpoints each queued in
   the other would outlive every handle to both. A send carrying an endpoint
   walks from what it carries, through the endpoints queued in each, for the
-  end it would land in (`libs/kernel/objects`'s `reaches`), and holds a lock only
+  end it would land in (`src/lib/kernel/objects`'s `reaches`), and holds a lock only
   such sends take from the walk to the push, so two sends cannot build the
   loop between them. A walk past 1024 endpoints is refused as too big rather
   than allowed to hold that lock.

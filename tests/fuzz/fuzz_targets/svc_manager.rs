@@ -1,4 +1,4 @@
-//! Fuzz the service manager's state machine (`libs/init/svc`, `Manager::step`).
+//! Fuzz the service manager's state machine (`src/lib/init/svc`, `Manager::step`).
 //!
 //! Init is pid 1: a panic in the manager is the machine. Its events come
 //! from processes that exit when they like, cgroups that empty when their

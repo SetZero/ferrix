@@ -2,7 +2,7 @@
 
 The customer's order of 2026-09-26: Ferrix plays **Bad Apple!! with its
 sound**, and runs **Doom, written in Rust**. Both are Linux programs on
-Ferrix's Linux ABI, in `userland/media/` (and `userland/doom/` for Doom),
+Ferrix's Linux ABI, in `src/user/linux/media/` (and `userland/doom/` for Doom),
 and both stand on what stages 17 and 22 built: `/dev/dri/card0`'s dumb
 buffers (`docs/DISPLAY.md`), `/dev/snd` (`docs/AUDIO.md`) and
 `/dev/input/eventN` (`docs/INPUT.md`). Neither needs anything new from the
@@ -11,7 +11,7 @@ kernel.
 ## 1. Nothing copyrighted in the repository
 
 * **Bad Apple!!** is ZUN's song as Alstroemeria Records arranged it, with
-  Anira's shadow-art PV. `scripts/fetch/fetch-badapple.sh` downloads the
+  Anira's shadow-art PV. `tools/common/fetch/fetch-badapple.sh` downloads the
   original upload (niconico sm8628149) from archive.org, and its SHA-256 is
   the one thing about it the repository holds.
 * **Doom**'s game data is Freedoom's (BSD), fetched by a script. id's
@@ -26,7 +26,7 @@ kernel.
 
 ## 2. Bad Apple!!
 
-`userland/media/` is a cargo workspace of its own:
+`src/user/linux/media/` is a cargo workspace of its own:
 
 | Crate | What |
 |---|---|
@@ -67,7 +67,7 @@ scanned out, so a half-drawn frame is never shown.
 
 **On the desktop** the player is a window. When `WAYLAND_DISPLAY` is set it
 opens a toplevel through the compositor toolkit (`Client::toplevel`, added
-to `userland/compositor/toolkit` for it) instead of the card. The
+to `src/user/linux/compositor/toolkit` for it) instead of the card. The
 compositor tiles and sizes the window, and the picture is fitted into it.
 The sound card is still the clock. Frame callbacks only say when the
 compositor is ready for the next picture, so a frame is never drawn over
@@ -78,7 +78,7 @@ a `.desktop` entry for a launcher, and `SUPER M` to start it. The image
 has no launcher yet, so the keybind is the way in today.
 
 `cargo xtask test-badapple` makes four checks (details in
-`xtask/src/badapple.rs`). It checks two boots: 30 s with the player as init
+`tools/common/xtask/src/badapple.rs`). It checks two boots: 30 s with the player as init
 on the card, and 12 s with it as a fullscreen window in hyprix, started by
 `exec-once`.
 * **The picture:** the frame the player holds at the end must be on the

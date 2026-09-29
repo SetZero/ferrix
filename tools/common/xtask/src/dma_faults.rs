@@ -249,7 +249,7 @@ fn report(seen: &Seen, lines: &[String]) {
         if !seen.remarks.is_empty() {
             println!(
                 "  QEMU remarked on a VT-d fault but traced none: it lacks the log trace \
-                 backend, so the run's DMA faults were not accounted (xtask/src/dma_faults.rs)"
+                 backend, so the run's DMA faults were not accounted (tools/common/xtask/src/dma_faults.rs)"
             );
         }
         return;
@@ -261,7 +261,7 @@ fn report(seen: &Seen, lines: &[String]) {
         .join(", ");
     println!(
         "  {} VT-d faults traced, every one the kernel's out-of-domain probe ({provoked}); \
-         QEMU's {} remarks on them hidden (xtask/src/dma_faults.rs says why)",
+         QEMU's {} remarks on them hidden (tools/common/xtask/src/dma_faults.rs says why)",
         seen.faults.len(),
         seen.remarks.len(),
     );

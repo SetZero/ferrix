@@ -16,7 +16,7 @@
 //! identity map of itself, loading every parameter before the MMU goes on,
 //! and branches to Rust at a virtual address. What differs from AArch64 is
 //! `TTBR1`, which holds the kernel's root plus sixteen, for the reason
-//! `boot/uefi/src/arch/armv7a.rs` gives.
+//! `src/boot/common/uefi/src/arch/armv7a.rs` gives.
 //!
 //! Which tree that identity map is in depends on where the machine keeps its
 //! RAM, exactly as it does for the loader's own switch: a `TTBR0` tree of the
@@ -102,7 +102,7 @@ fn note_coherency() {
 }
 
 /// Where the kernel half's level-1 table starts within the root: entry 2,
-/// eight bytes each. `boot/uefi/src/arch/armv7a.rs` says why.
+/// eight bytes each. `src/boot/common/uefi/src/arch/armv7a.rs` says why.
 const TTBR1_OFFSET: u64 = 16;
 
 /// Where `TTBR0`'s half of the address space ends, with `TTBCR.T1SZ = 1`.

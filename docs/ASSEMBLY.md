@@ -1,8 +1,8 @@
 # Assembly
 
 This OS is written in Rust. This document is the complete argument for every
-place it is not, and `scripts/check/check-asm-budget.py` fails the build on any
-assembly site that is not listed in `scripts/data/asm-allowlist.json`.
+place it is not, and `tools/common/check/check-asm-budget.py` fails the build on any
+assembly site that is not listed in `tools/common/data/asm-allowlist.json`.
 
 ## The test for admission
 
@@ -41,16 +41,16 @@ on â€” QEMU's `virt` with 2 GiB puts it inside the direct map's virtual range â€
 and then the loader copies the switch to a page below the split and runs it
 there. So the sequence is a block between `ferrix_switch_start` and
 `ferrix_switch_end`, register-only and position-independent, and
-`xtask/src/pe.rs` refuses a loader whose block is over a page or holds a
+`tools/common/xtask/src/pe.rs` refuses a loader whose block is over a page or holds a
 relocation. It is the same instructions, not more of them; the product owner
 admitted the block on 2026-09-13 on exactly those conditions.
 
 ### The one loader without UEFI: the Pixel 7
 
-`boot/pixel7/` is the exception, because the phone offers no UEFI. Its
+`src/boot/vendor/google/pixel7/` is the exception, because the phone offers no UEFI. Its
 signed bootloader, ABL, boots an Android boot image under the Linux arm64 boot
 protocol: it jumps to the image's first byte **at EL2, with the MMU off and no
-stack**, the device tree's address in `x0`. What UEFI does for `boot/uefi/`, that
+stack**, the device tree's address in `x0`. What UEFI does for `src/boot/common/uefi/`, that
 loader has to do itself before any Rust runs, and each piece is defined by the
 machine or by ABL rather than by choice:
 
@@ -62,18 +62,18 @@ machine or by ABL rather than by choice:
   the level it is written for;
 * a `VBAR_EL1` table, sixteen entries at fixed 128-byte offsets, so a fault in
   the loader is reported rather than hung on;
-* and at the other end the switch into the kernel, which is `boot/uefi/`'s less the
+* and at the other end the switch into the kernel, which is `src/boot/common/uefi/`'s less the
   half that turns the MMU off, since it never came on; with it `dc ivac`,
   because everything the loader writes goes to RAM with the caches off, and a
   line ABL left cached must be discarded rather than cleaned over it.
 
-All of it is in one file, `boot/pixel7/src/entry.rs`, allow-listed with
+All of it is in one file, `src/boot/vendor/google/pixel7/src/entry.rs`, allow-listed with
 a budget of 130 lines.
 
 ## The list
 
 Each entry names why Rust cannot express it. Entries are added to
-`scripts/data/asm-allowlist.json` in the same commit as the code.
+`tools/common/data/asm-allowlist.json` in the same commit as the code.
 
 ### Every architecture
 
@@ -117,8 +117,8 @@ enters in SVC mode unless the machine was built with virtualisation.
 
 ### A native program, on every architecture
 
-`native/rt`, the runtime a native program links, has one file per architecture
-under `native/rt/src/arch/`, and each holds the same three things.
+`src/user/native/rt`, the runtime a native program links, has one file per architecture
+under `src/user/native/rt/src/arch/`, and each holds the same three things.
 
 | Site | Why |
 |---|---|

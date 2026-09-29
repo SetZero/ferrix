@@ -9,7 +9,7 @@ worth having -- and it is the kind of claim that decays one convenient access
 at a time, each of which looked reasonable on its own.
 
 So this is an allow-list, not a threshold, and it works like
-`scripts/check/check-asm-budget.py`: adding a site is a deliberate act somebody had
+`tools/common/check/check-asm-budget.py`: adding a site is a deliberate act somebody had
 to argue for in a diff.
 
 What counts as a site
@@ -42,15 +42,15 @@ where the architecture says a register may be touched.
 
 Four rules:
 
-  1. A file under `kernel/` containing a device access must be listed in
-     `scripts/data/device-access-allowlist.json`, with a `kind` and a `reason`.
+  1. A file under `src/kernel/` containing a device access must be listed in
+     `tools/common/data/device-access-allowlist.json`, with a `kind` and a `reason`.
   2. Each entry declares a `max_sites` budget the file must stay under.
   3. A stale entry fails, the way `#[expect]` does: a file that no longer
      contains one must lose its exemption rather than keep it warm.
   4. A `register` entry must be under one of the permitted paths. This is the
      rule that carries the weight; the rest keep it honest.
 
-Usage:  python3 scripts/check/check-device-access.py [--json]
+Usage:  python3 tools/common/check/check-device-access.py [--json]
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ import pathlib
 import re
 import sys
 
-ROOT_DIR = "kernel"
+ROOT_DIR = "src/kernel"
 
 # `ptr.read_volatile()`, `core::ptr::write_volatile(ptr, v)` and every spelling
 # between. The compiler is being told the access must really happen. Matched on
@@ -122,7 +122,7 @@ def check(measured: dict[str, int], policy: dict) -> list[str]:
         if entry is None:
             problems.append(
                 f"{relative}: makes {count} device access(es) but is not in "
-                "scripts/data/device-access-allowlist.json.\n"
+                "tools/common/data/device-access-allowlist.json.\n"
                 "  Add an entry saying which kind it is and why, or move the "
                 "access to the driver that owns the device."
             )
@@ -162,7 +162,7 @@ def check(measured: dict[str, int], policy: dict) -> list[str]:
     if registers > cap:
         problems.append(
             f"the kernel touches device registers at {registers} sites, over "
-            f"the cap of {cap} in scripts/data/device-access-allowlist.json.\n"
+            f"the cap of {cap} in tools/common/data/device-access-allowlist.json.\n"
             "  That list is meant to be finished. A new device is a ring-3 "
             "driver, not another site here."
         )
@@ -175,9 +175,9 @@ def main() -> int:
     _ = parser.add_argument("--json", action="store_true", help="machine-readable report")
     args = parser.parse_args()
 
-    root = pathlib.Path(__file__).resolve().parent.parent.parent
+    root = pathlib.Path(__file__).resolve().parent.parent.parent.parent
     policy = json.loads(
-        (root / "scripts" / "data" / "device-access-allowlist.json").read_text(encoding="utf-8")
+        (root / "tools" / "common" / "data" / "device-access-allowlist.json").read_text(encoding="utf-8")
     )
     allowed = {entry["file"]: entry for entry in policy["files"]}
 

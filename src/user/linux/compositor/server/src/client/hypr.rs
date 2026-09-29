@@ -16,7 +16,7 @@
 //! Ferrix. Offering the global and then never sending the descriptor would
 //! leave a client waiting for ever, which is worse than not offering it.
 //! `hyprland-ctm-control-v1` is left out for a different reason, which
-//! `scripts/gen/gen-wayland-protocol.py` gives: its `blocked` event has a
+//! `tools/common/gen/gen-wayland-protocol.py` gives: its `blocked` event has a
 //! description with no summary, which this `wayland-scanner` refuses, so its
 //! table could not be checked against libwayland's.
 

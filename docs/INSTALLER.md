@@ -63,22 +63,22 @@ Ferrix has half an installer already, and none of the other half.
 
 * Every `run` boot *installs* already: the kernel starts on the initramfs
   in tmpfs, finds a btrfs volume labelled `ferrix-root`, unpacks the
-  initramfs onto it, and switches `/` there (`kernel/src/fs/root_disk.rs`,
-  `GUIDE.md` §Getting started). An installed system is exactly that volume
+  initramfs onto it, and switches `/` there (`src/kernel/src/fs/root_disk.rs`,
+  `docs/GUIDE.md` §Getting started). An installed system is exactly that volume
   plus something that boots it.
 * `ferrix.root=tmpfs` (and `--tmpfs-root`) is a live session: `/` in memory,
   no disk written.
-* The UEFI loader `boot/uefi` reads `FERRIX/KERNEL.ELF`, `FERRIX/INITRD.IMG`
+* The UEFI loader `src/boot/common/uefi` reads `FERRIX/KERNEL.ELF`, `FERRIX/INITRD.IMG`
   and `FERRIX/CMDLINE.TXT` from the FAT volume it was loaded from, and hands
   the kernel the firmware's GOP framebuffer.
-* `xtask/src/fat.rs` writes FAT32 in plain Rust, with no mtools.
-* `libs/fs/btrfs-write` writes btrfs that `btrfs check` accepts, including
+* `tools/common/xtask/src/fat.rs` writes FAT32 in plain Rust, with no mtools.
+* `src/lib/fs/btrfs-write` writes btrfs that `btrfs check` accepts, including
   allocating new chunks (`grow.rs`) -- what a fresh mkfs'd volume needs to
   grow into its device.
 * ACPI, PCI with MSI, and an IOMMU are in the kernel; ring-3 drivers sit
   behind `blkring` (`docs/BLOCK-RING.md`), so a new disk driver is a new
   process speaking an existing protocol.
-* hyprix, and `userland/compositor/toolkit` with `render` and `text` for
+* hyprix, and `src/user/linux/compositor/toolkit` with `render` and `text` for
   drawing a client's window; `authd` for accounts and passwords
   (`docs/AUTH.md`).
 
@@ -86,7 +86,7 @@ Ferrix has half an installer already, and none of the other half.
 
 | Gap | Where it shows |
 |---|---|
-| Userland cannot open a disk | `kernel/src/fs/devfs.rs:1355`: every block device is `ENXIO` on open |
+| Userland cannot open a disk | `src/kernel/src/fs/devfs.rs:1355`: every block device is `ENXIO` on open |
 | No partition tables | root is found by label on a *whole* virtio disk, and only `vdd`..`vdg` (`root_disk.rs:78`) |
 | No mkfs for btrfs | every volume is unpacked from a host fixture |
 | No FAT in the running system | the ESP can be written on the host only |
@@ -123,7 +123,7 @@ The `.iso` is the `.img` with an ISO 9660 filesystem and an El Torito catalog
 added in the space GPT leaves free, the layout `xorriso -as mkisofs
 -isohybrid-gpt-basdat` makes: firmware booting it as a CD finds the ESP
 through El Torito's EFI entry, and firmware booting it as a disk (after
-`dd`) finds it through the GPT. It is written by `xtask/src/iso.rs` in Rust,
+`dd`) finds it through the GPT. It is written by `tools/common/xtask/src/iso.rs` in Rust,
 as `fat.rs` is, so neither Windows nor Linux build hosts need `xorriso`.
 The ISO 9660 side carries a single `README.TXT`; nothing boots from it.
 
@@ -148,7 +148,7 @@ section pointing at `docs/INSTALL.md`, the user-facing guide (§8).
 ### 4.1 Two programs, one engine
 
 ```
-userland/installer/
+src/user/linux/installer/
   engine/   ferrix-installer-engine: a library, no I/O of its own beyond a Disk trait
   cli/      /bin/ferrix-install: runs an answer file, prints progress; the gates use it
   gui/      /bin/ferrix-installer: the desktop app, on toolkit + render + text
@@ -178,7 +178,7 @@ An answer file is the plan in TOML; the GUI builds the same struct.
 ### 4.2 The steps
 
 1. **Partition.** Write the new GPT entries (both headers, both entry
-   arrays, the protective MBR) with `libs/fs/partition`. On *Erase*: ESP
+   arrays, the protective MBR) with `src/lib/fs/partition`. On *Erase*: ESP
    512 MiB, root the rest. On *Beside*: root in the chosen free range, and a
    new ESP only if the disk has none. Then `BLKRRPART` and wait for the
    kernel to list the new partitions.
@@ -253,7 +253,7 @@ A toplevel window on hyprix, 900 × 640, one page at a time with *Back* and
 
 The widgets are new: a button, a label, a list, a radio group, a text field
 (with a password mode and the toolkit's clipboard), a progress bar, the
-partition bar and a slider. They go in `userland/compositor/widgets` beside
+partition bar and a slider. They go in `src/user/linux/compositor/widgets` beside
 the toolkit, so later apps get them too. They draw with `render` and `text`
 as the other clients do, and follow the desktop's theme colours.
 
@@ -275,8 +275,8 @@ never moves, so nothing the other system's boot loader points at changes.
 
 | File system | Who has it | How |
 |---|---|---|
-| NTFS | Windows | `libs/fs/ntfs` reads the MFT, attributes and run lists; `ntfs-resize` moves every cluster past the new end below it, rewrites the run lists that named them, truncates `$Bitmap` and `$BadClus`, moves the backup boot sector to the new last sector, and marks the volume for `chkdsk` on Windows' next start, as `ntfsresize` does |
-| ext4 | most Linux installs | `libs/fs/ext4` and `ext4-resize`, `resize2fs`'s shrink: move blocks and inodes out of the block groups being removed, rewrite extent trees and directory entries that named them, drop the groups, fix the superblock and group descriptors |
+| NTFS | Windows | `src/lib/fs/ntfs` reads the MFT, attributes and run lists; `ntfs-resize` moves every cluster past the new end below it, rewrites the run lists that named them, truncates `$Bitmap` and `$BadClus`, moves the backup boot sector to the new last sector, and marks the volume for `chkdsk` on Windows' next start, as `ntfsresize` does |
+| ext4 | most Linux installs | `src/lib/fs/ext4` and `ext4-resize`, `resize2fs`'s shrink: move blocks and inodes out of the block groups being removed, rewrite extent trees and directory entries that named them, drop the groups, fix the superblock and group descriptors |
 | btrfs | Fedora, openSUSE | `btrfs-write` already allocates chunks; shrinking relocates every chunk past the new end (a balance restricted to them) and then lowers the device's size, as `btrfs filesystem resize` does |
 | anything else | APFS, ZFS, LUKS, LVM, BitLocker | not shrunk; the installer says what it found and offers free space and *Replace* only |
 
@@ -302,7 +302,7 @@ Linux kernel's `Documentation/filesystems/ext4` are the specifications.
 
 1. **Check before.** A full read-only consistency pass (every MFT record,
    every run list against `$Bitmap`; every inode's extents against the block
-   bitmaps; `btrfs check`'s tree walk, which `libs/fs/btrfs` has). Anything
+   bitmaps; `btrfs check`'s tree walk, which `src/lib/fs/btrfs` has). Anything
    it cannot account for is a refusal.
 2. **Plan, then write.** The moves are computed in memory first, and the
    plan is refused if any destination is not free or overlaps a source not
@@ -333,7 +333,7 @@ limited to its range, as on Linux (I2). Like Linux without `O_EXCL`, opening
 a disk with something mounted from it is allowed, and not coherent with the
 mount; the engine refuses such a disk itself (I5).
 
-*Built (I1, 2026-09-28):* `kernel/src/fs/disk_file.rs`. Reads and writes of
+*Built (I1, 2026-09-28):* `src/kernel/src/fs/disk_file.rs`. Reads and writes of
 any byte range, with a read-modify-write for a sector covered in part;
 `EACCES` for writing a read-only disk; `ENOSPC` for a write at the end;
 `fsync` as the disk's flush; `BLKGETSIZE64`, `BLKGETSIZE`, `BLKSSZGET`,
@@ -343,9 +343,9 @@ I2. Held by devfs's boot check on all three architectures (FX-0830).
 
 ### 5.2 Partitions
 
-`libs/fs/partition`: GPT read and write (CRC-32 of headers and entry
+`src/lib/fs/partition`: GPT read and write (CRC-32 of headers and entry
 arrays, the backup at the end of the disk, the protective MBR), MBR read.
-Pure Rust, `no_std`, fuzzed like `libs/fs/btrfs`. The kernel's block core
+Pure Rust, `no_std`, fuzzed like `src/lib/fs/btrfs`. The kernel's block core
 reads each disk's table when the driver announces it and on `BLKRRPART`,
 and makes `/dev/vda1`, `/dev/nvme0n1p1`, `/dev/sda1` with Linux's minor
 numbers, plus `/sys/class/block/<name>/{partition,start,size}` and
@@ -358,7 +358,7 @@ the same way by its ESP label, so the loader need not say which disk it was.
 
 ### 5.3 mkfs.btrfs
 
-`libs/fs/btrfs-mkfs` and `/sbin/mkfs.btrfs`: what `mkfs.btrfs` makes by
+`src/lib/fs/btrfs-mkfs` and `/sbin/mkfs.btrfs`: what `mkfs.btrfs` makes by
 default for one device -- `SINGLE` data, `DUP` metadata, skinny metadata,
 `NO_HOLES`, the free-space tree, CRC-32C -- built as trees in memory and
 written in one pass, then grown by `btrfs-write`'s existing chunk
@@ -368,7 +368,7 @@ makes of the same size and comparing their trees item by item.
 
 ### 5.4 FAT
 
-`xtask/src/fat.rs` moves into `libs/fs/fat`, and gains the half it lacks:
+`tools/common/xtask/src/fat.rs` moves into `src/lib/fs/fat`, and gains the half it lacks:
 opening an existing FAT32 (or FAT16) volume, walking directories, long
 names, and adding files to it -- which is what writing into another
 system's ESP needs. It is a library the installer links, not a kernel
@@ -410,7 +410,7 @@ vendor *or by any key the machine's owner has enrolled* in its MokManager.
 That second path is the one Ferrix takes, as Ventoy does (the customer's
 decision of 2026-09-28):
 
-* `scripts/fetch/fetch-shim.sh` takes `shimx64.efi` and `mmx64.efi` (and the
+* `tools/common/fetch/fetch-shim.sh` takes `shimx64.efi` and `mmx64.efi` (and the
   `aa64` pair) from Ubuntu's `shim-signed` package, pinned by version and
   SHA-256, into `~/.local/share/ferrix/shim`. The repository carries none
   of it. A build without it makes images that need Secure Boot off, and
@@ -512,9 +512,9 @@ reference machine boots.
 | # | Slice | Points |
 |---|---|---|
 | I1 | Block devices from userland (§5.1) | 5 |
-| I2 | `libs/fs/partition`, partitions in the block core, root by `PARTUUID`/`LABEL` on any disk (§5.2) | 8 |
-| I3 | `libs/fs/btrfs-mkfs`, `/sbin/mkfs.btrfs` (§5.3) | 8 |
-| I4 | `libs/fs/fat` with read-and-add, `mkfs.fat` (§5.4) | 5 |
+| I2 | `src/lib/fs/partition`, partitions in the block core, root by `PARTUUID`/`LABEL` on any disk (§5.2) | 8 |
+| I3 | `src/lib/fs/btrfs-mkfs`, `/sbin/mkfs.btrfs` (§5.3) | 8 |
+| I4 | `src/lib/fs/fat` with read-and-add, `mkfs.fat` (§5.4) | 5 |
 | I5 | The engine and `/bin/ferrix-install`, answer files; `root_disk::install` shared (§4.1, §4.2) | 8 |
 | I6 | `xtask live`: GPT `.img`, hybrid `.iso` (§3.1) | 8 |
 | I7 | `test-install`, blank disk and `--beside`, x86-64 and AArch64 (§7) | 5 |
@@ -525,9 +525,9 @@ reference machine boots.
 | I12 | Release images, checksums, `docs/INSTALL.md`, README and website (§3.3, §8) | 3 |
 | I13 | Secure Boot through Ubuntu's shim: fetch, signing, the loader's kernel check, `--secure-boot` gate (§5.7) | 13 |
 | | **VM path** | **102** |
-| S1 | `libs/fs/ntfs`: boot sector, MFT, attributes, run lists, `$Bitmap`; the consistency pass; the refusals (§4.6) | 13 |
+| S1 | `src/lib/fs/ntfs`: boot sector, MFT, attributes, run lists, `$Bitmap`; the consistency pass; the refusals (§4.6) | 13 |
 | S2 | `ntfs-resize`: relocation, run-list rewrite, `$Bitmap`/`$BadClus`/backup boot sector, crash-ordered writes | 21 |
-| S3 | `libs/fs/ext4` read and the `ext4-resize` shrink | 21 |
+| S3 | `src/lib/fs/ext4` read and the `ext4-resize` shrink | 21 |
 | S4 | btrfs shrink on `btrfs-write` | 8 |
 | S5 | The engine's shrink step, the tree-hash check, the GUI's divider and warnings, `test-install --shrink` | 8 |
 | S6 | `test-install --windows` against a real Windows 11 | 5 |
@@ -575,11 +575,11 @@ VM path does not wait on it. I1 is built (§5.1).
 **The MVP (2026-09-28, the customer: "land a MVP for now, we need to save
 tokens").** What installs Ferrix in a VM today, built from what exists:
 
-* `build --installer` carries `/sbin/ferrix-install` (`userland/installer`)
+* `build --installer` carries `/sbin/ferrix-install` (`src/user/linux/installer`)
   and the packed empty root volume. The live image is the usual FAT image,
   attached as a virtio disk.
 * `ferrix-install [--yes] [--from /dev/vdX] /dev/vdY` wipes the target and
-  writes a GPT (`libs/fs/partition`): an ESP that is a byte copy of the live
+  writes a GPT (`src/lib/fs/partition`): an ESP that is a byte copy of the live
   FAT volume, and a root partition holding the 1 GiB `ferrix-root` volume.
   No mkfs.btrfs (I3) and no FAT writer (I4) were needed.
 * The kernel publishes GPT partitions as disks (`fs/partitions.rs`, once,

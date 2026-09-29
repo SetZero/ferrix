@@ -1,6 +1,6 @@
 //! A client's shared memory, mapped.
 //!
-//! `userland/compositor/server` holds a pool's descriptor and the rectangle a buffer
+//! `src/user/linux/compositor/server` holds a pool's descriptor and the rectangle a buffer
 //! cuts out of it, and nothing else: it never touches the memory. This maps
 //! it, so the renderer can read the pixels a client drew.
 

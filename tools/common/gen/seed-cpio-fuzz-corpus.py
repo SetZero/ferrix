@@ -4,7 +4,7 @@
 Three kinds of seed, all small:
 
 * The archive every boot image carries, byte for byte as
-  `xtask/src/initramfs.rs` writes it without a program, and the same archive
+  `tools/common/xtask/src/initramfs.rs` writes it without a program, and the same archive
   with a stand-in program and a few of its applet links, which is the shape
   `--init` produces. The kernel unpacks exactly these.
 * Archives GNU cpio wrote from a small tree -- a directory, files, a symbolic
@@ -16,7 +16,7 @@ Three kinds of seed, all small:
   device nodes and garbage after the trailer.
 
 Usage:
-    python3 scripts/gen/seed-cpio-fuzz-corpus.py
+    python3 tools/common/gen/seed-cpio-fuzz-corpus.py
 """
 
 import os
@@ -25,9 +25,9 @@ import shutil
 import subprocess
 import tempfile
 
-OUT = pathlib.Path(__file__).resolve().parent.parent.parent / "tests" / "fuzz" / "corpus" / "cpio_parse"
+OUT = pathlib.Path(__file__).resolve().parent.parent.parent.parent / "tests" / "fuzz" / "corpus" / "cpio_parse"
 
-# The constants xtask/src/initramfs.rs writes with.
+# The constants tools/common/xtask/src/initramfs.rs writes with.
 FIXED_MTIME = 1_767_225_600
 MARKER_PATH = "etc/ferrix/initramfs"
 MARKER = b"unpacked by the kernel from a cpio archive the loader handed it\n"
@@ -38,7 +38,7 @@ S_IFIFO, S_IFCHR, S_IFDIR, S_IFBLK, S_IFREG, S_IFLNK = (
 
 
 class Newc:
-    """The writer in xtask/src/initramfs.rs, field for field."""
+    """The writer in tools/common/xtask/src/initramfs.rs, field for field."""
 
     def __init__(self, magic=b"070701", digits="{:08X}"):
         self.bytes = bytearray()

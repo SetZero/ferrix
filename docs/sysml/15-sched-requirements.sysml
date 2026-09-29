@@ -1,9 +1,9 @@
 /*
  * Ferrix — SysML v2 model, part 15: the low-level requirements of sched/.
  *
- * What each unit of kernel/src/sched/ does, as `ItemLowLevel` requirements
+ * What each unit of src/kernel/src/sched/ does, as `ItemLowLevel` requirements
  * (part 13 defines the format, part 14's pilot settled how they are cut).
- * The scheduling decision itself is `libs/kernel/sched`'s `RunQueue`, an
+ * The scheduling decision itself is `src/lib/kernel/sched`'s `RunQueue`, an
  * EEVDF queue the kernel's per-processor queue wraps; its host tests are the
  * checks, and each requirement names the kernel function that carries the
  * behaviour into the item as its `unit`.
@@ -17,7 +17,7 @@ package FerrixSchedRequirements {
     private import FerrixItemRequirements::*;
 
     package Decisions {
-        doc /* kernel/src/sched/queue.rs and kernel/src/sched/mod.rs: when a
+        doc /* src/kernel/src/sched/queue.rs and src/kernel/src/sched/mod.rs: when a
              * processor next decides, and what a yield asks for. */
 
         requirement <'L.sched.1'> aDecisionWithinASlice : ItemLowLevel {

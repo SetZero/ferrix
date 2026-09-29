@@ -6,8 +6,8 @@ stage 11. `docs/ARCHITECTURE.md` §7 is the architecture; this is the protocol
 between the kernel and `devmgr`, and between `devmgr` and the drivers it
 starts. The kernel's half of it — `device_info`, `device_quiesce`, bus
 mastering at the first pin, START — is on develop; `devmgr` the program, on
-`ferrix-rt`, is `native/devmgr`, started by `kernel/src/devmgr.rs`; the
-messages are `libs/proto/devmgr-proto`.
+`ferrix-rt`, is `src/user/native/devmgr`, started by `src/kernel/src/devmgr.rs`; the
+messages are `src/lib/proto/devmgr-proto`.
 
 ## 1. What devmgr is, and what it is not
 
@@ -168,7 +168,7 @@ refuses a new ring for it (`ALREADY_BOUND`). `devmgr`:
    has ended: the kernel then waits, bounded, for the ring to let the device
    go, since the driver's end of the channel is provably closed. The net
    ring, display, render, input and sound cores are waited for the same way
-   (`kernel/src/claim.rs`), so a quiesced device has no claim left on it and
+   (`src/kernel/src/claim.rs`), so a quiesced device has no claim left on it and
    a driver started again gets its channel. Only a driver still holding its end gets `BAD_STATE`, which
    `devmgr` never retries; a core that has not let go within the kernel's
    patience answers `TIMED_OUT`, which `devmgr` retries until it succeeds,
@@ -196,7 +196,7 @@ DIED     devmgr -> kernel, 16 bytes
    it (hyprix does) opens it again; a program holding a dead sound card gets
    `EBADFD`. A dead driver's pins on a translated domain stay mapped, their
    frames held, until the core accepts the next driver's HELLO, which it
-   sends after resetting the device (`kernel/src/object/pin.rs`, finding
+   sends after resetting the device (`src/kernel/src/object/pin.rs`, finding
    F-38): QEMU writes a dead driver's buffers late, and those writes must
    not reach frames the allocator has handed on. A core that restarts a new
    kind calls `object::pin::quarantine_release` where it accepts a HELLO. A
@@ -211,7 +211,7 @@ RESTARTED devmgr -> kernel, 16 bytes
 ```
 
    Whether to start it again is the service manager's own restart policy
-   (`libs/init/restart`, `docs/INIT.md` §5.4): `Restart=always` for a kind
+   (`src/lib/init/restart`, `docs/INIT.md` §5.4): `Restart=always` for a kind
    that is started again and `Restart=no` for the rest, no delay, and a start
    limit of eight. A native program has no clock, so the limit is a count,
    not a rate: eight restarts per device, after which the device stays
@@ -293,7 +293,7 @@ row is beside it, not on the path.
 `devmgr` owns two facts sysfs shows (`docs/SYSFS.md` §2): which drivers it
 can start, and which drives which device. It tells the kernel both on the
 bootstrap channel, and the kernel keeps what it was told
-(`kernel/src/devmgr.rs`). A device is named by its place among the devices
+(`src/kernel/src/devmgr.rs`). A device is named by its place among the devices
 the DEVICES messages carried, in order, and a driver by its place among
 their names: a device tree node has no PCI address to be told apart by.
 

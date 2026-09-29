@@ -6,7 +6,7 @@
 //! 1. an EFI system partition holding a byte copy of the live disk's FAT
 //!    volume -- the loader, the kernel and the initramfs the machine booted;
 //! 2. a root partition holding the empty btrfs volume labelled `ferrix-root`
-//!    that `run` boots on (`libs/fs/btrfs/testdata/root.img.packed`, 1 GiB).
+//!    that `run` boots on (`src/lib/fs/btrfs/testdata/root.img.packed`, 1 GiB).
 //!
 //! The kernel does the rest at the installed disk's first boot, as it does
 //! for every `run`: it finds `ferrix-root`, now on a partition, and unpacks

@@ -14,7 +14,7 @@
 # ~/.local/share/ferrix/badapple). Needs curl and sha256sum; the conversion
 # needs ffmpeg.
 #
-# Usage: scripts/fetch/fetch-badapple.sh
+# Usage: tools/common/fetch/fetch-badapple.sh
 
 set -euo pipefail
 

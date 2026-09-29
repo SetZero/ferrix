@@ -3,7 +3,7 @@
 #
 # Needs a Linux host with libwayland's development files (libwayland-dev),
 # wayland-scanner, gcc and this repository's Rust toolchain. xdg-shell is
-# scanned from the XML vendored in userland/compositor/protocol, which is the same
+# scanned from the XML vendored in src/user/linux/compositor/protocol, which is the same
 # file the server's own tables come from. Writes roundtrip.txt beside this
 # script, which the crate's tests read: the transcript the server produced,
 # and what libwayland made of it.

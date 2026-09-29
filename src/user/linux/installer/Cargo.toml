@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 
 # A workspace of its own, as statd and adbd are: a static Linux program built
 # with std against the target's own musl, for the initramfs
-# (xtask/src/installer.rs).
+# (tools/common/xtask/src/installer.rs).
 [workspace]
 
 [[bin]]
@@ -16,7 +16,7 @@ name = "ferrix-install"
 path = "src/main.rs"
 
 [dependencies]
-ferrix-partition = { path = "../../libs/fs/partition" }
+ferrix-partition = { path = "../../../lib/fs/partition" }
 
 [profile.release]
 opt-level = "s"

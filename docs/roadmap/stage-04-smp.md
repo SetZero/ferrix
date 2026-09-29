@@ -47,7 +47,7 @@ how that class of bug is reachable at all.
 * **x86-64 secondaries** through INIT–SIPI–SIPI and a trampoline that goes from
   real mode to long mode in one step, on a root table below 1 MiB that shares
   the kernel's upper half. `Frames::allocate_below` finds the two low frames,
-  host-tested in `libs/kernel/frame`. Each processor gets its own GDT, TSS and
+  host-tested in `src/lib/kernel/frame`. Each processor gets its own GDT, TSS and
   guard-paged double-fault stack: a TSS cannot be shared, because loading one
   marks its descriptor busy. The trampoline's one bug was a triple fault — its
   GDT descriptors lacked the accessed bit, so loading a selector made the

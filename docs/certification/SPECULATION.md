@@ -30,18 +30,18 @@ machine whose owner has decided it runs nothing that distrusts anything else.
 
 `off` builds with `--cfg ferrix_mitigations_off`, and that one `cfg` is the
 whole of the configuration space. It is not a Cargo feature, deliberately: the
-reference configuration's claim of zero Cargo features in `kernel/` and `boot/uefi/`
+reference configuration's claim of zero Cargo features in `src/kernel/` and `src/boot/common/uefi/`
 stands, and a `cfg` that only `xtask` sets, with two values and one of them the
 default, is a configuration an evaluator can enumerate in a sentence.
 
 | Where | What the switch does |
 |---|---|
-| `xtask/src/cargo.rs` | `--mitigations off` adds `--config target.<triple>.rustflags=["--cfg","ferrix_mitigations_off","-C","relocation-model=static"]` to every kernel build, and builds into `target/mitigations-off` so neither setting's cache is thrown away for the other's. A `--config` array is appended to `.cargo/config.toml`'s, where `RUSTFLAGS` would have replaced the linker flags the image needs. |
-| `kernel/build.rs` | links the kernel so the loader can move it (§6) unless the `cfg` is set: a static PIE on x86-64 and AArch64, `--emit-relocs` on ARMv7-A. Built `off`, it is the static fixed-address image it always was. |
-| `xtask/src/check.rs` | `cargo xtask check` runs clippy over the kernel for all three architectures in both settings, so code only one setting compiles cannot rot in the other. |
+| `tools/common/xtask/src/cargo.rs` | `--mitigations off` adds `--config target.<triple>.rustflags=["--cfg","ferrix_mitigations_off","-C","relocation-model=static"]` to every kernel build, and builds into `target/mitigations-off` so neither setting's cache is thrown away for the other's. A `--config` array is appended to `.cargo/config.toml`'s, where `RUSTFLAGS` would have replaced the linker flags the image needs. |
+| `src/kernel/build.rs` | links the kernel so the loader can move it (§6) unless the `cfg` is set: a static PIE on x86-64 and AArch64, `--emit-relocs` on ARMv7-A. Built `off`, it is the static fixed-address image it always was. |
+| `tools/common/xtask/src/check.rs` | `cargo xtask check` runs clippy over the kernel for all three architectures in both settings, so code only one setting compiles cannot rot in the other. |
 | `Cargo.toml` | declares the `cfg` to `unexpected_cfgs`, so a misspelt one is a warning. |
-| `kernel/src/arch/speculation.rs` | `HARDENED`, the one constant every defence tests. |
-| `libs/kernel/sync/src/nospec.rs` | the libraries' clamp, the identity when the `cfg` is set. |
+| `src/kernel/src/arch/speculation.rs` | `HARDENED`, the one constant every defence tests. |
+| `src/lib/kernel/sync/src/nospec.rs` | the libraries' clamp, the identity when the `cfg` is set. |
 
 **What `off` removes:** every clamp (they become the identity after the
 ordinary bounds check), every write to a speculation control, every switch
@@ -74,8 +74,8 @@ mispredicted path reads slot zero.
 |---|---|---|
 | `arch/*/mod.rs` `decode_syscall` | Linux system call number, into a `match` the compiler makes a jump table of | `arch::nospec_index`, to the table's end (`ferrix_linux_abi::nr::X86_64_END` and kin; a host test holds each end to its table) |
 | `syscall/native.rs` `decode` | native call number | the same, to the native range |
-| `libs/kernel/objects/src/table.rs` | handle slot, in `get`, `remove`, `replace` | `ferrix_sync::nospec::bounded` |
-| `libs/fs/vfs/src/fd.rs` | descriptor slot | the same |
+| `src/lib/kernel/objects/src/table.rs` | handle slot, in `get`, `remove`, `replace` | `ferrix_sync::nospec::bounded` |
+| `src/lib/fs/vfs/src/fd.rs` | descriptor slot | the same |
 | `syscall/uaccess.rs` `user_address` | a user address, before the software table walk that follows it into the direct map | `arch::nospec_below`, to the top of the user half |
 
 The kernel's clamp is a line of assembly per architecture
@@ -299,7 +299,7 @@ the ELF anyone can read. KASLR puts the kernel somewhere new each boot, so the
 exploit needs a second bug first, one that discloses where. It does not stop
 the first bug; it makes one bug not enough.
 
-**What moves, and how far.** The loader (`boot/uefi/src/kaslr.rs`) moves three
+**What moves, and how far.** The loader (`src/boot/common/uefi/src/kaslr.rs`) moves three
 regions, each from its own random word, so that learning one gives away one:
 
 | Region | Step | Candidates (512 MiB of RAM) | Bits, x86-64 / AArch64 | Bits, ARMv7-A |
@@ -332,7 +332,7 @@ pairs. A bias that is a multiple of 64 KiB leaves every `movw` as it is and adds
 its top half to every `movt`, which is the only way to move those
 instructions without decoding their pairing.
 
-**How the image is made movable.** On `--mitigations on`, `kernel/build.rs`
+**How the image is made movable.** On `--mitigations on`, `src/kernel/build.rs`
 links:
 
 * **x86-64: a static PIE.** Code built for the static relocation model
@@ -386,7 +386,7 @@ With none of them, or with `nokaslr` on the command line (`CMDLINE.TXT`, or
 `cargo xtask run --gdb`, which adds it so that a debugger's symbols are where
 the kernel runs), everything stays at its fixed address and the log says
 why. A kernel with no fixups — built `off`, or a copy stripped of them — stays
-too. The Pixel 7 loader (`boot/pixel7`) randomises the same three things
+too. The Pixel 7 loader (`src/boot/vendor/google/pixel7`) randomises the same three things
 from the firmware's own generator, TF-A's `SMCCC_TRNG_RND64`, asked through an
 `smc` of its own and never from the eight bytes the bootloader passes, which
 go to the kernel's seed; the source prints as `SMCCC TRNG`. If the call is
@@ -415,12 +415,12 @@ firmware's console:
 ```
 
 and a panic prints `kaslr     slide 0x…` before its backtrace, which is how
-`xtask`'s symboliser and `scripts/gen/coverage-report.py` take run-time addresses
+`xtask`'s symboliser and `tools/common/gen/coverage-report.py` take run-time addresses
 back to link-time ones. The attacker in [SECURITY-TARGET.md](SECURITY-TARGET.md)
 is a program. Since 2026-09-26 the kernel keeps a log of what the console
-sends (`kernel/src/console/log.rs`), which `syslog(2)` reads and a ring-3
+sends (`src/kernel/src/console/log.rs`), which `syslog(2)` reads and a ring-3
 driver may stream off the machine (the Pixel 7's USB serial port,
-`kernel/src/logctl`). The lines that print the layout are kept out of it
+`src/kernel/src/logctl`). The lines that print the layout are kept out of it
 (`console::write_unlogged`): the panic's slide and backtrace, a fatal trap's
 headline and registers, stage 2's image, direct-map and page-array addresses,
 and the W^X and sealed-image sweeps' failure lines. They still go to the

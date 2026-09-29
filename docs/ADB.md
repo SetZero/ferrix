@@ -22,7 +22,7 @@ later port forwarding for a debugger. Four were weighed with the owner on
   usually does. It needs an IP on both ends, and `sshdt` is only in x86-64
   images so far.
 * **adb** needs no network setup on the PC. It is what the phone's tooling
-  already speaks: `tools/pixel7/monitor` reads the phone's `/proc` through one
+  already speaks: `tools/vendor/google/pixel7/monitor` reads the phone's `/proc` through one
   `adb shell`, and the helper and the launcher are adb. It covers shell,
   files, reboot and forwarding in one tool, and it runs over TCP as well as
   USB. **Chosen.**
@@ -82,12 +82,12 @@ check each value against those files before relying on it. The host's
   pseudo-terminals and job control (`test-pty`, `test-jobs`),
   `fork`/`execve`, and zinc as the shell. `/proc` is what `ps` and the
   monitor's script read.
-* **A place for the program:** `userland/`, beside `userland/statd`, built
+* **A place for the program:** `src/user/linux/`, beside `src/user/linux/statd`, built
   for the Linux personality and put in the initramfs the same way.
-* **The USB device stack:** `libs/drivers/dwc3`, `libs/drivers/usb-device`
-  and `native/drivers/usbdev` present a CDC-ACM port today (§8 of the USB
+* **The USB device stack:** `src/lib/drivers/usb/dwc3`, `src/lib/drivers/usb/usb-device`
+  and `src/user/native/drivers/usb/usbdev` present a CDC-ACM port today (§8 of the USB
   handover).
-* **The pattern for the USB half:** `native/drivers/vport` moves a device's
+* **The pattern for the USB half:** `src/user/native/drivers/console/vport` moves a device's
   bytes to and from a Unix socket, and a Linux program on the other side
   speaks the protocol (`docs/CLIPBOARD.md` §6). adb's USB transport is the
   same shape: `usbdev` moves the adb interface's bulk transfers to a socket,
@@ -97,7 +97,7 @@ check each value against those files before relying on it. The host's
 
 Each step lands on its own, gated, and says where it stands here.
 
-1. **adbd over TCP** (`userland/adbd`, a Linux program). The message layer
+1. **adbd over TCP** (`src/user/linux/adbd`, a Linux program). The message layer
    and the stream table go in a host-tested library, as the USB pieces are,
    tested against captured `adb` exchanges. Then `CNXN` without auth,
    `shell:` on a pty, `reboot:`, `sync:` push and pull, and `tcp:`. Started
@@ -108,9 +108,9 @@ Each step lands on its own, gated, and says where it stands here.
    `push`/`pull` round trip compared byte for byte, and `adb reboot`.
    Without `adb` on the host the step says so and passes as skipped, as
    other optional tools' steps do. About 3 points.
-3. **The USB transport.** A composite device in `libs/drivers/usb-device`
+3. **The USB transport.** A composite device in `src/lib/drivers/usb/usb-device`
    (ACM plus the adb interface, with an interface association), and room for
-   the extra endpoints in `libs/drivers/dwc3`'s layout (`MAX_ENDPOINTS` is 4
+   the extra endpoints in `src/lib/drivers/usb/dwc3`'s layout (`MAX_ENDPOINTS` is 4
    and ACM uses 3). Then `usbdev`'s bridge to a socket `adbd` connects to.
    About 8 points. **The new endpoint registers (`0xC860` and up) are a new
    write list: the product owner session approves it before the first boot**
@@ -157,10 +157,10 @@ secure-firmware call plus a persistent write Ferrix must never make:
 
 ### Step 1, adbd over TCP (2026-09-26)
 
-* `libs/proto/adb` (`ferrix-adb`): the 24-byte messages, the banner, and the
+* `src/lib/proto/adb` (`ferrix-adb`): the 24-byte messages, the banner, and the
   first sync protocol's requests and replies, with tests on the host. The
   constants match `protocol.txt`, and the host's `adb` 37 is the proof.
-* `userland/adbd`: a static musl program, built as `statd` is. `shell:` runs
+* `src/user/linux/adbd`: a static musl program, built as `statd` is. `shell:` runs
   a command under `/bin/sh -c`, or an interactive shell on a pty. `sync:`
   does `STAT`, `LIST`, `SEND` and `RECV`. `reboot:` restarts the machine,
   or ends adbd under `--test`. `tcp:PORT` is a stream to a port inside. No
@@ -184,10 +184,10 @@ secure-firmware call plus a persistent write Ferrix must never make:
 
 * The device has a third interface beside the serial port's two: adb's
   (`ff/42/01`, bulk OUT `0x03`, bulk IN `0x83`), always present; with no
-  adbd behind it the host lists it offline. `libs/drivers/dwc3` has room
+  adbd behind it the host lists it offline. `src/lib/drivers/usb/dwc3` has room
   for six endpoints and a nine-page DMA area.
 * `usbdev` bridges the two endpoints to `/tmp/adbd-usb`
-  (`native/drivers/usbdev/src/adb.rs`), `vport`'s shape. It sends each
+  (`src/user/native/drivers/usb/usbdev/src/adb.rs`), `vport`'s shape. It sends each
   message's header and payload as transfers of their own, and adbd over
   USB offers payloads of at most 4096 bytes, one endpoint ring.
 * `adbd --usb` serves that socket; run as pid 1

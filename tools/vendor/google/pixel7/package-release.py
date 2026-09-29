@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Package a phone desktop for a GitHub release, where the app finds it.
 
-    tools/pixel7/package-release.py <edition> <build-dir> <out-dir> <tag> <commit>
+    tools/vendor/google/pixel7/package-release.py <edition> <build-dir> <out-dir> <tag> <commit>
                                     [--volume chromium.img]
-    tools/pixel7/package-release.py --serve <out-dir> [--port 47708]
+    tools/vendor/google/pixel7/package-release.py --serve <out-dir> [--port 47708]
 
 `build-dir` is what `build-desktop.sh` wrote (its `desktop.Image`); the
 edition is `full` (built with `--chrome`, and given `--volume`) or `minimal`.
@@ -21,7 +21,7 @@ unpacks to, which the app checks before it puts a file in place:
      "volume": {"asset": "...", "sha256": "...", "size": N, "pins": "..."}}
 
 `pins` names the volume by what it holds rather than by its bytes:
-`scripts/fetch/fetch-chromium-arm64.sh` pins every package by its hash, but
+`tools/common/fetch/fetch-chromium-arm64.sh` pins every package by its hash, but
 mkfs.btrfs writes a different image each time from the same files. So it is
 the SHA-256 of that script, and the app fetches a volume again only when the
 pins move, never merely because a new release was built.
@@ -48,7 +48,7 @@ import pathlib
 import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
-PINS = HERE.parent.parent / "scripts" / "fetch" / "fetch-chromium-arm64.sh"
+PINS = HERE.parents[3] / "tools" / "common" / "fetch" / "fetch-chromium-arm64.sh"
 VOLUME_ASSET = "ferrix-pixel7-chromium.img.gz"
 
 

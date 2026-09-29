@@ -16,7 +16,7 @@
 //!
 //! The same way `struct stat` is encoded in the kernel's `syscall::stat`, so
 //! the two cannot disagree about method: each record is built as the
-//! `libs/proto/linux-abi` structure, so the compiler checks every field's width, and
+//! `src/lib/proto/linux-abi` structure, so the compiler checks every field's width, and
 //! written out one field at a time at its `offset_of!`. That needs no view of
 //! a structure as bytes and no idea of padding -- a byte no field names is
 //! zero, which is what Linux writes. It lives here rather than in the kernel
@@ -100,7 +100,7 @@ impl StatfsLayout {
     }
 }
 
-/// Serialise the named fields of a `libs/proto/linux-abi` structure.
+/// Serialise the named fields of a `src/lib/proto/linux-abi` structure.
 ///
 /// Each field is converted with its own type's `to_le_bytes`, so its width is
 /// the structure's and never a guess made here. A field left out of the list

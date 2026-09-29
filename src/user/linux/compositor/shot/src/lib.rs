@@ -9,7 +9,7 @@
 //!
 //! What comes out is the screen as the compositor composed it, pixel for
 //! pixel -- which is the useful thing about testing it: the picture a
-//! screenshot gives can be compared against the picture `userland/compositor/render`
+//! screenshot gives can be compared against the picture `src/user/linux/compositor/render`
 //! blesses, and the two are reached by completely different paths.
 //!
 //! The digest is FNV-1a over the red, green and blue of each pixel in row

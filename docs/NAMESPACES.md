@@ -119,7 +119,7 @@ that is a namespace; §9's last slice finds what of it Ferrix lacks.
 
 ### 1.4 As root it is a different program
 
-Steam runs as root on Ferrix today (`xtask/src/steam.rs`: `USER=root`).
+Steam runs as root on Ferrix today (`tools/common/xtask/src/steam.rs`: `USER=root`).
 bwrap turns a user namespace on only for a caller that is neither setuid
 nor uid 0 (`if (!is_privileged && getuid () != 0) opt_unshare_user = TRUE`);
 as root it keeps its capabilities and makes a mount namespace alone:
@@ -495,10 +495,10 @@ reads a process's ids or its fs context.
 ## 3. Where it lives: the certified item and the load
 
 **All of it is load.** Every file it touches is in the `load` ring of
-`scripts/data/certification-item.json`: `syscall/namespace.rs`,
+`tools/common/data/certification-item.json`: `syscall/namespace.rs`,
 `credentials.rs`, `family.rs`, `fsctl.rs`, `path.rs`, `fd.rs`, `exec.rs`,
 `memory.rs`, `attributes.rs`, `process.rs`, `fs/**` (procfs, sockname,
-root_disk), and the `libs/fs/vfs` library outside the kernel crate. The one
+root_disk), and the `src/lib/fs/vfs` library outside the kernel crate. The one
 new kernel file, `syscall/userns.rs`, and the new boot check,
 `syscall/namespace_check.rs`, go into the `load` ring's list, and the check
 into `composition_root.load_modules`, where `main.rs` names it (39 then).
@@ -638,7 +638,7 @@ else's namespace does not exist.
 
 ## 5. F-37: every kernel heap a program can keep is charged
 
-New kinds, each charged with a `Charge` from `libs/kernel/kmem` to the job
+New kinds, each charged with a `Charge` from `src/lib/kernel/kmem` to the job
 of the task whose call makes it, kept inside what it pays for:
 
 | Kind | Made by | Charged |
@@ -731,7 +731,7 @@ commit, never committed:
 
 * `cargo xtask test-bwrap` (new, x86_64; AArch64 and ARMv7-A if the same
   debs exist): Debian's `bubblewrap` with its libraries, fetched and pinned
-  by `scripts/fetch/fetch-bwrap.sh`, run on glibc's own loader as the
+  by `tools/common/fetch/fetch-bwrap.sh`, run on glibc's own loader as the
   dynamic busybox is: the requirements check's four argument lists, then a
   list shaped like pressure-vessel's (directory, file and socket binds,
   `--ro-bind-data`, `--tmpfs`, `--proc`, `--new-session`), each as root and
@@ -774,7 +774,7 @@ before the unprivileged half lands.
 ## 10. Risks
 
 1. **The walk is on every path.** N2 and N3 change the VFS every program
-   walks through. `libs/fs/vfs`'s host tests (3,770 lines) and the
+   walks through. `src/lib/fs/vfs`'s host tests (3,770 lines) and the
    `vfs_ops` fuzzer (`tests/fuzz`) run on every slice, and the fuzzer gains
    bind, remount, detach, copy and `pivot_root` operations with one more
    property: every mount's parent chain ends.

@@ -12,7 +12,7 @@ A VNC server beside `egl-headless` is handed the same frames a viewer would
 show, so this is the screen. Run the desktop and grab it:
 
     cargo xtask run-compositor --gl --accel kvm --vnc :18
-    userland/compositor/hyprix/probe/vncshot.py 127.0.0.1 5918 screen.png
+    src/user/linux/compositor/hyprix/probe/vncshot.py 127.0.0.1 5918 screen.png
 
 Needs Pillow. Reads the whole framebuffer once, raw, with no authentication,
 which is what `-vnc` without a password offers.

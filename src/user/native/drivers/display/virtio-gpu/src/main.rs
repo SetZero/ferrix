@@ -531,7 +531,7 @@ fn started(boot: &Channel<Kernel>) -> Result<Started, Step> {
     }
 }
 
-/// The render half of the card: `libs/proto/renderctl`'s HELLO, and then the one
+/// The render half of the card: `src/lib/proto/renderctl`'s HELLO, and then the one
 /// context the core asks for.
 ///
 /// A card has two conversations (`docs/GPU.md` §3.3) and this driver serves

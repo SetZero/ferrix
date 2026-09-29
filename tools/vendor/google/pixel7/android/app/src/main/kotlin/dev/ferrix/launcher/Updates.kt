@@ -49,7 +49,7 @@ private const val MARGIN = 256L shl 20
  * The desktop the phone keeps, as a distribution has its editions: [FULL]
  * with Chromium, whose volume comes with it, and [MINIMAL], the desktop
  * alone. A release carries each as `ferrix-pixel7-<id>.json` and the assets
- * it names (`tools/pixel7/package-release.py`).
+ * it names (`tools/vendor/google/pixel7/package-release.py`).
  */
 internal enum class Edition(val id: String, val label: String) {
     FULL("full", "Full"),

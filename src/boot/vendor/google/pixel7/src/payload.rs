@@ -1,6 +1,6 @@
 //! The kernel and initramfs this loader carries.
 //!
-//! ABL loads one image and nothing else, so what `boot/uefi/` reads off a FAT
+//! ABL loads one image and nothing else, so what `src/boot/common/uefi/` reads off a FAT
 //! volume is built into the loader instead; `build.rs` says from where.
 
 /// A byte array aligned for the ELF parser, which reads headers in place.

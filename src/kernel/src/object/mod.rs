@@ -1,8 +1,8 @@
 //! The native ABI's kernel objects, and what a handle names.
 //!
 //! Stage 9 of `docs/ROADMAP.md`. The rules — which handles are valid, which
-//! rights they carry, when a queue is full — are `libs/kernel/objects` and
-//! `libs/proto/native-abi`, where the host tests and the fuzzer reach them. This is
+//! rights they carry, when a queue is full — are `src/lib/kernel/objects` and
+//! `src/lib/proto/native-abi`, where the host tests and the fuzzer reach them. This is
 //! the part that needs a kernel: the reference counts, the locks, and freeing
 //! what an object held.
 //!

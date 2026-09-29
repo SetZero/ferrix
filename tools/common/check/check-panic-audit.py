@@ -25,7 +25,7 @@ and why it needs an attribute at all.
      instead of accumulating a stale one. An `allow` would sit there forever
      with nobody the wiser.
 
-Usage:  python3 scripts/check/check-panic-audit.py
+Usage:  python3 tools/common/check/check-panic-audit.py
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ ATTRIBUTE = re.compile(r"#!?\[(expect|allow)\(")
 TEST_MODULE = re.compile(r"#\[cfg\(test\)\]\s*(?:pub\s+)?mod\s+\w+\s*\{")
 
 # The crates whose sources are production code.
-ROOTS = ("kernel", "boot/uefi", "libs", "native", "xtask")
+ROOTS = ("src/kernel", "src/boot/common/uefi", "src/lib", "src/user/native", "tools/common/xtask")
 
 
 def balanced(source: str, opening: int, open_ch: str, close_ch: str) -> int:
@@ -113,7 +113,7 @@ def check(path: pathlib.Path) -> tuple[list[str], int]:
 
 
 def main() -> int:
-    root = pathlib.Path(__file__).resolve().parent.parent.parent
+    root = pathlib.Path(__file__).resolve().parent.parent.parent.parent
     problems: list[str] = []
     audited = 0
 

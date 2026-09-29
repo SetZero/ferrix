@@ -1096,7 +1096,7 @@
       "lines": "132",
       "category": "failure-path",
       "match": "Job::new_tree_root().unwrap_or_else(|_| {",
-      "why": "The root job is made once, by bring-up, before any program exists to be told memory ran out; the allocation is FATAL-ALLOC by design (`scripts/check/check-fallible-alloc.py` lists it) and this is the panic it ends in. A run reaching it is a boot that ran out of memory before its first program."
+      "why": "The root job is made once, by bring-up, before any program exists to be told memory ran out; the allocation is FATAL-ALLOC by design (`tools/common/check/check-fallible-alloc.py` lists it) and this is the panic it ends in. A run reaching it is a boot that ran out of memory before its first program."
     },
     {
       "file": "object/pin.rs",

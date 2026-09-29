@@ -239,7 +239,7 @@ pub(crate) fn report(hidden: u64) {
     }
     println!(
         "  {hidden} `{MESSAGE}` warnings from GDK hidden; QEMU resets the card's \
-         GL context on the wrong thread (xtask/src/noise.rs says why)"
+         GL context on the wrong thread (tools/common/xtask/src/noise.rs says why)"
     );
 }
 

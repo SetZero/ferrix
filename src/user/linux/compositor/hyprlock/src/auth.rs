@@ -9,7 +9,7 @@
 //! `$PAMPROMPT` shows before anybody types; [`Backend::respond`] answers
 //! it and gives the next prompt or a [`Verdict`]. The widgets, the field
 //! and the session never see anything else, so `authd`'s client
-//! (phase 1's `Service` backend, once `libs/proto/auth-proto` lands)
+//! (phase 1's `Service` backend, once `src/lib/proto/auth-proto` lands)
 //! changes nothing outside this module.
 //!
 //! Until then `/bin/hyprlock` has [`Missing`]: no service is running, the

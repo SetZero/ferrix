@@ -341,7 +341,7 @@ impl Switch {
 /// Decide where the switch runs from, and copy it there if that is not here.
 ///
 /// Where the loader may map itself is a property of the machine's memory, and
-/// is decided in `libs/proto/bootinfo` so that the answer for a board nobody here can
+/// is decided in `src/lib/proto/bootinfo` so that the answer for a board nobody here can
 /// boot is still something the host tests pin down. When the answer is a
 /// trampoline, the page comes from RAM below the split and below the direct
 /// map's ceiling, and holds the switch's instructions and nothing else.

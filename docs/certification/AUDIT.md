@@ -165,7 +165,7 @@ A capability, as the log core's reader and L12's starter are:
   Pid 1 keeps the handle and, once `/` is settled -- the root volume after
   L12's switch, or at once when the kernel started `devmgr` -- copies every
   record into `/var/log/audit/<id>.bin`, the id in hex, 64 bytes a record as
-  `libs/proto/audit` lays them out: the boot records first, then the
+  `src/lib/proto/audit` lays them out: the boot records first, then the
   high-value ring passing over the numbers they already wrote, then the
   refusals. It reads a last time as it goes down -- after the first `sync`
   and the unmounts, before `/` is made read-only -- so that as little as
@@ -261,7 +261,7 @@ OS protection profile is claimed.
 
 Three slices, each reviewed before it lands:
 
-1. **The store** (built): `kernel/src/audit.rs`, in the core ring -- the
+1. **The store** (built): `src/kernel/src/audit.rs`, in the core ring -- the
    two rings of static storage under `IrqSpinLock`s, the gapless numbering
    and the lost count, the fairness per budget with its *suppressed n*
    record,
@@ -272,7 +272,7 @@ Three slices, each reviewed before it lands:
    the generator's check, and one when the boot is brought up. Its boot
    check, `audit::check`, is §6's first half on stores of its own and on a
    job tree of its own, and the kernel's store read back (FX-0309). The
-   record's layout is `libs/proto/audit`, whose host tests round-trip the
+   record's layout is `src/lib/proto/audit`, whose host tests round-trip the
    start-up record's id and ring lengths through the bytes a reader gets.
 2. **The call sites** (built): a record at each §1 decision the item
    makes during a boot --

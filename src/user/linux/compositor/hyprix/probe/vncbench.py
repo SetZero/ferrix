@@ -16,7 +16,7 @@ pointer in a circle sixty times a second, and it reports
   lag anybody sees, because the viewer draws the arrow where the mouse is.
 
     cargo xtask run-compositor --accel kvm --vnc :18
-    userland/compositor/hyprix/probe/vncbench.py 127.0.0.1 5918 --seconds 20
+    src/user/linux/compositor/hyprix/probe/vncbench.py 127.0.0.1 5918 --seconds 20
 
 `--encoding zrle` makes QEMU compress, as a real viewer's does, and costs
 QEMU's encoder what a real viewer costs it; `raw` (the default) measures

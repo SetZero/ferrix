@@ -1,4 +1,4 @@
-//! Fuzz the service manager's unit-file parser and loader (`libs/init/svc`).
+//! Fuzz the service manager's unit-file parser and loader (`src/lib/init/svc`).
 //!
 //! A unit file is written by whoever administers the machine, and a
 //! generator writes more at every boot; init loads them all as pid 1, where

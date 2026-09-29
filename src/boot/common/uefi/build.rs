@@ -3,7 +3,7 @@
 //! # Why this is not in `.cargo/config.toml`
 //!
 //! It was, as `-Tboot/uefi/linker/armv7a.ld`, and that path had two problems the
-//! kernel's link script had before it (see `kernel/build.rs`). Cargo merges
+//! kernel's link script had before it (see `src/kernel/build.rs`). Cargo merges
 //! every `.cargo/config.toml` from the invocation directory up to the root,
 //! joining `rustflags` end to end, so a worktree inside another checkout
 //! linked with the script given twice. And the path was relative to wherever

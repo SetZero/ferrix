@@ -1,7 +1,7 @@
 /*
  * Ferrix — SysML v2 model, part 16: the low-level requirements of iommu.
  *
- * What each unit of kernel/src/iommu.rs and kernel/src/iommu/ does, as
+ * What each unit of src/kernel/src/iommu.rs and src/kernel/src/iommu/ does, as
  * `ItemLowLevel` requirements (part 13 defines the format): where firmware
  * puts each PCI function's DMA, the units the kernel turns translation on
  * for, the domains a driver pins pages into, the gate a wait on a unit is
@@ -35,7 +35,7 @@ package FerrixIommuRequirements {
     private import FerrixItemRequirements::*;
 
     package Discovery {
-        doc /* kernel/src/iommu.rs, the first half: every unit firmware
+        doc /* src/kernel/src/iommu.rs, the first half: every unit firmware
              * describes, and where it puts each PCI function's DMA. Read
              * apart from bring-up, which programs units, and printed on every
              * boot whether or not the checks run. */
@@ -111,7 +111,7 @@ package FerrixIommuRequirements {
     }
 
     package BringUpAndDomains {
-        doc /* kernel/src/iommu.rs, bring-up and domain_for, and the halves of
+        doc /* src/kernel/src/iommu.rs, bring-up and domain_for, and the halves of
              * iommu/vtd.rs and iommu/smmuv3.rs that program a unit and attach a
              * domain to it. */
 
@@ -271,7 +271,7 @@ package FerrixIommuRequirements {
     }
 
     package Pins {
-        doc /* kernel/src/iommu.rs, Domain::pin and Domain::unpin: the domain
+        doc /* src/kernel/src/iommu.rs, Domain::pin and Domain::unpin: the domain
              * side of every pin, the same for both kinds of unit, and the
              * unit's flush that ends an unpin. */
 
@@ -390,7 +390,7 @@ package FerrixIommuRequirements {
     }
 
     package Gate {
-        doc /* kernel/src/iommu/gate.rs: how an operation waits for a unit
+        doc /* src/kernel/src/iommu/gate.rs: how an operation waits for a unit
              * without masking interrupts. */
 
         requirement <'L.iommu.30'> aWaitEndsAtItsAnswerOrDeadline : ItemLowLevel {
@@ -439,7 +439,7 @@ package FerrixIommuRequirements {
     }
 
     package Faults {
-        doc /* kernel/src/iommu.rs, the faults half, and the fault readers of
+        doc /* src/kernel/src/iommu.rs, the faults half, and the fault readers of
              * iommu/vtd.rs and iommu/smmuv3.rs. */
 
         requirement <'L.iommu.34'> faultsReadAsRecorded : ItemLowLevel {

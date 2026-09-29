@@ -1,6 +1,6 @@
 {
   "//": [
-    "What scripts/check/check-traceability.py needs to know about the item's",
+    "What tools/common/check/check-traceability.py needs to know about the item's",
     "product functions, beyond the requirements that name them as units",
     "(docs/certification/IMPLEMENTATION.md W-8, the pilot on object/).",
     "",

@@ -1,7 +1,7 @@
 //! What a failed call means, decoded from the return register.
 //!
 //! A native call fails the way a Linux one does: `-errno` in `-4095..=-1`.
-//! `libs/proto/native-abi`'s `status` module names which `errno` each native failure
+//! `src/lib/proto/native-abi`'s `status` module names which `errno` each native failure
 //! travels as, and [`Error`] turns it back into the name, so a caller matches
 //! on [`Error::PeerClosed`] rather than on `EPIPE`.
 

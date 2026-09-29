@@ -1,8 +1,8 @@
 /*
- * The evdev numbers and layouts `libs/proto/linux-abi/src/input.rs` writes down,
+ * The evdev numbers and layouts `src/lib/proto/linux-abi/src/input.rs` writes down,
  * printed from the UAPI headers themselves.
  *
- * Run by `libs/proto/linux-abi/probe/input.sh` on a Linux host with the kernel's
+ * Run by `src/lib/proto/linux-abi/probe/input.sh` on a Linux host with the kernel's
  * UAPI headers (`linux-libc-dev`) once natively for 64-bit and once for
  * ARMv7-A under qemu-arm, into `input-64.txt` and `input-32.txt` beside it.
  * The crate's tests read both files and require every line to match what the

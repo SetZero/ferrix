@@ -9,7 +9,7 @@ package FerrixViews {
     private import FerrixLifecycle::*;
 
     viewpoint def MaintainerViewpoint {
-        doc /* Someone changing kernel/ or libs/ who wants to see the parts
+        doc /* Someone changing src/kernel/ or src/lib/ who wants to see the parts
              * that exist, their boot-time sequence, and the gates that guard
              * them. */
     }

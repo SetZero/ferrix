@@ -1,7 +1,7 @@
 //! The messages, as bytes.
 //!
 //! Every message starts with its type and its length, four bytes each, and has
-//! exactly the length its type fixes, in `libs/proto/inputctl`'s shape. Handles ride
+//! exactly the length its type fixes, in `src/lib/proto/inputctl`'s shape. Handles ride
 //! in the channel message's handle array; the glue reads their rights, and
 //! [`PORT_RIGHTS`] and [`BUFFER_RIGHTS`] say what they must be.
 //!
@@ -67,7 +67,7 @@ pub const STOPPED: u32 = 9;
 /// Bytes of the type and length, and all of STOP and STOPPED.
 pub const HEADER_BYTES: usize = 8;
 
-/// The most streams HELLO describes: QEMU's limit, and `libs/drivers/virtio::snd`'s.
+/// The most streams HELLO describes: QEMU's limit, and `src/lib/drivers/virtio::snd`'s.
 pub const MAX_STREAMS: usize = 10;
 /// The most streams the core publishes on one card: a playback and a capture.
 pub const MAX_PUBLISHED: usize = 2;

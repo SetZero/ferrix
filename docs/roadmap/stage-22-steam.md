@@ -30,7 +30,7 @@ staged until now.
   busyboxes and an i686 thread program, and I5, unsized, is what the
   Steam runtime finds missing. **I1 is on `main`** (2026-09-26): the GDT
   in Linux's order and numbers with real 32-bit segments, `int $0x80` as a
-  DPL-3 gate decoding through an i386 table in `libs/proto/linux-abi`, an
+  DPL-3 gate decoding through an i386 table in `src/lib/proto/linux-abi`, an
   `EM_386` image `execve`d into a 4 GiB space and entered in compatibility
   mode, and compatibility mode's `SYSCALL` and `SYSENTER` made harmless;
   the boot runs a hand-assembled i386 program. **I2a is on `main`** the
@@ -104,7 +104,7 @@ staged until now.
   for x86-64 on Ferrix, an X client run against it), a written design for
   the backend, then the backend in small landings. **The feasibility pass was met
   on 2026-09-28**: `cargo xtask test-yserver` boots yserver headless on
-  Mesa's lavapipe from the volume `scripts/fetch/fetch-yserver.sh` builds,
+  Mesa's lavapipe from the volume `tools/common/fetch/fetch-yserver.sh` builds,
   and `xdpyinfo` reaches it and lists 21 extensions. Ferrix did not change
   for it. **The design is `docs/YSERVER.md`**, approved the same day: the
   backend wraps yserver's Vulkan renderer, hands frames to hyprix as
@@ -128,7 +128,7 @@ staged until now.
   unchanged, downloads and installs itself from the bootstrap, starts its
   browser helper, and the helper draws "Sign in to Steam" through yserver
   on hyprix (`cargo xtask test-steam-window`, from the volume
-  `scripts/fetch/fetch-steam-window.sh` makes; `docs/STEAM.md`). It runs
+  `tools/common/fetch/fetch-steam-window.sh` makes; `docs/STEAM.md`). It runs
   with launch-side workarounds and no kernel change of its own: a stand-in
   for the steamrt64 entry point instead of pressure-vessel, the client
   preloaded with a shim for packet-mode pipes, and a 16 GiB guest.

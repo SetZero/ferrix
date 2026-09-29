@@ -21,7 +21,7 @@
 //! # What is not here
 //!
 //! Walking a buffer of messages, and the attributes after each header, is
-//! `libs/network/netlink`'s: this crate names the numbers and lays out the fixed
+//! `src/lib/network/netlink`'s: this crate names the numbers and lays out the fixed
 //! parts, and [`nlmsg_align`] and [`nla_align`] are the only arithmetic.
 
 use crate::socket::{AF_NETLINK, AddressError};

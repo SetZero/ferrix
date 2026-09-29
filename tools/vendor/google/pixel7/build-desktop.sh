@@ -2,13 +2,13 @@
 # Build the desktop the launcher's VM shows: `desktop.Image`, the Pixel 7
 # loader wrapping a kernel and initramfs whose init is the compositor.
 #
-# Usage: tools/pixel7/build-desktop.sh <out-dir> [scale] [--chrome] [--push]
+# Usage: tools/vendor/google/pixel7/build-desktop.sh <out-dir> [scale] [--chrome] [--push]
 #
 #   out-dir   a new directory; the stage and desktop.Image are written there
 #   scale     the monitor's scale, 2 when not given: 1080x2400 at 1 is text
 #             a few millimetres high on a 6.3-inch screen
 #   --chrome  Chromium on the desktop, from the volume
-#             scripts/fetch/fetch-chromium-arm64.sh makes, which the app
+#             tools/common/fetch/fetch-chromium-arm64.sh makes, which the app
 #             gives the VM as its disk when chromium.img is on the phone;
 #             with --push, the volume is copied there too if it is not
 #   --push    copy desktop.Image to /data/local/tmp/ferrix-vm/ on the phone,

@@ -1,6 +1,6 @@
 //! The net core: a host's networking, between a socket and an interface.
 //!
-//! `libs/network/netwire` reads and writes the headers. `libs/network/nettcp` decides which
+//! `src/lib/network/netwire` reads and writes the headers. `src/lib/network/nettcp` decides which
 //! TCP segments to send. This crate is everything between them and a program:
 //! interfaces and the addresses on them, a routing table, a neighbour cache,
 //! fragment reassembly, ICMP, UDP, and the socket table that says which packet

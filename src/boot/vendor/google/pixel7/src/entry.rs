@@ -2,7 +2,7 @@
 //! bootloader reads, the first instructions it jumps to, the drop from EL2 to
 //! EL1, the vector table, and the system registers Rust has no spelling for.
 //!
-//! The UEFI loader in `boot/uefi/` needs none of the first three, because firmware
+//! The UEFI loader in `src/boot/common/uefi/` needs none of the first three, because firmware
 //! calls its `efi_main` with a stack and the MMU on. ABL does not: it follows
 //! the Linux arm64 boot protocol (`Documentation/arch/arm64/booting.rst`),
 //! which enters the image at its first byte with the MMU off, no stack, the
@@ -200,7 +200,7 @@ pub(crate) fn invalidate_dcache(start: u64, len: u64) {
 }
 
 /// The largest physical address size this CPU implements, as a `TCR_EL1.IPS`
-/// encoding, capped at 48 bits as `boot/uefi/` caps it.
+/// encoding, capped at 48 bits as `src/boot/common/uefi/` caps it.
 pub(crate) fn physical_address_size() -> u64 {
     let features: u64;
     // SAFETY: ID_AA64MMFR0_EL1 is readable at EL1 and has no side effects.
@@ -231,7 +231,7 @@ pub(crate) struct Handoff {
 
 /// Install the kernel's translation regime and jump to it.
 ///
-/// The same switch as `boot/uefi/src/arch/aarch64.rs`, less its first half: the MMU
+/// The same switch as `src/boot/common/uefi/src/arch/aarch64.rs`, less its first half: the MMU
 /// is already off here, as ABL left it, so there is nothing to turn off. What
 /// it adds is `CPACR_EL1`, which UEFI leaves allowing FP and SIMD and ABL's
 /// hand-off does not promise, and an instruction cache invalidate, because the

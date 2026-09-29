@@ -8,7 +8,7 @@
 //!
 //! That loop is this crate, written against a [`Nic`] trait so it runs and is
 //! tested on the host with a fake device on one side and the ring's own kernel
-//! end on the other. The process that runs it (`native/drivers/net`) adds only the
+//! end on the other. The process that runs it (`src/user/native/drivers/net/virtio-net`) adds only the
 //! handles.
 //!
 //! # The two directions are not symmetrical, and that is the whole design

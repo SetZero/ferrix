@@ -1,7 +1,7 @@
 {
   "//": [
     "The complete list of places this OS is allowed to contain assembly, and",
-    "why each one cannot be Rust. Enforced by scripts/check/check-asm-budget.py and",
+    "why each one cannot be Rust. Enforced by tools/common/check/check-asm-budget.py and",
     "explained in docs/ASSEMBLY.md.",
     "",
     "The test for admission is narrow: the construct must be defined by what",
@@ -23,7 +23,7 @@
     "2026-09-27, when the count learned to read raw strings: the tree held",
     "1569 lines, not 733, and had for some time. The cap moved to the truth;",
     "the assembly did not grow. 1610 since 2026-09-28, for the device register",
-    "accesses of kernel/src/arch/{aarch64,armv7a}/mmio.rs (their entries say",
+    "accesses of src/kernel/src/arch/{aarch64,armv7a}/mmio.rs (their entries say",
     "why), which the tree at 1595 lines had no room for."
   ],
   "max_ratio": 0.06,
@@ -42,134 +42,134 @@
   ],
   "files": [
     {
-      "file": "boot/uefi/src/arch/aarch64.rs",
+      "file": "src/boot/common/uefi/src/arch/aarch64.rs",
       "max_lines": 60,
       "reason": "As x86-64, and longer for one architectural reason: TCR_EL1 cannot be reprogrammed under a live translation regime, so the sequence has to turn the MMU off, install MAIR/TCR/TTBR0/TTBR1, and turn it back on. The middle of that runs with the program counter as a physical address. Also `dc civac` cache maintenance, without which the tables written above are invisible once the caches are off."
     },
     {
-      "file": "boot/uefi/src/arch/armv7a.rs",
+      "file": "src/boot/common/uefi/src/arch/armv7a.rs",
       "max_lines": 63,
-      "reason": "As AArch64, in coprocessor 15's spelling: TTBCR.EAE cannot be switched under a live translation regime, so the sequence turns the MMU off, installs MAIR0/MAIR1, TTBCR and the two 64-bit TTBRs, and turns it back on, with the program counter a physical address in between. Also DCCIMVAC cache maintenance, and the CPSR and ID_MMFR0 reads that check the processor mode and the Large Physical Address Extension before any of it. The sequence is a global_asm block between ferrix_switch_start and ferrix_switch_end rather than inline asm, because on a machine whose RAM runs over the kernel's half (QEMU virt with 2 GiB) firmware loads the loader where neither translation tree can identity map it while the MMU comes back on; the loader then copies the block to a page below the split and runs it there. A copy runs only if the block is register-only and position-independent, so xtask/src/pe.rs refuses a loader whose block is over a page, off an instruction boundary, or holds a relocation; and before branching to it enter_kernel discards the instruction cache and branch predictor, as the architecture requires after instructions are written. Admitted by the product owner's decision of 2026-09-13 (docs/BACKLOG.md, Decisions: the ARMv7-A switch trampoline), with the Arm owner reviewing. And the ID_PFR1 and CNTVCT reads (mrc, mrrc) that give KASLR its last-resort counter where firmware offers no EFI_RNG_PROTOCOL: two coprocessor reads with no Rust spelling (docs/certification/SPECULATION.md section 6)."
+      "reason": "As AArch64, in coprocessor 15's spelling: TTBCR.EAE cannot be switched under a live translation regime, so the sequence turns the MMU off, installs MAIR0/MAIR1, TTBCR and the two 64-bit TTBRs, and turns it back on, with the program counter a physical address in between. Also DCCIMVAC cache maintenance, and the CPSR and ID_MMFR0 reads that check the processor mode and the Large Physical Address Extension before any of it. The sequence is a global_asm block between ferrix_switch_start and ferrix_switch_end rather than inline asm, because on a machine whose RAM runs over the kernel's half (QEMU virt with 2 GiB) firmware loads the loader where neither translation tree can identity map it while the MMU comes back on; the loader then copies the block to a page below the split and runs it there. A copy runs only if the block is register-only and position-independent, so tools/common/xtask/src/pe.rs refuses a loader whose block is over a page, off an instruction boundary, or holds a relocation; and before branching to it enter_kernel discards the instruction cache and branch predictor, as the architecture requires after instructions are written. Admitted by the product owner's decision of 2026-09-13 (docs/BACKLOG.md, Decisions: the ARMv7-A switch trampoline), with the Arm owner reviewing. And the ID_PFR1 and CNTVCT reads (mrc, mrrc) that give KASLR its last-resort counter where firmware offers no EFI_RNG_PROTOCOL: two coprocessor reads with no Rust spelling (docs/certification/SPECULATION.md section 6)."
     },
     {
-      "file": "boot/uefi/src/arch/x86_64.rs",
+      "file": "src/boot/common/uefi/src/arch/x86_64.rs",
       "max_lines": 30,
       "reason": "The loader's last instructions. Writing CR3 replaces the address space the return address of a Rust function call would live in, so the switch and the jump to the kernel cannot be a call. Also EFER.NXE and CR4.PGE, which are MSR and control-register writes with no Rust spelling and which must happen before the tables that rely on them are installed."
     },
     {
-      "file": "boot/pixel7/src/entry.rs",
+      "file": "src/boot/vendor/google/pixel7/src/entry.rs",
       "max_lines": 130,
-      "reason": "The Pixel 7 loader is entered under the Linux arm64 boot protocol, not UEFI: ABL jumps to the image's first byte at EL2 with the MMU off and no stack. So it needs what `boot/uefi/` gets from firmware for free: the 64-byte arm64 Image header ABL reads (a branch, sizes, flags and the arm64 magic at fixed offsets), setting the stack pointer and zeroing .bss before a Rust function can run, the EL2-to-EL1 drop (HCR_EL2, CNTHCTL_EL2, CPTR_EL2, ICC_SRE_EL2, SPSR_EL2/ELR_EL2 and eret), and a VBAR_EL1 table of sixteen entries at fixed 128-byte offsets. At the other end, the switch into the kernel, as boot/uefi/src/arch/aarch64.rs has it less the MMU-off half, plus CPACR_EL1 and an instruction cache invalidate; and dc ivac, because the loader writes with the caches off and must discard, not clean, what ABL left cached. Also the CurrentEL, HCR_EL2/SCTLR_EL2, generic-timer reads and the PSCI smc, which have no Rust spelling."
+      "reason": "The Pixel 7 loader is entered under the Linux arm64 boot protocol, not UEFI: ABL jumps to the image's first byte at EL2 with the MMU off and no stack. So it needs what `src/boot/common/uefi/` gets from firmware for free: the 64-byte arm64 Image header ABL reads (a branch, sizes, flags and the arm64 magic at fixed offsets), setting the stack pointer and zeroing .bss before a Rust function can run, the EL2-to-EL1 drop (HCR_EL2, CNTHCTL_EL2, CPTR_EL2, ICC_SRE_EL2, SPSR_EL2/ELR_EL2 and eret), and a VBAR_EL1 table of sixteen entries at fixed 128-byte offsets. At the other end, the switch into the kernel, as src/boot/common/uefi/src/arch/aarch64.rs has it less the MMU-off half, plus CPACR_EL1 and an instruction cache invalidate; and dc ivac, because the loader writes with the caches off and must discard, not clean, what ABL left cached. Also the CurrentEL, HCR_EL2/SCTLR_EL2, generic-timer reads and the PSCI smc, which have no Rust spelling."
     },
     {
-      "file": "kernel/src/arch/aarch64/cpu.rs",
+      "file": "src/kernel/src/arch/aarch64/cpu.rs",
       "max_lines": 100,
       "reason": "CPU primitives, one instruction each: `dsb`/`isb` are barriers, `tlbi` is TLB maintenance, `wfi` and `msr daifset` are CPU state, and `hvc` is the PSCI call that powers the machine off. Grows with stage 3 (VBAR_EL1, GIC, the generic timer) and must not grow with anything else."
     },
     {
-      "file": "kernel/src/arch/aarch64/mmio.rs",
+      "file": "src/kernel/src/arch/aarch64/mmio.rs",
       "max_lines": 8,
       "reason": "Device register access: one ldrb/ldrh/ldr or strb/strh/str with a bare base register per access, six in all. Under KVM a register access traps and the hypervisor emulates it from the fault's syndrome, which a load or store with writeback, or a pair, does not carry; KVM_RUN then fails with ENOSYS and the guest stops without a word. read_volatile says the access happens, not which instruction makes it, and LLVM folded three reads of one PCI command register into a pre-indexed ldrh, which stopped the Pixel 7's crosvm guest in stage 10. Rust has no spelling for 'this load, and no other form of it'; Linux's readl and writel are assembly for the same reason. x86-64 keeps volatile, since KVM there decodes the instruction itself."
     },
     {
-      "file": "kernel/src/arch/aarch64/smp.rs",
+      "file": "src/kernel/src/arch/aarch64/smp.rs",
       "max_lines": 58,
-      "reason": "The secondary core entry. PSCI CPU_ON starts a core at a physical address with its MMU off, and everything the kernel runs on is in the upper half: the first instructions have to install MAIR/TCR/TTBR0/TTBR1 and turn the MMU on while executing at an address only an identity map makes meaningful, then branch to a virtual one. The loader's switch again, once per core, and no Rust function can be entered with the MMU off and no stack. PSCI starts a core at the highest non-secure level, which on a machine with EL2 -- TF-A on the Pixel 7 -- is EL2, so the sequence first checks CurrentEL and, at EL2, makes EL1 a plain kernel's level (HCR_EL2, CNTHCTL_EL2, CNTVOFF_EL2, CPTR_EL2, HSTR_EL2, VPIDR/VMPIDR_EL2, ICC_SRE_EL2 where ID_AA64PFR0_EL1 says the GIC has system registers, SCTLR_EL1) and drops to it with an eret, as boot/pixel7/src/entry.rs does for the boot core. That drop is the price of starting cores on real firmware rather than QEMU's, and it is register writes and an eret at a physical address: nothing Rust can say. 58 rather than 30 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 2 its quotes were on. Unlike the other eight raised that day, this file had grown: the sequence was 26 lines until the EL2 drop (14ea5636) added 32 while the short count hid it. The Pixel 7's TF-A starts cores at EL2, so those 32 are what starting its secondaries takes."
+      "reason": "The secondary core entry. PSCI CPU_ON starts a core at a physical address with its MMU off, and everything the kernel runs on is in the upper half: the first instructions have to install MAIR/TCR/TTBR0/TTBR1 and turn the MMU on while executing at an address only an identity map makes meaningful, then branch to a virtual one. The loader's switch again, once per core, and no Rust function can be entered with the MMU off and no stack. PSCI starts a core at the highest non-secure level, which on a machine with EL2 -- TF-A on the Pixel 7 -- is EL2, so the sequence first checks CurrentEL and, at EL2, makes EL1 a plain kernel's level (HCR_EL2, CNTHCTL_EL2, CNTVOFF_EL2, CPTR_EL2, HSTR_EL2, VPIDR/VMPIDR_EL2, ICC_SRE_EL2 where ID_AA64PFR0_EL1 says the GIC has system registers, SCTLR_EL1) and drops to it with an eret, as src/boot/vendor/google/pixel7/src/entry.rs does for the boot core. That drop is the price of starting cores on real firmware rather than QEMU's, and it is register writes and an eret at a physical address: nothing Rust can say. 58 rather than 30 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 2 its quotes were on. Unlike the other eight raised that day, this file had grown: the sequence was 26 lines until the EL2 drop (14ea5636) added 32 while the short count hid it. The Pixel 7's TF-A starts cores at EL2, so those 32 are what starting its secondaries takes."
     },
     {
-      "file": "kernel/src/arch/aarch64/speculation.rs",
+      "file": "src/kernel/src/arch/aarch64/speculation.rs",
       "max_lines": 16,
       "reason": "The side-channel defences' primitives (docs/certification/SPECULATION.md). The Spectre v1 clamp is `cmp`, `csel` and `csdb`: its whole point is that the bound is enforced by a data dependency the processor cannot predict rather than by a branch, and `csdb` -- which forbids the processor to use a predicted result of the select -- has no Rust spelling; written in Rust, the compiler folds the clamp into the bounds check it follows and it disappears. Also the ID register reads the plan is made from (`MIDR_EL1`, `ID_AA64PFR1_EL1`, `ID_AA64MMFR1_EL1`), the `SCTLR_EL1` write that clears `DSSBS`, and `MSR SSBS`, each a system register access with no Rust spelling."
     },
     {
-      "file": "kernel/src/arch/aarch64/switch.rs",
+      "file": "src/kernel/src/arch/aarch64/switch.rs",
       "max_lines": 75,
       "reason": "The same, in AAPCS registers: x19-x28, the frame pointer and the link register, saved in pairs. No floating-point state, because the kernel is built softfloat and never touches the SIMD registers. 75 rather than 30 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 4 its quotes were on: the file had not grown, the count had been short."
     },
     {
-      "file": "kernel/src/arch/aarch64/trap.rs",
+      "file": "src/kernel/src/arch/aarch64/trap.rs",
       "max_lines": 145,
       "reason": "The `VBAR_EL1` vector table and its save/restore path. The architecture defines a table of sixteen entries at fixed 128-byte offsets, and that layout *is* the interface -- a Rust array of function pointers is not what the CPU reads. Each entry is far too small for a register save, so it stashes two registers, records which entry it is, and branches to the common path. Also `brk`, for the boot test. And the way out to EL0 and back (`ferrix_run_user`, `ferrix_leave_user`): dropping privilege is an `eret` into a context that has to be constructed first -- `SP_EL0`, `ELR_EL1`, `SPSR_EL1` and every general register zeroed -- and the stack pointer has to move to a dedicated entry stack after the last Rust frame and before the `eret`, because at EL1 `sp` is `SP_EL1`, the stack every exception from EL0 lands on. No Rust function can do either. 145 rather than 90 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 5 its quotes were on: the file had not grown, the count had been short."
     },
     {
-      "file": "kernel/src/arch/armv7a/cpu.rs",
+      "file": "src/kernel/src/arch/armv7a/cpu.rs",
       "max_lines": 103,
       "reason": "CPU primitives, one instruction or one short sequence each. Every ARMv7-A system register is a coprocessor 15 transfer, which Rust has no syntax for -- VBAR, SCTLR, TTBCR, TTBR0 and the generic timer's four registers -- and so are the barriers, the TLB maintenance, the cache maintenance (by line to the point of coherency for devices, and ICIALLUIS and BPIALLIS for code a user page is mapped with), cpsid and cpsie, wfi, and the PSCI call, made with whichever of hvc or smc the device tree names. 102 rather than 100 for the code sync, after the three CTR reads became one; 103 for `dma_barrier`'s `dmb osh`, which orders what a DMA master sees and which `fence` does not emit (F-44)."
     },
     {
-      "file": "kernel/src/arch/armv7a/mmio.rs",
+      "file": "src/kernel/src/arch/armv7a/mmio.rs",
       "max_lines": 8,
-      "reason": "AArch64's device register accesses (kernel/src/arch/aarch64/mmio.rs), for the same reason, in ARMv7-A's registers: KVM on a 32-bit Arm host emulates a trapped access from its syndrome as well, and a load or store with writeback carries none."
+      "reason": "AArch64's device register accesses (src/kernel/src/arch/aarch64/mmio.rs), for the same reason, in ARMv7-A's registers: KVM on a 32-bit Arm host emulates a trapped access from its syndrome as well, and a load or store with writeback carries none."
     },
     {
-      "file": "kernel/src/arch/armv7a/smp.rs",
+      "file": "src/kernel/src/arch/armv7a/smp.rs",
       "max_lines": 40,
       "reason": "The secondary core entry: AArch64's, in coprocessor 15's spelling. PSCI CPU_ON starts a core in SVC mode at a physical address, with its MMU off and no stack, and everything the kernel runs on is in the upper half: the first instructions check the processor mode, load MAIR0/MAIR1, TTBCR and the two 64-bit TTBRs, and turn the MMU on while executing at an address only an identity map makes meaningful, then branch to a virtual one. No Rust function can be entered with the MMU off and no stack."
     },
     {
-      "file": "kernel/src/arch/armv7a/speculation.rs",
+      "file": "src/kernel/src/arch/armv7a/speculation.rs",
       "max_lines": 16,
       "reason": "AArch64's clamp in coprocessor 15's world: `cmp`, `movhs` and `csdb` for an index, and `subs`/`sbcs` with two `movhs` for a 64-bit user address held in two registers, for the reason the AArch64 entry gives. Also the `MIDR` read the plan is made from, and `BPIALL` and `ICIALLU`, the branch predictor invalidations the cores Arm lists as affected by Spectre v2 need at a switch of address space; each is a coprocessor 15 transfer."
     },
     {
-      "file": "kernel/src/arch/armv7a/switch.rs",
+      "file": "src/kernel/src/arch/armv7a/switch.rs",
       "max_lines": 67,
       "reason": "The same again, and with one thing particular to this architecture: every exception is taken into a mode with its own banked stack pointer, and the trap path keeps everything on the SVC-mode stack -- so a task's context *is* its SVC stack pointer. A ninth register rides along with r4-r11 and the link register as padding, because nine words would leave the stack four-byte aligned where the ABI requires eight at a call. 67 rather than 30 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 4 its quotes were on: the file had not grown, the count had been short."
     },
     {
-      "file": "kernel/src/arch/armv7a/trap.rs",
+      "file": "src/kernel/src/arch/armv7a/trap.rs",
       "max_lines": 130,
       "reason": "The eight-entry vector table and its save/restore path. The CPU branches to a fixed offset in one of five banked processor modes, with the interrupted registers live and a return address off by a per-exception amount. Each stub corrects the address, stores it and the saved status on the SVC stack with srsdb, and switches to SVC mode with cps, so no other mode ever needs a stack; one common path saves the rest, calls Rust and returns with rfeia. Also bkpt, for the boot test. And the way out to USR mode and back (`ferrix_run_user`, `ferrix_leave_user`): the program's banked stack pointer can only be set from a mode that shares it, the SVC stack pointer has to move to a dedicated entry stack after the last Rust frame and before the privilege drop, and the drop is an `rfeia` of a return address and status built for a program that has never run. No Rust function can do any of it. 130 rather than 90 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 6 its quotes were on: the file had not grown, the count had been short."
     },
     {
-      "file": "kernel/src/arch/x86_64/cpu.rs",
+      "file": "src/kernel/src/arch/x86_64/cpu.rs",
       "max_lines": 100,
       "reason": "CPU primitives, one instruction each: `out`/`in` reach the I/O address space, which is not memory and has no Rust syntax; `hlt` and `cli` are CPU state; reading and writing CR3 is a control register; `mov` to and from DR0-DR3, DR6 and DR7 is the debug registers the paranoid entry's boot check arms a breakpoint with and its #DB handler reads. Grows with stage 3 (IDT, TSS, APIC) and must not grow with anything else. The one exception, 2026-09-26 (docs/I386.md, I2a): `mov` to and from DS, ES, FS and GS, a 32-bit program's segment selectors, which the switch saves and loads per task -- a segment register has no Rust syntax -- and the `swapgs` pair around a GS load, without which the load would replace the kernel's own GS base: Linux's `load_gs_index`."
     },
     {
-      "file": "kernel/src/arch/x86_64/smp.rs",
+      "file": "src/kernel/src/arch/x86_64/smp.rs",
       "max_lines": 41,
       "reason": "The AP trampoline, and the only 16-bit code in the project. INIT-SIPI-SIPI starts a processor in real mode at the start of a page below 1 MiB, with no stack and nothing but its reset state: there is no 16-bit Rust target, and the sequence that takes it to long mode -- control registers, EFER, a GDT, a far jump into a 64-bit segment -- is defined entirely by what the processor does to its registers along the way. 41 rather than 40 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 3 its quotes were on: the file had not grown, the count had been short."
     },
     {
-      "file": "kernel/src/arch/x86_64/speculation.rs",
+      "file": "src/kernel/src/arch/x86_64/speculation.rs",
       "max_lines": 16,
       "reason": "The side-channel defences' primitives (docs/certification/SPECULATION.md). The Spectre v1 clamp is `cmp` and `sbb`: the bound enforced by the carry flag as data rather than by a branch the processor can mispredict, which the compiler would otherwise fold into the bounds check it follows. The return stack refill is thirty-two `call`s whose return addresses are left in the predictor and taken off the stack, which is a side effect on a predictor, not a value. `VERW` of a memory operand clears the processor's buffers on an MDS-exposed part only as a side effect of that form. None has a Rust spelling."
     },
     {
-      "file": "kernel/src/arch/x86_64/switch.rs",
+      "file": "src/kernel/src/arch/x86_64/switch.rs",
       "max_lines": 32,
       "reason": "The context switch. A function that returns onto a different stack from the one it was called on: the callee-saved registers it restores belong to the context it is in the middle of leaving, and the return address it uses is on a stack that is no longer current. Rust has no way to say that. Six pushes, one store, one load, six pops and a return, plus the trampoline a task starts on -- which exists because the first thing a new task runs has nowhere but registers to read its entry point from. 32 rather than 30 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 4 its quotes were on: the file had not grown, the count had been short."
     },
     {
-      "file": "kernel/src/arch/x86_64/syscall.rs",
+      "file": "src/kernel/src/arch/x86_64/syscall.rs",
       "max_lines": 124,
       "reason": "The `SYSCALL` entry, the way into ring 3, and the way back out. All three are defined by what the machine does around them rather than by what they compute. `SYSCALL` switches no stack, so the kernel's first instruction after it runs on the user's stack with no free register: the sequence that reaches the per-CPU record through `GS` and moves off that stack has to be written before any Rust function could have a frame. `swapgs` is likewise not a value the compiler can hold -- it is a side effect on how the next memory reference resolves. Entering ring 3 is `sysretq`, which takes the address from RCX and the flags from R11 by the instruction's definition and cannot be reached by returning from a function; the register scrubbing beside it is there so nothing of the kernel's survives the privilege change, which means it has to happen after the last Rust code and before the instruction. Leaving ring 3 restores a stack pointer and the callee-saved registers a C call promised to keep, across a boundary a return cannot cross. 118 rather than 90 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 2 its quotes were on: the file had not grown, the count had been short. 124 since 2026-09-26 (docs/I386.md, I1): the `IA32_CSTAR` stub, six lines. Once a 32-bit user code segment exists, any program can far-jump into compatibility mode and issue `SYSCALL`, which on AMD goes to `CSTAR` in ring 0 with the program's stack and nothing saved; left at zero it would be a ring-0 jump to address zero. The stub loads -ENOSYS and returns with `SYSRETL`, the only instruction that returns there, touching no memory and no stack. The i386 program's own first entry takes no new assembly: it resumes a built frame through the trap stub's restore path."
     },
     {
-      "file": "kernel/src/arch/x86_64/trap.rs",
+      "file": "src/kernel/src/arch/x86_64/trap.rs",
       "max_lines": 171,
       "reason": "The 256 interrupt entry stubs and the common save/restore path. The CPU enters a handler with the interrupted registers still live and pushes a frame whose shape depends on the vector -- ten of the 256 push an error code and the rest do not -- so no Rust function can be entered and no Rust signature can describe the frame. The stubs are generated by an assembler `.rept`: the same machine code as 256 Rust-emitted blocks, at a twentieth of the lines. Also `int3`, which is how the boot test proves the path works. And the paranoid entry for the NMI, #DB, #MC and the double fault, which arrive on any instruction -- the SYSCALL trampoline's ring-0 stretches on the program's stack and GS included -- so the saved CS cannot say which way round GS is: it reads GS_BASE with rdmsr and swaps only if that is not the kernel's, clears DR7 so no breakpoint fires on its IST stack and restores it after, counts the stack's occupants, and moves a ring-3 #DB's frame onto the task's kernel stack before the ordinary path. Each is a side effect on how the next instruction runs, before or after any Rust frame. 171 rather than 90 since 2026-09-27, when check-asm-budget.py began counting every line of a raw-string global_asm! instead of the 3 its quotes were on: the file had not grown, the count had been short. It was 177 for one landing (docs/I386.md, I1), for six lines that loaded user data into `DS` and `ES` on every return to 32-bit code; since I2a each task keeps its own selectors, loaded by the switch, and the six lines are gone."
     },
     {
-      "file": "kernel/src/arch/x86_64/vdso.rs",
+      "file": "src/kernel/src/arch/x86_64/vdso.rs",
       "max_lines": 120,
       "reason": "The vDSO's clock_gettime, gettimeofday and time: machine code the kernel copies into a page every program maps, at whatever address it lands. Nothing in it may name an address or call anything outside itself, which compiled Rust cannot promise -- a 128-bit division is a call into compiler_builtins, a bounds check a call to a panic handler, and either would reach into the kernel's image from user mode. Linux compiles its vDSO as a shared object of its own; this is its three functions, rdtsc, and the mul and div that scale the TSC as the kernel's now_nanos does, instead of a second build and link. The boot check runs the bytes copied into every program's page, which is what shows there is no relocation in them."
     },
     {
-      "file": "native/rt/src/arch/aarch64.rs",
+      "file": "src/user/native/rt/src/arch/aarch64.rs",
       "max_lines": 20,
-      "reason": "A native program's side of the kernel's entry, and its first instructions. `_start`: the kernel enters a process with `eret`, not a call, so the frame pointer and link register hold no caller's frame and nothing promises the stack's alignment; they are zeroed and the stack aligned before the first Rust function is called, with the bootstrap handle left in X0. The trap: `svc #0` with the number in X8 and arguments in X0-X5 is `system_call`'s contract in kernel/src/arch/aarch64/trap.rs, and an instruction plus a register assignment is what `asm!` is -- the instruction and a line per register operand, for a call and for `exit_group`, because the register assignment is the contract. Nothing a runtime adds later (threads, TLS, allocation) belongs here."
+      "reason": "A native program's side of the kernel's entry, and its first instructions. `_start`: the kernel enters a process with `eret`, not a call, so the frame pointer and link register hold no caller's frame and nothing promises the stack's alignment; they are zeroed and the stack aligned before the first Rust function is called, with the bootstrap handle left in X0. The trap: `svc #0` with the number in X8 and arguments in X0-X5 is `system_call`'s contract in src/kernel/src/arch/aarch64/trap.rs, and an instruction plus a register assignment is what `asm!` is -- the instruction and a line per register operand, for a call and for `exit_group`, because the register assignment is the contract. Nothing a runtime adds later (threads, TLS, allocation) belongs here."
     },
     {
-      "file": "native/rt/src/arch/armv7a.rs",
+      "file": "src/user/native/rt/src/arch/armv7a.rs",
       "max_lines": 20,
-      "reason": "AArch64's argument in ARM state. `_start`: the kernel enters a process with `rfeia`, so R11 and LR hold no caller's frame and the stack may not be the multiple of 8 the AAPCS requires at a call; they are zeroed and the stack aligned before `ferrix_rt_start`, with the bootstrap handle left in R0. The trap: `svc #0` with the number in R7 and arguments in R0-R5, the EABI contract `system_call` in kernel/src/arch/armv7a/trap.rs reads -- the instruction and a line per register operand, for a call and for `exit_group`, because the register assignment is the contract."
+      "reason": "AArch64's argument in ARM state. `_start`: the kernel enters a process with `rfeia`, so R11 and LR hold no caller's frame and the stack may not be the multiple of 8 the AAPCS requires at a call; they are zeroed and the stack aligned before `ferrix_rt_start`, with the bootstrap handle left in R0. The trap: `svc #0` with the number in R7 and arguments in R0-R5, the EABI contract `system_call` in src/kernel/src/arch/armv7a/trap.rs reads -- the instruction and a line per register operand, for a call and for `exit_group`, because the register assignment is the contract."
     },
     {
-      "file": "native/rt/src/arch/x86_64.rs",
+      "file": "src/user/native/rt/src/arch/x86_64.rs",
       "max_lines": 20,
-      "reason": "`_start`: `ferrix_enter_user` enters a process with `SYSRET` and the stack a multiple of 16 with no return address, where a function expects to be entered by a `call` eight bytes below that; the stack is aligned, RBP zeroed, and `ferrix_rt_start` called with the bootstrap handle still in RDI. The trap: `SYSCALL` with the number in RAX, arguments in RDI, RSI, RDX, R10, R8, R9 and RCX and R11 destroyed, as `ferrix_syscall_stub` in kernel/src/arch/x86_64/syscall.rs defines -- the instruction and a line per register operand, for a call and for `exit_group`, because the register assignment is the contract."
+      "reason": "`_start`: `ferrix_enter_user` enters a process with `SYSRET` and the stack a multiple of 16 with no return address, where a function expects to be entered by a `call` eight bytes below that; the stack is aligned, RBP zeroed, and `ferrix_rt_start` called with the bootstrap handle still in RDI. The trap: `SYSCALL` with the number in RAX, arguments in RDI, RSI, RDX, R10, R8, R9 and RCX and R11 destroyed, as `ferrix_syscall_stub` in src/kernel/src/arch/x86_64/syscall.rs defines -- the instruction and a line per register operand, for a call and for `exit_group`, because the register assignment is the contract."
     }
   ]
 }

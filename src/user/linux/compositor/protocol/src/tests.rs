@@ -1,6 +1,6 @@
 //! The generated tables against libwayland's own.
 //!
-//! `scripts/gen/gen-wayland-protocol.py` reads the same XML `wayland-scanner`
+//! `tools/common/gen/gen-wayland-protocol.py` reads the same XML `wayland-scanner`
 //! reads and could read it wrong -- an opcode off by one, an argument type
 //! confused, a nullable flag dropped -- and nothing in the generator would
 //! notice. `probe/interfaces.c` links against the real `wl_*_interface`
@@ -204,7 +204,7 @@ struct Probed {
 /// [`ArgType::AnyNewId`] carrying all three, because a server that read them
 /// as three separate arguments could not tell this `new_id` from an ordinary
 /// one. So the `s` and `u` in front of an unnamed `n` are folded back into
-/// it here. The bytes are the same either way, and `userland/compositor/wire`'s own
+/// it here. The bytes are the same either way, and `src/user/linux/compositor/wire`'s own
 /// probe is what shows that.
 fn parse_signature(text: &str, anywhere: &[usize]) -> (u32, Vec<ArgType>) {
     let mut since = String::new();

@@ -1,7 +1,7 @@
 //! Fuzz the virtio-input driver's batch: from the events a device wrote to
 //! the EVENTS messages the core reads.
 //!
-//! `libs/drivers/virtio-input`'s [`Batch`] is the driver's whole judgement about
+//! `src/lib/drivers/input/virtio-input`'s [`Batch`] is the driver's whole judgement about
 //! where one message ends and the next begins, and the core's session is what
 //! judges the result. A device chooses the events and when the glue takes
 //! messages; the fuzzer plays both, and the session on the other side is a

@@ -1,4 +1,4 @@
-//! The launcher's helper, `tools/pixel7/helper.py`, which
+//! The launcher's helper, `tools/vendor/google/pixel7/helper.py`, which
 //! boots the phone into Ferrix with `fastboot boot`: asked over its HTTP port,
 //! and started by this app when it is not running.
 

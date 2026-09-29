@@ -1,7 +1,7 @@
 {
   "//": [
     "Functions in the certified item at or above the floors in",
-    "scripts/check/check-complexity.py, with the scores they had when",
+    "tools/common/check/check-complexity.py, with the scores they had when",
     "recorded. A debt register, not an allowance: an entry may",
     "improve or vanish freely, and the gate fails when one gets",
     "worse, when a new one appears, or when a stale entry is",

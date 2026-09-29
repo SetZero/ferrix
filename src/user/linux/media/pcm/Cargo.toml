@@ -15,7 +15,7 @@ path = "src/lib.rs"
 # Declarations only: open and ioctl are the C library std already links.
 libc = "0.2.189"
 # The ALSA numbers and layouts, checked against the UAPI header.
-ferrix-linux-abi = { path = "../../../libs/proto/linux-abi" }
+ferrix-linux-abi = { path = "../../../../lib/proto/linux-abi" }
 
 [lints]
 workspace = true

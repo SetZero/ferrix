@@ -2,8 +2,8 @@
  * Ferrix — SysML v2 model, part 20: the low-level requirements of a
  * device's claim, its node, and its quiesce.
  *
- * What each unit of kernel/src/claim.rs and kernel/src/device.rs does, and
- * the quiesce in kernel/src/syscall/native.rs, as `ItemLowLevel`
+ * What each unit of src/kernel/src/claim.rs and src/kernel/src/device.rs does, and
+ * the quiesce in src/kernel/src/syscall/native.rs, as `ItemLowLevel`
  * requirements (part 13 defines the format): a device claimed through its
  * core's control channels, the number its node is published under, the
  * apertures and vectors a node hands out and nothing past them, the MSI-X
@@ -34,7 +34,7 @@ package FerrixDeviceRequirements {
     private import FerrixItemRequirements::*;
 
     package Claims {
-        doc /* kernel/src/claim.rs: a device claimed through a core's control
+        doc /* src/kernel/src/claim.rs: a device claimed through a core's control
              * channel, which a quiesce waits out, and the numbers the cores'
              * nodes are published under. */
 
@@ -127,7 +127,7 @@ package FerrixDeviceRequirements {
     }
 
     package Nodes {
-        doc /* kernel/src/device.rs: the apertures and vectors a node hands
+        doc /* src/kernel/src/device.rs: the apertures and vectors a node hands
              * out, the nodes published, and the bus mastering a node's DMA
              * is switched with. */
 
@@ -340,7 +340,7 @@ package FerrixDeviceRequirements {
     }
 
     package Quiesce {
-        doc /* The quiesce in kernel/src/syscall/native.rs: every core that
+        doc /* The quiesce in src/kernel/src/syscall/native.rs: every core that
              * serves a device waited out, its DMA turned off, and the claims
              * a core keeps past its driver let go, before the next driver is
              * given it. */

@@ -53,7 +53,7 @@ Three decisions, each answering one link of the `Task -> Thread -> Process`
 chain.
 
 **1. The core process is a type of its own, and the POSIX process contains
-it.** `kernel/src/object/process.rs` holds `Process { space, pid, started,
+it.** `src/kernel/src/object/process.rs` holds `Process { space, pid, started,
 handles, membership, counted, exit }` -- what the core enforces or reports,
 and nothing else -- with `Exit`, `ProcessRef` and `Control`, which are what a
 native handle to a process holds. The personality's `syscall::process::
@@ -147,9 +147,9 @@ files, with no edge left behind.
 
 ### The trap
 
-The obvious reading of F-01 is "move `Process` to `kernel/src/object/
+The obvious reading of F-01 is "move `Process` to `src/kernel/src/object/
 process.rs`". **That is the wrong change and it would make the item worse.**
-`Process` is not a clean core type. Read `kernel/src/syscall/process.rs:65` —
+`Process` is not a clean core type. Read `src/kernel/src/syscall/process.rs:65` —
 its fields include:
 
 | Field | Belongs to |
@@ -174,7 +174,7 @@ item got structurally worse, which is the failure mode worth naming loudest.
 Split it. A core object holding what the core enforces, and a personality
 extension holding what POSIX needs.
 
-1. `kernel/src/object/process.rs` — `Process { space, pid, started, handles }`,
+1. `src/kernel/src/object/process.rs` — `Process { space, pid, started, handles }`,
    plus `pid()`, `space()`, `with_handles()` and job membership. This is what
    `object/`, `sched/` and `trap.rs` consume.
 2. The personality keeps a `PosixProcess` (name it as the tree prefers) holding
@@ -242,7 +242,7 @@ Four code commits, each green, then the documents:
 
 ### Verify
 
-`python3 scripts/check/check-item-boundary.py --report` shows no `F-01` or `F-06`
+`python3 tools/common/check/check-item-boundary.py --report` shows no `F-01` or `F-06`
 entry and nothing from `object/` or `sched/` above the core. Every boot gate
 exercises this code: `object/check.rs` and `sched/check.rs` on every boot,
 `test-threads` for the thread path, `test-jobs` for job control, and `test-shell`
@@ -307,7 +307,7 @@ wants, via an arch-owned enum or a plain discriminant the personality maps.
 **Done 2026-09-26.** F-05 closed on 2026-09-25 and F-04 on 2026-09-26, and
 F-08, which had no order of its own, went with it: power, init and `devmgr`
 took the same shape, an interface the item defines and the load ring
-registers into. `kernel/src/hooks.rs` is the list type the item keeps
+registers into. `src/kernel/src/hooks.rs` is the list type the item keeps
 registrations in, and `main.rs`'s `register_load` is the one place they are
 made, in bring-up order, with a check that each was (FX-0006). FINDINGS.md
 F-04 and F-08 say what moved and what the gate still cannot see.
@@ -400,7 +400,7 @@ command list for the run.
 
 ### Verify
 
-`python3 scripts/check/check-item-boundary.py --report` shows no upward reference and
+`python3 tools/common/check/check-item-boundary.py --report` shows no upward reference and
 an empty register. The full boot gate row, `test-threads`, `test-jobs`,
 `test-net` and `test-boot --mitigations off`: every native call devmgr and its
 drivers make, every Linux call busybox makes, and the paranoid check's
@@ -413,7 +413,7 @@ breakpoints, go through the new paths.
 **Done 2026-09-25.** See F-25. **Corrected 2026-09-26:** the gate's string
 stripping mis-paired quotes after a `\`-newline continuation and left 328 of
 the item's 1,887 functions unmeasured. It now reads code through
-`scripts/check/rustlex.py`, shared with the boundary gate, and the baseline was
+`tools/common/check/rustlex.py`, shared with the boundary gate, and the baseline was
 re-recorded at 47 entries.
 
 **Closes:** F-25. **Size:** medium. No kernel changes.
@@ -422,7 +422,7 @@ The one code gate the audit did not build. EN 50716 requires a coding standard
 with metrics; eleven gates enforce other properties and none bounds cyclomatic
 complexity, function length or recursion.
 
-Follow `scripts/check/check-item-boundary.py` exactly — it is the current best
+Follow `tools/common/check/check-item-boundary.py` exactly — it is the current best
 example of the ratchet pattern: measure, record a baseline, refuse growth,
 fail on stale entries.
 
@@ -518,11 +518,11 @@ Arm pair and one on every architecture (`boot-options`). Measured together:
 `ItemLowLevel` are defined in `docs/sysml/13-item-requirements.sysml`, with
 `statement`, `criterion`, `parent` and (low level) `unit` as string
 attributes; the model reader learned string values that span lines and hold
-the notation's own punctuation. `scripts/check/check-traceability.py` runs in
+the notation's own punctuation. `tools/common/check/check-traceability.py` runs in
 `cargo xtask check` with `--check`, self-tests on every run, keeps the
-baseline in `scripts/data/traceability-baseline.json` and writes
+baseline in `tools/common/data/traceability-baseline.json` and writes
 `docs/certification/TRACEABILITY.md`. Two departures from the design below:
-a `/// Verifies:` tag on an xtask gate goes on the function in `xtask/src`
+a `/// Verifies:` tag on an xtask gate goes on the function in `tools/common/xtask/src`
 that implements the gate; and the run-time column needed evidence the coverage
 run did not keep -- `coverage-report.py` dropped the check files' statements
 as not the item's -- so it now records them apart, in the `verification` map
@@ -558,11 +558,11 @@ the per-subsystem slices. What step 3 should know:
 **Step 3 done 2026-09-27: the pilot, `object/`.** 103 low-level
 requirements, `L.object.1` to `L.object.103`, in
 `docs/sysml/14-object-requirements.sysml`, one package per file of
-`kernel/src/object/`. **78 are verified**, by 49 check functions and 4 host
+`src/kernel/src/object/`. **78 are verified**, by 49 check functions and 4 host
 tests newly tagged (and one tag added to a check tagged already) in object/'s own check files and in
 `syscall/native_check.rs`, `syscall/init_calls_check.rs`,
 `fs/cgroupfs/{native,delegation,controllers,oom}_check.rs`,
-`fs/kmem_check.rs` and `libs/kernel/objects`; **25 need a check** and are
+`fs/kmem_check.rs` and `src/lib/kernel/objects`; **25 need a check** and are
 the baseline's `L.object.*` (TRACEABILITY.md lists them). Of object/'s 261
 product functions, 173 are a requirement's unit, 83 are accessors and 5 are
 check code in a product file; **0 are named by none**, and the gate now holds
@@ -640,7 +640,7 @@ What the pilot taught, for the slices that copy it:
   a requirement may still name one where it is the behaviour's entry point
   (object/ names 31).
 * **Check code in a product file is listed, not required.**
-  `scripts/data/traceability-units.json` names each with the reason it has
+  `tools/common/data/traceability-units.json` names each with the reason it has
   not moved (5 in object/, the quarantine's check and what serves it); the
   gate fails on a stale entry. Step 2's `main.rs` sweeps go there too until
   they move; moving them is the better answer, since a tag can then go on
@@ -714,7 +714,7 @@ What this slice found, for review:
 
 * **Most of a unit is proved only end to end**, by the out-of-domain probe
   in `pci/virtio.rs`, which is product code. The tag is on what judges its
-  count, `xtask/src/qemu.rs`'s `fault_problem`: `.7`, `.10`, `.35`, `.36`
+  count, `tools/common/xtask/src/qemu.rs`'s `fault_problem`: `.7`, `.10`, `.35`, `.36`
   and `H.DMA.2`. It skips on an AArch64 boot whose PCI came from the device
   tree and on a QEMU without SMMUv3 stage 2, and passes there without
   proving anything. Moving the probe into a check file is the pci slice's
@@ -726,7 +726,7 @@ What this slice found, for review:
   for the report, and `bring_up` with `domain_for` places them for the
   domains, from the same tables by different code. The report's counts
   prove the first; only the probe proves the second, on one function.
-* `xtask/src/dma_faults.rs`'s `problem` (every VT-d fault traced over a run
+* `tools/common/xtask/src/dma_faults.rs`'s `problem` (every VT-d fault traced over a run
   is one the kernel named) is left untagged: with no probe it passes
   vacuously, so it proves `.40` only together with `fault_problem`.
 * **Time.** About 45 minutes of agent time from the first read to the
@@ -905,8 +905,8 @@ What this slice found, for review:
 
 **Step 4, the x86-64, trap and system-call-entry slice, done 2026-09-27.**
 128 low-level requirements in `docs/sysml/18-x86-64-requirements.sysml`, in
-three id spaces: `L.x86_64.1` to `.119` for `kernel/src/arch/x86_64/`,
-`L.trap.1` to `.6` for `kernel/src/trap.rs`, and `L.syscall.1` to `.3` for
+three id spaces: `L.x86_64.1` to `.119` for `src/kernel/src/arch/x86_64/`,
+`L.trap.1` to `.6` for `src/kernel/src/trap.rs`, and `L.syscall.1` to `.3` for
 `syscall/mod.rs`'s dispatcher (`dispatch_with`, `native_call`,
 `unanswered`); one package per part -- descriptors, user state, processors,
 paranoid entries, speculation, timers, both ABIs' signal frames, the
@@ -1272,11 +1272,11 @@ reads:
   writable and executable");
 * `parent` -- one or more ids of the level above (`L.*` → `H.*`, `H.*` → `O.*`,
   `ASR-*` or `G.*`);
-* `unit` (low level only) -- `path::function` in `kernel/src`, which the gate
-  resolves with `scripts/check/rustlex.py`, so a renamed function breaks the
+* `unit` (low level only) -- `path::function` in `src/kernel/src`, which the gate
+  resolves with `tools/common/check/rustlex.py`, so a renamed function breaks the
   trace loudly instead of silently.
 
-The existing parser (`scripts/gen/sysml/parser.py`) reads these; the generated
+The existing parser (`tools/common/gen/sysml/parser.py`) reads these; the generated
 architecture document gains a requirements chapter from them.
 
 **Verification is named where the check is.** A check function, in a
@@ -1301,14 +1301,14 @@ records it, F-10), and (3) the boot reaches `FERRIX-BOOT-OK`. The matrix shows
 all three per architecture, so a check compiled out on one architecture shows
 as unverified there rather than passing everywhere by its name.
 
-**The gate** (`scripts/check/check-traceability.py`, run by `cargo xtask
+**The gate** (`tools/common/check/check-traceability.py`, run by `cargo xtask
 check`, generating `docs/certification/TRACEABILITY.md` with a `--check` mode):
 
 * fails on an id named by a check that no requirement defines;
 * fails on a low- or high-level requirement with no `parent`, a `parent` that
   does not exist, a `unit` that does not resolve, or no `statement`/`criterion`;
 * fails on a requirement with no verifier -- **as a ratchet**: a baseline file,
-  `scripts/data/traceability-baseline.json`, lists the requirements written but
+  `tools/common/data/traceability-baseline.json`, lists the requirements written but
   not yet verified, and it may only shrink, as `fallible-alloc-baseline.json`
   does;
 * reports, without failing yet, the item's functions no low-level requirement
@@ -1407,7 +1407,7 @@ engineering — **answer step 1 before planning anything that depends on it.**
    list cover `armv7a-none-eabi` and the three UEFI targets? Expect those four
    to fall outside it.
 2. If they do, the reference configuration in
-   `scripts/data/certification-item.json` must say which targets are built with a
+   `tools/common/data/certification-item.json` must say which targets are built with a
    qualified toolchain and which are not.
 3. Pinning a Ferrocene release means editing `rust-toolchain.toml`, which is
    its own commit by house convention, and re-running every gate.
@@ -1464,13 +1464,13 @@ code reports failure, except 73 at bring-up that are fatal by design. The
 design is [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) §1, and what follows is
 what to know before changing code under it.
 
-**The rule the gate enforces.** `scripts/check/check-fallible-alloc.py` fails
+**The rule the gate enforces.** `tools/common/check/check-fallible-alloc.py` fails
 `cargo xtask check` on any call to an allocating standard-library API in the
 item that is not argued at the site. So in the item:
 
 * `Box::new`, `Vec::push`, `collect`, `format!`, `to_vec` and the rest go
   through `crate::fallible` (`try_box`, `try_push`, `try_collect`,
-  `try_format`, `try_to_vec`, …), re-exported from `libs/kernel/fallible`.
+  `try_format`, `try_to_vec`, …), re-exported from `src/lib/kernel/fallible`.
 * `Arc::new` is `fallible::try_arc`, `Arc::new_cyclic` is `try_arc_cyclic`,
   and a map or set insert is `fallible::insert` or `insert_into_set`. When the
   value must not be lost if the insert is refused, enter the section first
@@ -1528,7 +1528,7 @@ tree; a native supervisor sets the same limits through a job handle.
 
 ### The counters: one quota slot per job, in a table of atomics
 
-Every job but the tree's root gets a **slot** (`kernel/src/object/quota.rs`):
+Every job but the tree's root gets a **slot** (`src/kernel/src/object/quota.rs`):
 for each resource a use count, a limit and a count of refusals, plus the
 CPU weight and load, all atomics. A slot names its parent's by index.
 
@@ -1602,7 +1602,7 @@ a program's, and is not charged as an object; its pages are charged as memory.
 
 **CPU**: a weight per job (`cpu.weight`, 1 to 10,000, default 100), so that a
 job's share no longer grows with its runnable tasks. Not a group entity in
-`libs/kernel/sched`'s EEVDF -- S1's 13 points, the largest change to the scheduler
+`src/lib/kernel/sched`'s EEVDF -- S1's 13 points, the largest change to the scheduler
 since EEVDF -- but the same arithmetic done on each task's weight: a job's
 *load* is the sum of its runnable tasks' weights and of its busy children's
 weights, and a task's effective weight is its own weight times, at each level
@@ -1756,18 +1756,18 @@ are not listed. Grouped by what is held:
 
 | Kind | Where | Bound before this |
 |---|---|---|
-| Open file descriptions | `libs/fs/vfs` `OpenFile::new`, `with_io` | descriptors per process -- and none in flight, in a mapping, or behind an epoll registration |
-| Dentries, anonymous-file locations, mounts | `libs/fs/vfs` `Dentry::new`, `Location::detached`, `Namespace::mount` | a 4,096-entry cache, plus whatever an open file or a working directory pins |
-| tmpfs inodes, names, symbolic links, instances; a file's VMO | `libs/fs/vfs/src/tmpfs.rs`, `fs/pages.rs` | none: `/tmp` and `/dev/shm` are mode 1777 |
-| Pipes and their buffers | `fs/pipe.rs`, `libs/fs/vfs/src/pipe.rs` | 64 KiB a pipe |
-| `AF_UNIX` sockets, their queues, descriptors in flight | `fs/socket.rs`, `libs/fs/vfs/src/socket.rs` | 212,992 bytes of payload a direction, but an empty record counts one byte and holds a hundred, and a message carrying 253 descriptors counts one |
+| Open file descriptions | `src/lib/fs/vfs` `OpenFile::new`, `with_io` | descriptors per process -- and none in flight, in a mapping, or behind an epoll registration |
+| Dentries, anonymous-file locations, mounts | `src/lib/fs/vfs` `Dentry::new`, `Location::detached`, `Namespace::mount` | a 4,096-entry cache, plus whatever an open file or a working directory pins |
+| tmpfs inodes, names, symbolic links, instances; a file's VMO | `src/lib/fs/vfs/src/tmpfs.rs`, `fs/pages.rs` | none: `/tmp` and `/dev/shm` are mode 1777 |
+| Pipes and their buffers | `fs/pipe.rs`, `src/lib/fs/vfs/src/pipe.rs` | 64 KiB a pipe |
+| `AF_UNIX` sockets, their queues, descriptors in flight | `fs/socket.rs`, `src/lib/fs/vfs/src/socket.rs` | 212,992 bytes of payload a direction, but an empty record counts one byte and holds a hundred, and a message carrying 253 descriptors counts one |
 | epoll sets and registrations; eventfd, timerfd, signalfd | `fs/epoll.rs`, `fs/eventfd.rs`, `fs/timerfd.rs`, `fs/signalfd.rs` | descriptors -- but a closed file's registration stays until the next wait |
-| Regions of an address space; a shared file mapping's records | `libs/kernel/vma`, `user/space.rs` | the address space: 2^35 pages. No `max_map_count`, and a shared file mapping makes no VMO for the object limit to see |
+| Regions of an address space; a shared file mapping's records | `src/lib/kernel/vma`, `user/space.rs` | the address space: 2^35 pages. No `max_map_count`, and a shared file mapping makes no VMO for the object limit to see |
 | Record and whole-file locks | `syscall/flock.rs` | none: one owner may lock any number of disjoint ranges |
-| Descriptor tables | `libs/fs/vfs/src/fd.rs` | `RLIMIT_NOFILE` a process |
+| Descriptor tables | `src/lib/fs/vfs/src/fd.rs` | `RLIMIT_NOFILE` a process |
 | A process's recorded program and arguments | `syscall/process.rs` `record_exec` | 256 KiB a process |
 | `/proc` and cgroupfs snapshots | `fs/procfs.rs` | one a descriptor, sized by what it shows |
-| Internet sockets and their queues | `net/socket.rs`, `libs/network/net`, `libs/network/nettcp` | 64 KiB each way a connection, 212,992 bytes of payload a datagram socket -- but an empty datagram counts nothing |
+| Internet sockets and their queues | `net/socket.rs`, `src/lib/network/net`, `src/lib/network/nettcp` | 64 KiB each way a connection, 212,992 bytes of payload a datagram socket -- but an empty datagram counts nothing |
 | Netlink queues | `net/netlink` | 256 KiB a socket |
 
 And five that are not a missing charge but a leak or a missing check, which
@@ -1796,7 +1796,7 @@ the global tables netlink writes, which get the privilege check Linux has.
   limit exactly and the compare-and-swap argument holds unchanged. A second
   count, kernel bytes alone, is kept beside it for `memory.stat`'s `kernel`
   line, and never limited.
-* **The token.** A new crate, `libs/kernel/kmem`, holds a `Charge`: a job's slot
+* **The token.** A new crate, `src/lib/kernel/kmem`, holds a `Charge`: a job's slot
   and a byte count, which uncharges as it drops. The object it pays for
   holds it, so every path that frees the object frees the charge, as W-13's
   object tokens do. It is a crate and not a kernel type because half the
@@ -1806,7 +1806,7 @@ the global tables netlink writes, which get the privilege check Linux has.
   charge is to nobody, which is also what the root job's programs get.
 * **What a charge is worth.** What the heap gave, not what was asked: the
   size class a request is served from, or the pages of a large one, from
-  `libs/kernel/heap`'s own arithmetic. A buffer is charged at its capacity, not its
+  `src/lib/kernel/heap`'s own arithmetic. A buffer is charged at its capacity, not its
   length, since that is what it holds.
 * **Who pays.** The job of the task whose call made the object, as Linux's
   `GFP_KERNEL_ACCOUNT` charges `current`'s memory cgroup. A buffer that
@@ -1859,7 +1859,7 @@ under KVM: open and close, a pipe write and read, a tmpfs create and write.
 
 ### As built
 
-Eight commits on `cert-f37-heap-quota`: this design; `libs/kernel/kmem`; the five
+Eight commits on `cert-f37-heap-quota`: this design; `src/lib/kernel/kmem`; the five
 fixes the audit found, in four commits -- a btrfs transaction committed once
 its changed nodes pass the threshold, a process's task list pruned, netlink
 changes refused without privilege, a closed listener's connections reaped
@@ -1950,7 +1950,7 @@ blocks, 20 impls and 120 `unsafe fn`s that need a `# Safety` section (the two
 before). Sorted by what each one actually does, they fall into fourteen
 obligations, which are the table in
 [SAFETY-MANUAL.md](SAFETY-MANUAL.md) §2 and `unsafe_obligations` in
-`scripts/data/safety-requirements.json`: `TRANSLATE`, `PROTECT`,
+`tools/common/data/safety-requirements.json`: `TRANSLATE`, `PROTECT`,
 `USER-COPY`, `FRAME`, `DMA`, `DEVICE`, `CONTEXT`, `ENTRY`, `SYSREG`,
 `FIRMWARE`, `SHARED`, `KMEM`, `BOOT-DATA`, `PROBE`. Each names the ASR, FM or
 AoU it serves and the code that argues it. As tagged: 123 `CONTEXT`, 118
@@ -1991,12 +1991,12 @@ valid without carrying.
 
 ### The gate
 
-`scripts/check/check-unsafe-audit.py` finds the comment that covers each site
+`tools/common/check/check-unsafe-audit.py` finds the comment that covers each site
 (it already did, to require one), reads the id, and:
 
 * fails on an id the registry does not define, anywhere in the tree;
 * in the item, counts sites with no id per file against
-  `scripts/data/unsafe-trace-baseline.json`, a ratchet like the fallible
+  `tools/common/data/unsafe-trace-baseline.json`, a ratchet like the fallible
   allocation one: a new untagged site fails, and so does a count that has
   fallen without `--record`. The target is an empty map;
 * prints the item's sites per id, so a new `(SHARED)` shows in a diff.
@@ -2010,7 +2010,7 @@ resolves every `argued_by`.
 ### Verify
 
 `cargo xtask check` (the "unsafe audit" and "safety requirements" steps). The
-tagging commits are comment-only; `git diff main -- kernel/src` filtered to
+tagging commits are comment-only; `git diff main -- src/kernel/src` filtered to
 lines that are not comments is empty.
 
 ---

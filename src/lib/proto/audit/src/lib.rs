@@ -2,7 +2,7 @@
 //! decision it makes, and hands a reader as they are
 //! (`docs/certification/AUDIT.md` §2).
 //!
-//! The kernel's store (`kernel/src/audit.rs`) keeps records of this layout
+//! The kernel's store (`src/kernel/src/audit.rs`) keeps records of this layout
 //! in its two rings; a reader -- init's `audit.service` -- is handed them
 //! byte for byte and writes them to disk. So the layout is here, where both
 //! sides and the host tests can reach it, and not in the kernel.

@@ -174,7 +174,7 @@ impl<S: Syscall> Device<S> {
     }
 
     /// `render_control_create`: the *render* control channel for this
-    /// device, over which `libs/proto/renderctl`'s HELLO goes next
+    /// device, over which `src/lib/proto/renderctl`'s HELLO goes next
     /// (`docs/GPU.md` §3.3).
     ///
     /// Separate from [`Device::display_control`], because a card has two

@@ -2,7 +2,7 @@
 # Builds alsa-lib 1.2.16.1 as a static library against ferrousli, for
 # alsa-utils' aplay and speaker-test (docs/AUDIO.md, U1).
 #
-#     tools/ports/alsa-lib/build.sh [--arch <arch>]    # from userland/ferrousli/
+#     tools/ports/alsa-lib/build.sh [--arch <arch>]    # from src/user/linux/ferrousli/
 #
 # Installs, under $FERRIX_PORTS (see ../common.sh):
 #   <arch>/include/alsa/*.h
@@ -22,7 +22,7 @@
 #
 # Its configuration is at /usr/share/ferrousli/alsa, not /usr/share/alsa:
 # that is where Chrome's own alsa-lib, Debian's, finds Debian's configuration
-# on its volume (xtask/src/chrome.rs), and the two are not the same build.
+# on its volume (tools/common/xtask/src/chrome.rs), and the two are not the same build.
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

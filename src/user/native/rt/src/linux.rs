@@ -2,10 +2,10 @@
 //!
 //! A native program is not a POSIX one and has no libc, no descriptors of its
 //! own and no `std`. But the kernel gives *every* process a descriptor table
-//! and a namespace (`Process::with_pid` in `kernel/src/syscall/process.rs`),
+//! and a namespace (`Process::with_pid` in `src/kernel/src/syscall/process.rs`),
 //! and `dispatch` picks the ABI by the number's range and by nothing else --
 //! so a native program that wants a socket may simply ask for one. This
-//! module is that: the handful of calls `native/drivers/vport` needs to put a virtio
+//! module is that: the handful of calls `src/user/native/drivers/console/vport` needs to put a virtio
 //! port on a Unix socket, and no more.
 //!
 //! `docs/CLIPBOARD.md` §5 is why this exists. It is deliberately not a libc:
@@ -74,7 +74,7 @@ pub fn sockaddr_un(path: &[u8]) -> Option<([u8; SOCKADDR_UN_BYTES], usize)> {
 ///
 /// The `Errno` a value in `-4095..=-1` names.
 pub fn decode(value: usize) -> Result<usize, Errno> {
-    // The same window `libs/proto/native`'s decode uses, and Linux's own.
+    // The same window `src/lib/proto/native`'s decode uses, and Linux's own.
     let signed = value as isize;
     if (-4095..0).contains(&signed) {
         Err(Errno(u16::try_from(-signed).unwrap_or(0)))

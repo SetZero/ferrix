@@ -572,9 +572,9 @@ fn the_commit_flushes_before_the_superblock() {
 }
 
 /// Write the images the other tests produce to `FERRIX_BTRFS_OUT` for host
-/// `btrfs check`; see `scripts/test/btrfs-check-writer.sh`.
+/// `btrfs check`; see `tools/common/test/btrfs-check-writer.sh`.
 #[test]
-#[ignore = "writes images for host btrfs check; run by scripts/test/btrfs-check-writer.sh"]
+#[ignore = "writes images for host btrfs check; run by tools/common/test/btrfs-check-writer.sh"]
 fn btrfs_check_images() {
     let out = std::env::var("FERRIX_BTRFS_OUT").expect("FERRIX_BTRFS_OUT names a directory");
     for (name, device) in fsops::images() {

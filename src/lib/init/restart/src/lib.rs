@@ -3,7 +3,7 @@
 //!
 //! Its own crate, and one that allocates nothing, because `devmgr` -- a
 //! `no_std` native program with no allocator -- shares it with the service
-//! manager (`libs/init/svc`, which re-exports every name here from where it
+//! manager (`src/lib/init/svc`, which re-exports every name here from where it
 //! always was). It also parses nothing: the text of `Restart=` or a signal's
 //! name is the service manager's to read.
 //!

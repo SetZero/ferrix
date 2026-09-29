@@ -2,7 +2,7 @@
  * Ferrix — SysML v2 model, part 19: the low-level requirements of
  * arch/aarch64.
  *
- * What each unit of kernel/src/arch/aarch64/ does, as `ItemLowLevel`
+ * What each unit of src/kernel/src/arch/aarch64/ does, as `ItemLowLevel`
  * requirements (part 13 defines the format, part 14 is the pilot this
  * copies): the trap path and the signal frames it builds, the context switch,
  * the interrupt controllers and the generic timer, the boot console, the
@@ -32,13 +32,13 @@
  * the area. The pilot's rules hold: a requirement names every function that
  * carries its behaviour; it is no broader than one check can prove; an
  * accessor needs no requirement of its own; and check code living in a
- * product file is listed in scripts/data/traceability-units.json.
+ * product file is listed in tools/common/data/traceability-units.json.
  */
 package FerrixAarch64Requirements {
     private import FerrixItemRequirements::*;
 
     package Traps {
-        doc /* kernel/src/arch/aarch64/trap.rs: the vector table, the save and
+        doc /* src/kernel/src/arch/aarch64/trap.rs: the vector table, the save and
              * restore sequences, and the decoding of a syndrome into the
              * architecture-neutral trap the generic dispatcher acts on. */
 
@@ -148,7 +148,7 @@ package FerrixAarch64Requirements {
     }
 
     package Signals {
-        doc /* kernel/src/arch/aarch64/signal.rs: the rt_sigframe Linux builds
+        doc /* src/kernel/src/arch/aarch64/signal.rs: the rt_sigframe Linux builds
              * on AArch64 and the restore that reads it back, and the rewind of
              * a system call a signal interrupted. */
 
@@ -200,7 +200,7 @@ package FerrixAarch64Requirements {
     }
 
     package Context {
-        doc /* kernel/src/arch/aarch64/switch.rs: moving between kernel stacks,
+        doc /* src/kernel/src/arch/aarch64/switch.rs: moving between kernel stacks,
              * and a user task's floating-point, SIMD and thread-pointer state
              * across the switch, a fork and an execve. */
 
@@ -245,7 +245,7 @@ package FerrixAarch64Requirements {
     }
 
     package Interrupts {
-        doc /* kernel/src/arch/aarch64/gic.rs, gic/gicv3.rs, gic/gicv3_its.rs
+        doc /* src/kernel/src/arch/aarch64/gic.rs, gic/gicv3.rs, gic/gicv3_its.rs
              * and the interrupt half of mod.rs: which controller the machine
              * has, a GICv3 and its ITS brought up, lines masked and let through,
              * and interrupts claimed, dispatched and retired. */
@@ -424,7 +424,7 @@ package FerrixAarch64Requirements {
     }
 
     package Timer {
-        doc /* kernel/src/arch/aarch64/timer.rs and its wrappers in mod.rs: the
+        doc /* src/kernel/src/arch/aarch64/timer.rs and its wrappers in mod.rs: the
              * generic timer's virtual counter and comparator. */
 
         requirement <'L.aarch64.24'> theTimerFiresOnce : ItemLowLevel {
@@ -472,7 +472,7 @@ package FerrixAarch64Requirements {
     }
 
     package Console {
-        doc /* kernel/src/arch/aarch64/console.rs and its wrappers in mod.rs:
+        doc /* src/kernel/src/arch/aarch64/console.rs and its wrappers in mod.rs:
              * which console the command line names -- the PL011
              * (arch/arm_common), a 16550 at an MMIO address, or a ramoops
              * record -- and bytes to and from it. */
@@ -634,7 +634,7 @@ package FerrixAarch64Requirements {
     }
 
     package Processors {
-        doc /* kernel/src/arch/aarch64/smp.rs and the processor half of
+        doc /* src/kernel/src/arch/aarch64/smp.rs and the processor half of
              * cpu.rs: which processors firmware says can be started, starting
              * them through PSCI, and what each core says it has. */
 
@@ -683,7 +683,7 @@ package FerrixAarch64Requirements {
     }
 
     package Speculation {
-        doc /* kernel/src/arch/aarch64/speculation.rs: what each core needs
+        doc /* src/kernel/src/arch/aarch64/speculation.rs: what each core needs
              * against Spectre v2, Spectre-BHB, Meltdown and speculative store
              * bypass, from its own identification registers and Arm's lists,
              * what firmware is asked, what is applied and read back, and the

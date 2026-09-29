@@ -6,7 +6,7 @@ and `ferrix-statd` from it live, proven on the phone (run `usblog2`).
 §8 is where it stands and what the phone said. The rest of this
 document is the brief as it was written: why it is wanted, what the
 hardware is, what Ferrix already has to build it from, the rules that bound
-it, and the order to do it in. Read `boot/pixel7/HANDOVER.md` first;
+it, and the order to do it in. Read `src/boot/vendor/google/pixel7/HANDOVER.md` first;
 it is the phone's own state, and its rules apply here unchanged.
 
 **Who decides what, since 2026-09-26:** hardware use is the product owner
@@ -20,8 +20,8 @@ the owner's own word, which the survey shows is not needed.
 When the Pixel 7 boots Ferrix natively (`fastboot boot` from example), nothing
 reaches the PC until the run is over. Android is gone, Ferrix has no USB, and
 so the phone is off USB for the whole run. Ferrix's console and the stat
-service's samples (`userland/statd/`, `ferrix-statd`) go to the `ramoops` record in RAM,
-which Android reads back after the watchdog reset. `tools/pixel7/monitor` then
+service's samples (`src/user/linux/statd/`, `ferrix-statd`) go to the `ramoops` record in RAM,
+which Android reads back after the watchdog reset. `tools/vendor/google/pixel7/monitor` then
 loads the record and fills its graphs after the fact. The owner wants them
 live.
 
@@ -37,7 +37,7 @@ streams live. This is only for native boots.
 ## 2. The rules
 
 These come from the owner, who has lost a device's touchscreen calibration to
-an agent before. `boot/pixel7/HANDOVER.md`, "Never write anything that
+an agent before. `src/boot/vendor/google/pixel7/HANDOVER.md`, "Never write anything that
 survives a reset", is the full text.
 
 * **Only volatile state may be written**: RAM, and SoC controller registers
@@ -51,11 +51,11 @@ survives a reset", is the full text.
 * Before any test that writes hardware, list the exact addresses, check them
   against `~/.local/share/ferrix/pixel7/panther.dts`, tell the owner, and make
   each write conditional on the hardware being as expected (as
-  `boot/pixel7/src/display.rs`'s `take_over` does).
+  `src/boot/vendor/google/pixel7/src/display.rs`'s `take_over` does).
 * Architecture: the kernel enumerates devices and drives none of them
-  (`docs/ARCHITECTURE.md` §1 and §7; `scripts/data/device-access-allowlist.json` is
+  (`docs/ARCHITECTURE.md` §1 and §7; `tools/common/data/device-access-allowlist.json` is
   the gate). The controller is driven by a ring-3 driver. The kernel does only
-  what the chip shares, as `kernel/src/platform/st/stm32mp1/usb.rs` does for the DK1.
+  what the chip shares, as `src/kernel/src/platform/st/stm32mp1/usb.rs` does for the DK1.
 
 The phone is shared with other sessions (`phone-link-9f`'s PhoneLink app,
 `dev.phonelink`, stays installed, with its data). `adb devices` listing it
@@ -103,17 +103,17 @@ What the tree cannot tell, and phase 1 has to find:
 ## 4. What Ferrix already has
 
 * **The device model.** The kernel publishes a device tree node for a binding
-  it knows (`kernel/src/device.rs`: `BoardBinding`, `BoardDevice`,
-  `DmaShape`). `native/devmgr`'s `TREE_DRIVERS` table maps the binding to a
+  it knows (`src/kernel/src/device.rs`: `BoardBinding`, `BoardDevice`,
+  `DmaShape`). `src/user/native/devmgr`'s `TREE_DRIVERS` table maps the binding to a
   driver, which `devmgr` starts in a job of its own with the node's
   apertures and interrupt (`docs/DEVMGR.md` §3). Bindings are numbered in
-  `libs/proto/native-abi/src/types.rs`: `TREE_STM32_HDMI = 1`, `_USBH = 2`,
+  `src/lib/proto/native-abi/src/types.rs`: `TREE_STM32_HDMI = 1`, `_USBH = 2`,
   `_GPU = 3`. A new one takes 4.
 * **The precedent to copy.** The DK1's USB host:
-  * `kernel/src/platform/st/stm32mp1/usb.rs` turns on clocks, resets, regulators and the
+  * `src/kernel/src/platform/st/stm32mp1/usb.rs` turns on clocks, resets, regulators and the
     PHY's PLL, with values read back from U-Boot, and publishes the node.
-  * `native/drivers/usbhid` drives the EHCI controller.
-  * `libs/drivers/usb-host` is the host-testable logic, with a register model under
+  * `src/user/native/drivers/usb/usbhid` drives the EHCI controller.
+  * `src/lib/drivers/usb/usb-host` is the host-testable logic, with a register model under
     `src/tests/model.rs`.
   * `docs/INPUT.md` §7 is its design.
 
@@ -122,15 +122,15 @@ What the tree cannot tell, and phase 1 has to find:
 * **DMA.** `DmaShape`'s coherence flag (the DWC3 has no `dma-coherent`). The
   pinned VMOs `vmo_pin`, with `PIN_COHERENT` for uncached memory.
   `arch::clean_for_device` and `arch::flush_for_device`.
-* **The phone's board support.** `kernel/src/platform/google/gs201/watchdog.rs` covers the
+* **The phone's board support.** `src/kernel/src/platform/google/gs201/watchdog.rs` covers the
   two watchdogs only. The kernel feeds them while it runs, and ends a run by
   letting one fire (`reset_now`), which keeps the `ramoops` record.
-* **The console.** `kernel/src/arch/aarch64/console.rs` has three backends:
+* **The console.** `src/kernel/src/arch/aarch64/console.rs` has three backends:
   PL011, 16550 over MMIO, and the phone's `ramoops` zone. `ferrix-statd`
   writes its `FERRIX-STAT` lines to its standard output, which as pid 1 is
-  the console. `userland/statd/README.md` has the format. How a ring-3 USB driver
+  the console. `src/user/linux/statd/README.md` has the format. How a ring-3 USB driver
   gets the console's bytes is a design decision still to make (§5, phase 4).
-* **The loader.** `boot/pixel7`, which runs with the MMU off, so all
+* **The loader.** `src/boot/vendor/google/pixel7`, which runs with the MMU off, so all
   memory is Device memory: aligned, word-sized, volatile accesses only. It
   is where a read-only survey is cheapest (`display.rs` reports DECON's
   registers the same way).
@@ -157,11 +157,11 @@ Each phase ends with something run on the phone and written down here.
    non-coherent `DmaShape`. Only the shared parts go in the kernel, and only
    if phase 1 says they need touching. The power domain and PMU writes wait
    for the owner.
-3. **The driver.** A host-testable library, say `libs/drivers/dwc3`: event buffer,
+3. **The driver.** A host-testable library, say `src/lib/drivers/usb/dwc3`: event buffer,
    TRB rings, event decoding, and endpoint 0's control state machine, tested
-   against a register model as `libs/drivers/usb-host` is. Device descriptors and the
-   CDC-ACM class go in `libs/drivers/usb-device`. The ring-3 program, say
-   `native/drivers/usbdev`, goes in `devmgr`'s table. Run at high speed (USB 2.0) first:
+   against a register model as `src/lib/drivers/usb/usb-host` is. Device descriptors and the
+   CDC-ACM class go in `src/lib/drivers/usb/usb-device`. The ring-3 program, say
+   `src/user/native/drivers/usb/usbdev`, goes in `devmgr`'s table. Run at high speed (USB 2.0) first:
    `DCFG` can hold the core there, which keeps the combo SuperSpeed PHY out of
    the first bring-up. The endpoints are endpoint 0, one bulk IN and one bulk
    OUT for ACM data, and an interrupt IN for ACM notifications.
@@ -171,16 +171,16 @@ Each phase ends with something run on the phone and written down here.
    and statd's.
 
    *Decided, and the kernel half built (2026-09-26, branch
-   `pixel7-usb-log`):* a kernel log. `kernel/src/console/log.rs` keeps every
+   `pixel7-usb-log`):* a kernel log. `src/kernel/src/console/log.rs` keeps every
    byte the console sends -- the kernel's lines and programs' output, statd's
    included, before CRLF -- in a static 128 KiB ring, less the lines that
    print the kernel's layout. The driver reads it by capability:
    `device.log_control()` (`LOG_CONTROL_CREATE`, 0x1051) on its
    `TREE_GS201_DWC3` node gives a channel, READ `{ max }` is answered with
    DATA `{ lost, bytes }` of up to `MAX_DATA` (4072) bytes from the oldest
-   byte still kept (`libs/proto/logctl`), one reader at a time, and the claim ends
+   byte still kept (`src/lib/proto/logctl`), one reader at a time, and the claim ends
    when the channel closes. `syslog(2)` reads the same log, privileged.
-5. **The monitor.** `tools/pixel7/monitor` reads `/dev/ttyACM*` while the
+5. **The monitor.** `tools/vendor/google/pixel7/monitor` reads `/dev/ttyACM*` while the
    phone is in Ferrix and feeds the same parser it uses for a guest
    (`vm-line`). The owner is in `dialout`, and `cdc_acm` loads on demand.
 
@@ -199,7 +199,7 @@ model (phase 3) and the phone.
   vendor_boot.img`, `fastboot boot`, waits for Android, and saves the
   `ramoops` record as `$P/<name>/run.log`. Nothing is flashed.
 
-The launcher's helper (`tools/pixel7/helper.py`) does the same
+The launcher's helper (`tools/vendor/google/pixel7/helper.py`) does the same
 cycle over HTTP, with `POST /boot?stats=N` for the stat service. The monitor
 drives it.
 
@@ -220,7 +220,7 @@ with the log kept.
 
 ### What the phone said (phase 1, run `usb-survey2`, 2026-09-26 18:24)
 
-One RAM boot of the loader's survey (`boot/pixel7/src/usb.rs`),
+One RAM boot of the loader's survey (`src/boot/vendor/google/pixel7/src/usb.rs`),
 approved by the PO with the S2MPU struck from the list (a security block:
 it is not read at all). Back in Android after 77 s, `FERRIX-BOOT-OK`. The
 record is `~/.local/share/ferrix/pixel7/usb-survey2/run.log`.
@@ -262,7 +262,7 @@ one vector. devmgr started nothing, since `usbdev` was not yet built in.
 
 What §1 asks for works on the phone. During a native boot Ferrix presents
 a CDC-ACM port on the USB-C port, example sees it as `/dev/ttyACM0`
-(`1209:0001`, "Ferrix console"), and `tools/pixel7/monitor` streams the
+(`1209:0001`, "Ferrix console"), and `tools/vendor/google/pixel7/monitor` streams the
 boot and `ferrix-statd`'s samples from it live: its boot card fills stage
 by stage, the Ferrix tab graphs the samples as they arrive, and the port
 going away ends the stream and keeps it as a `usb-<time>` run record.
@@ -284,27 +284,27 @@ other users asked first; any other offset or block needs a new OK.
 
 What each part is, now on `main`:
 
-* `boot/pixel7/src/usb.rs`: the read-only survey, in every record.
-* `kernel/src/platform/google/gs201/usb.rs`: `TREE_GS201_DWC3 = 4`, published only when
+* `src/boot/vendor/google/pixel7/src/usb.rs`: the read-only survey, in every record.
+* `src/kernel/src/platform/google/gs201/usb.rs`: `TREE_GS201_DWC3 = 4`, published only when
   `pd-hsi0` reads on and `GSNPSID` names a DWC3; nothing written.
-* `libs/drivers/usb-device`: chapter 9 and the CDC-ACM function.
-* `libs/drivers/dwc3`: the controller, tested against a register model
+* `src/lib/drivers/usb/usb-device`: chapter 9 and the CDC-ACM function.
+* `src/lib/drivers/usb/dwc3`: the controller, tested against a register model
   with a write-back cache in front of its memory, which caught one real
   missing invalidate. It refuses to write unless the controller is as
   ABL leaves it, and replaces ABL's event buffer before it runs.
-* `native/drivers/usbdev`: the ring-3 driver, devmgr's `Gadget` kind.
+* `src/user/native/drivers/usb/usbdev`: the ring-3 driver, devmgr's `Gadget` kind.
   It asks for the log only while a host holds the port open (DTR), and
   asks again only once the last piece has gone, so a slow or absent host
   leaves the log in the kernel's ring. What the host sends is dropped.
 * The kernel log (phase 4, designed with the certification agent,
-  ferrix-55): `kernel/src/console/log.rs`, a static 128 KiB ring of every
+  ferrix-55): `src/kernel/src/console/log.rs`, a static 128 KiB ring of every
   console byte less the kernel's layout (the KASLR slide, trace frames,
   trap registers); `syslog(2)` reads it, privileged for every action, so
-  `dmesg` works; `kernel/src/logctl` serves it over `LOG_CONTROL_CREATE`,
+  `dmesg` works; `src/kernel/src/logctl` serves it over `LOG_CONTROL_CREATE`,
   which only this controller's node may call, one reader at a time
-  (`libs/proto/logctl`). Its coverage arguments are staged for ferrix-55's
+  (`src/lib/proto/logctl`). Its coverage arguments are staged for ferrix-55's
   next evidence run, not committed.
-* `tools/pixel7/monitor`: the USB watcher. A monitor started before this
+* `tools/vendor/google/pixel7/monitor`: the USB watcher. A monitor started before this
   landed must be rebuilt and restarted to have it.
 
 **ModemManager takes the start of the log.** example's ModemManager opens
@@ -363,17 +363,17 @@ and every worktree, branch and target directory of its own removed.
   changed). The port comes up about 50 s into the run and stays about a
   minute with those settings. Run records: `$P/usbdev1`, `usblog1`,
   `usblog2`; the monitor's own is `$P/usb-20260926-174123`.
-* **To watch it**, rebuild and restart `tools/pixel7/monitor` from `main`:
+* **To watch it**, rebuild and restart `tools/vendor/google/pixel7/monitor` from `main`:
   a monitor built before 6f5090f6 has no USB watcher. Until the owner
   installs the udev rule above, ModemManager takes the log's first
   seconds.
-* **Where the parts are:** `boot/pixel7/src/usb.rs` (survey),
-  `kernel/src/platform/google/gs201/usb.rs` (binding), `libs/drivers/dwc3` and
-  `libs/drivers/usb-device` (host-tested, `cargo test -p ferrix-dwc3
-  -p ferrix-usb-device`), `native/drivers/usbdev` (driver),
-  `kernel/src/console/log.rs` and `kernel/src/logctl` (the log and its
+* **Where the parts are:** `src/boot/vendor/google/pixel7/src/usb.rs` (survey),
+  `src/kernel/src/platform/google/gs201/usb.rs` (binding), `src/lib/drivers/usb/dwc3` and
+  `src/lib/drivers/usb/usb-device` (host-tested, `cargo test -p ferrix-dwc3
+  -p ferrix-usb-device`), `src/user/native/drivers/usb/usbdev` (driver),
+  `src/kernel/src/console/log.rs` and `src/kernel/src/logctl` (the log and its
   reader, in the certified item: ask the certification session before
-  changing either), `tools/pixel7/monitor/src/usb.rs` (watcher).
+  changing either), `tools/vendor/google/pixel7/monitor/src/usb.rs` (watcher).
 * **Still in someone else's hands:** the log's coverage arguments, in
   `~/.local/share/ferrix/pixel7-usb-log/coverage-argued-x86_64.pending.json`,
   for the certification session (ferrix-55) to merge into its next

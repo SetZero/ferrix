@@ -2,19 +2,19 @@
 """Write the seed corpus for the `btrfs_read` fuzz target.
 
 Each input is a selector byte and a list of edits to one of the real images in
-`libs/fs/btrfs/testdata/` (see `tests/fuzz/fuzz_targets/btrfs_read.rs` for the layout).
+`src/lib/fs/btrfs/testdata/` (see `tests/fuzz/fuzz_targets/btrfs_read.rs` for the layout).
 The seeds are the untouched images, so the first run already mounts all four,
 plus two resealed edits so a mutated-but-checksummed image is in the corpus
 from the start rather than something the fuzzer has to stumble on.
 
 Usage:
-    python3 scripts/gen/seed-btrfs-fuzz-corpus.py
+    python3 tools/common/gen/seed-btrfs-fuzz-corpus.py
 """
 
 import pathlib
 import struct
 
-OUT = pathlib.Path(__file__).resolve().parent.parent.parent / "tests" / "fuzz" / "corpus" / "btrfs_read"
+OUT = pathlib.Path(__file__).resolve().parent.parent.parent.parent / "tests" / "fuzz" / "corpus" / "btrfs_read"
 
 RESEAL = 0x80
 SET_U8, SET_U64 = 1, 3

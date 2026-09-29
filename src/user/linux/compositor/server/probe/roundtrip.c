@@ -2,7 +2,7 @@
  * Replay the server's answer to a real libwayland client, and print what the
  * client made of it.
  *
- * `userland/compositor/server`'s tests build the bytes with `compositor_wire` and read
+ * `src/user/linux/compositor/server`'s tests build the bytes with `compositor_wire` and read
  * them back with `compositor_wire`, which proves the crate agrees with itself.
  * This is the other half: libwayland, which every real client is built on,
  * has to accept the same bytes and report the same globals.

@@ -35,18 +35,18 @@ compositor-server = { path = "../server" }
 compositor-socket = { path = "../socket" }
 compositor-wire = { path = "../wire" }
 # The evdev numbers the devices report.
-ferrix-linux-abi = { path = "../../../libs/proto/linux-abi" }
+ferrix-linux-abi = { path = "../../../../lib/proto/linux-abi" }
 # The bitmap face `debug:overlay` writes its numbers in.
-ferrix-fbtext = { path = "../../../libs/kernel/fbtext" }
+ferrix-fbtext = { path = "../../../../lib/kernel/fbtext" }
 # The init's control records: each program started is put in a scope of
 # its own (docs/INIT.md §5.6).
-ferrix-svc-proto = { path = "../../../libs/init/svc-proto" }
+ferrix-svc-proto = { path = "../../../../lib/init/svc-proto" }
 # Declarations only: `mmap` of a client's pool, and `pause`.
 libc = "0.2.189"
 
 [dev-dependencies]
 # The test runs the compositor and two clients in threads of one process and
-# compares the pixels, which is the everyday gate userland/compositor/README.md names.
+# compares the pixels, which is the everyday gate src/user/linux/compositor/README.md names.
 compositor-pattern = { path = "../pattern" }
 # And a subscriber on the event socket, which is what a bar is.
 compositor-ctl = { path = "../ctl" }
@@ -60,7 +60,7 @@ compositor-shot = { path = "../shot" }
 compositor-lock = { path = "../lock" }
 # Shared memory, for the one client the tests bring themselves: what damage
 # tracking has to be shown by is a client that repaints a corner of its
-# window and says so, which `userland/compositor/pattern` does not do.
+# window and says so, which `src/user/linux/compositor/pattern` does not do.
 compositor-shm = { path = "../shm" }
 
 [lints]

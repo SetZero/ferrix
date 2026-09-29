@@ -8,7 +8,7 @@ structure instead, and each renderer walks it once.
 
 The consequence worth knowing when adding a section: **text is never markup**.
 A string handed to `P()` is literal, and the renderer escapes it for its own
-target. Emphasis, code spans and links are `runs` -- `c("libs/kernel/sched")` rather
+target. Emphasis, code spans and links are `runs` -- `c("src/lib/kernel/sched")` rather
 than a string with backticks in it -- so a doc comment lifted out of the model
 cannot accidentally be read as formatting. The model's prose is full of `*`,
 `_`, `[0..*]` and `#[expect]`, and every one of them survives intact because

@@ -1,7 +1,7 @@
 //! Tells every native program where its linker script is.
 //!
 //! A program links with `-T`, emitted by its own build script, for the reason
-//! `kernel/build.rs` gives at length: a link script in `.cargo/config.toml` is
+//! `src/kernel/build.rs` gives at length: a link script in `.cargo/config.toml` is
 //! merged with every configuration file above the checkout and can end up
 //! passed twice. A build script's flag cannot be. But `rustc-link-arg` applies
 //! only to the package that emits it, so this crate cannot pass the flag for

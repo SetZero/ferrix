@@ -19,7 +19,7 @@ use ferrix_native::port;
 use ferrix_native::{Deadline, Error, Object, Raw, Signals, Syscall};
 use ferrix_native_abi::directory::{Kind, MAX_MESSAGE, Message};
 
-/// Native calls through `syscall`, as `userland/init/init/src/sys.rs` makes them.
+/// Native calls through `syscall`, as `src/user/linux/init/init/src/sys.rs` makes them.
 #[derive(Debug, Clone, Copy)]
 struct Native;
 
@@ -27,7 +27,7 @@ impl Syscall for Native {
     fn call(self, raw: Raw<'_>) -> usize {
         let [a0, a1, a2, a3, a4, a5] = raw.args();
         let number = libc::c_long::try_from(raw.number()).unwrap_or(-1);
-        // SAFETY: `libs/proto/native` built `raw` from memory it borrows for as
+        // SAFETY: `src/lib/proto/native` built `raw` from memory it borrows for as
         // long as `raw` lives, which is past this call.
         let ret = unsafe { libc::syscall(number, a0, a1, a2, a3, a4, a5) };
         if ret == -1 {

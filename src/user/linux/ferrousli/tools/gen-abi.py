@@ -58,7 +58,7 @@ ERRNO_HEADERS = (
 
 def shown(path: pathlib.Path) -> str:
     """A header's name as the generated files and the errors print it: relative
-    to userland/ferrousli/ and with forward slashes, so the output is byte-identical
+    to src/user/linux/ferrousli/ and with forward slashes, so the output is byte-identical
     whichever host wrote it."""
     return path.relative_to(ROOT).as_posix()
 # The aliases C programs use. The headers define a few more for the kernel's

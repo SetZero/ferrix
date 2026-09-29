@@ -31,7 +31,7 @@
 # dpkg-deb, readelf, strip, mkfs.btrfs and rustup's cargo with the
 # toolchain Ferrix pins; no root.
 #
-# Usage: scripts/fetch/fetch-yserver.sh
+# Usage: tools/common/fetch/fetch-yserver.sh
 
 set -euo pipefail
 

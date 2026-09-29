@@ -119,7 +119,7 @@ architectures, since ferrousli itself was ported to AArch64 and ARMv7-A on
 2026-09-23.
 
 Stage 15 has job control and, since 2026-09-26, a real init: `/sbin/init` runs
-services in cgroups of their own over `libs/init/svc`'s manager, with `svc` to
+services in cgroups of their own over `src/lib/init/svc`'s manager, with `svc` to
 drive it, readiness, socket activation and resource limits, gives the console
 a getty, and powers the machine off, on all three architectures (`cargo xtask
 test-init`). `run` and the desktop boot it, and the compositor is its service.

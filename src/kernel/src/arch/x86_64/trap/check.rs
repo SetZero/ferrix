@@ -3,7 +3,7 @@
 //! left only the ways `docs/I386.md` §3.3 allows.
 //!
 //! Verification, not the handlers: a file of its own so that the manifest
-//! counts it as the test it is (`scripts/data/certification-item.json`,
+//! counts it as the test it is (`tools/common/data/certification-item.json`,
 //! `test_file_patterns`). Each case is a real program, built into an ELF and
 //! run by the Linux personality's loader, because only an instruction a
 //! program executes in ring 3 takes the path under test: the stub, `classify`,

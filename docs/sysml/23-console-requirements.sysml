@@ -1,7 +1,7 @@
 /*
  * Ferrix — SysML v2 model, part 23: the low-level requirements of console.
  *
- * What each unit of kernel/src/console.rs and kernel/src/console/ does, as
+ * What each unit of src/kernel/src/console.rs and src/kernel/src/console/ does, as
  * `ItemLowLevel` requirements (part 13 defines the format, part 14 is the
  * pilot this copies): the kernel's lines to the port, whole and in order;
  * the way a failure report gets past a lock nobody will release; the
@@ -10,7 +10,7 @@
  * interrupt fills; the kernel log every byte is recorded in, what it
  * promises a reader and what it keeps out; and the boot console drawn on the
  * framebuffer. The ports themselves are each architecture's
- * (kernel/src/arch/<isa>/console.rs) and belong to the arch slices; the two
+ * (src/kernel/src/arch/<isa>/console.rs) and belong to the arch slices; the two
  * of their functions that decide *which* console the kernel writes to, and
  * whose checks test that, are here too (`Ports`), at the coordinator's asking.
  *
@@ -19,7 +19,7 @@
  * requirement is no broader than one check can prove; a statement says no
  * more than its criterion tests; an accessor needs no requirement of its own;
  * check code living in a product file is listed in
- * scripts/data/traceability-units.json, not required -- here
+ * tools/common/data/traceability-units.json, not required -- here
  * `console::input::check` and `console::output::check`, which read their
  * rings' private state and so cannot move to a check file without becoming
  * child modules. Until they do, the requirements they prove (`L.console.9`,

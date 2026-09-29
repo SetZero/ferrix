@@ -9,7 +9,7 @@
 //! bounds or overflow. Drawing is clipped, not refused.
 //!
 //! The font is Spleen 8x16 by Frederic Cambus (BSD-2-Clause, see
-//! `LICENSE-spleen`), embedded as rows by `scripts/gen/gen-font.py`.
+//! `LICENSE-spleen`), embedded as rows by `tools/common/gen/gen-font.py`.
 //!
 //! # Speed
 //!

@@ -38,7 +38,7 @@ kernel over the channels they already have; readers never wait on a service.
 | Interfaces: name, index, address, MTU, flags, counters | the `net` driver and the net core | the net core's stack, copied out; `net_ring::node_of` records the node each ring's interface came from |
 | Cards, connectors, modes; render nodes | the `gpu` or `ltdc` driver, through the display and render cores | `display::card`, `display::drm::connectors` (the same function the connector ioctl uses), `render::renderer`; each records its node |
 | Input devices: name, ids, capability bitmaps, serial | the `input` or `usbhid` driver, through the input core | the input session HELLO declared; each device records its node |
-| Which drivers exist, and which drives which device | `devmgr` | DRIVER, BOUND and UNBOUND on its bootstrap channel (§5); `kernel/src/devmgr.rs` keeps what it was told |
+| Which drivers exist, and which drives which device | `devmgr` | DRIVER, BOUND and UNBOUND on its bootstrap channel (§5); `src/kernel/src/devmgr.rs` keeps what it was told |
 | Processors: possible, present, online | the kernel | `smp::topology()` |
 | `null`, `zero`, `tty`, `console` and the other static nodes | the kernel | devfs's table |
 
@@ -101,9 +101,9 @@ after the pivot, as it does `/proc` and `/dev`.
 
 ## 4. The kernel's half
 
-`kernel/src/fs/sysfs.rs` is the view: a directory is a `Dir`, its names are
+`src/kernel/src/fs/sysfs.rs` is the view: a directory is a `Dir`, its names are
 computed by `entries`, a file is rendered at open by `render`, and a link's
-target is `path_of` the directory it names. `libs/fs/sysfs` holds every format
+target is `path_of` the directory it names. `src/lib/fs/sysfs` holds every format
 and every parse, pure, host-tested and fuzzed: the identifiers, the processor
 lists, the uevent lines, the input bitmaps in words of the kernel's `long`
 (64 bits on the 64-bit pair, 32 on ARMv7-A), the connector names, the relative
@@ -168,7 +168,7 @@ the net, input and serial cores do not yet, so a bind there may answer `EIO`.
 * **A PCI function's `resource`, `config`, `irq`, `enable`.** Enumeration keeps
   apertures, not BARs by index, and nothing maps configuration space after
   boot. `resource` is keeping the sized BARs, 2 points; `config` is a read of
-  configuration space on open, which `scripts/check/check-device-access.py` must be
+  configuration space on open, which `tools/common/check/check-device-access.py` must be
   told about, 3.
 * **A processor's `topology/`.** Firmware's tables do not say siblings and
   packages reliably enough to print; `cpufreq` has no source at all.
@@ -183,14 +183,14 @@ the net, input and serial cores do not yet, so a bind there may answer `EIO`.
 
 ## 7. How it is checked
 
-* **`libs/fs/sysfs`'s host tests** pin each format against what a Linux printed:
+* **`src/lib/fs/sysfs`'s host tests** pin each format against what a Linux printed:
   a virtio-gpu's `uevent` and `modalias`, a keyboard's `capabilities/ev` in
   64- and 32-bit words, `DEVMODE`'s octal, kernfs's link spelling to an
   ancestor.
 * **`tests/fuzz/fuzz_targets/sysfs_names.rs`**: every parse round-trips, a written
   name stays inside what was written, and a link never climbs above its mount.
 * **The boot check**, the last one, after `devmgr` has started its drivers
-  (`kernel/src/fs/sysfs/check.rs`, FX-0890): a sysfs under `/tmp` walked whole,
+  (`src/kernel/src/fs/sysfs/check.rs`, FX-0890): a sysfs under `/tmp` walked whole,
   three names a listing so every listing resumes; every name looks up as the
   kind and number listed, every file reads, every link leads to a directory in
   the mount; then every device node is on its bus with enumeration's ids, every
@@ -212,7 +212,7 @@ One landing, 26 points, measured in the points ledger:
 
 | part | points |
 |---|---|
-| `libs/fs/sysfs`, its tests and fuzzer | 5 |
+| `src/lib/fs/sysfs`, its tests and fuzzer | 5 |
 | The view and its boot check | 8 |
 | The cores' tie to their device nodes; enumeration's revision, subsystem ids and bridges | 3 |
 | `devmgr`: DRIVER, BOUND, UNBOUND, BIND, UNBIND, DONE, both ends | 5 |

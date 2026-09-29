@@ -2,7 +2,7 @@
 //! descriptor arithmetic behind `max_sectors`.
 //!
 //! These are pure functions of numbers, so the kernel, the driver and
-//! `libs/drivers/virtio-blk` all compute them one way.
+//! `src/lib/drivers/block/virtio-blk` all compute them one way.
 //!
 //! # Why `max_sectors` depends on the page size
 //!
@@ -23,7 +23,7 @@ use crate::layout::{FLAG_FUA, Op, RawSubmission, Submission};
 /// The smallest logical block size: 512 bytes, virtio's unit.
 pub const MIN_BLOCK_SIZE: u32 = 512;
 
-/// The largest logical block size a ring may announce, as `libs/fs/block` accepts.
+/// The largest logical block size a ring may announce, as `src/lib/fs/block` accepts.
 pub const MAX_BLOCK_SIZE: u32 = 65536;
 
 /// What the device can do, from the features the driver *negotiated* — never

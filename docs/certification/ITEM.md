@@ -6,8 +6,8 @@ and most consequential decision in the whole exercise — because each artifact
 here is written against it. The Security Target's TOE, the hazard analysis's
 safety item, the traceability matrix and the coverage obligation all mean the
 same thing, and that thing is defined in
-[`scripts/data/certification-item.json`](../../scripts/data/certification-item.json) and
-enforced by `scripts/check/check-item-boundary.py`.
+[`tools/common/data/certification-item.json`](../../tools/common/data/certification-item.json) and
+enforced by `tools/common/check/check-item-boundary.py`.
 
 A boundary that lives only in a document is a boundary that has already moved.
 
@@ -67,7 +67,7 @@ load before it, the vDSO and the other work since F-35 included. F-37 added
 and the charges on a VMO's mappers -- 30 to `item`, the boot's `kmem` line
 and the quota line's heap, and 447 to the load, the charge at each of its
 sites; and 445 lines of self-test. The charging in the libraries the load
-calls, `libs/kernel/kmem` among them, is outside the kernel and not counted here.
+calls, `src/lib/kernel/kmem` among them, is outside the kernel and not counted here.
 Re-measured 2026-09-27 with F-10's coverage evidence, on main at 7db6e8e8: the
 table above, after the checks F-10's passes wrote, F-38's quarantine, F-40's
 limit right and the other work since F-37, and the kernel relayout, which put
@@ -135,7 +135,7 @@ machine stops, init starts a program from one, `devmgr` reads its drivers
 from one, device enumeration asks board support what it prepared, the native
 ABI makes a ring's control channel or a native process, a Linux call is
 answered -- the item defines the interface and the load registers into it
-(`kernel/src/hooks.rs`, `syscall::native::serve`), or implements a trait the
+(`src/kernel/src/hooks.rs`, `syscall::native::serve`), or implements a trait the
 item defines and `main.rs` composes the two (`syscall::Personality`). `main.rs` is the crate root: it declares every
 module, and its `register_load` is the one place the load is told to
 register, in bring-up order, with a boot check that it did.
@@ -220,7 +220,7 @@ began — were lower bounds.** The gate matched only the literal text
 `crate::a::b`, so it missed nested `use` groups, paths through a name bound by
 `use` or declared by `mod`, and every path in code its string pattern had taken
 for a literal. It now resolves names as the compiler does
-(`scripts/check/check-item-boundary.py`, whose docstring says how, and what it still
+(`tools/common/check/check-item-boundary.py`, whose docstring says how, and what it still
 cannot see: an edge that is a type flowing through a value rather than a name
 written in the file). Re-measured the same day, the tree had 56 where 29 were
 reported, and the audit's starting tree 94 where 62 were.
@@ -267,8 +267,8 @@ A certificate attaches to a configuration, not to a repository.
 | Architectures | x86-64, AArch64, ARMv7-A |
 | Profile | release |
 | Toolchain | rustc 1.97.1, pinned exactly in `rust-toolchain.toml` |
-| Unstable features | none in `kernel/` or `boot/uefi/` |
-| Cargo features | 7 in the workspace, **0** in `kernel/` or `boot/uefi/` |
+| Unstable features | none in `src/kernel/` or `src/boot/common/uefi/` |
+| Cargo features | 7 in the workspace, **0** in `src/kernel/` or `src/boot/common/uefi/` |
 | Build settings | **one**, `cargo xtask --mitigations on\|off`; the reference is `on`, the default |
 | Boot options that change the item's work | **one**, `ferrix.devmgr=kernel\|init`; the reference is `kernel`, the default |
 | Kernel link (`on`) | a static PIE on x86-64 (PIC code model, every x86-64 crate) and AArch64 (static code model, `-pie -z notext`); on ARMv7-A a fixed-address link that keeps its relocations (`--emit-relocs`). The loader moves it each boot (KASLR). `off`: the static fixed-address image |

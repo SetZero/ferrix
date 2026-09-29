@@ -308,7 +308,7 @@ pub const KERNEL_VMAP_SIZE: u64 = LAYOUT.vmap_size;
 /// windows. See [`Layout::vmap_reserved`].
 pub const KERNEL_VMAP_RESERVED: u64 = LAYOUT.vmap_reserved;
 
-/// Where the kernel image is linked. `kernel/build.rs` tells the linker the
+/// Where the kernel image is linked. `src/kernel/build.rs` tells the linker the
 /// same number, and the loader refuses a kernel linked anywhere else. It is
 /// also where the image runs when it does not move; when it does (KASLR), it
 /// runs at one of [`Layout::kernel_slots`] above this.

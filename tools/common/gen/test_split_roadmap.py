@@ -8,7 +8,7 @@ or reordered (the round trip), that a second run changes nothing
 (idempotence), that a link still lands on its heading, and that a branch's
 edit arrives in the right file.
 
-Usage:  python3 scripts/gen/test_split_roadmap.py
+Usage:  python3 tools/common/gen/test_split_roadmap.py
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent.parent
+ROOT = HERE.parents[2]
 
 _spec = importlib.util.spec_from_file_location("split_roadmap", HERE / "split-roadmap.py")
 sr = importlib.util.module_from_spec(_spec)

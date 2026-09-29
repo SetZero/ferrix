@@ -249,7 +249,7 @@ fn a_cut_anywhere_leaves_a_volume_that_mounts_and_holds_its_promises() {
 }
 
 #[test]
-#[ignore = "hundreds of seeds; run by scripts/test/btrfs-check-writer.sh and by hand"]
+#[ignore = "hundreds of seeds; run by tools/common/test/btrfs-check-writer.sh and by hand"]
 fn hundreds_of_cuts() {
     for seed in 1..=200 {
         power_fail(seed, 20, 25);

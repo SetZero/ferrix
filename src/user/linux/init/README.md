@@ -3,12 +3,12 @@
 `/sbin/init`, `/sbin/getty` and the getty generator: the service manager
 `docs/INIT.md` designs, as far as landing L4 takes it.
 
-The manager itself is `libs/init/svc`, a pure `no_std` crate of the Ferrix
+The manager itself is `src/lib/init/svc`, a pure `no_std` crate of the Ferrix
 workspace: unit files in systemd's syntax, the dependency graph, operations,
 the slice tree and every kind's state machine, as `Manager::step(event, now)
 -> actions`. What is here is everything around it that makes system calls:
 
-* `userland/init/` -- pid 1. It mounts `/run` and cgroup2, moves itself into
+* `src/user/linux/init/` -- pid 1. It mounts `/run` and cgroup2, moves itself into
   `init.scope`, runs the generators, reads the three unit directories, and
   then waits in one `epoll_wait` on a signalfd, each child's exec report and
   each cgroup's `cgroup.events`. What it finds becomes the manager's events;

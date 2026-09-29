@@ -45,7 +45,7 @@ None of it is pushed.
   `src/usb.rs`), reading only, after the display: the PMU's PHY isolation
   words, `pd-hsi0`, and, when that reads on, the DWC3's registers and the
   PHY's first words. The S2MPU is not read (a security block). Run
-  `usb-survey2` found everything left on by ABL; `docs/PIXEL7-USB-HANDOVER.md`
+  `usb-survey2` found everything left on by ABL; `docs/vendor/google/pixel7/USB-HANDOVER.md`
   §8 has the values. It adds about 60 lines to every record.
 * **The GICv3 ITS** (`c21ce40f..a8680955`) landed after a rebase and a
   re-gate: `cargo xtask check` passed, and `test-boot` reached
@@ -82,7 +82,7 @@ None of it is pushed.
     for every user executable mapping: `clean_to_poc`, then `IC IALLUIS`
     (the A55s' VIPT instruction caches rule out `IC IVAU` by the direct
     map's address). ARMv7-A got the same, untested on the DK1.
-    `scripts/data/asm-allowlist.json` raised ARMv7-A `cpu.rs` from 100 to 102
+    `tools/common/data/asm-allowlist.json` raised ARMv7-A `cpu.rs` from 100 to 102
     lines for it, after the three `CTR` reads there became one. The owner
     allowed the raise on 2026-09-27.
   * **The reverse-map check's user program had no barriers**
@@ -142,7 +142,7 @@ None of it is pushed.
   | `20b242af` | Loader: hand ABL's framebuffer to the kernel as `BootInfo.framebuffer` |
   | `cf4002c6` | Docs: the screen, and the no-persistent-writes rule |
   | `65a9f5dc` | This handover, rewritten |
-  | `29b6bb5e` | `gs201.rs` into `kernel/src/arch/aarch64/`: the owner put it in the certified core ring |
+  | `29b6bb5e` | `gs201.rs` into `src/kernel/src/arch/aarch64/`: the owner put it in the certified core ring |
   | `83f1f8cf` | `gic::init` split for the complexity floor |
   | `73ef630e` | `arch::init_watchdogs`/`start_watchdogs` facade instead of `cfg`s in generic code |
 
@@ -191,7 +191,7 @@ FERRIX_PIXEL7_INITRD="$I" FERRIX_PIXEL7_INITRD_DIGEST="$(sha256sum "$I" | cut -d
     cargo build -p ferrix-boot-pixel7 --target aarch64-unknown-none-softfloat --release
 "$(rustc --print sysroot)"/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-objcopy \
     -O binary target/aarch64-unknown-none-softfloat/release/ferrix-boot-pixel7 "$P/Image"
-python3 boot/pixel7/mkbootimg.py "$P/Image" "$P/boot.img"
+python3 src/boot/vendor/google/pixel7/mkbootimg.py "$P/Image" "$P/boot.img"
 python3 "$P/avbtool.py" add_hash_footer --image "$P/boot.img" \
     --partition_size 67108864 --partition_name boot --algorithm NONE
 
@@ -303,7 +303,7 @@ them). Check any new one against the phone before you rely on it.
   Use `CARGO_TARGET_DIR=~/.local/share/ferrix/target-<session>`, never a
   worktree's own `target/`.
 * **`cargo xtask check` holds more than clippy:** every kernel file needs a
-  certification ring (`scripts/data/certification-item.json`, the owner's call),
+  certification ring (`tools/common/data/certification-item.json`, the owner's call),
   new functions stay under the complexity floor, and generic code may not
   hold a `target_arch` conditional. Run the whole gate, not a subset.
 
@@ -311,7 +311,7 @@ them). Check any new one against the phone before you rely on it.
 
 1. **A USB device driver**, so a native boot streams its console and
    `ferrix-statd`'s samples to the PC live, as a crosvm guest already does:
-   `docs/PIXEL7-USB-HANDOVER.md` is the brief. Not started.
+   `docs/vendor/google/pixel7/USB-HANDOVER.md` is the brief. Not started.
 
 Otherwise the phone boots all eight cores, seeded, with KASLR and the boot
 console, to `FERRIX-BOOT-OK`, and further work is new: a display driver of
@@ -320,7 +320,7 @@ TF-A answers it).
 
 ### Done, for the record
 
-* **The boot console** (`kernel/src/console/screen.rs`). With
+* **The boot console** (`src/kernel/src/console/screen.rs`). With
   `ferrix.fbcon` on the command line, the kernel's own lines (the bytes
   `console::recent` keeps, not programs' output) are drawn on the firmware
   framebuffer as they are printed. It picks the largest glyph scale that
@@ -346,7 +346,7 @@ TF-A answers it).
   58 lines, is the one that had really grown, by the EL2 drop.
 * **KASLR on the phone.** The kernel is a PIE (KASLR,
   `docs/certification/SPECULATION.md` §6.1), and this loader now moves it
-  as `boot/uefi/` does (`boot/pixel7/src/kaslr.rs`): the image, the direct
+  as `src/boot/common/uefi/` does (`src/boot/vendor/google/pixel7/src/kaslr.rs`): the image, the direct
   map and the vmap arena, each from its own word of TF-A's SMCCC
   `TRNG_RND64`, the source `ferrix_bootinfo::SOURCE_SMCCC_TRNG`. Only the
   `smc` conduit is used, since the loader left EL2 itself, and nothing
@@ -375,13 +375,13 @@ TF-A answers it).
 * **Entropy.** The owner allowed reading the SoC's random source, read
   only. Android's `/sys/class/misc/hw_random/rng_current` said
   `smccc_trng`, so no register of the security block is touched: the kernel
-  asks TF-A through SMCCC (`kernel/src/arch/aarch64/trng.rs`), after PSCI
+  asks TF-A through SMCCC (`src/kernel/src/arch/aarch64/trng.rs`), after PSCI
   1.0, `PSCI_FEATURES(SMCCC_VERSION)`, SMCCC 1.1, `TRNG_VERSION` and
   `TRNG_FEATURES(TRNG_RND64)`, and credits each bit. Run 14
   (`$P/run14-trng/`) booted `random   seeded with 448 bits: 8 bytes from
   firmware, 48 from its TRNG, 0 words from the CPU, timer jitter`, the
   phone's first seeded boot, and reached `FERRIX-BOOT-OK` on 8 cores.
-* **The seed** (`boot/pixel7/src/seed.rs`) folds `/chosen`'s
+* **The seed** (`src/boot/vendor/google/pixel7/src/seed.rs`) folds `/chosen`'s
   `rng-seed` and `kaslr-seed` into `firmware_seed` and NOPs both out of the
   kernel's copy of the tree. The owner chose to credit ABL's 8 bytes rather
   than read the TRNG, so `BootInfo` version 6 carries the count.
@@ -394,8 +394,8 @@ TF-A answers it).
 
 ## Starting Ferrix from Android
 
-**The button works through the PC** (`tools/pixel7/`, see its README). The app
-"Boot Ferrix" (`dev.ferrix.launcher`) asks `tools/pixel7/helper.py` on example,
+**The button works through the PC** (`tools/vendor/google/pixel7/`, see its README). The app
+"Boot Ferrix" (`dev.ferrix.launcher`) asks `tools/vendor/google/pixel7/helper.py` on example,
 over `adb reverse`, to run the `fastboot boot` cycle. The owner pressed it on
 2026-09-26: the run reached `FERRIX-BOOT-OK stages 1-12` and Android was back
 74 s later, with the record in `$P/launcher-20260926-144950/`. It needs the
@@ -414,8 +414,8 @@ guest lacks: KASLR, since the loader asks the TRNG only by `smc` and
 behind crosvm's `pci-host-cam-generic`, which Ferrix does not read; and
 console input.
 
-**Ferrix's own stats**: `userland/statd/` is Ferrix's stat service, `ferrix-statd`,
-and `tools/pixel7/monitor` graphs it. `build-run.sh` images carry it. A VM
+**Ferrix's own stats**: `src/user/linux/statd/` is Ferrix's stat service, `ferrix-statd`,
+and `tools/vendor/google/pixel7/monitor` graphs it. `build-run.sh` images carry it. A VM
 run starts it with crosvm's `-p ferrix.init=/sbin/ferrix-statd`, which the
 monitor's "Stats" choice does, and a native boot needs it built in with
 `FERRIX_PIXEL7_CMDLINE_EXTRA="ferrix.init=/sbin/ferrix-statd

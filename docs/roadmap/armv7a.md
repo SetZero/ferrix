@@ -6,12 +6,12 @@ records what the port changed and what it proved. None of stages 1–3 was
 rewritten to admit it.
 
 * **The same loader, converted.** rustc has no 32-bit UEFI target, so the
-  loader is built as an ELF static PIE and `xtask/src/pe.rs` rewrites it as a
+  loader is built as an ELF static PIE and `tools/common/xtask/src/pe.rs` rewrites it as a
   PE32 with base relocations, tested against an independent reader of its own
   output. U-Boot runs it as `BOOTARM.EFI`. No bootstrap assembly was added.
 * **A 32-bit address space, argued rather than shrunk.** A 2/2 split with a
   1.25 GiB direct map; LPAE tables, which are AArch64's descriptors on a
-  three-level walk, so `libs/kernel/paging` gained a geometry rather than a second
+  three-level walk, so `src/lib/kernel/paging` gained a geometry rather than a second
   mapper. The direct map now begins at the lowest RAM address on every
   architecture — which on AArch64 stopped it mapping the device hole below RAM
   as cacheable memory, and took that sweep from 822 leaves to 311.
@@ -19,7 +19,7 @@ rewritten to admit it.
   addresses where it had pointers, the direct map's physical origin, and a
   device tree copied into memory of its own kind, so that it outlives the
   reclaim that returns the firmware's copy.
-* **Device tree only.** `libs/platform/fdt` got its first consumer nine stages early:
+* **Device tree only.** `src/lib/platform/fdt` got its first consumer nine stages early:
   the console by `stdout-path`, the GICv2, the virtual timer's interrupt, and
   the PSCI conduit — which on QEMU is `hvc`, not the `smc` the plan first
   guessed; dumping the generated tree settled it before a line depended on it.
@@ -75,7 +75,7 @@ The exit line is lost because the STM32 USART driver returns as soon as the
 transmit register has room, and the PSCI `SYSTEM_OFF` after the last line
 powers the board off while that line is still being sent. The console now
 drains before power-off (`571316a9`), and a rerun on the board the same day
-received the exit line whole (`docs/stm32mp157-dk.md`). The first run's serial
+received the exit line whole (`docs/vendor/st/stm32mp157-dk.md`). The first run's serial
 log is kept outside the repository, at
 `~/.local/share/ferrix/board-boot-fd4442e-2026-09-13.log`.
 

@@ -1,7 +1,7 @@
 //! Netlink messages: walking a buffer of them and their attributes, and
 //! building replies into a buffer the caller owns.
 //!
-//! `libs/proto/linux-abi` names netlink's numbers and lays out its fixed headers,
+//! `src/lib/proto/linux-abi` names netlink's numbers and lays out its fixed headers,
 //! and says in as many words that walking a buffer of messages is left to this
 //! crate. This is that crate: the byte-level half of `AF_NETLINK`, with no
 //! socket, no interface table and no state of any kind.
@@ -24,8 +24,8 @@
 //! A walk borrows its payloads from the buffer it was given, and the builder
 //! writes into a buffer the caller already owns and answers how many bytes it
 //! took. That is what lets the kernel encode a reply inside the lock that
-//! holds the net core, where an allocation would be a bug: `libs/network/net` and its
-//! lock are `kernel/src/net`'s, and nothing that could sleep may happen while
+//! holds the net core, where an allocation would be a bug: `src/lib/network/net` and its
+//! lock are `src/kernel/src/net`'s, and nothing that could sleep may happen while
 //! it is held.
 //!
 //! ```

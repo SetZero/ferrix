@@ -6,7 +6,7 @@
 //! numbers against `asound.h`, virtio-snd against QEMU's source, the stream
 //! against Linux's rules, the driver against a device doing what QEMU's does
 //! -- and each is a part alone. This is the whole path at once, and nothing
-//! in it is simulated: `userland/compositor/tone` writes frames through the ALSA
+//! in it is simulated: `src/user/linux/compositor/tone` writes frames through the ALSA
 //! ioctls, the kernel's audio core copies them into its buffer and submits
 //! them, the ring-3 driver posts them to a real `virtio-sound-pci`, and
 //! QEMU's `wav` backend, with its mixing engine off so it neither resamples
@@ -54,7 +54,7 @@ const SETTLE: Duration = Duration::from_secs(1);
 /// after two restarts of the driver for the restart boot.
 const PATIENCE: Duration = Duration::from_secs(120);
 
-/// Which `userland/compositor/tone` is built.
+/// Which `src/user/linux/compositor/tone` is built.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Flavour {
     Plain,
@@ -64,7 +64,7 @@ enum Flavour {
     Restart,
 }
 
-/// Build `userland/compositor/tone` for `arch`, in `flavour`.
+/// Build `src/user/linux/compositor/tone` for `arch`, in `flavour`.
 fn build_tone(arch: Arch, flavour: Flavour) -> Result<PathBuf> {
     let target = crate::display::target(arch)
         .ok_or_else(|| Error::new(format!("{arch} has no user-space target for tone")))?;
@@ -81,11 +81,11 @@ fn build_tone(arch: Arch, flavour: Flavour) -> Result<PathBuf> {
     let target_dir = paths::target_dir()
         .join("compositor")
         .join(format!("tone-{flavour}"));
-    println!("  building userland/compositor/tone ({flavour}) for {target}");
+    println!("  building src/user/linux/compositor/tone ({flavour}) for {target}");
     let program = target_dir.join(target).join("release").join("tone");
     let mut build = crate::builds::Build::cargo(
-        format!("cargo build (userland/compositor/tone, {flavour}) --target {target}"),
-        paths::workspace_root().join("userland/compositor"),
+        format!("cargo build (src/user/linux/compositor/tone, {flavour}) --target {target}"),
+        paths::workspace_root().join("src/user/linux/compositor"),
     )
     .args([
         "build",
@@ -326,16 +326,16 @@ fn pulsed_script() -> String {
     format!("/bin/pulsed {PULSE_SOCKET} &\n/bin/pa-tone {PULSE_SOCKET}\nwait\n")
 }
 
-/// Build one of `userland/media`'s programs for `arch`: `package`'s `bin`.
+/// Build one of `src/user/linux/media`'s programs for `arch`: `package`'s `bin`.
 pub(crate) fn build_media(arch: Arch, package: &str, bin: &str) -> Result<PathBuf> {
     let target = crate::display::target(arch)
         .ok_or_else(|| Error::new(format!("{arch} has no user-space target for {bin}")))?;
     let target_dir = paths::target_dir().join("media").join(bin);
-    println!("  building userland/media/{bin} for {target}");
+    println!("  building src/user/linux/media/{bin} for {target}");
     let program = target_dir.join(target).join("release").join(bin);
     crate::builds::Build::cargo(
-        format!("cargo build (userland/media/{bin}) --target {target}"),
-        paths::workspace_root().join("userland/media"),
+        format!("cargo build (src/user/linux/media/{bin}) --target {target}"),
+        paths::workspace_root().join("src/user/linux/media"),
     )
     .args(["build", "--release", "-p", package, "--target", target])
     .env("CARGO_TARGET_DIR", &target_dir)
@@ -526,7 +526,7 @@ fn counter_wav() -> Vec<u8> {
 const RESTARTED: &str = "was started again and published";
 
 /// What the kernel says as a dead driver's quarantined pins go back
-/// (`kernel/src/object/pin.rs`), before the count of pages written late.
+/// (`src/kernel/src/object/pin.rs`), before the count of pages written late.
 const RELEASED: &str = "pages a dead driver's device could still write went back";
 
 /// Require, on an architecture whose card is behind a translating IOMMU,

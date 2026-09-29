@@ -43,7 +43,7 @@ use crate::types::{FIONREAD, O_CLOEXEC, O_NONBLOCK, TIOCOUTQ};
 /// The width of a user pointer, and so of a `size_t`, in the program whose
 /// structure is being read.
 ///
-/// `libs/kernel/ustack` has a type of the same name for the same fact. This crate
+/// `src/lib/kernel/ustack` has a type of the same name for the same fact. This crate
 /// cannot use it: `ferrix-ustack` depends on this crate rather than the other
 /// way round, and this one has no dependencies by design.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

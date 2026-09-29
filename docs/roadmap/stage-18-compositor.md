@@ -1,6 +1,6 @@
 # Stage 18 — The compositor ✅  ·  *96 points, spent*
 
-A Wayland compositor in Rust, on `libs/`' side of the tree as its own
+A Wayland compositor in Rust, on `src/lib/`' side of the tree as its own
 workspace the way ferrousli is, **written from scratch** rather than on the
 Smithay crates: decided on 2026-09-17, the reasoning in `docs/BACKLOG.md`.
 The wire protocol, the window management, the layouts, the configuration and
@@ -10,12 +10,12 @@ allowed is `xkbcommon`.
 * **Protocols:** `wl_compositor`, `wl_subcompositor`, `wl_shm`, `wl_seat`
   with keyboard and pointer (the keymap a client compiles with its own
   `xkbcommon`; as built, the compositor links no C at all, and ships keymaps
-  libxkbcommon printed on a host, in `userland/compositor/xkb`), `xdg_shell` with toplevels and popups, `xdg_decoration`,
+  libxkbcommon printed on a host, in `src/user/linux/compositor/xkb`), `xdg_shell` with toplevels and popups, `xdg_decoration`,
   `wlr_layer_shell` for bars; `zwp_linux_dmabuf` withheld until stage 19.
 * **Rendering** on the CPU into stage 17's dumb buffers: damage tracking,
   a pixman-shaped Rust rasteriser (`tiny-skia`), one page flip per frame,
   frame callbacks on vblank.
-* **The wire protocol with no libwayland** (`userland/compositor/wire`): the message
+* **The wire protocol with no libwayland** (`src/user/linux/compositor/wire`): the message
   header, every argument type, descriptor passing over `AF_UNIX`, and the
   object map, written from `/usr/share/wayland/wayland.xml` and fuzzed
   (8 points).
@@ -36,8 +36,8 @@ allowed is `xkbcommon`.
   console's pty, both static, both under `cargo xtask` like busybox.
 
 **Done — the configuration, before the Smithay decision needs making.**
-`userland/compositor/` is a workspace of its own, gated by `cargo xtask check`. Its
-first crate, `userland/compositor/config`, parses `hyprland.conf` as hyprlang does:
+`src/user/linux/compositor/` is a workspace of its own, gated by `cargo xtask check`. Its
+first crate, `src/user/linux/compositor/config`, parses `hyprland.conf` as hyprlang does:
 categories and the `category:key` shorthand, `$variables`, `##` escapes,
 `source`, Hyprland's option types and defaults for the options the compositor
 implements (integers that are also booleans and colours, floats, gradients,
@@ -46,7 +46,7 @@ the keywords later parts interpret, with Hyprland's diagnostics and the rest
 of the file still applied past a bad line. `Config::keyword` is `hyprctl
 keyword`. Host-tested and fuzzed (`hyprconf_parse`).
 
-**Done — the layout and dispatcher core.** `userland/compositor/layout` is Hyprland's
+**Done — the layout and dispatcher core.** `src/user/linux/compositor/layout` is Hyprland's
 window management as rectangles and ids, checked against Hyprland's source:
 monitors, workspaces made and dropped on demand, the dwindle tree (split
 direction, `preserve_split`, `force_split`, split ratio) and the master layout
@@ -61,14 +61,14 @@ changes it caused. Host-tested; where it departs from Hyprland (no cursor
 then, so `force_split` 0 took the second half, until 2026-09-18 gave it the
 pointer's position; pseudotiling; floating `movewindow`) its crate docs say so.
 
-**Done — the renderer, the last of the pure crates.** `userland/compositor/render`
+**Done — the renderer, the last of the pure crates.** `src/user/linux/compositor/render`
 draws a frame into the `XRGB8888` dumb buffer stage 17 gives it, on the CPU,
 with no C: a `Canvas` over a `tiny-skia` pixmap (pinned at `=0.12.0`, default
 features off, no build script) with `clear`, `fill`, `border` and `composite`
 -- `ARGB8888` source-over, `XRGB8888` copied and made opaque -- each drawn
 only inside a `Damage` of disjoint rectangles, so a translucent client blends
 every pixel once. `present` writes into a target of any stride, `render` draws
-one monitor from `userland/compositor/layout`'s output with `userland/compositor/config`'s
+one monitor from `src/user/linux/compositor/layout`'s output with `src/user/linux/compositor/config`'s
 border colours, and `damage_between` two layouts is the region a frame has to
 redraw. The everyday gate is pixel comparison on the host: the two pattern
 clients stage 18's tests will run are drawn in code, and a run-length expected
@@ -80,17 +80,17 @@ goes; its crate docs say how a Smithay `Renderer`/`Frame`/`ImportMem` or a
 server written from scratch wraps it.
 
 **Done — the wire protocol, with no libwayland (2026-09-17).**
-`userland/compositor/wire` is the bottom of the server: the message header, every
+`src/user/linux/compositor/wire` is the bottom of the server: the message header, every
 argument type, descriptors travelling beside the bytes rather than in them,
 and the per-client object map that keeps a client's ids and the server's in
 their own halves. It holds no socket and no descriptor -- an `fd` is an `i32`
-here and nothing more -- so it is host-tested and fuzzed as `libs/network/netwire`
-and `libs/proto/inputctl` are, and the part that has to run on Ferrix to be tried
+here and nothing more -- so it is host-tested and fuzzed as `src/lib/network/netwire`
+and `src/lib/proto/inputctl` are, and the part that has to run on Ferrix to be tried
 is only the socket above it.
 
 It is written from the protocol and from `connection.c`, so by construction
 nothing in it is checked against a real implementation. The check is a probe,
-in the shape `libs/proto/linux-abi/probe` set: `userland/compositor/wire/probe/wire.c`
+in the shape `src/lib/proto/linux-abi/probe` set: `src/user/linux/compositor/wire/probe/wire.c`
 drives a real libwayland client and a real libwayland server over socket
 pairs it owns and prints the bytes each wrote, `probe/wire.txt` is that
 output committed with the libwayland version on its first line, and the tests
@@ -120,12 +120,12 @@ NUL, no descriptor to be invented, and everything the writer builds to read
 back the same. It ran 65,887,144 inputs in ten minutes without a failure.
 
 **Done — the interface tables, generated from the protocol (2026-09-17).**
-`userland/compositor/protocol` is what tells `userland/compositor/wire`'s reader the signature
+`src/user/linux/compositor/protocol` is what tells `src/user/linux/compositor/wire`'s reader the signature
 of the message it is about to read: every interface's requests and events by
 opcode, their argument types, their `since` versions, which of them are
 destructors, and every enumeration value. It is generated by
-`scripts/gen/gen-wayland-protocol.py` from XML vendored under
-`userland/compositor/protocol/protocols/` -- at first `wayland.xml`, `xdg-shell.xml`,
+`tools/common/gen/gen-wayland-protocol.py` from XML vendored under
+`src/user/linux/compositor/protocol/protocols/` -- at first `wayland.xml`, `xdg-shell.xml`,
 `xdg-decoration-unstable-v1.xml` and `wlr-layer-shell-unstable-v1.xml`, and
 56 files by stage 19, each
 carrying its own permissive licence, copied into the generated file. The XML
@@ -135,7 +135,7 @@ change under the compositor without a commit. `cargo xtask check` runs the
 generator with `--check`, so a hand edit fails the gate.
 
 A generator can read XML wrong, and nothing in it would notice, so the tables
-are checked against an implementation the way `userland/compositor/wire` is:
+are checked against an implementation the way `src/user/linux/compositor/wire` is:
 `probe/interfaces.c` links against libwayland's own compiled
 `wl_*_interface` structures -- libwayland's for the core protocol and
 `wayland-scanner`'s output from the same vendored XML for the rest -- and
@@ -154,10 +154,10 @@ Two negative controls, neither committed. With `allow-null` read as its own
 opposite in the generator -- a nullable flag is the subtlest thing to get
 wrong -- `wl_display.error`'s signature disagrees and the comparison fails.
 With `wl_surface.commit`'s opcode changed by hand from 6 to 7, `--check`
-reports `userland/compositor/protocol/src/generated/core.rs is stale` and exits 1.
+reports `src/user/linux/compositor/protocol/src/generated/core.rs is stale` and exits 1.
 
 **Done — the connection, `wl_display` and `wl_registry` (2026-09-17).**
-`userland/compositor/server` is the protocol half of the compositor and holds no
+`src/user/linux/compositor/server` is the protocol half of the compositor and holds no
 socket, no descriptor and no pixel: a `Client` is handed the bytes that
 arrived and the descriptors that came with them and gives back the bytes to
 send, so object lifetimes, versions and every way a client can break the
@@ -168,7 +168,7 @@ fires it and takes the id back with `wl_display.delete_id`; `get_registry`
 announces every global in order; `bind` checks the name, the version and the
 interface the client named, because a client binding `wl_shm`'s name while
 saying `wl_seat` would otherwise get a `wl_shm` answering seat requests. The
-object map is `userland/compositor/wire`'s, now carrying the server's own state for
+object map is `src/user/linux/compositor/wire`'s, now carrying the server's own state for
 each object, so there is one map of live objects rather than two that can
 disagree about which exist.
 
@@ -240,7 +240,7 @@ compositor never agreed to. `set_max_size` and `set_min_size` are recorded
 and not obeyed, and `move`, `resize` and `show_window_menu` are ignored, as
 Hyprland ignores them for a tiled window.
 
-`userland/compositor/socket` is the first part of the compositor that has to be on
+`src/user/linux/compositor/socket` is the first part of the compositor that has to be on
 Ferrix to be tried: an `AF_UNIX` listener and the `sendmsg`/`recvmsg` control
 messages that carry descriptors, which the standard library has no stable way
 to do. It is the crate's only `unsafe`, split one operation to a block as the
@@ -266,21 +266,21 @@ its buffer, and libwayland prints `xdg_surface#7: error 3: a buffer was
 attached before a configure was acked`.
 
 **Done — the compositor runs, and two clients are tiled on it
-(2026-09-17).** `userland/compositor/hyprix` is the compositor itself: it reads a
+(2026-09-17).** `src/user/linux/compositor/hyprix` is the compositor itself: it reads a
 `hyprland.conf`, binds a Wayland socket, starts what `exec-once` names, tiles
-what connects to it with `userland/compositor/layout`, draws with `userland/compositor/render`
+what connects to it with `src/user/linux/compositor/layout`, draws with `src/user/linux/compositor/render`
 and puts the frame on a screen. Nothing in it parses a file, works out a
 layout, draws a pixel or decodes a message; it is the loop that joins the
 crates that do, and the two places the compositor touches the world -- a
 client's shared memory, mapped read-only, and the screen.
-`userland/compositor/pattern` is the client it draws: a whole Wayland client in one
-file, over `userland/compositor/wire` and `userland/compositor/socket` rather than a toolkit,
+`src/user/linux/compositor/pattern` is the client it draws: a whole Wayland client in one
+file, over `src/user/linux/compositor/wire` and `src/user/linux/compositor/socket` rather than a toolkit,
 which means the tests exercise those crates from both ends.
 
 **The headless half of this stage's exit passes.** Two pattern clients
 connect over a real socket, are tiled dwindle-style with the configured gaps
 and borders, draw into shared memory, and the frame the compositor composed
-is compared pixel for pixel against the expected image `userland/compositor/render`'s
+is compared pixel for pixel against the expected image `src/user/linux/compositor/render`'s
 own tests bless: 0 differing pixels of 786,432. The two pictures are built by
 different paths -- one by calling the renderer with rectangles from the
 layout, the other by two programs talking Wayland to a server that works the
@@ -298,10 +298,10 @@ client's bug and the server being right.
 
 What was left of this stage at that point: `wl_seat`, so a window can be
 typed into; the `hyprctl` IPC; and the screen itself, which is
-`userland/compositor/blank`'s DRM path moved behind `hyprix`'s backend so the same
+`src/user/linux/compositor/blank`'s DRM path moved behind `hyprix`'s backend so the same
 frame goes to `/dev/dri/card0` under QEMU. All three have landed since.
 
-**Done — a real toolkit runs on it (2026-09-17).** `userland/compositor/pattern` is
+**Done — a real toolkit runs on it (2026-09-17).** `src/user/linux/compositor/pattern` is
 written against the same crates the server is, so a test with it shows the two
 halves of this tree agree -- not that the protocol is right. `foot`, a
 Wayland terminal built against libwayland and every other compositor, knows
@@ -332,28 +332,28 @@ the pattern client could never have found:
 With those, `foot` gets a window, works out its cell size from the mode this
 compositor gave it, draws its terminal over 690,820 of the screen's 786,432
 pixels, and exits by choice with no protocol error.
-`userland/compositor/hyprix/probe/real-client.sh` records the run and the test requires
+`src/user/linux/compositor/hyprix/probe/real-client.sh` records the run and the test requires
 each step of it; the record summarises the busiest frame rather than
 committing a picture of somebody else's font rendering.
 
 **Done — `hyprctl`, driven by Hyprland's own client (2026-09-17).**
-`userland/compositor/ipc` is the request shape and the answers: the flags in front of
+`src/user/linux/compositor/ipc` is the request shape and the answers: the flags in front of
 a request, `[[BATCH]]`, and the JSON and readable forms of `version`,
 `monitors`, `workspaces`, `clients`, `activewindow` and `activeworkspace`,
 with Hyprland 0.56.2's field names in its own order, read from
 `src/debug/HyprCtl.cpp`. A bar reads those by name, so a missing one is a
 crash in somebody else's program. `dispatch`, `keyword` and `reload` come
 back for the compositor to run, because the crate holds no compositor and no
-socket; `userland/compositor/hyprix` binds the socket where Hyprland binds it, under
+socket; `src/user/linux/compositor/hyprix` binds the socket where Hyprland binds it, under
 `$XDG_RUNTIME_DIR/hypr/<instance>/.socket.sock`, and a program looks there
 and nowhere else.
 
-The answers are checked twice. `userland/compositor/ipc`'s tests parse them back with
+The answers are checked twice. `src/user/linux/compositor/ipc`'s tests parse them back with
 a JSON parser written in the tests -- the only way to say "this is JSON"
 without the compositor taking a dependency for it -- and require Hyprland's
 field order, that a window title holding a quote, a backslash and a newline
 comes back as it went in, and that `-j -r` and `-j` are the same document.
-Then `userland/compositor/hyprix/probe/hyprctl.sh` runs the real `hyprctl` against the
+Then `src/user/linux/compositor/hyprix/probe/hyprctl.sh` runs the real `hyprctl` against the
 compositor and records what it printed: `version`, `monitors`, `workspaces`,
 `clients` and `activewindow` in Hyprland's own shapes; `dispatch movefocus l`
 moving the focus from the second window to the first; and `keyword
@@ -362,7 +362,7 @@ the compositor runs. A compositor that took the keyword and did not re-tile
 would still have said `ok`, so the test requires the sizes.
 
 **Done — the compositor on a screen, on Ferrix (2026-09-17).**
-`userland/compositor/drm` is the card, lifted out of `userland/compositor/blank`: the legacy
+`src/user/linux/compositor/drm` is the card, lifted out of `src/user/linux/compositor/blank`: the legacy
 mode-setting calls and nothing a compositor does not need. `blank` drives the
 screen through it still -- `cargo xtask test-display` passes unchanged,
 negative control and all -- and `hyprix` drives it too, with two dumb buffers
@@ -375,7 +375,7 @@ the GPU drew into instead.
 virtio-gpu and requires the screen. It opened `/dev/dri/card0` through the
 kernel's display core and the ring-3 virtio-gpu driver, set the card's
 preferred mode, bound its Wayland socket, drew a frame with
-`userland/compositor/render` and flipped it, and every one of QEMU's 786,432 pixels is
+`src/user/linux/compositor/render` and flipped it, and every one of QEMU's 786,432 pixels is
 the compositor's background.
 
 Two things had to be true for it to run as init that are not true of a
@@ -388,12 +388,12 @@ falls back to `/tmp` rather than the compositor refusing to start -- which
 would be a compositor that only runs where something else ran first.
 
 **And stage 18's exit criterion passes on the card.** The initramfs carries
-`userland/compositor/pattern` at `/bin/pattern` and the compositor's own `exec-once`
+`src/user/linux/compositor/pattern` at `/bin/pattern` and the compositor's own `exec-once`
 starts two of them, so what reaches the screen is two real Wayland clients,
 tiled dwindle-style with the configured gaps and borders, drawn from the
 shared memory they committed. `cargo xtask test-compositor` compares QEMU's
-screendump against the same expected image `userland/compositor/render`'s own tests
-bless and `userland/compositor/hyprix/tests/two_clients.rs` compares against on the
+screendump against the same expected image `src/user/linux/compositor/render`'s own tests
+bless and `src/user/linux/compositor/hyprix/tests/two_clients.rs` compares against on the
 host: every one of 786,432 pixels, on x86-64 and on AArch64. Its negative
 control, not committed: with one client started instead of two, 362,542
 pixels differ and the test says the picture is not the one the renderer
@@ -408,14 +408,14 @@ now, and the test that named the old rule says the new one.
 
 **Done — the seat: a window that can be typed into (2026-09-17).** The input
 iteration landed the nodes; this is the compositor reading them. `hyprix`
-opens every `/dev/input/eventN` through `userland/compositor/evecho`, grabs it, and
+opens every `/dev/input/eventN` through `src/user/linux/compositor/evecho`, grabs it, and
 turns its events into `wl_keyboard` and `wl_pointer` ones: `enter` and
 `leave` as the layout's focus moves and as the pointer crosses a window,
 `key` with evdev's own code, `modifiers` with the masks the keymap declares,
 `motion`, `button`, `axis` and the `frame` that groups them, and
 `repeat_info` from `input:repeat_rate` and `input:repeat_delay`.
 
-The keymap is a real one. `userland/compositor/xkb` carries the text libxkbcommon
+The keymap is a real one. `src/user/linux/compositor/xkb` carries the text libxkbcommon
 itself printed for the `evdev` rules with the `us` layout -- 34,205 bytes,
 from a committed probe -- and hands it to each client in a sealed `memfd`, as
 Smithay's `SealedFile` does. The same probe asks libxkbcommon's own state
@@ -460,13 +460,13 @@ initramfs; its `exec-once` lines start the two clients; they tile
 dwindle-style with the configured gaps and borders; a keybind pressed through
 QMP's `input-send-event` moves the focus and another swaps the windows; and
 each of the three states is required from QEMU's screendump, pixel for pixel,
-against an image `userland/compositor/render`'s own tests bless. Every one of 786,432
+against an image `src/user/linux/compositor/render`'s own tests bless. Every one of 786,432
 pixels, three times over, and the test also requires the three pictures to be
 three pictures -- a compositor that ignored both keybinds would otherwise
 pass every comparison if two expected images happened to be the same file.
 
 The IPC half runs on the guest. Hyprland's `hyprctl` is not on Ferrix's
-image, so `userland/compositor/ctl` is the same program written here: it finds
+image, so `src/user/linux/compositor/ctl` is the same program written here: it finds
 `$XDG_RUNTIME_DIR/hypr/<instance>/.socket.sock` where Hyprland's looks,
 writes one line and prints the answer. `probe/hyprctl.sh` now runs every
 read-only command through both clients against one compositor in one session,
@@ -525,7 +525,7 @@ The protocol is answered whole for the four layers and the placement rules:
 the anchors, the size with the protocol's own `invalid_size` rule for an axis
 with no size and no two anchors, the margins, the exclusive zone, the
 keyboard interactivity, and the configure conversation with its serials.
-Where a surface goes is `userland/compositor/layout`'s `layers`, which follows
+Where a surface goes is `src/user/linux/compositor/layout`'s `layers`, which follows
 wlroots' `wlr_scene_layer_surface_v1_configure`: the usable area less the
 margins, the size the client asked for on any axis it is not stretched
 across, and each exclusive zone taken off the area the next surface is placed
@@ -533,16 +533,16 @@ in -- which is what makes two bars on one edge stack rather than overlap. The
 zones become the monitor's reserved strips, so the windows tile in what is
 left.
 
-`userland/compositor/pattern --bar 30` is a bar, asking for what `waybar` asks for in
+`src/user/linux/compositor/pattern --bar 30` is a bar, asking for what `waybar` asks for in
 the order it asks. On the host it is drawn beside two windows and the frame
-is compared against an image `userland/compositor/render`'s own tests bless; on
+is compared against an image `src/user/linux/compositor/render`'s own tests bless; on
 Ferrix, `cargo xtask test-compositor` boots a second time with a bar in the
 `hyprland.conf` and requires the same picture from QEMU's screendump. Every
 one of 786,432 pixels, on x86-64 and AArch64.
 
 **Done — the terminal (2026-09-17).** The last thing this stage owed. It
 needed pseudoterminals, which the kernel did not have and now does, and a
-terminal emulator, which is `userland/compositor/term`: stage 19's own entry has the
+terminal emulator, which is `src/user/linux/compositor/term`: stage 19's own entry has the
 whole of it, since that is where the work landed. `cargo xtask test-pty`
 proves the pair without a window and `cargo xtask test-compositor` boots a
 terminal in the compositor and requires the picture it makes.
@@ -557,7 +557,7 @@ their drivers run in degraded trusted mode. The compositor's programs are
 built for `armv7-unknown-linux-musleabihf`, hard float; rav1d needs one
 feature gate for its CPU probe on 32-bit ARM, which the compositor's cargo
 config lets that crate alone have. Nothing in the compositor, the DRM and
-evdev layouts or the kernel needed a 32-bit fix: `libs/proto/linux-abi` had
+evdev layouts or the kernel needed a 32-bit fix: `src/lib/proto/linux-abi` had
 carried both pointer widths from the start. `test-display`, `test-input`,
 `test-seat`, `test-pty`, `test-video` and every boot of `test-compositor`
 pass on ARMv7-A, at four processors and at two. Under TCG on a loaded

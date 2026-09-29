@@ -4,12 +4,12 @@
 # Pixel 7's VM above all (docs/CHROME.md §11).
 #
 # Why not Google's build: Chrome for Testing publishes linux64 alone, and
-# scripts/fetch/fetch-chrome.sh's volume is that. Debian 13's security archive
+# tools/common/fetch/fetch-chrome.sh's volume is that. Debian 13's security archive
 # carries Chromium 154.0.8037.57 for arm64, the very version of Chrome for
 # Testing the x86-64 volume holds, built by Debian with its own libraries.
 #
 # The package list is Chromium's dependency closure as
-# `scripts/gen/debian-closure.py --arch arm64 chromium --skip ...` resolved it
+# `tools/common/gen/debian-closure.py --arch arm64 chromium --skip ...` resolved it
 # from trixie, trixie-updates and trixie-security on 2026-09-26, leaving out
 # what no Ferrix volume runs -- debconf, systemd and D-Bus's daemons, GTK
 # (which Chromium only `dlopen`s, for its file dialog and theme) and Mesa's GL
@@ -26,7 +26,7 @@
 # ~/.local/share/ferrix/chromium-arm64/chromium.img). Needs curl, sha256sum,
 # dpkg-deb, readelf and mkfs.btrfs; no root.
 #
-# Usage: scripts/fetch/fetch-chromium-arm64.sh
+# Usage: tools/common/fetch/fetch-chromium-arm64.sh
 
 set -euo pipefail
 

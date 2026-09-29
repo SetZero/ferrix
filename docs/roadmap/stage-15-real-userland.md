@@ -14,7 +14,7 @@ gained one. What was left when this stage was looked at properly on
 2026-09-19 was not the kernel's at all: every system call job control is made
 of had been answered since stage 7 and nothing in user space used them.
 
-**Done -- job control, and a gate that types (2026-09-19).** `userland/zinc/src/jobs.rs`
+**Done -- job control, and a gate that types (2026-09-19).** `src/user/linux/zinc/src/jobs.rs`
 is the shell's half of what the kernel already offered. A pipeline is one
 process group, so `kill %1` and the terminal's Ctrl-C reach all of it; a
 foreground job is handed the terminal with `tcsetpgrp` and the shell takes it
@@ -30,7 +30,7 @@ Before this the shipped shell answered `fg` with *no job control in this
 shell*.
 
 Two gates, because a process group is invisible in a transcript.
-`userland/zinc/tests/pty_jobs.py`, in `cargo xtask check --zinc`, drives the shell on
+`src/user/linux/zinc/tests/pty_jobs.py`, in `cargo xtask check --zinc`, drives the shell on
 a host pseudo-terminal and reads the process groups themselves out of
 `/proc/<pid>/stat`: that the job's group is not the shell's, that a job's own
 children share it, and that the terminal's foreground group is the job's
@@ -55,7 +55,7 @@ and `ferrix.onexit=panic` gives Linux's answer to init exiting (`FX-1501`).
 off with `poweroff -f -n` and reads the file back on a second boot of the
 same volume. `docs/INIT.md` §16 has the details and the negative controls.
 
-**Done -- L1, the unit files (2026-09-24, 5 points).** `libs/init/svc` is the
+**Done -- L1, the unit files (2026-09-24, 5 points).** `src/lib/init/svc` is the
 manager's pure core, `no_std` so that `devmgr` can share its restart
 policy later. Its first landing reads units as systemd does: the INI
 subset with `conf-parser.c`'s corners, the three layered directories as a
@@ -68,7 +68,7 @@ Miri, and the `svc_unit` fuzz target. `docs/INIT.md` §16 records what
 the building changed in the design.
 
 **Done -- L2, the manager (2026-09-24, 8 points).** The rest of
-`libs/init/svc`: `Manager::step(event, now) -> actions` and `deadline()`, as
+`src/lib/init/svc`: `Manager::step(event, now) -> actions` and `deadline()`, as
 `docs/INIT.md` §3 has them. Requests become transactions of operations
 along systemd's dependencies, with its conflict rules, a `Wants=` cycle
 broken with a warning and a `Requires=` cycle refused; what is not ordered
@@ -84,9 +84,9 @@ drives the manager with events in any order. The core never holds a
 handle: every action names a `UnitId`, a `GroupPath`, a `Token` or a
 `ClientId`, for the init program's backends to map (`docs/INIT.md` §16).
 
-**Done -- L4, the init program (2026-09-26, 10 points).** `userland/init/` is a
+**Done -- L4, the init program (2026-09-26, 10 points).** `src/user/linux/init/` is a
 workspace beside zinc's, built the same way for all three architectures.
-`/sbin/init` is pid 1 around `libs/init/svc`'s manager: it mounts `/run` and
+`/sbin/init` is pid 1 around `src/lib/init/svc`'s manager: it mounts `/run` and
 cgroup2, moves itself into `init.scope`, runs the generators, and waits in
 one `epoll_wait` on a signalfd, each child's exec report and each cgroup's
 `cgroup.events`, turning what it finds into the manager's events and its
@@ -133,8 +133,8 @@ each program it starts in a scope of its own. `test-jobs` types its session
 at the getty's shell.
 
 **Done -- L11, `devmgr` on the restart policy (2026-09-26, 2 points).** The
-policy is its own crate, `libs/init/restart`, which allocates nothing so
-that `devmgr` can link it, and `libs/init/svc` re-exports it; its start limit
+policy is its own crate, `src/lib/init/restart`, which allocates nothing so
+that `devmgr` can link it, and `src/lib/init/svc` re-exports it; its start limit
 is systemd's fixed window. `devmgr` restarts a driver by it and reports how
 each driver died through K6.
 
@@ -165,7 +165,7 @@ stage 13's namespaces and seccomp exist.
 service manager in one program. Its units are in systemd's syntax, with
 slices, scopes, templates, generators and socket activation, and each service
 runs in a cgroup of its own. Its manager is a pure state machine in
-`libs/init/svc`, and every effect goes through a backend that a microkernel could
+`src/lib/init/svc`, and every effect goes through a backend that a microkernel could
 serve instead. Init hands each service a bootstrap channel and routes named
 native services between them.
 

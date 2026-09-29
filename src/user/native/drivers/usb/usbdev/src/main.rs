@@ -1,6 +1,6 @@
 //! The Pixel 7's USB device driver process: a ring-3 program that presents a
 //! USB serial port (CDC-ACM) on the phone's USB-C port, through its DWC3
-//! (`docs/PIXEL7-USB-HANDOVER.md`).
+//! (`docs/vendor/google/pixel7/USB-HANDOVER.md`).
 //!
 //! Everything that knows anything about USB is `ferrix-dwc3` and
 //! `ferrix-usb-device`, tested on the host against a model of the
@@ -182,7 +182,7 @@ impl fmt::Write for Line {
 ///
 /// What it writes is logged, and so is every read made before the first
 /// write: the product owner's condition for writing this controller at
-/// all (`docs/PIXEL7-USB-HANDOVER.md` §8) is that each run's record shows
+/// all (`docs/vendor/google/pixel7/USB-HANDOVER.md` §8) is that each run's record shows
 /// the guard's reads and which registers were written. Until the
 /// controller runs, every write is logged; after that, only the first
 /// write to each register, and not at once: it is queued with its time

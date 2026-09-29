@@ -4,8 +4,8 @@
 The images are HTML pages drawn with the tree's own fonts and screenshotted by
 headless Chrome, so they can be regenerated after the copy changes:
 
-    python3 scripts/gen/gen-brand-images.py            # all of them
-    python3 scripts/gen/gen-brand-images.py social     # one of them
+    python3 tools/common/gen/gen-brand-images.py            # all of them
+    python3 tools/common/gen/gen-brand-images.py social     # one of them
 
 Needs `google-chrome` (or `chromium`) on PATH. Output lands in docs/brand/.
 The terminal lines on the social preview are copied from real gate logs
@@ -19,7 +19,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 BRAND = ROOT / "docs" / "brand"
 FONTS = ROOT / "assets" / "fonts"
 

@@ -3,7 +3,7 @@
 //! Stage 5 of `docs/ROADMAP.md`. Until now the kernel has run one thread of
 //! control per processor, and every "CPU" in the code has meant a processor.
 //! From here a processor runs a *task*, chosen from a queue of its own, and
-//! the choosing is `ferrix_sched`'s EEVDF fair class — written in `libs/` and
+//! the choosing is `ferrix_sched`'s EEVDF fair class — written in `src/lib/` and
 //! tested on the host, because a scheduler that is wrong is wrong in a way
 //! nothing on the machine can print.
 //!

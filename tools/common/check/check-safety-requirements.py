@@ -6,7 +6,7 @@ integrator reads it, designs against its assumed safety requirements, and
 discharges its assumptions of use. That makes a stale claim in it worse than no
 manual at all, because a manual is believed and a missing one is not.
 
-So every claim names its evidence in `scripts/data/safety-requirements.json`, and
+So every claim names its evidence in `tools/common/data/safety-requirements.json`, and
 this asserts three things about the pair.
 
   1. **The manual and the register agree on which ids exist.** An `ASR-9` added
@@ -36,7 +36,7 @@ What it deliberately does not check: whether the evidence actually *supports*
 the claim. No script can. It checks that the citation resolves, which is the
 part that rots silently.
 
-    python3 scripts/check/check-safety-requirements.py
+    python3 tools/common/check/check-safety-requirements.py
 """
 
 from __future__ import annotations
@@ -46,8 +46,8 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent.parent
-REGISTER = ROOT / "scripts" / "data" / "safety-requirements.json"
+ROOT = Path(__file__).resolve().parent.parent.parent.parent
+REGISTER = ROOT / "tools" / "common" / "data" / "safety-requirements.json"
 MANUAL = ROOT / "docs" / "certification" / "SAFETY-MANUAL.md"
 
 ID = re.compile(r"\b(ASR-\d+|FM-\d+|AoU-\d+)\b")

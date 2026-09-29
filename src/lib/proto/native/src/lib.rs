@@ -1,6 +1,6 @@
 //! Typed, safe wrappers over every Ferrix native system call.
 //!
-//! `libs/proto/native-abi` writes the native ABI down as numbers and layouts; this
+//! `src/lib/proto/native-abi` writes the native ABI down as numbers and layouts; this
 //! crate is how a program *speaks* it. Each call is a function or a method on
 //! the handle type it acts on, taking slices and typed flags rather than
 //! pointers and words, and returning [`Error`] rather than `-errno`:
@@ -19,11 +19,11 @@
 //!
 //! Nothing here traps. Every wrapper builds a [`Raw`] — number, six argument
 //! registers, and the memory its pointer arguments name — and passes it to a
-//! [`Syscall`]. `native/rt`, the runtime a native program links, implements that
+//! [`Syscall`]. `src/user/native/rt`, the runtime a native program links, implements that
 //! trait with the architecture's trap instruction. The tests implement it with
 //! a recorder that plays the kernel's part, so every wrapper's number, argument
 //! order, pointer layout and error decoding is checked on the host and under
-//! Miri. That split is also why this crate can sit in `libs/`: it is the part
+//! Miri. That split is also why this crate can sit in `src/lib/`: it is the part
 //! of the runtime that is a pure function of its arguments.
 //!
 //! No `unsafe`: pointer arguments are addresses of borrowed slices, and the one

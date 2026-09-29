@@ -19,7 +19,7 @@ its failed link has been ferrousli's to-do list since it was written.
 Two reasons it goes. It is C, in a tree whose case is that an operating system
 is better written in Rust, and the exception has never been argued for — only
 tolerated because nothing else could boot. And it drags the kernel's UAPI
-headers in with it: `userland/ferrousli/tools/busybox/` needs the host's `<linux/*>` on
+headers in with it: `src/user/linux/ferrousli/tools/busybox/` needs the host's `<linux/*>` on
 Linux and Alpine's pinned copy on Windows, and ferrousli carries three
 pass-through headers for it. Both go when busybox goes.
 
@@ -56,7 +56,7 @@ linked against ferrousli the way busybox's C is.
 **Part one — a `std` hello-world.** Built for `x86_64-unknown-linux-gnu` with
 `-C target-feature=+crt-static -C link-self-contained=no` and a linker wrapper
 giving ferrousli's `crt1.o` and `libferrousli.a` and nothing from the host's C
-library — the shape `userland/ferrousli/tools/busybox/build.sh` already uses. Three
+library — the shape `src/user/linux/ferrousli/tools/busybox/build.sh` already uses. Three
 things stopped it:
 
 1. `rust_eh_personality` is defined by ferrousli *and* by `std`. ferrousli is
@@ -243,7 +243,7 @@ ferrousli, each under its own name.
 Fourteen programs. Everything else either moved or was never gated.
 
 **A note on the networking row, because a summary of this document got it
-wrong once.** Ferrix's networking is done and gated: the stack in `libs/network/net`,
+wrong once.** Ferrix's networking is done and gated: the stack in `src/lib/network/net`,
 the net ring, netlink, `AF_INET` and `AF_INET6`, raw and packet sockets, DHCP.
 `test-net` passes. What is missing is the seven *commands* above, which
 configure and inspect it. uutils is GNU coreutils, which has never contained a
@@ -271,13 +271,13 @@ its table row in `docs/BACKLOG.md` names.
 | # | Slice | Points | Gate |
 |---|---|---|---|
 | S1 | **Done.** ferrousli gained the 17: `posix_spawn` and its eight, `pthread_atfork`, `splice`, `lutimes`, `__res_init`, `gnu_get_libc_version`, three `_chk` functions, the two versioned `termios` names, `dlsym` and the rest of `dlfcn.h`, `_dl_find_object`, and a weak `rust_eh_personality`. `execvpe` and `errno::get` came with `posix_spawn`, and the `.init_array` constructors now get `argc`, `argv` and `envp` as glibc and musl pass them | 8 | `check --ferrousli` passes; uutils links with 0 undefined symbols |
-| S2 | **Done.** `userland/ferrousli/tools/uutils/` (`sources.sh`, `build.sh`, `build-windows.sh`) and `cargo xtask uutils`. What it shares with busybox moved to `xtask/src/ferrousli.rs`, which is what stays when S8 deletes `busybox.rs`. The staleness rule is written and unused until S3 calls it | 5 | builds on Linux and on Windows; the Windows-built binary runs on Linux |
+| S2 | **Done.** `src/user/linux/ferrousli/tools/uutils/` (`sources.sh`, `build.sh`, `build-windows.sh`) and `cargo xtask uutils`. What it shares with busybox moved to `tools/common/xtask/src/ferrousli.rs`, which is what stays when S8 deletes `busybox.rs`. The staleness rule is written and unused until S3 calls it | 5 | builds on Linux and on Windows; the Windows-built binary runs on Linux |
 | S3 | **Done.** Every image that carries a program carries `/bin/coreutils`, with each of the 106 utility names linked in `/usr/bin` — not `/bin`, which stays busybox's, so no gate runs a different program than it did. Three `test-vfs` rows, reported as a group of their own, run uutils on Ferrix for the first time | 3 | the three rows pass on Ferrix: the multicall form, the symlink dispatch, and a file read |
 | S4 | **Done, and it did split.** Three commits, each green: init resolves a command's program through `/bin` instead of always running busybox; `/bin/sh` is zinc; the hundred names uutils provides are uutils'. busybox keeps what neither has | 13 → **6** | the whole matrix; `test-vfs` gained a group that says which shell `/bin/sh` is |
 | S5 | *Folded into S4, and nearly free.* One row of eighteen needed re-recording | — | — |
 | S6 | **Done, in half.** findutils and diffutils are built and installed the same way, and six programs ride in the image where one did. procps and util-linux do not build for this target at all, at their release or at their main branch — §6a | 5 → 4 | `test-vfs` runs `find`, `xargs`, `diff` and `cmp` on Ferrix |
 | S7 | **Done by another session** (os-12, 2026-09-17): git 2.55.0 over a new `zlib` port and curl's libcurl, without Perl, Python, Tcl, gettext or iconv | 8 → 12 | landed gated by the whole matrix |
-| S8 | busybox deleted: `tools/busybox/`, `xtask/src/busybox.rs`, the UAPI headers, ferrousli's three `<linux/*>` pass-throughs, the applet list | 3 | the whole matrix, once §5 is empty |
+| S8 | busybox deleted: `tools/busybox/`, `tools/common/xtask/src/busybox.rs`, the UAPI headers, ferrousli's three `<linux/*>` pass-throughs, the applet list | 3 | the whole matrix, once §5 is empty |
 
 S1 to S7 have landed. uutils and zinc **are** the userland now, not
 passengers in the image, and git builds against ferrousli. What is left is
@@ -351,7 +351,7 @@ something answers the fourteen names in §5. This is what that means.
 |---|---|---|---|
 | Interfaces and routes | `ip`, `route`, `netstat` | A native Rust program over **netlink, which Ferrix already implements and gates**. `ip` is the only one the image really needs: `route` and `netstat` are `ip route` and `ss` in other clothes, and `test-net` could ask `ip` for what it asks them for | 8 |
 | Reachability | `ping`, `ping6` | Raw `AF_INET`/`AF_INET6` sockets, which the kernel has and `test-net` already exercises directly | 3 |
-| Address assignment | `udhcpc` | A DHCP client. The lease script `xtask/src/initramfs.rs` writes is busybox's shape and would go with it | 5 |
+| Address assignment | `udhcpc` | A DHCP client. The lease script `tools/common/xtask/src/initramfs.rs` writes is busybox's shape and would go with it | 5 |
 | Name lookup | `nslookup` | A front end to ferrousli's resolver, which is complete | 2 |
 | `/proc` readers | `sysctl`, `top`, `mpstat`, `iostat`, `pwdx` | procps' job. It does not build (§6a); writing them here instead is five small programs over `/proc`, which the kernel serves | 5 |
 | Partitions | `fdisk` | `test-vfs` only asks it to read `/proc/partitions` and exit 0 without dying. A reader is small; a partition *editor* is not, and is not wanted | 2 |
@@ -365,9 +365,9 @@ has. That is the useful shape of the answer — the hard half is done.
 
 Mechanical, once §8.1 lands. 3 points:
 
-* `userland/ferrousli/tools/busybox/` — `sources.sh`, `build.sh`, `build-windows.sh`,
+* `src/user/linux/ferrousli/tools/busybox/` — `sources.sh`, `build.sh`, `build-windows.sh`,
   `config.sh` and `hostcompat/`;
-* `xtask/src/busybox.rs`, and the `busybox` command in `main.rs`;
+* `tools/common/xtask/src/busybox.rs`, and the `busybox` command in `main.rs`;
 * `--init`, which exists to name a busybox. `test-shell` keeps a way to run
   somebody else's binary, or stage 7's exit criterion loses its point
   (`docs/ROADMAP.md` says why);

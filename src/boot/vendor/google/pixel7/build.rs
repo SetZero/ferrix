@@ -2,7 +2,7 @@
 //! and embed the kernel and initramfs it starts.
 //!
 //! The script is passed here rather than in `.cargo/config.toml` for the reason
-//! `kernel/build.rs` gives: cargo joins `rustflags` from every config file
+//! `src/kernel/build.rs` gives: cargo joins `rustflags` from every config file
 //! between the invocation directory and the root, so a checkout inside another
 //! checkout would pass `-T` twice.
 //!

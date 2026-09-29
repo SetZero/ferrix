@@ -1,6 +1,6 @@
 //! The three unit directories (§4.1), read into a [`Source`].
 //!
-//! `libs/init/svc` reads no directory: it takes each entry by its path relative
+//! `src/lib/init/svc` reads no directory: it takes each entry by its path relative
 //! to its directory, as a file's bytes, a mask or an alias. This is the
 //! walk that hands them over, one level deep, which is as deep as unit
 //! directories go: the units themselves, and in `name.d/`, `name.wants/`

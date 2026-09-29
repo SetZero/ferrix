@@ -3,7 +3,7 @@
 //! A 64-bit loader reads 64-bit objects and a 32-bit one reads 32-bit
 //! objects: a dynamic linker is loaded into the process it links, so the
 //! class is never in question and there is no need for the two-class reader
-//! `libs/platform/elf` is. The types are named after the C ones so that a reader with
+//! `src/lib/platform/elf` is. The types are named after the C ones so that a reader with
 //! the ELF specification open finds them.
 
 /// `Elf_Phdr`, in the layout this build's class gives it.

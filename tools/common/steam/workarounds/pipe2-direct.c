@@ -9,8 +9,8 @@
  * Real fix: packet-mode pipes in the kernel. Owner: steam-pipe-direct.
  * Delete this file when that lands (docs/STEAM.md, the workaround table).
  *
- * Built by scripts/fetch/fetch-steam-window.sh for i386 and x86-64, and
- * preloaded by scripts/steam/client.sh. No libc headers: -nostdlib, so
+ * Built by tools/common/fetch/fetch-steam-window.sh for i386 and x86-64, and
+ * preloaded by tools/common/steam/client.sh. No libc headers: -nostdlib, so
  * one command line builds both without a multilib toolchain.
  */
 void *dlsym(void *handle, const char *symbol);

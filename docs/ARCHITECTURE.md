@@ -97,7 +97,7 @@ Two ABIs coexist:
 
 A process may use both: a musl program can make native calls for the parts
 POSIX cannot express. `devmgr` and the ring-3 drivers are native programs,
-built on `native/rt`.
+built on `src/user/native/rt`.
 
 ---
 
@@ -143,7 +143,7 @@ own slabs, so a `Task` allocation is a pop off a list.
 **Virtual.** Tables of 512 eight-byte descriptors over a 4 KiB granule on all
 three architectures: four levels over 48-bit addresses on the 64-bit pair, three
 over 32 on ARMv7-A, whose Large Physical Address Extension is AArch64's
-descriptor format with a narrower physical address. `libs/kernel/paging` is written
+descriptor format with a narrower physical address. `src/lib/kernel/paging` is written
 once, over a *geometry* and an *encoding* each architecture supplies.
 
 The 64-bit pair share *identical layout constants*:
@@ -175,7 +175,7 @@ gets what the vmap area and the image leave, and its size is the ceiling on the
 RAM a 32-bit kernel can use. On every architecture the direct map begins at the
 lowest RAM address rather than at zero — a gibibyte in on QEMU's Arm machines,
 whose first gibibyte is flash and device registers — and `BootInfo` says where.
-`libs/proto/bootinfo` holds both layouts and checks both at compile time on every
+`src/lib/proto/bootinfo` holds both layouts and checks both at compile time on every
 build, whichever the build is for.
 
 The direct map is writable and never executable, except over the kernel
@@ -267,7 +267,7 @@ killer are scoped.
 
 **seccomp**, classic BPF filters evaluated on syscall entry, with an interpreter
 that is itself a pure function over bytes and therefore fuzzable and Miri-able
-in `libs/`.
+in `src/lib/`.
 
 **Credentials** are Unix: uid, gid, supplementary groups, POSIX capability sets,
 no-new-privs. They sit on top of the handle system rather than beside it.
@@ -280,9 +280,9 @@ The kernel enumerates buses, because that needs ACPI (x86-64, AArch64) or a
 device tree (ARMv7-A, and AArch64 firmware that offers one) and privileged
 access. It does not drive devices.
 
-**And that is gated, not merely meant.** `scripts/check/check-device-access.py` reads
-every volatile access and port instruction under `kernel/` against
-`scripts/data/device-access-allowlist.json`, which says for each file whether it
+**And that is gated, not merely meant.** `tools/common/check/check-device-access.py` reads
+every volatile access and port instruction under `src/kernel/` against
+`tools/common/data/device-access-allowlist.json`, which says for each file whether it
 touches a device register, RAM a device also reads, or ordinary memory made
 volatile so a boot check cannot be optimised away. A register access outside the
 paths this section and §1 permit is refused, a file over its budget is refused,
@@ -401,16 +401,16 @@ test that a CoW filesystem actually has to pass.
 
 | Layer | Lives in | Reachable by tests |
 |---|---|---|
-| Byte-level logic: ELF, cpio, btrfs item parsing, seccomp BPF, page-table arithmetic, allocators | `libs/` | `cargo test`, Miri, fuzzers |
-| Loader | `boot/uefi/` | QEMU boot test |
-| Kernel | `kernel/` | QEMU boot test, in-kernel test harness |
-| Ring-3 programs: the native runtime, `devmgr`, drivers, test programs | `native/` | Built and linted with clippy per kernel target; xtask checks each program's ELF shape; run under the QEMU boot test or `test-shell` once native process creation lands |
-| Host tooling | `xtask/` | `cargo test` |
+| Byte-level logic: ELF, cpio, btrfs item parsing, seccomp BPF, page-table arithmetic, allocators | `src/lib/` | `cargo test`, Miri, fuzzers |
+| Loader | `src/boot/common/uefi/` | QEMU boot test |
+| Kernel | `src/kernel/` | QEMU boot test, in-kernel test harness |
+| Ring-3 programs: the native runtime, `devmgr`, drivers, test programs | `src/user/native/` | Built and linted with clippy per kernel target; xtask checks each program's ELF shape; run under the QEMU boot test or `test-shell` once native process creation lands |
+| Host tooling | `tools/common/xtask/` | `cargo test` |
 
-The split is not cosmetic. Nothing in `kernel/` can be run by `cargo test`,
+The split is not cosmetic. Nothing in `src/kernel/` can be run by `cargo test`,
 Miri cannot interpret a privileged instruction, and a fuzzer cannot drive a
 page fault handler. So anything expressible as a pure function of bytes is
-written as one, in `libs/`, where all three tools reach it. `scripts/
+written as one, in `src/lib/`, where all three tools reach it. `scripts/
 check-crate-layering.sh` keeps that from eroding.
 
 Architecture-specific code lives under `arch/` and is reached through one
@@ -428,5 +428,5 @@ pair, U-Boot on ARMv7-A — calls a Rust `efi_main` with a stack and the MMU
 already set up. What assembly exists is confined to constructs the machine defines
 before a Rust function could run — exception vectors, the syscall trampoline,
 context switch, and the CPU primitives with no Rust spelling. `docs/ASSEMBLY.md`
-is the list, `scripts/data/asm-allowlist.json` is its machine-readable form, and CI
+is the list, `tools/common/data/asm-allowlist.json` is its machine-readable form, and CI
 fails on an assembly site that is not in it.

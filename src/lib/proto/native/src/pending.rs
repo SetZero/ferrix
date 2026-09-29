@@ -8,7 +8,7 @@
 //! All of them are stage 9's, owned by ferrix-4b.
 //!
 //! * **Process creation**, `0x1030` and `0x1031`. The numbers were copied here
-//!   while `libs/proto/native-abi`'s table left `0x1030..=0x1037` free for them;
+//!   while `src/lib/proto/native-abi`'s table left `0x1030..=0x1037` free for them;
 //!   they are on the table now and re-exported from it. The argument lists
 //!   are the handler's: `(job, image_vmo, name_ptr, name_len)` and
 //!   `(process, bootstrap or 0)`.
@@ -17,7 +17,7 @@
 //!   `process_status`.
 //! * **`vmo_map`**, `0x1024`, whose number is on main's table and whose handler
 //!   and `MAP_READ`/`MAP_WRITE` constants are not. The constants are copied here
-//!   until they land in `libs/proto/native-abi`'s `types`.
+//!   until they land in `src/lib/proto/native-abi`'s `types`.
 
 use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::nr;
@@ -257,7 +257,7 @@ pub fn take_bootstrap<S: Syscall>(sys: S) -> Result<Option<OwnedHandle<S>>, Erro
 
 /// `vmo_map`'s protection bit for a readable mapping.
 ///
-/// Owned by stage 9 (ferrix-4b), who adds it to `libs/proto/native-abi`'s `types`
+/// Owned by stage 9 (ferrix-4b), who adds it to `src/lib/proto/native-abi`'s `types`
 /// with the handler; copied here until then.
 pub const MAP_READ: u32 = 1;
 

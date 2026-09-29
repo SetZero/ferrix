@@ -11,7 +11,7 @@ package FerrixMemory {
     private import FerrixLifecycle::*;
 
     // -----------------------------------------------------------------------
-    // Physical frames (libs/kernel/frame, kernel/src/mm.rs)
+    // Physical frames (src/lib/kernel/frame, src/kernel/src/mm.rs)
     // -----------------------------------------------------------------------
 
     enum def FrameState { Reserved; Free; FreeTail; Allocated; }
@@ -54,7 +54,7 @@ package FerrixMemory {
 
     #implemented part def PhysicalMemory {
         @stage { number = 2; }
-        doc /* kernel/src/mm.rs: where the per-frame array goes, reaching
+        doc /* src/kernel/src/mm.rs: where the per-frame array goes, reaching
              * physical memory through the direct map, and the kernel's own
              * page tables. The per-frame array is carved from the front of the
              * largest usable region inside the direct map before there is an
@@ -86,7 +86,7 @@ package FerrixMemory {
     part def PerCpuFrameCache;
 
     // -----------------------------------------------------------------------
-    // The kernel heap (libs/kernel/heap)
+    // The kernel heap (src/lib/kernel/heap)
     // -----------------------------------------------------------------------
 
     interface def HeapBacking {
@@ -125,7 +125,7 @@ package FerrixMemory {
     part def ObjectSlab;
 
     // -----------------------------------------------------------------------
-    // Page tables (libs/kernel/paging)
+    // Page tables (src/lib/kernel/paging)
     // -----------------------------------------------------------------------
 
     attribute def MapFlags {
@@ -197,14 +197,14 @@ package FerrixMemory {
     }
 
     // -----------------------------------------------------------------------
-    // The kernel arena (kernel/src/vmap.rs)
+    // The kernel arena (src/kernel/src/vmap.rs)
     // -----------------------------------------------------------------------
 
     #implemented part def VmapArena {
         @stage { number = 2; }
         doc /* "Give me a range of addresses and let me decide later what goes
              * behind it": device windows, non-contiguous buffers, guard-paged
-             * stacks. The arena is a libs/kernel/vma AddressSpace over the vmap area
+             * stacks. The arena is a src/lib/kernel/vma AddressSpace over the vmap area
              * past the reserved windows, because a kernel arena and a process
              * address space are the same problem. Allocation identity lives in
              * a second map beside it, because the arena merges adjacent equal
@@ -231,7 +231,7 @@ package FerrixMemory {
     }
 
     // -----------------------------------------------------------------------
-    // Virtual memory areas (libs/kernel/vma)
+    // Virtual memory areas (src/lib/kernel/vma)
     // -----------------------------------------------------------------------
 
     enum def BackingKind { Anonymous; File; Device; }
@@ -294,7 +294,7 @@ package FerrixMemory {
 
     #implemented part def Vmo {
         @stage { number = 6; }
-        doc /* kernel/src/user/vmo.rs. A pageable memory object: pages, not a
+        doc /* src/kernel/src/user/vmo.rs. A pageable memory object: pages, not a
              * mapping. Anonymous memory, page-cache pages, shared memory and
              * DMA buffers are all VMOs. The load-bearing unification: a block
              * driver filling a page-cache page fills the VMO the cache already
@@ -337,7 +337,7 @@ package FerrixMemory {
 
     #implemented part def ProcessAddressSpace {
         @stage { number = 6; }
-        doc /* kernel/src/user/space.rs: a root frame, a libs/kernel/vma AddressSpace,
+        doc /* src/kernel/src/user/space.rs: a root frame, a src/lib/kernel/vma AddressSpace,
              * and a map from id to VMO. Each Vma names a VMO, an offset, a
              * protection and a share mode. VMOs are shared through Arc, so
              * this references them and never owns them. The kernel half is
@@ -406,7 +406,7 @@ package FerrixMemory {
         }
         #implemented action mmap {
             @stage { number = 7; }
-            doc /* kernel/src/syscall/memory.rs decodes the arguments -- mmap2
+            doc /* src/kernel/src/syscall/memory.rs decodes the arguments -- mmap2
                  * counting its offset in pages on ARMv7-A -- and the space
                  * does the rest: anonymous memory, a file mapped shared onto
                  * its own VMO pages or privately through a shadow object,
@@ -415,7 +415,7 @@ package FerrixMemory {
         }
         #implemented action mprotect {
             @stage { number = 7; }
-            doc /* libs/kernel/vma's protect, with splitting and merging; PROT_NONE
+            doc /* src/lib/kernel/vma's protect, with splitting and merging; PROT_NONE
                  * is kept as no access rather than widened to readable. */
         }
         #implemented action brk { @stage { number = 7; } }
@@ -488,7 +488,7 @@ package FerrixMemory {
         }
         #implemented action deliverSigsegv {
             @stage { number = 7; }
-            doc /* kernel/src/trap.rs: a user-mode fault the space cannot
+            doc /* src/kernel/src/trap.rs: a user-mode fault the space cannot
                  * resolve becomes SIGSEGV, or SIGBUS with BUS_ADRERR for an
                  * address with nothing behind it, raised with interrupts open
                  * and delivered on the way back to user mode. */
@@ -502,7 +502,7 @@ package FerrixMemory {
 
     #implemented part def VirtualMemory {
         @stage { number = 6; }
-        doc /* kernel/src/user: the VM subsystem above stage 2's allocators.
+        doc /* src/kernel/src/user: the VM subsystem above stage 2's allocators.
              * VMOs and address spaces, demand paging, fork with copy-on-write,
              * TLB invalidation where a live mapping changes, and the root swap
              * on a task switch, all self-checked at boot on all three
@@ -529,7 +529,7 @@ package FerrixMemory {
 
     #implemented part def UserElfLoader {
         @stage { number = 6; }
-        doc /* kernel/src/syscall/load.rs over libs/platform/elf. Each PT_LOAD is mapped
+        doc /* src/kernel/src/syscall/load.rs over src/lib/platform/elf. Each PT_LOAD is mapped
              * as anonymous memory and its bytes copied in through the user copy
              * layer, with permissions computed per page so two segments sharing
              * a page get their union, and a union that is writable and

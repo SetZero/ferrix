@@ -1,14 +1,14 @@
 /*
  * Ferrix — SysML v2 model, part 22: the low-level requirements of smp.
  *
- * What each unit of kernel/src/smp.rs does, as `ItemLowLevel` requirements
+ * What each unit of src/kernel/src/smp.rs does, as `ItemLowLevel` requirements
  * (part 13 defines the format, part 14 is the pilot this copies): finding
  * the processors and giving each a record it finds itself by, starting the
  * secondaries, the inter-processor interrupt, the TLB shootdown -- whole and
  * scoped, and the bound on how long it waits -- grace periods, stopping the
  * other processors for a panic, and the scheduler's kick. The start
  * sequences themselves, the per-processor register and the interrupt
- * controller are each architecture's (kernel/src/arch/<isa>/smp.rs), and
+ * controller are each architecture's (src/kernel/src/arch/<isa>/smp.rs), and
  * belong to the arch slices; this is the architecture-independent half
  * above them.
  *
@@ -17,7 +17,7 @@
  * requirement is no broader than one check can prove; a statement says no
  * more than its criterion tests; an accessor needs no requirement of its own;
  * check code living in a product file is listed in
- * scripts/data/traceability-units.json, not required -- here
+ * tools/common/data/traceability-units.json, not required -- here
  * `run_everywhere` and `next_job`, the way stage 4's checks hand work to
  * every processor, which nothing else uses.
  *
@@ -400,7 +400,7 @@ package FerrixSmpRequirements {
     package GracePeriods {
         doc /* Read-side sections and the wait for every one of them to end:
              * what lets a writer free an object it has unpublished. Nothing in
-             * the product calls synchronize yet (kernel/src/irq.rs names the
+             * the product calls synchronize yet (src/kernel/src/irq.rs names the
              * handler unregistration it is for); stage 4's grace check does. */
 
         requirement <'L.smp.29'> aGracePeriodOutlastsEveryReader : ItemLowLevel {

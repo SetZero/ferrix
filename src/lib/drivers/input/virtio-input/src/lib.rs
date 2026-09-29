@@ -84,7 +84,7 @@
 //!
 //! # Where this follows virtio-gpu rather than `docs/INPUT.md`
 //!
-//! The document is silent on these, and `libs/drivers/virtio-gpu` decides them: the
+//! The document is silent on these, and `src/lib/drivers/display/virtio-gpu` decides them: the
 //! trait shapes; how a failed bring-up and a shutdown hand memory back; the
 //! queue size taken as the smaller of the driver's and the device's; the
 //! MSI-X vector the device must keep; and a broken device marked `FAILED`

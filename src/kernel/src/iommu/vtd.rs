@@ -7,7 +7,7 @@
 //!
 //! * a **root table**, one entry per bus, pointing at that bus's **context
 //!   table**, one entry per device and function, which names a domain and the
-//!   root of its second-level tables — `libs/kernel/paging`'s [`VtdSecondLevel`],
+//!   root of its second-level tables — `src/lib/kernel/paging`'s [`VtdSecondLevel`],
 //!   three levels over 39 bits;
 //! * **register-based invalidation** of the context cache and the IOTLB, after
 //!   anything the unit may have cached changes;

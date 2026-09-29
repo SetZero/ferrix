@@ -7,10 +7,10 @@ abstraction is not retrofitted.
 
 **Done.**
 
-* **The deciding is `libs/kernel/sched`**, host-tested, because a scheduler that is
+* **The deciding is `src/lib/kernel/sched`**, host-tested, because a scheduler that is
   wrong is wrong in a way nothing on the machine can print. The EEVDF tree,
   the weights, the lag arithmetic and the domain partition are all reachable
-  from `cargo test`; what is in `kernel/` is the part that needs a machine.
+  from `cargo test`; what is in `src/kernel/` is the part that needs a machine.
 * **Deciding and switching are one operation.** The run queue's lock is taken
   before the decision and released *after* the switch, by whichever context
   ends up running. That is not an optimisation: it is what stops another
@@ -69,7 +69,7 @@ other two domain modes, which are stage 14.
 Stage 5 left the scheduler fair on each processor and naive across them, which
 is enough to pass its own exit criterion and not enough to be called a
 scheduler. Five things were added afterwards, all of them arithmetic in
-`libs/kernel/sched` with the kernel supplying the numbers, and each with a check in
+`src/lib/kernel/sched` with the kernel supplying the numbers, and each with a check in
 the boot test that fails without it.
 
 * **Load tracking.** A decaying average with a 33-millisecond half-life, in the

@@ -33,7 +33,7 @@
 //!
 //! The structure is two pointer-sized words, so it is eight bytes wide on
 //! ARMv7-A and sixteen on the other two. Read as native words rather than
-//! through a fixed layout for that reason: `libs/proto/linux-abi`'s `Iovec` is the
+//! through a fixed layout for that reason: `src/lib/proto/linux-abi`'s `Iovec` is the
 //! 64-bit one, and using it here would read a 32-bit program's array at twice
 //! the stride and hand the kernel a pointer assembled from two halves of
 //! different segments.

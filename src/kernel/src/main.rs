@@ -89,12 +89,12 @@ use early::EarlyMemory;
 use panic::{catalog, fatal};
 
 /// What the boot test waits for. Changing it means changing
-/// `xtask/src/qemu.rs`, and the two are checked against each other there.
+/// `tools/common/xtask/src/qemu.rs`, and the two are checked against each other there.
 const SUCCESS_MARKER: &str = "FERRIX-BOOT-OK";
 
 /// What a boot that skipped its self-checks prints where the success marker
 /// would be (`checks` says why it is another word). Checked against
-/// `xtask/src/qemu.rs` beside the success marker.
+/// `tools/common/xtask/src/qemu.rs` beside the success marker.
 const UNCHECKED_MARKER: &str = "FERRIX-BOOT-UNCHECKED";
 
 /// The kernel's entry point.

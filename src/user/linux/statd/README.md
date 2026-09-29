@@ -21,7 +21,7 @@ processes that used the most processor time since the last sample, as a
 percentage of one processor.
 
 As pid 1 its output is the console: a crosvm guest's 16550, which
-`tools/pixel7/monitor` reads live, or the Pixel 7's `ramoops` record, which the
+`tools/vendor/google/pixel7/monitor` reads live, or the Pixel 7's `ramoops` record, which the
 monitor reads once Android is back. The boot console on the phone's screen
 draws only the kernel's own lines, so these do not fill it.
 
@@ -56,4 +56,4 @@ is the watchdog's reset back to Android.
   ferrix.init=/sbin/ferrix-statd --kernel-option ferrix.statd.seconds=3`.
 
 It is built like zinc, with std, statically against the target's own musl,
-from a workspace of its own (`xtask/src/statd.rs`), and has no dependencies.
+from a workspace of its own (`tools/common/xtask/src/statd.rs`), and has no dependencies.

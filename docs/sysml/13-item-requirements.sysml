@@ -8,7 +8,7 @@
  * manual's assumed safety requirements (SAFETY-MANUAL.md §2). The low-level
  * requirements, one per unit of code, go in one file per subsystem after this
  * one. docs/certification/IMPLEMENTATION.md W-8 is the design, and
- * scripts/check/check-traceability.py the gate that reads these and writes
+ * tools/common/check/check-traceability.py the gate that reads these and writes
  * docs/certification/TRACEABILITY.md.
  */
 package FerrixItemRequirements {
@@ -50,7 +50,7 @@ package FerrixItemRequirements {
              * breaks the trace loudly. */
         attribute unit : String[1..*] {
             doc /* `path::function` or `path::Type::method`, relative to
-                 * kernel/src: `mm::zero_frame`. */
+                 * src/kernel/src: `mm::zero_frame`. */
         }
     }
 

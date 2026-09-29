@@ -13,7 +13,7 @@ table td {
 }
 
 /* The sidebar: every title starts with its status mark (✓ ◐ ○ ·, from
-   scripts/gen/split-roadmap.py). Hang the mark in a gutter of its own, one
+   tools/common/gen/split-roadmap.py). Hang the mark in a gutter of its own, one
    width for every mark, so the titles start in one column and a title that
    wraps continues under its text rather than under the mark. */
 .sidebar .chapter li.chapter-item > .chapter-link-wrapper > a {

@@ -343,7 +343,7 @@ const DESCRIPTORS: [usize; 4] = [54, 72, 90, 108];
 /// Read what a base block says the monitor is: `None` for bytes that are not
 /// a base block or whose manufacturer is not three letters.
 ///
-/// The same reading as `userland/compositor/drm`'s `Edid::parse`, which is what a
+/// The same reading as `src/user/linux/compositor/drm`'s `Edid::parse`, which is what a
 /// compositor matches `monitor = desc:` against; this one is for the kernel's
 /// boot line and for `xtask`, which finds a host's monitor by it.
 #[must_use]

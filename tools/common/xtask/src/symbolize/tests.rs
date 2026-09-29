@@ -68,7 +68,10 @@ fn only_a_trace_line_yields_an_address() {
         Some(0xffff_ffff_8001_2345)
     );
     assert_eq!(trace_address("trace #12 0x10"), Some(0x10));
-    assert_eq!(trace_address("  at        kernel/src/main.rs:12:5"), None);
+    assert_eq!(
+        trace_address("  at        src/kernel/src/main.rs:12:5"),
+        None
+    );
     assert_eq!(
         trace_address("  trace     no frame pointer chain to follow"),
         None

@@ -1,10 +1,10 @@
 # Authentication (docs/AUTH.md): `/sbin/authd`, `/bin/passwd`, `/bin/authctl`,
 # and the client library they and hyprlock share.
 #
-# A workspace of its own, as userland/init/ is: Linux user programs built with
+# A workspace of its own, as src/user/linux/init/ is: Linux user programs built with
 # std on musl, speaking only the Linux ABI. The pure parts are Ferrix
-# workspace crates: the records in libs/proto/auth-proto, the hash in
-# libs/crypto/argon2, and the policy files' syntax in libs/init/svc.
+# workspace crates: the records in src/lib/proto/auth-proto, the hash in
+# src/lib/crypto/argon2, and the policy files' syntax in src/lib/init/svc.
 [workspace]
 resolver = "3"
 members = ["authctl", "authd", "client", "passwd"]

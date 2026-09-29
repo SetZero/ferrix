@@ -32,7 +32,7 @@ grew some: `#[path]`-renamed modules (a gate question, asked in
 check-item-boundary.py), and reserved-prefix syntax beyond `b`, `c`, `r`, `br`
 and `cr`.
 
-    python3 scripts/check/rustlex.py --self-test
+    python3 tools/common/check/rustlex.py --self-test
 """
 
 from __future__ import annotations

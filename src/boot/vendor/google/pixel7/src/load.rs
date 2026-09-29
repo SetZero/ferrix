@@ -1,11 +1,11 @@
 //! Placing Ferrix and building the address space it starts in.
 //!
-//! The same job as `boot/uefi/src/load.rs`, on the same libraries -- the ELF
-//! parser, the page table mapper and the layout `libs/proto/bootinfo` defines -- with
+//! The same job as `src/boot/common/uefi/src/load.rs`, on the same libraries -- the ELF
+//! parser, the page table mapper and the layout `src/lib/proto/bootinfo` defines -- with
 //! the device tree's map and [`Memory`]'s allocator where UEFI's were. Two
 //! things differ, both because this is a phone rather than QEMU:
 //!
-//! * The identity map covers the loader's own image and nothing else. `boot/uefi/`
+//! * The identity map covers the loader's own image and nothing else. `src/boot/common/uefi/`
 //!   maps all of RAM there; here RAM holds the secure world's carve-outs, and a
 //!   cacheable mapping of those is somewhere a speculative access can raise an
 //!   asynchronous abort from.
@@ -35,7 +35,7 @@ use crate::seed::{self, Seed};
 const TABLE_POOL_BYTES: u64 = 4 * 1024 * 1024;
 
 /// The boot info, the command line behind it, and the memory map after that,
-/// laid out as `boot/uefi/` lays them out.
+/// laid out as `src/boot/common/uefi/` lays them out.
 const BOOT_INFO_BYTES: u64 = 64 * 1024;
 
 /// Offset of the memory map in the boot info area.
@@ -141,7 +141,7 @@ fn take_copy(memory: &mut Memory, bytes: &[u8], kind: MemKind) -> Result<Taken, 
     Ok(taken)
 }
 
-/// Parse and vet the kernel, as `boot/uefi/` does.
+/// Parse and vet the kernel, as `src/boot/common/uefi/` does.
 fn parse_kernel(bytes: &[u8]) -> Result<Elf<'_>, &'static str> {
     if bytes.is_empty() {
         return Err("this loader was built without a kernel: set FERRIX_PIXEL7_KERNEL");
@@ -249,7 +249,7 @@ fn build_tables(
     let identity: Mapper<AArch64> = Mapper::new(identity_root);
 
     // What the switch fetches through at its own address: the loader, and
-    // nothing else. Writable and executable, as `boot/uefi/`'s is, and dropped
+    // nothing else. Writable and executable, as `src/boot/common/uefi/`'s is, and dropped
     // with the rest of the tree.
     let transient = MapFlags {
         read: true,
@@ -273,7 +273,7 @@ fn build_tables(
         .map_err(|_| "could not build the identity map")?;
 
     // The kernel's text and read-only data read only in the direct map, as
-    // `boot/uefi/` maps them; `read_only_span` says why.
+    // `src/boot/common/uefi/` maps them; `read_only_span` says why.
     let sealed = read_only_span(elf.loadable().map(|segment| {
         let (base, length) = segment_pages(&segment);
         let phys = image.base + (base - KERNEL_VIRT_BASE);
@@ -343,7 +343,7 @@ fn segment_pages(segment: &Segment) -> (u64, u64) {
 }
 
 /// `TCR_EL1` with 48-bit addressing and a 4 KiB granule in both halves, as
-/// `boot/uefi/src/arch/aarch64.rs` builds it.
+/// `src/boot/common/uefi/src/arch/aarch64.rs` builds it.
 const fn tcr_el1(intermediate_physical_size: u64) -> u64 {
     const T0SZ: u64 = 64 - 48;
     const T1SZ: u64 = 64 - 48;

@@ -3,7 +3,7 @@
 //! The browser is Chrome for Testing's prebuilt `chrome-headless-shell`, not
 //! one built here: a 198 MB position-independent glibc program that loads
 //! forty of the system's libraries, run by Debian's `ld-linux` on Debian's
-//! glibc, all of it on a btrfs volume `scripts/fetch/fetch-chrome.sh` makes from
+//! glibc, all of it on a btrfs volume `tools/common/fetch/fetch-chrome.sh` makes from
 //! pinned downloads. `docs/CHROME.md` says why this is the first Chrome and
 //! what ferrousli standing in for that glibc would add.
 //!
@@ -51,7 +51,7 @@
 //!
 //! Chrome for Testing publishes linux64 only, so on AArch64 the browser is
 //! Debian 13's Chromium 154.0.8037.57 for arm64 -- the same version -- on a
-//! volume `scripts/fetch/fetch-chromium-arm64.sh` makes the same way, with
+//! volume `tools/common/fetch/fetch-chromium-arm64.sh` makes the same way, with
 //! Debian's arm64 glibc and loader. Its headless mode is the full browser's
 //! `--headless`, since Debian builds no `chrome-headless-shell`, and the
 //! three steps are the same. The Pixel 7's VM is the machine it is for.
@@ -146,7 +146,7 @@ echo chrome-gate: screenshot written
 exit 16
 "#;
 
-/// Where `scripts/fetch/fetch-chromium-arm64.sh` writes, unless
+/// Where `tools/common/fetch/fetch-chromium-arm64.sh` writes, unless
 /// `FERRIX_CHROMIUM_VOLUME` names another directory.
 pub(crate) fn arm64_volume() -> Result<std::path::PathBuf> {
     let directory = match std::env::var_os("FERRIX_CHROMIUM_VOLUME") {
@@ -156,7 +156,7 @@ pub(crate) fn arm64_volume() -> Result<std::path::PathBuf> {
     let image = directory.join("chromium.img");
     if !image.is_file() {
         return Err(Error::new(format!(
-            "{} is not there: scripts/fetch/fetch-chromium-arm64.sh makes it",
+            "{} is not there: tools/common/fetch/fetch-chromium-arm64.sh makes it",
             image.display()
         )));
     }
@@ -263,71 +263,71 @@ const FONTS: &str = "usr/share/ferrix/fonts";
 const FONT_FILES: &[(&str, &[u8])] = &[
     (
         "fonts.conf",
-        include_bytes!("../../assets/fonts/fonts.conf"),
+        include_bytes!("../../../../assets/fonts/fonts.conf"),
     ),
     (
         "inter/InterVariable.ttf",
-        include_bytes!("../../assets/fonts/inter/InterVariable.ttf"),
+        include_bytes!("../../../../assets/fonts/inter/InterVariable.ttf"),
     ),
     (
         "inter/InterVariable-Italic.ttf",
-        include_bytes!("../../assets/fonts/inter/InterVariable-Italic.ttf"),
+        include_bytes!("../../../../assets/fonts/inter/InterVariable-Italic.ttf"),
     ),
     (
         "inter/LICENSE",
-        include_bytes!("../../assets/fonts/inter/LICENSE"),
+        include_bytes!("../../../../assets/fonts/inter/LICENSE"),
     ),
     (
         "liberation/LiberationSans-Regular.ttf",
-        include_bytes!("../../assets/fonts/liberation/LiberationSans-Regular.ttf"),
+        include_bytes!("../../../../assets/fonts/liberation/LiberationSans-Regular.ttf"),
     ),
     (
         "liberation/LiberationSans-Bold.ttf",
-        include_bytes!("../../assets/fonts/liberation/LiberationSans-Bold.ttf"),
+        include_bytes!("../../../../assets/fonts/liberation/LiberationSans-Bold.ttf"),
     ),
     (
         "liberation/LiberationSans-Italic.ttf",
-        include_bytes!("../../assets/fonts/liberation/LiberationSans-Italic.ttf"),
+        include_bytes!("../../../../assets/fonts/liberation/LiberationSans-Italic.ttf"),
     ),
     (
         "liberation/LiberationSans-BoldItalic.ttf",
-        include_bytes!("../../assets/fonts/liberation/LiberationSans-BoldItalic.ttf"),
+        include_bytes!("../../../../assets/fonts/liberation/LiberationSans-BoldItalic.ttf"),
     ),
     (
         "liberation/LiberationSerif-Regular.ttf",
-        include_bytes!("../../assets/fonts/liberation/LiberationSerif-Regular.ttf"),
+        include_bytes!("../../../../assets/fonts/liberation/LiberationSerif-Regular.ttf"),
     ),
     (
         "liberation/LiberationSerif-Bold.ttf",
-        include_bytes!("../../assets/fonts/liberation/LiberationSerif-Bold.ttf"),
+        include_bytes!("../../../../assets/fonts/liberation/LiberationSerif-Bold.ttf"),
     ),
     (
         "liberation/LiberationSerif-Italic.ttf",
-        include_bytes!("../../assets/fonts/liberation/LiberationSerif-Italic.ttf"),
+        include_bytes!("../../../../assets/fonts/liberation/LiberationSerif-Italic.ttf"),
     ),
     (
         "liberation/LiberationSerif-BoldItalic.ttf",
-        include_bytes!("../../assets/fonts/liberation/LiberationSerif-BoldItalic.ttf"),
+        include_bytes!("../../../../assets/fonts/liberation/LiberationSerif-BoldItalic.ttf"),
     ),
     (
         "liberation/LiberationMono-Regular.ttf",
-        include_bytes!("../../assets/fonts/liberation/LiberationMono-Regular.ttf"),
+        include_bytes!("../../../../assets/fonts/liberation/LiberationMono-Regular.ttf"),
     ),
     (
         "liberation/LiberationMono-Bold.ttf",
-        include_bytes!("../../assets/fonts/liberation/LiberationMono-Bold.ttf"),
+        include_bytes!("../../../../assets/fonts/liberation/LiberationMono-Bold.ttf"),
     ),
     (
         "liberation/LiberationMono-Italic.ttf",
-        include_bytes!("../../assets/fonts/liberation/LiberationMono-Italic.ttf"),
+        include_bytes!("../../../../assets/fonts/liberation/LiberationMono-Italic.ttf"),
     ),
     (
         "liberation/LiberationMono-BoldItalic.ttf",
-        include_bytes!("../../assets/fonts/liberation/LiberationMono-BoldItalic.ttf"),
+        include_bytes!("../../../../assets/fonts/liberation/LiberationMono-BoldItalic.ttf"),
     ),
     (
         "liberation/LICENSE",
-        include_bytes!("../../assets/fonts/liberation/LICENSE"),
+        include_bytes!("../../../../assets/fonts/liberation/LICENSE"),
     ),
 ];
 
@@ -459,7 +459,7 @@ pub(crate) const DESKTOP_ENV: &str = "env = XDG_RUNTIME_DIR,/tmp\n\
 pub(crate) const WINDOW_HOME: &str = "HOME=/dev/shm";
 
 /// Whether the volume `image` has `libpulse`, in the tree
-/// `scripts/fetch/fetch-chrome.sh` keeps beside it: a volume fetched before
+/// `tools/common/fetch/fetch-chrome.sh` keeps beside it: a volume fetched before
 /// 2026-09-27 has not, and on it Chrome's sound can only be ALSA's, which a
 /// `pulsed` holding the card would refuse.
 pub(crate) fn has_pulse(image: &std::path::Path) -> bool {
@@ -484,13 +484,13 @@ pub(crate) fn pulse_volume() -> Result<std::path::PathBuf> {
     } else {
         Err(Error::new(format!(
             "{} has no libpulse beside it, which Chrome's sound goes through: \
-             scripts/fetch/fetch-chrome.sh again",
+             tools/common/fetch/fetch-chrome.sh again",
             volume.display()
         )))
     }
 }
 
-/// Where `scripts/fetch/fetch-chrome.sh` writes, unless `FERRIX_CHROME_VOLUME`
+/// Where `tools/common/fetch/fetch-chrome.sh` writes, unless `FERRIX_CHROME_VOLUME`
 /// names another directory.
 pub(crate) fn volume() -> Result<std::path::PathBuf> {
     let directory = match std::env::var_os("FERRIX_CHROME_VOLUME") {
@@ -500,7 +500,7 @@ pub(crate) fn volume() -> Result<std::path::PathBuf> {
     let image = directory.join("chrome.img");
     if !image.is_file() {
         return Err(Error::new(format!(
-            "{} is not there: scripts/fetch/fetch-chrome.sh makes it",
+            "{} is not there: tools/common/fetch/fetch-chrome.sh makes it",
             image.display()
         )));
     }
@@ -518,7 +518,7 @@ fn script(ferrousli: bool) -> String {
     }
 }
 
-/// Chrome's program `name` as `scripts/fetch/fetch-chrome.sh` unpacked it beside
+/// Chrome's program `name` as `tools/common/fetch/fetch-chrome.sh` unpacked it beside
 /// the volume, whose `PT_INTERP` says where a loader of ferrousli's must go.
 fn program_on_host(volume: &std::path::Path, name: &str) -> Result<std::path::PathBuf> {
     let program = volume
@@ -530,7 +530,7 @@ fn program_on_host(volume: &std::path::Path, name: &str) -> Result<std::path::Pa
         Ok(program)
     } else {
         Err(Error::new(format!(
-            "{} is not there: scripts/fetch/fetch-chrome.sh leaves it beside the volume",
+            "{} is not there: tools/common/fetch/fetch-chrome.sh leaves it beside the volume",
             program.display()
         )))
     }

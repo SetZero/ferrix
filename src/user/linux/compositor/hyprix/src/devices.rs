@@ -1,6 +1,6 @@
 //! The input devices, and what their events mean.
 //!
-//! `userland/compositor/evecho` opens a `/dev/input/eventN` and reads whole
+//! `src/user/linux/compositor/evecho` opens a `/dev/input/eventN` and reads whole
 //! `input_event`s. This turns those into the [`Input`]s the seat understands:
 //! evdev's relative axes into pixels, its absolute axes into a fraction of
 //! the device's own range, and its keys and buttons apart.

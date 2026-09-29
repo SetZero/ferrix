@@ -8,7 +8,7 @@
 //! # The formats
 //!
 //! `ARGB8888` and `XRGB8888`, the two every compositor must offer, and
-//! nothing else. They are what `userland/compositor/render` draws, and a format
+//! nothing else. They are what `src/user/linux/compositor/render` draws, and a format
 //! advertised but not drawn is a client that renders a frame nobody can show.
 
 use compositor_wire::Fd;

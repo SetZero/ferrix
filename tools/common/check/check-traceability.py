@@ -24,7 +24,7 @@ attributes, each a string or a parenthesised list of strings:
     }
 
 `unit` (low level only) names the code, `path::function` or
-`path::Type::method` relative to kernel/src -- `mm::zero_frame`,
+`path::Type::method` relative to src/kernel/src -- `mm::zero_frame`,
 `object::quota::Quota::charge` -- and must be the item's product code.
 
 Verification is named where the check is, in a doc line on the function:
@@ -37,10 +37,10 @@ with an underscore in xtask, which denies it)
 
 on a function in one of three places, and nowhere else:
 
-  * an in-kernel check, in a kernel/src file the manifest's
+  * an in-kernel check, in a src/kernel/src file the manifest's
     `test_file_patterns` call verification (check.rs, *_check.rs, ...);
-  * a host test under libs/, a function carrying `#[test]`;
-  * an xtask gate, the function in xtask/src that implements it (the one a
+  * a host test under src/lib/, a function carrying `#[test]`;
+  * an xtask gate, the function in tools/common/xtask/src that implements it (the one a
     `cargo xtask test-...` subcommand calls).
 
 The gate fails when
@@ -53,7 +53,7 @@ The gate fails when
     parent that does not exist at the level above, or -- at the low level --
     no `unit` or one that does not resolve to a function of the item;
   * a requirement has no verifier and is not in
-    scripts/data/traceability-baseline.json, or the baseline lists one that is
+    tools/common/data/traceability-baseline.json, or the baseline lists one that is
     now verified or no longer exists. A requirement enters the baseline only
     by `--record`, in a diff somebody reviews; verifying one and not
     re-recording fails, so an allowance cannot outlive its reason;
@@ -65,7 +65,7 @@ question: those a low-level requirement names as its unit; *accessors* -- one
 statement or one expression, no branch point and no `unsafe` -- whose
 behaviour is the requirement of the function they serve, and which need none
 of their own (`is_accessor`); check code that still lives in a product file,
-listed with a reason in scripts/data/traceability-units.json; and the rest,
+listed with a reason in tools/common/data/traceability-units.json; and the rest,
 which no requirement names. The last list moves with every function anybody
 adds, so it is printed (`--report`), never committed. It fails only for a
 subsystem that file lists as `complete`, whose low-level requirements are all
@@ -75,19 +75,19 @@ requirement names.
 
 The run-time half of the chain: a requirement is verified on an architecture
 only if its check's lines were executed in that architecture's coverage run.
-`scripts/gen/coverage-report.py` records, per check file, the statements the
+`tools/common/gen/coverage-report.py` records, per check file, the statements the
 suite reached, in the `verification` map of coverage-<arch>.json. The matrix
 reads a kernel check as *reached* when any statement of its function was,
 *not reached* when none was, *not built* when its file is another
-architecture's (kernel/src/arch/<isa>/) or the run's line table does not hold
+architecture's (src/kernel/src/arch/<isa>/) or the run's line table does not hold
 it, and *not measured* when the evidence predates the map. A host test or an
 xtask gate is not a per-architecture run and says so.
 
-    python3 scripts/check/check-traceability.py            # check, and write the matrix
-    python3 scripts/check/check-traceability.py --check    # check, and fail if the matrix is stale
-    python3 scripts/check/check-traceability.py --record   # rewrite the baseline
-    python3 scripts/check/check-traceability.py --report   # also list every unnamed unit
-    python3 scripts/check/check-traceability.py --self-test
+    python3 tools/common/check/check-traceability.py            # check, and write the matrix
+    python3 tools/common/check/check-traceability.py --check    # check, and fail if the matrix is stale
+    python3 tools/common/check/check-traceability.py --record   # rewrite the baseline
+    python3 tools/common/check/check-traceability.py --report   # also list every unnamed unit
+    python3 tools/common/check/check-traceability.py --self-test
 """
 
 from __future__ import annotations
@@ -102,28 +102,28 @@ from collections import defaultdict
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent.parent
+ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(ROOT / "scripts" / "gen"))
+sys.path.insert(0, str(ROOT / "tools" / "common" / "gen"))
 
 import rustlex  # noqa: E402  (after the path insert)
 from sysml import load, parse_text  # noqa: E402
 from sysml.parser import split_top_level  # noqa: E402
 
-KERNEL_SRC = ROOT / "kernel" / "src"
-LIBS = ROOT / "libs"
-XTASK_SRC = ROOT / "xtask" / "src"
+KERNEL_SRC = ROOT / "src" / "kernel" / "src"
+LIBS = ROOT / "src" / "lib"
+XTASK_SRC = ROOT / "tools" / "common" / "xtask" / "src"
 MODEL_DIR = ROOT / "docs" / "sysml"
 CERT = ROOT / "docs" / "certification"
 OUTPUT = CERT / "TRACEABILITY.md"
-BASELINE = ROOT / "scripts" / "data" / "traceability-baseline.json"
-UNIT_RULES = ROOT / "scripts" / "data" / "traceability-units.json"
+BASELINE = ROOT / "tools" / "common" / "data" / "traceability-baseline.json"
+UNIT_RULES = ROOT / "tools" / "common" / "data" / "traceability-units.json"
 SECURITY_TARGET = CERT / "SECURITY-TARGET.md"
-SAFETY_REGISTER = ROOT / "scripts" / "data" / "safety-requirements.json"
+SAFETY_REGISTER = ROOT / "tools" / "common" / "data" / "safety-requirements.json"
 
 ARCHES = ("x86_64", "aarch64", "armv7a")
 ARCH_LABEL = {"x86_64": "x86-64", "aarch64": "AArch64", "armv7a": "ARMv7-A"}
-# Directories of kernel/src built for only some architectures. `#[cfg(target_arch)]`
+# Directories of src/kernel/src built for only some architectures. `#[cfg(target_arch)]`
 # is allowed only under arch/ (a house rule a gate enforces), so a file's path
 # is what decides which kernels contain it.
 ARCH_ONLY = {
@@ -413,7 +413,7 @@ def _impl_type(header: str) -> str:
 
 
 class Units:
-    """Resolve `path::function` against kernel/src, product code of the item only."""
+    """Resolve `path::function` against src/kernel/src, product code of the item only."""
 
     def __init__(self, files: dict[str, str] | None = None, product: set[str] | None = None):
         self._files = files
@@ -464,7 +464,7 @@ class Units:
                 rel, rest = modules[module], segments[cut:]
                 break
         else:
-            return "names no module of kernel/src"
+            return "names no module of src/kernel/src"
         if rel not in self.product():
             return f"{rel} is not the item's product code"
         if len(rest) == 1:
@@ -523,7 +523,7 @@ def classify_units(located, named: set[str], accessor, rules: dict) -> tuple[Cov
     """Sort every product function, and what is wrong with the rules.
 
     `located` is `Units.located()`, `accessor(rel, line)` the accessor rule,
-    `rules` scripts/data/traceability-units.json. A subsystem listed
+    `rules` tools/common/data/traceability-units.json. A subsystem listed
     `complete` has every low-level requirement written, so a function of it
     that no requirement names, that is no accessor and that is not listed as
     check code fails: the "no unintended function" report is a ratchet there.
@@ -578,8 +578,8 @@ class Verifier:
 def scan_verifiers(source: str, rel: str, kind: str) -> tuple[list[Verifier], list[str]]:
     """Every `/// Verifies:` in one file, and what is wrong with the rest.
 
-    `kind` is "kernel" for a kernel check file, "host" for a file under libs/,
-    "gate" for xtask/src, and "none" for a file where no tag may be.
+    `kind` is "kernel" for a kernel check file, "host" for a file under src/lib/,
+    "gate" for tools/common/xtask/src, and "none" for a file where no tag may be.
     """
     found: list[Verifier] = []
     problems: list[str] = []
@@ -632,7 +632,7 @@ def scan_verifiers(source: str, rel: str, kind: str) -> tuple[list[Verifier], li
         if kind == "none":
             problems.append(
                 f"{where}: `Verifies:` on {function.group(1)}, which is not a check: tags go on a "
-                f"kernel check file's function, a host #[test] under libs/, or an xtask gate"
+                f"kernel check file's function, a host #[test] under src/lib/, or an xtask gate"
             )
             continue
         if kind == "host" and not any(re.sub(r"\s", "", a).startswith("#[test]") for a in attributes):
@@ -693,7 +693,7 @@ def reach(verifier: Verifier, arch: str, evidence: dict | None, spans) -> str:
         return "host test"
     if verifier.kind == "gate":
         return "xtask gate"
-    rel = verifier.file.removeprefix("kernel/src/")
+    rel = verifier.file.removeprefix("src/kernel/src/")
     if arch not in built_for(rel):
         return "not built"
     if evidence is None:
@@ -756,7 +756,7 @@ def write_baseline(unverified: set[str]) -> None:
                 "//": [
                     "High- and low-level requirements of the certified item that are",
                     "written and that no check names yet with `/// Verifies:`, as",
-                    "scripts/check/check-traceability.py finds them. A debt register",
+                    "tools/common/check/check-traceability.py finds them. A debt register",
                     "for finding F-14, not an allowance: an entry leaves when a check",
                     "is tagged, and the gate fails until it is re-recorded; one enters",
                     "only when a requirement is written unverified, in a reviewed diff.",
@@ -801,7 +801,7 @@ def render(
     w = out.append
     w("# Traceability")
     w("")
-    w("<!-- Generated by scripts/check/check-traceability.py from docs/sysml/, the")
+    w("<!-- Generated by tools/common/check/check-traceability.py from docs/sysml/, the")
     w("     `/// Verifies:` tags on the checks and docs/certification/coverage-*.json.")
     w("     Do not edit: run the script, which `cargo xtask check` runs with --check. -->")
     w("")
@@ -877,7 +877,7 @@ def render(
             "Functions that are checks, or serve only checks, and live in a product "
             "file, so that no `Verifies:` tag may go on them and the item's size "
             "counts them. Each is to move into a check file; until it does it is "
-            "listed here, in `scripts/data/traceability-units.json`, and not "
+            "listed here, in `tools/common/data/traceability-units.json`, and not "
             "reported as a function no requirement names."
         )
         w("")
@@ -1201,7 +1201,7 @@ def self_test() -> list[str]:
     if [v.function for v in found] != ["a_test"] or len(problems) != 1 or "not a #[test]" not in problems[0]:
         failures.append(f"host: found {[v.function for v in found]}, problems {problems}")
     found, problems = scan_verifiers(
-        "/// Verifies: `L.x86_64.1`, H.MEM.1\nfn a_gate() {}\n", "xtask/src/x.rs", "gate"
+        "/// Verifies: `L.x86_64.1`, H.MEM.1\nfn a_gate() {}\n", "tools/common/xtask/src/x.rs", "gate"
     )
     if [v.ids for v in found] != [["L.x86_64.1", "H.MEM.1"]] or problems:
         failures.append(f"backticked id: found {[v.ids for v in found]}, problems {problems}")
@@ -1215,7 +1215,7 @@ def self_test() -> list[str]:
         failures.append(f"ratchet: {problems}")
 
     spans = functions_in(_CHECK)
-    checker = Verifier("kernel", "kernel/src/mm/check.rs", "frames_read_zero", 9, ["H.MEM.1"])
+    checker = Verifier("kernel", "src/kernel/src/mm/check.rs", "frames_read_zero", 9, ["H.MEM.1"])
     spans_of = lambda rel: spans  # noqa: E731
     cases = [
         ("x86_64", None, "not measured"),
@@ -1226,7 +1226,7 @@ def self_test() -> list[str]:
     for arch, evidence, want in cases:
         if reach(checker, arch, evidence, spans_of) != want:
             failures.append(f"reach: {evidence} gave {reach(checker, arch, evidence, spans_of)}, expected {want}")
-    armed = Verifier("kernel", "kernel/src/arch/x86_64/trap/check.rs", "frames_read_zero", 9, [])
+    armed = Verifier("kernel", "src/kernel/src/arch/x86_64/trap/check.rs", "frames_read_zero", 9, [])
     if reach(armed, "aarch64", {"x": {}}, spans_of) != "not built":
         failures.append("reach: an x86-64 check counted on AArch64")
     if best(["not built", "reached", "not reached"]) != "reached":
@@ -1332,7 +1332,7 @@ def main() -> int:
         if current != text:
             print(
                 f"traceability: {OUTPUT.relative_to(ROOT)} is stale; run "
-                f"python3 scripts/check/check-traceability.py",
+                f"python3 tools/common/check/check-traceability.py",
                 file=sys.stderr,
             )
             status = 1

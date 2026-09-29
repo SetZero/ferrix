@@ -27,7 +27,7 @@
 //! What differs is the text. Hyprland lays its lines out with Pango in
 //! `misc:font_family`; this compositor has no font renderer, and draws them
 //! in Spleen 8x16, the bitmap face the kernel's panic screen uses
-//! (`libs/kernel/fbtext`), at twice its size for the frames-per-second line as
+//! (`src/lib/kernel/fbtext`), at twice its size for the frames-per-second line as
 //! Hyprland draws that line at 16 points against the others' 10. The
 //! layout -- margins, gaps, the graph's bars, the colours -- is Hyprland's
 //! own numbers.

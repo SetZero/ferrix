@@ -14,7 +14,7 @@ pub(crate) struct Options {
 /// The arguments meant, from `argv` less the program name.
 ///
 /// As init, Ferrix starts a program as `sh -i` or `sh -c SCRIPT`
-/// (`kernel/src/init.rs`), so `-i` alone is nothing asked for and a script
+/// (`src/kernel/src/init.rs`), so `-i` alone is nothing asked for and a script
 /// is split into the arguments it names: one a line when it has a newline,
 /// otherwise at whitespace. The rule is `compositor_evecho::init::unshell`'s.
 pub(crate) fn unshell(args: &[String]) -> Vec<String> {

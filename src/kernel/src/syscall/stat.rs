@@ -19,7 +19,7 @@
 //!
 //! # Encoded field by field
 //!
-//! Each record is built as the `libs/proto/linux-abi` structure, so the compiler
+//! Each record is built as the `src/lib/proto/linux-abi` structure, so the compiler
 //! checks every field's width, and then written out one field at a time at
 //! its `offset_of!`. That needs no `unsafe` view of a structure as bytes and
 //! does not depend on anyone's idea of padding: a byte no field names is
@@ -225,7 +225,7 @@ pub(crate) fn sys_faccessat(
 // The encoders
 // ---------------------------------------------------------------------------
 
-/// Serialise the named fields of a `libs/proto/linux-abi` structure.
+/// Serialise the named fields of a `src/lib/proto/linux-abi` structure.
 ///
 /// Each field is converted with its own type's `to_le_bytes`, so its width is
 /// the structure's and never a guess made here. Every field a caller leaves

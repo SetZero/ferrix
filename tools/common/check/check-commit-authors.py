@@ -31,9 +31,9 @@ reach for `--no-verify`:
     inherited.
 
 Usage:
-    python3 scripts/check/check-commit-authors.py                  # unpushed commits
-    python3 scripts/check/check-commit-authors.py BASE HEAD        # an explicit range
-    python3 scripts/check/check-commit-authors.py --hooks          # is this clone armed?
+    python3 tools/common/check/check-commit-authors.py                  # unpushed commits
+    python3 tools/common/check/check-commit-authors.py BASE HEAD        # an explicit range
+    python3 tools/common/check/check-commit-authors.py --hooks          # is this clone armed?
 """
 
 from __future__ import annotations

@@ -1,5 +1,5 @@
 //! Programs ported onto ferrousli beside busybox: built by the scripts in
-//! `userland/ferrousli/tools/ports/`, installed under `~/.local/share/ferrix/ports/ferrousli`
+//! `src/user/linux/ferrousli/tools/ports/`, installed under `~/.local/share/ferrix/ports/ferrousli`
 //! (or `$FERRIX_PORTS`), and carried by every image that carries a busybox.
 //!
 //! Each port installs into `<arch>/` there with the layout it has on the
@@ -28,7 +28,7 @@ use crate::paths::Arch;
 use crate::{Error, Result};
 
 /// The ports `cargo xtask ports` builds, in order, each a directory of
-/// `userland/ferrousli/tools/ports/` holding a `build.sh`. `libcxx` is the C++ runtime
+/// `src/user/linux/ferrousli/tools/ports/` holding a `build.sh`. `libcxx` is the C++ runtime
 /// btop links against, and installs nothing an image carries. `sshdt` is Rust
 /// rather than C, built the way uutils is, and needs cargo's crates.io.
 /// `foot` is the Wayland terminal `docs/CHROME.md` starts from, built with
@@ -368,7 +368,7 @@ pub(crate) fn build(arch: Arch) -> Result<()> {
         ));
     }
     let root = root()?;
-    let ferrousli = crate::paths::workspace_root().join("userland/ferrousli");
+    let ferrousli = crate::paths::workspace_root().join("src/user/linux/ferrousli");
     let ports = ports_for(arch);
     // One build of them all, in order, since each later port reads what an
     // earlier one installed: a build `FERRIX_BUILDS` may record or replay,
@@ -381,7 +381,7 @@ pub(crate) fn build(arch: Arch) -> Result<()> {
     );
     let mut build = crate::builds::Build::bash(
         format!(
-            "userland/ferrousli/tools/ports ({}) for {arch}",
+            "src/user/linux/ferrousli/tools/ports ({}) for {arch}",
             ports.join(", ")
         ),
         &ferrousli,

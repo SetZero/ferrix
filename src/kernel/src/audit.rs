@@ -8,7 +8,7 @@
 //! quiesced, TSF data changed, and the boot's own configuration. Each is
 //! recorded at the one place that decision is made, so recording it adds a
 //! call and changes nothing about the decision. The layout is
-//! `libs/proto/audit`'s, which a reader shares.
+//! `src/lib/proto/audit`'s, which a reader shares.
 //!
 //! # Where
 //!

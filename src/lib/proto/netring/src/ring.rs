@@ -6,7 +6,7 @@
 //! an entry; the arithmetic and the order of the handshake's reads and writes
 //! are the same, so they are written once, here.
 //!
-//! This is the discipline `libs/proto/blkring` keeps, written a second time; the
+//! This is the discipline `src/lib/proto/blkring` keeps, written a second time; the
 //! crate root says why.
 
 use crate::bell::{Doorbell, WANT_BELL, Wait};

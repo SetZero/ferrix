@@ -17,7 +17,7 @@ seen without it.
                    vendor_boot.img, fastboot boot the image, wait for Android,
                    and save the ramoops record the run left
     POST /boot?stats=N
-                   the same, with Ferrix's stat service (`userland/statd/`) as pid 1
+                   the same, with Ferrix's stat service (`src/user/linux/statd/`) as pid 1
                    for N seconds: a copy of the image whose boot image header
                    carries `ferrix.init=/sbin/ferrix-statd
                    ferrix.statd.seconds=N`, which ABL puts in the device
@@ -31,7 +31,7 @@ crosvm and needs no PC, the helper also keeps the raw loader `Image` from the
 same run directory at /data/local/tmp/ferrix-vm/ferrix.Image, pushing it
 whenever the phone's copy differs: an ordinary file, as an app's data is.
 
-Usage:  python3 tools/pixel7/helper.py [--image boot.img]
+Usage:  python3 tools/vendor/google/pixel7/helper.py [--image boot.img]
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ import time
 PORT = 47707
 RUNS = pathlib.Path.home() / ".local/share/ferrix/pixel7"
 HERE = pathlib.Path(__file__).resolve().parent
-MKBOOTIMG = HERE.parent.parent / "boot" / "pixel7" / "mkbootimg.py"
+MKBOOTIMG = HERE.parents[3] / "src" / "boot" / "vendor" / "google" / "pixel7" / "mkbootimg.py"
 AVBTOOL = RUNS / "avbtool.py"
 VM_DIR = "/data/local/tmp/ferrix-vm"
 VM_IMAGE = f"{VM_DIR}/ferrix.Image"

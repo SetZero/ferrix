@@ -1,7 +1,7 @@
 //! Bad Apple!! in a window on the desktop.
 //!
 //! The same player as on the card, with the compositor between it and the
-//! screen: a toolkit toplevel (`userland/compositor/toolkit`), which the
+//! screen: a toolkit toplevel (`src/user/linux/compositor/toolkit`), which the
 //! compositor tiles and sizes. The picture is fitted to whatever size the
 //! window is given and drawn whole into each buffer, since the toolkit
 //! rotates two or three of them. The sound card is still the clock; frame

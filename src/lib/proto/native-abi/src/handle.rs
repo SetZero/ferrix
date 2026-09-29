@@ -9,7 +9,7 @@
 //! through a channel, which removes it from the sender.
 //!
 //! How the number is built from a table index is the kernel's business, not
-//! the ABI's; `libs/kernel/objects` does it. The ABI promises exactly two things:
+//! the ABI's; `src/lib/kernel/objects` does it. The ABI promises exactly two things:
 //! the value is 32 bits wide on every architecture, and zero is never a
 //! handle.
 

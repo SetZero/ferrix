@@ -2,7 +2,7 @@
 //! then a device node a ring-3 driver is started on (`docs/GPU.md` §6.2, G1).
 //!
 //! The STM32MP157 carries a Vivante GC400T at `0x5900_0000`, the tree's
-//! `gpu@59000000` with `compatible = "vivante,gc"`. The driver, `native/drivers/gc400`,
+//! `gpu@59000000` with `compatible = "vivante,gc"`. The driver, `src/user/native/drivers/gpu/gc400`,
 //! programs everything inside the core: its own clock control and soft reset,
 //! its interrupt enables, and the front end that fetches command buffers.
 //! What it cannot do is what the rest of the chip shares, for the reason

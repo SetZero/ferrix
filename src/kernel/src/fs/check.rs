@@ -1,6 +1,6 @@
 //! Stage 8's self-checks for the root the kernel built.
 //!
-//! Two properties the host tests of `libs/fs/vfs` cannot establish, because both
+//! Two properties the host tests of `src/lib/fs/vfs` cannot establish, because both
 //! are about this machine rather than the logic. That the archive the loader
 //! handed over is the one the build wrote, unpacked intact through the direct
 //! map — hard link and symbolic link included. And that tmpfs over VMO pages
@@ -45,7 +45,7 @@ use crate::syscall::{fd, file, fsctl, pipe, uaccess};
 use crate::user::space::{Access, AddressSpace, FileMapping, FilePlace};
 use crate::user::vmo::Vmo;
 
-/// The marker `xtask/src/initramfs.rs` writes, byte for byte.
+/// The marker `tools/common/xtask/src/initramfs.rs` writes, byte for byte.
 const MARKER: &[u8] = b"unpacked by the kernel from a cpio archive the loader handed it\n";
 
 /// Where the marker is unpacked.

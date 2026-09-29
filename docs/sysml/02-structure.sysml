@@ -92,7 +92,7 @@ package FerrixStructure {
     port def BootHandoffPort {
         doc /* The loader and the kernel are two programs linked for different
              * targets that meet at exactly one struct, declared once in
-             * libs/proto/bootinfo. A mismatch is a type error rather than a triple
+             * src/lib/proto/bootinfo. A mismatch is a type error rather than a triple
              * fault. */
         in item info : BootInfo;
     }
@@ -110,7 +110,7 @@ package FerrixStructure {
     port def LinuxSyscallPort {
         doc /* Syscall numbers 0.., each architecture's table as Linux defines
              * it (the EABI table on ARMv7-A). A compatibility obligation: no
-             * opinions live here. libs/proto/linux-abi holds the numbers, errnos and
+             * opinions live here. src/lib/proto/linux-abi holds the numbers, errnos and
              * repr(C) layouts. */
         in item request : SyscallRequest;
         out item result : SyscallResult;
@@ -173,12 +173,12 @@ package FerrixStructure {
 
     #implemented part def Loader {
         @stage { number = 1; }
-        doc /* boot/uefi/: the UEFI loader. Reads the kernel from the volume it was
+        doc /* src/boot/common/uefi/: the UEFI loader. Reads the kernel from the volume it was
              * booted from, copies it to its link address, builds the address
              * space, takes the memory map, leaves boot services, installs the
              * new tables and jumps. Only the last step is assembly, because
              * the return address of a Rust call would be in the address space
-             * just replaced. One program for three architectures: boot/uefi/src/arch
+             * just replaced. One program for three architectures: src/boot/common/uefi/src/arch
              * has one file per machine and no second loader. */
 
         port efi : ~EfiHandoffPort;
@@ -189,18 +189,18 @@ package FerrixStructure {
         attribute bootStackBytes : Natural = 65536;
 
         part uefi : UefiBindings {
-            doc /* boot/uefi/src/uefi: the handful of protocols and tables used —
+            doc /* src/boot/common/uefi/src/uefi: the handful of protocols and tables used —
                  * simple file system, loaded image, graphics output, and the
                  * ACPI and device-tree configuration tables. Hand-written,
                  * no crates.io dependency. */
         }
         part services : Services {
-            doc /* boot/uefi/src/services.rs: allocation, memory map, and the one
+            doc /* src/boot/common/uefi/src/services.rs: allocation, memory map, and the one
                  * call after which firmware is gone: ExitBootServices. */
         }
         part load : ImageLoading {
-            doc /* boot/uefi/src/load.rs: ELF parse via libs/platform/elf, placement, page
-                 * tables via libs/kernel/paging, the identity plan for the switch. */
+            doc /* src/boot/common/uefi/src/load.rs: ELF parse via src/lib/platform/elf, placement, page
+                 * tables via src/lib/kernel/paging, the identity plan for the switch. */
         }
         part arch : LoaderArch;
 
@@ -230,7 +230,7 @@ package FerrixStructure {
     // -----------------------------------------------------------------------
 
     part def Kernel {
-        doc /* kernel/: monolithic core, capability seams, userspace device
+        doc /* src/kernel/: monolithic core, capability seams, userspace device
              * drivers. Entered from the loader with the MMU on, three
              * mappings in place and nothing else: no vectors, no allocator,
              * no other CPU running. */
@@ -243,12 +243,12 @@ package FerrixStructure {
         // -- Runs today, stages 1 to 4 --------------------------------------
         part arch : ArchLayer;
         #implemented part printer : Console {
-            doc /* kernel/src/console.rs: println over the arch console, behind
+            doc /* src/kernel/src/console.rs: println over the arch console, behind
                  * a lock that a panicking CPU waits a bounded time for, so a
                  * fault while printing still produces its FERRIX-PANIC line.
                  * It keeps its last 4 KiB in a lock-free ring, which a panic
                  * draws on the firmware framebuffer when there is one
-                 * (kernel/src/panic/screen.rs): the second in-kernel output
+                 * (src/kernel/src/panic/screen.rs): the second in-kernel output
                  * device, write-only and used for nothing else. */
         }
         #implemented part early : EarlyMemory;
@@ -312,39 +312,39 @@ package FerrixStructure {
              * shell since 2026-09-18 is zinc. What breaks the cycle "the root
              * filesystem needs a block driver that lives on the root
              * filesystem"; a btrfs root, on a boot that has one, is installed
-             * from the same archive (kernel/src/fs/root_disk.rs). */
+             * from the same archive (src/kernel/src/fs/root_disk.rs). */
         part devmgr : UserBinary {
             attribute :>> staticMusl = false;
-            doc /* /sbin/devmgr, a native program on native/rt. */
+            doc /* /sbin/devmgr, a native program on src/user/native/rt. */
         }
         part virtioBlk : UserBinary {
             attribute :>> staticMusl = false;
-            doc /* /lib/drivers/blk, a native program on native/rt. */
+            doc /* /lib/drivers/blk, a native program on src/user/native/rt. */
         }
         part virtioGpu : UserBinary {
             attribute :>> staticMusl = false;
-            doc /* /lib/drivers/gpu, a native program on native/rt. */
+            doc /* /lib/drivers/gpu, a native program on src/user/native/rt. */
         }
         part virtioNet : UserBinary {
             attribute :>> staticMusl = false;
-            doc /* /lib/drivers/net, a native program on native/rt. */
+            doc /* /lib/drivers/net, a native program on src/user/native/rt. */
         }
         part virtioInput : UserBinary {
             attribute :>> staticMusl = false;
-            doc /* /lib/drivers/input, a native program on native/rt. */
+            doc /* /lib/drivers/input, a native program on src/user/native/rt. */
         }
         part vport : UserBinary {
             attribute :>> staticMusl = false;
             doc /* /lib/drivers/vport, the virtio-serial port driver, a native
-                 * program on native/rt. */
+                 * program on src/user/native/rt. */
         }
         part virtioSndDriver : UserBinary {
             attribute :>> staticMusl = false;
             doc /* /lib/drivers/snd, the virtio-snd driver (docs/AUDIO.md), a
-                 * native program on native/rt over libs/drivers/virtio-snd. */
+                 * native program on src/user/native/rt over src/lib/drivers/sound/virtio-snd. */
         }
         part init : UserBinary {
-            doc /* The program the kernel starts first (kernel/src/init.rs):
+            doc /* The program the kernel starts first (src/kernel/src/init.rs):
                  * /bin/zinc unless a build names another with --init, or a
                  * list of commands run in turn. */
         }
@@ -360,7 +360,7 @@ package FerrixStructure {
              * dynamically linked through the interpreter its PT_INTERP names
              * -- as a Process (see FerrixObjects) speaking the Linux ABI, and
              * optionally the native one. devmgr and the drivers are native
-             * programs on native/rt, which make the few Linux calls they need
+             * programs on src/user/native/rt, which make the few Linux calls they need
              * as well. */
         attribute usesNativeAbi : Boolean = false;
     }
@@ -376,8 +376,8 @@ package FerrixStructure {
 
         #inProgress part init : UserProcess {
             @stage { number = 15; }
-            doc /* /sbin/init (userland/init/, docs/INIT.md), since 2026-09-26: pid 1
-                 * around libs/init/svc's manager. It mounts /run and cgroup2, runs
+            doc /* /sbin/init (src/user/linux/init/, docs/INIT.md), since 2026-09-26: pid 1
+                 * around src/lib/init/svc's manager. It mounts /run and cgroup2, runs
                  * each service in a cgroup of its own from clone3, reaps,
                  * restarts, gives the console a getty and a shell with a
                  * session of its own, and powers off. /bin/svc drives it over
@@ -412,7 +412,7 @@ package FerrixStructure {
     // -----------------------------------------------------------------------
 
     abstract part def ArchFacade {
-        doc /* kernel/src/arch/mod.rs: the one module generic code reaches the
+        doc /* src/kernel/src/arch/mod.rs: the one module generic code reaches the
              * CPU through. Each architecture exports the same set of names;
              * the facade re-exports whichever one the build is for. Adding an
              * architecture is a third cfg branch, not a second facade. */
@@ -429,7 +429,7 @@ package FerrixStructure {
                  * differs per machine; classify turns it into a Trap. */
         }
         part encoding : PageTableEncoding {
-            doc /* PageEncoding: which libs/kernel/paging Encoding this machine's
+            doc /* PageEncoding: which src/lib/kernel/paging Encoding this machine's
                  * descriptors use. */
         }
 
@@ -540,11 +540,11 @@ package FerrixStructure {
             doc /* x86-64: SYSCALL leaves the return address in rcx and does
                  * not switch the stack, so entry swaps to the kernel stack
                  * through swapgs before anything can be pushed
-                 * (kernel/src/arch/x86_64/syscall.rs). */
+                 * (src/kernel/src/arch/x86_64/syscall.rs). */
         }
         #implemented part iommu : IommuDriver {
             @stage { number = 10; }
-            doc /* The unit drivers live in kernel/src/iommu rather than under
+            doc /* The unit drivers live in src/kernel/src/iommu rather than under
                  * arch/: VT-d and the SMMUv3, each found from what the DMAR,
                  * the IORT or the device tree describes. What the facade
                  * gained for device interrupts is MSI (msi_allocate,
@@ -565,7 +565,7 @@ package FerrixStructure {
     #implemented part def X86_64Arch :> ArchFacade {
         attribute :>> NAME = "x86_64";
         attribute :>> TLB_FLUSH_IS_BROADCAST = false;
-        doc /* kernel/src/arch/x86_64. Target x86_64-unknown-none, kernel code
+        doc /* src/kernel/src/arch/x86_64. Target x86_64-unknown-none, kernel code
              * model, no red zone, soft float. Machine description: ACPI. */
 
         part gdt : Gdt {
@@ -612,7 +612,7 @@ package FerrixStructure {
         }
         #implemented part vtd : IommuDriver {
             @stage { number = 10; }
-            doc /* kernel/src/iommu/vtd.rs: legacy mode, checked against QEMU's
+            doc /* src/kernel/src/iommu/vtd.rs: legacy mode, checked against QEMU's
                  * intel_iommu.c -- a root table per unit, a context table per
                  * bus, a second-level table per domain -- programmed before
                  * PCI enumeration, so a function behind it reaches only what
@@ -631,7 +631,7 @@ package FerrixStructure {
     #implemented part def AArch64Arch :> ArchFacade {
         attribute :>> NAME = "aarch64";
         attribute :>> TLB_FLUSH_IS_BROADCAST = true;
-        doc /* kernel/src/arch/aarch64. Target aarch64-unknown-none-softfloat.
+        doc /* src/kernel/src/arch/aarch64. Target aarch64-unknown-none-softfloat.
              * Machine description: ACPI (MADT, FADT for the PSCI conduit,
              * GTDT for the timer interrupt). */
 
@@ -675,7 +675,7 @@ package FerrixStructure {
         }
         #implemented part smmu : IommuDriver {
             @stage { number = 10; }
-            doc /* kernel/src/iommu/smmuv3.rs: every SMMUv3 the IORT describes,
+            doc /* src/kernel/src/iommu/smmuv3.rs: every SMMUv3 the IORT describes,
                  * checked against QEMU's smmuv3.c -- a linear stream table
                  * aborting until a domain is attached, stage 2 per stream,
                  * the command queue polled and the event queue on -- with the
@@ -692,7 +692,7 @@ package FerrixStructure {
     #implemented part def Armv7aArch :> ArchFacade {
         attribute :>> NAME = "armv7a";
         attribute :>> TLB_FLUSH_IS_BROADCAST = true;
-        doc /* kernel/src/arch/armv7a: the Cortex-A7 of the STM32MP157, run on
+        doc /* src/kernel/src/arch/armv7a: the Cortex-A7 of the STM32MP157, run on
              * QEMU virt under U-Boot. Target armv7a-none-eabi with LPAE.
              * Machine description: device tree only. Joined after stage 3
              * without a second loader, a second facade or a line of bootstrap
@@ -768,7 +768,7 @@ package FerrixStructure {
              * architectures, gated by cfg(any(aarch64, arm)) inside the arch
              * directory where the layering check permits it. */
         part gicv2 : Gicv2 {
-            doc /* kernel/src/arch/arm_common/gicv2.rs: distributor (machine-wide) and CPU
+            doc /* src/kernel/src/arch/arm_common/gicv2.rs: distributor (machine-wide) and CPU
                  * interface (per core). 0..16 software-generated, 16..32
                  * private peripheral, 32.. shared. IPIs through GICD_SGIR.
                  * Private interrupts' enable bits are banked per core, so the
@@ -777,10 +777,10 @@ package FerrixStructure {
                  * included, which is what stage 5 found missing. */
         }
         part pl011 : Pl011 {
-            doc /* kernel/src/arch/arm_common/pl011.rs. Used by ARMv7-A today. */
+            doc /* src/kernel/src/arch/arm_common/pl011.rs. Used by ARMv7-A today. */
         }
         part stm32Usart : Stm32Usart {
-            doc /* kernel/src/arch/arm_common/stm32_usart.rs: the board's own UART. */
+            doc /* src/kernel/src/arch/arm_common/stm32_usart.rs: the board's own UART. */
         }
     }
     part def Gicv2; part def Pl011; part def Stm32Usart;
@@ -801,13 +801,13 @@ package FerrixStructure {
     // -----------------------------------------------------------------------
 
     package Workspace {
-        doc /* docs/ARCHITECTURE.md §9. libs/ is host-testable by design and
+        doc /* docs/ARCHITECTURE.md §9. src/lib/ is host-testable by design and
              * is the only code cargo test, Miri and the fuzzers can reach;
-             * boot/uefi/ and kernel/ are reached by the QEMU boot test; xtask/ by
-             * cargo test. native/ holds the native programs the initramfs
+             * src/boot/common/uefi/ and src/kernel/ are reached by the QEMU boot test; tools/common/xtask/ by
+             * cargo test. src/user/native/ holds the native programs the initramfs
              * carries -- devmgr, the drivers and the runtime they link --
              * built for the kernel's targets and kept out of the host gates.
-             * scripts/check/check-crate-layering.sh keeps the arrows below pointing
+             * tools/common/check/check-crate-layering.sh keeps the arrows below pointing
              * the right way. */
 
         enum def CrateKind {
@@ -833,35 +833,35 @@ package FerrixStructure {
 
         // The five the boot path was built on.
         #implemented part bootinfo : LibraryCrate {
-            attribute :>> path = "libs/proto/bootinfo";
+            attribute :>> path = "src/lib/proto/bootinfo";
             attribute :>> forbidsUnsafe = false;
             doc /* The hand-off ABI, both address layouts, checked at compile
                  * time on every build. */
         }
         #implemented part elf : LibraryCrate {
-            attribute :>> path = "libs/platform/elf";
+            attribute :>> path = "src/lib/platform/elf";
             attribute :>> forbidsUnsafe = true;
             doc /* ELF64 and, since the ARMv7-A port, ELF32. Used by the
                  * loader, by xtask's PE converter, and fuzzed. */
         }
         #implemented part frameCrate : LibraryCrate {
-            attribute :>> path = "libs/kernel/frame";
+            attribute :>> path = "src/lib/kernel/frame";
             attribute :>> forbidsUnsafe = true;
         }
         #implemented part heap : LibraryCrate {
-            attribute :>> path = "libs/kernel/heap";
+            attribute :>> path = "src/lib/kernel/heap";
             attribute :>> forbidsUnsafe = false;
             doc /* The body has no unsafe; the crate cannot forbid it because
                  * declaring Backing as an unsafe trait is the point. */
         }
         #implemented part paging : LibraryCrate {
-            attribute :>> path = "libs/kernel/paging";
+            attribute :>> path = "src/lib/kernel/paging";
             attribute :>> forbidsUnsafe = false;
         }
 
         // Written ahead, and reached early.
         #implemented part acpi : LibraryCrate {
-            attribute :>> path = "libs/platform/acpi";
+            attribute :>> path = "src/lib/platform/acpi";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 81;
             doc /* Reached at stage 3: the MADT walk the interrupt controller
@@ -871,7 +871,7 @@ package FerrixStructure {
                  * down, as the kernel does. */
         }
         #implemented part fdt : LibraryCrate {
-            attribute :>> path = "libs/platform/fdt";
+            attribute :>> path = "src/lib/platform/fdt";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 87;
             doc /* Reached at stage 1 on ARMv7-A: console, GIC, timer
@@ -880,7 +880,7 @@ package FerrixStructure {
                  * token stream written from the specification. */
         }
         #implemented part sync : LibraryCrate {
-            attribute :>> path = "libs/kernel/sync";
+            attribute :>> path = "src/lib/kernel/sync";
             attribute :>> forbidsUnsafe = false;
             attribute :>> hostTests = 27;
             doc /* Reached at stage 4: its ticket locks guard every shared
@@ -891,7 +891,7 @@ package FerrixStructure {
                  * 11. RwSpinLock still waits. */
         }
         #implemented part crng : LibraryCrate {
-            attribute :>> path = "libs/kernel/crng";
+            attribute :>> path = "src/lib/kernel/crng";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 9;
             doc /* Reached with curl's HTTPS: ChaCha20 with fast key erasure
@@ -900,7 +900,7 @@ package FerrixStructure {
                  * checked against RFC 8439 and OpenSSL's keystream. */
         }
         #implemented part sched : LibraryCrate {
-            attribute :>> path = "libs/kernel/sched";
+            attribute :>> path = "src/lib/kernel/sched";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 72;
             @stage { number = 5; }
@@ -909,7 +909,7 @@ package FerrixStructure {
                  * a run queue through hundreds of thousands of decisions. */
         }
         #implemented part vma : LibraryCrate {
-            attribute :>> path = "libs/kernel/vma";
+            attribute :>> path = "src/lib/kernel/vma";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 66;
             doc /* Written for stage 6; reached at stage 2 as the vmap arena's
@@ -919,7 +919,7 @@ package FerrixStructure {
 
         // Written ahead, and reached by their stages since.
         #implemented part linuxAbi : LibraryCrate {
-            attribute :>> path = "libs/proto/linux-abi";
+            attribute :>> path = "src/lib/proto/linux-abi";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 126;
             @stage { number = 7; }
@@ -936,7 +936,7 @@ package FerrixStructure {
                  * ioctls the render node answers. */
         }
         #implemented part ustack : LibraryCrate {
-            attribute :>> path = "libs/kernel/ustack";
+            attribute :>> path = "src/lib/kernel/ustack";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 22;
             @stage { number = 7; }
@@ -948,17 +948,17 @@ package FerrixStructure {
                  * what the fuzz target does. */
         }
         #implemented part cpio : LibraryCrate {
-            attribute :>> path = "libs/fs/cpio";
+            attribute :>> path = "src/lib/fs/cpio";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 45;
             @stage { number = 8; }
             doc /* The newc reader the initramfs is unpacked with, reached
-                 * through libs/fs/vfs. The cpio_parse fuzz target writes every
+                 * through src/lib/fs/vfs. The cpio_parse fuzz target writes every
                  * archive it walks to a trailer back out and requires it to
                  * read back identical. */
         }
         #implemented part vfs : LibraryCrate {
-            attribute :>> path = "libs/fs/vfs";
+            attribute :>> path = "src/lib/fs/vfs";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 101;
             @stage { number = 8; }
@@ -967,10 +967,10 @@ package FerrixStructure {
                  * store the kernel supplies, pipes and socket buffers, the
                  * permission rules as pure functions, initramfs unpacking and
                  * the getdents64 packer. The kernel's filesystem is built on
-                 * it (kernel/src/fs). */
+                 * it (src/kernel/src/fs). */
         }
         #implemented part procfs : LibraryCrate {
-            attribute :>> path = "libs/fs/procfs";
+            attribute :>> path = "src/lib/fs/procfs";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 33;
             @stage { number = 8; }
@@ -981,7 +981,7 @@ package FerrixStructure {
                  * reads its own output back with. */
         }
         #implemented part sysfs : LibraryCrate {
-            attribute :>> path = "libs/fs/sysfs";
+            attribute :>> path = "src/lib/fs/sysfs";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 15;
             doc /* The text of /sys as pure functions (docs/SYSFS.md): PCI
@@ -992,7 +992,7 @@ package FerrixStructure {
                  * Linux's and fuzzed (sysfs_names). */
         }
         #implemented part virtio : LibraryCrate {
-            attribute :>> path = "libs/drivers/virtio";
+            attribute :>> path = "src/lib/drivers/virtio";
             attribute :>> forbidsUnsafe = false;
             attribute :>> hostTests = 164;
             @stage { number = 10; }
@@ -1003,7 +1003,7 @@ package FerrixStructure {
                  * and by every ring-3 driver since. */
         }
         #implemented part netwire : LibraryCrate {
-            attribute :>> path = "libs/network/netwire";
+            attribute :>> path = "src/lib/network/netwire";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 54;
             doc /* The byte-level half of the net core, written ahead of the
@@ -1017,7 +1017,7 @@ package FerrixStructure {
                  * parse back unchanged. */
         }
         #implemented part nettcp : LibraryCrate {
-            attribute :>> path = "libs/network/nettcp";
+            attribute :>> path = "src/lib/network/nettcp";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 31;
             doc /* The TCP state machine, written ahead of the networking
@@ -1035,7 +1035,7 @@ package FerrixStructure {
                  * with to write and parse back. */
         }
         #implemented part netCore : LibraryCrate {
-            attribute :>> path = "libs/network/net";
+            attribute :>> path = "src/lib/network/net";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 69;
             doc /* The net core, written ahead of the networking stage:
@@ -1053,7 +1053,7 @@ package FerrixStructure {
                  * whole host from a stranger's frames. */
         }
         #implemented part netServe : LibraryCrate {
-            attribute :>> path = "libs/drivers/netserve";
+            attribute :>> path = "src/lib/drivers/net/netserve";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 12;
             doc /* A ring-3 network driver's serve loop: the net ring on one
@@ -1070,7 +1070,7 @@ package FerrixStructure {
                  * kernel end on the other. */
         }
         #implemented part netRing : LibraryCrate {
-            attribute :>> path = "libs/proto/netring";
+            attribute :>> path = "src/lib/proto/netring";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 32;
             doc /* The net ring: the memory the kernel shares with a ring-3
@@ -1084,7 +1084,7 @@ package FerrixStructure {
                  * read; corruption is terminal for the side that sees it. */
         }
         #implemented part netlink : LibraryCrate {
-            attribute :>> path = "libs/network/netlink";
+            attribute :>> path = "src/lib/network/netlink";
             attribute :>> hostTests = 48;
             doc /* The byte-level half of netlink, over linux-abi's headers:
                  * walking a buffer of messages and the attributes after each
@@ -1101,11 +1101,11 @@ package FerrixStructure {
                  * the builder writes to walk back to what was built. */
         }
         #implemented part virtioNet : LibraryCrate {
-            attribute :>> path = "libs/drivers/virtio-net";
+            attribute :>> path = "src/lib/drivers/net/virtio-net";
             attribute :>> hostTests = 22;
             @stage { number = 10; }
             doc /* The virtio-net driver logic, written ahead of the network
-                 * device it drives from native/drivers/net: bring-up in the order the
+                 * device it drives from src/user/native/drivers/net/virtio-net: bring-up in the order the
                  * status protocol fixes, a receive queue the driver fills and
                  * refills because an empty one drops every frame in silence, a
                  * transmit queue whose buffers stay the caller's until the
@@ -1120,12 +1120,12 @@ package FerrixStructure {
                  * every accepted frame to be answered exactly once. */
         }
         #implemented part virtioGpu : LibraryCrate {
-            attribute :>> path = "libs/drivers/virtio-gpu";
+            attribute :>> path = "src/lib/drivers/display/virtio-gpu";
             attribute :>> hostTests = 16;
             @stage { number = 17; }
             doc /* The virtio-gpu 2D driver logic, written ahead of the driver
                  * process for the compositor's first iteration and driven
-                 * from native/drivers/gpu since: bring-up with
+                 * from src/user/native/drivers/display/virtio-gpu since: bring-up with
                  * the control queue alone, one command at a time, every
                  * response checked, and the pipeline from the display core's
                  * requests to device commands. A failed step is undone as far
@@ -1136,7 +1136,7 @@ package FerrixStructure {
                  * the features 3D needs when asked. */
         }
         #implemented part virtioSnd : LibraryCrate {
-            attribute :>> path = "libs/drivers/virtio-snd";
+            attribute :>> path = "src/lib/drivers/sound/virtio-snd";
             attribute :>> hostTests = 13;
             doc /* The virtio-snd driver logic, written ahead of the driver
                  * process for the audio iteration (docs/AUDIO.md L4): bring-up
@@ -1151,12 +1151,12 @@ package FerrixStructure {
                  * those submitted. */
         }
         #implemented part virtioInput : LibraryCrate {
-            attribute :>> path = "libs/drivers/virtio-input";
+            attribute :>> path = "src/lib/drivers/input/virtio-input";
             attribute :>> hostTests = 28;
             @stage { number = 17; }
             doc /* The virtio-input driver logic, written ahead of the driver
                  * process for the input iteration (docs/INPUT.md) and driven
-                 * from native/drivers/input since: bring-up
+                 * from src/user/native/drivers/input/virtio-input since: bring-up
                  * that stops at FEATURES_OK so no event is discarded before
                  * the core has judged the device, the device's description
                  * read as a HELLO, the event queue kept full because QEMU
@@ -1171,7 +1171,7 @@ package FerrixStructure {
                  * the batch made and no event to be lost or reordered. */
         }
         #implemented part displayctl : LibraryCrate {
-            attribute :>> path = "libs/proto/displayctl";
+            attribute :>> path = "src/lib/proto/displayctl";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 12;
             @stage { number = 17; }
@@ -1188,7 +1188,7 @@ package FerrixStructure {
                  * the session never to accept a flip out of order. */
         }
         #implemented part inputctl : LibraryCrate {
-            attribute :>> path = "libs/proto/inputctl";
+            attribute :>> path = "src/lib/proto/inputctl";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 25;
             @stage { number = 17; }
@@ -1210,7 +1210,7 @@ package FerrixStructure {
                  * in order. */
         }
         #implemented part sndctl : LibraryCrate {
-            attribute :>> path = "libs/proto/sndctl";
+            attribute :>> path = "src/lib/proto/sndctl";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 30;
             doc /* The control protocol between the kernel's audio core and a
@@ -1230,23 +1230,23 @@ package FerrixStructure {
                  * across a period or during a halt, and to refuse every lie. */
         }
         #implemented part logctl : LibraryCrate {
-            attribute :>> path = "libs/proto/logctl";
+            attribute :>> path = "src/lib/proto/logctl";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 12;
             doc /* The log control protocol: how a ring-3 driver reads the
                  * kernel log over a control channel, for the Pixel 7's USB
-                 * serial port (docs/PIXEL7-USB-HANDOVER.md phase 4). Three
+                 * serial port (docs/vendor/google/pixel7/USB-HANDOVER.md phase 4). Three
                  * messages decoded strictly -- READ, DATA with the bytes the
                  * ring lost since the last, REFUSED -- and the kernel's half
                  * of the conversation: one READ outstanding, answered once
                  * the log has a byte, lost counts carried to the next DATA. */
         }
         #implemented part audit : LibraryCrate {
-            attribute :>> path = "libs/proto/audit";
+            attribute :>> path = "src/lib/proto/audit";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 7;
             doc /* The audit record's 64-byte layout, shared by the kernel's
-                 * store (kernel/src/audit.rs) and the reader it hands the
+                 * store (src/kernel/src/audit.rs) and the reader it hands the
                  * records to (docs/certification/AUDIT.md §2): the classes,
                  * the events, the configuration keys, and the start-up
                  * record that carries the boot's 128-bit audit id and both
@@ -1254,7 +1254,7 @@ package FerrixStructure {
                  * tests. */
         }
         #implemented part pci : LibraryCrate {
-            attribute :>> path = "libs/platform/pci";
+            attribute :>> path = "src/lib/platform/pci";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 47;
             @stage { number = 10; }
@@ -1263,11 +1263,11 @@ package FerrixStructure {
                  * both capability lists with a visited set, MSI-X, the bus
                  * walk without recursion or allocation, and virtio's PCI
                  * transport. The kernel's enumeration walks with it
-                 * (kernel/src/pci.rs). The pci_walk fuzz target requires
+                 * (src/kernel/src/pci.rs). The pci_walk fuzz target requires
                  * every walk to end and sizing to restore every register. */
         }
         #implemented part nativeAbi : LibraryCrate {
-            attribute :>> path = "libs/proto/native-abi";
+            attribute :>> path = "src/lib/proto/native-abi";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 14;
             @stage { number = 9; }
@@ -1277,7 +1277,7 @@ package FerrixStructure {
                  * Linux tables. No argument wider than a register. */
         }
         #implemented part objects : LibraryCrate {
-            attribute :>> path = "libs/kernel/objects";
+            attribute :>> path = "src/lib/kernel/objects";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 24;
             @stage { number = 9; }
@@ -1288,7 +1288,7 @@ package FerrixStructure {
                  * target checks against a model. */
         }
         #implemented part btrfs : LibraryCrate {
-            attribute :>> path = "libs/fs/btrfs";
+            attribute :>> path = "src/lib/fs/btrfs";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 167;
             @stage { number = 11; }
@@ -1300,7 +1300,7 @@ package FerrixStructure {
                  * stage 11. */
         }
         #implemented part btrfsWrite : LibraryCrate {
-            attribute :>> path = "libs/fs/btrfs-write";
+            attribute :>> path = "src/lib/fs/btrfs-write";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 32;
             @stage { number = 12; }
@@ -1314,27 +1314,27 @@ package FerrixStructure {
                  * on the host and hundreds of QEMU kills. */
         }
         #implemented part btrfsVfs : LibraryCrate {
-            attribute :>> path = "libs/fs/btrfs-vfs";
+            attribute :>> path = "src/lib/fs/btrfs-vfs";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 32;
             @stage { number = 11; }
             doc /* btrfs mounted into the VFS: FileSystem and Inode over the
                  * read path, read-only and holding no lock across I/O, and a
-                 * writable mount over libs/fs/btrfs-write behind one sleeping
+                 * writable mount over src/lib/fs/btrfs-write behind one sleeping
                  * lock, whose writes become extents at the commit. */
         }
         #implemented part blockQueue : LibraryCrate {
-            attribute :>> path = "libs/fs/block";
+            attribute :>> path = "src/lib/fs/block";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 36;
             @stage { number = 11; }
             doc /* The block core's request queue: merging, flush and FUA
                  * barriers no request crosses, deadline scheduling. In front
-                 * of every block ring in the kernel (kernel/src/block_ring).
+                 * of every block ring in the kernel (src/kernel/src/block_ring).
                  * Checked against a model by the block_queue fuzz target. */
         }
         #implemented part blkRing : LibraryCrate {
-            attribute :>> path = "libs/proto/blkring";
+            attribute :>> path = "src/lib/proto/blkring";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 52;
             @stage { number = 10; }
@@ -1347,27 +1347,27 @@ package FerrixStructure {
                  * honest other. */
         }
         #implemented part blkServe : LibraryCrate {
-            attribute :>> path = "libs/drivers/blkserve";
+            attribute :>> path = "src/lib/drivers/block/blkserve";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 6;
             @stage { number = 10; }
             doc /* A ring-3 block driver's serve loop between the block ring and
                  * a virtio-blk device, written against a trait so it runs on
-                 * the host with a fake device; native/drivers/blk adds only the
+                 * the host with a fake device; src/user/native/drivers/block/virtio-blk adds only the
                  * handles. */
         }
         #implemented part virtioBlk : LibraryCrate {
-            attribute :>> path = "libs/drivers/virtio-blk";
+            attribute :>> path = "src/lib/drivers/block/virtio-blk";
             attribute :>> hostTests = 39;
             @stage { number = 10; }
             doc /* The virtio-blk driver logic over a transport and DMA memory
                  * it is handed: bring-up to DRIVER_OK, read, write and flush,
                  * each completion counted once even from a hostile device, and
                  * memory handed back only after the device's reset. Driven
-                 * from native/drivers/blk; fuzzed by virtio_blk. */
+                 * from src/user/native/drivers/block/virtio-blk; fuzzed by virtio_blk. */
         }
         #implemented part devmgrProto : LibraryCrate {
-            attribute :>> path = "libs/proto/devmgr-proto";
+            attribute :>> path = "src/lib/proto/devmgr-proto";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 5;
             @stage { number = 10; }
@@ -1377,16 +1377,16 @@ package FerrixStructure {
                  * program share one definition. */
         }
         #implemented part nativeCrate : LibraryCrate {
-            attribute :>> path = "libs/proto/native";
+            attribute :>> path = "src/lib/proto/native";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 28;
             doc /* Typed, safe wrappers over every native system call, with
-                 * owned handles, written against a raw call trait: native/rt
+                 * owned handles, written against a raw call trait: src/user/native/rt
                  * implements it with the trap instruction, and the tests with
                  * a recorder that plays the kernel's part. */
         }
         #implemented part renderctl : LibraryCrate {
-            attribute :>> path = "libs/proto/renderctl";
+            attribute :>> path = "src/lib/proto/renderctl";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 19;
             @stage { number = 19; }
@@ -1398,7 +1398,7 @@ package FerrixStructure {
                  * renderctl. */
         }
         #implemented part gc400 : LibraryCrate {
-            attribute :>> path = "libs/drivers/gc400";
+            attribute :>> path = "src/lib/drivers/gpu/gc400";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 28;
             @stage { number = 19; }
@@ -1407,29 +1407,29 @@ package FerrixStructure {
                  * command stream from the etnaviv project's MIT-licensed
                  * register database, the identity, reset and initialisation
                  * in the order Linux's etnaviv driver uses them, and a
-                 * WAIT/LINK ring. Linked by native/drivers/gc400, which devmgr starts
+                 * WAIT/LINK ring. Linked by src/user/native/drivers/gpu/gc400, which devmgr starts
                  * on the board, where it ran on 2026-09-24; no QEMU machine
                  * has the core, so no gate drives it. */
         }
         #implemented part fbtext : LibraryCrate {
-            attribute :>> path = "libs/kernel/fbtext";
+            attribute :>> path = "src/lib/kernel/fbtext";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 30;
             doc /* Text and filled rectangles on a linear framebuffer, with an
                  * embedded Spleen 8x16 font, clipped rather than refused and
                  * allocating nothing: what the panic screen
-                 * (kernel/src/panic/screen.rs) draws with, and
-                 * userland/compositor/term as well. */
+                 * (src/kernel/src/panic/screen.rs) draws with, and
+                 * src/user/linux/compositor/term as well. */
         }
         #implemented part qr : LibraryCrate {
-            attribute :>> path = "libs/kernel/qr";
+            attribute :>> path = "src/lib/kernel/qr";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 20;
             doc /* A QR code encoder with no heap, ported from Linux's
                  * drm_panic_qr.rs, for the panic screen's report. */
         }
         #writtenAhead part vdagent : LibraryCrate {
-            attribute :>> path = "libs/drivers/vdagent";
+            attribute :>> path = "src/lib/drivers/console/vdagent";
             attribute :>> forbidsUnsafe = true;
             attribute :>> hostTests = 16;
             doc /* SPICE's vdagent protocol as bytes, the chunk framing and the
@@ -1438,12 +1438,12 @@ package FerrixStructure {
                  * yet. */
         }
         #writtenAhead part virtioConsole : LibraryCrate {
-            attribute :>> path = "libs/drivers/virtio-console";
+            attribute :>> path = "src/lib/drivers/console/virtio-console";
             attribute :>> forbidsUnsafe = false;
             attribute :>> hostTests = 14;
             doc /* The virtio-console driver: bring-up, the control
                  * conversation until a named port is open, and that port's
-                 * bytes (docs/CLIPBOARD.md §3). Linked by native/drivers/vport, which
+                 * bytes (docs/CLIPBOARD.md §3). Linked by src/user/native/drivers/console/vport, which
                  * devmgr starts when --clipboard puts the device on the bus;
                  * no gate drives it yet. */
         }

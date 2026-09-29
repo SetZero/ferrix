@@ -16,7 +16,7 @@
 # Needs curl, sha256sum, dpkg-deb and xz. A mirror other than deb.debian.org
 # can be named with DEBIAN_MIRROR.
 #
-# Usage: scripts/fetch/fetch-linux-reference.sh
+# Usage: tools/common/fetch/fetch-linux-reference.sh
 
 set -euo pipefail
 

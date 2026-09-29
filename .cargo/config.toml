@@ -10,7 +10,7 @@ xtask = "run --quiet --package xtask --"
 # filesystem root, joining `rustflags` arrays rather than letting the nearest
 # win -- so a checkout inside another checkout gets `-T` twice, the script is
 # evaluated twice, and the kernel links with a wrapped segment the loader
-# rejects. `kernel/build.rs` emits it instead, once, and argues it at length.
+# rejects. `src/kernel/build.rs` emits it instead, once, and argues it at length.
 #
 # What is left below is codegen flags, where being passed twice means nothing.
 
@@ -29,8 +29,8 @@ rustflags = [
     # is every native program.
     #
     # Those programs must stay fixed-address executables, which is what the
-    # kernel's ELF loader takes (native/rt/linker/native.ld), so the link is
-    # told `-no-pie` here, and `kernel/build.rs` alone says `-pie` after it:
+    # kernel's ELF loader takes (src/user/native/rt/linker/native.ld), so the link is
+    # told `-no-pie` here, and `src/kernel/build.rs` alone says `-pie` after it:
     # a build script's link arguments come after these, and the last wins.
     # `--mitigations off` builds the kernel with the static model again.
     "-C", "relocation-model=pie",
@@ -62,7 +62,7 @@ rustflags = [
     "-C", "force-frame-pointers=yes",
 ]
 
-# The ARMv7-A loader: an ELF32 static PIE, laid out for `xtask/src/pe.rs` to
+# The ARMv7-A loader: an ELF32 static PIE, laid out for `tools/common/xtask/src/pe.rs` to
 # turn into a UEFI application. Every flag here is load-bearing:
 #
 #   * rust-lld as a plain ELF linker, and `link-self-contained=no`, so that
@@ -74,7 +74,7 @@ rustflags = [
 #   * `-znotext`, because read-only data holds absolute pointers too, and a PE
 #     loader applies relocations before it applies section permissions.
 #
-# The link script is named by `boot/uefi/build.rs`, absolutely, not here: see why
+# The link script is named by `src/boot/common/uefi/build.rs`, absolutely, not here: see why
 # there.
 [target.armv7-unknown-linux-musleabi]
 linker = "rust-lld"

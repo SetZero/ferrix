@@ -3,7 +3,7 @@
 # pinned release, target and feature set, and the same static x86-64 program
 # against ferrousli.
 #
-#     bash tools/uutils/build-windows.sh    # from userland/ferrousli/, in Git Bash
+#     bash tools/uutils/build-windows.sh    # from src/user/linux/ferrousli/, in Git Bash
 #
 # `cargo xtask uutils` runs it on Windows. It needs Git for Windows (bash and
 # the POSIX tools) and LLVM, whose clang cross-compiles the one C dependency

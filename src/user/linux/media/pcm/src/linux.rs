@@ -1,4 +1,4 @@
-//! The ioctls, as `userland/compositor/tone` makes them.
+//! The ioctls, as `src/user/linux/compositor/tone` makes them.
 
 use std::ffi::CString;
 use std::io;

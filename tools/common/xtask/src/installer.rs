@@ -25,8 +25,8 @@ use crate::{Error, Result, cargo, fat, initramfs, native, ports, qemu, zinc};
 const PROGRAM_PATH: &str = "sbin/ferrix-install";
 /// Where the empty root volume goes.
 const ROOT_PATH: &str = "usr/share/ferrix/root.img.packed";
-/// The empty root volume, packed as `libs/fs/btrfs/testdata` keeps it.
-const ROOT_PACKED: &[u8] = include_bytes!("../../libs/fs/btrfs/testdata/root.img.packed");
+/// The empty root volume, packed as `src/lib/fs/btrfs/testdata` keeps it.
+const ROOT_PACKED: &[u8] = include_bytes!("../../../../src/lib/fs/btrfs/testdata/root.img.packed");
 /// The target disk's size.
 const TARGET_BYTES: u64 = 2 << 30;
 
@@ -55,7 +55,7 @@ pub(crate) fn files(arch: Arch) -> Result<Option<Vec<ports::File>>> {
         .join("ferrix-install");
     crate::builds::Build::cargo(
         format!("cargo build (ferrix-install) --target {target}"),
-        paths::workspace_root().join("userland/installer"),
+        paths::workspace_root().join("src/user/linux/installer"),
     )
     .args(["build", "--release", "--target", target])
     .env("CARGO_TARGET_DIR", &target_dir)

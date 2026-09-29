@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build QEMU for Windows with the fixes in scripts/data/qemu/, and install it
-# where xtask looks before PATH (xtask/src/paths.rs, `own_qemu`).
+# Build QEMU for Windows with the fixes in tools/common/data/qemu/, and install it
+# where xtask looks before PATH (tools/common/xtask/src/paths.rs, `own_qemu`).
 #
 # The released Windows build (Stefan Weil's 11.1.0, from the winget package)
 # jumps to NULL the first time a guest resets virtio-gpu-gl-pci -- OVMF does
@@ -21,13 +21,13 @@
 # path with `-build`), about 3 GiB. Needs MSYS2 at $MSYS2_ROOT (default C:/msys64); installs the
 # packages it needs there with pacman. Run from Git Bash or MSYS2.
 #
-# Usage: scripts/fetch/fetch-qemu-windows.sh
+# Usage: tools/common/fetch/fetch-qemu-windows.sh
 
 set -euo pipefail
 
 version=v11.1.0
 spice_protocol=v0.14.5
-here=$(cd "$(dirname "$0")/../.." && pwd)
+here=$(cd "$(dirname "$0")/../../.." && pwd)
 
 # Everything below runs in MSYS2's MINGW64 shell, whose compiler and
 # libraries are the ones the binary is linked against. The directories are
@@ -43,7 +43,7 @@ if [ "${1:-}" != --in-msys2 ]; then
     home=${USERPROFILE:-$HOME}
     out=$(cygpath -m "${FERRIX_QEMU_DIR:-$home/.local/share/ferrix/qemu}")
     work=$(cygpath -m "${FERRIX_QEMU_WORK:-$out-build}")
-    script=$(cygpath -m "$here/scripts/fetch/$(basename "$0")")
+    script=$(cygpath -m "$here/tools/common/fetch/$(basename "$0")")
     MSYSTEM=MINGW64 CHERE_INVOKING=1 exec "$msys/usr/bin/bash.exe" -lc         'exec bash "$0" --in-msys2 "$1" "$2"' "$script" "$out" "$work"
 fi
 

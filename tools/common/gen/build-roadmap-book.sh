@@ -6,15 +6,15 @@
 # the sidebar, and print.html is the whole roadmap on one page, which is the
 # one to read from the top or print. Links that leave docs/roadmap/ go to the
 # repository's web view, and the charts are inlined, so print.html stands on
-# its own (scripts/gen/split-roadmap.py's `mdbook` preprocessor does both).
+# its own (tools/common/gen/split-roadmap.py's `mdbook` preprocessor does both).
 #
 # The output, docs/roadmap/book/, is not committed.
 #
-# Usage: scripts/gen/build-roadmap-book.sh
+# Usage: tools/common/gen/build-roadmap-book.sh
 
 set -euo pipefail
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 
 if ! command -v mdbook > /dev/null; then
     echo "mdbook is not on PATH; install it with: cargo install mdbook --locked" >&2

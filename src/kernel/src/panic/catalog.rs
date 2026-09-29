@@ -19,7 +19,7 @@
 //!
 //! # The document
 //!
-//! `scripts/gen/gen-panic-catalog.py` reads this file, checks it — codes well
+//! `tools/common/gen/gen-panic-catalog.py` reads this file, checks it — codes well
 //! formed and unique, every entry listed in [`ALL`], every path in `see` real —
 //! and renders it into `docs/generated/PANICS.md`, so the explanations can be
 //! read without a machine that has just stopped. Its `--check` fails when the
@@ -67,7 +67,7 @@ pub(crate) static SHOOTDOWN_TIMEOUT: Explanation = Explanation {
         "A host that stopped running the named virtual processor, and kept running this one, \
          for longer than the count takes, which is the host's fault and not the kernel's.",
     ],
-    see: "kernel/src/smp.rs flush_tlb_everywhere; kernel/src/smp.rs patience; \
+    see: "src/kernel/src/smp.rs flush_tlb_everywhere; src/kernel/src/smp.rs patience; \
           docs/ROADMAP.md stage 4",
 };
 
@@ -90,7 +90,7 @@ pub(crate) static GRACE_PERIOD_TIMEOUT: Explanation = Explanation {
         "The named processor is halted or stuck with interrupts masked, so it takes no \
          interrupt at all.",
     ],
-    see: "kernel/src/smp.rs synchronize; kernel/src/smp.rs read_section; \
+    see: "src/kernel/src/smp.rs synchronize; src/kernel/src/smp.rs read_section; \
           docs/ROADMAP.md stage 4",
 };
 
@@ -115,7 +115,7 @@ pub(crate) static SHOOTDOWN_TURN_TIMEOUT: Explanation = Explanation {
         "A host so overcommitted that a virtual processor went unscheduled for seconds, which \
          is the host's fault and not the kernel's.",
     ],
-    see: "kernel/src/smp.rs flush_tlb_everywhere; docs/ROADMAP.md stage 4",
+    see: "src/kernel/src/smp.rs flush_tlb_everywhere; docs/ROADMAP.md stage 4",
 };
 
 /// For `this_logical_cpu` in `user/space.rs`, when an address space is
@@ -136,7 +136,7 @@ pub(crate) static SPACE_SET_WITHOUT_RECORD: Explanation = Explanation {
          the boot processor's record, or on a secondary before `install_secondary_record`.",
         "The per-CPU register was overwritten, so `smp::this_cpu` no longer finds the record.",
     ],
-    see: "kernel/src/user/space.rs install; kernel/src/smp.rs this_cpu; \
+    see: "src/kernel/src/user/space.rs install; src/kernel/src/smp.rs this_cpu; \
           docs/ROADMAP.md stage 6",
 };
 
@@ -157,7 +157,7 @@ pub(crate) static PRIVATE_OBJECT_SHARED: Explanation = Explanation {
         "A region's sharing flag changed after its object was attached, so an object attached \
          as shared now backs a private region.",
     ],
-    see: "kernel/src/user/space.rs remap; kernel/src/user/vmo.rs attach; \
+    see: "src/kernel/src/user/space.rs remap; src/kernel/src/user/vmo.rs attach; \
           docs/ROADMAP.md stage 6",
 };
 
@@ -179,8 +179,8 @@ pub(crate) static LOAD_REGISTRATION: Explanation = Explanation {
         "A registration list is full: another registration was added without raising the \
          bound its list declares (`power::FLUSHES`, `device::BOARD`).",
     ],
-    see: "kernel/src/main.rs register_load; kernel/src/hooks.rs; kernel/src/power.rs; \
-          kernel/src/init.rs; docs/certification/FINDINGS.md F-04 and F-08",
+    see: "src/kernel/src/main.rs register_load; src/kernel/src/hooks.rs; src/kernel/src/power.rs; \
+          src/kernel/src/init.rs; docs/certification/FINDINGS.md F-04 and F-08",
 };
 
 /// For an allocation the kernel makes while it comes up, before the first
@@ -194,7 +194,7 @@ pub(crate) static BOOT_OUT_OF_MEMORY: Explanation = Explanation {
               up there is nobody to report to: the structure being built is one every later \
               step depends on, such as the root job, a processor's run queue or the table of \
               processors. Those allocations are fatal by design and marked `FATAL-ALLOC` \
-              where they are made, and `scripts/check/check-fallible-alloc.py` lists them; one \
+              where they are made, and `tools/common/check/check-fallible-alloc.py` lists them; one \
               that stops through the standard library's allocation error handler before the \
               boot marker is reported here too. Reaching one means the machine does not have \
               the memory to run the kernel at all.",
@@ -203,8 +203,8 @@ pub(crate) static BOOT_OUT_OF_MEMORY: Explanation = Explanation {
          almost none of it as usable.",
         "An earlier boot step leaked or reserved most of memory, so a later one found none.",
     ],
-    see: "docs/certification/MEMORY-AND-TIMING.md; scripts/check/check-fallible-alloc.py; \
-          kernel/src/fallible.rs",
+    see: "docs/certification/MEMORY-AND-TIMING.md; tools/common/check/check-fallible-alloc.py; \
+          src/kernel/src/fallible.rs",
 };
 
 /// For the panic the standard library's allocation error handler raises,
@@ -220,7 +220,7 @@ pub(crate) static ALLOCATION_ABORTED: Explanation = Explanation {
               panic. After the boot it is reached only from code that has not been \
               converted to report failure -- the uncertified load, whose allocations share \
               the heap -- when memory really has run out. The item has none: \
-              `scripts/check/check-fallible-alloc.py` counts every allocating call in it and fails \
+              `tools/common/check/check-fallible-alloc.py` counts every allocating call in it and fails \
               the build on one that does not report failure.",
     causes: &[
         "Memory ran out, and the allocation that found it so was one of the infallible \
@@ -229,8 +229,8 @@ pub(crate) static ALLOCATION_ABORTED: Explanation = Explanation {
          and heap counts in the boot report and /proc/meminfo say whether memory was \
          being lost.",
     ],
-    see: "docs/certification/MEMORY-AND-TIMING.md; scripts/check/check-fallible-alloc.py; \
-          kernel/src/mm.rs",
+    see: "docs/certification/MEMORY-AND-TIMING.md; tools/common/check/check-fallible-alloc.py; \
+          src/kernel/src/mm.rs",
 };
 
 /// For `check_allocation_failure` in `stages_check.rs`.
@@ -258,7 +258,7 @@ pub(crate) static STAGE9_ALLOCATION: Explanation = Explanation {
          lost one, or left a space still translating it (`user/vmo.rs`'s chunked and \
          one-at-a-time fallbacks).",
     ],
-    see: "kernel/src/object/alloc_check.rs; kernel/src/fallible.rs; kernel/src/mm/reserve.rs; \
+    see: "src/kernel/src/object/alloc_check.rs; src/kernel/src/fallible.rs; src/kernel/src/mm/reserve.rs; \
           docs/certification/MEMORY-AND-TIMING.md",
 };
 
@@ -283,8 +283,8 @@ pub(crate) static STAGE9_REFUSALS: Explanation = Explanation {
         "A refused call took a handle, a packet or a message it then had nowhere to put.",
         "The cycle check's walk bound in `object/channel.rs` changed without the check.",
     ],
-    see: "kernel/src/syscall/native_check.rs; kernel/src/syscall/native.rs; \
-          kernel/src/object/channel.rs; libs/kernel/objects",
+    see: "src/kernel/src/syscall/native_check.rs; src/kernel/src/syscall/native.rs; \
+          src/kernel/src/object/channel.rs; src/lib/kernel/objects",
 };
 
 /// For `check_services` in `stages_check.rs`.
@@ -305,8 +305,8 @@ pub(crate) static SERVICES: Explanation = Explanation {
         "`devmgr` answered a request it should refuse, or answered with the wrong error.",
         "A failure's wording changed without its documentation.",
     ],
-    see: "kernel/src/service_check.rs; kernel/src/hooks.rs; kernel/src/claim.rs; \
-          kernel/src/devmgr.rs; kernel/src/iommu/check.rs; kernel/src/iommu/gate.rs",
+    see: "src/kernel/src/service_check.rs; src/kernel/src/hooks.rs; src/kernel/src/claim.rs; \
+          src/kernel/src/devmgr.rs; src/kernel/src/iommu/check.rs; src/kernel/src/iommu/gate.rs",
 };
 
 /// For `check_quotas` in `stages_check.rs`.
@@ -332,7 +332,7 @@ pub(crate) static STAGE9_QUOTAS: Explanation = Explanation {
          `CpuQueue::follow_group_share`), or its job's load was not kept as it came and went.",
         "A slot was not given back as its last hold went, or was freed while still held.",
     ],
-    see: "kernel/src/object/quota.rs; kernel/src/object/quota_check.rs; kernel/src/mm.rs; \
+    see: "src/kernel/src/object/quota.rs; src/kernel/src/object/quota_check.rs; src/kernel/src/mm.rs; \
           docs/certification/IMPLEMENTATION.md",
 };
 
@@ -360,7 +360,7 @@ pub(crate) static STAGE9_KMEM: Explanation = Explanation {
         "The kernel's account was not installed as the first job was made \
          (`quota::install_kernel_heap`), so nothing was charged at all.",
     ],
-    see: "kernel/src/fs/kmem_check.rs; libs/kernel/kmem/src/lib.rs; kernel/src/object/quota.rs; \
+    see: "src/kernel/src/fs/kmem_check.rs; src/lib/kernel/kmem/src/lib.rs; src/kernel/src/object/quota.rs; \
           docs/certification/IMPLEMENTATION.md W-15",
 };
 
@@ -390,7 +390,7 @@ pub(crate) static STAGE1_HANDOFF: Explanation = Explanation {
          without its fixups, because a copy was stripped with `--strip-all` rather than \
          `--strip-debug`; or a loader reported a move it did not make.",
     ],
-    see: "kernel/src/main.rs self_check and check_layout; kernel/src/early.rs; \
+    see: "src/kernel/src/main.rs self_check and check_layout; src/kernel/src/early.rs; \
           docs/certification/SPECULATION.md section 6; docs/ROADMAP.md stage 1",
 };
 
@@ -413,7 +413,7 @@ pub(crate) static MEMORY_BRING_UP: Explanation = Explanation {
          from the lowest RAM frame to the highest and so grows with the gaps between \
          banks of RAM; the message gives the bytes it needed.",
     ],
-    see: "kernel/src/mm.rs init; libs/kernel/frame; docs/ROADMAP.md stage 2",
+    see: "src/kernel/src/mm.rs init; src/lib/kernel/frame; docs/ROADMAP.md stage 2",
 };
 
 /// For `kmain` in `main.rs`, when `vmap::init` fails.
@@ -429,7 +429,7 @@ pub(crate) static VMAP_ARENA_BRING_UP: Explanation = Explanation {
          and `KERNEL_VMAP_SIZE` constants they are built from, are not page aligned or \
          leave no room; this is a bug in those constants, not something a machine can cause.",
     ],
-    see: "kernel/src/vmap.rs init; libs/proto/bootinfo; libs/kernel/vma",
+    see: "src/kernel/src/vmap.rs init; src/lib/proto/bootinfo; src/lib/kernel/vma",
 };
 
 /// For `check_allocators_and_traps` in `stages_check.rs`, when `mm::check::memory_check` fails.
@@ -451,7 +451,7 @@ pub(crate) static STAGE2_ALLOCATORS: Explanation = Explanation {
         "The frame allocator was given too little memory for the check: `no frame \
          available`, `no sixteen-frame block available` and `handed out nothing` mean it \
          ran out, not that it is wrong.",
-        "A change to `libs/kernel/frame` or `libs/kernel/heap` broke their bookkeeping, so the free frame \
+        "A change to `src/lib/kernel/frame` or `src/lib/kernel/heap` broke their bookkeeping, so the free frame \
          count or the heap's balance does not return to where it started.",
         "A change to the page table code left a mapping behind on unmap, or made a \
          permission change the descriptors do not show.",
@@ -459,8 +459,8 @@ pub(crate) static STAGE2_ALLOCATORS: Explanation = Explanation {
          the kernel image was mapped`): the refusal `mm::overlaps_image` makes is gone, or \
          memory bring-up did not record where the image is.",
     ],
-    see: "kernel/src/mm/check.rs memory_check; libs/kernel/frame; libs/kernel/heap; \
-          libs/kernel/paging; kernel/src/vmap.rs; docs/ROADMAP.md stage 2",
+    see: "src/kernel/src/mm/check.rs memory_check; src/lib/kernel/frame; src/lib/kernel/heap; \
+          src/lib/kernel/paging; src/kernel/src/vmap.rs; docs/ROADMAP.md stage 2",
 };
 
 /// For `kmain` in `main.rs`, when `finish_memory` fails.
@@ -494,8 +494,8 @@ pub(crate) static STAGE2_FINISH_MEMORY: Explanation = Explanation {
         "The memory map marks no loader or ACPI-reclaimable region inside the range the \
          per-frame array covers, so nothing was reclaimed.",
     ],
-    see: "kernel/src/main.rs finish_memory; kernel/src/mm/check.rs check_w_xor_x and \
-          check_sealed_image; kernel/src/mm.rs reclaim_boot_memory; docs/ROADMAP.md stage 2",
+    see: "src/kernel/src/main.rs finish_memory; src/kernel/src/mm/check.rs check_w_xor_x and \
+          check_sealed_image; src/kernel/src/mm.rs reclaim_boot_memory; docs/ROADMAP.md stage 2",
 };
 
 /// For `kmain` in `main.rs`, when `trap_check` fails.
@@ -529,7 +529,7 @@ pub(crate) static STAGE3_TRAPS: Explanation = Explanation {
         "Mapping a page in a region that already had its tables cost more than one frame, \
          which points at the page table code allocating a table it already had.",
     ],
-    see: "kernel/src/main.rs trap_check; kernel/src/trap.rs handle_page_fault; \
+    see: "src/kernel/src/main.rs trap_check; src/kernel/src/trap.rs handle_page_fault; \
           docs/ROADMAP.md stage 3",
 };
 
@@ -559,7 +559,7 @@ pub(crate) static STAGE3_TIMER: Explanation = Explanation {
         "An interrupt arrived on a line nothing registered for: a device firmware left \
          enabled, or a controller programmed to deliver somewhere unexpected.",
     ],
-    see: "kernel/src/main.rs timer_check; kernel/src/timer.rs; docs/ROADMAP.md stage 3",
+    see: "src/kernel/src/main.rs timer_check; src/kernel/src/timer.rs; docs/ROADMAP.md stage 3",
 };
 
 /// For `kmain` in `main.rs`, when `arch::init_interrupts` fails.
@@ -590,9 +590,9 @@ pub(crate) static INTERRUPT_BRING_UP: Explanation = Explanation {
         "The kernel address arena refused a device window for the controller, the HPET or \
          an I/O APIC, for want of address space or of frames for page tables.",
     ],
-    see: "kernel/src/arch/x86_64/mod.rs init_interrupts; kernel/src/arch/x86_64/apic.rs; \
-          kernel/src/arch/x86_64/clock.rs; kernel/src/arch/aarch64/gic.rs; \
-          kernel/src/arch/armv7a/mod.rs init_interrupts; docs/ROADMAP.md stage 3",
+    see: "src/kernel/src/arch/x86_64/mod.rs init_interrupts; src/kernel/src/arch/x86_64/apic.rs; \
+          src/kernel/src/arch/x86_64/clock.rs; src/kernel/src/arch/aarch64/gic.rs; \
+          src/kernel/src/arch/armv7a/mod.rs init_interrupts; docs/ROADMAP.md stage 3",
 };
 
 /// For `kmain` in `main.rs`, when `timer::init` fails.
@@ -607,7 +607,7 @@ pub(crate) static TIMER_REGISTRATION: Explanation = Explanation {
         "Code added to `kmain` before this point registered a handler on the same number, \
          or `timer::init` was called twice; nothing else registers a handler this early.",
     ],
-    see: "kernel/src/timer.rs init; kernel/src/irq.rs register",
+    see: "src/kernel/src/timer.rs init; src/kernel/src/irq.rs register",
 };
 
 /// For `kmain` in `main.rs`, when `console::input::check` or
@@ -629,7 +629,7 @@ pub(crate) static CONSOLE_INPUT: Explanation = Explanation {
          another early handler already holds, as a device tree giving two devices one \
          interrupt would.",
     ],
-    see: "kernel/src/console/input.rs check; kernel/src/irq.rs register",
+    see: "src/kernel/src/console/input.rs check; src/kernel/src/irq.rs register",
 };
 
 /// For `kmain` in `main.rs`, when `console::output::check` fails.
@@ -653,7 +653,7 @@ pub(crate) static CONSOLE_OUTPUT: Explanation = Explanation {
         "The check ran from a context that cannot sleep, which `sched::may_block` reports; \
          `kmain` calls it straight after the scheduler is started.",
     ],
-    see: "kernel/src/console/output.rs check; kernel/src/console.rs emit",
+    see: "src/kernel/src/console/output.rs check; src/kernel/src/console.rs emit",
 };
 
 /// For `kmain` in `main.rs`, when `logctl::check::run` fails.
@@ -661,7 +661,7 @@ pub(crate) static LOG_CONTROL: Explanation = Explanation {
     code: "FX-1008",
     title: "the log core did not serve the kernel log to a driver",
     meaning: "A driver whose device may carry the kernel log off the machine -- the Pixel 7's \
-              USB serial port -- reads it over a log control channel (`libs/proto/logctl`). The check \
+              USB serial port -- reads it over a log control channel (`src/lib/proto/logctl`). The check \
               claims the log as `log_control_create` does and plays the driver: a READ must be \
               answered with DATA holding the log's oldest bytes, the next READ with the bytes \
               after them, a second reader must be refused while the first holds the log, a \
@@ -677,7 +677,7 @@ pub(crate) static LOG_CONTROL: Explanation = Explanation {
         "The claim is not let go when the task ends, so `CLAIMED` stays set and every later \
          `log_control_create` answers `ALREADY_BOUND`.",
     ],
-    see: "kernel/src/logctl/check.rs; kernel/src/logctl/mod.rs; libs/proto/logctl",
+    see: "src/kernel/src/logctl/check.rs; src/kernel/src/logctl/mod.rs; src/lib/proto/logctl",
 };
 
 /// For `kmain` in `main.rs`, when `console::log_check::run` fails.
@@ -702,7 +702,7 @@ pub(crate) static CONSOLE_LOG: Explanation = Explanation {
         "The console stopped recording on one of its paths: `Writer::bytes`, `Unlocked`, or \
          `output::try_queue` for a task's write; or `Kind::Unlogged` is recorded after all.",
     ],
-    see: "kernel/src/console/log_check.rs; kernel/src/console/log.rs; kernel/src/console.rs",
+    see: "src/kernel/src/console/log_check.rs; src/kernel/src/console/log.rs; src/kernel/src/console.rs",
 };
 
 /// For `kmain` in `main.rs`, when `random::check` fails.
@@ -715,12 +715,12 @@ pub(crate) static RANDOM_GENERATOR: Explanation = Explanation {
               `AT_RANDOM` read this generator: one that repeats hands every program the same \
               stack canary and every TLS session the same key.",
     causes: &[
-        "A change to `libs/kernel/crng` that stopped `fill` from replacing the key, so each read \
+        "A change to `src/lib/kernel/crng` that stopped `fill` from replacing the key, so each read \
          starts from the same block; its host tests check the construction.",
         "A change to `random::fill` that no longer takes the lock around the generator, so \
          two reads copied one state.",
     ],
-    see: "kernel/src/random.rs; libs/kernel/crng",
+    see: "src/kernel/src/random.rs; src/lib/kernel/crng",
 };
 
 /// For `check_speculation` in `stages_check.rs`, when `arch::check_speculation` fails.
@@ -747,7 +747,7 @@ pub(crate) static SPECULATION_DEFENCES: Explanation = Explanation {
          which is where every switch barrier is issued.",
         "A change to an architecture's `clamp_index` that lets an out-of-bound index through.",
     ],
-    see: "kernel/src/arch/speculation.rs; kernel/src/arch/speculation_check.rs; \
+    see: "src/kernel/src/arch/speculation.rs; src/kernel/src/arch/speculation_check.rs; \
           docs/certification/SPECULATION.md",
 };
 
@@ -773,7 +773,7 @@ pub(crate) static STAGE3_MACHINE: Explanation = Explanation {
         "A change to how the console port or GIC version is chosen from the machine's \
          description.",
     ],
-    see: "kernel/src/arch/aarch64/check.rs; kernel/src/arch/armv7a/check.rs",
+    see: "src/kernel/src/arch/aarch64/check.rs; src/kernel/src/arch/armv7a/check.rs",
 };
 
 /// For `start_audit` in `main.rs`, when `audit::check::run` fails.
@@ -805,7 +805,7 @@ pub(crate) static AUDIT_STORE: Explanation = Explanation {
         "Bring-up's `start_audit` stopped recording one of the configuration items, or \
          `Store::start` stopped writing the whole id into the start-up record.",
     ],
-    see: "kernel/src/audit/check.rs; kernel/src/audit.rs; docs/certification/AUDIT.md",
+    see: "src/kernel/src/audit/check.rs; src/kernel/src/audit.rs; docs/certification/AUDIT.md",
 };
 
 /// For `bring_up_processors` in `main.rs`, when `smp::discover` fails.
@@ -830,9 +830,9 @@ pub(crate) static PROCESSOR_DISCOVERY: Explanation = Explanation {
         "The per-CPU register (`GS` base on x86-64, `TPIDR_EL1` on AArch64, `TPIDRPRW` on \
          ARMv7-A) did not keep the address written to it.",
     ],
-    see: "kernel/src/smp.rs discover; kernel/src/arch/x86_64/smp.rs describe_cpus; \
-          kernel/src/arch/aarch64/smp.rs describe_cpus; \
-          kernel/src/arch/armv7a/smp.rs describe_cpus; docs/ROADMAP.md stage 4",
+    see: "src/kernel/src/smp.rs discover; src/kernel/src/arch/x86_64/smp.rs describe_cpus; \
+          src/kernel/src/arch/aarch64/smp.rs describe_cpus; \
+          src/kernel/src/arch/armv7a/smp.rs describe_cpus; docs/ROADMAP.md stage 4",
 };
 
 /// For `bring_up_processors` in `main.rs`, when `smp::start_secondaries` fails.
@@ -861,8 +861,8 @@ pub(crate) static SECONDARY_START: Explanation = Explanation {
         "On ARMv7-A the entry sequence, a stack, a per-CPU record or the start block lies \
          above 4 GiB and cannot be passed in a 32-bit register.",
     ],
-    see: "kernel/src/smp.rs start_secondaries; kernel/src/arch/x86_64/smp.rs CpuStarter; \
-          kernel/src/arch/aarch64/smp.rs CpuStarter; kernel/src/arch/armv7a/smp.rs CpuStarter; \
+    see: "src/kernel/src/smp.rs start_secondaries; src/kernel/src/arch/x86_64/smp.rs CpuStarter; \
+          src/kernel/src/arch/aarch64/smp.rs CpuStarter; src/kernel/src/arch/armv7a/smp.rs CpuStarter; \
           docs/ROADMAP.md stage 4",
 };
 
@@ -884,7 +884,7 @@ pub(crate) static SECONDARY_GDT: Explanation = Explanation {
         "The vmap arena had no address space or frames left for another guard-paged stack; \
          every processor started also takes a kernel stack from the same arena.",
     ],
-    see: "kernel/src/arch/x86_64/gdt.rs init_secondary; kernel/src/arch/x86_64/smp.rs \
+    see: "src/kernel/src/arch/x86_64/gdt.rs init_secondary; src/kernel/src/arch/x86_64/smp.rs \
           secondary_start; docs/ROADMAP.md stage 4",
 };
 
@@ -904,8 +904,8 @@ pub(crate) static SECONDARY_NO_RECORD: Explanation = Explanation {
          memory when the new core, whose caches are off, read it; `clean_to_poc` after the \
          write is what prevents that.",
     ],
-    see: "kernel/src/smp.rs secondary_main; kernel/src/arch/x86_64/smp.rs; \
-          kernel/src/arch/aarch64/smp.rs; kernel/src/arch/armv7a/smp.rs",
+    see: "src/kernel/src/smp.rs secondary_main; src/kernel/src/arch/x86_64/smp.rs; \
+          src/kernel/src/arch/aarch64/smp.rs; src/kernel/src/arch/armv7a/smp.rs",
 };
 
 /// For `secondary_main` in `smp.rs`, when `check_this_cpu` fails.
@@ -925,7 +925,7 @@ pub(crate) static SECONDARY_RECORD_MISMATCH: Explanation = Explanation {
         "The per-CPU register (`GS` base on x86-64, `TPIDR_EL1` on AArch64, `TPIDRPRW` on \
          ARMv7-A) did not keep the address written to it.",
     ],
-    see: "kernel/src/smp.rs check_this_cpu; kernel/src/smp.rs secondary_main",
+    see: "src/kernel/src/smp.rs check_this_cpu; src/kernel/src/smp.rs secondary_main",
 };
 
 /// For `bring_up_processors` in `main.rs`, when fewer processors are online than described.
@@ -941,7 +941,7 @@ pub(crate) static PROCESSORS_MISSING: Explanation = Explanation {
         "`start_secondaries` returned success without waiting for every processor after the \
          boot one, which its loop is written to prevent.",
     ],
-    see: "kernel/src/main.rs bring_up_processors; kernel/src/smp.rs start_secondaries",
+    see: "src/kernel/src/main.rs bring_up_processors; src/kernel/src/smp.rs start_secondaries",
 };
 
 /// For `bring_up_processors` in `main.rs`, when `smp::check::run` fails.
@@ -975,8 +975,8 @@ pub(crate) static STAGE4_SMP: Explanation = Explanation {
          waiting for a shootdown recorded its flushes for the processor it left, because the \
          wait used a per-CPU record read before the move rather than the processor it was on.",
     ],
-    see: "kernel/src/smp/check.rs run; kernel/src/smp/check.rs migrating_shootdown; \
-          kernel/src/smp.rs run_everywhere; docs/ROADMAP.md stage 4",
+    see: "src/kernel/src/smp/check.rs run; src/kernel/src/smp/check.rs migrating_shootdown; \
+          src/kernel/src/smp.rs run_everywhere; docs/ROADMAP.md stage 4",
 };
 
 /// For `start_scheduler` in `main.rs`, when `sched::init` fails.
@@ -997,7 +997,7 @@ pub(crate) static SCHEDULER_BRING_UP: Explanation = Explanation {
         "The vmap arena had no stack left for the boot processor's idle task.",
         "`ferrix_sched` rejected the scheduler's slice constant when a run queue was built.",
     ],
-    see: "kernel/src/sched/mod.rs init; kernel/src/sched/mod.rs wait_for_processors; \
+    see: "src/kernel/src/sched/mod.rs init; src/kernel/src/sched/mod.rs wait_for_processors; \
           docs/ROADMAP.md stage 5",
 };
 
@@ -1025,7 +1025,7 @@ pub(crate) static SCHEDULE_WITH_PREEMPTION_HELD: Explanation = Explanation {
          held; the message names the file and line that last raised the count. An enable \
          that finds nothing to lower now stops the machine itself, naming the same site.",
     ],
-    see: "kernel/src/sync.rs; kernel/src/sched/mod.rs PREEMPT_OFF; libs/kernel/sync/src/lib.rs \
+    see: "src/kernel/src/sync.rs; src/kernel/src/sched/mod.rs PREEMPT_OFF; src/lib/kernel/sync/src/lib.rs \
           PreemptSpinLock",
 };
 
@@ -1056,7 +1056,7 @@ pub(crate) static STAGE5_SCHEDULER: Explanation = Explanation {
          switch away from the idle task, so an idle task preempted on its way out of a halt \
          leaves its processor marked idle while another task runs.",
     ],
-    see: "kernel/src/sched/check.rs run; kernel/src/sched/mod.rs; docs/ROADMAP.md stage 5",
+    see: "src/kernel/src/sched/check.rs run; src/kernel/src/sched/mod.rs; docs/ROADMAP.md stage 5",
 };
 
 /// For `check_user_memory` in `stages_check.rs`, when `user::check::run` fails.
@@ -1082,7 +1082,7 @@ pub(crate) static STAGE6_USER_MEMORY: Explanation = Explanation {
         "The copy-on-write path let a write through to a frame still shared with the other \
          address space.",
     ],
-    see: "kernel/src/user/check.rs run; kernel/src/user/space.rs; kernel/src/user/vmo.rs; \
+    see: "src/kernel/src/user/check.rs run; src/kernel/src/user/space.rs; src/kernel/src/user/vmo.rs; \
           docs/ROADMAP.md stage 6",
 };
 
@@ -1110,8 +1110,8 @@ pub(crate) static STAGE6_REVERSE_MAP: Explanation = Explanation {
         "A decommit, replace or move touched a held page, or backed off after already \
          invalidating it.",
     ],
-    see: "kernel/src/user/rmap_check.rs run; kernel/src/user/vmo.rs retire; \
-          kernel/src/user/space.rs forget_pages; kernel/src/smp.rs flush_tlb_pages; \
+    see: "src/kernel/src/user/rmap_check.rs run; src/kernel/src/user/vmo.rs retire; \
+          src/kernel/src/user/space.rs forget_pages; src/kernel/src/smp.rs flush_tlb_pages; \
           docs/ROADMAP.md stage 6",
 };
 
@@ -1131,7 +1131,7 @@ pub(crate) static STAGE10_PCI: Explanation = Explanation {
          device tree `reg` taken the other way.",
         "A bus's window could not be mapped, because the vmap arena is exhausted or the physical \
          address is beyond what this architecture's page tables can express.",
-        "`libs/platform/pci` refused a BAR or a capability list. On QEMU that means the accessor read the \
+        "`src/lib/platform/pci` refused a BAR or a capability list. On QEMU that means the accessor read the \
          wrong width or offset, not that the device is malformed.",
         "The virtio-rng self-check in `pci/virtio.rs` saw a completion that cannot be right: a \
          request nobody made, a length it was not given, or bytes it never wrote — which is what \
@@ -1144,7 +1144,7 @@ pub(crate) static STAGE10_PCI: Explanation = Explanation {
          completion alone is not this — QEMU's device completes a refused write through a bounce \
          buffer it then drops, and the unit's record is the answer.",
     ],
-    see: "kernel/src/pci.rs check; libs/platform/pci; libs/platform/acpi Mcfg; libs/platform/fdt ecam_hosts; \
+    see: "src/kernel/src/pci.rs check; src/lib/platform/pci; src/lib/platform/acpi Mcfg; src/lib/platform/fdt ecam_hosts; \
           docs/ROADMAP.md stage 10",
 };
 
@@ -1166,10 +1166,10 @@ pub(crate) static STAGE11_MOUNT: Explanation = Explanation {
          driver's request layout and the pin's device addresses through the ring's data copy \
          to the volume reader and the page source, or the fixture and the manifest disagree.",
         "A directory or a link is missing or of the wrong kind: lookup, readdir or readlink \
-         in libs/fs/btrfs-vfs changed what it answers.",
+         in src/lib/fs/btrfs-vfs changed what it answers.",
     ],
-    see: "kernel/src/fs/btrfs_check.rs; kernel/src/fs/btrfs.rs; libs/fs/btrfs-vfs; \
-          xtask/src/btrfs_disk.rs; docs/ROADMAP.md stage 11",
+    see: "src/kernel/src/fs/btrfs_check.rs; src/kernel/src/fs/btrfs.rs; src/lib/fs/btrfs-vfs; \
+          tools/common/xtask/src/btrfs_disk.rs; docs/ROADMAP.md stage 11",
 };
 
 /// For `check_cgroupfs` in `stages_check.rs`, when `fs::cgroupfs::check` fails.
@@ -1219,39 +1219,39 @@ pub(crate) static STAGE13_CGROUPFS: Explanation = Explanation {
               cpu.weight for writing; still read 16 MiB; and accept a limit on a job the \
               delegatee made with job_create.",
     causes: &[
-        "`job_set_limit` in kernel/src/syscall/native.rs asks for MANAGE rather than \
-         SET_LIMIT, or `job_for_cgroup` in kernel/src/fs/cgroupfs.rs grants SET_LIMIT without \
+        "`job_set_limit` in src/kernel/src/syscall/native.rs asks for MANAGE rather than \
+         SET_LIMIT, or `job_for_cgroup` in src/kernel/src/fs/cgroupfs.rs grants SET_LIMIT without \
          judging the limit files' write permission (`limit_metadata`), so whoever may fill a \
          delegated cgroup may also lift its limits.",
-        "`load_native` in kernel/src/syscall/launch.rs did not take the creator's \
-         credentials, or `process_create` in kernel/src/syscall/native.rs did not pass the \
+        "`load_native` in src/kernel/src/syscall/launch.rs did not take the creator's \
+         credentials, or `process_create` in src/kernel/src/syscall/native.rs did not pass the \
          caller as the creator, so a native process started as root \
          (`Credentials::root()`, what `Process::new` gives) whoever made it.",
-        "`forked_into` in kernel/src/syscall/process.rs or `clone_with`/`cgroup_target` in \
-         kernel/src/syscall/family.rs put the child in its parent's job, or \
+        "`forked_into` in src/kernel/src/syscall/process.rs or `clone_with`/`cgroup_target` in \
+         src/kernel/src/syscall/family.rs put the child in its parent's job, or \
          `cgroupfs::clone_target` did not recognise a cgroupfs directory.",
-        "`attach_permissions` in kernel/src/fs/cgroupfs.rs did not find the common ancestor, \
+        "`attach_permissions` in src/kernel/src/fs/cgroupfs.rs did not find the common ancestor, \
          or judged the move as someone other than the file's opener; or `set_node`/`node` \
          lost an owner, so a lookup reports root's.",
         "`Job::remove_named_child` did not mark the job removed, or `count_in_checked` and \
          `new_named_child` did not look.",
-        "`EventsFile` in kernel/src/fs/cgroupfs.rs does not name the job's `events` queue in \
+        "`EventsFile` in src/kernel/src/fs/cgroupfs.rs does not name the job's `events` queue in \
          `poll_queues`, or does not compare the queue's wake count with the one it last \
          rendered at; or `job::notify` did not wake the queue at the flip.",
         "`poll::revents`, `poll::select_sets` or epoll's `bits` lost `Readiness::priority`.",
-        "`Job::new_named_child`, `remove_named_child` or `children` in kernel/src/object/job.rs \
+        "`Job::new_named_child`, `remove_named_child` or `children` in src/kernel/src/object/job.rs \
          lost a named child, or `room_for_a_child` reads the limits wrongly.",
         "`Process::move_to` did not move the process, or its job's counts, so cgroup.procs or \
          cgroup.events disagree with where the process is.",
         "`Job::kill_members` did not find the member through the registry, or sealed the job.",
         "`job::notify` did not fire the job's EMPTY registrations at the flip, `Job::observe` \
          did not fire one on an empty job at once, or `Job::signals` does not report EMPTY; or \
-         `job_for_cgroup` in kernel/src/syscall/native.rs judged the rights by someone other \
+         `job_for_cgroup` in src/kernel/src/syscall/native.rs judged the rights by someone other \
          than the caller, or `cgroupfs::directory_job` did not recognise a cgroup directory.",
-        "A write's text is parsed differently from Linux's: libs/fs/cgroupfs, whose host tests \
+        "A write's text is parsed differently from Linux's: src/lib/fs/cgroupfs, whose host tests \
          pin each parse.",
     ],
-    see: "kernel/src/fs/cgroupfs.rs; kernel/src/object/job.rs; libs/fs/cgroupfs; \
+    see: "src/kernel/src/fs/cgroupfs.rs; src/kernel/src/object/job.rs; src/lib/fs/cgroupfs; \
           docs/CGROUPS.md",
 };
 
@@ -1276,14 +1276,14 @@ pub(crate) static SYSFS: Explanation = Explanation {
               refuses them, statfs says SYSFS_MAGIC, and cgroup2 mounts on fs/cgroup.",
     causes: &[
         "A directory lists a name its lookup does not find, or the other way round: \
-         `entries` in kernel/src/fs/sysfs.rs and a core's list disagree.",
+         `entries` in src/kernel/src/fs/sysfs.rs and a core's list disagree.",
         "A link's target is spelt wrongly: `path_of` and the directories disagree about where \
-         something is, or libs/fs/sysfs's `path::relative` climbs to the wrong ancestor.",
+         something is, or src/lib/fs/sysfs's `path::relative` climbs to the wrong ancestor.",
         "A core stopped recording the device node its driver serves (`Origin` in devfs, \
          `net_ring::node_of`, `Card::node`), so a device is shown in the wrong directory.",
-        "A format in libs/fs/sysfs changed; its host tests pin each against Linux's.",
+        "A format in src/lib/fs/sysfs changed; its host tests pin each against Linux's.",
     ],
-    see: "kernel/src/fs/sysfs.rs; kernel/src/fs/sysfs/check.rs; libs/fs/sysfs; docs/SYSFS.md",
+    see: "src/kernel/src/fs/sysfs.rs; src/kernel/src/fs/sysfs/check.rs; src/lib/fs/sysfs; docs/SYSFS.md",
 };
 
 /// For `check_btrfs_write` in `main.rs`, when `fs::btrfs_write_check::run`
@@ -1302,7 +1302,7 @@ pub(crate) static STAGE12_WRITE: Explanation = Explanation {
               again — replaying any log the kill left — and every file whose trailer says its \
               body was made durable is checked against that trailer.",
     causes: &[
-        "The mount failed: the disk takes no writes, or the volume is one libs/fs/btrfs-write will \
+        "The mount failed: the disk takes no writes, or the volume is one src/lib/fs/btrfs-write will \
          not maintain (a subvolume, quotas), which is EROFS, or a log left by a crash would not \
          replay.",
         "A file read back short or with the wrong CRC-32C: the write path put an extent, a \
@@ -1314,18 +1314,18 @@ pub(crate) static STAGE12_WRITE: Explanation = Explanation {
          the back-references or the orphan bookkeeping disagree.",
         "After a power failure, a file's bytes are not the ones its trailer promised: a log \
          or a commit that completed was rolled back, or replay put older extents under newer \
-         stat data. libs/fs/btrfs-write's powerfail tests reproduce this on the host, faster.",
+         stat data. src/lib/fs/btrfs-write's powerfail tests reproduce this on the host, faster.",
     ],
-    see: "kernel/src/fs/btrfs_write_check.rs; kernel/src/fs/btrfs_powerfail.rs; \
-          kernel/src/fs/btrfs.rs; libs/fs/btrfs-vfs rw; libs/fs/btrfs-write; xtask/src/btrfs_disk.rs; \
-          xtask/src/powerfail.rs; docs/ROADMAP.md stage 12",
+    see: "src/kernel/src/fs/btrfs_write_check.rs; src/kernel/src/fs/btrfs_powerfail.rs; \
+          src/kernel/src/fs/btrfs.rs; src/lib/fs/btrfs-vfs rw; src/lib/fs/btrfs-write; tools/common/xtask/src/btrfs_disk.rs; \
+          tools/common/xtask/src/powerfail.rs; docs/ROADMAP.md stage 12",
 };
 
 /// For `check_net` in `main.rs`, when the net core's self-check fails.
 pub(crate) static NET_CORE: Explanation = Explanation {
     code: "FX-1150",
     title: "the net core did not carry a packet round its own loopback",
-    meaning: "The net core is `libs/network/net` behind one lock, driven by a kernel task. Its check \
+    meaning: "The net core is `src/lib/network/net` behind one lock, driven by a kernel task. Its check \
               uses the loopback and nothing else, so it passes on a machine with no network \
               device: a datagram sent to a bound port must arrive with its sender's address, a \
               datagram to an empty port must earn ECONNREFUSED from the unreachable this host \
@@ -1336,7 +1336,7 @@ pub(crate) static NET_CORE: Explanation = Explanation {
               socket binding an overlapping address on it, or listening beside it having bound \
               first, must be EADDRINUSE though both set SO_REUSEADDR.",
     causes: &[
-        "`Stack::port_taken` in libs/network/net let SO_REUSEADDR lift the conflict with a \
+        "`Stack::port_taken` in src/lib/network/net let SO_REUSEADDR lift the conflict with a \
          socket already listening, or `Stack::listen` no longer checks for a listener on an \
          overlapping address and port (`listener_on`).",
         "The loopback interface is not up, or does not own 127.0.0.1 and ::1: `Stack::new` no \
@@ -1348,10 +1348,10 @@ pub(crate) static NET_CORE: Explanation = Explanation {
         "A blocking call waited for ever: the wait's condition and what wakes it disagree, or \
          `NetCore::progress` is no longer woken after the stack moves.",
         "A connection was refused that should have been made, or made that should have been \
-         refused: the listener lookup in `libs/network/net`'s TCP input, or the reset it sends a \
+         refused: the listener lookup in `src/lib/network/net`'s TCP input, or the reset it sends a \
          segment with nowhere to go.",
     ],
-    see: "kernel/src/net/check.rs; kernel/src/net/mod.rs; libs/network/net; libs/network/nettcp; \
+    see: "src/kernel/src/net/check.rs; src/kernel/src/net/mod.rs; src/lib/network/net; src/lib/network/nettcp; \
           docs/ROADMAP.md",
 };
 
@@ -1374,14 +1374,14 @@ pub(crate) static NET_RING: Explanation = Explanation {
          can now be copied.",
         "No slot was posted: `Serving::post_receives` stopped filling the ring, which is a \
          driver with no buffers and an interface that silently drops every packet.",
-        "The ARP request was not answered: it never reached `libs/network/net`'s input path, the \
+        "The ARP request was not answered: it never reached `src/lib/network/net`'s input path, the \
          interface has no address, or the reply was queued for an interface nobody drains.",
         "The interface outlived its driver: `Serving::finish` no longer takes it out of the net \
          core, so a route can still point at a device that is gone.",
         "The ring's task did not stop when the control channel closed, which a frame count \
          taken after the check would then see as a leak.",
     ],
-    see: "kernel/src/net_ring/check.rs; kernel/src/net_ring/mod.rs; libs/proto/netring; \
+    see: "src/kernel/src/net_ring/check.rs; src/kernel/src/net_ring/mod.rs; src/lib/proto/netring; \
           docs/NET-RING.md",
 };
 
@@ -1399,7 +1399,7 @@ pub(crate) static NETLINK: Explanation = Explanation {
               getsockname reported, which is what libnetlink checks before it believes any of \
               it.",
     causes: &[
-        "A reply could not be walked back: `libs/network/netlink`'s builder and its walk disagree about \
+        "A reply could not be walked back: `src/lib/network/netlink`'s builder and its walk disagree about \
          a length or the padding between messages, which no host test covers if the two changed \
          together.",
         "A dump answered with nothing, or without the loopback: `RTM_GETLINK` no longer reaches \
@@ -1407,14 +1407,14 @@ pub(crate) static NETLINK: Explanation = Explanation {
         "An address or a route was accepted and did not appear, or was removed and stayed: the \
          handler read the wrong attribute, or acted on a different interface from the one the \
          message named.",
-        "A refusal came back as something else: the order of the checks in `kernel/src/net/\
+        "A refusal came back as something else: the order of the checks in `src/kernel/src/net/\
          netlink/route.rs` changed, so an unknown type is answered before it is refused.",
         "A reply was addressed to another port or another sequence number: the socket's port \
          identifier is not what `getsockname` reports, or a reply no longer echoes the request's \
          sequence number -- which is silent breakage, because a program filters those replies \
          out and then waits for ever.",
     ],
-    see: "kernel/src/net/netlink/check.rs; kernel/src/net/netlink/route.rs; libs/network/netlink; \
+    see: "src/kernel/src/net/netlink/check.rs; src/kernel/src/net/netlink/route.rs; src/lib/network/netlink; \
           docs/ROADMAP.md",
 };
 
@@ -1431,14 +1431,14 @@ pub(crate) static DEVMGR_BY_INIT: Explanation = Explanation {
               process_start on the caller's handle to the started devmgr is BAD_STATE and gives \
               it nothing, and a second devmgr_start while devmgr lives is ALREADY_BOUND.",
     causes: &[
-        "`devmgr_start` in kernel/src/devmgr.rs put the channel's end in the caller's table, \
+        "`devmgr_start` in src/kernel/src/devmgr.rs put the channel's end in the caller's table, \
          or `start_program` did not put it in devmgr's.",
         "A call on a process handle reaches into the process: `process_start` in \
-         kernel/src/syscall/native.rs started or gave something to a process already started.",
+         src/kernel/src/syscall/native.rs started or gave something to a process already started.",
         "`may_start_again` did not see the devmgr it started as living: its exit record was \
          not kept, or was closed early.",
     ],
-    see: "kernel/src/devmgr.rs; kernel/src/object/mod.rs; kernel/src/syscall/native.rs; \
+    see: "src/kernel/src/devmgr.rs; src/kernel/src/object/mod.rs; src/kernel/src/syscall/native.rs; \
           docs/INIT.md §7.3; docs/certification/ITEM.md §5",
 };
 
@@ -1454,12 +1454,12 @@ pub(crate) static ROOT_PID1: Explanation = Explanation {
               and working directory must be the volume's, and a fork of pid 1 must see the \
               volume as /.",
     causes: &[
-        "`switch_to` in kernel/src/fs/root_disk.rs published the root without moving pid 1, \
+        "`switch_to` in src/kernel/src/fs/root_disk.rs published the root without moving pid 1, \
          or moved another process.",
         "A fork does not copy its parent's root (`Process::forked` in \
-         kernel/src/syscall/process.rs).",
+         src/kernel/src/syscall/process.rs).",
     ],
-    see: "kernel/src/fs/root_disk.rs; docs/INIT.md §7.3; docs/certification/ITEM.md",
+    see: "src/kernel/src/fs/root_disk.rs; docs/INIT.md §7.3; docs/certification/ITEM.md",
 };
 
 /// For `check_devmgr` in `main.rs`, when `devmgr::start` fails.
@@ -1474,13 +1474,13 @@ pub(crate) static STAGE10_DEVMGR: Explanation = Explanation {
               whose driver died. The boot's block drivers come from it from then on.",
     causes: &[
         "A driver the manifest names is not in the image, or its image does not fit a VMO: \
-         `xtask/src/native.rs` and the initramfs disagree.",
+         `tools/common/xtask/src/native.rs` and the initramfs disagree.",
         "`/sbin/devmgr` does not load as a native program, or could not be claimed to start.",
-        "devmgr exited before reporting: its exit status names the step (see `native/devmgr`).",
+        "devmgr exited before reporting: its exit status names the step (see `src/user/native/devmgr`).",
         "devmgr reported nothing within twenty seconds: a driver did not bring its device up, \
          or the kernel never sent PUBLISHED for a disk it accepted.",
     ],
-    see: "kernel/src/devmgr.rs; native/devmgr/src/main.rs; docs/DEVMGR.md; docs/ROADMAP.md \
+    see: "src/kernel/src/devmgr.rs; src/user/native/devmgr/src/main.rs; docs/DEVMGR.md; docs/ROADMAP.md \
           stage 10",
 };
 
@@ -1498,7 +1498,7 @@ pub(crate) static STAGE10_DRIVER: Explanation = Explanation {
               to match what `xtask` wrote into the test disk. The driver is left running.",
     causes: &[
         "The driver exited before publishing: the line above this report gives its exit \
-         status, which is the step `native/drivers/blk` stopped at (1 START, 2 identity, 3 registers, \
+         status, which is the step `src/user/native/drivers/block/virtio-blk` stopped at (1 START, 2 identity, 3 registers, \
          4 memory, 5 device bring-up, 6 ring or HELLO, 7 events), or from 20 up the fault that \
          stopped it serving (its `fault_status`: 23 the device refused a request, 30 up a \
          virtqueue check).",
@@ -1506,9 +1506,9 @@ pub(crate) static STAGE10_DRIVER: Explanation = Explanation {
          task did not publish, or the device never came up under TCG within the patience.",
         "A sector came back wrong or failed: the driver's request layout, the pin's device \
          addresses, the IOMMU domain, or the ring's data copy disagree with the device.",
-        "The initramfs carries no `/sbin/blk`: `xtask/src/native.rs` no longer lists it.",
+        "The initramfs carries no `/sbin/blk`: `tools/common/xtask/src/native.rs` no longer lists it.",
     ],
-    see: "kernel/src/block_ring/driver_check.rs; native/drivers/blk/src/main.rs; docs/BLOCK-RING.md; \
+    see: "src/kernel/src/block_ring/driver_check.rs; src/user/native/drivers/block/virtio-blk/src/main.rs; docs/BLOCK-RING.md; \
           docs/ROADMAP.md stage 10",
 };
 
@@ -1542,7 +1542,7 @@ pub(crate) static STAGE10_RING: Explanation = Explanation {
         "The second round did not give every frame back: the ring's VMO holds, its task's \
          stack or the registry leak.",
     ],
-    see: "kernel/src/block_ring/mod.rs; kernel/src/block_ring/check.rs; docs/BLOCK-RING.md; \
+    see: "src/kernel/src/block_ring/mod.rs; src/kernel/src/block_ring/check.rs; docs/BLOCK-RING.md; \
           docs/ROADMAP.md stage 10",
 };
 
@@ -1566,8 +1566,8 @@ pub(crate) static STAGE10_IOMMU: Explanation = Explanation {
          unpinned.",
         "No frame could be allocated for the check.",
     ],
-    see: "kernel/src/iommu.rs Domain; kernel/src/iommu/check.rs check_domains; \
-          kernel/src/device.rs DeviceNode::domain; \
+    see: "src/kernel/src/iommu.rs Domain; src/kernel/src/iommu/check.rs check_domains; \
+          src/kernel/src/device.rs DeviceNode::domain; \
           docs/ARCHITECTURE.md section 7; docs/ROADMAP.md stage 10",
 };
 
@@ -1610,10 +1610,10 @@ pub(crate) static STAGE10_DMA_FAULT: Explanation = Explanation {
          names the record that was full. QEMU's unit never overflows on one device's faults, \
          so there it means a second device faulted.",
     ],
-    see: "kernel/src/iommu.rs audit_faults; kernel/src/iommu/check.rs check_dma_faults; \
-          kernel/src/pci/virtio.rs probe_out_of_domain; \
-          kernel/src/iommu/vtd.rs Unit::take_fault; kernel/src/iommu/smmuv3.rs \
-          Unit::take_fault; xtask/src/dma_faults.rs; \
+    see: "src/kernel/src/iommu.rs audit_faults; src/kernel/src/iommu/check.rs check_dma_faults; \
+          src/kernel/src/pci/virtio.rs probe_out_of_domain; \
+          src/kernel/src/iommu/vtd.rs Unit::take_fault; src/kernel/src/iommu/smmuv3.rs \
+          Unit::take_fault; tools/common/xtask/src/dma_faults.rs; \
           docs/certification/VULNERABILITY-ANALYSIS.md T.DMA",
 };
 
@@ -1639,7 +1639,7 @@ pub(crate) static STAGE10_DEVICES: Explanation = Explanation {
         "`DeviceNode::pci` minted an aperture from a BAR whose size or address enumeration had \
          not checked.",
     ],
-    see: "kernel/src/device.rs publish; kernel/src/pci.rs; docs/ROADMAP.md stage 10",
+    see: "src/kernel/src/device.rs publish; src/kernel/src/pci.rs; docs/ROADMAP.md stage 10",
 };
 
 /// For `check_devices` in `main.rs`, when the GICv2 distributor check fails.
@@ -1664,7 +1664,7 @@ pub(crate) static STAGE10_DISTRIBUTOR: Explanation = Explanation {
         "The check could not put its lines back as it found them, or a core never reached \
          its rendezvous.",
     ],
-    see: "kernel/src/arch/arm_common/gicv2.rs rmw; kernel/src/arch/arm_common/gicv2/check.rs; \
+    see: "src/kernel/src/arch/arm_common/gicv2.rs rmw; src/kernel/src/arch/arm_common/gicv2/check.rs; \
           docs/certification/FINDINGS.md F-50",
 };
 
@@ -1685,17 +1685,17 @@ pub(crate) static STAGE8_PATH_CALLS: Explanation = Explanation {
               device.",
     causes: &[
         "`arch::STAT_LAYOUT` names the wrong `struct stat` for this architecture, or a layout in \
-         `libs/proto/linux-abi` moved a field.",
+         `src/lib/proto/linux-abi` moved a field.",
         "An arm of `syscall::path::dispatch` reads its arguments in the wrong order or at the \
          wrong width.",
-        "The namespace in `libs/fs/vfs` changed what a walk, a rename or a directory cursor does.",
+        "The namespace in `src/lib/fs/vfs` changed what a walk, a rename or a directory cursor does.",
         "/tmp is not mounted, or a previous run left /tmp/pathcheck behind.",
         "`fs::devfs::attach_device` is not called from `openat`, or `devfs::open_char_device` \
          matches numbers in a different encoding from the one `mknodat` stores.",
     ],
-    see: "kernel/src/syscall/check.rs run_paths; kernel/src/syscall/path.rs; \
-          kernel/src/fs/devfs.rs; \
-          kernel/src/syscall/stat.rs; libs/fs/vfs; docs/ROADMAP.md stage 8",
+    see: "src/kernel/src/syscall/check.rs run_paths; src/kernel/src/syscall/path.rs; \
+          src/kernel/src/fs/devfs.rs; \
+          src/kernel/src/syscall/stat.rs; src/lib/fs/vfs; docs/ROADMAP.md stage 8",
 };
 
 /// For `check_native_objects` in `stages_check.rs`, when `object::check::run` fails.
@@ -1724,7 +1724,7 @@ pub(crate) static STAGE9_OBJECTS: Explanation = Explanation {
               kernel failing any of these would give userspace drivers a capability system that \
               confines nothing.",
     causes: &[
-        "The handle table in `libs/kernel/objects` or the rights rule in `libs/proto/native-abi` changed, so \
+        "The handle table in `src/lib/kernel/objects` or the rights rule in `src/lib/proto/native-abi` changed, so \
          a closed handle resolves again or a duplicate gains a right.",
         "`Endpoint::write` took the sender's handles before the peer's queue had accepted the \
          message, so a refused send lost them.",
@@ -1742,8 +1742,8 @@ pub(crate) static STAGE9_OBJECTS: Explanation = Explanation {
         "`object::dispose` stopped draining, or an object was dropped under a lock its drop \
          needs, so the frames behind a VMO queued in a closed channel were never freed.",
     ],
-    see: "kernel/src/object/check.rs run; kernel/src/syscall/native.rs; \
-          kernel/src/object/channel.rs; docs/ROADMAP.md stage 9",
+    see: "src/kernel/src/object/check.rs run; src/kernel/src/syscall/native.rs; \
+          src/kernel/src/object/channel.rs; docs/ROADMAP.md stage 9",
 };
 
 /// For `check_syscalls` in `stages_check.rs`, when `syscall::check::run` fails.
@@ -1760,7 +1760,7 @@ pub(crate) static STAGE7_SYSCALLS: Explanation = Explanation {
     causes: &[
         "The kernel was built with another architecture's number table behind \
          `arch::decode_syscall`.",
-        "The number tables or the errno encoding in `libs/proto/linux-abi` changed, so a \
+        "The number tables or the errno encoding in `src/lib/proto/linux-abi` changed, so a \
          credential call has no number on this architecture or ENOSYS no longer encodes \
          as -38.",
         "A handler added to the dispatch table returns `Outcome::Enter` for an ordinary call \
@@ -1783,7 +1783,7 @@ pub(crate) static STAGE7_SYSCALLS: Explanation = Explanation {
          parent before the new parent's list holds it, or keeps a reaper that has ended \
          (the `orphan` messages).",
     ],
-    see: "kernel/src/syscall/check.rs run; kernel/src/syscall/mod.rs dispatch; libs/proto/linux-abi; \
+    see: "src/kernel/src/syscall/check.rs run; src/kernel/src/syscall/mod.rs dispatch; src/lib/proto/linux-abi; \
           docs/ROADMAP.md stage 7",
 };
 
@@ -1797,16 +1797,16 @@ pub(crate) static STAGE8_ROOT: Explanation = Explanation {
               file. The archive is read through the direct map from memory the loader \
               reserved as `Initrd`.",
     causes: &[
-        "The archive is malformed or truncated: `xtask/src/initramfs.rs` wrote something the \
-         newc reader in `libs/fs/cpio` refuses, or the loader read less of FERRIX/INITRD.IMG \
+        "The archive is malformed or truncated: `tools/common/xtask/src/initramfs.rs` wrote something the \
+         newc reader in `src/lib/fs/cpio` refuses, or the loader read less of FERRIX/INITRD.IMG \
          than it reported.",
         "The loader placed the archive outside the direct map, which it is meant to refuse \
          before the hand-off.",
         "An entry could not be created: tmpfs refused it, or memory for file contents ran \
          out.",
     ],
-    see: "kernel/src/fs/mod.rs init; libs/fs/vfs/src/initramfs.rs; xtask/src/initramfs.rs; \
-          boot/uefi/src/main.rs load_initrd; docs/ROADMAP.md stage 8",
+    see: "src/kernel/src/fs/mod.rs init; src/lib/fs/vfs/src/initramfs.rs; tools/common/xtask/src/initramfs.rs; \
+          src/boot/common/uefi/src/main.rs load_initrd; docs/ROADMAP.md stage 8",
 };
 
 /// For `check_filesystems` in `main.rs`, when `fs::check::run` fails.
@@ -1820,15 +1820,15 @@ pub(crate) static STAGE8_FILESYSTEM: Explanation = Explanation {
               truncation rather than the bytes it cut off, to survive a rename, and to give \
               every frame back once it is gone.",
     causes: &[
-        "The marker in `kernel/src/fs/check.rs` and the one in `xtask/src/initramfs.rs` have \
+        "The marker in `src/kernel/src/fs/check.rs` and the one in `tools/common/xtask/src/initramfs.rs` have \
          drifted apart.",
         "The VMO page store copies through the wrong frame or offset, or `Vmo::decommit_from` \
          does not release what a truncation discards.",
         "The dentry cache keeps an unlinked file's inode alive, so its pages outlive it and \
          show up as leaked frames.",
     ],
-    see: "kernel/src/fs/check.rs run; kernel/src/fs/pages.rs; kernel/src/user/vmo.rs \
-          decommit_from; libs/fs/vfs/src/namespace.rs; docs/ROADMAP.md stage 8",
+    see: "src/kernel/src/fs/check.rs run; src/kernel/src/fs/pages.rs; src/kernel/src/user/vmo.rs \
+          decommit_from; src/lib/fs/vfs/src/namespace.rs; docs/ROADMAP.md stage 8",
 };
 
 /// For `standard_streams` in `syscall/fd.rs`, when a new process cannot be
@@ -1845,13 +1845,13 @@ pub(crate) static CONSOLE_DESCRIPTORS: Explanation = Explanation {
               Running out of memory for the table is not this: it is reported, and \
               process_create answers NO_MEMORY.",
     causes: &[
-        "The console inode in `kernel/src/fs/console.rs` started refusing to be opened, or \
+        "The console inode in `src/kernel/src/fs/console.rs` started refusing to be opened, or \
          `OpenFile::new` gained a check the console does not pass.",
         "A new descriptor table no longer starts empty or with room for three descriptors, \
          so installing them failed with EMFILE.",
     ],
-    see: "kernel/src/syscall/fd.rs standard_streams; kernel/src/fs/console.rs open_console; \
-          libs/fs/vfs/src/fd.rs; docs/ROADMAP.md stage 8",
+    see: "src/kernel/src/syscall/fd.rs standard_streams; src/kernel/src/fs/console.rs open_console; \
+          src/lib/fs/vfs/src/fd.rs; docs/ROADMAP.md stage 8",
 };
 
 /// For `check_filesystems` in `main.rs`, when `/dev` or `/proc` fails its check.
@@ -1900,9 +1900,9 @@ pub(crate) static STAGE8_PSEUDO_FILESYSTEMS: Explanation = Explanation {
          ended process not as a zombie, a stopped one not as stopped, or its reader not as \
          running.",
     ],
-    see: "kernel/src/fs/procfs/check.rs run; kernel/src/fs/procfs.rs; kernel/src/fs/devfs.rs; \
-          kernel/src/fs/devfs/check.rs; kernel/src/fs/block.rs; libs/fs/procfs/src/maps.rs; libs/fs/procfs/src/kstat.rs; kernel/src/fs/procfs/render.rs state_of; \
-          kernel/src/sched/queue.rs time_spent; docs/ROADMAP.md stage 8",
+    see: "src/kernel/src/fs/procfs/check.rs run; src/kernel/src/fs/procfs.rs; src/kernel/src/fs/devfs.rs; \
+          src/kernel/src/fs/devfs/check.rs; src/kernel/src/fs/block.rs; src/lib/fs/procfs/src/maps.rs; src/lib/fs/procfs/src/kstat.rs; src/kernel/src/fs/procfs/render.rs state_of; \
+          src/kernel/src/sched/queue.rs time_spent; docs/ROADMAP.md stage 8",
 };
 
 /// For `sysrq_trigger` in `fs/procfs.rs`, when a program writes `c` to
@@ -1919,7 +1919,7 @@ pub(crate) static SYSRQ_CRASH: Explanation = Explanation {
         "A program wrote `c` to /proc/sysrq-trigger: from the shell, `echo c > \
          /proc/sysrq-trigger`.",
     ],
-    see: "kernel/src/fs/procfs.rs sysrq_trigger; docs/RELIABILITY.md",
+    see: "src/kernel/src/fs/procfs.rs sysrq_trigger; docs/RELIABILITY.md",
 };
 
 /// For `check_filesystems` in `main.rs`, when the pipe and filesystem call
@@ -1952,14 +1952,14 @@ pub(crate) static STAGE8_PIPES_AND_FILESYSTEM_CALLS: Explanation = Explanation {
          of file and the pipe outlives its descriptors as leaked frames.",
         "`attach_fifo` is not called from `openat`, or keys its table by something two opens \
          of one FIFO do not share, so each opener gets a pipe of its own.",
-        "A `statfs` layout in `libs/proto/linux-abi` or its encoder in `libs/fs/vfs/src/statfs.rs` \
+        "A `statfs` layout in `src/lib/proto/linux-abi` or its encoder in `src/lib/fs/vfs/src/statfs.rs` \
          moved a field, so the magic number is not where a program reads it.",
         "tmpfs's `grow_to` shrinks a file, or `sendfile` stopped putting its offset back.",
-        "`splice` or `copy_file_range` in `kernel/src/syscall/pipe.rs` moved the wrong bytes \
+        "`splice` or `copy_file_range` in `src/kernel/src/syscall/pipe.rs` moved the wrong bytes \
          or offset, or `fs::pipe::splice_pipes` lost bytes between two pipes.",
     ],
-    see: "kernel/src/fs/check.rs run_calls; kernel/src/fs/pipe.rs; kernel/src/syscall/pipe.rs; \
-          kernel/src/syscall/fsctl.rs; libs/fs/vfs/src/pipe.rs; libs/fs/vfs/src/statfs.rs; \
+    see: "src/kernel/src/fs/check.rs run_calls; src/kernel/src/fs/pipe.rs; src/kernel/src/syscall/pipe.rs; \
+          src/kernel/src/syscall/fsctl.rs; src/lib/fs/vfs/src/pipe.rs; src/lib/fs/vfs/src/statfs.rs; \
           docs/ROADMAP.md stage 8",
 };
 
@@ -1989,9 +1989,9 @@ pub(crate) static STAGE8_MEMFD: Explanation = Explanation {
          makes the range writable.",
         "tmpfs's write_at, set_len or grow_to does not consult the node's seals under its lock.",
     ],
-    see: "kernel/src/fs/memfd_check.rs; kernel/src/syscall/memfd.rs; kernel/src/syscall/fd.rs \
-          sys_fcntl; kernel/src/syscall/memory.rs map_file; kernel/src/user/space.rs map_file, \
-          protect; libs/fs/vfs/src/tmpfs.rs add_seals",
+    see: "src/kernel/src/fs/memfd_check.rs; src/kernel/src/syscall/memfd.rs; src/kernel/src/syscall/fd.rs \
+          sys_fcntl; src/kernel/src/syscall/memory.rs map_file; src/kernel/src/user/space.rs map_file, \
+          protect; src/lib/fs/vfs/src/tmpfs.rs add_seals",
 };
 
 /// For `check_epoll` in `stages_check.rs`, when the epoll check fails.
@@ -2019,8 +2019,8 @@ pub(crate) static STAGE8_EPOLL: Explanation = Explanation {
          above or below one set too many or too few.",
         "`sys_epoll_ctl` or the wait checks in a different order from Linux's.",
     ],
-    see: "kernel/src/fs/epoll_check.rs; kernel/src/fs/epoll.rs; kernel/src/fs/anon.rs; \
-          kernel/src/syscall/epoll.rs; kernel/src/sched/wait.rs; libs/fs/vfs/src/node.rs \
+    see: "src/kernel/src/fs/epoll_check.rs; src/kernel/src/fs/epoll.rs; src/kernel/src/fs/anon.rs; \
+          src/kernel/src/syscall/epoll.rs; src/kernel/src/sched/wait.rs; src/lib/fs/vfs/src/node.rs \
           poll_changes",
 };
 
@@ -2053,8 +2053,8 @@ pub(crate) static STAGE8_MOUNT_FLAGS: Explanation = Explanation {
         "`render::mountinfo` prints the mount point from a different root than \
          `/proc/<pid>/fd` does, or `MountFlags::options` misorders the options.",
     ],
-    see: "kernel/src/fs/mount_check.rs; kernel/src/syscall/fsctl.rs; \
-          libs/fs/vfs/src/namespace.rs; kernel/src/fs/procfs/render.rs",
+    see: "src/kernel/src/fs/mount_check.rs; src/kernel/src/syscall/fsctl.rs; \
+          src/lib/fs/vfs/src/namespace.rs; src/kernel/src/fs/procfs/render.rs",
 };
 
 /// For `check_semaphores` in `stages_check.rs`, when `syscall::sem_check::run`
@@ -2088,8 +2088,8 @@ pub(crate) static STAGE7_SEMAPHORES: Explanation = Explanation {
         "`encode_semid` writes a field at an offset another layout uses.",
         "`create` counts the sets of every job, or of none, against the per-job bound.",
     ],
-    see: "kernel/src/syscall/sem_check.rs; kernel/src/syscall/sem.rs; \
-          kernel/src/syscall/process.rs Process::release",
+    see: "src/kernel/src/syscall/sem_check.rs; src/kernel/src/syscall/sem.rs; \
+          src/kernel/src/syscall/process.rs Process::release",
 };
 
 /// For `check_eventfd` in `stages_check.rs`, when the eventfd check fails.
@@ -2127,9 +2127,9 @@ pub(crate) static STAGE8_EVENTFD: Explanation = Explanation {
          can end the wait first. One stop spoils one attempt, and the attempt lines say which \
          wait each time.",
     ],
-    see: "kernel/src/fs/eventfd_check.rs; kernel/src/fs/eventfd.rs; kernel/src/fs/wake.rs; \
-          kernel/src/sched/wait.rs; kernel/src/syscall/eventfd.rs; \
-          kernel/src/fs/anon.rs",
+    see: "src/kernel/src/fs/eventfd_check.rs; src/kernel/src/fs/eventfd.rs; src/kernel/src/fs/wake.rs; \
+          src/kernel/src/sched/wait.rs; src/kernel/src/syscall/eventfd.rs; \
+          src/kernel/src/fs/anon.rs",
 };
 
 /// For `check_timerfd` in `stages_check.rs`, when the timerfd check fails.
@@ -2167,9 +2167,9 @@ pub(crate) static STAGE8_TIMERFD: Explanation = Explanation {
         "The thread does not exit once nothing is armed, or a timer closed does not tell it, so \
          its stack is counted against the frame window.",
     ],
-    see: "kernel/src/fs/timerfd_check.rs; kernel/src/fs/timerfd.rs; \
-          kernel/src/syscall/timerfd.rs; kernel/src/syscall/time.rs; kernel/src/fs/wake.rs; \
-          kernel/src/sched/wait.rs",
+    see: "src/kernel/src/fs/timerfd_check.rs; src/kernel/src/fs/timerfd.rs; \
+          src/kernel/src/syscall/timerfd.rs; src/kernel/src/syscall/time.rs; src/kernel/src/fs/wake.rs; \
+          src/kernel/src/sched/wait.rs",
 };
 
 /// For `check_signalfd` in `stages_check.rs`, when the signalfd check fails.
@@ -2203,9 +2203,9 @@ pub(crate) static STAGE8_SIGNALFD: Explanation = Explanation {
          late as the stop was long. One stop spoils one attempt, and the attempt lines show the \
          lateness each time.",
     ],
-    see: "kernel/src/fs/signalfd_check.rs; kernel/src/fs/signalfd.rs; \
-          kernel/src/syscall/signalfd.rs; kernel/src/syscall/signal.rs; \
-          kernel/src/syscall/process.rs notify_signal; kernel/src/fs/wake.rs",
+    see: "src/kernel/src/fs/signalfd_check.rs; src/kernel/src/fs/signalfd.rs; \
+          src/kernel/src/syscall/signalfd.rs; src/kernel/src/syscall/signal.rs; \
+          src/kernel/src/syscall/process.rs notify_signal; src/kernel/src/fs/wake.rs",
 };
 
 /// For `check_madvise` in `stages_check.rs`, when the madvise check fails.
@@ -2236,8 +2236,8 @@ pub(crate) static STAGE8_MADVISE: Explanation = Explanation {
         "`sys_madvise` rounds the length in 64 bits on a 32-bit build, or checks it before the \
          advice and the alignment.",
     ],
-    see: "kernel/src/user/madvise_check.rs; kernel/src/user/space.rs advise; \
-          kernel/src/syscall/memory.rs sys_madvise; kernel/src/user/vmo.rs take_range, retire",
+    see: "src/kernel/src/user/madvise_check.rs; src/kernel/src/user/space.rs advise; \
+          src/kernel/src/syscall/memory.rs sys_madvise; src/kernel/src/user/vmo.rs take_range, retire",
 };
 
 /// For `check_filesystems` in `main.rs`, when the shared file mapping check
@@ -2268,8 +2268,8 @@ pub(crate) static STAGE8_FILE_MAPPINGS: Explanation = Explanation {
         "`give_back` decommits a file mapping's pages on munmap, which takes them away from \
          the file itself.",
     ],
-    see: "kernel/src/fs/mmap_check.rs; kernel/src/syscall/memory.rs sys_mmap, sys_msync; \
-          kernel/src/user/space.rs map_file, fault; kernel/src/fs/pages.rs; docs/ROADMAP.md stage 8",
+    see: "src/kernel/src/fs/mmap_check.rs; src/kernel/src/syscall/memory.rs sys_mmap, sys_msync; \
+          src/kernel/src/user/space.rs map_file, fault; src/kernel/src/fs/pages.rs; docs/ROADMAP.md stage 8",
 };
 
 /// For `check_program_files` in `stages_check.rs`, when the check of programs mapped
@@ -2299,8 +2299,8 @@ pub(crate) static STAGE8_PROGRAM_FILES: Explanation = Explanation {
          /proc/self/exe is ENOENT; or procfs's `link_location` is not answered, so the link \
          is followed as text to a name that is gone.",
     ],
-    see: "kernel/src/fs/exec_check.rs; kernel/src/syscall/load.rs; kernel/src/syscall/program.rs; \
-          kernel/src/syscall/exec.rs; kernel/src/fs/procfs.rs; libs/fs/vfs/src/walk.rs; \
+    see: "src/kernel/src/fs/exec_check.rs; src/kernel/src/syscall/load.rs; src/kernel/src/syscall/program.rs; \
+          src/kernel/src/syscall/exec.rs; src/kernel/src/fs/procfs.rs; src/lib/fs/vfs/src/walk.rs; \
           docs/CHROME.md",
 };
 
@@ -2321,7 +2321,7 @@ pub(crate) static INIT_EXITED: Explanation = Explanation {
         "Nothing could be started at all: no program is built in, `ferrix.init=` named a file \
          that would not start, and the image carries no /sbin/init.",
     ],
-    see: "kernel/src/power.rs finish; kernel/src/init.rs run; docs/INIT.md §8.3",
+    see: "src/kernel/src/power.rs finish; src/kernel/src/init.rs run; docs/INIT.md §8.3",
 };
 
 /// For `check_init_calls` in `stages_check.rs`, when `syscall::init_calls_check::run`
@@ -2365,7 +2365,7 @@ pub(crate) static INIT_CALLS: Explanation = Explanation {
         "`process_status` (`syscall/native.rs`) read the status without the signal the \
          personality records beside it (`Exit::record`), so a killed process reads as \
          exited with 128 plus the signal, or it reads an exit before the process ended.",
-        "`init::bootstrap_channel` no longer writes the hello from `libs/proto/native-abi`'s \
+        "`init::bootstrap_channel` no longer writes the hello from `src/lib/proto/native-abi`'s \
          `bootstrap` module, or writes more than one message, or `exec::give_bootstrap` \
          does not put the program's end in the new process's slot.",
         "`process_give` (`syscall/launch.rs`) judged the parent by something other than the \
@@ -2376,13 +2376,13 @@ pub(crate) static INIT_CALLS: Explanation = Explanation {
         "A process's release does not dispose of an untaken bootstrap \
          (`close_bootstrap`), so the peer never hears PEER_CLOSED.",
         "The program's machine code (`arch::USER_BOOTSTRAP_PROGRAM`) does not make the calls \
-         by the numbers `libs/proto/native-abi` gives, or the dispatcher does not route a native \
+         by the numbers `src/lib/proto/native-abi` gives, or the dispatcher does not route a native \
          number from a Linux program.",
     ],
-    see: "kernel/src/syscall/init_calls_check.rs; kernel/src/init.rs; \
-          kernel/src/syscall/native.rs; kernel/src/syscall/launch.rs; \
-          kernel/src/object/process.rs; libs/proto/native-abi/src/nr.rs; \
-          kernel/src/fs/portfd.rs; libs/proto/native-abi/src/bootstrap.rs; \
+    see: "src/kernel/src/syscall/init_calls_check.rs; src/kernel/src/init.rs; \
+          src/kernel/src/syscall/native.rs; src/kernel/src/syscall/launch.rs; \
+          src/kernel/src/object/process.rs; src/lib/proto/native-abi/src/nr.rs; \
+          src/kernel/src/fs/portfd.rs; src/lib/proto/native-abi/src/bootstrap.rs; \
           docs/INIT.md §6, §9, §11, §16",
 };
 
@@ -2411,8 +2411,8 @@ pub(crate) static UNHANDLED_PAGE_FAULT: Explanation = Explanation {
          reported as not mapped, an external abort from a device address included; the \
          fault status in `esr` says which it was.",
     ],
-    see: "kernel/src/trap.rs handle_page_fault; kernel/src/mm.rs map_demand_page; \
-          kernel/src/vmap.rs; kernel/src/arch/aarch64/trap.rs abort",
+    see: "src/kernel/src/trap.rs handle_page_fault; src/kernel/src/mm.rs map_demand_page; \
+          src/kernel/src/vmap.rs; src/kernel/src/arch/aarch64/trap.rs abort",
 };
 
 /// For `dispatch` in `trap.rs`, the `system call before stage 7` report.
@@ -2432,8 +2432,8 @@ pub(crate) static SYSTEM_CALL_TRAP: Explanation = Explanation {
         "A user program called `execve` on an Arm architecture, and `execve` through the trap \
          path is not wired yet (the headline says so).",
     ],
-    see: "kernel/src/trap.rs dispatch; kernel/src/arch/aarch64/trap.rs system_call; \
-          kernel/src/arch/armv7a/trap.rs system_call; docs/ROADMAP.md stage 7",
+    see: "src/kernel/src/trap.rs dispatch; src/kernel/src/arch/aarch64/trap.rs system_call; \
+          src/kernel/src/arch/armv7a/trap.rs system_call; docs/ROADMAP.md stage 7",
 };
 
 /// For `dispatch` in `trap.rs`, the `illegal instruction` report.
@@ -2449,8 +2449,8 @@ pub(crate) static ILLEGAL_INSTRUCTION: Explanation = Explanation {
          address or function pointer; check whether the saved program counter lies inside \
          the kernel image.",
     ],
-    see: "kernel/src/trap.rs dispatch; kernel/src/arch/x86_64/trap.rs classify; \
-          kernel/src/arch/aarch64/trap.rs classify; kernel/src/arch/armv7a/trap.rs classify",
+    see: "src/kernel/src/trap.rs dispatch; src/kernel/src/arch/x86_64/trap.rs classify; \
+          src/kernel/src/arch/aarch64/trap.rs classify; src/kernel/src/arch/armv7a/trap.rs classify",
 };
 
 /// For `dispatch` in `trap.rs`, the report naming any other exception.
@@ -2471,8 +2471,8 @@ pub(crate) static UNEXPECTED_EXCEPTION: Explanation = Explanation {
         "On ARMv7-A, a data abort with an external abort status, from an access to an \
          address with no device behind it; the `fsr` in the report gives the status.",
     ],
-    see: "kernel/src/trap.rs dispatch; kernel/src/arch/x86_64/trap.rs vector_name; \
-          kernel/src/arch/aarch64/trap.rs class_name; kernel/src/arch/armv7a/trap.rs abort",
+    see: "src/kernel/src/trap.rs dispatch; src/kernel/src/arch/x86_64/trap.rs vector_name; \
+          src/kernel/src/arch/aarch64/trap.rs class_name; src/kernel/src/arch/armv7a/trap.rs abort",
 };
 
 /// For `ferrix_paranoid_entry` in `arch/x86_64/paranoid.rs`, a machine check.
@@ -2492,7 +2492,7 @@ pub(crate) static MACHINE_CHECK: Explanation = Explanation {
         "Kernel code executed `int $18`, which enters through the same gate; the saved \
          instruction pointer then lies in the kernel image, just after it.",
     ],
-    see: "kernel/src/arch/x86_64/paranoid.rs; kernel/src/arch/x86_64/trap.rs \
+    see: "src/kernel/src/arch/x86_64/paranoid.rs; src/kernel/src/arch/x86_64/trap.rs \
           ferrix_paranoid_common",
 };
 
@@ -2517,14 +2517,14 @@ pub(crate) static NESTED_INTERRUPT_STACK: Explanation = Explanation {
         "A double fault inside the double-fault handler: that handler's report itself \
          overflowed or faulted.",
     ],
-    see: "kernel/src/arch/x86_64/paranoid.rs; kernel/src/arch/x86_64/trap.rs \
-          ferrix_paranoid_common; kernel/src/arch/x86_64/gdt.rs",
+    see: "src/kernel/src/arch/x86_64/paranoid.rs; src/kernel/src/arch/x86_64/trap.rs \
+          ferrix_paranoid_common; src/kernel/src/arch/x86_64/gdt.rs",
 };
 
 /// Every entry, in code order.
 #[expect(
     dead_code,
-    reason = "scripts/gen/gen-panic-catalog.py checks every entry is listed here; the kernel names entries directly"
+    reason = "tools/common/gen/gen-panic-catalog.py checks every entry is listed here; the kernel names entries directly"
 )]
 pub(crate) static ALL: &[&Explanation] = &[
     &SHOOTDOWN_TIMEOUT,

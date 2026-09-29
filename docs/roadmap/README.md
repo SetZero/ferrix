@@ -63,7 +63,7 @@ is in [Where it stands](where-it-stands.md).
   how sizes are given.
 - [How to edit the roadmap](HOW-TO-EDIT.md).
 
-<!-- The stage index below is generated from the headings by `python3 scripts/gen/split-roadmap.py index`; do not edit it by hand. -->
+<!-- The stage index below is generated from the headings by `python3 tools/common/gen/split-roadmap.py index`; do not edit it by hand. -->
 
 ## The stages
 

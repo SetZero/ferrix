@@ -21,7 +21,7 @@
 //! the way the C libraries do, for the tests and the kernel's own check.
 //!
 //! The code is not here. It is machine code, one architecture's, and lives
-//! behind the kernel's architecture facade (`kernel/src/arch/x86_64/vdso.rs`),
+//! behind the kernel's architecture facade (`src/kernel/src/arch/x86_64/vdso.rs`),
 //! which hands it to [`build`] as bytes and offsets. It has to run in any
 //! process at whatever address the page lands, so it is written
 //! position-independent and finds its data by its own address.

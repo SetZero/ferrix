@@ -16,7 +16,7 @@
 //! That loop is this crate, written against the two libraries' types and a
 //! [`Disk`] trait the real driver implements, so that it runs and is tested on
 //! the host with a fake device on one side and the ring's own kernel side on
-//! the other. The process that runs it (`native/drivers/blk`) adds only the handles: the
+//! the other. The process that runs it (`src/user/native/drivers/block/virtio-blk`) adds only the handles: the
 //! mappings the two sides' memory lives in, the port both bells and the
 //! interrupt arrive on, and the control channel STOP comes over.
 //!

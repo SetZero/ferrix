@@ -2,7 +2,7 @@
 //! memory: who the core says it is, how it is brought out of reset, and the
 //! command stream its front end fetches.
 //!
-//! `native/drivers/gc400` runs this in a ring-3 process under devmgr (`docs/GPU.md`
+//! `src/user/native/drivers/gpu/gc400` runs this in a ring-3 process under devmgr (`docs/GPU.md`
 //! §6.3). The process holds an `IoMapping` of the core's registers, its
 //! interrupt, and a page pinned with `PIN_COHERENT` for the command buffer.
 //! None of those exist in a unit test, so everything that decides a register
@@ -45,7 +45,7 @@
 //! The RCC is not a driver's: it clocks every peripheral on the chip. The
 //! kernel turns on the GPU's bus and core clocks, pulses its reset line,
 //! and checks that PLL2's Q output, the core clock, runs, before it
-//! publishes the device (`kernel/src/platform/st/stm32mp1/gpu.rs`). What reaches this
+//! publishes the device (`src/kernel/src/platform/st/stm32mp1/gpu.rs`). What reaches this
 //! crate is a register window of a core fresh out of reset.
 
 #![no_std]

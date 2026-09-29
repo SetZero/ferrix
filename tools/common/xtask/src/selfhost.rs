@@ -7,7 +7,7 @@
 //! One btrfs volume per run, made here and attached writable. It has no
 //! `ferrix-root` label, so the kernel mounts it at `/data`. It holds:
 //!
-//! * the toolchain tree `scripts/fetch/fetch-rustc-sysroot.sh` keeps beside its own
+//! * the toolchain tree `tools/common/fetch/fetch-rustc-sysroot.sh` keeps beside its own
 //!   image: rustc and Cargo, the standard libraries for the host,
 //!   `x86_64-unknown-none` and `x86_64-unknown-uefi`, and Debian's glibc and
 //!   gcc driver, copied into the staging directory (extents shared where the

@@ -17,39 +17,39 @@ interfaces through. Those run over interfaces, routes and a loopback device.
 virtio-net is the first driver. It runs in user mode on stage 10's device
 objects and speaks to the core over a channel, with its buffers in VMOs, as
 virtio-blk speaks to the block core. `/proc/net` (`arp`, `dev`, `route`,
-`tcp`, `tcp6`, `udp`, `udp6`) comes with it, rendered in `libs/fs/procfs` like
+`tcp`, `tcp6`, `udp`, `udp6`) comes with it, rendered in `src/lib/fs/procfs` like
 the rest of `/proc`; `unix` is not there yet.
 
-The byte-level halves are `libs/` code, host-tested and fuzzed before the
+The byte-level halves are `src/lib/` code, host-tested and fuzzed before the
 kernel calls them, for the reason the continuous rule gives: a packet is bytes
 someone else chose. They are header parsing, the TCP state machine with its
 retransmission and congestion arithmetic, and netlink message encoding.
 
 **Written ahead, before the net core landed on 2026-09-16** (the counts are
-of that day). `libs/network/netwire` has the headers — Ethernet, ARP,
+of that day). `src/lib/network/netwire` has the headers — Ethernet, ARP,
 IPv4 and IPv6 with its extension headers, ICMPv4, ICMPv6 and Neighbor
 Discovery, UDP and TCP — with 54 host tests and the `netwire_parse` fuzz
-target; see *Written ahead of their stage*. `libs/proto/linux-abi` has the numbers
+target; see *Written ahead of their stage*. `src/lib/proto/linux-abi` has the numbers
 and layouts a program passes: `sockaddr_in` and `sockaddr_in6`, the
 `IPPROTO_`, `IP_`, `IPV6_` and `TCP_` options, and the fixed headers of
 netlink and its routing messages, each checked against a probe compiled from
-the UAPI headers. `libs/network/nettcp` has the TCP state machine over those headers,
-with 30 host tests and the `nettcp_state` fuzz target, and `libs/network/net` has the
+the UAPI headers. `src/lib/network/nettcp` has the TCP state machine over those headers,
+with 30 host tests and the `nettcp_state` fuzz target, and `src/lib/network/net` has the
 net core over both — interfaces, routes, neighbours, reassembly, ICMP, UDP and
 the socket table — with 45 host tests and the `net_input` fuzz target; see
-*Written ahead of their stage*. `libs/network/netlink` has the byte-level half of
+*Written ahead of their stage*. `src/lib/network/netlink` has the byte-level half of
 netlink over those headers — walking a buffer of messages and the attributes
 after each one, and building replies into a caller's buffer — with 48 host
 tests and the `netlink_walk` fuzz target. virtio-net is written too, in the two halves
-virtio-blk is split into: `libs/drivers/virtio`'s `net` module for the device protocol
+virtio-blk is split into: `src/lib/drivers/virtio`'s `net` module for the device protocol
 — the configuration block, the feature bits and the header — and
-`libs/drivers/virtio-net` for the driver logic over two queues, with 22 host tests and
+`src/lib/drivers/net/virtio-net` for the driver logic over two queues, with 22 host tests and
 the `virtio_net` fuzz target. The kernel calls all of it now, below.
 
-**Done — the net core, and `AF_INET` and `AF_INET6` sockets.** `kernel/src/net`
-is `libs/network/net` behind one lock and a task that drives it. Nothing sleeps inside
+**Done — the net core, and `AF_INET` and `AF_INET6` sockets.** `src/kernel/src/net`
+is `src/lib/network/net` behind one lock and a task that drives it. Nothing sleeps inside
 that lock: every call takes what it needs into a kernel buffer, drops it, and
-only then touches the program's memory, which is `kernel/src/fs/socket.rs`'s
+only then touches the program's memory, which is `src/kernel/src/fs/socket.rs`'s
 rule and the same reason. Sockets have no wait queue of their own -- they all
 wait on one, woken whenever the stack moved, and each waiter re-checks its own
 condition; that is a thundering herd in the textbook sense and the right trade
@@ -167,7 +167,7 @@ shim over it, and `udhcpc` and a C library's `getifaddrs` read it directly.
 `bind` gives it a port identifier, and `sendmsg` and `recvmsg` carry requests
 and replies.
 
-`kernel/src/net/netlink` answers dumps of links, addresses, routes and
+`src/kernel/src/net/netlink` answers dumps of links, addresses, routes and
 neighbours, and the changes that matter: `RTM_SETLINK` and the `RTM_NEWLINK`
 that `ip link set dev eth0 up` actually sends, `RTM_NEWADDR` and `RTM_DELADDR`,
 `RTM_NEWROUTE` and `RTM_DELROUTE`. An unknown type is `NLMSG_ERROR` with
@@ -200,7 +200,7 @@ nothing answers and `EINVAL` for a message too short for its header. It reads:
 ```
 
 **The host side already exists, and it is ours.** `cargo xtask run --net`
-attaches a virtio-net device whose backend is `xtask/src/gateway/`: a NAT
+attaches a virtio-net device whose backend is `tools/common/xtask/src/gateway/`: a NAT
 gateway in the build tool, on the guest network `10.0.2.0/24` with the gateway
 at `10.0.2.2`, DNS at `10.0.2.3` and the guest at `10.0.2.15` — slirp's numbers,
 so that every habit and every piece of QEMU documentation carries over. It
@@ -227,24 +227,24 @@ on every developer's machine.
 
 ICMP echo to the outside was not forwarded at first, because originating ICMP
 needs a raw socket or a permitted ping group. Since 2026-09-16 it is
-(`xtask/src/gateway/icmp.rs`): through `IcmpSendEcho` on Windows, an
+(`tools/common/xtask/src/gateway/icmp.rs`): through `IcmpSendEcho` on Windows, an
 unprivileged ICMP socket where the ping group admits the user, or the host's
 own `ping` where neither does. What it does not do is IPv6, because a
 half-answered IPv6 is worse than none — a guest that receives a router
 advertisement will prefer the address in it.
 
-**Done — the ring the driver will speak over.** `libs/proto/netring` and
+**Done — the ring the driver will speak over.** `src/lib/proto/netring` and
 `docs/NET-RING.md` are the memory the kernel shares with a ring-3 network
 driver. It is the block ring's discipline with its allocator taken out: a frame
 is bounded by the interface's MTU, so the data VMO is `entries` slots of a fixed
 size and a submission names its slot. That removes the whole region-allocation
 half of the protocol and with it the class of bug where a region is reused
 before its completion, which on an untranslated IOMMU domain is a device writing
-into somebody else's packet. The index discipline is `libs/proto/blkring`'s, written a
+into somebody else's packet. The index discipline is `src/lib/proto/blkring`'s, written a
 second time rather than shared, which `docs/BACKLOG.md` carries as a debt with
 its reason.
 
-**Done — the kernel's end of the ring.** `kernel/src/net_ring` is one task per
+**Done — the kernel's end of the ring.** `src/kernel/src/net_ring` is one task per
 ring: it waits for the driver's HELLO, checks the rights every handle carries
 exactly rather than at least, holds the two VMOs, adds the interface to the net
 core, and answers READY with its completion port. Then it posts half the ring
@@ -263,7 +263,7 @@ and a frame out through the whole stack. It reads:
   netring  1 HELLOs refused as specified, 4 slots posted for a driver to fill, 1 frames taken up the stack and 1 answered back down it
 ```
 
-**Done — `/proc/net`.** `libs/fs/procfs` gains `dev`, `route`, `tcp`, `tcp6`,
+**Done — `/proc/net`.** `src/lib/fs/procfs` gains `dev`, `route`, `tcp`, `tcp6`,
 `udp`, `udp6` and `arp`, each pinned in its tests against a line copied from a
 running Linux, because `route`, `netstat`, `arp` and `ifconfig` read these
 files with `sscanf` and fixed columns and a field one column off is a program
@@ -274,10 +274,10 @@ fixed width, 127 for `route` and `udp` and 149 for `tcp`, by Linux's
 `seq_pad`, which pads a short line and leaves a long one alone -- which is why
 an IPv6 row overflows.
 
-**Done — the driver, in ring 3.** `native/drivers/net` is the process that makes a
+**Done — the driver, in ring 3.** `src/user/native/drivers/net/virtio-net` is the process that makes a
 virtio-net function an interface. It holds handles and nothing else:
-`libs/drivers/virtio-net` drives the device, `libs/proto/netring` speaks the ring,
-`libs/drivers/netserve` joins the two, and all three are tested on the host, so the
+`src/lib/drivers/net/virtio-net` drives the device, `src/lib/proto/netring` speaks the ring,
+`src/lib/drivers/net/netserve` joins the two, and all three are tested on the host, so the
 program is the protocol of `docs/NET-RING.md` §7, with a `Step` exit code for
 each of its eight ways to fail.
 `devmgr` starts it from a second row in its table, and the net ring's `take_up`
@@ -290,9 +290,9 @@ kernel — which rings only a driver that has said it is going to sleep — neve
 rang it. Frames the *device* delivered still woke it through the interrupt, so
 the interface looked alive and transmitted nothing at all.
 
-That was possible because `libs/drivers/netserve` left the handshake to its caller
-while `libs/drivers/blkserve` owns it, which is why `native/drivers/blk` never had the bug and
-`native/drivers/net` did. The handshake is now `netserve`'s too, and with it the rule
+That was possible because `src/lib/drivers/net/netserve` left the handshake to its caller
+while `src/lib/drivers/block/blkserve` owns it, which is why `src/user/native/drivers/block/virtio-blk` never had the bug and
+`src/user/native/drivers/net/virtio-net` did. The handshake is now `netserve`'s too, and with it the rule
 `blkserve` already had: while a frame waits for room in the device's transmit
 queue the answer is always to sleep, whatever the ring holds. Without that
 rule a full transmit queue is a spin rather than a wait — the loop takes no
@@ -300,11 +300,11 @@ submission while a frame waits, so the ring stays full and answers "do not
 sleep" until the device interrupts. A test pins both.
 
 **Done — the `ifreq` ioctls.** rtnetlink is how an interface is configured and
-`kernel/src/net/netlink` answers it, but `if_nametoindex` — which POSIX.1-2024
+`src/kernel/src/net/netlink` answers it, but `if_nametoindex` — which POSIX.1-2024
 specifies, which every program that names an interface goes through, and which
 musl implements as `ioctl(SIOCGIFINDEX)` over an `AF_UNIX` socket — had nothing
 to talk to, so `ip` could not find a device that was right there.
-`kernel/src/net/ifreq` is the index, the flags, the address, the mask, the
+`src/kernel/src/net/ifreq` is the index, the flags, the address, the mask, the
 broadcast and peer addresses, the MTU, the hardware address, the queue length
 and `SIOCGIFCONF`. `sys_ioctl` sends what a socket's own family did not know to
 it whatever the family, as Linux's `sock_ioctl` passes it to `dev_ioctl`, so
@@ -315,7 +315,7 @@ the guest fetches from are threads of `xtask` on ports the host's kernel chose,
 and `10.0.2.2` is the host's loopback as it is under slirp, so the run is
 hermetic: it says the same thing on a machine with no network, and the name it
 resolves is answered by a stub the gateway's forwarder is pointed at for the
-run. The digest is POSIX `cksum`, written out in `xtask/src/net.rs` and checked
+run. The digest is POSIX `cksum`, written out in `tools/common/xtask/src/net.rs` and checked
 against what the host's own `cksum` prints, because it is the one digest this
 busybox and this build tool can both compute with nothing added to either.
 
@@ -329,7 +329,7 @@ the answer; and `/proc/net/dev` and `arp -n` show what the traffic left behind.
 **Done — `AF_UNIX` names.** `bind`, `listen`, `connect` and `accept` on a
 local socket, over both namespaces Linux has. A pathname is a node in the
 filesystem: `bind` creates an `S_IFSOCK` node exactly as `mknod` would, and
-`kernel/src/fs/sockname` maps that node — its device and inode numbers, not
+`src/kernel/src/fs/sockname` maps that node — its device and inode numbers, not
 the path, because two paths can name one node — to the socket. `connect` walks
 the path like any other, which is what makes the permissions on the
 directories above it mean something. An abstract name, a `sun_path` starting
@@ -348,7 +348,7 @@ landed. musl's `initgroups` tries an `AF_UNIX` connection to nscd before it
 reads `/etc/group`; `EOPNOTSUPP` is an error it gives up on, and `ENOENT` is
 one it falls back from.
 
-**Done — curl, built against ferrousli.** `userland/ferrousli/tools/ports/curl` builds
+**Done — curl, built against ferrousli.** `src/user/linux/ferrousli/tools/ports/curl` builds
 curl 8.22.0 over Mbed TLS 3.6.7 as a static x86-64 program against ferrousli,
 from sources pinned by checksum, with curl.se's extract of Mozilla's CA
 certificates. It linked with nothing missing from the library. `cargo xtask
@@ -371,14 +371,14 @@ nanoseconds by `ferrix_bootinfo::unix_nanos`, and 32 bytes from
 that firmware provided. The kernel starts `CLOCK_REALTIME` at that time after
 stage 3's timer check.
 
-`libs/kernel/crng` is the generator: ChaCha20 with fast key erasure, its block
+`src/lib/kernel/crng` is the generator: ChaCha20 with fast key erasure, its block
 function checked against RFC 8439's vector and OpenSSL's keystream. Every
 64-byte block replaces the key with its first half and hands out the second.
-`kernel/src/random.rs` seeds it from firmware's bytes, credited 256 bits, and
+`src/kernel/src/random.rs` seeds it from firmware's bytes, credited 256 bits, and
 from the CPU's `RDSEED` or `RDRAND` on x86-64, or `RNDR` on AArch64, at 32 bits
 a word. On AArch64 it also asks firmware's True Random Number Generator
 through SMCCC (`TRNG_RND64`, Arm DEN0098) for 48 bytes, credited in full, once
-PSCI and SMCCC 1.1 say it is safe to ask (`kernel/src/arch/aarch64/trng.rs`).
+PSCI and SMCCC 1.1 say it is safe to ask (`src/kernel/src/arch/aarch64/trng.rs`).
 It also mixes in timer jitter, credited nothing, and mixes the counter
 into every read. `getrandom`, `/dev/random`, `/dev/urandom` and `AT_RANDOM` all
 read it. A boot says what it had:
@@ -418,8 +418,8 @@ Its negative control, not committed, on x86-64: with the loader's time flag
 cleared, the guest printed `verified 0` and `untrusted 60`, and `test-net`
 failed on that program.
 
-**Done — git, built against ferrousli.** `userland/ferrousli/tools/ports/zlib` builds
-zlib 1.3.2 and `userland/ferrousli/tools/ports/git` builds git 2.55.0 over it and over
+**Done — git, built against ferrousli.** `src/user/linux/ferrousli/tools/ports/zlib` builds
+zlib 1.3.2 and `src/user/linux/ferrousli/tools/ports/git` builds git 2.55.0 over it and over
 the curl port's libcurl and Mbed TLS. It is built without Perl, Python, Tcl,
 gettext and iconv, which the image does not have. Its Rust half is off too: cargo
 builds that for the host, against glibc. It uses git's own regex, because
@@ -436,9 +436,9 @@ protocol at `10.0.2.2`, through `git-remote-http` and libcurl: neither
 busybox on the image has `httpd`. The file and the commit's subject must
 come back both times.
 
-**Done — btop, and the C++ runtime under it.** `userland/ferrousli/tools/ports/libcxx`
+**Done — btop, and the C++ runtime under it.** `src/user/linux/ferrousli/tools/ports/libcxx`
 builds LLVM 23.1.1's libc++, libc++abi and libunwind against ferrousli with
-the host's gcc. `userland/ferrousli/tools/ports/btop` builds btop 1.4.7, a C++23
+the host's gcc. `src/user/linux/ferrousli/tools/ports/btop` builds btop 1.4.7, a C++23
 program, over them. What ferrousli lacked for that landed with them:
 `dl_iterate_phdr` and `dladdr`, the message catalogues, the `strtod_l` family,
 `pathconf`, `copy_file_range`, `getloadavg`, and thread cancellation, which
@@ -472,7 +472,7 @@ both when started that small and after a resize, and still redraws after a
 key at full size.
 
 **Done — an SSH server, and a way in from the host.**
-`userland/ferrousli/tools/ports/sshdt` builds sshdt 0.4.2, an SSH server written in Rust
+`src/user/linux/ferrousli/tools/ports/sshdt` builds sshdt 0.4.2, an SSH server written in Rust
 (russh, tokio, and aws-lc underneath). It is built the way uutils is: the musl
 target, ferrousli in the C library's place, and aws-lc compiled with
 `ferrousli-cc`. It linked on the first try, with nothing undefined. sshdt was

@@ -1,6 +1,6 @@
 //! Being Ferrix's first program.
 //!
-//! The kernel starts init the way it starts a shell (`kernel/src/init.rs`):
+//! The kernel starts init the way it starts a shell (`src/kernel/src/init.rs`):
 //! `sh -i` when nothing was built in, and `sh -c <script>` when something
 //! was. A program that is init therefore receives a shell's arguments
 //! whether or not it is a shell, and `-i` is not an option any compositor

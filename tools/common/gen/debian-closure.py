@@ -7,12 +7,12 @@ trixie-updates and trixie-security, whose newer builds win -- and walks
 alternative and leaving out every package named with `--skip`: daemons,
 maintainer-script tools and data nothing on a Ferrix volume runs. Prints one
 line per package, `<archive> <pool path> <sha256>`, which is the list
-`scripts/fetch/fetch-chromium-arm64.sh` pins, and the total installed size.
+`tools/common/fetch/fetch-chromium-arm64.sh` pins, and the total installed size.
 
 The closure is where to start, not the answer: the fetch script's check that
 every library an ELF file needs is on the volume is what says it is enough.
 
-Usage: scripts/gen/debian-closure.py --arch arm64 chromium --skip debconf ...
+Usage: tools/common/gen/debian-closure.py --arch arm64 chromium --skip debconf ...
 Needs curl-free network access (urllib), xz support in Python, and
 `dpkg --compare-versions`.
 """

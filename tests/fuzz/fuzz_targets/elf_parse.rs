@@ -8,7 +8,7 @@
 //! The contract being fuzzed is total: for **any** input, every accessor either
 //! answers or returns an error. It must never panic, never index out of bounds,
 //! never overflow, and never read outside the slice it was given.
-//! `libs/platform/elf` is `#![forbid(unsafe_code)]`, so a memory-safety bug here would
+//! `src/lib/platform/elf` is `#![forbid(unsafe_code)]`, so a memory-safety bug here would
 //! have to be a compiler bug — what this actually hunts is the panic, which in
 //! a kernel is just as fatal.
 

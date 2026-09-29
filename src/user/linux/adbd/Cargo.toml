@@ -7,7 +7,7 @@ publish = false
 license = "MIT OR Apache-2.0"
 
 # A workspace of its own, as statd and zinc are: a static Linux program built
-# with std against the target's own musl, for the initramfs (xtask/src/adbd.rs).
+# with std against the target's own musl, for the initramfs (tools/common/xtask/src/adbd.rs).
 [workspace]
 
 [[bin]]
@@ -15,7 +15,7 @@ name = "adbd"
 path = "src/main.rs"
 
 [dependencies]
-ferrix-adb = { path = "../../libs/proto/adb" }
+ferrix-adb = { path = "../../../lib/proto/adb" }
 # posix_openpt and the pty ioctls, setsid, and reboot, none of which std
 # offers; the version zinc already builds with.
 libc = "0.2.189"

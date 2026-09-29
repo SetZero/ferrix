@@ -105,7 +105,7 @@ _ABBREVIATION = re.compile(r"(?:\b[A-Za-z]|§\s*\d+|\bvs|\be\.g|\bi\.e|\bNo)\.$"
 def prose(text: str) -> list:
     """Model prose as runs, honouring the backtick spans the model writes.
 
-    Doc comments in the model mark code with backticks -- `libs/kernel/sched`,
+    Doc comments in the model mark code with backticks -- `src/lib/kernel/sched`,
     `#[expect]`, `rustc` -- and mean it. Turning those into real code spans is
     the one interpretation of model text this generator makes, and it is safe
     because an unbalanced backtick simply fails to match and stays literal.
@@ -257,7 +257,7 @@ def section_about(model: Model, doc: Doc) -> None:
 _MATURITY_PROSE = {
     "implemented": "The code exists and the QEMU boot test exercises it on every architecture it applies to.",
     "inProgress": "The owning stage has started; part of the element runs.",
-    "writtenAhead": "A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet.",
+    "writtenAhead": "A src/lib/ crate exists and passes its host tests, but nothing in src/kernel/ calls it yet.",
     "planned": "Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it.",
     "deferred": "Work a finished stage explicitly left behind, carrying the reason that stage gave.",
 }
@@ -1316,7 +1316,7 @@ def section_figures(model: Model, doc: Doc) -> None:
     doc.add(
         P(
             "Every diagram in this document, drawn from the model by "
-            "scripts/gen/sysml/diagrams.py. Each is also written as a standalone SVG beside "
+            "tools/common/gen/sysml/diagrams.py. Each is also written as a standalone SVG beside "
             "this file, so it can be opened, zoomed or embedded on its own."
         )
     )

@@ -5,9 +5,9 @@
 #
 # It is the union of three trees, laid over each other in this order:
 #
-# 1. yserver's volume tree, which scripts/fetch/fetch-yserver.sh builds (the
+# 1. yserver's volume tree, which tools/common/fetch/fetch-yserver.sh builds (the
 #    X server at the commit it pins, its amd64 Debian libraries, lavapipe).
-# 2. The Steam bootstrap tree scripts/fetch/fetch-steam.sh makes (Valve's
+# 2. The Steam bootstrap tree tools/common/fetch/fetch-steam.sh makes (Valve's
 #    bootstrap under steam/, i386 and amd64 glibc, bash, GNU tar, xz and the
 #    other tools, the certificate bundle).
 #
@@ -20,7 +20,7 @@
 #    Debian's amd64 lsof and what it links, which the client runs to learn
 #    which process opened its UI websocket.
 #
-# Then the launch-side workarounds in scripts/steam/workarounds/, compiled
+# Then the launch-side workarounds in tools/common/steam/workarounds/, compiled
 # with the host's gcc into steam-workarounds/lib/<multiarch>/ (the client
 # preloads them through ld.so's $LIB), and the links unpacking does not make:
 # libGLX.so, which the client's updater dlopens by its development name to
@@ -36,12 +36,12 @@
 # fetch-steam.sh and fetch-yserver.sh need, and gcc able to build -m32
 # objects without a C library (-nostdlib). No root.
 #
-# Usage: scripts/fetch/fetch-steam-window.sh
+# Usage: tools/common/fetch/fetch-steam-window.sh
 
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-repo=$(cd "$here/../.." && pwd)
+repo=$(cd "$here/../../.." && pwd)
 out=${FERRIX_STEAM_WINDOW_VOLUME:-$HOME/.local/share/ferrix/steam-window}
 yserver=$out/yserver
 bootstrap=$out/bootstrap
@@ -133,8 +133,8 @@ fetch() {
     printf '%s\n' "$file"
 }
 
-FERRIX_YSERVER_VOLUME=$yserver "$repo/scripts/fetch/fetch-yserver.sh"
-FERRIX_STEAM_VOLUME=$bootstrap "$repo/scripts/fetch/fetch-steam.sh"
+FERRIX_YSERVER_VOLUME=$yserver "$repo/tools/common/fetch/fetch-yserver.sh"
+FERRIX_STEAM_VOLUME=$bootstrap "$repo/tools/common/fetch/fetch-steam.sh"
 
 mkdir -p "$out/pool"
 tree="$out/tree"
@@ -155,7 +155,7 @@ ln -sfn libGLX.so.0 "$tree/usr/lib/i386-linux-gnu/libGLX.so"
 [ -e "$tree/usr/bin/awk" ] || ln -s mawk "$tree/usr/bin/awk"
 
 # The workarounds, each for the ABIs that need it (see each file's header).
-work="$repo/scripts/steam/workarounds"
+work="$repo/tools/common/steam/workarounds"
 i386="$tree/steam-workarounds/lib/i386-linux-gnu"
 amd64="$tree/steam-workarounds/lib/x86_64-linux-gnu"
 mkdir -p "$i386" "$amd64"

@@ -19,7 +19,7 @@
 //! it, within the patience; then sectors of the first disk
 //! read through the registry's [`BlockDevice`] — the same path a mount takes
 //! — come back exactly as `xtask` wrote the test disk, whose layout is fixed
-//! in `xtask/src/test_disk.rs` and repeated here in [`expected`]. A driver
+//! in `tools/common/xtask/src/test_disk.rs` and repeated here in [`expected`]. A driver
 //! that exits before publishing fails the check with its exit status printed,
 //! which names the step it stopped at.
 //!
@@ -90,7 +90,7 @@ const ENDED: u64 = 0x1e;
 /// ring task publishes on HELLO; ten seconds is generous under TCG.
 const PATIENCE_NANOS: u64 = 10_000_000_000;
 
-/// The test disk's layout, as `xtask/src/test_disk.rs` fixes it.
+/// The test disk's layout, as `tools/common/xtask/src/test_disk.rs` fixes it.
 const SECTOR_SIZE: usize = 512;
 const MAGIC: &[u8; 9] = b"FERRIXBLK";
 const VERSION: u8 = 1;
@@ -398,7 +398,7 @@ fn published_by_devmgr(
 const DRIVER_DIED: &str = "a blk driver devmgr started died before publishing its disk";
 
 /// The step `/sbin/blk`'s exit status names: its `Step` enum, in
-/// `native/drivers/blk/src/main.rs`, whose numbers are its exit statuses, and
+/// `src/user/native/drivers/block/virtio-blk/src/main.rs`, whose numbers are its exit statuses, and
 /// from 20 up its `fault_status`, the fault that stopped it serving.
 fn blk_step(status: i32) -> &'static str {
     match status {

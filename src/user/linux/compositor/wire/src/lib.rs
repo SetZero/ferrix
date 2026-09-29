@@ -4,7 +4,7 @@
 //! `AF_UNIX` socket carries, and the map from the object ids in them to the
 //! things they name. It holds no socket and no descriptor of its own -- a
 //! descriptor is an `i32` here and nothing more -- so it is host-tested and
-//! fuzzed the way `libs/network/netwire` and `libs/proto/inputctl` are, and the server
+//! fuzzed the way `src/lib/network/netwire` and `src/lib/proto/inputctl` are, and the server
 //! above it is the only part that has to run on Ferrix to be tried.
 //!
 //! Written from `/usr/share/wayland/wayland.xml` and the format

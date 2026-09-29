@@ -25,7 +25,7 @@ qualification package, which is findings F-17, F-18 and F-19.
 
 **T3 and unqualified — finding F-17.** Good practice is in place and is not
 qualification evidence: the channel is pinned exactly rather than floating,
-`kernel/` and `boot/uefi/` use no `#![feature]`, and the assembly budget keeps 303
+`src/kernel/` and `src/boot/common/uefi/` use no `#![feature]`, and the assembly budget keeps 303
 lines across 19 sites outside the compiler's remit where hand analysis is
 cheap.
 
@@ -79,7 +79,7 @@ output is used to *satisfy* an objective rather than to find defects.
 | `check-panic-audit.py` | every panic-lint exemption justified | T2 |
 | `check-asm-budget.py` | the assembly allow-list and budget | T2 |
 | `check-device-access.py` | the kernel-enumerates-drivers-drive seam | T2 |
-| `check-crate-layering.sh` | layering; `libs/` depends on nothing above | T2 |
+| `check-crate-layering.sh` | layering; `src/lib/` depends on nothing above | T2 |
 | `gen-soup.py` | the item links no external crate | T2 |
 | `coverage-report.py` | statement coverage | **T2, and load-bearing** |
 | `decision-coverage.py` | decision (branch) coverage of object code, from the same traces; not yet offered against an objective (F-13) | T2 |
@@ -134,7 +134,7 @@ The 21 external crates in `Cargo.lock` are tools by this register's definition,
 since none is in the item — see [SOUP.md](SOUP.md) §2 for the list with
 versions and licences. They build, test and package; `syn`, `quote` and
 `proc-macro2` are T3 by the strict reading, since a procedural macro emits
-code, though none is used in `kernel/` or `boot/uefi/`.
+code, though none is used in `src/kernel/` or `src/boot/common/uefi/`.
 
 All are watched by `cargo deny check` with an empty `advisories.ignore` list
 and `yanked = "deny"`.
@@ -172,7 +172,7 @@ is struck out.
 
 | | |
 |---|---|
-| Output in the item | the panic explanation catalogue compiled into `kernel/src/panic/catalog.rs` |
+| Output in the item | the panic explanation catalogue compiled into `src/kernel/src/panic/catalog.rs` |
 | **Shall** | derive every entry from the catalogue source, deterministically |
 | **Shall not** | emit an entry that its input does not contain, or omit one it does |
 | Failure mode | a panic prints the wrong explanation; the kernel's behaviour is unchanged |

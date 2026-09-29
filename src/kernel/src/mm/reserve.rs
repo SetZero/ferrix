@@ -37,7 +37,7 @@
 //! tests measure the pinned standard library against the bounds: `Arc::new`
 //! makes one allocation, of `arc_layout::<T>()`; a `BTreeMap` insert makes at
 //! most `height + 2` allocations, each of a node no larger than
-//! `btree_node_bound`, which `kernel/src/fallible.rs` holds at or below the
+//! `btree_node_bound`, which `src/kernel/src/fallible.rs` holds at or below the
 //! largest size class at compile time. A B-tree of height `h` has at least
 //! `10 * 6^(h - 1)` entries, so [`RESERVE_DEPTH`] of 16 objects per class
 //! covers a tree of height 14 -- more than 10^11 entries, more memory than any

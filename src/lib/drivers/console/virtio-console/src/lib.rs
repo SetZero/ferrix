@@ -1,7 +1,7 @@
 //! The virtio-console driver: bring the device up, walk the control
 //! conversation until a named port is open, and carry that port's bytes.
 //!
-//! `libs/drivers/virtio`'s [`console`] module is the protocol -- the numbers, the
+//! `src/lib/drivers/virtio`'s [`console`] module is the protocol -- the numbers, the
 //! queue arithmetic, the control message. This crate is the *order*: what to
 //! write when, which buffers to post, what a completion means, and what state
 //! the port is in. `docs/CLIPBOARD.md` §3 is the specification.

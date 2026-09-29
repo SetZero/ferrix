@@ -9,7 +9,7 @@ a new assembly site is a deliberate act somebody had to argue for in a diff.
 
 So this is an allow-list, not a threshold. Four rules:
 
-  1. Assembly may only appear in a file listed in `scripts/data/asm-allowlist.json`,
+  1. Assembly may only appear in a file listed in `tools/common/data/asm-allowlist.json`,
      each entry carrying a `reason` for why Rust cannot express it.
   2. Each entry declares a `max_lines` budget the file must stay under, so a
      trampoline cannot quietly grow into a runtime.
@@ -32,7 +32,7 @@ ratio ceiling that binds today would only be measuring how young the tree is.
 `max_ratio` is a backstop set above where the tree sits now, ratcheted down as
 it grows; `target_ratio` records where it is going.
 
-Usage:  python3 scripts/check/check-asm-budget.py [--json]
+Usage:  python3 tools/common/check/check-asm-budget.py [--json]
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ import pathlib
 import re
 import sys
 
-ROOTS = ("kernel", "boot", "libs", "native", "xtask")
+ROOTS = ("src/kernel", "src/boot", "src/lib", "src/user/native", "tools/common/xtask")
 
 # The macros that introduce assembly. `asm!` and `naked_asm!` may be reached
 # through a `core::arch::` path, so allow a qualified prefix.
@@ -198,7 +198,7 @@ def check_allowlist(measured: dict[str, int], allowed: dict[str, dict]) -> list[
         if entry is None:
             problems.append(
                 f"{relative}: contains {count} line(s) of assembly but is not in "
-                "scripts/data/asm-allowlist.json"
+                "tools/common/data/asm-allowlist.json"
             )
         elif count > entry["max_lines"]:
             problems.append(
@@ -221,8 +221,8 @@ def main() -> int:
     _ = parser.add_argument("--json", action="store_true", help="machine-readable report")
     args = parser.parse_args()
 
-    root = pathlib.Path(__file__).resolve().parent.parent.parent
-    policy = json.loads((root / "scripts" / "data" / "asm-allowlist.json").read_text(encoding="utf-8"))
+    root = pathlib.Path(__file__).resolve().parent.parent.parent.parent
+    policy = json.loads((root / "tools" / "common" / "data" / "asm-allowlist.json").read_text(encoding="utf-8"))
     allowed = {entry["file"]: entry for entry in policy["files"]}
 
     measured, total_rust = survey(root)
@@ -238,7 +238,7 @@ def main() -> int:
     if total_asm > max_total:
         problems.append(
             f"the tree contains {total_asm} lines of assembly, over the cap of "
-            f"{max_total} in scripts/data/asm-allowlist.json.\n"
+            f"{max_total} in tools/common/data/asm-allowlist.json.\n"
             "  That list is meant to be finished. If a new construct genuinely "
             "has no Rust spelling,\n  raise the cap in the same commit that "
             "explains why."
@@ -248,7 +248,7 @@ def main() -> int:
     if ratio > max_ratio:
         problems.append(
             f"assembly is {ratio * 100:.3f}% of the tree, over the "
-            f"{max_ratio * 100:.3f}% backstop in scripts/data/asm-allowlist.json"
+            f"{max_ratio * 100:.3f}% backstop in tools/common/data/asm-allowlist.json"
         )
 
     if args.json:

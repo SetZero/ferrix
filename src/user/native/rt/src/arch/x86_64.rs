@@ -1,7 +1,7 @@
 //! x86-64.
 //!
 //! The kernel's entry is `ferrix_syscall_stub` in
-//! `kernel/src/arch/x86_64/syscall.rs`: `SYSCALL`, the number in RAX, the
+//! `src/kernel/src/arch/x86_64/syscall.rs`: `SYSCALL`, the number in RAX, the
 //! arguments in RDI, RSI, RDX, R10, R8 and R9 — R10, not RCX, because the
 //! instruction overwrites RCX with the return address and R11 with the flags —
 //! and the result back in RAX. Every other register comes back as it went.
@@ -51,7 +51,7 @@ pub(crate) fn call(raw: &Raw<'_>) -> usize {
 ///
 /// The same instruction and the same registers as [`call`]: the kernel picks
 /// the ABI by the number's range and by nothing else (`dispatch` in
-/// `kernel/src/syscall/mod.rs`), so a native program issues a Linux call
+/// `src/kernel/src/syscall/mod.rs`), so a native program issues a Linux call
 /// exactly as it issues one of its own. `exit` below has done this since this
 /// file was written; `docs/CLIPBOARD.md` §5 is what made it worth naming.
 ///
@@ -107,11 +107,11 @@ pub(crate) fn monotonic_nanos(nanos: &mut u64) -> usize {
 ///
 /// One block for both ABIs, because it is one instruction and one register
 /// assignment -- which is the whole of what `asm!` is here, and what
-/// `scripts/data/asm-allowlist.json` admits.
+/// `tools/common/data/asm-allowlist.json` admits.
 fn trap(number: usize, args: [usize; 6]) -> usize {
     let [a0, a1, a2, a3, a4, a5] = args;
     let result;
-    // SAFETY: `raw` was built by `libs/proto/native`, which puts in a pointer
+    // SAFETY: `raw` was built by `src/lib/proto/native`, which puts in a pointer
     // argument only the address of a slice `raw` borrows — shared if the
     // kernel reads it, exclusive if it writes — and `raw` outlives this trap.
     // Every native call either touches only that memory or adds mappings where

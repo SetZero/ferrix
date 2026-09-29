@@ -33,11 +33,11 @@ still has to happen. It happens at the integrator, and this item's certificate
 | Not in scope | VFS, btrfs, network stack, Linux personality, ring-3 drivers — 44,215 lines of uncertified load |
 | Reference configuration | x86-64, AArch64, ARMv7-A; release profile; rustc 1.97.1; zero Cargo features; built `--mitigations on`, the default |
 
-The boundary is enforced on every build by `scripts/check/check-item-boundary.py`, so
+The boundary is enforced on every build by `tools/common/check/check-item-boundary.py`, so
 what this manual describes and what ships cannot drift apart silently. The
 manual's own claims are held the same way: every requirement and failure mode
-below names its evidence in `scripts/data/safety-requirements.json`, and
-`scripts/check/check-safety-requirements.py` fails the build when a citation stops
+below names its evidence in `tools/common/data/safety-requirements.json`, and
+`tools/common/check/check-safety-requirements.py` fails the build when a citation stops
 resolving or when the manual and the register disagree about which ids exist.
 It caught a wrong citation the first time it ran.
 
@@ -76,9 +76,9 @@ a reason to look at the site before it is a reason to add an id.
 
 The id opens the site's `SAFETY:` comment, `// SAFETY: (DEVICE) ...`, or an
 `unsafe fn`'s `# Safety` section, `/// (TRANSLATE) The caller ...`.
-`scripts/check/check-unsafe-audit.py` refuses an id that is not in this table
+`tools/common/check/check-unsafe-audit.py` refuses an id that is not in this table
 and holds the untagged remainder to a baseline that may only shrink; this table
-and `unsafe_obligations` in `scripts/data/safety-requirements.json` are held
+and `unsafe_obligations` in `tools/common/data/safety-requirements.json` are held
 to each other by `check-safety-requirements.py`.
 
 | Id | Obligation | What it covers | Serves |
@@ -166,7 +166,7 @@ shall treat ASR-8 as unmet until they have. (Finding F-24.)
 The element allocates dynamically, and reports allocation failure at every
 site in its own source. A native call answers `NO_MEMORY`, a Linux call
 `ENOMEM` (`EAGAIN` from `madvise`), and the element carries on.
-`scripts/check/check-fallible-alloc.py` fails the build on an allocation that does
+`tools/common/check/check-fallible-alloc.py` fails the build on an allocation that does
 not report failure, and every boot proves the handling by failing allocations
 under the native calls ([MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) §1). Two
 cases still reach the safe state of §3. An allocation failure during bring-up,

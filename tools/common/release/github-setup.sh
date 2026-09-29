@@ -3,8 +3,8 @@
 # page and link previews show. Everything here is public the moment it runs;
 # read it first. Needs `gh auth login` with admin rights on the repository.
 #
-#   sh scripts/marketing/github-setup.sh            # settings only
-#   sh scripts/marketing/github-setup.sh releases   # also publish the old tags
+#   sh tools/common/release/github-setup.sh            # settings only
+#   sh tools/common/release/github-setup.sh releases   # also publish the old tags
 #
 # The social preview image cannot be set through the API. Upload
 # docs/brand/social-preview.png by hand: Settings -> General -> Social preview.
@@ -38,9 +38,9 @@ if [ "${1:-}" = releases ]; then
   for tag in stage-9 stage-9.1-console-and-iommu stage-11-ring-3-disk-and-btrfs \
              stage-11.1-network-display-and-threads; do
     gh release view "$tag" -R "$repo" >/dev/null 2>&1 && continue
-    python3 scripts/gen/release-notes.py "$tag" > /tmp/ferrix-notes.md
+    python3 tools/common/gen/release-notes.py "$tag" > /tmp/ferrix-notes.md
     gh release create "$tag" -R "$repo" --verify-tag \
-      --title "$(python3 scripts/gen/release-notes.py --title "$tag")" \
+      --title "$(python3 tools/common/gen/release-notes.py --title "$tag")" \
       --notes-file /tmp/ferrix-notes.md
   done
   rm -f /tmp/ferrix-notes.md

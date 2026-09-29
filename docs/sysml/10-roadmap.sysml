@@ -151,7 +151,7 @@ package FerrixRoadmap {
         attribute :>> status = StageStatus::Done;
         attribute :>> size = "week";
         doc /* Task, kernel stacks, context switch, per-CPU runqueues, the
-             * class stack, EEVDF in libs/kernel/sched. Scheduling domains from the
+             * class stack, EEVDF in src/lib/kernel/sched. Scheduling domains from the
              * start with Throughput alone implemented. Exit, met on all three:
              * a thousand kernel threads spawned on one processor run bounded
              * work to completion and give every stack back (about 28,000
@@ -202,8 +202,8 @@ package FerrixRoadmap {
              * which is outside the boot test because it needs a binary the
              * repository does not carry.
              *
-             * Built: the three number tables in libs/proto/linux-abi, the startup
-             * stack in libs/kernel/ustack, dispatch in kernel/src/syscall, the copy
+             * Built: the three number tables in src/lib/proto/linux-abi, the startup
+             * stack in src/lib/kernel/ustack, dispatch in src/kernel/src/syscall, the copy
              * layer, the ELF loader, and the calls a static binary makes --
              * mmap, mmap2, munmap, mprotect, brk, set_tid_address, read and
              * write/writev on the console, the clocks, getrandom, uname, the
@@ -268,8 +268,8 @@ package FerrixRoadmap {
              * exchange messages and a handle over a channel, and a Job kill
              * takes down a process tree.
              *
-             * Built: the byte-level half, in libs/proto/native-abi and libs/kernel/objects,
-             * host-tested, fuzzed and under Miri; and in kernel/src/object and
+             * Built: the byte-level half, in src/lib/proto/native-abi and src/lib/kernel/objects,
+             * host-tested, fuzzed and under Miri; and in src/kernel/src/object and
              * syscall/native, handle tables on every Process, channels carrying
              * handles, VMOs, signals and object_wait_one, Job, ports with
              * object_wait_async, and IoMapping and Interrupt minted from stage
@@ -293,7 +293,7 @@ package FerrixRoadmap {
              * through a ring-3 driver with the IOMMU on, and a deliberate
              * out-of-domain DMA attempt faulting.
              *
-             * Built: PCI configuration space in libs/platform/pci, host-tested, fuzzed
+             * Built: PCI configuration space in src/lib/platform/pci, host-tested, fuzzed
              * and under Miri; kernel enumeration from the MCFG and the device
              * tree, in the boot test on all three architectures against a
              * virtio-rng-pci device; device nodes whose apertures and vectors
@@ -308,7 +308,7 @@ package FerrixRoadmap {
              * which stage 9's Interrupt uses; every IOMMU found and each PCI
              * function placed behind one (DMAR, IORT, device tree), virtio's
              * DMA sent through it on x86-64 and AArch64, and VT-d and stage-2
-             * table encodings in libs/kernel/paging; an iommu::Domain every device
+             * table encodings in src/lib/kernel/paging; an iommu::Domain every device
              * node has, which the entropy check's DMA goes through; VT-d
              * programmed at boot on x86-64 and the SMMUv3 under ACPI on
              * AArch64, with translated domains. VMO_PIN pinning VMO pages into
@@ -333,10 +333,10 @@ package FerrixRoadmap {
              * mkfs.btrfs is mounted and a file tree read out byte-for-byte
              * matching what the host wrote.
              *
-             * Built, host-side: the btrfs read path in libs/fs/btrfs (mount
+             * Built, host-side: the btrfs read path in src/lib/fs/btrfs (mount
              * bootstrap, lookup, readdir, read, zlib/LZO/zstd), reading four
              * real mkfs.btrfs images back exactly; the mount over stage 8's
-             * traits in libs/fs/btrfs-vfs; the block queue in libs/fs/block. In the
+             * traits in src/lib/fs/btrfs-vfs; the block queue in src/lib/fs/block. In the
              * kernel: mount -t btrfs on a registered block device, read-only,
              * file data in the inode's VMO pages. Exit met: the mkfs.btrfs
              * fixture on a second virtio-blk disk, served by the ring-3
@@ -353,8 +353,8 @@ package FerrixRoadmap {
              * and AF_INET6 sockets, the AF_NETLINK route family, interfaces,
              * routes and loopback; virtio-net as a userspace driver on stage
              * 10's device objects; /proc/net; parsers and the TCP state
-             * machine in libs/, fuzzed. The host side exists already, in
-             * xtask/src/gateway/: a NAT gateway on QEMU's dgram backend,
+             * machine in src/lib/, fuzzed. The host side exists already, in
+             * tools/common/xtask/src/gateway/: a NAT gateway on QEMU's dgram backend,
              * written rather than reusing -netdev user because that is slirp
              * and slirp is an optional QEMU build dependency, while tap and
              * unprivileged user namespaces both need privilege a build tool
@@ -453,7 +453,7 @@ package FerrixRoadmap {
         attribute :>> size = "month";
         doc /* All eight namespaces, the unified cgroup hierarchy with cpu,
              * memory, io and pids, cgroupfs, classic-BPF seccomp with the
-             * interpreter in libs/. Exit: an unprivileged user namespace runs
+             * interpreter in src/lib/. Exit: an unprivileged user namespace runs
              * pid 1 under a memory limit that triggers scoped reclaim and a
              * scoped OOM kill, with a seccomp filter blocking a syscall.
              *
@@ -467,7 +467,7 @@ package FerrixRoadmap {
              * 2026-09-23: every process in exactly one job, fork inheriting
              * it, populated counted exactly, the two kills apart. G2
              * done the same day: cgroupfs mounts as cgroup2, over
-             * libs/fs/cgroupfs. G3 and G4 done on 2026-09-24: cgroup.events
+             * src/lib/fs/cgroupfs. G3 and G4 done on 2026-09-24: cgroup.events
              * wakes poll, select and epoll with POLLPRI; clone3 starts a
              * child in a cgroup; chown delegates a subtree under cgroup v2's
              * common-ancestor rule. C1-C5 and C7 are met. G5 done on
@@ -510,13 +510,13 @@ package FerrixRoadmap {
              * kernel: every call it is made of -- setpgid, TIOCSPGRP,
              * TIOCSCTTY, the line discipline's SIGTSTP, wait4's WUNTRACED --
              * had been answered since stage 7 with nothing using them.
-             * userland/zinc/src/jobs.rs puts a pipeline in one process group, hands
+             * src/user/linux/zinc/src/jobs.rs puts a pipeline in one process group, hands
              * the terminal to the foreground job and takes it back, and
              * keeps the table jobs, fg, bg, wait, disown and kill %1 name.
              * Verified by jobsSession and by zinc's pty gate.
              *
              * A working init landed on 2026-09-26 (L1 to L4 of
-             * docs/INIT.md): /sbin/init over libs/init/svc's manager, a cgroup
+             * docs/INIT.md): /sbin/init over src/lib/init/svc's manager, a cgroup
              * per service, a getty on the console, shutdown by SIGTERM; the
              * same day svc and its control socket, readiness, socket
              * activation and resource limits (L5 to L7, L9) and the
@@ -535,7 +535,7 @@ package FerrixRoadmap {
              *
              * Designed on 2026-09-23 in docs/INIT.md: pid 1 and a service
              * manager, systemd-shaped units, a cgroup per service, a pure
-             * manager in libs/init/svc behind backends a microkernel could
+             * manager in src/lib/init/svc behind backends a microkernel could
              * serve. 67 points to L10, all spent; the stage 13
              * cgroups its first boot needs landed on 2026-09-24. */
     }
@@ -744,7 +744,7 @@ package FerrixRoadmap {
              * owed a target before its consuming stage starts. */
     }
     #planned requirement <'D.miri'> miriOwed : Principles::DesignRule {
-        doc /* CI runs Miri over libs/platform/elf and libs/proto/bootinfo only; frame, heap
+        doc /* CI runs Miri over src/lib/platform/elf and src/lib/proto/bootinfo only; frame, heap
              * and paging run in the kernel today and are owed a step ahead of
              * every crate in the written-ahead table. */
     }
@@ -871,7 +871,7 @@ package FerrixRoadmap {
 
     #implemented verification def RustcTest {
         doc /* The acceptance test itself: cargo xtask test-rustc, and the CI
-             * job rustc. It attaches the sysroot scripts/fetch/fetch-rustc-sysroot.sh
+             * job rustc. It attaches the sysroot tools/common/fetch/fetch-rustc-sysroot.sh
              * makes -- a btrfs volume the kernel mounts at /data -- under
              * snapshot=on, and zinc runs rustc -vV, rustc hello.rs and
              * ./hello, each with an exit status of its own. x86-64 only. */

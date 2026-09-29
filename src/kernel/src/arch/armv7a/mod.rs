@@ -3,7 +3,7 @@
 //! Everything the facade asks of an architecture, for a 32-bit Arm CPU with
 //! the Large Physical Address Extension — a Cortex-A7 or A15 — described by a
 //! device tree rather than by ACPI. The register-level drivers live beside
-//! this directory in `kernel/src/arch/`: the GICv2, which AArch64 shares, and
+//! this directory in `src/kernel/src/arch/`: the GICv2, which AArch64 shares, and
 //! the two serial ports, one of which every machine here has. What is in this
 //! directory is how this architecture finds them, and everything that is
 //! coprocessor 15 rather than a system register.
@@ -84,7 +84,7 @@ pub(crate) const NAME: &str = "armv7a";
 /// This machine, as the hand-off structure names it.
 ///
 /// The kernel needs it for the same reason the loader does: to refuse an ELF
-/// image built for a different architecture. `boot/uefi/src/arch/` has carried the
+/// image built for a different architecture. `src/boot/common/uefi/src/arch/` has carried the
 /// same constant since stage 1; this is the kernel's copy, and the two are
 /// checked against each other by the image simply booting.
 pub(crate) const ARCH: Arch = Arch::Armv7a;

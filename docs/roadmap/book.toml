@@ -1,4 +1,4 @@
-# The roadmap as a website: scripts/gen/build-roadmap-book.sh runs
+# The roadmap as a website: tools/common/gen/build-roadmap-book.sh runs
 # `mdbook build docs/roadmap`. The pages are the Markdown beside this file,
 # in SUMMARY.md's order; print.html is all of them on one page.
 
@@ -12,9 +12,9 @@ build-dir = "book"
 create-missing = false
 
 # Links that leave docs/roadmap/ go to the repository's web view on the site,
-# and images from docs/img/ are inlined (scripts/gen/split-roadmap.py).
+# and images from docs/img/ are inlined (tools/common/gen/split-roadmap.py).
 [preprocessor.outside-links]
-command = "python3 ../../scripts/gen/split-roadmap.py mdbook"
+command = "python3 ../../tools/common/gen/split-roadmap.py mdbook"
 
 [output.html]
 git-repository-url = "https://github.com/SetZero/ferrix"

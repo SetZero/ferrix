@@ -440,7 +440,7 @@ fn the_mime_types_are_the_compositors() {
     assert_eq!(
         ClipboardType::Utf8Text.mime(),
         Some("text/plain;charset=utf-8"),
-        "what `userland/compositor/clip` offers"
+        "what `src/user/linux/compositor/clip` offers"
     );
     assert_eq!(ClipboardType::None.mime(), None, "the absence of a type");
 }

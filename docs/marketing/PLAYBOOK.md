@@ -4,7 +4,7 @@ Updated 2026-09-27. Ferrix is experimental software. Lead with what a visitor
 can see and try, then explain how it was built.
 
 The reusable logo, colours and short descriptions are in the
-[press and brand kit](../../marketing/README.md).
+[press and brand kit](README.md).
 
 ## The story
 
@@ -27,7 +27,7 @@ and documentation; it is not the product headline.
   <https://setzero.github.io/ferrix/>.
 - The repository has a homepage, description, focused topics, README,
   contribution guide, issue forms and Discussions. The live description and
-  topics were refreshed on 2026-09-27; `scripts/marketing/github-setup.sh`
+  topics were refreshed on 2026-09-27; `tools/common/release/github-setup.sh`
   records them for future setup.
 - `docs/brand/social-preview.png` is 1280×640 and under 1 MB. Upload it under
   the repository's **Settings → General → Social preview** if it is not there.

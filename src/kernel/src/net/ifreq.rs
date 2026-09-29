@@ -1,6 +1,6 @@
 //! The `ifreq` ioctls: the interface interface every program already knows.
 //!
-//! rtnetlink is how an interface is configured today, and `kernel/src/net/
+//! rtnetlink is how an interface is configured today, and `src/kernel/src/net/
 //! netlink` is where that lives. These calls are the older way, and they have
 //! not gone anywhere: `if_nametoindex`, which POSIX.1-2024 specifies and which
 //! every program that names an interface goes through, is `SIOCGIFINDEX`;

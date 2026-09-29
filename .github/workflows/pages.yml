@@ -1,13 +1,13 @@
 name: Website
 
-# Publishes website/ to GitHub Pages (https://setzero.github.io/ferrix/).
+# Publishes docs/website/ to GitHub Pages (https://setzero.github.io/ferrix/).
 # Pages has to be switched on once, in Settings -> Pages -> Source:
 # "GitHub Actions". Until then the deploy job fails and nothing else does.
 
 on:
   push:
     branches: [main]
-    paths: [website/**, docs/brand/**, .github/workflows/pages.yml]
+    paths: [docs/website/**, docs/brand/**, .github/workflows/pages.yml]
   workflow_dispatch:
 
 permissions:
@@ -25,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Assemble the site
-        run: sh website/build.sh _site
+        run: sh docs/website/build.sh _site
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

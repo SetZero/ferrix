@@ -16,7 +16,7 @@ import collections
 import pathlib
 import sys
 
-# `userland/compositor/render`'s `Style::default` background, as the PPM holds it.
+# `src/user/linux/compositor/render`'s `Style::default` background, as the PPM holds it.
 BACKGROUND = (0x11, 0x11, 0x11)
 
 

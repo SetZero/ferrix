@@ -7,7 +7,7 @@
 //! space — which is why this is where the loader's only assembly lives.
 //!
 //! `#[cfg(target_arch)]` is confined to this directory by
-//! `scripts/check/check-crate-layering.sh`, and the facade below is what the rest of
+//! `tools/common/check/check-crate-layering.sh`, and the facade below is what the rest of
 //! the loader sees.
 
 #[cfg(target_arch = "aarch64")]

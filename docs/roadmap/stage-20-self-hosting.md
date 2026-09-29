@@ -86,7 +86,7 @@ are in place:
 * `FERRIX_BUILDS=record:<DIR>` makes xtask write down every build it makes
   -- Cargo's and the C programs' build scripts, each keyed by SHA-256 over
   its command, its environment and the files it reads -- as a plan, while
-  the matrix runs as usual (`xtask/src/builds.rs`).
+  the matrix runs as usual (`tools/common/xtask/src/builds.rs`).
   `FERRIX_BUILDS=replay:<DIR>/store` makes no build at all: each is answered
   from the store, and one the store lacks fails with "was not built on
   Ferrix".
@@ -94,13 +94,13 @@ are in place:
   vendored crates of every workspace and the sources the C builds read, and
   zinc runs `cargo xtask builds-execute` there; the store it writes comes
   back to the host.
-* `scripts/test/selfhost-matrix.sh record|replay <DIR>` runs the matrix both
+* `tools/common/test/selfhost-matrix.sh record|replay <DIR>` runs the matrix both
   ways, in a home of its own. A plan belongs to the tree it was recorded on.
 
 The toolchain grew to match: every target's standard library, gcc and g++ 15,
 binutils, make, cmake, ninja, meson, bison, pkg-config, Perl, Python and
 wayland-scanner 1.24.0 for foot, 151 Debian packages pinned by
-`scripts/fetch/fetch-rustc-sysroot.sh`. foot builds from that tree alone in a
+`tools/common/fetch/fetch-rustc-sysroot.sh`. foot builds from that tree alone in a
 sandbox shaped like the guest. On 2026-09-24 the whole matrix recorded 147
 builds; 26 of its 31 rows passed, and the five that failed were kernel
 self-check flakes and one slow frame on a host at a load of 20 to 50. Ferrix
@@ -125,7 +125,7 @@ What the exit needs now:
   (`aarch64-unknown-linux-gnu`, `armv7-unknown-linux-gnueabihf`,
   `armv7-unknown-linux-musleabihf`), so the matrix's Arm rows boot Alpine's
   musl busybox and `test-shell` on ferrousli's loader runs on x86-64 only.
-* **Chrome.** `test-chrome` needs the volume `scripts/fetch/fetch-chrome.sh`
+* **Chrome.** `test-chrome` needs the volume `tools/common/fetch/fetch-chrome.sh`
   makes, and is not in the matrix.
 
 ---

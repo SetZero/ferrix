@@ -4,7 +4,7 @@ Inode and dentry caches, the mount table, file descriptors and their sharing
 rules, tmpfs, devfs, procfs (`self/maps`, `self/exe`, `self/fd`, `cpuinfo`,
 `meminfo`), and cpio initramfs unpacking.
 
-**Done — the VFS, host-tested before the kernel calls it.** `libs/fs/vfs` is
+**Done — the VFS, host-tested before the kernel calls it.** `src/lib/fs/vfs` is
 the half of the stage that needs no machine, written first for the reason the
 continuous rule gives: path resolution over names a program chose is exactly
 the code that should meet a fuzzer before it meets ring 0.
@@ -74,7 +74,7 @@ zeros past it, and never asks the source for what it cut:
   tmpfs    4 pages written through a VMO and read back, 52 filled from a page source in runs and cut, 0 frames leaked
 ```
 
-**Done — the calls that take a path.** `kernel/src/syscall/path.rs` and
+**Done — the calls that take a path.** `src/kernel/src/syscall/path.rs` and
 `stat.rs`: `mkdirat`, `mknodat` (regular files, pipes, socket names, and
 character and block device nodes), `unlinkat`, `renameat2` with
 `RENAME_NOREPLACE`, `symlinkat`, `linkat`, `readlinkat`, `chdir`, `fchdir`,
@@ -82,7 +82,7 @@ character and block device nodes), `unlinkat`, `renameat2` with
 `getdents64`, and the stat family with `statx` — each with its pre-`*at` form
 where the architecture has one. The one architecture-dependent fact is which
 `struct stat` a stat call fills: x86-64's own 144 bytes, the generic 128, or
-ARMv7-A's 104-byte `stat64`, whose EABI padding `libs/proto/linux-abi` now names.
+ARMv7-A's 104-byte `stat64`, whose EABI padding `src/lib/proto/linux-abi` now names.
 It is `arch::STAT_LAYOUT`, and all three encoders are compiled, and checked, on
 every architecture. The umask is per process, 0o022 to start, and applies to
 `openat`'s create too. The boot check makes each call by its number against
@@ -103,7 +103,7 @@ description of `/dev/console`. `openat`, `close`, `read`, `write`, `readv`,
 the console, which is the one thing busybox's `printf` needed before it would
 print, and stage 7's shell test has its `printf` line back. The `O_*` bits
 x86-64 and the Arm architectures number differently are tables in
-`libs/proto/linux-abi`, chosen through the architecture facade. `ioctl` on the
+`src/lib/proto/linux-abi`, chosen through the architecture facade. `ioctl` on the
 console goes to `syscall/tty.rs`. It refused `TCGETS` while the console edited
 and echoed every line itself, because `sh -i` would then switch to raw mode
 and echo as well, doubling every character. Since stage 7 made the console a
@@ -140,7 +140,7 @@ the caller's pid; each `/proc/<pid>` has `fd`, `status`, `comm`, `cmdline`,
 `stat`, `maps`, `exe`, `cwd` and `root`, and later `task` and `mounts`; and
 `/proc` has `cpuinfo`, `meminfo`, `mounts`, `stat`, `partitions`,
 `filesystems`, `uptime`, `version` and `sys`, and later `sysrq-trigger` and
-`net`. The text is `libs/fs/procfs`, pinned
+`net`. The text is `src/lib/fs/procfs`, pinned
 byte for byte against lines taken from a real Linux `/proc`. `/proc/stat`'s
 processor lines are each run queue's busy and idle time, read without charging
 anything, so a line never goes backwards between reads; all busy time is
@@ -163,7 +163,7 @@ process now has a pid from a registry that finds a live process by it.
 ```
 
 **Done — pipes, FIFOs, and the calls about filesystems.** `pipe` and `pipe2`
-over `libs/fs/vfs`'s pipe buffer, with a wait queue for each direction and each
+over `src/lib/fs/vfs`'s pipe buffer, with a wait queue for each direction and each
 end counted by its inode, so that a reader sees end of file and a writer
 `EPIPE` exactly when the last descriptor that could feed or drain the pipe
 closes. `O_NONBLOCK` reaches a stream with every read and write, because

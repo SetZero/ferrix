@@ -3,10 +3,10 @@
 //! Hyprland's own `hyprctl` is a program that opens
 //! `$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket.sock`, writes
 //! one line, reads the answer and prints it. That is the whole of it, and
-//! this is the same program: a client of the socket `userland/compositor/hyprix`
+//! this is the same program: a client of the socket `src/user/linux/compositor/hyprix`
 //! serves, written here because Ferrix has no Hyprland to take one from.
 //!
-//! The shape of a request and of an answer is `userland/compositor/ipc`'s, which is
+//! The shape of a request and of an answer is `src/user/linux/compositor/ipc`'s, which is
 //! host-tested against Hyprland's own documented forms and against real
 //! `hyprctl` through a committed probe. This crate is the socket and the
 //! command line.

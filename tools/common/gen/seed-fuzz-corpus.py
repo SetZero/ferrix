@@ -9,7 +9,7 @@ happens to exercise some of them.
 import pathlib
 import struct
 
-OUT = pathlib.Path(__file__).resolve().parent.parent.parent / "tests" / "fuzz" / "corpus" / "elf_parse"
+OUT = pathlib.Path(__file__).resolve().parent.parent.parent.parent / "tests" / "fuzz" / "corpus" / "elf_parse"
 OUT.mkdir(parents=True, exist_ok=True)
 
 EHDR_SIZE = 64

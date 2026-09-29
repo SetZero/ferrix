@@ -1,8 +1,8 @@
 /*
- * The ALSA numbers and layouts `libs/proto/linux-abi/src/sound.rs` writes down,
+ * The ALSA numbers and layouts `src/lib/proto/linux-abi/src/sound.rs` writes down,
  * printed from the UAPI header itself.
  *
- * Run by `libs/proto/linux-abi/probe/sound.sh` on a Linux host with the kernel's
+ * Run by `src/lib/proto/linux-abi/probe/sound.sh` on a Linux host with the kernel's
  * UAPI headers (`linux-libc-dev`) once natively for 64-bit and once for
  * ARMv7-A under qemu-arm, into `sound-64.txt` and `sound-32.txt` beside it.
  * The crate's tests read both files and require every line to match what the

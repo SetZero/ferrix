@@ -1,7 +1,7 @@
 //! Reading what the loader did about KASLR off a boot's serial output.
 //!
 //! The loader moves the kernel image, the direct map and the vmap arena each
-//! boot (`boot/uefi/src/kaslr.rs`, `docs/certification/SPECULATION.md` §6) and says
+//! boot (`src/boot/common/uefi/src/kaslr.rs`, `docs/certification/SPECULATION.md` §6) and says
 //! where on the serial line:
 //!
 //! ```text
@@ -114,7 +114,7 @@ pub(crate) fn declined(args: &Args) -> bool {
 }
 
 /// Write the slide of the boot in `lines` beside the trace a coverage plugin
-/// wrote, as `<trace>.slide`, for `scripts/gen/coverage-report.py`.
+/// wrote, as `<trace>.slide`, for `tools/common/gen/coverage-report.py`.
 ///
 /// `plugin` is QEMU's `-plugin` argument, whose `filename=` names the trace.
 /// A drcov trace records the addresses the code ran at, and the report looks

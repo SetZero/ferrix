@@ -28,7 +28,7 @@ after a click and typing (§8).
 not one built here -- starts on Ferrix with its GPU process and renderers,
 runs a page's JavaScript in V8 and writes a screenshot, and `cargo xtask
 test-chrome` requires all three (§8). It is not on the image: it lives on a
-btrfs volume `scripts/fetch/fetch-chrome.sh` makes from pinned downloads, with
+btrfs volume `tools/common/fetch/fetch-chrome.sh` makes from pinned downloads, with
 Debian 13's glibc and the forty libraries it loads. What it runs with, and
 what is left:
 
@@ -60,7 +60,7 @@ what is left:
 **Done, 2026-09-24: a foreign toolkit client inside the guest** (§6).
 `foot` 1.24.0, a real Wayland terminal nobody here wrote, runs on Ferrix's
 compositor and draws a program's output in the image's font. It is built
-by `userland/ferrousli/tools/ports/foot` against ferrousli with libffi 3.5.2,
+by `src/user/linux/ferrousli/tools/ports/foot` against ferrousli with libffi 3.5.2,
 wayland 1.24.0, wayland-protocols 1.45, libxkbcommon 1.11.0, pixman 0.46.4,
 freetype 2.14.1, expat 2.7.3, fontconfig 2.17.1, tllist 1.1.0 and fcft
 3.3.2, and DejaVu Sans Mono 2.37 is the font. **Then** headless Chrome,
@@ -100,7 +100,7 @@ thing rather than by planning it.
 This is further along than the question usually starts from, and the reasons
 are worth naming because each was built for something else and pays here.
 
-* **The system-call surface.** About 237 of the 263 names `libs/proto/linux-abi`
+* **The system-call surface.** About 237 of the 263 names `src/lib/proto/linux-abi`
   carries are answered with real work. The ones Chrome's process model stands
   on are among them: `clone`/`clone3` with real threads, `futex`, all six
   `epoll` calls, `eventfd2`, `memfd_create` with seals, and `AF_UNIX` with
@@ -112,11 +112,11 @@ are worth naming because each was built for something else and pays here.
   since. Threads are complete down to
   robust and priority-inheriting mutexes and cancellation, and the thread
   control block keeps glibc's layout.
-* **A C++ runtime that is exercised.** `userland/ferrousli/tools/ports/libcxx` builds
+* **A C++ runtime that is exercised.** `src/user/linux/ferrousli/tools/ports/libcxx` builds
   LLVM 23.1.1's libc++, libc++abi and libunwind against ferrousli, exceptions
   and all, and btop 1.4.7 -- a C++23 program with threads -- draws its panels
   on Ferrix. curl fetches over HTTPS and git clones, both built the same way.
-* **A compositor a toolkit will start against.** `userland/compositor/hyprix` advertises
+* **A compositor a toolkit will start against.** `src/user/linux/compositor/hyprix` advertises
   every global Chromium's Ozone backend binds: `wl_compositor`,
   `wl_subcompositor`, `wl_shm`, `wl_seat`, `wl_data_device_manager`,
   `xdg_wm_base` at 6, `zxdg_decoration_manager_v1`, `wp_viewporter`,
@@ -151,8 +151,8 @@ says how much of it is done. It is unavoidable on either route.
 the file and reads its first page -- a script's `#!` line, or an ELF file's
 header and program header table, read on to the table's end if that is
 further -- and maps the segments from the file's page cache, the same object
-an `mmap` of the file maps (`kernel/src/syscall/program.rs`,
-`kernel/src/syscall/load.rs`). Every page wholly inside one segment's file
+an `mmap` of the file maps (`src/kernel/src/syscall/program.rs`,
+`src/kernel/src/syscall/load.rs`). Every page wholly inside one segment's file
 contents is a private mapping of the file: read from the disk the first time
 the program touches it, shared by every process running the same program,
 and copied into the process's own object the first time it is written, so a
@@ -164,7 +164,7 @@ the kernel, are still copied, a piece at a time rather than whole. The linker
 limit, since `mmap` of a file always mapped its object. What is left of a
 limit is memory for page tables.
 
-The boot check (`kernel/src/fs/exec_check.rs`, FX-0871) loads a 72 MiB
+The boot check (`src/kernel/src/fs/exec_check.rs`, FX-0871) loads a 72 MiB
 program whose file is served by a page source that counts what it is asked
 for, as btrfs serves its page cache from disk. On every boot it reports
 `a 72 MiB program was loaded reading 3 of its 18437 pages, 67 by the time it
@@ -186,7 +186,7 @@ target at all; and the link was followed as its text, so a program whose file
 had been renamed or deleted could not be run again through it. A fork now
 takes its parent's identity (`Process::forked`), and `/proc/<pid>/exe` is a
 magic link, as on Linux: followed, it leads to the file the program was
-loaded from, by `Inode::link_location` (`libs/fs/vfs/src/walk.rs`), whatever its
+loaded from, by `Inode::link_location` (`src/lib/fs/vfs/src/walk.rs`), whatever its
 name is now; read, it is that file's path with ` (deleted)` after a file since
 removed. The boot check forks the sparse 72 MiB program, removes its name,
 and has the fork `execve("/proc/self/exe")`, which must run it to its status.
@@ -195,7 +195,7 @@ with the link followed as text, with `errno 2` again.
 
 **On Chrome, 2026-09-24**, x86-64 under KVM with 2 GiB, the 198 MB
 `chrome-headless-shell` 154.0.8037.57 on the btrfs volume
-`scripts/fetch/fetch-chrome.sh` makes (branch `chrome/headless`), run by `cargo
+`tools/common/fetch/fetch-chrome.sh` makes (branch `chrome/headless`), run by `cargo
 xtask test-chrome`:
 
 * on Debian's `ld-linux` and glibc, `execve` of the 198 MB file succeeds, the
@@ -225,7 +225,7 @@ followed as their text.
 What follows is how it stood before.
 
 `execve` reads the whole file through `fs::read_file`, whose `READ_FILE_LIMIT`
-is 64 MiB (`kernel/src/fs/mod.rs`), and `load.rs` maps the segments and copies
+is 64 MiB (`src/kernel/src/fs/mod.rs`), and `load.rs` maps the segments and copies
 the image in. There is no demand-paged, file-backed executable mapping and no
 page cache behind `execve`. Chrome's binary with its resources is 180 to 250
 MiB.
@@ -253,7 +253,7 @@ back.
 
 Chrome's zygote wants user, pid and mount namespaces and a seccomp-bpf filter.
 Ferrix has neither: `unshare` refuses everything it cannot honour
-(`kernel/src/syscall/namespace.rs`), and there is no `seccomp` or `bpf` number
+(`src/kernel/src/syscall/namespace.rs`), and there is no `seccomp` or `bpf` number
 at all. Running `--no-sandbox` is the honest first target; stage 13 is the
 other answer.
 
@@ -263,9 +263,9 @@ does. A ring-3 program on all three architectures proves it. What follows is
 what the state was, and why it mattered.
 
 But `clone` and `clone3` did not check the `CLONE_NEW*` flags at all.
-`libs/proto/linux-abi` defines them -- `CLONE_NEWNS`, `CLONE_NEWUSER`, `CLONE_NEWPID`
+`src/lib/proto/linux-abi` defines them -- `CLONE_NEWNS`, `CLONE_NEWUSER`, `CLONE_NEWPID`
 and `CLONE_NEWNET` are all in `types.rs` -- and no line of
-`kernel/src/syscall/family.rs` ever tested one: `clone_with` checked the
+`src/kernel/src/syscall/family.rs` ever tested one: `clone_with` checked the
 `CLONE_THREAD`, `CLONE_SIGHAND` and `CLONE_VM` combinations and `CLONE_PIDFD`,
 and nothing else. So `clone(CLONE_NEWUSER|CLONE_NEWPID|SIGCHLD)` succeeded and
 handed back an ordinary child in the one namespace there is. A program that
@@ -287,7 +287,7 @@ that a program which asks for isolation now finds out it cannot have it.
   program now gets Linux's shape of vDSO, `linux-vdso.so.1` with
   `__vdso_clock_gettime`, `__vdso_gettimeofday` and `__vdso_time` at
   `LINUX_2.6`, over a data page holding the TSC's frequency and the
-  real-time offset (`libs/kernel/vdso`, `kernel/src/syscall/vdso.rs`). Under an
+  real-time offset (`src/lib/kernel/vdso`, `src/kernel/src/syscall/vdso.rs`). Under an
   emulator, whose clock is the HPET, the functions make the system call.
   AArch64 and ARMv7-A have none yet.
 * ~~**No `madvise`.**~~ **Done, 2026-09-24.** The number decoded and nothing
@@ -354,7 +354,7 @@ that a program which asks for isolation now finds out it cannot have it.
   AArch64, and ARMv7-A at four processors and at two -- no waiter came back
   more than 3.5 ms after its deadline, and most within half a millisecond.
   What is not as Linux has it is in `docs/ROADMAP.md`, stage 17.
-* **No AVX.** `kernel/src/arch/x86_64/switch.rs` saves a 512-byte `FXSAVE`
+* **No AVX.** `src/kernel/src/arch/x86_64/switch.rs` saves a 512-byte `FXSAVE`
   area -- x87 and SSE -- and `CR4.OSXSAVE` is never set, so `CPUID` reports no
   OS support and V8 and Skia fall back to SSE2. That is correct rather than
   corrupting, and it is slow.
@@ -363,8 +363,8 @@ that a program which asks for isolation now finds out it cannot have it.
   fontconfig with freetype and expat, plus an actual font on the image. They
   are static libraries in foot's build today; Chromium, built dynamically,
   will want them as shared ones. The compositor still draws its own text
-  with the coverage cells `userland/compositor/term` carries; a client brings its own
-  fonts, which is what these are for. Note that `userland/compositor/README.md`'s "no
+  with the coverage cells `src/user/linux/compositor/term` carries; a client brings its own
+  fonts, which is what these are for. Note that `src/user/linux/compositor/README.md`'s "no
   C device stack, ever" is a rule about the compositor, not about its
   clients.
 * ~~**No audio at all**, which a browser survives and a person notices.~~
@@ -412,14 +412,14 @@ changed no code.
 
 **Overtaken on 2026-09-20:** `PT_INTERP` is loaded now. `execve` places the
 linker the program names at `INTERP_BASE`, enters it, and fills `AT_BASE`;
-`libs/platform/elf` reads the path. That is 3 of the kernel half's 5 points, so **31
+`src/lib/platform/elf` reads the path. That is 3 of the kernel half's 5 points, so **31
 remain**, and what remains is the part this paragraph already said was the
 expensive one -- there is still no loader anywhere. What follows is how it
 stood on 2026-09-18.
 
 **Overtaken again on 2026-09-21: 27 of the 39 are done, 12 left.**
-`userland/ferrousli/ld` is a working loader -- symbol versions, `COPY`, initial-exec
-TLS, `DT_FINI` -- and `userland/ferrousli/tools/build-shared.sh` links ferrousli as a
+`src/user/linux/ferrousli/ld` is a working loader -- symbol versions, `COPY`, initial-exec
+TLS, `DT_FINI` -- and `src/user/linux/ferrousli/tools/build-shared.sh` links ferrousli as a
 versioned `libc.so.6`. Debian's own dynamic busybox runs on Ferrix with
 glibc's loader on all three architectures, and with ferrousli's in glibc's
 place on x86-64. What Chrome still needs of it is most of the 12:
@@ -428,28 +428,28 @@ place on x86-64. What Chrome still needs of it is most of the 12:
 current account.
 
 What was not done is `PT_INTERP`, and the hook for it is one place --
-`load.rs`'s refusal. `libs/platform/elf` already parses the relative relocations a
+`load.rs`'s refusal. `src/lib/platform/elf` already parses the relative relocations a
 static PIE carries and reads symbol tables; ferrousli has the load-bias
 arithmetic, a real `dl_iterate_phdr` and a real `dladdr`, which is what makes
 C++ unwinding work. What does not exist anywhere, on any ref, is a loader: a
 search of every commit in the repository for `PT_INTERP`, `DT_NEEDED`,
 `JUMP_SLOT` and GNU-hash code finds only musl's vendored
-`userland/ferrousli/include/elf.h`. **34 points remain**, not 39.
+`src/user/linux/ferrousli/include/elf.h`. **34 points remain**, not 39.
 
 *(btrfs write is overtaken too: stage 12 landed on 2026-09-21, and the
 roadmap has how it stands. What follows is 2026-09-18.)*
 
 **btrfs write: no code, on any ref.** Searches across every commit for
 `delayed_ref`, a transaction commit and the free-space tree return nothing.
-`libs/fs/btrfs` says in its own header that it "knows nothing about transactions
-or allocation", and `libs/fs/btrfs-vfs` answers `EROFS` from `write_at`,
+`src/lib/fs/btrfs` says in its own header that it "knows nothing about transactions
+or allocation", and `src/lib/fs/btrfs-vfs` answers `EROFS` from `write_at`,
 `set_len` and `create`.
 
 What is there, and it is the expensive half, landed with stage 11: the page
 cache (`ffc95eac` and `f36551cf`, a file's VMO filled from a `PageSource`),
 file-backed `MAP_SHARED` writing through to the file (`c63167ee`), and a block
-stack that can already write -- `libs/drivers/virtio-blk` has `Write` and `Flush`
-request types and `libs/proto/blkring` copies write payloads in. Writing a sector is
+stack that can already write -- `src/lib/drivers/block/virtio-blk` has `Write` and `Flush`
+request types and `src/lib/proto/blkring` copies write payloads in. Writing a sector is
 plumbed end to end and nothing above it uses that path. Three recorded
 decisions park log-tree replay, eviction and writeback here.
 
@@ -494,7 +494,7 @@ So the row is not a cost a browser would have to carry; it is already paid.
 Two milestones before the browser, each of which is worth having on its own.
 
 **First, a foreign toolkit client inside the guest.** `foot` is already the
-compositor's real-client probe, but `userland/compositor/hyprix/probe/real-client.sh`
+compositor's real-client probe, but `src/user/linux/compositor/hyprix/probe/real-client.sh`
 says in its own header that it is a development-host check: no client that was
 not written against this tree's crates has ever run *on* Ferrix. Building
 libwayland-client and libxkbcommon against ferrousli and running foot in the
@@ -502,7 +502,7 @@ guest proves the client story end to end for a fraction of a browser's cost,
 and it is on the browser's path rather than beside it.
 
 **Done, 2026-09-24.** `cargo xtask ports` builds foot and the ten libraries
-under it statically against ferrousli (`userland/ferrousli/tools/ports/foot`), and
+under it statically against ferrousli (`src/user/linux/ferrousli/tools/ports/foot`), and
 `cargo xtask test-foot` boots the compositor with foot running `hyprctl
 version`. foot finds DejaVu Sans Mono through fontconfig, lays out a 7x13
 grid, starts four render threads and draws the three lines, which came
@@ -550,19 +550,19 @@ telling a caller something untrue.
 
 ## 7. What was checked, and what was not
 
-Read for this: `kernel/src/syscall/` against the `Syscall` enum, `libs/platform/elf`,
-`libs/fs/btrfs` and `libs/fs/btrfs-vfs`, `libs/drivers/virtio-blk` and `libs/proto/blkring`,
-`userland/ferrousli/src` and `userland/ferrousli/tools`, `userland/compositor/server` and
-`userland/compositor/hyprix`, `xtask/src/initramfs.rs`, and the history of every ref for
+Read for this: `src/kernel/src/syscall/` against the `Syscall` enum, `src/lib/platform/elf`,
+`src/lib/fs/btrfs` and `src/lib/fs/btrfs-vfs`, `src/lib/drivers/block/virtio-blk` and `src/lib/proto/blkring`,
+`src/user/linux/ferrousli/src` and `src/user/linux/ferrousli/tools`, `src/user/linux/compositor/server` and
+`src/user/linux/compositor/hyprix`, `tools/common/xtask/src/initramfs.rs`, and the history of every ref for
 the two prerequisites in §4. Chromium's own requirements were taken from
 Alpine's `community/chromium` APKBUILD and its musl patch set, which is the
 only evidence that a Chromium against a musl-shaped C library builds at all.
 
-Read again on 2026-09-19, for the re-check at the top: `kernel/src/fs/devfs.rs`
-and `libs/fs/vfs`'s dentry cache, for what `/dev/shm` actually costs;
-`kernel/src/syscall/family.rs` again; and, for §4, that no loader has appeared
+Read again on 2026-09-19, for the re-check at the top: `src/kernel/src/fs/devfs.rs`
+and `src/lib/fs/vfs`'s dentry cache, for what `/dev/shm` actually costs;
+`src/kernel/src/syscall/family.rs` again; and, for §4, that no loader has appeared
 (`DT_NEEDED` and `JUMP_SLOT` are still in no Rust in the tree), that
-`libs/fs/btrfs-vfs` still answers `EROFS`, and that `madvise`, `AT_SYSINFO_EHDR`,
+`src/lib/fs/btrfs-vfs` still answers `EROFS`, and that `madvise`, `AT_SYSINFO_EHDR`,
 `timerfd` and `signalfd` are all still where §3 left them.
 
 Not checked, and each could move the numbers: whether Chromium's build system
@@ -584,7 +584,7 @@ position-independent glibc program, with ANGLE and SwiftShader beside it,
 that loads forty of the system's libraries -- glib, NSS, D-Bus, the X11
 client libraries, gbm, udev, ALSA and what those load.
 
-**Where it runs from.** `scripts/fetch/fetch-chrome.sh` puts it on a btrfs volume
+**Where it runs from.** `tools/common/fetch/fetch-chrome.sh` puts it on a btrfs volume
 with Debian 13's glibc and loader and the Debian packages of those forty
 libraries, fontconfig's configuration and DejaVu, every download pinned by
 its SHA-256. After unpacking, it looks up every library each ELF file on the
@@ -758,7 +758,7 @@ variable is not set.
 
 The customer asked to see it. `chrome-headless-shell` has no windowing, so
 the volume carries the same version's full browser too, Chrome for Testing's
-`chrome-linux64`, a 294 MB program. `scripts/fetch/fetch-chrome.sh`'s library
+`chrome-linux64`, a 294 MB program. `tools/common/fetch/fetch-chrome.sh`'s library
 check added the 32 Debian packages it needs beyond the headless one -- cairo,
 pango, CUPS and what they load, GnuTLS and Kerberos among them -- in four
 rounds; the volume is 1220 MiB.
@@ -795,7 +795,7 @@ tmpfs root, because on the desktop's btrfs root Chrome stopped after its
 first Wayland requests or before them, with its profile in `/dev/shm` as
 well as in `/tmp`. It was not btrfs's. When the kernel moves `/` onto the
 btrfs volume it mounts a fresh devfs, `/proc`, `/sys` and a tmpfs `/tmp`
-inside it (`kernel/src/fs/root_disk.rs`), but not the tmpfs `fs::init`
+inside it (`src/kernel/src/fs/root_disk.rs`), but not the tmpfs `fs::init`
 mounts over `/dev/shm` on the initramfs's root; so on a btrfs root
 `/dev/shm` was devfs's bare directory, where nothing can be made. Chrome
 ended at once, crashpad unable to make its database and `PathService` with
@@ -974,7 +974,7 @@ a holder's virtual processor can also be descheduled by the host, and
 every other caller then spins until it runs again.
 
 The table is now 256 buckets with a lock each, as Linux's is
-(`kernel/src/syscall/futex.rs`). A boot check requeues a waiter across two
+(`src/kernel/src/syscall/futex.rs`). A boot check requeues a waiter across two
 buckets, with a negative control. Three runs of each, alternated one at a
 time on glibc under KVM, the host at a load of 25–39 throughout (38.6,
 28.3 and 39.5 at the before runs' starts, 37.1, 25.4 and 38.0 at the
@@ -1071,7 +1071,7 @@ Chrome for Testing is for automated testing only.
 
 The user agent has spaces, and the compositor split an `exec` line at every
 space. It now splits the line as `sh -c` would for quoting alone
-(`userland/compositor/hyprix/src/command.rs`), which is what a Hyprland
+(`src/user/linux/compositor/hyprix/src/command.rs`), which is what a Hyprland
 configuration assumes, since Hyprland hands the line to the shell.
 
 ---
@@ -1091,7 +1091,7 @@ What is not, in points:
 | An ARM browser: Chrome for Testing is linux64 only, so Debian 13's Chromium 150 for armhf (199 MB installed), on a volume `fetch-chrome.sh` makes the same way | 3 |
 | The SD card at run time: U-Boot loads everything into RAM as the initramfs, and there is no SDMMC driver, so a 1 GB volume has nowhere to be; a ring-3 driver behind the block ring, then btrfs from a partition | 13 |
 | Memory: 512 MiB, no swap, and the page cache never evicts a file's pages, so every page of the program Chrome touches stays; eviction under pressure, with `--single-process` and one page at a time | 8–13 |
-| V8's JIT flushes the instruction cache with ARM's `cacheflush`, which `libs/proto/linux-abi` numbers and the kernel does not answer; or `--js-flags=--jitless` | 1–3 |
+| V8's JIT flushes the instruction cache with ARM's `cacheflush`, which `src/lib/proto/linux-abi` numbers and the kernel does not answer; or `--js-flags=--jitless` | 1–3 |
 | What running it finds: on x86-64 that was six things in a day | 13 or more |
 | The board's Ethernet, a DWMAC with no driver, if pages are to come from the network | 8 |
 

@@ -3,7 +3,7 @@
 //! `#DB` handler's own path, each survived where it lands.
 //!
 //! Verification, not the entry: a file of its own so that the manifest counts
-//! it as the test it is (`scripts/data/certification-item.json`,
+//! it as the test it is (`tools/common/data/certification-item.json`,
 //! `test_file_patterns`). The system call window's check runs a real program
 //! -- [`super::super::USER_TEST_PROGRAM`], built into an ELF and loaded by
 //! the Linux personality's loader -- because only a program's own `syscall`

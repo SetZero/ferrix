@@ -7,7 +7,7 @@
 //!
 //! They are not simply stopped, because they are also this phone's only
 //! record of a run. The console is a `ramoops` record in RAM, and a watchdog
-//! reset is the one reset measured to keep it (`boot/pixel7/README.md`).
+//! reset is the one reset measured to keep it (`src/boot/vendor/google/pixel7/README.md`).
 //! So the kernel keeps them fed while it is alive -- a task writes each one's
 //! reload value back into its counter every [`FEED_INTERVAL`] -- and a kernel
 //! that hangs, or stops scheduling that task, is still reset with its log

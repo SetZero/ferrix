@@ -1,7 +1,7 @@
 //! uutils/coreutils built against ferrousli: the utilities that replace
 //! busybox's, as one static multicall binary.
 //!
-//! `userland/ferrousli/tools/uutils/build.sh` builds it, or `build-windows.sh` beside
+//! `src/user/linux/ferrousli/tools/uutils/build.sh` builds it, or `build-windows.sh` beside
 //! it on Windows, and installs it as `x86_64/bin/coreutils` under
 //! `~/.local/share/ferrix/uutils/ferrousli` (or `$FERRIX_UUTILS`).
 //!
@@ -24,7 +24,7 @@ const VAR: &str = "FERRIX_UUTILS";
 /// The default install directory under the home directory.
 const HOME_SEGMENTS: &[&str] = &[".local", "share", "ferrix", "uutils", "ferrousli"];
 
-/// Run by `bash -c` in `userland/ferrousli/`, with `$1` the build script in
+/// Run by `bash -c` in `src/user/linux/ferrousli/`, with `$1` the build script in
 /// `tools/uutils/` and `$2` the directory to install into.
 ///
 /// `$out` is the script's own: `$FERRIX_UUTILS`, with its default. Normally it
@@ -50,7 +50,7 @@ fi
 "#;
 
 /// What a uutils built against ferrousli is made from, relative to
-/// `userland/ferrousli/`: the library and its entry object, and the pinned sources and
+/// `src/user/linux/ferrousli/`: the library and its entry object, and the pinned sources and
 /// the build scripts.
 const INPUTS: &[&str] = &[
     "Cargo.toml",
@@ -104,7 +104,7 @@ pub(crate) fn program(arch: Arch) -> Result<PathBuf> {
     refuse_other_than_x86_64(arch)?;
     let root = root()?;
     let program = first(&root, arch);
-    let dir = crate::paths::workspace_root().join("userland/ferrousli");
+    let dir = crate::paths::workspace_root().join("src/user/linux/ferrousli");
     if !crate::builds::active() && ferrousli::stale(&program, &dir, INPUTS).is_none() {
         return Ok(program);
     }
@@ -133,7 +133,7 @@ pub(crate) fn build(arch: Arch) -> Result<PathBuf> {
 fn build_locked(arch: Arch, root: &Path) -> Result<PathBuf> {
     let root = root.to_path_buf();
     let program = first(&root, arch);
-    let dir = crate::paths::workspace_root().join("userland/ferrousli");
+    let dir = crate::paths::workspace_root().join("src/user/linux/ferrousli");
 
     // Linux builds through `crate::builds`; this is the Windows build.
     if !cfg!(windows) {
@@ -149,7 +149,7 @@ fn build_locked(arch: Arch, root: &Path) -> Result<PathBuf> {
         .args(["-c", SCRIPT, "bash", "build-windows.sh", &spelled]);
     ferrousli::in_ferrousli(&mut command, &dir);
 
-    let description = format!("userland/ferrousli/tools/uutils/{script}");
+    let description = format!("src/user/linux/ferrousli/tools/uutils/{script}");
     if let Err(error) = cargo::run(command, &description) {
         let list = root.join(ferrousli::UNDEFINED);
         return Err(match std::fs::read_to_string(&list) {
@@ -220,9 +220,9 @@ pub(crate) fn carried(arch: Arch) -> Result<Vec<(&'static str, Vec<u8>)>> {
 /// download from `root/src`, and making every program of the family.
 fn build_here(arch: Arch, root: &Path) -> Result<PathBuf> {
     let program = first(root, arch);
-    let ferrousli = crate::paths::workspace_root().join("userland/ferrousli");
+    let ferrousli = crate::paths::workspace_root().join("src/user/linux/ferrousli");
     let mut build =
-        crate::builds::Build::bash("userland/ferrousli/tools/uutils/build.sh", &ferrousli)
+        crate::builds::Build::bash("src/user/linux/ferrousli/tools/uutils/build.sh", &ferrousli)
             .args(["-c", SCRIPT, "bash", "build.sh"])
             .args([root])
             .reads_dir(root.join("src"));

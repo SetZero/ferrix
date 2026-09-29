@@ -1,8 +1,8 @@
 /*
- * The virtio-gpu numbers and layouts `libs/proto/linux-abi/src/virtgpu.rs` writes
+ * The virtio-gpu numbers and layouts `src/lib/proto/linux-abi/src/virtgpu.rs` writes
  * down, printed from the UAPI headers themselves.
  *
- * Run by `libs/proto/linux-abi/probe/virtgpu.sh` on a Linux host with the kernel's
+ * Run by `src/lib/proto/linux-abi/probe/virtgpu.sh` on a Linux host with the kernel's
  * UAPI headers (`linux-libc-dev`) once natively for 64-bit and once for
  * ARMv7-A under qemu-arm, into `virtgpu-64.txt` and `virtgpu-32.txt` beside
  * it. The crate's tests read both files and require every line to match what

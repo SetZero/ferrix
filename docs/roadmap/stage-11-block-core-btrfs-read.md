@@ -4,7 +4,7 @@ Request queues, merging, the I/O scheduler. Then btrfs stage A: superblock,
 chunk tree, root tree, fs trees, extents inline and regular, crc32c, and
 zstd/zlib/lzo.
 
-The item parsing is `libs/` code — pure functions over bytes, fuzzed against
+The item parsing is `src/lib/` code — pure functions over bytes, fuzzed against
 images `mkfs.btrfs` produced.
 
 **Exit:** Ferrix mounts an image made by real `mkfs.btrfs`, and reads a file
@@ -14,7 +14,7 @@ tree out of it that byte-for-byte matches what the host wrote.
 stages 8 to 10 are under way, because everything short of the kernel mount is
 logic `cargo test`, Miri and a fuzzer can reach.
 
-* `libs/fs/btrfs` — the read path, allocating nothing and forbidding `unsafe`.
+* `src/lib/fs/btrfs` — the read path, allocating nothing and forbidding `unsafe`.
   `volume.rs` mounts: superblock, system chunk array, chunk tree, root tree, and
   the default subvolume's fs tree — the one the root tree's `default` entry
   names, as Linux's `get_default_subvol_objectid` finds it, or the top-level
@@ -25,7 +25,7 @@ logic `cargo test`, Miri and a fuzzer can reach.
   `DIR_INDEX` cursor, and `read`, which zero-fills and copies extents over the
   top so every kind of hole reads the same way. `compress/` holds zlib, LZO and
   zstd decoders, each written for btrfs's framing of its format.
-* **Real images.** `scripts/gen/gen-btrfs-fixtures.py` builds four images with real
+* **Real images.** `tools/common/gen/gen-btrfs-fixtures.py` builds four images with real
   `mkfs.btrfs` — uncompressed, zlib, LZO and zstd, with 4 KiB nodes so the fs
   tree is deeper than a leaf — packed to their non-zero blocks, beside a
   manifest of every path's size and CRC-32C. All four read back exactly.
@@ -49,18 +49,18 @@ logic `cargo test`, Miri and a fuzzer can reach.
   root, and each descent used to read every node on the way from the device
   again. `ferrix-btrfs`'s `Device` now says what each read is for —
   `ReadKind::Metadata` for the superblock and tree nodes, `ReadKind::Data` for
-  an extent's bytes — and `libs/fs/btrfs-vfs` keeps metadata reads in a CLOCK cache
+  an extent's bytes — and `src/lib/fs/btrfs-vfs` keeps metadata reads in a CLOCK cache
   of 1024 entries every handle of a mount shares: a hit hands out a shared
   reference and copies with no lock held, and a miss reads with no lock held. A
   cached node is trusted no more than a read one, since every node is still
   checked against its parent pointer and its checksum. File data is never kept
   there; it belongs in the page cache. A second walk to a file reads no metadata
   from the device, and a cache of two entries still reads every file back.
-* `libs/fs/btrfs-vfs` — the mount: stage 8's `FileSystem` and `Inode` over the
+* `src/lib/fs/btrfs-vfs` — the mount: stage 8's `FileSystem` and `Inode` over the
   read path, read-only, holding no lock across I/O. Tested through the trait,
   and through `Namespace` at `/mnt` on a tmpfs root. Since stage 12 it holds
-  the read-write mount as well, `rw::RwBtrfs`, over `libs/fs/btrfs-write`.
-* `libs/fs/block` — the block core's queue: merging, flush and FUA barriers that
+  the read-write mount as well, `rw::RwBtrfs`, over `src/lib/fs/btrfs-write`.
+* `src/lib/fs/block` — the block core's queue: merging, flush and FUA barriers that
   no request crosses, and deadline scheduling, checked against a model by the
   tests and the `block_queue` fuzz target.
 * The `btrfs_read` fuzz target starts each run from a real image and applies
@@ -102,7 +102,7 @@ logic `cargo test`, Miri and a fuzzer can reach.
   namespace on the host with heap pages; the same code runs over the kernel's.
 
 **Done — the exit, on all three architectures.** `xtask` unpacks the `none`
-fixture — the image `scripts/gen/gen-btrfs-fixtures.py` made with real
+fixture — the image `tools/common/gen/gen-btrfs-fixtures.py` made with real
 `mkfs.btrfs` — into a raw disk and attaches it as a second `virtio-blk-pci`
 after the pattern disk. The boot check starts a driver for every virtio-blk
 function, so `/sbin/blk` serves the fixture as `vdb`; stage 11's check then
@@ -123,13 +123,13 @@ manifest's; a byte wrong anywhere in the stack is a CRC that differs.
 **The seam measured, 1 (2026-09-27): what one crossing costs.** After the
 driver check, the kernel reads the pattern disk 1,024 times, 4 KiB at a time,
 one request at a time and then from 32 tasks at once, and times each read
-from the call to its answer (`kernel/src/block_ring/hop_check.rs`, the `seam`
+from the call to its answer (`src/kernel/src/block_ring/hop_check.rs`, the `seam`
 boot line). The driver times its own submit-to-drain in each completion's
 `device_ticks` where ring 3 can read the kernel's counter: x86-64 today. That
 share holds the device and the interrupt's way up to the driver, so the rest
 understates the seam. `cargo xtask bench-seam` boots a stock Linux kernel
 (Debian 13's cloud kernel, 6.12.107, by SHA-256 from
-`scripts/fetch/fetch-linux-reference.sh`) on the same QEMU machine, IOMMU
+`tools/common/fetch/fetch-linux-reference.sh`) on the same QEMU machine, IOMMU
 included, and reads the same disk with `dd iflag=direct`. Measured on
 2026-09-27 in pairs, each Linux run straight before its Ferrix run, at host
 loads of 20 to 28. The numbers move with the host's load, so these are the
@@ -157,7 +157,7 @@ kernel counts, from boot:
 - Linux system calls answered;
 - file pages served from a page cache against pages filled from a source,
   and of those the pages read from a disk;
-- block-ring submissions and completions (`kernel/src/fs/seam.rs`,
+- block-ring submissions and completions (`src/kernel/src/fs/seam.rs`,
   `/proc/ferrix-seam`).
 
 `test-vfs` prints the line at its end. `test-rustc` prints it after its cold

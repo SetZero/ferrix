@@ -9,7 +9,7 @@ with a page fault serviced along the way.
 
 **Exit criterion met, and in the boot test on all three architectures.** Each
 architecture boots a program at user privilege — through the ELF loader, a
-startup stack built by `libs/kernel/ustack`, and its own way down: `sysretq` to ring 3
+startup stack built by `src/lib/kernel/ustack`, and its own way down: `sysretq` to ring 3
 on x86-64, `eret` to EL0 on AArch64, `rfeia` to USR on ARMv7-A. The program is a
 few dozen bytes of that architecture's machine code calling `write(1, …)` and
 `exit_group(42)`, and the boot log carries both:
@@ -38,7 +38,7 @@ so anything that touches ring 3 wants a KVM boot before it is called done.
 * **The objects.** `Vmo` is a sparse page list, committed on first touch, so a
   reservation costs nothing until it is written — which is what makes a large
   `mmap` cheap and is measured rather than asserted: 2048 pages reserved, seven
-  committed. `AddressSpace` is the `libs/kernel/vma` interval tree used for the first
+  committed. `AddressSpace` is the `src/lib/kernel/vma` interval tree used for the first
   time as what it was written for, with a lock of its own rather than a global
   one, so two processes faulting at once contend for nothing. Anonymous memory
   carries an identity, because `MAP_SHARED|MAP_ANONYMOUS`, futexes resolving to

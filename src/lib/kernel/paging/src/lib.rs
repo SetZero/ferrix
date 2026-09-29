@@ -11,7 +11,7 @@
 //! one. So the walk is written once here, generic over an [`Encoding`] that
 //! supplies both, and each architecture is roughly forty lines of bit layout.
 //!
-//! This lives in `libs/` rather than in the kernel for the reason
+//! This lives in `src/lib/` rather than in the kernel for the reason
 //! `docs/ARCHITECTURE.md` gives: it is pure arithmetic over bytes, so
 //! `cargo test`, Miri and a fuzzer can all reach it, and a mistake here is the
 //! kind that writes to the wrong physical page and shows up somewhere else

@@ -11,7 +11,7 @@
 //!
 //! # The volume, and the network
 //!
-//! `scripts/fetch/fetch-steamcmd.sh` makes the volume: Debian's `libc6:i386`
+//! `tools/common/fetch/fetch-steamcmd.sh` makes the volume: Debian's `libc6:i386`
 //! and steamcmd, unpacked and not yet updated. It carries no `ferrix-root`
 //! label, so the kernel mounts it at `/data`, attached under QEMU's
 //! `snapshot=on`, so the update steamcmd writes beside itself is thrown away
@@ -136,7 +136,7 @@ const MEMORY: u32 = 2048;
 /// unpacked, under TCG.
 const TIMEOUT: u64 = 3600;
 
-/// Where `scripts/fetch/fetch-steamcmd.sh` writes, unless
+/// Where `tools/common/fetch/fetch-steamcmd.sh` writes, unless
 /// `FERRIX_STEAMCMD_VOLUME` names another directory.
 ///
 /// # Errors
@@ -151,7 +151,7 @@ pub(crate) fn volume() -> Result<std::path::PathBuf> {
     let image = directory.join("steamcmd.img");
     if !image.is_file() {
         return Err(Error::new(format!(
-            "{} is not there: scripts/fetch/fetch-steamcmd.sh makes it",
+            "{} is not there: tools/common/fetch/fetch-steamcmd.sh makes it",
             image.display()
         )));
     }

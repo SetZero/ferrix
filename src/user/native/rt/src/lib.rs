@@ -1,7 +1,7 @@
 //! The runtime a Ferrix native program links.
 //!
 //! Everything a native program needs that cannot be a pure function, and so
-//! cannot live in `libs/`:
+//! cannot live in `src/lib/`:
 //!
 //! * `_start`, where the kernel enters the process, with the bootstrap handle
 //!   in the first argument register;
@@ -12,7 +12,7 @@
 //! * `linker/native.ld`, the layout the kernel's ELF loader accepts.
 //!
 //! The calls themselves — typed, owned handles and decoded errors — are
-//! `libs/proto/native`, re-exported here as [`native`], so a program depends on this
+//! `src/lib/proto/native`, re-exported here as [`native`], so a program depends on this
 //! crate alone.
 //!
 //! # A program
@@ -63,7 +63,7 @@ pub type Bootstrap = Option<Channel<Kernel>>;
 /// The kernel, reached by trapping into it.
 ///
 /// Zero-sized, so every handle carries one for nothing. Anyone may make one:
-/// the only thing it can do is make a [`Raw`] call, and only `libs/proto/native`
+/// the only thing it can do is make a [`Raw`] call, and only `src/lib/proto/native`
 /// can build one of those.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Kernel;

@@ -509,7 +509,7 @@ impl Core {
     fn on_ipv4(&mut self, bytes: &[u8]) -> Result<()> {
         let packet = ipv4::Header::parse(bytes)?;
         if packet.header.is_fragment() {
-            // Reassembly would be a second implementation of what `libs/network/net`
+            // Reassembly would be a second implementation of what `src/lib/network/net`
             // already has, for a path where nothing this gateway originates is
             // ever fragmented and the MTU is the same on both sides.
             bump(&self.counters.unsupported);

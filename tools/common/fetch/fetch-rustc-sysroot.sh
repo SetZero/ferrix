@@ -9,7 +9,7 @@
 # own. rustc links through `cc`, which is gcc 15's driver, and gcc runs
 # `collect2`, which runs the `ld.lld` rustc points it at, which runs
 # `rust-lld`. Every one of those is somebody else's glibc binary, and the
-# glibc is Debian 13's, the same one scripts/fetch/fetch-debian-busybox.sh pins.
+# glibc is Debian 13's, the same one tools/common/fetch/fetch-debian-busybox.sh pins.
 # Beside the host's standard library are the ones Ferrix's own images are
 # built against: the kernels' and native programs' freestanding targets, the
 # loaders' UEFI targets (and the ARMv7-A loader's musl one, used for its
@@ -41,7 +41,7 @@
 # ~/.local/share/ferrix/rustc/rustc.img). Needs curl, sha256sum, dpkg-deb, tar
 # and mkfs.btrfs; no root, since mkfs.btrfs --rootdir writes an image file.
 #
-# Usage: scripts/fetch/fetch-rustc-sysroot.sh
+# Usage: tools/common/fetch/fetch-rustc-sysroot.sh
 
 set -euo pipefail
 

@@ -1,6 +1,6 @@
 # Ferrix — panic codes
 
-> Generated from kernel/src/panic/catalog.rs by scripts/gen/gen-panic-catalog.py. Do not edit: change the catalog and regenerate with `python3 scripts/gen/gen-panic-catalog.py`.
+> Generated from src/kernel/src/panic/catalog.rs by tools/common/gen/gen-panic-catalog.py. Do not edit: change the catalog and regenerate with `python3 tools/common/gen/gen-panic-catalog.py`.
 
 When the kernel stops on a fatal condition it prints a report beginning with a
 `FERRIX-PANIC` line that carries the failing site's own message. A site that
@@ -131,7 +131,7 @@ invalidate every processor's TLB in hardware and never wait here.
    this one, for longer than the count takes, which is the host's fault and not
    the kernel's.
 
-See: kernel/src/smp.rs flush_tlb_everywhere; kernel/src/smp.rs patience;
+See: src/kernel/src/smp.rs flush_tlb_everywhere; src/kernel/src/smp.rs patience;
 docs/ROADMAP.md stage 4.
 
 <a id="fx-0002"></a>
@@ -153,7 +153,7 @@ that is in use.
 3. The named processor is halted or stuck with interrupts masked, so it takes no
    interrupt at all.
 
-See: kernel/src/smp.rs synchronize; kernel/src/smp.rs read_section;
+See: src/kernel/src/smp.rs synchronize; src/kernel/src/smp.rs read_section;
 docs/ROADMAP.md stage 4.
 
 <a id="fx-0003"></a>
@@ -177,7 +177,7 @@ made safe, so the kernel stops instead of waiting forever.
 3. A host so overcommitted that a virtual processor went unscheduled for
    seconds, which is the host's fault and not the kernel's.
 
-See: kernel/src/smp.rs flush_tlb_everywhere; docs/ROADMAP.md stage 4.
+See: src/kernel/src/smp.rs flush_tlb_everywhere; docs/ROADMAP.md stage 4.
 
 <a id="fx-0004"></a>
 
@@ -198,7 +198,7 @@ record, so the kernel stops instead.
 2. The per-CPU register was overwritten, so `smp::this_cpu` no longer finds the
    record.
 
-See: kernel/src/user/space.rs install; kernel/src/smp.rs this_cpu;
+See: src/kernel/src/user/space.rs install; src/kernel/src/smp.rs this_cpu;
 docs/ROADMAP.md stage 6.
 
 <a id="fx-0005"></a>
@@ -217,7 +217,7 @@ the allocator, so the kernel stops before anything moves.
 2. A region's sharing flag changed after its object was attached, so an object
    attached as shared now backs a private region.
 
-See: kernel/src/user/space.rs remap; kernel/src/user/vmo.rs attach;
+See: src/kernel/src/user/space.rs remap; src/kernel/src/user/vmo.rs attach;
 docs/ROADMAP.md stage 6.
 
 <a id="fx-0006"></a>
@@ -237,8 +237,9 @@ mattered, so the kernel stops at the first line that can say so.
 2. A registration list is full: another registration was added without raising
    the bound its list declares (`power::FLUSHES`, `device::BOARD`).
 
-See: kernel/src/main.rs register_load; kernel/src/hooks.rs; kernel/src/power.rs;
-kernel/src/init.rs; docs/certification/FINDINGS.md F-04 and F-08.
+See: src/kernel/src/main.rs register_load; src/kernel/src/hooks.rs;
+src/kernel/src/power.rs; src/kernel/src/init.rs; docs/certification/FINDINGS.md
+F-04 and F-08.
 
 <a id="fx-0007"></a>
 
@@ -250,10 +251,10 @@ asked -- a program gets `ENOMEM` or `NO_MEMORY`, and nothing stops
 there is nobody to report to: the structure being built is one every later step
 depends on, such as the root job, a processor's run queue or the table of
 processors. Those allocations are fatal by design and marked `FATAL-ALLOC` where
-they are made, and `scripts/check/check-fallible-alloc.py` lists them; one that
-stops through the standard library's allocation error handler before the boot
-marker is reported here too. Reaching one means the machine does not have the
-memory to run the kernel at all.
+they are made, and `tools/common/check/check-fallible-alloc.py` lists them; one
+that stops through the standard library's allocation error handler before the
+boot marker is reported here too. Reaching one means the machine does not have
+the memory to run the kernel at all.
 
 1. The machine has far less memory than the kernel needs, or firmware reported
    almost none of it as usable.
@@ -261,7 +262,7 @@ memory to run the kernel at all.
    none.
 
 See: docs/certification/MEMORY-AND-TIMING.md;
-scripts/check/check-fallible-alloc.py; kernel/src/fallible.rs.
+tools/common/check/check-fallible-alloc.py; src/kernel/src/fallible.rs.
 
 <a id="fx-0008"></a>
 
@@ -274,8 +275,9 @@ ordinary `Box`, `Vec` or map cannot: the standard library calls its allocation
 error handler instead, which panics, and this is that panic. After the boot it
 is reached only from code that has not been converted to report failure -- the
 uncertified load, whose allocations share the heap -- when memory really has run
-out. The item has none: `scripts/check/check-fallible-alloc.py` counts every
-allocating call in it and fails the build on one that does not report failure.
+out. The item has none: `tools/common/check/check-fallible-alloc.py` counts
+every allocating call in it and fails the build on one that does not report
+failure.
 
 1. Memory ran out, and the allocation that found it so was one of the infallible
    ones: the trace names it.
@@ -284,7 +286,7 @@ allocating call in it and fails the build on one that does not report failure.
    was being lost.
 
 See: docs/certification/MEMORY-AND-TIMING.md;
-scripts/check/check-fallible-alloc.py; kernel/src/mm.rs.
+tools/common/check/check-fallible-alloc.py; src/kernel/src/mm.rs.
 
 <a id="fx-0101"></a>
 
@@ -313,8 +315,9 @@ later as corruption with no visible source.
    without its fixups, because a copy was stripped with `--strip-all` rather
    than `--strip-debug`; or a loader reported a move it did not make.
 
-See: kernel/src/main.rs self_check and check_layout; kernel/src/early.rs;
-docs/certification/SPECULATION.md section 6; docs/ROADMAP.md stage 1.
+See: src/kernel/src/main.rs self_check and check_layout;
+src/kernel/src/early.rs; docs/certification/SPECULATION.md section 6;
+docs/ROADMAP.md stage 1.
 
 <a id="fx-0201"></a>
 
@@ -334,7 +337,7 @@ point can run.
    grows with the gaps between banks of RAM; the message gives the bytes it
    needed.
 
-See: kernel/src/mm.rs init; libs/kernel/frame; docs/ROADMAP.md stage 2.
+See: src/kernel/src/mm.rs init; src/lib/kernel/frame; docs/ROADMAP.md stage 2.
 
 <a id="fx-0202"></a>
 
@@ -350,7 +353,7 @@ that needs a device register or a new stack can run without it.
    are not page aligned or leave no room; this is a bug in those constants, not
    something a machine can cause.
 
-See: kernel/src/vmap.rs init; libs/proto/bootinfo; libs/kernel/vma.
+See: src/kernel/src/vmap.rs init; src/lib/proto/bootinfo; src/lib/kernel/vma.
 
 <a id="fx-0203"></a>
 
@@ -370,7 +373,7 @@ up as corruption in whichever subsystem first relied on it.
 1. The frame allocator was given too little memory for the check: `no frame
    available`, `no sixteen-frame block available` and `handed out nothing` mean
    it ran out, not that it is wrong.
-2. A change to `libs/kernel/frame` or `libs/kernel/heap` broke their
+2. A change to `src/lib/kernel/frame` or `src/lib/kernel/heap` broke their
    bookkeeping, so the free frame count or the heap's balance does not return to
    where it started.
 3. A change to the page table code left a mapping behind on unmap, or made a
@@ -379,8 +382,9 @@ up as corruption in whichever subsystem first relied on it.
    over the kernel image was mapped`): the refusal `mm::overlaps_image` makes is
    gone, or memory bring-up did not record where the image is.
 
-See: kernel/src/mm/check.rs memory_check; libs/kernel/frame; libs/kernel/heap;
-libs/kernel/paging; kernel/src/vmap.rs; docs/ROADMAP.md stage 2.
+See: src/kernel/src/mm/check.rs memory_check; src/lib/kernel/frame;
+src/lib/kernel/heap; src/lib/kernel/paging; src/kernel/src/vmap.rs;
+docs/ROADMAP.md stage 2.
 
 <a id="fx-0204"></a>
 
@@ -413,9 +417,9 @@ the identity map, is not the kernel the boot marker describes.
 6. The memory map marks no loader or ACPI-reclaimable region inside the range
    the per-frame array covers, so nothing was reclaimed.
 
-See: kernel/src/main.rs finish_memory; kernel/src/mm/check.rs check_w_xor_x and
-check_sealed_image; kernel/src/mm.rs reclaim_boot_memory; docs/ROADMAP.md stage
-2.
+See: src/kernel/src/main.rs finish_memory; src/kernel/src/mm/check.rs
+check_w_xor_x and check_sealed_image; src/kernel/src/mm.rs reclaim_boot_memory;
+docs/ROADMAP.md stage 2.
 
 <a id="fx-0301"></a>
 
@@ -449,8 +453,8 @@ code the `#DB` handler runs, which must not fire inside it.
 5. Mapping a page in a region that already had its tables cost more than one
    frame, which points at the page table code allocating a table it already had.
 
-See: kernel/src/main.rs trap_check; kernel/src/trap.rs handle_page_fault;
-docs/ROADMAP.md stage 3.
+See: src/kernel/src/main.rs trap_check; src/kernel/src/trap.rs
+handle_page_fault; docs/ROADMAP.md stage 3.
 
 <a id="fx-0302"></a>
 
@@ -479,8 +483,8 @@ that is silent, repeats, or runs at the wrong rate makes all of them wrong.
 5. An interrupt arrived on a line nothing registered for: a device firmware left
    enabled, or a controller programmed to deliver somewhere unexpected.
 
-See: kernel/src/main.rs timer_check; kernel/src/timer.rs; docs/ROADMAP.md stage
-3.
+See: src/kernel/src/main.rs timer_check; src/kernel/src/timer.rs;
+docs/ROADMAP.md stage 3.
 
 <a id="fx-0303"></a>
 
@@ -510,10 +514,10 @@ processor.
 5. The kernel address arena refused a device window for the controller, the HPET
    or an I/O APIC, for want of address space or of frames for page tables.
 
-See: kernel/src/arch/x86_64/mod.rs init_interrupts;
-kernel/src/arch/x86_64/apic.rs; kernel/src/arch/x86_64/clock.rs;
-kernel/src/arch/aarch64/gic.rs; kernel/src/arch/armv7a/mod.rs init_interrupts;
-docs/ROADMAP.md stage 3.
+See: src/kernel/src/arch/x86_64/mod.rs init_interrupts;
+src/kernel/src/arch/x86_64/apic.rs; src/kernel/src/arch/x86_64/clock.rs;
+src/kernel/src/arch/aarch64/gic.rs; src/kernel/src/arch/armv7a/mod.rs
+init_interrupts; docs/ROADMAP.md stage 3.
 
 <a id="fx-0304"></a>
 
@@ -528,7 +532,7 @@ tick is counted as unclaimed, and the timer self-check that follows cannot pass.
    number, or `timer::init` was called twice; nothing else registers a handler
    this early.
 
-See: kernel/src/timer.rs init; kernel/src/irq.rs register.
+See: src/kernel/src/timer.rs init; src/kernel/src/irq.rs register.
 
 <a id="fx-0305"></a>
 
@@ -548,7 +552,7 @@ registration failure means the interrupt number already has a handler.
    timer or another early handler already holds, as a device tree giving two
    devices one interrupt would.
 
-See: kernel/src/console/input.rs check; kernel/src/irq.rs register.
+See: src/kernel/src/console/input.rs check; src/kernel/src/irq.rs register.
 
 <a id="fx-0306"></a>
 
@@ -560,12 +564,13 @@ neither to be all zeros. `getrandom`, `/dev/urandom` and every program's
 `AT_RANDOM` read this generator: one that repeats hands every program the same
 stack canary and every TLS session the same key.
 
-1. A change to `libs/kernel/crng` that stopped `fill` from replacing the key, so
-   each read starts from the same block; its host tests check the construction.
+1. A change to `src/lib/kernel/crng` that stopped `fill` from replacing the key,
+   so each read starts from the same block; its host tests check the
+   construction.
 2. A change to `random::fill` that no longer takes the lock around the
    generator, so two reads copied one state.
 
-See: kernel/src/random.rs; libs/kernel/crng.
+See: src/kernel/src/random.rs; src/lib/kernel/crng.
 
 <a id="fx-0307"></a>
 
@@ -594,8 +599,8 @@ speculative read of another's memory or the kernel's.
 5. A change to an architecture's `clamp_index` that lets an out-of-bound index
    through.
 
-See: kernel/src/arch/speculation.rs; kernel/src/arch/speculation_check.rs;
-docs/certification/SPECULATION.md.
+See: src/kernel/src/arch/speculation.rs;
+src/kernel/src/arch/speculation_check.rs; docs/certification/SPECULATION.md.
 
 <a id="fx-0308"></a>
 
@@ -618,7 +623,7 @@ exactly these answers. On the Arm architectures only.
 3. A change to how the console port or GIC version is chosen from the machine's
    description.
 
-See: kernel/src/arch/aarch64/check.rs; kernel/src/arch/armv7a/check.rs.
+See: src/kernel/src/arch/aarch64/check.rs; src/kernel/src/arch/armv7a/check.rs.
 
 <a id="fx-0309"></a>
 
@@ -648,7 +653,7 @@ boot that skipped its checks among it -- goes unrecorded.
 4. Bring-up's `start_audit` stopped recording one of the configuration items, or
    `Store::start` stopped writing the whole id into the start-up record.
 
-See: kernel/src/audit/check.rs; kernel/src/audit.rs;
+See: src/kernel/src/audit/check.rs; src/kernel/src/audit.rs;
 docs/certification/AUDIT.md.
 
 <a id="fx-0401"></a>
@@ -674,9 +679,9 @@ interrupt to the wrong processor.
 4. The per-CPU register (`GS` base on x86-64, `TPIDR_EL1` on AArch64, `TPIDRPRW`
    on ARMv7-A) did not keep the address written to it.
 
-See: kernel/src/smp.rs discover; kernel/src/arch/x86_64/smp.rs describe_cpus;
-kernel/src/arch/aarch64/smp.rs describe_cpus; kernel/src/arch/armv7a/smp.rs
-describe_cpus; docs/ROADMAP.md stage 4.
+See: src/kernel/src/smp.rs discover; src/kernel/src/arch/x86_64/smp.rs
+describe_cpus; src/kernel/src/arch/aarch64/smp.rs describe_cpus;
+src/kernel/src/arch/armv7a/smp.rs describe_cpus; docs/ROADMAP.md stage 4.
 
 <a id="fx-0402"></a>
 
@@ -704,9 +709,9 @@ stops rather than go on without it or free the block under it.
 5. On ARMv7-A the entry sequence, a stack, a per-CPU record or the start block
    lies above 4 GiB and cannot be passed in a 32-bit register.
 
-See: kernel/src/smp.rs start_secondaries; kernel/src/arch/x86_64/smp.rs
-CpuStarter; kernel/src/arch/aarch64/smp.rs CpuStarter;
-kernel/src/arch/armv7a/smp.rs CpuStarter; docs/ROADMAP.md stage 4.
+See: src/kernel/src/smp.rs start_secondaries; src/kernel/src/arch/x86_64/smp.rs
+CpuStarter; src/kernel/src/arch/aarch64/smp.rs CpuStarter;
+src/kernel/src/arch/armv7a/smp.rs CpuStarter; docs/ROADMAP.md stage 4.
 
 <a id="fx-0403"></a>
 
@@ -722,8 +727,8 @@ triple fault and a silent reset.
 1. The vmap arena had no address space or frames left for another guard-paged
    stack; every processor started also takes a kernel stack from the same arena.
 
-See: kernel/src/arch/x86_64/gdt.rs init_secondary; kernel/src/arch/x86_64/smp.rs
-secondary_start; docs/ROADMAP.md stage 4.
+See: src/kernel/src/arch/x86_64/gdt.rs init_secondary;
+src/kernel/src/arch/x86_64/smp.rs secondary_start; docs/ROADMAP.md stage 4.
 
 <a id="fx-0404"></a>
 
@@ -741,8 +746,8 @@ raised on the secondary processor itself.
    reached memory when the new core, whose caches are off, read it;
    `clean_to_poc` after the write is what prevents that.
 
-See: kernel/src/smp.rs secondary_main; kernel/src/arch/x86_64/smp.rs;
-kernel/src/arch/aarch64/smp.rs; kernel/src/arch/armv7a/smp.rs.
+See: src/kernel/src/smp.rs secondary_main; src/kernel/src/arch/x86_64/smp.rs;
+src/kernel/src/arch/aarch64/smp.rs; src/kernel/src/arch/armv7a/smp.rs.
 
 <a id="fx-0405"></a>
 
@@ -761,7 +766,7 @@ and a record naming other hardware sends this processor's interrupts elsewhere.
 2. The per-CPU register (`GS` base on x86-64, `TPIDR_EL1` on AArch64, `TPIDRPRW`
    on ARMv7-A) did not keep the address written to it.
 
-See: kernel/src/smp.rs check_this_cpu; kernel/src/smp.rs secondary_main.
+See: src/kernel/src/smp.rs check_this_cpu; src/kernel/src/smp.rs secondary_main.
 
 <a id="fx-0406"></a>
 
@@ -776,7 +781,7 @@ every online processor and expect all of them.
 1. `start_secondaries` returned success without waiting for every processor
    after the boot one, which its loop is written to prevent.
 
-See: kernel/src/main.rs bring_up_processors; kernel/src/smp.rs
+See: src/kernel/src/main.rs bring_up_processors; src/kernel/src/smp.rs
 start_secondaries.
 
 <a id="fx-0407"></a>
@@ -812,8 +817,9 @@ rely on each of these whenever more than one processor runs.
    because the wait used a per-CPU record read before the move rather than the
    processor it was on.
 
-See: kernel/src/smp/check.rs run; kernel/src/smp/check.rs migrating_shootdown;
-kernel/src/smp.rs run_everywhere; docs/ROADMAP.md stage 4.
+See: src/kernel/src/smp/check.rs run; src/kernel/src/smp/check.rs
+migrating_shootdown; src/kernel/src/smp.rs run_everywhere; docs/ROADMAP.md stage
+4.
 
 <a id="fx-0501"></a>
 
@@ -834,8 +840,8 @@ slept or preempted until every processor is running tasks.
 4. `ferrix_sched` rejected the scheduler's slice constant when a run queue was
    built.
 
-See: kernel/src/sched/mod.rs init; kernel/src/sched/mod.rs wait_for_processors;
-docs/ROADMAP.md stage 5.
+See: src/kernel/src/sched/mod.rs init; src/kernel/src/sched/mod.rs
+wait_for_processors; docs/ROADMAP.md stage 5.
 
 <a id="fx-0502"></a>
 
@@ -865,8 +871,8 @@ user process included, is scheduled by the code this measures.
    for a switch away from the idle task, so an idle task preempted on its way
    out of a halt leaves its processor marked idle while another task runs.
 
-See: kernel/src/sched/check.rs run; kernel/src/sched/mod.rs; docs/ROADMAP.md
-stage 5.
+See: src/kernel/src/sched/check.rs run; src/kernel/src/sched/mod.rs;
+docs/ROADMAP.md stage 5.
 
 <a id="fx-0503"></a>
 
@@ -893,8 +899,8 @@ machine instead, and the message says how many such locks were held.
    last raised the count. An enable that finds nothing to lower now stops the
    machine itself, naming the same site.
 
-See: kernel/src/sync.rs; kernel/src/sched/mod.rs PREEMPT_OFF;
-libs/kernel/sync/src/lib.rs PreemptSpinLock.
+See: src/kernel/src/sync.rs; src/kernel/src/sched/mod.rs PREEMPT_OFF;
+src/lib/kernel/sync/src/lib.rs PreemptSpinLock.
 
 <a id="fx-0504"></a>
 
@@ -917,7 +923,7 @@ waiting on an interrupt that does not come.
 3. The check ran from a context that cannot sleep, which `sched::may_block`
    reports; `kmain` calls it straight after the scheduler is started.
 
-See: kernel/src/console/output.rs check; kernel/src/console.rs emit.
+See: src/kernel/src/console/output.rs check; src/kernel/src/console.rs emit.
 
 <a id="fx-0505"></a>
 
@@ -942,8 +948,8 @@ was meant to stay on the port: the kernel's layout.
    `Unlocked`, or `output::try_queue` for a task's write; or `Kind::Unlogged` is
    recorded after all.
 
-See: kernel/src/console/log_check.rs; kernel/src/console/log.rs;
-kernel/src/console.rs.
+See: src/kernel/src/console/log_check.rs; src/kernel/src/console/log.rs;
+src/kernel/src/console.rs.
 
 <a id="fx-0601"></a>
 
@@ -968,8 +974,8 @@ address. Across all of it the free frame count must end where it started.
 4. The copy-on-write path let a write through to a frame still shared with the
    other address space.
 
-See: kernel/src/user/check.rs run; kernel/src/user/space.rs;
-kernel/src/user/vmo.rs; docs/ROADMAP.md stage 6.
+See: src/kernel/src/user/check.rs run; src/kernel/src/user/space.rs;
+src/kernel/src/user/vmo.rs; docs/ROADMAP.md stage 6.
 
 <a id="fx-0602"></a>
 
@@ -998,9 +1004,9 @@ Across the measured run every frame must come back.
 4. A decommit, replace or move touched a held page, or backed off after already
    invalidating it.
 
-See: kernel/src/user/rmap_check.rs run; kernel/src/user/vmo.rs retire;
-kernel/src/user/space.rs forget_pages; kernel/src/smp.rs flush_tlb_pages;
-docs/ROADMAP.md stage 6.
+See: src/kernel/src/user/rmap_check.rs run; src/kernel/src/user/vmo.rs retire;
+src/kernel/src/user/space.rs forget_pages; src/kernel/src/smp.rs
+flush_tlb_pages; docs/ROADMAP.md stage 6.
 
 <a id="fx-0701"></a>
 
@@ -1016,8 +1022,8 @@ would pass every host test and answer a program's `write` with a different call.
 
 1. The kernel was built with another architecture's number table behind
    `arch::decode_syscall`.
-2. The number tables or the errno encoding in `libs/proto/linux-abi` changed, so
-   a credential call has no number on this architecture or ENOSYS no longer
+2. The number tables or the errno encoding in `src/lib/proto/linux-abi` changed,
+   so a credential call has no number on this architecture or ENOSYS no longer
    encodes as -38.
 3. A handler added to the dispatch table returns `Outcome::Enter` for an
    ordinary call or answers a credential call with something other than root.
@@ -1040,8 +1046,8 @@ would pass every host test and answer a program's `write` with a different call.
    the orphan's parent before the new parent's list holds it, or keeps a reaper
    that has ended (the `orphan` messages).
 
-See: kernel/src/syscall/check.rs run; kernel/src/syscall/mod.rs dispatch;
-libs/proto/linux-abi; docs/ROADMAP.md stage 7.
+See: src/kernel/src/syscall/check.rs run; src/kernel/src/syscall/mod.rs
+dispatch; src/lib/proto/linux-abi; docs/ROADMAP.md stage 7.
 
 <a id="fx-0702"></a>
 
@@ -1073,8 +1079,8 @@ while a sibling makes one, and every set the check made must be gone.
 5. `encode_semid` writes a field at an offset another layout uses.
 6. `create` counts the sets of every job, or of none, against the per-job bound.
 
-See: kernel/src/syscall/sem_check.rs; kernel/src/syscall/sem.rs;
-kernel/src/syscall/process.rs Process::release.
+See: src/kernel/src/syscall/sem_check.rs; src/kernel/src/syscall/sem.rs;
+src/kernel/src/syscall/process.rs Process::release.
 
 <a id="fx-0801"></a>
 
@@ -1086,17 +1092,17 @@ a kernel that could not build it has nowhere to find a program or put a file.
 The archive is read through the direct map from memory the loader reserved as
 `Initrd`.
 
-1. The archive is malformed or truncated: `xtask/src/initramfs.rs` wrote
-   something the newc reader in `libs/fs/cpio` refuses, or the loader read less
-   of FERRIX/INITRD.IMG than it reported.
+1. The archive is malformed or truncated: `tools/common/xtask/src/initramfs.rs`
+   wrote something the newc reader in `src/lib/fs/cpio` refuses, or the loader
+   read less of FERRIX/INITRD.IMG than it reported.
 2. The loader placed the archive outside the direct map, which it is meant to
    refuse before the hand-off.
 3. An entry could not be created: tmpfs refused it, or memory for file contents
    ran out.
 
-See: kernel/src/fs/mod.rs init; libs/fs/vfs/src/initramfs.rs;
-xtask/src/initramfs.rs; boot/uefi/src/main.rs load_initrd; docs/ROADMAP.md stage
-8.
+See: src/kernel/src/fs/mod.rs init; src/lib/fs/vfs/src/initramfs.rs;
+tools/common/xtask/src/initramfs.rs; src/boot/common/uefi/src/main.rs
+load_initrd; docs/ROADMAP.md stage 8.
 
 <a id="fx-0802"></a>
 
@@ -1109,15 +1115,16 @@ a file there to read back across page boundaries, to read zeros past a
 truncation rather than the bytes it cut off, to survive a rename, and to give
 every frame back once it is gone.
 
-1. The marker in `kernel/src/fs/check.rs` and the one in
-   `xtask/src/initramfs.rs` have drifted apart.
+1. The marker in `src/kernel/src/fs/check.rs` and the one in
+   `tools/common/xtask/src/initramfs.rs` have drifted apart.
 2. The VMO page store copies through the wrong frame or offset, or
    `Vmo::decommit_from` does not release what a truncation discards.
 3. The dentry cache keeps an unlinked file's inode alive, so its pages outlive
    it and show up as leaked frames.
 
-See: kernel/src/fs/check.rs run; kernel/src/fs/pages.rs; kernel/src/user/vmo.rs
-decommit_from; libs/fs/vfs/src/namespace.rs; docs/ROADMAP.md stage 8.
+See: src/kernel/src/fs/check.rs run; src/kernel/src/fs/pages.rs;
+src/kernel/src/user/vmo.rs decommit_from; src/lib/fs/vfs/src/namespace.rs;
+docs/ROADMAP.md stage 8.
 
 <a id="fx-0810"></a>
 
@@ -1132,13 +1139,13 @@ condition to report to one: a process created without them would have its first
 of memory for the table is not this: it is reported, and process_create answers
 NO_MEMORY.
 
-1. The console inode in `kernel/src/fs/console.rs` started refusing to be
+1. The console inode in `src/kernel/src/fs/console.rs` started refusing to be
    opened, or `OpenFile::new` gained a check the console does not pass.
 2. A new descriptor table no longer starts empty or with room for three
    descriptors, so installing them failed with EMFILE.
 
-See: kernel/src/syscall/fd.rs standard_streams; kernel/src/fs/console.rs
-open_console; libs/fs/vfs/src/fd.rs; docs/ROADMAP.md stage 8.
+See: src/kernel/src/syscall/fd.rs standard_streams; src/kernel/src/fs/console.rs
+open_console; src/lib/fs/vfs/src/fd.rs; docs/ROADMAP.md stage 8.
 
 <a id="fx-0820"></a>
 
@@ -1157,19 +1164,19 @@ or repeats a name, a working directory that is not where chdir put it, or a
 device node reaching the wrong device.
 
 1. `arch::STAT_LAYOUT` names the wrong `struct stat` for this architecture, or a
-   layout in `libs/proto/linux-abi` moved a field.
+   layout in `src/lib/proto/linux-abi` moved a field.
 2. An arm of `syscall::path::dispatch` reads its arguments in the wrong order or
    at the wrong width.
-3. The namespace in `libs/fs/vfs` changed what a walk, a rename or a directory
-   cursor does.
+3. The namespace in `src/lib/fs/vfs` changed what a walk, a rename or a
+   directory cursor does.
 4. /tmp is not mounted, or a previous run left /tmp/pathcheck behind.
 5. `fs::devfs::attach_device` is not called from `openat`, or
    `devfs::open_char_device` matches numbers in a different encoding from the
    one `mknodat` stores.
 
-See: kernel/src/syscall/check.rs run_paths; kernel/src/syscall/path.rs;
-kernel/src/fs/devfs.rs; kernel/src/syscall/stat.rs; libs/fs/vfs; docs/ROADMAP.md
-stage 8.
+See: src/kernel/src/syscall/check.rs run_paths; src/kernel/src/syscall/path.rs;
+src/kernel/src/fs/devfs.rs; src/kernel/src/syscall/stat.rs; src/lib/fs/vfs;
+docs/ROADMAP.md stage 8.
 
 <a id="fx-0830"></a>
 
@@ -1222,11 +1229,11 @@ fails here hands them wrong numbers without an error.
    doing: an ended process not as a zombie, a stopped one not as stopped, or its
    reader not as running.
 
-See: kernel/src/fs/procfs/check.rs run; kernel/src/fs/procfs.rs;
-kernel/src/fs/devfs.rs; kernel/src/fs/devfs/check.rs; kernel/src/fs/block.rs;
-libs/fs/procfs/src/maps.rs; libs/fs/procfs/src/kstat.rs;
-kernel/src/fs/procfs/render.rs state_of; kernel/src/sched/queue.rs time_spent;
-docs/ROADMAP.md stage 8.
+See: src/kernel/src/fs/procfs/check.rs run; src/kernel/src/fs/procfs.rs;
+src/kernel/src/fs/devfs.rs; src/kernel/src/fs/devfs/check.rs;
+src/kernel/src/fs/block.rs; src/lib/fs/procfs/src/maps.rs;
+src/lib/fs/procfs/src/kstat.rs; src/kernel/src/fs/procfs/render.rs state_of;
+src/kernel/src/sched/queue.rs time_spent; docs/ROADMAP.md stage 8.
 
 <a id="fx-0850"></a>
 
@@ -1241,7 +1248,7 @@ write system call that carried the request.
 1. A program wrote `c` to /proc/sysrq-trigger: from the shell, `echo c >
    /proc/sysrq-trigger`.
 
-See: kernel/src/fs/procfs.rs sysrq_trigger; docs/RELIABILITY.md.
+See: src/kernel/src/fs/procfs.rs sysrq_trigger; docs/RELIABILITY.md.
 
 <a id="fx-0860"></a>
 
@@ -1271,17 +1278,19 @@ ENODEV. The whole run is done twice and must leave no frame behind.
    sees end of file and the pipe outlives its descriptors as leaked frames.
 2. `attach_fifo` is not called from `openat`, or keys its table by something two
    opens of one FIFO do not share, so each opener gets a pipe of its own.
-3. A `statfs` layout in `libs/proto/linux-abi` or its encoder in
-   `libs/fs/vfs/src/statfs.rs` moved a field, so the magic number is not where a
-   program reads it.
+3. A `statfs` layout in `src/lib/proto/linux-abi` or its encoder in
+   `src/lib/fs/vfs/src/statfs.rs` moved a field, so the magic number is not
+   where a program reads it.
 4. tmpfs's `grow_to` shrinks a file, or `sendfile` stopped putting its offset
    back.
-5. `splice` or `copy_file_range` in `kernel/src/syscall/pipe.rs` moved the wrong
-   bytes or offset, or `fs::pipe::splice_pipes` lost bytes between two pipes.
+5. `splice` or `copy_file_range` in `src/kernel/src/syscall/pipe.rs` moved the
+   wrong bytes or offset, or `fs::pipe::splice_pipes` lost bytes between two
+   pipes.
 
-See: kernel/src/fs/check.rs run_calls; kernel/src/fs/pipe.rs;
-kernel/src/syscall/pipe.rs; kernel/src/syscall/fsctl.rs;
-libs/fs/vfs/src/pipe.rs; libs/fs/vfs/src/statfs.rs; docs/ROADMAP.md stage 8.
+See: src/kernel/src/fs/check.rs run_calls; src/kernel/src/fs/pipe.rs;
+src/kernel/src/syscall/pipe.rs; src/kernel/src/syscall/fsctl.rs;
+src/lib/fs/vfs/src/pipe.rs; src/lib/fs/vfs/src/statfs.rs; docs/ROADMAP.md stage
+8.
 
 <a id="fx-0870"></a>
 
@@ -1311,9 +1320,9 @@ twice and must leave no frame behind.
 4. `give_back` decommits a file mapping's pages on munmap, which takes them away
    from the file itself.
 
-See: kernel/src/fs/mmap_check.rs; kernel/src/syscall/memory.rs sys_mmap,
-sys_msync; kernel/src/user/space.rs map_file, fault; kernel/src/fs/pages.rs;
-docs/ROADMAP.md stage 8.
+See: src/kernel/src/fs/mmap_check.rs; src/kernel/src/syscall/memory.rs sys_mmap,
+sys_msync; src/kernel/src/user/space.rs map_file, fault;
+src/kernel/src/fs/pages.rs; docs/ROADMAP.md stage 8.
 
 <a id="fx-0871"></a>
 
@@ -1341,9 +1350,9 @@ it to its status; /proc/<pid>/exe must read as the path with (deleted) after it.
    /proc/self/exe is ENOENT; or procfs's `link_location` is not answered, so the
    link is followed as text to a name that is gone.
 
-See: kernel/src/fs/exec_check.rs; kernel/src/syscall/load.rs;
-kernel/src/syscall/program.rs; kernel/src/syscall/exec.rs;
-kernel/src/fs/procfs.rs; libs/fs/vfs/src/walk.rs; docs/CHROME.md.
+See: src/kernel/src/fs/exec_check.rs; src/kernel/src/syscall/load.rs;
+src/kernel/src/syscall/program.rs; src/kernel/src/syscall/exec.rs;
+src/kernel/src/fs/procfs.rs; src/lib/fs/vfs/src/walk.rs; docs/CHROME.md.
 
 <a id="fx-0872"></a>
 
@@ -1374,9 +1383,9 @@ done twice and must leave no frame behind.
 4. `sys_madvise` rounds the length in 64 bits on a 32-bit build, or checks it
    before the advice and the alignment.
 
-See: kernel/src/user/madvise_check.rs; kernel/src/user/space.rs advise;
-kernel/src/syscall/memory.rs sys_madvise; kernel/src/user/vmo.rs take_range,
-retire.
+See: src/kernel/src/user/madvise_check.rs; src/kernel/src/user/space.rs advise;
+src/kernel/src/syscall/memory.rs sys_madvise; src/kernel/src/user/vmo.rs
+take_range, retire.
 
 <a id="fx-0880"></a>
 
@@ -1407,9 +1416,10 @@ run is done twice and must leave no frame behind.
 4. tmpfs's write_at, set_len or grow_to does not consult the node's seals under
    its lock.
 
-See: kernel/src/fs/memfd_check.rs; kernel/src/syscall/memfd.rs;
-kernel/src/syscall/fd.rs sys_fcntl; kernel/src/syscall/memory.rs map_file;
-kernel/src/user/space.rs map_file, protect; libs/fs/vfs/src/tmpfs.rs add_seals.
+See: src/kernel/src/fs/memfd_check.rs; src/kernel/src/syscall/memfd.rs;
+src/kernel/src/syscall/fd.rs sys_fcntl; src/kernel/src/syscall/memory.rs
+map_file; src/kernel/src/user/space.rs map_file, protect;
+src/lib/fs/vfs/src/tmpfs.rs add_seals.
 
 <a id="fx-0881"></a>
 
@@ -1437,9 +1447,9 @@ behind.
    the depth above or below one set too many or too few.
 4. `sys_epoll_ctl` or the wait checks in a different order from Linux's.
 
-See: kernel/src/fs/epoll_check.rs; kernel/src/fs/epoll.rs;
-kernel/src/fs/anon.rs; kernel/src/syscall/epoll.rs; kernel/src/sched/wait.rs;
-libs/fs/vfs/src/node.rs poll_changes.
+See: src/kernel/src/fs/epoll_check.rs; src/kernel/src/fs/epoll.rs;
+src/kernel/src/fs/anon.rs; src/kernel/src/syscall/epoll.rs;
+src/kernel/src/sched/wait.rs; src/lib/fs/vfs/src/node.rs poll_changes.
 
 <a id="fx-0882"></a>
 
@@ -1477,9 +1487,9 @@ must leave no frame behind.
    races the write and can end the wait first. One stop spoils one attempt, and
    the attempt lines say which wait each time.
 
-See: kernel/src/fs/eventfd_check.rs; kernel/src/fs/eventfd.rs;
-kernel/src/fs/wake.rs; kernel/src/sched/wait.rs; kernel/src/syscall/eventfd.rs;
-kernel/src/fs/anon.rs.
+See: src/kernel/src/fs/eventfd_check.rs; src/kernel/src/fs/eventfd.rs;
+src/kernel/src/fs/wake.rs; src/kernel/src/sched/wait.rs;
+src/kernel/src/syscall/eventfd.rs; src/kernel/src/fs/anon.rs.
 
 <a id="fx-0883"></a>
 
@@ -1518,9 +1528,9 @@ the thread's stack included.
 6. The thread does not exit once nothing is armed, or a timer closed does not
    tell it, so its stack is counted against the frame window.
 
-See: kernel/src/fs/timerfd_check.rs; kernel/src/fs/timerfd.rs;
-kernel/src/syscall/timerfd.rs; kernel/src/syscall/time.rs;
-kernel/src/fs/wake.rs; kernel/src/sched/wait.rs.
+See: src/kernel/src/fs/timerfd_check.rs; src/kernel/src/fs/timerfd.rs;
+src/kernel/src/syscall/timerfd.rs; src/kernel/src/syscall/time.rs;
+src/kernel/src/fs/wake.rs; src/kernel/src/sched/wait.rs.
 
 <a id="fx-0884"></a>
 
@@ -1555,9 +1565,9 @@ and must leave no frame behind.
    comes back as late as the stop was long. One stop spoils one attempt, and the
    attempt lines show the lateness each time.
 
-See: kernel/src/fs/signalfd_check.rs; kernel/src/fs/signalfd.rs;
-kernel/src/syscall/signalfd.rs; kernel/src/syscall/signal.rs;
-kernel/src/syscall/process.rs notify_signal; kernel/src/fs/wake.rs.
+See: src/kernel/src/fs/signalfd_check.rs; src/kernel/src/fs/signalfd.rs;
+src/kernel/src/syscall/signalfd.rs; src/kernel/src/syscall/signal.rs;
+src/kernel/src/syscall/process.rs notify_signal; src/kernel/src/fs/wake.rs.
 
 <a id="fx-0885"></a>
 
@@ -1589,8 +1599,8 @@ does.
 5. `render::mountinfo` prints the mount point from a different root than
    `/proc/<pid>/fd` does, or `MountFlags::options` misorders the options.
 
-See: kernel/src/fs/mount_check.rs; kernel/src/syscall/fsctl.rs;
-libs/fs/vfs/src/namespace.rs; kernel/src/fs/procfs/render.rs.
+See: src/kernel/src/fs/mount_check.rs; src/kernel/src/syscall/fsctl.rs;
+src/lib/fs/vfs/src/namespace.rs; src/kernel/src/fs/procfs/render.rs.
 
 <a id="fx-0890"></a>
 
@@ -1613,17 +1623,18 @@ opened for writing, mkdir and unlink are refused as kernfs refuses them, statfs
 says SYSFS_MAGIC, and cgroup2 mounts on fs/cgroup.
 
 1. A directory lists a name its lookup does not find, or the other way round:
-   `entries` in kernel/src/fs/sysfs.rs and a core's list disagree.
+   `entries` in src/kernel/src/fs/sysfs.rs and a core's list disagree.
 2. A link's target is spelt wrongly: `path_of` and the directories disagree
-   about where something is, or libs/fs/sysfs's `path::relative` climbs to the
-   wrong ancestor.
+   about where something is, or src/lib/fs/sysfs's `path::relative` climbs to
+   the wrong ancestor.
 3. A core stopped recording the device node its driver serves (`Origin` in
    devfs, `net_ring::node_of`, `Card::node`), so a device is shown in the wrong
    directory.
-4. A format in libs/fs/sysfs changed; its host tests pin each against Linux's.
+4. A format in src/lib/fs/sysfs changed; its host tests pin each against
+   Linux's.
 
-See: kernel/src/fs/sysfs.rs; kernel/src/fs/sysfs/check.rs; libs/fs/sysfs;
-docs/SYSFS.md.
+See: src/kernel/src/fs/sysfs.rs; src/kernel/src/fs/sysfs/check.rs;
+src/lib/fs/sysfs; docs/SYSFS.md.
 
 <a id="fx-0901"></a>
 
@@ -1650,8 +1661,8 @@ registration watched. A bound interrupt must queue exactly one packet on its
 port per delivery before acknowledgement. A kernel failing any of these would
 give userspace drivers a capability system that confines nothing.
 
-1. The handle table in `libs/kernel/objects` or the rights rule in
-   `libs/proto/native-abi` changed, so a closed handle resolves again or a
+1. The handle table in `src/lib/kernel/objects` or the rights rule in
+   `src/lib/proto/native-abi` changed, so a closed handle resolves again or a
    duplicate gains a right.
 2. `Endpoint::write` took the sender's handles before the peer's queue had
    accepted the message, so a refused send lost them.
@@ -1671,8 +1682,8 @@ give userspace drivers a capability system that confines nothing.
    drop needs, so the frames behind a VMO queued in a closed channel were never
    freed.
 
-See: kernel/src/object/check.rs run; kernel/src/syscall/native.rs;
-kernel/src/object/channel.rs; docs/ROADMAP.md stage 9.
+See: src/kernel/src/object/check.rs run; src/kernel/src/syscall/native.rs;
+src/kernel/src/object/channel.rs; docs/ROADMAP.md stage 9.
 
 <a id="fx-0902"></a>
 
@@ -1698,8 +1709,8 @@ failure that corrupts state, leaks, or is reported as something it is not.
    page, lost one, or left a space still translating it (`user/vmo.rs`'s chunked
    and one-at-a-time fallbacks).
 
-See: kernel/src/object/alloc_check.rs; kernel/src/fallible.rs;
-kernel/src/mm/reserve.rs; docs/certification/MEMORY-AND-TIMING.md.
+See: src/kernel/src/object/alloc_check.rs; src/kernel/src/fallible.rs;
+src/kernel/src/mm/reserve.rs; docs/certification/MEMORY-AND-TIMING.md.
 
 <a id="fx-0903"></a>
 
@@ -1724,8 +1735,8 @@ attempt.
 3. The cycle check's walk bound in `object/channel.rs` changed without the
    check.
 
-See: kernel/src/syscall/native_check.rs; kernel/src/syscall/native.rs;
-kernel/src/object/channel.rs; libs/kernel/objects.
+See: src/kernel/src/syscall/native_check.rs; src/kernel/src/syscall/native.rs;
+src/kernel/src/object/channel.rs; src/lib/kernel/objects.
 
 <a id="fx-0904"></a>
 
@@ -1746,8 +1757,9 @@ with.
    error.
 4. A failure's wording changed without its documentation.
 
-See: kernel/src/service_check.rs; kernel/src/hooks.rs; kernel/src/claim.rs;
-kernel/src/devmgr.rs; kernel/src/iommu/check.rs; kernel/src/iommu/gate.rs.
+See: src/kernel/src/service_check.rs; src/kernel/src/hooks.rs;
+src/kernel/src/claim.rs; src/kernel/src/devmgr.rs;
+src/kernel/src/iommu/check.rs; src/kernel/src/iommu/gate.rs.
 
 <a id="fx-0905"></a>
 
@@ -1774,8 +1786,8 @@ lets one job take memory, tasks, objects or processor time from the rest
 4. A slot was not given back as its last hold went, or was freed while still
    held.
 
-See: kernel/src/object/quota.rs; kernel/src/object/quota_check.rs;
-kernel/src/mm.rs; docs/certification/IMPLEMENTATION.md.
+See: src/kernel/src/object/quota.rs; src/kernel/src/object/quota_check.rs;
+src/kernel/src/mm.rs; docs/certification/IMPLEMENTATION.md.
 
 <a id="fx-0906"></a>
 
@@ -1800,8 +1812,8 @@ path its memory limit does not see (certification finding F-37, T.EXHAUST).
 4. The kernel's account was not installed as the first job was made
    (`quota::install_kernel_heap`), so nothing was charged at all.
 
-See: kernel/src/fs/kmem_check.rs; libs/kernel/kmem/src/lib.rs;
-kernel/src/object/quota.rs; docs/certification/IMPLEMENTATION.md W-15.
+See: src/kernel/src/fs/kmem_check.rs; src/lib/kernel/kmem/src/lib.rs;
+src/kernel/src/object/quota.rs; docs/certification/IMPLEMENTATION.md W-15.
 
 <a id="fx-1001"></a>
 
@@ -1821,7 +1833,7 @@ none.
 2. A bus's window could not be mapped, because the vmap arena is exhausted or
    the physical address is beyond what this architecture's page tables can
    express.
-3. `libs/platform/pci` refused a BAR or a capability list. On QEMU that means
+3. `src/lib/platform/pci` refused a BAR or a capability list. On QEMU that means
    the accessor read the wrong width or offset, not that the device is
    malformed.
 4. The virtio-rng self-check in `pci/virtio.rs` saw a completion that cannot be
@@ -1836,8 +1848,8 @@ none.
    completes a refused write through a bounce buffer it then drops, and the
    unit's record is the answer.
 
-See: kernel/src/pci.rs check; libs/platform/pci; libs/platform/acpi Mcfg;
-libs/platform/fdt ecam_hosts; docs/ROADMAP.md stage 10.
+See: src/kernel/src/pci.rs check; src/lib/platform/pci; src/lib/platform/acpi
+Mcfg; src/lib/platform/fdt ecam_hosts; docs/ROADMAP.md stage 10.
 
 <a id="fx-1002"></a>
 
@@ -1862,7 +1874,8 @@ exactly the right answers before any node is published.
 3. `DeviceNode::pci` minted an aperture from a BAR whose size or address
    enumeration had not checked.
 
-See: kernel/src/device.rs publish; kernel/src/pci.rs; docs/ROADMAP.md stage 10.
+See: src/kernel/src/device.rs publish; src/kernel/src/pci.rs; docs/ROADMAP.md
+stage 10.
 
 <a id="fx-1003"></a>
 
@@ -1885,9 +1898,9 @@ sends a device's writes somewhere its driver did not choose.
    had unpinned.
 4. No frame could be allocated for the check.
 
-See: kernel/src/iommu.rs Domain; kernel/src/iommu/check.rs check_domains;
-kernel/src/device.rs DeviceNode::domain; docs/ARCHITECTURE.md section 7;
-docs/ROADMAP.md stage 10.
+See: src/kernel/src/iommu.rs Domain; src/kernel/src/iommu/check.rs
+check_domains; src/kernel/src/device.rs DeviceNode::domain; docs/ARCHITECTURE.md
+section 7; docs/ROADMAP.md stage 10.
 
 <a id="fx-1004"></a>
 
@@ -1922,7 +1935,7 @@ nothing here; a request on the ring is the ring-3 driver's check.
 6. The second round did not give every frame back: the ring's VMO holds, its
    task's stack or the registry leak.
 
-See: kernel/src/block_ring/mod.rs; kernel/src/block_ring/check.rs;
+See: src/kernel/src/block_ring/mod.rs; src/kernel/src/block_ring/check.rs;
 docs/BLOCK-RING.md; docs/ROADMAP.md stage 10.
 
 <a id="fx-1005"></a>
@@ -1939,21 +1952,23 @@ through it to match what `xtask` wrote into the test disk. The driver is left
 running.
 
 1. The driver exited before publishing: the line above this report gives its
-   exit status, which is the step `native/drivers/blk` stopped at (1 START, 2
-   identity, 3 registers, 4 memory, 5 device bring-up, 6 ring or HELLO, 7
-   events), or from 20 up the fault that stopped it serving (its `fault_status`:
-   23 the device refused a request, 30 up a virtqueue check).
+   exit status, which is the step `src/user/native/drivers/block/virtio-blk`
+   stopped at (1 START, 2 identity, 3 registers, 4 memory, 5 device bring-up, 6
+   ring or HELLO, 7 events), or from 20 up the fault that stopped it serving
+   (its `fault_status`: 23 the device refused a request, 30 up a virtqueue
+   check).
 2. No disk appeared in time: HELLO was refused (the ring's task prints why), the
    ring's task did not publish, or the device never came up under TCG within the
    patience.
 3. A sector came back wrong or failed: the driver's request layout, the pin's
    device addresses, the IOMMU domain, or the ring's data copy disagree with the
    device.
-4. The initramfs carries no `/sbin/blk`: `xtask/src/native.rs` no longer lists
-   it.
+4. The initramfs carries no `/sbin/blk`: `tools/common/xtask/src/native.rs` no
+   longer lists it.
 
-See: kernel/src/block_ring/driver_check.rs; native/drivers/blk/src/main.rs;
-docs/BLOCK-RING.md; docs/ROADMAP.md stage 10.
+See: src/kernel/src/block_ring/driver_check.rs;
+src/user/native/drivers/block/virtio-blk/src/main.rs; docs/BLOCK-RING.md;
+docs/ROADMAP.md stage 10.
 
 <a id="fx-1006"></a>
 
@@ -1967,16 +1982,16 @@ drivers, makes each driver's ring, starts it with START, and quiesces a device
 whose driver died. The boot's block drivers come from it from then on.
 
 1. A driver the manifest names is not in the image, or its image does not fit a
-   VMO: `xtask/src/native.rs` and the initramfs disagree.
+   VMO: `tools/common/xtask/src/native.rs` and the initramfs disagree.
 2. `/sbin/devmgr` does not load as a native program, or could not be claimed to
    start.
 3. devmgr exited before reporting: its exit status names the step (see
-   `native/devmgr`).
+   `src/user/native/devmgr`).
 4. devmgr reported nothing within twenty seconds: a driver did not bring its
    device up, or the kernel never sent PUBLISHED for a disk it accepted.
 
-See: kernel/src/devmgr.rs; native/devmgr/src/main.rs; docs/DEVMGR.md;
-docs/ROADMAP.md stage 10.
+See: src/kernel/src/devmgr.rs; src/user/native/devmgr/src/main.rs;
+docs/DEVMGR.md; docs/ROADMAP.md stage 10.
 
 <a id="fx-1007"></a>
 
@@ -2017,10 +2032,10 @@ DMA it was not given, and a unit whose faults nobody reads would hide it.
    `first read here` line names the record that was full. QEMU's unit never
    overflows on one device's faults, so there it means a second device faulted.
 
-See: kernel/src/iommu.rs audit_faults; kernel/src/iommu/check.rs
-check_dma_faults; kernel/src/pci/virtio.rs probe_out_of_domain;
-kernel/src/iommu/vtd.rs Unit::take_fault; kernel/src/iommu/smmuv3.rs
-Unit::take_fault; xtask/src/dma_faults.rs;
+See: src/kernel/src/iommu.rs audit_faults; src/kernel/src/iommu/check.rs
+check_dma_faults; src/kernel/src/pci/virtio.rs probe_out_of_domain;
+src/kernel/src/iommu/vtd.rs Unit::take_fault; src/kernel/src/iommu/smmuv3.rs
+Unit::take_fault; tools/common/xtask/src/dma_faults.rs;
 docs/certification/VULNERABILITY-ANALYSIS.md T.DMA.
 
 <a id="fx-1008"></a>
@@ -2028,7 +2043,7 @@ docs/certification/VULNERABILITY-ANALYSIS.md T.DMA.
 ## FX-1008 — the log core did not serve the kernel log to a driver
 
 A driver whose device may carry the kernel log off the machine -- the Pixel 7's
-USB serial port -- reads it over a log control channel (`libs/proto/logctl`).
+USB serial port -- reads it over a log control channel (`src/lib/proto/logctl`).
 The check claims the log as `log_control_create` does and plays the driver: a
 READ must be answered with DATA holding the log's oldest bytes, the next READ
 with the bytes after them, a second reader must be refused while the first holds
@@ -2045,7 +2060,8 @@ driver after it went.
 3. The claim is not let go when the task ends, so `CLAIMED` stays set and every
    later `log_control_create` answers `ALREADY_BOUND`.
 
-See: kernel/src/logctl/check.rs; kernel/src/logctl/mod.rs; libs/proto/logctl.
+See: src/kernel/src/logctl/check.rs; src/kernel/src/logctl/mod.rs;
+src/lib/proto/logctl.
 
 <a id="fx-1009"></a>
 
@@ -2059,16 +2075,17 @@ checks, as the caller: devmgr holds its end, the caller holds no handle to it,
 process_start on the caller's handle to the started devmgr is BAD_STATE and
 gives it nothing, and a second devmgr_start while devmgr lives is ALREADY_BOUND.
 
-1. `devmgr_start` in kernel/src/devmgr.rs put the channel's end in the caller's
-   table, or `start_program` did not put it in devmgr's.
+1. `devmgr_start` in src/kernel/src/devmgr.rs put the channel's end in the
+   caller's table, or `start_program` did not put it in devmgr's.
 2. A call on a process handle reaches into the process: `process_start` in
-   kernel/src/syscall/native.rs started or gave something to a process already
-   started.
+   src/kernel/src/syscall/native.rs started or gave something to a process
+   already started.
 3. `may_start_again` did not see the devmgr it started as living: its exit
    record was not kept, or was closed early.
 
-See: kernel/src/devmgr.rs; kernel/src/object/mod.rs;
-kernel/src/syscall/native.rs; docs/INIT.md §7.3; docs/certification/ITEM.md §5.
+See: src/kernel/src/devmgr.rs; src/kernel/src/object/mod.rs;
+src/kernel/src/syscall/native.rs; docs/INIT.md §7.3; docs/certification/ITEM.md
+§5.
 
 <a id="fx-1010"></a>
 
@@ -2094,8 +2111,9 @@ silently; a lost edge bit is an MSI that never arrives (F-50).
 4. The check could not put its lines back as it found them, or a core never
    reached its rendezvous.
 
-See: kernel/src/arch/arm_common/gicv2.rs rmw;
-kernel/src/arch/arm_common/gicv2/check.rs; docs/certification/FINDINGS.md F-50.
+See: src/kernel/src/arch/arm_common/gicv2.rs rmw;
+src/kernel/src/arch/arm_common/gicv2/check.rs; docs/certification/FINDINGS.md
+F-50.
 
 <a id="fx-1101"></a>
 
@@ -2117,17 +2135,18 @@ printed before the report.
    ring's data copy to the volume reader and the page source, or the fixture and
    the manifest disagree.
 3. A directory or a link is missing or of the wrong kind: lookup, readdir or
-   readlink in libs/fs/btrfs-vfs changed what it answers.
+   readlink in src/lib/fs/btrfs-vfs changed what it answers.
 
-See: kernel/src/fs/btrfs_check.rs; kernel/src/fs/btrfs.rs; libs/fs/btrfs-vfs;
-xtask/src/btrfs_disk.rs; docs/ROADMAP.md stage 11.
+See: src/kernel/src/fs/btrfs_check.rs; src/kernel/src/fs/btrfs.rs;
+src/lib/fs/btrfs-vfs; tools/common/xtask/src/btrfs_disk.rs; docs/ROADMAP.md
+stage 11.
 
 <a id="fx-1150"></a>
 
 ## FX-1150 — the net core did not carry a packet round its own loopback
 
-The net core is `libs/network/net` behind one lock, driven by a kernel task. Its
-check uses the loopback and nothing else, so it passes on a machine with no
+The net core is `src/lib/network/net` behind one lock, driven by a kernel task.
+Its check uses the loopback and nothing else, so it passes on a machine with no
 network device: a datagram sent to a bound port must arrive with its sender's
 address, a datagram to an empty port must earn ECONNREFUSED from the unreachable
 this host sends itself, a connection to a listening port must be made, accepted,
@@ -2137,7 +2156,7 @@ IPv4 and again over IPv6. A port a socket listens on must be its own: a second
 socket binding an overlapping address on it, or listening beside it having bound
 first, must be EADDRINUSE though both set SO_REUSEADDR.
 
-1. `Stack::port_taken` in libs/network/net let SO_REUSEADDR lift the conflict
+1. `Stack::port_taken` in src/lib/network/net let SO_REUSEADDR lift the conflict
    with a socket already listening, or `Stack::listen` no longer checks for a
    listener on an overlapping address and port (`listener_on`).
 2. The loopback interface is not up, or does not own 127.0.0.1 and ::1:
@@ -2152,11 +2171,11 @@ first, must be EADDRINUSE though both set SO_REUSEADDR.
 5. A blocking call waited for ever: the wait's condition and what wakes it
    disagree, or `NetCore::progress` is no longer woken after the stack moves.
 6. A connection was refused that should have been made, or made that should have
-   been refused: the listener lookup in `libs/network/net`'s TCP input, or the
-   reset it sends a segment with nowhere to go.
+   been refused: the listener lookup in `src/lib/network/net`'s TCP input, or
+   the reset it sends a segment with nowhere to go.
 
-See: kernel/src/net/check.rs; kernel/src/net/mod.rs; libs/network/net;
-libs/network/nettcp; docs/ROADMAP.md.
+See: src/kernel/src/net/check.rs; src/kernel/src/net/mod.rs;
+src/lib/network/net; src/lib/network/nettcp; docs/ROADMAP.md.
 
 <a id="fx-1151"></a>
 
@@ -2179,16 +2198,16 @@ driver does.
 2. No slot was posted: `Serving::post_receives` stopped filling the ring, which
    is a driver with no buffers and an interface that silently drops every
    packet.
-3. The ARP request was not answered: it never reached `libs/network/net`'s input
-   path, the interface has no address, or the reply was queued for an interface
-   nobody drains.
+3. The ARP request was not answered: it never reached `src/lib/network/net`'s
+   input path, the interface has no address, or the reply was queued for an
+   interface nobody drains.
 4. The interface outlived its driver: `Serving::finish` no longer takes it out
    of the net core, so a route can still point at a device that is gone.
 5. The ring's task did not stop when the control channel closed, which a frame
    count taken after the check would then see as a leak.
 
-See: kernel/src/net_ring/check.rs; kernel/src/net_ring/mod.rs;
-libs/proto/netring; docs/NET-RING.md.
+See: src/kernel/src/net_ring/check.rs; src/kernel/src/net_ring/mod.rs;
+src/lib/proto/netring; docs/NET-RING.md.
 
 <a id="fx-1152"></a>
 
@@ -2204,7 +2223,7 @@ message too short for its fixed header to earn EINVAL -- with every reply
 addressed to the port getsockname reported, which is what libnetlink checks
 before it believes any of it.
 
-1. A reply could not be walked back: `libs/network/netlink`'s builder and its
+1. A reply could not be walked back: `src/lib/network/netlink`'s builder and its
    walk disagree about a length or the padding between messages, which no host
    test covers if the two changed together.
 2. A dump answered with nothing, or without the loopback: `RTM_GETLINK` no
@@ -2214,15 +2233,15 @@ before it believes any of it.
    stayed: the handler read the wrong attribute, or acted on a different
    interface from the one the message named.
 4. A refusal came back as something else: the order of the checks in
-   `kernel/src/net/netlink/route.rs` changed, so an unknown type is answered
+   `src/kernel/src/net/netlink/route.rs` changed, so an unknown type is answered
    before it is refused.
 5. A reply was addressed to another port or another sequence number: the
    socket's port identifier is not what `getsockname` reports, or a reply no
    longer echoes the request's sequence number -- which is silent breakage,
    because a program filters those replies out and then waits for ever.
 
-See: kernel/src/net/netlink/check.rs; kernel/src/net/netlink/route.rs;
-libs/network/netlink; docs/ROADMAP.md.
+See: src/kernel/src/net/netlink/check.rs; src/kernel/src/net/netlink/route.rs;
+src/lib/network/netlink; docs/ROADMAP.md.
 
 <a id="fx-1201"></a>
 
@@ -2240,8 +2259,8 @@ again — replaying any log the kill left — and every file whose trailer says 
 body was made durable is checked against that trailer.
 
 1. The mount failed: the disk takes no writes, or the volume is one
-   libs/fs/btrfs-write will not maintain (a subvolume, quotas), which is EROFS,
-   or a log left by a crash would not replay.
+   src/lib/fs/btrfs-write will not maintain (a subvolume, quotas), which is
+   EROFS, or a log left by a crash would not replay.
 2. A file read back short or with the wrong CRC-32C: the write path put an
    extent, a checksum or an inode's size somewhere the read path does not look,
    or the block ring's write copied the wrong bytes.
@@ -2252,12 +2271,14 @@ body was made durable is checked against that trailer.
    items, the back-references or the orphan bookkeeping disagree.
 5. After a power failure, a file's bytes are not the ones its trailer promised:
    a log or a commit that completed was rolled back, or replay put older extents
-   under newer stat data. libs/fs/btrfs-write's powerfail tests reproduce this
-   on the host, faster.
+   under newer stat data. src/lib/fs/btrfs-write's powerfail tests reproduce
+   this on the host, faster.
 
-See: kernel/src/fs/btrfs_write_check.rs; kernel/src/fs/btrfs_powerfail.rs;
-kernel/src/fs/btrfs.rs; libs/fs/btrfs-vfs rw; libs/fs/btrfs-write;
-xtask/src/btrfs_disk.rs; xtask/src/powerfail.rs; docs/ROADMAP.md stage 12.
+See: src/kernel/src/fs/btrfs_write_check.rs;
+src/kernel/src/fs/btrfs_powerfail.rs; src/kernel/src/fs/btrfs.rs;
+src/lib/fs/btrfs-vfs rw; src/lib/fs/btrfs-write;
+tools/common/xtask/src/btrfs_disk.rs; tools/common/xtask/src/powerfail.rs;
+docs/ROADMAP.md stage 12.
 
 <a id="fx-1202"></a>
 
@@ -2270,12 +2291,13 @@ directory onto it, under pid 1's filesystem lock. After the switch pid 1's root
 and working directory must be the volume's, and a fork of pid 1 must see the
 volume as /.
 
-1. `switch_to` in kernel/src/fs/root_disk.rs published the root without moving
-   pid 1, or moved another process.
+1. `switch_to` in src/kernel/src/fs/root_disk.rs published the root without
+   moving pid 1, or moved another process.
 2. A fork does not copy its parent's root (`Process::forked` in
-   kernel/src/syscall/process.rs).
+   src/kernel/src/syscall/process.rs).
 
-See: kernel/src/fs/root_disk.rs; docs/INIT.md §7.3; docs/certification/ITEM.md.
+See: src/kernel/src/fs/root_disk.rs; docs/INIT.md §7.3;
+docs/certification/ITEM.md.
 
 <a id="fx-1301"></a>
 
@@ -2324,45 +2346,47 @@ SET_LIMIT, and job_set_limit through a plain duplicate; refuse EACCES on opening
 its own memory.max, pids.max and cpu.weight for writing; still read 16 MiB; and
 accept a limit on a job the delegatee made with job_create.
 
-1. `job_set_limit` in kernel/src/syscall/native.rs asks for MANAGE rather than
-   SET_LIMIT, or `job_for_cgroup` in kernel/src/fs/cgroupfs.rs grants SET_LIMIT
-   without judging the limit files' write permission (`limit_metadata`), so
-   whoever may fill a delegated cgroup may also lift its limits.
-2. `load_native` in kernel/src/syscall/launch.rs did not take the creator's
-   credentials, or `process_create` in kernel/src/syscall/native.rs did not pass
-   the caller as the creator, so a native process started as root
+1. `job_set_limit` in src/kernel/src/syscall/native.rs asks for MANAGE rather
+   than SET_LIMIT, or `job_for_cgroup` in src/kernel/src/fs/cgroupfs.rs grants
+   SET_LIMIT without judging the limit files' write permission
+   (`limit_metadata`), so whoever may fill a delegated cgroup may also lift its
+   limits.
+2. `load_native` in src/kernel/src/syscall/launch.rs did not take the creator's
+   credentials, or `process_create` in src/kernel/src/syscall/native.rs did not
+   pass the caller as the creator, so a native process started as root
    (`Credentials::root()`, what `Process::new` gives) whoever made it.
-3. `forked_into` in kernel/src/syscall/process.rs or
-   `clone_with`/`cgroup_target` in kernel/src/syscall/family.rs put the child in
-   its parent's job, or `cgroupfs::clone_target` did not recognise a cgroupfs
-   directory.
-4. `attach_permissions` in kernel/src/fs/cgroupfs.rs did not find the common
+3. `forked_into` in src/kernel/src/syscall/process.rs or
+   `clone_with`/`cgroup_target` in src/kernel/src/syscall/family.rs put the
+   child in its parent's job, or `cgroupfs::clone_target` did not recognise a
+   cgroupfs directory.
+4. `attach_permissions` in src/kernel/src/fs/cgroupfs.rs did not find the common
    ancestor, or judged the move as someone other than the file's opener; or
    `set_node`/`node` lost an owner, so a lookup reports root's.
 5. `Job::remove_named_child` did not mark the job removed, or `count_in_checked`
    and `new_named_child` did not look.
-6. `EventsFile` in kernel/src/fs/cgroupfs.rs does not name the job's `events`
-   queue in `poll_queues`, or does not compare the queue's wake count with the
-   one it last rendered at; or `job::notify` did not wake the queue at the flip.
+6. `EventsFile` in src/kernel/src/fs/cgroupfs.rs does not name the job's
+   `events` queue in `poll_queues`, or does not compare the queue's wake count
+   with the one it last rendered at; or `job::notify` did not wake the queue at
+   the flip.
 7. `poll::revents`, `poll::select_sets` or epoll's `bits` lost
    `Readiness::priority`.
 8. `Job::new_named_child`, `remove_named_child` or `children` in
-   kernel/src/object/job.rs lost a named child, or `room_for_a_child` reads the
-   limits wrongly.
+   src/kernel/src/object/job.rs lost a named child, or `room_for_a_child` reads
+   the limits wrongly.
 9. `Process::move_to` did not move the process, or its job's counts, so
    cgroup.procs or cgroup.events disagree with where the process is.
 10. `Job::kill_members` did not find the member through the registry, or sealed
     the job.
 11. `job::notify` did not fire the job's EMPTY registrations at the flip,
     `Job::observe` did not fire one on an empty job at once, or `Job::signals`
-    does not report EMPTY; or `job_for_cgroup` in kernel/src/syscall/native.rs
-    judged the rights by someone other than the caller, or
-    `cgroupfs::directory_job` did not recognise a cgroup directory.
-12. A write's text is parsed differently from Linux's: libs/fs/cgroupfs, whose
-    host tests pin each parse.
+    does not report EMPTY; or `job_for_cgroup` in
+    src/kernel/src/syscall/native.rs judged the rights by someone other than the
+    caller, or `cgroupfs::directory_job` did not recognise a cgroup directory.
+12. A write's text is parsed differently from Linux's: src/lib/fs/cgroupfs,
+    whose host tests pin each parse.
 
-See: kernel/src/fs/cgroupfs.rs; kernel/src/object/job.rs; libs/fs/cgroupfs;
-docs/CGROUPS.md.
+See: src/kernel/src/fs/cgroupfs.rs; src/kernel/src/object/job.rs;
+src/lib/fs/cgroupfs; docs/CGROUPS.md.
 
 <a id="fx-1501"></a>
 
@@ -2381,7 +2405,8 @@ disks were committed before this panic, as they are before a power-off.
 3. Nothing could be started at all: no program is built in, `ferrix.init=` named
    a file that would not start, and the image carries no /sbin/init.
 
-See: kernel/src/power.rs finish; kernel/src/init.rs run; docs/INIT.md §8.3.
+See: src/kernel/src/power.rs finish; src/kernel/src/init.rs run; docs/INIT.md
+§8.3.
 
 <a id="fx-1502"></a>
 
@@ -2424,7 +2449,7 @@ EBADF (247).
    exited with 128 plus the signal, or it reads an exit before the process
    ended.
 3. `init::bootstrap_channel` no longer writes the hello from
-   `libs/proto/native-abi`'s `bootstrap` module, or writes more than one
+   `src/lib/proto/native-abi`'s `bootstrap` module, or writes more than one
    message, or `exec::give_bootstrap` does not put the program's end in the new
    process's slot.
 4. `process_give` (`syscall/launch.rs`) judged the parent by something other
@@ -2437,14 +2462,14 @@ EBADF (247).
 6. A process's release does not dispose of an untaken bootstrap
    (`close_bootstrap`), so the peer never hears PEER_CLOSED.
 7. The program's machine code (`arch::USER_BOOTSTRAP_PROGRAM`) does not make the
-   calls by the numbers `libs/proto/native-abi` gives, or the dispatcher does
+   calls by the numbers `src/lib/proto/native-abi` gives, or the dispatcher does
    not route a native number from a Linux program.
 
-See: kernel/src/syscall/init_calls_check.rs; kernel/src/init.rs;
-kernel/src/syscall/native.rs; kernel/src/syscall/launch.rs;
-kernel/src/object/process.rs; libs/proto/native-abi/src/nr.rs;
-kernel/src/fs/portfd.rs; libs/proto/native-abi/src/bootstrap.rs; docs/INIT.md
-§6, §9, §11, §16.
+See: src/kernel/src/syscall/init_calls_check.rs; src/kernel/src/init.rs;
+src/kernel/src/syscall/native.rs; src/kernel/src/syscall/launch.rs;
+src/kernel/src/object/process.rs; src/lib/proto/native-abi/src/nr.rs;
+src/kernel/src/fs/portfd.rs; src/lib/proto/native-abi/src/bootstrap.rs;
+docs/INIT.md §6, §9, §11, §16.
 
 <a id="fx-9001"></a>
 
@@ -2473,8 +2498,9 @@ existed, and the architecture's saved registers follow.
    reported as not mapped, an external abort from a device address included; the
    fault status in `esr` says which it was.
 
-See: kernel/src/trap.rs handle_page_fault; kernel/src/mm.rs map_demand_page;
-kernel/src/vmap.rs; kernel/src/arch/aarch64/trap.rs abort.
+See: src/kernel/src/trap.rs handle_page_fault; src/kernel/src/mm.rs
+map_demand_page; src/kernel/src/vmap.rs; src/kernel/src/arch/aarch64/trap.rs
+abort.
 
 <a id="fx-9002"></a>
 
@@ -2493,8 +2519,9 @@ call never comes this way, because `SYSCALL` has an entry of its own.
 2. A user program called `execve` on an Arm architecture, and `execve` through
    the trap path is not wired yet (the headline says so).
 
-See: kernel/src/trap.rs dispatch; kernel/src/arch/aarch64/trap.rs system_call;
-kernel/src/arch/armv7a/trap.rs system_call; docs/ROADMAP.md stage 7.
+See: src/kernel/src/trap.rs dispatch; src/kernel/src/arch/aarch64/trap.rs
+system_call; src/kernel/src/arch/armv7a/trap.rs system_call; docs/ROADMAP.md
+stage 7.
 
 <a id="fx-9003"></a>
 
@@ -2509,9 +2536,9 @@ counter in the report is the instruction that was refused.
    return address or function pointer; check whether the saved program counter
    lies inside the kernel image.
 
-See: kernel/src/trap.rs dispatch; kernel/src/arch/x86_64/trap.rs classify;
-kernel/src/arch/aarch64/trap.rs classify; kernel/src/arch/armv7a/trap.rs
-classify.
+See: src/kernel/src/trap.rs dispatch; src/kernel/src/arch/x86_64/trap.rs
+classify; src/kernel/src/arch/aarch64/trap.rs classify;
+src/kernel/src/arch/armv7a/trap.rs classify.
 
 <a id="fx-9004"></a>
 
@@ -2531,9 +2558,9 @@ translation, access-flag or permission fault.
 2. On ARMv7-A, a data abort with an external abort status, from an access to an
    address with no device behind it; the `fsr` in the report gives the status.
 
-See: kernel/src/trap.rs dispatch; kernel/src/arch/x86_64/trap.rs vector_name;
-kernel/src/arch/aarch64/trap.rs class_name; kernel/src/arch/armv7a/trap.rs
-abort.
+See: src/kernel/src/trap.rs dispatch; src/kernel/src/arch/x86_64/trap.rs
+vector_name; src/kernel/src/arch/aarch64/trap.rs class_name;
+src/kernel/src/arch/armv7a/trap.rs abort.
 
 <a id="fx-9005"></a>
 
@@ -2552,7 +2579,7 @@ a program or the kernel was interrupted; that says nothing about the cause.
 2. Kernel code executed `int $18`, which enters through the same gate; the saved
    instruction pointer then lies in the kernel image, just after it.
 
-See: kernel/src/arch/x86_64/paranoid.rs; kernel/src/arch/x86_64/trap.rs
+See: src/kernel/src/arch/x86_64/paranoid.rs; src/kernel/src/arch/x86_64/trap.rs
 ferrix_paranoid_common.
 
 <a id="fx-9006"></a>
@@ -2575,5 +2602,5 @@ registers in the report are the second exception's.
 3. A double fault inside the double-fault handler: that handler's report itself
    overflowed or faulted.
 
-See: kernel/src/arch/x86_64/paranoid.rs; kernel/src/arch/x86_64/trap.rs
-ferrix_paranoid_common; kernel/src/arch/x86_64/gdt.rs.
+See: src/kernel/src/arch/x86_64/paranoid.rs; src/kernel/src/arch/x86_64/trap.rs
+ferrix_paranoid_common; src/kernel/src/arch/x86_64/gdt.rs.

@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn the_arguments_a_kernel_gives_its_first_program_are_read() {
-        // `kernel/src/init.rs` starts the first program as `sh -i` or as
+        // `src/kernel/src/init.rs` starts the first program as `sh -i` or as
         // `sh -c <script>`, and the compositor is that program when it runs
         // as init.
         assert_eq!(parse(&["-i"]).expect("valid"), Options::default());

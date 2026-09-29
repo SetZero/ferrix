@@ -21,13 +21,13 @@ kernel meets under `cargo xtask test-boot`. Checksums are set as firmware
 sets them.
 
 Usage:
-    python3 scripts/gen/seed-acpi-fuzz-corpus.py
+    python3 tools/common/gen/seed-acpi-fuzz-corpus.py
 """
 
 import pathlib
 import struct
 
-OUT = pathlib.Path(__file__).resolve().parent.parent.parent / "tests" / "fuzz" / "corpus" / "acpi_tables"
+OUT = pathlib.Path(__file__).resolve().parent.parent.parent.parent / "tests" / "fuzz" / "corpus" / "acpi_tables"
 
 
 def checksum_fix(table, at):

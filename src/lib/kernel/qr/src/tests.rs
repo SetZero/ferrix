@@ -52,7 +52,7 @@ fn pseudo_random(len: usize, seed: u32) -> Vec<u8> {
 
 /// A payload of `len` printable ASCII bytes, like a panic report.
 fn text(len: usize) -> Vec<u8> {
-    b"FERRIX-PANIC stage 3 self-check failed: the timer never fired\n  at kernel/src/main.rs:153\n"
+    b"FERRIX-PANIC stage 3 self-check failed: the timer never fired\n  at src/kernel/src/main.rs:153\n"
         .iter()
         .copied()
         .cycle()

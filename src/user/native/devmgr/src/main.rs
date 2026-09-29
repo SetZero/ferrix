@@ -105,7 +105,7 @@ enum Kind {
     /// subsystem serves yet. Handed its device and START as a port's driver
     /// is; it publishes nothing, so it is started and taken at its word.
     Engine,
-    /// `docs/PIXEL7-USB-HANDOVER.md`: a USB device controller, which
+    /// `docs/vendor/google/pixel7/USB-HANDOVER.md`: a USB device controller, which
     /// presents a function to whatever it is plugged into -- the Pixel 7's
     /// serial port. Handed its device and START as a port's driver is; what
     /// it serves comes from the kernel's log through its own device's
@@ -161,7 +161,7 @@ const DRIVERS: [(u16, &[u16], &[u8], Kind); 6] = [
 /// (`docs/GPU.md` §6.3).
 ///
 /// The Pixel 7's USB device controller is a gadget, driven by `usbdev`
-/// (`docs/PIXEL7-USB-HANDOVER.md`).
+/// (`docs/vendor/google/pixel7/USB-HANDOVER.md`).
 const TREE_DRIVERS: [(u16, &[u8], Kind); 4] = [
     (TREE_STM32_HDMI, b"ltdc", Kind::Display),
     (TREE_STM32_USBH, b"usbhid", Kind::Host),
@@ -194,7 +194,7 @@ enum Step {
 /// many, and its device stays quiesced as a device with no restart does.
 const MAX_RESTARTS: u32 = 8;
 
-/// A device's restart policy, the service manager's own (`libs/init/restart`,
+/// A device's restart policy, the service manager's own (`src/lib/init/restart`,
 /// `docs/INIT.md` §5.4): `Restart=always` for a kind that is
 /// [`restarted`] and `Restart=no` for the rest, no delay, and a start limit of
 /// [`MAX_RESTARTS`] which, with no clock to renew it, is a count.
@@ -240,12 +240,12 @@ fn died_status(exit: Exit) -> i32 {
 /// (`docs/DEVMGR.md` §4).
 ///
 /// A display, sound, network, input or disk driver. Each of their cores
-/// waits for a dead driver's claim to go (`kernel/src/claim.rs`), gives the
+/// waits for a dead driver's claim to go (`src/kernel/src/claim.rs`), gives the
 /// device back as it was -- the card or event node under the lowest free
 /// number, the network interface parked with its addresses, the disk parked
 /// with its requests queued -- and gives a dead driver's quarantined pins
 /// back only once the next one has reset the device and sent HELLO
-/// (`kernel/src/object/pin.rs`). The serial port has no core to wait for,
+/// (`src/kernel/src/object/pin.rs`). The serial port has no core to wait for,
 /// and the USB host, GPU engine and gadget kinds are not restarted yet.
 const fn restarted(kind: Kind) -> bool {
     matches!(

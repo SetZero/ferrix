@@ -77,7 +77,7 @@ pub fn offer(info: &PcmInfo) -> Offer {
 }
 
 /// HELLO for a device whose streams `infos` describe, at `location`. Streams
-/// past [`MAX_STREAMS`] do not fit and are not described; `libs/drivers/virtio::snd`
+/// past [`MAX_STREAMS`] do not fit and are not described; `src/lib/drivers/virtio::snd`
 /// refuses such a device before this is reached.
 #[must_use]
 pub fn hello(infos: &[PcmInfo], location: u32) -> Hello {

@@ -1,7 +1,7 @@
 # The net ring
 
 The memory the kernel shares with a ring-3 network driver, and the rules each
-side keeps over it. `libs/proto/netring` is this document in code; where the two
+side keeps over it. `src/lib/proto/netring` is this document in code; where the two
 differ, this document is wrong.
 
 `docs/ARCHITECTURE.md` §7 runs drivers in user processes and says the data path
@@ -72,7 +72,7 @@ The arrays go immediately after the header, submissions first. A peer does not
 get to choose where: letting it would mean checking two ranges against each
 other, against the header and against the ring's end on every attach, and fixing
 them makes that one comparison and takes nothing away, since both sides link
-`libs/proto/netring`.
+`src/lib/proto/netring`.
 
 The driver writes the first six fields before HELLO. The kernel reads them once,
 in `KernelSide::attach`, and keeps its own copies. Every other field has the one
@@ -171,10 +171,10 @@ index, so a driver started again brings `eth0` back as it was, and a socket
 bound to its address or a route through it sees only the carrier come back. A
 HELLO naming something else on that device replaces the parked interface. The
 device's claim is released when the ring's task ends, and a quiesce waits for
-that (`kernel/src/claim.rs`).
+that (`src/kernel/src/claim.rs`).
 
 ## 8. What is not here
 
 Ports, mappings, the pinned pages and the device. Those are the kernel's glue
-and the driver process's business. `libs/proto/netring` is the bytes and the
+and the driver process's business. `src/lib/proto/netring` is the bytes and the
 arithmetic, so that `cargo test`, Miri and a fuzzer can reach all of it.

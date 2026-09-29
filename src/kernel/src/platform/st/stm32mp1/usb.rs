@@ -4,7 +4,7 @@
 //! The DK boards' four USB-A sockets hang off a Microchip USB2514B hub, wired
 //! to port 1 of the chip's EHCI controller through the first port of its
 //! USB PHY controller, `USBPHYC` (`docs/INPUT.md` §7). The driver,
-//! `native/drivers/usbhid`, programs the EHCI controller and everything on the bus.
+//! `src/user/native/drivers/usb/usbhid`, programs the EHCI controller and everything on the bus.
 //! What it cannot do is what the rest of the chip shares, for the reason
 //! `stm32mp1` gives for the display -- the RCC's clock gates and resets, and
 //! the PWR block's regulators -- or what serves two controllers, as the PHY's

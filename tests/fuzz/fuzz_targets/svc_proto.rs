@@ -1,4 +1,4 @@
-//! Fuzz init's wire formats (`libs/init/svc-proto`): any bytes a local program
+//! Fuzz init's wire formats (`src/lib/init/svc-proto`): any bytes a local program
 //! sends to `/run/ferrix/control` or writes to a readiness descriptor.
 //!
 //! Decoding must never panic, a record that decodes must encode back to the

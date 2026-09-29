@@ -30,7 +30,7 @@ came with stage 8 and dynamic linking, and the glibc loader was proven on
 Debian's busybox. The sysroot on btrfs is stage 12's write path and the
 `/data` mount. Three things were new:
 
-* **A sysroot.** `scripts/fetch/fetch-rustc-sysroot.sh` downloads the compiler and
+* **A sysroot.** `tools/common/fetch/fetch-rustc-sysroot.sh` downloads the compiler and
   `rust-std` from rust-lang.org, and `libc6`, `libc6-dev`, `libgcc-s1`,
   `libgcc-14-dev`, gcc 14's driver and `zlib1g` from Debian. Every download
   is pinned by the SHA-256 its own index gave. The script lays them out as
@@ -58,7 +58,7 @@ Debian's busybox. The sysroot on btrfs is stage 12's write path and the
   mapping reaches the VMO directly and committed any absent page as zeros,
   which is right for tmpfs and wrong for every file on a disk. It was
   latent since stage 12 began offering btrfs files for mapping, and
-  `libs/fs/vfs` had written the rule down: no store over a source may be
+  `src/lib/fs/vfs` had written the rule down: no store over a source may be
   mapped until a fault can fill it. The VMO of such a file now carries its
   source as a `Filler`. The address space asks it for the page, with a
   32-page read-ahead run, before taking its own lock, because the fill waits

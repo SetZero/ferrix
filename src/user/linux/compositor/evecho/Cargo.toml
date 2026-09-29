@@ -25,7 +25,7 @@ negative-control = []
 # std already links.
 libc = "0.2.189"
 # The evdev numbers and layouts, checked against the UAPI headers.
-ferrix-linux-abi = { path = "../../../libs/proto/linux-abi" }
+ferrix-linux-abi = { path = "../../../../lib/proto/linux-abi" }
 
 [lints]
 workspace = true

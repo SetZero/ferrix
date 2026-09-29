@@ -2,7 +2,7 @@
 # Builds btop 1.4.7 as a static x86-64 program against ferrousli and the C++
 # runtime tools/ports/libcxx builds on it, which must be built first.
 #
-#     tools/ports/btop/build.sh            # from userland/ferrousli/
+#     tools/ports/btop/build.sh            # from src/user/linux/ferrousli/
 #
 # Installs, under $FERRIX_PORTS (see ../common.sh):
 #   x86_64/bin/btop

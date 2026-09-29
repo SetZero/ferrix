@@ -27,7 +27,7 @@ fn main() {
 }
 
 /// How far a channel may be from the expected image's and the picture still
-/// be the same one: what `userland/compositor/render` holds a GPU's frame to.
+/// be the same one: what `src/user/linux/compositor/render` holds a GPU's frame to.
 const STEP: u8 = 3;
 
 /// The line for a picture held to the expected image at `path`.

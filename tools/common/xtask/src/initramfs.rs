@@ -37,7 +37,7 @@ pub(crate) const FIXED_MTIME: u32 = 1_767_225_600;
 pub(crate) const MARKER_PATH: &str = "etc/ferrix/initramfs";
 
 /// The marker's contents. The kernel's self-check compares them byte for byte,
-/// and `kernel/src/fs/check.rs` carries the same string.
+/// and `src/kernel/src/fs/check.rs` carries the same string.
 pub(crate) const MARKER: &[u8] =
     b"unpacked by the kernel from a cpio archive the loader handed it\n";
 
@@ -290,7 +290,7 @@ pub(crate) struct Binary {
     pub(crate) links: &'static [&'static str],
 }
 
-/// The family, as `userland/ferrousli/tools/uutils/` builds it.
+/// The family, as `src/user/linux/ferrousli/tools/uutils/` builds it.
 ///
 /// Three projects and six programs. coreutils and diffutils are multicall
 /// binaries, which pick their utility from `argv[0]`; findutils builds one
@@ -581,7 +581,7 @@ fn build_with_shell(
         // by DHCP and a guest configured by hand agree.
         archive.file("etc/resolv.conf", 0o644, b"nameserver 10.0.2.3\n")?;
         // What is mounted, for the programs that read it. Ferrix mounts `/`
-        // and `/data` itself, from the command line (`kernel/src/fs/root_disk.rs`,
+        // and `/data` itself, from the command line (`src/kernel/src/fs/root_disk.rs`,
         // `data_disk.rs`), and nothing here mounts from this file. But every
         // Linux has one, and btop reads its list of disks from it by default:
         // with none, its memory panel's collection failed every time on the

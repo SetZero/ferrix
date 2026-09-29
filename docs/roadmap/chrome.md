@@ -7,7 +7,7 @@ first assessment to what each run found. On 2026-09-24 the customer chose
 Google's prebuilt Chrome over building Chromium, for a first result in days
 rather than a source build's 40-plus unknown points. The browser is Chrome
 for Testing 154.0.8037.57 on Debian 13's glibc, from a btrfs volume
-`scripts/fetch/fetch-chrome.sh` makes from pinned downloads; ferrousli standing in
+`tools/common/fetch/fetch-chrome.sh` makes from pinned downloads; ferrousli standing in
 for that glibc is the other route, and since 2026-09-24 ferrousli answers
 every glibc name Chrome and its libraries import.
 

@@ -1,17 +1,17 @@
 # Stage 2 — Physical and virtual memory ✅
 
-The arithmetic lives in `libs/` and is unit-tested on the host; the parts that
+The arithmetic lives in `src/lib/` and is unit-tested on the host; the parts that
 touch `CR3` or `TTBR1` do not.
 
-**Done.** The buddy allocator (`libs/kernel/frame`) and the kernel heap
-(`libs/kernel/heap`), both wired up and running on both architectures:
+**Done.** The buddy allocator (`src/lib/kernel/frame`) and the kernel heap
+(`src/lib/kernel/heap`), both wired up and running on both architectures:
 
-* `libs/kernel/frame` — buddy allocator over the UEFI memory map, orders 0 to 10.
+* `src/lib/kernel/frame` — buddy allocator over the UEFI memory map, orders 0 to 10.
   Free-list links live in a per-frame side array rather than in the free pages,
   which makes the whole allocator index arithmetic and therefore
   `#![forbid(unsafe_code)]`, host-testable and fuzzable. The side array is not a
   concession to testing: a refcount per frame is what copy-on-write will need.
-* `libs/kernel/heap` — segregated free lists over a page supply, behind a `Backing`
+* `src/lib/kernel/heap` — segregated free lists over a page supply, behind a `Backing`
   trait so the loads and stores that a free-list allocator needs are the
   implementor's problem rather than the allocator's. `Box`, `Vec` and
   `BTreeMap` now work in the kernel.
@@ -36,7 +36,7 @@ entries, all verified to hold what was put in them.
 
 **Done — the virtual half, and the tidying the physical half was owed.**
 
-* `kernel/src/vmap.rs` — an arena over `KERNEL_VMAP_BASE` that hands out
+* `src/kernel/src/vmap.rs` — an arena over `KERNEL_VMAP_BASE` that hands out
   virtual ranges with an unmapped guard page either side, and guard-paged
   kernel stacks on top of it. Free ranges are coalesced with their neighbours,
   so a stack allocated and freed a thousand times does not fragment the arena
@@ -59,7 +59,7 @@ entries, all verified to hold what was put in them.
 * The W^X sweep walks the live tables through `Mapper::for_each_leaf` and
   asserts no leaf is both writable and executable. It reports what it swept as
   well as what it found, because a sweep that walks nothing also finds nothing.
-* `libs/kernel/heap` returns empty slab pages to the buddy. The free-object count
+* `src/lib/kernel/heap` returns empty slab pages to the buddy. The free-object count
   lives in the per-frame record, as the note here asked — not in a header
   stolen from the first object, which would have made the allocator's own
   metadata the thing a use-after-free corrupts first. The last page of a class

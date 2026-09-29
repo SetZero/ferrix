@@ -2,7 +2,7 @@
 //!
 //! Stage 5 of `docs/ROADMAP.md`, and the half of the scheduler that is
 //! arithmetic. The kernel's half — tasks, stacks, the context switch, the
-//! per-CPU locks and the timer — lives in `kernel/src/sched/`. Everything
+//! per-CPU locks and the timer — lives in `src/kernel/src/sched/`. Everything
 //! here is a pure function of the numbers it is handed, so `cargo test` can
 //! drive a run queue through hundreds of thousands of decisions and check
 //! every one, which a kernel that reboots on a mistake cannot.

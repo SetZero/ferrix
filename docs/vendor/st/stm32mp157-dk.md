@@ -695,14 +695,14 @@ tasks onto one queue reads many times slower there than on the board.
 | PLL4's Q output is 74.25 MHz on this firmware | read from U-Boot: `PLL4CR 0x73`, `PLL4CFGR1 0x00030062`, `PLL4CFGR2 0x00070705`, no fraction, `RCK4SELR` the HSE: 24 MHz / 4 x 99 / 8. The kernel reads the same registers and prints `pixel clock 74.250 MHz` |
 | The pixel clock's divider can be changed while Ferrix runs, and modes other than 720p60 show | **not yet on the board** (2026-09-24). What stands behind it: `PLL4CFGR2 0x00070705` above is DIVQ 7 in bits 14:8 with P and R beside it; TF-A's `pll4_cfg1` gives P to SDMMC1 only; Linux's clock tree gates `pll4_q` with `PLL4CR` bit 5 around its divider; the mode choice is host-tested against two Dells' EDIDs |
 | The RCC is the normal world's to write | OP-TEE's boot line `RCC tzen:0` |
-| HDMI out at 1280x720 from a Linux program | `userland/compositor/blank` as init drew `0x1e1e2e` over `/dev/dri/card0`, seen on a monitor, 2026-09-23 (`docs/DISPLAY.md` §6) |
+| HDMI out at 1280x720 from a Linux program | `src/user/linux/compositor/blank` as init drew `0x1e1e2e` over `/dev/dri/card0`, seen on a monitor, 2026-09-23 (`docs/DISPLAY.md` §6) |
 | The Wayland compositor on the board | `hyprix` as init: `1 monitor [card0 HDMI-A-1 1280x720 1280x720]`, a terminal window tiled, seen on the monitor, about 100 ms a frame |
 | A monitor in portrait | `monitor = HDMI-A-1, 1280x720@60, 0x0, 1, transform, 3`: `hyprix: 1 monitor [card0 HDMI-A-1 1280x720 1280x720 transform 3]`, a terminal of 678x1238 pixels over a second window, upright on the customer's monitor, 2026-09-23 |
 | A reset starts the desktop; `reboot --firmware-setup` comes back to U-Boot | 2026-09-23 23:16, the environment above saved: `reset` autobooted to `hyprix: 1 monitor [... transform 3]` with the serial shell's `ferrix#` beside it; `reboot --firmware-setup` there printed `reboot: U-Boot runs altbootcmd, which stops at its prompt`, and after TF-A U-Boot said `Ferrix asked for the U-Boot prompt, type boot to start it again` at `STM32MP>`; `boot` brought the desktop back |
 | The TAMP boot context is the normal world's to write | U-Boot's `mw.l 0x5c00a150 0x00011102` read back, took effect at the next start and was cleared to `00011100`; `PWR_CR1` reads `0x100`, the backup domain writable |
 | Both boot switches ON boots the SD card; the prompt is `STM32MP>` | on the board |
 | U-Boot's IWDG heuristic starts a 32 s watchdog on `VERR = 0x30` | on the board; gone with `WDT_STM32MP` off, and survives an OP-TEE without IWDG |
-| The above-2-GiB identity-map placement | host unit tests in `libs/proto/bootinfo` |
+| The above-2-GiB identity-map placement | host unit tests in `src/lib/proto/bootinfo` |
 | STM32 USART register offsets | against Linux's `stm32h7_info`: `isr 0x1c`, `tdr 0x28`, `TXE` bit 7; and the board prints |
 | UART4 is the DK console at `0x40010000` | `stm32mp151.dtsi`, and `stdout-path = serial0:115200n8` in `stm32mp15xx-dkx.dtsi` |
 | DK RAM is 512 MiB at `0xc0000000` | `memory@c0000000 reg = <0xc0000000 0x20000000>` |

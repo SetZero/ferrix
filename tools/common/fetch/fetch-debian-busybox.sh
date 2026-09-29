@@ -28,7 +28,7 @@
 # Needs curl, sha256sum and dpkg-deb. A mirror other than deb.debian.org can
 # be named with DEBIAN_MIRROR.
 #
-# Usage: scripts/fetch/fetch-debian-busybox.sh
+# Usage: tools/common/fetch/fetch-debian-busybox.sh
 
 set -euo pipefail
 

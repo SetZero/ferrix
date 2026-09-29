@@ -7,7 +7,7 @@
 //! package for Linux. Everything else — the kernel, the loaders, QEMU, the
 //! gateway — builds and runs natively.
 //!
-//! The downloaded btrfs volumes are Linux's too: the `scripts/fetch/`
+//! The downloaded btrfs volumes are Linux's too: the `tools/common/fetch/`
 //! scripts that make them unpack Debian packages into a tree of symbolic
 //! links and run `mkfs.btrfs` over it, and `run-compositor --everything`
 //! merges two such trees into a third volume. So on Windows those scripts

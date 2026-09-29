@@ -13,7 +13,7 @@
 //! Two readers take it out. `syslog(2)` (`dmesg`), in the Linux personality,
 //! and a ring-3 driver that holds a device whose binding may read the log --
 //! the Pixel 7's USB serial port -- through a log control channel
-//! (`kernel/src/logctl`, `libs/proto/logctl`). Both are privileged: program output
+//! (`src/kernel/src/logctl`, `src/lib/proto/logctl`). Both are privileged: program output
 //! is here, and a program's output is its own.
 //!
 //! # Why a ring of atomics

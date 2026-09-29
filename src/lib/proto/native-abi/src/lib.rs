@@ -1,12 +1,12 @@
 //! The Ferrix native system call ABI: the half of the interface that is ours.
 //!
 //! `docs/ARCHITECTURE.md` §2 fixes two ABIs side by side. The Linux one is a
-//! compatibility obligation and `libs/proto/linux-abi` writes it down. This crate is
+//! compatibility obligation and `src/lib/proto/linux-abi` writes it down. This crate is
 //! the other one — capability handles to typed kernel objects, numbered from
 //! `0x1000` — and it is where the design opinions live, so each of them is
 //! argued where it is decided rather than in a document that can drift.
 //!
-//! Like `libs/proto/linux-abi`, nothing here executes. It is numbers, flag words and
+//! Like `src/lib/proto/linux-abi`, nothing here executes. It is numbers, flag words and
 //! `repr(C)` layouts, shared by the kernel's dispatcher and by anything that
 //! calls it, so it is `no_std`, forbids `unsafe` and cannot panic.
 //!
@@ -19,7 +19,7 @@
 //! built. The range `0x1000..=0x1FFF` is clear of every Linux number on all
 //! three targets — the highest is ARMv7-A's private `0x0F0000` block, above
 //! it, and the generic tables end below `0x200` — and the tests hold that
-//! against `libs/proto/linux-abi` rather than against this comment.
+//! against `src/lib/proto/linux-abi` rather than against this comment.
 //!
 //! # No argument wider than a register
 //!

@@ -592,7 +592,7 @@ fn map(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Errno> {
 /// between an object's backing and the device's copy. To the device returns
 /// once they are on their way, from the device once they have arrived.
 ///
-/// The two structures are one layout, which a test in `libs/proto/linux-abi`
+/// The two structures are one layout, which a test in `src/lib/proto/linux-abi`
 /// holds them to, so one reader serves both.
 fn transfer(
     process: &Process,

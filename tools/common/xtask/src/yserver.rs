@@ -10,7 +10,7 @@
 //! [`RUN`], carried in the image, starts it on `:1`, runs `xdpyinfo` against
 //! it, and prints the server's log.
 //!
-//! `scripts/fetch/fetch-yserver.sh` builds yserver from the customer's fork
+//! `tools/common/fetch/fetch-yserver.sh` builds yserver from the customer's fork
 //! and makes the volume (docs/YSERVER.md §3). It carries no `ferrix-root`
 //! label, so the kernel mounts it at `/data`, under QEMU's `snapshot=on`.
 //! The gate needs no network, but it attaches a volume, so it runs on demand
@@ -136,7 +136,7 @@ const STATUS: i32 = 17;
 /// Memory for the guest: lavapipe and a 130 MiB server.
 pub(crate) const MEMORY: u32 = 2048;
 
-/// Where `scripts/fetch/fetch-yserver.sh` writes, unless
+/// Where `tools/common/fetch/fetch-yserver.sh` writes, unless
 /// `FERRIX_YSERVER_VOLUME` names another directory.
 ///
 /// # Errors
@@ -150,7 +150,7 @@ pub(crate) fn volume() -> Result<std::path::PathBuf> {
     let image = directory.join("yserver.img");
     if !image.is_file() {
         return Err(Error::new(format!(
-            "{} is not there: scripts/fetch/fetch-yserver.sh makes it",
+            "{} is not there: tools/common/fetch/fetch-yserver.sh makes it",
             image.display()
         )));
     }

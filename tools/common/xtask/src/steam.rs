@@ -14,7 +14,7 @@
 //!
 //! # The volume
 //!
-//! `scripts/fetch/fetch-steam.sh` makes it: the bootstrap under `steam/`, an
+//! `tools/common/fetch/fetch-steam.sh` makes it: the bootstrap under `steam/`, an
 //! empty home, and from Debian 13 the i386 and amd64 C libraries, the four
 //! GL libraries `steamui.so` needs that scout does not carry, and the shell
 //! tools `steam.sh` runs (`bash`, GNU `tar` and `xz`, `grep`, `sed`, `mawk`,
@@ -165,7 +165,7 @@ const MEMORY: u32 = 4096;
 /// and the runtime's unpacking after it.
 const TIMEOUT: u64 = 3600;
 
-/// Where `scripts/fetch/fetch-steam.sh` writes, unless
+/// Where `tools/common/fetch/fetch-steam.sh` writes, unless
 /// `FERRIX_STEAM_VOLUME` names another directory.
 fn volume() -> Result<std::path::PathBuf> {
     let directory = match std::env::var_os("FERRIX_STEAM_VOLUME") {
@@ -175,7 +175,7 @@ fn volume() -> Result<std::path::PathBuf> {
     let image = directory.join("steam.img");
     if !image.is_file() {
         return Err(Error::new(format!(
-            "{} is not there: scripts/fetch/fetch-steam.sh makes it",
+            "{} is not there: tools/common/fetch/fetch-steam.sh makes it",
             image.display()
         )));
     }

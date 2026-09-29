@@ -2,7 +2,7 @@
   "//": [
     "High- and low-level requirements of the certified item that are",
     "written and that no check names yet with `/// Verifies:`, as",
-    "scripts/check/check-traceability.py finds them. A debt register",
+    "tools/common/check/check-traceability.py finds them. A debt register",
     "for finding F-14, not an allowance: an entry leaves when a check",
     "is tagged, and the gate fails until it is re-recorded; one enters",
     "only when a requirement is written unverified, in a reviewed diff.",

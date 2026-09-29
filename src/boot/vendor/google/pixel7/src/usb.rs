@@ -6,7 +6,7 @@
 //! what is still on at that moment: the HSI0 power domain the controller, its
 //! PHY and HSI0's clock unit sit in; the PMU's PHY isolation control; the
 //! controller itself, and whether it is still running.
-//! `docs/PIXEL7-USB-HANDOVER.md` says why each matters. The stage-2 MPU in
+//! `docs/vendor/google/pixel7/USB-HANDOVER.md` says why each matters. The stage-2 MPU in
 //! front of HSI0 (`s2mpu_hsi0`) is not read: it is a security block, and the
 //! device rule leaves those alone entirely.
 //!

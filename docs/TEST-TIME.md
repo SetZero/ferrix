@@ -20,7 +20,7 @@ fleet's other gates ran beside it. So the figures are upper bounds. Their
 proportions are what they are for.
 
 **A: a standard item gate after a one-line kernel change** (`touch
-kernel/src/main.rs`):
+src/kernel/src/main.rs`):
 
 | Step | Wall | Load | Where it goes |
 |---|---:|---:|---|
@@ -103,7 +103,7 @@ start cold; and a digest in `--target-dir` enters `builds.rs`'s build keys,
 so test-selfhost's replay would miss whenever the init is an earlier build's
 output, whose bytes Ferrix makes differently. The two variants left, dirs
 per flavour for `--release` only and the init carried in the image rather
-than built into the kernel (a `kernel/` change, for the certification
+than built into the kernel (a `src/kernel/` change, for the certification
 consultant), are sound but not worth it today: neither takes time off a
 gate as the gates are.
 
@@ -116,12 +116,12 @@ is followed by the 5 s power-off grace before QEMU is stopped (cost 3). The
 
 ## Where the time goes: the five likely costs
 
-From a read of `xtask/src` and `kernel/src` (file and line in the survey,
+From a read of `tools/common/xtask/src` and `src/kernel/src` (file and line in the survey,
 kept in the owner's handover), checked against the timings above:
 
 1. **The kernel crate rebuilds whenever a gate embeds a different init.**
    `FERRIX_INIT`, `FERRIX_INIT_SCRIPT`, `FERRIX_INIT_COMMANDS` and their
-   digests are `rerun-if-env-changed` (`kernel/build.rs`), and every flavour
+   digests are `rerun-if-env-changed` (`src/kernel/build.rs`), and every flavour
    builds into one target dir. **Measured and dropped** (above, *Measured,
    2026-09-28*): in the debug profile, which every test gate boots, the
    rebuild is incremental and costs about 2 s; only a release build pays the whole

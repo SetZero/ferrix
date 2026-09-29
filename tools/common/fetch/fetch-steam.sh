@@ -38,7 +38,7 @@
 # ~/.local/share/ferrix/steam-bootstrap/steam.img). Needs curl, sha256sum,
 # dpkg-deb, tar, xz, readelf and mkfs.btrfs; no root.
 #
-# Usage: scripts/fetch/fetch-steam.sh
+# Usage: tools/common/fetch/fetch-steam.sh
 
 set -euo pipefail
 

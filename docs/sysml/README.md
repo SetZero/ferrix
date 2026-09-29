@@ -29,15 +29,15 @@ tooling that can check a model for consistency where it cannot check prose.
 | `10-roadmap.sysml` | `FerrixRoadmap` | Stages 0–22, the ARMv7-A port, networking and dynamic linking as requirements with status and exit criteria, their ordering, what satisfies each, and the boot tests that verify the done ones. |
 | `11-assurance.sysml` | `FerrixAssurance` | Every gate `cargo xtask check` and CI run, the xtask boot gates, the commit-authorship check, the assembly budget, what each layer's tests can reach, and the verification later stages owe. |
 | `12-views.sysml` | `FerrixViews` | Views filtering the one model into current, written-ahead, future and deferred. |
-| `13-item-requirements.sysml` | `FerrixItemRequirements` | The certified item's high-level requirements (`H.<AREA>.<n>`), each with a statement, a pass/fail criterion and its parent objective; the definitions the low-level ones (`L.<module>.<n>`) use. `scripts/check/check-traceability.py` holds them to their checks. |
-| `14-object-requirements.sysml` | `FerrixObjectRequirements` | The low-level requirements of `kernel/src/object/` (`L.object.<n>`), the pilot of W-8: each names the functions that carry it as its `unit` and the `H.*` it refines. One file per subsystem follows it. |
-| `15-sched-requirements.sysml` | `FerrixSchedRequirements` | The low-level requirements of `kernel/src/sched/` (`L.sched.<n>`), started with the two FX-0502's fix created: a decision within a slice while anything waits, and a lone yield that asks for nothing. |
-| `16-iommu-requirements.sysml` | `FerrixIommuRequirements` | The low-level requirements of `kernel/src/iommu.rs` and `kernel/src/iommu/` (`L.iommu.<n>`): where firmware puts each PCI function's DMA, the units translation is turned on for, the domains a driver pins pages into, the gate a wait on a unit goes through, and the faults a unit records, in the pilot's format. |
+| `13-item-requirements.sysml` | `FerrixItemRequirements` | The certified item's high-level requirements (`H.<AREA>.<n>`), each with a statement, a pass/fail criterion and its parent objective; the definitions the low-level ones (`L.<module>.<n>`) use. `tools/common/check/check-traceability.py` holds them to their checks. |
+| `14-object-requirements.sysml` | `FerrixObjectRequirements` | The low-level requirements of `src/kernel/src/object/` (`L.object.<n>`), the pilot of W-8: each names the functions that carry it as its `unit` and the `H.*` it refines. One file per subsystem follows it. |
+| `15-sched-requirements.sysml` | `FerrixSchedRequirements` | The low-level requirements of `src/kernel/src/sched/` (`L.sched.<n>`), started with the two FX-0502's fix created: a decision within a slice while anything waits, and a lone yield that asks for nothing. |
+| `16-iommu-requirements.sysml` | `FerrixIommuRequirements` | The low-level requirements of `src/kernel/src/iommu.rs` and `src/kernel/src/iommu/` (`L.iommu.<n>`): where firmware puts each PCI function's DMA, the units translation is turned on for, the domains a driver pins pages into, the gate a wait on a unit goes through, and the faults a unit records, in the pilot's format. |
 | `17-memory-requirements.sysml` | `FerrixMemoryRequirements` | The low-level requirements of the item's memory management: `L.mm.<n>` for the kernel's own (`mm.rs`, `mm/`, `vmap.rs`, `early.rs`) and `L.user.<n>` for a program's (`user/vmo.rs`, `user/space.rs`), in the pilot's format. |
-| `18-x86-64-requirements.sysml` | `FerrixX8664Requirements` | The low-level requirements of `kernel/src/arch/x86_64/` (`L.x86_64.<n>`), `kernel/src/trap.rs` (`L.trap.<n>`) and the system call dispatcher (`L.syscall.<n>`): descriptors and user selectors, the context switch, starting processors, the paranoid entries, speculation, timers, both ABIs' signal frames, SYSCALL and int $0x80, exceptions and dispatch, in the pilot's format. |
-| `19-aarch64-requirements.sysml` | `FerrixAarch64Requirements` | The low-level requirements of `kernel/src/arch/aarch64/` (`L.aarch64.<n>`): the trap path and signal frames, the context switch, the GICv3 and its ITS, the generic timer, the boot console, translation, starting the processors, the speculation defences and what firmware is asked for, in the pilot's format. |
-| `22-smp-requirements.sysml` | `FerrixSmpRequirements` | The low-level requirements of `kernel/src/smp.rs` (`L.smp.<n>`): the processors and their records, bring-up, the whole-TLB and scoped shootdowns and the bounds on their waits, grace periods, stopping for a panic and the scheduler's kick, in the pilot's format. |
-| `23-console-requirements.sysml` | `FerrixConsoleRequirements` | The low-level requirements of `kernel/src/console.rs` and `kernel/src/console/` (`L.console.<n>`): whole lines to the port, the failure report's way past a held lock, the recent-output ring, the transmit and receive rings, the kernel log and what it keeps out, and the screen console; with the two console-choice parsers of the Arm ports, in the pilot's format. |
+| `18-x86-64-requirements.sysml` | `FerrixX8664Requirements` | The low-level requirements of `src/kernel/src/arch/x86_64/` (`L.x86_64.<n>`), `src/kernel/src/trap.rs` (`L.trap.<n>`) and the system call dispatcher (`L.syscall.<n>`): descriptors and user selectors, the context switch, starting processors, the paranoid entries, speculation, timers, both ABIs' signal frames, SYSCALL and int $0x80, exceptions and dispatch, in the pilot's format. |
+| `19-aarch64-requirements.sysml` | `FerrixAarch64Requirements` | The low-level requirements of `src/kernel/src/arch/aarch64/` (`L.aarch64.<n>`): the trap path and signal frames, the context switch, the GICv3 and its ITS, the generic timer, the boot console, translation, starting the processors, the speculation defences and what firmware is asked for, in the pilot's format. |
+| `22-smp-requirements.sysml` | `FerrixSmpRequirements` | The low-level requirements of `src/kernel/src/smp.rs` (`L.smp.<n>`): the processors and their records, bring-up, the whole-TLB and scoped shootdowns and the bounds on their waits, grace periods, stopping for a panic and the scheduler's kick, in the pilot's format. |
+| `23-console-requirements.sysml` | `FerrixConsoleRequirements` | The low-level requirements of `src/kernel/src/console.rs` and `src/kernel/src/console/` (`L.console.<n>`): whole lines to the port, the failure report's way past a held lock, the recent-output ring, the transmit and receive rings, the kernel log and what it keeps out, and the screen console; with the two console-choice parsers of the Arm ports, in the pilot's format. |
 
 ## Reading it
 
@@ -46,7 +46,7 @@ Every definition and usage carries a maturity keyword:
 * `#implemented` — the code exists and a QEMU boot exercises it: the boot
   test itself, or a named `cargo xtask test-*` gate.
 * `#inProgress` — the owning stage has started; part of the element runs.
-* `#writtenAhead` — a `libs/` crate exists and passes host tests, but no
+* `#writtenAhead` — a `src/lib/` crate exists and passes host tests, but no
   gate exercises it yet through the kernel or a program in the image.
 * `#planned` — the design exists in `docs/ARCHITECTURE.md` and nothing else.
 * `@deferred { reason = "..."; }` — a finished stage explicitly left it behind; the attribute
@@ -58,7 +58,7 @@ ids the packages cite across files.
 
 Hexadecimal addresses are `String` attributes because the notation has no
 hexadecimal literal; the two layouts in `03-boot.sysml` are the same
-constants `libs/proto/bootinfo` checks at compile time.
+constants `src/lib/proto/bootinfo` checks at compile time.
 
 ## The generated document
 
@@ -119,17 +119,17 @@ coordinates and the committed output is comparable byte for byte.
 ## The generator
 
 ```
-scripts/gen/gen-arch-doc.py       the command
-scripts/gen/sysml/parser.py       SysML v2 text  -> model.Model
-scripts/gen/sysml/model.py        the element tree and the queries over it
-scripts/gen/sysml/sections.py     model.Model    -> document.Doc      <- start here
-scripts/gen/sysml/document.py     the format-neutral document
-scripts/gen/sysml/diagrams.py     model.Model    -> figure.Figure     <- and here
-scripts/gen/sysml/figure.py       the format-neutral graph
-scripts/gen/sysml/layout.py       figure.Figure  -> coordinates
-scripts/gen/sysml/render_*.py     document.Doc   -> Markdown / HTML / SVG / Mermaid
-scripts/gen/sysml/emit_json.py    model.Model    -> JSON
-scripts/gen/sysml/tests.py        all of the above
+tools/common/gen/gen-arch-doc.py       the command
+tools/common/gen/sysml/parser.py       SysML v2 text  -> model.Model
+tools/common/gen/sysml/model.py        the element tree and the queries over it
+tools/common/gen/sysml/sections.py     model.Model    -> document.Doc      <- start here
+tools/common/gen/sysml/document.py     the format-neutral document
+tools/common/gen/sysml/diagrams.py     model.Model    -> figure.Figure     <- and here
+tools/common/gen/sysml/figure.py       the format-neutral graph
+tools/common/gen/sysml/layout.py       figure.Figure  -> coordinates
+tools/common/gen/sysml/render_*.py     document.Doc   -> Markdown / HTML / SVG / Mermaid
+tools/common/gen/sysml/emit_json.py    model.Model    -> JSON
+tools/common/gen/sysml/tests.py        all of the above
 ```
 
 Stdlib Python, no dependencies: a gate that needs a `pip install` is a gate
@@ -196,7 +196,7 @@ The model changes when the documents it indexes change, in the same commit:
 * a stage finishing flips its requirement in `10-roadmap.sysml` to `Done`,
   moves its parts from `#planned` to `#implemented`, and records anything the
   stage deferred with the reason the roadmap gives;
-* a new `libs/` crate is a new `#writtenAhead` part in
+* a new `src/lib/` crate is a new `#writtenAhead` part in
   `FerrixStructure::Workspace`, with its dependency edge;
 * a new architecture is a fourth variant of `ArchLayer` and a fourth boot
   test, and nothing else — which is the point of the facade.

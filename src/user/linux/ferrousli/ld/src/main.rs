@@ -64,7 +64,7 @@ mod tls;
 // The library's own system call module, used as it is rather than written
 // again. The loader cannot *call* the C library -- it is the half of it that
 // runs before there is one -- but the numbers must still come from
-// `tools/gen-abi.py`'s table, which `userland/ferrousli/CONVENTIONS.md` requires of
+// `tools/gen-abi.py`'s table, which `src/user/linux/ferrousli/CONVENTIONS.md` requires of
 // every call site here. A path dependency would not do it: `ferrousli` is a
 // `staticlib`, which no Rust crate can link against.
 #[path = "../../src/syscall.rs"]

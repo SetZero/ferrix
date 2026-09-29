@@ -4,7 +4,7 @@
 //!
 //! `docs/AUDIO.md` §3.1 and §3.2 are the specification. Messages are small and
 //! come at most once a period, so there is no ring: one control channel per
-//! card, carrying fixed little-endian messages in `libs/proto/inputctl`'s shape, and
+//! card, carrying fixed little-endian messages in `src/lib/proto/inputctl`'s shape, and
 //! the samples themselves in a buffer the core allocates and the driver pins
 //! for the device to read.
 //!

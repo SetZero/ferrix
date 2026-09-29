@@ -29,7 +29,7 @@ pub struct Press<'a> {
     pub keysym: Option<&'a str>,
     /// The keysyms it makes at its first level.
     pub plain: &'a [&'a str],
-    /// The effective modifiers, as `userland/compositor/xkb`'s mask.
+    /// The effective modifiers, as `src/user/linux/compositor/xkb`'s mask.
     pub mods: u32,
     /// The modifiers the key used to choose its level.
     pub consumed: u32,

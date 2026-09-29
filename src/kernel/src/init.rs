@@ -28,7 +28,7 @@
 //! business and not this file's.
 //!
 //! Each command's start and end go on lines of their own, in a format
-//! `xtask/src/vfs.rs` parses; the two change together. While a command runs,
+//! `tools/common/xtask/src/vfs.rs` parses; the two change together. While a command runs,
 //! every call answered `ENOSYS` is reported too, up to a bound, which is what
 //! turns a failing run into the name of the call that is missing.
 //!
@@ -53,7 +53,7 @@
 //!
 //! Every program started here is started with a bootstrap channel, as
 //! `devmgr` is (`docs/INIT.md` §6, K2). The kernel writes one message on its
-//! end before the program runs -- `libs/proto/native-abi`'s `bootstrap` module says
+//! end before the program runs -- `src/lib/proto/native-abi`'s `bootstrap` module says
 //! what it holds -- and keeps that end for as long as the program runs, so a
 //! later message can carry what the first does not. The program takes its end
 //! with `process_bootstrap`; one that never does, which is every program a
@@ -355,7 +355,7 @@ pub(crate) fn read_option(view: &BootView<'_>) {
     }
 }
 
-/// The embedded program, or nothing. See `kernel/build.rs`.
+/// The embedded program, or nothing. See `src/kernel/build.rs`.
 pub(crate) static IMAGE: &[u8] = include_bytes!(env!("FERRIX_INIT_IMAGE"));
 
 /// What `/proc/self/exe` names for [`IMAGE`], which has no file of its own.
@@ -367,11 +367,11 @@ pub(crate) static IMAGE: &[u8] = include_bytes!(env!("FERRIX_INIT_IMAGE"));
 const BUILT_IN_EXE: &[u8] = b"/bin/busybox";
 
 /// A script for the shell to run with `-c`, or nothing for an interactive
-/// one. See `kernel/build.rs`.
+/// one. See `src/kernel/build.rs`.
 static SCRIPT: &[u8] = include_bytes!(env!("FERRIX_INIT_SCRIPT_FILE"));
 
 /// Commands to run in turn instead of the shell, or nothing. See
-/// `kernel/build.rs` for the encoding.
+/// `src/kernel/build.rs` for the encoding.
 static COMMANDS: &[u8] = include_bytes!(env!("FERRIX_INIT_COMMANDS_FILE"));
 
 /// Where a command's program is looked for: `PATH`, which is one directory.
@@ -631,7 +631,7 @@ fn start(
     })
 }
 
-/// The commands in a list `kernel/build.rs` embedded: each argument ends in a
+/// The commands in a list `src/kernel/build.rs` embedded: each argument ends in a
 /// NUL, and each command in an empty argument.
 ///
 /// A command left unterminated at the end is dropped rather than run with

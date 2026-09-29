@@ -9,7 +9,7 @@
 //!   change is a line written to it. It is never read from.
 //!
 //! What a request means, what an answer says and what an event's line is are
-//! `userland/compositor/ipc`'s; this is the sockets under them.
+//! `src/user/linux/compositor/ipc`'s; this is the sockets under them.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};

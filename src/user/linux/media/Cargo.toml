@@ -3,7 +3,7 @@
 #
 # A workspace of its own, as the compositor and zinc are: Linux user programs
 # built with std, speaking only the Linux ABI, cross-built for the initramfs
-# (xtask/src/badapple.rs). The pure crates -- the video format and the
+# (tools/common/xtask/src/badapple.rs). The pure crates -- the video format and the
 # resampler -- build and are tested on any host; the one that holds a device
 # (`pcm`) builds only for Linux.
 [workspace]

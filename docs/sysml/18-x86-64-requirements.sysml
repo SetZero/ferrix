@@ -2,8 +2,8 @@
  * Ferrix — SysML v2 model, part 18: the low-level requirements of the x86-64
  * architecture, the trap path and the system call entry.
  *
- * What each unit of kernel/src/arch/x86_64/, kernel/src/trap.rs and
- * kernel/src/syscall/mod.rs's dispatcher does, as `ItemLowLevel` requirements
+ * What each unit of src/kernel/src/arch/x86_64/, src/kernel/src/trap.rs and
+ * src/kernel/src/syscall/mod.rs's dispatcher does, as `ItemLowLevel` requirements
  * (part 13 defines the format): the descriptor tables and which selectors ring 3
  * may hold, the context switch and the user state it carries, starting
  * processors, the paranoid entries, the speculation defences, the counter and
@@ -36,7 +36,7 @@ package FerrixX8664Requirements {
     private import FerrixItemRequirements::*;
 
     package Descriptors {
-        doc /* kernel/src/arch/x86_64/gdt.rs: each processor's descriptor tables, its
+        doc /* src/kernel/src/arch/x86_64/gdt.rs: each processor's descriptor tables, its
              * task state, and which selectors ring 3 may hold. */
 
         requirement <'L.x86_64.1'> selectorsRing3MayHoldAreLoadable : ItemLowLevel {
@@ -122,7 +122,7 @@ package FerrixX8664Requirements {
     }
 
     package UserState {
-        doc /* kernel/src/arch/x86_64/switch.rs, with gdt.rs's thread-local slots: the
+        doc /* src/kernel/src/arch/x86_64/switch.rs, with gdt.rs's thread-local slots: the
              * context switch, and the user-mode state a trap does not save. */
 
         requirement <'L.x86_64.7'> threadAreaInLiveGdt : ItemLowLevel {
@@ -262,7 +262,7 @@ package FerrixX8664Requirements {
     }
 
     package Processors {
-        doc /* kernel/src/arch/x86_64/smp.rs and apic.rs's commands: starting each
+        doc /* src/kernel/src/arch/x86_64/smp.rs and apic.rs's commands: starting each
              * processor, and the interrupts processors send each other. */
 
         requirement <'L.x86_64.18'> everyListedProcessorStarts : ItemLowLevel {
@@ -340,7 +340,7 @@ package FerrixX8664Requirements {
     }
 
     package ParanoidEntries {
-        doc /* kernel/src/arch/x86_64/paranoid.rs: the NMI, #DB and #DF entries, which
+        doc /* src/kernel/src/arch/x86_64/paranoid.rs: the NMI, #DB and #DF entries, which
              * decide GS for themselves. */
 
         requirement <'L.x86_64.24'> kernelNmiSurvived : ItemLowLevel {
@@ -401,7 +401,7 @@ package FerrixX8664Requirements {
     }
 
     package Speculation {
-        doc /* kernel/src/arch/x86_64/speculation.rs: the side-channel defences, per
+        doc /* src/kernel/src/arch/x86_64/speculation.rs: the side-channel defences, per
              * processor, and the index clamp. */
 
         requirement <'L.x86_64.28'> everyProcessorRecordsItsDefences : ItemLowLevel {
@@ -490,7 +490,7 @@ package FerrixX8664Requirements {
     }
 
     package Timers {
-        doc /* kernel/src/arch/x86_64/clock.rs and apic.rs's timer and I/O APICs: the
+        doc /* src/kernel/src/arch/x86_64/clock.rs and apic.rs's timer and I/O APICs: the
              * counter, its rate, and the timer interrupt. */
 
         requirement <'L.x86_64.34'> lapicTimerCalibrated : ItemLowLevel {
@@ -599,7 +599,7 @@ package FerrixX8664Requirements {
     }
 
     package SignalFrames {
-        doc /* kernel/src/arch/x86_64/signal.rs: a 64-bit program's signal frame, its
+        doc /* src/kernel/src/arch/x86_64/signal.rs: a 64-bit program's signal frame, its
              * return, and the context resumed from it. */
 
         requirement <'L.x86_64.42'> nativeSignalRoundTrip : ItemLowLevel {
@@ -673,7 +673,7 @@ package FerrixX8664Requirements {
     }
 
     package CompatSignalFrames {
-        doc /* kernel/src/arch/x86_64/signal/compat.rs: an i386 program's two signal
+        doc /* src/kernel/src/arch/x86_64/signal/compat.rs: an i386 program's two signal
              * frames and their returns. */
 
         requirement <'L.x86_64.47'> compatSignalRoundTrip : ItemLowLevel {
@@ -751,7 +751,7 @@ package FerrixX8664Requirements {
     }
 
     package SystemCallEntry {
-        doc /* kernel/src/arch/x86_64/syscall.rs: SYSCALL's entry, the registers a call
+        doc /* src/kernel/src/arch/x86_64/syscall.rs: SYSCALL's entry, the registers a call
              * reads and a fork child resumes from, and entering a program. */
 
         requirement <'L.x86_64.52'> syscallEntersAtLstar : ItemLowLevel {
@@ -972,7 +972,7 @@ package FerrixX8664Requirements {
     }
 
     package CompatEntry {
-        doc /* kernel/src/arch/x86_64/mod.rs and trap.rs: int $0x80, and which mode an
+        doc /* src/kernel/src/arch/x86_64/mod.rs and trap.rs: int $0x80, and which mode an
              * image runs in. */
 
         requirement <'L.x86_64.72'> int80IsAnI386Call : ItemLowLevel {
@@ -1037,7 +1037,7 @@ package FerrixX8664Requirements {
     }
 
     package Exceptions {
-        doc /* kernel/src/arch/x86_64/trap.rs and kernel/src/trap.rs: the gates, and
+        doc /* src/kernel/src/arch/x86_64/trap.rs and src/kernel/src/trap.rs: the gates, and
              * what a fault becomes. */
 
         requirement <'L.x86_64.77'> userExceptionsNameLinuxSignals : ItemLowLevel {
@@ -1175,7 +1175,7 @@ package FerrixX8664Requirements {
     }
 
     package Processor {
-        doc /* kernel/src/arch/x86_64/mod.rs and cpu.rs: per-processor state, the user
+        doc /* src/kernel/src/arch/x86_64/mod.rs and cpu.rs: per-processor state, the user
              * root, interrupts, and how a run ends. */
 
         requirement <'L.x86_64.86'> eachProcessorReachesItsOwnRecord : ItemLowLevel {
@@ -1415,7 +1415,7 @@ package FerrixX8664Requirements {
     }
 
     package Memory {
-        doc /* kernel/src/arch/x86_64/cpu.rs: the control-register and TLB operations
+        doc /* src/kernel/src/arch/x86_64/cpu.rs: the control-register and TLB operations
              * the memory code relies on. */
 
         requirement <'L.x86_64.108'> globalFlushReachesEveryProcessor : ItemLowLevel {
@@ -1471,7 +1471,7 @@ package FerrixX8664Requirements {
     }
 
     package Interrupts {
-        doc /* kernel/src/arch/x86_64/msi.rs: message-signalled interrupts. */
+        doc /* src/kernel/src/arch/x86_64/msi.rs: message-signalled interrupts. */
 
         requirement <'L.x86_64.113'> msiMessageRaisesItsVector : ItemLowLevel {
             attribute :>> statement = "msi_allocate shall answer a message address
@@ -1498,7 +1498,7 @@ package FerrixX8664Requirements {
     }
 
     package Console {
-        doc /* kernel/src/arch/x86_64/console.rs: the serial port. */
+        doc /* src/kernel/src/arch/x86_64/console.rs: the serial port. */
 
         requirement <'L.x86_64.115'> consoleReceivesTypedBytes : ItemLowLevel {
             attribute :>> statement = "read_byte shall answer each byte received at
@@ -1548,7 +1548,7 @@ package FerrixX8664Requirements {
     }
 
     package Dispatch {
-        doc /* kernel/src/syscall/mod.rs's dispatcher and kernel/src/trap.rs's
+        doc /* src/kernel/src/syscall/mod.rs's dispatcher and src/kernel/src/trap.rs's
              * registration: which calls reach which answer. */
 
         requirement <'L.trap.4'> anUnknownNumberIsEnosys : ItemLowLevel {

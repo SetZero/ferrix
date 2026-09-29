@@ -28,8 +28,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          python3 scripts/gen/release-notes.py "$TAG" > "$RUNNER_TEMP/notes.md"
-          title=$(python3 scripts/gen/release-notes.py --title "$TAG")
+          python3 tools/common/gen/release-notes.py "$TAG" > "$RUNNER_TEMP/notes.md"
+          title=$(python3 tools/common/gen/release-notes.py --title "$TAG")
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release edit "$TAG" --title "$title" --notes-file "$RUNNER_TEMP/notes.md"
           else
@@ -39,9 +39,9 @@ jobs:
   # The Pixel 7 app's desktop, in two editions as a distribution has them:
   # `full`, with Chromium, whose Debian arm64 volume goes on the release
   # beside it, and `minimal`, the desktop alone. The app keeps the phone on
-  # the newest release that carries its edition (tools/pixel7/README.md,
+  # the newest release that carries its edition (tools/vendor/google/pixel7/README.md,
   # "Updates"), so these assets are what it installs. Each edition is the
-  # build `tools/pixel7/build-desktop.sh` makes by hand, with ferrousli's
+  # build `tools/vendor/google/pixel7/build-desktop.sh` makes by hand, with ferrousli's
   # busybox and the AArch64 ports in it as on a developer's machine.
   pixel7:
     name: Pixel 7 desktop (${{ matrix.edition }})
@@ -89,13 +89,13 @@ jobs:
         if: matrix.edition == 'full'
         env:
           FERRIX_CHROMIUM_VOLUME: ${{ runner.temp }}/chromium
-        run: scripts/fetch/fetch-chromium-arm64.sh
+        run: tools/common/fetch/fetch-chromium-arm64.sh
 
       - name: Build the desktop
         env:
           FERRIX_CHROMIUM_VOLUME: ${{ runner.temp }}/chromium
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
-        run: sh tools/pixel7/build-desktop.sh "$RUNNER_TEMP/desktop" ${{ matrix.edition == 'full' && '--chrome' || '' }}
+        run: sh tools/vendor/google/pixel7/build-desktop.sh "$RUNNER_TEMP/desktop" ${{ matrix.edition == 'full' && '--chrome' || '' }}
 
       - name: Attach it to the release
         env:
@@ -105,6 +105,6 @@ jobs:
         run: |
           volume=
           [ "$EDITION" = minimal ] || volume="--volume $RUNNER_TEMP/chromium/chromium.img"
-          python3 tools/pixel7/package-release.py "$EDITION" "$RUNNER_TEMP/desktop" \
+          python3 tools/vendor/google/pixel7/package-release.py "$EDITION" "$RUNNER_TEMP/desktop" \
             "$RUNNER_TEMP/assets" "$TAG" "$(git rev-parse HEAD)" $volume
           gh release upload "$TAG" "$RUNNER_TEMP"/assets/* --clobber

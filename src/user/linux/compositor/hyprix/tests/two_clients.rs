@@ -4,11 +4,11 @@
 //! 18's exit in `docs/ROADMAP.md`: two pattern clients connect over a real
 //! socket, are tiled by the dwindle layout, draw into shared memory, and the
 //! frame the compositor composed is compared pixel for pixel against the
-//! image `userland/compositor/render`'s own tests bless.
+//! image `src/user/linux/compositor/render`'s own tests bless.
 //!
-//! That the two agree is the point. `userland/compositor/render`'s expected image is
+//! That the two agree is the point. `src/user/linux/compositor/render`'s expected image is
 //! built by calling the renderer directly with rectangles from
-//! `userland/compositor/layout`; this one is built by two programs talking Wayland
+//! `src/user/linux/compositor/layout`; this one is built by two programs talking Wayland
 //! over a socket to a server that works out the same rectangles from the
 //! requests they sent. Nothing but the pixels is shared between the two
 //! paths, so a difference is a real one.
@@ -35,11 +35,11 @@ use compositor_pattern::Shape;
 use compositor_render::Pattern;
 use hyprix::{Options, Renderer};
 
-/// The screen, which is the size `userland/compositor/render`'s expected image is.
+/// The screen, which is the size `src/user/linux/compositor/render`'s expected image is.
 const WIDTH: u32 = 1024;
 const HEIGHT: u32 = 768;
 
-/// Where `userland/compositor/render` keeps the image both paths must produce.
+/// Where `src/user/linux/compositor/render` keeps the image both paths must produce.
 const EXPECTED: &str = "../render/tests/data/dwindle-two-clients.xrle";
 
 /// The same, with a bar across the top.
@@ -80,11 +80,11 @@ fn workspace(name: &str) -> Workspace {
 /// A configuration with the blur's dither turned off, written into `work`.
 ///
 /// `decoration:blur:noise` is 0.0117 in Hyprland and 0.0117 here, and the
-/// dither is drawn. But `userland/compositor/render`'s expected images are
+/// dither is drawn. But `src/user/linux/compositor/render`'s expected images are
 /// run-length encoded and a dither is the one thing a run of pixels cannot
 /// survive, so they are blessed without it -- and this test compares
 /// against those images, so the compositor under test is told the same
-/// thing. `userland/compositor/render`'s `graded-blur-two-clients` is the picture
+/// thing. `src/user/linux/compositor/render`'s `graded-blur-two-clients` is the picture
 /// that holds the dither.
 fn undithered(work: &Path) -> PathBuf {
     let path = work.join("no-dither.conf");
@@ -269,7 +269,7 @@ fn last_frame(directory: &Path) -> Vec<u8> {
     parts.next().expect("pixels").to_vec()
 }
 
-/// `userland/compositor/render`'s expected image, as the same `(red, green, blue)`
+/// `src/user/linux/compositor/render`'s expected image, as the same `(red, green, blue)`
 /// bytes a PPM holds.
 fn expected() -> Vec<u8> {
     image(&Path::new(env!("CARGO_MANIFEST_DIR")).join(EXPECTED))
@@ -378,7 +378,7 @@ fn two_clients_are_tiled_and_drawn_exactly_as_the_renderer_says() {
 /// virglrenderer's test server, which is the renderer a guest's frames reach
 /// through QEMU -- and held to the same expected image.
 ///
-/// Not to the byte: `userland/compositor/render`'s `gpu` module says why a GPU's
+/// Not to the byte: `src/user/linux/compositor/render`'s `gpu` module says why a GPU's
 /// frame is a step or two of a channel from the software one, and its own
 /// tests hold the painter to that. What this adds is everything round it:
 /// real clients' buffers named by their connection, moved as textures under
@@ -432,7 +432,7 @@ fn the_comparison_would_notice_a_different_frame() {
 ///
 /// The clients are tiled on a monitor 768 wide and 1024 tall -- which is
 /// what they are configured to and draw at -- and the screen's buffer holds
-/// that picture turned, pixel for pixel the image `userland/compositor/render`
+/// that picture turned, pixel for pixel the image `src/user/linux/compositor/render`
 /// blesses for the same transform. Both quarter turns, since a compositor
 /// that turned the wrong way would pass either one alone by being the other.
 #[test]
@@ -559,7 +559,7 @@ fn a_real_toolkit_gets_a_window_and_draws_in_it() {
 // ---------------------------------------------------------------------------
 // Hyprland's own client
 //
-// `userland/compositor/ipc`'s tests check the answers against Hyprland's source.
+// `src/user/linux/compositor/ipc`'s tests check the answers against Hyprland's source.
 // `probe/hyprctl.sh` checks them against Hyprland's client: the program people
 // type, and the one every script and bar is written around. If `hyprctl
 // clients` prints nothing here, no Hyprland script works on this compositor
@@ -587,7 +587,7 @@ fn hyprctl(command: &str) -> &'static str {
     recorded("hyprctl", command)
 }
 
-/// What `userland/compositor/ctl`'s `hyprctl <command>` printed.
+/// What `src/user/linux/compositor/ctl`'s `hyprctl <command>` printed.
 fn ours(command: &str) -> &'static str {
     recorded("ours", command)
 }
@@ -595,7 +595,7 @@ fn ours(command: &str) -> &'static str {
 /// Every read-only command the probe ran through both clients must have got
 /// one answer.
 ///
-/// That is the whole claim `userland/compositor/ctl` makes: a script written for
+/// That is the whole claim `src/user/linux/compositor/ctl` makes: a script written for
 /// `hyprctl` works when the program it calls is ours, which is what Ferrix's
 /// image carries because Hyprland's is not on it. The two ran against one
 /// compositor in one session, so even the window addresses are comparable.
@@ -763,7 +763,7 @@ fn a_request_that_is_slow_to_arrive_is_still_answered() {
 // ---------------------------------------------------------------------------
 // The event socket
 //
-// `.socket2.sock` is what a bar reads. `userland/compositor/ipc`'s tests check each
+// `.socket2.sock` is what a bar reads. `src/user/linux/compositor/ipc`'s tests check each
 // line's shape against Hyprland's own `postEvent` calls; this checks that the
 // compositor puts them on a socket a reader can get at, in the order a reader
 // needs, while two clients come and go.
@@ -957,7 +957,7 @@ fn a_bar_takes_its_strip_and_the_windows_tile_under_it() {
 // ---------------------------------------------------------------------------
 // Animations
 //
-// `userland/compositor/anim`'s tests check the curves against the numbers hyprutils'
+// `src/user/linux/compositor/anim`'s tests check the curves against the numbers hyprutils'
 // own algorithm produces. This checks that a window really slides: that the
 // frames between two layouts hold the window at places neither layout put it,
 // and that those places are on the curve rather than a straight line.
@@ -1146,7 +1146,7 @@ fn a_window_moves_through_the_frames_between_two_layouts() {
 
     // And it is on a curve rather than a straight line. Hyprland's
     // `default` starts fast: by the middle frame of the move it is well
-    // past half way, which `userland/compositor/anim`'s own test puts at 0.843 of
+    // past half way, which `src/user/linux/compositor/anim`'s own test puts at 0.843 of
     // the distance a quarter of the way in.
     let (Some(first), Some(last)) = (seams.first().copied(), seams.last().copied()) else {
         panic!("no seam at all");
@@ -1197,7 +1197,7 @@ fn animations_can_be_turned_off() {
 // Plugins
 //
 // A plugin is a program the compositor starts, which connects to the control
-// socket, says what it is, and adds a dispatcher. `userland/compositor/plug` is the
+// socket, says what it is, and adds a dispatcher. `src/user/linux/compositor/plug` is the
 // one Ferrix carries; this speaks the same protocol from a thread, which is
 // what lets a host test press the dispatcher and look at the frame.
 // ---------------------------------------------------------------------------
@@ -1241,7 +1241,7 @@ fn with_a_plugin(name: &str) -> (Vec<u8>, String, String) {
             }));
             std::thread::sleep(Duration::from_millis(250));
         }
-        // The plugin: the protocol `userland/compositor/plug` speaks, from here.
+        // The plugin: the protocol `src/user/linux/compositor/plug` speaks, from here.
         let plugin = std::os::unix::net::UnixStream::connect(&requests)
             .expect("the plugin connects to the control socket");
         let mut reading = plugin.try_clone().expect("the plugin's connection");
@@ -1291,7 +1291,7 @@ fn with_a_plugin(name: &str) -> (Vec<u8>, String, String) {
             }
         }
         if reply.contains("dispatch>>swapthem") {
-            // What `userland/compositor/plug` sends: the two dispatchers that
+            // What `src/user/linux/compositor/plug` sends: the two dispatchers that
             // exchange the windows, as one batch.
             say("[[BATCH]]dispatch movefocus l ; dispatch movewindow r\n");
         }
@@ -1432,7 +1432,7 @@ fn one_selection(which: compositor_clip::Which) {
 
 /// A bar's half of the protocol: `zwlr_foreign_toplevel_management_v1`.
 ///
-/// `userland/compositor/lswt` is a taskbar with the drawing taken out -- it binds the
+/// `src/user/linux/compositor/lswt` is a taskbar with the drawing taken out -- it binds the
 /// manager, takes a handle for each window, and reads the title, the
 /// application id and the states. What is required here is that the two
 /// windows the compositor is tiling are the two it describes, with the
@@ -1569,10 +1569,10 @@ fn settled(socket: &Path) -> Result<compositor_shot::Shot, String> {
 
 /// A screenshot, through `zwlr_screencopy_v1`.
 ///
-/// `userland/compositor/shot` is `grim` without the file format: it binds the
+/// `src/user/linux/compositor/shot` is `grim` without the file format: it binds the
 /// manager and a `wl_output`, is told what buffer to make, makes one, hands
 /// it over and reads back what the compositor wrote into it. What is
-/// required is that those pixels are the picture `userland/compositor/render`
+/// required is that those pixels are the picture `src/user/linux/compositor/render`
 /// blesses for the same two windows -- so a screenshot taken over the socket
 /// and a frame built by calling the renderer with rectangles agree byte for
 /// byte, which is the same standard every other picture in this tree is held
@@ -1751,7 +1751,7 @@ fn the_window_left_after_a_close_is_drawn_from_its_own_buffer() {
 ///
 /// Three claims, in order: the taskbar's list has both windows while they
 /// are up; it has one after the destroy; and the picture is the one
-/// `userland/compositor/render` blesses for a single window with the whole
+/// `src/user/linux/compositor/render` blesses for a single window with the whole
 /// workspace, which a compositor still tiling a ghost cannot produce.
 #[test]
 fn a_client_that_destroys_one_of_its_two_windows_leaves_the_other_alone() {
@@ -1775,7 +1775,7 @@ fn a_client_that_destroys_one_of_its_two_windows_leaves_the_other_alone() {
             std::thread::sleep(Duration::from_millis(5));
         }
         // One client, whose kept window is the gradient: that is the window
-        // `userland/compositor/render` blesses alone, and the second window this
+        // `src/user/linux/compositor/render` blesses alone, and the second window this
         // client opens draws the other pattern.
         let path = for_clients.clone();
         let client =
@@ -1858,7 +1858,7 @@ fn titles_until(socket: &Path, count: usize) -> Vec<String> {
 /// compositor stops drawing everything else, so the check is a picture: two
 /// windows are tiled, a program takes the lock and draws a checkerboard over
 /// the whole screen, and a screenshot of the *locked* screen must be the
-/// image `userland/compositor/render` blesses for one -- not the windows, and not a
+/// image `src/user/linux/compositor/render` blesses for one -- not the windows, and not a
 /// strip of them at any edge.
 #[test]
 fn a_locked_screen_shows_the_lock_and_none_of_the_windows() {
@@ -1939,7 +1939,7 @@ fn a_locked_screen_shows_the_lock_and_none_of_the_windows() {
 /// `xdg_popup`, and a client that makes one and is never configured waits
 /// for ever: the menu simply does not appear. What is required here is the
 /// picture -- the popup over the window, at the rectangle the placement
-/// rules put it, compared against the image `userland/compositor/render` blesses by
+/// rules put it, compared against the image `src/user/linux/compositor/render` blesses by
 /// calling those same rules.
 #[test]
 fn a_menu_is_drawn_where_the_positioner_puts_it() {
@@ -2007,7 +2007,7 @@ fn a_menu_is_drawn_where_the_positioner_puts_it() {
 //
 // The compositor redraws the part of each screen that changed and leaves the
 // rest of the canvas as the last frame left it. What shows that is a client
-// that changes a little: `userland/compositor/pattern` damages the whole of its buffer
+// that changes a little: `src/user/linux/compositor/pattern` damages the whole of its buffer
 // every time it draws, so this brings a client of its own that repaints a
 // square of a few hundred pixels and says which square.
 //

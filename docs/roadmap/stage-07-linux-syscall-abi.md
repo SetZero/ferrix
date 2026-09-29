@@ -59,7 +59,7 @@ handler below directly.
 
 **Done:**
 
-* **The numbers.** `libs/proto/linux-abi` carries all three tables. ARMv7-A's EABI
+* **The numbers.** `src/lib/proto/linux-abi` carries all three tables. ARMv7-A's EABI
   table is not the 64-bit calls renumbered: a 32-bit register cannot carry a
   file offset, a file size or a post-2038 `time_t`, so sixteen calls exist twice
   and the wide form is a *different call with a different signature* — `mmap2`
@@ -68,7 +68,7 @@ handler below directly.
   counterpart. The boot test asserts which table this build uses by its content:
   each architecture reports its own number for `getpid`, 39, 172 and 20, which
   is the one fact a host test cannot establish.
-* **The startup stack.** `libs/kernel/ustack` writes `argc`, `argv`, `envp` and the
+* **The startup stack.** `src/lib/kernel/ustack` writes `argc`, `argv`, `envp` and the
   auxiliary vector at both pointer widths, and reads them back; its fuzz target
   found that a string containing a NUL built a well-formed image which read back
   as a different, shorter string. `execve` puts `AT_HWCAP` and `AT_HWCAP2` in it,
@@ -77,7 +77,7 @@ handler below directly.
   bit values are checked against Linux's uapi headers and the fields are read
   as Linux reads them, signed where Linux reads them signed; `DCPOP` is not
   reported, because `DC CVAP` traps from EL0 without `SCTLR_EL1.UCI`.
-* **Dispatch.** `kernel/src/syscall/`: `SyscallArgs`, `Outcome` and `dispatch`,
+* **Dispatch.** `src/kernel/src/syscall/`: `SyscallArgs`, `Outcome` and `dispatch`,
   reached through `arch::decode_syscall`, and total. The boot test puts every
   number in `0..=600` except `exit`, `exit_group`, `pause` and `alarm` through
   `dispatch`, with poisoned argument registers, from a task of a check process,
@@ -222,13 +222,13 @@ how every wake was keyed before, has been shown to find nobody:
 
 **inotify and pidfds, and real-time futex deadlines (ferrix-e4,
 2026-09-27).** A black-box pass found `inotify_init`, `inotify_init1` and
-`pidfd_open` answering `ENOSYS`. inotify (`kernel/src/fs/inotify.rs`) has
+`pidfd_open` answering `ENOSYS`. inotify (`src/kernel/src/fs/inotify.rs`) has
 its four calls on all three architectures, a watch naming a node by device
 and inode number, directory watches hearing their entries' events by name,
 rename cookies, `IN_DELETE_SELF` with `IN_IGNORED`, the one-shot and mask
 flags, merged repeats, `IN_Q_OVERFLOW`, poll, epoll and `FIONREAD`; nothing
 it adds to a call costs anything until a watch exists. A pidfd
-(`kernel/src/fs/pidfd.rs`) is readable once its process has ended, and
+(`src/kernel/src/fs/pidfd.rs`) is readable once its process has ended, and
 takes `pidfd_send_signal` and `waitid(P_PIDFD)`. A 59-check program run
 first on the host's Linux passes on Ferrix. Left: a `siginfo_t` for
 `pidfd_send_signal`, `CLONE_PIDFD`, `IN_UNMOUNT`, the per-user limits and
@@ -282,7 +282,7 @@ follow `kernel/sys.c` and `kernel/groups.c`, an effective uid of 0 standing in
 for the capabilities, so busybox's `su` reaches a user.
 
 **The ids are enforced**, which is what makes Ferrix multi-user rather than a
-machine with ids written on it. `libs/fs/vfs`'s `access` holds the rules as pure
+machine with ids written on it. `src/lib/fs/vfs`'s `access` holds the rules as pure
 functions -- `generic_permission`, `may_create`, `may_delete` with the sticky
 bit, `setattr_prepare`'s chown and chmod rules, `inode_init_owner` -- and the
 namespace calls them where Linux does: search on every directory of a walk,
@@ -372,7 +372,7 @@ Ctrl-C with status 130 and the prompt back at once.
 
 **Unix-domain sockets, connected.** `fs/socket.rs` is a socket inode on a
 sockfs of its own, built the way pipes are: each direction is
-`libs/fs/vfs`'s `SocketBuffer` -- one queue as values, telling a stream from
+`src/lib/fs/vfs`'s `SocketBuffer` -- one queue as values, telling a stream from
 records -- behind a lock, with a wait queue each way, and no wait ever happens
 with the buffer locked. `socket` and `socketpair` make stream,
 sequenced-packet and datagram sockets; `read`, `write`, `send`, `recv`,
@@ -445,7 +445,7 @@ that took what it looked at, a record read that found the last record's tail:
   milliseconds rather than waiting on the receive interrupt, and still is.
   The other two are gone since 2026-09-16: the real-time clocks start at
   the time firmware's clock gave the loader rather than at 1970, and
-  `getrandom` is `libs/kernel/crng`'s ChaCha20, seeded from firmware's
+  `getrandom` is `src/lib/kernel/crng`'s ChaCha20, seeded from firmware's
   `EFI_RNG_PROTOCOL`, the processor's generator and jitter. And the console
   is no longer the one terminal: pseudo-terminals came with stage 18.
 

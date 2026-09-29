@@ -2,9 +2,9 @@
  * Ferrix — SysML v2 model, part 6: kernel objects and the two ABIs.
  *
  * docs/ARCHITECTURE.md §2 and §3. The constants for the Linux half are in
- * libs/proto/linux-abi and for the native half in libs/proto/native-abi. The objects a
- * handle can name exist in kernel/src/object, the core half of a process
- * among them; the POSIX half and threads in kernel/src/syscall. No handle
+ * src/lib/proto/linux-abi and for the native half in src/lib/proto/native-abi. The objects a
+ * handle can name exist in src/kernel/src/object, the core half of a process
+ * among them; the POSIX half and threads in src/kernel/src/syscall. No handle
  * names an address space or a thread yet.
  */
 package FerrixObjects {
@@ -20,7 +20,7 @@ package FerrixObjects {
     abstract #implemented part def KernelObject {
         @stage { number = 9; }
         doc /* Typed, reference-counted, reached through per-process handle
-             * tables. The native ABI is built on these. kernel/src/object's
+             * tables. The native ABI is built on these. src/kernel/src/object's
              * Object is a channel end, a VMO, a job, a device node, an
              * interrupt, an I/O mapping, a pin, a process's ending, or a
              * port; each reports its signals as a level and names the queue
@@ -59,7 +59,7 @@ package FerrixObjects {
     #implemented part def IoMapping :> KernelObject {
         doc /* An MMIO aperture, mappable into a driver's address space, with
              * its IOMMU domain. Nothing outside the aperture:
-             * kernel/src/object/io_mapping.rs makes one only from an
+             * src/kernel/src/object/io_mapping.rs makes one only from an
              * Aperture a device node minted, and whole pages or none. */
         attribute phys : Natural;
         attribute len : Natural;
@@ -75,7 +75,7 @@ package FerrixObjects {
     #implemented part def Process :> KernelObject {
         @stage { number = 6; }
         doc /* The process as the core enforces and reports it, and nothing a
-             * personality adds: kernel/src/object/process.rs. Its address
+             * personality adds: src/kernel/src/object/process.rs. Its address
              * space, its pid, when it was made, its handle table, its job,
              * and how it ended -- which is all a native handle to one names,
              * so a handle kept past its end keeps nothing else it owned
@@ -102,7 +102,7 @@ package FerrixObjects {
              * context and signal dispositions. Precisely a particular sharing
              * arrangement of independently shareable objects, composed by
              * clone flags as Linux composes them, within what Clone below
-             * refuses. kernel/src/syscall/process.rs, in the uncertified
+             * refuses. src/kernel/src/syscall/process.rs, in the uncertified
              * load ring: it contains the core Process and derefs to it, and
              * decides how a process ends -- descriptors closed, orphans
              * handed on, the parent told. No namespace set until stage 13:
@@ -118,7 +118,7 @@ package FerrixObjects {
     #implemented part def Thread :> FerrixScheduling::UserThread {
         @stage { number = 7; }
         doc /* One line of execution through a PosixProcess:
-             * kernel/src/syscall/thread.rs. Its thread id from the pid space,
+             * src/kernel/src/syscall/thread.rs. Its thread id from the pid space,
              * its own signal mask and queue, the address to clear when it
              * ends. The task that runs it holds it only as a UserThread, and
              * the personality has it back by downcast. */
@@ -143,7 +143,7 @@ package FerrixObjects {
         @stage { number = 13; }
         doc /* What a job and every job beneath it may hold at once, and hold
              * now: the Security Target's FRU_RSA.1 (certification finding
-             * F-35, work order W-13). kernel/src/object/quota.rs: a slot in a
+             * F-35, work order W-13). src/kernel/src/object/quota.rs: a slot in a
              * table of atomics, named by a u32 so a frame freed under any
              * lock finds its charge from the frame record alone. A charge
              * walks the slots from the job up with a compare-and-swap at
@@ -153,7 +153,7 @@ package FerrixObjects {
              * page tables (at allocation, to the running task's job; at every
              * free), the native objects they make (a token in each), and the
              * kernel heap the Linux personality and its libraries hold for
-             * them (a libs/kernel/kmem token in each object, charged as memory in
+             * them (a src/lib/kernel/kmem token in each object, charged as memory in
              * bytes against the same limit, as cgroup v2 folds kmem into
              * memory.max; certification finding F-37, work order W-15). The
              * processor is a weight, not a limit: each task runs at its own
@@ -181,7 +181,7 @@ package FerrixObjects {
     }
 
     part def FdTable {
-        doc /* File descriptors and their sharing rules, stage 8: libs/fs/vfs's
+        doc /* File descriptors and their sharing rules, stage 8: src/lib/fs/vfs's
              * descriptor table behind an Arc, shared where CLONE_FILES asks,
              * with close-on-exec belonging to the number. */
     }
@@ -206,7 +206,7 @@ package FerrixObjects {
         doc /* clone: each Shareable is shared or copied independently.
              * CLONE_THREAD|CLONE_VM|CLONE_SETTLS is a thread; none of them is
              * fork, which marks both address spaces copy-on-write.
-             * kernel/src/syscall/family.rs, with clone3 through the same
+             * src/kernel/src/syscall/family.rs, with clone3 through the same
              * path. What Linux allows between a thread and a process is
              * refused with ENOSYS: memory shared between processes without
              * CLONE_VFORK, handlers shared between processes, and a thread
@@ -234,11 +234,11 @@ package FerrixObjects {
     #implemented part def LinuxSyscallLayer {
         @stage { number = 7; }
         doc /* The entry path on every architecture, the dispatch table, and
-             * the ~150-call surface rustc needs. libs/proto/linux-abi holds the
+             * the ~150-call surface rustc needs. src/lib/proto/linux-abi holds the
              * numbers for x86-64, AArch64 and the ARM EABI table, the errnos,
              * and the repr(C) layouts (statx, dirent64, sigaction, ...).
              *
-             * kernel/src/syscall, reached through arch::decode_syscall, which
+             * src/kernel/src/syscall, reached through arch::decode_syscall, which
              * is the only place in the kernel that knows which of the three
              * number tables this build uses. Memory, files and paths,
              * processes and threads, futex, signals, time, identity and
@@ -254,7 +254,7 @@ package FerrixObjects {
                  * a SyscallArgs from the trap frame and applies the Outcome
                  * that comes back, so no register convention reaches the
                  * dispatch layer and no ABI knowledge reaches the vector.
-                 * Both types are the core's (kernel/src/trap.rs), and the
+                 * Both types are the core's (src/kernel/src/trap.rs), and the
                  * trap path calls trap::system_call, which answers through
                  * the SyscallEntry main.rs registered: the core names no
                  * dispatcher above it (F-09). */
@@ -280,7 +280,7 @@ package FerrixObjects {
 
     #implemented part def Signals {
         @stage { number = 7; }
-        doc /* kernel/src/syscall/signal.rs keeps each disposition, the
+        doc /* src/kernel/src/syscall/signal.rs keeps each disposition, the
              * blocked mask and the alternate stack, split between thread and
              * process as Linux splits them; deliver.rs delivers on every
              * return to user mode, onto each architecture's own Linux frame,
@@ -297,7 +297,7 @@ package FerrixObjects {
     #implemented part def PosixIpc {
         @stage { number = 15; }
         doc /* Pipes, ttys and job control: what an interactive shell needs.
-             * Pipes and FIFOs are stage 8's (kernel/src/fs/pipe.rs), the
+             * Pipes and FIFOs are stage 8's (src/kernel/src/fs/pipe.rs), the
              * console a terminal with a line discipline since stage 7
              * (fs/terminal.rs) and pseudo-terminals stage 18's (fs/pty.rs),
              * and every call job control is made of has been answered since
@@ -315,9 +315,9 @@ package FerrixObjects {
              * VMO create/map, job create/kill. What devmgr and drivers speak;
              * a process may use both ABIs.
              *
-             * kernel/src/syscall/native.rs, branched to before any Linux
-             * table is asked, with the numbers in libs/proto/native-abi/src/nr.rs
-             * and typed wrappers in libs/proto/native. Beyond that first list:
+             * src/kernel/src/syscall/native.rs, branched to before any Linux
+             * table is asked, with the numbers in src/lib/proto/native-abi/src/nr.rs
+             * and typed wrappers in src/lib/proto/native. Beyond that first list:
              * waits on one object or asynchronously through a port, VMO
              * pins for a device's DMA, a job's quota set and read, process
              * create and start, device

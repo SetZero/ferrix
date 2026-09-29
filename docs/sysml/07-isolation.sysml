@@ -63,7 +63,7 @@ package FerrixIsolation {
     #planned part def Seccomp {
         @stage { number = 13; }
         doc /* Classic BPF filters evaluated on syscall entry. The interpreter
-             * is a pure function over bytes in libs/, fuzzable and Miri-able. */
+             * is a pure function over bytes in src/lib/, fuzzable and Miri-able. */
         part interpreter : ClassicBpfInterpreter;
         action installFilter;
         action evaluate;
@@ -80,7 +80,7 @@ package FerrixIsolation {
              * no-new-privs. They sit on top of the handle system rather than
              * beside it.
              *
-             * kernel/src/syscall/credentials.rs: Linux's four user ids and
+             * src/kernel/src/syscall/credentials.rs: Linux's four user ids and
              * four group ids and the supplementary groups on every Process,
              * copied by fork, kept by execve with the saved and filesystem
              * ids made the effective ones, and changed by the set*id calls

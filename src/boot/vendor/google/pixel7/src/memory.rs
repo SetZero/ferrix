@@ -1,7 +1,7 @@
 //! The phone's memory, as its device tree describes it, and the loader's
 //! allocations out of it.
 //!
-//! UEFI hands `boot/uefi/` a memory map and an allocator; ABL hands over neither,
+//! UEFI hands `src/boot/common/uefi/` a memory map and an allocator; ABL hands over neither,
 //! only a device tree. So the map is built here, in layers: RAM from the
 //! `/memory` nodes, then everything the tree reserves -- the memory
 //! reservation block and every `/reserved-memory` child with a `reg` -- then

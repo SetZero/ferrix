@@ -1,5 +1,5 @@
 //! Link the program with the runtime's linker script, as every native program
-//! is; see `native/rt/build.rs` for where the script's path comes from.
+//! is; see `src/user/native/rt/build.rs` for where the script's path comes from.
 
 #![allow(
     clippy::print_stdout,

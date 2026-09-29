@@ -11,10 +11,10 @@ must not drift onto another statement.
 This carries the anchors from the tree the evidence was last written on to the
 working tree, file by file, through a diff:
 
-    python3 scripts/gen/carry-coverage.py            # from `git merge-base HEAD main`
-    python3 scripts/gen/carry-coverage.py --from REV
-    python3 scripts/gen/gen-coverage-justification.py   # then regenerate the pages
-    python3 scripts/gen/gen-coverage-justification.py --check
+    python3 tools/common/gen/carry-coverage.py            # from `git merge-base HEAD main`
+    python3 tools/common/gen/carry-coverage.py --from REV
+    python3 tools/common/gen/gen-coverage-justification.py   # then regenerate the pages
+    python3 tools/common/gen/gen-coverage-justification.py --check
 
 It carries, it does not measure. A line the change left untouched keeps its
 place in the residual and its argument, at its new number. A line the change
@@ -34,10 +34,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 CERT = ROOT / "docs" / "certification"
 ARCHES = ("x86_64", "aarch64", "armv7a")
-SRC = "kernel/src/"
+SRC = "src/kernel/src/"
 
 
 def git(*args, check=True):

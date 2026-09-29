@@ -2,7 +2,7 @@
   "//": [
     "Unsafe sites in the certified item -- the core and item rings,",
     "self-tests included -- whose SAFETY comment or # Safety section",
-    "names no obligation id, per file, as scripts/check/check-unsafe-audit.py",
+    "names no obligation id, per file, as tools/common/check/check-unsafe-audit.py",
     "counts them. A debt register for finding F-26, not an allowance:",
     "a count may only fall, and the gate fails when one rises, when a",
     "new file appears, or when one has fallen without being",

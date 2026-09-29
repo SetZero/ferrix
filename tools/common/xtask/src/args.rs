@@ -116,7 +116,7 @@ pub(crate) struct Args {
     /// (`crate::dotfiles`).
     pub(crate) no_dotfiles: bool,
     /// `--chrome`: `run-compositor` with Google's Chrome on the desktop,
-    /// from the volume `scripts/fetch/fetch-chrome.sh` makes, in place of the
+    /// from the volume `tools/common/fetch/fetch-chrome.sh` makes, in place of the
     /// rustc volume, and a keybind for another window.
     pub(crate) chrome: bool,
     /// `--everything`: `run-compositor` with every feature a watched desktop

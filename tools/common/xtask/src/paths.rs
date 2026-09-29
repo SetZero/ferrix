@@ -110,11 +110,12 @@ impl std::fmt::Display for Arch {
 
 /// The workspace root, found from this crate's manifest directory.
 pub(crate) fn workspace_root() -> PathBuf {
-    // `CARGO_MANIFEST_DIR` is xtask/, so the workspace is its parent. Resolved
-    // at compile time, which means it is right even when xtask is run from
-    // somewhere else in the tree.
+    // `CARGO_MANIFEST_DIR` is tools/common/xtask/, so the workspace is three
+    // levels up. Resolved at compile time, which means it is right even when
+    // xtask is run from somewhere else in the tree.
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
+        .ancestors()
+        .nth(3)
         .unwrap_or(Path::new("."))
         .to_path_buf()
 }
@@ -130,7 +131,7 @@ pub(crate) fn target_dir() -> PathBuf {
         .map_or_else(|| workspace_root().join("target"), PathBuf::from)
 }
 
-/// Where a `scripts/fetch/` script that makes a btrfs volume writes unless
+/// Where a `tools/common/fetch/` script that makes a btrfs volume writes unless
 /// its own variable says otherwise: `~/.local/share/ferrix/<name>`.
 ///
 /// Those scripts need `dpkg-deb`, `mkfs.btrfs` and a file system that keeps
@@ -409,8 +410,8 @@ pub(crate) fn which_all(program: &str) -> Vec<PathBuf> {
     found
 }
 
-/// `~/.local/share/ferrix/qemu`, where `scripts/fetch/fetch-qemu-windows.sh`
-/// installs a QEMU with the fixes in `scripts/data/qemu/`, looked in before
+/// `~/.local/share/ferrix/qemu`, where `tools/common/fetch/fetch-qemu-windows.sh`
+/// installs a QEMU with the fixes in `tools/common/data/qemu/`, looked in before
 /// `PATH`: the released Windows build jumps to NULL the first time a guest
 /// resets `virtio-gpu-gl-pci`, so every `--gl` boot there needs this one
 /// (`docs/GPU.md` §3.12). Taken whenever it is there, on any host, rather
@@ -535,6 +536,6 @@ mod tests {
             workspace_root().join("Cargo.toml").is_file(),
             "workspace root should be the directory with the virtual manifest"
         );
-        assert!(workspace_root().join("kernel").is_dir());
+        assert!(workspace_root().join("src").join("kernel").is_dir());
     }
 }

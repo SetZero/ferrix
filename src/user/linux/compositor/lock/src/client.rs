@@ -340,7 +340,7 @@ impl Session {
             .filter(|len| *len > 0)
             .ok_or_else(|| format!("a {width}x{height} lock surface"))?;
         let mut shared = Shared::new(len).map_err(|error| format!("the memory: {error}"))?;
-        // The checkerboard, because `userland/compositor/render` draws it and the
+        // The checkerboard, because `src/user/linux/compositor/render` draws it and the
         // expected image is made from the same code: a locked screen is a
         // picture a test can compare, and this is the picture.
         let pixels = Pattern::Checkerboard.draw(width, height);

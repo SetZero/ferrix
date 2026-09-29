@@ -182,7 +182,7 @@ fn run(keys: &[String]) -> Result<String, String> {
 ///
 /// A bind names a modifier as `SUPER` or `SHIFT`, which is a *modifier* and
 /// not a key; a keyboard has no such key and a person presses the left one.
-/// Every other name is XKB's own, which is what `userland/compositor/xkb` knows.
+/// Every other name is XKB's own, which is what `src/user/linux/compositor/xkb` knows.
 fn keycode(name: &str) -> Option<u16> {
     let modifier = match name.to_ascii_uppercase().as_str() {
         "SUPER" | "MOD4" | "WIN" | "META" => Some("Super_L"),

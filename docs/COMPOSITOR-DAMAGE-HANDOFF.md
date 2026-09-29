@@ -65,7 +65,7 @@ every image.
 Before this, `hyprix` handed `Damage::full` to the renderer every frame, so
 1.1 bought nothing.
 
-Two halves, in `userland/compositor/hyprix/src/damage.rs`:
+Two halves, in `src/user/linux/compositor/hyprix/src/damage.rs`:
 
 1. **Inside a surface.** A commit's `wl_surface.damage` / `damage_buffer`,
    read out of the server's `current` state at `Event::SurfaceCommitted`,
@@ -131,7 +131,7 @@ that moves eight times a second and letters that arrive in bursts.
 Outside the damage the canvas still holds the **last** frame -- and the last
 frame has the translucent surface drawn *over* the blur. So blurring a strip
 is blurring the previous blur plus the surface: a smear that grows every
-frame. `Plan::blurs_whole` in `userland/compositor/hyprix/src/damage.rs` answered
+frame. `Plan::blurs_whole` in `src/user/linux/compositor/hyprix/src/damage.rs` answered
 that by growing the damage until every blurred surface it touched was
 redrawn whole, plus a reach. Correct, and a near-fullscreen frame for every
 pointer motion over a near-fullscreen window.
@@ -140,7 +140,7 @@ It was found the honest way -- it cost a step or two of a channel over 8604
 pixels of `dwindle-two-clients`, which is the golden-image suite catching
 it.
 
-### 2.2 The backdrop (`userland/compositor/render/src/backdrop.rs`)
+### 2.2 The backdrop (`src/user/linux/compositor/render/src/backdrop.rs`)
 
 Hyprland's answer is `decoration:blur:new_optimizations`, **on by default**:
 the monitor keeps `m_blurFB`, the background and the layer surfaces under
@@ -216,7 +216,7 @@ been pacing of a kind; at 0.06 ms the loop drew one for every report the
 mouse sent, and a frame is not only drawing. On a card it ends in a page
 flip, and Ferrix's virtio-gpu answers a flip by setting the scanout and
 sending the **whole** framebuffer to the host, waited for (`show` in
-`kernel/src/display/drm.rs`). A guest with one processor spent it doing
+`src/kernel/src/display/drm.rs`). A guest with one processor spent it doing
 that.
 
 * `hyprix::pace`: a change is owed a frame, and the frame is the next one
@@ -328,7 +328,7 @@ linked against musl, whose `malloc` maps every block over 128 KiB on its
 own and unmaps it on `free`. So a frame was some 25,000 page faults, each
 a trap into Ferrix and its address space's one lock, taken by the four
 threads of the blur at once, and seven TLB shootdowns across every
-processor for the unmaps. `userland/compositor/render/src/scratch.rs` keeps those
+processor for the unmaps. `src/user/linux/compositor/render/src/scratch.rs` keeps those
 buffers now, per thread, handed out with whatever they last held (every
 taker writes every byte before reading one, which is the promise the golden
 images hold). The video client kept an 8 MB frame the same way: it scaled
@@ -369,7 +369,7 @@ Ferrix answered `poll` on a listening Unix socket as hung up: a stream
 socket with no peer is `POLLHUP`, and a listener never has one. Linux's
 `unix_poll` answers a listener as readable while a connection waits and
 nothing else, which is what the kernel answers now
-(`kernel/src/fs/socket.rs`, `readiness`), with the boot check holding a
+(`src/kernel/src/fs/socket.rs`, `readiness`), with the boot check holding a
 listener to both halves. The compositor was right; every turn of its loop
 paid for the kernel's answer, and so did anything else sleeping in `poll`
 on a listener, sshdt among them.
@@ -445,7 +445,7 @@ Three traps, each of which cost time:
 ## 4. The tests that hold all of this
 
 - `a_blur_reads_what_is_damaged_and_writes_the_same_pixels`
-  (`userland/compositor/render/src/tests.rs`) — a blur over a damaged strip writes
+  (`src/user/linux/compositor/render/src/tests.rs`) — a blur over a damaged strip writes
   byte-identical pixels to a blur over the whole window, *and* costs under
   25 ms rather than the window's 95. Both halves matter: the first is the
   licence to take the shortcut and the second is that the shortcut was
@@ -464,8 +464,8 @@ Three traps, each of which cost time:
   so that a slower machine passes and a change that made the blur several
   times more expensive does not.
 - `a_small_commit_redraws_a_small_part_of_the_screen`
-  (`userland/compositor/hyprix/tests/two_clients.rs`) — the damage test. It needed a
-  client of its own, because `userland/compositor/pattern` damages its whole buffer:
+  (`src/user/linux/compositor/hyprix/tests/two_clients.rs`) — the damage test. It needed a
+  client of its own, because `src/user/linux/compositor/pattern` damages its whole buffer:
   `patching` fills its window one colour and then repaints a 24x24 square
   twelve times, damaging only that square. It asserts the picture (the
   square is in the last frame, exactly 576 pixels, with the window's colour
@@ -541,9 +541,9 @@ Not part of this handoff, but the next person will ask.
 
   **That fix has a test since 2026-09-19.** Nothing in this tree opened two
   windows from one client -- every gate boot starts two
-  `userland/compositor/pattern` processes, and `pattern` exits when its one window
+  `src/user/linux/compositor/pattern` processes, and `pattern` exits when its one window
   is closed, which takes the connection with it and goes down the path
-  that was already there -- so `userland/compositor/pattern` gained a client that
+  that was already there -- so `src/user/linux/compositor/pattern` gained a client that
   does: `Shape::Twin` (`--twin` on the command line) opens a second
   `xdg_toplevel` once the first has drawn, draws it, and destroys it two
   seconds later with the connection still open.
@@ -551,7 +551,7 @@ Not part of this handoff, but the next person will ask.
   `a_client_that_destroys_one_of_its_two_windows_leaves_the_other_alone` in
   `hyprix/tests/two_clients.rs` makes three claims in order: a taskbar's
   list has both windows while they are up, it has one after the destroy,
-  and a screenshot is the `one-client-alone` image `userland/compositor/render`
+  and a screenshot is the `one-client-alone` image `src/user/linux/compositor/render`
   blesses -- the kept window alone, filling the workspace. Its negative
   control, not committed: with the `for window in closed` loop in
   `hyprix/src/state.rs` short-circuited, the list after the destroy is

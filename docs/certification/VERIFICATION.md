@@ -12,12 +12,12 @@ of something and evidence for something.
 ## 1. The reachability problem, and what changed
 
 `docs/sysml/11-assurance.sysml` states the constraint that shapes everything
-here. `libs/` is reachable by `cargo test`, Miri and the fuzzers because it is
-architecture-neutral logic over bytes. `kernel/` is reachable **only by booting
+here. `src/lib/` is reachable by `cargo test`, Miri and the fuzzers because it is
+architecture-neutral logic over bytes. `src/kernel/` is reachable **only by booting
 it** — Miri cannot interpret a privileged instruction and a fuzzer cannot drive
-a page-fault handler. That is the whole argument for `libs/` existing.
+a page-fault handler. That is the whole argument for `src/lib/` existing.
 
-The consequence was that the item — which is entirely `kernel/` — had no
+The consequence was that the item — which is entirely `src/kernel/` — had no
 structural coverage measurement at all. As of 2026-09-25 it does, via QEMU's
 `drcov` TCG plugin and the kernel's own DWARF line table. See §3.
 
@@ -29,7 +29,7 @@ structural coverage measurement at all. As of 2026-09-25 it does, via QEMU's
 |---|---|---|
 | In-kernel self-tests | `check.rs` / `*_check.rs`, run on every boot | **31,135 lines**, 29 files |
 | Boot gates | `cargo xtask test-*` under QEMU | 18 commands, 3 architectures |
-| Host unit tests | `cargo test` over `libs/` | ~1,950 plus doc tests (2026-09-23), `xtask` 242 |
+| Host unit tests | `cargo test` over `src/lib/` | ~1,950 plus doc tests (2026-09-23), `xtask` 242 |
 | UB detection | `cargo miri test` | 13 crates |
 | Fuzzing | `cargo fuzz`, corpora committed | 30 targets |
 | Supply chain | `cargo deny check` | empty ignore list |
@@ -102,10 +102,10 @@ firmware loads the kernel above the split, as the DK1's memory always is, and
 with the options. Debug profile, with KASLR. Every Arm boot goes through its
 firmware as a board's does -- EDK2 on AArch64, U-Boot on ARMv7-A -- with its
 two waits skipped since 2026-09-27: EDK2's boot menu, by a `Timeout` of 0 in
-the fresh variable store xtask writes (`xtask/src/uefi_vars.rs`), and U-Boot's
+the fresh variable store xtask writes (`tools/common/xtask/src/uefi_vars.rs`), and U-Boot's
 autoboot countdown, by an environment in flash that is U-Boot's own
 compiled-in default with `bootdelay=0` and nothing else changed
-(`xtask/src/uboot_env.rs`). x86-64 measured again on 2026-09-27 at e5f3110f
+(`tools/common/xtask/src/uboot_env.rs`). x86-64 measured again on 2026-09-27 at e5f3110f
 (11532464); AArch64 and ARMv7-A measured again
 on 2026-09-27 at 9e196852, with `test-vfs` in their suite and the trap
 check's read past a mapped file's end:
@@ -242,7 +242,7 @@ tool that only 64-bit addresses met (§3.4).
 QEMU's `drcov` TCG plugin records every basic block the guest translates and
 executes. The kernel's DWARF line table says which source statement each
 address belongs to; the denominator is the rows the compiler marked `is_stmt`,
-which is what gcov-shaped tools count. `scripts/gen/coverage-report.py` intersects
+which is what gcov-shaped tools count. `tools/common/gen/coverage-report.py` intersects
 the two and attributes each file to a ring using the same classifier the
 boundary gate uses, so the two cannot disagree.
 
@@ -269,12 +269,12 @@ and runs `decision-coverage.py` over the same traces, which has no floor yet
 (§3.6), and `--json` regenerates its evidence the same way. It needs boots,
 so it is not part of `cargo xtask check`. Adding `--json` and `--residual` to
 the printed command regenerates the evidence, and
-`scripts/gen/gen-coverage-justification.py` the two documents from it.
+`tools/common/gen/gen-coverage-justification.py` the two documents from it.
 
 **Between measurements.** The evidence names statements by file and line, so a
 change that moves a line in the item leaves an anchor on the wrong statement,
 and `--check` fails rather than let an argument drift. A landing that changes
-the item carries the anchors with `scripts/gen/carry-coverage.py`, which maps
+the item carries the anchors with `tools/common/gen/carry-coverage.py`, which maps
 each line through a diff from the tree the evidence was written on: a line the
 change left alone keeps its place and its argument at its new number, and a
 line it edited or removed is dropped and printed -- it is unmeasured now, and
@@ -372,7 +372,7 @@ has taken every outcome. DAL C does not ask it, and F-13 stays Informational;
 this section measures how far the item is from it, from the traces §3.1
 already collects, with no new instrumentation.
 
-**Method.** `scripts/gen/decision-coverage.py` disassembles each kernel build
+**Method.** `tools/common/gen/decision-coverage.py` disassembles each kernel build
 with the pinned toolchain's `llvm-objdump` (the `llvm-tools` component
 `rust-toolchain.toml` installs, one tool for all three architectures) and
 finds every direct conditional branch: `jcc` on x86-64; `b.<cond>`,
@@ -474,7 +474,7 @@ half as far from 100%.
 * *Inlining.* A branch is attributed to the innermost source line, so an
   inlined kernel function's decision is that function's, and `core`'s inlined
   into the item are outside it -- 65,658, 75,795 and 69,560 branches in
-  `core`, `alloc` and `libs/` -- everything outside `kernel/src` -- as
+  `core`, `alloc` and `src/lib/` -- everything outside `src/kernel/src` -- as
   outside the item as their statements are.
 * *Aliasing.* The upper bound credits a successor some other edge entered;
   the lower bound can still be fooled by an indirect jump or an interrupt or

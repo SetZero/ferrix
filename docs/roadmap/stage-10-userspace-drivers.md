@@ -25,7 +25,7 @@ and fault.
 Started while stage 9 is still under way, because the exit criterion needs
 stage 9's objects but most of what stands between here and it does not.
 
-* `libs/platform/pci` — configuration space as arithmetic over a `ConfigSpace` the
+* `src/lib/platform/pci` — configuration space as arithmetic over a `ConfigSpace` the
   caller implements, answering as hardware does: all ones for a function that
   is not there. `#![forbid(unsafe_code)]`, no allocation, no recursion.
   * **ECAM**: the window geometry, and an adapter that turns "read these bytes
@@ -67,11 +67,11 @@ check now requires one contiguous run, and a test sizes a 40-bit decoder.
 
 **Done — enumeration, in the boot test on all three architectures.**
 
-* **Where configuration space is.** `libs/platform/acpi` reads the MCFG, `libs/platform/fdt` the
+* **Where configuration space is.** `src/lib/platform/acpi` reads the MCFG, `src/lib/platform/fdt` the
   `pci-host-ecam-generic` nodes. The two disagree about what their address
   means: an MCFG allocation's is where bus *zero* would be, whatever bus it
   starts at, and a device tree's `reg` is its first bus's. Both parsers hand
-  over the first bus's, so `kernel/src/pci.rs` never has to remember which it
+  over the first bus's, so `src/kernel/src/pci.rs` never has to remember which it
   read. Where the loader handed over ACPI tables the MCFG is authoritative;
   otherwise the device tree is read. A `bus-range` larger than its window is
   cut to what the window holds, as Linux does.
@@ -82,7 +82,7 @@ check now requires one contiguous run, and a test sizes a 40-bit decoder.
   reads from it, and every window is given back afterwards.
 * **The check** walks every host, sizes every BAR, walks both capability lists
   of every function and finds its virtio transport. It fails if a described
-  host answers with nothing, if a bus cannot be mapped, or if `libs/platform/pci`
+  host answers with nothing, if a bus cannot be mapped, or if `src/lib/platform/pci`
   refuses anything a device presents. A machine that describes no host passes
   and says so, because the board has no PCI at all.
 * **A virtio device on every test machine.** `virtio-rng-pci`, because it needs
@@ -96,7 +96,7 @@ ARMv7-A the same 2 from the device tree, reaching a window at
 `0x40_1000_0000` — above 4 GiB, through LPAE.
 
 **Done — device nodes, and the only way to name a device's memory.**
-`kernel/src/device.rs`, written to the contract agreed with stage 9: its
+`src/kernel/src/device.rs`, written to the contract agreed with stage 9: its
 `IoMapping` and `Interrupt` take an `Aperture` and a `Vector`, and only this
 module can make either — from a sized memory BAR, from a `virtio,mmio` node's
 `reg` and GIC interrupts, or afterwards from `DeviceNode::aperture`, which
@@ -127,7 +127,7 @@ refusals, at four processors and at two.
 drive devices, but it owns everything a driver stands on — the BAR mappings,
 the capability locations, and the physical memory a device reads and writes —
 and enumeration proves none of that, because it only reads configuration
-space. So once at boot `kernel/src/pci/virtio.rs` plays driver for the
+space. So once at boot `src/kernel/src/pci/virtio.rs` plays driver for the
 simplest device there is, virtio-rng: it maps the common and notification
 blocks the capabilities name, turns on bus mastering, gives the device a queue
 in a page of its own, asks for 64 bytes, and requires the device to write them
@@ -135,7 +135,7 @@ into the page whose physical address it was given. Then it resets the device
 — before the pages are freed, so the device holds no address into memory that
 is given back — and restores the command register.
 
-* `libs/drivers/virtio` gains the PCI transport's common configuration: the status
+* `src/lib/drivers/virtio` gains the PCI transport's common configuration: the status
   protocol, feature negotiation and queue activation, host-tested against a
   device that behaves as virtio 1.2 §4.1.4.3 says. A reset that never finishes
   times out rather than hanging, a device that drops `FEATURES_OK` has refused,
@@ -157,7 +157,7 @@ ranges; the boot check requires every one of them, and its first and last
 byte, to be refused. virtio-rng keeps its table in a BAR of its own, which
 therefore stops being an aperture at all.
 
-* `libs/platform/pci::msix` is the arithmetic — the withheld and mappable ranges of a
+* `src/lib/platform/pci::msix` is the arithmetic — the withheld and mappable ranges of a
   BAR, rounded out to pages, and the table entry layout — and the messages the
   table will be programmed with: the local APIC's on x86-64, and a `GICv2m`
   frame's on the Arm machines, read from QEMU's own `arm_gicv2m.c` rather than
@@ -165,7 +165,7 @@ therefore stops being an aperture at all.
   `MSI_TYPER` reports the first identifier and the count. The `pci_walk` fuzz
   target now also requires a BAR's mappable and withheld ranges to partition
   it exactly, with every withheld range on page boundaries.
-* `libs/platform/acpi` reads the MADT's GIC MSI frame entries, and `libs/platform/fdt` the
+* `src/lib/platform/acpi` reads the MADT's GIC MSI frame entries, and `src/lib/platform/fdt` the
   `arm,gic-v2m-frame` nodes, which is where those frames are described.
 
 The run recorded when it landed: x86-64 publishes 3 apertures where it had 4,
@@ -263,7 +263,7 @@ from delivery to acknowledgement" on x86-64 for the first time. AArch64 mints
 none: its virtio-rng has memory decoding off, which the next item is for.
 
 **Done — where each device's IOMMU is, and virtio's DMA sent through it.**
-`kernel/src/iommu.rs` finds every IOMMU firmware describes and places every
+`src/kernel/src/iommu.rs` finds every IOMMU firmware describes and places every
 PCI function behind one, before any unit is programmed:
 
 * on x86-64, by the DMAR's endpoint scopes;
@@ -275,10 +275,10 @@ not there — is counted as unresolved, never as bypassing, because a bypassing
 function is one no domain will ever be built for. Every unit's register block
 is withheld from apertures.
 
-* `libs/platform/fdt` reads SMMU nodes, phandles, and `iommu-map` with its mask. It
+* `src/lib/platform/fdt` reads SMMU nodes, phandles, and `iommu-map` with its mask. It
   masks the requester ID, then takes the first entry that matches, as Linux's
-  `of_map_id` does. `libs/platform/pci` gives a function's requester ID.
-* `libs/kernel/paging` gains the two tables a domain is made of: VT-d's second level
+  `of_map_id` does. `src/lib/platform/pci` gives a function's requester ID.
+* `src/lib/kernel/paging` gains the two tables a domain is made of: VT-d's second level
   and an `SMMUv3`'s stage 2. Both are three levels over 39 bits of I/O
   address, with bits checked against QEMU's walkers, and they run through the
   same walk tests as the processors' tables. `Mapper::pages_only` holds a
@@ -337,7 +337,7 @@ the entropy check's 64 bytes through its domain, on x86-64, AArch64 and ARMv7-A.
 domain.** On x86-64 the kernel programs the VT-d unit the DMAR describes before
 PCI enumeration, so from the first DMA on, a function behind it reaches only
 what its domain maps and a function with no domain reaches nothing.
-`kernel/src/iommu/vtd.rs` drives the unit in legacy mode, checked against
+`src/kernel/src/iommu/vtd.rs` drives the unit in legacy mode, checked against
 QEMU's `intel_iommu.c`: a root table per unit, a context table per bus, a
 context entry per function naming a domain identifier and its second-level
 tables, and register-based invalidation of the context cache and the IOTLB
@@ -353,7 +353,7 @@ or one that needs write-buffer flushing, is left alone and says why.
   and refuses frames above 39 bits. A failed pin unmaps what it mapped; a
   domain dropped with nothing pinned detaches and gives back its tables.
 * **`mm::map_io`, `unmap_io` and `translate_io`** build IOMMU tables beside
-  the kernel's, generic over `libs/kernel/paging`'s encodings, a page at a time, so a
+  the kernel's, generic over `src/lib/kernel/paging`'s encodings, a page at a time, so a
   unit is never asked to walk a block.
 * **The domain check** now also requires a translated domain to resolve each
   pinned page to its frame and to fault it again once unpinned.
@@ -391,7 +391,7 @@ addresses on every machine, through a translated domain on x86-64.
 translated domain.** On AArch64 the kernel programs every `SMMUv3` the IORT
 describes before PCI enumeration, so a function an IORT root complex sends to
 one reaches only what its stage-2 domain maps, and one with no domain reaches
-nothing. `kernel/src/iommu/smmuv3.rs` drives the unit, checked against QEMU's
+nothing. `src/kernel/src/iommu/smmuv3.rs` drives the unit, checked against QEMU's
 `smmuv3.c` and `smmuv3-internal.h`: a linear stream table of 256 entries, every
 entry valid and aborting until a domain is attached; stage 2 per attached
 stream, with its own VMID, a 39-bit walk from level 1 over 4 KiB pages, 40
@@ -437,7 +437,7 @@ The run recorded when it landed: 1 out-of-domain write faulted on x86-64 and on
 AArch64; ARMv7-A's untranslated domain was not probed.
 
 **Done — both units' waits made with interrupts on.** A VT-d invalidation and
-an `SMMUv3` command are waited for under a gate, `kernel/src/iommu/gate.rs`,
+an `SMMUv3` command are waited for under a gate, `src/kernel/src/iommu/gate.rs`,
 instead of inside `IrqSpinLock`s that masked interrupts for up to 100 ms on the
 path every unpin takes. A task waiting to enter a domain's pins and unpins, or
 a unit's commands, sleeps on a wait queue; the one inside polls the unit with
@@ -452,7 +452,7 @@ The run recorded when it landed: 10 waits on a unit with interrupts on by the
 end of the domain check on x86-64, under KVM, and on AArch64; none on ARMv7-A,
 whose domain is untranslated.
 
-**Done — the block ring's protocol, as a library, host-side.** `libs/proto/blkring`
+**Done — the block ring's protocol, as a library, host-side.** `src/lib/proto/blkring`
 (`ferrix-blkring`) is the ring the kernel and a ring-3 block driver will share,
 as `docs/BLOCK-RING.md` specifies it: the ring and data VMO layout, every index
 and entry the other side writes checked before it is used, doorbells over stage
@@ -489,7 +489,7 @@ under KVM, the completion after the fault and no further fault, since VT-d
 keeps one record; ARMv7-A unprobed at four processors and at two.
 
 **Done — the block ring's kernel side, up to a published disk.**
-`kernel/src/block_ring` is the glue `docs/BLOCK-RING.md` §8 leaves to the
+`src/kernel/src/block_ring` is the glue `docs/BLOCK-RING.md` §8 leaves to the
 kernel. A process holding a device with `MANAGE` asks for a ring with
 `block_ring_create` (0x1048) and is answered the driver's end of the ring's
 control channel; the kernel's end goes to a task of its own per ring, which
@@ -500,7 +500,7 @@ the ring up: it holds the ring and data VMOs, attaches the crate's
 registry under HELLO's name with the virtio-blk major and `index × 16`, and
 answers READY with its completion port. From then on it serves reads (and,
 since stage 12, writes and flushes):
-`libs/fs/block`'s queue in front of the ring, one submission per dispatch into a
+`src/lib/fs/block`'s queue in front of the ring, one submission per dispatch into a
 region of the data VMO the kernel allocates, the driver rung when it asked to
 be, completions taken off the ring and copied out once, readers woken. A read
 on a ring whose driver has gone answers `EIO` at once; the ring ends on
@@ -533,9 +533,9 @@ disks published and unpublished, 0 frames leaked, in about 50 ms, on x86-64,
 AArch64 and ARMv7-A at four processors and at two.
 
 **Done — virtio-blk's protocol and driver logic, as libraries, host-side.**
-`libs/drivers/virtio`'s `blk` module is the device protocol: features checked against
+`src/lib/drivers/virtio`'s `blk` module is the device protocol: features checked against
 Linux's header, the configuration, request headers and statuses, and a request
-split into descriptor chains one pinned page at a time. `libs/drivers/virtio-blk` is the
+split into descriptor chains one pinned page at a time. `src/lib/drivers/block/virtio-blk` is the
 driver's logic: bring-up to `DRIVER_OK`, read, write and flush, each completion
 counted exactly once even from a hostile device, and a teardown that hands
 memory back only after the device's reset has finished. Device addresses reach
@@ -584,7 +584,7 @@ ARMv7-A at four processors and at two.
 
 **Done — the exit: a sector read through a driver in ring 3, with the IOMMU
 on.** `/sbin/blk` (at `/lib/drivers/blk` since `devmgr` landed), stage 11's virtio-blk driver on the native runtime
-(`native/drivers/blk`, over `libs/drivers/virtio-blk` and `libs/drivers/blkserve`), is started from the
+(`src/user/native/drivers/block/virtio-blk`, over `src/lib/drivers/block/virtio-blk` and `src/lib/drivers/block/blkserve`), is started from the
 boot check by a kernel-driven parent with the START `devmgr` will send
 (`docs/BLOCK-RING.md` §6.4, from `block_ring::start_for`): the device with
 `MANAGE`, and the driver's end of the ring's control channel. It maps the
@@ -622,7 +622,7 @@ message carries 64 handles and ARMv7-A publishes 36 device nodes, so the
 kernel sends DEVICES in as many messages as the handles need, each saying how
 many devices are still to come. The boot check's own starter now runs only
 when the image carries no `devmgr`; with it, the driver check reads through
-the disks `devmgr`'s drivers serve. `libs/proto/devmgr-proto` is the protocol's
+the disks `devmgr`'s drivers serve. `src/lib/proto/devmgr-proto` is the protocol's
 crate, host-tested. The table has since grown to five kinds — virtio-blk,
 virtio-net, virtio-gpu, virtio-input and the virtio-serial port driver
 `vport` — each handed its own subsystem's channel, and every driver but the
@@ -653,7 +653,7 @@ boot without the fix. The wake change c2129a68, once the suspect, was not it.
   firmware driver used — as virtio-rng on AArch64 was until its legacy
   interface was turned off — can still be given to a ring-3 driver. Worked
   out with the review that found the gap. **Started on 2026-09-19:** the
-  device-tree half of the first bullet has landed — `libs/platform/fdt` reads a host
+  device-tree half of the first bullet has landed — `src/lib/platform/fdt` reads a host
   bridge's `ranges` into `PciWindow`s that keep the bus and the CPU address
   apart, refusing a BAR only half inside a window, an empty or wrapping range,
   and a node whose cell counts are not PCI's — and the rest below is untouched:
@@ -689,7 +689,7 @@ again** (`docs/DEVMGR.md` §4). It began as a bug: `kill -9` of `gpu` under
 the desktop took card0 away for good, hyprix ended on `ENODEV`, and it was
 init, so the machine powered off. The kernel had not crashed. Now
 `device_quiesce` also waits for the display and render cores to let a dead
-driver's device go (`kernel/src/claim.rs`). Cards and render nodes are
+driver's device go (`src/kernel/src/claim.rs`). Cards and render nodes are
 numbered lowest-free, so the card returns as `card0`. devmgr keeps its device
 handle with `DUPLICATE`, starts the driver again on a duplicate (eight times
 a device at most), and tells the kernel RESTARTED. hyprix treats `ENODEV`, or
@@ -700,7 +700,7 @@ twice under hyprix, and the screen must then be the tiled picture, every
 pixel). A sound driver is started again the same way (2026-09-26), gated by
 `test-audio`'s restart boot. A dead driver's pins on a translated domain stay
 mapped, their frames held, until the device's core accepts the next driver's
-HELLO (`kernel/src/object/pin.rs`, finding F-38): QEMU writes a dead
+HELLO (`src/kernel/src/object/pin.rs`, finding F-38): QEMU writes a dead
 driver's buffers late, and those writes must not reach frames handed on.
 Network, input and disk drivers are started again too (2026-09-27, T0 of
 the live kernel update plan): a network interface is parked with its

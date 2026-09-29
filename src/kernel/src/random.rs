@@ -1,7 +1,7 @@
 //! The kernel's random numbers: what `getrandom`, `/dev/random`,
 //! `/dev/urandom` and every program's `AT_RANDOM` read.
 //!
-//! `libs/kernel/crng` is the generator, `ChaCha20` with fast key erasure. This module
+//! `src/lib/kernel/crng` is the generator, `ChaCha20` with fast key erasure. This module
 //! seeds it and serialises access to it.
 //!
 //! # What it is seeded from

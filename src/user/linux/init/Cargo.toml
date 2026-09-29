@@ -4,7 +4,7 @@
 # A workspace of its own, not a member of Ferrix's, for the reason zinc and the
 # compositor are: these are Linux user programs built with std, speaking only
 # the Linux ABI, and the Ferrix workspace's dependency policy is written for a
-# kernel. The manager itself is `libs/init/svc`, a `no_std` crate of that workspace,
+# kernel. The manager itself is `src/lib/init/svc`, a `no_std` crate of that workspace,
 # which is pure and host-tested there; what is here is the event loop and the
 # backends that turn its actions into system calls.
 [workspace]

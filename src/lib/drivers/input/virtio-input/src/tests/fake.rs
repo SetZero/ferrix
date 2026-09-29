@@ -2,7 +2,7 @@
 //! queries, its event queue, and QEMU 9.2.4's way of sending events.
 //!
 //! The configuration tables mirror `hw/input/virtio-input-hid.c`'s keyboard,
-//! mouse, tablet and multi-touch devices as `libs/drivers/virtio`'s input tests build
+//! mouse, tablet and multi-touch devices as `src/lib/drivers/virtio`'s input tests build
 //! them, the keyboard's key bitmap abbreviated to `KEY_ESC`, `KEY_A` and
 //! `KEY_MEDIA` as theirs is. [`Device::send`] is `virtio_input_send` in
 //! `hw/input/virtio-input.c`: nothing before `DRIVER_OK`, events held until

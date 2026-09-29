@@ -12,7 +12,7 @@
 //!
 //! # Where the compiler lives
 //!
-//! On a btrfs volume, `scripts/fetch/fetch-rustc-sysroot.sh` makes it from pinned
+//! On a btrfs volume, `tools/common/fetch/fetch-rustc-sysroot.sh` makes it from pinned
 //! downloads. It carries no `ferrix-root` label, so the kernel mounts it at
 //! `/data`, as it does any other btrfs disk; this test attaches it under
 //! QEMU's `snapshot=on` so the image is never changed by a run. The volume
@@ -130,7 +130,7 @@ const MEMORY: u32 = 4096;
 /// where LLVM runs emulated.
 const TIMEOUT: u64 = 1800;
 
-/// Where `scripts/fetch/fetch-rustc-sysroot.sh` writes, unless
+/// Where `tools/common/fetch/fetch-rustc-sysroot.sh` writes, unless
 /// `FERRIX_RUSTC_SYSROOT` names another directory.
 fn directory() -> Result<std::path::PathBuf> {
     match std::env::var_os("FERRIX_RUSTC_SYSROOT") {
@@ -144,7 +144,7 @@ pub(crate) fn volume() -> Result<std::path::PathBuf> {
     let image = directory()?.join("rustc.img");
     if !image.is_file() {
         return Err(Error::new(format!(
-            "{} is not there: scripts/fetch/fetch-rustc-sysroot.sh makes it",
+            "{} is not there: tools/common/fetch/fetch-rustc-sysroot.sh makes it",
             image.display()
         )));
     }
@@ -167,7 +167,7 @@ pub(crate) fn tree() -> Result<std::path::PathBuf> {
     ];
     if let Some(missing) = needed.iter().find(|path| !tree.join(path).exists()) {
         return Err(Error::new(format!(
-            "{} has no {missing}: run scripts/fetch/fetch-rustc-sysroot.sh again",
+            "{} has no {missing}: run tools/common/fetch/fetch-rustc-sysroot.sh again",
             tree.display()
         )));
     }
@@ -194,7 +194,7 @@ pub(crate) fn prepare_default(arch: Arch, args: &mut Args) -> Result<()> {
         println!(
             "  warning: the volume's gcc has no {missing}, so no C program compiles on it; \
              it is from before the script fetched gcc 15 -- run \
-             scripts/fetch/fetch-rustc-sysroot.sh again"
+             tools/common/fetch/fetch-rustc-sysroot.sh again"
         );
     }
     args.data_image = Some(image);
@@ -351,7 +351,7 @@ fn judge(arch: Arch, lines: &[String]) -> Result<()> {
         ))),
         Some("7") => Err(Error::new(format!(
             "{arch}: gcc did not compile hello.c (a volume without cc1: run \
-             scripts/fetch/fetch-rustc-sysroot.sh again)"
+             tools/common/fetch/fetch-rustc-sysroot.sh again)"
         ))),
         Some("8") => Err(Error::new(format!(
             "{arch}: gcc made a program, and it did not run"

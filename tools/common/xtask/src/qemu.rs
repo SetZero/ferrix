@@ -35,7 +35,7 @@ pub(crate) const UNCHECKED_MARKER: &str = "FERRIX-BOOT-UNCHECKED";
 pub(crate) const RESET_OPTION: &str = "ferrix.onexit=reset";
 
 /// The option that has the kernel start pid 1 from the file at `path` in the
-/// image, rather than from the program built into it (`kernel/src/init.rs`):
+/// image, rather than from the program built into it (`src/kernel/src/init.rs`):
 /// what `--init-path` puts in `CMDLINE.TXT`, and what a test that boots a
 /// program from a file puts there itself.
 pub(crate) fn init_option(path: &str) -> String {
@@ -350,7 +350,7 @@ fn devmgr_problem(lines: &[String]) -> Option<String> {
 ///
 /// Nor is an AArch64 boot that found its PCI hosts in the device tree, which
 /// `FERRIX_ARM_MACHINE=acpi=off` asks for: the kernel brings an `SMMUv3` up
-/// from ACPI's IORT alone (`kernel/src/iommu.rs`), so on that path it is
+/// from ACPI's IORT alone (`src/kernel/src/iommu.rs`), so on that path it is
 /// ARMv7-A's case, and says so in the same degraded-trusted-mode line. The
 /// coverage suite boots it for the Pixel 7's path, which has no ACPI.
 ///
@@ -1440,7 +1440,7 @@ fn judged_vnc(args: &Args, card: Option<&str>) -> Vec<String> {
 /// only way to measure the kernel's coverage at all: `docs/sysml/
 /// 11-assurance.sysml` records that a fuzzer cannot drive a page-fault handler
 /// and Miri cannot interpret a privileged instruction, so QEMU is the only
-/// thing that reaches ring 0. `scripts/gen/coverage-report.py` turns what the
+/// thing that reaches ring 0. `tools/common/gen/coverage-report.py` turns what the
 /// plugin writes into statement coverage per certification ring; see
 /// `docs/certification/VERIFICATION.md`.
 ///
@@ -1488,7 +1488,7 @@ pub(crate) fn accelerator_arguments(
 ///
 /// And under KVM an invariant TSC, which the host's is and `qemu64` does not
 /// say: without the bit the kernel's clock is the HPET
-/// (`kernel/src/arch/x86_64/clock.rs`), and every reading of an emulated HPET
+/// (`src/kernel/src/arch/x86_64/clock.rs`), and every reading of an emulated HPET
 /// is an exit to QEMU. A browser asking the time six thousand times a second,
 /// and the scheduler asking at every switch, spent processors on nothing
 /// else. Only KVM is asked: TCG has no invariant TSC to give and says so.
@@ -2228,7 +2228,7 @@ fn attach_data_image(command: &mut Command, arch: Arch, args: &Args) {
 
 /// `test-install`'s disks, after the three every boot has: the live disk and
 /// the target as `vdd` and `vde`, or the installed disk alone as `vdd`,
-/// booted from (`xtask/src/installer.rs`).
+/// booted from (`tools/common/xtask/src/installer.rs`).
 fn attach_install_disks(command: &mut Command, arch: Arch, image: &Path, args: &Args) {
     let virtio = |id: &str, boot: bool| {
         let boot = if boot { ",bootindex=0" } else { "" };
@@ -2718,7 +2718,7 @@ mod tests {
 
     #[test]
     fn the_markers_are_the_ones_the_kernel_prints() {
-        let path = crate::paths::workspace_root().join("kernel/src/main.rs");
+        let path = crate::paths::workspace_root().join("src/kernel/src/main.rs");
         let kernel = std::fs::read_to_string(&path).expect("reading the kernel's main.rs");
         for marker in [SUCCESS_MARKER, UNCHECKED_MARKER] {
             assert!(

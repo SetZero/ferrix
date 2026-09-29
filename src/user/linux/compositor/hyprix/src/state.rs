@@ -1759,7 +1759,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             if drawn == 1 {
                 // The screens are up and the first frame is on them. This is
                 // what a watcher waits for, in the shape
-                // `userland/compositor/blank`'s marker has.
+                // `src/user/linux/compositor/blank`'s marker has.
                 report(&format!("hyprix: {} {display}", described(&screens)));
             }
             if let Some(directory) = options.dump.as_ref() {
@@ -3690,7 +3690,7 @@ fn open_screens(_rules: &[MonitorRule]) -> Result<Vec<Box<dyn Backend>>, String>
 
 /// Do what a `hyprctl` request asked, and say whether the layout changed.
 ///
-/// `dispatch` is `userland/compositor/layout`'s own dispatcher table, so `hyprctl
+/// `dispatch` is `src/user/linux/compositor/layout`'s own dispatcher table, so `hyprctl
 /// dispatch movefocus l` and a keybind of the same name do the same thing.
 /// `keyword` changes one option while the compositor runs, which is what
 /// `hyprctl keyword general:gaps_in 10` is for.
@@ -3734,7 +3734,7 @@ fn run_ipc(
             false
         }
         // `hyprctl switchxkblayout`: put the keyboard in another layout
-        // group. The group was worked out by `userland/compositor/ipc`, which had
+        // group. The group was worked out by `src/user/linux/compositor/ipc`, which had
         // the snapshot to work it out from; what is left is the part only
         // the compositor can do.
         //
@@ -4077,7 +4077,7 @@ enum Shot {
 
 /// What a commit changed inside one surface.
 ///
-/// `userland/compositor/server`'s `surface.rs` keeps a commit's two damage lists
+/// `src/user/linux/compositor/server`'s `surface.rs` keeps a commit's two damage lists
 /// apart, because it cannot join them: `wl_surface.damage` is in surface
 /// coordinates and `damage_buffer` in the buffer's, and what turns one into
 /// the other is the surface's scale. This is the moment the scale is known,

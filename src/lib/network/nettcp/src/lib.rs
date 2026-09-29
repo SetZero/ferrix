@@ -1,6 +1,6 @@
 //! The TCP state machine, as a pure function of segments and time.
 //!
-//! `libs/network/netwire` reads and writes a TCP header. This crate is what decides
+//! `src/lib/network/netwire` reads and writes a TCP header. This crate is what decides
 //! which headers to write, in what order, and what to do with the ones that
 //! arrive: the eleven states of RFC 9293, reassembly of what came out of
 //! order, retransmission when nothing is acknowledged, and the congestion

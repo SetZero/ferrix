@@ -5,10 +5,10 @@ nothing on the path to `rustc` needs it, since Rust's `std` targets static
 musl. What needs it is the promise `docs/ARCHITECTURE.md` §2 makes — that
 somebody else's Linux binary runs unchanged — which today holds only for a
 static, fixed-address executable. Nearly every binary a distribution ships is a position-independent executable
-that asks for glibc's `ld-linux`. `kernel/src/syscall/load.rs` used to refuse
+that asks for glibc's `ld-linux`. `src/kernel/src/syscall/load.rs` used to refuse
 `PT_INTERP` by name; since 2026-09-20 it loads the linker the program asks for
 and enters it, which is the first bullet below. Since the same day there is a
-linker to name — `userland/ferrousli/ld`, the second bullet — and since 2026-09-21 it
+linker to name — `src/user/linux/ferrousli/ld`, the second bullet — and since 2026-09-21 it
 runs Debian's glibc busybox inside Ferrix on x86-64, which is the exit's
 second half there.
 The question of 2026-09-16 that put this here was
@@ -22,12 +22,12 @@ Three parts, in the order they can be tested:
 * **The kernel half, 5 points — done, 2026-09-21.** `execve` loads
   an `ET_DYN` executable at a
   base of its own — Linux's `ELF_ET_DYN_BASE`, unrandomised until stage 13 —
-  and applies its relative relocations, which `libs/platform/elf` already reads
+  and applies its relative relocations, which `src/lib/platform/elf` already reads
   because the UEFI loader relocates itself. A `PT_INTERP` names a second
   file: the interpreter is loaded at its own base, the entry point is the
   interpreter's, and the auxiliary vector says the rest — `AT_BASE` for the
   interpreter, `AT_PHDR`, `AT_PHNUM` and `AT_ENTRY` for the program, plus
-  `AT_RANDOM`, `AT_EXECFN` and `AT_PLATFORM`, whose keys `libs/proto/linux-abi`
+  `AT_RANDOM`, `AT_EXECFN` and `AT_PLATFORM`, whose keys `src/lib/proto/linux-abi`
   carries. The interpreter then maps libraries itself, through stage 8's
   file-backed `mmap` with `MAP_FIXED` and `PROT_EXEC`, and `mprotect`s its
   `PT_GNU_RELRO` — now covered in the same pattern a real `ld.so` uses.
@@ -41,7 +41,7 @@ Three parts, in the order they can be tested:
   and the processor is entered at the linker's entry. `AT_BASE` is filled and
   was not there at all before; `AT_PHDR`, `AT_PHNUM` and `AT_ENTRY` stay the
   program's, which is why `Loaded` now carries `start` beside `entry`. The
-  linker's path comes from `Elf::interpreter`, new in `libs/platform/elf` with five
+  linker's path comes from `Elf::interpreter`, new in `src/lib/platform/elf` with five
   tests, and is read before `execve`'s point of no return so a missing linker
   leaves the caller running. One latent bug went with it: the old refusal
   looked for `PT_INTERP` only on an `ET_DYN`, so a dynamically linked `ET_EXEC`
@@ -61,9 +61,9 @@ Three parts, in the order they can be tested:
   rather than three calls that only happen to exist separately.
 * **ferrousli's loader, 21 points — 18 done: a first version on 2026-09-20,
   the rest by 2026-09-22.** The
-  fifth item of `userland/ferrousli/README.md`: a dynamic loader in Rust, shipped as
+  fifth item of `src/user/linux/ferrousli/README.md`: a dynamic loader in Rust, shipped as
   ferrousli's `ld.so` with `libferrousli.so` beside `libferrousli.a`.
-  `userland/ferrousli/ld` reads `PT_DYNAMIC`, resolves `DT_NEEDED` libraries (through
+  `src/user/linux/ferrousli/ld` reads `PT_DYNAMIC`, resolves `DT_NEEDED` libraries (through
   `LD_LIBRARY_PATH` when a name carries no path of its own), looks symbols up
   through the GNU hash table, and applies `GLOB_DAT`, `JUMP_SLOT` and
   `IRELATIVE` relocations, then runs `DT_INIT_ARRAY` in dependency order and
@@ -170,7 +170,7 @@ Three parts, in the order they can be tested:
   several operations, and the one real one was a field written and never
   read.
 * **glibc's names, 13 points — 10 done on x86-64, 2026-09-21.**
-  `userland/ferrousli/tools/build-shared.sh` links `libferrousli.a` whole into a
+  `src/user/linux/ferrousli/tools/build-shared.sh` links `libferrousli.a` whole into a
   `libc.so.6` whose every symbol carries the version glibc gives it by
   default, from `tools/glibc-versions/x86_64.txt` (3,733 names, which
   `tools/gen-glibc-versions.py` reads out of glibc's own libraries: names and
@@ -224,7 +224,7 @@ somewhere the program would not look; the second puts each library in `/lib`,
 which glibc's linker and ferrousli's both search with no configuration. The
 built-in shell now reads the linker it names through the VFS, as a command
 from the initramfs already did, so the test binary is still one the
-repository does not carry. `scripts/fetch/fetch-debian-busybox.sh` fetches the one
+repository does not carry. `tools/common/fetch/fetch-debian-busybox.sh` fetches the one
 the exit names, pinned by checksum.
 
 **Exit,** in two halves, each a test of its own for the reason stage 7's is:
@@ -237,7 +237,7 @@ the exit names, pinned by checksum.
 
    **Met on 2026-09-21,** on all three architectures and at the first
    attempt: Debian 13's busybox 1.37.0-6+b9 with glibc 2.41-12+deb13u4's
-   linker, `libc.so.6` and `libresolv.so.2`, as `scripts/fetch/fetch-debian-busybox.sh`
+   linker, `libc.so.6` and `libresolv.so.2`, as `tools/common/fetch/fetch-debian-busybox.sh`
    lays them out —
 
    ```
@@ -291,7 +291,7 @@ the exit names, pinned by checksum.
 the library's port inside this stage on 2026-09-21, at ≈ 34 points of its
 own. ferrousli now builds for both, and its whole suite passes on each under
 QEMU 9.2.4's user mode — every unit test, and every C program at `-O0` and
-`-O2` — with x86-64's unchanged. `userland/ferrousli/README.md` says how to run it.
+`-O2` — with x86-64's unchanged. `src/user/linux/ferrousli/README.md` says how to run it.
 What it took: a system-call table per architecture, generated from the
 kernel's headers; the thread pointer, `clone` and TLS variant I, with the
 canary in `__stack_chk_guard`; `setjmp`, `va_list`, `fenv`, signal
@@ -317,7 +317,7 @@ customer means to run ferrousli on a rooted Pixel 7 that boots Ferrix
 itself, whose Tensor G2 is Cortex-X1, A78 and A55 cores. On AArch64
 `memcpy`, `memmove`, `memset`, `memcmp`, `memchr`, `strlen` and
 `strchrnul` work sixteen bytes at a time in Advanced SIMD registers
-(`userland/ferrousli/src/string/aarch64.rs`), which every AArch64 core has, so
+(`src/user/linux/ferrousli/src/string/aarch64.rs`), which every AArch64 core has, so
 nothing is chosen at run time; copies and fills of 64 bytes and more are
 one loop of `ldp`/`stp` register pairs. Counted with QEMU's instruction
 plugin on a Cortex-A55, at 4 KiB they take 1.8 to 5.3 times fewer
@@ -334,7 +334,7 @@ stage's points.
 
 **Done — `rustc`'s libraries on the loader, 2026-09-26.** Running the
 rustc volume on ferrousli (`docs/roadmap/stage-16-rustc.md`) took four
-changes to the loader, each with a test in `userland/ferrousli/ld/tests/link.rs`
+changes to the loader, each with a test in `src/user/linux/ferrousli/ld/tests/link.rs`
 that fails with it taken out: `$ORIGIN` and `${ORIGIN}` in a run path,
 from `/proc/self/exe` for the program and the path found for a library, and
 not for an `AT_SECURE` program; a program header table read from `e_phoff`

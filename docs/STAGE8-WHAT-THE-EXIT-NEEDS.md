@@ -60,7 +60,7 @@ Everything below was measured on 2026-09-13 against Alpine's `busybox-static`
 | 9 | `rmdir /tmp/vfs/deep /tmp/vfs` | 0 | |
 | 10 | `sh -c` *gone script* | 7 | `tmpfs: removed` |
 
-The scripts are in `xtask/src/vfs.rs`. The statuses are not zero for the same
+The scripts are in `tools/common/xtask/src/vfs.rs`. The statuses are not zero for the same
 reason stage 7's is 7: a shell that died and reported success cannot pass.
 
 **Output is checked, not just statuses, because the statuses lie.** Injecting
@@ -200,6 +200,6 @@ qemu-arm -strace ~/.local/share/ferrix/busybox/armv7a/bin/busybox.static cat /pr
 ```
 
 For the scripts, run `"$BB" sh -c "…"` under `strace -f` with each script from
-`xtask/src/vfs.rs`, with `/tmp` replaced by a scratch directory, and count the
+`tools/common/xtask/src/vfs.rs`, with `/tmp` replaced by a scratch directory, and count the
 pids in the trace. Wrap every fault-injection run in `timeout 10`, because
 refusing `dup2` hangs the shell.

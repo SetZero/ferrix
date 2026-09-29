@@ -8,5 +8,5 @@
   and `test-compositor` — run in the landing gates of `docs/BACKLOG.md`, not
   in CI.
 * The assembly allow-list is not added to without an argument in the diff.
-* Anything expressible as a pure function of bytes goes to `libs/` and gets a
+* Anything expressible as a pure function of bytes goes to `src/lib/` and gets a
   fuzz target and a Miri run — before it is called from the kernel, not after.

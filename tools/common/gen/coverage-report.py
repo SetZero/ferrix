@@ -3,7 +3,7 @@
 
 `docs/sysml/11-assurance.sysml` records the reachability problem plainly: a
 fuzzer cannot drive a page-fault handler and Miri cannot interpret a privileged
-instruction, so `kernel/` is reachable only by booting it. That left the kernel
+instruction, so `src/kernel/` is reachable only by booting it. That left the kernel
 with no structural coverage measurement at all, which is the single largest
 open objective for DO-178C DAL C (table A-7) and a recommended technique for
 EN 50716 SIL 2.
@@ -14,7 +14,7 @@ DWARF line table says which source statement each address belongs to. Intersect
 the two and you have statement coverage of ring 0, per certification ring.
 
     cargo xtask test-boot --arch x86_64 --accel tcg   # with FERRIX_QEMU_PLUGIN
-    python3 scripts/gen/coverage-report.py \
+    python3 tools/common/gen/coverage-report.py \
         --drcov /tmp/ferrix-cov.drcov \
         --elf target/x86_64-unknown-none/debug/ferrix-kernel
 
@@ -75,9 +75,9 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
-# `kernel/src/syscall/image.rs:` -- objdump groups the line table by source
+# `src/kernel/src/syscall/image.rs:` -- objdump groups the line table by source
 # file and prints the path, relative to the compilation directory, as a header.
 #
 # Some headers carry no directory at all (`mod.rs:`), which names a file this
@@ -105,7 +105,7 @@ LINE_ROW = re.compile(r"^\S+\s+(\d+|-)\s+(0x[0-9a-fA-F]+)\s*(\d*)\s*(x?)\s*$")
 def load_gate():
     """Reuse the boundary gate's classifier so both agree on the rings."""
     spec = importlib.util.spec_from_file_location(
-        "boundary", ROOT / "scripts" / "check" / "check-item-boundary.py"
+        "boundary", ROOT / "tools" / "common" / "check" / "check-item-boundary.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -181,8 +181,8 @@ def trace_slide(trace: Path, given: int | None) -> int:
 
     The trace holds the addresses the kernel ran at; the line table holds the
     ones it was linked at. The loader moves the image each boot and prints the
-    difference (`boot/uefi/src/kaslr.rs`), and xtask writes it beside the trace as
-    `<trace>.slide` (`xtask/src/kaslr.rs`). `--slide` overrides it for every
+    difference (`src/boot/common/uefi/src/kaslr.rs`), and xtask writes it beside the trace as
+    `<trace>.slide` (`tools/common/xtask/src/kaslr.rs`). `--slide` overrides it for every
     trace; a trace with neither is taken to be of a kernel that did not move,
     as one built `--mitigations off` or booted with `nokaslr` does not.
     """
@@ -261,9 +261,9 @@ def kernel_of(trace: Path, default: Path) -> Path:
 
 def relative(path: str) -> str | None:
     """A line-table path as the boundary gate names it; None outside the kernel."""
-    if "kernel/src/" not in path:
+    if "src/kernel/src/" not in path:
         return None
-    return path.split("kernel/src/", 1)[1]
+    return path.split("src/kernel/src/", 1)[1]
 
 
 def statements_reached(

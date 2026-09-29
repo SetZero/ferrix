@@ -1,6 +1,6 @@
 //! The generated interface tables, one module per vendored protocol.
 //!
-//! Written by `scripts/gen/gen-wayland-protocol.py`; `cargo xtask check` runs it
+//! Written by `tools/common/gen/gen-wayland-protocol.py`; `cargo xtask check` runs it
 //! with `--check`, so an edit here that the XML does not justify fails the
 //! gate. This file is the only hand-written one in the directory.
 

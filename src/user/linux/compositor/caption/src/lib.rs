@@ -1,7 +1,7 @@
 //! `caption`: a line of text in a named font on a layer surface.
 //!
 //! The smallest program built on the desktop clients' whole foundation --
-//! `userland/compositor/toolkit` for the surface, `userland/compositor/text` for the font --
+//! `src/user/linux/compositor/toolkit` for the surface, `src/user/linux/compositor/text` for the font --
 //! and what `cargo xtask test-compositor`'s `caption` boot runs with the
 //! user's own font carried in. The same code draws the same pixels on the
 //! host with `--render`, which is the picture the boot's screendump is

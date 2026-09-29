@@ -2,7 +2,7 @@
 //! is equal only to one with the same entry, stack and mode.
 //!
 //! Verification, not the trap path: a file of its own so that the manifest
-//! counts it as the test it is (`scripts/data/certification-item.json`,
+//! counts it as the test it is (`tools/common/data/certification-item.json`,
 //! `test_file_patterns`). Every architecture's trap check runs it; x86-64's
 //! adds the one mode only it has, `Abi::Compat`.
 

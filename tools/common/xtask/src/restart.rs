@@ -90,7 +90,7 @@ const LINKS: &[u8] = b"for n in /sys/class/net/*; do [ \"${n##*/}\" = lo ] && co
 /// What the file line prints once it has read back what it wrote on `/`.
 const FILE_TAG: &str = "restart-gate-file=";
 
-/// Where `userland/compositor/evecho` is carried, which prints every event
+/// Where `src/user/linux/compositor/evecho` is carried, which prints every event
 /// the input devices deliver.
 const EVECHO: &str = "/bin/evecho";
 
@@ -192,7 +192,7 @@ pub(crate) fn test_restart(args: &Args) -> Result<()> {
     }
     let bytes = std::fs::read(&shell)
         .map_err(|error| Error::new(format!("reading {}: {error}", shell.display())))?;
-    // A program holding the card when its driver dies: `userland/compositor/blank`
+    // A program holding the card when its driver dies: `src/user/linux/compositor/blank`
     // sets a mode, shows a buffer and waits, as a compositor's card stays open.
     let blank = crate::display::build_blank(arch, false)?;
     let mut carried = ports::installed(arch)?;

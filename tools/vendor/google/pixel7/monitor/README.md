@@ -7,7 +7,7 @@ USB with adb authorised, and nothing else: no Claude, no terminal.
   after a `fastboot boot`), or not connected, with a strip along the top
   that colours the last ten minutes by state.
 * **Boot Ferrix** natively, through the launcher's helper
-  (`tools/pixel7/helper.py`). If the helper is not running,
+  (`tools/vendor/google/pixel7/helper.py`). If the helper is not running,
   the monitor starts it. While the phone is away the boot card follows the
   helper's phase, and when Android is back it loads the run's `ramoops`
   record.
@@ -34,7 +34,7 @@ USB with adb authorised, and nothing else: no Claude, no terminal.
   * **Battery**: draw and voltage.
   * **crosvm**: processor use and resident memory while a guest runs.
 * **Ferrix's own stats**, on the graphs' second tab, from `ferrix-statd`
-  (`userland/statd/`), Ferrix's stat service:
+  (`src/user/linux/statd/`), Ferrix's stat service:
   * **CPU**: load, overall and per processor.
   * **Memory**: used and cached.
   * **Rates**: interrupts and context switches a second.
@@ -63,7 +63,7 @@ npm packages; the charts are its own, on a canvas (`ui/chart.js`). It is a
 Cargo workspace of its own, outside the directories Ferrix's gates read.
 
 ```sh
-cd tools/pixel7/monitor
+cd tools/vendor/google/pixel7/monitor
 cargo run --release            # or: cargo tauri dev
 ```
 

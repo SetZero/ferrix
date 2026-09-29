@@ -951,7 +951,7 @@ struct Client {
     /// Only the first is: a USB mouse reports up to a thousand times a
     /// second, and on a DK1 a line per motion kept one of its two cores
     /// writing to the serial console for as long as the mouse moved. Nothing
-    /// reads the positions -- `xtask/src/seat.rs` waits for the enter and the
+    /// reads the positions -- `tools/common/xtask/src/seat.rs` waits for the enter and the
     /// buttons -- and the first one after an enter is enough to see where the
     /// pointer came in.
     pointer_placed: bool,
@@ -2120,7 +2120,7 @@ impl Client {
             .unwrap_or(0);
         let buffer = *BUFFERS.get(slot).unwrap_or(&id::BUFFER);
 
-        // The pattern itself, drawn by `userland/compositor/render` so the client and
+        // The pattern itself, drawn by `src/user/linux/compositor/render` so the client and
         // the expected image are made from one piece of code.
         let size = (
             u32::try_from(width).unwrap_or(0),

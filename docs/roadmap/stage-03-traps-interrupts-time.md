@@ -51,7 +51,7 @@ say why.
   under tcg and kvm alike — tcg implements the debug registers and delivers
   the NMI.
 * AArch64 — the `VBAR_EL1` vector table and its handlers.
-* One dispatch path above both (`kernel/src/trap.rs`), reached only through the
+* One dispatch path above both (`src/kernel/src/trap.rs`), reached only through the
   architecture facade — `TrapFrame`, `classify`, `report_trap` — so generic code
   still never names a CPU.
 
@@ -84,7 +84,7 @@ between a program and an operating system.
   wide — capability bit 13, and common on AMD chipsets — wraps every five
   minutes, so it is not handed out as the counter: the TSC is calibrated
   against it, subtracting in 32 bits, and used instead. QEMU's HPET is
-  64-bit, so the boot test does not reach that path; `libs/platform/acpi`'s `hpet`
+  64-bit, so the boot test does not reach that path; `src/lib/platform/acpi`'s `hpet`
   module holds its arithmetic and its tests. Since 2026-09-19 an invariant
   TSC (`CPUID.80000007H:EDX[8]`) is the counter whenever the processor has
   one, measured against the HPET, because every HPET read is a device access

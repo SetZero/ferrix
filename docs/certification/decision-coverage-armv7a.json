@@ -5,7 +5,7 @@
     "when executed blocks began at its target and at its",
     "fall-through. `guards` are branches one of whose",
     "successors runs straight into a panic. Written by",
-    "scripts/gen/decision-coverage.py; VERIFICATION.md 3.6."
+    "tools/common/gen/decision-coverage.py; VERIFICATION.md 3.6."
   ],
   "arch": "armv7a",
   "profile": "debug",

@@ -5,7 +5,7 @@
 //! expressions, and the compositor finds the window it picks out. Hyprland
 //! reads them in `CViewQuery::bySelector`, and this is that function.
 //!
-//! It is here and not in `userland/compositor/layout` because the layout holds a
+//! It is here and not in `src/user/linux/compositor/layout` because the layout holds a
 //! window's place and nothing about what it is called: a title, an
 //! application id and a process are the compositor's, so the selecting is
 //! too.

@@ -15,7 +15,7 @@ package FerrixLifecycle {
          *                every architecture it applies to: the boot test
          *                itself, or a named `cargo xtask test-*` gate.
          * #inProgress    the owning stage has started; part of the element runs.
-         * #writtenAhead  a `libs/` crate exists and passes its host tests, but
+         * #writtenAhead  a `src/lib/` crate exists and passes its host tests, but
          *                no gate exercises it yet through the kernel or a
          *                program in the image.
          * #planned       only the design exists, in docs/ARCHITECTURE.md.

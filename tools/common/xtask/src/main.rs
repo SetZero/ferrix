@@ -186,8 +186,8 @@ USAGE:
 COMMANDS:
     build         Compile the loader and kernel and write a bootable image
     run           Boot the image under QEMU, attached to the terminal
-    run-compositor  Boot userland/compositor/hyprix as init with a virtio-gpu, on a screen this host can show
-    run-badapple  Boot userland/media/badapple as init: all of Bad Apple!! in a window, heard on this host's sound server (scripts/fetch/fetch-badapple.sh first)
+    run-compositor  Boot src/user/linux/compositor/hyprix as init with a virtio-gpu, on a screen this host can show
+    run-badapple  Boot src/user/linux/media/badapple as init: all of Bad Apple!! in a window, heard on this host's sound server (tools/common/fetch/fetch-badapple.sh first)
     remote-desktop  Send this tree to another machine, boot the desktop there and watch it here over VNC
     wallpapers    Convert pictures for run-compositor's desktop and keep them on this machine
     everything-volume  Make run-compositor --everything's volume from the fetched ones (on Windows, in WSL)
@@ -202,20 +202,20 @@ COMMANDS:
     test-net      Boot with a network device and require busybox to configure it and fetch a file
     test-clipboard  Boot the desktop with its clipboard port on a socket xtask speaks vdagent over, and carry text both ways
     test-adb      Boot adbd with a network, and drive it with this machine's adb: shell, push, pull, forward, reboot
-    test-display  Boot userland/compositor/blank as init with a virtio-gpu, and require its colour on every pixel
-    test-compositor  Boot userland/compositor/hyprix as init with a virtio-gpu, and require its background on every pixel
+    test-display  Boot src/user/linux/compositor/blank as init with a virtio-gpu, and require its colour on every pixel
+    test-compositor  Boot src/user/linux/compositor/hyprix as init with a virtio-gpu, and require its background on every pixel
     test-video    Boot a wallpaper that moves and require the screen to show its frames in turn
-    test-input    Boot userland/compositor/evecho as init with virtio-input, send a key and a touch over QMP, and require them back
-    test-audio    Boot userland/compositor/tone as init with virtio-snd, play a second of a counter, and require every frame back from QEMU's wav file
-    test-badapple Boot userland/media/badapple as init, play 30 s of Bad Apple!!, and require the held frame on the screen, the song in QEMU's wav file, and the two in step
+    test-input    Boot src/user/linux/compositor/evecho as init with virtio-input, send a key and a touch over QMP, and require them back
+    test-audio    Boot src/user/linux/compositor/tone as init with virtio-snd, play a second of a counter, and require every frame back from QEMU's wav file
+    test-badapple Boot src/user/linux/media/badapple as init, play 30 s of Bad Apple!!, and require the held frame on the screen, the song in QEMU's wav file, and the two in step
     test-seat     Boot the compositor with a client, type into it over QMP, and require the key and the keybind to land
-    test-pty      Boot userland/compositor/term as init, run a program on a pseudoterminal, and require its output back
+    test-pty      Boot src/user/linux/compositor/term as init, run a program on a pseudoterminal, and require its output back
     test-foot     Boot the compositor with foot, the ported Wayland terminal, and require its font and its text on screen
     test-vkgears  Boot the compositor with vkgears and the Venus card, and require it drew frames on the host's GPU (Linux hosts)
     test-jobs     Boot an interactive shell on the console, type a session with jobs at it, and require the answers
     test-init     Boot /sbin/init as pid 1, type at the shell its getty gives, and require its session, a failing
                   service's restart budget, a service's cgroup, and a shutdown btrfs check finds clean
-    bench-seam    Boot a stock Linux kernel on the same QEMU machine and time a 4 KiB O_DIRECT read of the pattern disk at depths 1 and 32: the in-kernel reference for the seam boot line (scripts/fetch/fetch-linux-reference.sh first)
+    bench-seam    Boot a stock Linux kernel on the same QEMU machine and time a 4 KiB O_DIRECT read of the pattern disk at depths 1 and 32: the in-kernel reference for the seam boot line (tools/common/fetch/fetch-linux-reference.sh first)
     test-auth     Boot init with authd, type at the shell its getty gives, and require each refusal of
                   docs/AUTH.md: a wrong password, an unknown account, a user naming another, the throttle
                   (with --sabotage NAME, against an authd with that refusal turned off, which must fail)
@@ -228,16 +228,16 @@ COMMANDS:
                   EINTR, EIDRM and timeouts (--i686: 32-bit x86, through ipc(117), as Steam calls them)
     test-procfs   Boot procfs-test as init and require /proc/self/fd links to stat as fstat (sockets, anonymous files, a pipe,
                   a memfd), /proc/net/tcp's inode to match, and every /proc inode number to fit 32 bits (--i686: 32-bit x86)
-    test-rustc    Attach the rustc volume scripts/fetch/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
-    test-chrome   Attach the volume scripts/fetch/fetch-chrome.sh makes, and require headless Chrome to run a page's script and draw it
-    test-steamcmd Attach the volume scripts/fetch/fetch-steamcmd.sh makes, and require Valve's 32-bit steamcmd to update itself
+    test-rustc    Attach the rustc volume tools/common/fetch/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
+    test-chrome   Attach the volume tools/common/fetch/fetch-chrome.sh makes, and require headless Chrome to run a page's script and draw it
+    test-steamcmd Attach the volume tools/common/fetch/fetch-steamcmd.sh makes, and require Valve's 32-bit steamcmd to update itself
                   and log in to Steam anonymously, over the network
-    test-steam-bootstrap  Attach the volume scripts/fetch/fetch-steam.sh makes, and require Valve's steam.sh to update the
+    test-steam-bootstrap  Attach the volume tools/common/fetch/fetch-steam.sh makes, and require Valve's steam.sh to update the
                   client and run it until it asks for an X display, over the network
-    test-steam-window  Attach the volume scripts/fetch/fetch-steam-window.sh makes, and require Steam's sign-in window
+    test-steam-window  Attach the volume tools/common/fetch/fetch-steam-window.sh makes, and require Steam's sign-in window
                   on hyprix, drawn through yserver, over the network (docs/STEAM.md)
     run-steam     The same boot, the screen dumped into build/x86_64/steam/ every few seconds until the timeout
-    test-yserver  Attach the volume scripts/fetch/fetch-yserver.sh makes, start yserver headless on lavapipe and require xdpyinfo
+    test-yserver  Attach the volume tools/common/fetch/fetch-yserver.sh makes, start yserver headless on lavapipe and require xdpyinfo
                   to reach it
     test-xwindow  The same volume, yserver as a client of the compositor: its root must be the screen's size, and xev's window
                   one of the compositor's, by title and class and on the screen, the server started as
@@ -248,7 +248,7 @@ COMMANDS:
     bench-chrome-video  Chrome playing a video with its sound: processor time, frames shown and dropped, underruns, and gaps in what the card played
     test-selfhost  Run `cargo xtask build` on Ferrix from that toolchain and this checkout, and boot the image it made;
                   with --plan DIR, have Ferrix make every build a FERRIX_BUILDS=record:DIR run wrote down
-    builds-execute  Make every build in --plan DIR here, keeping the outputs in DIR/store (see xtask/src/builds.rs)
+    builds-execute  Make every build in --plan DIR here, keeping the outputs in DIR/store (see tools/common/xtask/src/builds.rs)
     coverage      Run every boot gate under QEMU's drcov plugin (FERRIX_DRCOV) with --init, and
                   require the certified item's statement coverage to hold its recorded floor
     check         Run every quality gate (fmt, clippy, layering, audits, tests, docs)
@@ -297,7 +297,7 @@ OPTIONS:
     --no-dotfiles                        run-compositor: carry --config's file alone, without the
                                          directories and fonts beside it
     --chrome                             run-compositor: Chrome on the desktop, from the volume
-                                         scripts/fetch/fetch-chrome.sh makes; SUPER+B opens another
+                                         tools/common/fetch/fetch-chrome.sh makes; SUPER+B opens another
     --everything                         run-compositor: all of it at once -- --gl, --release,
                                          --clipboard, --chrome, and rustc and cargo in the shell,
                                          from one volume made of the rustc and Chrome ones; and
@@ -345,7 +345,7 @@ OPTIONS:
                                          hypr, waybar and fuzzel next to the one PATH is in go
                                          to the guest's $HOME/.config (HOME is /), and the font
                                          families they name, resolved here with fc-match, to
-                                         /usr/share/fonts/host (xtask/src/dotfiles.rs);
+                                         /usr/share/fonts/host (tools/common/xtask/src/dotfiles.rs);
                                          remote-desktop: the file of answers to read instead of
                                          the ones searched [or $FERRIX_REMOTE]
     --host <DESTINATION>                 remote-desktop: the machine to boot on, as `ssh` names

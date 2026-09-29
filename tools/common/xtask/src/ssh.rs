@@ -4,7 +4,7 @@
 //! guest's port 22 and starts `sshdt` there from the compositor's own
 //! `exec-once`, so `ssh -p 2222 root@127.0.0.1` reaches the guest as soon as
 //! it is up. The server is the one `cargo xtask ports` builds
-//! (`userland/ferrousli/tools/ports/sshdt`); without it the forward leads nowhere and
+//! (`src/user/linux/ferrousli/tools/ports/sshdt`); without it the forward leads nowhere and
 //! the boot says so.
 //!
 //! # Who may log in

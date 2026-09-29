@@ -2,7 +2,7 @@
 //!
 //! The other two loaders come out of rustc as PE32+ images, because their
 //! targets are UEFI targets. rustc has no 32-bit Arm UEFI target, so this
-//! loader is linked as an ELF32 static PIE by `boot/uefi/linker/armv7a.ld` and
+//! loader is linked as an ELF32 static PIE by `src/boot/common/uefi/linker/armv7a.ld` and
 //! converted here: each loadable segment becomes a section at the same
 //! address, and each `R_ARM_RELATIVE` relocation becomes a PE base relocation
 //! at the same address. That is what systemd's `elf2efi.py` does for its own
@@ -174,7 +174,7 @@ fn segments(elf: &Elf<'_>) -> Result<Vec<Section>> {
             return Err(fail(format!(
                 "a segment at {rva:#x} where {next:#x} was expected. The first must start \
                  at {SECTION_ALIGNMENT:#x}, above the headers, and each must follow the \
-                 last on the next page; see boot/uefi/linker/armv7a.ld"
+                 last on the next page; see src/boot/common/uefi/linker/armv7a.ld"
             )));
         }
 
@@ -219,7 +219,7 @@ const SWITCH_PAGE: u64 = 4096;
 
 /// Check the loader's switch block can be copied to a trampoline page.
 ///
-/// `boot/uefi/src/arch/armv7a.rs` runs its switch either where it is or from a copy
+/// `src/boot/common/uefi/src/arch/armv7a.rs` runs its switch either where it is or from a copy
 /// on a page below the split. A copy runs only if nothing in the block names
 /// an absolute address — which, in a static PIE, is exactly a relocation site
 /// inside it — and if it fits the one page the loader allocates. Both are

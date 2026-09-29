@@ -2,7 +2,7 @@
 # Builds aplay and speaker-test from alsa-utils 1.2.16, static against
 # ferrousli and tools/ports/alsa-lib (docs/AUDIO.md, U1).
 #
-#     tools/ports/alsa-utils/build.sh [--arch <arch>]    # from userland/ferrousli/
+#     tools/ports/alsa-utils/build.sh [--arch <arch>]    # from src/user/linux/ferrousli/
 #
 # Needs tools/ports/alsa-lib built first. Installs, under $FERRIX_PORTS (see
 # ../common.sh):

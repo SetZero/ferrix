@@ -5,7 +5,7 @@
 //! The same argument as the other two architectures': a function that returns
 //! onto another stack cannot be written in Rust. What is particular to this
 //! one is which stack. Every exception on ARMv7-A is taken into a mode with
-//! its own banked stack pointer, and `kernel/src/arch/armv7a/trap.rs` answers
+//! its own banked stack pointer, and `src/kernel/src/arch/armv7a/trap.rs` answers
 //! that by keeping everything on the SVC-mode stack — so a task's context is
 //! its SVC stack pointer, and this saves and restores exactly that.
 //!

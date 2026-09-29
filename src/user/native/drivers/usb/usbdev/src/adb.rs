@@ -228,7 +228,7 @@ impl Bridge {
 
 /// A header's payload length, if it is a header: the magic word is the
 /// command's complement, and the length is at most [`MAX_PAYLOAD`]. The two
-/// words `libs/proto/adb`'s `Header::decode` checks, read here by hand so
+/// words `src/lib/proto/adb`'s `Header::decode` checks, read here by hand so
 /// the driver needs no allocator.
 fn payload_length(head: &[u8]) -> Option<usize> {
     let word = |at: usize| {

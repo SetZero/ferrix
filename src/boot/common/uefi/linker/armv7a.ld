@@ -2,7 +2,7 @@
  *
  * The other two loaders come out of rustc as PE32+ images and need no script.
  * There is no ARMv7 UEFI target, so this one is linked as an ELF32 static PIE
- * and turned into a PE32 UEFI application by xtask/src/pe.rs -- and that
+ * and turned into a PE32 UEFI application by tools/common/xtask/src/pe.rs -- and that
  * converter's input contract is this file:
  *
  *   * three PT_LOADs -- read-execute, read-only, read-write -- each starting

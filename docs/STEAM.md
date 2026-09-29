@@ -14,7 +14,7 @@ kernel.
 ## 1. Running it
 
 ```
-scripts/fetch/fetch-steam-window.sh     # once: the volume, about 7 GB sparse
+tools/common/fetch/fetch-steam-window.sh     # once: the volume, about 7 GB sparse
 cargo xtask test-steam-window           # the gate: waits for the window, judges the screen
 cargo xtask run-steam                   # the same boot, screens dumped until the timeout
 ```
@@ -40,7 +40,7 @@ hyprix's that fills the screen, the rest of the tile black.
 
 **On the desktop.** Once the volume has been made, `cargo xtask
 run-compositor --everything` merges its tree into the desktop's volume and
-starts Steam beside Chrome and a terminal: `scripts/steam/desktop.sh` waits
+starts Steam beside Chrome and a terminal: `tools/common/steam/desktop.sh` waits
 for the desktop's yserver on `:0` and runs the client's half as uid 1000,
 its output in the guest's `/tmp/steam.log`. The guest has 16 GiB then,
 unless `--memory` says otherwise. Steam's tree carries its own yserver, so
@@ -52,12 +52,12 @@ desktop's volume is attached under `snapshot=on` too, so every boot does.
 
 | Piece | Where | What |
 |---|---|---|
-| The volume | `scripts/fetch/fetch-steam-window.sh` | yserver's tree (`fetch-yserver.sh`, the fork at its pinned commit), Valve's bootstrap and the Debian tools under it (`fetch-steam.sh`), i386 Mesa with llvmpipe for the 32-bit client's own GL UI, i386 libstdc++, Debian's amd64 `lsof`, and the workarounds compiled |
-| The boot | `xtask/src/compositor/steam_window.rs` | hyprix, the links the volume's programs need, the scripts below, a `uname` that says `Linux` |
-| The root half | `scripts/steam/run.sh` | yserver on `:0` as a Wayland client of hyprix, a lease, then the client's half as uid 1000; a watcher for the window's title |
-| The client's half | `scripts/steam/client.sh` | `ubuntu12_32/steam` started directly with `steam.sh`'s environment, again while it exits 42 |
-| Stand-ins | `scripts/steam/_v2-entry-point`, `logger-0.bash`, `lsof` | see §3 |
-| Shims | `scripts/steam/workarounds/*.c` | see §3; each file's header names its gap and owner |
+| The volume | `tools/common/fetch/fetch-steam-window.sh` | yserver's tree (`fetch-yserver.sh`, the fork at its pinned commit), Valve's bootstrap and the Debian tools under it (`fetch-steam.sh`), i386 Mesa with llvmpipe for the 32-bit client's own GL UI, i386 libstdc++, Debian's amd64 `lsof`, and the workarounds compiled |
+| The boot | `tools/common/xtask/src/compositor/steam_window.rs` | hyprix, the links the volume's programs need, the scripts below, a `uname` that says `Linux` |
+| The root half | `tools/common/steam/run.sh` | yserver on `:0` as a Wayland client of hyprix, a lease, then the client's half as uid 1000; a watcher for the window's title |
+| The client's half | `tools/common/steam/client.sh` | `ubuntu12_32/steam` started directly with `steam.sh`'s environment, again while it exits 42 |
+| Stand-ins | `tools/common/steam/_v2-entry-point`, `logger-0.bash`, `lsof` | see §3 |
+| Shims | `tools/common/steam/workarounds/*.c` | see §3; each file's header names its gap and owner |
 
 The client runs as uid 1000: run as root, it moves its effective uid to the
 home's owner partway through, and GTK2's setuid check then exits

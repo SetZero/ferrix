@@ -5,7 +5,7 @@
 //!
 //! # Three programs, as the criterion names them
 //!
-//! The kernel starts each one itself (`kernel/src/init.rs`), in order, over
+//! The kernel starts each one itself (`src/kernel/src/init.rs`), in order, over
 //! one tmpfs. The third is a shell script, and this busybox's shell starts
 //! every applet that touches a file -- `mkdir`, `mv`, `ln`, `cat`, `rm`,
 //! `rmdir` -- with `fork`, `execve` and `wait4`, none of its builtins making,
@@ -35,7 +35,7 @@
 //!
 //! # The log
 //!
-//! `kernel/src/init.rs` writes `  init     command N: ARGV` before command `N`
+//! `src/kernel/src/init.rs` writes `  init     command N: ARGV` before command `N`
 //! and `  init     command N exited with S` after it, and reports each call
 //! answered `ENOSYS` in between as `  syscall  ...`. Everything else between the
 //! two is the program's. Kernel lines start with two spaces and no program
@@ -428,7 +428,7 @@ const PERMISSIONS_UNDER_UUTILS: Expect = Expect::Shaped(&[
     // and the file is not this user's, and busybox says so. uutils says
     // "Permission denied". What the row is for holds either way -- the removal
     // was refused -- and the errno the kernel returns is checked where it is
-    // decided, in `kernel/src/fs`.
+    // decided, in `src/kernel/src/fs`.
     "rm: cannot remove '/tmp/dac-private': Permission denied",
     // Two of uutils' messages name no file, and read as a Rust error rather
     // than a C one. Recorded as they are rather than tidied with a `*`, so
@@ -602,7 +602,7 @@ umount /tmp/co
 exit 6
 "#;
 
-/// The list as `kernel/build.rs` takes it: each argument ends in a NUL, and
+/// The list as `src/kernel/build.rs` takes it: each argument ends in a NUL, and
 /// each command in an empty argument.
 ///
 /// # Errors
@@ -1078,7 +1078,7 @@ pub(crate) const SHELL: &[Command] = &[
 /// * `diff` and `cmp`, from diffutils, which is a multicall binary again.
 ///
 /// Each is an `sh -c` script, because the kernel starts every command with
-/// `/bin/busybox` (`kernel/src/init.rs`): the shell is what forks and execs
+/// `/bin/busybox` (`src/kernel/src/init.rs`): the shell is what forks and execs
 /// something else. Each ends in a status of its own, for the reason the rest
 /// of this file's scripts do.
 pub(crate) const UTILITIES: &[Command] = &[
@@ -1178,7 +1178,7 @@ pub(crate) fn utilities(utilities: Utilities) -> &'static [Command] {
 }
 
 /// What crosses the seam, read last so it counts every command above: the
-/// kernel's counters from boot (`kernel/src/fs/seam.rs`), for the second
+/// kernel's counters from boot (`src/kernel/src/fs/seam.rs`), for the second
 /// "seam measured" row of `docs/BACKLOG.md` (`docs/OPAQUE-KERNEL.md`, S0).
 pub(crate) const SEAM: &[Command] = &[Command {
     argv: &["cat", "/proc/ferrix-seam"],

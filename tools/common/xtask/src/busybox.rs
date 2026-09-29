@@ -1,4 +1,4 @@
-//! ferrousli's busybox: built by `userland/ferrousli/tools/busybox/build.sh`, or on
+//! ferrousli's busybox: built by `src/user/linux/ferrousli/tools/busybox/build.sh`, or on
 //! Windows by `build-windows.sh` beside it, and installed as
 //! `<arch>/bin/busybox.static` under `~/.local/share/ferrix/busybox/ferrousli`
 //! (or `$FERRIX_BUSYBOX`), where `--init ferrousli` finds it.
@@ -29,7 +29,7 @@ fn root() -> Result<PathBuf> {
     ferrousli::install_root(VAR, HOME_SEGMENTS, "ferrousli's busybox")
 }
 
-/// Run by `bash -c` in `userland/ferrousli/`, with `$1` the build script in
+/// Run by `bash -c` in `src/user/linux/ferrousli/`, with `$1` the build script in
 /// `tools/busybox/`, `$2` the directory to install into and `$3` the
 /// architecture.
 ///
@@ -70,7 +70,7 @@ fn refuse_unbuildable(arch: Arch) -> Result<()> {
 }
 
 /// What a busybox built against ferrousli is made from, relative to
-/// `userland/ferrousli/`: the library and its entry object, and the pinned busybox
+/// `src/user/linux/ferrousli/`: the library and its entry object, and the pinned busybox
 /// sources and configuration the build scripts use.
 const INPUTS: &[&str] = &[
     "Cargo.toml",
@@ -104,7 +104,7 @@ pub(crate) fn program(arch: Arch) -> Result<PathBuf> {
     refuse_unbuildable(arch)?;
     let root = root()?;
     let program = installed(&root, arch);
-    let ferrousli = crate::paths::workspace_root().join("userland/ferrousli");
+    let ferrousli = crate::paths::workspace_root().join("src/user/linux/ferrousli");
     if !crate::builds::active() && ferrousli::stale(&program, &ferrousli, INPUTS).is_none() {
         return Ok(program);
     }
@@ -136,7 +136,7 @@ pub(crate) fn build(arch: Arch) -> Result<PathBuf> {
 fn build_locked(arch: Arch, root: &Path) -> Result<PathBuf> {
     let root = root.to_path_buf();
     let program = installed(&root, arch);
-    let ferrousli = crate::paths::workspace_root().join("userland/ferrousli");
+    let ferrousli = crate::paths::workspace_root().join("src/user/linux/ferrousli");
 
     // Linux builds through `crate::builds`; this is the Windows build.
     if !cfg!(windows) {
@@ -157,7 +157,7 @@ fn build_locked(arch: Arch, root: &Path) -> Result<PathBuf> {
     ]);
     ferrousli::in_ferrousli(&mut command, &ferrousli);
 
-    let description = format!("userland/ferrousli/tools/busybox/{script}");
+    let description = format!("src/user/linux/ferrousli/tools/busybox/{script}");
     if let Err(error) = cargo::run(command, &description) {
         let list = root.join(ferrousli::UNDEFINED);
         return Err(match std::fs::read_to_string(&list) {
@@ -182,13 +182,15 @@ fn build_locked(arch: Arch, root: &Path) -> Result<PathBuf> {
 /// download from `root/src`.
 fn build_here(arch: Arch, root: &Path) -> Result<PathBuf> {
     let program = installed(root, arch);
-    let ferrousli = crate::paths::workspace_root().join("userland/ferrousli");
-    let mut build =
-        crate::builds::Build::bash("userland/ferrousli/tools/busybox/build.sh", &ferrousli)
-            .args(["-c", SCRIPT, "bash", "build.sh"])
-            .args([root.as_os_str(), std::ffi::OsStr::new(arch.name())])
-            .reads_dir(root.join("src"))
-            .output(&program);
+    let ferrousli = crate::paths::workspace_root().join("src/user/linux/ferrousli");
+    let mut build = crate::builds::Build::bash(
+        "src/user/linux/ferrousli/tools/busybox/build.sh",
+        &ferrousli,
+    )
+    .args(["-c", SCRIPT, "bash", "build.sh"])
+    .args([root.as_os_str(), std::ffi::OsStr::new(arch.name())])
+    .reads_dir(root.join("src"))
+    .output(&program);
     if let Some(dir) = ferrousli::target_dir(std::env::var_os("CARGO_TARGET_DIR")) {
         build = build.env("CARGO_TARGET_DIR", dir);
     }

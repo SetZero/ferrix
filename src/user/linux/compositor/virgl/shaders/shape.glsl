@@ -1,6 +1,6 @@
 // Whether the pixel whose centre is `p` is inside `rect` (x, y, width,
 // height) with its corners cut to `radius` by a superellipse of `power`:
-// `rounding.glsl`'s curve, all or nothing, as userland/compositor/render's
+// `rounding.glsl`'s curve, all or nothing, as src/user/linux/compositor/render's
 // `corner_inset` cuts it.
 float inside(vec2 p, vec4 rect, float radius, float power) {
     vec2 lo = rect.xy + radius;

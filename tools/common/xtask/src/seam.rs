@@ -2,10 +2,10 @@
 //! (`docs/BACKLOG.md`, "the seam measured, 1"; `docs/OPAQUE-KERNEL.md`, S0).
 //!
 //! Ferrix's boot measures a 4 KiB read of the pattern disk through the block
-//! ring and its ring-3 driver, at depths 1 and 32 (`kernel/src/block_ring/
+//! ring and its ring-3 driver, at depths 1 and 32 (`src/kernel/src/block_ring/
 //! hop_check.rs`, the `seam` boot line). This boots a stock Linux kernel --
 //! Debian 13's cloud kernel, fetched and pinned by
-//! `scripts/fetch/fetch-linux-reference.sh`, its driver in ring 0 -- on the
+//! `tools/common/fetch/fetch-linux-reference.sh`, its driver in ring 0 -- on the
 //! same QEMU machine, IOMMU and all, and reads the same disk with
 //! `dd iflag=direct`: one `dd` of 1024 reads for depth 1, and 32 at once of 32
 //! reads each for depth 32. Each `dd`'s time over its reads is its mean
@@ -83,7 +83,7 @@ fn reference_dir(arch: Arch) -> PathBuf {
 fn fetched(path: &Path) -> Result<Vec<u8>> {
     std::fs::read(path).map_err(|error| {
         Error::new(format!(
-            "reading {}: {error}; scripts/fetch/fetch-linux-reference.sh fetches the reference \
+            "reading {}: {error}; tools/common/fetch/fetch-linux-reference.sh fetches the reference \
              kernel, and the static busybox is the one test-shell uses",
             path.display()
         ))

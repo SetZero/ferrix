@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Draw the roadmap's burndown and Gantt charts as SVG.
 
-    python3 scripts/gen/gen-roadmap-charts.py
+    python3 tools/common/gen/gen-roadmap-charts.py
 
 writes docs/img/burndown.svg and docs/img/gantt.svg. It uses the standard
 library only, so it runs wherever the other gen-* scripts do. The numbers
@@ -13,7 +13,7 @@ import math
 from datetime import date, timedelta
 from pathlib import Path
 
-OUT = Path(__file__).resolve().parent.parent.parent / "docs" / "img"
+OUT = Path(__file__).resolve().parent.parent.parent.parent / "docs" / "img"
 
 TODAY = date(2026, 9, 26)
 

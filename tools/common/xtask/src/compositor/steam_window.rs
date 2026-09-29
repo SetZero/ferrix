@@ -1,18 +1,18 @@
 //! `run-steam` and `test-steam-window`: Valve's Steam client in a window of
 //! hyprix, drawn through yserver, on Ferrix (`docs/STEAM.md`).
 //!
-//! The image boots hyprix, whose `exec-once` runs `scripts/steam/run.sh`:
+//! The image boots hyprix, whose `exec-once` runs `tools/common/steam/run.sh`:
 //! yserver on `:0` as a Wayland client of hyprix, a lease for `eth0`, then
-//! `scripts/steam/client.sh` as uid 1000, which starts the 32-bit
+//! `tools/common/steam/client.sh` as uid 1000, which starts the 32-bit
 //! `ubuntu12_32/steam` from the volume. From the bootstrap, that downloads
 //! and installs the client (about 500 MB), restarts, and the client opens
 //! its sign-in window, drawn by `steamwebhelper` (Chromium).
 //!
 //! # The volume
 //!
-//! `scripts/fetch/fetch-steam-window.sh` makes it: yserver's tree,
+//! `tools/common/fetch/fetch-steam-window.sh` makes it: yserver's tree,
 //! `fetch-steam.sh`'s bootstrap tree, i386 Mesa, lsof, and the launch-side
-//! workarounds of `scripts/steam/workarounds/` compiled. It is attached
+//! workarounds of `tools/common/steam/workarounds/` compiled. It is attached
 //! under QEMU's `snapshot=on`, as the other Steam volumes are, so every boot
 //! starts from the bootstrap and downloads the client again.
 //!
@@ -20,7 +20,7 @@
 //!
 //! Beyond the Steam gates' links and `uname` (`crate::steam`) and yserver's
 //! links, the guest scripts and the stand-ins `client.sh` names, all from
-//! `scripts/steam/`: the steamrt64 entry point that runs `steamwebhelper`
+//! `tools/common/steam/`: the steamrt64 entry point that runs `steamwebhelper`
 //! without pressure-vessel, a logger that logs nothing, and `lsof` at
 //! `/usr/bin`, the one place of four the client looks for it that the
 //! initramfs can hold. `docs/STEAM.md` has the table of these and of the
@@ -49,22 +49,22 @@ use crate::qemu::Watching;
 use crate::{Error, Result};
 
 /// The script hyprix's `exec-once` runs, as root.
-const RUN: &[u8] = include_bytes!("../../../scripts/steam/run.sh");
+const RUN: &[u8] = include_bytes!("../../../steam/run.sh");
 
 /// The client's half, which `RUN` runs as uid 1000.
-const CLIENT: &[u8] = include_bytes!("../../../scripts/steam/client.sh");
+const CLIENT: &[u8] = include_bytes!("../../../steam/client.sh");
 
 /// The steamrt64 entry point's stand-in.
-const ENTRY_POINT: &[u8] = include_bytes!("../../../scripts/steam/_v2-entry-point");
+const ENTRY_POINT: &[u8] = include_bytes!("../../../steam/_v2-entry-point");
 
 /// The Steam Runtime logger's stand-in.
-const LOGGER: &[u8] = include_bytes!("../../../scripts/steam/logger-0.bash");
+const LOGGER: &[u8] = include_bytes!("../../../steam/logger-0.bash");
 
 /// `lsof` where the client looks for it, running the volume's.
-const LSOF: &[u8] = include_bytes!("../../../scripts/steam/lsof");
+const LSOF: &[u8] = include_bytes!("../../../steam/lsof");
 
 /// The `--everything` desktop's script, in `RUN`'s place.
-const DESKTOP: &[u8] = include_bytes!("../../../scripts/steam/desktop.sh");
+const DESKTOP: &[u8] = include_bytes!("../../../steam/desktop.sh");
 
 /// Where [`DESKTOP`] is in the image.
 const DESKTOP_PATH: &str = "steam/desktop.sh";
@@ -111,7 +111,7 @@ pub(crate) const MEMORY: u32 = 16384;
 /// under KVM), a restart, and Chromium's start in software.
 const TIMEOUT: u64 = 2400;
 
-/// Where `scripts/fetch/fetch-steam-window.sh` writes, unless
+/// Where `tools/common/fetch/fetch-steam-window.sh` writes, unless
 /// `FERRIX_STEAM_WINDOW_VOLUME` names another directory.
 pub(crate) fn volume() -> Result<PathBuf> {
     let directory = match std::env::var_os("FERRIX_STEAM_WINDOW_VOLUME") {
@@ -121,7 +121,7 @@ pub(crate) fn volume() -> Result<PathBuf> {
     let image = directory.join("steam-window.img");
     if !image.is_file() {
         return Err(Error::new(format!(
-            "{} is not there: scripts/fetch/fetch-steam-window.sh makes it",
+            "{} is not there: tools/common/fetch/fetch-steam-window.sh makes it",
             image.display()
         )));
     }
@@ -160,7 +160,7 @@ fn scripts(scripts: &[(&str, &[u8], u32)]) -> Vec<File> {
 }
 
 /// What `run-compositor --everything` adds to the archive for Steam, when
-/// the volume `scripts/fetch/fetch-steam-window.sh` makes is merged into
+/// the volume `tools/common/fetch/fetch-steam-window.sh` makes is merged into
 /// its own: [`SCRIPTS`] but `run.sh`, [`DESKTOP`], and Steam's links less
 /// any path `carried` already has -- Chrome's, the compiler's and yserver's
 /// name the same Debian's paths.

@@ -3,7 +3,7 @@
 //! One value holds the interfaces, the routes, the neighbour cache and every
 //! socket. It has no clock, no lock and no device: frames and a time go in,
 //! frames come out, and the kernel is what gives it a lock, a timer and a
-//! driver. That is the same shape `libs/network/nettcp` has and for the same reason --
+//! driver. That is the same shape `src/lib/network/nettcp` has and for the same reason --
 //! it is the shape `cargo test` can drive.
 //!
 //! # The loopback is inside

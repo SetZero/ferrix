@@ -1,6 +1,6 @@
 //! ARMv7-A, in ARM state.
 //!
-//! The kernel's entry is `system_call` in `kernel/src/arch/armv7a/trap.rs`:
+//! The kernel's entry is `system_call` in `src/kernel/src/arch/armv7a/trap.rs`:
 //! `svc #0`, the EABI's convention — the number in R7, the arguments in R0 to
 //! R5, and the result back in R0. Every other register comes back as it went.
 //! R7 is free to carry the number because the targets are built in ARM state,
@@ -56,7 +56,7 @@ pub(crate) fn call(raw: &Raw<'_>) -> usize {
 ///
 /// The same instruction and the same registers as [`call`]: the kernel picks
 /// the ABI by the number's range and by nothing else (`dispatch` in
-/// `kernel/src/syscall/mod.rs`), so a native program issues a Linux call
+/// `src/kernel/src/syscall/mod.rs`), so a native program issues a Linux call
 /// exactly as it issues one of its own. `exit` below has done this since this
 /// file was written; `docs/CLIPBOARD.md` §5 is what made it worth naming.
 ///
@@ -118,11 +118,11 @@ pub(crate) fn monotonic_nanos(nanos: &mut u64) -> usize {
 ///
 /// One block for both ABIs, because it is one instruction and one register
 /// assignment -- which is the whole of what `asm!` is here, and what
-/// `scripts/data/asm-allowlist.json` admits.
+/// `tools/common/data/asm-allowlist.json` admits.
 fn trap(number: usize, args: [usize; 6]) -> usize {
     let [a0, a1, a2, a3, a4, a5] = args;
     let result;
-    // SAFETY: `raw` was built by `libs/proto/native`, which puts in a pointer
+    // SAFETY: `raw` was built by `src/lib/proto/native`, which puts in a pointer
     // argument only the address of a slice `raw` borrows — shared if the
     // kernel reads it, exclusive if it writes — and `raw` outlives this trap.
     // Every native call either touches only that memory or adds mappings where

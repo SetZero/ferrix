@@ -14,7 +14,7 @@
 //!   and input devices their cores accepted -- each of which now records the
 //!   device node its driver serves, so sysfs can put it inside that node;
 //! * **`devmgr`** -- which drivers it can start and which one drives which
-//!   device, as it said in DRIVER, BOUND and UNBOUND (`kernel/src/devmgr.rs`).
+//!   device, as it said in DRIVER, BOUND and UNBOUND (`src/kernel/src/devmgr.rs`).
 //!   A write to a driver's `bind` or `unbind` is not done here: it is a
 //!   request to `devmgr`, which decides, starts or stops the driver, and
 //!   answers.

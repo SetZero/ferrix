@@ -16,7 +16,7 @@
 //! not pretend otherwise either, and an abstraction that claimed to hide it
 //! would cost a rewrite the first time it met a second device.
 //!
-//! The shape is `libs/proto/displayctl`'s, because the two solve the same
+//! The shape is `src/lib/proto/displayctl`'s, because the two solve the same
 //! problem: one `Channel` per device, a fixed little-endian message with
 //! its type and length first, decoded strictly, handles in the channel
 //! message's array, and a message on the channel as its own doorbell.

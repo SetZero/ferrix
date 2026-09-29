@@ -3,7 +3,7 @@
 //! The phone's own bootloader, ABL, is signed and cannot be replaced; what an
 //! unlocked one will do is load an Android boot image and jump to its kernel
 //! under the Linux arm64 boot protocol. This program is that kernel. It does
-//! for Ferrix what `boot/uefi/` does under UEFI -- finds memory, loads the kernel
+//! for Ferrix what `src/boot/common/uefi/` does under UEFI -- finds memory, loads the kernel
 //! and its initramfs, and hands over a `BootInfo` -- from what ABL provides
 //! instead: a device tree, and a machine at EL2 with the MMU off.
 //!
@@ -65,7 +65,7 @@ extern "C" fn early(device_tree: u64, current_el: u64, loaded_at: u64) {
 /// Called from the entry sequence at EL1: load Ferrix and start it.
 extern "C" fn main(device_tree: u64) -> ! {
     // The count as well as the rate: Ferrix's clock is this counter, and
-    // tools/pixel7/monitor places the stat service's samples in the PC's time
+    // tools/vendor/google/pixel7/monitor places the stat service's samples in the PC's time
     // from this line, the loader starting as the phone leaves USB.
     let (count, frequency) = entry::counter();
     let millis = count
@@ -100,7 +100,7 @@ extern "C" fn main(device_tree: u64) -> ! {
 ///
 /// In a guest, `bootargs` is crosvm's, which `crosvm run -p` adds to. On the
 /// phone it is ABL's: Android's own, and the boot image header's command
-/// line, which `tools/pixel7/helper.py` fills for a run that asks for Ferrix's
+/// line, which `tools/vendor/google/pixel7/helper.py` fills for a run that asks for Ferrix's
 /// stat service. Either way only `ferrix.*` words are taken.
 fn command_line<'a>(base: &'a str, tree: &Fdt<'_>, buffer: &'a mut [u8]) -> &'a str {
     let mut used = 0;

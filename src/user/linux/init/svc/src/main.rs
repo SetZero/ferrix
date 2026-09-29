@@ -1,7 +1,7 @@
 //! `/bin/svc`: the init's control client (`docs/INIT.md` §10).
 //!
 //! systemctl's verbs, spoken to `/run/ferrix/control` as the records of
-//! `libs/init/svc-proto`. One call per connection; init answers, the last
+//! `src/lib/init/svc-proto`. One call per connection; init answers, the last
 //! answer final. What `svc` prints is its own business: the records carry
 //! the facts, so this output can change without breaking another client.
 //!

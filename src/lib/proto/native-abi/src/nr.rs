@@ -341,7 +341,7 @@ pub enum NativeCall {
     /// (`docs/AUDIO.md` §3.2). One per device.
     SoundControlCreate,
     /// `(device)` → handle. Make a control channel on which the device's
-    /// driver reads the kernel log (`libs/proto/logctl`), and answer the driver's
+    /// driver reads the kernel log (`src/lib/proto/logctl`), and answer the driver's
     /// end of it. Needs `MANAGE` on a device whose binding may stream the log
     /// off the machine -- the Pixel 7's USB device controller -- and
     /// `ACCESS_DENIED` for any other; one reader at a time, `ALREADY_BOUND`
@@ -363,7 +363,7 @@ pub enum NativeCall {
     /// record's whole records of ring `which` ([`crate::types::AUDIT_HIGH`],
     /// [`crate::types::AUDIT_REFUSALS`] or [`crate::types::AUDIT_BOOT`])
     /// numbered `from` or later into `buffer`, 64 bytes each as
-    /// `libs/proto/audit` lays them out, at most `count` and at most
+    /// `src/lib/proto/audit` lays them out, at most `count` and at most
     /// [`AUDIT_READ_MAX`]. `answer` is [`crate::types::AUDIT_ANSWER_WORDS`]
     /// 64-bit words in the machine's order, and its second word is `from` on
     /// the way in, so that a sequence number is 64 bits on every

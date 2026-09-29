@@ -324,7 +324,7 @@ impl NetlinkSocket {
     fn queue(&self, replies: &[u8]) -> Result<(), Errno> {
         let mut state = self.state.lock();
         for message in Messages::new(replies) {
-            // Everything here was written by `libs/network/netlink`'s builder, so a
+            // Everything here was written by `src/lib/network/netlink`'s builder, so a
             // refusal is this kernel's bug rather than a program's; there is
             // nothing to tell the program about it, and the rest of the
             // buffer cannot be read past it either way.

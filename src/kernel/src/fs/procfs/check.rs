@@ -1,6 +1,6 @@
 //! Stage 8's self-checks for `/dev` and `/proc`.
 //!
-//! The host tests in `libs/fs/procfs` hold the byte formats against lines a real
+//! The host tests in `src/lib/fs/procfs` hold the byte formats against lines a real
 //! Linux printed. What they cannot hold is the kernel's side: that a device
 //! node opened through the namespace reaches the device, that every name a
 //! `/proc` listing reports can be walked to — the property `busybox ls -R
@@ -291,7 +291,7 @@ const MEMORY_DEVICES: [&[u8]; 5] = [
 
 /// A memory device is at 0 whatever `lseek` asks, a read between two seeks
 /// included, and a positioned read or write does what a plain one does:
-/// what a Linux 7.0 host answered, measured (`kernel/src/fs/devfs.rs`).
+/// what a Linux 7.0 host answered, measured (`src/kernel/src/fs/devfs.rs`).
 /// busybox `dd of=/dev/null seek=1` dies if the first of these is refused.
 fn check_seeks_to_zero(device: &OpenFile) -> Result<(), &'static str> {
     let seeks = [

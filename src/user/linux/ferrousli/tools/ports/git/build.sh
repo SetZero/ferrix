@@ -3,7 +3,7 @@
 # tools/ports/zlib and libcurl and Mbed TLS from tools/ports/curl, which must
 # be built first, for the same architecture.
 #
-#     tools/ports/git/build.sh [--arch <arch>]    # from userland/ferrousli/
+#     tools/ports/git/build.sh [--arch <arch>]    # from src/user/linux/ferrousli/
 #
 # Installs, under $FERRIX_PORTS (see ../common.sh):
 #   <arch>/usr/bin/git, and <arch>/bin/git linking to it

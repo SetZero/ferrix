@@ -29,7 +29,7 @@ Measured from the release kernel's symbols (`nm -S`, grouped by crate), on
 
 ## 2. Phase 0: measure (this landing)
 
-`--strip-kernel` (`xtask/src/fat.rs`) puts the kernel on the image as `flash`
+`--strip-kernel` (`tools/common/xtask/src/fat.rs`) puts the kernel on the image as `flash`
 writes it to a card: armv7a's is 8.2 MiB rather than 98, and aarch64's is
 4.5 MiB. It is off unless asked for. The kernel now prints free and managed
 memory at the end of boot, beside stage 2's line.

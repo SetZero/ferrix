@@ -18,7 +18,7 @@ compositor-hyprlang = { path = "../hyprlang" }
 # Declarations only: getuid(2).
 libc = "0.2.189"
 # The rasteriser the widgets are drawn with, at the version the workspace
-# pins (userland/compositor/render/Cargo.toml says why exactly); no new crates.
+# pins (src/user/linux/compositor/render/Cargo.toml says why exactly); no new crates.
 tiny-skia = { version = "=0.12.0", default-features = false, features = ["std", "simd"] }
 
 [lints]

@@ -31,12 +31,12 @@ The obligation id (finding F-26)
 
 Documented is not traced. An assurance argument needs each unsafe site in the
 certified item -- the `core` and `item` rings of
-`scripts/data/certification-item.json`, self-tests included, since they run in
+`tools/common/data/certification-item.json`, self-tests included, since they run in
 the same image -- to name *why unsafe exists there*: which of a small closed set
 of obligations it discharges, and through that, which assumed safety
 requirement, failure mode or assumption of use of
 `docs/certification/SAFETY-MANUAL.md` it serves. The set is the
-`unsafe_obligations` table of `scripts/data/safety-requirements.json`;
+`unsafe_obligations` table of `tools/common/data/safety-requirements.json`;
 `check-safety-requirements.py` holds it to the manual and to its evidence.
 
 The id is written in parentheses straight after the `SAFETY:` that clippy
@@ -63,7 +63,7 @@ Two more rules follow:
   4. An id anywhere in the tree must be one the registry defines. An id that
      resolves to nothing traces to nothing.
   5. In the item, a site with no id is debt, recorded per file in
-     `scripts/data/unsafe-trace-baseline.json`. A file may only improve: a new
+     `tools/common/data/unsafe-trace-baseline.json`. A file may only improve: a new
      untagged site fails, and so does a count that has fallen without being
      re-recorded, so a tagged site leaves no allowance behind. The target is
      an empty baseline.
@@ -73,9 +73,9 @@ obligation id. Those numbers are meant to be looked at in a diff: unsafe
 growing is not a failure, but it should never grow without somebody noticing.
 
 Usage:
-    python3 scripts/check/check-unsafe-audit.py
-    python3 scripts/check/check-unsafe-audit.py --report    # the untagged sites, by file
-    python3 scripts/check/check-unsafe-audit.py --record    # rewrite the baseline
+    python3 tools/common/check/check-unsafe-audit.py
+    python3 tools/common/check/check-unsafe-audit.py --report    # the untagged sites, by file
+    python3 tools/common/check/check-unsafe-audit.py --record    # rewrite the baseline
 """
 
 from __future__ import annotations
@@ -87,11 +87,11 @@ import pathlib
 import re
 import sys
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
-ROOTS = ("kernel", "boot/uefi", "libs", "native", "xtask")
-REGISTER = ROOT / "scripts" / "data" / "safety-requirements.json"
-BASELINE = ROOT / "scripts" / "data" / "unsafe-trace-baseline.json"
-KERNEL_SRC = ROOT / "kernel" / "src"
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent.parent
+ROOTS = ("src/kernel", "src/boot/common/uefi", "src/lib", "src/user/native", "tools/common/xtask")
+REGISTER = ROOT / "tools" / "common" / "data" / "safety-requirements.json"
+BASELINE = ROOT / "tools" / "common" / "data" / "unsafe-trace-baseline.json"
+KERNEL_SRC = ROOT / "src" / "kernel" / "src"
 
 # `unsafe {` opening a block, but not `unsafe fn`, `unsafe impl`, `unsafe trait`
 # or `unsafe extern`. Also matches the `unsafe` in `unsafe { ... }` used as an
@@ -281,9 +281,9 @@ def load_obligations() -> dict[str, dict]:
 
 def item_files() -> dict[str, str]:
     """Every kernel file in the `core` or `item` ring, relative to
-    kernel/src, with its ring."""
+    src/kernel/src, with its ring."""
     spec = importlib.util.spec_from_file_location(
-        "boundary", ROOT / "scripts" / "check" / "check-item-boundary.py"
+        "boundary", ROOT / "tools" / "common" / "check" / "check-item-boundary.py"
     )
     gate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gate)
@@ -358,7 +358,7 @@ def record(untagged: dict[str, int]) -> None:
                 "//": [
                     "Unsafe sites in the certified item -- the core and item rings,",
                     "self-tests included -- whose SAFETY comment or # Safety section",
-                    "names no obligation id, per file, as scripts/check/check-unsafe-audit.py",
+                    "names no obligation id, per file, as tools/common/check/check-unsafe-audit.py",
                     "counts them. A debt register for finding F-26, not an allowance:",
                     "a count may only fall, and the gate fails when one rises, when a",
                     "new file appears, or when one has fallen without being",
@@ -444,7 +444,7 @@ def main() -> int:
     if unknown:
         print(
             "unsafe-audit: an obligation id the registry does not define. The ids\n"
-            "  are the unsafe_obligations of scripts/data/safety-requirements.json,\n"
+            "  are the unsafe_obligations of tools/common/data/safety-requirements.json,\n"
             "  tabled in docs/certification/SAFETY-MANUAL.md:",
             file=sys.stderr,
         )

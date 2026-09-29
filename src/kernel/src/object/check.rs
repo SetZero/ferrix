@@ -1,7 +1,7 @@
 //! Stage 9's self-checks: two processes, a channel between them, and the
 //! rules a capability system lives by.
 //!
-//! The host tests in `libs/kernel/objects` prove the handle table and the queue in
+//! The host tests in `src/lib/kernel/objects` prove the handle table and the queue in
 //! isolation. What they cannot prove is the join: that a handle written by one
 //! process really leaves its table and arrives in another's naming the *same*
 //! object, that a system call refused half-way leaves both tables as they

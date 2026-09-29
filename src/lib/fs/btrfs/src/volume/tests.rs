@@ -2,7 +2,7 @@
 //!
 //! The rest of the crate's tests build their structures by hand, which pins
 //! every field to an offset. These pin the reader to btrfs itself: the images
-//! in `testdata/` come from `scripts/gen/gen-btrfs-fixtures.py`, and nothing in
+//! in `testdata/` come from `tools/common/gen/gen-btrfs-fixtures.py`, and nothing in
 //! them was produced by this crate.
 
 extern crate std;

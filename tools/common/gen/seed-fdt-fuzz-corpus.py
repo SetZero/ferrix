@@ -16,7 +16,7 @@ Two kinds of seed:
   limit, an unknown token and a tree that never ends.
 
 Usage:
-    python3 scripts/gen/seed-fdt-fuzz-corpus.py [--qemu]
+    python3 tools/common/gen/seed-fdt-fuzz-corpus.py [--qemu]
 """
 
 import pathlib
@@ -26,7 +26,7 @@ import subprocess
 import sys
 import tempfile
 
-OUT = pathlib.Path(__file__).resolve().parent.parent.parent / "tests" / "fuzz" / "corpus" / "fdt_parse"
+OUT = pathlib.Path(__file__).resolve().parent.parent.parent.parent / "tests" / "fuzz" / "corpus" / "fdt_parse"
 
 GICV2_VIRT = """/dts-v1/;
 /memreserve/ 0x40000000 0x100000;

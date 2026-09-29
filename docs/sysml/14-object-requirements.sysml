@@ -1,12 +1,12 @@
 /*
  * Ferrix — SysML v2 model, part 14: the low-level requirements of object/.
  *
- * What each unit of kernel/src/object/ does, as `ItemLowLevel` requirements
+ * What each unit of src/kernel/src/object/ does, as `ItemLowLevel` requirements
  * (part 13 defines the format): the core ring's object layer -- what a handle
  * names and how it is dropped, channels, ports, interrupts, I/O mappings,
  * pins, the job quotas, jobs, the core half of a process, and the scoped OOM
  * kill. The handle table itself and the rights arithmetic are
- * `libs/kernel/objects` and `libs/proto/native-abi`, whose host tests verify
+ * `src/lib/kernel/objects` and `src/lib/proto/native-abi`, whose host tests verify
  * H.OBJ.1 to H.OBJ.4 directly; nothing here restates them.
  *
  * This is W-8's pilot (docs/certification/IMPLEMENTATION.md, step 3), the
@@ -28,7 +28,7 @@
  *    `unsafe` -- needs no requirement of its own (check-traceability.py's
  *    rule); one is still named where it is the behaviour's entry point;
  *  - check code that lives in a product file is listed in
- *    scripts/data/traceability-units.json, not given a requirement, and the
+ *    tools/common/data/traceability-units.json, not given a requirement, and the
  *    requirement it would verify waits in the baseline until it moves into a
  *    check file where a `Verifies:` tag may go on it.
  *
@@ -39,7 +39,7 @@ package FerrixObjectRequirements {
     private import FerrixItemRequirements::*;
 
     package ObjectKinds {
-        doc /* kernel/src/object/mod.rs: what a handle names, its signals, and
+        doc /* src/kernel/src/object/mod.rs: what a handle names, its signals, and
              * how objects are dropped without recursing. */
 
         requirement <'L.object.1'> aProcessHandleSaysTerminated : ItemLowLevel {
@@ -141,7 +141,7 @@ package FerrixObjectRequirements {
     }
 
     package Channels {
-        doc /* kernel/src/object/channel.rs. */
+        doc /* src/kernel/src/object/channel.rs. */
 
         requirement <'L.object.9'> aPairIsTwoObjects : ItemLowLevel {
             attribute :>> statement = "Endpoint::pair shall make two connected ends
@@ -344,7 +344,7 @@ package FerrixObjectRequirements {
     }
 
     package Ports {
-        doc /* kernel/src/object/port.rs. */
+        doc /* src/kernel/src/object/port.rs. */
 
         requirement <'L.object.27'> aPortIsOneObject : ItemLowLevel {
             attribute :>> statement = "Port::new shall make an empty port charged as
@@ -434,7 +434,7 @@ package FerrixObjectRequirements {
     }
 
     package Interrupts {
-        doc /* kernel/src/object/interrupt.rs. */
+        doc /* src/kernel/src/object/interrupt.rs. */
 
         requirement <'L.object.35'> aLineIsClaimedOnce : ItemLowLevel {
             attribute :>> statement = "Interrupt::new shall claim a line for at most
@@ -534,7 +534,7 @@ package FerrixObjectRequirements {
     }
 
     package IoMappings {
-        doc /* kernel/src/object/io_mapping.rs. */
+        doc /* src/kernel/src/object/io_mapping.rs. */
 
         requirement <'L.object.43'> wholePagesOrRefused : ItemLowLevel {
             attribute :>> statement = "IoMapping::new shall refuse an aperture that
@@ -559,7 +559,7 @@ package FerrixObjectRequirements {
     }
 
     package Pins {
-        doc /* kernel/src/object/pin.rs. The quarantine's own check,
+        doc /* src/kernel/src/object/pin.rs. The quarantine's own check,
              * check_quarantine, is in object/pin/check.rs, a child module that
              * may read what pin.rs keeps to itself, and verifies the three
              * quarantine requirements. The domain side of a pin is iommu's
@@ -622,7 +622,7 @@ package FerrixObjectRequirements {
     }
 
     package QuotaSlots {
-        doc /* kernel/src/object/quota.rs: the counters behind FRU_RSA.1. */
+        doc /* src/kernel/src/object/quota.rs: the counters behind FRU_RSA.1. */
 
         requirement <'L.object.50'> aChargeIsHierarchical : ItemLowLevel {
             attribute :>> statement = "quota::charge shall add to the slot and to
@@ -769,7 +769,7 @@ package FerrixObjectRequirements {
     }
 
     package Jobs {
-        doc /* kernel/src/object/job.rs. */
+        doc /* src/kernel/src/object/job.rs. */
 
         requirement <'L.object.63'> everyProcessInOneJob : ItemLowLevel {
             attribute :>> statement = "root shall answer the one job at the top of
@@ -983,7 +983,7 @@ package FerrixObjectRequirements {
     }
 
     package Processes {
-        doc /* kernel/src/object/process.rs: the core half of a process. */
+        doc /* src/kernel/src/object/process.rs: the core half of a process. */
 
         requirement <'L.object.81'> aProcessStartsCountedAndCharged : ItemLowLevel {
             attribute :>> statement = "Process::new shall make a process counted in
@@ -1190,7 +1190,7 @@ package FerrixObjectRequirements {
     }
 
     package OomKill {
-        doc /* kernel/src/object/oom.rs, and the quota reading it starts from. */
+        doc /* src/kernel/src/object/oom.rs, and the quota reading it starts from. */
 
         requirement <'L.object.100'> theKillIsScoped : ItemLowLevel {
             attribute :>> statement = "A user fault refused by a memory limit shall

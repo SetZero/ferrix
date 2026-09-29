@@ -5,7 +5,7 @@
 //! kernel to find what is there and what apertures it decodes, a driver to
 //! find its device's capabilities. What they read was written by a device —
 //! or, for a function behind a bridge nobody configured, by nothing at all —
-//! so this is a parser of hostile bytes like `libs/platform/acpi` and `libs/platform/elf`, and
+//! so this is a parser of hostile bytes like `src/lib/platform/acpi` and `src/lib/platform/elf`, and
 //! it lives here for the same reason they do.
 //!
 //! # Why configuration space is behind a trait

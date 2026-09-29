@@ -126,7 +126,7 @@ import org.json.JSONObject
  *
  * **Boot Ferrix** reboots the phone into it. The phone cannot start Ferrix by
  * itself, so the button asks the helper on the PC
- * (`tools/pixel7/helper.py`), which adb reverse makes reachable
+ * (`tools/vendor/google/pixel7/helper.py`), which adb reverse makes reachable
  * at 127.0.0.1 over the USB cable. The helper runs `fastboot boot`: nothing is
  * written to the phone's partitions, and Ferrix's watchdog brings Android back
  * about 75 seconds later.
@@ -180,7 +180,7 @@ private const val MOUSE = "$VM_DIR/mouse.sock"
  * The guest is `desktop.Image` when there is one, a build whose init is the
  * compositor (`cargo xtask flash --compositor`, wrapped by the loader), and
  * otherwise `ferrix.Image`, the helper's console image. `chromium.img` beside
- * it, `scripts/fetch/fetch-chromium-arm64.sh`'s volume, becomes the guest's
+ * it, `tools/common/fetch/fetch-chromium-arm64.sh`'s volume, becomes the guest's
  * fourth disk, `vdd`, which Ferrix mounts at `/data`: a desktop built with
  * `--chrome` starts Chromium from it. Ferrix takes a data disk only from
  * `vdd` on, since `vda` to `vdc` are the boot checks' fixtures under QEMU,
@@ -443,7 +443,7 @@ private fun ConnectionCard(helper: Helper) {
         is Helper.Unreachable -> Triple(
             MaterialTheme.colorScheme.error,
             "PC helper not reachable",
-            "Plug the phone into the PC and run tools/pixel7/helper.py there.",
+            "Plug the phone into the PC and run tools/vendor/google/pixel7/helper.py there.",
         )
         is Helper.Reachable -> Triple(
             Color(0xFF3DDC84),

@@ -1,4 +1,4 @@
-//! Fuzz authd's wire format (`libs/proto/auth-proto`): any packet a local
+//! Fuzz authd's wire format (`src/lib/proto/auth-proto`): any packet a local
 //! program sends to `/run/ferrix/auth`.
 //!
 //! Decoding must never panic, and a record that decodes must encode back to

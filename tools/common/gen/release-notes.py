@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Print a tag's release notes, or its release title, from docs/RELEASES.md.
 
-    python3 scripts/gen/release-notes.py <tag>           # the notes, as Markdown
-    python3 scripts/gen/release-notes.py --title <tag>   # "<tag> — <date>"
+    python3 tools/common/gen/release-notes.py <tag>           # the notes, as Markdown
+    python3 tools/common/gen/release-notes.py --title <tag>   # "<tag> — <date>"
 
 A tag's section is the one whose heading starts `## <tag> — `. It runs to the
 next `## ` heading. The release workflow publishes exactly this, so a tag
@@ -12,7 +12,7 @@ without a section fails here rather than going out as an empty release.
 import sys
 from pathlib import Path
 
-RELEASES = Path(__file__).resolve().parents[2] / "docs" / "RELEASES.md"
+RELEASES = Path(__file__).resolve().parents[3] / "docs" / "RELEASES.md"
 REPO = "https://github.com/SetZero/ferrix"
 
 
