@@ -294,6 +294,9 @@ pub struct Client {
     idles: BTreeMap<IdleId, ObjectId>,
     next_idle: u32,
     program_buffers: BTreeMap<u32, ProgramBuffer>,
+    /// What the `new_id`s in a program object's event are, by the object and
+    /// the event's opcode ([`Client::adopt_new_ids`]).
+    adoptions: BTreeMap<(u32, u16), (&'static Interface, u32)>,
     sources: Sources,
     children: Children,
     pending: Vec<Event>,
@@ -349,6 +352,7 @@ impl Client {
             idles: BTreeMap::new(),
             next_idle: 1,
             program_buffers: BTreeMap::new(),
+            adoptions: BTreeMap::new(),
             sources: Sources::default(),
             children: Children::default(),
             pending: Vec::new(),
@@ -1520,6 +1524,35 @@ impl Client {
         );
     }
 
+    /// Say what the objects the compositor makes in `object`'s event
+    /// `opcode` are: each `new_id` that event carries is adopted as an
+    /// object of `interface` at `version` as the event is read.
+    ///
+    /// [`Client::adopt`] after the fact is too late for an object whose own
+    /// events follow its making in the same read, and they are skipped
+    /// unread: `ext_data_control_device_v1.data_offer` makes an offer and
+    /// the offer's `offer` events, each a type it can be pasted as, come
+    /// straight after it.
+    pub fn adopt_new_ids(
+        &mut self,
+        object: ObjectId,
+        opcode: u16,
+        interface: &'static Interface,
+        version: u32,
+    ) {
+        let _ = self
+            .adoptions
+            .insert((object.0, opcode), (interface, version));
+    }
+
+    /// The `wl_seat` this client bound, for a request that names it
+    /// (`ext_data_control_manager_v1.get_data_device`); `None` while the
+    /// compositor offers none.
+    #[must_use]
+    pub const fn seat(&self) -> Option<ObjectId> {
+        self.seat.seat
+    }
+
     /// A `wl_shm` buffer of `width` × `height` in `format` (a
     /// `wl_shm.format` value) the program fills itself, for a request that
     /// wants one (`zwlr_screencopy_frame_v1.copy`). The bytes stay mapped
@@ -2095,6 +2128,7 @@ impl Client {
                     if self.objects.remove(&id).is_some() && id != 1 {
                         self.free_ids.push(id);
                     }
+                    self.adoptions.retain(|&(object, _), _| object != id);
                 }
                 _ => {}
             },
@@ -2276,12 +2310,23 @@ impl Client {
                 }
             }
             Role::SurfaceBuffer(_) => {}
-            Role::User => self.pending.push(Event::Object {
-                object: sender,
-                interface: entry.interface.name,
-                opcode,
-                args: args.iter().map(Value::from_arg).collect(),
-            }),
+            Role::User => {
+                if let Some(&(interface, version)) = self.adoptions.get(&(sender.0, opcode)) {
+                    let made = args.iter().filter_map(|arg| match arg {
+                        Arg::NewId(made) => Some(*made),
+                        _ => None,
+                    });
+                    for made in made.collect::<Vec<_>>() {
+                        self.adopt(made, interface, version);
+                    }
+                }
+                self.pending.push(Event::Object {
+                    object: sender,
+                    interface: entry.interface.name,
+                    opcode,
+                    args: args.iter().map(Value::from_arg).collect(),
+                });
+            }
         }
         Ok(())
     }

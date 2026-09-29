@@ -658,3 +658,154 @@ fn a_zero_timeout_dispatch_reads_what_arrived_behind_queued_events() {
         "the configure waiting on the socket was not read"
     );
 }
+
+/// A clipboard manager on the toolkit: `ext_data_control` bound and driven
+/// by the program, as yserver's clipboard bridge does. What it copies comes
+/// back to it as an offer whose types were read with it, which needs the
+/// offer adopted as the `data_offer` event that makes it is read
+/// ([`Client::adopt_new_ids`]): the offer's own `offer` events follow in the
+/// same read, and an offer adopted after the fact never hears its types.
+/// Then it pastes its own copy through a pipe it answers itself.
+#[test]
+fn a_data_control_offer_is_read_with_its_types_and_pasted() {
+    use compositor_toolkit::Value;
+    use compositor_toolkit::protocol::ext_data_control::{
+        self as control, ext_data_control_device_v1 as device,
+        ext_data_control_manager_v1 as manager, ext_data_control_offer_v1 as offer,
+        ext_data_control_source_v1 as source,
+    };
+    use std::io::{Read as _, Write as _};
+    use std::os::fd::{AsRawFd as _, FromRawFd as _};
+
+    const TEXT: &str = "text/plain;charset=utf-8";
+    let (answer, _) = with_compositor("control", 3000, |socket| {
+        let fail = |error: compositor_toolkit::Error| error.to_string();
+        let mut client = Client::connect_to(socket).map_err(fail)?;
+        let seat = client.seat().ok_or("no seat")?;
+        let (bound, _) = client
+            .bind(&control::EXT_DATA_CONTROL_MANAGER_V1, 1, None)
+            .map_err(fail)?;
+        let made = client.new_object(&control::EXT_DATA_CONTROL_DEVICE_V1, 1);
+        client
+            .request(
+                bound,
+                manager::request::GET_DATA_DEVICE,
+                &[Value::NewId(made), Value::Object(seat)],
+            )
+            .map_err(fail)?;
+        client.adopt_new_ids(
+            made,
+            device::event::DATA_OFFER,
+            &control::EXT_DATA_CONTROL_OFFER_V1,
+            1,
+        );
+        let copied = client.new_object(&control::EXT_DATA_CONTROL_SOURCE_V1, 1);
+        client
+            .request(
+                bound,
+                manager::request::CREATE_DATA_SOURCE,
+                &[Value::NewId(copied)],
+            )
+            .map_err(fail)?;
+        client
+            .request(
+                copied,
+                source::request::OFFER,
+                &[Value::Str(Some(TEXT.to_owned()))],
+            )
+            .map_err(fail)?;
+        client
+            .request(
+                made,
+                device::request::SET_SELECTION,
+                &[Value::Object(copied)],
+            )
+            .map_err(fail)?;
+        client.flush().map_err(fail)?;
+
+        // The offer the selection names, and the types it said it has.
+        let mut types: Vec<(compositor_toolkit::ObjectId, String)> = Vec::new();
+        let mut held = None;
+        until(&mut client, Duration::from_secs(2), |_, event| {
+            if let Event::Object {
+                object,
+                opcode,
+                args,
+                ..
+            } = event
+            {
+                if *opcode == offer::event::OFFER
+                    && let Some(mime) = args.first().and_then(Value::as_str)
+                {
+                    types.push((*object, mime.to_owned()));
+                }
+                if *object == made
+                    && *opcode == device::event::SELECTION
+                    && let Some(named) = args.first().and_then(Value::as_object)
+                    && !named.is_null()
+                {
+                    held = Some(named);
+                    return true;
+                }
+            }
+            false
+        })?;
+        let held = held.ok_or("no selection")?;
+        let offered: Vec<&str> = types
+            .iter()
+            .filter(|(object, _)| *object == held)
+            .map(|(_, mime)| mime.as_str())
+            .collect();
+        if offered != [TEXT] {
+            return Err(format!("the offer said {offered:?}"));
+        }
+
+        let (mut reading, writing) =
+            std::os::unix::net::UnixStream::pair().map_err(|error| error.to_string())?;
+        client
+            .request(
+                held,
+                offer::request::RECEIVE,
+                &[
+                    Value::Str(Some(TEXT.to_owned())),
+                    Value::Fd(writing.as_raw_fd()),
+                ],
+            )
+            .map_err(fail)?;
+        client.flush().map_err(fail)?;
+        drop(writing);
+        until(&mut client, Duration::from_secs(2), |_, event| {
+            let Event::Object {
+                object,
+                opcode,
+                args,
+                ..
+            } = event
+            else {
+                return false;
+            };
+            if *object != copied || *opcode != source::event::SEND {
+                return false;
+            }
+            if let Some(Value::Fd(fd)) = args.get(1) {
+                #[expect(
+                    unsafe_code,
+                    reason = "AUDIT: the descriptor arrived with the event and is the test's to own"
+                )]
+                // SAFETY: a descriptor this process received and nothing else holds.
+                let mut pipe = unsafe { std::fs::File::from_raw_fd(*fd) };
+                let _ = pipe.write_all(b"copied by the toolkit");
+            }
+            true
+        })?;
+        let mut text = String::new();
+        let _ = reading
+            .read_to_string(&mut text)
+            .map_err(|error| error.to_string())?;
+        Ok::<_, String>(text)
+    });
+    assert_eq!(
+        answer.expect("the clipboard worked"),
+        "copied by the toolkit"
+    );
+}
