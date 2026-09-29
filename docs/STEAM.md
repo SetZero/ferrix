@@ -68,7 +68,7 @@ does not offer; it renders in software instead.
 | `logger-0.bash` stand-in | The Steam Runtime's logger failed on Ferrix under `steamwebhelper.sh`; this one logs nothing | whatever the logger meets: `/dev/fd` through process substitution, and the `/proc` gaps below | steam-proc-gaps |
 | (not worked around) `lsof` warns "unsupported format" for `/proc/net/tcp6` and `udp6`, and cannot identify Unix sockets | the IPv6 tables' columns differ from Linux's, and `/proc/net/unix` names no inodes | Linux's formats | steam-proc-gaps |
 | 16 GiB guest | At 8 GiB several processes died of `SIGBUS` on execute faults of mapped library pages while Chromium started | find and fix the refault | steam-sigbus |
-| the window fills its tile, black around the login | yserver does not yet give hyprix the window's size hints (`WM_NORMAL_HINTS`) | a floating window of the size Steam asks for | yserver, after Y6 |
+| the window fills its tile, black around the login | hyprix tiled a window of a fixed size, and yserver did not pass on its size hints (`WM_NORMAL_HINTS`) | a floating window of the size Steam asks for: hyprix ec4ce6b2 and the yserver pin c5b5935, which a volume made after them carries; not yet seen on Steam's window | done, to be confirmed |
 
 Four things the sprint needed are no longer workarounds: yserver's own
 patch making a client's socket blocking before its setup (the pinned fork

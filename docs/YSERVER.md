@@ -359,6 +359,16 @@ Still open:
 
 ## 9. Where it stands
 
+2026-09-29, later: **a window of a fixed size floats at that size**, as in
+Hyprland. yserver passes `WM_NORMAL_HINTS` on as `xdg_toplevel`'s least and
+greatest size (fork `c5b5935`, which `fetch-yserver.sh` pins), and hyprix
+floats a window whose least size is its greatest (Ferrix `ec4ce6b2`); Steam's
+sign-in window is one, and was tiled to fill the screen. `against_hyprix`
+requires a 150x90 fixed window to float at 150x90 (tiled at 598x438 with the
+rule taken out), yserver's unit test reads the hints' flags, and
+`test-xwindow` passes on a volume made from the pin. Not yet seen on Steam's
+own window.
+
 2026-09-29: Y6 is done, and with it all 36 points. X's `CLIPBOARD` and
 `PRIMARY` and hyprix's clipboard and primary selection follow each other
 both ways, for text (§4.5); `fetch-yserver.sh` pins the fork at
