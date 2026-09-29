@@ -1,7 +1,7 @@
-//! `unistd.h`'s `sysconf` and `getpagesize`: the system's limits, as the
-//! running kernel reports them.
+//! `unistd.h`'s `sysconf`, `getpagesize` and `confstr`: the system's limits,
+//! as the running kernel reports them, and its configuration strings.
 
-use core::ffi::{c_int, c_long, c_ulong};
+use core::ffi::{c_char, c_int, c_long, c_ulong};
 use core::mem::{offset_of, size_of};
 use core::ptr::null;
 
@@ -202,6 +202,74 @@ pub extern "C" fn sysconf(name: c_int) -> c_long {
             -1
         }
     }
+}
+
+/// The glibc version this library claims to be, as `gnu/libc-version.h`
+/// declares it: a NUL-terminated string such as `2.39`. `gnu_get_libc_version`
+/// (in `crate::start`) and [`confstr`] answer it.
+///
+/// It is a claim about which glibc interfaces exist here, not a version of
+/// this library. A program asks so that it can decide whether a newer
+/// interface is available; Rust's `std` is one, which is how this came to be
+/// needed. 2.39 is the newest glibc whose additions this library has —
+/// `__isoc23_strtol` and its relatives from 2.38, `fchmodat2` from 2.39.
+/// **Raise it when an interface from a later glibc is added, and not before:
+/// a number that is too high makes callers take a path that is not here.**
+pub(crate) const LIBC_VERSION: &core::ffi::CStr = c"2.39";
+
+/// `_CS_PATH`, from glibc's and musl's `unistd.h`.
+const CS_PATH: c_int = 0;
+/// `_CS_GNU_LIBC_VERSION`.
+const CS_GNU_LIBC_VERSION: c_int = 2;
+/// `_CS_GNU_LIBPTHREAD_VERSION`.
+const CS_GNU_LIBPTHREAD_VERSION: c_int = 3;
+
+/// The string value `confstr` answers for `name`, in pieces, or `None`.
+fn configured(name: c_int) -> Option<[&'static [u8]; 2]> {
+    let version = LIBC_VERSION.to_bytes();
+    match name {
+        // Where the standard utilities are, which `bash` makes its default
+        // `PATH` of.
+        CS_PATH => Some([b"/bin:/usr/bin", b""]),
+        // glibc's own spelling, which a program parses to learn which glibc
+        // it runs on: the same version `gnu_get_libc_version` answers.
+        CS_GNU_LIBC_VERSION => Some([b"glibc ", version]),
+        CS_GNU_LIBPTHREAD_VERSION => Some([b"NPTL ", version]),
+        _ => None,
+    }
+}
+
+/// Copies the string value of configuration variable `name` into the `len`
+/// bytes at `buf`, truncated and terminated if it does not fit, and returns
+/// the size it needs with its NUL: `unistd.h`'s `confstr`. A `len` of zero or
+/// a null `buf` only measures. `_CS_PATH` and glibc's two version strings are
+/// answered; any other name is 0 with `EINVAL`.
+///
+/// # Safety
+///
+/// `buf` must be null or valid for writes of `len` bytes.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn confstr(name: c_int, buf: *mut c_char, len: usize) -> usize {
+    let Some(pieces) = configured(name) else {
+        errno::set(errno::EINVAL);
+        return 0;
+    };
+    let mut at = 0usize;
+    for piece in pieces {
+        for &byte in piece {
+            if !buf.is_null() && at.saturating_add(1) < len {
+                // SAFETY: `at + 1 < len`, inside the caller's buffer.
+                unsafe { buf.wrapping_add(at).write(byte as c_char) };
+            }
+            at = at.saturating_add(1);
+        }
+    }
+    if !buf.is_null() && len > 0 {
+        // SAFETY: the terminator goes at the last written byte or earlier,
+        // inside the `len` bytes.
+        unsafe { buf.wrapping_add(at.min(len - 1)).write(0) };
+    }
+    at.saturating_add(1)
 }
 
 #[cfg(test)]

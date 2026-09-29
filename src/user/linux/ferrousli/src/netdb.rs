@@ -334,6 +334,30 @@ pub struct Sources<'a> {
     pub port: u16,
 }
 
+/// Sun RPC's `struct rpcent` from `rpc/netdb.h`: a program's name, its
+/// aliases and its number. Only its pointer is ever handed out, and that is
+/// null: see [`getrpcbynumber`].
+#[repr(C)]
+#[derive(Debug)]
+pub struct Rpcent {
+    /// The program's name.
+    pub r_name: *mut c_char,
+    /// Other names for it, ending in a null.
+    pub r_aliases: *mut *mut c_char,
+    /// Its RPC program number.
+    pub r_number: c_int,
+}
+
+/// The entry for RPC program `number` in the RPC database, `/etc/rpc`, which
+/// Ferrix's images do not carry and this does not read: always null, "no such
+/// program", which is also glibc's answer where the file is missing. `lsof`
+/// asks it to name the RPC services it finds bound, and falls back to the
+/// number.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn getrpcbynumber(_number: c_int) -> *mut Rpcent {
+    core::ptr::null_mut()
+}
+
 /// What the C functions read: the standard files, and name servers on port 53.
 pub const SYSTEM: Sources<'static> = Sources {
     hosts: c"/etc/hosts",

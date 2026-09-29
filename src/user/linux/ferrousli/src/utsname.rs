@@ -1,4 +1,5 @@
-//! `sys/utsname.h`'s `uname`, and `unistd.h`'s `gethostname` built on it.
+//! `sys/utsname.h`'s `uname`, and `unistd.h`'s `gethostname` and
+//! `getdomainname` built on it.
 
 use core::ffi::{c_char, c_int};
 use core::mem::{MaybeUninit, offset_of, size_of};
@@ -66,6 +67,36 @@ fn fit(name: &[c_char], len: usize) -> (usize, bool) {
 /// `name` must be valid for writes of `len` bytes.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn gethostname(name: *mut c_char, len: usize) -> c_int {
+    // SAFETY: the caller's contract is `copy_field`'s.
+    unsafe { copy_field(|uts| uts.nodename, name, len, errno::ENAMETOOLONG) }
+}
+
+/// Copies the NIS domain name into the `len` bytes at `name`, as
+/// [`gethostname`] copies the host name, except that a name that does not fit
+/// is `EINVAL`, as glibc's is. The Sun RPC library `lsof` links asks for it.
+///
+/// # Safety
+///
+/// `name` must be valid for writes of `len` bytes.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn getdomainname(name: *mut c_char, len: usize) -> c_int {
+    // SAFETY: the caller's contract is `copy_field`'s.
+    unsafe { copy_field(|uts| uts.domainname, name, len, errno::EINVAL) }
+}
+
+/// Copies the field `field` picks of `uname`'s answer into the `len` bytes at
+/// `name`: truncated and still terminated if it does not fit with its NUL,
+/// and then failing with `too_long`.
+///
+/// # Safety
+///
+/// `name` must be valid for writes of `len` bytes.
+unsafe fn copy_field(
+    field: impl Fn(&Utsname) -> [c_char; FIELD],
+    name: *mut c_char,
+    len: usize,
+    too_long: c_int,
+) -> c_int {
     let mut uts = MaybeUninit::<Utsname>::uninit();
     // SAFETY: the kernel writes the whole structure into the live local.
     if unsafe { uname(uts.as_mut_ptr()) } != 0 {
@@ -73,15 +104,13 @@ pub unsafe extern "C" fn gethostname(name: *mut c_char, len: usize) -> c_int {
     }
     // SAFETY: `uname` succeeded, so the kernel initialised every field.
     let uts = unsafe { uts.assume_init() };
-    let (copy, whole) = fit(&uts.nodename, len);
+    let value = field(&uts);
+    let (copy, whole) = fit(&value, len);
     let mut i = 0;
     while i < copy {
         // SAFETY: `copy < len`, so the write is inside the caller's buffer,
         // and `copy` is at most the field's length.
-        unsafe {
-            name.wrapping_add(i)
-                .write(*uts.nodename.get(i).unwrap_or(&0))
-        };
+        unsafe { name.wrapping_add(i).write(*value.get(i).unwrap_or(&0)) };
         i += 1;
     }
     if len > 0 {
@@ -91,7 +120,7 @@ pub unsafe extern "C" fn gethostname(name: *mut c_char, len: usize) -> c_int {
     if whole {
         0
     } else {
-        errno::set(errno::ENAMETOOLONG);
+        errno::set(too_long);
         -1
     }
 }

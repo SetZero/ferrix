@@ -226,6 +226,33 @@ pub extern "C" fn setpriority(which: c_int, who: c_uint, priority: c_int) -> c_i
     errno::from_syscall(ret) as c_int
 }
 
+/// `PRIO_PROCESS`, from `linux/resource.h`.
+const PRIO_PROCESS: c_int = 0;
+
+/// Adds `increment` to the calling process's nice value and returns the new
+/// one, which the kernel keeps within -20 and 19: `unistd.h`'s `nice`. As
+/// with [`getpriority`], -1 is a nice value as well as the failure, and a
+/// caller that must tell them apart clears `errno` first. Only raising
+/// priority needs privilege; a refusal is `EPERM`, as POSIX spells it.
+/// Steam's Vulkan layer imports it.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn nice(increment: c_int) -> c_int {
+    let saved = errno::get();
+    errno::set(0);
+    let now = getpriority(PRIO_PROCESS, 0);
+    if now == -1 && errno::get() != 0 {
+        return -1;
+    }
+    errno::set(saved);
+    if setpriority(PRIO_PROCESS, 0, now.saturating_add(increment)) != 0 {
+        if errno::get() == errno::EACCES {
+            errno::set(errno::EPERM);
+        }
+        return -1;
+    }
+    getpriority(PRIO_PROCESS, 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

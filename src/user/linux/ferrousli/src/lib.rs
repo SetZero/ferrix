@@ -39,6 +39,7 @@
 compile_error!("ferrousli supports x86-64, AArch64 and ARMv7-A");
 
 pub mod arch;
+pub mod argz;
 pub mod arith;
 #[cfg(target_arch = "arm")]
 mod arm_names;
@@ -63,6 +64,8 @@ pub mod exit;
 pub mod fcntl;
 pub mod fenv;
 pub mod float;
+#[cfg(target_arch = "x86_64")]
+pub mod float128;
 pub mod fnmatch;
 pub mod fortify;
 #[cfg(not(target_arch = "arm"))]

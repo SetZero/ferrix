@@ -10,7 +10,7 @@
 //! `AT_PHDR` less the `PT_PHDR` segment's address for a position-independent
 //! one, as `thread.rs` computes it for TLS.
 
-use core::ffi::{CStr, c_char, c_int, c_ulonglong, c_void};
+use core::ffi::{CStr, c_char, c_int, c_long, c_ulonglong, c_void};
 use core::mem::{offset_of, size_of};
 use core::ptr::{null, null_mut, with_exposed_provenance};
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -293,6 +293,100 @@ core::arch::global_asm!(
     ".popsection",
     target = sym dlsym_caller,
 );
+
+/// `dlvsym`'s work, as [`dlsym_caller`] is `dlsym`'s: `name` at `version`,
+/// with the return address as `caller` for `RTLD_NEXT`. A static program has
+/// loaded nothing and finds nothing; a loader older than revision 5 is asked
+/// for the name at any version, the best it can answer.
+///
+/// # Safety
+///
+/// `name` and `version` must be NUL-terminated strings.
+#[cfg_attr(test, allow(dead_code, reason = "reached through the assembly below"))]
+pub(crate) unsafe extern "C" fn dlvsym_caller(
+    handle: *mut c_void,
+    name: *const c_char,
+    version: *const c_char,
+    caller: *const c_void,
+) -> *mut c_void {
+    if let Some(dlvsym_from) = crate::loader::dlvsym_from() {
+        // SAFETY: the caller's contract is the loader's.
+        return unsafe { dlvsym_from(handle, name, version, caller) };
+    }
+    // SAFETY: as above, without the version.
+    unsafe { dlsym_caller(handle, name, caller) }
+}
+
+// `dlvsym`: the return address becomes the fourth argument, as `dlsym`'s
+// becomes its third.
+#[cfg(all(not(test), target_arch = "x86_64"))]
+core::arch::global_asm!(
+    ".pushsection .text.dlvsym,\"ax\",@progbits",
+    ".p2align 4",
+    ".globl dlvsym",
+    ".type dlvsym, @function",
+    "dlvsym:",
+    "    mov rcx, qword ptr [rsp]",
+    "    jmp {target}",
+    ".size dlvsym, . - dlvsym",
+    ".popsection",
+    target = sym dlvsym_caller,
+);
+
+#[cfg(all(not(test), target_arch = "aarch64"))]
+core::arch::global_asm!(
+    ".pushsection .text.dlvsym,\"ax\",%progbits",
+    ".p2align 2",
+    ".globl dlvsym",
+    ".type dlvsym, %function",
+    "dlvsym:",
+    "    mov x3, x30",
+    "    b {target}",
+    ".size dlvsym, . - dlvsym",
+    ".popsection",
+    target = sym dlvsym_caller,
+);
+
+#[cfg(all(not(test), target_arch = "arm"))]
+core::arch::global_asm!(
+    ".pushsection .text.dlvsym,\"ax\",%progbits",
+    ".p2align 2",
+    ".globl dlvsym",
+    ".type dlvsym, %function",
+    "dlvsym:",
+    "    mov r3, lr",
+    "    b {target}",
+    ".size dlvsym, . - dlvsym",
+    ".popsection",
+    target = sym dlvsym_caller,
+);
+
+/// `LM_ID_BASE`, from `dlfcn.h`: the namespace the program was loaded in.
+const LM_ID_BASE: c_long = 0;
+
+/// `LM_ID_NEWLM`: a namespace of its own for what is opened.
+const LM_ID_NEWLM: c_long = -1;
+
+/// [`dlopen`] into the link-map namespace `lmid`: glibc's `dlmopen`. The
+/// loader has one namespace, the program's, so `LM_ID_BASE` is exactly
+/// `dlopen`, and `LM_ID_NEWLM` opens the object there too, sharing the
+/// libraries already loaded where glibc would load fresh copies of them.
+/// Any other namespace is not one there can be, and fails as a failed
+/// `dlopen` does. The Steam client's browser helper and its `tier0` library
+/// open with it.
+///
+/// # Safety
+///
+/// As [`dlopen`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn dlmopen(lmid: c_long, path: *const c_char, flags: c_int) -> *mut c_void {
+    if lmid != LM_ID_BASE && lmid != LM_ID_NEWLM {
+        fail();
+        return null_mut();
+    }
+    // SAFETY: the caller's contract is `dlopen`'s.
+    unsafe { dlopen(path, flags) }
+}
 
 /// Closes a handle from [`dlopen`], which in a static program never gave one
 /// out, and returns -1. Loaded by `ld-ferrousli`, the loader's.

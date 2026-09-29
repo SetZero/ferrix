@@ -13,6 +13,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::exit::exit;
 use crate::stdlib::environ;
+use crate::sysconf::LIBC_VERSION;
 use crate::{auxv, thread};
 
 /// A C `main`, which may take fewer arguments than this. The x86-64 calling
@@ -251,18 +252,6 @@ pub unsafe extern "C" fn run_fini() {
         }
     }
 }
-
-/// The glibc version this library claims to be, as `gnu/libc-version.h`
-/// declares it: a NUL-terminated string such as `2.39`.
-///
-/// It is a claim about which glibc interfaces exist here, not a version of
-/// this library. A program asks so that it can decide whether a newer
-/// interface is available; Rust's `std` is one, which is how this came to be
-/// needed. 2.39 is the newest glibc whose additions this library has —
-/// `__isoc23_strtol` and its relatives from 2.38, `fchmodat2` from 2.39.
-/// **Raise it when an interface from a later glibc is added, and not before:
-/// a number that is too high makes callers take a path that is not here.**
-const LIBC_VERSION: &CStr = c"2.39";
 
 /// The release this library claims to be, as glibc reports it. glibc says
 /// `stable` for a released version, and so does this.

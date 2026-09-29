@@ -174,6 +174,17 @@ fn unlock_requeue(l: &AtomicI32, onto: &AtomicI32, wake: bool) {
 /// the caller holds, both outliving the call, and `ts` null or valid for a
 /// read of a `struct timespec`.
 pub unsafe fn timedwait(c: *mut Cond, m: *mut Mutex, ts: *const Timespec) -> c_int {
+    // SAFETY: the caller's contract is `wait_on`'s, with the variable's clock.
+    unsafe { wait_on(c, m, None, ts) }
+}
+
+/// [`timedwait`], measuring `ts` against `clock` when it is given rather
+/// than the clock `*c` was made with: `pthread_cond_clockwait`.
+///
+/// # Safety
+///
+/// As [`timedwait`].
+unsafe fn wait_on(c: *mut Cond, m: *mut Mutex, clock: Option<c_int>, ts: *const Timespec) -> c_int {
     // SAFETY: the caller vouches for the mutex, which is all atomics.
     let m = unsafe { &*m };
     let kind = m.kind.load(Ordering::SeqCst);
@@ -190,8 +201,11 @@ pub unsafe fn timedwait(c: *mut Cond, m: *mut Mutex, ts: *const Timespec) -> c_i
     }
     cancel::testcancel();
 
-    // SAFETY: the caller vouches for `c` throughout.
-    let clock = unsafe { int(c, CLOCK_INT) }.load(Ordering::SeqCst);
+    let clock = match clock {
+        Some(clock) => clock,
+        // SAFETY: the caller vouches for `c` throughout.
+        None => unsafe { int(c, CLOCK_INT) }.load(Ordering::SeqCst),
+    };
     // SAFETY: as above.
     let shared = !unsafe { word(c, SHARED_WORD) }
         .load(Ordering::SeqCst)
@@ -526,6 +540,29 @@ pub unsafe extern "C" fn pthread_cond_timedwait(
 ) -> c_int {
     // SAFETY: the caller vouches for all three.
     unsafe { timedwait(c, m, ts) }
+}
+
+/// [`pthread_cond_timedwait`], with the absolute time `ts` measured against
+/// `clock` rather than the clock `*c` was made with (POSIX.1-2024, and glibc
+/// since 2.30). Only `CLOCK_REALTIME` and `CLOCK_MONOTONIC` are accepted, as
+/// glibc accepts; any other clock is `EINVAL`. Chromium's base library waits
+/// this way, so the Steam client's browser helper imports it.
+///
+/// # Safety
+///
+/// As [`pthread_cond_timedwait`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn pthread_cond_clockwait(
+    c: *mut Cond,
+    m: *mut Mutex,
+    clock: c_int,
+    ts: *const Timespec,
+) -> c_int {
+    if clock != crate::time::CLOCK_REALTIME && clock != crate::time::CLOCK_MONOTONIC {
+        return errno::EINVAL;
+    }
+    // SAFETY: the caller vouches for all three.
+    unsafe { wait_on(c, m, Some(clock), ts) }
 }
 
 /// Wakes one thread waiting on `*c`, if any.

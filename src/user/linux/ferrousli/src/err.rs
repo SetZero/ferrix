@@ -4,7 +4,8 @@
 //! `warn(fmt, ...)` writes `name: message: text of errno`, `warnx` the same
 //! without the text of `errno`; a null format leaves the message and its
 //! `": "` out. util-linux's libraries, which Chrome loads through GLib, call
-//! them.
+//! them. GNU's `error`, from `error.h`, is the same report with the error
+//! number given, and lives here too.
 
 use core::ffi::{CStr, c_char, c_int};
 
@@ -105,7 +106,28 @@ pub unsafe extern "C" fn verrx(status: c_int, fmt: *const c_char, ap: VaListArg)
     exit::exit(status)
 }
 
+/// GNU's `error`, for its list: flushes standard output, reports the message
+/// on standard error, with the text of `errnum` after it unless that is zero,
+/// and exits with `status` unless that is zero. GNU grep, sed and tar report
+/// through it. glibc's `error_message_count` and `error_print_progname` are
+/// not kept; nothing on the Steam client's side reads them.
+///
+/// # Safety
+///
+/// As [`vwarn`].
+unsafe extern "C" fn verror(status: c_int, errnum: c_int, fmt: *const c_char, ap: VaListArg) {
+    let out = file::stdout.load(core::sync::atomic::Ordering::Relaxed);
+    // SAFETY: standard output is a static stream.
+    let _ = unsafe { crate::stdio::io::fflush(out) };
+    // SAFETY: the caller's contract.
+    unsafe { report(fmt, ap, errnum != 0, errnum) };
+    if status != 0 {
+        exit::exit(status)
+    }
+}
+
 va::variadic!(warn, 1, vwarn);
 va::variadic!(warnx, 1, vwarnx);
 va::variadic!(err, 2, verr);
 va::variadic!(errx, 2, verrx);
+va::variadic!(error, 3, verror);

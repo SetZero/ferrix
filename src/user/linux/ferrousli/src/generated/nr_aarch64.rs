@@ -269,6 +269,10 @@ pub const MKNODAT: usize = 33;
 pub const SETRESUID: usize = 147;
 /// `setresgid`.
 pub const SETRESGID: usize = 149;
+/// `setfsuid`.
+pub const SETFSUID: usize = 151;
+/// `setfsgid`.
+pub const SETFSGID: usize = 152;
 /// `fchmodat2`.
 pub const FCHMODAT2: usize = 452;
 /// `copy_file_range`.
