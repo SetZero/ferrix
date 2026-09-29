@@ -264,6 +264,8 @@ pub(crate) const XWINDOW_PATH: &str = "etc/xwindow.sh";
 /// `xfontsel` with its field menu held open through XTEST, between
 /// [`XWINDOW_MENU`] and [`XWINDOW_MENU_OPEN`], at each of which xtask looks
 /// at the screen.
+/// Last, the clipboard both ways for both selections (Y6): `xclip` copies
+/// and `/bin/clip` pastes, then `/bin/clip` copies and `xclip` pastes.
 /// Every line of its own starts `xwindow:`, and it ends with `xwindow: end`
 /// whatever happened.
 pub(crate) const XWINDOW_SCRIPT: &str = r#"export PATH=/bin:/data/usr/bin HOME=/tmp
@@ -368,6 +370,19 @@ echo "xwindow: menu open"
 sleep 4
 xdotool mouseup 1
 sleep 1
+# The clipboard (Y6), both selections: an X client's copy pasted by a
+# Wayland one, then the reverse. xclip -i serves the selection from the
+# background until the Wayland copy takes it.
+for which in clipboard primary; do
+    flag=""
+    [ $which = primary ] && flag=--primary
+    printf 'x-%s-to-wayland' $which | xclip -selection $which -i
+    sleep 1
+    /bin/clip $flag paste 2>&1 | sed "s/^/xwindow: clip $which: /"
+    /bin/clip $flag copy wayland-$which-to-x > /dev/null 2>&1 &
+    sleep 1
+    echo "xwindow: xclip $which: $(xclip -selection $which -o 2>&1)"
+done
 sed 's/^/xwindow: xev: /' /tmp/xev.txt
 sed 's/^/xwindow: yserver: /' /tmp/yserver.log
 echo "xwindow: end"
@@ -958,6 +973,43 @@ pub(crate) fn judge_menu(
     Ok(())
 }
 
+/// Whether the clipboard went both ways for both selections
+/// (docs/YSERVER.md, Y6): what `xclip` copied, `clip` pasted, and what
+/// `clip` copied, `xclip` pasted.
+pub(crate) fn judge_clipboard(arch: Arch, lines: &[String]) -> Result<()> {
+    let said = |prefix: &str| {
+        lines
+            .iter()
+            .find_map(|line| line.split_once(prefix))
+            .map(|(_, rest)| rest.trim().to_owned())
+    };
+    let mut wrong = Vec::new();
+    for which in ["clipboard", "primary"] {
+        let pasted = said(&format!("xwindow: clip {which}:"));
+        let wanted = format!("clip: pasted x-{which}-to-wayland");
+        if pasted.as_deref() != Some(wanted.as_str()) {
+            wrong.push(format!(
+                "X's {which} copy reached Wayland as {pasted:?}, not {wanted:?}"
+            ));
+        }
+        let pasted = said(&format!("xwindow: xclip {which}:"));
+        let wanted = format!("wayland-{which}-to-x");
+        if pasted.as_deref() != Some(wanted.as_str()) {
+            wrong.push(format!(
+                "Wayland's {which} copy reached X as {pasted:?}, not {wanted:?}"
+            ));
+        }
+    }
+    if wrong.is_empty() {
+        println!("  {arch}: the clipboard and the primary selection go from X to Wayland and back");
+        return Ok(());
+    }
+    Err(Error::new(format!(
+        "{arch}: {}; the `xwindow:` lines and the server's log say more",
+        wrong.join("; ")
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1192,6 +1244,34 @@ KeyRelease event, serial 13, synthetic NO, window 0x200001,
         assert!(judge_menu(Arch::X86_64, &lines, (Some(&blank), Some(&menu))).is_ok());
         assert!(judge_menu(Arch::X86_64, &lines, (Some(&blank), Some(&blank))).is_err());
         assert!(judge_menu(Arch::X86_64, &lines, (Some(&menu), Some(&menu))).is_err());
+    }
+
+    #[test]
+    fn the_clipboard_must_go_both_ways_for_both_selections() {
+        let good: Vec<String> = [
+            "xwindow: clip clipboard: clip: pasted x-clipboard-to-wayland",
+            "xwindow: xclip clipboard: wayland-clipboard-to-x",
+            "xwindow: clip primary: clip: pasted x-primary-to-wayland",
+            "xwindow: xclip primary: wayland-primary-to-x",
+        ]
+        .iter()
+        .map(|line| (*line).to_owned())
+        .collect();
+        assert!(judge_clipboard(Arch::X86_64, &good).is_ok());
+        // What a server without the bridge gives: xclip pastes its own
+        // copy back, and clip finds nothing.
+        let unbridged: Vec<String> = good
+            .iter()
+            .map(|line| {
+                line.replace(
+                    "clip: pasted x-clipboard-to-wayland",
+                    "clip: failed: nothing",
+                )
+                .replace("wayland-primary-to-x", "x-primary-to-wayland")
+            })
+            .collect();
+        assert!(judge_clipboard(Arch::X86_64, &unbridged).is_err());
+        assert!(judge_clipboard(Arch::X86_64, &good[..3]).is_err());
     }
 
     #[test]

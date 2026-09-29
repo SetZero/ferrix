@@ -119,7 +119,11 @@ staged until now.
   finds xev's window on the screen, requires xev to report the input put
   in, to take its tile's size, and to end when hyprix closes it, a
   transient xev to float, and xfontsel's menu to show where X put it).
-  Next are Y6, the clipboard, and Y7, yserver in `--everything`.
+  Y7 put yserver on the `--everything` desktop the same day, and Y6, the
+  clipboard, was done on 2026-09-29: X's `CLIPBOARD` and `PRIMARY` and
+  hyprix's clipboard and primary selection follow each other both ways,
+  for text (`test-xwindow` copies with `xclip` and pastes with `clip`, then
+  the reverse). All 36 points are done; next is I5b.
 * **Sound.** Playback is done, 2026-09-26 (`docs/AUDIO.md` §8): a
   `virtio-snd` driver in ring 3, the audio core and `/dev/snd`, and Chrome
   playing through them, which `test-audio` and `test-chrome-audio` gate.

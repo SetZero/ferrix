@@ -230,6 +230,35 @@ for. The Wayland side is an `ext_data_control` client, as `vdagent` is, so no
 focus serial is needed. It carries text only at first (`UTF8_STRING`,
 `text/plain;charset=utf-8`), the same as the SPICE bridge.
 
+As built in Y6, the bridge is the fork's `crates/yserver/src/wayland/clipboard.rs`,
+for `CLIPBOARD` and `PRIMARY` both:
+
+* **The core's pieces.** A window of the server's own,
+  `selection_window_for_server` (an unmapped `InputOnly` child of the
+  root, owned by `SERVER_OWNER`), owns X selections for the compositor and
+  asks X clients for theirs. A `ConvertSelection` of a selection it owns,
+  and a `SelectionNotify` sent to it, have no client to go to, so the core
+  queues them in `ServerState::server_selection_events` for the backend.
+  The backend's own requests are `set_selection_owner_for_server`,
+  `convert_selection_for_server`, `change_property_for_server` and
+  `send_selection_notify_for_server`, each driving the request's handler.
+* **X to Wayland.** An X client that owns a selection gets a data source
+  offering text set as the compositor's. A Wayland paste from it becomes
+  the server's `ConvertSelection` for `UTF8_STRING`, then `STRING`, whose
+  answer is read off the server's window into the paster's pipe.
+* **Wayland to X.** A compositor selection offering text makes the
+  server's window the X owner, unless it is the server's own source coming
+  back, which carries a marker type. An X client's `ConvertSelection`
+  becomes a `receive` on the compositor's offer, read from a pipe into the
+  requestor's property. `TARGETS` is answered at once.
+* **Transfers** move a little each loop iteration without blocking, the
+  loop woken every 5 ms while one is under way, and give up after five
+  seconds. `INCR` is not done: a selection larger than one property is
+  refused both ways.
+* **The toolkit** needed `Client::adopt_new_ids` (Ferrix `f1ced561`): an
+  offer's types follow the `data_offer` that makes it in the same read,
+  and an offer adopted after the event had lost them.
+
 ## 5. What hyprix needs
 
 Nothing, for §7's first four slices. Every protocol above is already
@@ -282,7 +311,11 @@ its first buffer, centred over its parent. There are two defaults to add:
     black border where X put it, at xfontsel's tile plus the popup's place
     on xfontsel, while the button is down and not before. xfontsel's
     layout, and so its menu, comes from its app-defaults file, which the
-    image links in from the volume's `/etc/X11`.
+    image links in from the volume's `/etc/X11`;
+* last, the clipboard (Y6), for `CLIPBOARD` and `PRIMARY` each: `xclip`
+  copies and hyprix's `clip` pastes, then `clip` copies and `xclip`
+  pastes, and each must get the other's text. A server without the bridge
+  fails it: `clip` finds nothing and `xclip` pastes its own copy.
 * Each slice runs `cargo xtask check` before it lands. The tests are
   on-demand boots and do not join the item gate, because test time is the
   customer's first priority.
@@ -297,7 +330,7 @@ its first buffer, centred over its parent. There are two defaults to add:
 | Y4 | Input and cursor: keys, pointer, wheel, focus, `set_cursor`; `xev` reports the injected events. **Done 2026-09-28** | 5 |
 | Y5a | Transients, compositor resize and close; the core helpers. **Done 2026-09-28** | 5 |
 | Y5b | Popups; the menu case. **Done 2026-09-28** | 3 |
-| Y6 | Clipboard: core selection hooks, `ext_data_control` bridge, text | 5 |
+| Y6 | Clipboard: core selection hooks, `ext_data_control` bridge, text. **Done 2026-09-29** | 5 |
 | Y7 | yserver in `--everything`: `exec-once`, `DISPLAY`, window rules | 2 |
 
 That is 36 points, against stage 19's 40-point first guess for an X server.
@@ -326,7 +359,31 @@ Still open:
 
 ## 9. Where it stands
 
-2026-09-28, later: Y7 is done too, 31 of the 36 points.
+2026-09-29: Y6 is done, and with it all 36 points. X's `CLIPBOARD` and
+`PRIMARY` and hyprix's clipboard and primary selection follow each other
+both ways, for text (§4.5); `fetch-yserver.sh` pins the fork at
+`9b55c06` and adds `xclip` to the volume. `test-xwindow` copies and pastes
+across in both directions for both selections, on its own volume and with
+`--everything`; the same test on the server before Y6 fails, with `clip`
+finding nothing and `xclip` pasting its own copy. What Y6 found:
+
+* **The toolkit lost a data offer's types.** A program's own objects are
+  adopted after the event that makes them, which is too late when the
+  object's events follow in the same read: every `data_offer` came with
+  no types. `Client::adopt_new_ids` (Ferrix `f1ced561`) says ahead of time
+  what an event's new objects are.
+* **The core had no way to own or ask for a selection itself**, and a
+  `ConvertSelection` of a selection owned by a window of the server's own
+  was answered as if nothing owned it. The queue and the server's own
+  requests of §4.5 are the change.
+* **Not done.** `INCR`, so a selection over one property's size is
+  refused; and types other than text (images, files), which the design
+  left for later.
+* **Estimate against spend.** 5 points estimated, about 4 spent: both
+  gate runs green the first time, and the negative control failed as it
+  should.
+
+Before it, 2026-09-28, later: Y7 was done too, 31 of the 36 points.
 `run-compositor --everything` merges yserver's volume into its own and
 starts yserver on `:0` as a client of hyprix, from `exec-once`, with
 `DISPLAY=:0` for every program the desktop starts, and floats Steam's

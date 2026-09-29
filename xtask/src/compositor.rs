@@ -6809,7 +6809,8 @@ fn xwindow_args(args: &Args) -> Result<Args> {
 /// `xev` against it (docs/YSERVER.md, Y2 to Y4): the root window must be
 /// the compositor's screen, xev's window one of the compositor's, by its
 /// title and class and on the screen, and the pointer, a click, the wheel
-/// and keys put in through QEMU must reach xev as X events. yserver is
+/// and keys put in through QEMU must reach xev as X events; later cases
+/// check windows, menus and the clipboard both ways (Y5, Y6). yserver is
 /// started as `run-compositor --everything` starts it (Y7), and with
 /// `--everything` the gate attaches that desktop's merged volume.
 ///
@@ -6916,7 +6917,8 @@ pub(crate) fn test_xwindow(args: &Args) -> Result<()> {
     crate::yserver::judge_xev(arch, &said, screen.as_ref(), &dump)?;
     crate::yserver::judge_xev_input(arch, &said)?;
     crate::yserver::judge_windows(arch, &said, screen.as_ref())?;
-    crate::yserver::judge_menu(arch, &said, (menu.0.as_ref(), menu.1.as_ref()))
+    crate::yserver::judge_menu(arch, &said, (menu.0.as_ref(), menu.1.as_ref()))?;
+    crate::yserver::judge_clipboard(arch, &said)
 }
 
 /// The input of [`BENCH_PHASES`], ten seconds each: nothing, the wheel

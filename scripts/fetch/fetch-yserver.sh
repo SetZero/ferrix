@@ -10,7 +10,8 @@
 # lavapipe is its Vulkan on a machine with no GPU for it, and x11-utils'
 # xdpyinfo, xev and xfontsel are the clients the tests run against it, with
 # xdotool to unmap, resize and map a window, and to hold a menu open, the way
-# a program or a hand would.
+# a program or a hand would, and xclip to copy and paste through X's
+# selections.
 #
 # The source is the customer's fork of yserver (docs/YSERVER.md §8), pinned
 # by commit: 1.6.0 and Ferrix's commits on top. It is built with its
@@ -41,7 +42,7 @@ out=${FERRIX_YSERVER_VOLUME:-$HOME/.local/share/ferrix/yserver}
 # The fork, and the commit of it that is built. YSERVER_REPO may name a local
 # clone, for a commit not yet pushed.
 repo=${YSERVER_REPO:-https://github.com/SetZero/yserver.git}
-YSERVER_COMMIT=a2b01cf688f4be7a9a1993de2d849c09595f484b
+YSERVER_COMMIT=9b55c06fe7b51850daa1cf33d0c290717ed6562a
 # The toolchain Ferrix pins in rust-toolchain.toml.
 toolchain=${YSERVER_TOOLCHAIN:-1.97.1}
 
@@ -192,6 +193,7 @@ debs=(
     "pool/main/z/zlib/zlib1g-dev_1.3.dfsg+really1.3.1-1+b1_amd64.deb 76ed5c858e1aef38b7be93acce5910e457e77bd6271471b9d05fb42e78826224"
     "pool/main/x/xdotool/libxdo3_3.20160805.1-5.1_amd64.deb d634e25d2b50af140ee9f44bab507fcfb665f3556fd483faefdb56e85598cc12"
     "pool/main/x/xdotool/xdotool_3.20160805.1-5.1_amd64.deb 98ac8681533b01020c7288fb2e9de403d586747dab48cfd58e04cb00d0c44fb1"
+    "pool/main/x/xclip/xclip_0.13-4_amd64.deb 14203d9a0138996c647d603fcadd79e6765a0a124f606e386215325ac13ece76"
 )
 
 # The same, from the security archive.
