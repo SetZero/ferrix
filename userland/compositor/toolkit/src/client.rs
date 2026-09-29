@@ -726,6 +726,9 @@ impl Client {
             xdg_toplevel::request::SET_APP_ID,
             &[Arg::Str(Some(&options.app_id))],
         )?;
+        if options.min_size != (0, 0) || options.max_size != (0, 0) {
+            send_size_limits(self, toplevel, options.min_size, options.max_size)?;
+        }
         self.send(surface, wl_surface::request::COMMIT, &[])?;
         let _ = self.surfaces.insert(
             id,
@@ -753,6 +756,20 @@ impl Client {
     /// window is left alone.
     pub fn set_app_id(&mut self, window: SurfaceId, app_id: &str) {
         let result = self.toplevel_text(window, xdg_toplevel::request::SET_APP_ID, app_id);
+        self.defer(result);
+    }
+
+    /// Change the least and greatest size a window may be given
+    /// (`xdg_toplevel.set_min_size` and `set_max_size`; 0 is no limit),
+    /// in effect from its next commit. Anything but a window is left alone.
+    pub fn set_size_limits(&mut self, window: SurfaceId, min: (u32, u32), max: (u32, u32)) {
+        let Some(Kind::Toplevel { toplevel, .. }) =
+            self.surfaces.get(&window).map(|state| &state.kind)
+        else {
+            return;
+        };
+        let toplevel = *toplevel;
+        let result = send_size_limits(self, toplevel, min, max);
         self.defer(result);
     }
 
@@ -2842,6 +2859,25 @@ impl SurfaceState {
 }
 
 /// A `u32` argument as the `int` the wire wants.
+/// `xdg_toplevel.set_min_size` and `set_max_size` on `toplevel`.
+fn send_size_limits(
+    client: &mut Client,
+    toplevel: ObjectId,
+    min: (u32, u32),
+    max: (u32, u32),
+) -> Result<(), Error> {
+    client.send(
+        toplevel,
+        xdg_toplevel::request::SET_MIN_SIZE,
+        &[int(min.0), int(min.1)],
+    )?;
+    client.send(
+        toplevel,
+        xdg_toplevel::request::SET_MAX_SIZE,
+        &[int(max.0), int(max.1)],
+    )
+}
+
 fn int(value: u32) -> Arg<'static> {
     Arg::Int(i32::try_from(value).unwrap_or(i32::MAX))
 }

@@ -2720,16 +2720,20 @@ fn configure_first(
 }
 
 /// Float a window that has just mapped if it is a dialog, as Hyprland
-/// does: one with a parent (`xdg_toplevel.set_parent`), which is also what
-/// an X server's transient windows become. A window a rule floated already
-/// is left where the rule put it. Floats it, for now, centred at half the
-/// monitor, until its first buffer gives its size (`fit_dialog`); gives
-/// whether it did.
+/// does (`CHyprXWaylandManager::shouldBeFloated`): one with a parent
+/// (`xdg_toplevel.set_parent`), which is also what an X server's transient
+/// windows become, or one of a fixed size, whose least size is set and
+/// equals its greatest in width or in height (`set_min_size` and
+/// `set_max_size`), which is what an X window's `WM_NORMAL_HINTS` become.
+/// A window a rule floated already is left where the rule put it. Floats
+/// it, for now, centred at half the monitor, until its first buffer gives
+/// its size (`fit_dialog`); gives whether it did.
 fn float_dialog(client: &Client, toplevel: ObjectId, window: WindowId, state: &mut State) -> bool {
-    let parented = client
-        .toplevel(toplevel)
-        .is_some_and(|top| top.parent.is_some());
-    if !parented || state.is_floating(window) {
+    let dialog = client.toplevel(toplevel).is_some_and(|top| {
+        let (min, max) = (top.min_size, top.max_size);
+        top.parent.is_some() || (min.0 != 0 && min.1 != 0 && (min.0 == max.0 || min.1 == max.1))
+    });
+    if !dialog || state.is_floating(window) {
         return false;
     }
     let Some(monitor) = monitor_rect(state, window) else {
