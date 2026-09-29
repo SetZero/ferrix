@@ -34,7 +34,11 @@ boot (one SUITE line).
    transients, and open their menus as its popups. Y7 put yserver on the
    `--everything` desktop, and Y6 (2026-09-29) made X's clipboard and
    primary selection and hyprix's one, both ways, which finishes the
-   design's 36 points. Next is I5b, the Steam client's bootstrapper.
+   design's 36 points.
+   **Steam's sign-in window is on hyprix** (2026-09-29, `docs/STEAM.md`,
+   `cargo xtask test-steam-window`): the client installs itself from the
+   bootstrap and its browser helper draws through yserver, with launch-side
+   workarounds each owned by a kernel or yserver fix now under way.
 3. **W-8**: 21b, 21c and file 24, then the modules the traceability gate does
    not yet hold complete.
 4. **The desktop**: fuzzel's second-press toggle, hyprlock P1.5, hypridle.
@@ -174,8 +178,9 @@ whose 32-bit x86 ABI is under way (`docs/I386.md`): I1 to I4 are on `main`
 (32-bit programs, their threads, signals and fork, Alpine's and Debian's i386
 busybox), and I5a: Valve's `steamcmd` logs in to Steam, from `test-steamcmd`
 and from the `--everything` desktop's terminal (2026-09-27). The Steam client
-itself needs an X server; the customer chose yserver, a Rust X11 server, with
-a rootless Wayland backend of Ferrix's own (2026-09-27, not started). Ferrix also boots on the customer's Pixel
+itself draws through yserver, a Rust X11 server, with a rootless Wayland
+backend of Ferrix's own: its sign-in window is on hyprix since 2026-09-29,
+with launch-side workarounds listed in `docs/STEAM.md`. Ferrix also boots on the customer's Pixel
 7: natively on all eight cores to `FERRIX-BOOT-OK stages 1-12`, and as a guest
 of the phone's own crosvm from a launcher app, which shows a desktop in that
 VM with Chromium on it (2026-09-27); during a native boot a USB serial port

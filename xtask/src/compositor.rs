@@ -46,6 +46,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 mod idle;
+pub(crate) mod steam_window;
 
 use crate::args::Args;
 use crate::display::{DEVICE_ID, Image, Qmp, free_port, mismatches, parse_ppm};

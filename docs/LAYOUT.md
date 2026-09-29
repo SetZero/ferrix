@@ -132,8 +132,9 @@ exercise the system from outside any one crate.
 |---|---|
 | `scripts/check/` | The quality gates `cargo xtask check` and CI run: layering, assembly budget, unsafe and panic audits, the certification item boundary, complexity, commit authors. `rustlex.py` is their shared Rust lexer. |
 | `scripts/gen/` | Generators and their `--check` modes: brand images and release notes, the architecture document (with its `sysml/` reader), the panic catalogue, fonts, Wayland protocol tables, XKB tables, SOUP, coverage justification, fuzz corpus seeds. |
-| `scripts/fetch/` | Fetch pinned downloads: the rustc sysroot, busybox, Chrome, Bad Apple!!. |
+| `scripts/fetch/` | Fetch pinned downloads: the rustc sysroot, busybox, Chrome, Bad Apple!!, Steam's volumes. |
 | `scripts/test/` | Test drivers run by hand: the self-host matrix, the host `btrfs check` oracle. |
+| `scripts/steam/` | What `cargo xtask run-steam` and `test-steam-window` carry into the guest: the scripts that start Steam, its stand-ins, and in `workarounds/` the C shims for kernel gaps, each headed with its gap and the owner of the real fix (`docs/STEAM.md`). |
 | `scripts/data/` | The allow-lists, baselines and registers the checks read. |
 | `scripts/marketing/` | One-off GitHub repository settings, run by the owner (`github-setup.sh`). |
 

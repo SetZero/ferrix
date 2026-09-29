@@ -1,0 +1,22 @@
+#!/bin/sh
+# Stands in for the Steam Linux Runtime 3 ("steamrt64") entry point, which the
+# Steam client runs steamwebhelper through (docs/STEAM.md). Valve's starts
+# pressure-vessel, which builds a container with bubblewrap, and Ferrix has
+# no user namespaces yet. This one runs the command directly, on Debian 13's
+# libraries first and the runtime's own after them. `cargo xtask run-steam`
+# carries it at /steam/steamrt, which client.sh names in
+# STEAM_RUNTIME_STEAMRT. Owner of the real fix: namespaces N2-N6.
+while [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done
+[ "${1-}" = "--" ] && shift
+# The platform's libraries, with the soname links client.sh gives them.
+runtime=
+for files in /data/steam/steamrt64/pv-runtime/steam-runtime-steamrt/steamrt*_platform_*/files; do
+    [ -d "$files" ] && runtime=$files && break
+done
+[ -n "$runtime" ] || echo "steam-window: steamrt stand-in finds no Steam Linux Runtime" >&2
+export LD_LIBRARY_PATH=/data/steam/ubuntu12_64:/usr/lib/x86_64-linux-gnu:$runtime/lib/x86_64-linux-gnu:$runtime/lib
+export LIBGL_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri
+unset LD_PRELOAD WAYLAND_DISPLAY
+export SDL_VIDEO_DRIVER=x11
+echo "steam-window: steamrt stand-in runs $*" >&2
+exec "$@"
