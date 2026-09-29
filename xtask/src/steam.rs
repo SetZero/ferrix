@@ -61,7 +61,7 @@ use crate::{Error, Result, busybox, cargo, fat, initramfs, native, qemu, rustc, 
 /// The paths the volume's programs name absolutely, each a link into it:
 /// both loaders and both of glibc's directories, the certificate bundle,
 /// `bash` where `ldd`'s `#!` names it, and `env` where `steam.sh`'s does.
-const LINKS: &[(&str, &str)] = &[
+pub(crate) const LINKS: &[(&str, &str)] = &[
     (
         "lib/ld-linux.so.2",
         "/data/usr/lib/i386-linux-gnu/ld-linux.so.2",
@@ -81,12 +81,12 @@ const LINKS: &[(&str, &str)] = &[
 ];
 
 /// Where [`UNAME`] is in the image: a directory of its own, first in `PATH`.
-const UNAME_PATH: &str = "usr/local/bin/uname";
+pub(crate) const UNAME_PATH: &str = "usr/local/bin/uname";
 
 /// `uname` for `steam.sh`: `Linux` for the bare `uname` and `uname -s`, the
 /// two ways it and scout ask for the system's name; busybox's answer to
 /// anything else, `uname -m` among them.
-const UNAME: &str = r#"#!/bin/sh
+pub(crate) const UNAME: &str = r#"#!/bin/sh
 case "$*" in
     '' | -s) echo Linux ;;
     *) exec /bin/busybox uname "$@" ;;

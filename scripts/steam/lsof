@@ -1,0 +1,8 @@
+#!/bin/sh
+# lsof for the Steam client on Ferrix (docs/STEAM.md): Debian's lsof on the
+# volume, with scripts/steam/workarounds/lsof-sockstat.c preloaded so that it
+# can see which process holds a TCP socket. The client looks for lsof only at
+# /sbin, /bin, /usr/sbin and /usr/bin, so `cargo xtask run-steam` carries this
+# at /usr/bin/lsof. Drop the LD_PRELOAD when steam-procfs-fd lands.
+LD_PRELOAD=/data/steam-workarounds/lib/x86_64-linux-gnu/lsof-sockstat.so \
+    exec /data/usr/bin/lsof "$@"

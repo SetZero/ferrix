@@ -120,6 +120,16 @@ staged until now.
   in, to take its tile's size, and to end when hyprix closes it, a
   transient xev to float, and xfontsel's menu to show where X put it).
   Next are Y6, the clipboard, and Y7, yserver in `--everything`.
+  **Steam's sign-in window is on hyprix (2026-09-29):** Valve's client,
+  unchanged, downloads and installs itself from the bootstrap, starts its
+  browser helper, and the helper draws "Sign in to Steam" through yserver
+  on hyprix (`cargo xtask test-steam-window`, from the volume
+  `scripts/fetch/fetch-steam-window.sh` makes; `docs/STEAM.md`). It runs
+  with launch-side workarounds and no kernel change of its own: a stand-in
+  for the steamrt64 entry point instead of pressure-vessel, `lsof` and the
+  client preloaded with shims for `/proc` gaps and packet-mode pipes, and
+  a 16 GiB guest. `docs/STEAM.md` §3 lists each with the fix that retires
+  it and its owner.
 * **Sound.** Playback is done, 2026-09-26 (`docs/AUDIO.md` §8): a
   `virtio-snd` driver in ring 3, the audio core and `/dev/snd`, and Chrome
   playing through them, which `test-audio` and `test-chrome-audio` gate.
@@ -154,6 +164,10 @@ with the browser helper drawing; a native Linux game from the library
 installs to btrfs, launches and draws through the GPU path with sound; and
 a Windows game runs through Proton. The first two are a guest's exit on
 the Linux host; the third is the GPU's Vulkan, wherever that comes first.
+
+The first step is part met (2026-09-29): the client starts and its browser
+helper draws the sign-in window; signing in and the store are next, and the
+workarounds of `docs/STEAM.md` §3 are still in use.
 
 None of it is sized past a first guess, and the sum of the first guesses is
 already over 300 points, so the stage is written as a list of what has to be
