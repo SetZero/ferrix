@@ -3,7 +3,7 @@
 //! Images are built by hand rather than checked in as binaries, so that a test
 //! failure names the field that is wrong instead of pointing at an opaque blob,
 //! and so that the malformed cases can be produced by mutating one field of a
-//! known-good image. The same shapes seed `tests/fuzz/fuzz_targets/elf_parse.rs`, by
+//! known-good image. The same shapes seed `src/tests/fuzz/fuzz_targets/elf_parse.rs`, by
 //! way of `tools/common/gen/seed-fuzz-corpus.py`.
 
 extern crate std;

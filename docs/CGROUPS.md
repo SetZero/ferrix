@@ -520,7 +520,7 @@ and fails by the check's own message. Five things cost a gate each today:
 * The kernel denies `unused_results` and `clippy::too_many_lines` (100).
 * A new panic-catalog entry needs `docs/generated/PANICS.md`, regenerated
   on Linux.
-* A new crate goes into `Cargo.lock` and `tests/fuzz/Cargo.lock`: check with
+* A new crate goes into `Cargo.lock` and `src/tests/fuzz/Cargo.lock`: check with
   `cargo metadata --locked --offline` in both.
 * On example, `pgrep -f` with a pattern that also appears in the calling
   command line matches its own shell.

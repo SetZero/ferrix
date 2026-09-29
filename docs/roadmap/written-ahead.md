@@ -64,7 +64,7 @@ it was first counted, plus the doc-tests and the 41 of `xtask` itself. On
 crate under `src/lib/` together has 2178, 92 of them `src/lib/init/svc`'s.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
-asks for a fuzz target *and* a Miri run per crate, and `tests/fuzz/` has
+asks for a fuzz target *and* a Miri run per crate, and `src/tests/fuzz/` has
 thirty-two: `elf_parse`, `frame_alloc`, `ustack_build`, `handle_table`,
 `vfs_ops`, `pci_walk`, `btrfs_read`, `block_queue`, `blkring`, `virtio_blk`,
 `virtio_net`, `cpio_parse`, `fdt_parse`, `acpi_tables`, `netwire_parse`,

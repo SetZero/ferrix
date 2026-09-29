@@ -27,7 +27,7 @@ Usage:
 import pathlib
 import struct
 
-OUT = pathlib.Path(__file__).resolve().parent.parent.parent.parent / "tests" / "fuzz" / "corpus" / "acpi_tables"
+OUT = pathlib.Path(__file__).resolve().parent.parent.parent.parent / "src" / "tests" / "fuzz" / "corpus" / "acpi_tables"
 
 
 def checksum_fix(table, at):

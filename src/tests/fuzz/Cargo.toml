@@ -14,42 +14,42 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-ferrix-acpi = { path = "../../src/lib/platform/acpi" }
-ferrix-cpio = { path = "../../src/lib/fs/cpio" }
-ferrix-argon2 = { path = "../../src/lib/crypto/argon2" }
-ferrix-auth-proto = { path = "../../src/lib/proto/auth-proto" }
-ferrix-elf = { path = "../../src/lib/platform/elf" }
-ferrix-fdt = { path = "../../src/lib/platform/fdt" }
-ferrix-frame = { path = "../../src/lib/kernel/frame" }
-ferrix-ustack = { path = "../../src/lib/kernel/ustack" }
-ferrix-linux-abi = { path = "../../src/lib/proto/linux-abi" }
-ferrix-native-abi = { path = "../../src/lib/proto/native-abi" }
-ferrix-objects = { path = "../../src/lib/kernel/objects" }
-ferrix-sync = { path = "../../src/lib/kernel/sync" }
-ferrix-vfs = { path = "../../src/lib/fs/vfs" }
-ferrix-pci = { path = "../../src/lib/platform/pci" }
-ferrix-btrfs = { path = "../../src/lib/fs/btrfs" }
-ferrix-block = { path = "../../src/lib/fs/block", features = ["model"] }
-ferrix-blkring = { path = "../../src/lib/proto/blkring" }
-ferrix-virtio = { path = "../../src/lib/drivers/virtio" }
-ferrix-displayctl = { path = "../../src/lib/proto/displayctl" }
-ferrix-renderctl = { path = "../../src/lib/proto/renderctl" }
-ferrix-inputctl = { path = "../../src/lib/proto/inputctl" }
-ferrix-sndctl = { path = "../../src/lib/proto/sndctl" }
-ferrix-virtio-blk = { path = "../../src/lib/drivers/block/virtio-blk" }
-ferrix-virtio-net = { path = "../../src/lib/drivers/net/virtio-net" }
-ferrix-virtio-gpu = { path = "../../src/lib/drivers/display/virtio-gpu" }
-ferrix-virtio-input = { path = "../../src/lib/drivers/input/virtio-input" }
-ferrix-netwire = { path = "../../src/lib/network/netwire" }
-ferrix-nettcp = { path = "../../src/lib/network/nettcp" }
-ferrix-net = { path = "../../src/lib/network/net" }
-ferrix-netlink = { path = "../../src/lib/network/netlink" }
-ferrix-cgroupfs = { path = "../../src/lib/fs/cgroupfs" }
-ferrix-sysfs = { path = "../../src/lib/fs/sysfs" }
-ferrix-svc = { path = "../../src/lib/init/svc" }
-ferrix-svc-proto = { path = "../../src/lib/init/svc-proto" }
-compositor-config = { path = "../../src/user/linux/compositor/config" }
-compositor-wire = { path = "../../src/user/linux/compositor/wire" }
+ferrix-acpi = { path = "../../lib/platform/acpi" }
+ferrix-cpio = { path = "../../lib/fs/cpio" }
+ferrix-argon2 = { path = "../../lib/crypto/argon2" }
+ferrix-auth-proto = { path = "../../lib/proto/auth-proto" }
+ferrix-elf = { path = "../../lib/platform/elf" }
+ferrix-fdt = { path = "../../lib/platform/fdt" }
+ferrix-frame = { path = "../../lib/kernel/frame" }
+ferrix-ustack = { path = "../../lib/kernel/ustack" }
+ferrix-linux-abi = { path = "../../lib/proto/linux-abi" }
+ferrix-native-abi = { path = "../../lib/proto/native-abi" }
+ferrix-objects = { path = "../../lib/kernel/objects" }
+ferrix-sync = { path = "../../lib/kernel/sync" }
+ferrix-vfs = { path = "../../lib/fs/vfs" }
+ferrix-pci = { path = "../../lib/platform/pci" }
+ferrix-btrfs = { path = "../../lib/fs/btrfs" }
+ferrix-block = { path = "../../lib/fs/block", features = ["model"] }
+ferrix-blkring = { path = "../../lib/proto/blkring" }
+ferrix-virtio = { path = "../../lib/drivers/virtio" }
+ferrix-displayctl = { path = "../../lib/proto/displayctl" }
+ferrix-renderctl = { path = "../../lib/proto/renderctl" }
+ferrix-inputctl = { path = "../../lib/proto/inputctl" }
+ferrix-sndctl = { path = "../../lib/proto/sndctl" }
+ferrix-virtio-blk = { path = "../../lib/drivers/block/virtio-blk" }
+ferrix-virtio-net = { path = "../../lib/drivers/net/virtio-net" }
+ferrix-virtio-gpu = { path = "../../lib/drivers/display/virtio-gpu" }
+ferrix-virtio-input = { path = "../../lib/drivers/input/virtio-input" }
+ferrix-netwire = { path = "../../lib/network/netwire" }
+ferrix-nettcp = { path = "../../lib/network/nettcp" }
+ferrix-net = { path = "../../lib/network/net" }
+ferrix-netlink = { path = "../../lib/network/netlink" }
+ferrix-cgroupfs = { path = "../../lib/fs/cgroupfs" }
+ferrix-sysfs = { path = "../../lib/fs/sysfs" }
+ferrix-svc = { path = "../../lib/init/svc" }
+ferrix-svc-proto = { path = "../../lib/init/svc-proto" }
+compositor-config = { path = "../../user/linux/compositor/config" }
+compositor-wire = { path = "../../user/linux/compositor/wire" }
 
 [[bin]]
 name = "elf_parse"

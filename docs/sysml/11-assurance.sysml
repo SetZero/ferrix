@@ -310,7 +310,7 @@ package FerrixAssurance {
     }
     #implemented verification def ThreadsTest {
         @stage { number = 7; }
-        doc /* cargo xtask test-threads: tests/threads/, a static musl Rust
+        doc /* cargo xtask test-threads: src/tests/threads/, a static musl Rust
              * program of five threads using std::thread, Mutex and mpsc,
              * booted as init on all three architectures, counting its
              * threads through /proc/self; a build that expects one thread

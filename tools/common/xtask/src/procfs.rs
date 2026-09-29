@@ -1,6 +1,6 @@
 //! `test-procfs`: `/proc` as the Steam client's helpers read it.
 //!
-//! The program is `tests/procfs/`, built for each architecture's musl target
+//! The program is `src/tests/procfs/`, built for each architecture's musl target
 //! -- with `--i686`, x86-64's is 32-bit x86, as the Steam client is -- and
 //! booted as init. For a TCP socket, a pair of `AF_UNIX` ones, an eventfd, an
 //! epoll set, a pipe and a memfd it requires `stat` through

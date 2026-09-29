@@ -26,7 +26,7 @@ import subprocess
 import sys
 import tempfile
 
-OUT = pathlib.Path(__file__).resolve().parent.parent.parent.parent / "tests" / "fuzz" / "corpus" / "fdt_parse"
+OUT = pathlib.Path(__file__).resolve().parent.parent.parent.parent / "src" / "tests" / "fuzz" / "corpus" / "fdt_parse"
 
 GICV2_VIRT = """/dts-v1/;
 /memreserve/ 0x40000000 0x100000;

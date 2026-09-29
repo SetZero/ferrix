@@ -187,7 +187,7 @@ the net, input and serial cores do not yet, so a bind there may answer `EIO`.
   a virtio-gpu's `uevent` and `modalias`, a keyboard's `capabilities/ev` in
   64- and 32-bit words, `DEVMODE`'s octal, kernfs's link spelling to an
   ancestor.
-* **`tests/fuzz/fuzz_targets/sysfs_names.rs`**: every parse round-trips, a written
+* **`src/tests/fuzz/fuzz_targets/sysfs_names.rs`**: every parse round-trips, a written
   name stays inside what was written, and a link never climbs above its mount.
 * **The boot check**, the last one, after `devmgr` has started its drivers
   (`src/kernel/src/fs/sysfs/check.rs`, FX-0890): a sysfs under `/tmp` walked whole,

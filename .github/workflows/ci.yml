@@ -657,7 +657,7 @@ jobs:
   # initramfs assembled elsewhere. Both are parsed with the MMU on and no
   # supervisor above.
   #
-  # Replay first, search second. The committed corpus in `tests/fuzz/corpus/` is
+  # Replay first, search second. The committed corpus in `src/tests/fuzz/corpus/` is
   # what makes this a regression test: an input that crashed once fails
   # again in seconds, rather than waiting for the fuzzer to rediscover it
   # inside a timebox.
@@ -673,7 +673,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: fuzz
-          workspaces: tests/fuzz
+          workspaces: src/tests/fuzz
 
       - name: Install cargo-fuzz
         uses: taiki-e/install-action@v2
@@ -682,7 +682,7 @@ jobs:
 
       # `--fuzz-dir .` on every call: cargo-fuzz finds the project's root --
       # the workspace's -- and looks for `fuzz/` under it, whatever the working
-      # directory, and the corpus has been in tests/fuzz since the tree was
+      # directory, and the corpus has been in src/tests/fuzz since the tree was
       # regrouped (2026-09-26). Without it every call read fuzz/Cargo.toml and
       # the job failed before building anything.
       # Pin the gnu host target: cargo-fuzz otherwise selects
@@ -690,7 +690,7 @@ jobs:
       # AddressSanitizer and whose std the runner does not have.
       - name: Build every target
         run: cargo +nightly fuzz build --fuzz-dir . --target x86_64-unknown-linux-gnu
-        working-directory: tests/fuzz
+        working-directory: src/tests/fuzz
 
       - name: Replay the committed corpus
         run: |
@@ -700,7 +700,7 @@ jobs:
               --target x86_64-unknown-linux-gnu -- -runs=0
             echo "::endgroup::"
           done
-        working-directory: tests/fuzz
+        working-directory: src/tests/fuzz
 
       - name: Search
         # Thirty seconds each: long enough to explore what the diff changed,
@@ -723,7 +723,7 @@ jobs:
           }
           export -f search
           cargo +nightly fuzz list --fuzz-dir . | xargs -P "$(nproc)" -I{} bash -c 'search {}'
-        working-directory: tests/fuzz
+        working-directory: src/tests/fuzz
 
       - name: Keep the crashing input
         # Without this the run reports a crash and throws away the bytes that
@@ -732,5 +732,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fuzz-artifacts
-          path: tests/fuzz/artifacts/
+          path: src/tests/fuzz/artifacts/
           if-no-files-found: ignore

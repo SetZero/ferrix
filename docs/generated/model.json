@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "f002bf5f248b258ceb67906b1d005d8e286d590ccd5a05db0f53c2444bfb985e",
+  "digest": "9f0e296311731d7613755b084b156fa3c4ce4ffe098d61a1d611bbfd0a1d1bf8",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -18057,7 +18057,7 @@
           "shortName": "D.fuzz",
           "type": "Principles::DesignRule",
           "maturity": "planned",
-          "doc": "tests/fuzz/ has two targets, elf_parse and frame_alloc. Every written-ahead crate parses bytes from outside the system and is owed a target before its consuming stage starts.",
+          "doc": "src/tests/fuzz/ has two targets, elf_parse and frame_alloc. Every written-ahead crate parses bytes from outside the system and is owed a target before its consuming stage starts.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
             "line": 741
@@ -19462,7 +19462,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 7,
-          "doc": "cargo xtask test-threads: tests/threads/, a static musl Rust program of five threads using std::thread, Mutex and mpsc, booted as init on all three architectures, counting its threads through /proc/self; a build that expects one thread too many must fail on that count.",
+          "doc": "cargo xtask test-threads: src/tests/threads/, a static musl Rust program of five threads using std::thread, Mutex and mpsc, booted as init on all three architectures, counting its threads through /proc/self; a build that expects one thread too many must fail on that count.",
           "source": {
             "file": "docs/sysml/11-assurance.sysml",
             "line": 311

@@ -130,7 +130,7 @@
 //! Nothing here panics, indexes, or loops without a bound. Every sector
 //! calculation is checked, every lookup is a `get`, and every error is a value.
 //! The `model` module — compiled for the tests and, with the `model` feature,
-//! for `tests/fuzz/` — holds the queue to an independent statement of the rules
+//! for `src/tests/fuzz/` — holds the queue to an independent statement of the rules
 //! above over operation sequences nobody chose.
 
 #![no_std]

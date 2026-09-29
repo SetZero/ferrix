@@ -81,7 +81,7 @@ STATUS_PAGE = "status.md"
 # Markdown files whose links to docs/ROADMAP.md are rewritten: these top-level
 # files and every *.md under these directories.
 LINK_TOP_FILES = ("README.md", "CLAUDE.md")
-LINK_DIRS = ("docs", "src", "tools", "tests")
+LINK_DIRS = ("docs", "src", "tools")
 LINK_EXCLUDE = ("docs/roadmap/", "docs/generated/")
 
 DONE, PROGRESS, NOT_STARTED, PLANNED = "done", "in progress", "not started", "planned"

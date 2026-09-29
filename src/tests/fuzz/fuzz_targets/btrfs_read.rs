@@ -48,10 +48,10 @@ use ferrix_btrfs::{BtrfsError, BtrfsKey, ChunkMapEntry, crc32c};
 use libfuzzer_sys::fuzz_target;
 
 const PACKED: [&[u8]; 4] = [
-    include_bytes!("../../../src/lib/fs/btrfs/testdata/none.img.packed"),
-    include_bytes!("../../../src/lib/fs/btrfs/testdata/zlib.img.packed"),
-    include_bytes!("../../../src/lib/fs/btrfs/testdata/lzo.img.packed"),
-    include_bytes!("../../../src/lib/fs/btrfs/testdata/zstd.img.packed"),
+    include_bytes!("../../../lib/fs/btrfs/testdata/none.img.packed"),
+    include_bytes!("../../../lib/fs/btrfs/testdata/zlib.img.packed"),
+    include_bytes!("../../../lib/fs/btrfs/testdata/lzo.img.packed"),
+    include_bytes!("../../../lib/fs/btrfs/testdata/zstd.img.packed"),
 ];
 const BLOCK: usize = 4096;
 const IMAGE_SIZE: u64 = 128 * 1024 * 1024;

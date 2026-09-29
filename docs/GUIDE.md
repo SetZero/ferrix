@@ -807,7 +807,7 @@ the repository.
 | `src/lib/` | Architecture-neutral logic, nearly sixty crates in eight groups: `proto`, `kernel`, `platform`, `fs`, `network`, `drivers`, `init`, `crypto`. Host-testable **by design** — it is the only code `cargo test`, Miri and the fuzzers can reach. Drivers are grouped by function: `block`, `net`, `display`, `gpu`, `input`, `usb`, `sound`, `console`. |
 | `src/user/native/` | Ring-3 programs on the native ABI: the runtime, `devmgr`, and one process per driver under `src/user/native/drivers/<function>/`. |
 | `src/user/linux/` | Linux-ABI programs, each its own workspace: [the compositor](../src/user/linux/compositor/README.md), [the init](../src/user/linux/init/README.md), [zinc](../src/user/linux/zinc/README.md), statd and [ferrousli](../src/user/linux/ferrousli/README.md), the C library. |
-| `tests/` | The fuzz targets over `src/lib/`, and test programs that live outside any one crate. |
+| `src/tests/` | The fuzz targets over `src/lib/`, and test programs that live outside any one crate. |
 | `tools/common/` | Everything that runs on the host: `xtask/` the build driver (cross-compiles every half, writes the images, drives QEMU and every `test-*` gate), `check/` the quality gates, `gen/` the generators, `fetch/` the pinned downloads, `test/` hand-run test drivers, `data/` the allow-lists and baselines. |
 | `tools/vendor/` | Host tools for one vendor's hardware: the Pixel 7 launcher and monitor. |
 | `assets/` | Fonts that ship in the image. |

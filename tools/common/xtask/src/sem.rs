@@ -1,6 +1,6 @@
 //! `test-sem`: System V semaphores as a program uses them.
 //!
-//! The program is `tests/sem/`, built for each architecture's musl target --
+//! The program is `src/tests/sem/`, built for each architecture's musl target --
 //! with `--i686`, x86-64's is 32-bit x86, whose musl reaches the semaphores
 //! through `ipc` (117), as the Steam client's glibc does -- and booted as
 //! init. It forks children that contend for a `SEM_UNDO` mutex, kills one
@@ -61,7 +61,7 @@ fn build(arch: Arch, negative: bool, i686: bool) -> Result<PathBuf> {
     build_test("sem", arch, feature, i686)
 }
 
-/// Build `tests/<name>`, the program `<name>-test`, for `arch` with `feature`
+/// Build `src/tests/<name>`, the program `<name>-test`, for `arch` with `feature`
 /// on if there is one, and return where the program is.
 pub(crate) fn build_test(
     name: &str,
@@ -77,7 +77,7 @@ pub(crate) fn build_test(
     let program = target_dir.join(target).join("release").join(&crate_name);
     let mut build = crate::builds::Build::cargo(
         format!("cargo build ({crate_name}, {flavour}) --target {target}"),
-        paths::workspace_root().join("tests").join(name),
+        paths::workspace_root().join("src").join("tests").join(name),
     )
     .args(["build", "--release", "--target", target])
     .env("CARGO_TARGET_DIR", &target_dir)
@@ -87,7 +87,7 @@ pub(crate) fn build_test(
     }
     // Ferrix's own `.cargo/config.toml` uses this triple for the ARMv7-A
     // loader, with its linker script, and cargo merges a parent directory's
-    // flags for a target into `tests/<name>/`'s. The variable replaces every
+    // flags for a target into `src/tests/<name>/`'s. The variable replaces every
     // configured flag, so the program is linked as the other two are.
     if arch == Arch::Armv7a {
         build = build

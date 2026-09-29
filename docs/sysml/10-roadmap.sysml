@@ -739,7 +739,7 @@ package FerrixRoadmap {
         stage12BtrfsWrite, stage13Isolation, stageNetworking;
 
     #planned requirement <'D.fuzz'> fuzzTargetsOwed : Principles::DesignRule {
-        doc /* tests/fuzz/ has two targets, elf_parse and frame_alloc. Every
+        doc /* src/tests/fuzz/ has two targets, elf_parse and frame_alloc. Every
              * written-ahead crate parses bytes from outside the system and is
              * owed a target before its consuming stage starts. */
     }

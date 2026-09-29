@@ -775,7 +775,7 @@ before the unprivileged half lands.
 
 1. **The walk is on every path.** N2 and N3 change the VFS every program
    walks through. `src/lib/fs/vfs`'s host tests (3,770 lines) and the
-   `vfs_ops` fuzzer (`tests/fuzz`) run on every slice, and the fuzzer gains
+   `vfs_ops` fuzzer (`src/tests/fuzz`) run on every slice, and the fuzzer gains
    bind, remount, detach, copy and `pivot_root` operations with one more
    property: every mount's parent chain ends.
 2. **`test-steam-bootstrap` is an hour on the internet.** N6 is gated by

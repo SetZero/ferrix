@@ -13,7 +13,7 @@ ELF header or a filesystem chose is not a 500, it is the machine.
 Two rules, both about production code only. Test bodies are exempt from the
 lints themselves (`allow-unwrap-in-tests` and friends in `.clippy.toml`), so an
 exemption inside a `#[cfg(test)]` module is not making a claim about the kernel
-and is skipped here. So is anything under a `tests/` directory: an integration
+and is skipped here. So is anything under a `src/tests/` directory: an integration
 test is its own crate, which is why clippy's in-test exemptions do not reach it
 and why it needs an attribute at all.
 

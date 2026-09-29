@@ -1,4 +1,4 @@
-//! Inputs the fuzzer found (`tests/fuzz/fuzz_targets/svc_manager.rs`),
+//! Inputs the fuzzer found (`src/tests/fuzz/fuzz_targets/svc_manager.rs`),
 //! replayed as host tests: the harness's unit set and event script, and its
 //! three properties on the cgroup actions, run on every `cargo test`.
 

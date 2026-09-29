@@ -37,7 +37,7 @@ names the part of Hyprland or hyprlang it follows.
   `unbind` and submaps, and the keywords the rest of the compositor
   interprets (`windowrule`, `monitor`, `workspace`, `exec-once`, `env`, …),
   with Hyprland's diagnostics. `Config::keyword` is `hyprctl keyword`. Fuzzed
-  by `tests/fuzz/fuzz_targets/hyprconf_parse.rs`.
+  by `src/tests/fuzz/fuzz_targets/hyprconf_parse.rs`.
 * **`layout`** is Hyprland's window management with nothing but rectangles
   and ids: monitors, workspaces created on demand, the dwindle and master
   layouts with `gaps_in`, `gaps_out` and `border_size`, floating and

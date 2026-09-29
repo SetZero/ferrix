@@ -25,7 +25,7 @@ import shutil
 import subprocess
 import tempfile
 
-OUT = pathlib.Path(__file__).resolve().parent.parent.parent.parent / "tests" / "fuzz" / "corpus" / "cpio_parse"
+OUT = pathlib.Path(__file__).resolve().parent.parent.parent.parent / "src" / "tests" / "fuzz" / "corpus" / "cpio_parse"
 
 # The constants tools/common/xtask/src/initramfs.rs writes with.
 FIXED_MTIME = 1_767_225_600

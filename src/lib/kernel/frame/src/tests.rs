@@ -821,7 +821,7 @@ fn a_saturated_count_is_refused_rather_than_wrapped() {
     let frame = frames.allocate_frame().unwrap();
     // Reaching u32::MAX a share at a time is not a test anybody can run, so the
     // count is put there directly. In-crate access, which is why this lives
-    // beside the allocator rather than in `tests/`.
+    // beside the allocator rather than in `src/tests/`.
     frames.entry_mut(frame).unwrap().refcount = u32::MAX;
 
     assert_eq!(

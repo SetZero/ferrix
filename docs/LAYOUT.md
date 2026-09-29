@@ -1,19 +1,19 @@
 # Layout
 
 Where everything in this repository lives, and where a new thing goes. The
-top level has five directories: the source of everything that runs on
-Ferrix, the tests around it, the host tools that build and drive it, the
+top level has four directories: the source of everything that runs on
+Ferrix and the tests around it, the host tools that build and drive it, the
 documents, and the data files the image ships.
 
 ```
-src/         everything that runs on Ferrix
+src/         everything that runs on Ferrix, and its tests
   boot/        loaders: what runs before the kernel
   kernel/      the kernel
   lib/         host-testable logic, grouped by layer
   user/        programs that run in ring 3
     native/      on Ferrix's own ABI: runtime, devmgr, drivers
     linux/       on the Linux ABI, each its own cargo workspace
-tests/       test programs and fuzzing that live outside any one crate
+  tests/       test programs and fuzzing that live outside any one crate
 tools/       everything that runs on the host
   common/      the build driver, gates, generators, fetchers
   vendor/      host tools for one vendor's hardware
@@ -31,7 +31,7 @@ chip.
 
 The root `Cargo.toml` is one workspace: `src/boot/`, `src/kernel/`,
 `src/lib/`, `src/user/native/` and `tools/common/xtask/`. Everything under
-`src/user/linux/`, `tests/` and `tools/vendor/` is a workspace of its own,
+`src/user/linux/`, `src/tests/` and `tools/vendor/` is a workspace of its own,
 built by xtask from inside its directory.
 
 ## `src/boot/`
@@ -139,16 +139,17 @@ directory:
 | `src/user/linux/media/` | Bad Apple!!'s player, its video format and the host's converter (`docs/MEDIA.md`); the resampler and the playback through `/dev/snd` it and the sound server share; and the PulseAudio-protocol server and its client (`docs/AUDIO.md`, U2). ferrix-90's since 2026-09-27, when Bad Apple's author stopped. |
 | `src/user/linux/ferrousli/` | The C library written in Rust, its dynamic linker, and the ports built against it (`tools/ports/`). |
 
-## `tests/`
+## `src/tests/`
 
 | Path | What |
 |---|---|
-| `tests/fuzz/` | `cargo fuzz` targets over `src/lib/`, and their committed corpus. |
-| `tests/threads/` | Stage 7's threads exit test: a static musl program using `std::thread`. |
+| `src/tests/fuzz/` | `cargo fuzz` targets over `src/lib/`, and their committed corpus. |
+| `src/tests/threads/` | Stage 7's threads exit test: a static musl program using `std::thread`. |
+| `src/tests/sem/`, `src/tests/procfs/` | Static programs `test-sem` and `test-procfs` run inside Ferrix. |
 
 A crate's own tests and test data stay beside it (`src/lib/fs/btrfs/testdata/`,
-`src/user/linux/compositor/render/tests/data/`). `tests/` is for programs that
-exercise the system from outside any one crate.
+`src/user/linux/compositor/render/tests/data/`). `src/tests/` is for programs
+that exercise the system from outside any one crate.
 
 ## `assets/`
 
