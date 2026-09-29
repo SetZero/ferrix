@@ -350,6 +350,15 @@ impl Endpoint {
         handle_capacity: usize,
         topology_held: bool,
     ) -> Result<ChannelMessage, ReadError> {
+        // Looked at before the queue, not after it is found empty: a peer
+        // writes its last message and then closes, so a peer seen closed
+        // here has nothing left to land, and an empty queue below is the
+        // end. Asked after, a peer that wrote and closed between the two
+        // was reported closed with its last message still queued -- the
+        // net ring's REFUSED lost that way, FX-1151 under WHPX. A close
+        // that comes after this look reads as `Empty`, and the caller's
+        // wait for `READABLE | PEER_CLOSED` returns at once to read again.
+        let peer_closed = self.peer_closed();
         let (taken, was_full) = {
             let mut inbox = self.own().inbox.lock();
             let was_full = inbox.is_full();
@@ -376,9 +385,7 @@ impl Endpoint {
             Err(ReceiveError::TooSmall { bytes, handles }) => {
                 Err(ReadError::TooSmall { bytes, handles })
             }
-            // Asked after the queue was found empty, so a peer that wrote its
-            // last message and then closed is read to the end first.
-            Err(ReceiveError::Empty) if self.peer_closed() => Err(ReadError::PeerClosed),
+            Err(ReceiveError::Empty) if peer_closed => Err(ReadError::PeerClosed),
             Err(ReceiveError::Empty) => Err(ReadError::Empty),
         }
     }
