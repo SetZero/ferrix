@@ -63,8 +63,6 @@ does not offer; it renders in software instead.
 
 | Workaround | Why | Real fix | Owner |
 |---|---|---|---|
-| `lsof-sockstat.c`, preloaded into `lsof` by `scripts/steam/lsof` | The client runs `lsof -P -F upnR -i TCP@127.0.0.1:<port>` to find which process opened its UI websocket, and accepts only its web helper. `stat()` through `/proc/<pid>/fd/<n>` of a socket is `ENOENT` on Ferrix (`kernel/src/fs/procfs.rs`, `descriptor_location`), so `lsof` cannot tie a socket to its process, and the client rejects the connection ("Unexpected Transport Error 0x3008") | `stat` of a descriptor link reaches the open file: `S_IFSOCK` and the sockfs inode | steam-procfs-fd |
-| `readdir32.c`, preloaded into the client | `/proc`'s inode numbers carry the pid in bits 32–63 (`Place::ino`), so an i386 program's `readdir` is `EOVERFLOW` there; the client then finds no web helper process and rejects it as above | `/proc` inode numbers that fit 32 bits | steam-procfs-fd |
 | `pipe2-direct.c`, preloaded into the client | `pipe2(O_DIRECT)` (packet mode) is `EINVAL`; `controllerxinput_linux.cpp` asserts without it | packet-mode pipes | steam-pipe-direct |
 | `_v2-entry-point` stand-in, and `-no-cef-sandbox` | Valve's steamrt64 entry point starts pressure-vessel, which needs user and mount namespaces for bubblewrap; Chromium's sandbox needs them too | namespaces | N2–N6 (`docs/NAMESPACES.md`) |
 | `logger-0.bash` stand-in | The Steam Runtime's logger failed on Ferrix under `steamwebhelper.sh`; this one logs nothing | whatever the logger meets: `/dev/fd` through process substitution, and the `/proc` gaps below | steam-proc-gaps |
@@ -72,11 +70,17 @@ does not offer; it renders in software instead.
 | 16 GiB guest | At 8 GiB several processes died of `SIGBUS` on execute faults of mapped library pages while Chromium started | find and fix the refault | steam-sigbus |
 | the window fills its tile, black around the login | yserver does not yet give hyprix the window's size hints (`WM_NORMAL_HINTS`) | a floating window of the size Steam asks for | yserver, after Y6 |
 
-Two things the sprint needed are no longer workarounds: yserver's own patch
-making a client's socket blocking before its setup (the pinned fork has
-14197fb, and the kernel no longer passes a listener's `O_NONBLOCK` to
-`accept`, 18388c70), and a `getresuid` shim, not needed once the client
-runs as uid 1000.
+Four things the sprint needed are no longer workarounds: yserver's own
+patch making a client's socket blocking before its setup (the pinned fork
+has 14197fb, and the kernel no longer passes a listener's `O_NONBLOCK` to
+`accept`, 18388c70); a `getresuid` shim, not needed once the client runs as
+uid 1000; and two shims for `/proc`, retired when `test-procfs` landed.
+One was preloaded into `lsof`, because `stat` through `/proc/<pid>/fd/<n>`
+of a socket was `ENOENT`, so `lsof` could not tie the client's websocket to
+the web helper and the client rejected it ("Unexpected Transport Error
+0x3008"). The other was preloaded into the client, because `/proc`'s inode
+numbers did not fit 32 bits, so the client's `readdir` there was
+`EOVERFLOW` and it found no web helper process at all.
 
 ## 4. What the sprint found, in order (2026-09-28 and 29)
 
@@ -90,6 +94,7 @@ runs as uid 1000.
 5. The web helper's websocket was rejected: `accept` gave the new socket the
    listener's `O_NONBLOCK` (fixed, 18388c70); `/proc/net/tcp` named the
    stack's socket id as the inode (fixed, 5b14b91b); `stat` through a socket's
-   descriptor link, and 32-bit `readdir` on `/proc` (worked around, §3).
+   descriptor link, and 32-bit `readdir` on `/proc` (worked around, then
+   fixed by `test-procfs`'s landing).
 6. The client looks for `lsof` only at `/sbin`, `/bin`, `/usr/sbin` and
    `/usr/bin`, and says so nowhere visible when it finds none.

@@ -60,7 +60,7 @@ const ENTRY_POINT: &[u8] = include_bytes!("../../../scripts/steam/_v2-entry-poin
 /// The Steam Runtime logger's stand-in.
 const LOGGER: &[u8] = include_bytes!("../../../scripts/steam/logger-0.bash");
 
-/// `lsof` with its workaround preloaded.
+/// `lsof` where the client looks for it, running the volume's.
 const LSOF: &[u8] = include_bytes!("../../../scripts/steam/lsof");
 
 /// Where each is carried, with its mode. `client.sh` names the stand-ins'

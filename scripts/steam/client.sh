@@ -19,7 +19,7 @@ export LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe
 export STEAM_RUNTIME_LIBRARY_PATH=$RT/pinned_libs_32:$RT/pinned_libs_64:/usr/lib/i386-linux-gnu:/usr/lib/x86_64-linux-gnu:$RT/lib/i386-linux-gnu:$RT/usr/lib/i386-linux-gnu:$RT/lib/x86_64-linux-gnu:$RT/usr/lib/x86_64-linux-gnu:$RT/lib:$RT/usr/lib
 export LD_LIBRARY_PATH=$S/ubuntu12_32:$S/ubuntu12_32/panorama:$STEAM_RUNTIME_LIBRARY_PATH
 # Launch-side workarounds for kernel gaps (scripts/steam/workarounds/).
-export LD_PRELOAD='/data/steam-workarounds/$LIB/pipe2-direct.so /data/steam-workarounds/$LIB/readdir32.so'
+export LD_PRELOAD='/data/steam-workarounds/$LIB/pipe2-direct.so'
 # The stand-ins run-steam carries: the steamrt64 entry point that runs
 # steamwebhelper without pressure-vessel, and a logger that logs nothing.
 export STEAM_RUNTIME_STEAMRT=/steam/steamrt STEAM_RUNTIME_SCOUT=/steam/scout

@@ -159,11 +159,10 @@ work="$repo/scripts/steam/workarounds"
 i386="$tree/steam-workarounds/lib/i386-linux-gnu"
 amd64="$tree/steam-workarounds/lib/x86_64-linux-gnu"
 mkdir -p "$i386" "$amd64"
-for name in pipe2-direct readdir32; do
+for name in pipe2-direct; do
     gcc -m32 -O2 -shared -fPIC -nostdlib -o "$i386/$name.so" "$work/$name.c"
     gcc -O2 -shared -fPIC -nostdlib -o "$amd64/$name.so" "$work/$name.c"
 done
-gcc -O2 -shared -fPIC -o "$amd64/lsof-sockstat.so" "$work/lsof-sockstat.c" -ldl
 
 rm -rf "$tree/usr/share/doc" "$tree/usr/share/man" "$tree/usr/share/locale" \
     "$tree/usr/share/lintian" "$tree/usr/share/info"
