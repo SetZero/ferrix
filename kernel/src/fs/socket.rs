@@ -1654,6 +1654,12 @@ struct SockFs {
 /// The one sockfs.
 static SOCKFS: Once<Arc<SockFs>> = Once::new();
 
+/// Whether `file` is a socket: an open file on sockfs, which a path reaches
+/// only through `/proc/<pid>/fd/<n>`.
+pub(crate) fn holds(file: &OpenFile) -> bool {
+    file.location().mount.filesystem().name() == sockfs().name()
+}
+
 /// The one sockfs, made on first use.
 fn sockfs() -> &'static Arc<SockFs> {
     SOCKFS.call_once(|| {
