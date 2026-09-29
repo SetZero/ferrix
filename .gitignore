@@ -1,10 +1,13 @@
-/target
+# Cargo's output, wherever a workspace or a stray build put it. Builds share
+# /target; one run with a target dir of its own belongs under /target too.
+target/
 /target-remote
 /target-*/
+# xtask's images, logs and screens.
 /build
+/build-logs-*/
 *.img
 *.fd
-/tests/fuzz/target
 __pycache__/
 /tests/fuzz/artifacts
 /remote-desktop.toml
