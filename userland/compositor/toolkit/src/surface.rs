@@ -156,6 +156,12 @@ pub struct ToplevelOptions {
     /// `xdg_toplevel.set_parent`, sent before the first commit: the window
     /// this one is a dialog of, which a compositor may float it over.
     pub parent: Option<SurfaceId>,
+    /// `xdg_toplevel.set_min_size`, sent before the first commit; 0 is no
+    /// limit. A window whose least and greatest size agree is one of a
+    /// fixed size, which a compositor floats as Hyprland does.
+    pub min_size: (u32, u32),
+    /// `xdg_toplevel.set_max_size`, the same.
+    pub max_size: (u32, u32),
 }
 
 /// A rectangle in a surface's logical pixels.

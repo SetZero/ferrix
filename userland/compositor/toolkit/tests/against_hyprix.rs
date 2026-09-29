@@ -179,6 +179,7 @@ fn a_window_is_tiled_by_the_compositor_and_drawn_there() {
                 app_id: "toolkit-test".to_owned(),
                 size: (200, 100),
                 parent: None,
+                ..ToplevelOptions::default()
             })
             .map_err(|error| error.to_string())?;
         let mut size = None;
@@ -444,6 +445,7 @@ fn a_cursor_picture_is_taken_replaced_and_given_up_without_a_protocol_error() {
                 app_id: "toolkit-test".to_owned(),
                 size: (100, 100),
                 parent: None,
+                ..ToplevelOptions::default()
             })
             .map_err(|error| error.to_string())?;
         let arrow = [0xff_u8; 2 * 3 * 4];
@@ -485,6 +487,7 @@ fn a_menu_hangs_from_the_point_of_the_window_it_was_opened_at() {
                 app_id: "toolkit-test".to_owned(),
                 size: (200, 100),
                 parent: None,
+                ..ToplevelOptions::default()
             })
             .map_err(|error| error.to_string())?;
         let mut menu = None;
@@ -571,6 +574,7 @@ fn a_dialog_floats_at_its_own_size_over_its_parent() {
                 app_id: "toolkit-test".to_owned(),
                 size: (200, 100),
                 parent: None,
+                ..ToplevelOptions::default()
             })
             .map_err(|error| error.to_string())?;
         let dialog = client
@@ -579,6 +583,7 @@ fn a_dialog_floats_at_its_own_size_over_its_parent() {
                 app_id: "toolkit-test".to_owned(),
                 size: (120, 80),
                 parent: Some(window),
+                ..ToplevelOptions::default()
             })
             .map_err(|error| error.to_string())?;
         let mut configured = None;
@@ -621,6 +626,55 @@ fn a_dialog_floats_at_its_own_size_over_its_parent() {
     );
 }
 
+/// A window of a fixed size -- its least size its greatest -- floats at
+/// that size, as in Hyprland; an X window's `WM_NORMAL_HINTS` become such
+/// limits. The same window without them is tiled.
+#[test]
+fn a_window_of_a_fixed_size_floats_at_it() {
+    let floated = |name: &str, limits: Option<(u32, u32)>| {
+        let (answer, _) = with_compositor(name, 1500, move |socket| {
+            let mut client = Client::connect_to(socket).map_err(|error| error.to_string())?;
+            let (min_size, max_size) = limits.map_or(((0, 0), (0, 0)), |size| (size, size));
+            let window = client
+                .toplevel(&ToplevelOptions {
+                    title: "toolkit fixed".to_owned(),
+                    app_id: "toolkit-test".to_owned(),
+                    size: (150, 90),
+                    min_size,
+                    max_size,
+                    ..ToplevelOptions::default()
+                })
+                .map_err(|error| error.to_string())?;
+            let mut configured = None;
+            let _ = until(&mut client, Duration::from_secs(1), |client, event| {
+                if let Event::Configure {
+                    surface,
+                    width,
+                    height,
+                } = event
+                    && *surface == window
+                {
+                    configured = Some((*width, *height));
+                    fill(client, window, (0, 200, 0));
+                }
+                false
+            });
+            Ok::<_, String>(configured)
+        });
+        answer.expect("the client worked")
+    };
+    // Floated, it is first told to choose (0x0), then given what it drew;
+    // tiled, it would be given the tile.
+    assert_eq!(
+        floated("fixed", Some((150, 90))),
+        Some((150, 90)),
+        "a fixed-size window floats at its own size"
+    );
+    let tiled = floated("free", None).expect("configured");
+    assert_ne!(tiled, (0, 0), "a window with no limits is tiled");
+    assert!(tiled.0 > 150, "and given the tile: {tiled:?}");
+}
+
 /// A program whose own loop polls the socket (`Client::as_raw_fd`) and then
 /// dispatches with a zero timeout must get what arrived, even with events
 /// still queued from before: `connect`'s round trips leave each screen's
@@ -640,6 +694,7 @@ fn a_zero_timeout_dispatch_reads_what_arrived_behind_queued_events() {
                     app_id: "toolkit-test".to_owned(),
                     size: (100, 100),
                     parent: None,
+                    ..ToplevelOptions::default()
                 })
                 .map_err(|error| error.to_string())?;
             client.flush().map_err(|error| error.to_string())?;
