@@ -52,11 +52,27 @@
 //! # Inode numbers
 //!
 //! Computed from what a node is, so the same file has the same number every
-//! time without a table of numbers to keep: the top level and `/proc/sys`
-//! below 2³², by where they are in the tree, and a process's files above it
-//! with the pid in the upper half. `find` and `du` treat two names with one
-//! number as one file, so the numbers are distinct; nothing else about them
-//! is promised, as nothing is on Linux.
+//! time without a table of numbers to keep, and all of them below 2³², as
+//! Linux's are: a 32-bit program's `readdir` and `stat` without large-file
+//! support fail with `EOVERFLOW` on any number wider, and the Steam client,
+//! which is one, then sees no processes at all.
+//!
+//! The 2³² numbers are cut into [`registry::PID_MAX`] blocks of 2¹⁷, one per
+//! pid. Block 0 is the top of the tree and `/proc/sys`, numbered densely in
+//! the order a listing walks them ([`Tree::ordinal`]); no process has pid 0.
+//! Block `pid` holds `/proc/<pid>` at its start, the process's entries after
+//! it, and from `0x200` to its end the links in `/proc/<pid>/fd`. A thread's
+//! directory and entries are in its *tid's* block, at `0x100`: thread ids and
+//! pids are one table's numbers, so a tid's block is its process's own for
+//! the first thread and belongs to no process for every other. So every name
+//! a process can have gets a number of its own, except that descriptors
+//! above 130,560 share numbers with those 130,560 below them -- no pid block
+//! can hold `fd::MAX_LIMIT`'s million, and 2³² has no room for 32,768 blocks
+//! that could -- which `find` and `du` only notice as two links being one.
+//!
+//! Nothing else about the numbers is promised, as nothing is on Linux, whose
+//! `/proc` numbers come from a counter and change when a name is looked up
+//! afresh.
 
 pub(crate) mod check;
 pub(crate) mod loadavg;
@@ -426,10 +442,6 @@ const _: () = assert!(
     flat(&PER_THREAD),
     "a thread's directory cannot hold a directory"
 );
-const _: () = assert!(
-    PER_THREAD.len() < THREAD_INODE_SPAN as usize,
-    "a thread's directory has more entries than its inode numbers leave room for"
-);
 
 /// Where an entry is in [`TOP`]'s tree: its index at each level plus one, a
 /// byte a level from the low end, so `/proc/<TOP[i]>` is `i + 1` and
@@ -456,6 +468,31 @@ impl Tree {
         }
         let byte = u32::try_from(index).ok()?.checked_add(1)?;
         Some(Tree(self.0 | byte << (8 * depth)))
+    }
+
+    /// Where this is in a walk of [`TOP`]'s tree that lists a directory
+    /// before what it holds: 0 for `/proc`, and below [`nodes`] of it for
+    /// every name. Dense, where the value itself is a byte a level, so the
+    /// tree's inode numbers take a few hundred numbers rather than 2^32.
+    fn ordinal(self) -> u32 {
+        let mut table: &'static [Entry<Kernel>] = &TOP;
+        let mut ordinal = 0_u32;
+        let mut rest = self.0;
+        while let Some(index) = (rest & 0xff).checked_sub(1) {
+            let index = usize::try_from(index).unwrap_or(usize::MAX);
+            let Some((before, Some(entry))) =
+                table.split_at_checked(index).map(|(b, a)| (b, a.first()))
+            else {
+                return ordinal;
+            };
+            ordinal = ordinal.saturating_add(1).saturating_add(nodes(before));
+            rest >>= 8;
+            match entry.content {
+                Content::Directory { entries, .. } => table = entries,
+                _ => return ordinal,
+            }
+        }
+        ordinal
     }
 
     /// The entries of the directory this names: [`TOP`] for the root.
@@ -580,30 +617,70 @@ enum Place {
     ThreadEntry(u32, u32, usize),
 }
 
-/// Where threads' inode numbers start in a process's half: above every
-/// descriptor number a table can hold.
-const THREAD_INODES: u64 = 0x4000_0000;
+/// Inode numbers per pid: `/proc/<pid>` and everything below it are numbered
+/// in the block `[pid * PID_INODES, (pid + 1) * PID_INODES)`, and the top of
+/// the tree in pid 0's, which no process has. See the module documentation.
+const PID_INODES: u64 = 1 << 17;
 
-/// Inode numbers per thread: its directory, then its entries. A tid is below
-/// `registry::PID_MAX`, so every thread's numbers stay below 2^32.
-const THREAD_INODE_SPAN: u64 = 16;
+/// Where in its pid's block a process's entries start: `/proc/<pid>` itself
+/// is the block's first number, and `PER_PROCESS[i]` is `1 + i`.
+const ENTRY_INODES: u64 = 1;
+
+/// Where in a tid's block its thread's numbers start: `/proc/<pid>/task/<tid>`
+/// is here, and `PER_THREAD[i]` is one above it and on.
+const THREAD_INODES: u64 = 0x100;
+
+/// Where in its pid's block the descriptors' links start, and how many
+/// distinct numbers they have: every number to the end of the block.
+const DESCRIPTOR_INODES: u64 = 0x200;
+
+/// See [`DESCRIPTOR_INODES`].
+const DESCRIPTOR_SPAN: u64 = PID_INODES - DESCRIPTOR_INODES;
+
+const _: () = assert!(
+    PER_PROCESS.len() as u64 + ENTRY_INODES <= THREAD_INODES,
+    "a process's entries run into its thread's inode numbers"
+);
+const _: () = assert!(
+    PER_THREAD.len() as u64 + THREAD_INODES < DESCRIPTOR_INODES,
+    "a thread's entries run into the descriptors' inode numbers"
+);
+const _: () = assert!(
+    nodes(&TOP) as u64 + 2 <= PID_INODES,
+    "/proc's own tree has more names than pid 0's block of inode numbers"
+);
+const _: () = assert!(
+    registry::PID_MAX as u64 * PID_INODES <= 1 << 32,
+    "the last pid's inode numbers do not fit 32 bits"
+);
+
+/// The names in `table` and everything under it: a [`Tree`]'s number below
+/// [`Tree::ordinal`] counts them.
+const fn nodes(table: &[Entry<Kernel>]) -> u32 {
+    let Some((first, rest)) = table.split_first() else {
+        return 0;
+    };
+    let inside = match first.content {
+        Content::Directory { entries, .. } => nodes(entries),
+        _ => 0,
+    };
+    1 + inside + nodes(rest)
+}
 
 impl Place {
     /// The inode number; see the module documentation.
     fn ino(self) -> u64 {
-        let pid = |pid: u32| u64::from(pid) << 32;
+        let block = |id: u32| u64::from(id) * PID_INODES;
         match self {
             Place::Root => 1,
-            Place::Top(tree) => u64::from(tree.0).saturating_add(1),
-            Place::Process(id) => pid(id) | 1,
-            Place::Entry(id, index) => pid(id) | (0x100 + index as u64),
-            Place::Descriptor(id, fd) => pid(id) | (0x1_0000 + u64::from(fd.unsigned_abs())),
-            Place::Thread(id, tid) => {
-                pid(id) | THREAD_INODES | (u64::from(tid) * THREAD_INODE_SPAN)
+            Place::Top(tree) => 1 + u64::from(tree.ordinal()),
+            Place::Process(id) => block(id),
+            Place::Entry(id, index) => block(id) + ENTRY_INODES + index as u64,
+            Place::Descriptor(id, fd) => {
+                block(id) + DESCRIPTOR_INODES + u64::from(fd.unsigned_abs()) % DESCRIPTOR_SPAN
             }
-            Place::ThreadEntry(id, tid, index) => {
-                pid(id) | THREAD_INODES | (u64::from(tid) * THREAD_INODE_SPAN) | (index as u64 + 1)
-            }
+            Place::Thread(_, tid) => block(tid) + THREAD_INODES,
+            Place::ThreadEntry(_, tid, index) => block(tid) + THREAD_INODES + 1 + index as u64,
         }
     }
 
@@ -773,14 +850,21 @@ fn alive(pid: u32) -> Result<Arc<Process>> {
 }
 
 /// Where following `/proc/<pid>/fd/<fd>` leads: the open file's own location,
-/// for a file a path reached and for a pipe. So a file renamed or deleted
-/// since it was opened opens again, and a pipe opens as a new end of itself,
-/// which is how `/dev/fd/63` from bash's `<(...)` works (`fs::pipe`).
+/// whatever it is, as Linux's `proc_fd_link` jumps to the file's own path.
 ///
-/// `None` -- the link followed as its text, `socket:[5]` and the like, which
-/// leads nowhere -- for every other object no path reaches: a socket, and an
-/// eventfd, epoll or other anonymous file, which Linux refuses to open again
-/// with `ENXIO` and which here have no second opening to give.
+/// For a file a path reached, that is the file, so one renamed or deleted
+/// since it was opened opens again. For a pipe it is the end the descriptor
+/// holds, which opens as a new end of the same pipe (`fs::pipe`): bash's
+/// `<(...)` opens `/dev/fd/63` that way. For a memfd it is the file itself,
+/// which opens again as Linux's shmem file does.
+///
+/// For a socket, and for an eventfd, epoll or other anonymous file, it is the
+/// object's detached location on sockfs or `anon_inodefs`. `stat` through the
+/// link then describes the object as `fstat` of the descriptor does: a
+/// socket's `S_IFSOCK` and its sockfs inode number, which is how `lsof`
+/// matches a `/proc/net/tcp` row's inode to the processes holding it. Opening
+/// one again is refused with `ENXIO` by [`refuse_reopen`], as Linux's
+/// `sock_no_open` and `no_open` refuse it.
 fn descriptor_location(pid: u32, fd: i32) -> Option<Result<Location>> {
     let process = match alive(pid) {
         Ok(process) => process,
@@ -790,8 +874,7 @@ fn descriptor_location(pid: u32, fd: i32) -> Option<Result<Location>> {
     let Ok(file) = file else {
         return Some(Err(Errno::ENOENT));
     };
-    let location = file.location();
-    (!location.is_detached() || fs::pipe::is_pipe(&file)).then(|| Ok(location.clone()))
+    Some(Ok(file.location().clone()))
 }
 
 /// The ids of a process's threads that have not begun to end, in order; its
@@ -1325,6 +1408,22 @@ pub(crate) fn refuse_write_open(file: Arc<OpenFile>) -> Result<Arc<OpenFile>> {
         && !node.writable();
     if read_only_value {
         return Err(Errno::EACCES);
+    }
+    Ok(file)
+}
+
+/// An open file `openat` made, refused with `ENXIO` if it is a socket or an
+/// anonymous file -- an eventfd, epoll, timerfd, signalfd, inotify, pidfd --
+/// which only a walk through `/proc/<pid>/fd/<n>` reaches by a path.
+///
+/// Linux gives those objects no second opening: a socket's `open` is
+/// `sock_no_open` and an anonymous inode's is `no_open`, both `ENXIO`. An
+/// `O_PATH` handle opens nothing, so it is allowed, as on Linux. The open file
+/// the namespace made is dropped unused: no socket or anonymous inode has an
+/// [`Inode::open`] of its own, so making it did nothing to the object.
+pub(crate) fn refuse_reopen(file: Arc<OpenFile>) -> Result<Arc<OpenFile>> {
+    if !file.is_path() && (fs::socket::holds(&file) || fs::anon::holds(&file)) {
+        return Err(Errno::ENXIO);
     }
     Ok(file)
 }

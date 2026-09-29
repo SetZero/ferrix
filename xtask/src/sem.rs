@@ -22,7 +22,7 @@ use crate::{Error, Result, cargo, fat, native, qemu, shell};
 /// The Rust target the program is built for on `arch`: with `i686`, x86-64's
 /// program is 32-bit x86, which the kernel runs in compatibility mode through
 /// `int $0x80` (`docs/I386.md`, I4).
-fn target(arch: Arch, i686: bool) -> Result<&'static str> {
+pub(crate) fn target(arch: Arch, i686: bool) -> Result<&'static str> {
     Ok(match (arch, i686) {
         (Arch::X86_64, false) => "x86_64-unknown-linux-musl",
         (Arch::X86_64, true) => "i686-unknown-linux-musl",
@@ -57,24 +57,37 @@ const NEGATIVE_FAILURE: &str =
 /// Build `sem-test` for `arch`, as the negative control or not, and return
 /// where the program is.
 fn build(arch: Arch, negative: bool, i686: bool) -> Result<PathBuf> {
+    let feature = negative.then_some("negative-control");
+    build_test("sem", arch, feature, i686)
+}
+
+/// Build `tests/<name>`, the program `<name>-test`, for `arch` with `feature`
+/// on if there is one, and return where the program is.
+pub(crate) fn build_test(
+    name: &str,
+    arch: Arch,
+    feature: Option<&str>,
+    i686: bool,
+) -> Result<PathBuf> {
     let target = target(arch, i686)?;
-    let flavour = if negative { "negative" } else { "plain" };
-    let target_dir = paths::target_dir().join("sem-test").join(flavour);
-    println!("  building sem-test ({flavour}) for {target}");
-    let program = target_dir.join(target).join("release").join("sem-test");
+    let flavour = feature.unwrap_or("plain");
+    let crate_name = format!("{name}-test");
+    let target_dir = paths::target_dir().join(&crate_name).join(flavour);
+    println!("  building {crate_name} ({flavour}) for {target}");
+    let program = target_dir.join(target).join("release").join(&crate_name);
     let mut build = crate::builds::Build::cargo(
-        format!("cargo build (sem-test, {flavour}) --target {target}"),
-        paths::workspace_root().join("tests/sem"),
+        format!("cargo build ({crate_name}, {flavour}) --target {target}"),
+        paths::workspace_root().join("tests").join(name),
     )
     .args(["build", "--release", "--target", target])
     .env("CARGO_TARGET_DIR", &target_dir)
     .output(&program);
-    if negative {
-        build = build.args(["--features", "negative-control"]);
+    if let Some(feature) = feature {
+        build = build.args(["--features", feature]);
     }
     // Ferrix's own `.cargo/config.toml` uses this triple for the ARMv7-A
     // loader, with its linker script, and cargo merges a parent directory's
-    // flags for a target into `tests/sem/`'s. The variable replaces every
+    // flags for a target into `tests/<name>/`'s. The variable replaces every
     // configured flag, so the program is linked as the other two are.
     if arch == Arch::Armv7a {
         build = build
@@ -94,7 +107,7 @@ fn build(arch: Arch, negative: bool, i686: bool) -> Result<PathBuf> {
 
 /// Boot `program` as init on `arch` and return every line after the boot
 /// marker, once init has exited.
-fn boot(arch: Arch, program: &Path, args: &Args) -> Result<Vec<String>> {
+pub(crate) fn boot(arch: Arch, program: &Path, args: &Args) -> Result<Vec<String>> {
     let loader = cargo::build_loader(arch, args.release)?;
     let kernel = cargo::build_kernel_with_init(arch, args.release, program, shell::SCRIPT)?;
     let natives = native::build(arch, args.release)?;
@@ -110,7 +123,7 @@ fn boot(arch: Arch, program: &Path, args: &Args) -> Result<Vec<String>> {
 }
 
 /// The status init exited with, from the kernel's line.
-fn status(lines: &[String]) -> Option<i32> {
+pub(crate) fn status(lines: &[String]) -> Option<i32> {
     lines.iter().find_map(|line| {
         let at = line.find(shell::EXITED)?;
         line.get(at + shell::EXITED.len()..)?.trim().parse().ok()
@@ -118,7 +131,7 @@ fn status(lines: &[String]) -> Option<i32> {
 }
 
 /// Whether `line` is `want`, once the serial log's time stamp is taken off.
-fn says(line: &str, want: &str) -> bool {
+pub(crate) fn says(line: &str, want: &str) -> bool {
     line.trim_end().ends_with(want)
 }
 

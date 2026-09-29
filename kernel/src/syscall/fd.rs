@@ -245,8 +245,10 @@ pub(crate) fn sys_openat(
         // A read-only `/proc/sys` value opened for writing is refused, as is
         // a sysfs attribute opened for what it cannot do, a named pipe opens
         // as a pipe end, and a device node as the device its number names;
-        // everything else is returned as it is.
+        // a socket or anonymous file reached through `/proc/<pid>/fd` is
+        // refused; everything else is returned as it is.
         .and_then(fs::procfs::refuse_write_open)
+        .and_then(fs::procfs::refuse_reopen)
         .and_then(fs::sysfs::refuse_open)
         .and_then(fs::pipe::attach_fifo)
         .and_then(fs::devfs::attach_device);

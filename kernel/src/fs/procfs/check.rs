@@ -32,6 +32,7 @@ use ferrix_vfs::{Context, Errno, FileType, Namespace, OpenFile, OpenFlags, Whenc
 use ferrix_vma::VmaFlags;
 
 use crate::fs;
+use crate::fs::socket::SocketType;
 use crate::sched;
 use crate::smp;
 use crate::syscall::process::{self, Process, Startup};
@@ -514,6 +515,7 @@ fn check_proc(process: &Arc<Process>, layout: &Layout) -> Found {
     // it as they would into a program's buffer.
     let buffer = layout.heap.0;
     check_cwd_and_root(ns, &ctx, process, &pid, buffer)?;
+    check_object_links(ns, &ctx, process, buffer)?;
     let values = check_sysctl(ns, &ctx, process, buffer)?;
     if !read_all(ns, &ctx, b"/proc/partitions", 5)?.is_empty() {
         return Err("/proc/partitions is not empty, with no block device to list");
@@ -890,6 +892,93 @@ fn check_descriptors(
     Ok(vec![null_fd, doomed_fd])
 }
 
+/// `/proc/self/fd/<n>` of a socket and of an anonymous file, as `lsof`
+/// uses it: `stat` through the link is `fstat` of the descriptor -- the
+/// same device, inode number and type, a socket's `S_IFSOCK` -- while
+/// `lstat` is the link itself and `readlink` names the object; and `openat`
+/// through it is `ENXIO`, as Linux's `sock_no_open` and `no_open` answer.
+fn check_object_links(
+    ns: &Namespace,
+    ctx: &Context,
+    process: &Process,
+    buffer: u64,
+) -> Result<(), &'static str> {
+    let (socket, _peer) = fs::socket::new_pair(SocketType::Stream, false, process)
+        .map_err(|_| "no socket pair for the /proc/self/fd check")?;
+    let eventfd = fs::eventfd::create(0, false, false)
+        .map_err(|_| "no eventfd for the /proc/self/fd check")?;
+    let socket_ino = socket.inode().metadata().ino;
+    let objects: [(Arc<OpenFile>, FileType, Vec<u8>); 2] = [
+        (
+            socket,
+            FileType::Socket,
+            alloc::format!("socket:[{socket_ino}]").into_bytes(),
+        ),
+        (eventfd, FileType::Regular, b"anon_inode:[eventfd]".to_vec()),
+    ];
+    for (file, kind, name) in objects {
+        let described = ns
+            .stat(file.location())
+            .map_err(|_| "fstat of a socket or eventfd failed")?;
+        let number = process
+            .files()
+            .lock()
+            .insert(Arc::clone(&file), false)
+            .map_err(|_| "the check process's descriptor table refused a file")?;
+        let link = alloc::format!("/proc/self/fd/{number}").into_bytes();
+        let found = check_object_link(ns, ctx, process, buffer, &link, kind, &name, &described);
+        let closed = fd::sys_close(process, number);
+        found?;
+        let _ = closed.map_err(|_| "a /proc/self/fd check descriptor did not close")?;
+    }
+    Ok(())
+}
+
+/// [`check_object_links`] for one descriptor, open at `link`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one descriptor's facts, each compared once"
+)]
+fn check_object_link(
+    ns: &Namespace,
+    ctx: &Context,
+    process: &Process,
+    buffer: u64,
+    link: &[u8],
+    kind: FileType,
+    name: &[u8],
+    described: &ferrix_vfs::Stat,
+) -> Result<(), &'static str> {
+    let followed = ns
+        .resolve(ctx, None, link, true)
+        .and_then(|at| ns.stat(&at))
+        .map_err(|_| "stat of /proc/self/fd/<n> of a socket or eventfd failed")?;
+    if followed.metadata.kind != kind
+        || followed.metadata.ino != described.metadata.ino
+        || followed.dev != described.dev
+    {
+        return Err("stat of /proc/self/fd/<n> is not fstat of a socket or eventfd");
+    }
+    let itself = ns
+        .resolve(ctx, None, link, false)
+        .and_then(|at| ns.stat(&at))
+        .map_err(|_| "lstat of /proc/self/fd/<n> of a socket or eventfd failed")?;
+    if itself.metadata.kind != FileType::Symlink {
+        return Err("lstat of /proc/self/fd/<n> is not the link itself");
+    }
+    if ns.read_link(ctx, None, link).as_deref() != Ok(name) {
+        return Err("/proc/self/fd/<n> does not name a socket or eventfd as Linux does");
+    }
+    let mut path = link.to_vec();
+    path.push(0);
+    uaccess::copy_to_user(process.space(), buffer, &path)
+        .map_err(|_| "could not stage a /proc/self/fd path")?;
+    if fd::sys_openat(process, AT_FDCWD, buffer, 0, 0) != Err(Errno::ENXIO) {
+        return Err("openat of /proc/self/fd/<n> of a socket or eventfd is not ENXIO");
+    }
+    Ok(())
+}
+
 /// One directory's entries: name, kind and inode number, `.` and `..` left
 /// out.
 fn list(ns: &Namespace, ctx: &Context, path: &[u8]) -> Result<Listing, &'static str> {
@@ -912,9 +1001,12 @@ fn list(ns: &Namespace, ctx: &Context, path: &[u8]) -> Result<Listing, &'static 
 }
 
 /// `ls -R /proc`: list every directory without following links, walk to
-/// every name listed, and require the walk to end.
+/// every name listed, and require the walk to end; and every inode number
+/// listed to fit 32 bits and be one name's alone, as a 32-bit program's
+/// `readdir` needs and `find` assumes.
 fn check_listing(ns: &Namespace, ctx: &Context, pid: &[u8]) -> Result<u32, &'static str> {
     let mut pending: Vec<Vec<u8>> = vec![b"/proc".to_vec()];
+    let mut numbers = alloc::collections::BTreeSet::new();
     let mut listed = 0_u32;
     let mut seen_self = false;
     let mut seen_pid = false;
@@ -925,6 +1017,12 @@ fn check_listing(ns: &Namespace, ctx: &Context, pid: &[u8]) -> Result<u32, &'sta
             path.push(b'/');
             path.extend_from_slice(&name);
             walk_back(ns, ctx, &path, kind, ino)?;
+            if u32::try_from(ino).is_err() {
+                return Err("a /proc inode number does not fit 32 bits");
+            }
+            if !numbers.insert(ino) {
+                return Err("two /proc names share an inode number");
+            }
             listed += 1;
             if listed > LISTING_LIMIT {
                 return Err("listing /proc recursively does not end");
