@@ -1486,12 +1486,16 @@ pub(crate) fn accelerator_arguments(
 /// the rest. Not under TCG, which emulates no speculation to control and
 /// would warn about every one. `docs/certification/SPECULATION.md`.
 ///
-/// And under KVM an invariant TSC, which the host's is and `qemu64` does not
-/// say: without the bit the kernel's clock is the HPET
+/// And under KVM and WHPX an invariant TSC, which the host's is and `qemu64`
+/// does not say: without the bit the kernel's clock is the HPET
 /// (`src/kernel/src/arch/x86_64/clock.rs`), and every reading of an emulated HPET
 /// is an exit to QEMU. A browser asking the time six thousand times a second,
 /// and the scheduler asking at every switch, spent processors on nothing
-/// else. Only KVM is asked: TCG has no invariant TSC to give and says so.
+/// else. Under WHPX, on the one processor it runs with, Chrome on the desktop
+/// answered a click half a minute late: `bench-chrome --accel whpx` found the
+/// machine 100% busy at 16 to 36 frames a second with the HPET, and 19 to 25%
+/// busy at 60 with the TSC (2026-09-29). TCG has no invariant TSC to give
+/// and says so.
 ///
 /// UMIP under both, which TCG emulates: without it a program's `SIDT` reads
 /// the address of the IDT inside the kernel image, and KASLR is undone by one
@@ -1509,7 +1513,11 @@ pub(crate) fn x86_cpu(accelerator: &str) -> String {
     if accelerator == "tcg" {
         return base.to_owned();
     }
-    let clock = if accelerator == "kvm" { ",+invtsc" } else { "" };
+    let clock = if matches!(accelerator, "kvm" | "whpx") {
+        ",+invtsc"
+    } else {
+        ""
+    };
     format!("{base},+spec-ctrl,+stibp,+ssbd,+arch-capabilities,+auto-ibrs{clock}")
 }
 
@@ -2415,7 +2423,7 @@ pub(crate) fn accelerator(arch: Arch, binary: &Path, requested: Option<&str>) ->
         return Ok("tcg".to_owned());
     }
     match host_accelerator() {
-        Some(name) if supported(name) && usable(binary, name) => Ok(name.to_owned()),
+        Some(name) if supported(name) && usable(arch, binary, name) => Ok(name.to_owned()),
         _ => Ok("tcg".to_owned()),
     }
 }
@@ -2468,16 +2476,24 @@ pub(crate) fn processors(accelerator: &str, args: &Args) -> u32 {
 /// emulation", not "fail the boot test".
 ///
 /// There is no way to ask the question without answering it: QEMU initialises
-/// an accelerator only when it starts a machine. So this starts the smallest
-/// one there is (`-M none`, no devices, CPU halted) and watches. Failure is
-/// prompt and is an exit; success is QEMU sitting there waiting, which is what
-/// the deadline is for. The asymmetry is the signal.
-fn usable(binary: &Path, name: &str) -> bool {
+/// an accelerator only when it starts a machine. So this starts one with no
+/// devices and its CPU halted, and watches. Failure is prompt and is an exit;
+/// success is QEMU sitting there waiting, which is what the deadline is for.
+/// The asymmetry is the signal.
+///
+/// The machine is the one a boot of `arch` uses, not `-M none`: the Windows
+/// QEMU xtask boots with (`docs/GPU.md` §3.12) aborts under WHPX on a
+/// machine that is not an x86 one -- "`X86_MACHINE`: Object ... is not an
+/// instance of type `x86-machine`" -- well inside the deadline, and `auto` then
+/// chose `tcg`: `run-compositor --everything` ran emulated on four processors
+/// with the HPET for a clock, and Chrome took half a minute to answer a click.
+fn usable(arch: Arch, binary: &Path, name: &str) -> bool {
+    let machine = if arch == Arch::X86_64 { "q35" } else { "none" };
     let Ok(mut child) = Command::new(binary)
         .args(["-accel", name])
         .args([
             "-M",
-            "none",
+            machine,
             "-display",
             "none",
             "-monitor",

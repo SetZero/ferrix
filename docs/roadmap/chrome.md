@@ -91,6 +91,15 @@ drops 19% of its frames instead of 29%, at a host load of 25–39. The
 sound's remaining gaps follow the host's load. `cargo xtask
 bench-chrome-video` measures it (`docs/CHROME.md` §9).
 
+**Done (2026-09-29): Chrome on the Windows desktop.** Clicks took half a
+minute to land on `run-compositor --everything` on Windows. The patched
+QEMU of 2026-09-27 aborts under WHPX on `-M none`, which is how `auto`
+probed for it, so every Windows desktop since ran emulated under TCG; and
+under WHPX the clock was the HPET, the invariant TSC being asked for only
+under KVM. The probe now starts a `q35`, and WHPX gets `+invtsc`:
+`bench-chrome --accel whpx` went from a machine 100% busy at 16 to 36
+frames a second to 19–25% busy at 60 (`docs/CHROME.md` §8).
+
 **Still to do:**
 
 * `--no-sandbox`, which is stage 13's.

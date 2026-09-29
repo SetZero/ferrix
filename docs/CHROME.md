@@ -918,6 +918,22 @@ own runs did it as often. `bench-chrome` now gives a phase's reports beside
 its frames, and its frames a second are frames per report. A real stall
 still shows: the report that covers it counts fewer frames for its second.
 
+**On Windows, 2026-09-29.** On `run-compositor --everything` Chrome
+answered a click half a minute late, and the guest's `btop` showed its
+one processor at 100%. Two causes. The QEMU xtask boots on Windows
+(`docs/GPU.md` §3.12) aborts under WHPX on a machine that is not an x86
+one, and `auto` probed WHPX with `-M none`, so the probe failed and the
+desktop ran under TCG on four emulated processors. And WHPX, like KVM
+before `+invtsc`, left the kernel on the HPET, each reading an exit that
+QEMU's own x86 emulator decodes. The probe now starts a `q35`, and WHPX
+is given `+invtsc` as KVM is. `cargo xtask bench-chrome --accel whpx`,
+one processor:
+
+| clock | machine busy | frames a second |
+|---|---|---|
+| HPET | 100% in every phase | 16–36 |
+| TSC | 19–25% | 60 in every phase |
+
 **Brief slowdowns are the host's.** Some runs still dip for a second or
 two, to 42–56 frames a second in a phase, and the dips come and go between
 runs of the same kernel. To find out why, two probes ran side by side over
