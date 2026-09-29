@@ -193,6 +193,17 @@ fn installed() -> Result<Vec<File>> {
         );
         return Ok(Vec::new());
     }
+    let start = root.join("oh-my-zsh.sh");
+    let text = std::fs::read(&start)
+        .map_err(|error| Error::new(format!("reading {}: {error}", start.display())))?;
+    if text.windows(2).any(|pair| pair == b"\r\n") {
+        return Err(Error::new(format!(
+            "{} has CRLF line endings, which zsh cannot parse -- git's core.autocrlf \
+             checked it out that way; install it again with cargo xtask omz --from <URL>, \
+             which clones with LF",
+            start.display()
+        )));
+    }
     let mut files = vec![File {
         path: "etc/zshrc".to_owned(),
         mode: 0o644,
@@ -239,8 +250,21 @@ pub(crate) fn install(from: Option<&str>) -> Result<()> {
     if source.exists() {
         copy_tree(source, &root)?;
     } else {
+        // LF whatever the host's git says: a Windows git with core.autocrlf
+        // checks the scripts out with CRLF, and zsh reads each \r as part of
+        // the line, so oh-my-zsh.sh fails to parse in the guest.
         let mut command = Command::new("git");
-        let _ = command.args(["clone", "--depth", "1", from]).arg(&root);
+        let _ = command
+            .args(["-c", "core.autocrlf=false", "-c", "core.eol=lf"])
+            .args([
+                "clone",
+                "--depth",
+                "1",
+                "--config",
+                "core.autocrlf=false",
+                from,
+            ])
+            .arg(&root);
         crate::cargo::run(command, "git clone (oh-my-zsh)")?;
     }
     println!("\ninstalled oh-my-zsh under {}", root.display());
