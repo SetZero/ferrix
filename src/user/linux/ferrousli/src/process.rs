@@ -347,6 +347,23 @@ pub extern "C" fn setresgid(rgid: c_uint, egid: c_uint, sgid: c_uint) -> c_int {
     set_ids(nr::SETRESGID, rgid as usize, egid as usize, sgid as usize)
 }
 
+/// Sets the user id file accesses are checked against to `fsuid`, if the
+/// caller may, and returns the one before: Linux's `setfsuid`, which never
+/// fails and sets no `errno`. Passing an id it refuses reads the current one.
+/// ncurses' `libtinfo` imports it, and so `bash` does.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn setfsuid(fsuid: c_uint) -> c_int {
+    // SAFETY: the call reads no memory.
+    unsafe { syscall::syscall2(nr::SETFSUID, fsuid as usize, 0) as c_int }
+}
+
+/// [`setfsuid`] for the group id file accesses are checked against.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn setfsgid(fsgid: c_uint) -> c_int {
+    // SAFETY: the call reads no memory.
+    unsafe { syscall::syscall2(nr::SETFSGID, fsgid as usize, 0) as c_int }
+}
+
 /// Stores up to `size` supplementary group ids at `list`, and returns how
 /// many there are. A zero `size` only counts them.
 ///

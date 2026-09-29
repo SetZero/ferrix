@@ -310,7 +310,7 @@ fn hexadecimal(
 /// # Safety
 ///
 /// `s` must be a NUL-terminated string, and `endptr` null or valid to write.
-unsafe fn convert(s: *const c_char, endptr: *mut *mut c_char, format: &Format) -> u128 {
+pub(crate) unsafe fn convert(s: *const c_char, endptr: *mut *mut c_char, format: &Format) -> u128 {
     // SAFETY: the caller passes a NUL-terminated string.
     let text = unsafe { CText::new(s) };
     let parsed = parse(&text, format);

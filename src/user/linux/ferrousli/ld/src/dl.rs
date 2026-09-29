@@ -337,7 +337,26 @@ fn place_tls(scope: &mut Scope, before: usize) -> Result<(), Error> {
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void {
     // SAFETY: the caller's contract.
-    unsafe { symbol(handle, name, None) }
+    unsafe { symbol(handle, name, None, None) }
+}
+
+/// `dlvsym(handle, name, version)` called from `caller`, as [`dlsym_from`]
+/// is: the definition of `name` at `version`, such as `GLIBC_2.2.5`, where
+/// an object defines the name at several. Steam's overlay library finds the
+/// functions it wraps this way, with `RTLD_NEXT`.
+///
+/// # Safety
+///
+/// `name` and `version` must be NUL-terminated strings.
+pub(crate) unsafe extern "C" fn dlvsym_from(
+    handle: *mut c_void,
+    name: *const c_char,
+    version: *const c_char,
+    caller: *const c_void,
+) -> *mut c_void {
+    let version = (!version.is_null()).then_some(version);
+    // SAFETY: the caller's contract.
+    unsafe { symbol(handle, name, Some(caller.addr()), version) }
 }
 
 /// `dlsym(handle, name)` called from `caller`, an address in the calling
@@ -354,7 +373,7 @@ pub(crate) unsafe extern "C" fn dlsym_from(
     caller: *const c_void,
 ) -> *mut c_void {
     // SAFETY: the caller's contract.
-    unsafe { symbol(handle, name, Some(caller.addr())) }
+    unsafe { symbol(handle, name, Some(caller.addr()), None) }
 }
 
 /// Why a lookup found nothing.
@@ -372,7 +391,12 @@ enum Missing {
 /// # Safety
 ///
 /// `name` must be a NUL-terminated string.
-unsafe fn symbol(handle: *mut c_void, name: *const c_char, caller: Option<usize>) -> *mut c_void {
+unsafe fn symbol(
+    handle: *mut c_void,
+    name: *const c_char,
+    caller: Option<usize>,
+    version: Option<*const c_char>,
+) -> *mut c_void {
     let found = with_scope(|scope| {
         if handle.addr() == RTLD_NEXT {
             let caller = caller.ok_or(Missing::NoCaller)?;
@@ -384,15 +408,17 @@ unsafe fn symbol(handle: *mut c_void, name: *const c_char, caller: Option<usize>
                 })
                 .ok_or(Missing::NoCaller)?;
             // SAFETY: every object in the scope is mapped.
-            return unsafe { scope.lookup(name, None, index + 1) }.ok_or(Missing::Undefined);
+            return unsafe { scope.lookup(name, version, index + 1) }.ok_or(Missing::Undefined);
         }
         if handle.is_null() {
             // SAFETY: as above.
-            return unsafe { scope.lookup(name, None, 0) }.ok_or(Missing::Undefined);
+            return unsafe { scope.lookup(name, version, 0) }.ok_or(Missing::Undefined);
         }
         match scope.index_of_handle(handle) {
-            // SAFETY: as above.
-            Some(index) => unsafe { scope.lookup_from(index, name) }.ok_or(Missing::Undefined),
+            Some(index) => {
+                // SAFETY: as above.
+                unsafe { scope.lookup_from(index, name, version) }.ok_or(Missing::Undefined)
+            }
             None => Err(Missing::NotAHandle),
         }
     });

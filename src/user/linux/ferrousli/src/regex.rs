@@ -461,10 +461,10 @@ pub unsafe extern "C" fn regfree(preg: *mut Regex) {
 /// why it is a variable this library reads through its GOT rather than a
 /// value it keeps: see [`crate::stdlib::environ`].
 ///
-/// # Weak, all four GNU names
+/// # Weak, all five GNU names
 ///
-/// `re_syntax_options`, `re_set_syntax`, `re_compile_pattern` and
-/// `re_search` are weak, so that a program bringing its own GNU regex -- git
+/// `re_syntax_options`, `re_set_syntax`, `re_compile_pattern`, `re_search`
+/// and `re_match` are weak, so that a program bringing its own GNU regex -- git
 /// links `compat/regex` into itself -- links against this library at all,
 /// and keeps its own. The variable is weak `.bss` in assembly, as
 /// `__environ` is; each function is a weak tail jump to the Rust one, as
@@ -507,6 +507,7 @@ core::arch::global_asm!(
     ".hidden __ferrousli_re_set_syntax",
     ".hidden __ferrousli_re_compile_pattern",
     ".hidden __ferrousli_re_search",
+    ".hidden __ferrousli_re_match",
     ".p2align 4",
     ".weak re_set_syntax",
     ".type re_set_syntax, @function",
@@ -522,6 +523,11 @@ core::arch::global_asm!(
     ".type re_search, @function",
     "re_search:",
     "jmp __ferrousli_re_search",
+    ".p2align 4",
+    ".weak re_match",
+    ".type re_match, @function",
+    "re_match:",
+    "jmp __ferrousli_re_match",
     ".popsection",
 );
 
@@ -541,6 +547,7 @@ core::arch::global_asm!(
     ".hidden __ferrousli_re_set_syntax",
     ".hidden __ferrousli_re_compile_pattern",
     ".hidden __ferrousli_re_search",
+    ".hidden __ferrousli_re_match",
     ".p2align 2",
     ".weak re_set_syntax",
     ".type re_set_syntax, %function",
@@ -554,6 +561,10 @@ core::arch::global_asm!(
     ".type re_search, %function",
     "re_search:",
     "b __ferrousli_re_search",
+    ".weak re_match",
+    ".type re_match, %function",
+    "re_match:",
+    "b __ferrousli_re_match",
     ".popsection",
     size = const size_of::<usize>(),
     align = const size_of::<usize>().trailing_zeros(),
@@ -738,6 +749,99 @@ pub unsafe extern "C" fn re_search(
     if regs.is_null() || bits & NO_SUB != 0 {
         return answer;
     }
+    // SAFETY: the caller's contract, for the match found at `position`.
+    unsafe {
+        fill_registers(
+            buffer,
+            regs,
+            compiled,
+            text,
+            position,
+            flags(position),
+            answer,
+        )
+    }
+}
+
+/// GNU's anchored match: whether the pattern in `*buffer` matches `string`'s
+/// `length` bytes starting exactly at `start`. Returns how many bytes the
+/// match takes (the longest, as POSIX's rules have it), -1 if it does not
+/// match there, or -2 if memory ran out; fills `*regs` as [`re_search`] does.
+/// GNU grep calls it to check a line it has found a candidate in.
+///
+/// # Safety
+///
+/// As [`re_search`].
+#[cfg_attr(not(test), unsafe(export_name = "__ferrousli_re_match"))]
+pub unsafe extern "C" fn re_match(
+    buffer: *mut Regex,
+    string: *const c_char,
+    length: c_int,
+    start: c_int,
+    regs: *mut Registers,
+) -> c_int {
+    // SAFETY: the caller passes a compiled pattern.
+    let Some(compiled) = (unsafe { compiled(buffer) }) else {
+        return -2;
+    };
+    let (Ok(length), Ok(first)) = (usize::try_from(length), usize::try_from(start)) else {
+        return -1;
+    };
+    if first > length {
+        return -1;
+    }
+    // SAFETY: the caller vouches for `length` bytes.
+    let text = unsafe { core::slice::from_raw_parts(string.cast::<u8>(), length) };
+    // SAFETY: as above.
+    let bits = unsafe { (*buffer).bits };
+    let flags = (if first > 0 || bits & NOT_BOL != 0 {
+        REG_NOTBOL
+    } else {
+        0
+    }) | (if bits & NOT_EOL != 0 { REG_NOTEOL } else { 0 });
+    // The leftmost match from `first` on starts at `first` if any match
+    // there does, so it is the one asked about or there is none.
+    let mut end = None;
+    let rest = text.get(first..).unwrap_or_default();
+    let matched = execute(compiled, rest, flags, 1, &mut |i, so, eo| {
+        if i == 0 && so == 0 {
+            end = Some(eo);
+        }
+    });
+    if matched.is_err() {
+        return -2;
+    }
+    let Some(end) = end else {
+        return -1;
+    };
+    let Ok(answer) = c_int::try_from(end) else {
+        return -2;
+    };
+    if regs.is_null() || bits & NO_SUB != 0 {
+        return answer;
+    }
+    // SAFETY: the caller's contract, for the match found at `first`.
+    unsafe { fill_registers(buffer, regs, compiled, text, first, flags, answer) }
+}
+
+/// Fills `*regs` with the match of `compiled` in `text` at `position`, found
+/// under `flags`, and each of its groups, allocating the registers as
+/// `buffer`'s `regs_allocated` says; answers `answer`, or -2 if memory ran
+/// out. The last step of [`re_search`] and [`re_match`].
+///
+/// # Safety
+///
+/// `buffer` and `regs` as those functions' callers promise, and `compiled`
+/// the pattern `buffer` holds.
+unsafe fn fill_registers(
+    buffer: *mut Regex,
+    regs: *mut Registers,
+    compiled: &Compiled,
+    text: &[u8],
+    position: usize,
+    flags: c_int,
+    answer: c_int,
+) -> c_int {
     let groups = compiled.ast.groups as usize + 1;
     // SAFETY: the caller passes registers, which nothing else uses meanwhile.
     let registers = unsafe { &mut *regs };
@@ -773,13 +877,7 @@ pub unsafe extern "C" fn re_search(
         };
         write(i, so, eo);
     };
-    match execute(
-        compiled,
-        rest,
-        flags(position),
-        groups.min(count),
-        &mut record,
-    ) {
+    match execute(compiled, rest, flags, groups.min(count), &mut record) {
         Ok(true) => answer,
         Ok(false) | Err(_) => -2,
     }

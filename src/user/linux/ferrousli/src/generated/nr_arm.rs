@@ -469,6 +469,10 @@ pub const SETRESGID32: usize = 210;
 pub const GETRESUID32: usize = 209;
 /// `getresgid32`.
 pub const GETRESGID32: usize = 211;
+/// `setfsuid32`.
+pub const SETFSUID32: usize = 215;
+/// `setfsgid32`.
+pub const SETFSGID32: usize = 216;
 /// `clock_gettime64`.
 pub const CLOCK_GETTIME64: usize = 403;
 /// `clock_settime64`.
@@ -573,6 +577,10 @@ pub const SETRESGID: usize = SETRESGID32;
 pub const GETRESUID: usize = GETRESUID32;
 /// `getresgid`: [`GETRESGID32`], which takes its arguments here.
 pub const GETRESGID: usize = GETRESGID32;
+/// `setfsuid`: [`SETFSUID32`], which takes its arguments here.
+pub const SETFSUID: usize = SETFSUID32;
+/// `setfsgid`: [`SETFSGID32`], which takes its arguments here.
+pub const SETFSGID: usize = SETFSGID32;
 /// `fcntl`: [`FCNTL64`], which takes its arguments here.
 pub const FCNTL: usize = FCNTL64;
 /// `sendfile`: [`SENDFILE64`], which takes its arguments here.

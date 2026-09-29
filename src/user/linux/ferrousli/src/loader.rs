@@ -55,6 +55,13 @@ pub struct Interface {
     /// Revision 4: `dlsym` with the caller's address, which `RTLD_NEXT`
     /// needs.
     pub dlsym_from: unsafe extern "C" fn(*mut c_void, *const c_char, *const c_void) -> *mut c_void,
+    /// Revision 5: `dlvsym` with the caller's address.
+    pub dlvsym_from: unsafe extern "C" fn(
+        *mut c_void,
+        *const c_char,
+        *const c_char,
+        *const c_void,
+    ) -> *mut c_void,
 }
 
 /// The revision that added the `dlfcn.h` calls.
@@ -73,6 +80,19 @@ pub fn dlsym_from()
     interface()
         .filter(|interface| interface.version >= DLSYM_FROM)
         .map(|interface| interface.dlsym_from)
+}
+
+/// The revision that added `dlvsym` with its caller.
+const DLVSYM_FROM: usize = 5;
+
+/// The loader's `dlvsym` that takes its caller's address, when it has one.
+#[must_use]
+pub fn dlvsym_from() -> Option<
+    unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char, *const c_void) -> *mut c_void,
+> {
+    interface()
+        .filter(|interface| interface.version >= DLVSYM_FROM)
+        .map(|interface| interface.dlvsym_from)
 }
 
 /// The loader's copy of the auxiliary vector: `None` in a static program,

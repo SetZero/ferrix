@@ -51,6 +51,42 @@ pub enum Float {
     /// A `long double`: the x87's on x86-64, binary128 on AArch64, and a
     /// `double` on ARMv7-A.
     Long(LongDouble),
+    /// An IEEE binary128's bits, `_Float128`, on every architecture:
+    /// `strfromf128`'s argument.
+    Binary128(u128),
+}
+
+/// The sign and kind of the binary128 whose bits are `bits`.
+fn decode_binary128(bits: u128) -> (bool, Kind) {
+    let biased = ((bits >> 112) & 0x7fff) as i32;
+    let fraction = bits & ((1 << 112) - 1);
+    let kind = match biased {
+        0x7fff if fraction == 0 => Kind::Infinite,
+        0x7fff => Kind::Nan,
+        0 => Kind::Finite {
+            mantissa: fraction,
+            exponent: -16494,
+        },
+        _ => Kind::Finite {
+            mantissa: fraction | (1 << 112),
+            exponent: biased - 16495,
+        },
+    };
+    (bits >> 127 != 0, kind)
+}
+
+/// `%a`'s leading digit, fraction, fraction digits, exponent and whether the
+/// leading digit carries four bits, for the binary128 whose bits are `bits`:
+/// printed as a `double` is, with 28 fraction digits.
+fn hex_binary128(bits: u128) -> (u128, u128, usize, i32, bool) {
+    let biased = ((bits >> 112) & 0x7fff) as i32;
+    let fraction = bits & ((1 << 112) - 1);
+    if biased == 0 {
+        let exp = if fraction == 0 { 0 } else { -16382 };
+        (0, fraction, 28, exp, false)
+    } else {
+        (1, fraction, 28, biased - 16383, false)
+    }
 }
 
 /// What a floating-point value is.
@@ -90,25 +126,9 @@ fn decode(value: Float) -> (bool, Kind) {
             };
             (bits >> 63 != 0, kind)
         }
+        Float::Binary128(bits) => decode_binary128(bits),
         #[cfg(target_arch = "aarch64")]
-        Float::Long(value) => {
-            let bits = value.bits;
-            let biased = ((bits >> 112) & 0x7fff) as i32;
-            let fraction = bits & ((1 << 112) - 1);
-            let kind = match biased {
-                0x7fff if fraction == 0 => Kind::Infinite,
-                0x7fff => Kind::Nan,
-                0 => Kind::Finite {
-                    mantissa: fraction,
-                    exponent: -16494,
-                },
-                _ => Kind::Finite {
-                    mantissa: fraction | (1 << 112),
-                    exponent: biased - 16495,
-                },
-            };
-            (bits >> 127 != 0, kind)
-        }
+        Float::Long(value) => decode_binary128(value.bits),
         #[cfg(target_arch = "arm")]
         Float::Long(value) => decode(Float::Double(value.0)),
         #[cfg(target_arch = "x86_64")]
@@ -535,17 +555,9 @@ fn hexadecimal(
                 (1, fraction, 13, biased - 1023, false)
             }
         }
+        Float::Binary128(bits) => hex_binary128(bits),
         #[cfg(target_arch = "aarch64")]
-        Float::Long(value) => {
-            let biased = ((value.bits >> 112) & 0x7fff) as i32;
-            let fraction = value.bits & ((1 << 112) - 1);
-            if biased == 0 {
-                let exp = if fraction == 0 { 0 } else { -16382 };
-                (0, fraction, 28, exp, false)
-            } else {
-                (1, fraction, 28, biased - 16383, false)
-            }
-        }
+        Float::Long(value) => hex_binary128(value.bits),
         #[cfg(target_arch = "arm")]
         Float::Long(value) => {
             return hexadecimal(sink, spec, upper, sign, Float::Double(value.0), count);

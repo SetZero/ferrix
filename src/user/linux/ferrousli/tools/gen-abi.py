@@ -84,7 +84,7 @@ renameat2 getrandom memfd_create execveat statx clone3 faccessat2
 epoll_create1 epoll_ctl epoll_pwait epoll_pwait2 eventfd2
 timerfd_create timerfd_settime timerfd_gettime signalfd4
 fadvise64 fallocate mlock munlock mlockall munlockall getpriority setpriority
-waitid preadv pwritev mknodat setresuid setresgid fchmodat2 copy_file_range
+waitid preadv pwritev mknodat setresuid setresgid setfsuid setfsgid fchmodat2 copy_file_range
 sync_file_range
 set_robust_list get_robust_list sched_setparam sched_getparam
 sched_setscheduler sched_getscheduler sched_get_priority_max
@@ -110,7 +110,7 @@ ARM_NARROW = """
 stat fstat lstat lseek fcntl truncate ftruncate statfs fstatfs sendfile
 getuid getgid geteuid getegid setuid setgid setreuid setregid getgroups
 setgroups chown fchown lchown setresuid setresgid getresuid getresgid
-clock_gettime clock_settime clock_getres clock_nanosleep clock_adjtime futex
+setfsuid setfsgid clock_gettime clock_settime clock_getres clock_nanosleep clock_adjtime futex
 ppoll pselect6 rt_sigtimedwait utimensat semtimedop sched_rr_get_interval
 gettimeofday settimeofday nanosleep timerfd_settime timerfd_gettime
 recvmmsg
@@ -122,7 +122,7 @@ mmap2 _llseek fcntl64 truncate64 ftruncate64 fstat64 fstatat64 statfs64
 fstatfs64 sendfile64 ugetrlimit getuid32 getgid32 geteuid32 getegid32
 setuid32 setgid32 setreuid32 setregid32 getgroups32 setgroups32 chown32
 fchown32 lchown32 setresuid32 setresgid32 getresuid32 getresgid32
-clock_gettime64 clock_settime64 clock_getres_time64 clock_nanosleep_time64
+setfsuid32 setfsgid32 clock_gettime64 clock_settime64 clock_getres_time64 clock_nanosleep_time64
 clock_adjtime64 futex_time64 ppoll_time64 pselect6_time64
 rt_sigtimedwait_time64 utimensat_time64 semtimedop_time64
 sched_rr_get_interval_time64 arm_fadvise64_64 arm_sync_file_range sigreturn
@@ -171,6 +171,8 @@ ARM_SAME_ARGUMENTS = {
     "setresgid": "setresgid32",
     "getresuid": "getresuid32",
     "getresgid": "getresgid32",
+    "setfsuid": "setfsuid32",
+    "setfsgid": "setfsgid32",
     "fcntl": "fcntl64",
     "sendfile": "sendfile64",
 }

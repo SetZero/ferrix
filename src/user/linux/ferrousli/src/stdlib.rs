@@ -1,5 +1,5 @@
 //! `stdlib.h`: `getenv`, `secure_getenv` and `environ` beside them; the
-//! radix-64 conversions `a64l` and `l64a`; and `getsubopt`.
+//! radix-64 conversions `a64l` and `l64a`; `getsubopt`; and glibc's `rpmatch`.
 //!
 //! `exit`, `_Exit`, `atexit`, `quick_exit` and `at_quick_exit` are in
 //! [`crate::exit`], and `abort` is in [`crate::signal`]. The radix-64 functions
@@ -269,9 +269,39 @@ pub unsafe extern "C" fn getsubopt(
     }
 }
 
+/// Whether the answer `response` means yes (1) or no (0), or neither (-1):
+/// glibc's `rpmatch`, which GNU tar asks before it overwrites. The C locale's
+/// patterns are the only ones, as the library has no other: yes begins with
+/// `y` or `Y`, no with `n` or `N`.
+///
+/// # Safety
+///
+/// `response` must be a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn rpmatch(response: *const c_char) -> c_int {
+    // SAFETY: the caller vouches for a string, which has at least its NUL.
+    match unsafe { response.read() } as u8 {
+        b'y' | b'Y' => 1,
+        b'n' | b'N' => 0,
+        _ => -1,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rpmatch_answers_the_c_locales_yes_and_no() {
+        // SAFETY: each is a NUL-terminated literal.
+        let answer = |text: &CStr| unsafe { rpmatch(text.as_ptr()) };
+        assert_eq!(answer(c"yes"), 1);
+        assert_eq!(answer(c"Y"), 1);
+        assert_eq!(answer(c"no"), 0);
+        assert_eq!(answer(c"N"), 0);
+        assert_eq!(answer(c"maybe"), -1);
+        assert_eq!(answer(c""), -1);
+    }
 
     #[test]
     fn radix_64_round_trips_and_stops_where_musl_does() {

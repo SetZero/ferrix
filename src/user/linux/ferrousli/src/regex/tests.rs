@@ -693,3 +693,51 @@ fn re_search_finds_forwards_backwards_and_fills_its_registers() {
     // SAFETY: the pattern is compiled and not used again.
     unsafe { regfree(re.as_mut_ptr()) };
 }
+
+/// `re_match` answers only for a match that starts where it is asked, with
+/// its length, the longest there is, and the groups in the registers.
+#[test]
+fn re_match_matches_only_where_it_starts_and_says_how_long() {
+    const RE_SYNTAX_POSIX_EXTENDED_ISH: usize = RE_NO_BK_PARENS;
+    let old = re_set_syntax(RE_SYNTAX_POSIX_EXTENDED_ISH);
+    let mut re = MaybeUninit::<Regex>::zeroed();
+    let pattern = b"(b+)c";
+    // SAFETY: the pattern's bytes and a zeroed `regex_t`.
+    let error =
+        unsafe { re_compile_pattern(pattern.as_ptr().cast(), pattern.len(), re.as_mut_ptr()) };
+    assert!(error.is_null());
+    let _ = re_set_syntax(old);
+
+    let text = b"abbc abbbc";
+    // SAFETY: the pattern is compiled and the text is `len` bytes; no
+    // registers.
+    let mut matching = |start: c_int| unsafe {
+        re_match(re.as_mut_ptr(), text.as_ptr().cast(), 10, start, null_mut())
+    };
+    assert_eq!(matching(0), -1, "the match at 1 does not start at 0");
+    assert_eq!(matching(1), 3, "bbc");
+    assert_eq!(matching(2), 2, "bc");
+    assert_eq!(matching(6), 4, "bbbc");
+    assert_eq!(matching(11), -1, "past the end");
+
+    let mut regs = Registers {
+        num_regs: 0,
+        start: null_mut(),
+        end: null_mut(),
+    };
+    // SAFETY: as above, with unallocated registers, as a zeroed `regex_t` says.
+    let length = unsafe { re_match(re.as_mut_ptr(), text.as_ptr().cast(), 10, 6, &raw mut regs) };
+    assert_eq!(length, 4);
+    assert!(regs.num_regs >= 2);
+    // SAFETY: `re_match` allocated `num_regs` entries, at least two.
+    let starts = unsafe { core::slice::from_raw_parts(regs.start, 2) };
+    // SAFETY: as above.
+    let ends = unsafe { core::slice::from_raw_parts(regs.end, 2) };
+    assert_eq!((starts, ends), (&[6, 6][..], &[10, 9][..]));
+    // SAFETY: the arrays came from `malloc`.
+    unsafe { free(regs.start.cast()) };
+    // SAFETY: as above.
+    unsafe { free(regs.end.cast()) };
+    // SAFETY: the pattern is compiled and not used again.
+    unsafe { regfree(re.as_mut_ptr()) };
+}

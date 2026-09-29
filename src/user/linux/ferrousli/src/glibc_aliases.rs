@@ -1,7 +1,11 @@
 //! glibc's double-underscore names for functions this library has under the
 //! plain name: the locale functions GCC's C++ runtime calls by glibc's
-//! internal names -- LLVM and `rustc`'s driver import them through it -- and
-//! `__pthread_key_create`.
+//! internal names -- LLVM and `rustc`'s driver import them through it --
+//! `__pthread_key_create`, and the names the Steam client's 64-bit side
+//! imports: `__strdup` and `__strtok_r` (SDL, the Steam Runtime's tools),
+//! `_IO_putc` (lsof), `prlimit64` (the Runtime's tools; `rlim_t` is 64 bits
+//! here on every architecture, so it is `prlimit`), and Chromium's
+//! `__libc_malloc` family, which its allocator shim calls through.
 //!
 //! Each takes the same arguments as the plain function and does the same
 //! thing, so each is a branch to it, as [`crate::arm_names`] does for
@@ -61,16 +65,24 @@ macro_rules! aliases {
 }
 
 aliases! {
+    "_IO_putc" => "putc",
     "__duplocale" => "duplocale",
     "__freelocale" => "freelocale",
     "__iswctype_l" => "iswctype_l",
+    "__libc_calloc" => "calloc",
+    "__libc_free" => "free",
+    "__libc_malloc" => "malloc",
+    "__libc_memalign" => "memalign",
+    "__libc_realloc" => "realloc",
     "__newlocale" => "newlocale",
     "__nl_langinfo_l" => "nl_langinfo_l",
     "__pthread_key_create" => "pthread_key_create",
     "__strcoll_l" => "strcoll_l",
+    "__strdup" => "strdup",
     "__strftime_l" => "strftime_l",
     "__strtod_l" => "strtod_l",
     "__strtof_l" => "strtof_l",
+    "__strtok_r" => "strtok_r",
     "__strxfrm_l" => "strxfrm_l",
     "__towlower_l" => "towlower_l",
     "__towupper_l" => "towupper_l",
@@ -79,6 +91,7 @@ aliases! {
     "__wcsftime_l" => "wcsftime_l",
     "__wcsxfrm_l" => "wcsxfrm_l",
     "__wctype_l" => "wctype_l",
+    "prlimit64" => "prlimit",
 }
 
 pub(crate) use aliases;

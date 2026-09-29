@@ -457,14 +457,20 @@ impl Scope {
         (offset % size == 0 && index < self.count).then_some(index)
     }
 
-    /// Find `name` in object `root` and then in what it needs, breadth-first
-    /// as the loader loaded them: what `dlsym` on a handle searches.
+    /// Find `name`, at `version` when one is given, in object `root` and then
+    /// in what it needs, breadth-first as the loader loaded them: what
+    /// `dlsym` and `dlvsym` on a handle search.
     ///
     /// # Safety
     ///
     /// Every object in the scope must be mapped.
     #[must_use]
-    pub(crate) unsafe fn lookup_from(&self, root: usize, name: *const c_char) -> Option<Found> {
+    pub(crate) unsafe fn lookup_from(
+        &self,
+        root: usize,
+        name: *const c_char,
+        version: Option<*const c_char>,
+    ) -> Option<Found> {
         let hash = sym::hash(name);
         let mut queued = [0_u64; QUEUED_WORDS];
         let mark = |queued: &mut [u64; QUEUED_WORDS], index: usize| -> Option<bool> {
@@ -482,7 +488,7 @@ impl Scope {
             let index = *queue.get(head)?;
             head += 1;
             let object = self.objects.get(index)?;
-            if let Some(mut found) = sym::lookup(object, name, hash, None) {
+            if let Some(mut found) = sym::lookup(object, name, hash, version) {
                 found.tls_offset = object.tls.map(|tls| tls.offset);
                 found.module = index;
                 return Some(found);
