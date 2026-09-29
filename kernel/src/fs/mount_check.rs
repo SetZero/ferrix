@@ -54,21 +54,21 @@ pub(crate) struct Report {
 
 /// The check's scratch page: paths are staged at the start, a read lands in
 /// the second half.
-struct Page<'a> {
-    process: &'a Process,
+pub(super) struct Page<'a> {
+    pub(super) process: &'a Process,
     base: u64,
     /// Where the next staged string goes.
     next: u64,
 }
 
 /// Half a page for staged strings, half for what is read back.
-const STAGED: u64 = 2048;
+pub(super) const STAGED: u64 = 2048;
 /// Bytes a read may bring back.
-const READ_ROOM: u64 = 8192;
+pub(super) const READ_ROOM: u64 = 8192;
 
 impl Page<'_> {
     /// Stage `text` with its NUL and answer its address.
-    fn put(&mut self, text: &[u8]) -> Result<u64, &'static str> {
+    pub(super) fn put(&mut self, text: &[u8]) -> Result<u64, &'static str> {
         let at = self.base + self.next;
         let mut bytes = Vec::with_capacity(text.len() + 1);
         bytes.extend_from_slice(text);
@@ -83,13 +83,26 @@ impl Page<'_> {
         Ok(at)
     }
 
+    /// Stage `bytes` as they are, with no NUL, and answer their address.
+    pub(super) fn put_bytes(&mut self, bytes: &[u8]) -> Result<u64, &'static str> {
+        let at = self.base + self.next;
+        let len = bytes.len() as u64;
+        if self.next + len > STAGED {
+            return Err("a check ran out of room for its staged bytes");
+        }
+        uaccess::copy_to_user(self.process.space(), at, bytes)
+            .map_err(|_| "a check could not stage its bytes")?;
+        self.next += len;
+        Ok(at)
+    }
+
     /// Where a read lands.
-    fn buffer(&self) -> u64 {
+    pub(super) fn buffer(&self) -> u64 {
         self.base + STAGED
     }
 
     /// `len` bytes of what a read left.
-    fn read_back(&self, len: usize) -> Result<Vec<u8>, &'static str> {
+    pub(super) fn read_back(&self, len: usize) -> Result<Vec<u8>, &'static str> {
         let mut bytes = vec![0_u8; len];
         uaccess::copy_from_user(self.process.space(), self.buffer(), &mut bytes)
             .map_err(|_| "the mount check could not read its buffer")?;
@@ -97,19 +110,19 @@ impl Page<'_> {
     }
 
     /// Start staging again.
-    fn reset(&mut self) {
+    pub(super) fn reset(&mut self) {
         self.next = 0;
     }
 }
 
 /// Counts what was answered.
-struct Tally<'a> {
-    report: &'a mut Report,
+pub(super) struct Tally<'a> {
+    pub(super) report: &'a mut Report,
 }
 
 impl Tally<'_> {
     /// Require `got` to succeed.
-    fn done(
+    pub(super) fn done(
         &mut self,
         got: Result<usize, Errno>,
         what: &'static str,
@@ -119,12 +132,12 @@ impl Tally<'_> {
     }
 
     /// Require `got` to succeed, whatever it answered.
-    fn ok(&mut self, got: Result<usize, Errno>, what: &'static str) -> Result<(), &'static str> {
+    pub(super) fn ok(&mut self, got: Result<usize, Errno>, what: &'static str) -> Result<(), &'static str> {
         self.done(got, what).map(drop)
     }
 
     /// Require `got` to be `Err(wanted)`.
-    fn refused(
+    pub(super) fn refused(
         &mut self,
         got: Result<usize, Errno>,
         wanted: Errno,
@@ -140,7 +153,7 @@ impl Tally<'_> {
 }
 
 /// Make `call` by its number, as a program would.
-fn by_number(process: &Process, call: Syscall, args: [u64; 6]) -> Result<usize, Errno> {
+pub(super) fn by_number(process: &Process, call: Syscall, args: [u64; 6]) -> Result<usize, Errno> {
     syscall_check::call_by_number(process, call, args)
 }
 
@@ -162,7 +175,7 @@ fn mount(
 }
 
 /// `openat(AT_FDCWD, path, flags, mode)`.
-fn open(
+pub(super) fn open(
     page: &mut Page<'_>,
     path: &[u8],
     flags: u32,
@@ -177,7 +190,7 @@ fn open(
 }
 
 /// `close(fd)`, whose answer the check does not need.
-fn close(process: &Process, fd: usize) {
+pub(super) fn close(process: &Process, fd: usize) {
     let _ = by_number(process, Syscall::Close, [fd as u64, 0, 0, 0, 0, 0]);
 }
 
@@ -189,12 +202,10 @@ fn under(name: &[u8]) -> Vec<u8> {
     path
 }
 
-/// Run the check.
-pub(crate) fn run() -> Result<Report, &'static str> {
-    let process =
-        process::new_for_check().map_err(|_| "could not make a process for the mount check")?;
+/// A scratch page in `process`, for staging paths and reading back.
+pub(super) fn page_for(process: &Process) -> Result<Page<'_>, &'static str> {
     let base = memory::sys_mmap(
-        &process,
+        process,
         &MmapRequest {
             addr: 0,
             len: STAGED + READ_ROOM,
@@ -205,12 +216,19 @@ pub(crate) fn run() -> Result<Report, &'static str> {
             unit: OffsetUnit::Bytes,
         },
     )
-    .map_err(|_| "the mount check's page was refused")? as u64;
-    let mut page = Page {
-        process: &process,
+    .map_err(|_| "a mount check's page was refused")? as u64;
+    Ok(Page {
+        process,
         base,
         next: 0,
-    };
+    })
+}
+
+/// Run the check.
+pub(crate) fn run() -> Result<Report, &'static str> {
+    let process =
+        process::new_for_check().map_err(|_| "could not make a process for the mount check")?;
+    let mut page = page_for(&process)?;
     let mut report = Report::default();
     let outcome = check(&mut page, &mut report);
     // Whatever happened, the mount goes: a remount read-write first, so the
@@ -734,7 +752,7 @@ fn shows_the_flags(
 }
 
 /// The whole of a small file, read by number.
-fn read_whole(
+pub(super) fn read_whole(
     page: &mut Page<'_>,
     tally: &mut Tally<'_>,
     path: &[u8],

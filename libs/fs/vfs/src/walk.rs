@@ -386,10 +386,7 @@ pub(crate) fn up(at: &Location, root: Option<&Location>) -> Location {
         if Arc::ptr_eq(&here.dentry, here.mount.root()) {
             match here.mount.parent() {
                 Some((mount, dentry)) => {
-                    here = Location {
-                        mount: Arc::clone(mount),
-                        dentry: Arc::clone(dentry),
-                    };
+                    here = Location { mount, dentry };
                     continue;
                 }
                 None => return here,
