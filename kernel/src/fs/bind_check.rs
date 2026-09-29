@@ -39,7 +39,7 @@ use ferrix_linux_abi::types::{
 use ferrix_vfs::Errno;
 
 use crate::fs::mount_check::{Page, READ_ROOM, Report, Tally, by_number, close, open, page_for};
-use crate::syscall::process::{self, Process};
+use crate::syscall::process;
 
 /// Where the check works.
 const BASE: &[u8] = b"/tmp/.bind-check";
@@ -92,7 +92,11 @@ fn bind(
 }
 
 /// `umount2(target, flags)`.
-fn unmount(page: &mut Page<'_>, target: &[u8], flags: u32) -> Result<Result<usize, Errno>, &'static str> {
+fn unmount(
+    page: &mut Page<'_>,
+    target: &[u8],
+    flags: u32,
+) -> Result<Result<usize, Errno>, &'static str> {
     page.reset();
     let target = page.put(&at(target))?;
     Ok(by_number(
@@ -103,7 +107,11 @@ fn unmount(page: &mut Page<'_>, target: &[u8], flags: u32) -> Result<Result<usiz
 }
 
 /// Open `name` under [`BASE`] with `flags`, from a fresh page.
-fn open_at(page: &mut Page<'_>, name: &[u8], flags: u32) -> Result<Result<usize, Errno>, &'static str> {
+fn open_at(
+    page: &mut Page<'_>,
+    name: &[u8],
+    flags: u32,
+) -> Result<Result<usize, Errno>, &'static str> {
     page.reset();
     open(page, &at(name), flags, 0o644)
 }
@@ -160,7 +168,10 @@ fn mountinfo_line(
     Ok(info
         .split(|&byte| byte == b'\n')
         .filter_map(|line| {
-            let fields: Vec<Vec<u8>> = line.split(|&byte| byte == b' ').map(<[u8]>::to_vec).collect();
+            let fields: Vec<Vec<u8>> = line
+                .split(|&byte| byte == b' ')
+                .map(<[u8]>::to_vec)
+                .collect();
             (fields.get(4).map(Vec::as_slice) == Some(point)).then_some(fields)
         })
         .last())
@@ -185,14 +196,26 @@ pub(crate) fn run() -> Result<Report, &'static str> {
 /// every name.
 fn clean_up(page: &mut Page<'_>) {
     for _ in 0..3 {
-        for name in [&b"d1"[..], b"d2", b"d3", b"d4", b"ffile", b"sockfile", b"src"] {
+        for name in [
+            &b"d1"[..],
+            b"d2",
+            b"d3",
+            b"d4",
+            b"ffile",
+            b"sockfile",
+            b"src",
+        ] {
             let _ = unmount(page, name, MNT_DETACH);
         }
     }
     for name in TARGET_FILES {
         page.reset();
         if let Ok(path) = page.put(&at(name)) {
-            let _ = by_number(page.process, Syscall::Unlinkat, [AT_FDCWD as u64, path, 0, 0, 0, 0]);
+            let _ = by_number(
+                page.process,
+                Syscall::Unlinkat,
+                [AT_FDCWD as u64, path, 0, 0, 0, 0],
+            );
         }
     }
     for name in DIRECTORIES.iter().chain([&&b""[..]]) {
@@ -231,7 +254,11 @@ fn set_up(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<usize, &'static 
     for name in [&b""[..]].into_iter().chain(DIRECTORIES) {
         page.reset();
         let path = page.put(&at(name))?;
-        let got = by_number(process, Syscall::Mkdirat, [AT_FDCWD as u64, path, 0o755, 0, 0, 0]);
+        let got = by_number(
+            process,
+            Syscall::Mkdirat,
+            [AT_FDCWD as u64, path, 0o755, 0, 0, 0],
+        );
         tally.ok(got, "a directory of the bind check could not be made")?;
     }
     for name in TARGET_FILES {
@@ -244,8 +271,15 @@ fn set_up(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<usize, &'static 
     for name in [&b"src/a"[..], b"src/a/deep"] {
         page.reset();
         let path = page.put(&at(name))?;
-        let got = by_number(process, Syscall::Mkdirat, [AT_FDCWD as u64, path, 0o755, 0, 0, 0]);
-        tally.ok(got, "a directory in the bind check's tmpfs could not be made")?;
+        let got = by_number(
+            process,
+            Syscall::Mkdirat,
+            [AT_FDCWD as u64, path, 0o755, 0, 0, 0],
+        );
+        tally.ok(
+            got,
+            "a directory in the bind check's tmpfs could not be made",
+        )?;
     }
     let got = mount(page, b"tmpfs", &at(b"src/a/deep"), b"tmpfs", 0)?;
     tally.ok(got, "the bind check's inner tmpfs could not be mounted")?;
@@ -253,14 +287,26 @@ fn set_up(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<usize, &'static 
         let fd = open_at(page, name, O_CREAT | O_WRONLY)?;
         let fd = tally.done(fd, "a file in the bind check's tmpfs could not be made")?;
         let data = page.put(bytes)?;
-        let got = by_number(process, Syscall::Write, [fd as u64, data, bytes.len() as u64, 0, 0, 0]);
+        let got = by_number(
+            process,
+            Syscall::Write,
+            [fd as u64, data, bytes.len() as u64, 0, 0, 0],
+        );
         close(process, fd);
         tally.ok(got, "a file in the bind check's tmpfs could not be written")?;
     }
-    let listener = by_number(process, Syscall::Socket, [u64::from(AF_UNIX), u64::from(SOCK_STREAM), 0, 0, 0, 0]);
+    let listener = by_number(
+        process,
+        Syscall::Socket,
+        [u64::from(AF_UNIX), u64::from(SOCK_STREAM), 0, 0, 0, 0],
+    );
     let listener = tally.done(listener, "the bind check's socket could not be made")?;
     let (address, len) = socket_address(page, b"src/sock")?;
-    let got = by_number(process, Syscall::Bind, [listener as u64, address, len, 0, 0, 0]);
+    let got = by_number(
+        process,
+        Syscall::Bind,
+        [listener as u64, address, len, 0, 0, 0],
+    );
     tally.ok(got, "the bind check's socket could not be bound")?;
     let got = by_number(process, Syscall::Listen, [listener as u64, 4, 0, 0, 0, 0]);
     tally.ok(got, "the bind check's socket would not listen")?;
@@ -296,7 +342,11 @@ fn binds(
         return Err("a bound directory does not show its file");
     }
     let got = open_at(page, b"d1/a/deep/inner", O_RDONLY)?;
-    tally.refused(got, Errno::ENOENT, "a bind without MS_REC showed a submount")?;
+    tally.refused(
+        got,
+        Errno::ENOENT,
+        "a bind without MS_REC showed a submount",
+    )?;
     let got = bind(page, b"src", b"d2", MS_REC)?;
     tally.ok(got, "a directory could not be bound with MS_REC")?;
     if contents(page, b"d2/a/deep/inner")? != b"in" {
@@ -318,18 +368,33 @@ fn binds(
     tally.ok(got, "a directory could not be bound onto itself")?;
     page.reset();
     let inside = page.put(&at(b"d4/made"))?;
-    let got = by_number(process, Syscall::Mkdirat, [AT_FDCWD as u64, inside, 0o755, 0, 0, 0]);
+    let got = by_number(
+        process,
+        Syscall::Mkdirat,
+        [AT_FDCWD as u64, inside, 0o755, 0, 0, 0],
+    );
     tally.ok(got, "a directory bound onto itself took no directory")?;
 
     // The socket, and a connection through the bind.
     let got = bind(page, b"src/sock", b"sockfile", 0)?;
     tally.ok(got, "a socket could not be bound")?;
-    let client = by_number(process, Syscall::Socket, [u64::from(AF_UNIX), u64::from(SOCK_STREAM), 0, 0, 0, 0]);
+    let client = by_number(
+        process,
+        Syscall::Socket,
+        [u64::from(AF_UNIX), u64::from(SOCK_STREAM), 0, 0, 0, 0],
+    );
     let client = tally.done(client, "the bind check's client socket could not be made")?;
     descriptors.push(client);
     let (address, len) = socket_address(page, b"sockfile")?;
-    let got = by_number(process, Syscall::Connect, [client as u64, address, len, 0, 0, 0]);
-    tally.ok(got, "a connect through a bound socket did not reach the listener")?;
+    let got = by_number(
+        process,
+        Syscall::Connect,
+        [client as u64, address, len, 0, 0, 0],
+    );
+    tally.ok(
+        got,
+        "a connect through a bound socket did not reach the listener",
+    )?;
 
     // What bubblewrap compares after every bind: the descriptor's link and
     // mountinfo's mount point, and the root inside the filesystem.
@@ -346,7 +411,7 @@ fn binds(
             return Err("mountinfo has no line for a bind");
         };
         if fields.get(3).map(Vec::as_slice) != Some(root)
-            || fields.get(8).map(Vec::as_slice) != Some(&b"tmpfs"[..])
+            || fields.get(7).map(Vec::as_slice) != Some(&b"tmpfs"[..])
         {
             return Err("mountinfo's line for a bind has the wrong root or type");
         }
@@ -356,13 +421,22 @@ fn binds(
 
 /// The two kinds of remount: one mount, or the filesystem.
 fn remounts(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'static str> {
-    let got = mount(page, b"none", &at(b"d1"), b"none", MS_REMOUNT | MS_BIND | MS_RDONLY)?;
+    let got = mount(
+        page,
+        b"none",
+        &at(b"d1"),
+        b"none",
+        MS_REMOUNT | MS_BIND | MS_RDONLY,
+    )?;
     tally.ok(got, "a bind remount read-only was refused")?;
     let got = writes(page, b"d1/f")?;
     tally.refused(got, Errno::EROFS, "a bind remounted read-only took a write")?;
     for name in [&b"src/f"[..], b"d2/f", b"ffile"] {
         let got = writes(page, name)?;
-        tally.ok(got, "a bind remount read-only reached another mount of the filesystem")?;
+        tally.ok(
+            got,
+            "a bind remount read-only reached another mount of the filesystem",
+        )?;
     }
     let got = mount(page, b"none", &at(b"d1"), b"none", MS_REMOUNT | MS_BIND)?;
     tally.ok(got, "a bind remount read-write was refused")?;
@@ -374,7 +448,11 @@ fn remounts(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'static s
     tally.ok(got, "a plain remount read-only was refused")?;
     for name in [&b"d1/f"[..], b"src/f", b"d2/f", b"ffile"] {
         let got = writes(page, name)?;
-        tally.refused(got, Errno::EROFS, "a plain remount read-only left a bind of the filesystem writable")?;
+        tally.refused(
+            got,
+            Errno::EROFS,
+            "a plain remount read-only left a bind of the filesystem writable",
+        )?;
     }
     let got = writes(page, b"d2/a/deep/inner")?;
     tally.ok(got, "a plain remount read-only reached another filesystem")?;
@@ -382,7 +460,7 @@ fn remounts(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'static s
         return Err("mountinfo has no line for the bind check's tmpfs");
     };
     if fields.get(5).map(Vec::as_slice) != Some(&b"rw"[..])
-        || fields.get(10).map(Vec::as_slice) != Some(&b"ro"[..])
+        || fields.get(9).map(Vec::as_slice) != Some(&b"ro"[..])
     {
         return Err("mountinfo does not show a filesystem read-only under a writable mount");
     }
@@ -397,14 +475,27 @@ fn remounts(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'static s
 
 /// The propagation flags: accepted as the no-ops they are here, or refused.
 fn propagation(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'static str> {
-    for kind in [MS_REC | MS_PRIVATE, MS_REC | MS_SLAVE, MS_UNBINDABLE, MS_PRIVATE] {
+    for kind in [
+        MS_REC | MS_PRIVATE,
+        MS_REC | MS_SLAVE,
+        MS_UNBINDABLE,
+        MS_PRIVATE,
+    ] {
         let got = mount(page, b"none", &at(b"d2"), b"none", kind)?;
         tally.ok(got, "a propagation change on a mount's root was refused")?;
     }
     for (target, kind, why) in [
         (&b"d2"[..], MS_SHARED, "MS_SHARED was accepted"),
-        (b"d2", MS_PRIVATE | MS_SLAVE, "two propagation types at once were accepted"),
-        (b"d2/a", MS_PRIVATE, "a propagation change inside a mount was accepted"),
+        (
+            b"d2",
+            MS_PRIVATE | MS_SLAVE,
+            "two propagation types at once were accepted",
+        ),
+        (
+            b"d2/a",
+            MS_PRIVATE,
+            "a propagation change inside a mount was accepted",
+        ),
         (b"d2", MS_MOVE, "MS_MOVE was accepted"),
     ] {
         let got = mount(page, b"none", &at(target), b"none", kind)?;
@@ -424,13 +515,21 @@ fn detach(
     let kept = tally.done(got, "the copied submount would not open O_PATH")?;
     descriptors.push(kept);
     let got = unmount(page, b"d2", 0)?;
-    tally.refused(got, Errno::EBUSY, "a mount with one inside it unmounted without MNT_DETACH")?;
+    tally.refused(
+        got,
+        Errno::EBUSY,
+        "a mount with one inside it unmounted without MNT_DETACH",
+    )?;
     let got = unmount(page, b"d2/a", MNT_DETACH)?;
     tally.refused(got, Errno::EINVAL, "an unmount inside a mount was accepted")?;
     let got = unmount(page, b"d2", MNT_DETACH)?;
     tally.ok(got, "MNT_DETACH of a mount with one inside it was refused")?;
     let got = open_at(page, b"d2/a", O_PATH)?;
-    tally.refused(got, Errno::ENOENT, "a detached bind is still reached by its path")?;
+    tally.refused(
+        got,
+        Errno::ENOENT,
+        "a detached bind is still reached by its path",
+    )?;
     if mountinfo_line(page, tally, &at(b"d2/a/deep"))?.is_some()
         || mountinfo_line(page, tally, &at(b"d2"))?.is_some()
     {
@@ -439,7 +538,11 @@ fn detach(
     // `..` from inside the detached submount stays where it is.
     page.reset();
     let dotdot = page.put(b"..")?;
-    let got = by_number(process, Syscall::Openat, [kept as u64, dotdot, u64::from(O_PATH), 0, 0, 0]);
+    let got = by_number(
+        process,
+        Syscall::Openat,
+        [kept as u64, dotdot, u64::from(O_PATH), 0, 0, 0],
+    );
     let above = tally.done(got, "`..` from a detached mount would not open")?;
     descriptors.push(above);
     if link_of(page, above)? != link_of(page, kept)? {
@@ -449,7 +552,11 @@ fn detach(
     let pid = process.pid();
     let source = format!("/proc/{pid}/fd/{kept}");
     let got = mount(page, source.as_bytes(), &at(b"d2"), b"none", MS_BIND)?;
-    tally.refused(got, Errno::EINVAL, "a bind from a detached mount was accepted")?;
+    tally.refused(
+        got,
+        Errno::EINVAL,
+        "a bind from a detached mount was accepted",
+    )?;
 
     // The source filesystem's own mount goes; a bind of it stays.
     let got = unmount(page, b"src", MNT_DETACH)?;

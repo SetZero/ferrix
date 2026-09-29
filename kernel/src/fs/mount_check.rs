@@ -132,7 +132,11 @@ impl Tally<'_> {
     }
 
     /// Require `got` to succeed, whatever it answered.
-    pub(super) fn ok(&mut self, got: Result<usize, Errno>, what: &'static str) -> Result<(), &'static str> {
+    pub(super) fn ok(
+        &mut self,
+        got: Result<usize, Errno>,
+        what: &'static str,
+    ) -> Result<(), &'static str> {
         self.done(got, what).map(drop)
     }
 
@@ -400,15 +404,18 @@ fn refuses_a_wrong_remount(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result
     tally.refused(got, Errno::EPERM, "a remount by uid 1000 was not EPERM")
 }
 
-/// `nosuid` alone, then read-only alone, each by `MS_REMOUNT | MS_BIND` as
-/// bubblewrap asks.
+/// `nosuid` alone, by a plain remount that makes the filesystem writable
+/// again, then read-only alone by `MS_REMOUNT | MS_BIND`, as bubblewrap asks.
 fn one_flag_at_a_time(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'static str> {
     let process = page.process;
     let ctx = crate::syscall::path::context(process);
-    // `nosuid` alone: the program runs, without its set-user-id bit.
+    // `nosuid` alone: the program runs, without its set-user-id bit. A plain
+    // remount, since the read-only one before it was plain and made the
+    // filesystem itself read-only, which only a plain remount undoes (a
+    // bind remount changes the one mount's flags: `docs/NAMESPACES.md`, N2).
     page.reset();
-    let got = mount(page, MOUNT_POINT, b"none", MS_REMOUNT | MS_BIND | MS_NOSUID)?;
-    tally.ok(got, "a bind remount nosuid was refused")?;
+    let got = mount(page, MOUNT_POINT, b"none", MS_REMOUNT | MS_NOSUID)?;
+    tally.ok(got, "a plain remount nosuid was refused")?;
     let (_, _, set_ids) = fs::open_program(&ctx, None, &under(b"suid"))
         .map_err(|_| "a program on a nosuid mount would not open")?;
     if set_ids != fs::SetIds::NONE {
