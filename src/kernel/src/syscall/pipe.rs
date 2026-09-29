@@ -68,20 +68,24 @@ const MAX_RW_COUNT: u64 = 0x7FFF_F000;
 
 /// `pipe2`, and `pipe` as `pipe2` with no flags.
 ///
-/// Only `O_CLOEXEC` and `O_NONBLOCK` are taken, both decoded through the
+/// `O_CLOEXEC` and `O_NONBLOCK` are taken, both decoded through the
 /// architecture's `open` table, where all three architectures agree on them:
 /// neither `arch/arm/include/uapi/asm/fcntl.h` nor its arm64 counterpart
 /// overrides the generic header's values, and x86-64 has no header of its own.
-/// Linux also takes `O_DIRECT`, for a pipe that keeps writes apart as packets,
-/// and `O_NOTIFICATION_PIPE`; there are no such pipes here, so both are
-/// `EINVAL` with every other bit.
+/// So is `O_DIRECT`, whose bit Arm does move, for a packet pipe that keeps
+/// each write apart (`ferrix_vfs::pipe`): the Steam client's controller code
+/// asserts without one. Linux's `O_NOTIFICATION_PIPE` is `EINVAL` here, with
+/// every other bit.
 pub(crate) fn sys_pipe2(process: &Process, fds: u64, raw: u32) -> Result<usize, Errno> {
-    if raw & !(O_CLOEXEC | O_NONBLOCK) != 0 {
+    // `O_DIRECT` is this architecture's bit, which is not the same on Arm.
+    let direct = crate::arch::OPEN_FLAGS.direct;
+    if raw & !(O_CLOEXEC | O_NONBLOCK | direct) != 0 {
         return Err(Errno::EINVAL);
     }
     let (flags, cloexec) = fd::decode_open_flags(raw);
     let owner = crate::syscall::path::creator_ids(process);
-    let (reader, writer) = fs::pipe::new_pipe(flags.nonblock, owner)?;
+    let packets = raw & direct != 0;
+    let (reader, writer) = fs::pipe::new_pipe_of(flags.nonblock, packets, owner)?;
     let (read_fd, write_fd) = install(process, reader, writer, cloexec)?;
 
     let pair: Vec<u8> = read_fd

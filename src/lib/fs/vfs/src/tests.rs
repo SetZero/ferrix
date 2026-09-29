@@ -1332,6 +1332,79 @@ fn a_drained_pipe_is_end_of_file_only_once_no_writer_is_left() {
     );
 }
 
+fn open_packet_pipe(capacity: usize) -> PipeBuffer {
+    let mut pipe = PipeBuffer::packets(capacity);
+    pipe.open_reader();
+    pipe.open_writer();
+    pipe
+}
+
+/// A packet pipe (`pipe2(O_DIRECT)`) keeps each write's bounds: a read takes
+/// one write at most, however large its buffer, and a stream pipe the same
+/// writes as one run of bytes.
+#[test]
+fn a_packet_pipe_reads_one_write_at_a_time() {
+    let mut pipe = open_packet_pipe(PIPE_CAPACITY);
+    assert!(pipe.is_packets());
+    assert_eq!(pipe.write(b"one"), WriteOutcome::Wrote(3));
+    assert_eq!(pipe.write(b"three"), WriteOutcome::Wrote(5));
+    assert_eq!(pipe.next_read(), 3);
+    let mut buf = [0_u8; 64];
+    assert_eq!(pipe.read(&mut buf), ReadOutcome::Read(3));
+    assert_eq!(&buf[..3], b"one");
+    assert_eq!(buf[3], 0, "nothing of the next packet is copied");
+    assert_eq!(pipe.read(&mut buf), ReadOutcome::Read(5));
+    assert_eq!(&buf[..5], b"three");
+    assert_eq!(pipe.read(&mut buf), ReadOutcome::WouldBlock);
+
+    let mut stream = open_pipe(PIPE_CAPACITY);
+    assert_eq!(stream.write(b"one"), WriteOutcome::Wrote(3));
+    assert_eq!(stream.write(b"three"), WriteOutcome::Wrote(5));
+    assert_eq!(stream.read(&mut buf), ReadOutcome::Read(8));
+}
+
+/// A read too small for a packet takes what fits and drops the rest of that
+/// packet, as Linux's `pipe_read` does; the next read is the next packet.
+#[test]
+fn a_short_read_of_a_packet_drops_its_rest() {
+    let mut pipe = open_packet_pipe(PIPE_CAPACITY);
+    assert_eq!(pipe.write(b"abcdef"), WriteOutcome::Wrote(6));
+    assert_eq!(pipe.write(b"gh"), WriteOutcome::Wrote(2));
+    let mut small = [0_u8; 2];
+    assert_eq!(pipe.read(&mut small), ReadOutcome::Read(2));
+    assert_eq!(&small, b"ab");
+    assert_eq!(pipe.len(), 2, "cdef went with its packet");
+    assert_eq!(pipe.read(&mut small), ReadOutcome::Read(2));
+    assert_eq!(&small, b"gh");
+}
+
+/// A write larger than `PIPE_BUF` goes in as packets of `PIPE_BUF`, one per
+/// call, and each needs room for all of itself; bytes put back after a failed
+/// copy come back as one packet.
+#[test]
+fn a_packet_pipe_cuts_large_writes_and_takes_packets_whole() {
+    let mut pipe = open_packet_pipe(PIPE_BUF * 2);
+    let big = vec![7_u8; PIPE_BUF + 100];
+    assert_eq!(pipe.write(&big), WriteOutcome::Wrote(PIPE_BUF));
+    assert_eq!(pipe.write(&big[PIPE_BUF..]), WriteOutcome::Wrote(100));
+    // PIPE_BUF - 100 bytes of room: a packet of PIPE_BUF waits whole, where a
+    // stream would take what fits.
+    assert!(
+        !pipe.can_write(PIPE_BUF + 100),
+        "a whole packet does not fit"
+    );
+    assert_eq!(pipe.write(&big), WriteOutcome::WouldBlock);
+    assert!(pipe.can_write(100));
+    let mut buf = vec![0_u8; PIPE_BUF * 2];
+    assert_eq!(pipe.read(&mut buf), ReadOutcome::Read(PIPE_BUF));
+    pipe.unread(&buf[..10]);
+    assert_eq!(pipe.next_read(), 10);
+    assert_eq!(pipe.read(&mut buf), ReadOutcome::Read(10));
+    assert_eq!(pipe.read(&mut buf), ReadOutcome::Read(100));
+    pipe.close_writer();
+    assert_eq!(pipe.read(&mut buf), ReadOutcome::EndOfFile);
+}
+
 #[test]
 fn bytes_a_reader_could_not_take_are_read_again_first() {
     let mut pipe = open_pipe(PIPE_BUF);

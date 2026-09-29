@@ -11,8 +11,7 @@
 //! # The volume
 //!
 //! `tools/common/fetch/fetch-steam-window.sh` makes it: yserver's tree,
-//! `fetch-steam.sh`'s bootstrap tree, i386 Mesa, lsof, and the launch-side
-//! workarounds of `tools/common/steam/workarounds/` compiled. It is attached
+//! `fetch-steam.sh`'s bootstrap tree, i386 Mesa and lsof. It is attached
 //! under QEMU's `snapshot=on`, as the other Steam volumes are, so every boot
 //! starts from the bootstrap and downloads the client again.
 //!

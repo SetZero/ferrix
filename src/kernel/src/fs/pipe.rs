@@ -108,18 +108,25 @@ impl fmt::Debug for Pipe {
 }
 
 impl Pipe {
-    /// An empty pipe with no ends, charged to the running task's job.
+    /// An empty pipe with no ends, charged to the running task's job: a
+    /// packet pipe when `packets`, as `pipe2(O_DIRECT)` makes one (see
+    /// `ferrix_vfs::pipe`), and a byte stream otherwise.
     ///
     /// # Errors
     ///
     /// `ENOMEM` past the job's memory limit.
-    fn new() -> Result<Arc<Pipe>, Errno> {
+    fn new(packets: bool) -> Result<Arc<Pipe>, Errno> {
         let charge = Charge::bytes(
             arc_footprint::<Pipe>().saturating_add(arc_footprint::<WaitQueue>().saturating_mul(2)),
         )
         .map_err(|_| Errno::ENOMEM)?;
+        let buffer = if packets {
+            PipeBuffer::packets(PIPE_CAPACITY)
+        } else {
+            PipeBuffer::new(PIPE_CAPACITY)
+        };
         Ok(Arc::new(Pipe {
-            buffer: SpinLock::new(PipeBuffer::new(PIPE_CAPACITY)),
+            buffer: SpinLock::new(buffer),
             readable: Arc::new(WaitQueue::new()),
             writable: Arc::new(WaitQueue::new()),
             readers_opened: AtomicU64::new(0),
@@ -462,6 +469,19 @@ impl Inode for PipeRoot {
 /// Whatever [`OpenFile::new`] refuses, which for a pipe end is nothing.
 pub(crate) fn new_pipe(
     nonblock: bool,
+    owner: (u32, u32),
+) -> Result<(Arc<OpenFile>, Arc<OpenFile>), Errno> {
+    new_pipe_of(nonblock, false, owner)
+}
+
+/// [`new_pipe`], a packet pipe when `packets`: what `pipe2(O_DIRECT)` makes.
+///
+/// # Errors
+///
+/// As [`new_pipe`].
+pub(crate) fn new_pipe_of(
+    nonblock: bool,
+    packets: bool,
     (uid, gid): (u32, u32),
 ) -> Result<(Arc<OpenFile>, Arc<OpenFile>), Errno> {
     let pipefs = pipefs();
@@ -484,7 +504,7 @@ pub(crate) fn new_pipe(
     };
     // What `/proc/self/fd` will show, in Linux's spelling.
     let name = format!("pipe:[{ino}]");
-    let pipe = Pipe::new()?;
+    let pipe = Pipe::new(packets)?;
     let reader = open_end(
         End::open(&pipe, true, false, metadata)?,
         name.as_bytes(),
@@ -535,7 +555,7 @@ fn shared_pipe(key: (u64, u64)) -> Result<Arc<Pipe>, Errno> {
     // FIFOs open now rather than every FIFO ever opened. Only weak references
     // are dropped here, so nothing is freed under the lock.
     table.retain(|_, pipe| pipe.strong_count() > 0);
-    let pipe = Pipe::new()?;
+    let pipe = Pipe::new(false)?;
     let _ = table.insert(key, Arc::downgrade(&pipe));
     Ok(pipe)
 }
@@ -786,7 +806,13 @@ fn join(from: &Pipe, to: &Pipe, bounce: &mut [u8]) -> Joined {
     if source.is_empty() {
         return Joined::EndOfFile;
     }
-    let count = bounce.len().min(source.len()).min(sink.room());
+    // Out of a packet pipe, one packet, which waits for room for all of it
+    // rather than lose what the sink could not take.
+    let next = source.next_read();
+    if source.is_packets() && sink.room() < next.min(bounce.len()) {
+        return Joined::Full;
+    }
+    let count = bounce.len().min(next).min(sink.room());
     if count == 0 {
         return Joined::Full;
     }

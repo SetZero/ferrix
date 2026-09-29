@@ -6,10 +6,10 @@ yserver, on Ferrix, in a guest under KVM. This is the first step of stage
 with the browser helper drawing"): the client and its browser helper start
 and draw, and nobody has signed in yet. Input has not been tried.
 
-It runs with launch-side workarounds: stand-ins, preloaded shims and flags,
-each for something Ferrix does not do yet. The table in §3 lists every one,
-the real fix that retires it, and who owns that fix. None of them is in the
-kernel.
+It runs with launch-side workarounds: stand-ins and flags, each for
+something Ferrix does not do yet. The table in §3 lists every one, the real
+fix that retires it, and who owns that fix. None of them is in the kernel,
+and no library is preloaded into the client any more.
 
 ## 1. Running it
 
@@ -52,12 +52,11 @@ desktop's volume is attached under `snapshot=on` too, so every boot does.
 
 | Piece | Where | What |
 |---|---|---|
-| The volume | `tools/common/fetch/fetch-steam-window.sh` | yserver's tree (`fetch-yserver.sh`, the fork at its pinned commit), Valve's bootstrap and the Debian tools under it (`fetch-steam.sh`), i386 Mesa with llvmpipe for the 32-bit client's own GL UI, i386 libstdc++, Debian's amd64 `lsof`, and the workarounds compiled |
+| The volume | `tools/common/fetch/fetch-steam-window.sh` | yserver's tree (`fetch-yserver.sh`, the fork at its pinned commit), Valve's bootstrap and the Debian tools under it (`fetch-steam.sh`), i386 Mesa with llvmpipe for the 32-bit client's own GL UI, i386 libstdc++, and Debian's amd64 `lsof` |
 | The boot | `tools/common/xtask/src/compositor/steam_window.rs` | hyprix, the links the volume's programs need, the scripts below, a `uname` that says `Linux` |
 | The root half | `tools/common/steam/run.sh` | yserver on `:0` as a Wayland client of hyprix, a lease, then the client's half as uid 1000; a watcher for the window's title |
 | The client's half | `tools/common/steam/client.sh` | `ubuntu12_32/steam` started directly with `steam.sh`'s environment, again while it exits 42 |
 | Stand-ins | `tools/common/steam/_v2-entry-point`, `logger-0.bash`, `lsof` | see §3 |
-| Shims | `tools/common/steam/workarounds/*.c` | see §3; each file's header names its gap and owner |
 
 The client runs as uid 1000: run as root, it moves its effective uid to the
 home's owner partway through, and GTK2's setuid check then exits
@@ -73,14 +72,16 @@ does not offer; it renders in software instead.
 
 | Workaround | Why | Real fix | Owner |
 |---|---|---|---|
-| `pipe2-direct.c`, preloaded into the client | `pipe2(O_DIRECT)` (packet mode) is `EINVAL`; `controllerxinput_linux.cpp` asserts without it | packet-mode pipes | steam-pipe-direct |
 | `_v2-entry-point` stand-in, and `-no-cef-sandbox` | Valve's steamrt64 entry point starts pressure-vessel, which needs user and mount namespaces for bubblewrap; Chromium's sandbox needs them too | namespaces | N2–N6 (`docs/NAMESPACES.md`) |
 | `logger-0.bash` stand-in | The Steam Runtime's logger failed on Ferrix under `steamwebhelper.sh`; this one logs nothing | whatever the logger meets: `/dev/fd` through process substitution, and the `/proc` gaps below | steam-proc-gaps |
 | (not worked around) `lsof` warns "unsupported format" for `/proc/net/tcp6` and `udp6`, and cannot identify Unix sockets | the IPv6 tables' columns differ from Linux's, and `/proc/net/unix` names no inodes | Linux's formats | steam-proc-gaps |
 | 16 GiB guest | At 8 GiB several processes died of `SIGBUS` on execute faults of mapped library pages while Chromium started | find and fix the refault | steam-sigbus |
 | the window fills its tile, black around the login | hyprix tiled a window of a fixed size, and yserver did not pass on its size hints (`WM_NORMAL_HINTS`) | a floating window of the size Steam asks for: hyprix ec4ce6b2 and the yserver pin c5b5935, which a volume made after them carries; not yet seen on Steam's window | done, to be confirmed |
 
-Four things the sprint needed are no longer workarounds: yserver's own
+Five things the sprint needed are no longer workarounds. A shim that
+retried `pipe2` without `O_DIRECT`: the kernel makes packet pipes now, each
+write a packet and each read one packet at most, which the client's
+`controllerxinput_linux.cpp` asserts it gets. And yserver's own
 patch making a client's socket blocking before its setup (the pinned fork
 has 14197fb, and the kernel no longer passes a listener's `O_NONBLOCK` to
 `accept`, 18388c70); a `getresuid` shim, not needed once the client runs as
@@ -93,7 +94,7 @@ numbers and its entries' offsets did not fit 32 bits, so the client's
 `readdir` there was `EOVERFLOW` and it found no web helper process at all.
 The inode numbers were fixed first (f577b9b1); the offsets only after the
 client, without the shim, still logged `Checked: <pid>/<pid>` and rejected
-the connection, since the shim had truncated `d_off` as well (320f54bf).
+the connection, since the shim had truncated `d_off` as well (a46797f7).
 cgroupfs and sysfs have offsets past 2³¹ too; nothing 32-bit lists them yet.
 
 ## 4. What the sprint found, in order (2026-09-28 and 29)

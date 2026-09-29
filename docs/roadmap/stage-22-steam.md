@@ -130,12 +130,13 @@ staged until now.
   on hyprix (`cargo xtask test-steam-window`, from the volume
   `tools/common/fetch/fetch-steam-window.sh` makes; `docs/STEAM.md`). It runs
   with launch-side workarounds and no kernel change of its own: a stand-in
-  for the steamrt64 entry point instead of pressure-vessel, the client
-  preloaded with a shim for packet-mode pipes, and a 16 GiB guest.
-  `docs/STEAM.md` §3 lists each with the fix that retires it and its
-  owner. Two shims for `/proc` went the same day: `stat` through
-  `/proc/<pid>/fd/<n>` reaches a socket, and `/proc`'s inode numbers fit
-  32 bits (`cargo xtask test-procfs`).
+  for the steamrt64 entry point instead of pressure-vessel, a logger that
+  logs nothing, and a 16 GiB guest. `docs/STEAM.md` §3 lists each with the
+  fix that retires it and its owner. The three shims preloaded at first
+  went the same day, each for a kernel fix: `stat` through
+  `/proc/<pid>/fd/<n>` reaches a socket, `/proc`'s inode numbers and
+  directory offsets fit a 32-bit `readdir` (`cargo xtask test-procfs`), and
+  `pipe2(O_DIRECT)` makes a packet pipe.
 * **Sound.** Playback is done, 2026-09-26 (`docs/AUDIO.md` §8): a
   `virtio-snd` driver in ring 3, the audio core and `/dev/snd`, and Chrome
   playing through them, which `test-audio` and `test-chrome-audio` gate.

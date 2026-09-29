@@ -20,11 +20,8 @@
 #    Debian's amd64 lsof and what it links, which the client runs to learn
 #    which process opened its UI websocket.
 #
-# Then the launch-side workarounds in tools/common/steam/workarounds/, compiled
-# with the host's gcc into steam-workarounds/lib/<multiarch>/ (the client
-# preloads them through ld.so's $LIB), and the links unpacking does not make:
-# libGLX.so, which the client's updater dlopens by its development name to
-# choose its X11 UI, and awk.
+# Then the links unpacking does not make: libGLX.so, which the client's
+# updater dlopens by its development name to choose its X11 UI, and awk.
 #
 # The Steam client proper is not here: the bootstrap downloads it (about
 # 500 MB) on the guest's first start, as it does on Linux.
@@ -33,8 +30,7 @@
 #
 # Writes $FERRIX_STEAM_WINDOW_VOLUME/steam-window.img (default
 # ~/.local/share/ferrix/steam-window/steam-window.img). Needs what
-# fetch-steam.sh and fetch-yserver.sh need, and gcc able to build -m32
-# objects without a C library (-nostdlib). No root.
+# fetch-steam.sh and fetch-yserver.sh need. No root.
 #
 # Usage: tools/common/fetch/fetch-steam-window.sh
 
@@ -115,7 +111,7 @@ DEBS=(
     pool/main/l/lsof/lsof_4.99.4+dfsg-2_amd64.deb 76ca9b82da6d5dabd66609937675768a593c20c5e544171a2d9544060a1780b7
 )
 
-for tool in curl sha256sum dpkg-deb gcc mkfs.btrfs; do
+for tool in curl sha256sum dpkg-deb mkfs.btrfs; do
     command -v "$tool" > /dev/null || { echo "fetch-steam-window: $tool is not installed" >&2; exit 1; }
 done
 
@@ -153,16 +149,6 @@ done
 # dlopens, and the awk alternative.
 ln -sfn libGLX.so.0 "$tree/usr/lib/i386-linux-gnu/libGLX.so"
 [ -e "$tree/usr/bin/awk" ] || ln -s mawk "$tree/usr/bin/awk"
-
-# The workarounds, each for the ABIs that need it (see each file's header).
-work="$repo/tools/common/steam/workarounds"
-i386="$tree/steam-workarounds/lib/i386-linux-gnu"
-amd64="$tree/steam-workarounds/lib/x86_64-linux-gnu"
-mkdir -p "$i386" "$amd64"
-for name in pipe2-direct; do
-    gcc -m32 -O2 -shared -fPIC -nostdlib -o "$i386/$name.so" "$work/$name.c"
-    gcc -O2 -shared -fPIC -nostdlib -o "$amd64/$name.so" "$work/$name.c"
-done
 
 rm -rf "$tree/usr/share/doc" "$tree/usr/share/man" "$tree/usr/share/locale" \
     "$tree/usr/share/lintian" "$tree/usr/share/info"

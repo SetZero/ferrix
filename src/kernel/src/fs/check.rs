@@ -787,6 +787,7 @@ fn check_the_calls(process: &Process) -> Result<u64, &'static str> {
 
     let outcome = check_a_pipe_carries_bytes_and_then_ends(process, page)
         .and_then(|piped| check_a_pipe_refuses_as_linux_does(process, page).map(|()| piped))
+        .and_then(|piped| check_a_packet_pipe_keeps_writes_apart(process, page).map(|()| piped))
         .and_then(|piped| check_fionbio_reaches_pipes_and_sockets(process, page).map(|()| piped))
         .and_then(|piped| {
             check_a_pipe_keeps_what_a_bad_buffer_missed(process, page).map(|()| piped)
@@ -952,9 +953,60 @@ fn check_a_pipe_carries_bytes_and_then_ends(
     Ok(len as u64)
 }
 
+/// `pipe2(O_DIRECT)`, a packet pipe: two writes read back as two reads however
+/// large the reader's buffer, and a read too small for a packet takes what fits
+/// and leaves nothing of it behind, as Linux's packet pipes do. The Steam
+/// client's controller code asserts without one.
+fn check_a_packet_pipe_keeps_writes_apart(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    let direct = crate::arch::OPEN_FLAGS.direct;
+    answers(
+        pipe::sys_pipe2(process, page + AT_FDS, direct | O_NONBLOCK),
+        0,
+        "pipe2 with O_DIRECT was refused",
+    )?;
+    let (reader, writer) = pair(process, page)?;
+    // "through" and " a pipe\n": two packets.
+    let (first, second) = (7_u64, DATA.len() as u64 - 7);
+    for (at, len) in [(0, first), (first, second), (0, first)] {
+        answers(
+            file::sys_write(process, writer, page + AT_DATA + at, len),
+            len as usize,
+            "a write into a packet pipe was short",
+        )?;
+    }
+    for len in [first, second] {
+        answers(
+            file::sys_read(process, reader, page + AT_BACK, 64),
+            len as usize,
+            "a packet pipe's read did not stop at the end of one write",
+        )?;
+    }
+    answers(
+        file::sys_read(process, reader, page + AT_BACK, 3),
+        3,
+        "a short read of a packet did not take what fit",
+    )?;
+    refuses(
+        file::sys_read(process, reader, page + AT_BACK, 64),
+        Errno::EAGAIN,
+        "a short read of a packet left the rest of it in the pipe",
+    )?;
+    for end in [reader, writer] {
+        answers(
+            fd::sys_close(process, end),
+            0,
+            "a packet pipe's end would not close",
+        )?;
+    }
+    Ok(())
+}
+
 /// An empty non-blocking pipe answers `EAGAIN`; a write with no reader left is
-/// `EPIPE`; `pipe2` takes only its two flags; and a pair it cannot hand back
-/// is closed again.
+/// `EPIPE`; `pipe2` takes only its flags; and a pair it cannot hand back is
+/// closed again.
 fn check_a_pipe_refuses_as_linux_does(process: &Process, page: u64) -> Result<(), &'static str> {
     answers(
         pipe::sys_pipe2(process, page + AT_FDS, O_NONBLOCK | O_CLOEXEC),

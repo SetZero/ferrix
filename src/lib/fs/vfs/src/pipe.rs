@@ -13,6 +13,15 @@
 //! sleep — or into `EAGAIN` under `O_NONBLOCK` — which is why every outcome
 //! that would block is a value rather than a wait: the same buffer serves both
 //! and the host tests can reach every edge.
+//!
+//! # Packets
+//!
+//! A pipe made with `O_DIRECT` is a packet pipe, as Linux's is since 3.4: each
+//! write of up to [`PIPE_BUF`] bytes is one packet, a larger one is cut into
+//! packets of [`PIPE_BUF`], and a read takes one packet at most and drops what
+//! of it does not fit the reader's buffer. Linux decides it per open file, and
+//! `fcntl` can change it; here the pipe is made one or the other, which is all
+//! `pipe2(O_DIRECT)` asks.
 
 use alloc::collections::VecDeque;
 
@@ -64,6 +73,9 @@ pub struct PipeBuffer {
     capacity: usize,
     readers: usize,
     writers: usize,
+    /// The length of each packet in `data`, oldest first, for a packet pipe;
+    /// `None` for a byte stream. They add up to `data.len()`.
+    packets: Option<VecDeque<usize>>,
     /// The heap `data` holds, charged to the job that made the pipe as the
     /// buffer grows, and given back as the pipe goes (F-37). The buffer
     /// keeps the room it grew to, and so does the charge.
@@ -81,7 +93,33 @@ impl PipeBuffer {
             capacity: capacity.max(PIPE_BUF),
             readers: 0,
             writers: 0,
+            packets: None,
             charge: Charge::bytes(0).unwrap_or_default(),
+        }
+    }
+
+    /// An empty packet pipe: see the module documentation.
+    #[must_use]
+    pub fn packets(capacity: usize) -> PipeBuffer {
+        PipeBuffer {
+            packets: Some(VecDeque::new()),
+            ..PipeBuffer::new(capacity)
+        }
+    }
+
+    /// Whether this is a packet pipe.
+    #[must_use]
+    pub fn is_packets(&self) -> bool {
+        self.packets.is_some()
+    }
+
+    /// How many bytes the next read takes out of the pipe: the next packet
+    /// for a packet pipe, all of it for a byte stream.
+    #[must_use]
+    pub fn next_read(&self) -> usize {
+        match &self.packets {
+            Some(packets) => packets.front().copied().unwrap_or(0),
+            None => self.data.len(),
         }
     }
 
@@ -198,6 +236,9 @@ impl PipeBuffer {
         if self.readers == 0 || len == 0 {
             return true;
         }
+        if self.packets.is_some() {
+            return self.free() >= len.min(PIPE_BUF);
+        }
         if len <= PIPE_BUF {
             self.free() >= len
         } else {
@@ -205,7 +246,8 @@ impl PipeBuffer {
         }
     }
 
-    /// Take up to `buf.len()` bytes.
+    /// Take up to `buf.len()` bytes; from a packet pipe, the next packet, of
+    /// which what does not fit `buf` is dropped.
     ///
     /// What is in the pipe is delivered even after the last writer has gone;
     /// end of file comes only once it is drained.
@@ -220,18 +262,25 @@ impl PipeBuffer {
                 ReadOutcome::WouldBlock
             };
         }
-        let count = buf.len().min(self.data.len());
+        let taken = match self.packets.as_mut().map(VecDeque::pop_front) {
+            Some(packet) => packet.unwrap_or(self.data.len()),
+            None => self.data.len(),
+        };
+        let count = buf.len().min(taken);
         // A slice at a time rather than a byte at a time: the ring is at most
         // two runs, and each is one copy.
         let (front, back) = self.data.as_slices();
-        let mut rest = &mut *buf;
+        let mut rest = buf.get_mut(..count).unwrap_or_default();
         for run in [front, back] {
             let take = run.len().min(rest.len());
             let (to, after) = rest.split_at_mut(take);
             to.copy_from_slice(run.get(..take).unwrap_or_default());
             rest = after;
         }
-        drop(self.data.drain(..count));
+        // A packet's bytes past what the reader could take go with it; a
+        // stream keeps them for the next read.
+        let gone = if self.packets.is_some() { taken } else { count };
+        drop(self.data.drain(..gone.min(self.data.len())));
         ReadOutcome::Read(count)
     }
 
@@ -252,6 +301,12 @@ impl PipeBuffer {
         for &byte in bytes.iter().rev() {
             self.data.push_front(byte);
         }
+        // Back as the packet it was read from, less what did not fit.
+        if let Some(packets) = self.packets.as_mut()
+            && !bytes.is_empty()
+        {
+            packets.push_front(bytes.len());
+        }
     }
 
     /// Queue as much of `data` as the rules allow.
@@ -259,7 +314,9 @@ impl PipeBuffer {
     /// A write of at most [`PIPE_BUF`] bytes goes in whole or not at all. A
     /// larger one takes whatever room there is, and the caller comes back for
     /// the rest — which is exactly the case in which POSIX lets writers
-    /// interleave.
+    /// interleave. A packet pipe takes one packet: all of a write of at most
+    /// [`PIPE_BUF`] bytes, or the first [`PIPE_BUF`] of a larger one, whole or
+    /// not at all.
     pub fn write(&mut self, data: &[u8]) -> WriteOutcome {
         if self.readers == 0 {
             return WriteOutcome::Broken;
@@ -268,7 +325,13 @@ impl PipeBuffer {
             return WriteOutcome::Wrote(0);
         }
         let free = self.free();
-        let count = if data.len() <= PIPE_BUF {
+        let count = if self.packets.is_some() {
+            let packet = data.len().min(PIPE_BUF);
+            if free < packet {
+                return WriteOutcome::WouldBlock;
+            }
+            packet
+        } else if data.len() <= PIPE_BUF {
             if free < data.len() {
                 return WriteOutcome::WouldBlock;
             }
@@ -283,6 +346,9 @@ impl PipeBuffer {
             return WriteOutcome::NoMemory;
         }
         self.data.extend(data.get(..count).unwrap_or_default());
+        if let Some(packets) = self.packets.as_mut() {
+            packets.push_back(count);
+        }
         WriteOutcome::Wrote(count)
     }
 
