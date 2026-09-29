@@ -47,7 +47,7 @@ src=$ports/src
 
 # The toolchain Ferrix pins, named outright: the crate is built outside the
 # repository, where rustup would otherwise pick the machine's default.
-toolchain=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' "$ferrousli/../../rust-toolchain.toml")
+toolchain=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' "$ferrousli/../../../../rust-toolchain.toml")
 [ -n "$toolchain" ] || fail "no channel in rust-toolchain.toml"
 export RUSTUP_TOOLCHAIN=$toolchain
 echo "toolchain $toolchain"

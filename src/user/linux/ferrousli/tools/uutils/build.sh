@@ -37,7 +37,7 @@ fail() {
 # built outside the repository, where rustup would otherwise fall back to the
 # machine's default toolchain -- which is usually older than ferrousli's
 # rust-version and has no musl target installed.
-toolchain=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' "$ferrousli/../../rust-toolchain.toml")
+toolchain=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' "$ferrousli/../../../../rust-toolchain.toml")
 [ -n "$toolchain" ] || fail "no channel in rust-toolchain.toml"
 export RUSTUP_TOOLCHAIN=$toolchain
 echo "toolchain $toolchain"
