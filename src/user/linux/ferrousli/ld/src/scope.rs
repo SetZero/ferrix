@@ -48,7 +48,41 @@ const QUEUED_WORDS: usize = MAX_OBJECTS.div_ceil(64);
 /// caller; these are the defaults every system has. There is no
 /// `/etc/ld.so.cache`: a cache is a second source of truth about where a file
 /// is, and the loader reads the directories instead.
-const DEFAULT_PATHS: [&str; 4] = ["/lib", "/usr/lib", "/lib64", "/usr/lib64"];
+///
+/// Debian's and Ubuntu's glibc search their multiarch directories first,
+/// `/lib/<triplet>` and `/usr/lib/<triplet>`, where every library of theirs
+/// is; so does this, for the architecture's triplet. Without them a Debian
+/// program started with no `LD_LIBRARY_PATH` -- `grep` in the Steam client's
+/// scripts, which clear it -- found none of its libraries.
+#[cfg(target_arch = "x86_64")]
+const DEFAULT_PATHS: [&str; 6] = [
+    "/lib/x86_64-linux-gnu",
+    "/usr/lib/x86_64-linux-gnu",
+    "/lib",
+    "/usr/lib",
+    "/lib64",
+    "/usr/lib64",
+];
+/// See the x86-64 list.
+#[cfg(target_arch = "aarch64")]
+const DEFAULT_PATHS: [&str; 6] = [
+    "/lib/aarch64-linux-gnu",
+    "/usr/lib/aarch64-linux-gnu",
+    "/lib",
+    "/usr/lib",
+    "/lib64",
+    "/usr/lib64",
+];
+/// See the x86-64 list.
+#[cfg(target_arch = "arm")]
+const DEFAULT_PATHS: [&str; 6] = [
+    "/lib/arm-linux-gnueabihf",
+    "/usr/lib/arm-linux-gnueabihf",
+    "/lib",
+    "/usr/lib",
+    "/lib64",
+    "/usr/lib64",
+];
 
 /// Bytes of static TLS kept past the start-up modules' blocks for the
 /// libraries `dlopen` brings: glibc's default surplus. Chrome's GPU process
