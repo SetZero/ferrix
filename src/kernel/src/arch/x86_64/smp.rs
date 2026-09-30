@@ -383,6 +383,8 @@ extern "C" fn secondary_start(record: u64) -> ! {
         // clear as `PCIDE` requires.
         unsafe { cpu::write_cr4(boot_cr4) };
     }
+    // `XCR0` is each processor's own; `CR4` just gave this one `OSXSAVE`.
+    cpu::load_extended_state_on_this_cpu();
 
     // The IDT before the GDT: every gate names selector 0x10, which is 64-bit
     // kernel code in the trampoline's GDT as much as in the kernel's, so a

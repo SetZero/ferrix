@@ -172,15 +172,20 @@ package FerrixX8664Requirements {
                 "arch::x86_64::switch::load_selectors");
         }
         requirement <'L.x86_64.10'> fpuStateTravelsWithTask : ItemLowLevel {
-            attribute :>> statement = "save_user_state shall FXSAVE64 the outgoing
-                task's x87 and SSE state and restore_user_state shall FXRSTOR64 the
-                incoming task's.";
+            attribute :>> statement = "save_user_state shall save the outgoing
+                task's x87 and SSE state, and its AVX state where
+                enable_extended_state enabled it, with XSAVE64 of the enabled
+                components, or FXSAVE64 without XSAVE; restore_user_state shall
+                restore the incoming task's with XRSTOR64, or FXRSTOR64.";
             attribute :>> criterion = "Two programs pinned to one processor, each
-                holding distinct XMM values and MXCSR and x87 control words across N
-                sched_yields, read back their own: 0 mismatches.";
+                holding distinct XMM values, YMM upper halves where AVX is enabled,
+                and MXCSR and x87 control words across N sched_yields, read back
+                their own: 0 mismatches.";
             attribute :>> parent = "H.SCHED.8";
             attribute :>> unit = ("arch::x86_64::switch::save_user_state",
-                "arch::x86_64::switch::restore_user_state");
+                "arch::x86_64::switch::restore_user_state",
+                "arch::x86_64::switch::ferrix_fpu_save",
+                "arch::x86_64::switch::ferrix_fpu_restore");
         }
         requirement <'L.x86_64.11'> forkChildInheritsUserState : ItemLowLevel {
             attribute :>> statement = "UserState::capture shall copy the calling
@@ -1584,6 +1589,45 @@ package FerrixX8664Requirements {
             attribute :>> unit = ("arch::x86_64::mmio::read8", "arch::x86_64::mmio::write8",
                 "arch::x86_64::mmio::read16", "arch::x86_64::mmio::write16",
                 "arch::x86_64::mmio::read32", "arch::x86_64::mmio::write32");
+        }
+        requirement <'L.x86_64.121'> extendedStateEnabledOnEveryProcessor : ItemLowLevel {
+            attribute :>> statement = "enable_extended_state shall, only when CPUID
+                reports XSAVE and leaf 0xD supports x87 and SSE, set CR4.OSXSAVE and
+                load XCR0 with x87 and SSE, and AVX where CPUID reports it and the
+                standard-form area for them is 832 bytes with AVX at 576;
+                load_extended_state_on_this_cpu shall load the same XCR0 on each
+                secondary, whose CR4 is the boot processor's.";
+            attribute :>> criterion = "The boot says 'program register state: x87,
+                SSE and AVX, saved with XSAVE' on a model with AVX and XSAVEOPT, and
+                'saved with FXSAVE; no XSAVE, so no AVX' on qemu64; Claude Code's
+                AVX2-only runtime completes test-claude-code's turn on four
+                processors, and on qemu64 does not.";
+            attribute :>> parent = "H.SCHED.8";
+            attribute :>> unit = ("arch::x86_64::cpu::enable_extended_state",
+                "arch::x86_64::cpu::load_extended_state_on_this_cpu",
+                "arch::x86_64::cpu::write_xcr0");
+        }
+        requirement <'L.x86_64.122'> signalFrameCarriesExtendedState : ItemLowLevel {
+            attribute :>> statement = "Where AVX is enabled, setup_signal_frame shall
+                carry the interrupted state as Linux's XSAVE area -- FP_XSTATE_MAGIC1,
+                the sizes and components in the software-reserved bytes, XSTATE_BV,
+                the YMM upper halves, FP_XSTATE_MAGIC2 -- with UC_FP_XSTATE in
+                uc_flags; restore_signal_frame shall take AVX back only from a whole
+                area and reset it otherwise, take nothing of the header but
+                XSTATE_BV, and XSTATE_BV shall name only AVX, x87 and SSE, and only
+                XCR0's components, before XRSTOR64 sees it.";
+            attribute :>> criterion = "A handler that sets every bit of its frame's
+                XSTATE_BV, XCOMP_BV and reserved header bytes, keeping the magic
+                words and sizes, returns through rt_sigreturn and its program runs
+                on to exit 79 (the `xstate` line); with restore_fpu's and
+                set_xstate_bv's masks both taken out, the boot stops on a #GP in
+                ring 0, under TCG and under KVM.";
+            attribute :>> parent = "H.TRAP.9";
+            attribute :>> unit = ("arch::x86_64::signal::uc_flags",
+                "arch::x86_64::signal::fp_area_bytes",
+                "arch::x86_64::signal::xstate_in",
+                "arch::x86_64::signal::restore_fpu",
+                "arch::x86_64::switch::UserState::set_xstate_bv");
         }
         requirement <'L.syscall.1'> nativeNumbersReachTheNativeAbi : ItemLowLevel {
             attribute :>> statement = "dispatch_with shall send a native-entry

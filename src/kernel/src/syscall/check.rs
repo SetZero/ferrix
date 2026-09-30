@@ -218,6 +218,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     mark!(5);
     let reclaimed = check_ended_programs_give_their_frames_back()?;
     let signalled = check_a_handler_runs_and_returns()?;
+    check_a_poisoned_xsave_header_comes_back_safely()?;
     check_untested_signal_paths()?;
     mark!(6);
     let copied = check_a_copy_on_write_page_is_copied_for_the_side_that_writes()?;
@@ -6233,6 +6234,64 @@ fn check_a_handler_runs_and_returns() -> Result<Option<i32>, &'static str> {
              handler's entry or its return was wrong",
         ),
         _ => Err("a program that handles a signal did not exit with 77"),
+    }
+}
+
+/// What [`arch::USER_XSTATE_PROGRAM`] exits with when its frame carried an
+/// `XSAVE` area, which its handler poisoned, and the program ran on after
+/// `rt_sigreturn`.
+const XSTATE_POISONED: i32 = 79;
+
+/// What it exits with when its frame carried `FXSAVE` alone: a processor
+/// without `XSAVE`, or AVX, where there is no header to poison.
+const XSTATE_ABSENT: i32 = 78;
+
+/// A handler writes ones over its frame's `XSAVE` header -- `XSTATE_BV`
+/// naming every component, AVX-512's and PKRU's among them, `XCOMP_BV` with
+/// the compacted form's bit, the reserved bytes -- keeping both magic words
+/// and the sizes, and returns through `rt_sigreturn`.
+///
+/// `XRSTOR64` refuses such a header with `#GP`, in ring 0, where the return
+/// loads it: any program could stop the machine. The return must instead
+/// take `XSTATE_BV` masked -- to AVX, x87 and SSE in `restore_fpu`, and to
+/// `XCR0` in `UserState::set_xstate_bv` -- and nothing else of the header, so
+/// the program runs on and exits with its handler's count. With both masks
+/// taken out (scratch, 2026-09-30) the boot stops here on the `#GP`, under
+/// TCG, whose `XRSTOR` checks the header, and under KVM. With only
+/// `set_xstate_bv`'s taken out it does not: a frame carries an `XSAVE` area
+/// only when `XCR0` has AVX, so `restore_fpu`'s mask is already inside it.
+/// Verifies: `L.x86_64.122`
+fn check_a_poisoned_xsave_header_comes_back_safely() -> Result<(), &'static str> {
+    if arch::USER_XSTATE_PROGRAM.is_empty() {
+        return Ok(());
+    }
+    let file = image::build_with(
+        class_of_this_build(),
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        arch::USER_XSTATE_PROGRAM,
+    );
+    let status = exec::run(
+        &file,
+        &[b"/xstate"],
+        &[],
+        [0x5a; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "a program that poisons its signal frame could not be started")?;
+    match status {
+        XSTATE_POISONED => {
+            println!(
+                "  xstate   a signal frame's XSAVE header, every bit set, came back through \
+                 rt_sigreturn masked to XCR0, without a fault"
+            );
+            Ok(())
+        }
+        XSTATE_ABSENT => {
+            println!("  xstate   no XSAVE area in signal frames on this processor: FXSAVE alone");
+            Ok(())
+        }
+        99 => Err("rt_sigaction or tgkill failed in the program that poisons its frame"),
+        _ => Err("a program whose handler poisoned its XSAVE header did not run on after it"),
     }
 }
 

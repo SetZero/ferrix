@@ -150,6 +150,13 @@ pub(crate) fn test_boot_lines(
                     watched.log.display()
                 )));
             }
+            let own_model = std::env::var_os("FERRIX_X86_CPU").is_none();
+            if let Some(problem) = xstate_problem(arch, own_model, &watched.lines) {
+                return Err(Error::new(format!(
+                    "{arch}: {problem}.\n  Serial output is in {}",
+                    watched.log.display()
+                )));
+            }
             if let Some(problem) = fault_problem(arch, &watched.lines) {
                 return Err(Error::new(format!(
                     "{arch}: {problem}.\n  Serial output is in {}",
@@ -344,6 +351,33 @@ fn namespace_problem(lines: &[String]) -> Option<String> {
         Some(line) => Some(format!(
             "the stage 12 disk was written, and the mount namespace check did not show a \
              detached subtree's write-out reach it: `{}`",
+            line.trim()
+        )),
+    }
+}
+
+/// What the `xstate` line ends with when a signal frame's poisoned `XSAVE`
+/// header came back through `rt_sigreturn` without a fault.
+const XSTATE_SURVIVED: &str = "without a fault";
+
+/// Why an x86-64 boot on this tool's own model did not show a poisoned
+/// `XSAVE` header come back safely, if it did not.
+///
+/// The `xstate` line has a quiet variant, for a processor with no `XSAVE`
+/// area in its frames, which the coverage suite's `qemu64` is meant to be
+/// and names with `FERRIX_X86_CPU`. [`x86_cpu`]'s model has AVX, so there
+/// the line with the survived return is the evidence for `L.x86_64.122` the
+/// certification review asked be kept, and it must not go missing quietly.
+fn xstate_problem(arch: Arch, own_model: bool, lines: &[String]) -> Option<String> {
+    if arch != Arch::X86_64 || !own_model {
+        return None;
+    }
+    match lines.iter().find(|line| line.contains("  xstate   ")) {
+        None => Some("the kernel never reported on its signal frames' XSAVE header".to_owned()),
+        Some(line) if line.contains(XSTATE_SURVIVED) => None,
+        Some(line) => Some(format!(
+            "on a model with AVX, the XSAVE signal-frame check did not show a poisoned header \
+             come back without a fault: `{}`",
             line.trim()
         )),
     }
@@ -1539,6 +1573,19 @@ pub(crate) fn accelerator_arguments(
 /// the address of the IDT inside the kernel image, and KASLR is undone by one
 /// instruction (`SPECULATION.md` §6).
 ///
+/// And x86-64-v3's instructions under every accelerator -- SSSE3 to SSE4.2,
+/// `XSAVE`, AVX and AVX2, BMI, FMA -- which every x86-64 processor sold in the
+/// last decade has and `qemu64` lacks. A program built for them with no
+/// fallback cannot run without them: Claude Code's Bun runtime, on a
+/// `qemu64` without AVX, found no string routine it was allowed and spun
+/// forever in its first conversion (`docs/CLAUDE-CODE.md` §3). The kernel
+/// saves AVX with `XSAVE` when the processor has it
+/// (`src/kernel/src/arch/x86_64/cpu.rs`). TCG emulates all of them since
+/// QEMU 7.2. `XSAVEOPT` with them, as every processor with AVX has it:
+/// QEMU's TCG takes `CR4.OSXSAVE` for a reserved bit unless the model has
+/// one of leaf 0xD's sub-leaf 1 features, and answers the kernel's write of
+/// it by running the write again, forever (QEMU 9.2 and 10.2, 2026-09-30).
+///
 /// `FERRIX_X86_CPU` replaces the model, as `FERRIX_ARM_CPU` does on Arm: the
 /// coverage suite boots a processor with `RDRAND` and no `RDSEED` that way,
 /// which is the only one that takes `cpu::hardware_random`'s other
@@ -1547,7 +1594,8 @@ pub(crate) fn x86_cpu(accelerator: &str) -> String {
     if let Ok(model) = std::env::var("FERRIX_X86_CPU") {
         return model;
     }
-    let base = "qemu64,+pdpe1gb,+smep,+smap,+umip,+rdrand,+rdseed";
+    let base = "qemu64,+pdpe1gb,+smep,+smap,+umip,+rdrand,+rdseed,+ssse3,+sse4.1,+sse4.2,+popcnt,\
+                +cx16,+movbe,+xsave,+xsaveopt,+avx,+avx2,+f16c,+fma,+bmi1,+bmi2,+abm,+pclmulqdq,+aes";
     if accelerator == "tcg" {
         return base.to_owned();
     }
@@ -2647,7 +2695,7 @@ fn prepare_vars(arch: Arch, code: &Path, template: Option<&Path>) -> Result<Path
 mod tests {
     use super::{
         Arch, SUCCESS_MARKER, UNCHECKED_MARKER, devmgr_problem, entropy_problem, fault_problem,
-        iommu_problem, namespace_problem, parse_qemu_version,
+        iommu_problem, namespace_problem, parse_qemu_version, xstate_problem,
     };
 
     /// What QEMU prints, from the two versions CI and this host have.
@@ -2681,6 +2729,33 @@ mod tests {
         assert_eq!(devmgr_problem(&absent), None, "an image without devmgr");
         let silent = lines(&["FERRIX-BOOT-OK stages 1-12"]);
         assert!(devmgr_problem(&silent).is_some(), "no line at all");
+    }
+
+    #[test]
+    fn an_x86_64_boot_on_the_own_model_must_show_the_xsave_header_survive() {
+        let survived = "  xstate   a signal frame's XSAVE header, every bit set, came back through \
+                        rt_sigreturn masked to XCR0, without a fault";
+        let quiet = "  xstate   no XSAVE area in signal frames on this processor: FXSAVE alone";
+        let x86 = Arch::X86_64;
+        assert_eq!(xstate_problem(x86, true, &lines(&[survived])), None);
+        assert!(
+            xstate_problem(x86, true, &lines(&[quiet])).is_some(),
+            "the quiet variant"
+        );
+        assert!(
+            xstate_problem(x86, true, &lines(&["FERRIX-BOOT-OK stages 1-12"])).is_some(),
+            "no line at all"
+        );
+        assert_eq!(
+            xstate_problem(x86, false, &lines(&[quiet])),
+            None,
+            "a model FERRIX_X86_CPU named"
+        );
+        assert_eq!(
+            xstate_problem(Arch::AArch64, true, &lines(&["FERRIX-BOOT-OK"])),
+            None,
+            "another architecture"
+        );
     }
 
     #[test]

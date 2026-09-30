@@ -6,7 +6,7 @@
 //! not because assembly is convenient.
 
 use core::arch::asm;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Write a byte to an I/O port.
 ///
@@ -79,6 +79,118 @@ const CR4_UMIP: u64 = 1 << 11;
 /// `CR4.SMAP` — the processor refuses to *read or write* a user page in ring 0
 /// unless `EFLAGS.AC` is set.
 const CR4_SMAP: u64 = 1 << 21;
+
+/// `CR4.OSXSAVE` — `XSAVE`, `XRSTOR` and `XSETBV` may run, and `CPUID` tells
+/// a program so (leaf 1, `ECX` bit 27), which is what it reads before it
+/// asks `XGETBV` whether it may use AVX.
+const CR4_OSXSAVE: u64 = 1 << 18;
+
+/// The x87 and SSE state components, bits 0 and 1 of `XCR0`: the two
+/// `FXSAVE` already saved, and the least `XCR0` may hold.
+pub(crate) const XSTATE_X87_SSE: u64 = 0b011;
+
+/// The AVX state component, bit 2: the upper halves of the sixteen `YMM`
+/// registers.
+pub(crate) const XSTATE_AVX: u64 = 0b100;
+
+/// Bytes of an `XSAVE` area holding x87, SSE and AVX in the standard form:
+/// the 512-byte legacy area, the 64-byte header, and AVX's 256 bytes at the
+/// architectural offset 576.
+pub(crate) const XSAVE_AREA_BYTES: u64 = 832;
+
+/// The state components `XCR0` enables on every processor: zero until
+/// [`enable_extended_state`] has run on the boot processor, and zero for good
+/// on one without `XSAVE`, which the switch then saves with `FXSAVE`.
+static XSAVE_COMPONENTS: AtomicU64 = AtomicU64::new(0);
+
+/// Let programs use AVX: set `CR4.OSXSAVE` and put x87, SSE and AVX in
+/// `XCR0`, on the boot processor. Secondaries take the same `CR4` from it and
+/// load the same `XCR0` in [`load_extended_state_on_this_cpu`].
+///
+/// A program learns whether it may use AVX from `CPUID`'s `OSXSAVE` bit and
+/// from `XCR0`, not from the processor having it: with `OSXSAVE` clear it
+/// must not, because nothing would save the upper halves of its `YMM`
+/// registers when it is switched away. A runtime built for AVX2 without a
+/// fallback -- Bun's, in Claude Code -- then finds no code path it may take
+/// and cannot run. So the switch saves them with `XSAVE`
+/// (`switch::save_user_state`), and a signal frame carries them
+/// (`signal::write_fp_area`).
+///
+/// Only x87, SSE and AVX, even on a processor with more: each further
+/// component -- AVX-512's three, AMX's tiles -- grows every thread's saved
+/// state and every signal frame, and a program checks `XCR0` before using
+/// them, so leaving them out costs a program that wants them its fast path
+/// and nothing else.
+///
+/// Answers the components enabled, for the boot log: zero when the processor
+/// has no `XSAVE`, as QEMU's `qemu64` model does not.
+pub(crate) fn enable_extended_state() -> u64 {
+    use core::arch::x86_64::{__cpuid, __cpuid_count};
+
+    if __cpuid(0).eax < 0xD {
+        return 0;
+    }
+    let features = __cpuid(1).ecx;
+    let has_xsave = features & (1 << 26) != 0;
+    let has_avx = features & (1 << 28) != 0;
+    if !has_xsave {
+        return 0;
+    }
+    let supported = __cpuid_count(0xD, 0);
+    let supported = u64::from(supported.eax) | (u64::from(supported.edx) << 32);
+    if supported & XSTATE_X87_SSE != XSTATE_X87_SSE {
+        return 0;
+    }
+    let mut components = XSTATE_X87_SSE;
+    if has_avx && supported & XSTATE_AVX != 0 {
+        components |= XSTATE_AVX;
+    }
+    // SAFETY: (SYSREG) CPUID reported `XSAVE`, which is all `OSXSAVE` needs.
+    unsafe { write_cr4(read_cr4() | CR4_OSXSAVE) };
+    // SAFETY: (SYSREG) `OSXSAVE` is set, and every bit is one leaf 0xD says
+    // this processor supports, x87 among them, as `XSETBV` requires.
+    unsafe { write_xcr0(components) };
+    // The area the switch saves into holds x87, SSE and AVX where the
+    // standard form puts them, and nothing past them. A processor that
+    // disagrees about the size gets x87 and SSE alone, which fit any.
+    if u64::from(__cpuid_count(0xD, 0).ebx) > XSAVE_AREA_BYTES
+        || (components & XSTATE_AVX != 0 && __cpuid_count(0xD, 2).ebx != 576)
+    {
+        components = XSTATE_X87_SSE;
+        // SAFETY: (SYSREG) as above, with fewer bits.
+        unsafe { write_xcr0(components) };
+    }
+    XSAVE_COMPONENTS.store(components, Ordering::Relaxed);
+    components
+}
+
+/// Load the boot processor's `XCR0` on this one, which took its `CR4` --
+/// `OSXSAVE` with it -- as it started.
+pub(crate) fn load_extended_state_on_this_cpu() {
+    let components = XSAVE_COMPONENTS.load(Ordering::Relaxed);
+    if components != 0 && read_cr4() & CR4_OSXSAVE != 0 {
+        // SAFETY: (SYSREG) `OSXSAVE` is set, and the boot processor, of the
+        // same kind, accepted these bits.
+        unsafe { write_xcr0(components) };
+    }
+}
+
+/// The state components the switch saves with `XSAVE`: zero to save with
+/// `FXSAVE`.
+pub(crate) fn extended_state_components() -> u64 {
+    XSAVE_COMPONENTS.load(Ordering::Relaxed)
+}
+
+/// Write `XCR0`, the state components `XSAVE` manages and a program may use.
+///
+/// # Safety
+///
+/// (SYSREG) `CR4.OSXSAVE` must be set, bit 0 must be set, and every bit must be one
+/// this processor supports, or `XSETBV` faults.
+unsafe fn write_xcr0(components: u64) {
+    // SAFETY: (SYSREG) the caller's guarantee. `XSETBV` as `core::arch` spells it.
+    unsafe { core::arch::x86_64::_xsetbv(0, components) };
+}
 
 /// Turn on the hardware that keeps ring 0 out of user pages.
 ///

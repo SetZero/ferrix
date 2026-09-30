@@ -13,7 +13,10 @@
 //! | 312 | `struct siginfo`, 128 bytes |
 //!
 //! and below it, 64-byte aligned, the 512-byte `FXSAVE` area `uc_mcontext.fpstate`
-//! points at. The vDSO holds no way back from a handler -- Linux's x86-64 one
+//! points at -- the first part of an 832-byte `XSAVE` area when the program
+//! may use AVX, as Linux lays one out: its software-reserved bytes say so,
+//! the header and the upper halves of the `YMM` registers follow, then
+//! `FP_XSTATE_MAGIC2`, and `uc_flags` has `UC_FP_XSTATE`. The vDSO holds no way back from a handler -- Linux's x86-64 one
 //! holds none either -- and there is no other, so a handler installed without
 //! `SA_RESTORER` cannot be entered: Linux refuses the frame, and so does this.
 //! Every libc sets it.
@@ -32,6 +35,7 @@ mod compat;
 use ferrix_bootinfo::is_user_address;
 use ferrix_linux_abi::types::SA_RESTORER;
 
+use super::cpu;
 use super::gdt;
 use super::switch::{self, UserState};
 use super::syscall::SyscallFrame;
@@ -79,8 +83,27 @@ const MXCSR: usize = 24;
 /// Where `MXCSR_MASK` is: which `MXCSR` bits this processor has.
 const MXCSR_MASK: usize = 28;
 /// Where the software-reserved bytes' first magic word is. Zero says the area
-/// is plain `FXSAVE`, with no extended state after it.
+/// is plain `FXSAVE`, with no extended state after it; [`FP_XSTATE_MAGIC1`]
+/// says an `XSAVE` area follows, as Linux's `struct _fpx_sw_bytes` has it.
 const SW_MAGIC1: usize = 464;
+/// `_fpx_sw_bytes.extended_size`: the area's bytes with the second magic word.
+const SW_EXTENDED_SIZE: usize = 468;
+/// `_fpx_sw_bytes.xfeatures`: the components the area has room for.
+const SW_XFEATURES: usize = 472;
+/// `_fpx_sw_bytes.xstate_size`: the `XSAVE` area's bytes.
+const SW_XSTATE_SIZE: usize = 480;
+/// Linux's `FP_XSTATE_MAGIC1`.
+const FP_XSTATE_MAGIC1: u32 = 0x4650_5853;
+/// Linux's `FP_XSTATE_MAGIC2`, the word just past the `XSAVE` area.
+const FP_XSTATE_MAGIC2: u32 = 0x4650_5845;
+/// Where `XSTATE_BV` is: the header's first word.
+const XSTATE_BV: usize = 512;
+/// Where the upper halves of the `YMM` registers are, in the standard form.
+const AVX_AT: usize = 576;
+/// Bytes of the `XSAVE` area a frame carries, for x87, SSE and AVX.
+const XSTATE_BYTES: usize = cpu::XSAVE_AREA_BYTES as usize;
+/// `UC_FP_XSTATE`: `fpstate` is an `XSAVE` area, not `FXSAVE` alone.
+const UC_FP_XSTATE: u64 = 0x1;
 /// The mask to assume when a processor reports none: Intel's documented
 /// default, every bit but `DAZ`.
 const DEFAULT_MXCSR_MASK: u32 = 0xFFBF;
@@ -332,15 +355,53 @@ const USER_CS32: u64 = (gdt::USER_CODE32 | 3) as u64;
 /// Ring 3's stack selector, likewise.
 const USER_SS: u64 = (gdt::USER_DATA | 3) as u64;
 
+/// `uc_flags`: [`UC_FLAGS`], and [`UC_FP_XSTATE`] when the frame carries an
+/// `XSAVE` area.
+fn uc_flags() -> u64 {
+    if frame_has_xstate() {
+        UC_FLAGS | UC_FP_XSTATE
+    } else {
+        UC_FLAGS
+    }
+}
+
+/// Whether a frame carries an `XSAVE` area: when the switch saves AVX, so
+/// that a handler which uses it does not hand the interrupted code back
+/// different `YMM` registers.
+fn frame_has_xstate() -> bool {
+    cpu::extended_state_components() & cpu::XSTATE_AVX != 0
+}
+
+/// Bytes the floating-point area takes below the frame: `FXSAVE`'s alone, or
+/// the `XSAVE` area and the magic word after it.
+fn fp_area_bytes() -> usize {
+    if frame_has_xstate() {
+        XSTATE_BYTES + 4
+    } else {
+        FXSAVE_BYTES
+    }
+}
+
 /// Write the program's x87 and SSE state, as `FXSAVE` lays it out, to
-/// `fpstate`.
+/// `fpstate` -- and its AVX state after it, as `XSAVE` does, with the
+/// software-reserved words that say so, when the switch saves AVX.
 fn write_fp_area(space: &AddressSpace, fpstate: u64) -> Result<(), BadFrame> {
     // SAFETY: (CONTEXT) on the running task's own way back to ring 3, so the processor
-    // holds this program's x87 and SSE registers.
+    // holds this program's x87, SSE and AVX registers.
     let state = unsafe { UserState::capture() };
-    let mut area = FrameBytes::zeroed(FXSAVE_BYTES)?;
+    let mut area = FrameBytes::zeroed(fp_area_bytes())?;
     area.put(0, state.fxsave())?;
-    area.put_u32(SW_MAGIC1, 0)?;
+    if frame_has_xstate() {
+        area.put_u32(SW_MAGIC1, FP_XSTATE_MAGIC1)?;
+        area.put_u32(SW_EXTENDED_SIZE, (XSTATE_BYTES + 4) as u32)?;
+        area.put_u64(SW_XFEATURES, cpu::extended_state_components())?;
+        area.put_u32(SW_XSTATE_SIZE, XSTATE_BYTES as u32)?;
+        area.put_u64(XSTATE_BV, state.xstate_bv())?;
+        area.put(AVX_AT, state.avx())?;
+        area.put_u32(XSTATE_BYTES, FP_XSTATE_MAGIC2)?;
+    } else {
+        area.put_u32(SW_MAGIC1, 0)?;
+    }
     area.write(space, fpstate)
 }
 
@@ -354,12 +415,12 @@ const fn frame_is_buildable(request: &FrameRequest) -> Result<(), BadFrame> {
     Ok(())
 }
 
-/// Where the `FXSAVE` area and the frame go below `stack`: the area 64-byte
-/// aligned, and the frame below it aligned so that on entry
+/// Where the floating-point area and the frame go below `stack`: the area
+/// 64-byte aligned, and the frame below it aligned so that on entry
 /// `(sp + 8) % 16 == 0`, which is what a function expects just after a
 /// `call` pushed its return address. Answers both addresses.
 fn place(stack: u64) -> Result<(u64, u64), BadFrame> {
-    let fpstate = stack.checked_sub(FXSAVE_BYTES as u64).ok_or(BadFrame)? & !63;
+    let fpstate = stack.checked_sub(fp_area_bytes() as u64).ok_or(BadFrame)? & !63;
     let below = fpstate.checked_sub(FRAME_BYTES as u64).ok_or(BadFrame)?;
     let frame_at = ((below + 8) & !15).checked_sub(8).ok_or(BadFrame)?;
     Ok((fpstate, frame_at))
@@ -383,7 +444,7 @@ pub(crate) fn setup_signal_frame(
 
     let mut frame = FrameBytes::zeroed(FRAME_BYTES)?;
     frame.put_u64(0, request.restorer)?;
-    frame.put_u64(UC, UC_FLAGS)?;
+    frame.put_u64(UC, uc_flags())?;
     frame.put_stack(UC_STACK, request.altstack)?;
     for (index, value) in context.registers().iter().enumerate() {
         frame.put_u64(MCONTEXT + index * 8, *value)?;
@@ -453,7 +514,28 @@ pub(crate) fn restore_signal_frame(
     Ok(restored)
 }
 
-/// Load the x87 and SSE registers from the `FXSAVE` area at `at`.
+/// The AVX state an area at `at` carries, if it is a whole `XSAVE` area as
+/// [`write_fp_area`] writes one: both magic words, the sizes it was written
+/// with. `None` for plain `FXSAVE` -- a frame from before, or one a program
+/// built -- after which AVX is loaded in its initial state, as Linux does.
+fn xstate_in(space: &AddressSpace, at: u64, legacy: &FrameBytes) -> Option<(u64, [u8; 256])> {
+    if !frame_has_xstate()
+        || legacy.u32_at(SW_MAGIC1).ok()? != FP_XSTATE_MAGIC1
+        || legacy.u32_at(SW_XSTATE_SIZE).ok()? as usize != XSTATE_BYTES
+        || legacy.u32_at(SW_EXTENDED_SIZE).ok()? as usize != XSTATE_BYTES + 4
+    {
+        return None;
+    }
+    let area = FrameBytes::read(space, at, XSTATE_BYTES + 4).ok()?;
+    if area.u32_at(XSTATE_BYTES).ok()? != FP_XSTATE_MAGIC2 {
+        return None;
+    }
+    let avx = area.get(AVX_AT, 256).ok()?.first_chunk::<256>().copied()?;
+    Some((area.u64_at(XSTATE_BV).ok()?, avx))
+}
+
+/// Load the x87 and SSE registers from the `FXSAVE` area at `at`, and the
+/// AVX registers from the `XSAVE` area it may begin.
 fn restore_fpu(space: &AddressSpace, at: u64) -> Result<(), BadFrame> {
     let area = FrameBytes::read(space, at, FXSAVE_BYTES)?;
     // SAFETY: (CONTEXT) inside the running task's own system call, so the registers are
@@ -471,8 +553,14 @@ fn restore_fpu(space: &AddressSpace, at: u64) -> Result<(), BadFrame> {
     state
         .fxsave_mut()
         .copy_from_slice(wanted.get(0, FXSAVE_BYTES)?);
-    // SAFETY: (CONTEXT) the registers are the running task's, and `MXCSR` was masked to
-    // the bits this processor reports, so `FXRSTOR64` has nothing to refuse.
+    // x87 and SSE from the legacy area whatever else there is; AVX from the
+    // frame when it carries it, its initial state when it does not.
+    let (components, avx) = xstate_in(space, at, &area).unwrap_or((0, [0; 256]));
+    state.set_xstate_bv(components & cpu::XSTATE_AVX | cpu::XSTATE_X87_SSE);
+    *state.avx_mut() = avx;
+    // SAFETY: (CONTEXT) the registers are the running task's, `MXCSR` was masked to
+    // the bits this processor reports, and `XSTATE_BV` names only enabled
+    // components, so neither `FXRSTOR64` nor `XRSTOR64` has anything to refuse.
     unsafe { switch::load_fpu(&state) };
     Ok(())
 }

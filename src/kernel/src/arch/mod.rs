@@ -205,13 +205,13 @@ pub(crate) use x86_64::{USER_INTO_CGROUP_PROGRAM, USER_OOM_PROGRAM};
 pub(crate) use aarch64::{
     SIGNAL_RED_ZONE, USER_DETHREAD_PROGRAM, USER_EXITS_PROGRAM, USER_HANDOFF_PROGRAM,
     USER_SIGNAL_PROGRAM, USER_STOPPED_PROGRAM, USER_SYSLOG_PROGRAM, USER_THREAD_PROGRAM,
-    UserContext, fault_signal, restore_signal_frame, setup_signal_frame,
+    USER_XSTATE_PROGRAM, UserContext, fault_signal, restore_signal_frame, setup_signal_frame,
 };
 #[cfg(target_arch = "arm")]
 pub(crate) use armv7a::{
     SIGNAL_RED_ZONE, USER_DETHREAD_PROGRAM, USER_EXITS_PROGRAM, USER_HANDOFF_PROGRAM,
     USER_SIGNAL_PROGRAM, USER_STOPPED_PROGRAM, USER_SYSLOG_PROGRAM, USER_THREAD_PROGRAM,
-    UserContext, fault_signal, restore_signal_frame, setup_signal_frame,
+    USER_XSTATE_PROGRAM, UserContext, fault_signal, restore_signal_frame, setup_signal_frame,
 };
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::{
@@ -237,7 +237,7 @@ pub(crate) use x86_64::{
 pub(crate) use x86_64::{
     SIGNAL_RED_ZONE, USER_DETHREAD_PROGRAM, USER_EXITS_PROGRAM, USER_HANDOFF_PROGRAM,
     USER_SIGNAL_PROGRAM, USER_STOPPED_PROGRAM, USER_SYSLOG_PROGRAM, USER_THREAD_PROGRAM,
-    UserContext, fault_signal, restore_signal_frame, setup_signal_frame,
+    USER_XSTATE_PROGRAM, UserContext, fault_signal, restore_signal_frame, setup_signal_frame,
 };
 // The scoped TLB shootdown: one page invalidated, one processor interrupted,
 // and the program that checks it from user mode.

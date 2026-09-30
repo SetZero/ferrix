@@ -873,6 +873,10 @@ pub(crate) const USER_SIGNAL_PROGRAM: &[u8] = &[
 /// `SPSR_EL1` an exception return loads, and EL0 can write neither.
 pub(crate) const USER_STEP_PROGRAM: &[u8] = &[];
 
+/// x86-64's `XSAVE` signal-frame check has no counterpart here: the
+/// frame carries no `XSAVE` header to poison.
+pub(crate) const USER_XSTATE_PROGRAM: &[u8] = &[];
+
 /// What [`USER_STEP_PROGRAM`] would exit with; unused while it is empty.
 pub(crate) const USER_STEP_STATUS: i32 = 0;
 

@@ -14,7 +14,8 @@
 //! `r15`. Everything else is the caller's problem, and the caller here is
 //! Rust, which has already spilled whatever it cared about. There is no
 //! floating-point state to save: the kernel is built for a target with no
-//! SSE, so it uses none.
+//! SSE, so it uses none. A program's is saved beside its other user state
+//! ([`UserState`]), with `XSAVE` where the processor has it.
 
 use core::arch::global_asm;
 
@@ -118,7 +119,7 @@ pub(crate) unsafe fn prepare_stack(
 }
 
 /// What a program owns on this processor that no trap saves: its thread
-/// pointer and `GS` base, its x87 and SSE state, and -- for a 32-bit program,
+/// pointer and `GS` base, its x87, SSE and AVX state, and -- for a 32-bit program,
 /// which addresses through segments -- its data segment selectors and the
 /// three thread-local descriptors they may name (`docs/I386.md` §3.5).
 ///
@@ -126,7 +127,7 @@ pub(crate) unsafe fn prepare_stack(
 /// these, so a trap from ring 3 leaves them as the program had them. Two
 /// programs taking turns need them saved and loaded by the scheduler whenever
 /// it switches between tasks that run user code.
-#[repr(C, align(16))]
+#[repr(C, align(64))]
 #[derive(Debug, Clone)]
 pub(crate) struct UserState {
     /// `FS_BASE`, which `arch_prctl(ARCH_SET_FS)` writes.
@@ -140,13 +141,33 @@ pub(crate) struct UserState {
     tls: [u64; gdt::TLS_SLOTS],
     /// `DS`, `ES`, `FS` and `GS`, as the program left them.
     selectors: [u16; 4],
-    /// The 512-byte `FXSAVE` area, at a sixteen-byte offset.
-    fxsave: [u8; 512],
+    /// The x87, SSE and AVX registers, as `XSAVE` or `FXSAVE` wrote them.
+    fpu: FpuArea,
+}
+
+/// An `XSAVE` area in the standard form, for the components
+/// `cpu::enable_extended_state` enables: the 512-byte legacy area `FXSAVE`
+/// also writes, the header, and the upper halves of the sixteen `YMM`
+/// registers. `FXSAVE` uses the first part alone.
+#[repr(C, align(64))]
+#[derive(Debug, Clone)]
+struct FpuArea {
+    /// x87 and SSE, as `FXSAVE` lays them out.
+    legacy: [u8; 512],
+    /// `XSTATE_BV`, which components the area holds rather than leaves in
+    /// their initial state, then `XCOMP_BV` and reserved bytes, all zero.
+    header: [u8; 64],
+    /// `YMM_Hi128`: bits 128 to 255 of `YMM0` to `YMM15`.
+    avx: [u8; 256],
 }
 
 const _: () = assert!(
-    core::mem::offset_of!(UserState, fxsave).is_multiple_of(16),
-    "FXSAVE64 wants its area sixteen-byte aligned"
+    core::mem::offset_of!(UserState, fpu).is_multiple_of(64),
+    "XSAVE64 wants its area 64-byte aligned"
+);
+const _: () = assert!(
+    size_of::<FpuArea>() as u64 == cpu::XSAVE_AREA_BYTES,
+    "the area is the standard form's size for x87, SSE and AVX"
 );
 
 impl UserState {
@@ -190,72 +211,122 @@ impl UserState {
     /// would take `#XM` instead of rounding. `0x1F80` masks them all, and
     /// `0x037F` does the same for the x87.
     pub(crate) const fn new() -> UserState {
-        let mut fxsave = [0_u8; 512];
+        let mut legacy = [0_u8; 512];
         let control = 0x037F_u16.to_le_bytes();
-        fxsave[0] = control[0];
-        fxsave[1] = control[1];
+        legacy[0] = control[0];
+        legacy[1] = control[1];
         let mxcsr = 0x1F80_u32.to_le_bytes();
-        fxsave[24] = mxcsr[0];
-        fxsave[25] = mxcsr[1];
-        fxsave[26] = mxcsr[2];
-        fxsave[27] = mxcsr[3];
+        legacy[24] = mxcsr[0];
+        legacy[25] = mxcsr[1];
+        legacy[26] = mxcsr[2];
+        legacy[27] = mxcsr[3];
+        // `XSTATE_BV` names x87 and SSE, so `XRSTOR` loads the control words
+        // above rather than its own initial ones, and leaves AVX out, so it
+        // starts zero.
+        let mut header = [0_u8; 64];
+        header[0] = cpu::XSTATE_X87_SSE as u8;
         UserState {
             thread_pointer: 0,
             gs_base: 0,
             tls: [0; gdt::TLS_SLOTS],
             selectors: [0; 4],
-            fxsave,
+            fpu: FpuArea {
+                legacy,
+                header,
+                avx: [0; 256],
+            },
         }
     }
 
     /// The 512-byte `FXSAVE` area: what a signal frame carries as `fpstate`.
     pub(super) const fn fxsave(&self) -> &[u8; 512] {
-        &self.fxsave
+        &self.fpu.legacy
     }
 
     /// The same area, for `rt_sigreturn` to fill from the frame.
     pub(super) const fn fxsave_mut(&mut self) -> &mut [u8; 512] {
-        &mut self.fxsave
+        &mut self.fpu.legacy
+    }
+
+    /// Which components the area holds, `XSTATE_BV`: a component left out
+    /// is in its initial state, all zero for AVX.
+    pub(super) fn xstate_bv(&self) -> u64 {
+        self.fpu
+            .header
+            .first_chunk::<8>()
+            .map_or(0, |word| u64::from_le_bytes(*word))
+    }
+
+    /// Set `XSTATE_BV`. `XRSTOR` refuses with `#GP` a component `XCR0` does
+    /// not enable, so only those are kept.
+    pub(super) fn set_xstate_bv(&mut self, components: u64) {
+        let kept = components & cpu::extended_state_components();
+        if let Some(word) = self.fpu.header.first_chunk_mut::<8>() {
+            *word = kept.to_le_bytes();
+        }
+    }
+
+    /// The upper halves of the sixteen `YMM` registers.
+    pub(super) const fn avx(&self) -> &[u8; 256] {
+        &self.fpu.avx
+    }
+
+    /// The same, for `rt_sigreturn` to fill from the frame.
+    pub(super) const fn avx_mut(&mut self) -> &mut [u8; 256] {
+        &mut self.fpu.avx
     }
 }
 
-/// Load `state`'s x87 and SSE registers and nothing else: not the thread
-/// pointer, and not the entry stack. What `rt_sigreturn` puts back.
+/// Load `state`'s x87, SSE and AVX registers and nothing else: not the
+/// thread pointer, and not the entry stack. What `rt_sigreturn` puts back.
 ///
 /// # Safety
 ///
 /// (CONTEXT) The registers must be the calling task's own, and `state`'s `MXCSR` must
-/// have no reserved bit set, which `FXRSTOR64` answers with `#GP` in ring 0.
+/// have no reserved bit set, which `FXRSTOR64` and `XRSTOR64` answer with
+/// `#GP` in ring 0; its header is kept valid by [`UserState::set_xstate_bv`].
 pub(super) unsafe fn load_fpu(state: &UserState) {
-    // SAFETY: (CONTEXT) a 512-byte area inside a sixteen-byte-aligned structure, whose
-    // `MXCSR` the caller has masked.
-    unsafe { ferrix_fpu_restore(state.fxsave.as_ptr()) };
+    // SAFETY: (CONTEXT) an area inside a 64-byte-aligned structure, whose `MXCSR`
+    // the caller has masked and whose header only names enabled components.
+    unsafe { ferrix_fpu_restore(&raw const state.fpu, cpu::extended_state_components()) };
 }
 
-global_asm!(
-    r#"
-.section .text
+/// `XSAVE64` of `components` into `area`, or `FXSAVE64` for none: the
+/// processor's own instructions, which `core::arch` spells, rather than
+/// assembly (`docs/ASSEMBLY.md`).
+///
+/// # Safety
+///
+/// (CONTEXT) `area` must be a whole [`FpuArea`], and `components` zero or a subset
+/// of `XCR0`, which `cpu::extended_state_components` is.
+unsafe fn ferrix_fpu_save(area: *mut FpuArea, components: u64) {
+    let at = area.cast::<u8>();
+    if components == 0 {
+        // SAFETY: (CONTEXT) 512 bytes, sixteen-byte aligned, inside the area.
+        unsafe { core::arch::x86_64::_fxsave64(at) };
+    } else {
+        // SAFETY: (CONTEXT) the standard form's size for these components,
+        // 64-byte aligned; `OSXSAVE` is set whenever they are not zero.
+        unsafe { core::arch::x86_64::_xsave64(at, components) };
+    }
+}
 
-// void ferrix_fpu_save(u8 *area), area: 512 bytes
-.globl ferrix_fpu_save
-ferrix_fpu_save:
-    fxsave64 (%rdi)
-    retq
-
-// void ferrix_fpu_restore(const u8 *area)
-.globl ferrix_fpu_restore
-ferrix_fpu_restore:
-    fxrstor64 (%rdi)
-    retq
-"#,
-    options(att_syntax)
-);
-
-unsafe extern "C" {
-    /// `FXSAVE64` into `area`.
-    fn ferrix_fpu_save(area: *mut u8);
-    /// `FXRSTOR64` from `area`.
-    fn ferrix_fpu_restore(area: *const u8);
+/// `XRSTOR64` of `components` from `area`, or `FXRSTOR64` for none.
+///
+/// # Safety
+///
+/// (CONTEXT) As [`ferrix_fpu_save`], and the area's `MXCSR` and header must be ones
+/// the processor accepts: written by it, built by [`UserState::new`], or
+/// masked by `rt_sigreturn`.
+unsafe fn ferrix_fpu_restore(area: *const FpuArea, components: u64) {
+    let at = area.cast::<u8>();
+    if components == 0 {
+        // SAFETY: (CONTEXT) the caller's guarantee.
+        unsafe { core::arch::x86_64::_fxrstor64(at) };
+    } else {
+        // SAFETY: (CONTEXT) the caller's guarantee.
+        unsafe { core::arch::x86_64::_xrstor64(at, components) };
+    }
 }
 
 /// Store the program state this processor holds into `state`.
@@ -273,9 +344,9 @@ pub(crate) unsafe fn save_user_state(state: &mut UserState) {
     // SAFETY: (CONTEXT) the caller switches tasks with interrupts masked, so these are
     // this processor's slots and the outgoing thread's.
     state.tls = unsafe { gdt::read_tls() };
-    // SAFETY: (CONTEXT) a 512-byte area inside a sixteen-byte-aligned structure, which
-    // is what `FXSAVE64` writes.
-    unsafe { ferrix_fpu_save(state.fxsave.as_mut_ptr()) };
+    // SAFETY: (CONTEXT) an area of the standard form's size for the enabled
+    // components, 64-byte aligned, which is what `XSAVE64` and `FXSAVE64` write.
+    unsafe { ferrix_fpu_save(&raw mut state.fpu, cpu::extended_state_components()) };
 }
 
 /// Load `state` onto this processor for the task about to run, and point the
@@ -298,9 +369,9 @@ pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
             state.gs_base,
         );
     }
-    // SAFETY: (CONTEXT) an area this module initialised or `FXSAVE64` wrote, so every
-    // reserved bit `FXRSTOR64` checks is clear.
-    unsafe { ferrix_fpu_restore(state.fxsave.as_ptr()) };
+    // SAFETY: (CONTEXT) an area this module initialised or `XSAVE64` wrote, so every
+    // reserved bit `XRSTOR64` checks is clear.
+    unsafe { ferrix_fpu_restore(&raw const state.fpu, cpu::extended_state_components()) };
     // SAFETY: (ENTRY) the caller guarantees the stack.
     unsafe { super::syscall::set_entry_stack(entry_stack) };
 }
@@ -327,7 +398,7 @@ pub(crate) unsafe fn reset_user_state() {
         unsafe { load_selectors(fresh.selectors, &fresh.tls, 0, 0) };
     });
     // SAFETY: (CONTEXT) an area built by `UserState::new`, whose reserved bits are clear.
-    unsafe { ferrix_fpu_restore(fresh.fxsave.as_ptr()) };
+    unsafe { ferrix_fpu_restore(&raw const fresh.fpu, cpu::extended_state_components()) };
 }
 
 /// Load a program's four data selectors, each checked against `tls`, and

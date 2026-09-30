@@ -114,6 +114,8 @@ processor, read back on each (`arch/x86_64/speculation.rs`).
 | Speculative store bypass | `SSBD`, through `IA32_SPEC_CTRL` or AMD's `VIRT_SPEC_CTRL` | unless `SSB_NO` | Intel SA-00115, AMD SSBD whitepaper |
 | MDS | `VERW` on every return to ring 3 | Intel, `MD_CLEAR`, no `MDS_NO` | Intel SA-00233 |
 | Meltdown, L1TF | **none** — reported | — | §6 |
+| Zenbleed (AMD Zen 2): a mispredicted `vzeroupper` leaves another program's `YMM` contents readable | **none** in the kernel — Linux sets `DE_CFG[9]` where the microcode lacks the fix; under KVM, the host's microcode and chicken bit | exposed since programs may use AVX (2026-09-30, `docs/CLAUDE-CODE.md` §3) | CVE-2023-20593, AMD-SB-7008 |
+| Gather Data Sampling (Intel Skylake to Ice Lake): `VPGATHER` samples stale vector data of another program | **none** in the kernel — the mitigation is microcode, and Linux's `gds=force` takes AVX out of `XCR0` without it; under KVM, the host's microcode | exposed since programs may use AVX (2026-09-30) | CVE-2022-40982, Intel SA-00828 |
 
 **Why these, and why always on.** Linux enables most of these conditionally —
 `SSBD` and `IBPB` only for programs that ask, by `prctl` or `seccomp`. The item
@@ -657,6 +659,13 @@ instructions per clamp.
 * **KPTI** (§6.2), and so **KASLR against a local timing attacker**, the
   **fixed physical placement** of the image and the writable alias of its text
   in the direct map, and ARMv7-A's few bits (§6.1).
+* **Zenbleed and Gather Data Sampling** (§3). Since 2026-09-30 programs may
+  use AVX (`cpu::enable_extended_state`), and both leak one program's vector
+  registers to another on affected parts. The kernel sets no `DE_CFG[9]` and
+  keeps AVX in `XCR0` on a part without GDS microcode; under KVM the host's
+  microcode and chicken bit are what protects. The code mitigation -- `XCR0`
+  kept at x87 and SSE on an affected processor that is not mitigated -- is a
+  `docs/BACKLOG.md` row, owed before §3's claims are cited again.
 * **CET** — neither indirect branch tracking nor shadow stacks. Both need
   compiler support (`-Z cf-protection`, nightly) and loader cooperation.
 * **Cache timing between processes.** Two programs that share a cache can
