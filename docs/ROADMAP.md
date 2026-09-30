@@ -82,6 +82,10 @@ Now [`docs/roadmap/sysfs.md`](roadmap/sysfs.md).
 
 Now [`docs/roadmap/chrome.md`](roadmap/chrome.md).
 
+## Claude Code — Anthropic's coding agent on Ferrix  ·  *the command line, 2026-09-30; the desktop app being assessed*
+
+Now [`docs/roadmap/claude-code.md`](roadmap/claude-code.md).
+
 ## Stage 13 — Namespaces, cgroups v2, seccomp  ·  *month*
 
 Now [`docs/roadmap/stage-13-namespaces-cgroups-v2-seccomp.md`](roadmap/stage-13-namespaces-cgroups-v2-seccomp.md).

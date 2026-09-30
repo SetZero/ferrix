@@ -6,6 +6,14 @@
 
 Since the 2026-09-27 wind-down, everything finished is on `main` and pushed:
 
+* **Claude Code runs on Ferrix** (2026-09-30, `docs/CLAUDE-CODE.md`,
+  `cargo xtask test-claude-code`): Anthropic's linux-x64 release takes a
+  prompt, runs the model's Bash command on Ferrix and sends back its
+  output, and `claude` is in the `--everything` desktop's terminals, and so
+  in `remote-desktop`'s. It needed AVX: the kernel saves it with `XSAVE`
+  now, and every x86-64 guest's model has x86-64-v3. The Claude desktop app
+  is next, as an assessment.
+
 * **Steam's sign-in window** draws on hyprix through yserver
   (2026-09-29, `docs/STEAM.md`, `cargo xtask test-steam-window`), and
   `run-compositor --everything` starts the client beside Chrome and a

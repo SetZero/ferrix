@@ -20,7 +20,10 @@
 //!
 //! steamcmd's tree, when it has been fetched, is merged in next. Its i386
 //! glibc is under paths neither of the other two uses, so it adds files and
-//! clashes with none. yserver's, the X server's (`docs/YSERVER.md`, Y7), comes
+//! clashes with none. Claude Code's (`docs/CLAUDE-CODE.md`) follows when
+//! `tools/common/fetch/fetch-claude-code.sh` has made it: Chrome's glibc pin
+//! again, bash and ripgrep, and `claude-code/claude`, which the desktop's
+//! terminals run as `claude`. yserver's, the X server's (`docs/YSERVER.md`, Y7), comes
 //! last when `tools/common/fetch/fetch-yserver.sh` has made it: trixie's libraries
 //! again, with the server at `/yserver/yserver`. Where it holds libstdc++'s
 //! gdb pretty-printers of gcc 14 beside the rustc volume's of gcc 16, the ones
@@ -45,6 +48,10 @@ const SPARE_MIB: u64 = 1024 + 512;
 /// Room for what steamcmd writes beside itself: the update it downloads and
 /// unpacks on its first run, and what a login keeps.
 const STEAMCMD_SPARE_MIB: u64 = 512;
+
+/// Room for what Claude Code keeps: its configuration, its sessions, and
+/// what its tools write.
+const CLAUDE_CODE_SPARE_MIB: u64 = 256;
 
 /// Room for the X server's log and its clients' files.
 const YSERVER_SPARE_MIB: u64 = 256;
@@ -161,6 +168,10 @@ fn sources() -> Result<(Vec<(PathBuf, PathBuf)>, u64)> {
         sources.push(steamcmd);
         spare += STEAMCMD_SPARE_MIB;
     }
+    if let Some(claude_code) = claude_code()? {
+        sources.push(claude_code);
+        spare += CLAUDE_CODE_SPARE_MIB;
+    }
     // Steam's tree is yserver's with Valve's bootstrap and the client's
     // libraries on top, and its yserver was built by its own run of
     // fetch-yserver.sh: two servers at one path would stop the merge.
@@ -229,6 +240,28 @@ fn steamcmd() -> Result<Option<(PathBuf, PathBuf)>> {
         .ok_or_else(|| {
             Error::new(format!(
                 "no tree beside {}: tools/common/fetch/fetch-steamcmd.sh keeps one there",
+                image.display()
+            ))
+        })?;
+    Ok(Some((image, tree)))
+}
+
+/// Claude Code's image and the tree beside it, or `None` when it has not
+/// been fetched: the desktop is whole without it, and says how to add it.
+fn claude_code() -> Result<Option<(PathBuf, PathBuf)>> {
+    let Ok(image) = crate::claude_code::volume() else {
+        println!(
+            "  everything: no Claude Code in the terminal; tools/common/fetch/fetch-claude-code.sh adds it"
+        );
+        return Ok(None);
+    };
+    let tree = image
+        .parent()
+        .map(|directory| directory.join("tree"))
+        .filter(|tree| tree.join("claude-code/claude").is_file())
+        .ok_or_else(|| {
+            Error::new(format!(
+                "no tree with Claude Code beside {}: tools/common/fetch/fetch-claude-code.sh keeps one there",
                 image.display()
             ))
         })?;

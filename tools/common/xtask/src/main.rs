@@ -72,6 +72,7 @@ mod bwrap;
 mod cargo;
 mod check;
 mod chrome;
+mod claude_code;
 // A Unix socket is the clipboard port's far end.
 #[cfg(unix)]
 mod clipboard;
@@ -233,6 +234,9 @@ COMMANDS:
                   a memfd), /proc/net/tcp's inode to match, and every /proc inode number to fit 32 bits (--i686: 32-bit x86)
     test-rustc    Attach the rustc volume tools/common/fetch/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
     test-chrome   Attach the volume tools/common/fetch/fetch-chrome.sh makes, and require headless Chrome to run a page's script and draw it
+    test-claude-code  Attach the volume tools/common/fetch/fetch-claude-code.sh makes, and require Claude Code to start and,
+                  against a stub Messages API xtask serves, run a Bash command on Ferrix for its model
+                  (--everything: as `claude` on run-compositor --everything's merged volume)
     test-steamcmd Attach the volume tools/common/fetch/fetch-steamcmd.sh makes, and require Valve's 32-bit steamcmd to update itself
                   and log in to Steam anonymously, over the network
     test-steam-bootstrap  Attach the volume tools/common/fetch/fetch-steam.sh makes, and require Valve's steam.sh to update the
@@ -310,7 +314,8 @@ OPTIONS:
                                          tools/common/fetch/fetch-chrome.sh makes; SUPER+B opens another
     --everything                         run-compositor: all of it at once -- --gl, --release,
                                          --clipboard, --chrome, and rustc and cargo in the shell,
-                                         from one volume made of the rustc and Chrome ones; and
+                                         from one volume made of the rustc and Chrome ones, with
+                                         claude too once fetch-claude-code.sh has run; and
                                          this machine's ~/.config/hypr/hyprland.conf with its
                                          dotfiles unless --config or --no-dotfiles says otherwise
     --forward <HOST>:<GUEST>             the host's 127.0.0.1:HOST leads to the guest's port GUEST,
@@ -534,6 +539,7 @@ fn run() -> Result<()> {
         "coverage" => coverage::run(&args),
         "test-rustc" => rustc::test_rustc(&args),
         "test-chrome" | "test-chrome-window" | "test-chrome-audio" => chrome::run(command, &args),
+        "test-claude-code" => claude_code::test_claude_code(&args),
         "test-steamcmd" | "test-steam-bootstrap" => steamcmd::run(command, &args),
         "test-bwrap" => bwrap::test_bwrap(&args),
         "test-yserver" | "test-xwindow" => yserver::run(command, &args),

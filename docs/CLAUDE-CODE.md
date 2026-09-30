@@ -1,0 +1,259 @@
+# Claude Code on Ferrix
+
+Asked by the customer on 2026-09-30: "add Claude Code (CLI first, then the
+desktop) to Ferrix". This is the account of the first half -- the command
+line -- and of what running it found. The desktop app is §7.
+
+## Where it stands, 2026-09-30
+
+**Claude Code runs on Ferrix, since 2026-09-30.** Anthropic's prebuilt
+native release 2.1.280 for linux-x64 -- not one built here -- starts on
+Ferrix, takes a prompt with `claude -p`, sends it to a Messages API, runs
+the Bash command the model answers with in bash on Ferrix, and sends back
+what it printed. `cargo xtask test-claude-code` requires all of it, against
+an API xtask serves itself (§4), in about two seconds of the guest's time.
+
+| | state |
+|---|---|
+| Claude Code's native linux-x64 build on Debian's glibc, from a pinned volume | **done** 2026-09-30, `tools/common/fetch/fetch-claude-code.sh` (§2) |
+| AVX for programs: `XSAVE` in the kernel, and x86-64-v3 on the QEMU model | **done** 2026-09-30, the one thing running it found missing (§3) |
+| `claude --version`, and a turn of `claude -p` that runs a tool on Ferrix | **done** 2026-09-30, `cargo xtask test-claude-code` (§4) |
+| `claude` in the terminals of `run-compositor --everything`, and so of `remote-desktop`'s desktop | **done** 2026-09-30, `cargo xtask test-claude-code --everything` (§5) |
+| The interactive TUI in a terminal, and a real account | not gated (§5) |
+| On ferrousli in glibc's place; on AArch64 with the linux-arm64 build | not started (§6) |
+| The Claude desktop app, which Anthropic builds for macOS and Windows only | assessment next (§7) |
+
+**Certification review (consultant, 2026-09-30): OK**, on b0db74ef, after a
+first round on 672611b6. The change is core ring (arch/x86_64: cpu.rs,
+switch.rs, signal.rs, smp.rs, mod.rs) and adds no upward reference. Its
+unsafe is core::arch's XSAVE64, XRSTOR64, FXSAVE64, FXRSTOR64 and XSETBV
+intrinsics, each with a (CONTEXT) obligation, and there is less assembly
+than before. rt_sigreturn takes only XSTATE_BV and the YMM upper halves
+from a frame: XSTATE_BV is masked to AVX, x87 and SSE and then to XCR0,
+and XCOMP_BV and the reserved header bytes come from the kernel's own
+XSAVE, never from user memory. So no program can make XRSTOR fault in ring
+0. The xstate boot line (check_a_poisoned_xsave_header_comes_back_safely,
+L.x86_64.122) returns a frame whose whole header is ones; with both masks
+removed, the boot stopped on #GP under TCG and KVM. A thread starts, and
+an exec restarts, with AVX outside XSTATE_BV, so no YMM state crosses
+processes. Enabling AVX exposes Zenbleed (CVE-2023-20593) and GDS
+(CVE-2022-40982). SPECULATION.md §3 and §9 record that the kernel
+mitigates neither today, and that under KVM the host's microcode and
+chicken bit do. A BACKLOG row owes keeping XCR0 at x87 and SSE on an
+unmitigated processor when the speculation switch is on. L.x86_64.121,
+enabling the state on every processor, is baselined: every SMP boot
+exercises it, since a processor without it faults on its first user
+switch. The i386 frame stays FXSAVE-only (BACKLOG).
+
+## 1. What Claude Code is, to an operating system
+
+Since 2.1 Claude Code ships as a native program rather than an npm package:
+Bun, a JavaScript runtime built on JavaScriptCore, with Claude Code's
+JavaScript and its ripgrep bundled into one 234 MB executable. The linux-x64
+build is a non-PIE glibc program that needs nothing of the system's but
+glibc itself -- `libc`, `libm`, `libpthread`, `libdl`, `librt` -- and reads
+its own bundle out of its executable. What it does with the system is what
+Chrome does, less a display: threads, `futex`, `epoll`, `eventfd`,
+JavaScriptCore's JIT, TCP through the resolver, `fork` and `execve` of a
+shell for every tool call, and pipes back from it.
+
+Everything a browser needed had been built for Chrome (`docs/CHROME.md`):
+`execve` of a program past 64 MiB mapped from its file, the vDSO,
+`madvise`, `timerfd`, the network. So the expectation was a short list of
+missing calls. The list had one entry, and it was not a call.
+
+## 2. The volume
+
+`tools/common/fetch/fetch-claude-code.sh` makes a btrfs volume, as
+`fetch-chrome.sh` does, from pinned downloads:
+
+* `claude` 2.1.280 for linux-x64, the stable channel's release on
+  2026-09-30, from `downloads.claude.ai`, the URL Anthropic's `install.sh`
+  uses, checked against the SHA-256 that release's `manifest.json`
+  publishes;
+* Debian 13's `libc6` -- the pin Chrome's volume takes -- `libgcc-s1`,
+  `bash`, `libtinfo6`, `ripgrep` and `libpcre2-8-0`.
+
+bash because Claude Code's Bash tool runs every command in bash or zsh and
+in nothing else, and `SHELL` points it at the volume's. The script checks
+that every library each program on the volume needs is on it, which caught
+ripgrep's PCRE2 the first time it ran.
+
+The volume is mounted at `/data`, under QEMU's `snapshot=on`, and the
+initramfs links glibc's paths into it (`claude_code::LINKS`), as Chrome's
+test does.
+
+## 3. What running it found: no AVX
+
+`claude --version` answered at once. `claude -p` never made a request: its
+main thread ran at full speed, in state R, for as long as it was given, and
+made no system call after its first 1.5 seconds. It wrote nothing, not even
+its configuration directory.
+
+A trial kernel, never landed, sampled the thread's user instruction pointer
+at each timer interrupt and walked its frame pointers through the user
+stack. Every sample was in the same place:
+JavaScript calling Bun's conversion of a string to UTF-8, which called,
+through a lazily built object's table, a function that did nothing but
+return the pair `(11, 0)`. That is simdutf's *unsupported implementation*:
+error `OTHER`, nothing converted. The conversion loop asks again for the
+rest, and there is always all of it left.
+
+simdutf chooses its implementation at run time from what the processor
+offers. Bun's x86-64 build -- the one Claude Code ships -- is compiled for
+Haswell and carries no implementation older than AVX2, and a program may
+use AVX only when `CPUID` says the operating system saves it (`OSXSAVE`) and
+`XGETBV` says it is enabled. On Ferrix neither was true twice over:
+
+* **The kernel** saved a program's floating-point state with `FXSAVE`, which
+  holds x87 and SSE and not the upper halves of the `YMM` registers, and so
+  never set `CR4.OSXSAVE`. A program could not use AVX under it even on a
+  processor that had it.
+* **QEMU's model**: xtask booted every x86-64 guest on `qemu64`, which has
+  SSE3 and nothing after it -- no SSSE3, no SSE4, no `XSAVE`, no AVX.
+
+Chrome ran on both because it chooses its code at run time all the way down
+to SSE2. Anything built for x86-64-v3 without a fallback -- which is most of
+what distributions now ship for "modern" x86 -- could not.
+
+### The fix
+
+**In the kernel** (`src/kernel/src/arch/x86_64/`):
+
+* `cpu::enable_extended_state` sets `CR4.OSXSAVE` and puts x87, SSE and AVX
+  in `XCR0` on the boot processor; each secondary loads the same `XCR0` as it
+  starts (`smp::secondary_start`), having taken `CR4` from the boot
+  processor already. Only those three components, even on a processor with
+  AVX-512 or AMX: each further one grows every thread's saved state and
+  every signal frame, and a program asks `XCR0` before using them.
+* The switch saves and restores a program's registers with `XSAVE64` and
+  `XRSTOR64` into an 832-byte area in the standard form, 64-byte aligned, in
+  place of the 512-byte `FXSAVE` area (`switch::UserState`). A processor
+  without `XSAVE` keeps `FXSAVE`; the boot log says which:
+  `program register state: x87, SSE and AVX, saved with XSAVE`.
+* A signal frame carries the `XSAVE` area as Linux lays it out: the
+  software-reserved bytes of the `FXSAVE` part say so
+  (`FP_XSTATE_MAGIC1`, the sizes, the components), the header and the
+  `YMM` upper halves follow, then `FP_XSTATE_MAGIC2`, and `uc_flags` has
+  `UC_FP_XSTATE`. `rt_sigreturn` takes AVX back only from a whole area,
+  and otherwise returns it to its initial state, as Linux does. So a
+  handler that uses AVX -- glibc's `memcpy` does -- no longer hands the
+  code it interrupted different registers.
+
+Without the switch saving the upper halves, the first run with AVX turned
+on and nothing else changed printed Claude Code's answer and then crashed as
+Bun left, at address 0, with four threads taking turns on one processor.
+With it, the crash is gone.
+
+**In xtask** (`qemu::x86_cpu`): every x86-64 guest gets x86-64-v3's
+instructions, under every accelerator -- SSSE3 to SSE4.2, `XSAVE`, AVX and
+AVX2, BMI1 and 2, FMA, F16C, `MOVBE`, `LZCNT`, `PCLMULQDQ` and AES. Every
+x86-64 processor sold in the last decade has them, and TCG emulates them
+all since QEMU 7.2. The coverage suite's own model, which has none, keeps
+`FXSAVE`'s path exercised.
+
+And `XSAVEOPT`, for a reason that is QEMU's: its TCG takes `CR4.OSXSAVE` for
+a reserved bit unless the model has one of `CPUID` leaf 0xD's sub-leaf 1
+features (`cr4_reserved_bits` tests `FEAT_XSAVE`, not leaf 1's `XSAVE`).
+On `qemu64,+xsave` the kernel's write of `CR4` then became an SVM exit
+outside any guest, which restarts the instruction: the boot stopped on one
+`mov cr4`, forever, with no exception logged, under QEMU 9.2 and 10.2
+alike, and ran under KVM, which checks `CR4` itself. Every processor with
+AVX has `XSAVEOPT`, so the model is still one that exists.
+
+The i386 signal frame (`signal/compat.rs`) still carries `FXSAVE` alone: a
+32-bit program's handler that uses AVX would leave the interrupted code's
+upper halves changed. Steam's 32-bit programs are the only ones, and none
+seen so far uses AVX in a handler; the row is in `docs/BACKLOG.md`.
+
+## 4. The gate: `cargo xtask test-claude-code`
+
+One boot, x86-64, with the network. The script takes a lease for `eth0`,
+runs `claude --version`, then one prompt:
+
+```
+claude -p 'ferrix-gate: run the check' --allowedTools Bash --max-turns 3 < /dev/null
+```
+
+`ANTHROPIC_BASE_URL` points at a Messages API in a thread of xtask
+(`claude_code::Api`), on the host's loopback, which the guest reaches as
+`10.0.2.2` through the gateway, as `test-net`'s servers are reached. It
+requires the made-up key the script gives, and answers:
+
+* the prompt, when it comes with tools, with a call of the Bash tool
+  running `echo ferrix-bash-$((6*7)); uname -s`, streamed as the API
+  streams one;
+* the request that carries that command's output back as a tool result --
+  `ferrix-bash-42`, then `Ferrix` -- with the text
+  `claude-code-gate: bash on Ferrix said ferrix-bash-42`;
+* anything else Claude Code asks on its own with a word, and its keyless
+  reachability check, `HEAD /api/hello`, with an empty 200.
+
+The gate passes when `--version` printed Claude Code's version, the guest
+printed that last text, the API saw the tool result, and the script got to
+its end. The text exists only if bash ran the command on Ferrix: the
+script's source holds neither `42` nor the reply. No model is called, no
+account is needed, nothing leaves the host, and the result is the same on
+a machine with no internet. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`
+keeps the telemetry, error reports and update checks at home.
+
+`-p` reads its input as more of the prompt until the end of it, whenever
+the input is not a terminal, and the console is not one to it: the script
+gives it `/dev/null`.
+
+**The negative control** (2026-09-30): the same gate with
+`FERRIX_X86_CPU` set to the model before this change fails -- the boot log
+says `saved with FXSAVE; no XSAVE, so no AVX`, and `claude -p` spins until
+the timeout.
+
+## 5. On the desktop, and what is left for the command line
+
+**`claude` in the desktop's terminals** (2026-09-30). `run-compositor
+--everything` merges this volume's tree into the one data volume that
+desktop mounts, beside rustc's, Chrome's, steamcmd's and yserver's
+(`everything.rs`), once `fetch-claude-code.sh` has made it; the only path
+two of them share with different contents is `libgcc_s.so.1`, which the
+merge already settles for Chrome's copy of the same file. The image then
+carries `/bin/claude` (`claude_code::WRAPPER`), which runs
+`/data/claude-code/claude` with `SHELL` naming the volume's bash -- the
+terminals' shell is zinc -- and Claude Code's updater off, since the volume
+is started afresh every boot. `cargo xtask remote-desktop` boots
+`run-compositor --everything` on the machine it names, so its desktop has
+`claude` wherever the volume has been fetched there.
+`cargo xtask test-claude-code --everything` runs the gate's script on that
+merged volume, through the same `/bin/claude`, so what it passes is what a
+terminal on the desktop runs. The plain gate goes through `/bin/claude`
+too.
+
+What is left:
+
+* **The interactive TUI.** `claude` without `-p`, in a terminal: raw mode,
+  the alternate screen, key input, resizes. Not gated yet. The console is
+  not a terminal to it; foot on the compositor is, and so is `sshdt`'s
+  pseudo-terminal, which is where a gate would drive it. One thing to
+  check there: Bun passes a file descriptor to `ioctl` as a NaN-boxed
+  JavaScript value (`0xfffe000000000001` for 1), whose upper half Linux
+  ignores because the argument is an `unsigned int`. Every call seen so far
+  was on a file that is not a terminal, where the answer is `ENOTTY` either
+  way.
+* **A real account.** `claude` logs in through a browser, or takes
+  `ANTHROPIC_API_KEY`; both need the real internet through the gateway,
+  which a watched desktop has. Unmeasured on Ferrix.
+* Both rows are in `docs/BACKLOG.md` (P2).
+
+## 6. Elsewhere
+
+* **ferrousli in glibc's place**, as Chrome runs (`test-chrome
+  --interpreter ferrousli --library ferrousli`): Claude Code imports only
+  glibc's own names, so this should be the shortest of Chrome's steps.
+* **AArch64**: Anthropic publishes linux-arm64, for the Pixel 7's VM; its
+  Bun build needs no AVX.
+
+## 7. The desktop app
+
+Asked for second. Anthropic builds the Claude desktop app for macOS and
+Windows only: an Electron application. The customer chose, on 2026-09-30,
+the Electron app itself over Claude Code in a desktop window or claude.ai
+in Chrome, knowing it has no Linux build; the next step is an assessment
+of what running its Windows bundle's JavaScript on Linux's Electron on
+Ferrix would take, before anything is built.

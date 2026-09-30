@@ -133,21 +133,7 @@ pub(super) fn desktop(
         carried.ports.extend(crate::chrome::window_files());
         carried.ports.push(crate::chrome::desktop_policy());
         if args.everything {
-            let links = rustc_links(&carried.ports);
-            carried.ports.extend(links);
-            if crate::steamcmd::volume().is_ok() {
-                let files = crate::steamcmd::desktop_files(&carried.ports);
-                carried.ports.extend(files);
-            }
-            let steam = with_steam_volume(args, arch);
-            if arch == Arch::X86_64 && (crate::yserver::volume().is_ok() || steam) {
-                let files = crate::yserver::desktop_files(&carried.ports);
-                carried.ports.extend(files);
-            }
-            if steam {
-                let files = steam_window::desktop_files(&carried.ports);
-                carried.ports.extend(files);
-            }
+            carry_everything(arch, args, &mut carried);
         }
     } else {
         carried.ports.extend(crate::rustc::default_links(args));
@@ -284,6 +270,31 @@ fn chrome_links(arch: Arch, carried: &[crate::ports::File]) -> Vec<crate::ports:
         }
     }
     crate::rustc::files(&links)
+}
+
+/// What `--everything` carries beside Chrome: the compiler's links, and
+/// steamcmd, Claude Code, yserver and Steam's window where each volume has
+/// been made.
+fn carry_everything(arch: Arch, args: &Args, carried: &mut Carried) {
+    let links = rustc_links(&carried.ports);
+    carried.ports.extend(links);
+    if crate::steamcmd::volume().is_ok() {
+        let files = crate::steamcmd::desktop_files(&carried.ports);
+        carried.ports.extend(files);
+    }
+    if arch == Arch::X86_64 && crate::claude_code::volume().is_ok() {
+        let files = crate::claude_code::desktop_files(&carried.ports);
+        carried.ports.extend(files);
+    }
+    let steam = with_steam_volume(args, arch);
+    if arch == Arch::X86_64 && (crate::yserver::volume().is_ok() || steam) {
+        let files = crate::yserver::desktop_files(&carried.ports);
+        carried.ports.extend(files);
+    }
+    if steam {
+        let files = steam_window::desktop_files(&carried.ports);
+        carried.ports.extend(files);
+    }
 }
 
 /// The compiler's links for `--everything`, less any path Chrome's links

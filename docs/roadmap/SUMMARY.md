@@ -20,6 +20,7 @@
 - [✓ Stage 12 — btrfs, write](stage-12-btrfs-write.md)
 - [✓ sysfs — the device tree, fed by the services that own it](sysfs.md)
 - [◐ Chrome — a browser on Ferrix](chrome.md)
+- [◐ Claude Code — Anthropic's coding agent on Ferrix](claude-code.md)
 - [◐ Stage 13 — Namespaces, cgroups v2, seccomp](stage-13-namespaces-cgroups-v2-seccomp.md)
 - [○ Stage 14 — Real-time domains](stage-14-real-time-domains.md)
 - [◐ Stage 15 — A real userland](stage-15-real-userland.md)
