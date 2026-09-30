@@ -38,8 +38,10 @@
 //!   so the table is as long as the number of processes that have changed
 //!   something, not the number that ever lived.
 //! * **Only the two switches that guard privilege are inherited across
-//!   `fork`**, by [`inherit`], which the fork paths call: `no_new_privs` and
-//!   `dumpable`. The first is the one that cannot wait. A child that started
+//!   `fork`**, by [`inherit`], which the fork paths call, and so does a
+//!   native `process_create` for its creator's child
+//!   (`syscall::launch::load_native`): `no_new_privs` and `dumpable`. The
+//!   first is the one that cannot wait. A child that started
 //!   from the defaults could run a set-user-id program its parent had given
 //!   up, which undoes the whole promise `PR_SET_NO_NEW_PRIVS` makes: that
 //!   nothing this process or anything it starts runs will have more
@@ -154,7 +156,8 @@ pub(crate) fn update<R>(process: &Process, change: impl FnOnce(&mut Attributes) 
     change(&mut entry.1)
 }
 
-/// Give `child`, which `fork` has just made of `parent`, what Linux's
+/// Give `child`, which `fork` (or a native `process_create`) has just made
+/// of `parent`, what Linux's
 /// `copy_process` gives it of these: `no_new_privs`, which lives in the task's
 /// `atomic_flags` and is copied with the whole `task_struct`
 /// (`dup_task_struct`, and again under the signal lock with the seccomp

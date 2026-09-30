@@ -35,7 +35,7 @@ use crate::syscall::exec::{self, ExecError};
 use crate::syscall::load::{LoadError, Source};
 use crate::syscall::native::{self, Argument, Processes, StartRefused};
 use crate::syscall::process::{self, Process};
-use crate::syscall::registry;
+use crate::syscall::{attributes, registry};
 use crate::user::space::SpaceError;
 
 /// What `init` is lent.
@@ -105,21 +105,35 @@ fn process_give(caller: &dyn Host, registers: &[u64; 6]) -> Result<usize, Errno>
 ///
 /// A creator of another personality's has no ids to give, and is refused
 /// rather than given root's.
+///
+/// It also takes its creator's `no_new_privs` and dumpability, as a fork
+/// child takes its parent's ([`attributes::inherit`]). A native process can
+/// make Linux calls -- a number outside the native range goes to the Linux
+/// table -- so without the flag a child of a process that gave up new
+/// privileges could `execve` a set-user-id file and take them back. One with
+/// no creator starts from the defaults.
 pub(crate) fn load_native(
     creator: Option<&dyn Host>,
     image: &[u8],
     name: &[u8],
 ) -> Result<Arc<dyn Host>, Errno> {
+    let creator = creator
+        .map(|creator| process::of_host(creator).ok_or(status::BAD_STATE))
+        .transpose()?;
     let (credentials, context) = match creator {
         Some(creator) => {
-            let creator = process::of_host(creator).ok_or(status::BAD_STATE)?;
             let context = creator.fs_context().lock().clone();
             (creator.with_credentials(|held| held.clone()), Some(context))
         }
         None => (Credentials::root(), None),
     };
-    let process: Arc<dyn Host> =
-        exec::load_native(image, name, credentials, context).map_err(load_status)?;
+    let child = exec::load_native(image, name, credentials, context).map_err(load_status)?;
+    // After `exec::load_native` registered it, so that the entry is not
+    // pruned as a pid nothing finds, and before anything can start it.
+    if let Some(creator) = creator {
+        attributes::inherit(creator, &child);
+    }
+    let process: Arc<dyn Host> = child;
     Ok(process)
 }
 

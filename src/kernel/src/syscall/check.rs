@@ -796,6 +796,7 @@ fn check_handlers(output: Output) -> Result<u64, &'static str> {
     check_a_robust_list_is_each_threads_own(&process)?;
     check_no_new_privs_crosses_a_fork()?;
     check_a_change_of_ids_ends_dumpability()?;
+    check_no_new_privs_reaches_a_native_child()?;
     check_uname_names_the_system(&process)?;
     check_poll_reports_ready_invalid_and_skipped(&process)?;
     check_select_answers_with_the_sets_that_are_ready(&process)?;
@@ -1638,6 +1639,72 @@ fn check_a_change_of_ids_ends_dumpability() -> Result<(), &'static str> {
         return Err("a process that moved its effective uid kept its parent-death signal");
     }
     Ok(())
+}
+
+/// A native child, made by `process_create` through the personality's
+/// `LoadNative` ([`crate::syscall::launch::load_native`]), of a process that
+/// set `PR_SET_NO_NEW_PRIVS` reads it as 1 and is not dumpable when its
+/// creator is not. A native process reaches the Linux table for any number
+/// outside the native range, so a child without the flag could `execve` a
+/// set-user-id file. A child made before the creator set either reads the
+/// defaults -- the control, that the child copies and does not share.
+///
+/// The child's `prctl` is the Linux handler called for the child, not one the
+/// child's own program makes: a native program that makes a Linux call is a
+/// user program of its own to build, and the handler is what that call
+/// reaches, through the same table.
+fn check_no_new_privs_reaches_a_native_child() -> Result<(), &'static str> {
+    use crate::object::process::{Host, downcast};
+    use crate::syscall::attributes::sys_prctl;
+    let creator = process::new_for_check()
+        .map_err(|_| "could not make a process for the native no-new-privs check")?;
+    let file = image::build_with(
+        class_of_this_build(),
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        arch::USER_ARGUMENT_PROGRAM,
+    );
+    let create = |name: &'static [u8]| {
+        crate::syscall::launch::load_native(Some(&*creator as &dyn Host), &file, name)
+            .ok()
+            .and_then(downcast::<Process>)
+            .ok_or("a native child could not be made for the no-new-privs check")
+    };
+    let before = create(b"/nnp-before")?;
+    answers(
+        sys_prctl(&creator, PR_SET_NO_NEW_PRIVS, [1, 0, 0, 0]),
+        0,
+        "PR_SET_NO_NEW_PRIVS was refused",
+    )?;
+    answers(
+        sys_prctl(&creator, PR_SET_DUMPABLE, [0, 0, 0, 0]),
+        0,
+        "PR_SET_DUMPABLE 0 was refused",
+    )?;
+    let child = create(b"/nnp-child")?;
+    let outcome = answers(
+        sys_prctl(&child, PR_GET_NO_NEW_PRIVS, [0; 4]),
+        1,
+        "a native child of a no-new-privs process did not read PR_GET_NO_NEW_PRIVS as 1",
+    )
+    .and_then(|()| {
+        answers(
+            sys_prctl(&child, PR_GET_DUMPABLE, [0; 4]),
+            0,
+            "a native child of a process that is not dumpable was dumpable",
+        )
+    })
+    .and_then(|()| {
+        answers(
+            sys_prctl(&before, PR_GET_NO_NEW_PRIVS, [0; 4]),
+            0,
+            "a native child made before its creator set no-new-privs read it as set",
+        )
+    });
+    // Never started: ended here, as the other checks end theirs.
+    process::kill(&child, 137);
+    process::kill(&before, 137);
+    outcome
 }
 
 /// `uname` fills all six fields, NUL-terminates each within its 65 bytes, and
