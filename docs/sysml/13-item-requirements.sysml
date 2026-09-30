@@ -571,12 +571,18 @@ package FerrixItemRequirements {
             attribute :>> parent = ("O.CAPABILITY", "ASR-3");
         }
         requirement <'H.IRQ.2'> maskedUntilAcknowledged : ItemHighLevel {
-            attribute :>> statement = "A line bound to an Interrupt object shall stay
-                masked from its delivery until the holder acknowledges it, and shall
-                be masked when the object is destroyed.";
+            attribute :>> statement = "A line bound to an Interrupt object shall be
+                delivered to its holder once until the holder acknowledges it; a
+                line the interrupt controller holds shall stay masked from its
+                delivery until the acknowledgement, and an edge-triggered MSI-X
+                vector shall reach the kernel's handler at most 65 times between two
+                acknowledgements before it is masked until the next; and the line
+                shall be masked when the object is destroyed.";
             attribute :>> criterion = "A line held from delivery to acknowledgement
-                is delivered once and 0 times more before the acknowledgement; after
-                the last handle to its object closes, the line is masked.";
+                is delivered once and 0 times more before the acknowledgement; an
+                MSI-X vector delivered 65 times unacknowledged reads masked (the
+                `irq` line); after the last handle to its object closes, the line is
+                masked.";
             attribute :>> parent = ("O.CAPABILITY", "O.QUOTA");
         }
         requirement <'H.IRQ.3'> unclaimedLinesMasked : ItemHighLevel {

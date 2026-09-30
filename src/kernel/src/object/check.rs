@@ -163,6 +163,10 @@ struct Counter {
     wakes: u32,
     /// See [`DeviceReport::slowest_wake`].
     slowest_wake: u64,
+    /// See [`DeviceReport::coalesced`].
+    coalesced: u32,
+    /// See [`DeviceReport::storm_nanos`].
+    storm_nanos: u64,
 }
 
 /// Run them. `Err` names the first thing that was not true.
@@ -2096,6 +2100,12 @@ pub(crate) struct DeviceReport {
     /// nanoseconds: the host's latency as much as the kernel's, so reported
     /// and never judged.
     pub(crate) slowest_wake: u64,
+    /// Edge-triggered MSI-X vectors found unmasked through their deliveries,
+    /// and masked by the delivery past `interrupt::STORM_BOUND`.
+    pub(crate) coalesced: u32,
+    /// What those bounded deliveries took, in nanoseconds, all of it charged
+    /// to the task that ran them: reported, never judged.
+    pub(crate) storm_nanos: u64,
 }
 
 /// The device objects: I/O mappings and interrupts, minted from the device
@@ -2140,6 +2150,8 @@ pub(crate) fn run_devices() -> Result<DeviceReport, &'static str> {
         delivered: counter.delivered,
         wakes: counter.wakes,
         slowest_wake: counter.slowest_wake,
+        coalesced: counter.coalesced,
+        storm_nanos: counter.storm_nanos,
     })
 }
 
@@ -2530,6 +2542,9 @@ fn check_an_interrupt_is_held_until_acknowledged(
         "an interrupt that has not fired said it was pending",
         counter,
     )?;
+    // First of the checks that deliver after an acknowledgement, so a
+    // delivery lost there fails on its own line.
+    check_a_line_is_held_back_where_it_must_be(&side, first, vector.number(), counter)?;
 
     interrupt::on_interrupt(vector.number());
     stage_deadline(&side, PATIENCE_NANOS)?;
@@ -3462,6 +3477,119 @@ fn check_an_interrupt_wakes_its_waiter(
     let _ = side
         .call(nr::HANDLE_CLOSE, &[reg(port)])
         .map_err(|_| "closing the wake check's port failed")?;
+    Ok(())
+}
+
+/// A delivery holds a line back exactly where it must, and loses nothing.
+///
+/// The driver's own sequence first: a delivery, its packet taken, the
+/// acknowledgement, then a second delivery before the driver has drained the
+/// device -- the one a coalescing line could lose -- and the wait after the
+/// drain must find a packet for it. Then, for an edge-triggered MSI-X vector,
+/// what is read at its table entry: unmasked after a delivery, still unmasked
+/// after [`interrupt::STORM_BOUND`] deliveries nobody acknowledged, masked by
+/// the next one with the line's storm count one higher and one packet queued
+/// for all of them, and unmasked again by the acknowledgement. A line the
+/// controller holds keeps its mask per delivery, which the earlier checks
+/// already drive.
+///
+/// Called with the interrupt acknowledged, and leaves it acknowledged, bound to
+/// a port that is closed.
+///
+/// Verifies: L.object.41
+fn check_a_line_is_held_back_where_it_must_be(
+    side: &Side,
+    interrupt: Handle,
+    number: u32,
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    let port = side.handle(nr::PORT_CREATE, &[], "port_create failed")?;
+    side.put(KEY, &44_u64.to_ne_bytes())?;
+    let _ = side
+        .call(nr::INTERRUPT_BIND, &[reg(interrupt), reg(port), KEY])
+        .map_err(|_| "binding an interrupt for the masking check failed")?;
+    let held = side
+        .process
+        .with_handles(|table| table.get(interrupt).map(|(object, _)| object.clone()))
+        .map_err(|_| "the masking check's handle named nothing")?;
+    let result = match &held {
+        Object::Interrupt(line) => held_back_rounds(side, (interrupt, line), port, number, counter),
+        _ => Err("the masking check's handle was not an interrupt"),
+    };
+    // Let go of here: a reference to the interrupt is a claim on its line.
+    object::dispose([held]);
+    let _ = side
+        .call(nr::HANDLE_CLOSE, &[reg(port)])
+        .map_err(|_| "closing the masking check's port failed")?;
+    result
+}
+
+/// [`check_a_line_is_held_back_where_it_must_be`]'s rounds, on the interrupt
+/// `handle` names and `line` is, bound to `port`.
+fn held_back_rounds(
+    side: &Side,
+    (handle, line): (Handle, &interrupt::Interrupt),
+    port: Handle,
+    number: u32,
+    counter: &mut Counter,
+) -> Result<(), &'static str> {
+    // Acknowledged as a driver acknowledges, through its handle.
+    let ack = |what: &'static str| {
+        side.call(nr::INTERRUPT_ACK, &[reg(handle)])
+            .map(|_| ())
+            .map_err(|_| what)
+    };
+    if line.reads_masked() == Some(true) {
+        return Err("a claimed, acknowledged line read masked");
+    }
+    interrupt::on_interrupt(number);
+    let _ = take_now(side, port).map_err(|_| "a delivery queued no packet")?;
+    if line.coalesces() && line.reads_masked() != Some(false) {
+        return Err("one delivery masked an edge-triggered MSI-X vector");
+    }
+    ack("acknowledging the masking check's first delivery failed")?;
+    // The device fires again before the driver drains it: the acknowledgement
+    // above is the driver's, and the drain has nothing for the kernel to do.
+    interrupt::on_interrupt(number);
+    let _ = take_now(side, port)
+        .map_err(|_| "an interrupt that fired between acknowledgement and drain was lost")?;
+    ack("acknowledging the delivery between acknowledgement and drain failed")?;
+    if !line.coalesces() {
+        return Ok(());
+    }
+
+    let storms = line.storms();
+    let started = crate::timer::now_nanos();
+    for _ in 0..interrupt::STORM_BOUND {
+        interrupt::on_interrupt(number);
+    }
+    if line.reads_masked() != Some(false) || line.storms() != storms {
+        return Err("a line was masked before its storm bound");
+    }
+    interrupt::on_interrupt(number);
+    counter.storm_nanos = crate::timer::now_nanos().saturating_sub(started);
+    if line.reads_masked() != Some(true) || line.storms() != storms.wrapping_add(1) {
+        crate::console::println!(
+            "  irq      {} deliveries without an acknowledgement left the line unmasked (bound {})",
+            interrupt::STORM_BOUND + 1,
+            interrupt::STORM_BOUND,
+        );
+        return Err(
+            "a line delivered past its storm bound without an acknowledgement was not masked",
+        );
+    }
+    let _ = take_now(side, port).map_err(|_| "a storm queued no packet")?;
+    refused(
+        take_now(side, port),
+        status::TIMED_OUT,
+        "a storm queued more than one packet",
+        counter,
+    )?;
+    ack("acknowledging the storm failed")?;
+    if line.reads_masked() != Some(false) {
+        return Err("the acknowledgement after a storm left the line masked");
+    }
+    counter.coalesced += 1;
     Ok(())
 }
 

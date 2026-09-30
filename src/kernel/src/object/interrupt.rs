@@ -4,13 +4,37 @@
 //! vector". It is built only from a [`Vector`], which only `crate::device`
 //! can make, so a driver cannot claim a line its device does not have.
 //!
-//! # Masked from delivery to acknowledgement
+//! # Masked from delivery to acknowledgement, where it must be
 //!
-//! When the line fires, the kernel's handler masks it and marks the object
-//! pending. The driver sees `READABLE`, services the device, and acknowledges,
-//! which clears pending and unmasks. A device that keeps its line asserted
+//! When the line fires, the kernel's handler marks the object pending. The
+//! driver sees `READABLE`, services the device, and acknowledges, which clears
+//! pending. A line the interrupt controller holds -- level-triggered, or one
+//! whose trigger firmware left unsaid -- is also masked by every delivery and
+//! unmasked by the acknowledgement. A device that keeps such a line asserted
 //! therefore cannot keep a processor in the handler, and a driver that has
 //! wedged costs one masked line rather than an interrupt storm.
+//!
+//! An edge-triggered MSI-X vector is not masked per delivery. Its entry lives
+//! in the device's table, so masking and unmasking are two writes to device
+//! memory per interrupt -- under a hypervisor, two exits to the emulator for
+//! every block read. It needs neither: a message is an edge, it does not stay
+//! asserted, and a delivery while the line is pending changes nothing, since
+//! `pending` coalesces it into the packet already queued. A delivery between
+//! the driver's acknowledgement and its drain is not lost either, because the
+//! acknowledgement clears pending first and that delivery queues a packet of
+//! its own.
+//!
+//! What such a vector keeps is a stated bound on what a device may cost the
+//! processor between two acknowledgements: at most [`STORM_BOUND`] deliveries
+//! reach the handler, each a lock, two atomics and no wake once the line is
+//! pending, and the time is charged to whichever task the interrupt cut, as
+//! every interrupt's is. The delivery past the bound masks the entry, and the
+//! acknowledgement that follows unmasks it. A driver that wedges therefore
+//! costs [`STORM_BOUND`] handler runs and one masked line, not a storm. The
+//! bound is counted per acknowledgement rather than per unit of time because
+//! the acknowledgement is what the holder controls: a device raising
+//! completions as fast as its driver takes them is a working device, and one
+//! raising them while nobody listens is the storm.
 //!
 //! # What an interrupt handler may do
 //!
@@ -56,7 +80,7 @@
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::sync::Arc;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use ferrix_sync::IrqSpinLock;
 
@@ -73,6 +97,15 @@ static BOUND: IrqSpinLock<BTreeMap<u32, Arc<Line>>, arch::Irq> = IrqSpinLock::ne
 
 /// The lines [`on_interrupt`] is registered on.
 static REGISTERED: IrqSpinLock<BTreeSet<u32>, arch::Irq> = IrqSpinLock::new(BTreeSet::new());
+
+/// How many deliveries an edge-triggered MSI-X vector, which is not masked
+/// per delivery, may make between two acknowledgements. The next one masks
+/// it until the acknowledgement: see the module documentation.
+///
+/// Above a block device's queue depth, 32, so that a device completing a full
+/// queue while its driver is busy is not taken for a storm and made to pay the
+/// two writes the bound exists to save.
+pub(crate) const STORM_BOUND: u32 = 64;
 
 /// Why an interrupt could not be claimed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,9 +151,45 @@ struct Line {
     binding: IrqSpinLock<Option<Binding>, arch::Irq>,
     /// Woken by a delivery each time the line goes from quiet to pending.
     waiters: WaitQueue,
+    /// Deliveries since the last acknowledgement, counted only for a vector
+    /// not masked per delivery: what [`STORM_BOUND`] bounds.
+    unacknowledged: AtomicU32,
+    /// A delivery masked the line and the next acknowledgement unmasks it.
+    ///
+    /// Set only after the mask is written and read only by the
+    /// acknowledgement, so an acknowledgement that finds it set always
+    /// unmasks a line that was masked. One that runs between a delivery's mask
+    /// and this flag misses it, and the next does not: that delivery goes on
+    /// to mark the line pending, which the acknowledgement had just cleared,
+    /// and so queues a packet the holder answers with another acknowledgement.
+    masked: AtomicBool,
+    /// Times [`STORM_BOUND`] masked the line, for the checks.
+    storms: AtomicU32,
 }
 
 impl Line {
+    /// The first half of a delivery: hold the line back where it must be.
+    ///
+    /// A line the controller holds is masked every time. An edge-triggered
+    /// MSI-X vector is counted, and masked only by the delivery past
+    /// [`STORM_BOUND`]. Takes no lock, so it runs under [`BOUND`]'s.
+    fn hold_back(&self) {
+        if !self.vector.coalesces() {
+            let _ = self.vector.mask();
+            self.masked.store(true, Ordering::Release);
+            return;
+        }
+        let seen = self
+            .unacknowledged
+            .fetch_add(1, Ordering::AcqRel)
+            .saturating_add(1);
+        if seen > STORM_BOUND && !self.masked.load(Ordering::Acquire) {
+            let _ = self.vector.mask();
+            self.masked.store(true, Ordering::Release);
+            let _ = self.storms.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     /// Mark it pending, queue its packet if it is bound and was quiet, and
     /// wake whoever waits on it and on its port.
     ///
@@ -201,6 +270,9 @@ impl Interrupt {
             pending: AtomicBool::new(false),
             binding: IrqSpinLock::new(None),
             waiters: WaitQueue::new(),
+            unacknowledged: AtomicU32::new(0),
+            masked: AtomicBool::new(false),
+            storms: AtomicU32::new(0),
         })
         .map_err(|_| InterruptError::NoMemory)?;
         let interrupt =
@@ -274,12 +346,41 @@ impl Interrupt {
     /// The driver has serviced the device: clear pending and let the line
     /// through again.
     ///
+    /// Pending is cleared first, so a delivery from here on queues a packet
+    /// of its own rather than being coalesced into the one being answered. A
+    /// line the controller holds is unmasked every time, as it is masked
+    /// every time. An edge-triggered MSI-X vector is unmasked only if a
+    /// delivery past [`STORM_BOUND`] masked it: otherwise it never was, and
+    /// the write would be a device access for nothing.
+    ///
     /// # Errors
     ///
     /// If the controller refuses to unmask, which a line it masked does not.
     pub(crate) fn acknowledge(&self) -> Result<(), &'static str> {
         self.line.pending.store(false, Ordering::Release);
-        self.line.vector.unmask()
+        self.line.unacknowledged.store(0, Ordering::Release);
+        let masked = self.line.masked.swap(false, Ordering::AcqRel);
+        if masked || !self.line.vector.coalesces() {
+            return self.line.vector.unmask();
+        }
+        Ok(())
+    }
+
+    /// Times [`STORM_BOUND`] has masked the line, for the checks.
+    pub(crate) fn storms(&self) -> u32 {
+        self.line.storms.load(Ordering::Relaxed)
+    }
+
+    /// Whether the line reads back masked where it is masked, where that can
+    /// be read (an MSI-X entry), for the checks.
+    pub(crate) fn reads_masked(&self) -> Option<bool> {
+        self.line.vector.reads_masked()
+    }
+
+    /// Whether a delivery leaves the line unmasked: an edge-triggered MSI-X
+    /// vector, below [`STORM_BOUND`].
+    pub(crate) fn coalesces(&self) -> bool {
+        self.line.vector.coalesces()
     }
 }
 
@@ -328,7 +429,8 @@ impl Delivery {
 }
 
 /// The first half of a delivery on line `number`: find the line its holder
-/// claimed and mask it, in one step under [`BOUND`]'s lock.
+/// claimed and hold it back ([`Line::hold_back`]: mask it, or count it
+/// against [`STORM_BOUND`]), in one step under [`BOUND`]'s lock.
 ///
 /// The line is found before it is masked, because only its [`Vector`] knows
 /// where masking happens: at the controller for a line, at the device's table
@@ -339,7 +441,7 @@ pub(crate) fn take_delivery(number: u32) -> Option<Delivery> {
     let bound = BOUND.lock();
     match bound.get(&number) {
         Some(line) => {
-            let _ = line.vector.mask();
+            line.hold_back();
             Some(Delivery(Arc::clone(line)))
         }
         None => {

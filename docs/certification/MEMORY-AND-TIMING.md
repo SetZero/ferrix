@@ -346,7 +346,23 @@ Real, and narrower than a WCET:
 * **Bounded critical sections on the RT path**, by construction rather than by
   measurement.
 * **Preemptible kernel**, so a long section delays rather than blocks.
-* **Interrupts that cannot steal unaccounted time.**
+* **Interrupts that cannot steal unaccounted time.** A line the controller
+  holds (level-triggered, or of unknown trigger) is masked from each delivery
+  to its acknowledgement, so it runs its handler at most once per
+  acknowledgement. An edge-triggered MSI-X vector is no longer masked per
+  delivery (L.object.41, since 2026-10-01). It is masked only after
+  `STORM_BOUND` = 64 deliveries without an acknowledgement, and stays
+  masked until the next one. Acknowledgements come only as fast as the
+  holder's task is scheduled. So one MSI-X line's interrupt load is at most
+  64 handler runs per scheduling of its holder, where it was 1 before; the
+  65th delivery masks the entry and is counted in `Line::storms`.
+
+  Who pays: the handler's time is charged to whichever task the interrupt
+  cut. A storming device whose driver acknowledges promptly therefore costs
+  other partitions up to that bound. The time is accounted, but in the
+  victim's account, not the device holder's. AoU-4 and ASR-8 rest on this
+  sentence, and it is the reason the bound is a named constant with its own
+  check (the `irq` line) and its negative control.
 
 ### 2.2a The one bound the item puts on its own waiting
 

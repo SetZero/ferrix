@@ -512,18 +512,35 @@ package FerrixObjectRequirements {
                 "object::port::Port::queue_interrupt");
         }
         requirement <'L.object.41'> maskedFromDeliveryToAcknowledgement : ItemLowLevel {
-            attribute :>> statement = "A delivery shall mask the line where its
-                vector says -- the controller, or the MSI-X entry -- before it marks
-                it pending, acknowledge shall unmask it, and a refused claim shall
-                leave the holder's line unmasked.";
-            attribute :>> criterion = "Read at the controller or the MSI-X entry, a
-                claimed line is unmasked, masked after a delivery, unmasked after
-                the acknowledgement, and still unmasked after a second claim is
-                refused.";
+            doc /* Rationale: an edge MSI-X vector's extra deliveries fold into the
+                packet its holder has not answered, so masking it per delivery
+                only cost two exits to the hypervisor per interrupt. The bound
+                keeps interrupt time bounded: at most STORM_BOUND (64) handler
+                runs per scheduling of the holder, where it was 1, each charged
+                to the task the interrupt cut, so a storm costs other partitions
+                up to that bound, accounted in their share
+                (docs/certification/MEMORY-AND-TIMING.md §2.2; AoU-4, ASR-8). */
+            attribute :>> statement = "A delivery shall mask a line the controller
+                holds before it marks it pending, and acknowledge shall unmask it; a
+                delivery shall leave an edge-triggered MSI-X vector unmasked unless
+                more than STORM_BOUND (64) deliveries have reached it since the last
+                acknowledgement, when it shall mask the vector's entry until the
+                next acknowledgement; acknowledge shall clear pending before it
+                unmasks, so a delivery after it queues a packet of its own; and a
+                refused claim shall leave the holder's line unmasked.";
+            attribute :>> criterion = "On an edge-triggered MSI-X vector: read at its
+                entry the claimed line is unmasked and stays unmasked after a
+                delivery; a delivery after the acknowledgement and before the drain
+                queues a packet; after 64 unacknowledged deliveries the entry is
+                still unmasked, after the 65th it is masked with the line's storm
+                count one higher and one packet queued, and after the
+                acknowledgement it is unmasked (the `irq` line).";
             attribute :>> parent = "H.IRQ.2";
             attribute :>> unit = ("object::interrupt::take_delivery",
+                "object::interrupt::Line::hold_back",
                 "object::interrupt::Interrupt::acknowledge",
-                "object::interrupt::Interrupt::new");
+                "object::interrupt::Interrupt::new",
+                "device::Vector::coalesces", "device::Vector::reads_masked");
         }
         requirement <'L.object.42'> anUnheldLineIsMasked : ItemLowLevel {
             attribute :>> statement = "take_delivery shall mask at the controller a
