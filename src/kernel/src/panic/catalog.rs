@@ -118,7 +118,7 @@ pub(crate) static SHOOTDOWN_TURN_TIMEOUT: Explanation = Explanation {
     see: "src/kernel/src/smp.rs flush_tlb_everywhere; docs/ROADMAP.md stage 4",
 };
 
-/// For `this_logical_cpu` in `user/space.rs`, when an address space is
+/// For `loaded_record` in `user/space.rs`, when an address space is
 /// installed or uninstalled on a processor with no per-CPU record.
 pub(crate) static SPACE_SET_WITHOUT_RECORD: Explanation = Explanation {
     code: "FX-0004",
@@ -231,6 +231,32 @@ pub(crate) static ALLOCATION_ABORTED: Explanation = Explanation {
     ],
     see: "docs/certification/MEMORY-AND-TIMING.md; tools/common/check/check-fallible-alloc.py; \
           src/kernel/src/mm.rs",
+};
+
+/// For `Presence::retire` in `user/space.rs`, when an address space about to
+/// free its tables is still loaded on a processor.
+pub(crate) static SPACE_DROPPED_WHILE_LOADED: Explanation = Explanation {
+    code: "FX-0009",
+    title: "an address space was dropped while a processor still had it loaded",
+    meaning: "A processor running a kernel thread keeps the last program's address space \
+              loaded rather than switching its root register to the kernel's own tables, and \
+              stays in that space's set. When the space's last user lets go of it, dropping it \
+              first makes every processor in the set take it off and leave, and then checks \
+              that the set is empty and that no processor's record still names the space. A \
+              processor that still had it loaded could walk the space's page tables, or use \
+              its cached translations, after they and the frames they reach went back to the \
+              allocator for somebody else (finding F-36), so the kernel stops before giving \
+              anything back.",
+    causes: &[
+        "Dropping the space did not ask the processors in its set to leave, or asked them \
+         before marking it retiring, so they answered without taking it off.",
+        "A processor loaded the space without joining its set first, so the request never \
+         reached it, or left the set without clearing its record.",
+        "Something wrote a processor's root register for a user space without going through \
+         `AddressSpace::install`, so the record and the register disagree.",
+    ],
+    see: "src/kernel/src/user/space.rs Presence::retire; src/kernel/src/user/space.rs \
+          answer_retiring; src/kernel/src/smp.rs wait_until_left; docs/ROADMAP.md stage 6",
 };
 
 /// For `check_allocation_failure` in `stages_check.rs`.
@@ -2609,6 +2635,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &LOAD_REGISTRATION,
     &BOOT_OUT_OF_MEMORY,
     &ALLOCATION_ABORTED,
+    &SPACE_DROPPED_WHILE_LOADED,
     &STAGE1_HANDOFF,
     &MEMORY_BRING_UP,
     &VMAP_ARENA_BRING_UP,

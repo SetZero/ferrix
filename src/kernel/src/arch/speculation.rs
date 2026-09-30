@@ -237,12 +237,33 @@ pub(crate) fn entered_space(root: u64) {
         return;
     }
     let cpu = this_cpu();
-    let (Some(last), Some(issued)) = (LAST_ROOT.get(cpu), SWITCH_BARRIERS.get(cpu)) else {
+    let (Some(last), Some(issued), Some(changes)) = (
+        LAST_ROOT.get(cpu),
+        SWITCH_BARRIERS.get(cpu),
+        SPACE_CHANGES.get(cpu),
+    ) else {
         return;
     };
-    if last.swap(root, Ordering::Relaxed) != root && machine::switch_barrier(cpu) {
-        let _ = issued.fetch_add(1, Ordering::Relaxed);
+    if last.swap(root, Ordering::Relaxed) != root {
+        let _ = changes.fetch_add(1, Ordering::Relaxed);
+        if machine::switch_barrier(cpu) {
+            let _ = issued.fetch_add(1, Ordering::Relaxed);
+        }
     }
+}
+
+/// How many times each processor entered a different program's space than
+/// the one it last ran, by logical number: each a switch barrier where the
+/// processor's plan has one. Counted whether or not it has, so that the
+/// check of when the barrier fires can see the decision on every processor.
+static SPACE_CHANGES: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+
+/// How many times processor `logical` has decided it entered another
+/// program's space: see [`SPACE_CHANGES`].
+pub(crate) fn space_changes_on(logical: usize) -> u64 {
+    SPACE_CHANGES
+        .get(logical)
+        .map_or(0, |changes| changes.load(Ordering::Relaxed))
 }
 
 /// Called by an architecture's `prepare_user_root` for a root that is about to
