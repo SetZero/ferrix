@@ -317,3 +317,49 @@ the maker paths, `getpid` and the calls of §4 down to `wait`/`kill`/groups;
 (3) init (§5); (4) signals' and credentials' pids; (5) procfs and
 `/proc/<pid>/ns/pid`; (6) tty, cgroupfs, locks, semaphores; (7) the boot
 line and F-37; (8) the docs' records.
+
+## 10. Where it stands (2026-10-01, wound down)
+
+Built on `stage13-pidns` over N4, **not landed**. Gated: `cargo clippy`
+x86_64 and AArch64 clean (ARMv7-A compiled by the queue's boot, clippy not run
+locally: the disk filled); the `pidns` line (61 calls, 12 refusals) and the
+`kmem` fill boot on x86_64, AArch64 and ARMv7-A `--smp 2`; `test-shell`
+passes. Negative controls, each stopping the boot with the check's own
+message (run on 383ff664; the later commit only moves code out of line):
+
+| Rule | Sabotage | Message |
+|---|---|---|
+| P1 | first number 5 | the first process made in a pid namespace was not pid 1 there |
+| P2 | numbering jumps after 1 | the second process made in a pid namespace was not pid 2 there |
+| P10 | `pid_for_children` names the namespace it is in | pid_for_children after unshare(CLONE_NEWPID) names the namespace it is in |
+| P3 | `from_user` takes the kernel number | kill(2) from inside a pid namespace found nothing |
+| P3 | unseen parent told as the kernel's number | getppid of a pid namespace's init was not 0 |
+| P4 | local reaper skipped | an orphan in a pid namespace was given no parent |
+| P5 | `dying` not set | a process joined a pid namespace whose init had gone |
+| P5 | members not killed | a process in a pid namespace outlived its init |
+| P6 | `is_init` false | the init of a pid namespace took SIGTERM from inside it |
+| P6 | ancestor test inverted | SIGKILL from inside a pid namespace ended its init |
+| P7 | `show_pid` tells the kernel number | si_pid was not told in the reader's namespace's numbers |
+| P8 | listing by kernel numbers | a procfs of a pid namespace did not list exactly its processes by its numbers |
+| P8 | `NS*` chain off | NSpid did not list the numbers from the reader's namespace down |
+| P8 | `/proc/self` by kernel number | /proc/self in a pid namespace was not the reader's number there |
+| P9 | `unshare` privilege test off | uid 1000 made a pid namespace with unshare |
+| P9 | `clone` privilege test off | uid 1000 cloned into a pid namespace |
+| P9 | CLONE_THREAD/PARENT test off | CLONE_NEWPID was accepted with CLONE_THREAD or CLONE_PARENT |
+| P9 | depth limit off by one (unshare) | a 33rd level of pid namespaces was made |
+| P9 | depth limit off by one (clone) | a clone into a 33rd level of pid namespaces was accepted |
+| P11 | `cgroup.procs` lists kernel numbers | cgroup.procs listed more than the reader's namespace's processes by its numbers |
+| P11 | write finds by kernel number | a pid namespace moved a process it cannot see into a cgroup |
+| P12 | namespace uncharged | kmem: a job made more than its limit could hold |
+| P12 | `Numbers` uncharged | kmem: a fill was refused by something other than its limit |
+
+**Open, and the reason this is not landable:** `test-vfs` on x86_64 with the
+busybox init double-faults four times out of four (`pidns-vfs` to `-vfs4`),
+where the N4-based `timens` and `smallns` branches pass. The faulting
+instruction is in `sys_ioctl`/`fd::file`, with `rbp` 0x70 above the stack's
+bottom and `rsp` below it: a kernel stack overflow (four pages) on the ioctl
+path, at different commands each time (a `sh -c` pipeline, a job-control
+ioctl). Moving this work's frames out of line (8d494755) did not cure it.
+Next: compare the frame sizes of `linux::with_process`, `handle` and
+`sys_ioctl` with N4's, and shrink `Process` (now between 1 and 1.5 KiB) by
+boxing the three fields this adds.
