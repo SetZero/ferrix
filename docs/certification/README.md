@@ -25,6 +25,7 @@ specific, measured, and mostly documents rather than code.
 
 * [IMPLEMENTATION.md](IMPLEMENTATION.md) — **start here to build**: fourteen work orders, ordered
 * [TODO.md](TODO.md) — start here to re-audit: what to re-measure, and what not to write
+* [CLAIM.md](CLAIM.md) — **PROPOSED, not decided**: what "Linux software on a kernel that can be assured" can mean, the first standard, freedom from interference for the ring-0 load, and the milestones; the customer's two decisions are open
 * [SAFETY-MANUAL.md](SAFETY-MANUAL.md) — the out-of-context argument: assumed requirements, safe state, eleven assumptions of use, element failure analysis
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
 * [FINDINGS.md](FINDINGS.md) — the audit register, 16 open findings and 41 closed
