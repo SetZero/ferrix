@@ -1312,7 +1312,7 @@ impl Reclaimed {
 ///   the memory map and the command line were copied into the `BootInfo`
 ///   region, which is a different kind and is **not** reclaimed.
 /// * [`MemKind::AcpiReclaim`] holds the firmware tables. Those are read
-///   through the direct map by `crate::acpi`, so this must not run until the
+///   through the direct map by `crate::discovery::acpi`, so this must not run until the
 ///   last parse has finished; it is called from `kmain` after interrupt
 ///   bring-up for exactly that reason.
 ///
@@ -1324,7 +1324,7 @@ impl Reclaimed {
 ///
 /// (KMEM) Every reference into loader or ACPI-reclaim memory must be dead. In this
 /// kernel that means being called from `kmain` after the last use of
-/// `crate::acpi::Firmware`, and it is called exactly once.
+/// `crate::discovery::acpi::Firmware`, and it is called exactly once.
 pub(crate) unsafe fn reclaim_boot_memory(view: &BootView<'_>) -> Reclaimed {
     let mut reclaimed = Reclaimed::default();
 

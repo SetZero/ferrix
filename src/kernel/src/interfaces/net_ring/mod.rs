@@ -450,7 +450,7 @@ fn take_up(start: &Start, message: &ChannelMessage) -> Result<Serving, Refusal> 
     // driver that has not published by the time it reports, and the driver
     // may act on READY the instant it is sent.
     if let Some(location) = start.location {
-        crate::devmgr::published(location);
+        crate::discovery::devmgr::published(location);
     }
     let [ready_rights] = READY_RIGHTS;
     let handed = (Object::Port(Arc::clone(&kernel_port)), ready_rights);

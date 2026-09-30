@@ -375,8 +375,8 @@
       ],
       "argued_by": [
         "src/lib/proto/bootinfo/src/lib.rs::validate",
-        "src/kernel/src/acpi.rs",
-        "src/kernel/src/fdt.rs",
+        "src/kernel/src/discovery/acpi.rs",
+        "src/kernel/src/discovery/fdt.rs",
         "src/kernel/src/stages_check.rs::check_direct_map"
       ]
     },

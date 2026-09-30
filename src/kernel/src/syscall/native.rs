@@ -469,7 +469,7 @@ fn answer(call: NativeCall, caller: &dyn Host, a: [u64; 6]) -> Result<usize, Err
         | NativeCall::JobForCgroup
         | NativeCall::ProcessGive
         | NativeCall::PortFd => served(call, caller, &a),
-        NativeCall::DevmgrStart => crate::devmgr::devmgr_start(caller, &a),
+        NativeCall::DevmgrStart => crate::discovery::devmgr::devmgr_start(caller, &a),
         NativeCall::AuditRead => audit_read(process, handle(a[0]), a[1], a[2], a[3], a[4]),
         NativeCall::ProcessBootstrap => process_bootstrap(process),
         NativeCall::ProcessStatus => process_status(process, handle(a[0]), a[1]),
@@ -1766,7 +1766,7 @@ fn interrupt_create(process: &Process, device: Handle, index: u64) -> Result<usi
     // Taking a device's interrupt is what its driver does, and devmgr and a
     // quiesce never do: noted, so that a check waiting for the driver's work
     // can say how the driver ended.
-    crate::devmgr::note_driver(&node, process);
+    crate::discovery::devmgr::note_driver(&node, process);
     let vector = usize::try_from(index)
         .ok()
         .and_then(|index| node.vector(index))
@@ -1804,7 +1804,7 @@ fn interrupt_ack(process: &Process, interrupt: Handle) -> Result<usize, Errno> {
 fn io_mapping_create(process: &Process, device: Handle, spec: u64) -> Result<usize, Errno> {
     let node = device_in(process, device, Rights::MANAGE)?;
     // Mapping a device's registers, likewise (see `interrupt_create`).
-    crate::devmgr::note_driver(&node, process);
+    crate::discovery::devmgr::note_driver(&node, process);
     let phys = read_u64(process, spec)?;
     let len = read_u64(process, spec.checked_add(8).ok_or(status::FAULT)?)?;
     let aperture = node.aperture(phys, len).ok_or(status::ACCESS_DENIED)?;
@@ -1898,7 +1898,7 @@ fn device_quiesce(process: &Process, device: Handle) -> Result<usize, Errno> {
 
 /// Quiesce `node` as `device_quiesce` does, for the kernel itself: before a
 /// `devmgr` pid 1 starts again is handed the devices its dead predecessor's
-/// drivers served (`crate::devmgr`).
+/// drivers served (`crate::discovery::devmgr`).
 ///
 /// # Errors
 ///

@@ -88,7 +88,7 @@ pub(crate) fn install(view: &BootView<'_>) -> Result<(), Full> {
     device::register_board(&DISPLAY)?;
     device::register_board(&usb::BINDING)?;
     device::register_board(&gpu::BINDING)?;
-    if let Ok(tree) = crate::fdt::open(view) {
+    if let Ok(tree) = crate::discovery::fdt::open(view) {
         note_boot_context(&tree);
     }
     power::register_boot_mode(request_boot_mode);

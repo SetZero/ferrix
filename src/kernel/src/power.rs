@@ -116,7 +116,7 @@ const PANIC_ON_EXIT: u8 = 2;
 /// default, and a misspelt option should not turn into something nobody asked
 /// for.
 pub(crate) fn init(view: &BootView<'_>) {
-    let tree = crate::fdt::open(view).ok();
+    let tree = crate::discovery::fdt::open(view).ok();
     if let Some(tree) = &tree {
         arch::init_watchdogs(tree);
     }

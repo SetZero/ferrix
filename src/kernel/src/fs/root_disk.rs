@@ -210,7 +210,7 @@ fn switch_to(rdev: u64) -> Result<Installed, &'static str> {
         // Pid 1, when it was started before the switch, moves with it: its
         // filesystem lock held across the publication, so a fork of it
         // copies either the old root before or the new one after.
-        let pid1 = if crate::devmgr::by_init() {
+        let pid1 = if crate::discovery::devmgr::by_init() {
             crate::syscall::registry::find(1)
         } else {
             None
@@ -368,7 +368,7 @@ pub(crate) fn switch_after_devmgr() {
 /// The task [`switch_after_devmgr`] starts.
 fn after_devmgr(_: usize) {
     let deadline = crate::timer::now_nanos().saturating_add(DEVMGR_PATIENCE_NANOS);
-    if !crate::devmgr::wait_reported(deadline) {
+    if !crate::discovery::devmgr::wait_reported(deadline) {
         println!("  root     devmgr did not report in time: / stays in memory");
         crate::init::notify_root(false);
         return;

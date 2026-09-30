@@ -6,7 +6,7 @@ stage 11. `docs/ARCHITECTURE.md` §7 is the architecture; this is the protocol
 between the kernel and `devmgr`, and between `devmgr` and the drivers it
 starts. The kernel's half of it — `device_info`, `device_quiesce`, bus
 mastering at the first pin, START — is on develop; `devmgr` the program, on
-`ferrix-rt`, is `src/user/native/devmgr`, started by `src/kernel/src/devmgr.rs`; the
+`ferrix-rt`, is `src/user/native/devmgr`, started by `src/kernel/src/discovery/devmgr.rs`; the
 messages are `src/lib/proto/devmgr-proto`.
 
 ## 1. What devmgr is, and what it is not
@@ -293,7 +293,7 @@ row is beside it, not on the path.
 `devmgr` owns two facts sysfs shows (`docs/SYSFS.md` §2): which drivers it
 can start, and which drives which device. It tells the kernel both on the
 bootstrap channel, and the kernel keeps what it was told
-(`src/kernel/src/devmgr.rs`). A device is named by its place among the devices
+(`src/kernel/src/discovery/devmgr.rs`). A device is named by its place among the devices
 the DEVICES messages carried, in order, and a driver by its place among
 their names: a device tree node has no PCI address to be told apart by.
 

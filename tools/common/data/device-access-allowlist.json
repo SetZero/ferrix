@@ -36,7 +36,7 @@
   "register_paths": [
     "src/kernel/src/arch/",
     "src/kernel/src/iommu/",
-    "src/kernel/src/pci/",
+    "src/kernel/src/discovery/pci/",
     "src/kernel/src/mmio.rs",
     "src/kernel/src/interfaces/block_ring/",
     "src/kernel/src/interfaces/net_ring/",
@@ -101,7 +101,7 @@
       "reason": "The AArch64 console's own windows, reached before the MMIO accessors are usable: the ramoops record's header words and its byte store, and the byte registers of the 16550 that is the only console crosvm gives the Pixel 7's guest. The PL011 is arm_common/pl011.rs's, shared with ARMv7-A. 5 rather than 3 for the 16550, which the owner allowed on 2026-09-26."
     },
     {
-      "file": "src/kernel/src/pci/virtio.rs",
+      "file": "src/kernel/src/discovery/pci/virtio.rs",
       "kind": "register",
       "max_sites": 4,
       "reason": "virtio configuration space in a function's BAR, read during enumeration and by the boot check that proves a translated domain works. §7 permits the kernel to enumerate; the driver that then runs the device is in ring 3. The four sites are that check's ring memory, shared with the device rather than a register: a byte and a whole u16 each way, the u16 one access because the device reads and writes the ring's indices concurrently (F-45)."

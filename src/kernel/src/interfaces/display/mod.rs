@@ -1155,7 +1155,7 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
     // written means the driver is gone, and devmgr hears of its death and
     // quiesces the device; the card listed above goes with it.
     if let Some(location) = start.location {
-        crate::devmgr::published(location);
+        crate::discovery::devmgr::published(location);
     }
     let ready = Message::Ready(Ready {
         card: index,

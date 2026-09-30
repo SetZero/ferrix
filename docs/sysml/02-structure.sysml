@@ -1263,7 +1263,7 @@ package FerrixStructure {
                  * both capability lists with a visited set, MSI-X, the bus
                  * walk without recursion or allocation, and virtio's PCI
                  * transport. The kernel's enumeration walks with it
-                 * (src/kernel/src/pci.rs). The pci_walk fuzz target requires
+                 * (src/kernel/src/discovery/pci.rs). The pci_walk fuzz target requires
                  * every walk to end and sizing to restore every register. */
         }
         #implemented part nativeAbi : LibraryCrate {

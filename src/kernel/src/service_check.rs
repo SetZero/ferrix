@@ -21,7 +21,7 @@ use ferrix_sched::NICE_0_WEIGHT;
 
 use crate::claim::{Claims, Numbers, StillServed};
 use crate::device::{DeviceNode, Location};
-use crate::devmgr::{self, Request};
+use crate::discovery::devmgr::{self, Request};
 use crate::hooks::{Full, Hooks};
 use crate::init::Failure;
 use crate::iommu::{Cause, Domain, Fault};

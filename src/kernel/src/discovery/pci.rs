@@ -66,9 +66,9 @@ use ferrix_pci::{Address, ConfigSpace, PciError};
 mod virtio;
 
 use crate::device::{self, DeviceNode, Reserved, Seen};
+use crate::discovery::{acpi, fdt};
 use crate::mmio::Mmio;
 use crate::vmap;
-use crate::{acpi, fdt};
 
 /// Which description a host came from.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

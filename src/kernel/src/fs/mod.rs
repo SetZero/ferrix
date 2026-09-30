@@ -120,7 +120,7 @@ static DATA_FLUSH: Flush = Flush {
 pub(crate) fn install() -> Result<(), Full> {
     crate::power::register_flush(&ROOT_FLUSH)?;
     crate::power::register_flush(&DATA_FLUSH)?;
-    crate::devmgr::register_reader(read_from_root);
+    crate::discovery::devmgr::register_reader(read_from_root);
     cgroupfs::install()?;
     portfd::install()
 }

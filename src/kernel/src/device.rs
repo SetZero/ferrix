@@ -82,11 +82,12 @@ use ferrix_pci::msix::{
 use ferrix_pci::virtio::{Location as VirtioLocation, SharedMemory, Transport};
 use ferrix_sync::{IrqSpinLock, Once};
 
+use crate::discovery::{acpi, fdt};
 use crate::fallible::{self, AllocError};
 use crate::hooks::{Full, Hooks};
 use crate::mmio::Mmio;
 use crate::sync::SpinLock;
-use crate::{acpi, arch, fdt, iommu, irq, vmap};
+use crate::{arch, iommu, irq, vmap};
 
 mod check;
 

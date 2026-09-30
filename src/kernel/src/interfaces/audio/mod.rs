@@ -440,7 +440,7 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<(Arc<Card>, Session
     // that has not published by the time it reports.
     CARDS.lock().push(Arc::clone(&card));
     if let Some(location) = start.location {
-        crate::devmgr::published(location);
+        crate::discovery::devmgr::published(location);
     }
     if let Err(refusal) = send_ready(&start.control, &publication, index, buffer) {
         CARDS.lock().retain(|held| !Arc::ptr_eq(held, &card));

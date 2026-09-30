@@ -111,7 +111,7 @@ pub(crate) fn init_console(
     view: &BootView<'_>,
     memory: &mut EarlyMemory,
 ) -> Result<(), EarlyError> {
-    let tree = crate::fdt::open(view).map_err(|_| EarlyError::NoConsole)?;
+    let tree = crate::discovery::fdt::open(view).map_err(|_| EarlyError::NoConsole)?;
     console::init(&tree, memory)
 }
 
@@ -1051,7 +1051,7 @@ pub(crate) fn take_console_byte() -> Option<u8> {
 
 /// The GIC interrupt the console port receives on, from the device tree.
 pub(crate) fn console_receive_irq(view: &BootView<'_>) -> Option<u32> {
-    let tree = crate::fdt::open(view).ok()?;
+    let tree = crate::discovery::fdt::open(view).ok()?;
     console::receive_interrupt(&tree)
 }
 
@@ -1302,7 +1302,7 @@ pub(crate) fn halt() -> ! {
 /// (DEVICE) Must be called exactly once, on the boot CPU, after [`init_traps`] and
 /// while interrupts are masked.
 pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'static str> {
-    let tree = crate::fdt::open(view)?;
+    let tree = crate::discovery::fdt::open(view)?;
 
     let gic = tree
         .interrupt_controller()

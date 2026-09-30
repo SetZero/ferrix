@@ -1082,7 +1082,7 @@ static CONSOLE_INPUT: SpinLock<Option<(apic::IoApicInput, u64)>> = SpinLock::new
 /// polled — when the machine has no readable MADT, no I/O APIC covering the
 /// line, or no vector left.
 pub(crate) fn console_receive_irq(view: &BootView<'_>) -> Option<u32> {
-    let firmware = crate::acpi::Firmware::open(view).ok()?;
+    let firmware = crate::discovery::acpi::Firmware::open(view).ok()?;
     let madt = firmware.acpi().madt().ok()?;
     let input = apic::IoApicInput::for_isa(&madt, console::ISA_IRQ).ok()?;
     let vector = msi::allocate_vector()?;
@@ -1383,7 +1383,7 @@ fn settle() {
 /// Only a register in I/O space is kept. That is where a PC's firmware puts it;
 /// one in memory space would need a mapping made by a machine on its way down,
 /// and the keyboard controller and the triple fault still follow.
-fn record_reset_register(acpi: &ferrix_acpi::Acpi<'_, crate::acpi::DirectMap>) {
+fn record_reset_register(acpi: &ferrix_acpi::Acpi<'_, crate::discovery::acpi::DirectMap>) {
     let Some((register, value)) = acpi.fadt().ok().and_then(|fadt| fadt.reset()) else {
         return;
     };
@@ -1422,8 +1422,8 @@ pub(crate) fn halt() -> ! {
 /// (DEVICE) Must be called exactly once, on the boot CPU, after [`init_traps`] and
 /// while interrupts are still masked.
 pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'static str> {
-    let firmware =
-        crate::acpi::Firmware::open(view).map_err(|_| "the machine has no readable ACPI tables")?;
+    let firmware = crate::discovery::acpi::Firmware::open(view)
+        .map_err(|_| "the machine has no readable ACPI tables")?;
     let acpi = firmware.acpi();
     record_reset_register(&acpi);
 

@@ -453,7 +453,7 @@ fn control_create(caller: &dyn Host, registers: &[u64; 6]) -> Result<usize, Errn
 
 /// The PCI location HELLO must name for `node`, if it is a PCI function:
 /// `devmgr`'s, since its messages name devices the same way.
-pub(crate) use crate::devmgr::location_of;
+pub(crate) use crate::discovery::devmgr::location_of;
 
 /// Take ring `id`'s start off the list.
 fn take_start(id: usize) -> Option<Start> {
@@ -722,7 +722,7 @@ fn take_up<'s>(
     // Served from before READY goes out, not after: the driver may act on
     // READY, and devmgr may ask after the device, the instant it is sent.
     set_served(start.id, Some((start.location, Arc::clone(&start.control))));
-    crate::devmgr::published(start.location);
+    crate::discovery::devmgr::published(start.location);
     let ready = Message::Ready.encode().as_bytes().to_vec();
     let handed = (Object::Port(Arc::clone(&kernel_port)), Rights::WRITE);
     if start

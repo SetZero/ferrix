@@ -51,7 +51,7 @@ use ferrix_acpi::hpet::{self, Capabilities};
 use ferrix_acpi::{Acpi, GenericAddress};
 
 use super::cpu;
-use crate::acpi::DirectMap;
+use crate::discovery::acpi::DirectMap;
 use crate::mmio::Mmio;
 
 /// General configuration.

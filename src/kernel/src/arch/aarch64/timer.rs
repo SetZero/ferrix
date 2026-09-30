@@ -19,7 +19,7 @@ use ferrix_acpi::Acpi;
 use ferrix_fdt::{Fdt, TimerInterrupt};
 
 use super::cpu;
-use crate::acpi::DirectMap;
+use crate::discovery::acpi::DirectMap;
 
 /// `CNTV_CTL_EL0`: the timer is enabled.
 const CTL_ENABLE: u64 = 1 << 0;

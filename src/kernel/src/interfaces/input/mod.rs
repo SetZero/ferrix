@@ -423,7 +423,7 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<InputDevice>, R
     if start.announce
         && let Some(location) = start.location
     {
-        crate::devmgr::published(location);
+        crate::discovery::devmgr::published(location);
     }
     if let Err(refusal) = send_ready(&start.control, index) {
         // Not left published, nor its number held, for a driver that never

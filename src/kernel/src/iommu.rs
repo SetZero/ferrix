@@ -65,8 +65,9 @@ use ferrix_pci::Address;
 use ferrix_sync::Once;
 
 use crate::device::{DeviceNode, Location};
+use crate::discovery::{acpi, fdt};
 use crate::sync::SpinLock;
-use crate::{acpi, arch, fdt, mm, println};
+use crate::{arch, mm, println};
 
 mod check;
 mod gate;

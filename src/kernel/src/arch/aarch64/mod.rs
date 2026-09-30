@@ -1263,14 +1263,14 @@ pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'st
     // tables are broken says so instead of quietly booting from a tree that
     // may describe something else.
     let version = if view.raw().rsdp == 0 {
-        let tree = crate::fdt::open(view)?;
+        let tree = crate::discovery::fdt::open(view)?;
         // SAFETY: (DEVICE) called once from `kmain`, on the boot CPU, after the vector
         // table is installed and with interrupts masked.
         let version = unsafe { gic::init_from_tree(&tree)? };
         timer::init_from_tree(&tree)?;
         version
     } else {
-        let firmware = crate::acpi::Firmware::open(view)
+        let firmware = crate::discovery::acpi::Firmware::open(view)
             .map_err(|_| "the machine has no readable ACPI tables")?;
         let acpi = firmware.acpi();
         // SAFETY: (DEVICE) as above.

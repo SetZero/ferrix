@@ -210,7 +210,7 @@ fn next_bootstrap() -> Option<Transfer> {
     // Under `ferrix.devmgr=init`, the first program -- pid 1 -- is also given
     // devmgr's starter, after the hello, with MANAGE alone (`docs/INIT.md`
     // §7.3). Given once: a later program of a command list gets none.
-    if let Some(starter) = crate::devmgr::starter() {
+    if let Some(starter) = crate::discovery::devmgr::starter() {
         let written = fallible::try_to_vec(&after_hello(DEVMGR_STARTER_MAGIC, 1))
             .and_then(|message| Ok((message, fallible::try_with_capacity(1)?)))
             .map_err(|_| ())
@@ -337,7 +337,7 @@ static NAMED: Once<Vec<u8>> = Once::new();
 /// is not absolute is refused here, since there is no working directory yet
 /// to resolve it from.
 pub(crate) fn read_option(view: &BootView<'_>) {
-    let tree = crate::fdt::open(view).ok();
+    let tree = crate::discovery::fdt::open(view).ok();
     let value = view.option(OPTION).or_else(|| {
         tree.as_ref()
             .and_then(|tree| option_in(tree.bootargs()?, OPTION))

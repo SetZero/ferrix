@@ -1791,7 +1791,7 @@ with.
 4. A failure's wording changed without its documentation.
 
 See: src/kernel/src/service_check.rs; src/kernel/src/hooks.rs;
-src/kernel/src/claim.rs; src/kernel/src/devmgr.rs;
+src/kernel/src/claim.rs; src/kernel/src/discovery/devmgr.rs;
 src/kernel/src/iommu/check.rs; src/kernel/src/iommu/gate.rs.
 
 <a id="fx-0905"></a>
@@ -1881,8 +1881,9 @@ none.
    completes a refused write through a bounce buffer it then drops, and the
    unit's record is the answer.
 
-See: src/kernel/src/pci.rs check; src/lib/platform/pci; src/lib/platform/acpi
-Mcfg; src/lib/platform/fdt ecam_hosts; docs/ROADMAP.md stage 10.
+See: src/kernel/src/discovery/pci.rs check; src/lib/platform/pci;
+src/lib/platform/acpi Mcfg; src/lib/platform/fdt ecam_hosts; docs/ROADMAP.md
+stage 10.
 
 <a id="fx-1002"></a>
 
@@ -1907,8 +1908,8 @@ exactly the right answers before any node is published.
 3. `DeviceNode::pci` minted an aperture from a BAR whose size or address
    enumeration had not checked.
 
-See: src/kernel/src/device.rs publish; src/kernel/src/pci.rs; docs/ROADMAP.md
-stage 10.
+See: src/kernel/src/device.rs publish; src/kernel/src/discovery/pci.rs;
+docs/ROADMAP.md stage 10.
 
 <a id="fx-1003"></a>
 
@@ -2024,7 +2025,7 @@ whose driver died. The boot's block drivers come from it from then on.
 4. devmgr reported nothing within twenty seconds: a driver did not bring its
    device up, or the kernel never sent PUBLISHED for a disk it accepted.
 
-See: src/kernel/src/devmgr.rs; src/user/native/devmgr/src/main.rs;
+See: src/kernel/src/discovery/devmgr.rs; src/user/native/devmgr/src/main.rs;
 docs/DEVMGR.md; docs/ROADMAP.md stage 10.
 
 <a id="fx-1007"></a>
@@ -2067,7 +2068,7 @@ DMA it was not given, and a unit whose faults nobody reads would hide it.
    overflows on one device's faults, so there it means a second device faulted.
 
 See: src/kernel/src/iommu.rs audit_faults; src/kernel/src/iommu/check.rs
-check_dma_faults; src/kernel/src/pci/virtio.rs probe_out_of_domain;
+check_dma_faults; src/kernel/src/discovery/pci/virtio.rs probe_out_of_domain;
 src/kernel/src/iommu/vtd.rs Unit::take_fault; src/kernel/src/iommu/smmuv3.rs
 Unit::take_fault; tools/common/xtask/src/dma_faults.rs;
 docs/certification/VULNERABILITY-ANALYSIS.md T.DMA.
@@ -2109,15 +2110,15 @@ checks, as the caller: devmgr holds its end, the caller holds no handle to it,
 process_start on the caller's handle to the started devmgr is BAD_STATE and
 gives it nothing, and a second devmgr_start while devmgr lives is ALREADY_BOUND.
 
-1. `devmgr_start` in src/kernel/src/devmgr.rs put the channel's end in the
-   caller's table, or `start_program` did not put it in devmgr's.
+1. `devmgr_start` in src/kernel/src/discovery/devmgr.rs put the channel's end in
+   the caller's table, or `start_program` did not put it in devmgr's.
 2. A call on a process handle reaches into the process: `process_start` in
    src/kernel/src/syscall/native.rs started or gave something to a process
    already started.
 3. `may_start_again` did not see the devmgr it started as living: its exit
    record was not kept, or was closed early.
 
-See: src/kernel/src/devmgr.rs; src/kernel/src/object/mod.rs;
+See: src/kernel/src/discovery/devmgr.rs; src/kernel/src/object/mod.rs;
 src/kernel/src/syscall/native.rs; docs/INIT.md §7.3; docs/certification/ITEM.md
 §5.
 

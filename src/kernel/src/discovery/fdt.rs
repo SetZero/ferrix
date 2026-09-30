@@ -1,6 +1,6 @@
 //! Reaching the device tree from the kernel.
 //!
-//! The counterpart of `crate::acpi` for machines that describe themselves with
+//! The counterpart of `crate::discovery::acpi` for machines that describe themselves with
 //! a flattened device tree: every ARMv7-A board, and AArch64 ones whose
 //! firmware chooses to. `ferrix_fdt` parses a byte slice and never follows a
 //! pointer; this is where that slice comes from — the loader's copy of

@@ -38,7 +38,7 @@ kernel over the channels they already have; readers never wait on a service.
 | Interfaces: name, index, address, MTU, flags, counters | the `net` driver and the net core | the net core's stack, copied out; `net_ring::node_of` records the node each ring's interface came from |
 | Cards, connectors, modes; render nodes | the `gpu` or `ltdc` driver, through the display and render cores | `display::card`, `display::drm::connectors` (the same function the connector ioctl uses), `render::renderer`; each records its node |
 | Input devices: name, ids, capability bitmaps, serial | the `input` or `usbhid` driver, through the input core | the input session HELLO declared; each device records its node |
-| Which drivers exist, and which drives which device | `devmgr` | DRIVER, BOUND and UNBOUND on its bootstrap channel (§5); `src/kernel/src/devmgr.rs` keeps what it was told |
+| Which drivers exist, and which drives which device | `devmgr` | DRIVER, BOUND and UNBOUND on its bootstrap channel (§5); `src/kernel/src/discovery/devmgr.rs` keeps what it was told |
 | Processors: possible, present, online | the kernel | `smp::topology()` |
 | `null`, `zero`, `tty`, `console` and the other static nodes | the kernel | devfs's table |
 

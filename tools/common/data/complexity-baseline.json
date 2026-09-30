@@ -44,12 +44,12 @@
       "lines": 22,
       "recursive": false
     },
-    "devmgr.rs::request": {
+    "discovery/devmgr.rs::request": {
       "complexity": 17,
       "lines": 44,
       "recursive": false
     },
-    "devmgr.rs::write_devices": {
+    "discovery/devmgr.rs::write_devices": {
       "complexity": 17,
       "lines": 54,
       "recursive": false
@@ -69,22 +69,22 @@
       "lines": 83,
       "recursive": false
     },
-    "pci.rs::check_function": {
+    "discovery/pci.rs::check_function": {
       "complexity": 31,
       "lines": 67,
       "recursive": false
     },
-    "pci/virtio.rs::drive": {
+    "discovery/pci/virtio.rs::drive": {
       "complexity": 29,
       "lines": 90,
       "recursive": false
     },
-    "pci/virtio.rs::entropy": {
+    "discovery/pci/virtio.rs::entropy": {
       "complexity": 16,
       "lines": 88,
       "recursive": false
     },
-    "pci/virtio.rs::probe_out_of_domain": {
+    "discovery/pci/virtio.rs::probe_out_of_domain": {
       "complexity": 24,
       "lines": 62,
       "recursive": false

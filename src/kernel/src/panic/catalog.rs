@@ -306,7 +306,7 @@ pub(crate) static SERVICES: Explanation = Explanation {
         "A failure's wording changed without its documentation.",
     ],
     see: "src/kernel/src/service_check.rs; src/kernel/src/hooks.rs; src/kernel/src/claim.rs; \
-          src/kernel/src/devmgr.rs; src/kernel/src/iommu/check.rs; src/kernel/src/iommu/gate.rs",
+          src/kernel/src/discovery/devmgr.rs; src/kernel/src/iommu/check.rs; src/kernel/src/iommu/gate.rs",
 };
 
 /// For `check_quotas` in `stages_check.rs`.
@@ -1144,7 +1144,7 @@ pub(crate) static STAGE10_PCI: Explanation = Explanation {
          completion alone is not this — QEMU's device completes a refused write through a bounce \
          buffer it then drops, and the unit's record is the answer.",
     ],
-    see: "src/kernel/src/pci.rs check; src/lib/platform/pci; src/lib/platform/acpi Mcfg; src/lib/platform/fdt ecam_hosts; \
+    see: "src/kernel/src/discovery/pci.rs check; src/lib/platform/pci; src/lib/platform/acpi Mcfg; src/lib/platform/fdt ecam_hosts; \
           docs/ROADMAP.md stage 10",
 };
 
@@ -1431,14 +1431,14 @@ pub(crate) static DEVMGR_BY_INIT: Explanation = Explanation {
               process_start on the caller's handle to the started devmgr is BAD_STATE and gives \
               it nothing, and a second devmgr_start while devmgr lives is ALREADY_BOUND.",
     causes: &[
-        "`devmgr_start` in src/kernel/src/devmgr.rs put the channel's end in the caller's table, \
+        "`devmgr_start` in src/kernel/src/discovery/devmgr.rs put the channel's end in the caller's table, \
          or `start_program` did not put it in devmgr's.",
         "A call on a process handle reaches into the process: `process_start` in \
          src/kernel/src/syscall/native.rs started or gave something to a process already started.",
         "`may_start_again` did not see the devmgr it started as living: its exit record was \
          not kept, or was closed early.",
     ],
-    see: "src/kernel/src/devmgr.rs; src/kernel/src/object/mod.rs; src/kernel/src/syscall/native.rs; \
+    see: "src/kernel/src/discovery/devmgr.rs; src/kernel/src/object/mod.rs; src/kernel/src/syscall/native.rs; \
           docs/INIT.md §7.3; docs/certification/ITEM.md §5",
 };
 
@@ -1480,7 +1480,7 @@ pub(crate) static STAGE10_DEVMGR: Explanation = Explanation {
         "devmgr reported nothing within twenty seconds: a driver did not bring its device up, \
          or the kernel never sent PUBLISHED for a disk it accepted.",
     ],
-    see: "src/kernel/src/devmgr.rs; src/user/native/devmgr/src/main.rs; docs/DEVMGR.md; docs/ROADMAP.md \
+    see: "src/kernel/src/discovery/devmgr.rs; src/user/native/devmgr/src/main.rs; docs/DEVMGR.md; docs/ROADMAP.md \
           stage 10",
 };
 
@@ -1611,7 +1611,7 @@ pub(crate) static STAGE10_DMA_FAULT: Explanation = Explanation {
          so there it means a second device faulted.",
     ],
     see: "src/kernel/src/iommu.rs audit_faults; src/kernel/src/iommu/check.rs check_dma_faults; \
-          src/kernel/src/pci/virtio.rs probe_out_of_domain; \
+          src/kernel/src/discovery/pci/virtio.rs probe_out_of_domain; \
           src/kernel/src/iommu/vtd.rs Unit::take_fault; src/kernel/src/iommu/smmuv3.rs \
           Unit::take_fault; tools/common/xtask/src/dma_faults.rs; \
           docs/certification/VULNERABILITY-ANALYSIS.md T.DMA",
@@ -1639,7 +1639,7 @@ pub(crate) static STAGE10_DEVICES: Explanation = Explanation {
         "`DeviceNode::pci` minted an aperture from a BAR whose size or address enumeration had \
          not checked.",
     ],
-    see: "src/kernel/src/device.rs publish; src/kernel/src/pci.rs; docs/ROADMAP.md stage 10",
+    see: "src/kernel/src/device.rs publish; src/kernel/src/discovery/pci.rs; docs/ROADMAP.md stage 10",
 };
 
 /// For `check_devices` in `main.rs`, when the GICv2 distributor check fails.

@@ -53,7 +53,7 @@ static SKIPPED: AtomicBool = AtomicBool::new(false);
 /// an unchecked one.
 pub(crate) fn init(view: &BootView<'_>) {
     let value = view.option(OPTION).or_else(|| {
-        crate::fdt::open(view)
+        crate::discovery::fdt::open(view)
             .ok()
             .and_then(|tree| option_in(tree.bootargs()?, OPTION))
     });

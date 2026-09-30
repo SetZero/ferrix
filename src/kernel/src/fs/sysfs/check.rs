@@ -341,7 +341,7 @@ fn check_binding(
 ) -> Checked<()> {
     let mut link = at.to_vec();
     link.extend_from_slice(b"/driver");
-    let Some((_, driver)) = crate::devmgr::driver_of(index) else {
+    let Some((_, driver)) = crate::discovery::devmgr::driver_of(index) else {
         if number_of(harness, &link).is_some() {
             return Err("a device devmgr bound nothing to has a driver link");
         }

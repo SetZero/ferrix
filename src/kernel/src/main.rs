@@ -12,13 +12,6 @@
 
 extern crate alloc;
 
-// ACPI is how the 64-bit pair describe themselves. An ARMv7-A machine has
-// none, and there this module is compiled and never called.
-#[allow(
-    dead_code,
-    reason = "ARMv7-A describes itself with a device tree, not ACPI"
-)]
-mod acpi;
 mod arch;
 mod audit;
 mod backtrace;
@@ -26,10 +19,9 @@ mod checks;
 mod claim;
 mod console;
 mod device;
-mod devmgr;
+mod discovery;
 mod early;
 mod fallible;
-mod fdt;
 mod fs;
 mod hooks;
 mod init;
@@ -41,7 +33,6 @@ mod mmio;
 mod net;
 mod object;
 mod panic;
-mod pci;
 // What belongs to one system on chip rather than to an architecture: the
 // kernel's part in a board's devices, each found in the device tree at boot
 // and a no-op on a machine without one, grouped by the vendor prefix of the
@@ -79,6 +70,7 @@ use ferrix_bootinfo::{BootInfo, BootView, KASLR_FIXED_IMAGE, KASLR_MOVED, MemKin
 use ferrix_paging::MapError;
 
 use console::{println, println_unlogged};
+use discovery::{devmgr, fdt, pci};
 use early::EarlyMemory;
 use interfaces::{audio, block_ring, display, input, logctl, net_ring, render};
 use panic::{catalog, fatal};
@@ -1071,7 +1063,7 @@ fn finish_memory(view: &BootView<'_>) -> Result<(), &'static str> {
         mm::check::sweep_w_xor_x(view)?;
     }
 
-    // SAFETY: (KMEM) called once, after the last use of `crate::acpi::Firmware` —
+    // SAFETY: (KMEM) called once, after the last use of `crate::discovery::acpi::Firmware` —
     // interrupt bring-up above is the only reader — and the loader's code has
     // not run since the jump into `_start`.
     let reclaimed = unsafe { mm::reclaim_boot_memory(view) };

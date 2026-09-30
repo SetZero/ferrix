@@ -19,7 +19,7 @@ package FerrixDrivers {
 
     #implemented part def AcpiAccess {
         @stage { number = 3; }
-        doc /* src/kernel/src/acpi.rs: the one place a physical address firmware
+        doc /* src/kernel/src/discovery/acpi.rs: the one place a physical address firmware
              * wrote becomes a reference the parser reads, through the direct
              * map, refusing addresses or lengths outside it. src/lib/platform/acpi never
              * dereferences a pointer: RSDP, XSDT/RSDT, MADT, FADT fixed
@@ -34,7 +34,7 @@ package FerrixDrivers {
 
     #implemented part def FdtAccess {
         @stage { number = 1; }
-        doc /* src/kernel/src/fdt.rs: the loader's copy of firmware's tree, read
+        doc /* src/kernel/src/discovery/fdt.rs: the loader's copy of firmware's tree, read
              * through the direct map from DeviceTree memory that nothing
              * reclaims, so the borrow is honestly 'static. src/lib/platform/fdt: nodes,
              * properties, reg, interrupts, compatible, stdout-path, the
@@ -84,7 +84,7 @@ package FerrixDrivers {
         @stage { number = 10; }
         doc /* ACPI on x86-64 and AArch64 under EDK2, device tree on ARMv7-A
              * and where AArch64 firmware offers one; PCIe bus walk from
-             * either. src/kernel/src/pci.rs: MCFG (src/lib/platform/acpi) or
+             * either. src/kernel/src/discovery/pci.rs: MCFG (src/lib/platform/acpi) or
              * pci-host-ecam-generic (src/lib/platform/fdt), ECAM mapped a bus at a time,
              * the src/lib/platform/pci walk with every BAR sized and every capability
              * list walked, in the boot test on all three architectures.
@@ -184,7 +184,7 @@ package FerrixDrivers {
              * above. The kernel starts it from stage 10's boot check with
              * DEVICES messages holding a job, every device node twice and
              * every driver image /lib/drivers/MANIFEST lists
-             * (src/kernel/src/devmgr.rs, src/lib/proto/devmgr-proto); it matches
+             * (src/kernel/src/discovery/devmgr.rs, src/lib/proto/devmgr-proto); it matches
              * virtio-blk, virtio-net, virtio-gpu, virtio-input and the
              * virtio-serial port by a table of its own, starts each driver
              * with START, waits for every one but the port driver to be

@@ -103,7 +103,7 @@
         "a boundary later is every artifact written against the wrong one."
       ],
       "members": [
-        "acpi.rs",
+        "discovery/acpi.rs",
         "arch/**",
         "audit.rs",
         "audit/**",
@@ -115,7 +115,7 @@
         "device/**",
         "early.rs",
         "fallible.rs",
-        "fdt.rs",
+        "discovery/fdt.rs",
         "hooks.rs",
         "iommu.rs",
         "iommu/**",
@@ -170,11 +170,12 @@
       ],
       "members": [
         "checks.rs",
-        "devmgr.rs",
+        "discovery/devmgr.rs",
+        "discovery/mod.rs",
+        "discovery/pci.rs",
+        "discovery/pci/**",
         "init.rs",
         "main.rs",
-        "pci.rs",
-        "pci/**",
         "power.rs",
         "random.rs",
         "service_check.rs",

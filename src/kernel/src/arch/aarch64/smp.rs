@@ -85,8 +85,8 @@ pub(crate) fn describe_cpus(view: &BootView<'_>) -> Result<Described, &'static s
 
 /// The MADT's enabled GIC CPU interfaces, by affinity.
 fn cpus_from_madt(view: &BootView<'_>) -> Result<Vec<u64>, &'static str> {
-    let firmware =
-        crate::acpi::Firmware::open(view).map_err(|_| "the machine has no readable ACPI tables")?;
+    let firmware = crate::discovery::acpi::Firmware::open(view)
+        .map_err(|_| "the machine has no readable ACPI tables")?;
     let acpi = firmware.acpi();
     let madt = acpi.madt().map_err(|_| "the machine has no MADT")?;
 
@@ -109,7 +109,7 @@ fn cpus_from_madt(view: &BootView<'_>) -> Result<Vec<u64>, &'static str> {
 /// has a PSCI node, as Linux does and as ARMv7-A's `describe_cpus` explains;
 /// one naming another method is left out, since nothing here speaks it.
 fn cpus_from_tree(view: &BootView<'_>) -> Result<Vec<u64>, &'static str> {
-    let tree = crate::fdt::open(view)?;
+    let tree = crate::discovery::fdt::open(view)?;
     let boot = hardware_id();
     let psci = tree.psci_conduit().is_some();
     Ok(tree
@@ -397,15 +397,15 @@ impl CpuStarter {
 /// `/psci` node's `method` otherwise.
 pub(super) fn psci_conduit(view: &BootView<'_>) -> Result<Conduit, &'static str> {
     if view.raw().rsdp == 0 {
-        let tree = crate::fdt::open(view)?;
+        let tree = crate::discovery::fdt::open(view)?;
         return match tree.psci_conduit() {
             Some(PsciConduit::Hvc) => Ok(Conduit::Hvc),
             Some(PsciConduit::Smc) => Ok(Conduit::Smc),
             None => Err("the device tree describes no PSCI, and spin tables are not supported"),
         };
     }
-    let firmware =
-        crate::acpi::Firmware::open(view).map_err(|_| "the machine has no readable ACPI tables")?;
+    let firmware = crate::discovery::acpi::Firmware::open(view)
+        .map_err(|_| "the machine has no readable ACPI tables")?;
     let flags = firmware
         .acpi()
         .fadt()

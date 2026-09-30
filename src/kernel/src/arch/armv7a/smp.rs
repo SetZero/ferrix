@@ -127,7 +127,7 @@ const LOWER_HALF_END: u64 = 0x8000_0000;
 ///
 /// If there is no device tree to read.
 pub(crate) fn describe_cpus(view: &BootView<'_>) -> Result<Described, &'static str> {
-    let tree = crate::fdt::open(view)?;
+    let tree = crate::discovery::fdt::open(view)?;
     let boot = hardware_id();
     // A tree that describes PSCI and says nothing about how a given processor
     // is started means PSCI. That is not a guess: it is what Linux does on

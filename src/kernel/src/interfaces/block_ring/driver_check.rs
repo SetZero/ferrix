@@ -371,7 +371,7 @@ fn published_by_devmgr(
         }
         // A driver that died is named, with how it died, rather than left to
         // look like a disk that never came.
-        if let Some((status, signal)) = location.and_then(crate::devmgr::driver_ending) {
+        if let Some((status, signal)) = location.and_then(crate::discovery::devmgr::driver_ending) {
             let raw = location.map_or(0, ferrix_blkring::Location::raw);
             match signal {
                 Some(signal) => crate::console::println!(

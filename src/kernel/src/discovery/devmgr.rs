@@ -580,7 +580,7 @@ static BY_INIT: AtomicBool = AtomicBool::new(false);
 
 /// Read [`OPTION`], once, early.
 pub(crate) fn read_option(view: &BootView<'_>) {
-    let tree = crate::fdt::open(view).ok();
+    let tree = crate::discovery::fdt::open(view).ok();
     let value = view.option(OPTION).or_else(|| {
         tree.as_ref()
             .and_then(|tree| option_in(tree.bootargs()?, OPTION))

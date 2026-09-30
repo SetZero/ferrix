@@ -1,0 +1,42 @@
+//! Finding what the machine has, and handing it to ring 3.
+//!
+//! The kernel enumerates hardware and does not drive it
+//! (`docs/ARCHITECTURE.md` §7). This is the enumerating half: how firmware
+//! describes the machine, the buses walked to find functions on it, and the
+//! hand-over of what was found to `devmgr`, which starts a driver for each.
+//! What the kernel then does for a running driver -- its device nodes, the
+//! IOMMU domains, interrupts and register access -- is not here, and neither
+//! are the cores that speak each driver's protocol (`crate::interfaces`).
+//!
+//! | Module | What it finds |
+//! |---|---|
+//! | [`acpi`] | the firmware tables, on x86-64 and on AArch64 under EDK2 |
+//! | [`fdt`] | the device tree, on every other machine |
+//! | [`pci`] | the PCI functions behind the ECAM windows either describes |
+//! | [`devmgr`] | nothing: it starts `devmgr` and tells it what was found |
+//!
+//! The parsers themselves are host-testable crates in `src/lib/platform/`
+//! (`ferrix-acpi`, `ferrix-fdt`, `ferrix-pci`); these modules reach them to
+//! physical memory.
+//!
+//! # Only declarations here
+//!
+//! The group straddles the certification boundary: [`acpi`] and [`fdt`] are
+//! in the core ring, [`pci`] and [`devmgr`] in the item, and this file is in
+//! the item (`tools/common/data/certification-item.json`). Core code names
+//! `crate::discovery::acpi` through it, as it names `crate::syscall::uaccess`
+//! through `syscall/mod.rs`, and that is accepted on one term: this file
+//! holds module declarations, attributes and documentation, and nothing
+//! else -- no `pub use`, no items. A re-export here would let a core path
+//! reach an item name without the item-boundary check seeing a path to it.
+
+// ACPI is how the 64-bit pair describe themselves. An ARMv7-A machine has
+// none, and there this module is compiled and never called.
+#[allow(
+    dead_code,
+    reason = "ARMv7-A describes itself with a device tree, not ACPI"
+)]
+pub(crate) mod acpi;
+pub(crate) mod devmgr;
+pub(crate) mod fdt;
+pub(crate) mod pci;

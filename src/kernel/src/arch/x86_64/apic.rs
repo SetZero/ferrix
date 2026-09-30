@@ -23,7 +23,7 @@ use ferrix_sync::IrqControl;
 
 use super::clock;
 use super::trap::IRQ_BASE;
-use crate::acpi::DirectMap;
+use crate::discovery::acpi::DirectMap;
 use crate::mmio::Mmio;
 
 /// Where the local APIC's registers are when the MADT does not say.

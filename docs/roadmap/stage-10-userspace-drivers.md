@@ -71,7 +71,7 @@ check now requires one contiguous run, and a test sizes a 40-bit decoder.
   `pci-host-ecam-generic` nodes. The two disagree about what their address
   means: an MCFG allocation's is where bus *zero* would be, whatever bus it
   starts at, and a device tree's `reg` is its first bus's. Both parsers hand
-  over the first bus's, so `src/kernel/src/pci.rs` never has to remember which it
+  over the first bus's, so `src/kernel/src/discovery/pci.rs` never has to remember which it
   read. Where the loader handed over ACPI tables the MCFG is authoritative;
   otherwise the device tree is read. A `bus-range` larger than its window is
   cut to what the window holds, as Linux does.
@@ -127,7 +127,7 @@ refusals, at four processors and at two.
 drive devices, but it owns everything a driver stands on — the BAR mappings,
 the capability locations, and the physical memory a device reads and writes —
 and enumeration proves none of that, because it only reads configuration
-space. So once at boot `src/kernel/src/pci/virtio.rs` plays driver for the
+space. So once at boot `src/kernel/src/discovery/pci/virtio.rs` plays driver for the
 simplest device there is, virtio-rng: it maps the common and notification
 blocks the capabilities name, turns on bus mastering, gives the device a queue
 in a page of its own, asks for 64 bytes, and requires the device to write them

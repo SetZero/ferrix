@@ -22,8 +22,8 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use ferrix_acpi::{Acpi, Madt, MadtEntry};
 use ferrix_fdt::{Fdt, GicVersion};
 
-use crate::acpi::DirectMap;
 use crate::arch::arm_common::gicv2;
+use crate::discovery::acpi::DirectMap;
 
 /// Which driver [`init`] brought up: 2 or 3, and 0 before it has.
 static VERSION: AtomicU8 = AtomicU8::new(0);

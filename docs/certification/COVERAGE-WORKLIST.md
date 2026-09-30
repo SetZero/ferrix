@@ -10,10 +10,10 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | Module | x86_64 | aarch64 | armv7a | Files |
 |---|---:|---:|---:|---:|
-| [`devmgr`](#devmgr) | 13 | 78 | 82 | 1 |
+| [`discovery`](#discovery) | 53 | 111 | 131 | 2 |
 | [`arch/x86_64`](#archx86_64) | 35 | - | - | 5 |
 | [`object`](#object) | 9 | 17 | 17 | 7 |
-| [`syscall`](#syscall) | 15 | 11 | 11 | 2 |
+| [`syscall`](#syscall) | 15 | 10 | 10 | 2 |
 | [`init`](#init) | 3 | 14 | 14 | 1 |
 | [`console`](#console) | 3 | 6 | 7 | 4 |
 | [`main`](#main) | 3 | 6 | 5 | 1 |
@@ -31,15 +31,16 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | [`signal_frame`](#signal_frame) | - | - | 1 | 1 |
 | [`timer`](#timer) | - | - | 1 | 1 |
 | [`user`](#user) | - | - | 1 | 1 |
-| **Total** | **94** | **144** | **163** | 37 |
+| **Total** | **134** | **176** | **211** | 38 |
 
 ---
 
-## `devmgr`
+## `discovery`
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `devmgr.rs` | `item` | 13 | 78 | 82 | 11 | 395, 561, 589, 596, 746, 839, 843-844, 862, 867, 1078 |
+| `discovery/devmgr.rs` | `item` | 13 | 78 | 82 | 11 | 395, 561, 589, 596, 746, 839, 843-844, 862, 867, 1078 |
+| `discovery/pci/virtio.rs` | `item` | 40 | 33 | 49 | 31 | 332-333, 379, 382, 388, 435, 437-438, 471, 480, 486, 495-496, 498-499, 504, 512, 527, 548, 556, 558, 567, 615, 620, 625, 653, 679, 684, 697, 704, 795 |
 
 ---
 
@@ -73,7 +74,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `syscall/native.rs` | `item` | 12 | 7 | 9 | 1 | 1908 |
+| `syscall/native.rs` | `item` | 12 | 6 | 8 | 1 | 1908 |
 | `syscall/program.rs` | `item` | 3 | 4 | 2 | 1 | 89 |
 
 ---
@@ -101,7 +102,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `main.rs` | `item` | 3 | 6 | 5 | 3 | 301, 662, 1194 |
+| `main.rs` | `item` | 3 | 6 | 5 | 3 | 293, 654, 1186 |
 
 ---
 

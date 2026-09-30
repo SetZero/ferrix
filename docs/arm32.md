@@ -231,7 +231,7 @@ right for stage 3 and wrong from stage 10, which needs the tree for the life of
 the system. So the loader copies the blob into an allocation of its own — a new
 `MemKind::DeviceTree`, never reclaimed — and `BootInfo.dtb`/`dtb_len` name the
 copy. AArch64 gets the same treatment for the tree EDK2 offers it, so the field
-means one thing. `src/kernel/src/fdt.rs` is the generic counterpart of `acpi.rs`:
+means one thing. `src/kernel/src/discovery/fdt.rs` is the generic counterpart of `acpi.rs`:
 it borrows the copy through the direct map with the same bounds discipline and
 hands `src/lib/platform/fdt` a slice.
 
@@ -389,7 +389,7 @@ In this order, each step boot-tested on AArch64 as well as ARMv7-A once the
 latter reaches the console:
 
 1. **The shared drivers move** (decision 6). AArch64 boots unchanged.
-2. **`src/kernel/src/fdt.rs`**, generic, alongside `acpi.rs`.
+2. **`src/kernel/src/discovery/fdt.rs`**, generic, alongside `acpi.rs`.
 3. **`src/kernel/src/arch/armv7a/mod.rs`** — the facade's twenty-four symbols.
    `init_console` parses the tree, finds the console by `stdout-path` (falling
    back to the first `arm,pl011`), and maps its first `reg` range at
@@ -552,7 +552,7 @@ it. `docs/BOOT-LOG.md` has U-Boot's lines.
   before its caches are coherent with the other core's. The kernel leaves it
   to the PSCI firmware, which sets it on real boards, because a non-secure
   write can be undefined; the board's first two-core boot is what confirms it.
-* **AArch64 from the device tree.** With `src/kernel/src/fdt.rs` in the tree, the
+* **AArch64 from the device tree.** With `src/kernel/src/discovery/fdt.rs` in the tree, the
   hard-coded PL011 address in `aarch64/console.rs` could go; it stays, so that
   this port changes AArch64's boot only where the shared design forces it.
 * **The PL011 half of decision 6.** AArch64 is on the shared GICv2 driver;

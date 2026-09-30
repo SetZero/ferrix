@@ -37,8 +37,8 @@ use crate::smp::Described;
 ///
 /// If the ACPI tables or the MADT cannot be read.
 pub(crate) fn describe_cpus(view: &BootView<'_>) -> Result<Described, &'static str> {
-    let firmware =
-        crate::acpi::Firmware::open(view).map_err(|_| "the machine has no readable ACPI tables")?;
+    let firmware = crate::discovery::acpi::Firmware::open(view)
+        .map_err(|_| "the machine has no readable ACPI tables")?;
     let acpi = firmware.acpi();
     let madt = acpi.madt().map_err(|_| "the machine has no MADT")?;
 
