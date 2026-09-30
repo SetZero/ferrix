@@ -28,6 +28,8 @@ use super::cpu;
 use crate::arch::speculation::{Defences, HARDENED, record_this_cpu};
 use crate::console::println;
 
+mod check;
+
 /// `IA32_SPEC_CTRL`: IBRS, STIBP and SSBD.
 const IA32_SPEC_CTRL: u32 = 0x48;
 /// `IA32_PRED_CMD`: writing [`PRED_CMD_IBPB`] empties the indirect predictors.
@@ -59,6 +61,27 @@ const CAP_IBRS_ALL: u64 = 1 << 1;
 const CAP_SSB_NO: u64 = 1 << 4;
 /// `IA32_ARCH_CAPABILITIES.MDS_NO`: not vulnerable to MDS.
 const CAP_MDS_NO: u64 = 1 << 5;
+/// `IA32_ARCH_CAPABILITIES.GDS_CTRL`: microcode that mitigates Gather Data
+/// Sampling, controlled through `IA32_MCU_OPT_CTRL`.
+const CAP_GDS_CTRL: u64 = 1 << 25;
+/// `IA32_ARCH_CAPABILITIES.GDS_NO`: not vulnerable to Gather Data Sampling,
+/// or a hypervisor's word that its host is mitigated.
+const CAP_GDS_NO: u64 = 1 << 26;
+
+/// `IA32_MCU_OPT_CTRL`: switches for microcode mitigations.
+const IA32_MCU_OPT_CTRL: u32 = 0x123;
+/// `IA32_MCU_OPT_CTRL.GDS_MITG_DIS`: the GDS mitigation turned off.
+const MCU_GDS_MITG_DIS: u64 = 1 << 4;
+/// `IA32_MCU_OPT_CTRL.GDS_MITG_LOCKED`: and that setting locked.
+const MCU_GDS_MITG_LOCKED: u64 = 1 << 5;
+
+/// AMD's `DE_CFG`, whose bit 9 is Zenbleed's chicken bit.
+const AMD_DE_CFG: u32 = 0xC001_1029;
+/// `DE_CFG`'s Zen 2 floating-point backup fix: Zenbleed closed without the
+/// fixed microcode, at some cost to vector code.
+const DE_CFG_ZEN2_FP_BACKUP_FIX: u64 = 1 << 9;
+/// AMD's microcode patch level.
+const AMD_PATCH_LEVEL: u32 = 0x8B;
 
 /// What the processor offers and says about itself.
 #[derive(Debug, Clone, Copy, Default)]
@@ -223,6 +246,267 @@ const fn meltdown_exposed(offered: &Offered) -> bool {
     offered.intel && offered.capabilities & CAP_RDCL_NO == 0
 }
 
+/// What decides whether programs may keep AVX: who made the processor, which
+/// one it is, and what its microcode and a hypervisor say.
+#[derive(Debug, Clone, Copy, Default)]
+struct VectorFacts {
+    /// `GenuineIntel`.
+    intel: bool,
+    /// `AuthenticAMD` or `HygonGenuine`.
+    amd: bool,
+    /// The display family, extended family added.
+    family: u32,
+    /// The display model, extended model added.
+    model: u32,
+    /// `CPUID.1:ECX[31]`: running under a hypervisor.
+    hypervisor: bool,
+    /// The processor offers AVX at all.
+    avx: bool,
+    /// `IA32_ARCH_CAPABILITIES`, or zero.
+    capabilities: u64,
+    /// AMD's microcode patch level, read only on a Zen 2 part outside a
+    /// hypervisor.
+    patch_level: u32,
+    /// `IA32_MCU_OPT_CTRL`, read only where `GDS_CTRL` says it exists.
+    mcu_opt_ctrl: u64,
+}
+
+/// What letting programs use AVX exposes on this processor, and what covers
+/// it (`docs/certification/SPECULATION.md` §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VectorLeak {
+    /// Built `--mitigations off`: nothing is decided.
+    SwitchOff,
+    /// Neither Zenbleed nor Gather Data Sampling applies.
+    NotAffected,
+    /// Zenbleed, closed by microcode at or past the fixed revision.
+    ZenbleedMicrocode,
+    /// Zenbleed, closed by `DE_CFG`'s chicken bit, set on every processor.
+    ZenbleedChickenBit,
+    /// Gather Data Sampling, closed by microcode whose mitigation is on.
+    GdsMicrocode,
+    /// Gather Data Sampling, closed once the kernel turns the microcode's
+    /// mitigation back on, which it does before any program runs.
+    GdsMicrocodeEnabled,
+    /// Uncovered: programs do not get AVX. Says why.
+    Uncovered(&'static str),
+}
+
+impl VectorLeak {
+    /// Whether programs may use AVX.
+    pub(crate) const fn allows_avx(self) -> bool {
+        !matches!(self, VectorLeak::Uncovered(_))
+    }
+
+    /// For the boot log.
+    pub(crate) const fn describe(self) -> &'static str {
+        match self {
+            VectorLeak::SwitchOff => "not decided: built with --mitigations off",
+            VectorLeak::NotAffected => "Zenbleed and GDS do not apply",
+            VectorLeak::ZenbleedMicrocode => "Zenbleed closed by microcode",
+            VectorLeak::ZenbleedChickenBit => "Zenbleed closed by DE_CFG[9]",
+            VectorLeak::GdsMicrocode => "GDS closed by microcode",
+            VectorLeak::GdsMicrocodeEnabled => "GDS closed by microcode, turned back on",
+            VectorLeak::Uncovered(why) => why,
+        }
+    }
+}
+
+/// Zen 2, the parts Zenbleed reads another program's vector registers on:
+/// family 0x17, these models (Linux's `amd_zenbleed`).
+const fn is_zen2(facts: &VectorFacts) -> bool {
+    facts.amd
+        && facts.family == 0x17
+        && matches!(facts.model, 0x30..=0x4f | 0x60..=0x7f | 0x90..=0x91 | 0xa0..=0xaf)
+}
+
+/// The first patch level with Zenbleed's fix, by model; none known for the
+/// rest (Linux's `cpu_has_zenbleed_microcode`).
+const fn zenbleed_fixed_at(model: u32) -> Option<u32> {
+    match model {
+        0x30..=0x3f => Some(0x0830_107b),
+        0x60..=0x67 => Some(0x0860_010c),
+        0x68..=0x6f => Some(0x0860_8107),
+        0x70..=0x7f => Some(0x0870_1033),
+        0xa0..=0xaf => Some(0x08a0_0009),
+        _ => None,
+    }
+}
+
+/// Intel's parts that Gather Data Sampling samples stale vector data on:
+/// family 6, these models (Linux's `cpu_vuln_blacklist` entries with `GDS`:
+/// Skylake to Rocket Lake, Ice Lake and Tiger Lake).
+const fn is_gds_model(facts: &VectorFacts) -> bool {
+    facts.intel
+        && facts.family == 6
+        && matches!(
+            facts.model,
+            0x4e | 0x5e
+                | 0x55
+                | 0x8e
+                | 0x9e
+                | 0xa5
+                | 0xa6
+                | 0x6a
+                | 0x6c
+                | 0x7e
+                | 0x8c
+                | 0x8d
+                | 0xa7
+        )
+}
+
+/// Zenbleed's verdict for a Zen 2 part. A guest can neither read the host's
+/// microcode nor set its chicken bit, so it is uncovered, as a strict
+/// reading of Linux's "trust the hypervisor" must be.
+const fn zenbleed(facts: &VectorFacts) -> VectorLeak {
+    if facts.hypervisor {
+        return VectorLeak::Uncovered(
+            "AVX held back: Zenbleed, on a Zen 2 guest that cannot see the host's fix",
+        );
+    }
+    match zenbleed_fixed_at(facts.model) {
+        Some(fixed) if facts.patch_level >= fixed => VectorLeak::ZenbleedMicrocode,
+        _ => VectorLeak::ZenbleedChickenBit,
+    }
+}
+
+/// Gather Data Sampling's verdict for an affected Intel model. `GDS_NO` is
+/// the processor's, or a hypervisor's for a mitigated host, as KVM gives it.
+const fn gds(facts: &VectorFacts) -> VectorLeak {
+    if facts.capabilities & CAP_GDS_NO != 0 {
+        return VectorLeak::NotAffected;
+    }
+    if facts.capabilities & CAP_GDS_CTRL == 0 {
+        return VectorLeak::Uncovered("AVX held back: GDS, and no microcode mitigates it");
+    }
+    if facts.mcu_opt_ctrl & MCU_GDS_MITG_DIS == 0 {
+        VectorLeak::GdsMicrocode
+    } else if facts.mcu_opt_ctrl & MCU_GDS_MITG_LOCKED != 0 {
+        VectorLeak::Uncovered("AVX held back: GDS, its microcode mitigation off and locked")
+    } else {
+        VectorLeak::GdsMicrocodeEnabled
+    }
+}
+
+/// Whether every processor sets Zenbleed's chicken bit as it starts.
+static PLAN_ZENBLEED_BIT: AtomicBool = AtomicBool::new(false);
+/// Whether every processor turns the GDS microcode mitigation back on.
+static PLAN_GDS_ENABLE: AtomicBool = AtomicBool::new(false);
+
+/// The display family and model `CPUID.1:EAX` names, the extended parts
+/// added where the base family says they count.
+const fn family_and_model(eax: u32) -> (u32, u32) {
+    let base_family = (eax >> 8) & 0xf;
+    let base_model = (eax >> 4) & 0xf;
+    let family = if base_family == 0xf {
+        base_family + ((eax >> 20) & 0xff)
+    } else {
+        base_family
+    };
+    let model = if base_family == 0xf || base_family == 6 {
+        base_model | (((eax >> 16) & 0xf) << 4)
+    } else {
+        base_model
+    };
+    (family, model)
+}
+
+/// What this processor says, for [`decide_vector_leak`].
+fn vector_facts(offered: &Offered) -> VectorFacts {
+    let leaf1 = __cpuid(1);
+    let (family, model) = family_and_model(leaf1.eax);
+    let mut facts = VectorFacts {
+        intel: offered.intel,
+        amd: offered.amd,
+        family,
+        model,
+        hypervisor: leaf1.ecx & (1 << 31) != 0,
+        avx: leaf1.ecx & (1 << 28) != 0,
+        capabilities: offered.capabilities,
+        ..VectorFacts::default()
+    };
+    if is_zen2(&facts) && !facts.hypervisor {
+        // SAFETY: (PROTECT) the patch level register exists on every AMD
+        // processor since the K8, and this is a Zen 2 outside a guest.
+        facts.patch_level = unsafe { cpu::read_msr(AMD_PATCH_LEVEL) } as u32;
+    }
+    if is_gds_model(&facts) && facts.capabilities & CAP_GDS_CTRL != 0 {
+        // SAFETY: (PROTECT) `GDS_CTRL` says `IA32_MCU_OPT_CTRL` exists.
+        facts.mcu_opt_ctrl = unsafe { cpu::read_msr(IA32_MCU_OPT_CTRL) };
+    }
+    facts
+}
+
+/// Decide what letting programs use AVX would expose, cover it on the boot
+/// processor where that is possible, and answer the verdict:
+/// `cpu::enable_extended_state` leaves AVX out of `XCR0` for an uncovered
+/// one. Before `init`, since `XCR0` is written in `init_traps`; `apply` does
+/// the same covering on every processor after.
+pub(crate) fn vector_leak() -> VectorLeak {
+    if !HARDENED {
+        return VectorLeak::SwitchOff;
+    }
+    let verdict = decide_vector_leak(&vector_facts(&offered()));
+    match verdict {
+        VectorLeak::ZenbleedChickenBit => {
+            PLAN_ZENBLEED_BIT.store(true, Ordering::Relaxed);
+            if set_zenbleed_bit() {
+                verdict
+            } else {
+                VectorLeak::Uncovered("AVX held back: Zenbleed, and DE_CFG[9] did not hold")
+            }
+        }
+        VectorLeak::GdsMicrocodeEnabled => {
+            PLAN_GDS_ENABLE.store(true, Ordering::Relaxed);
+            if enable_gds_mitigation() {
+                verdict
+            } else {
+                VectorLeak::Uncovered("AVX held back: GDS, and its mitigation did not turn on")
+            }
+        }
+        other => other,
+    }
+}
+
+/// Set `DE_CFG[9]` on this processor, and say whether it reads back set.
+fn set_zenbleed_bit() -> bool {
+    // SAFETY: (PROTECT) `DE_CFG` exists on every Zen part; only a Zen 2
+    // outside a guest plans this.
+    let config = unsafe { cpu::read_msr(AMD_DE_CFG) };
+    // SAFETY: (PROTECT) as above; bit 9 is the documented backup fix.
+    unsafe { cpu::write_msr(AMD_DE_CFG, config | DE_CFG_ZEN2_FP_BACKUP_FIX) };
+    // SAFETY: (PROTECT) as above.
+    let read = unsafe { cpu::read_msr(AMD_DE_CFG) };
+    read & DE_CFG_ZEN2_FP_BACKUP_FIX != 0
+}
+
+/// Clear `GDS_MITG_DIS` on this processor, and say whether it reads back
+/// clear.
+fn enable_gds_mitigation() -> bool {
+    // SAFETY: (PROTECT) only planned where `GDS_CTRL` says the register exists.
+    let control = unsafe { cpu::read_msr(IA32_MCU_OPT_CTRL) };
+    // SAFETY: (PROTECT) as above, and the setting is not locked, or the plan
+    // would have left AVX out instead.
+    unsafe { cpu::write_msr(IA32_MCU_OPT_CTRL, control & !MCU_GDS_MITG_DIS) };
+    // SAFETY: (PROTECT) as above.
+    let read = unsafe { cpu::read_msr(IA32_MCU_OPT_CTRL) };
+    read & MCU_GDS_MITG_DIS == 0
+}
+
+/// The verdict for a processor that says `facts`.
+const fn decide_vector_leak(facts: &VectorFacts) -> VectorLeak {
+    if !facts.avx {
+        VectorLeak::NotAffected
+    } else if is_zen2(facts) {
+        zenbleed(facts)
+    } else if is_gds_model(facts) {
+        gds(facts)
+    } else {
+        VectorLeak::NotAffected
+    }
+}
+
 /// Whether `VERW` runs on every return to ring 3. Read by the exits in
 /// `syscall` and `trap`, from assembly, as a byte.
 pub(super) static CLEAR_CPU_BUFFERS: AtomicU8 = AtomicU8::new(0);
@@ -339,11 +623,26 @@ fn apply(plan: &Plan) -> Defences {
         // SAFETY: (PROTECT) as above.
         held &= unsafe { cpu::read_msr(AMD_VIRT_SPEC_CTRL) } & SPEC_CTRL_SSBD != 0;
     }
+    held &= apply_vector_cover();
     if held {
         plan.defences
     } else {
         plan.defences.with(Defences::READ_BACK_FAILED)
     }
+}
+
+/// What [`vector_leak`] planned for every processor: Zenbleed's chicken bit
+/// and the GDS mitigation, each only where the boot processor needed it.
+/// Answers whether what was planned reads back.
+fn apply_vector_cover() -> bool {
+    let mut held = true;
+    if PLAN_ZENBLEED_BIT.load(Ordering::Relaxed) {
+        held &= set_zenbleed_bit();
+    }
+    if PLAN_GDS_ENABLE.load(Ordering::Relaxed) {
+        held &= enable_gds_mitigation();
+    }
+    held
 }
 
 /// Apply the boot processor's plan on a secondary, as it starts.
@@ -465,5 +764,5 @@ pub(crate) fn check() -> Result<(), &'static str> {
     if HARDENED {
         clear_cpu_buffers();
     }
-    Ok(())
+    check::vector_leak_decisions()
 }

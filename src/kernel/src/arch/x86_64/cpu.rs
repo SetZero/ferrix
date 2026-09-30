@@ -122,9 +122,13 @@ static XSAVE_COMPONENTS: AtomicU64 = AtomicU64::new(0);
 /// them, so leaving them out costs a program that wants them its fast path
 /// and nothing else.
 ///
+/// AVX only where `allow_avx` says: `speculation::vector_leak` withholds it
+/// on a processor where Zenbleed or Gather Data Sampling would let one
+/// program read another's vector registers and nothing covers it.
+///
 /// Answers the components enabled, for the boot log: zero when the processor
 /// has no `XSAVE`, as QEMU's `qemu64` model does not.
-pub(crate) fn enable_extended_state() -> u64 {
+pub(crate) fn enable_extended_state(allow_avx: bool) -> u64 {
     use core::arch::x86_64::{__cpuid, __cpuid_count};
 
     if __cpuid(0).eax < 0xD {
@@ -142,7 +146,7 @@ pub(crate) fn enable_extended_state() -> u64 {
         return 0;
     }
     let mut components = XSTATE_X87_SSE;
-    if has_avx && supported & XSTATE_AVX != 0 {
+    if has_avx && allow_avx && supported & XSTATE_AVX != 0 {
         components |= XSTATE_AVX;
     }
     // SAFETY: (SYSREG) CPUID reported `XSAVE`, which is all `OSXSAVE` needs.

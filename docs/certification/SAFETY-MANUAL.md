@@ -246,6 +246,12 @@ must not learn each other's cache access patterns shall not share a cache: no
 cache is partitioned (V-06). QEMU's TCG, on which most gates run, offers no
 speculation controls and executes no speculation, so its log lines are not a
 counter-example; the gate under KVM is where the controls are exercised.
+On x86-64 the boot line `cpu      program register state:` must not name
+Zenbleed or GDS as holding AVX back unless the integrator accepts programs
+without AVX; and in a guest, whose verdict rests on the CPU model and
+`IA32_ARCH_CAPABILITIES` the hypervisor presents, the integrator shall run
+the element only on a host that mitigates Zenbleed and GDS itself
+([SPECULATION.md](SPECULATION.md) §9).
 For KASLR the integrator shall provide firmware offering `EFI_RNG_PROTOCOL`,
 or on x86-64 a processor with `RDRAND`. The boot line `kaslr    image, direct
 map and arena moved` must name one of the two, not the cycle counter. On

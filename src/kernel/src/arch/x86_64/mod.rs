@@ -180,7 +180,10 @@ pub(crate) unsafe fn init_traps() {
     crate::console::println!("  cpu      descriptor table addresses kept from ring 3: UMIP {umip}");
     // Before `CpuStarter::new` snapshots `CR4`, so secondaries take
     // `OSXSAVE` with it; each loads `XCR0` in `smp::secondary_start`.
-    let components = cpu::enable_extended_state();
+    // Whether AVX would let one program read another's vector registers
+    // (Zenbleed, GDS), decided and covered before `XCR0` is written.
+    let leak = speculation::vector_leak();
+    let components = cpu::enable_extended_state(leak.allows_avx());
     let state = if components & cpu::XSTATE_AVX != 0 {
         "x87, SSE and AVX, saved with XSAVE"
     } else if components != 0 {
@@ -188,7 +191,10 @@ pub(crate) unsafe fn init_traps() {
     } else {
         "x87 and SSE, saved with FXSAVE; no XSAVE, so no AVX"
     };
-    crate::console::println!("  cpu      program register state: {state}");
+    crate::console::println!(
+        "  cpu      program register state: {state}; vector registers: {}",
+        leak.describe()
+    );
 }
 
 /// Decide which side-channel defences this machine gets, apply them on the

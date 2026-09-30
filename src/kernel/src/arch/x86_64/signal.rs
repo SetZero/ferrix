@@ -389,6 +389,13 @@ fn write_fp_area(space: &AddressSpace, fpstate: u64) -> Result<(), BadFrame> {
     // SAFETY: (CONTEXT) on the running task's own way back to ring 3, so the processor
     // holds this program's x87, SSE and AVX registers.
     let state = unsafe { UserState::capture() };
+    fp_area(&state)?.write(space, fpstate)
+}
+
+/// [`write_fp_area`]'s bytes for `state`: the `FXSAVE` image, and the rest of
+/// the `XSAVE` area after it when the switch saves AVX. A 32-bit frame
+/// carries the same bytes after its `fsave` environment (`compat`).
+fn fp_area(state: &UserState) -> Result<FrameBytes, BadFrame> {
     let mut area = FrameBytes::zeroed(fp_area_bytes())?;
     area.put(0, state.fxsave())?;
     if frame_has_xstate() {
@@ -402,7 +409,7 @@ fn write_fp_area(space: &AddressSpace, fpstate: u64) -> Result<(), BadFrame> {
     } else {
         area.put_u32(SW_MAGIC1, 0)?;
     }
-    area.write(space, fpstate)
+    Ok(area)
 }
 
 /// Whether a frame can be built for `request`: the handler must name a

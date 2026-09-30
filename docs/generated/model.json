@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "f02e09a34048ddf22469e0ddfc513189b3112a0d3e97277fde409c9734ab9804",
+  "digest": "a7b1ea9fbff6d51c7f7eb85e13a04150c7441eeebdb583f1d8aafb1a57362717",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -97,7 +97,7 @@
   ],
   "summary": {
     "packages": 103,
-    "elements": 5276,
+    "elements": 5281,
     "maturity": {
       "implemented": 277,
       "inProgress": 15,
@@ -51049,10 +51049,67 @@
                   "qualifiedName": "FerrixX8664Requirements::Dispatch::signalFrameCarriesExtendedState",
                   "kind": "attribute",
                   "redefines": "unit",
-                  "value": "(\"arch::x86_64::signal::uc_flags\", \"arch::x86_64::signal::fp_area_bytes\", \"arch::x86_64::signal::xstate_in\", \"arch::x86_64::signal::restore_fpu\", \"arch::x86_64::switch::UserState::set_xstate_bv\")",
+                  "value": "(\"arch::x86_64::signal::uc_flags\", \"arch::x86_64::signal::fp_area\", \"arch::x86_64::signal::fp_area_bytes\", \"arch::x86_64::signal::xstate_in\", \"arch::x86_64::signal::restore_fpu\", \"arch::x86_64::switch::UserState::set_xstate_bv\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1630
+                    "line": 1631
+                  }
+                }
+              ]
+            },
+            {
+              "name": "avxWithheldWhereVectorRegistersLeak",
+              "qualifiedName": "FerrixX8664Requirements::Dispatch::avxWithheldWhereVectorRegistersLeak",
+              "kind": "requirement",
+              "shortName": "L.x86_64.123",
+              "type": "ItemLowLevel",
+              "source": {
+                "file": "docs/sysml/18-x86-64-requirements.sysml",
+                "line": 1633
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::avxWithheldWhereVectorRegistersLeak",
+                  "kind": "attribute",
+                  "redefines": "statement",
+                  "value": "\"With the speculation switch on, vector_leak shall, on a Zen 2 processor (family 0x17, Linux's amd_zenbleed models), set DE_CFG[9] on every processor unless the microcode is at the fixed revision, and withhold AVX from XCR0 in a guest; and on an Intel model Linux lists for Gather Data Sampling without GDS_NO, keep AVX only where GDS_CTRL's microcode mitigation is on or can be turned back on, which it does on every processor; the boot line shall say which.\"",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1641
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::avxWithheldWhereVectorRegistersLeak",
+                  "kind": "attribute",
+                  "redefines": "criterion",
+                  "value": "\"decide_vector_leak gives each of twelve processors -- Zen 2 bare metal with old, fixed and unlisted microcode, a Zen 2 guest, one without AVX, a Zen 5, Kaby Lake without and with GDS_NO, with GDS_CTRL on, off and unlocked, off and locked, an Alder Lake -- its verdict, and family_and_model reads a Matisse and a Kaby Lake right; with the guest rule taken out, the check fails. The writes, DE_CFG[9] and clearing GDS_MITG_DIS, are not exercised on the gate's machines, which are not affected parts; in a guest the verdict rests on the model the hypervisor presents (SPECULATION.md section 9, AoU-11).\"",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1651
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::avxWithheldWhereVectorRegistersLeak",
+                  "kind": "attribute",
+                  "redefines": "parent",
+                  "value": "\"H.TRAP.3\"",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1652
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixX8664Requirements::Dispatch::avxWithheldWhereVectorRegistersLeak",
+                  "kind": "attribute",
+                  "redefines": "unit",
+                  "value": "(\"arch::x86_64::speculation::vector_leak\", \"arch::x86_64::speculation::decide_vector_leak\", \"arch::x86_64::speculation::zenbleed\", \"arch::x86_64::speculation::gds\", \"arch::x86_64::speculation::is_zen2\", \"arch::x86_64::speculation::is_gds_model\", \"arch::x86_64::speculation::zenbleed_fixed_at\", \"arch::x86_64::speculation::family_and_model\", \"arch::x86_64::speculation::vector_facts\", \"arch::x86_64::speculation::set_zenbleed_bit\", \"arch::x86_64::speculation::enable_gds_mitigation\", \"arch::x86_64::speculation::apply_vector_cover\", \"arch::x86_64::speculation::VectorLeak::describe\")",
+                  "source": {
+                    "file": "docs/sysml/18-x86-64-requirements.sysml",
+                    "line": 1665
                   }
                 }
               ]
@@ -51065,7 +51122,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1632
+                "line": 1667
               },
               "children": [
                 {
@@ -51076,7 +51133,7 @@
                   "value": "\"dispatch_with shall send a native-entry number in the native range to native_call, which answers it for the calling task's own process.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1635
+                    "line": 1670
                   }
                 },
                 {
@@ -51087,7 +51144,7 @@
                   "value": "\"Two programs whose every native call is made by SYSCALL -- vmo_create, channel_write with a handle, object_wait_one, channel_read, vmo_read -- each exit 0.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1638
+                    "line": 1673
                   }
                 },
                 {
@@ -51098,7 +51155,7 @@
                   "value": "\"H.OBJ.1\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1639
+                    "line": 1674
                   }
                 },
                 {
@@ -51109,7 +51166,7 @@
                   "value": "(\"syscall::dispatch_with\", \"syscall::native_call\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1640
+                    "line": 1675
                   }
                 }
               ]
@@ -51122,7 +51179,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1642
+                "line": 1677
               },
               "children": [
                 {
@@ -51133,7 +51190,7 @@
                   "value": "\"dispatch_with shall answer an int $0x80 number in the native range with -ENOSYS, never as a native call.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1644
+                    "line": 1679
                   }
                 },
                 {
@@ -51144,7 +51201,7 @@
                   "value": "\"An int $0x80 with a number in 0x1000..0x1FFF answers -38.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1646
+                    "line": 1681
                   }
                 },
                 {
@@ -51155,7 +51212,7 @@
                   "value": "\"H.TRAP.12\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1647
+                    "line": 1682
                   }
                 },
                 {
@@ -51166,7 +51223,7 @@
                   "value": "\"syscall::dispatch_with\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1648
+                    "line": 1683
                   }
                 }
               ]
@@ -51179,7 +51236,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1650
+                "line": 1685
               },
               "children": [
                 {
@@ -51190,7 +51247,7 @@
                   "value": "\"unanswered shall print a call answered ENOSYS by name while report_unanswered's bound lasts, and nothing once it is spent.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1653
+                    "line": 1688
                   }
                 },
                 {
@@ -51201,7 +51258,7 @@
                   "value": "\"After report_unanswered(1), two unanswered calls print exactly one `syscall ... answered ENOSYS` line.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1655
+                    "line": 1690
                   }
                 },
                 {
@@ -51212,7 +51269,7 @@
                   "value": "\"H.TRAP.11\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1656
+                    "line": 1691
                   }
                 },
                 {
@@ -51223,7 +51280,7 @@
                   "value": "\"syscall::unanswered\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1657
+                    "line": 1692
                   }
                 }
               ]
@@ -51236,7 +51293,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1659
+                "line": 1694
               },
               "children": [
                 {
@@ -51247,7 +51304,7 @@
                   "value": "\"system_call shall answer ENOSYS with no entry registered, and the first registration shall stand.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1661
+                    "line": 1696
                   }
                 },
                 {
@@ -51258,7 +51315,7 @@
                   "value": "\"With no entry registered, system_call answers -38; a second set_syscall_entry leaves the first in place.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1663
+                    "line": 1698
                   }
                 },
                 {
@@ -51269,7 +51326,7 @@
                   "value": "\"H.TRAP.11\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1664
+                    "line": 1699
                   }
                 },
                 {
@@ -51280,7 +51337,7 @@
                   "value": "(\"trap::system_call\", \"trap::set_syscall_entry\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1665
+                    "line": 1700
                   }
                 }
               ]
@@ -51293,7 +51350,7 @@
               "type": "ItemLowLevel",
               "source": {
                 "file": "docs/sysml/18-x86-64-requirements.sysml",
-                "line": 1667
+                "line": 1702
               },
               "children": [
                 {
@@ -51304,7 +51361,7 @@
                   "value": "\"system_call and dispatch shall regroup the running task after a call or a trap from user mode, so that a process moved to another job runs in it from then on.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1670
+                    "line": 1705
                   }
                 },
                 {
@@ -51315,7 +51372,7 @@
                   "value": "\"After a program writes its pid to another cgroup's cgroup.procs, its next charges land in that job.\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1672
+                    "line": 1707
                   }
                 },
                 {
@@ -51326,7 +51383,7 @@
                   "value": "\"H.OBJ.12\"",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1673
+                    "line": 1708
                   }
                 },
                 {
@@ -51337,7 +51394,7 @@
                   "value": "(\"trap::system_call\", \"trap::dispatch\")",
                   "source": {
                     "file": "docs/sysml/18-x86-64-requirements.sysml",
-                    "line": 1674
+                    "line": 1709
                   }
                 }
               ]

@@ -1624,10 +1624,45 @@ package FerrixX8664Requirements {
                 ring 0, under TCG and under KVM.";
             attribute :>> parent = "H.TRAP.9";
             attribute :>> unit = ("arch::x86_64::signal::uc_flags",
+                "arch::x86_64::signal::fp_area",
                 "arch::x86_64::signal::fp_area_bytes",
                 "arch::x86_64::signal::xstate_in",
                 "arch::x86_64::signal::restore_fpu",
                 "arch::x86_64::switch::UserState::set_xstate_bv");
+        }
+        requirement <'L.x86_64.123'> avxWithheldWhereVectorRegistersLeak : ItemLowLevel {
+            attribute :>> statement = "With the speculation switch on, vector_leak
+                shall, on a Zen 2 processor (family 0x17, Linux's amd_zenbleed
+                models), set DE_CFG[9] on every processor unless the microcode is
+                at the fixed revision, and withhold AVX from XCR0 in a guest; and
+                on an Intel model Linux lists for Gather Data Sampling without
+                GDS_NO, keep AVX only where GDS_CTRL's microcode mitigation is on or
+                can be turned back on, which it does on every processor; the boot
+                line shall say which.";
+            attribute :>> criterion = "decide_vector_leak gives each of twelve
+                processors -- Zen 2 bare metal with old, fixed and unlisted
+                microcode, a Zen 2 guest, one without AVX, a Zen 5, Kaby Lake
+                without and with GDS_NO, with GDS_CTRL on, off and unlocked, off and
+                locked, an Alder Lake -- its verdict, and family_and_model reads a
+                Matisse and a Kaby Lake right; with the guest rule taken out, the
+                check fails. The writes, DE_CFG[9] and clearing GDS_MITG_DIS, are
+                not exercised on the gate's machines, which are not affected parts;
+                in a guest the verdict rests on the model the hypervisor presents
+                (SPECULATION.md section 9, AoU-11).";
+            attribute :>> parent = "H.TRAP.3";
+            attribute :>> unit = ("arch::x86_64::speculation::vector_leak",
+                "arch::x86_64::speculation::decide_vector_leak",
+                "arch::x86_64::speculation::zenbleed",
+                "arch::x86_64::speculation::gds",
+                "arch::x86_64::speculation::is_zen2",
+                "arch::x86_64::speculation::is_gds_model",
+                "arch::x86_64::speculation::zenbleed_fixed_at",
+                "arch::x86_64::speculation::family_and_model",
+                "arch::x86_64::speculation::vector_facts",
+                "arch::x86_64::speculation::set_zenbleed_bit",
+                "arch::x86_64::speculation::enable_gds_mitigation",
+                "arch::x86_64::speculation::apply_vector_cover",
+                "arch::x86_64::speculation::VectorLeak::describe");
         }
         requirement <'L.syscall.1'> nativeNumbersReachTheNativeAbi : ItemLowLevel {
             attribute :>> statement = "dispatch_with shall send a native-entry

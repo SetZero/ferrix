@@ -114,8 +114,8 @@ processor, read back on each (`arch/x86_64/speculation.rs`).
 | Speculative store bypass | `SSBD`, through `IA32_SPEC_CTRL` or AMD's `VIRT_SPEC_CTRL` | unless `SSB_NO` | Intel SA-00115, AMD SSBD whitepaper |
 | MDS | `VERW` on every return to ring 3 | Intel, `MD_CLEAR`, no `MDS_NO` | Intel SA-00233 |
 | Meltdown, L1TF | **none** — reported | — | §6 |
-| Zenbleed (AMD Zen 2): a mispredicted `vzeroupper` leaves another program's `YMM` contents readable | **none** in the kernel — Linux sets `DE_CFG[9]` where the microcode lacks the fix; under KVM, the host's microcode and chicken bit | exposed since programs may use AVX (2026-09-30, `docs/CLAUDE-CODE.md` §3) | CVE-2023-20593, AMD-SB-7008 |
-| Gather Data Sampling (Intel Skylake to Ice Lake): `VPGATHER` samples stale vector data of another program | **none** in the kernel — the mitigation is microcode, and Linux's `gds=force` takes AVX out of `XCR0` without it; under KVM, the host's microcode | exposed since programs may use AVX (2026-09-30) | CVE-2022-40982, Intel SA-00828 |
+| Zenbleed (AMD Zen 2): a mispredicted `vzeroupper` leaves another program's `YMM` contents readable | `DE_CFG[9]` on every processor unless the microcode is at the fixed revision, as Linux does; in a guest, which can neither see the host's fix nor set the bit, programs do not get AVX | Zen 2 (family 0x17, Linux's `amd_zenbleed` models) with AVX; since 2026-09-30 (`speculation::vector_leak`) | CVE-2023-20593, AMD-SB-7008 |
+| Gather Data Sampling (Intel Skylake to Rocket Lake): `VPGATHER` samples stale vector data of another program | the microcode's mitigation, turned back on on every processor where `GDS_MITG_DIS` is set and not locked; without that microcode, or with it off and locked, programs do not get AVX -- Linux's `gds=force` | Linux's GDS models, without `GDS_NO`, which a hypervisor gives for a mitigated host; since 2026-09-30 | CVE-2022-40982, Intel SA-00828 |
 
 **Why these, and why always on.** Linux enables most of these conditionally —
 `SSBD` and `IBPB` only for programs that ask, by `prctl` or `seccomp`. The item
@@ -659,13 +659,20 @@ instructions per clamp.
 * **KPTI** (§6.2), and so **KASLR against a local timing attacker**, the
   **fixed physical placement** of the image and the writable alias of its text
   in the direct map, and ARMv7-A's few bits (§6.1).
-* **Zenbleed and Gather Data Sampling** (§3). Since 2026-09-30 programs may
-  use AVX (`cpu::enable_extended_state`), and both leak one program's vector
-  registers to another on affected parts. The kernel sets no `DE_CFG[9]` and
-  keeps AVX in `XCR0` on a part without GDS microcode; under KVM the host's
-  microcode and chicken bit are what protects. The code mitigation -- `XCR0`
-  kept at x87 and SSE on an affected processor that is not mitigated -- is a
-  `docs/BACKLOG.md` row, owed before §3's claims are cited again.
+* **Zenbleed and Gather Data Sampling in a `--mitigations off` build**
+  (§3). The strict form of each, AVX withheld where nothing covers the leak,
+  is `on`'s; `off` decides nothing and programs keep AVX. And the model
+  lists are Linux's of 2026 (the 6.1.157 tree's `amd_zenbleed` and
+  `cpu_vuln_blacklist`), so a part added to them later is not known here.
+* **Zenbleed and GDS in a guest.** The verdict there is only as good as the
+  CPU model and `IA32_ARCH_CAPABILITIES` the hypervisor presents. A
+  synthetic model -- xtask's own x86-64-v3 among them -- names neither the
+  host's part nor its fix, so a guest on an unmitigated affected host can
+  report "not affected" and keep AVX; there the host's mitigation is what
+  protects (AoU-11). A Zen 2 guest is held back only because it reports a
+  Zen 2 model. And the writes that cover a leak -- `DE_CFG[9]`, clearing
+  `GDS_MITG_DIS` -- run only on affected hardware, never on the gates'
+  machines: their evidence is the decision check and the argued coverage.
 * **CET** — neither indirect branch tracking nor shadow stacks. Both need
   compiler support (`-Z cf-protection`, nightly) and loader cooperation.
 * **Cache timing between processes.** Two programs that share a cache can
