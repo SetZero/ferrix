@@ -26,7 +26,7 @@ use ferrix_vma::VmaFlags;
 use crate::arch;
 use crate::mm;
 use crate::sync::SpinLock;
-use crate::user::space::{Access, AddressSpace, FilePlace, SpaceError};
+use crate::user::space::{self, Access, AddressSpace, FilePlace, SpaceError};
 use crate::user::vmo::{Vmo, VmoError};
 
 /// What the checks measured, for the boot log.
@@ -94,6 +94,10 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let copied = check_fork_shares_pages_and_a_write_copies_one()?;
     check_a_page_made_writable_after_fork_is_copied()?;
     let swapped = check_two_tasks_keep_their_own_address_spaces()?;
+    let lazy = check_a_kernel_thread_keeps_the_last_space_loaded()?;
+    check_a_kernel_thread_between_two_programs_keeps_the_barrier()?;
+    let left_on = check_a_dropped_space_is_taken_off_first(lazy)?;
+    report_lazy(lazy, left_on);
     let refused = crate::user::edge_check::run()?;
     crate::console::println!(
         "  edges    {refused} refusals of an address space, an object and the kernel arena, each \
@@ -710,9 +714,11 @@ fn check_pages_arrive_on_demand_and_go_back() -> Result<u64, &'static str> {
 /// *enabled* — a root written there walks whether or not anything thought
 /// about `TCR.EPD0` / `TTBCR.EPD0`. Uninstalling switches the regime off, as
 /// it must, and the second install is therefore the one that has to turn it
-/// back on. That is the state every address space switch after the first one
-/// happens in, and a version of `install_user_root` that wrote the root and
-/// left `EPD0` alone passes the first round and fails the second.
+/// back on. The scheduler no longer uninstalls when it switches to a kernel
+/// thread -- it leaves the space loaded, lazily -- but a space being dropped
+/// is still taken off every processor that has it, and the next install there
+/// happens in exactly this state. A version of `install_user_root` that wrote
+/// the root and left `EPD0` alone passes the first round and fails the second.
 ///
 /// One consequence worth naming: on Arm this leaves the lower half switched
 /// off earlier than `drop_identity_map` would have. That is safe because
@@ -747,9 +753,12 @@ fn check_the_processor_walks_an_installed_space() -> Result<u64, &'static str> {
     for round in 0..ROUNDS {
         walked = walk_through_installed(&space, base, pages, round);
 
-        // Unconditionally, and before the mask is lifted or `space` is
-        // dropped: a processor left translating through tables that are then
-        // freed is walking memory the allocator has given to somebody else.
+        // Unconditionally, and before the mask is lifted: the next round has
+        // to find the lower half switched off, and the round after the last
+        // must not find this space loaded under whatever this processor runs
+        // next. Dropping it would take it off every processor that still had
+        // it, but that is `Drop`'s promise to check, not this check's to lean
+        // on.
         //
         // SAFETY: (TRANSLATE) nothing after this wants a user address — the next round
         // installs its own, and every read outside this loop goes through the
@@ -850,7 +859,7 @@ fn fault_and_write_installed(
     // SAFETY: (TRANSLATE) `space` is borrowed across the whole window so its tables
     // outlive the installation, interrupts are masked, and it is uninstalled
     // below before anything else can want a user address.
-    unsafe { space.install(None) };
+    unsafe { space.install() };
 
     // As in `walk_through_installed`: reaching a user linear address from ring
     // 0 is the point of the check, and SMAP refuses it without `EFLAGS.AC`.
@@ -897,7 +906,7 @@ fn walk_through_installed(
     // SAFETY: (TRANSLATE) `space` is borrowed for the whole of this call, so its tables
     // outlive the installation; the caller has masked interrupts and
     // uninstalls before going on.
-    unsafe { space.install(None) };
+    unsafe { space.install() };
 
     // SMAP refuses ring 0 a user linear address, and reaching one on purpose is
     // the whole point of this check: it proves the processor walks an installed
@@ -1374,6 +1383,308 @@ fn check_two_tasks_keep_their_own_address_spaces() -> Result<u64, &'static str> 
         "running tasks in address spaces leaked frames",
     )?;
     Ok(right)
+}
+
+/// A kernel thread runs on whatever space the last program left loaded where
+/// the processor refuses ring 0 a user page, and on the kernel's own tables
+/// where it does not; either way a processor is in exactly the set of the
+/// space it has loaded.
+///
+/// The scheduler's own switch, `space::switch_here`, driven by hand on this
+/// processor with interrupts masked, in the order `choose_next` would drive it
+/// on the ring's round trip: a program, a kernel thread, the same program
+/// again, a kernel thread, and another program. Root writes are counted per
+/// processor, so nothing another processor does moves the count.
+///
+/// Which of the two is expected is read from the processor, through
+/// `arch::user_access_refused`, not from the scheduler's own decision -- so
+/// a scheduler that went lazy on a processor without SMAP or PAN fails here.
+/// Lazy: the kernel thread and the return to the same program write no root,
+/// the other program exactly one, and the processor stays in the first
+/// space's set under the kernel thread. Eager: each switch writes one, and
+/// under the kernel thread nothing is loaded and the processor is in no set.
+/// Both: at the end the second space is loaded, and the processor is in its
+/// set and out of the first's. Answers whether this processor ran lazily.
+///
+/// Verifies: L.user.107
+fn check_a_kernel_thread_keeps_the_last_space_loaded() -> Result<bool, &'static str> {
+    let before = quiet_frames()?;
+    let first = AddressSpace::new().map_err(|_| "could not make an address space")?;
+    let second = AddressSpace::new().map_err(|_| "could not make an address space")?;
+
+    let state = <arch::Irq as IrqControl>::disable();
+    let lazy = arch::user_access_refused();
+    let switched = switch_through_a_kernel_thread(&first, &second, lazy);
+    take_off_here(&[&first, &second]);
+    <arch::Irq as IrqControl>::restore(state);
+    switched?;
+
+    drop(first);
+    drop(second);
+    expect_frames(before, "switching through a kernel thread leaked frames")?;
+    Ok(lazy)
+}
+
+/// [`check_a_kernel_thread_keeps_the_last_space_loaded`]'s switches, `lazy`
+/// saying which behaviour the processor allows. With interrupts masked; the
+/// caller takes both spaces off afterwards.
+fn switch_through_a_kernel_thread(
+    first: &AddressSpace,
+    second: &AddressSpace,
+    lazy: bool,
+) -> Result<(), &'static str> {
+    let cpu = crate::smp::this_cpu()
+        .ok_or("no processor to switch address spaces on")?
+        .logical;
+    // Root writes each step makes: none lazily, where a kernel thread keeps
+    // the space and a program finds its own still loaded; one each eagerly.
+    let step = u64::from(!lazy);
+
+    // SAFETY: (TRANSLATE) both spaces are borrowed for the whole call and taken off this
+    // processor by the caller before either goes; interrupts are masked, and
+    // nothing here reaches a user address.
+    unsafe { space::switch_here(Some(first)) };
+    let writes = space::root_writes_on(cpu);
+
+    // SAFETY: (TRANSLATE) as above.
+    unsafe { space::switch_here(None) };
+    if lazy && space::root_writes_on(cpu) != writes {
+        return Err("switching to a kernel thread wrote a root");
+    }
+    if lazy && (!space::is_loaded_here(first) || !first.in_set(cpu)) {
+        return Err(
+            "a processor running a kernel thread did not keep the last space loaded and stay in \
+             its set",
+        );
+    }
+    if !lazy && (space::root_writes_on(cpu) != writes + 1 || first.in_set(cpu)) {
+        return Err(
+            "a kernel thread ran on a program's space on a processor that does not refuse ring 0 \
+             a user page",
+        );
+    }
+
+    // SAFETY: (TRANSLATE) as above.
+    unsafe { space::switch_here(Some(first)) };
+    if space::root_writes_on(cpu) != writes + 2 * step {
+        return Err(
+            "a program coming back to its own space through a kernel thread had a root written \
+             that its processor's mode does not call for",
+        );
+    }
+
+    // SAFETY: (TRANSLATE) as above.
+    unsafe { space::switch_here(None) };
+    // SAFETY: (TRANSLATE) as above.
+    unsafe { space::switch_here(Some(second)) };
+    if space::root_writes_on(cpu) != writes + 1 + 3 * step {
+        return Err("another program's space was not installed with exactly one root write");
+    }
+    if !space::is_loaded_here(second) || !second.in_set(cpu) || first.in_set(cpu) {
+        return Err(
+            "installing another space did not move this processor from the first space's set to \
+             the second's",
+        );
+    }
+    Ok(())
+}
+
+/// The switch barrier fires when a processor enters a different program's
+/// space than the last one it ran, and a kernel thread in between -- whether
+/// it runs on the space it was left or on the kernel's own tables -- changes
+/// nothing about that.
+///
+/// The decision is keyed on the last *program's* space this processor ran,
+/// not on the running task's: a program, a kernel thread, then another
+/// program must be decided a change, and a program, a kernel thread, then the
+/// same program must not. Counted by `speculation::space_changes_on`, which
+/// counts the decision whether or not the processor's plan has a barrier to
+/// issue for it, so the check means the same on every architecture; a build
+/// with `--mitigations off` decides nothing and is held to that.
+///
+/// Verifies: L.user.108
+fn check_a_kernel_thread_between_two_programs_keeps_the_barrier() -> Result<(), &'static str> {
+    let before = quiet_frames()?;
+    let first = AddressSpace::new().map_err(|_| "could not make an address space")?;
+    let second = AddressSpace::new().map_err(|_| "could not make an address space")?;
+
+    let state = <arch::Irq as IrqControl>::disable();
+    let decided = barrier_decisions_through_a_kernel_thread(&first, &second);
+    take_off_here(&[&first, &second]);
+    <arch::Irq as IrqControl>::restore(state);
+    let (back, other) = decided?;
+
+    if back != 0 {
+        return Err(
+            "a program coming back to its own space through a kernel thread was decided another \
+             program's",
+        );
+    }
+    if other != u64::from(arch::HARDENED) {
+        return Err(
+            "a kernel thread between two programs hid the change of program from the switch barrier",
+        );
+    }
+
+    drop(first);
+    drop(second);
+    expect_frames(before, "deciding switch barriers leaked frames")
+}
+
+/// [`check_a_kernel_thread_between_two_programs_keeps_the_barrier`]'s
+/// switches: how many changes of program were decided coming back to the
+/// same space, and going on to another. With interrupts masked; the caller
+/// takes both spaces off afterwards.
+fn barrier_decisions_through_a_kernel_thread(
+    first: &AddressSpace,
+    second: &AddressSpace,
+) -> Result<(u64, u64), &'static str> {
+    let cpu = crate::smp::this_cpu()
+        .ok_or("no processor to switch address spaces on")?
+        .logical;
+
+    // SAFETY: (TRANSLATE) both spaces are borrowed for the whole call and taken off this
+    // processor by the caller before either goes; interrupts are masked, and
+    // nothing here reaches a user address.
+    unsafe { space::switch_here(Some(first)) };
+    let start = arch::space_changes_on(cpu);
+    // SAFETY: (TRANSLATE) as above.
+    unsafe { space::switch_here(None) };
+    // SAFETY: (TRANSLATE) as above.
+    unsafe { space::switch_here(Some(first)) };
+    let back = arch::space_changes_on(cpu).saturating_sub(start);
+
+    // SAFETY: (TRANSLATE) as above.
+    unsafe { space::switch_here(None) };
+    let middle = arch::space_changes_on(cpu);
+    // SAFETY: (TRANSLATE) as above.
+    unsafe { space::switch_here(Some(second)) };
+    let other = arch::space_changes_on(cpu).saturating_sub(middle);
+    Ok((back, other))
+}
+
+/// Take whichever of `spaces` is loaded on this processor off it. With
+/// interrupts masked.
+fn take_off_here(spaces: &[&AddressSpace]) {
+    for loaded in spaces.iter().filter(|each| space::is_loaded_here(each)) {
+        // SAFETY: (TRANSLATE) the caller has interrupts masked and wants no user address
+        // afterwards.
+        unsafe { loaded.uninstall() };
+    }
+}
+
+/// The `lazy` boot line: which way a kernel thread ran on this processor, and
+/// what the lazy address space checks found.
+fn report_lazy(lazy: bool, left_on: Option<usize>) {
+    let backstop = arch::USER_ACCESS_BACKSTOP;
+    if lazy {
+        crate::console::println!(
+            "  lazy     lazy, the processor refusing ring 0 user pages ({backstop} on): a kernel \
+             thread ran on the space the last program left, with 0 root writes and the \
+             processor still in its set; another program's space took 1 root write and was \
+             decided a change of program; a space dropped while loaded on processor {} was \
+             taken off it first",
+            left_on.map_or(-1, |cpu| i64::try_from(cpu).unwrap_or(-1))
+        );
+    } else {
+        crate::console::println!(
+            "  lazy     eager, no {backstop} on this processor: a kernel thread ran on the \
+             kernel's own tables, each switch writing its root, and a finished program's space \
+             was loaded nowhere when dropped; another program's space was decided a change of \
+             program"
+        );
+    }
+}
+
+/// Set by [`leave_a_space`] as it finishes.
+static LEFT_DONE: AtomicU64 = AtomicU64::new(0);
+
+/// A task that runs in a space and finishes, leaving the space loaded on its
+/// processor under whatever kernel thread runs there next.
+fn leave_a_space(_: usize) {
+    LEFT_DONE.store(1, Ordering::Release);
+}
+
+/// How many times [`check_a_dropped_space_is_taken_off_first`] tries to have
+/// the space still loaded where its task ran when it drops it.
+const LEAVE_ATTEMPTS: u32 = 5;
+
+/// A space dropped while another processor still has it loaded -- left there,
+/// lazily, by a task of the space that ran and finished there -- is taken off
+/// that processor before anything it reaches goes back.
+///
+/// The evidence is `Drop`'s own check, which stops the machine (FX-0009) if
+/// any processor is still in the set or still names the space in its record
+/// when the tables are about to go. What this adds is the case itself, made
+/// on purpose: a task pinned to another processor, where there is one, runs
+/// in the space and finishes; the idle task that follows it there is a kernel
+/// thread, so the space stays loaded; and the check confirms it still is --
+/// the processor is in the space's set -- at the moment the last reference
+/// goes, trying again if something else ran there first. The drop then has
+/// to interrupt that processor and wait for it to leave. Answers the
+/// processor it was taken off.
+///
+/// Where the processors are not `lazy` -- no SMAP or PAN -- the idle task
+/// takes the space off as it starts, so the check holds the other side of
+/// the rule: the finished program's space is in no processor's set when its
+/// last reference goes, and the drop waits for no one. Answers `None`.
+///
+/// Verifies: L.user.109
+fn check_a_dropped_space_is_taken_off_first(lazy: bool) -> Result<Option<usize>, &'static str> {
+    let frames_before = quiet_frames()?;
+    let arena_before = crate::vmap::usage().allocations;
+    let here = crate::smp::this_cpu()
+        .ok_or("no processor to run the lazy address space check on")?
+        .logical;
+    let count = crate::smp::count();
+    let there = if count > 1 { (here + 1) % count } else { here };
+
+    for _ in 0..LEAVE_ATTEMPTS {
+        let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
+        LEFT_DONE.store(0, Ordering::Release);
+        let task = crate::sched::spawn_on_in(
+            "space-leaver",
+            leave_a_space,
+            0,
+            NICE_0_WEIGHT,
+            there,
+            CpuSet::of(there),
+            Some(Arc::clone(&space)),
+        )
+        .map_err(|_| "could not start a task in an address space")?;
+        wait_until(
+            || LEFT_DONE.load(Ordering::Acquire) != 0 && task.is_dead(),
+            "a task that ran in an address space never finished",
+        )?;
+        reap_until(arena_before)?;
+        crate::sched::wait_until_reaper_quiet(PATIENCE_NANOS)?;
+        drop(task);
+        wait_until(
+            || Arc::strong_count(&space) == 1,
+            "a finished task never let go of its address space",
+        )?;
+
+        let still_loaded = space.in_set(there);
+        // The drop under test: with `there` still in the set, it has to take
+        // the space off that processor before its own check lets it go on.
+        drop(space);
+        if !lazy && still_loaded {
+            return Err(
+                "a processor without SMAP or PAN kept a finished program's space loaded under a \
+                 kernel thread",
+            );
+        }
+        if !lazy || still_loaded {
+            expect_frames(
+                frames_before,
+                "a space dropped while loaded on another processor leaked frames",
+            )?;
+            return Ok(still_loaded.then_some(there));
+        }
+    }
+    Err(
+        "a space a finished task left loaded on its processor was never still loaded there when dropped",
+    )
 }
 
 /// Wait for `ready`, yielding, until it is true or the patience runs out.

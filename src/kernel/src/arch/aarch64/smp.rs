@@ -457,5 +457,11 @@ extern "C" fn secondary_start(record: u64) -> ! {
     // The boot core's side-channel defences, before this one can run a
     // program: after the record, which is where it says what it applied.
     super::speculation::apply_this_cpu();
+    // The boot core's PAN. `SCTLR_EL1` came from the boot core with `SPAN`
+    // clear, so every exception entry here sets `PSTATE.PAN`; but the core
+    // arrives from firmware with it clear, and an exception return restores
+    // that, so without this the contexts this core runs would all have it
+    // off. Set once here, every context this core starts inherits it.
+    cpu::forbid_user_access();
     crate::smp::secondary_main(record)
 }

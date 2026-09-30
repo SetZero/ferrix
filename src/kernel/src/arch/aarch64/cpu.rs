@@ -380,6 +380,24 @@ pub(crate) fn permit_user_access() {
     }
 }
 
+/// Whether PAN is in force on the processor running this: `PSTATE.PAN` read
+/// from the processor itself, not the boot processor's finding, so that a
+/// core that never set it answers no.
+pub(crate) fn user_access_refused() -> bool {
+    if !PAN_ON.load(Ordering::Relaxed) {
+        return false;
+    }
+    let pan: u64;
+    // SAFETY: (SYSREG) reading the `PAN` special register (`s3_0_c4_c2_3`) has no side
+    // effects, and is only reached when `ID_AA64MMFR1_EL1` reported the feature,
+    // without which the encoding is undefined.
+    unsafe {
+        asm!("mrs {}, s3_0_c4_c2_3", out(reg) pan, options(nomem, nostack, preserves_flags));
+    }
+    // `PSTATE.PAN` is bit 22 of what the register reads.
+    pan & (1 << 22) != 0
+}
+
 /// Refuse user pages to this processor again.
 pub(crate) fn forbid_user_access() {
     if PAN_ON.load(Ordering::Relaxed) {

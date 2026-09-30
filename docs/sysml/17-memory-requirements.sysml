@@ -1330,7 +1330,8 @@ package FerrixMemoryRequirements {
                 table's physical address is non-zero and a multiple of the page
                 size.";
             attribute :>> parent = "H.MEM.1";
-            attribute :>> unit = "user::space::AddressSpace::new";
+            attribute :>> unit = ("user::space::AddressSpace::new",
+                "user::space::new_root");
         }
         requirement <'L.user.45'> nothingIsMappedBelowTheFloor : ItemLowLevel {
             attribute :>> statement = "AddressSpace::new shall make a space whose map
@@ -1474,12 +1475,13 @@ package FerrixMemoryRequirements {
             attribute :>> parent = "H.MEM.1";
             attribute :>> unit = ("user::space::AddressSpace::install",
                 "user::space::AddressSpace::uninstall",
-                "user::space::this_logical_cpu");
+                "user::space::unload", "user::space::loaded_record",
+                "user::space::count_root_write");
         }
         requirement <'L.user.56'> twoSpacesReadTheirOwnPageAtOneAddress : ItemLowLevel {
-            attribute :>> statement = "install and uninstall, as the scheduler calls
-                them, shall leave a task reading its own space's frame at a user
-                address however often one processor alternates between two spaces.";
+            attribute :>> statement = "switch_here, as the scheduler calls it, shall
+                leave a task reading its own space's frame at a user address however
+                often one processor alternates between two spaces.";
             attribute :>> criterion = "Two tasks pinned to one processor, each in a
                 space holding a different value at one address, yield between reads:
                 128 reads of 128 return the reader's own value and 0 the other's (the
@@ -1487,7 +1489,8 @@ package FerrixMemoryRequirements {
             attribute :>> parent = "H.MEM.1";
             attribute :>> unit = ("user::space::AddressSpace::install",
                 "user::space::AddressSpace::uninstall",
-                "user::space::this_logical_cpu");
+                "user::space::unload", "user::space::loaded_record",
+                "user::space::count_root_write", "user::space::switch_here");
         }
 
         // --- fork and copy-on-write ---
@@ -2197,6 +2200,70 @@ package FerrixMemoryRequirements {
                 page scenario, the `sweep` line).";
             attribute :>> parent = "H.MEM.18";
             attribute :>> unit = "user::space::AddressSpace::map_code_page";
+        }
+
+        // --- Lazy TLB: a kernel thread runs on the space it was left ---
+
+        requirement <'L.user.107'> aKernelThreadKeepsTheLastSpaceLoaded : ItemLowLevel {
+            attribute :>> statement = "On a processor that refuses the kernel a user
+                page (SMAP on x86-64, PAN on AArch64), switch_here shall write no root
+                register when the incoming task is a kernel thread or runs in the
+                space already loaded; on any other processor, ARMv7-A always, it
+                shall take the loaded space off when the incoming task is a kernel
+                thread. On both it shall install any other space with one root
+                write, and a processor shall stay in the set of the space it has
+                loaded, lazily or not, until the root write that replaces it.";
+            attribute :>> criterion = "On one processor, switched by hand through a
+                program, a kernel thread, the same program, a kernel thread and
+                another program, the mode read from the processor itself: lazily, 0
+                root writes up to the other program and 1 for it, the first space
+                loaded and the processor in its set under the kernel thread;
+                eagerly, 1 root write per switch and the processor in no set under
+                the kernel thread; either way the second space loaded, the processor
+                in its set and out of the first's at the end, the `lazy` line naming
+                the mode, and 0 frames kept. Forced lazy on a processor without the
+                refusal, the check fails.";
+            attribute :>> parent = ("H.MEM.1", "H.MEM.17");
+            attribute :>> unit = ("user::space::switch_here", "user::space::lazy_here",
+                "user::space::AddressSpace::install", "user::space::loaded_record",
+                "user::space::count_root_write", "user::space::unload",
+                "arch::x86_64::cpu::user_access_refused",
+                "arch::aarch64::cpu::user_access_refused");
+        }
+        requirement <'L.user.108'> aKernelThreadBetweenTwoProgramsKeepsTheBarrier : ItemLowLevel {
+            attribute :>> statement = "switch_here and install shall decide a change
+                of program, and so a switch barrier where the processor's plan has
+                one, exactly when the space entered differs from the last program's
+                space the processor ran, whatever kernel threads ran between.";
+            attribute :>> criterion = "On one processor, a program, a kernel thread and
+                the same program decide 0 changes; a program, a kernel thread and
+                another program decide 1 in a hardened build and 0 in a
+                --mitigations off build (the `lazy` line), and 0 frames kept.";
+            attribute :>> parent = ("H.TRAP.3", "H.MEM.1");
+            attribute :>> unit = ("user::space::switch_here",
+                "user::space::AddressSpace::install");
+        }
+        requirement <'L.user.109'> aDroppedSpaceIsTakenOffFirst : ItemLowLevel {
+            attribute :>> statement = "Dropping an address space shall make every
+                processor that still has it loaded take it off and leave its set,
+                shall give back no page table and no frame while any processor is in
+                its set or names it in its record, and shall stop the kernel, in
+                every build, if it is asked for holding a lock that disables
+                preemption or with interrupts masked.";
+            attribute :>> criterion = "A task pinned to a second processor runs in a
+                space and finishes. Where the processors are lazy, with that
+                processor still in the space's set, the space's last reference is
+                dropped from the first processor, the boot goes on past Drop's check
+                (FX-0009) to FERRIX-BOOT-OK and 0 frames are kept; where they are
+                eager, the space is in no processor's set when dropped (the `lazy`
+                line). With the request to leave skipped, the same drop stops the
+                kernel with FX-0009; a drop made holding a spin lock stops it with
+                FX-0010.";
+            attribute :>> parent = ("H.MEM.7", "H.MEM.17", "H.MEM.9");
+            attribute :>> unit = ("user::space::Presence::retire",
+                "user::space::answer_retiring", "user::space::unload",
+                "smp::wait_until_left", "smp::retire_may_wait", "smp::service_tlb",
+                "user::space::AddressSpace::drop");
         }
     }
 }

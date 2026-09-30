@@ -1158,9 +1158,10 @@ pub(crate) unsafe fn install_user_root(root: u64) {
 
 /// Stop translating the lower half at all.
 ///
-/// What a processor picking up a kernel thread does; see AArch64's, whose
-/// argument is the same one. `EPD0` governs walks and not the `TLB`, so the
-/// cached user entries have to be invalidated as well.
+/// What every processor here does when it picks up a kernel thread: without
+/// PAN, a kernel thread is never left on a program's root
+/// (`crate::user::space`); see AArch64's, whose argument is the same one. `EPD0` governs walks and not the `TLB`, so the cached user entries
+/// have to be invalidated as well.
 ///
 /// # Safety
 ///
@@ -1546,6 +1547,16 @@ pub(crate) const fn thread_area(_index: usize) -> Option<u64> {
 /// `permit_user_access` exists to allow. Finding F-32 tracks turning it on,
 /// and when it is, this is where the `PAN` toggle goes.
 pub(crate) fn permit_user_access() {}
+
+/// What would refuse PL1 a user page: `PAN`, which ARMv7-A does not have.
+pub(crate) const USER_ACCESS_BACKSTOP: &str = "PAN";
+
+/// Never: nothing refuses the kernel a user page here (see
+/// [`permit_user_access`]), so a kernel thread must not be left running on a
+/// program's space, and the scheduler takes it off (`crate::user::space`).
+pub(crate) const fn user_access_refused() -> bool {
+    false
+}
 
 /// Refuse user pages to this processor again. A no-op, as above.
 pub(crate) fn forbid_user_access() {}
