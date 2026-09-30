@@ -197,6 +197,8 @@ pub mod lgamma;
 pub mod lgammaf;
 pub mod log;
 pub mod log10;
+#[cfg(target_arch = "x86_64")]
+pub mod log128;
 pub mod log1p;
 pub mod log2;
 pub mod logf;
