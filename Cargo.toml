@@ -87,6 +87,7 @@ members = [
     # host, so the host gates exclude them; everything about them that can be
     # a pure function lives in `src/lib/proto/native`.
     "src/user/native/rt",
+    "src/user/native/driver",
     "src/user/native/channel-echo",
     "src/user/native/pong",
     "src/user/native/drivers/block/virtio-blk",
@@ -163,6 +164,7 @@ ferrix-netring = { path = "src/lib/proto/netring" }
 ferrix-netserve = { path = "src/lib/drivers/net/netserve" }
 ferrix-netlink = { path = "src/lib/network/netlink" }
 ferrix-rt = { path = "src/user/native/rt" }
+ferrix-driver = { path = "src/user/native/driver" }
 ferrix-net-driver = { path = "src/user/native/drivers/net/virtio-net" }
 ferrix-objects = { path = "src/lib/kernel/objects" }
 ferrix-sync = { path = "src/lib/kernel/sync" }

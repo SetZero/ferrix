@@ -14,11 +14,9 @@ test = false
 bench = false
 
 [dependencies]
-ferrix-blkring.workspace = true
+ferrix-driver = { workspace = true, features = ["input"] }
 ferrix-inputctl.workspace = true
-ferrix-native-abi.workspace = true
 ferrix-rt.workspace = true
-ferrix-virtio.workspace = true
 ferrix-virtio-input.workspace = true
 
 [lints]

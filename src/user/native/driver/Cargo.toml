@@ -1,0 +1,24 @@
+[package]
+name = "ferrix-driver"
+description = "What every ring-3 driver process shares: its start, its registers and DMA memory, a bus's transport, and the protocol its subsystem speaks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# The input subsystem, and the virtio-input device logic it serves through the
+# virtio bus. A driver asks for what it is; the rest is not compiled.
+input = ["dep:ferrix-inputctl", "dep:ferrix-virtio-input"]
+
+[dependencies]
+ferrix-blkring.workspace = true
+ferrix-native-abi.workspace = true
+ferrix-rt.workspace = true
+ferrix-virtio.workspace = true
+ferrix-inputctl = { workspace = true, optional = true }
+ferrix-virtio-input = { workspace = true, optional = true }
+
+[lints]
+workspace = true

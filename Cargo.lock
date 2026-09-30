@@ -176,6 +176,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-driver"
+version = "0.1.0"
+dependencies = [
+ "ferrix-blkring",
+ "ferrix-inputctl",
+ "ferrix-native-abi",
+ "ferrix-rt",
+ "ferrix-virtio",
+ "ferrix-virtio-input",
+]
+
+[[package]]
 name = "ferrix-dwc3"
 version = "0.1.0"
 dependencies = [
@@ -240,11 +252,9 @@ version = "0.1.0"
 name = "ferrix-input"
 version = "0.1.0"
 dependencies = [
- "ferrix-blkring",
+ "ferrix-driver",
  "ferrix-inputctl",
- "ferrix-native-abi",
  "ferrix-rt",
- "ferrix-virtio",
  "ferrix-virtio-input",
 ]
 
