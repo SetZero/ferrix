@@ -1,4 +1,8 @@
-//! `unshare` and `setns`: mount namespaces, and nothing else yet.
+//! `unshare` and `setns`: mount and user namespaces, and nothing else yet.
+//!
+//! A user namespace (`docs/NAMESPACES.md` §2.2) is made first when asked for
+//! with a mount namespace, and owns it. The caller ends up in it holding every
+//! capability there and none outside; see [`userns`].
 //!
 //! A process is in one mount namespace, named in its fs context beside its
 //! root and working directory, and `unshare(CLONE_NEWNS)` or
@@ -25,12 +29,14 @@ use ferrix_vfs::Context;
 use crate::fallible;
 use crate::fs;
 use crate::sync::SpinLock;
-use crate::syscall::credentials;
 use crate::syscall::fd;
 use crate::syscall::process::Process;
+use crate::syscall::userns::{self, CAP_SYS_ADMIN};
 
 /// Give the process a mount namespace of its own.
 pub(crate) const CLONE_NEWNS: u64 = 0x0002_0000;
+/// Give the process a user namespace of its own.
+pub(crate) const CLONE_NEWUSER: u64 = 0x1000_0000;
 
 /// `unshare`.
 ///
@@ -54,20 +60,70 @@ pub(crate) const CLONE_NEWNS: u64 = 0x0002_0000;
 /// Every other flag names a namespace, or asks to leave a thread group or an
 /// address space, and is `EINVAL`.
 pub(crate) fn sys_unshare(process: &Process, flags: u64) -> Result<usize, Errno> {
-    if flags & !(CLONE_FILES | CLONE_FS | CLONE_NEWNS) != 0 {
+    if flags & !(CLONE_FILES | CLONE_FS | CLONE_NEWNS | CLONE_NEWUSER) != 0 {
         return Err(Errno::EINVAL);
     }
     if flags & CLONE_FILES != 0 && Arc::strong_count(process.files()) > 1 {
         return Err(Errno::EINVAL);
     }
-    if flags & (CLONE_FS | CLONE_NEWNS) != 0 && Arc::strong_count(process.fs_context()) > 1 {
+    if flags & (CLONE_FS | CLONE_NEWNS | CLONE_NEWUSER) != 0
+        && Arc::strong_count(process.fs_context()) > 1
+    {
         return Err(Errno::EINVAL);
     }
+    // A user namespace cannot be given to one thread of several (U5's kin:
+    // Linux implies `CLONE_THREAD`'s opposite).
+    if flags & CLONE_NEWUSER != 0 && process.tasks().len() > 1 {
+        return Err(Errno::EINVAL);
+    }
+    let fresh = if flags & CLONE_NEWUSER != 0 {
+        Some(make_user_namespace(process)?)
+    } else {
+        None
+    };
+    // `CLONE_NEWNS` needs `CAP_SYS_ADMIN` where the caller is: in the
+    // namespace it is about to have, if it asked for one.
     if flags & CLONE_NEWNS != 0 {
-        credentials::require_privilege(process)?;
+        if fresh.is_none() && !process.with_credentials(|held| held.holds(CAP_SYS_ADMIN)) {
+            return Err(Errno::EPERM);
+        }
         copy_namespace(process.fs_context())?;
     }
+    if let Some(fresh) = fresh {
+        enter_user_namespace(process, fresh);
+    }
     Ok(0)
+}
+
+/// Make the user namespace `process` asks for: Linux's `create_user_ns`,
+/// less the ids, which come when `process` is put in it
+/// ([`enter_user_namespace`]). Nothing changes if it is refused.
+///
+/// # Errors
+///
+/// `EPERM` for a process whose root is not its mount namespace's (rule U6,
+/// CVE-2013-1956: a chrooted process holding `CAP_SYS_CHROOT` inside a
+/// namespace it made could walk out), and for ids the creator's namespace
+/// does not map; `EUSERS` past 32 levels; `ENOMEM`.
+pub(crate) fn make_user_namespace(process: &Process) -> Result<Arc<userns::UserNamespace>, Errno> {
+    let chrooted = {
+        let context = process.fs_context().lock();
+        let namespace = fs::namespace_of(&context);
+        !context.root.same(&namespace.root())
+    };
+    if chrooted {
+        return Err(Errno::EPERM);
+    }
+    process.with_credentials(|held| userns::create(held))
+}
+
+/// Put `process` in `namespace`, holding every capability there and none
+/// outside it, as Linux's `set_cred_user_ns`. Its ids stay as they are.
+pub(crate) fn enter_user_namespace(process: &Process, namespace: Arc<userns::UserNamespace>) {
+    process.with_credentials(|held| {
+        held.user_ns = namespace;
+        held.caps = userns::CapSets::FRESH;
+    });
 }
 
 /// Put a copy of `context`'s mount namespace in it, with its root and

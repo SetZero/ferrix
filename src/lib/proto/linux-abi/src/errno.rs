@@ -117,6 +117,9 @@ impl Errno {
     /// Streams pipe error: what a PCM stream answers while its device is
     /// suspended.
     pub const ESTRPIPE: Self = Self(86);
+    /// Too many users: what making a user namespace past the nesting limit
+    /// answers.
+    pub const EUSERS: Self = Self(87);
     /// Socket operation on non-socket.
     pub const ENOTSOCK: Self = Self(88);
     /// Destination address required.

@@ -65,6 +65,7 @@ pub(crate) mod sysfs;
 pub(crate) mod terminal;
 pub(crate) mod timerfd;
 pub(crate) mod timerfd_check;
+pub(crate) mod userns_check;
 pub(crate) mod wake;
 
 use alloc::sync::Arc;
