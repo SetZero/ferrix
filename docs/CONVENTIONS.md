@@ -127,6 +127,34 @@ rule below comes from something seen there.
    both, in each agent's report. That is what shows whether a stream is slow
    because of its code, its gates, or its reruns.
 
+## Changes to the certified item go through review
+
+Ferrix's certification targets are required (`docs/BACKLOG.md`, Decisions,
+2026-10-01): Common Criteria EAL5+, DO-178C DAL C, IEC 62304 Class C and EN
+50716 SIL 2. Their evidence lives in `docs/certification/`, and a landing can
+quietly break it. So send the branch and commit to the certification
+consultant session before `land.sh take` when a change:
+
+* touches a file in the `core` or `item` ring of
+  `tools/common/data/certification-item.json`, or the file itself;
+* is a kernel change in the load ring that adds `unsafe`, a countermeasure,
+  or a check the item's evidence relies on;
+* changes a requirement, a check or a baseline under `docs/sysml/` or
+  `tools/common/data/`, or anything in `docs/certification/`.
+
+Find the consultant with `ListAgents`; its name changes between sessions.
+Ring-3 programs, xtask-only changes and docs outside `docs/certification/`
+do not need it. The review checks the rules the evidence rests on:
+* no upward reference across the item boundary;
+* a changed behaviour has an updated requirement;
+* every new `unsafe` is traced;
+* every countermeasure has a check with a negative control that shows it
+  fired;
+* coverage is carried after the final rebase, with dropped anchors listed.
+
+The review is internal, not independent verification in the standards'
+sense (F-27, F-29).
+
 ## Where a new file goes
 
 [LAYOUT.md](LAYOUT.md) says which directory each kind of thing belongs in:

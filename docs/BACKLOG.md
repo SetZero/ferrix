@@ -600,6 +600,16 @@ The roadmap's *Burndown* lists that scope.
 Dated, newest first. A decision here is final until the customer says
 otherwise; one a later decision replaced is deleted, and the history keeps it.
 
+* **2026-10-01 (customer)** **The certification targets are a must, and the
+  goal is to reach them.** That is all four in
+  `docs/certification/README.md`: Common Criteria EAL5+, DO-178C DAL C, IEC
+  62304 Class C and EN 50716 SIL 2. The work that produces their evidence is
+  required, not optional: traceability, coverage, checks with negative
+  controls, the findings register and the vulnerability analysis. Changes to
+  the certified item go to the certification consultant before they land
+  (`docs/CONVENTIONS.md`). `docs/certification/CLAIM.md`'s two questions,
+  the claim's wording and which standard is pursued first, stay open until
+  the customer settles them.
 * **2026-09-28 (customer)** **A live installer, as Linux distributions
   have one** (`docs/INSTALLER.md`). The customer chose: real PCs as well as
   virtual machines (so NVMe, AHCI, xHCI, USB mass storage, i8042 and a

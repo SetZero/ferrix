@@ -5,6 +5,15 @@ A theoretical assessment of Ferrix against four assurance ratings, conducted
 independent assessor has been engaged — the audit is internal, and says so
 everywhere it matters.
 
+**Reaching all four is a requirement (customer, 2026-10-01).** The verdicts
+below say how far each is. They are not an invitation to drop one. What this
+directory asks for is required evidence: requirements and their traces,
+structural coverage, checks with negative controls, findings, the
+vulnerability analysis and the safety manual. So are the steps only outside
+parties can take: an assessor, a quality management system, independent
+reviewers, and a position on AI-authored code (§5). The order in which the
+targets are pursued is open ([CLAIM.md](CLAIM.md)).
+
 **The element is developed out of context.** It has no application of its own,
 so it is analysed against *assumed* safety requirements and ships the
 conditions an integrator must discharge — ISO 26262's SEooC, EN 50716's generic

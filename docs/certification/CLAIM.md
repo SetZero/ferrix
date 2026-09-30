@@ -8,8 +8,13 @@
 > 1. **The claim's wording** (§1).
 > 2. **IEC 61508 SIL 2 as the first standard** (§2).
 >
-> Until the customer decides both, nothing here is a commitment, and no
-> other document should cite it as one. Figures marked *guess* are the
+> **Decided (customer, 2026-10-01):** certification is required. The four
+> targets in the [README](README.md) are a must, and the goal is to reach
+> them. That settles *whether*, not the two questions above: the claim's
+> wording and which standard comes first stay open.
+>
+> Until the customer decides both, the plan below is not a commitment, and
+> no other document should cite it as one. Figures marked *guess* are the
 > consultant's estimates, not measurements. Points are for the product owner
 > to convert.
 
