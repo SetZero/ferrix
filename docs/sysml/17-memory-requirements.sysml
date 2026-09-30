@@ -747,6 +747,20 @@ package FerrixMemoryRequirements {
             attribute :>> parent = "H.MEM.14";
             attribute :>> unit = "early::EarlyMemory::allocate_table";
         }
+        requirement <'L.mm.62'> onlyRamHasACheckedDirectMapAlias : ItemLowLevel {
+            attribute :>> statement = "direct_map_ram shall answer a direct-map address
+                only for a physical address inside a run of RAM that record_ram
+                recorded from the memory map, clipped to the direct map's span, and
+                record_ram shall record those runs whole, in whole pages, ascending
+                and apart, or refuse to bring memory up.";
+            attribute :>> criterion = "At least one run is recorded, each whole pages,
+                ascending and apart; a frame the allocator hands out is answered with
+                the direct_map address; the page past the highest run, a page between
+                two runs where the memory map has one, and a device's aperture are
+                each answered None (the stage 2 memory check and the `copies` line).";
+            attribute :>> parent = ("H.MEM.1", "H.MEM.15");
+            attribute :>> unit = ("mm::direct_map_ram", "mm::record_ram");
+        }
     }
 
     package VirtualMemoryObjects {
@@ -1654,6 +1668,21 @@ package FerrixMemoryRequirements {
                 "user::space::AddressSpace::fault_device",
                 "user::space::AddressSpace::resolve",
                 "user::space::AddressSpace::fork");
+        }
+        requirement <'L.user.107'> aCopyThroughADevicePageIsRefused : ItemLowLevel {
+            attribute :>> statement = "with_page and with_present_page shall refuse
+                a copy to or from a page of a device region with Refused, before the
+                page is faulted in or a direct-map address is formed for it, and
+                shall form one only through direct_map_ram.";
+            attribute :>> criterion = "A writev() from and a readv() into a device's
+                aperture mapped by io_mapping_map, a cached window past all RAM and,
+                where the memory map has a hole between runs of RAM, a window over
+                it are each EFAULT with the page still absent, and with_present_page
+                refuses each for reading and writing; with the aperture's page
+                faulted in, both copies are EFAULT again (the `copies` line).";
+            attribute :>> parent = ("H.MEM.1", "H.DMA.5");
+            attribute :>> unit = ("user::space::AddressSpace::with_page",
+                "user::space::AddressSpace::with_present_page", "user::space::copyable");
         }
 
         // --- mremap ---

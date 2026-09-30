@@ -325,6 +325,7 @@ pub(crate) fn memory_check(stats: &mm::Stats) -> Result<(), &'static str> {
     check_no_device_window_over_the_image()?;
     check_no_device_window_wraps()?;
     check_stacks()?;
+    check_only_ram_has_a_checked_alias()?;
     Ok(())
 }
 
@@ -810,6 +811,81 @@ fn check_heap() -> Result<(), &'static str> {
 
     if mm::heap_pages() == 0 {
         return Err("the heap never took a page, so nothing was really allocated");
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The direct map's RAM (F-55)
+// ---------------------------------------------------------------------------
+
+/// The runs of RAM [`super::record_ram`] recorded, lowest first.
+fn ram_runs() -> impl Iterator<Item = (u64, u64)> {
+    let count = super::RAM_RUN_COUNT.load(Ordering::Acquire);
+    super::RAM_RUNS
+        .iter()
+        .take(count)
+        .map(|(first, end)| (first.load(Ordering::Relaxed), end.load(Ordering::Relaxed)))
+}
+
+/// A physical page past every byte of RAM the direct map translates: the
+/// first gibibyte boundary at or past the end of the highest run, where the
+/// window a virtual GPU exposes host memory through sits on a machine with
+/// that much RAM (F-55).
+pub(crate) fn past_ram() -> u64 {
+    let end = ram_runs().map(|(_, end)| end).max().unwrap_or(0);
+    end.next_multiple_of(1 << 30)
+}
+
+/// A physical page between two runs of RAM, inside the span the direct map
+/// covers but not RAM, if the memory map has one: where a device's window
+/// would have a cacheable alias if the direct map translated it.
+pub(crate) fn hole_in_ram() -> Option<u64> {
+    let mut runs = ram_runs().peekable();
+    while let Some((_, end)) = runs.next() {
+        if let Some(&(next, _)) = runs.peek()
+            && next > end
+        {
+            return Some(end);
+        }
+    }
+    None
+}
+
+/// `direct_map_ram` answers for RAM and for nothing else.
+///
+/// The runs are there, whole pages, ascending and apart, as the loaders' own
+/// walk of the memory map makes them. A frame the allocator hands out is
+/// RAM, and gets the same alias [`direct_map`] gives it; the page past the
+/// highest run, and a page between two runs where the map has one, get none.
+/// Nothing is read through any of them.
+///
+/// Verifies: L.mm.62
+fn check_only_ram_has_a_checked_alias() -> Result<(), &'static str> {
+    let mut previous_end = None;
+    for (first, end) in ram_runs() {
+        if first >= end || !first.is_multiple_of(PAGE_SIZE) || !end.is_multiple_of(PAGE_SIZE) {
+            return Err("a recorded run of RAM is empty or not whole pages");
+        }
+        if previous_end.is_some_and(|previous| first < previous) {
+            return Err("the recorded runs of RAM overlap or are out of order");
+        }
+        previous_end = Some(end);
+    }
+    if previous_end.is_none() {
+        return Err("no run of RAM was recorded");
+    }
+    let frame = mm::allocate_frames(0).ok_or("no frame for the direct-map check")?;
+    let answered = mm::direct_map_ram(frame * PAGE_SIZE);
+    mm::deallocate_frames(frame, 0);
+    if answered != Some(direct_map(frame * PAGE_SIZE)) {
+        return Err("a frame the allocator handed out has no checked direct-map alias");
+    }
+    if mm::direct_map_ram(past_ram()).is_some() {
+        return Err("a page past all RAM has a checked direct-map alias");
+    }
+    if hole_in_ram().is_some_and(|hole| mm::direct_map_ram(hole).is_some()) {
+        return Err("a page between two runs of RAM has a checked direct-map alias");
     }
     Ok(())
 }

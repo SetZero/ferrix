@@ -971,6 +971,30 @@ pub(super) fn check_device_objects() {
          device and found at their device addresses, {} refusals as specified",
         report.mapped, report.interrupts, report.pinned, report.refusals,
     );
+    // F-55: a copy through any of them is refused, and the boot goes on.
+    let copies = match object::device_copy_check::run() {
+        Ok(copies) => copies,
+        Err(problem) => fatal!(
+            catalog::STAGE9_OBJECTS,
+            "stage 9 device object self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  copies   {} copies to and from {} device windows EFAULT before any page was faulted \
+         in: {}a cached window past all RAM{}",
+        copies.refused,
+        copies.windows,
+        if copies.aperture {
+            "a device's aperture, "
+        } else {
+            "no aperture on this machine, "
+        },
+        if copies.inside {
+            ", and one between two runs of RAM"
+        } else {
+            "; no hole between runs of RAM for one inside the direct map"
+        },
+    );
     if report.delivered > 0 {
         println!(
             "  wake     {} of {} interrupt deliveries ended their wait by waking it, the slowest \

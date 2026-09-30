@@ -116,7 +116,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixSmpRequirements` | `22-smp-requirements.sysml` | What each unit of src/kernel/src/smp.rs does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): finding the processors and giving each a record it finds itself by, starting the secondaries, the inter-processor interrupt, the TLB shootdown -- whole and scoped, and the bound on how long it waits -- grace periods, stopping the other processors for a panic, and the scheduler's kick. The start sequences themselves, the per-processor register and the interrupt controller are each architecture's (src/kernel/src/arch/\<isa>/smp.rs), and belong to the arch slices; this is the architecture-independent half above them. |
 | `FerrixConsoleRequirements` | `23-console-requirements.sysml` | What each unit of src/kernel/src/console.rs and src/kernel/src/console/ does, as `ItemLowLevel` requirements (part 13 defines the format, part 14 is the pilot this copies): the kernel's lines to the port, whole and in order; the way a failure report gets past a lock nobody will release; the recent-output ring a panic screen draws; the transmit ring and the writers who queue into it, wait for room or poll; the receive ring the port's interrupt fills; the kernel log every byte is recorded in, what it promises a reader and what it keeps out; and the boot console drawn on the framebuffer. The ports themselves are each architecture's (src/kernel/src/arch/\<isa>/console.rs) and belong to the arch slices; the two of their functions that decide \*which\* console the kernel writes to, and whose checks test that, are here too (`Ports`), at the coordinator's asking. |
 
-23 files, 103 packages, 5281 elements, 212 relations. Model digest `32d30828786bf90f`.
+23 files, 103 packages, 5291 elements, 212 relations. Model digest `984516a98e5225fb`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -4046,6 +4046,7 @@ flowchart LR
 | `L.mm.59` | `earlyWindowsRefuseTheImage` | — | — | — |
 | `L.mm.60` | `earlyWindowsRefuseAWrappedRange` | — | — | — |
 | `L.mm.61` | `theEarlyTablePoolIsBounded` | — | — | — |
+| `L.mm.62` | `onlyRamHasACheckedDirectMapAlias` | — | — | — |
 | `L.user.1` | `aReservationCostsNothing` | — | — | — |
 | `L.user.2` | `aCommittedPageIsZeroed` | — | — | — |
 | `L.user.3` | `aFirstWriteCommitsAZeroedPage` | — | — | — |
@@ -4114,6 +4115,7 @@ flowchart LR
 | `L.user.66` | `aWindowIsRefusedAsDeviceMemoryIs` | — | — | — |
 | `L.user.67` | `aWindowKeepsItsKeeperWhileMapped` | — | — | — |
 | `L.user.68` | `aDeviceMappingReachesTheDevicesOwnPages` | — | — | — |
+| `L.user.107` | `aCopyThroughADevicePageIsRefused` | — | — | — |
 | `L.user.69` | `mremapRefusesWhatItShould` | — | — | — |
 | `L.user.70` | `aRegionGrowsWhereItHasRoom` | — | — | — |
 | `L.user.71` | `aSharedRegionNeverGrowsOverItsOwnPages` | — | — | — |

@@ -50,9 +50,9 @@
 
 use alloc::vec::Vec;
 use core::alloc::{GlobalAlloc, Layout};
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-use ferrix_bootinfo::{BootView, MemKind, MemRegion, PAGE_SIZE};
+use ferrix_bootinfo::{BootView, MemKind, MemRegion, PAGE_SIZE, direct_map_runs};
 use ferrix_frame::{Frame, Frames, PageEntry};
 use ferrix_heap::{Backing, Heap, Request};
 use ferrix_paging::{Encoding, MapFlags, Mapper, PhysAddr, PhysMem, Released, VirtAddr};
@@ -79,6 +79,12 @@ pub(crate) enum MemoryError {
     /// Carries the bytes needed. On a machine small enough for this, the array
     /// is most of what there is.
     NoRoomForPageArray(u64),
+    /// The memory map's RAM falls into more separate runs than
+    /// [`MOST_RAM_RUNS`], so the direct map's RAM cannot all be recorded.
+    ///
+    /// Carries how many runs there were. Refused rather than recorded in part:
+    /// a run left out would make every copy through its frames fail.
+    TooManyRamRuns(usize),
 }
 
 impl core::fmt::Display for MemoryError {
@@ -87,6 +93,9 @@ impl core::fmt::Display for MemoryError {
             MemoryError::NoUsableMemory => f.write_str("firmware reported no usable memory"),
             MemoryError::NoRoomForPageArray(bytes) => {
                 write!(f, "no usable region holds the {bytes}-byte page array")
+            }
+            MemoryError::TooManyRamRuns(runs) => {
+                write!(f, "RAM falls into {runs} runs, more than can be recorded")
             }
         }
     }
@@ -120,6 +129,28 @@ static PHYSMAP: AtomicU64 = AtomicU64::new(0);
 /// The physical address that appears at [`PHYSMAP`]: the lowest RAM address,
 /// which is zero on x86-64 and a gibibyte on QEMU's Arm machines.
 static PHYSMAP_PHYS: AtomicU64 = AtomicU64::new(0);
+
+/// How many separate runs of RAM [`RAM_RUNS`] can hold.
+///
+/// A memory map's RAM regions mostly touch, and merged they are a handful of
+/// runs: one or two on a device-tree board, a few dozen on a PC whose firmware
+/// scatters reserved ranges through it. A map with more is refused at
+/// bring-up ([`MemoryError::TooManyRamRuns`]), not recorded in part.
+pub(crate) const MOST_RAM_RUNS: usize = 128;
+
+/// The runs of RAM the direct map translates, as `(first byte, one past the
+/// last)`, lowest first; the first [`RAM_RUN_COUNT`] of them are meaningful.
+///
+/// Written once by [`record_ram`], on the boot processor before any other
+/// starts, and read without a lock by [`direct_map_ram`], which the panic
+/// path uses too. Atomics rather than a cell, so that neither side needs an
+/// `unsafe`.
+static RAM_RUNS: [(AtomicU64, AtomicU64); MOST_RAM_RUNS] =
+    [const { (AtomicU64::new(0), AtomicU64::new(0)) }; MOST_RAM_RUNS];
+
+/// How many of [`RAM_RUNS`] [`record_ram`] filled. Stored last, with release,
+/// so a reader that sees a count sees the runs it counts.
+static RAM_RUN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// The virtual address at which physical address `phys` is readable.
 fn physmap(phys: u64) -> u64 {
@@ -165,6 +196,7 @@ pub(crate) fn init(view: &BootView<'_>) -> Result<Stats, MemoryError> {
     ROOT_TABLE.store(view.raw().root_table_phys, Ordering::Relaxed);
     IMAGE_PHYS.store(view.raw().kernel_phys, Ordering::Relaxed);
     IMAGE_LEN.store(view.raw().kernel_len, Ordering::Relaxed);
+    record_ram(view)?;
 
     // No higher than the direct map reaches: a frame the kernel cannot address
     // is not a frame it can hand out. Only a 32-bit machine with more RAM than
@@ -780,6 +812,74 @@ pub(crate) fn root_table() -> u64 {
 /// hands out is outside that span, since the image is never freed.
 pub(crate) fn direct_map(phys: u64) -> u64 {
     physmap(phys)
+}
+
+/// [`direct_map`] for an address that has to be RAM: its direct-map alias if
+/// `phys` is in a run [`record_ram`] recorded, and `None` otherwise.
+///
+/// What a path that reaches memory a program's tables name asks, rather than
+/// [`direct_map`]'s bare arithmetic. That arithmetic answers for any physical
+/// address: above the direct map's span with an address nothing translates,
+/// so the copy faults in the kernel (F-55); inside the span, in a hole or on
+/// a device's registers, with an address that is unmapped or would be a
+/// cacheable alias of memory mapped uncached elsewhere, which the Arm
+/// architecture makes unpredictable and x86 answers with a machine check.
+/// This answers only for RAM, where the direct map's attributes are the
+/// memory's own.
+///
+/// The runs are whole pages, so an answer for one byte holds for its page.
+/// Takes no lock and reads only atomics, so the panic path may ask it too.
+pub(crate) fn direct_map_ram(phys: u64) -> Option<u64> {
+    let count = RAM_RUN_COUNT.load(Ordering::Acquire);
+    RAM_RUNS
+        .iter()
+        .take(count)
+        .any(|(first, end)| {
+            (first.load(Ordering::Relaxed)..end.load(Ordering::Relaxed)).contains(&phys)
+        })
+        .then(|| physmap(phys))
+}
+
+/// Whether [`record_ram`] has run, so that [`direct_map_ram`]'s `None` means
+/// "not RAM" rather than "not known yet".
+pub(crate) fn ram_recorded() -> bool {
+    RAM_RUN_COUNT.load(Ordering::Acquire) != 0
+}
+
+/// Record the runs of RAM the direct map translates, for [`direct_map_ram`].
+///
+/// RAM as the memory map calls it ([`MemKind::is_ram`]) less a framebuffer
+/// firmware carved out of it, whose pages are the display's and are mapped
+/// to programs as a device's; merged where regions touch and clipped to the
+/// direct map's span, as the loaders' own [`direct_map_runs`] walk is. Every
+/// frame the allocator is ever given is in one: it is given usable RAM at
+/// [`init`], and the loader's and ACPI's reclaimable RAM later.
+///
+/// # Errors
+///
+/// [`MemoryError::TooManyRamRuns`] if the runs do not fit [`RAM_RUNS`].
+fn record_ram(view: &BootView<'_>) -> Result<(), MemoryError> {
+    let info = view.raw();
+    let ram = view
+        .regions()
+        .iter()
+        .copied()
+        .filter(|region| region.kind.is_ram() && region.kind != MemKind::Framebuffer);
+    let mut runs = direct_map_runs(ram, info.physmap_phys, info.physmap_len);
+    let mut count = 0_usize;
+    // `RAM_RUNS` first: a zip stops at the shorter without taking one more
+    // from the other, so a run that does not fit is left for the count below.
+    for ((first, end), (start, len)) in RAM_RUNS.iter().zip(runs.by_ref()) {
+        first.store(start, Ordering::Relaxed);
+        end.store(start.saturating_add(len), Ordering::Relaxed);
+        count = count.saturating_add(1);
+    }
+    let left = runs.count();
+    if left != 0 {
+        return Err(MemoryError::TooManyRamRuns(count.saturating_add(left)));
+    }
+    RAM_RUN_COUNT.store(count, Ordering::Release);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

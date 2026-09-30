@@ -15,14 +15,14 @@ Coverage evidence recording the checks: x86-64, AArch64, ARMv7-A.
 | Level | Written | Named by a check | Unverified, in the baseline |
 |---|---:|---:|---:|
 | High (`H.*`) | 112 | 60 | 52 |
-| Low (`L.*`) | 609 | 341 | 268 |
+| Low (`L.*`) | 611 | 343 | 268 |
 
-1182 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
+1185 functions of the item are named as a low-level requirement's unit. Of the item's product functions, the gate counts those a requirement names, the *accessors* -- one statement or one expression, no branch point and no `unsafe`, whose behaviour is the requirement of the function they serve -- the check code that still lives in product files (listed below), and the rest, which no requirement names. That last list changes with every function written, so it is printed by `--report`, not kept here; in a subsystem whose low-level requirements are complete it must be empty, and the gate fails otherwise.
 
 | Product functions | Count |
 |---|---:|
-| Named by a low-level requirement | 1182 |
-| Accessors, covered by the requirement they serve | 575 |
+| Named by a low-level requirement | 1185 |
+| Accessors, covered by the requirement they serve | 576 |
 | Check code in a product file | 55 |
 | Named by none | 599 |
 
@@ -634,6 +634,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `L.mm.59` | map_window shall refuse, before it maps anything, a range that touches any byte of the kernel image. | Early device windows asked for over the image's first page, a range straddling its start, its last byte and a range straddling its end are each refused KernelImage naming the address asked for, 4 of 4, and the window address still does not translate. | H.MEM.10 | `early::EarlyMemory::map_window`, `mm::image_span_overlaps` | *baselined* | — | — | — |
 | `L.mm.60` | map_window shall refuse with RangeOverflow, before it judges the range against the image or maps anything, a range whose end rounded out to a page is past the top of the address space. | The top page with a page's length and a page with a length of 2^64 - 1 are each refused MapFailed(RangeOverflow), 2 of 2, and the window address still does not translate. | H.MEM.15 | `early::EarlyMemory::map_window` | *baselined* | — | — | — |
 | `L.mm.61` | EarlyMemory::allocate_table shall hand out each of its 16 pool frames at most once and then refuse, which a mapping reports as running out of memory. | An EarlyMemory asked for 17 tables answers 16 distinct page-aligned frames inside the pool and then none; a mapping that needs a table after that is refused MapFailed(OutOfMemory). | H.MEM.14 | `early::EarlyMemory::allocate_table` | *baselined* | — | — | — |
+| `L.mm.62` | direct_map_ram shall answer a direct-map address only for a physical address inside a run of RAM that record_ram recorded from the memory map, clipped to the direct map's span, and record_ram shall record those runs whole, in whole pages, ascending and apart, or refuse to bring memory up. | At least one run is recorded, each whole pages, ascending and apart; a frame the allocator hands out is answered with the direct_map address; the page past the highest run, a page between two runs where the memory map has one, and a device's aperture are each answered None (the stage 2 memory check and the `copies` line). | H.MEM.1, H.MEM.15 | `mm::direct_map_ram`, `mm::record_ram` | `src/kernel/src/mm/check.rs::check_only_ram_has_a_checked_alias`, `src/kernel/src/object/device_copy_check.rs::run` | not reached | not reached | not reached |
 
 ### VirtualMemoryObjects
 
@@ -712,6 +713,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `L.user.66` | map_window shall refuse an executable window with Refused, a length that is not whole pages with BadRange and a range reaching past the user half with NotUserRange. | A window over a frame asked read-execute is Refused, of half a page BadRange, and of two pages from the user half's last page NotUserRange: 3 refusals of 3. | H.MEM.2, H.MEM.18 | `user::space::AddressSpace::map_window`, `user::space::check_device_range` | `src/kernel/src/user/edge_check.rs::window_over` | reached | reached | reached |
 | `L.user.67` | A window's region shall keep what map_window was given to keep until no region names the window, and an unmap of another mapping shall let go of that mapping's file and not of the window's keeper. | Mapped, the window holds its keeper (count 2) and is the highest mapping; a file mapping beside it unmapped leaves its open file at count 1 and the keeper at 2; the window unmapped leaves the keeper at 1. | H.MEM.9 | `user::space::AddressSpace::map_window`, `user::space::AddressSpace::unmap`, `user::space::AddressSpace::give_back`, `user::space::AddressSpace::drop_unnamed`, `user::space::still_named`, `user::space::drop_objects` | `src/kernel/src/user/edge_check.rs::window_over` | reached | reached | reached |
 | `L.user.68` | A page of a device region shall be faulted in to the device's own physical page, in the space that mapped it and in a fork child of it alike. | On a machine with a whole-page aperture, io_mapping_map's address, faulted, translates to the aperture's physical address in the process's space and in a fork child's. | H.MEM.1, H.DMA.5 | `user::space::AddressSpace::map_device`, `user::space::AddressSpace::fault_device`, `user::space::AddressSpace::resolve`, `user::space::AddressSpace::fork` | `src/kernel/src/object/check.rs::check_a_device_gives_exactly_its_own_memory` | reached | reached | reached |
+| `L.user.107` | with_page and with_present_page shall refuse a copy to or from a page of a device region with Refused, before the page is faulted in or a direct-map address is formed for it, and shall form one only through direct_map_ram. | A writev() from and a readv() into a device's aperture mapped by io_mapping_map, a cached window past all RAM and, where the memory map has a hole between runs of RAM, a window over it are each EFAULT with the page still absent, and with_present_page refuses each for reading and writing; with the aperture's page faulted in, both copies are EFAULT again (the `copies` line). | H.MEM.1, H.DMA.5 | `user::space::AddressSpace::with_page`, `user::space::AddressSpace::with_present_page`, `user::space::copyable` | `src/kernel/src/object/device_copy_check.rs::run` | not built | not built | not built |
 | `L.user.69` | remap shall refuse a new length of zero with BadRange, an old range longer than its region with NotMapped and a fixed destination overlapping the old range with BadRange, and leave a remap to the same length where it is. | On a two-page region, a remap to length 0 is BadRange, of three pages NotMapped, to a fixed address one page in BadRange -- 3 refusals of 3 -- and to the same length anywhere answers the region's own address. | H.MEM.1 | `user::space::AddressSpace::remap`, `user::space::remap_target`, `user::space::user_range` | `src/kernel/src/user/edge_check.rs::check_remap_refusals` | reached | reached | reached |
 | `L.user.70` | remap shall grow a region where it is when the pages after it are free, even when it may move. | A one-page region with free pages after it, remapped to three pages anywhere, answers its own address. | H.MEM.1 | `user::space::AddressSpace::remap`, `user::space::remap_target`, `user::space::grows_in_place`, `user::space::AddressSpace::move_private`, `user::space::AddressSpace::add_fresh`, `user::space::AddressSpace::remap_backing` | `src/kernel/src/user/edge_check.rs::check_a_region_grows_where_it_is` | reached | reached | reached |
 | `L.user.71` | remap shall refuse with OutOfMemory to grow a shared region over offsets of its object that another region of the space already names. | A three-page shared region whose last page was moved away on its own cannot grow its first two pages back to three in place: OutOfMemory. | H.MEM.1, H.MEM.9 | `user::space::AddressSpace::remap`, `user::space::named_elsewhere` | `src/kernel/src/user/edge_check.rs::check_a_shared_region_does_not_grow_over_itself` | reached | reached | reached |
@@ -1285,6 +1287,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `src/kernel/src/mm/check.rs::check_heap` | kernel | L.mm.12 |
 | `src/kernel/src/mm/check.rs::check_no_device_window_over_the_image` | kernel | L.mm.50 |
 | `src/kernel/src/mm/check.rs::check_no_device_window_wraps` | kernel | L.mm.51 |
+| `src/kernel/src/mm/check.rs::check_only_ram_has_a_checked_alias` | kernel | L.mm.62 |
 | `src/kernel/src/mm/check.rs::check_sealed_image` | kernel | H.MEM.5, L.mm.33 |
 | `src/kernel/src/mm/check.rs::check_stacks` | kernel | H.FAIL.2, L.mm.55 |
 | `src/kernel/src/mm/check.rs::check_vmap` | kernel | H.MEM.15, L.mm.42, L.mm.46 |
@@ -1327,6 +1330,7 @@ Each system-level requirement, and the high-level requirements that name it as t
 | `src/kernel/src/object/check.rs::check_the_two_kills` | kernel | L.object.66, L.object.77, L.object.86, L.object.99 |
 | `src/kernel/src/object/check.rs::check_two_programs_talk_over_a_channel` | kernel | L.object.10, L.syscall.1 |
 | `src/kernel/src/object/check.rs::check_vmo_map_needs_its_rights` | kernel | L.user.74 |
+| `src/kernel/src/object/device_copy_check.rs::run` | kernel | L.user.107, L.mm.62 |
 | `src/kernel/src/object/edge_check.rs::check_a_change_fires_only_what_wants_it` | kernel | L.object.33 |
 | `src/kernel/src/object/edge_check.rs::check_a_cycle_walk_meets_one_end_twice` | kernel | L.object.25 |
 | `src/kernel/src/object/edge_check.rs::check_a_job_records_what_cgroupfs_sets` | kernel | L.object.72 |

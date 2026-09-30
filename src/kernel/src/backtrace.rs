@@ -93,13 +93,25 @@ fn in_kernel(address: u64) -> bool {
     (start..end).contains(&address)
 }
 
-/// Read one machine word at `virt`, or `None` if nothing is mapped there.
+/// Read one machine word at `virt`, or `None` if nothing is mapped there or
+/// what is mapped there is not RAM.
 ///
 /// The two halves of a frame record are read separately because a record may
 /// straddle a page boundary, and the second page can be missing where the
 /// first is not.
+///
+/// A stack is RAM, and a word anywhere else ends the walk. The span a chain
+/// may climb reaches past a stack's top into whatever the kernel arena put
+/// beside it, a device's registers included, where a read is not a read of
+/// memory: it can change the device's state, or never complete and hang the
+/// panic that asked (F-55). Before memory is up nothing is recorded to ask,
+/// and nothing but the early console and framebuffer is mapped as a device,
+/// so a walk then takes any page.
 fn read_word(root: u64, virt: u64) -> Option<u64> {
-    let _ = mm::translate_in(root, virt)?;
+    let physical = mm::translate_in(root, virt)?;
+    if mm::ram_recorded() && mm::direct_map_ram(physical).is_none() {
+        return None;
+    }
     let address = usize::try_from(virt).ok()? as *const usize;
     // SAFETY: (KMEM) a page is mapped at `virt`, the address is word-aligned by the
     // caller's check, and reading a word of stack has no side effects.

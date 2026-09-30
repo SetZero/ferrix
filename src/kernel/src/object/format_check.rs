@@ -127,6 +127,10 @@ fn memory_errors() -> Result<u32, &'static str> {
         &MemoryError::NoRoomForPageArray(8192),
         "no usable region holds the 8192-byte page array",
     )?;
+    says(
+        &MemoryError::TooManyRamRuns(129),
+        "RAM falls into 129 runs, more than can be recorded",
+    )?;
     let vmap = [
         (VmapError::NotReady, "the vmap arena is not up yet"),
         (

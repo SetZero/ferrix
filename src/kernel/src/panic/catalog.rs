@@ -1717,7 +1717,10 @@ pub(crate) static STAGE9_OBJECTS: Explanation = Explanation {
               and none above it. `object::check::run_devices`, once the device nodes are \
               published, requires an I/O mapping of a device's own aperture to translate to \
               its physical pages, in a forked child too, and nothing past it to be granted, \
-              and an interrupt to be held pending from delivery to acknowledgement. Two \
+              and an interrupt to be held pending from delivery to acknowledgement; \
+              `object::device_copy_check::run` then requires a writev from and a readv into a \
+              page of a device's mapping each to be EFAULT before the page is faulted in \
+              (F-55). Two \
               programs in user mode must exchange a message and a VMO handle over a channel \
               and both exit 0. A \
               port must give back what was queued, a registration must fire once when its \

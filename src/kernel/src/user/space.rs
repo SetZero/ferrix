@@ -1288,9 +1288,14 @@ impl AddressSpace {
     /// module gives. A copy between the direct map and a kernel buffer does
     /// none of those.
     ///
+    /// Only RAM is reached this way. A device region is refused before its
+    /// page is faulted in (`copyable`), and the address `touch` is given
+    /// comes from [`mm::direct_map_ram`], which answers for RAM alone (F-55).
+    ///
     /// # Errors
     ///
-    /// As [`AddressSpace::fault`].
+    /// As [`AddressSpace::fault`]; and [`SpaceError::Refused`] for a page of
+    /// a device region, or one whose frame is not RAM.
     pub(crate) fn with_page<R>(
         &self,
         address: u64,
@@ -1304,14 +1309,15 @@ impl AddressSpace {
                     .map
                     .find(address)
                     .ok_or(SpaceError::NotMapped(address))?;
-                if !permits(region.flags, access) {
+                if !permits(region.flags, access) || !copyable(&region) {
                     return Err(SpaceError::Refused(address));
                 }
                 if let Some(physical) = mm::translate_in(self.root * PAGE_SIZE, address)
                     && (!access.write
                         || writable_in_place(&inner, &region, address, physical / PAGE_SIZE))
                 {
-                    let answer = touch(mm::direct_map(physical));
+                    let virt = mm::direct_map_ram(physical).ok_or(SpaceError::Refused(address))?;
+                    let answer = touch(virt);
                     drop(inner);
                     return Ok(answer);
                 }
@@ -1336,7 +1342,9 @@ impl AddressSpace {
     /// # Errors
     ///
     /// [`SpaceError::NotMapped`] if no region covers the address, and
-    /// [`SpaceError::Refused`] if the region does not permit the access.
+    /// [`SpaceError::Refused`] if the region does not permit the access, is a
+    /// device's, or maps a frame that is not RAM, as for
+    /// [`AddressSpace::with_page`].
     pub(crate) fn with_present_page<R>(
         &self,
         address: u64,
@@ -1348,7 +1356,7 @@ impl AddressSpace {
             .map
             .find(address)
             .ok_or(SpaceError::NotMapped(address))?;
-        if !permits(region.flags, access) {
+        if !permits(region.flags, access) || !copyable(&region) {
             return Err(SpaceError::Refused(address));
         }
         let Some(physical) = mm::translate_in(self.root * PAGE_SIZE, address) else {
@@ -1357,7 +1365,8 @@ impl AddressSpace {
         if access.write && !writable_in_place(&inner, &region, address, physical / PAGE_SIZE) {
             return Ok(None);
         }
-        let answer = touch(mm::direct_map(physical));
+        let virt = mm::direct_map_ram(physical).ok_or(SpaceError::Refused(address))?;
+        let answer = touch(virt);
         drop(inner);
         Ok(Some(answer))
     }
@@ -3317,6 +3326,23 @@ fn owner<'a>(inner: &'a Inner, range: &Freeing) -> Option<&'a Arc<Vmo>> {
     } else {
         inner.objects.get(&range.id)
     }
+}
+
+/// Whether the kernel may copy to or from `region`'s pages through the direct
+/// map: every region but a device's.
+///
+/// A device region's pages are a device's registers or memory -- a BAR, a
+/// window of host memory a virtual GPU exposes -- and are not RAM. The direct
+/// map translates what the memory map calls memory and nothing between, so
+/// the alias [`mm::direct_map`] would form for one is either no translation,
+/// and the copy faults in the kernel (F-55), or, for a window lying in memory
+/// the direct map does translate, a cacheable alias of memory the program
+/// maps uncached. A copy through one is `EFAULT` to the program until copies
+/// go through a mapping with the device's own attributes. Asked before any
+/// translation is taken, so no direct-map address is ever formed for such a
+/// page.
+fn copyable(region: &Vma) -> bool {
+    !matches!(region.backing, Backing::Device { .. })
 }
 
 /// Whether a write at `address` in `region` may go straight through the frame
