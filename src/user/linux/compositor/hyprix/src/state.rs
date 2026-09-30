@@ -474,67 +474,13 @@ impl<'r> Compositor<'r> {
         let display = resolve_display(&options.display);
         let listener = Listener::bind(&display).map_err(|error| format!("the socket: {error}"))?;
 
-        // The seat, but only for a compositor that owns the screen.
-        //
-        // Taking a device means grabbing it, and a grab takes the keyboard away
-        // from whatever else is reading it. A `--headless` compositor is one
-        // running beside something else -- a test on a build machine, a nested
-        // session -- and it has no business taking that machine's keyboard. So
-        // the devices go with the screen: the card has them, memory does not.
-        //
-        // A compositor that owns the screen and finds no devices is not a
-        // failure either; it is a machine with nothing plugged in, so what is
-        // missing is said and the loop goes on.
-        let devices = if options.headless.is_some() {
-            Devices::default()
-        } else {
-            match Devices::open() {
-                Ok((devices, refused)) => {
-                    for reason in refused {
-                        report(&format!("hyprix: {reason}"));
-                    }
-                    devices
-                }
-                Err(error) => {
-                    report(&format!("hyprix: no input devices: {error}"));
-                    Devices::default()
-                }
-            }
-        };
+        let devices = open_devices(options, report);
         let capabilities = seat_capabilities(&devices);
         let rescan = options
             .headless
             .is_none()
             .then(|| Instant::now() + RESCAN_EARLY);
-        // The keymap is made whether or not there is a keyboard: a client that
-        // binds one on a seat that announced none is already refused, and a
-        // machine whose keyboard arrives later should not need a new file.
-        // `input:kb_layout` and `input:kb_variant`, and a sentence when the
-        // configuration asked for a layout this compositor does not ship: a
-        // person whose keyboard suddenly types English is owed a reason.
-        let asked = crate::seat::chosen_layouts(&config);
-        for (chosen, exact) in &asked {
-            if !*exact {
-                report(&format!(
-                    "hyprix: no keymap for kb_layout = {}, kb_variant = {}; using {}",
-                    config.str("input:kb_layout").unwrap_or_default(),
-                    config.str("input:kb_variant").unwrap_or_default(),
-                    chosen.described()
-                ));
-            }
-        }
-        // One keymap with a group for each layout, which is what libxkbcommon
-        // hands Hyprland for `kb_layout = de,us` and what lets a switch send
-        // only a new group rather than a new keymap.
-        let layouts = asked.iter().map(|(layout, _)| *layout).collect::<Vec<_>>();
-        let text = compositor_xkb::merged(&layouts);
-        let keymap = match Keymap::new(&text) {
-            Ok(keymap) => Some(keymap),
-            Err(error) => {
-                report(&format!("hyprix: no keymap: {error}"));
-                None
-            }
-        };
+        let keymap = make_keymap(&config, report);
         let mut seat = Seat::new(&config, desktop.2, desktop.3);
         seat.place_at(desktop.0, desktop.1);
         let animations = crate::animate::Animations::new(&config);
@@ -567,118 +513,14 @@ impl<'r> Compositor<'r> {
             ));
         }
 
-        let mut state = State::new(settings);
-        for screen in &screens {
-            let _ = state
-                .add_monitor(Monitor {
-                    id: screen.monitor,
-                    name: screen.name.clone(),
-                    rect: screen.rect,
-                    reserved: compositor_layout::Gaps::default(),
-                    scale: screen.scale,
-                    transform: screen.transform,
-                    description: screen.description.clone(),
-                    made: screen.made.clone(),
-                })
-                .map_err(|error| format!("the monitor: {error:?}"))?;
-        }
-        // The workspace rules go in once the monitors are there: a
-        // `persistent:` workspace has to be put on one, and `monitor:` names
-        // it.
-        let made = state.set_workspace_rules(said.workspace_rules.clone());
-        if !said.workspace_rules.is_empty() {
-            report(&format!(
-                "hyprix: {} workspace rule{}, {} workspace{} made",
-                said.workspace_rules.len(),
-                if said.workspace_rules.len() == 1 {
-                    ""
-                } else {
-                    "s"
-                },
-                made.len(),
-                if made.len() == 1 { "" } else { "s" }
-            ));
-        }
-        report(&format!(
-            "hyprix: {} monitor{} [{}]",
-            screens.len(),
-            if screens.len() == 1 { "" } else { "s" },
-            screens
-                .iter()
-                .map(|screen| screen.describe())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-
-        // `hyprctl`'s socket, when one was asked for. Hyprland puts it under
-        // $XDG_RUNTIME_DIR/hypr/<instance>/, and a program looks there.
-        let mut events = None;
-        let control = match options.instance.as_deref() {
-            Some(instance) => {
-                let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(std::env::temp_dir);
-                let control = crate::control::Control::bind(&runtime, instance)
-                    .map_err(|error| format!("hyprctl's socket: {error}"))?;
-                // The event socket beside it, refused the way the request socket
-                // is. `.socket2.sock` is a byte longer than `.socket.sock`, so an
-                // instance directory can take the one and not the other; said
-                // only in the compositor's report, that was a bar that got no
-                // events and a test that failed as if the machine were slow.
-                events = Some(
-                    crate::control::Events::bind(control.directory())
-                        .map_err(|error| format!("hyprctl's event socket: {error}"))?,
-                );
-                Some(control)
-            }
-            None => None,
-        };
-
-        // The plugins: programs the compositor starts and talks to over the
-        // control socket. Started before `exec-once`, because a plugin that adds
-        // a dispatcher should be there before anything presses it, and after the
-        // sockets, because it connects to one as soon as it runs.
+        let state = lay_out(settings, &screens, &said, report)?;
+        let (control, events) = bind_control(options)?;
         let plugins = crate::plugins::Plugins::new();
-        for command in &config.plugins {
-            match start(command, listener.path(), options.instance.as_deref()) {
-                Ok(pid) => report(&format!("hyprix: plugin {command} started as {pid}")),
-                Err(error) => report(&format!("hyprix: plugin {command} did not start: {error}")),
-            }
-        }
-
-        // `exec-once` from the configuration, then anything --exec added --
-        // after the sockets, because a bar started by `exec-once` looks for them
-        // as soon as it runs and a compositor that binds them later has started
-        // a program that cannot find it.
-        for command in config
-            .exec_once
-            .iter()
-            .map(String::as_str)
-            .chain(options.exec.iter().map(String::as_str))
-        {
-            match start(command, listener.path(), options.instance.as_deref()) {
-                Ok(pid) => report(&format!("hyprix: started {command} as {pid}")),
-                // A program that will not start is the person's to fix, not a
-                // reason to have no compositor; Hyprland logs it and carries on.
-                Err(error) => {
-                    if let Some(line) = not_started(command, &error) {
-                        report(&line);
-                    }
-                }
-            }
-        }
+        start_programs(&config, options, &listener, report);
 
         let started = Instant::now();
         let deadline = options.deadline.map(Duration::from_millis);
-        let children = match crate::children::Children::watch() {
-            Ok(children) => Some(children),
-            Err(error) => {
-                report(&format!(
-                    "hyprix: SIGCHLD not caught ({error}); children are reaped only when the loop wakes"
-                ));
-                None
-            }
-        };
+        let children = watch_children(report);
         Ok(Self {
             options,
             rolling,
@@ -760,26 +602,120 @@ impl<'r> Compositor<'r> {
 
     /// One pass of the loop: everything that is ready is read and answered,
     /// and a frame is drawn if one is owed. Gives whether to go on.
+    ///
+    /// The steps are in the order they have to be: each says in its own
+    /// comment what it must come before or after.
     fn pass(&mut self) -> Result<bool, String> {
         if let Some(children) = self.children.as_ref() {
             let _ = children.reap();
         }
-        if self.quit {
+        if self.stopping() {
             return Ok(false);
+        }
+        self.notice_lost_cards();
+        self.follow_card_modes();
+        let first_new = self.accept();
+        // `hyprctl`: one request a connection, answered and closed -- unless
+        // the connection opens with `[[PLUGIN]]`, which is a plugin and is
+        // kept.
+        let mut asked = self.poll_plugins();
+        self.answer_control(&mut asked);
+
+        let mut changed = false;
+        // What each screen is called and where it is, which is all a
+        // dispatcher needs of one: `dpms` names a screen and
+        // `movecursortocorner` falls back to the first. Taken here so that
+        // the screens themselves stay free for the frame below.
+        let placements: Vec<(String, Rect)> = self
+            .screens
+            .iter()
+            .map(|screen| (screen.name.clone(), screen.rect))
+            .collect();
+        // The loop's clock for this pass, in milliseconds as a `u32`, which
+        // is what `wl_keyboard.key` and `wl_pointer.motion` carry.
+        let now = u32::try_from(self.fixed.started.elapsed().as_millis()).unwrap_or(u32::MAX);
+        changed |= self.take_input(now, &placements);
+
+        // What the screen protocols asked for this pass, drained below: a
+        // client's own borrow holds the screens and the layout, and each of
+        // these reaches one of them.
+        let mut asks = ScreenAsks::default();
+        changed |= self.serve_ready(first_new, &mut asks)?;
+        changed |= self.carry_asks(asks, now);
+        self.after_clients();
+        changed |= self.run_asked(asked, &placements, now);
+        changed |= self.drop_gone();
+
+        // A window arriving or leaving resizes every other window on the
+        // workspace, and a window that is not told is one drawing at the
+        // size it had before -- which the compositor then draws scaled into
+        // a rectangle that is not its buffer's. Hyprland reconfigures the
+        // whole workspace for the same reason.
+        //
+        // Everything that changes the layout is above this, *including* a
+        // connection ending: a window left alone when its neighbour's client
+        // went is the one case where nothing the compositor was asked to do
+        // changed the layout and it changed anyway, and it was the one case
+        // this missed.
+        if changed {
+            self.rearrange();
+        }
+        // The popups, which are drawn over the windows like a layer surface
+        // on the top level: a menu is not a window, has no border and no
+        // gaps, and belongs where its parent put it.
+        let popups = placed_popups(&self.slots, &self.state, &self.sources);
+        self.follow_keyboard();
+        self.publish(changed);
+
+        self.tally.most = self.tally.most.max(self.sources.len());
+        let animating = self.frame(&mut changed, now, &popups)?;
+
+        // A request may have changed the layout after the event snapshot was
+        // made above, and a plugin's hello may have carried its first command
+        // too. Run that follow-up pass now, before waiting for another
+        // descriptor edge.
+        if changed || self.plugins.needs_poll() {
+            return Ok(true);
+        }
+
+        // `frames_done`, screenshots, and desktop protocol timers can queue
+        // output after their slot was served. Send it before the next wait:
+        // the old fixed polling pass happened to do this two milliseconds
+        // later, whereas an idle compositor may otherwise wait forever for a
+        // client which is waiting for this very reply.
+        if self.slots.iter_mut().any(|slot| !slot.flush()) {
+            // Let the normal connection cleanup above remove a client whose
+            // queued reply could not be written before it enters the wait
+            // set.
+            return Ok(true);
+        }
+
+        self.wait(animating)?;
+        Ok(true)
+    }
+
+    /// Whether the run is over: `exit` was asked for, or `--deadline` or
+    /// `--frames` has been reached.
+    fn stopping(&self) -> bool {
+        if self.quit {
+            return true;
         }
         if let Some(limit) = self.fixed.deadline
             && self.fixed.started.elapsed() > limit
         {
-            return Ok(false);
+            return true;
         }
         if let Some(limit) = self.options.frames
             && self.tally.drawn >= limit
         {
-            return Ok(false);
+            return true;
         }
+        false
+    }
 
-        // A card whose driver died: the screen is lost until the card is
-        // back, and the frames that look for it are owed from now on.
+    /// A card whose driver died: the screen is lost until the card is
+    /// back, and the frames that look for it are owed from now on.
+    fn notice_lost_cards(&mut self) {
         for screen in &mut self.screens {
             let Some(fd) = screen.backend.raw_fd() else {
                 continue;
@@ -789,10 +725,12 @@ impl<'r> Compositor<'r> {
                 self.owed = true;
             }
         }
+    }
 
-        // A card whose modes changed -- a virtio-gpu whose window on the host
-        // was resized -- has its screens follow, where their `monitor =` line
-        // leaves the mode to the monitor.
+    /// A card whose modes changed -- a virtio-gpu whose window on the host
+    /// was resized -- has its screens follow, where their `monitor =` line
+    /// leaves the mode to the monitor.
+    fn follow_card_modes(&mut self) {
         if self.screens.iter_mut().fold(false, |changed, screen| {
             screen.backend.modes_changed() | changed
         }) && follow_modes(
@@ -813,8 +751,12 @@ impl<'r> Compositor<'r> {
             }
             self.owed = true;
         }
+    }
 
-        // New connections.
+    /// New connections. Gives where they start in the slots: a connection
+    /// accepted in this pass is read in this pass whether or not it woke
+    /// the wait.
+    fn accept(&mut self) -> usize {
         let first_new = self.slots.len();
         if self
             .ready
@@ -856,10 +798,33 @@ impl<'r> Compositor<'r> {
                 }
             }
         }
+        first_new
+    }
 
-        // `hyprctl`: one request a connection, answered and closed -- unless
-        // the connection opens with `[[PLUGIN]]`, which is a plugin and is
-        // kept.
+    /// What `hyprctl` is answered from: the layout, the connections and
+    /// what the compositor says about itself, as they are now.
+    fn snapshot(&self) -> compositor_ipc::Snapshot {
+        crate::control::snapshot(
+            &self.state,
+            &self.slots,
+            &self.sources,
+            &as_reported(
+                &self.config,
+                &self.seat,
+                &self.devices,
+                &self.placed_layers,
+                &self.plugins,
+                &self.fixed.said,
+                &self.rolling.borrow(),
+                self.window_rules.styles(),
+                self.lock.is_some(),
+                self.fixed.started.elapsed().as_secs(),
+            ),
+        )
+    }
+
+    /// What the plugins asked for.
+    fn poll_plugins(&mut self) -> Vec<compositor_ipc::Reply> {
         let mut asked: Vec<compositor_ipc::Reply> = Vec::new();
         // A description of the compositor is not free -- it walks every
         // window of every monitor -- so it is made only when there is a
@@ -871,25 +836,16 @@ impl<'r> Compositor<'r> {
                 .is_none_or(|fds| self.plugins.raw_fds().any(|fd| fds.contains(&fd)))
                 || self.plugins.needs_poll())
         {
-            let snapshot = crate::control::snapshot(
-                &self.state,
-                &self.slots,
-                &self.sources,
-                &as_reported(
-                    &self.config,
-                    &self.seat,
-                    &self.devices,
-                    &self.placed_layers,
-                    &self.plugins,
-                    &self.fixed.said,
-                    &self.rolling.borrow(),
-                    self.window_rules.styles(),
-                    self.lock.is_some(),
-                    self.fixed.started.elapsed().as_secs(),
-                ),
-            );
+            let snapshot = self.snapshot();
             asked.extend(self.plugins.poll(&snapshot));
         }
+        asked
+    }
+
+    /// `hyprctl`'s connections: new ones taken, and each request read as it
+    /// arrives and answered once it is whole. What one asked the compositor
+    /// to do is added to `asked`.
+    fn answer_control(&mut self, asked: &mut Vec<compositor_ipc::Reply>) {
         if let Some(control) = self.control.as_ref()
             && self
                 .ready
@@ -918,23 +874,7 @@ impl<'r> Compositor<'r> {
             }
         }
         if !whole.is_empty() {
-            let snapshot = crate::control::snapshot(
-                &self.state,
-                &self.slots,
-                &self.sources,
-                &as_reported(
-                    &self.config,
-                    &self.seat,
-                    &self.devices,
-                    &self.placed_layers,
-                    &self.plugins,
-                    &self.fixed.said,
-                    &self.rolling.borrow(),
-                    self.window_rules.styles(),
-                    self.lock.is_some(),
-                    self.fixed.started.elapsed().as_secs(),
-                ),
-            );
+            let snapshot = self.snapshot();
             for pending in whole {
                 match crate::control::serve(pending, &snapshot, &mut self.plugins) {
                     Ok(todo) => asked.extend(todo),
@@ -945,37 +885,72 @@ impl<'r> Compositor<'r> {
                 }
             }
         }
+    }
 
-        let mut changed = false;
-        // What each screen is called and where it is, which is all a
-        // dispatcher needs of one: `dpms` names a screen and
-        // `movecursortocorner` falls back to the first. Taken here so that
-        // the screens themselves stay free for the frame below.
-        let placements: Vec<(String, Rect)> = self
-            .screens
-            .iter()
-            .map(|screen| (screen.name.clone(), screen.rect))
-            .collect();
+    /// Carry actions out for the clients the way a person's input is: the
+    /// same focus, layout and pointer rules, and the drag that is on.
+    fn deliver(&mut self, actions: &[crate::seat::Action], now: u32) -> crate::deliver::Done {
+        crate::deliver::deliver(
+            actions,
+            &mut self.focus,
+            &self.state,
+            &mut self.slots,
+            &self.sources,
+            now,
+            self.fixed.follow_mouse,
+            self.carried
+                .as_ref()
+                .is_some_and(crate::dragging::Carried::holding),
+        )
+    }
 
-        // Input, before the clients are read: a key that fires a dispatcher
-        // changes the layout, and a window told its new size in the same pass
-        // draws once rather than twice.
-        //
-        // One input at a time, each carried out before the next is read.
-        // That matters for anything a dispatcher changes about what the
-        // *next* key means: `submap` is the whole of that, and a batch of
-        // events turned into actions all at once would judge every key in it
-        // against the map that was in force before the first. On a machine
-        // fast enough to see each key on its own the two are the same; under
-        // emulation a whole sequence arrives in one read, which is where
-        // this was found.
-        let now = u32::try_from(self.fixed.started.elapsed().as_millis()).unwrap_or(u32::MAX);
+    /// Input, before the clients are read: a key that fires a dispatcher
+    /// changes the layout, and a window told its new size in the same pass
+    /// draws once rather than twice. Gives whether anything changed.
+    ///
+    /// One input at a time, each carried out before the next is read.
+    /// That matters for anything a dispatcher changes about what the
+    /// *next* key means: `submap` is the whole of that, and a batch of
+    /// events turned into actions all at once would judge every key in it
+    /// against the map that was in force before the first. On a machine
+    /// fast enough to see each key on its own the two are the same; under
+    /// emulation a whole sequence arrives in one read, which is where
+    /// this was found.
+    fn take_input(&mut self, now: u32, placements: &[(String, Rect)]) -> bool {
         // While the session is locked the keyboard is the lock's: a bind
         // fires only if it was written `bindl`, and every other key goes to
         // the lock's own surface and to no window. That is
         // `ext-session-lock-v1`'s other half -- a lock that showed a picture
         // and still let a key reach the browser under it would not be one.
         self.seat.set_locked(self.lock.is_some());
+        self.rescan_devices();
+        // A virtual pointer is a pointer device while it lives, as Hyprland
+        // adds one for it: without the capability no client has a
+        // `wl_pointer`, and what the virtual pointer moves reaches nobody --
+        // which is every headless compositor's case, whose real devices are
+        // none.
+        let wanted = seat_capabilities(&self.devices) | virtual_capabilities(&self.slots);
+        if wanted != self.capabilities {
+            self.capabilities = wanted;
+            for slot in &mut self.slots {
+                slot.client_mut()
+                    .change_seat_capabilities(self.capabilities);
+            }
+        }
+        let inputs = match self.ready.as_deref() {
+            Some(fds) => self.devices.read_ready(fds),
+            None => self.devices.read(),
+        };
+        let mut changed = false;
+        for input in inputs.into_iter().chain(std::mem::take(&mut self.injected)) {
+            changed |= self.take_one(input, now, placements);
+        }
+        changed
+    }
+
+    /// Look at `/dev/input` again when it is due, open what has been
+    /// plugged in since, and tell the clients what the seat has now.
+    fn rescan_devices(&mut self) {
         if let Some(due) = self.rescan
             && Instant::now() >= due
         {
@@ -996,149 +971,121 @@ impl<'r> Compositor<'r> {
                 }
             }
         }
-        // A virtual pointer is a pointer device while it lives, as Hyprland
-        // adds one for it: without the capability no client has a
-        // `wl_pointer`, and what the virtual pointer moves reaches nobody --
-        // which is every headless compositor's case, whose real devices are
-        // none.
-        let wanted = seat_capabilities(&self.devices) | virtual_capabilities(&self.slots);
-        if wanted != self.capabilities {
-            self.capabilities = wanted;
-            for slot in &mut self.slots {
-                slot.client_mut()
-                    .change_seat_capabilities(self.capabilities);
-            }
-        }
-        let inputs = match self.ready.as_deref() {
-            Some(fds) => self.devices.read_ready(fds),
-            None => self.devices.read(),
-        };
-        for input in inputs.into_iter().chain(std::mem::take(&mut self.injected)) {
-            // Any input at all ends the idle: that is what the protocol
-            // measures, and what `forceidle` was pretending about.
-            self.last_input = Instant::now();
-            self.forced = None;
-            let actions = self.seat.input(input);
-            self.devices.show_locks(self.seat.modifiers().locked);
-            // Where the pointer is, for the layout: Hyprland's dwindle tree
-            // asks the input manager for it at the moment a window opens,
-            // and `dwindle:use_active_for_splits`, `force_split = 0` and
-            // `smart_split` are all about which window it was over then.
-            // Kept up to date here rather than passed in at the open,
-            // because a window can open long after the pointer last moved.
-            self.state.set_pointer(self.seat.pointer());
-            if actions.is_empty() {
-                continue;
-            }
-            // `general:resize_on_border`: a press on the ring around a
-            // window grabs that edge, and neither the press nor the release
-            // that ends it reaches the client -- a client that was sent a
-            // press it never saw the end of would think the button is still
-            // held. Hyprland's `processMouseDownNormal` returns before
-            // `sendPointerButton` for the same reason.
-            let actions = crate::act::grab_border(actions, &self.state, &self.seat, &mut self.drag);
-            if actions.is_empty() {
-                continue;
-            }
-            // A pointer drawn into the frame makes moving it a change to the
-            // screen even when nothing else moved: without this the arrow
-            // would stay where the last redraw left it and catch up only
-            // when a window did something. A pointer on every screen's
-            // cursor plane is moved there and owes no frame -- unless a drag
-            // carries a surface along with it, which is drawn.
-            if actions
-                .iter()
-                .any(|action| matches!(action, crate::seat::Action::Pointer { .. }))
-                && (self
-                    .carried
-                    .as_ref()
-                    .is_some_and(crate::dragging::Carried::holding)
-                    || self.screens.iter().any(|screen| !screen.plane.on))
-            {
-                changed = true;
-            }
-            let done = crate::deliver::deliver(
-                &actions,
-                &mut self.focus,
-                &self.state,
-                &mut self.slots,
-                &self.sources,
-                now,
-                self.fixed.follow_mouse,
-                self.carried
-                    .as_ref()
-                    .is_some_and(crate::dragging::Carried::holding),
-            );
-            let mut pending = Vec::new();
-            for asked in done.dispatch {
-                let mut around = crate::act::Around {
-                    slots: &mut self.slots,
-                    sources: &self.sources,
-                    socket: self.listener.path(),
-                    instance: self.options.instance.as_deref(),
-                    opened: &mut self.opened,
-                    seat: &mut self.seat,
-                    plugins: &mut self.plugins,
-                    rules: &mut self.window_rules,
-                    events: &mut self.events,
-                    dpms: &mut self.dpms,
-                    screens: &placements,
-                    urgent: &mut self.urgent,
-                    drag: &mut self.drag,
-                    pending: &mut pending,
-                    quit: &mut self.quit,
-                    swallow: &mut self.swallow,
-                    forced: &mut self.forced,
-                    focus: &mut self.focus,
-                    trigger: asked.trigger,
-                    report: self.report,
-                };
-                if dispatch(&asked.name, &asked.argument, &mut self.state, &mut around) {
-                    changed = true;
-                }
-            }
-            // A dispatcher that moved the pointer moved it for the clients
-            // too: the same actions a hand would have caused.
-            if !pending.is_empty() {
-                let _done = crate::deliver::deliver(
-                    &pending,
-                    &mut self.focus,
-                    &self.state,
-                    &mut self.slots,
-                    &self.sources,
-                    now,
-                    self.fixed.follow_mouse,
-                    self.carried
-                        .as_ref()
-                        .is_some_and(crate::dragging::Carried::holding),
-                );
-                changed = true;
-            }
-            // A drag carries on for as long as the button is held: one bind
-            // starts it and every movement after that moves the window.
-            if let Some(held) = self.drag.as_mut() {
-                let (x, y) = self.seat.pointer();
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    reason = "the pointer is held inside the screen, which is far inside i64"
-                )]
-                if crate::act::dragged(held, &mut self.state, (x as i64, y as i64)) {
-                    changed = true;
-                }
-            }
-            // `follow_mouse`: the pointer moved onto a window that is not
-            // focused, so focus it.
-            if let Some(window) = done.focus
-                && self.state.focus_window(window).is_ok()
-            {
-                changed = true;
-            }
-        }
+    }
 
-        // What the screen protocols asked for this pass, drained below: a
-        // client's own borrow holds the screens and the layout, and each of
-        // these reaches one of them.
-        let mut asks = ScreenAsks::default();
+    /// One input: through the seat, to the clients, and to the dispatchers
+    /// its binds fire. Gives whether anything changed.
+    fn take_one(
+        &mut self,
+        input: crate::seat::Input,
+        now: u32,
+        placements: &[(String, Rect)],
+    ) -> bool {
+        // Any input at all ends the idle: that is what the protocol
+        // measures, and what `forceidle` was pretending about.
+        self.last_input = Instant::now();
+        self.forced = None;
+        let actions = self.seat.input(input);
+        self.devices.show_locks(self.seat.modifiers().locked);
+        // Where the pointer is, for the layout: Hyprland's dwindle tree
+        // asks the input manager for it at the moment a window opens,
+        // and `dwindle:use_active_for_splits`, `force_split = 0` and
+        // `smart_split` are all about which window it was over then.
+        // Kept up to date here rather than passed in at the open,
+        // because a window can open long after the pointer last moved.
+        self.state.set_pointer(self.seat.pointer());
+        if actions.is_empty() {
+            return false;
+        }
+        // `general:resize_on_border`: a press on the ring around a
+        // window grabs that edge, and neither the press nor the release
+        // that ends it reaches the client -- a client that was sent a
+        // press it never saw the end of would think the button is still
+        // held. Hyprland's `processMouseDownNormal` returns before
+        // `sendPointerButton` for the same reason.
+        let actions = crate::act::grab_border(actions, &self.state, &self.seat, &mut self.drag);
+        if actions.is_empty() {
+            return false;
+        }
+        let mut changed = false;
+        // A pointer drawn into the frame makes moving it a change to the
+        // screen even when nothing else moved: without this the arrow
+        // would stay where the last redraw left it and catch up only
+        // when a window did something. A pointer on every screen's
+        // cursor plane is moved there and owes no frame -- unless a drag
+        // carries a surface along with it, which is drawn.
+        if actions
+            .iter()
+            .any(|action| matches!(action, crate::seat::Action::Pointer { .. }))
+            && (self
+                .carried
+                .as_ref()
+                .is_some_and(crate::dragging::Carried::holding)
+                || self.screens.iter().any(|screen| !screen.plane.on))
+        {
+            changed = true;
+        }
+        let done = self.deliver(&actions, now);
+        let mut pending = Vec::new();
+        for asked in done.dispatch {
+            let mut around = crate::act::Around {
+                slots: &mut self.slots,
+                sources: &self.sources,
+                socket: self.listener.path(),
+                instance: self.options.instance.as_deref(),
+                opened: &mut self.opened,
+                seat: &mut self.seat,
+                plugins: &mut self.plugins,
+                rules: &mut self.window_rules,
+                events: &mut self.events,
+                dpms: &mut self.dpms,
+                screens: placements,
+                urgent: &mut self.urgent,
+                drag: &mut self.drag,
+                pending: &mut pending,
+                quit: &mut self.quit,
+                swallow: &mut self.swallow,
+                forced: &mut self.forced,
+                focus: &mut self.focus,
+                trigger: asked.trigger,
+                report: self.report,
+            };
+            if dispatch(&asked.name, &asked.argument, &mut self.state, &mut around) {
+                changed = true;
+            }
+        }
+        // A dispatcher that moved the pointer moved it for the clients
+        // too: the same actions a hand would have caused.
+        if !pending.is_empty() {
+            let _done = self.deliver(&pending, now);
+            changed = true;
+        }
+        // A drag carries on for as long as the button is held: one bind
+        // starts it and every movement after that moves the window.
+        if let Some(held) = self.drag.as_mut() {
+            let (x, y) = self.seat.pointer();
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "the pointer is held inside the screen, which is far inside i64"
+            )]
+            if crate::act::dragged(held, &mut self.state, (x as i64, y as i64)) {
+                changed = true;
+            }
+        }
+        // `follow_mouse`: the pointer moved onto a window that is not
+        // focused, so focus it.
+        if let Some(window) = done.focus
+            && self.state.focus_window(window).is_ok()
+        {
+            changed = true;
+        }
+        changed
+    }
+
+    /// Read every client that woke the wait, and every one accepted in
+    /// this pass. Gives whether the layout changed.
+    fn serve_ready(&mut self, first_new: usize, asks: &mut ScreenAsks) -> Result<bool, String> {
+        let mut changed = false;
         for index in 0..self.slots.len() {
             let woke = self.ready.as_ref().is_none_or(|fds| {
                 self.slots
@@ -1162,7 +1109,7 @@ impl<'r> Compositor<'r> {
                 &self.screens,
                 &mut self.urgent,
                 &mut self.injected,
-                &mut asks,
+                asks,
                 &mut self.commits,
                 self.fixed.focus_on_activate,
                 self.report,
@@ -1170,12 +1117,19 @@ impl<'r> Compositor<'r> {
                 changed = true;
             }
         }
+        Ok(changed)
+    }
+
+    /// What the clients asked for that reaches past their own connection,
+    /// now that every client's own borrow is over. Gives whether anything
+    /// changed.
+    fn carry_asks(&mut self, mut asks: ScreenAsks, now: u32) -> bool {
         // A focus on a surface a client has just destroyed, dropped before
         // anything moves the focus and sends a `leave` naming it.
         self.focus.prune(&self.slots);
         // The drag, now that every client's own borrow is over: it reaches
         // two connections at once and a client's borrow holds one of them.
-        changed |= carry_drag(
+        let mut changed = carry_drag(
             &mut asks,
             &mut self.carried,
             &mut self.slots,
@@ -1205,22 +1159,17 @@ impl<'r> Compositor<'r> {
         if let Some((x, y)) = asks.warps.pop() {
             let moved = self.seat.warp(x, y);
             if !moved.is_empty() {
-                let _done = crate::deliver::deliver(
-                    &moved,
-                    &mut self.focus,
-                    &self.state,
-                    &mut self.slots,
-                    &self.sources,
-                    now,
-                    self.fixed.follow_mouse,
-                    self.carried
-                        .as_ref()
-                        .is_some_and(crate::dragging::Carried::holding),
-                );
+                let _done = self.deliver(&moved, now);
                 changed = true;
             }
         }
+        changed
+    }
 
+    /// What is worked out from the clients once they have all been read:
+    /// the screenshots, the pointer's constraint, the keybinds' inhibitor,
+    /// the lock's watchers and the idle notifications.
+    fn after_clients(&mut self) {
         // The screenshots asked for in this pass, now that the screens are
         // in reach again.
         for shot in self.shots.drain(..) {
@@ -1254,9 +1203,13 @@ impl<'r> Compositor<'r> {
             }
         }
 
-        // What every `ext_idle_notification_v1` is waiting for: how long
-        // the seat has gone without input, and whether any client holds
-        // idling off with a `zwp_idle_inhibitor_v1` on a mapped surface.
+        self.tell_idle();
+    }
+
+    /// What every `ext_idle_notification_v1` is waiting for: how long
+    /// the seat has gone without input, and whether any client holds
+    /// idling off with a `zwp_idle_inhibitor_v1` on a mapped surface.
+    fn tell_idle(&mut self) {
         let idle = u64::try_from(
             self.forced
                 .unwrap_or_else(|| self.last_input.elapsed())
@@ -1267,7 +1220,17 @@ impl<'r> Compositor<'r> {
         for slot in &mut self.slots {
             let _said = slot.client_mut().idle_tick(idle, inhibited);
         }
+    }
 
+    /// What `hyprctl` and the plugins asked for this pass: dispatchers and
+    /// keywords. Gives whether anything changed.
+    fn run_asked(
+        &mut self,
+        asked: Vec<compositor_ipc::Reply>,
+        placements: &[(String, Rect)],
+        now: u32,
+    ) -> bool {
+        let mut changed = false;
         let mut pending = Vec::new();
         let forced_before = self.forced;
         for reply in asked {
@@ -1282,7 +1245,7 @@ impl<'r> Compositor<'r> {
                 rules: &mut self.window_rules,
                 events: &mut self.events,
                 dpms: &mut self.dpms,
-                screens: &placements,
+                screens: placements,
                 urgent: &mut self.urgent,
                 drag: &mut self.drag,
                 pending: &mut pending,
@@ -1313,87 +1276,88 @@ impl<'r> Compositor<'r> {
         // they would hear of it only when something else woke the loop --
         // hypridle's listeners fired seconds late, at the next keypress.
         if self.forced != forced_before {
-            let idle = u64::try_from(
-                self.forced
-                    .unwrap_or_else(|| self.last_input.elapsed())
-                    .as_millis(),
-            )
-            .unwrap_or(u64::MAX);
-            let inhibited = self.slots.iter().any(|slot| slot.client().inhibits_idle());
-            for slot in &mut self.slots {
-                let _said = slot.client_mut().idle_tick(idle, inhibited);
-            }
+            self.tell_idle();
         }
         if !pending.is_empty() {
-            let _done = crate::deliver::deliver(
-                &pending,
-                &mut self.focus,
-                &self.state,
-                &mut self.slots,
-                &self.sources,
-                now,
-                self.fixed.follow_mouse,
-                self.carried
-                    .as_ref()
-                    .is_some_and(crate::dragging::Carried::holding),
-            );
+            let _done = self.deliver(&pending, now);
             changed = true;
         }
+        changed
+    }
 
-        // A connection that ended takes its windows with it.
+    /// A connection that ended takes its windows with it, and the slots
+    /// after it move up. Gives whether anything changed.
+    fn drop_gone(&mut self) -> bool {
+        let mut changed = false;
         for index in 0..self.slots.len() {
             if self.slots.get(index).is_some_and(|slot| slot.gone) {
-                let windows = self
-                    .slots
-                    .get(index)
-                    .map(|slot| slot.windows.clone())
-                    .unwrap_or_default();
-                for (_, window) in windows {
-                    remember_size(
-                        window,
-                        &mut self.slots,
-                        index,
-                        &mut self.state,
-                        &mut self.window_rules,
-                    );
-                    let _ = self.state.window_gone(window);
-                    let _ = self.sources.remove(&window);
-                    // What a rule gave it goes with it, so that a window id
-                    // handed out again is drawn as a new window.
-                    self.window_rules.window_gone(window);
-                    changed = true;
-                }
-                self.clipboard.client_gone(&mut self.slots, index);
-                // A lock whose program died leaves the screen locked with
-                // nothing drawn on it, which is the one thing
-                // `ext-session-lock-v1` is most explicit about: an unlocked
-                // session is not what a crash is allowed to produce.
-                if let Some(held) = self.lock.as_mut()
-                    && held.client == index
-                {
-                    held.orphaned = true;
-                    held.surfaces.clear();
-                    (self.report)(
-                        "hyprix: the program holding the lock went; the screen stays locked",
-                    );
-                    changed = true;
-                }
-                if self
-                    .slots
-                    .get(index)
-                    .is_some_and(|slot| !slot.layers.is_empty())
-                {
-                    // Its bars go with it, and the space they reserved comes
-                    // back to the windows.
-                    changed = true;
-                }
+                changed |= self.client_gone(index);
             }
         }
-        // Taking a slot out moves every slot after it, and a window's
-        // `Source` and the focus both name a client by its *place* in the
-        // list. Renumber them as the list is compacted: a window that
-        // outlived an earlier client would otherwise be drawn from somebody
-        // else's buffer and typed into by somebody else's keyboard.
+        changed |= self.renumber();
+        changed
+    }
+
+    /// What a connection that ended leaves behind: its windows, its part
+    /// of the clipboard, its lock and its bars. Gives whether anything
+    /// changed.
+    fn client_gone(&mut self, index: usize) -> bool {
+        let mut changed = false;
+        let windows = self
+            .slots
+            .get(index)
+            .map(|slot| slot.windows.clone())
+            .unwrap_or_default();
+        for (_, window) in windows {
+            remember_size(
+                window,
+                &mut self.slots,
+                index,
+                &mut self.state,
+                &mut self.window_rules,
+            );
+            let _ = self.state.window_gone(window);
+            let _ = self.sources.remove(&window);
+            // What a rule gave it goes with it, so that a window id
+            // handed out again is drawn as a new window.
+            self.window_rules.window_gone(window);
+            changed = true;
+        }
+        self.clipboard.client_gone(&mut self.slots, index);
+        // A lock whose program died leaves the screen locked with
+        // nothing drawn on it, which is the one thing
+        // `ext-session-lock-v1` is most explicit about: an unlocked
+        // session is not what a crash is allowed to produce.
+        if let Some(held) = self.lock.as_mut()
+            && held.client == index
+        {
+            held.orphaned = true;
+            held.surfaces.clear();
+            (self.report)("hyprix: the program holding the lock went; the screen stays locked");
+            changed = true;
+        }
+        if self
+            .slots
+            .get(index)
+            .is_some_and(|slot| !slot.layers.is_empty())
+        {
+            // Its bars go with it, and the space they reserved comes
+            // back to the windows.
+            changed = true;
+        }
+        changed
+    }
+
+    /// Take the connections that ended out of the slots. Gives whether a
+    /// drag ended with them.
+    ///
+    /// Taking a slot out moves every slot after it, and a window's
+    /// `Source` and the focus both name a client by its *place* in the
+    /// list. Renumber them as the list is compacted: a window that
+    /// outlived an earlier client would otherwise be drawn from somebody
+    /// else's buffer and typed into by somebody else's keyboard.
+    fn renumber(&mut self) -> bool {
+        let mut changed = false;
         let places = renumbered(&self.slots);
         self.slots.retain(|slot| !slot.gone);
         self.sources.retain(
@@ -1432,43 +1396,33 @@ impl<'r> Compositor<'r> {
                 None => self.method = None,
             }
         }
+        changed
+    }
 
-        // A window arriving or leaving resizes every other window on the
-        // workspace, and a window that is not told is one drawing at the
-        // size it had before -- which the compositor then draws scaled into
-        // a rectangle that is not its buffer's. Hyprland reconfigures the
-        // whole workspace for the same reason.
-        //
-        // Everything that changes the layout is above this, *including* a
-        // connection ending: a window left alone when its neighbour's client
-        // went is the one case where nothing the compositor was asked to do
-        // changed the layout and it changed anyway, and it was the one case
-        // this missed.
-        if changed {
-            // The layer surfaces first: their exclusive zones decide how
-            // much of the monitor is left for the windows to tile in, so a
-            // bar has to be placed before a window is told its size.
-            // `monitor = NAME, addreserved, ...` lines, the file's and
-            // `hyprctl keyword`'s since, which reserve strips beside the
-            // layer surfaces' zones.
-            let added = compositor_config::AddedReserved::read_all(
-                self.config.monitors.iter().map(|raw| raw.value.as_str()),
-            );
-            self.placed_layers = place_layers(
-                &mut self.slots,
-                &mut self.state,
-                &self.screens,
-                &self.fixed.layer_rules,
-                &added,
-            );
-            reconfigure(&mut self.slots, &self.state);
-        }
-        // The popups, which are drawn over the windows like a layer surface
-        // on the top level: a menu is not a window, has no border and no
-        // gaps, and belongs where its parent put it.
-        let popups = placed_popups(&self.slots, &self.state, &self.sources);
-        // The keyboard follows the layout's focus, and a window that has just
-        // arrived is what the layout focused.
+    /// Place the layer surfaces and tell every window its size.
+    fn rearrange(&mut self) {
+        // The layer surfaces first: their exclusive zones decide how
+        // much of the monitor is left for the windows to tile in, so a
+        // bar has to be placed before a window is told its size.
+        // `monitor = NAME, addreserved, ...` lines, the file's and
+        // `hyprctl keyword`'s since, which reserve strips beside the
+        // layer surfaces' zones.
+        let added = compositor_config::AddedReserved::read_all(
+            self.config.monitors.iter().map(|raw| raw.value.as_str()),
+        );
+        self.placed_layers = place_layers(
+            &mut self.slots,
+            &mut self.state,
+            &self.screens,
+            &self.fixed.layer_rules,
+            &added,
+        );
+        reconfigure(&mut self.slots, &self.state);
+    }
+
+    /// The keyboard follows the layout's focus, and a window that has just
+    /// arrived is what the layout focused.
+    fn follow_keyboard(&mut self) {
         // Who the keyboard is on. A locked session takes it away from every
         // window and gives it to the lock's own surface, so that a key
         // typed at a lock screen cannot reach what is behind it.
@@ -1505,10 +1459,12 @@ impl<'r> Compositor<'r> {
                 self.seat.keyboard().modifiers(),
             );
         }
+    }
 
-        // The event socket and the bars, from the same description
-        // `hyprctl` answers from: a bar and a script must not be told two
-        // different things.
+    /// The event socket and the bars, from the same description
+    /// `hyprctl` answers from: a bar and a script must not be told two
+    /// different things.
+    fn publish(&mut self, changed: bool) {
         let watched = self
             .slots
             .iter()
@@ -1540,23 +1496,7 @@ impl<'r> Compositor<'r> {
             .map(|window| window.map(|window| window.0))
             .collect();
         if event_ready || events_watched || plugins_tracking || watched || workspaces_watched {
-            let snapshot = crate::control::snapshot(
-                &self.state,
-                &self.slots,
-                &self.sources,
-                &as_reported(
-                    &self.config,
-                    &self.seat,
-                    &self.devices,
-                    &self.placed_layers,
-                    &self.plugins,
-                    &self.fixed.said,
-                    &self.rolling.borrow(),
-                    self.window_rules.styles(),
-                    self.lock.is_some(),
-                    self.fixed.started.elapsed().as_secs(),
-                ),
-            );
+            let snapshot = self.snapshot();
             if let Some(socket) = self.events.as_mut() {
                 socket.publish(&snapshot, &trail);
             }
@@ -1582,11 +1522,21 @@ impl<'r> Compositor<'r> {
                 }
             }
         }
+    }
 
-        self.tally.most = self.tally.most.max(self.sources.len());
-        // A frame is drawn when something changed, when nothing has been
-        // drawn yet, and while any window is still on its way somewhere: an
-        // animation is a frame a change does not ask for.
+    /// Draw a frame if one is owed and the screens can take it. `changed`
+    /// gains whatever moving the pointer's planes changed. Gives whether
+    /// an animation is running, which the wait has to know.
+    ///
+    /// A frame is drawn when something changed, when nothing has been
+    /// drawn yet, and while any window is still on its way somewhere: an
+    /// animation is a frame a change does not ask for.
+    fn frame(
+        &mut self,
+        changed: &mut bool,
+        now: u32,
+        popups: &[crate::frame::Placed],
+    ) -> Result<bool, String> {
         // The loop's `now` is milliseconds as a `u32`, which is what
         // `wl_keyboard.key` and `wl_pointer.motion` carry; an animation's is
         // the same clock, widened.
@@ -1614,7 +1564,7 @@ impl<'r> Compositor<'r> {
             surface: cursor_surface(&self.slots, &self.focus),
             shown: cursor_shown(&self.slots, &self.focus),
         });
-        changed |= sync_planes(
+        *changed |= sync_planes(
             &mut self.screens,
             &self.slots,
             pointer.map(|cursor| (cursor, self.seat.pointer())),
@@ -1622,7 +1572,7 @@ impl<'r> Compositor<'r> {
             self.fixed.planes,
             self.report,
         );
-        self.owed |= changed;
+        self.owed |= *changed;
         // `debug:overlay`, read every pass so that `hyprctl keyword` turns
         // it on and off at once. While it is up its numbers move every
         // 200 ms, and a frame is owed that often, as Hyprland's
@@ -1635,430 +1585,510 @@ impl<'r> Compositor<'r> {
         if (self.owed || self.tally.drawn == 0 || animating || self.settling)
             && self.pace.due(Instant::now(), refresh_ns(&self.screens))
         {
-            self.owed = false;
-            self.settling = animating;
-            // A pass that moves the animations is one of their ticks:
-            // Hyprland keeps how long it was since the last.
-            if animating {
-                self.overlay.tick(Instant::now());
-            }
-            self.overlay
-                .screens(self.screens.iter().map(|screen| screen.name.as_str()));
-            let outputs = self.state.layout();
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "the pointer is held inside the screen, which is far inside i64"
-            )]
-            let cursor_at = {
-                let (x, y) = self.seat.pointer();
-                (x as i64, y as i64)
-            };
-            // What each window is drawn with: what a `windowrule` gave it,
-            // and over that whatever `wp_alpha_modifier_v1` asked for. The
-            // protocol's multiplier is the client's own word about how much
-            // of its surface shows, so it wins over a rule's opacity.
-            let drawn_with = drawn_with(self.window_rules.styles(), &self.slots, &self.sources);
-            let began = Instant::now();
-            // How many pixels this frame redrew, over every screen: what
-            // damage tracking is worth is how little a frame that changes
-            // little costs, and the line the loop prints says so.
-            let mut redrew = 0i64;
-            let mut drew_what = (0i64, 0usize, 0i64);
-            let mut drew_from = [0i64; 4];
-            // Whether a screen is lost and not yet back: the next frame is
-            // owed so that it is looked for again.
-            let mut waiting = false;
-            // A frame a monitor: each screen draws the workspace it shows,
-            // with the windows' rectangles moved into its own pixels.
-            for (which, screen) in self.screens.iter_mut().enumerate() {
-                let Some(output) = outputs
+            self.draw(now, animating, overlay_on, popups)?;
+        }
+        Ok(animating)
+    }
+
+    /// Draw the frame: every screen, then what the clients are owed for it
+    /// and what the report says of it.
+    fn draw(
+        &mut self,
+        now: u32,
+        animating: bool,
+        overlay_on: bool,
+        popups: &[crate::frame::Placed],
+    ) -> Result<(), String> {
+        self.owed = false;
+        self.settling = animating;
+        // A pass that moves the animations is one of their ticks:
+        // Hyprland keeps how long it was since the last.
+        if animating {
+            self.overlay.tick(Instant::now());
+        }
+        self.overlay
+            .screens(self.screens.iter().map(|screen| screen.name.as_str()));
+        let outputs = self.state.layout();
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the pointer is held inside the screen, which is far inside i64"
+        )]
+        let cursor_at = {
+            let (x, y) = self.seat.pointer();
+            (x as i64, y as i64)
+        };
+        // What each window is drawn with: what a `windowrule` gave it,
+        // and over that whatever `wp_alpha_modifier_v1` asked for. The
+        // protocol's multiplier is the client's own word about how much
+        // of its surface shows, so it wins over a rule's opacity.
+        let drawn_with = drawn_with(self.window_rules.styles(), &self.slots, &self.sources);
+        let began = Instant::now();
+        let mut drew = Drew::default();
+        let with = Drawing {
+            millis: u64::from(now),
+            overlay_on,
+            cursor_at,
+            drawn_with: &drawn_with,
+            popups,
+        };
+        // A frame a monitor: each screen draws the workspace it shows,
+        // with the windows' rectangles moved into its own pixels.
+        for which in 0..self.screens.len() {
+            let Some(output) = self.screens.get(which).and_then(|screen| {
+                outputs
                     .iter()
                     .find(|output| output.monitor == screen.monitor)
-                else {
-                    continue;
-                };
-                // A screen whose card went away is looked for again every
-                // frame and drawn for only once it is back: then as a whole
-                // frame, since the card it is on now has seen none of the
-                // last one's, and in software, since the GPU went with it.
-                // The loss is said here too: a cursor that could not be
-                // shown or moved finds it with nothing said, and a driver
-                // killed as the pointer first reaches its plane is lost
-                // that way, before any frame or wait could find it.
-                let lost = screen.backend.lost();
-                if lost {
-                    screen.say_gone(self.report);
-                }
-                if lost && !screen.backend.recover() {
-                    waiting = true;
-                    continue;
-                }
-                if lost {
-                    (self.report)(&format!(
-                        "hyprix: {}: the card is back; drawing on it again",
-                        screen.name
-                    ));
-                    screen.said_gone = false;
-                    screen.gpu = None;
-                    screen.watch = crate::damage::Watch::default();
-                    screen.plane.forget();
-                }
-                // When this screen's frame began, which is what the
-                // counter's frame times and render times are taken from.
-                let screen_began = Instant::now();
-                if overlay_on {
-                    self.overlay.frame(
-                        &screen.name,
-                        screen.output().refresh,
-                        which == 0,
-                        screen_began,
-                    );
-                }
-                // Where each window *is*, rather than where the tiling put
-                // it.
-                let output = &self.animations.follow(output, millis);
-                let (width, height) = screen.size();
-                let origin = (screen.rect.x, screen.rect.y);
-                let scale = screen.scale;
-                // A screen `dpms off` turned off shows nothing at all,
-                // before the lock and before the windows: that is what
-                // turning a screen off means.
-                let dark = self.dpms.get(&screen.name).copied().unwrap_or(false);
-                // What is drawn over the windows, or over the lock: the
-                // bars and the menus, or the lock's own surface and
-                // whatever a `layerrule = abovelock` asked for over it --
-                // an on-screen keyboard, which is the whole reason that
-                // rule exists, because a compositor that drew nothing over
-                // the lock would leave a person with no way to type the
-                // password.
-                let over: Vec<crate::frame::Placed> = if dark {
-                    Vec::new()
-                } else if let Some(held) = self.lock.as_ref() {
-                    held.surfaces
-                        .get(&which)
-                        .map(|(_, surface)| crate::frame::Placed {
-                            client: held.client,
-                            surface: *surface,
-                            rect: screen.rect,
-                            above: true,
-                            rules: crate::frame::LayerRules::default(),
-                        })
-                        .into_iter()
-                        .chain(
-                            self.placed_layers
-                                .iter()
-                                .copied()
-                                .filter(|placed| placed.rules.above_lock),
-                        )
-                        .collect()
-                } else {
+            }) else {
+                continue;
+            };
+            self.draw_screen(which, output, &with, &mut drew)?;
+        }
+        self.owed |= drew.waiting;
+        // The frame has been drawn from them, so the next one starts
+        // from what happens next.
+        self.commits.taken();
+        self.tally.least = self.tally.least.min(drew.redrew);
+        self.tally.drawn = self.tally.drawn.saturating_add(1);
+        // Every surface that went into the frame is owed two things: a
+        // `wl_callback.done` for the `wl_surface.frame` it asked for,
+        // and a `wp_presentation_feedback.presented` if it asked for
+        // one. A client that waits on the first before drawing again --
+        // which every toolkit does -- draws once and stops without it.
+        frames_done(
+            &mut self.slots,
+            &self.sources,
+            &self.placed_layers,
+            popups,
+            self.lock.as_ref(),
+            now,
+            self.tally.drawn,
+            refresh_ns(&self.screens),
+        );
+        self.count_frame(began.elapsed(), &drew);
+        if self.tally.drawn == 1 {
+            // The screens are up and the first frame is on them. This is
+            // what a watcher waits for, in the shape
+            // `src/user/linux/compositor/blank`'s marker has.
+            (self.report)(&format!(
+                "hyprix: {} {display}",
+                described(&self.screens),
+                display = self.fixed.display,
+            ));
+        }
+        if let Some(directory) = self.options.dump.as_ref() {
+            dump(&mut self.screens, directory, self.tally.drawn)?;
+        }
+        Ok(())
+    }
+
+    /// Whether the screen at `which` can be drawn on: a screen whose card
+    /// went away is looked for again every frame and drawn for only once it
+    /// is back.
+    ///
+    /// Then as a whole frame, since the card it is on now has seen none of
+    /// the last one's, and in software, since the GPU went with it. The
+    /// loss is said here too: a cursor that could not be shown or moved
+    /// finds it with nothing said, and a driver killed as the pointer first
+    /// reaches its plane is lost that way, before any frame or wait could
+    /// find it.
+    fn screen_back(&mut self, which: usize) -> bool {
+        let Some(screen) = self.screens.get_mut(which) else {
+            return false;
+        };
+        let lost = screen.backend.lost();
+        if lost {
+            screen.say_gone(self.report);
+        }
+        if lost && !screen.backend.recover() {
+            return false;
+        }
+        if lost {
+            (self.report)(&format!(
+                "hyprix: {}: the card is back; drawing on it again",
+                screen.name
+            ));
+            screen.said_gone = false;
+            screen.gpu = None;
+            screen.watch = crate::damage::Watch::default();
+            screen.plane.forget();
+        }
+        true
+    }
+
+    /// What is drawn over the windows on the screen at `which`, or over
+    /// the lock: the bars and the menus, or the lock's own surface and
+    /// whatever a `layerrule = abovelock` asked for over it -- an on-screen
+    /// keyboard, which is the whole reason that rule exists, because a
+    /// compositor that drew nothing over the lock would leave a person with
+    /// no way to type the password.
+    fn over_windows(
+        &self,
+        which: usize,
+        rect: Rect,
+        dark: bool,
+        popups: &[crate::frame::Placed],
+    ) -> Vec<crate::frame::Placed> {
+        if dark {
+            Vec::new()
+        } else if let Some(held) = self.lock.as_ref() {
+            held.surfaces
+                .get(&which)
+                .map(|(_, surface)| crate::frame::Placed {
+                    client: held.client,
+                    surface: *surface,
+                    rect,
+                    above: true,
+                    rules: crate::frame::LayerRules::default(),
+                })
+                .into_iter()
+                .chain(
                     self.placed_layers
                         .iter()
                         .copied()
-                        .chain(popups.iter().copied())
-                        .collect()
-                };
-                // The surface a drag is carrying, drawn at the pointer:
-                // that is what makes a drag look like one.
-                let drag_icon = self
-                    .carried
-                    .as_ref()
-                    .filter(|held| !dark && held.holding())
-                    .and_then(|held| {
-                        Some(crate::frame::Placed {
-                            client: held.client,
-                            surface: held.icon?,
-                            rect: Rect::new(cursor_at.0, cursor_at.1, 0, 0),
-                            above: true,
-                            rules: crate::frame::LayerRules::default(),
-                        })
-                    });
-                // The pointer, unless the session is locked: a lock screen
-                // draws its own and the compositor's arrow over it would be
-                // two pointers.
-                // And not where the screen's cursor plane shows it.
-                let cursor = (!dark
-                    && !screen.plane.on
-                    && self.lock.is_none()
-                    && self.devices.has_pointer()
-                    && self.seat.pointer_used())
-                .then(|| crate::frame::Cursor {
-                    at: cursor_at,
-                    surface: cursor_surface(&self.slots, &self.focus),
-                    shown: cursor_shown(&self.slots, &self.focus),
-                });
-                // The ramps a night-light set on this screen, applied to
-                // the pixels on their way out.
-                let gamma = self.gammas.get(&which).copied();
-                // A locked screen draws no window, and a screen that is off
-                // draws nothing at all: a plan says what is drawn, not what
-                // the layout holds.
-                let scaled = self.style.at_scale(scale);
-                let layout = if dark || self.lock.is_some() {
-                    compositor_layout::MonitorLayout {
-                        windows: Vec::new(),
-                        ..output.clone()
-                    }
-                } else {
-                    compositor_render::scaled(output, origin, scale)
-                };
-                let mut blurred = blurs_behind(
-                    &scaled,
-                    &layout,
-                    &over,
-                    &self.slots,
-                    &self.sources,
-                    &drawn_with,
-                    (origin, scale),
-                );
-                // The counter, on the first screen as Hyprland draws it,
-                // over everything but a screen that is off. Its boxes blur
-                // what is behind them as it stands, which the damage has to
-                // know to redraw them whole.
-                let picture = (overlay_on && which == 0 && !dark)
-                    .then(|| self.overlay.picture(screen_began, scale));
-                if scaled.blur.is_some()
-                    && let Some(picture) = picture.as_ref()
-                {
-                    blurred.extend(
-                        picture
-                            .blurred()
-                            .map(|rect| crate::damage::Blurred { rect, live: true }),
-                    );
-                }
-                // Everything this frame is drawn from but the clients' own
-                // pixels, which is what the damage is worked out from by
-                // comparing it with the frame before's.
-                let plan = crate::damage::Plan {
-                    size: (width, height),
-                    origin,
-                    scale,
-                    style: scaled,
-                    dark,
-                    locked: self.lock.is_some(),
-                    gamma,
-                    layout,
-                    blurred,
-                    styles: drawn_with.clone(),
-                    layers: over.clone(),
-                    cursor: cursor.and_then(|cursor| {
-                        Some((
-                            cursor,
-                            crate::frame::cursor_rect(&self.slots, &cursor, origin, scale)?,
-                        ))
-                    }),
-                    drag_icon: drag_icon.and_then(|icon| {
-                        Some((
-                            icon,
-                            crate::frame::drag_rect(&self.slots, &icon, origin, scale)?,
-                        ))
-                    }),
-                    overlay: picture.as_ref().map(|picture| picture.stamp),
-                    plane: screen
-                        .plane
-                        .on
-                        .then(|| cursor_surface(&self.slots, &self.focus))
-                        .flatten()
-                        .map(|(client, surface, _)| (client, surface)),
-                };
-                // And the clients' own pixels: where on this screen each
-                // commit since the last frame landed.
-                let heard = self.commits.on(&plan, &self.sources);
-                let frame = screen.watch.frame(plan, &heard, screen.backend.age());
-                redrew = redrew.saturating_add(frame.canvas.area());
-                // What the report says of the slowest frame's damage: how much
-                // was drawn and in how many pieces, and how much was copied to
-                // the screen -- a small change drawn as a large one is a
-                // damage question, not a drawing one.
-                drew_what = (
-                    drew_what.0.saturating_add(frame.canvas.area()),
-                    drew_what.1.saturating_add(frame.canvas.rects().len()),
-                    drew_what.2.saturating_add(frame.screen.area()),
-                );
-                drew_from = frame.sources;
-                let mut target = crate::frame::Output {
-                    canvas: &mut screen.canvas,
-                    backdrop: &mut screen.backdrop,
-                    gpu: screen.gpu.as_mut(),
-                    backend: screen.backend.as_mut(),
-                    origin,
-                    style: &self.style,
-                    styles: &drawn_with,
-                    scale,
-                    transform: screen.transform,
-                    drag_icon,
-                    gamma,
-                    cursor,
-                    present: frame.screen,
-                    overlay: picture.as_ref(),
-                    overlay_took: Duration::ZERO,
-                };
-                let drew = if dark {
-                    crate::frame::draw_dark(&mut target, &frame.canvas)
-                } else if self.lock.is_some() {
-                    // The lock's own surface is the first of `over`, which
-                    // is where the damage above expects it too: the drawing
-                    // and the damage read one list.
-                    crate::frame::draw_locked(
-                        &mut target,
-                        output,
-                        &self.slots,
-                        None,
-                        &over,
-                        &frame.canvas,
-                    )
-                } else {
-                    crate::frame::draw(
-                        &mut target,
-                        output,
-                        &self.slots,
-                        &self.sources,
-                        &over,
-                        &frame.canvas,
-                    )
-                };
-                let overlay_took = target.overlay_took;
-                if overlay_on {
-                    self.overlay
-                        .rendered(&screen.name, screen_began.elapsed(), overlay_took);
-                }
-                match drew {
-                    Ok(()) if screen.backend.lost() => {
-                        screen.say_gone(self.report);
-                        waiting = true;
-                    }
-                    Ok(()) => {}
-                    // A GPU that has gone is not a screen that has. The
-                    // software canvas has drawn nothing while the GPU was
-                    // drawing, so what it is owed is everything: the watch
-                    // forgets what it saw, which makes the next frame a
-                    // whole one, and that frame is owed now.
-                    Err(why)
-                        if screen.gpu.is_some() && why.starts_with(crate::frame::GPU_FAILED) =>
-                    {
-                        (self.report)(&format!(
-                            "hyprix: {}: {why}; drawing in software from here on",
-                            screen.name
-                        ));
-                        screen.gpu = None;
-                        screen.watch = crate::damage::Watch::default();
-                        self.owed = true;
-                    }
-                    Err(why) => return Err(why),
-                }
-            }
-            self.owed |= waiting;
-            // The frame has been drawn from them, so the next one starts
-            // from what happens next.
-            self.commits.taken();
-            self.tally.least = self.tally.least.min(redrew);
-            self.tally.drawn = self.tally.drawn.saturating_add(1);
-            // Every surface that went into the frame is owed two things: a
-            // `wl_callback.done` for the `wl_surface.frame` it asked for,
-            // and a `wp_presentation_feedback.presented` if it asked for
-            // one. A client that waits on the first before drawing again --
-            // which every toolkit does -- draws once and stops without it.
-            frames_done(
-                &mut self.slots,
-                &self.sources,
-                &self.placed_layers,
-                &popups,
-                self.lock.as_ref(),
-                now,
-                self.tally.drawn,
-                refresh_ns(&self.screens),
+                        .filter(|placed| placed.rules.above_lock),
+                )
+                .collect()
+        } else {
+            self.placed_layers
+                .iter()
+                .copied()
+                .chain(popups.iter().copied())
+                .collect()
+        }
+    }
+
+    /// Draw one screen's frame into `drew`.
+    fn draw_screen(
+        &mut self,
+        which: usize,
+        output: &compositor_layout::MonitorLayout,
+        with: &Drawing<'_>,
+        drew: &mut Drew,
+    ) -> Result<(), String> {
+        if !self.screen_back(which) {
+            drew.waiting = true;
+            return Ok(());
+        }
+        let Some(screen) = self.screens.get(which) else {
+            return Ok(());
+        };
+        // When this screen's frame began, which is what the
+        // counter's frame times and render times are taken from.
+        let screen_began = Instant::now();
+        if with.overlay_on {
+            self.overlay.frame(
+                &screen.name,
+                screen.output().refresh,
+                which == 0,
+                screen_began,
             );
-            // The slowest frame, which is the bound `docs/ROADMAP.md` asks
-            // each software effect to have: blur is the expensive one, and a
-            // number measured on the machine that ran it is worth more than
-            // one somebody hoped for.
-            let took = began.elapsed();
-            self.tally.slowest = self.tally.slowest.max(took);
-            // Where the slowest frame of the report's interval spent its
-            // time, which the report prints after it: a slow frame on a slow
-            // machine is a question whose answer is one of these.
-            let phases = compositor_render::timing::take();
-            if took >= self.tally.since {
-                self.tally.since_phases = phases;
-                self.tally.since_drew = drew_what;
-                self.tally.since_from = drew_from;
+        }
+        // Where each window *is*, rather than where the tiling put
+        // it.
+        let output = &self.animations.follow(output, with.millis);
+        let Some(planned) = self.plan_screen(which, output, with, screen_began) else {
+            return Ok(());
+        };
+        self.present(which, output, with, screen_began, planned, drew)
+    }
+
+    /// What the screen at `which` is drawn from this frame, worked out
+    /// before any of it is drawn: `output` is where each window is.
+    fn plan_screen(
+        &mut self,
+        which: usize,
+        output: &compositor_layout::MonitorLayout,
+        with: &Drawing<'_>,
+        screen_began: Instant,
+    ) -> Option<Planned> {
+        let screen = self.screens.get(which)?;
+        let (width, height) = screen.size();
+        let origin = (screen.rect.x, screen.rect.y);
+        let scale = screen.scale;
+        // A screen `dpms off` turned off shows nothing at all,
+        // before the lock and before the windows: that is what
+        // turning a screen off means.
+        let dark = self.dpms.get(&screen.name).copied().unwrap_or(false);
+        let over = self.over_windows(which, screen.rect, dark, with.popups);
+        // The surface a drag is carrying, drawn at the pointer:
+        // that is what makes a drag look like one.
+        let drag_icon = self
+            .carried
+            .as_ref()
+            .filter(|held| !dark && held.holding())
+            .and_then(|held| {
+                Some(crate::frame::Placed {
+                    client: held.client,
+                    surface: held.icon?,
+                    rect: Rect::new(with.cursor_at.0, with.cursor_at.1, 0, 0),
+                    above: true,
+                    rules: crate::frame::LayerRules::default(),
+                })
+            });
+        // The pointer, unless the session is locked: a lock screen
+        // draws its own and the compositor's arrow over it would be
+        // two pointers.
+        // And not where the screen's cursor plane shows it.
+        let cursor = (!dark
+            && !screen.plane.on
+            && self.lock.is_none()
+            && self.devices.has_pointer()
+            && self.seat.pointer_used())
+        .then(|| crate::frame::Cursor {
+            at: with.cursor_at,
+            surface: cursor_surface(&self.slots, &self.focus),
+            shown: cursor_shown(&self.slots, &self.focus),
+        });
+        // The ramps a night-light set on this screen, applied to
+        // the pixels on their way out.
+        let gamma = self.gammas.get(&which).copied();
+        // A locked screen draws no window, and a screen that is off
+        // draws nothing at all: a plan says what is drawn, not what
+        // the layout holds.
+        let scaled = self.style.at_scale(scale);
+        let layout = if dark || self.lock.is_some() {
+            compositor_layout::MonitorLayout {
+                windows: Vec::new(),
+                ..output.clone()
             }
-            // Every so many frames, say how long the slowest of them took.
-            // The compositor does not end on a machine it is the session of,
-            // so a number only in the line it prints when it stops is a
-            // number nobody sees: `docs/ROADMAP.md` asks each software
-            // effect for a frame-time bound, and this is where it is
-            // measured on the machine that ran it.
-            //
-            // And all of them together, after the slowest, which is what
-            // the machine spent drawing: one frame in sixty may be slow for
-            // a reason of its own, and a slowest frame cannot tell that
-            // from sixty slow ones.
-            self.tally.since = self.tally.since.max(took);
-            self.tally.spent = self.tally.spent.saturating_add(took);
-            self.tally.counted = self.tally.counted.saturating_add(1);
-            if self.tally.reported.elapsed() >= FRAME_REPORT {
+        } else {
+            compositor_render::scaled(output, origin, scale)
+        };
+        let mut blurred = blurs_behind(
+            &scaled,
+            &layout,
+            &over,
+            &self.slots,
+            &self.sources,
+            with.drawn_with,
+            (origin, scale),
+        );
+        // The counter, on the first screen as Hyprland draws it,
+        // over everything but a screen that is off. Its boxes blur
+        // what is behind them as it stands, which the damage has to
+        // know to redraw them whole.
+        let picture = (with.overlay_on && which == 0 && !dark)
+            .then(|| self.overlay.picture(screen_began, scale));
+        if scaled.blur.is_some()
+            && let Some(picture) = picture.as_ref()
+        {
+            blurred.extend(
+                picture
+                    .blurred()
+                    .map(|rect| crate::damage::Blurred { rect, live: true }),
+            );
+        }
+        // Everything this frame is drawn from but the clients' own
+        // pixels, which is what the damage is worked out from by
+        // comparing it with the frame before's.
+        let plan = crate::damage::Plan {
+            size: (width, height),
+            origin,
+            scale,
+            style: scaled,
+            dark,
+            locked: self.lock.is_some(),
+            gamma,
+            layout,
+            blurred,
+            styles: with.drawn_with.clone(),
+            layers: over.clone(),
+            cursor: cursor.and_then(|cursor| {
+                Some((
+                    cursor,
+                    crate::frame::cursor_rect(&self.slots, &cursor, origin, scale)?,
+                ))
+            }),
+            drag_icon: drag_icon.and_then(|icon| {
+                Some((
+                    icon,
+                    crate::frame::drag_rect(&self.slots, &icon, origin, scale)?,
+                ))
+            }),
+            overlay: picture.as_ref().map(|picture| picture.stamp),
+            plane: screen
+                .plane
+                .on
+                .then(|| cursor_surface(&self.slots, &self.focus))
+                .flatten()
+                .map(|(client, surface, _)| (client, surface)),
+        };
+        Some(Planned {
+            plan,
+            over,
+            drag_icon,
+            cursor,
+            gamma,
+            picture,
+            dark,
+            origin,
+            scale,
+        })
+    }
+
+    /// Draw the screen at `which` from what `plan_screen` worked out, and
+    /// count what it drew into `drew`.
+    fn present(
+        &mut self,
+        which: usize,
+        output: &compositor_layout::MonitorLayout,
+        with: &Drawing<'_>,
+        screen_began: Instant,
+        planned: Planned,
+        drew: &mut Drew,
+    ) -> Result<(), String> {
+        let Planned {
+            plan,
+            over,
+            drag_icon,
+            cursor,
+            gamma,
+            picture,
+            dark,
+            origin,
+            scale,
+        } = planned;
+        let Some(screen) = self.screens.get_mut(which) else {
+            return Ok(());
+        };
+        // And the clients' own pixels: where on this screen each
+        // commit since the last frame landed.
+        let heard = self.commits.on(&plan, &self.sources);
+        let frame = screen.watch.frame(plan, &heard, screen.backend.age());
+        drew.redrew = drew.redrew.saturating_add(frame.canvas.area());
+        // What the report says of the slowest frame's damage: how much
+        // was drawn and in how many pieces, and how much was copied to
+        // the screen -- a small change drawn as a large one is a
+        // damage question, not a drawing one.
+        drew.what = (
+            drew.what.0.saturating_add(frame.canvas.area()),
+            drew.what.1.saturating_add(frame.canvas.rects().len()),
+            drew.what.2.saturating_add(frame.screen.area()),
+        );
+        drew.from = frame.sources;
+        let mut target = crate::frame::Output {
+            canvas: &mut screen.canvas,
+            backdrop: &mut screen.backdrop,
+            gpu: screen.gpu.as_mut(),
+            backend: screen.backend.as_mut(),
+            origin,
+            style: &self.style,
+            styles: with.drawn_with,
+            scale,
+            transform: screen.transform,
+            drag_icon,
+            gamma,
+            cursor,
+            present: frame.screen,
+            overlay: picture.as_ref(),
+            overlay_took: Duration::ZERO,
+        };
+        let result = if dark {
+            crate::frame::draw_dark(&mut target, &frame.canvas)
+        } else if self.lock.is_some() {
+            // The lock's own surface is the first of `over`, which
+            // is where the damage above expects it too: the drawing
+            // and the damage read one list.
+            crate::frame::draw_locked(&mut target, output, &self.slots, None, &over, &frame.canvas)
+        } else {
+            crate::frame::draw(
+                &mut target,
+                output,
+                &self.slots,
+                &self.sources,
+                &over,
+                &frame.canvas,
+            )
+        };
+        let overlay_took = target.overlay_took;
+        if with.overlay_on {
+            self.overlay
+                .rendered(&screen.name, screen_began.elapsed(), overlay_took);
+        }
+        match result {
+            Ok(()) if screen.backend.lost() => {
+                screen.say_gone(self.report);
+                drew.waiting = true;
+            }
+            Ok(()) => {}
+            // A GPU that has gone is not a screen that has. The
+            // software canvas has drawn nothing while the GPU was
+            // drawing, so what it is owed is everything: the watch
+            // forgets what it saw, which makes the next frame a
+            // whole one, and that frame is owed now.
+            Err(why) if screen.gpu.is_some() && why.starts_with(crate::frame::GPU_FAILED) => {
                 (self.report)(&format!(
-                    "hyprix: frames {drawn} slowest of the last {counted} {} us, all of them {} us ({}; drew {} px in {} rects, showed {} px; from layout {} commits {} backdrop {} blurs {})",
-                    self.tally.since.as_micros(),
-                    self.tally.spent.as_micros(),
-                    compositor_render::timing::describe(&self.tally.since_phases),
-                    self.tally.since_drew.0,
-                    self.tally.since_drew.1,
-                    self.tally.since_drew.2,
-                    self.tally.since_from[0],
-                    self.tally.since_from[1],
-                    self.tally.since_from[2],
-                    self.tally.since_from[3],
-                    drawn = self.tally.drawn,
-                    counted = self.tally.counted,
+                    "hyprix: {}: {why}; drawing in software from here on",
+                    screen.name
                 ));
-                (
-                    self.tally.since,
-                    self.tally.spent,
-                    self.tally.counted,
-                    self.tally.reported,
-                ) = (Duration::ZERO, Duration::ZERO, 0, Instant::now());
+                screen.gpu = None;
+                screen.watch = crate::damage::Watch::default();
+                self.owed = true;
             }
-            if self.tally.drawn == 1 {
-                // The screens are up and the first frame is on them. This is
-                // what a watcher waits for, in the shape
-                // `src/user/linux/compositor/blank`'s marker has.
-                (self.report)(&format!(
-                    "hyprix: {} {display}",
-                    described(&self.screens),
-                    display = self.fixed.display,
-                ));
-            }
-            if let Some(directory) = self.options.dump.as_ref() {
-                dump(&mut self.screens, directory, self.tally.drawn)?;
-            }
+            Err(why) => return Err(why),
         }
+        Ok(())
+    }
 
-        // A request may have changed the layout after the event snapshot was
-        // made above, and a plugin's hello may have carried its first command
-        // too. Run that follow-up pass now, before waiting for another
-        // descriptor edge.
-        if changed || self.plugins.needs_poll() {
-            return Ok(true);
+    /// Count a frame that took `took` and drew what `drew` says, and say
+    /// how the frames went once a second.
+    fn count_frame(&mut self, took: Duration, drew: &Drew) {
+        // The slowest frame, which is the bound `docs/ROADMAP.md` asks
+        // each software effect to have: blur is the expensive one, and a
+        // number measured on the machine that ran it is worth more than
+        // one somebody hoped for.
+        self.tally.slowest = self.tally.slowest.max(took);
+        // Where the slowest frame of the report's interval spent its
+        // time, which the report prints after it: a slow frame on a slow
+        // machine is a question whose answer is one of these.
+        let phases = compositor_render::timing::take();
+        if took >= self.tally.since {
+            self.tally.since_phases = phases;
+            self.tally.since_drew = drew.what;
+            self.tally.since_from = drew.from;
         }
-
-        // `frames_done`, screenshots, and desktop protocol timers can queue
-        // output after their slot was served. Send it before the next wait:
-        // the old fixed polling pass happened to do this two milliseconds
-        // later, whereas an idle compositor may otherwise wait forever for a
-        // client which is waiting for this very reply.
-        if self.slots.iter_mut().any(|slot| !slot.flush()) {
-            // Let the normal connection cleanup above remove a client whose
-            // queued reply could not be written before it enters the wait
-            // set.
-            return Ok(true);
+        // Every so many frames, say how long the slowest of them took.
+        // The compositor does not end on a machine it is the session of,
+        // so a number only in the line it prints when it stops is a
+        // number nobody sees: `docs/ROADMAP.md` asks each software
+        // effect for a frame-time bound, and this is where it is
+        // measured on the machine that ran it.
+        //
+        // And all of them together, after the slowest, which is what
+        // the machine spent drawing: one frame in sixty may be slow for
+        // a reason of its own, and a slowest frame cannot tell that
+        // from sixty slow ones.
+        self.tally.since = self.tally.since.max(took);
+        self.tally.spent = self.tally.spent.saturating_add(took);
+        self.tally.counted = self.tally.counted.saturating_add(1);
+        if self.tally.reported.elapsed() >= FRAME_REPORT {
+            (self.report)(&format!(
+                "hyprix: frames {drawn} slowest of the last {counted} {} us, all of them {} us ({}; drew {} px in {} rects, showed {} px; from layout {} commits {} backdrop {} blurs {})",
+                self.tally.since.as_micros(),
+                self.tally.spent.as_micros(),
+                compositor_render::timing::describe(&self.tally.since_phases),
+                self.tally.since_drew.0,
+                self.tally.since_drew.1,
+                self.tally.since_drew.2,
+                self.tally.since_from[0],
+                self.tally.since_from[1],
+                self.tally.since_from[2],
+                self.tally.since_from[3],
+                drawn = self.tally.drawn,
+                counted = self.tally.counted,
+            ));
+            (
+                self.tally.since,
+                self.tally.spent,
+                self.tally.counted,
+                self.tally.reported,
+            ) = (Duration::ZERO, Duration::ZERO, 0, Instant::now());
         }
+    }
 
-        // Nothing changes until an input descriptor, a client, a control
-        // socket or a plugin becomes ready. Do not wake merely to discover
-        // that: wait for one of them, or for the next frame, idle, or test
-        // timer.
+    /// How long the wait may last: until the next frame, idle, test or
+    /// device timer, whichever is first, or for ever.
+    fn timeout(&self, animating: bool) -> Option<Duration> {
         let frame_wait = (self.owed || animating || self.settling)
             .then(|| self.pace.until(Instant::now()))
             .flatten();
@@ -2102,7 +2132,7 @@ impl<'r> Compositor<'r> {
             .map(crate::control::Pending::deadline)
             .min()
             .map(|deadline| deadline.saturating_duration_since(Instant::now()));
-        let timeout = [
+        [
             frame_wait,
             idle_wait,
             deadline_wait,
@@ -2113,7 +2143,17 @@ impl<'r> Compositor<'r> {
         ]
         .into_iter()
         .flatten()
-        .min();
+        .min()
+    }
+
+    /// Wait for something to do.
+    ///
+    /// Nothing changes until an input descriptor, a client, a control
+    /// socket or a plugin becomes ready. Do not wake merely to discover
+    /// that: wait for one of them, or for the next frame, idle, or test
+    /// timer.
+    fn wait(&mut self, animating: bool) -> Result<(), String> {
+        let timeout = self.timeout(animating);
 
         let mut fds = Vec::with_capacity(
             1 + self.slots.len()
@@ -2158,7 +2198,7 @@ impl<'r> Compositor<'r> {
             crate::wait::wait(&fds, &writable, timeout)
                 .map_err(|error| format!("hyprix: event wait: {error}"))?,
         );
-        Ok(true)
+        Ok(())
     }
 
     /// The line the compositor ends with.
@@ -2194,6 +2234,265 @@ impl<'r> Compositor<'r> {
             drawn = self.tally.drawn,
             most = self.tally.most,
         )
+    }
+}
+
+/// What every screen of one frame is drawn with.
+struct Drawing<'a> {
+    /// The loop's clock, which the animations follow.
+    millis: u64,
+    /// Whether `debug:overlay` is up.
+    overlay_on: bool,
+    /// Where the pointer is, in the space all screens share.
+    cursor_at: (i64, i64),
+    /// What each window is drawn with.
+    drawn_with: &'a BTreeMap<WindowId, compositor_render::WindowStyle>,
+    /// The popups, which are drawn over the windows.
+    popups: &'a [crate::frame::Placed],
+}
+
+/// What one screen's frame is drawn from, worked out before any of it is
+/// drawn.
+struct Planned {
+    /// Everything this frame is drawn from but the clients' own pixels.
+    plan: crate::damage::Plan,
+    /// What is drawn over the windows, or over the lock.
+    over: Vec<crate::frame::Placed>,
+    /// The surface a drag is carrying, drawn at the pointer.
+    drag_icon: Option<crate::frame::Placed>,
+    /// The pointer, where it is drawn into the frame.
+    cursor: Option<crate::frame::Cursor>,
+    /// The ramps a night-light set on this screen.
+    gamma: Option<crate::frame::Gamma>,
+    /// The counter, on the first screen while `debug:overlay` is up.
+    picture: Option<crate::overlay::Picture>,
+    /// Whether `dpms off` turned the screen off.
+    dark: bool,
+    /// Where the screen is in the space all screens share.
+    origin: (i64, i64),
+    /// The screen's scale.
+    scale: f64,
+}
+
+/// What one frame drew, over every screen.
+#[derive(Default)]
+struct Drew {
+    /// How many pixels this frame redrew, over every screen: what
+    /// damage tracking is worth is how little a frame that changes
+    /// little costs, and the line the loop prints says so.
+    redrew: i64,
+    /// How much was drawn, in how many pieces, and how much was shown.
+    what: (i64, usize, i64),
+    /// Where the last screen's frame drew from.
+    from: [i64; 4],
+    /// Whether a screen is lost and not yet back: the next frame is
+    /// owed so that it is looked for again.
+    waiting: bool,
+}
+
+/// The seat's devices, but only for a compositor that owns the screen.
+///
+/// Taking a device means grabbing it, and a grab takes the keyboard away
+/// from whatever else is reading it. A `--headless` compositor is one
+/// running beside something else -- a test on a build machine, a nested
+/// session -- and it has no business taking that machine's keyboard. So
+/// the devices go with the screen: the card has them, memory does not.
+///
+/// A compositor that owns the screen and finds no devices is not a
+/// failure either; it is a machine with nothing plugged in, so what is
+/// missing is said and the loop goes on.
+fn open_devices(options: &Options, report: &mut dyn FnMut(&str)) -> Devices {
+    if options.headless.is_some() {
+        Devices::default()
+    } else {
+        match Devices::open() {
+            Ok((devices, refused)) => {
+                for reason in refused {
+                    report(&format!("hyprix: {reason}"));
+                }
+                devices
+            }
+            Err(error) => {
+                report(&format!("hyprix: no input devices: {error}"));
+                Devices::default()
+            }
+        }
+    }
+}
+
+/// The keymap every client is handed.
+///
+/// It is made whether or not there is a keyboard: a client that binds one
+/// on a seat that announced none is already refused, and a machine whose
+/// keyboard arrives later should not need a new file.
+fn make_keymap(config: &Config, report: &mut dyn FnMut(&str)) -> Option<Keymap> {
+    // `input:kb_layout` and `input:kb_variant`, and a sentence when the
+    // configuration asked for a layout this compositor does not ship: a
+    // person whose keyboard suddenly types English is owed a reason.
+    let asked = crate::seat::chosen_layouts(config);
+    for (chosen, exact) in &asked {
+        if !*exact {
+            report(&format!(
+                "hyprix: no keymap for kb_layout = {}, kb_variant = {}; using {}",
+                config.str("input:kb_layout").unwrap_or_default(),
+                config.str("input:kb_variant").unwrap_or_default(),
+                chosen.described()
+            ));
+        }
+    }
+    // One keymap with a group for each layout, which is what libxkbcommon
+    // hands Hyprland for `kb_layout = de,us` and what lets a switch send
+    // only a new group rather than a new keymap.
+    let layouts = asked.iter().map(|(layout, _)| *layout).collect::<Vec<_>>();
+    let text = compositor_xkb::merged(&layouts);
+    match Keymap::new(&text) {
+        Ok(keymap) => Some(keymap),
+        Err(error) => {
+            report(&format!("hyprix: no keymap: {error}"));
+            None
+        }
+    }
+}
+
+/// The layout, with a monitor for every screen and the workspace rules in.
+fn lay_out(
+    settings: Settings,
+    screens: &[Screen],
+    said: &Said,
+    report: &mut dyn FnMut(&str),
+) -> Result<State, String> {
+    let mut state = State::new(settings);
+    for screen in screens {
+        let _ = state
+            .add_monitor(Monitor {
+                id: screen.monitor,
+                name: screen.name.clone(),
+                rect: screen.rect,
+                reserved: compositor_layout::Gaps::default(),
+                scale: screen.scale,
+                transform: screen.transform,
+                description: screen.description.clone(),
+                made: screen.made.clone(),
+            })
+            .map_err(|error| format!("the monitor: {error:?}"))?;
+    }
+    // The workspace rules go in once the monitors are there: a
+    // `persistent:` workspace has to be put on one, and `monitor:` names
+    // it.
+    let made = state.set_workspace_rules(said.workspace_rules.clone());
+    if !said.workspace_rules.is_empty() {
+        report(&format!(
+            "hyprix: {} workspace rule{}, {} workspace{} made",
+            said.workspace_rules.len(),
+            if said.workspace_rules.len() == 1 {
+                ""
+            } else {
+                "s"
+            },
+            made.len(),
+            if made.len() == 1 { "" } else { "s" }
+        ));
+    }
+    report(&format!(
+        "hyprix: {} monitor{} [{}]",
+        screens.len(),
+        if screens.len() == 1 { "" } else { "s" },
+        screens
+            .iter()
+            .map(|screen| screen.describe())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    Ok(state)
+}
+
+/// `hyprctl`'s socket and the event socket beside it, when one was asked
+/// for. Hyprland puts it under `$XDG_RUNTIME_DIR/hypr/<instance>/`, and a
+/// program looks there.
+fn bind_control(
+    options: &Options,
+) -> Result<
+    (
+        Option<crate::control::Control>,
+        Option<crate::control::Events>,
+    ),
+    String,
+> {
+    let mut events = None;
+    let control = match options.instance.as_deref() {
+        Some(instance) => {
+            let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(std::env::temp_dir);
+            let control = crate::control::Control::bind(&runtime, instance)
+                .map_err(|error| format!("hyprctl's socket: {error}"))?;
+            // The event socket beside it, refused the way the request socket
+            // is. `.socket2.sock` is a byte longer than `.socket.sock`, so an
+            // instance directory can take the one and not the other; said
+            // only in the compositor's report, that was a bar that got no
+            // events and a test that failed as if the machine were slow.
+            events = Some(
+                crate::control::Events::bind(control.directory())
+                    .map_err(|error| format!("hyprctl's event socket: {error}"))?,
+            );
+            Some(control)
+        }
+        None => None,
+    };
+    Ok((control, events))
+}
+
+/// Start the plugins, then `exec-once`.
+fn start_programs(
+    config: &Config,
+    options: &Options,
+    listener: &Listener,
+    report: &mut dyn FnMut(&str),
+) {
+    // The plugins: programs the compositor starts and talks to over the
+    // control socket. Started before `exec-once`, because a plugin that adds
+    // a dispatcher should be there before anything presses it, and after the
+    // sockets, because it connects to one as soon as it runs.
+    for command in &config.plugins {
+        match start(command, listener.path(), options.instance.as_deref()) {
+            Ok(pid) => report(&format!("hyprix: plugin {command} started as {pid}")),
+            Err(error) => report(&format!("hyprix: plugin {command} did not start: {error}")),
+        }
+    }
+
+    // `exec-once` from the configuration, then anything --exec added --
+    // after the sockets, because a bar started by `exec-once` looks for them
+    // as soon as it runs and a compositor that binds them later has started
+    // a program that cannot find it.
+    for command in config
+        .exec_once
+        .iter()
+        .map(String::as_str)
+        .chain(options.exec.iter().map(String::as_str))
+    {
+        match start(command, listener.path(), options.instance.as_deref()) {
+            Ok(pid) => report(&format!("hyprix: started {command} as {pid}")),
+            // A program that will not start is the person's to fix, not a
+            // reason to have no compositor; Hyprland logs it and carries on.
+            Err(error) => {
+                if let Some(line) = not_started(command, &error) {
+                    report(&line);
+                }
+            }
+        }
+    }
+}
+
+/// Catch `SIGCHLD`, so that a child's end wakes the loop to reap it.
+fn watch_children(report: &mut dyn FnMut(&str)) -> Option<crate::children::Children> {
+    match crate::children::Children::watch() {
+        Ok(children) => Some(children),
+        Err(error) => {
+            report(&format!(
+                "hyprix: SIGCHLD not caught ({error}); children are reaped only when the loop wakes"
+            ));
+            None
+        }
     }
 }
 
