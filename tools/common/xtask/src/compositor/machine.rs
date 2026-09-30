@@ -8,11 +8,11 @@
 
 use std::time::{Duration, Instant};
 
-use super::{
-    Carried, DESKTOP_DEFAULTS, EITHER, EXPECTED, FAILED, MARKER, Programs, SETTLE,
-    build_desktop_image, build_image, compositor_ended, differences, expected, say_the_marker,
-    settle, undithered, unexpected,
+use super::boot::{
+    build_desktop_image, build_image, compositor_ended, say_the_marker, settle, undithered,
 };
+use super::picture::{differences, expected, unexpected};
+use super::{Carried, DESKTOP_DEFAULTS, EITHER, EXPECTED, FAILED, MARKER, Programs, SETTLE};
 use crate::args::Args;
 use crate::display::{Qmp, free_port};
 use crate::paths::{self, Arch};

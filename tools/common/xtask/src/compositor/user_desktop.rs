@@ -9,10 +9,13 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use super::boot::{
+    Wanted, boot_and_dump_carrying, judge_still_running, judged_image, press, say_the_marker,
+    with_the_transcript,
+};
 use super::{
-    Carried, EITHER, MARKER, Programs, SETTLE, Wanted, boot_and_dump_carrying, build,
-    desktop_programs, everything_config, judge_still_running, judged_image, press, say_the_marker,
-    with_chrome, with_the_transcript,
+    Carried, EITHER, MARKER, Programs, SETTLE, build, desktop_programs, everything_config,
+    with_chrome,
 };
 use crate::args::Args;
 use crate::display::{DEVICE_ID, Qmp, free_port};

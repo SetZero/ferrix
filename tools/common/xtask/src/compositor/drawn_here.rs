@@ -10,10 +10,8 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use super::{
-    Carried, MARKER, Programs, SETTLE, absolute, build, build_image, button_event, undithered,
-    with_the_transcript,
-};
+use super::boot::{absolute, build_image, button_event, undithered, with_the_transcript};
+use super::{Carried, MARKER, Programs, SETTLE, build};
 use crate::args::Args;
 use crate::display::{DEVICE_ID, Image, Qmp, free_port, parse_ppm};
 use crate::paths::{self, Arch};

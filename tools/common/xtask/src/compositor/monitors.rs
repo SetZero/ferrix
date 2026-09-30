@@ -8,9 +8,10 @@
 
 use std::path::Path;
 
+use super::boot::{Wanted, boot_and_dump, boot_and_dump_carrying, said_on_its_own};
 use super::drawing::one_picture;
 use super::pointer::{POINTER_AT, POINTER_EXPECTED};
-use super::{Carried, Programs, Wanted, boot_and_dump, boot_and_dump_carrying, said_on_its_own};
+use super::{Carried, Programs};
 use crate::args::Args;
 use crate::paths::Arch;
 use crate::{Error, Result};

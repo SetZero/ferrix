@@ -26,12 +26,11 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use super::{
-    Carried, EITHER, EXPECTED, FAILED, MARKER, Programs, build_image, differences, expected,
-    free_port, gates_busybox, press, say_the_marker, settle, undithered, with_the_transcript,
-};
+use super::boot::{build_image, press, say_the_marker, settle, undithered, with_the_transcript};
+use super::picture::{differences, expected};
+use super::{Carried, EITHER, EXPECTED, FAILED, MARKER, Programs, gates_busybox};
 use crate::args::Args;
-use crate::display::{DEVICE_ID, Image, Qmp, parse_ppm};
+use crate::display::{DEVICE_ID, Image, Qmp, free_port, parse_ppm};
 use crate::paths::{self, Arch};
 use crate::qemu::Watching;
 use crate::{Error, Result};

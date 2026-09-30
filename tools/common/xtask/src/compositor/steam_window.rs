@@ -39,7 +39,8 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use super::{Carried, EITHER, Programs, build_image, gates_busybox, undithered};
+use super::boot::{build_image, undithered};
+use super::{Carried, EITHER, Programs, gates_busybox};
 use crate::args::Args;
 use crate::display::{DEVICE_ID, Qmp, free_port, parse_ppm};
 use crate::paths::{self, Arch};

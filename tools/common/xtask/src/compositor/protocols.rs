@@ -7,7 +7,9 @@
 //! protocol is mostly what the clients say they were handed, since several of
 //! these change nothing on the screen at all.
 
-use super::{Programs, Wanted, boot_and_dump, expected, said_on_its_own};
+use super::Programs;
+use super::boot::{Wanted, boot_and_dump, said_on_its_own};
+use super::picture::expected;
 use crate::args::Args;
 use crate::paths::Arch;
 use crate::{Error, Result};

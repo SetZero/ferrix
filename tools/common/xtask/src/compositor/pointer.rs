@@ -9,11 +9,12 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use super::{
-    Carried, EITHER, FAILED, MARKER, Programs, SETTLE, Wanted, ask_for_state, boot_and_dump,
-    build_image, differences, expected, say_the_marker, settle, undithered, unexpected,
+use super::boot::{
+    Wanted, ask_for_state, boot_and_dump, build_image, say_the_marker, settle, undithered,
     with_the_transcript,
 };
+use super::picture::{differences, expected, unexpected};
+use super::{Carried, EITHER, FAILED, MARKER, Programs, SETTLE};
 use crate::args::Args;
 use crate::display::{Qmp, free_port};
 use crate::paths::{self, Arch};

@@ -7,7 +7,8 @@
 //! socket to what they must have said about it: the picture proves the
 //! layout, and the transcript what a bar would have been told.
 
-use super::{EXPECTED, Programs, Wanted, boot_and_dump, said_on_its_own};
+use super::boot::{Wanted, boot_and_dump, said_on_its_own};
+use super::{EXPECTED, Programs};
 use crate::args::Args;
 use crate::paths::Arch;
 use crate::{Error, Result};
