@@ -706,7 +706,13 @@ package FerrixRoadmap {
              * cargo xtask test-steam-window), with launch-side
              * workarounds each owned by a fix: namespaces for
              * pressure-vessel, the /proc gaps, and a SIGBUS that needs a
-             * 16 GiB guest. */
+             * 16 GiB guest. On 2026-09-30 the exit's first step was met:
+             * on the --everything desktop, its 64-bit side on ferrousli,
+             * the client signs in and shows its store, gated by cargo
+             * xtask test-steam-store with a test account. Its sandbox
+             * waits on stage 13, and its GPU process on user copies
+             * through a device window and a render group
+             * (docs/STEAM.md section 6). */
     }
 
     #inProgress requirement <'S20'> stage20SelfHosting : Stage {

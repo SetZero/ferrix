@@ -14,16 +14,17 @@ Since the 2026-09-27 wind-down, everything finished is on `main` and pushed:
   now, and every x86-64 guest's model has x86-64-v3. The Claude desktop app
   is next, as an assessment.
 
-* **Steam's sign-in window** draws on hyprix through yserver
-  (2026-09-29, `docs/STEAM.md`, `cargo xtask test-steam-window`), and
-  `run-compositor --everything` starts the client beside Chrome and a
-  terminal, fetching its volume first when it is missing, and fuzzel lists
-  Steam to start it again (2026-10-01). It still runs with launch-side
-  workarounds, each owned by a fix (`docs/STEAM.md` §3): namespaces for
-  pressure-vessel and Chromium's sandbox, the `/proc` gaps behind the
-  runtime's logger, and the `SIGBUS` that needs a 16 GiB guest. The kernel
-  makes packet pipes for `pipe2(O_DIRECT)`, which retired the last
-  preloaded shim.
+* **Steam signs in and shows its store** on the `--everything` desktop,
+  its 64-bit side on ferrousli (2026-09-30, `docs/STEAM.md` §5), and
+  `cargo xtask test-steam-store` gates it with a test account, signing in
+  with no one there. `run-compositor --everything` fetches Steam's volume
+  when it is missing, and fuzzel lists Steam to start it again
+  (2026-10-01). It still runs with launch-side workarounds, each owned by a
+  fix (`docs/STEAM.md` §3): namespaces and seccomp for pressure-vessel and
+  Chromium's sandbox, the `/proc` gaps behind the runtime's logger, the
+  `SIGBUS` that needs a 16 GiB guest, and the web helper's GPU process
+  off. F-55, which the GPU route through Venus met first, is closed; the
+  rest of that route is designed (`docs/STEAM.md` §6) and not started.
 * **`--everything` is everything** (the customer's rule, 2026-10-01): the
   desktop carries every feature, volume and app, and nothing is left out
   with a line saying how it could have been added. The volume half is in:
@@ -250,8 +251,9 @@ busybox), and I5a: Valve's `steamcmd` logs in to Steam, from `test-steamcmd`
 and from the `--everything` desktop's terminal (2026-09-27). The Steam client
 itself draws through yserver, a Rust X11 server, with a rootless Wayland
 backend of Ferrix's own: its sign-in window is on hyprix since 2026-09-29,
-with launch-side workarounds listed in `docs/STEAM.md`, and
-`run-compositor --everything` starts it beside Chrome. Ferrix also boots on the customer's Pixel
+and on the `--everything` desktop, its 64-bit side on ferrousli, it signs
+in and shows its store (2026-09-30, gated by `test-steam-store`), with
+launch-side workarounds listed in `docs/STEAM.md`. Ferrix also boots on the customer's Pixel
 7: natively on all eight cores to `FERRIX-BOOT-OK stages 1-12`, and as a guest
 of the phone's own crosvm from a launcher app, which shows a desktop in that
 VM with Chromium on it (2026-09-27), and each release carries that desktop,

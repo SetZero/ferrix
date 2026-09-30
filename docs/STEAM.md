@@ -110,7 +110,8 @@ does not offer; it renders in software instead.
 | Workaround | Why | Real fix | Owner |
 |---|---|---|---|
 | `_v2-entry-point` stand-in | Valve's steamrt64 entry point starts pressure-vessel, which needs user and mount namespaces for bubblewrap | namespaces | N2–N6 (`docs/NAMESPACES.md`) |
-| `-no-cef-sandbox` | Chromium's sandbox is two layers: user and pid namespaces (network ones optional), and a seccomp-bpf filter in every child. Measured on the host (`docs/SECCOMP.md` §1.2): with `CLONE_NEWPID` refused, Chrome with its sandbox on does not start at all | user namespaces, pid namespaces and seccomp together | N4 (`docs/NAMESPACES.md`); pid namespaces, unowned and unsized; S1–S8 (`docs/SECCOMP.md`) |
+| `-no-cef-sandbox` | Chromium's sandbox is two layers: user and pid namespaces (network ones optional), and a seccomp-bpf filter in every child. Measured on the host (`docs/SECCOMP.md` §1.2): with `CLONE_NEWPID` refused, Chrome with its sandbox on does not start at all | user namespaces, pid namespaces and seccomp together | N4 (`docs/NAMESPACES.md`); pid namespaces and a loopback-only network namespace, os-98 after N4 (the customer's decision of 2026-09-30); seccomp S1–S6, os-7c, and S7–S8, Steam's own filters (`docs/SECCOMP.md`) |
+| `-cef-disable-gpu -cef-disable-gpu-compositing` | yserver on the Wayland backend offers no DRI3, so the web helper's GL is llvmpipe, which CEF 126 rejects: its GPU process falls back to SwiftShader after three or four restarts | ANGLE on Vulkan through Venus, presenting with `MESA_VK_WSI_DEBUG=sw`: user copies through a device window's own mapping (F-55's second landing), the render node opened to a `render` group, and the helper's flags (§6) | not started; os-9f's conditions are in §6 |
 | `logger-0.bash` stand-in | The Steam Runtime's logger failed on Ferrix under `steamwebhelper.sh`; this one logs nothing | whatever the logger meets: `/dev/fd` through process substitution, and the `/proc` gaps below | steam-proc-gaps |
 | (not worked around) `lsof` warns "unsupported format" for `/proc/net/tcp6` and `udp6`, and cannot identify Unix sockets | the IPv6 tables' columns differ from Linux's, and `/proc/net/unix` names no inodes | Linux's formats | steam-proc-gaps |
 | 16 GiB guest | At 8 GiB several processes died of `SIGBUS` on execute faults of mapped library pages while Chromium started | find and fix the refault | steam-sigbus |
@@ -195,3 +196,67 @@ on /dev: Function not implemented`. Since 2026-09-30 a
 sent yet), and `name_to_handle_at` answers `EOPNOTSUPP`, the one failure
 that libudev takes quietly. A `test-steam-window` run went from 291 such
 lines to none.
+
+## 6. The GPU process: what is left (2026-10-01)
+
+The store draws in software. To draw it on the GPU, the one route that
+needs no DRI3 from yserver is ANGLE on Vulkan through Venus, with Mesa
+presenting to X by copying each frame (`MESA_VK_WSI_DEBUG=sw`); plain Chrome
+got that far on 2026-09-30, and the copy was F-55's kernel page fault.
+F-55's first landing (c5c92781) turned that fault into `EFAULT`, and F-55
+is closed (ef206bb2). Three pieces are left, 14 to 23 points in all; none
+has code yet. The certification consultant (os-9f) set the conditions for
+the first two on 2026-10-01, and each diff goes to os-9f before landing.
+
+**User copies through a device window, 5 to 8 points.** Mesa's copy
+`writev`s the frame straight from a Venus window to the X socket. The
+conditions: a per-CPU mapping slot per copy (Linux's `kmap_local`), not a
+`vmap` and unmap (a machine-wide shootdown per page) and no standing
+mapping per region; preemption off for a copy of at most one page, a local
+invalidation only, and no interrupt handler in the slot; the slot's
+attributes exactly the user mapping's, and only normal memory copied, since
+a device-type window keeps `EFAULT`; the page checked to lie in the
+region's own recorded device range, with the region held for the copy; no
+direct-map address and no sleeping lock; a requirement beside L.user.107, a
+stage 9 check that bytes written through the copy read back through a
+second mapping, both ways, across a page boundary and within a page, and
+negative controls with the attribute check and the range check dropped.
+What the tree has for it: `Backing::Device` records only `cached`
+(`src/lib/kernel/vma`); `map_device` always stores `false` and `map_window`
+what the device says, so a `cached` region is normal write-back and the
+rest device-type, and nothing maps write-combining yet. The space's
+`inner` lock is a spinlock and holds the region across the copy. There is
+no per-CPU temporary mapping area: slots can go after `DEMAND_WINDOW` below
+the vmap arena (mind armv7a's 64 MiB reserve and stage 3's probes there),
+their tables built once at bring-up, with a new helper that writes one leaf
+without allocating and invalidates one address on this CPU (`invlpg`,
+`tlbi vale1`, `TLBIMVA`); `mm::unmap_kernel` shoots down every CPU and
+cannot be used. Landing 1's stage 9 check then changes: cached windows
+copy, device-type ones stay `EFAULT`.
+
+**The render node for a `render` group, 5 to 8 points.** Mode 0660, group
+`render`, the desktop's user in it, not 0666. Before the mode changes: what
+a user can allocate through the node bounded, and an audit of its calls.
+What the reading found: the node's metadata is `Renderer::metadata`
+(`src/kernel/src/interfaces/render/mod.rs`), gid 0 like every device node so
+far; `/etc/group` is written in four places in xtask (`initramfs.rs`,
+`init.rs`, `auth.rs`, and `compositor/apps.rs` to check), gid 90 is taken.
+The renderer's session limits, 16 contexts and 256 objects
+(`src/lib/proto/renderctl/src/session.rs`), are shared by every open, so a
+user could take the compositor's GPU away: the bound has to be per open
+(one context, an object limit) with a per-job limit on opens, and each
+object's heap charged with a kmem `Charge` as F-37 does elsewhere. For the
+audit, in `interfaces/render/node.rs`: `mapping_at`'s offset against the
+object's size, `transfer`'s box, level and offset, `resource_create`'s
+32-bit size with no page bound of its own, and handles that stop advancing
+at `u32::MAX`. A fuzz target for the request parser, and `docs/GPU.md` to
+say that the host's virglrenderer is a guest-to-host surface for the host
+to secure. The boot check needs a renderer, which test-boot's machine does
+not have: a stand-in driver, or a gate under `--venus`.
+
+**The helper, 4 to 7 points.** `client.sh` without `-cef-disable-gpu`,
+with `--use-angle=vulkan` and Vulkan's features, `MESA_VK_WSI_DEBUG=sw`,
+and without the llvmpipe variables it sets for the 32-bit client. Untested:
+whether CEF 126 accepts Venus and presents this way. The host's
+`__GLX_VENDOR_LIBRARY_NAME=nvidia`, from the carried `hyprland.conf`,
+reaches every guest program too.

@@ -173,22 +173,31 @@ installs to btrfs, launches and draws through the GPU path with sound; and
 a Windows game runs through Proton. The first two are a guest's exit on
 the Linux host; the third is the GPU's Vulkan, wherever that comes first.
 
-The first step is met by hand (2026-09-30), not yet by a gate: on the
-`--everything` desktop, with its 64-bit side on ferrousli rather than glibc,
-the client starts, its browser helper draws the sign-in window, the customer
-signed in with the Steam app's QR code, and the client showed its store
-(`docs/STEAM.md` §5 lists what ferrousli needed for it). Its gate is
-`cargo xtask test-steam-store` (`docs/STEAM.md` §1): it boots that
-desktop's Steam, on ferrousli, and requires the sign-in window drawn; with
-a Steam test account's name and password in
+The first step is met, and gated (2026-09-30): on the `--everything`
+desktop, with its 64-bit side on ferrousli rather than glibc, the client
+starts, its browser helper draws the sign-in window, and the client shows
+its store. The customer signed in first with the Steam app's QR code
+(`docs/STEAM.md` §5 lists what ferrousli needed for it); then `cargo xtask
+test-steam-store` did it with no one there (`docs/STEAM.md` §1): it boots
+that desktop's Steam on ferrousli, requires the sign-in window drawn, types
+in a test account's name and password from
 `~/.config/ferrix/steam-test-account` on the gate host (Steam Guard off,
-never in a checkout) it types them in, signs in and requires the store on
-the screen, and without that file it says the store step was skipped. The
-sign-in step passes on nazuna. Still to do for the step: the store step
-passing there, which needs an account Steam accepts -- the file there on
-2026-09-30 was refused ("check your password and account name"), though
-the gate typed what it holds, as a probe of the same keys showed -- and
-the workarounds of `docs/STEAM.md` §3, which are still in use.
+never in a checkout), and requires the store on the screen. It passes on
+nazuna with the account `ferrixsteamtest` since 2026-09-30. fuzzel lists
+Steam on that desktop, so a closed client can be started again (not yet
+tried on a live desktop).
+
+What is still a workaround is `docs/STEAM.md` §3's list. The helper's
+sandbox and pressure-vessel wait on stage 13: user namespaces (N4) and
+then pid namespaces and a loopback-only network namespace, os-98's; seccomp
+S1 to S6, os-7c's; and Steam's own filters, S7 and S8 (`docs/SECCOMP.md`).
+The helper's GPU process is off (`-cef-disable-gpu`), so the store draws in
+software. Its route is ANGLE on Vulkan through Venus: F-55, a kernel page
+fault on a copy from a Venus window, is closed (c5c92781), and what is left
+is user copies through a device window's own mapping, the render node for
+a `render` group, and the helper's flags, 14 to 23 points, designed with
+the certification consultant's conditions and not started
+(`docs/STEAM.md` §6).
 
 None of it is sized past a first guess, and the sum of the first guesses is
 already over 300 points, so the stage is written as a list of what has to be
