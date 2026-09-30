@@ -142,42 +142,7 @@ impl Client {
                     surface.pending.input = region;
                 }
             }
-            wl_surface::request::COMMIT => {
-                // A surface that has been given an `xdg_surface` may not
-                // carry a buffer until it has acked a configure. That is the
-                // rule that stops a client painting at a size the compositor
-                // never agreed to: `xdg_surface`'s description has the
-                // client commit once with nothing attached, take the
-                // configure, ack it, and only then attach.
-                let wants_buffer = self
-                    .surfaces
-                    .get(&sender)
-                    .is_some_and(|state| state.pending.buffer.is_some());
-                let unconfigured = self
-                    .xdg_surfaces
-                    .iter()
-                    .find(|(_, xdg)| xdg.surface == sender)
-                    .filter(|(_, xdg)| !xdg.configured)
-                    .map(|(id, _)| *id);
-                if let Some(xdg) = unconfigured
-                    && wants_buffer
-                {
-                    self.fail(Fatal::Interface {
-                        object: xdg,
-                        code: xdg_surface::error::UNCONFIGURED_BUFFER,
-                        text: "a buffer was attached before a configure was acked".to_owned(),
-                    });
-                    return;
-                }
-                let Some(surface) = self.surfaces.get_mut(&sender) else {
-                    return;
-                };
-                let change = surface.commit();
-                self.events.push(Event::SurfaceCommitted {
-                    surface: sender,
-                    change,
-                });
-            }
+            wl_surface::request::COMMIT => self.surface_commit(sender),
             wl_surface::request::SET_BUFFER_TRANSFORM => {
                 let Some(transform) = args.first().and_then(Arg::as_int) else {
                     return;
@@ -233,6 +198,44 @@ impl Client {
             }
             _ => {}
         }
+    }
+
+    /// `wl_surface.commit`: the pending state becomes the current one.
+    fn surface_commit(&mut self, sender: ObjectId) {
+        // A surface that has been given an `xdg_surface` may not
+        // carry a buffer until it has acked a configure. That is the
+        // rule that stops a client painting at a size the compositor
+        // never agreed to: `xdg_surface`'s description has the
+        // client commit once with nothing attached, take the
+        // configure, ack it, and only then attach.
+        let wants_buffer = self
+            .surfaces
+            .get(&sender)
+            .is_some_and(|state| state.pending.buffer.is_some());
+        let unconfigured = self
+            .xdg_surfaces
+            .iter()
+            .find(|(_, xdg)| xdg.surface == sender)
+            .filter(|(_, xdg)| !xdg.configured)
+            .map(|(id, _)| *id);
+        if let Some(xdg) = unconfigured
+            && wants_buffer
+        {
+            self.fail(Fatal::Interface {
+                object: xdg,
+                code: xdg_surface::error::UNCONFIGURED_BUFFER,
+                text: "a buffer was attached before a configure was acked".to_owned(),
+            });
+            return;
+        }
+        let Some(surface) = self.surfaces.get_mut(&sender) else {
+            return;
+        };
+        let change = surface.commit();
+        self.events.push(Event::SurfaceCommitted {
+            surface: sender,
+            change,
+        });
     }
 
     /// `wl_region`: `add` and `subtract`.

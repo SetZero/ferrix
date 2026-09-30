@@ -94,121 +94,8 @@ impl Client {
         args: &[Arg<'_>],
     ) {
         match opcode {
-            xdg_surface::request::GET_TOPLEVEL => {
-                let Some(id) = args.first().and_then(Arg::as_object) else {
-                    return;
-                };
-                let Some(xdg) = self.xdg_surfaces.get(&sender) else {
-                    return;
-                };
-                if xdg.role.is_some() {
-                    self.fail(Fatal::Interface {
-                        object: sender,
-                        code: xdg_surface::error::ALREADY_CONSTRUCTED,
-                        text: "this xdg_surface already has a role".to_owned(),
-                    });
-                    return;
-                }
-                let surface = xdg.surface;
-                if !self.make(id, &xdg_shell::XDG_TOPLEVEL, version, Role::XdgToplevel) {
-                    return;
-                }
-                if let Some(xdg) = self.xdg_surfaces.get_mut(&sender) {
-                    xdg.role = Some(XdgRole::Toplevel(id));
-                }
-                let _ = self.toplevels.insert(
-                    id,
-                    Toplevel {
-                        xdg_surface: sender,
-                        surface,
-                        ..Toplevel::default()
-                    },
-                );
-                self.events.push(Event::ToplevelCreated {
-                    toplevel: id,
-                    surface,
-                });
-            }
-            xdg_surface::request::GET_POPUP => {
-                let Some(id) = args.first().and_then(Arg::as_object) else {
-                    return;
-                };
-                // The parent is nullable in the protocol: another extension
-                // gives such a popup its parent, and the one this compositor
-                // has is `zwlr_layer_surface_v1.get_popup`, which is how a
-                // bar's tooltips and menus are made. Such a popup is kept
-                // and placed once a layer surface takes it.
-                let (parent, positioner) = (
-                    args.get(1).and_then(Arg::as_object),
-                    args.get(2).and_then(Arg::as_object),
-                );
-                let Some(xdg) = self.xdg_surfaces.get(&sender) else {
-                    return;
-                };
-                if xdg.role.is_some() {
-                    self.fail(Fatal::Interface {
-                        object: sender,
-                        code: xdg_surface::error::ALREADY_CONSTRUCTED,
-                        text: "this xdg_surface already has a role".to_owned(),
-                    });
-                    return;
-                }
-                let surface = xdg.surface;
-                let parent = parent.unwrap_or(ObjectId::NULL);
-                if !parent.is_null() && !self.xdg_surfaces.contains_key(&parent) {
-                    self.fail(Fatal::WrongInterface {
-                        object: parent,
-                        wanted: "xdg_surface",
-                    });
-                    return;
-                }
-                let Some(held) = positioner.and_then(|id| self.positioners.get(&id)).copied()
-                else {
-                    self.fail(Fatal::WrongInterface {
-                        object: positioner.unwrap_or(ObjectId::NULL),
-                        wanted: "xdg_positioner",
-                    });
-                    return;
-                };
-                // A positioner without a size or an anchor rectangle is the
-                // one error a popup can earn before it exists.
-                if !held.is_complete() {
-                    self.fail(Fatal::Interface {
-                        object: sender,
-                        code: xdg_wm_base::error::INVALID_POSITIONER,
-                        text: "the positioner has no size or no anchor rectangle".to_owned(),
-                    });
-                    return;
-                }
-                if !self.make(id, &xdg_shell::XDG_POPUP, version, Role::XdgPopup) {
-                    return;
-                }
-                if let Some(xdg) = self.xdg_surfaces.get_mut(&sender) {
-                    xdg.role = Some(XdgRole::Popup(id));
-                }
-                let _ = self.popups.insert(
-                    id,
-                    Popup {
-                        surface,
-                        xdg_surface: sender,
-                        parent,
-                        layer_parent: None,
-                        positioner: held,
-                        placed: None,
-                        grabbed: false,
-                    },
-                );
-                // A parentless popup waits for the layer surface that will
-                // take it; the compositor places it then.
-                if parent.is_null() {
-                    return;
-                }
-                self.events.push(Event::PopupCreated {
-                    popup: id,
-                    surface,
-                    parent,
-                });
-            }
+            xdg_surface::request::GET_TOPLEVEL => self.get_toplevel(sender, version, args),
+            xdg_surface::request::GET_POPUP => self.get_popup(sender, version, args),
             xdg_surface::request::SET_WINDOW_GEOMETRY => {
                 let numbers: Vec<i32> = (0..4)
                     .filter_map(|index| args.get(index).and_then(Arg::as_int))
@@ -246,6 +133,125 @@ impl Client {
             }
             _ => {}
         }
+    }
+
+    /// `xdg_surface.get_toplevel`: the surface becomes a window.
+    fn get_toplevel(&mut self, sender: ObjectId, version: u32, args: &[Arg<'_>]) {
+        let Some(id) = args.first().and_then(Arg::as_object) else {
+            return;
+        };
+        let Some(xdg) = self.xdg_surfaces.get(&sender) else {
+            return;
+        };
+        if xdg.role.is_some() {
+            self.fail(Fatal::Interface {
+                object: sender,
+                code: xdg_surface::error::ALREADY_CONSTRUCTED,
+                text: "this xdg_surface already has a role".to_owned(),
+            });
+            return;
+        }
+        let surface = xdg.surface;
+        if !self.make(id, &xdg_shell::XDG_TOPLEVEL, version, Role::XdgToplevel) {
+            return;
+        }
+        if let Some(xdg) = self.xdg_surfaces.get_mut(&sender) {
+            xdg.role = Some(XdgRole::Toplevel(id));
+        }
+        let _ = self.toplevels.insert(
+            id,
+            Toplevel {
+                xdg_surface: sender,
+                surface,
+                ..Toplevel::default()
+            },
+        );
+        self.events.push(Event::ToplevelCreated {
+            toplevel: id,
+            surface,
+        });
+    }
+
+    /// `xdg_surface.get_popup`: the surface becomes a popup, placed by the
+    /// numbers its positioner holds when this arrives.
+    fn get_popup(&mut self, sender: ObjectId, version: u32, args: &[Arg<'_>]) {
+        let Some(id) = args.first().and_then(Arg::as_object) else {
+            return;
+        };
+        // The parent is nullable in the protocol: another extension
+        // gives such a popup its parent, and the one this compositor
+        // has is `zwlr_layer_surface_v1.get_popup`, which is how a
+        // bar's tooltips and menus are made. Such a popup is kept
+        // and placed once a layer surface takes it.
+        let (parent, positioner) = (
+            args.get(1).and_then(Arg::as_object),
+            args.get(2).and_then(Arg::as_object),
+        );
+        let Some(xdg) = self.xdg_surfaces.get(&sender) else {
+            return;
+        };
+        if xdg.role.is_some() {
+            self.fail(Fatal::Interface {
+                object: sender,
+                code: xdg_surface::error::ALREADY_CONSTRUCTED,
+                text: "this xdg_surface already has a role".to_owned(),
+            });
+            return;
+        }
+        let surface = xdg.surface;
+        let parent = parent.unwrap_or(ObjectId::NULL);
+        if !parent.is_null() && !self.xdg_surfaces.contains_key(&parent) {
+            self.fail(Fatal::WrongInterface {
+                object: parent,
+                wanted: "xdg_surface",
+            });
+            return;
+        }
+        let Some(held) = positioner.and_then(|id| self.positioners.get(&id)).copied() else {
+            self.fail(Fatal::WrongInterface {
+                object: positioner.unwrap_or(ObjectId::NULL),
+                wanted: "xdg_positioner",
+            });
+            return;
+        };
+        // A positioner without a size or an anchor rectangle is the
+        // one error a popup can earn before it exists.
+        if !held.is_complete() {
+            self.fail(Fatal::Interface {
+                object: sender,
+                code: xdg_wm_base::error::INVALID_POSITIONER,
+                text: "the positioner has no size or no anchor rectangle".to_owned(),
+            });
+            return;
+        }
+        if !self.make(id, &xdg_shell::XDG_POPUP, version, Role::XdgPopup) {
+            return;
+        }
+        if let Some(xdg) = self.xdg_surfaces.get_mut(&sender) {
+            xdg.role = Some(XdgRole::Popup(id));
+        }
+        let _ = self.popups.insert(
+            id,
+            Popup {
+                surface,
+                xdg_surface: sender,
+                parent,
+                layer_parent: None,
+                positioner: held,
+                placed: None,
+                grabbed: false,
+            },
+        );
+        // A parentless popup waits for the layer surface that will
+        // take it; the compositor places it then.
+        if parent.is_null() {
+            return;
+        }
+        self.events.push(Event::PopupCreated {
+            popup: id,
+            surface,
+            parent,
+        });
     }
 
     /// `xdg_toplevel`: what a client says about its window.
