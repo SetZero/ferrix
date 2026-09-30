@@ -6,6 +6,12 @@ everything after it are not started. The 2026-09-16 decision stands:
 monolithic core, device drivers in ring 3. What would bring the plan back is
 a cheaper trip to ring 3 (*The verdict of S0*, below).
 
+**2026-09-30: the trip is being cut** (§ 8). The customer chose a direction
+for Ferrix, Linux software beside safety functions on a kernel that can be
+assured. Getting the btrfs parser out of ring 0 is one step of that, and it
+needs the trip cheap first. The trace now says where a trip's time goes,
+and the fixes are landing one at a time.
+
 Drafted by ferrix-55b on 2026-09-27. The certification consultant reviewed
 §2 and §5, and the init owner reviewed §3. Both decisions are recorded in
 `docs/BACKLOG.md`, Decisions, 2026-09-27.
@@ -62,8 +68,11 @@ but that is not measured.
    behind its head for up to 500 ms; ring disks now use a 25 ms read
    expiry, and the p99 fell to 28–35 ms.
 2. Find where the 250 to 800 us go; the driver's own `device_ticks` already
-   splits off the device's share.
-3. Add PCIDs.
+   splits off the device's share. Done 2026-09-30: the `seam-trip` and
+   `seam-count` lines, and what they found in § 8.
+3. Add PCIDs. Re-costed 2026-09-30 (§ 8): tagging saves microseconds per
+   trip under KVM and nothing under TCG. Lazy TLB for kernel threads comes
+   first, and wake placement matters more.
 4. Remeasure with `cargo xtask bench-seam` and the `seam` boot line, with a
    target such as within twice Linux's per trip.
 5. Add the direct measure of a cold `rustc` run.
@@ -323,3 +332,158 @@ taken up; they stand as they were asked, for whoever reopens the plan.
 3. **S1 regardless?** The ioctl and socket seams and the generic rebind
    contract pay off even if B is never built.
 4. **Option C** stays unplanned unless measurements argue for it.
+
+## 8. Cutting the trip (2026-09-30, os-35)
+
+**Why now.** The customer chose a direction for Ferrix: unmodified Linux
+software running as a non-safety partition beside safety functions, on a
+kernel item that can be assured. The certification consultant (os-9f)
+proposed the route, with IEC 61508 SIL 2 as the first target; the claim's
+exact wording and that standard are still the customer's to confirm
+(`docs/certification/CLAIM.md`, marked PROPOSED). Its
+freedom-from-interference argument is easier the less of the Linux layer
+runs in ring 0, and the cheapest large piece to move out is btrfs's parser
+for untrusted disk images (about 25,000 lines). A filesystem server pays
+the trip on every cold fill, so the trip has to be cheap first. The
+consultant's recommendation for SIL 2 is software compartments in ring 0
+first, then this trip, then btrfs as a server. For SIL 3 it is either the
+full opaque kernel, which this makes affordable, or a separation kernel
+with a real Linux guest; that choice is the customer's.
+
+**What the trace found.** Four read-only studies of the path, then the
+`seam-trip` and `seam-count` lines (§ *Where a trip's time goes*). The
+baseline on x86-64 under KVM at two processors, host load 31 to 42:
+
+- A depth-1 trip is p50 230 us and p99 417 us. The hops' medians add up to
+  98% of it, so the trace accounts for the trip.
+- Per read: 13 switches, 2.4 user roots written and 2.4 taken off, 3.2
+  IPIs, 0.2 switch barriers (IBPB) and one device interrupt.
+- No sleep was ended by the recheck timer. The missed-wake-up theory of
+  *The verdict of S0* is wrong at depth 1: the port packets persist and the
+  want-bell handshake is correct. The recheck is 5 ms in practice, not
+  50 ms, because `wait_until_deadline` sleeps in 5 ms slices.
+- 60 to 85% of the wakes put the woken task on another processor than its
+  waker's. `sched::wake` never moves a task, so each such wake is an IPI to
+  a virtual processor that is probably halted, and on a loaded host each
+  costs tens of microseconds.
+- The largest single hop is the bell to the device's interrupt (the device
+  and QEMU): 56 us at p50.
+
+A trip makes four or five hops (reader, ring task, driver, ring task,
+reader). `dispatch()` wakes every reader on every pass, so a reader wakes
+about three times per read and twice for nothing. Every interrupt masks
+and unmasks its MSI-X entry, two exits to QEMU. The data is copied four
+times, the first byte by byte under the disk's lock.
+
+**The plan, in order.** Points are guesses.
+
+| Step | What | Points | State |
+|---|---|---|---|
+| 1 | Trace a trip: `sched::trip`, `seam-trip`, `seam-count`; AArch64's driver reads `CNTVCT_EL0` | 8 | **landed** 5cc5ed38 |
+| 2 | The ring: wake a reader only when its answer is there, no nudge when the ring task is awake, one word-wise copy, the shared indices read whole (F-45), a driver that rewrites a posted completion checked | 3 (6 spent) | **landed** b7cab053 |
+| 3 | Lazy TLB: a kernel thread keeps the last program's space loaded, where the processor has SMAP or PAN | 3–5 (7 spent) | gated; WIP until renumbered and re-gated |
+| 4 | Take the ring task off the data path: the reader publishes, the driver's `port_queue` completes inline | 5–8 (7 spent) | written, WIP on `os-35/ipc-ring` (7c52861e) |
+| 5 | Interrupts: no MSI-X mask per delivery, with a stated storm bound (L.object.41 rewritten) | 2 (2.5 spent) | **landed** 1dcc433f |
+| 6 | A sync wake onto the waker's processor, within its affinity and quota | 3–5 (4 spent) | written, WIP |
+| 7 | A bounded poll before the idle halt; targeted IPIs on the GIC | 2 (3 spent) | written, WIP |
+| 8 | Read into page-cache frames, one kernel copy | 3–5 | not started |
+| 9 | A direct hand-off call (`port_queue_wait`) | 8–13 | not started; high risk |
+| 10 | PCIDs and ASIDs | ~12 | not started; small gain |
+| 11 | DMA into the page cache | 13–21 | blocked: domains are untranslated |
+
+Steps 2 to 7 are the ones expected to bring a trip near twice Linux's. Each
+branch measures itself against step 1's lines, back to back on the same
+host load, and goes to the certification consultant before it lands.
+
+**What the consultant requires of these branches.**
+- Traceability entries for new functions, a changed requirement for changed
+  behaviour, carry-coverage after the last rebase, and a negative control
+  shown firing for every new check.
+- The ring: every value read from memory the driver can write is read once,
+  validated, then used; inline completion is bounded per call and charged
+  to the driver's job.
+- Lazy TLB: tables are freed only once no processor has the space loaded,
+  eagerly or lazily (FX-0009), and the switch barrier keys on the last
+  program's space, so user A, a kernel thread, then user B still gets it.
+  On a processor without SMAP or PAN (ARMv7-A, a Cortex-A72, an x86-64
+  without SMAP) a stray kernel pointer would read the last program's
+  memory where it used to fault, so those processors stay eager.
+- The IBPB policy stays as it is. `--mitigations off` moved p50 by 0 to
+  25 us, an upper bound for every defence together; IBPB fires on 0.2 to
+  1 read in 1. Linux's conditional mode would take that to zero, but it
+  would narrow SPECULATION.md §3's claim, and it is the customer's and the
+  consultant's decision, not proposed.
+
+**Where the branches stand (2026-10-01 wind-down).**
+
+- **The ring, part A** (step 2), landed as b7cab053. The consultant's
+  review asked that the ring task's 50 ms recheck stay as the liveness
+  backstop, and it does. The landing's KVM boot counted 0.17 sleeps per
+  read ended on the 5 ms wait slice rather than a wake. No nudge was lost
+  (FX-1005 did not fire), so these are reads slower than 5 ms on a loaded
+  host; watch the count. Against 5cc5ed38, back to back at nazuna loads of
+  41 to 51:
+  - KVM at four processors: 12.7 switches per read became 10.1; depth 32
+    went from a mean of 10.3 ms to 2.1 ms; the depth-1 p99 went from 3.3 ms
+    to 1.0 ms.
+  - AArch64 under TCG: the depth-1 p50 went from 954 us to 314 us.
+  - A reader now sleeps once per read, not about three times.
+- **The ring, part B** (step 4), WIP 7c52861e on part A. The ring belongs
+  to the disk: a caller dispatches its own request and rings the driver.
+  The completion port has a server (`Port::new_served`, L.object.106), so
+  the driver's own `port_queue` takes the completions and wakes the
+  readers. A trip is reader, driver, reader.
+  - What it holds to: at most 64 completions per call, work charged to
+    the driver's thread, nothing allocated under the lock, and corruption
+    handed to the task.
+  - Both negative controls fired, and it passed the full row on 5cc5ed38.
+  - Measured against 5cc5ed38:
+    - KVM at four processors: 4.95 switches and 0 IPIs per read.
+    - AArch64 under TCG: the p50 went from 954 us to 211 us.
+  - Left: re-gate on current main, the consultant's review, land.
+- **Lazy TLB** (step 3), reworked to the consultant's three conditions.
+  - The kernel is lazy only where the processor refuses ring 0 a user page:
+    SMAP on x86-64, PAN on AArch64. It stays eager on ARMv7-A and wherever
+    the backstop is missing, and the `lazy` boot line names the mode.
+  - FX-0010 stops a drop that cannot wait, in every build.
+  - Gated green at 065e3cb3. User roots written per read went from about
+    2.5 installs and 2.5 uninstalls to 0.2 and 0 on lazy processors. The
+    p50 moved by no more than the host's noise.
+  - QEMU's default AArch64 processor has no PAN, so AArch64 ran eager.
+  - Left, on `os-35/ipc-lazytlb-on-ef206bb2`: renumbered past F-55; the
+    generated evidence, the full row and the consultant's second look.
+- **Interrupts** (step 5), landed as 1dcc433f.
+  - An edge MSI-X vector is no longer masked per delivery. The bound is 64
+    deliveries per acknowledgement, and L.object.41 is rewritten.
+  - At the consultant's word, MEMORY-AND-TIMING.md §2.2 now states who pays
+    for a storm: at most 64 handler runs per scheduling of the holder, each
+    charged to the task the interrupt cut.
+  - On x86-64 under KVM at two processors, eight alternating boots each:
+    the depth-1 p50 went from 291 us to 206 us, and the driver's
+    submit-to-drain from 204 us to 83 us (medians).
+- **Sync wake and idle poll** (steps 6 and 7), WIP on `os-35/ipc-wake`.
+  - When reader, ring task and driver meet on one processor, cross-processor
+    wakes fall from 60–85% to 1–4%, and IPIs to about 0.1 per read. Until
+    the ring's spurious `wake_all` is gone, other boots miss that.
+  - The work found a lost wake on AArch64 with a GICv3; it has a BACKLOG
+    row.
+  - What is left is in `docs/BACKLOG.md`, *Branches that still hold
+    unlanded work*.
+
+Hazards the ring work found:
+- The new `ferrix-driver` ring (`src/user/system/native/driver/src/block.rs`)
+  still reads and writes the shared indices a byte at a time. That is
+  F-45 on the driver's side, and it has a BACKLOG row.
+- Only four commands fit in flight: four 128 KiB regions of a 512 KiB data
+  VMO.
+- With the copy moved to the reader, `reader>done` is now 11 to 15 us, a
+  cache miss on freshly DMA'd data. `answered>reader` is 20 to 26 us, a
+  same-processor wake, which step 6 addresses.
+
+**Measure on hardware for Arm.** Under TCG, QEMU flushes its whole TLB on
+the register writes this work saves, so AArch64 numbers from TCG say
+nothing about steps 3 and 10. Use the Pixel 7 under KVM or the DK1.
+
+**Still owed to the trace.** `bench-seam`'s Linux side prints a mean only,
+not p50/p99 per read; the ftrace segments on Linux and the host-side
+count of VM exits (`trace-cmd` on nazuna) are not written.

@@ -152,6 +152,15 @@ x86-64 KVM p99 at depth 32 fell to 28–35 ms, with the median unchanged
 system calls, so the hop's cost falls on cold reads, which is where the
 decision of 2026-09-16 put it.
 
+**Where the crossing's time goes (2026-09-30).** The same 1,024 depth-1
+reads are now traced hop by hop (`sched::trip`; the `seam-trip` and
+`seam-count` lines, read as `docs/OPAQUE-KERNEL.md` says). On x86-64 under
+KVM at two processors, at loads of 31 to 42, a read took p50 230 us and
+p99 417 us. It cost 13 switches, 2.4 user roots written, 3.2 IPIs and one
+device interrupt. No sleep was ended by the recheck timer, and 60 to 85% of
+the wakes put the task on another processor. What that means, and the fixes
+in flight, are in `docs/OPAQUE-KERNEL.md` § 8.
+
 **The seam measured, 2 (2026-09-27): how much of a build crosses it.** The
 kernel counts, from boot:
 - Linux system calls answered;

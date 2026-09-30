@@ -14,6 +14,24 @@ Since the 2026-09-27 wind-down, everything finished is on `main` and pushed:
   now, and every x86-64 guest's model has x86-64-v3. The Claude desktop app
   is next, as an assessment.
 
+* **The trip to ring 3 is being cut** (2026-09-30, `docs/OPAQUE-KERNEL.md`
+  § 8). The customer's direction is Linux software beside safety functions
+  on a kernel that can be assured. Moving btrfs's parser out of ring 0 is a
+  step of that, and it needs a cheap trip first. The `seam` check now
+  traces where a 4 KiB read's 230 us go under KVM (`seam-trip`,
+  `seam-count`): no missed wake-ups, but 13 switches, 3 IPIs and 60 to 85%
+  of wakes landing on another processor per read. Two fixes are in, both
+  reviewed by the certification consultant (2026-10-01):
+  - the block ring wakes a reader once, with one copy (b7cab053). At
+    depth 32 the mean fell from 10.3 ms to 2.1 ms;
+  - an MSI-X vector is no longer masked per interrupt (1dcc433f). The
+    depth-1 p50 fell from 291 us to 206 us.
+
+  Lazy TLB, the ring task off the data path, and same-processor wakes are
+  on `os-35/ipc-*` branches; `docs/BACKLOG.md` says what each has left.
+  The claim they serve is drafted as a proposal in
+  `docs/certification/CLAIM.md`.
+
 * **Steam signs in and shows its store** on the `--everything` desktop,
   its 64-bit side on ferrousli (2026-09-30, `docs/STEAM.md` §5), and
   `cargo xtask test-steam-store` gates it with a test account, signing in
