@@ -92,7 +92,25 @@ pub(crate) struct Mapped {
 /// [`Error`], naming `path`.
 pub(crate) fn object(path: *const c_char, page_size: usize) -> Result<Mapped, Error> {
     let fd = open(path)?;
-    let mapped = map_opened(path, fd, page_size);
+    let mapped = map_opened(path, fd, page_size, false);
+    // SAFETY: `fd` is the descriptor just opened, and nothing else holds it.
+    let _ = unsafe { sys::syscall2(nr::CLOSE, fd as usize, 0) };
+    mapped
+}
+
+/// [`object`] for the C library, `libc.so.6`: refused, before anything is
+/// mapped, if the file has a `PT_INTERP`. glibc's own `libc.so.6` has one --
+/// it runs as a program that prints its version -- and needs glibc's loader,
+/// which this is not; ferrousli's has none. A Debian volume carries glibc's
+/// under the same name, often in a directory on `LD_LIBRARY_PATH` or the
+/// default path, so the search goes on past it to ferrousli's.
+///
+/// # Errors
+///
+/// As [`object`], and [`Error::NotAnObject`] for glibc's C library.
+pub(crate) fn c_library(path: *const c_char, page_size: usize) -> Result<Mapped, Error> {
+    let fd = open(path)?;
+    let mapped = map_opened(path, fd, page_size, true);
     // SAFETY: `fd` is the descriptor just opened, and nothing else holds it.
     let _ = unsafe { sys::syscall2(nr::CLOSE, fd as usize, 0) };
     mapped
@@ -110,7 +128,14 @@ fn open(path: *const c_char) -> Result<c_int, Error> {
 }
 
 /// [`object`]'s middle, so that the descriptor is closed whatever happens.
-fn map_opened(path: *const c_char, fd: c_int, page_size: usize) -> Result<Mapped, Error> {
+/// With `refuse_program`, a file with a `PT_INTERP` is refused before
+/// anything is mapped ([`c_library`]).
+fn map_opened(
+    path: *const c_char,
+    fd: c_int,
+    page_size: usize,
+    refuse_program: bool,
+) -> Result<Mapped, Error> {
     let mut head = [0_u8; HEAD_BYTES];
     let read = pread(fd, &mut head, 0);
     if read < 0 {
@@ -147,6 +172,14 @@ fn map_opened(path: *const c_char, fd: c_int, page_size: usize) -> Result<Mapped
             elf_head.table(table).ok_or(Error::NotAnObject(path))?
         }
     };
+
+    if refuse_program
+        && headers
+            .iter()
+            .any(|header| header.p_type == crate::elf::PT_INTERP)
+    {
+        return Err(Error::NotAnObject(path));
+    }
 
     let (low, high) = span(headers, page_size).ok_or(Error::NotAnObject(path))?;
 

@@ -53,7 +53,9 @@ const QUEUED_WORDS: usize = MAX_OBJECTS.div_ceil(64);
 /// `/lib/<triplet>` and `/usr/lib/<triplet>`, where every library of theirs
 /// is; so does this, for the architecture's triplet. Without them a Debian
 /// program started with no `LD_LIBRARY_PATH` -- `grep` in the Steam client's
-/// scripts, which clear it -- found none of its libraries.
+/// scripts, which clear it -- found none of its libraries. glibc's own
+/// `libc.so.6` is in those directories too, and is passed over for
+/// ferrousli's (`map_named`).
 #[cfg(target_arch = "x86_64")]
 const DEFAULT_PATHS: [&str; 6] = [
     "/lib/x86_64-linux-gnu",
@@ -624,7 +626,7 @@ impl Scope {
             let Some(path) = join(&mut buffer, directory.as_bytes(), name) else {
                 continue;
             };
-            if let Ok(mapped) = map::object(path, page_size) {
+            if let Ok(mapped) = map_named(path, name, page_size) {
                 return self.add_found(name, &buffer, mapped);
             }
             // Any failure here means "not this directory": the next one is
@@ -658,7 +660,7 @@ impl Scope {
                 && let Some(text) = directory.get(..len)
                 && let Some(text) = with_origin(text, origin, &mut expanded)
                 && let Some(path) = join(buffer, text, name)
-                && let Ok(mapped) = map::object(path, page_size)
+                && let Ok(mapped) = map_named(path, name, page_size)
             {
                 return Some(mapped);
             }
@@ -854,6 +856,23 @@ const PART_OF_LIBC: [&core::ffi::CStr; 7] = [
 
 /// The name every [`PART_OF_LIBC`] falls back to.
 const LIBC: &core::ffi::CStr = c"libc.so.6";
+
+/// Map the file at `path`, found by searching for `name`: for [`LIBC`] only a
+/// C library that is not glibc's ([`map::c_library`]), so that glibc's
+/// `libc.so.6` in a directory searched first -- a Debian volume's multiarch
+/// directory, or one `LD_LIBRARY_PATH` names -- is passed over for
+/// ferrousli's, as though that directory did not have it.
+fn map_named(
+    path: *const c_char,
+    name: *const c_char,
+    page_size: usize,
+) -> Result<map::Mapped, Error> {
+    if same(name, LIBC.as_ptr()) {
+        map::c_library(path, page_size)
+    } else {
+        map::object(path, page_size)
+    }
+}
 
 /// The last component of a path: `ld-linux-x86-64.so.2` of
 /// `/lib64/ld-linux-x86-64.so.2`, and a name with no slash itself.
