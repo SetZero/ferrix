@@ -63,6 +63,11 @@ fn the_names_python_imports_read_write_exec_and_spawn() {
 }
 
 #[test]
+fn the_names_mesas_llvm_imports_do_their_work() {
+    check(&Case::named("glibc/mesa"));
+}
+
+#[test]
 fn gnus_error_names_format_parser_generators_and_allocator_calls() {
     check(&Case::named("glibc/gnu"));
 }

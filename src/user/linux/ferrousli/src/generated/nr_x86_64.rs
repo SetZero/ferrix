@@ -300,6 +300,10 @@ pub const MUNLOCKALL: usize = 152;
 pub const GETPRIORITY: usize = 140;
 /// `setpriority`.
 pub const SETPRIORITY: usize = 141;
+/// `iopl`.
+pub const IOPL: usize = 172;
+/// `ioperm`.
+pub const IOPERM: usize = 173;
 /// `waitid`.
 pub const WAITID: usize = 247;
 /// `preadv`.

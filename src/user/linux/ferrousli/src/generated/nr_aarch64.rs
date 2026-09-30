@@ -3,7 +3,7 @@
 // Not in this table, because aarch64 lacks them or has wider forms:
 // open stat lstat poll access pipe dup2 pause alarm fork vfork rename mkdir
 // rmdir creat link unlink symlink readlink chmod chown lchown getpgrp
-// arch_prctl
+// arch_prctl iopl ioperm
 
 /// `read`.
 pub const READ: usize = 63;
