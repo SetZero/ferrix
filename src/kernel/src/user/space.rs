@@ -25,8 +25,9 @@
 //! # Which processors may still hold this space's translations
 //!
 //! Every space keeps a set of processors, and the set means *may still have
-//! this space's translations in its TLB* — not *has the root loaded now*. The
-//! difference is the whole of what makes a shootdown to the set enough:
+//! this space's translations in its TLB* — not *is running one of its threads
+//! now*. The difference is the whole of what makes a shootdown to the set
+//! enough:
 //!
 //! * A processor **joins before** [`AddressSpace::install`] loads the root, so
 //!   no processor walks these tables and caches an entry while outside the
@@ -39,9 +40,42 @@
 //!   write to `TTBR0` drops nothing and `EPD0` stops walks rather than TLB
 //!   hits, so both `install_user_root` and `uninstall_user_root` invalidate
 //!   `ASID` zero, which every user translation carries and no kernel one does.
-//! * There is no lazy TLB. The scheduler uninstalls a space when it switches
-//!   to a kernel thread rather than leaving the root loaded, so a processor
-//!   running a kernel thread is in no space's set.
+//! * **A processor running a kernel thread keeps the last space loaded: lazy
+//!   TLB.** The scheduler writes no root when it switches to a kernel thread,
+//!   and on the way back to a program writes one only if that program's space
+//!   is not the one loaded ([`switch_here`]). Such a processor stays in the
+//!   set, because its root still names these tables and its TLB may still hold
+//!   their entries; every shootdown of the space reaches it as it reaches a
+//!   processor running one of the space's threads, and it answers the same
+//!   way.
+//! * [`LOADED`] records, for each processor, the space whose root is loaded
+//!   there. Outside the masked windows of `install` and `uninstall`, a
+//!   processor is in a space's set exactly while its record names that space.
+//!
+//! # What keeps a loaded space alive
+//!
+//! Two counts, kept apart as Linux keeps `mm_users` and `mm_count`. The `Arc`
+//! counts the space's users -- tasks, processes, handles -- and when it reaches
+//! zero the space is torn down at once, however many processors still have it
+//! loaded lazily: a dead program's memory never waits for a processor to run
+//! another program. The set counts the processors that have it loaded, and
+//! `Drop` empties it before it gives anything back. It marks the space
+//! retiring, interrupts every processor in the set and waits: each answers,
+//! in [`answer_retiring`], by switching to the kernel's own tables and
+//! leaving. Only then do the tables and frames go, and only once `Drop` has
+//! checked that the set is empty and that no processor's record names the
+//! space (FX-0009).
+//!
+//! A kernel thread never reaches user memory through the space it was left:
+//! `syscall::uaccess` translates through the task's own space in software,
+//! never through the loaded root, and the scheduler asserts on every switch
+//! that a task running in a space finds that space loaded, so only a kernel
+//! thread ever runs on another's. A stray ring-0 access to a user address is
+//! refused by SMAP on x86-64 and PAN on `AArch64` where the processor has
+//! them. ARMv7-A has neither, and before lazy TLB `EPD0` made such an access
+//! fault under a kernel thread; now it reads the space left loaded, so there
+//! the property rests on the kernel following no user pointer outside
+//! `uaccess`.
 //!
 //! # Taking a translation down
 //!
@@ -54,7 +88,8 @@
 //! 2. still under the lock, and only after that, the set is read and the
 //!    shootdown counted pending;
 //! 3. with the lock let go, [`crate::smp::flush_tlb_pages`] reaches every
-//!    processor in the set and waits for each to answer;
+//!    processor in the set -- one that has the space loaded lazily included --
+//!    and waits for each to answer;
 //! 4. only then is anything the translations reached given back.
 //!
 //! "Anything" includes the page tables step 1 emptied. A processor caches the
@@ -92,13 +127,13 @@ use alloc::vec::Vec;
 use core::any::Any;
 use core::fmt;
 use core::ops::Deref;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 
 use crate::sync::SpinLock;
 use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END, is_user_address};
 use ferrix_frame::Frame;
 use ferrix_paging::MapFlags;
-use ferrix_sched::CpuSet;
+use ferrix_sched::{CpuSet, MAX_CPUS};
 use ferrix_sync::{SleepLock, SleepLockGuard};
 use ferrix_vma::{Backing, PageRange, Unmapping, Vma, VmaFlags};
 
@@ -228,6 +263,64 @@ impl Inner {
     }
 }
 
+/// Where an address space is loaded: the part of it other processors touch
+/// through their [`LOADED`] records, holding no reference.
+///
+/// An allocation of its own, shared by `Arc`, rather than fields of the space:
+/// `Drop` holds the space exclusively while it waits for those processors to
+/// leave, and they leave by writing here. What they write must not be memory
+/// that exclusive borrow covers.
+#[derive(Debug)]
+struct Presence {
+    /// The processors whose TLB may still hold the space's translations:
+    /// those whose record names it, whether a thread of the space runs there
+    /// or a kernel thread it was left loaded under.
+    cpus: CpuMask,
+    /// Set by `Drop` before it asks the processors in the set to leave: what
+    /// [`answer_retiring`] looks for.
+    retiring: AtomicBool,
+}
+
+impl Presence {
+    /// Loaded nowhere.
+    const fn new() -> Presence {
+        Presence {
+            cpus: CpuMask::new(),
+            retiring: AtomicBool::new(false),
+        }
+    }
+
+    /// Make every processor that still has the space loaded leave it, and
+    /// stop the machine if one has not: what `Drop` does before it gives back
+    /// anything a translation could reach (finding F-36).
+    ///
+    /// The space has no users, so every processor in the set has it loaded
+    /// lazily, under a kernel thread. Each is interrupted and answers in
+    /// [`answer_retiring`], which the retiring mark tells to take the space
+    /// off; this one answers for itself as it waits. The check after the wait
+    /// is the evidence the lazy scheme rests on: the set empty, and no
+    /// processor's record naming the space, in either sense of loaded.
+    fn retire(&self) {
+        self.retiring.store(true, Ordering::SeqCst);
+        let loaded = self.cpus.snapshot();
+        smp::wait_until_left(&loaded, |cpu| !self.cpus.contains(cpu));
+
+        let this = core::ptr::from_ref(self);
+        let named = LOADED
+            .iter()
+            .position(|record| core::ptr::eq(record.load(Ordering::SeqCst), this));
+        let in_set = !self.cpus.snapshot().is_empty();
+        if in_set || named.is_some() {
+            crate::panic::fatal!(
+                crate::panic::catalog::SPACE_DROPPED_WHILE_LOADED,
+                "an address space was about to give back its tables while still loaded: the \
+                 record naming it is processor {named:?}'s, and its set is {}",
+                if in_set { "not empty" } else { "empty" }
+            );
+        }
+    }
+}
+
 /// One process's address space.
 #[derive(Debug)]
 pub(crate) struct AddressSpace {
@@ -235,8 +328,9 @@ pub(crate) struct AddressSpace {
     root: Frame,
     /// This space, as the objects it maps record it.
     me: Weak<AddressSpace>,
-    /// The processors whose TLB may still hold this space's translations.
-    cpus: CpuMask,
+    /// Where it is loaded: the processors whose TLB may still hold its
+    /// translations.
+    presence: Arc<Presence>,
     /// Its shootdowns: those not yet returned, and those ever begun.
     flushes: Flushes,
     /// Held by each system call that changes which ranges are mapped, from
@@ -253,13 +347,7 @@ impl AddressSpace {
     ///
     /// [`SpaceError::OutOfMemory`] if there is no frame for the root.
     pub(crate) fn new() -> Result<Arc<AddressSpace>, SpaceError> {
-        let root = mm::allocate_frames(0).ok_or(SpaceError::OutOfMemory)?;
-        mm::zero_frame(root);
-
-        // Before anything is mapped into it: on x86-64 this is what puts the
-        // kernel's half in reach, and a trap taken in this address space
-        // before it ran would have nowhere to go.
-        arch::prepare_user_root(root * PAGE_SIZE);
+        let (root, presence) = new_root()?;
 
         let map = ferrix_vma::AddressSpace::new(MMAP_MIN_ADDR, USER_VIRT_END).map_err(|_| {
             // The window is a compile-time constant of the layout, so this is
@@ -272,7 +360,7 @@ impl AddressSpace {
         fallible::try_arc_cyclic(|me| AddressSpace {
             root,
             me: me.clone(),
-            cpus: CpuMask::new(),
+            presence,
             flushes: Flushes::new(),
             layout,
             inner: SpinLock::new(Inner {
@@ -323,7 +411,7 @@ impl AddressSpace {
     }
 
     /// Install this address space on the processor that is running, in place
-    /// of `replacing` if that was installed there.
+    /// of whichever space [`LOADED`] says is loaded there.
     ///
     /// Every page faulted in so far has been reachable only through the direct
     /// map, because the kernel was walking these tables in software. After
@@ -337,68 +425,207 @@ impl AddressSpace {
     /// kernel code running in the address space that faulted.
     ///
     /// The processor joins this space's set before the root is loaded, and
-    /// leaves `replacing`'s only after, for the reasons the module gives. A
-    /// `replacing` that was not in fact installed here costs nothing: the
-    /// root write just made has dropped whatever of it this TLB held.
+    /// leaves the replaced space's only after, for the reasons the module
+    /// gives. The replaced space is read from this processor's own record
+    /// rather than taken from the caller, so that a check installing a space
+    /// of its own on a processor a kernel thread left a program's space on
+    /// takes that processor out of the program's set as the scheduler would.
     ///
     /// # Safety
     ///
     /// (TRANSLATE) Something must hold a reference to this address space for as long as it
-    /// stays installed. The tables are freed when the last [`Arc`] goes, and a
-    /// processor whose root register still names freed frames is walking
-    /// memory the allocator has handed to somebody else.
+    /// stays installed and the running task works in it. After that the space
+    /// may stay loaded here lazily, and `Drop` makes this processor leave it
+    /// before its tables go: a processor whose root register still names
+    /// freed frames is walking memory the allocator has handed to somebody
+    /// else.
     ///
     /// Interrupts must be masked across the call, so that the processor that
     /// joins is the one whose root is loaded, and the caller must not be
     /// preempted into a context expecting a different address space.
-    pub(crate) unsafe fn install(&self, replacing: Option<&AddressSpace>) {
-        let cpu = this_logical_cpu();
+    pub(crate) unsafe fn install(&self) {
+        let (cpu, record) = loaded_record();
         // NOALLOC: a `CpuMask` is a fixed bitmap; joining sets a bit.
-        self.cpus.join(cpu);
+        self.presence.cpus.join(cpu);
         // SAFETY: (TRANSLATE) the root was made by `new`, so `prepare_user_root` has run
         // on it and the kernel is reachable through it on the architecture
         // that needs that; the caller guarantees it outlives the installation.
         unsafe { arch::install_user_root(self.root * PAGE_SIZE) };
-        if let Some(previous) = replacing
-            && !core::ptr::eq(previous, self)
+        count_root_write(cpu);
+        let this = Arc::as_ptr(&self.presence).cast_mut();
+        let replaced = record.swap(this, Ordering::SeqCst);
+        // SAFETY: (SHARED) what a record names is alive: this processor is in its set
+        // until the `leave` below, and `Drop` lets go of nothing while any
+        // processor is. Interrupts are masked, so nothing on this processor
+        // changes the record between the swap and the leave.
+        if let Some(replaced) = unsafe { replaced.as_ref() }
+            && !core::ptr::eq(replaced, this)
         {
-            previous.cpus.leave(cpu);
+            replaced.cpus.leave(cpu);
         }
     }
 
-    /// Leave this address space on the processor that is running.
+    /// Take this address space off the processor that is running.
     ///
-    /// After this no user address translates here, which is the state a kernel
-    /// thread runs in. The processor leaves the set after the root write,
-    /// which on every architecture drops the user translations it had cached.
+    /// After this no user address translates here. The processor leaves the
+    /// set after the root write, which on every architecture drops the user
+    /// translations it had cached. The scheduler never calls this -- a kernel
+    /// thread runs on whatever space was loaded -- and stage 6's checks, which
+    /// install spaces of their own, do.
     ///
     /// # Safety
     ///
     /// (TRANSLATE) Nothing on this processor may still need a user address, and interrupts
     /// must be masked across the call.
     pub(crate) unsafe fn uninstall(&self) {
-        let cpu = this_logical_cpu();
-        // SAFETY: (TRANSLATE) the caller guarantees no user address is wanted, and the kernel
-        // is reachable without one on every architecture.
-        unsafe { arch::uninstall_user_root() };
-        self.cpus.leave(cpu);
+        let (cpu, record) = loaded_record();
+        debug_assert!(
+            core::ptr::eq(record.load(Ordering::SeqCst), Arc::as_ptr(&self.presence)),
+            "an address space was uninstalled from a processor it was not loaded on"
+        );
+        // SAFETY: (TRANSLATE) the caller guarantees no user address is wanted.
+        unsafe { unload(cpu, record) };
+    }
+
+    /// Whether processor `cpu` is in this space's set: may hold its
+    /// translations, and receives its shootdowns.
+    pub(crate) fn in_set(&self, cpu: usize) -> bool {
+        self.presence.cpus.contains(cpu)
     }
 }
 
-/// The logical number of the processor running this, for its bit in a set.
+/// For each processor by logical number, the space whose root is loaded
+/// there, by its [`Presence`], or null while the processor translates only
+/// the kernel's tables.
 ///
-/// Stops the machine rather than guessing when there is no per-CPU record. A
-/// user space is installed only by the scheduler and by stage 6's checks, both
-/// long after every processor has its record, so a missing one is a kernel
-/// bug; and a default -- zero, say -- would put the wrong processor in the set
-/// and leave the right one out, which no later check would see.
-fn this_logical_cpu() -> usize {
-    match smp::this_cpu() {
-        Some(cpu) => cpu.logical,
+/// Written only by its own processor, with interrupts masked -- by
+/// [`AddressSpace::install`] and [`unload`] -- and read by it the same way;
+/// `Drop` reads every record once the set is empty, to check it. A record
+/// names a space only while that processor is in the space's set, and that is
+/// what keeps the pointer alive: `Drop` waits for the set to empty before the
+/// space lets go of its `Presence`.
+static LOADED: [AtomicPtr<Presence>; MAX_CPUS] =
+    [const { AtomicPtr::new(core::ptr::null_mut()) }; MAX_CPUS];
+
+/// Root register writes each processor has made for a user space, by logical
+/// number: loads and unloads together. What the checks count to prove that a
+/// switch through a kernel thread and back costs none.
+static ROOT_WRITES: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+
+/// Take whatever user space is loaded off processor `cpu`, whose record is
+/// `record`: the kernel's own tables go in, the record is cleared, and the
+/// processor leaves the space's set -- in that order, for the reason the
+/// module gives.
+///
+/// # Safety
+///
+/// (TRANSLATE) `cpu` must be the processor running this, with interrupts masked, and
+/// nothing on it may still need a user address.
+unsafe fn unload(cpu: usize, record: &AtomicPtr<Presence>) {
+    // SAFETY: (TRANSLATE) the caller guarantees no user address is wanted, and the kernel
+    // is reachable without one on every architecture.
+    unsafe { arch::uninstall_user_root() };
+    count_root_write(cpu);
+    let unloaded = record.swap(core::ptr::null_mut(), Ordering::SeqCst);
+    // SAFETY: (SHARED) as in `install`: the space is alive while this processor is in
+    // its set, and it leaves last.
+    if let Some(unloaded) = unsafe { unloaded.as_ref() } {
+        unloaded.cpus.leave(cpu);
+    }
+}
+
+/// Put the space a task runs in on this processor, for the scheduler's
+/// switch: `next` is the incoming task's space, `None` for a kernel thread.
+///
+/// Lazy. A kernel thread gets whatever is loaded, and a program whose space
+/// is already loaded -- because it is where this processor was before a
+/// kernel thread, or the idle task, ran -- gets no root write. The one case
+/// that writes is a program whose space is not the one loaded, and that is
+/// also the one case the switch barrier is for: [`AddressSpace::install`]
+/// issues it when the space differs from the last program's space this
+/// processor ran, exactly as it did when every kernel thread uninstalled.
+///
+/// # Safety
+///
+/// (TRANSLATE) As [`AddressSpace::install`]: the caller holds `next` for as long as the
+/// task runs in it, and interrupts are masked.
+pub(crate) unsafe fn switch_here(next: Option<&AddressSpace>) {
+    let Some(next) = next else {
+        return;
+    };
+    let (_, record) = loaded_record();
+    if !core::ptr::eq(record.load(Ordering::SeqCst), Arc::as_ptr(&next.presence)) {
+        // SAFETY: (TRANSLATE) the caller's guarantee, passed on.
+        unsafe { next.install() };
+    }
+}
+
+/// Whether `space` is the one loaded on the processor running this. Read
+/// with interrupts masked, or the answer may be another processor's.
+pub(crate) fn is_loaded_here(space: &AddressSpace) -> bool {
+    core::ptr::eq(
+        loaded_record().1.load(Ordering::SeqCst),
+        Arc::as_ptr(&space.presence),
+    )
+}
+
+/// The root writes processor `cpu` has made for user spaces.
+pub(crate) fn root_writes_on(cpu: usize) -> u64 {
+    ROOT_WRITES
+        .get(cpu)
+        .map_or(0, |writes| writes.load(Ordering::Relaxed))
+}
+
+/// Count a root write on processor `cpu`.
+fn count_root_write(cpu: usize) {
+    if let Some(writes) = ROOT_WRITES.get(cpu) {
+        let _ = writes.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// What a processor does for a space being dropped, answering an interrupt
+/// or a wait: if the space loaded here is retiring, take it off.
+///
+/// Called from `smp::service_tlb`, so on every path that answers a shootdown
+/// -- the interrupt, and every wait's poll for the processor it is on -- and
+/// with interrupts masked. A retiring space has no users left, so the task
+/// running here cannot be working in it: whatever runs is a kernel thread the
+/// space was left loaded under.
+///
+/// `cpu` must be the processor running this.
+pub(crate) fn answer_retiring(cpu: usize) {
+    let Some(record) = LOADED.get(cpu) else {
+        return;
+    };
+    // SAFETY: (SHARED) a space a record names is alive while this processor is in its
+    // set, which it is until `unload` below has left it.
+    let retiring = unsafe { record.load(Ordering::SeqCst).as_ref() }
+        .is_some_and(|loaded| loaded.retiring.load(Ordering::SeqCst));
+    if retiring {
+        // SAFETY: (TRANSLATE) the space has no users, so nothing on this processor works
+        // in it, and the caller has interrupts masked.
+        unsafe { unload(cpu, record) };
+    }
+}
+
+/// The logical number of the processor running this, for its bit in a set,
+/// and its [`LOADED`] record.
+///
+/// Stops the machine rather than guessing when there is no per-CPU record, or
+/// one past the records this keeps. A user space is installed only by the
+/// scheduler and by stage 6's checks, both long after every processor has its
+/// record and on a machine the scheduler agreed to start on, so either is a
+/// kernel bug; and a default -- zero, say -- would put the wrong processor in
+/// the set and leave the right one out, which no later check would see.
+fn loaded_record() -> (usize, &'static AtomicPtr<Presence>) {
+    let cpu = smp::this_cpu().map(|cpu| cpu.logical);
+    match cpu.and_then(|cpu| Some((cpu, LOADED.get(cpu)?))) {
+        Some(found) => found,
         None => {
             crate::panic::fatal!(
                 crate::panic::catalog::SPACE_SET_WITHOUT_RECORD,
-                "an address space was installed or uninstalled on a processor with no per-CPU record"
+                "an address space was installed or uninstalled on a processor with no per-CPU \
+                 record, or one numbered past MAX_CPUS"
             );
         }
     }
@@ -509,6 +736,24 @@ fn inherited(
         let _ = fallible::insert(&mut files, id, mapping.clone())?;
     }
     Ok((native, files))
+}
+
+/// A root table for a new space, zeroed and prepared, and the record of where
+/// the space is loaded: nowhere yet.
+///
+/// # Errors
+///
+/// [`SpaceError::OutOfMemory`] if there is no frame for the root or no memory
+/// for the record; nothing is kept.
+fn new_root() -> Result<(Frame, Arc<Presence>), SpaceError> {
+    let root = mm::allocate_frames(0).ok_or(SpaceError::OutOfMemory)?;
+    mm::zero_frame(root);
+    // Before anything is mapped into it: on x86-64 this is what puts the
+    // kernel's half in reach, and a trap taken in this address space before it
+    // ran would have nowhere to go.
+    arch::prepare_user_root(root * PAGE_SIZE);
+    let presence = fallible::try_arc(Presence::new()).map_err(|_| unrooted(root))?;
+    Ok((root, presence))
 }
 
 /// A fork refused for memory once its child's root is taken: the root goes
@@ -749,9 +994,7 @@ impl AddressSpace {
 
         // The child's root first, because it is the step most likely to fail
         // and the only one that fails without leaving a trace.
-        let root = mm::allocate_frames(0).ok_or(SpaceError::OutOfMemory)?;
-        mm::zero_frame(root);
-        arch::prepare_user_root(root * PAGE_SIZE);
+        let (root, presence) = new_root()?;
 
         // Then the objects, while the map is still untouched, so that a
         // failure here has changed nothing the parent can observe.
@@ -820,7 +1063,7 @@ impl AddressSpace {
         let child = fallible::try_arc_cyclic(|me| AddressSpace {
             root,
             me: me.clone(),
-            cpus: CpuMask::new(),
+            presence,
             flushes: Flushes::new(),
             layout: SleepLock::new((), &crate::sync::SchedParker),
             inner: SpinLock::new(Inner {
@@ -1683,11 +1926,12 @@ impl AddressSpace {
     /// must reach.
     ///
     /// Called with the lock held — `_locked` is the proof — and after the
-    /// translations it is for are out of the tables, never before.
+    /// translations it is for are out of the tables, never before. The set
+    /// read includes every processor that has the space loaded lazily.
     fn begin_shootdown(&self, _locked: &Inner) -> CpuSet {
         let _ = self.flushes.pending.fetch_add(1, Ordering::SeqCst);
         let _ = self.flushes.begun.fetch_add(1, Ordering::Relaxed);
-        self.cpus.snapshot()
+        self.presence.cpus.snapshot()
     }
 
     /// How many shootdowns of this space have begun: see the field.
@@ -3355,22 +3599,28 @@ fn still_named(map: &ferrix_vma::AddressSpace, id: u64) -> bool {
 impl Drop for AddressSpace {
     /// Tear the whole space down: every mapping, every object, every table.
     ///
-    /// The objects go first and the tables second. Dropping an object releases
-    /// its frames, and a frame released while a translation to it still exists
-    /// is only safe because nothing is running in this address space — an
+    /// First every processor that still has the space loaded leaves it; then
+    /// the objects go, and the tables last. Dropping an object releases its
+    /// frames, and a frame released while a translation to it still exists is
+    /// only safe because nothing is running in this address space — an
     /// `AddressSpace` is dropped when its last reference goes, and a running
-    /// thread is a reference — and because every processor that ran it left
-    /// its set only after the root write that dropped its translations.
+    /// thread is a reference — and because no processor is left in its set:
+    /// each left only after the root write that dropped its translations,
+    /// those it had loaded lazily at [`Presence::retire`]'s request.
     ///
     /// Every object is detached before it is let go, taking only its mapper
-    /// list: this runs with no lock of its own to hold.
+    /// list. The one wait is `retire`'s, for processors to answer an
+    /// interrupt, so this must run where a shootdown may be asked for: no
+    /// lock that disables preemption held, and interrupts on.
     fn drop(&mut self) {
+        self.presence.retire();
+
         let me: *const AddressSpace = &raw const *self;
         let inner = self.inner.get_mut();
 
-        // Unwalked: no processor is in this space's set, and each left it
-        // through the root write that dropped its entries, walk caches and
-        // all -- the module's second rule.
+        // Unwalked: no processor is in this space's set -- `retire` has just
+        // checked -- and each left it through the root write that dropped its
+        // entries, walk caches and all: the module's second rule.
         for region in inner.map.iter() {
             let _ = mm::unmap_unwalked(
                 self.root * PAGE_SIZE,
