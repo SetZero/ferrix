@@ -1994,6 +1994,17 @@ bind = SUPER, C, exec, /bin/hyprctl clients
 bind = SUPER, W, exec, /bin/hyprctl activewindow
 ";
 
+/// Venus on the 3D card of an `--everything` desktop, where this host can
+/// give it ([`crate::window::offers_venus`]): Vulkan on the host's GPU is a
+/// feature of a watched desktop like the others `--everything` turns on, and
+/// fuzzel then lists vkgears. Elsewhere the card stays virgl's, as it was.
+fn everything_venus(arch: Arch, args: &mut Args) {
+    if args.everything && args.gl && !args.venus && crate::window::offers_venus(arch) {
+        println!("  gpu: Venus on the 3D card, so Vulkan runs on the host's GPU");
+        args.venus = true;
+    }
+}
+
 /// `--everything` with nothing else naming a configuration: the customer's
 /// own desktop, the same one `--config` would carry, found where hyprland
 /// keeps it. Without this, `--everything` shows [`RUN_CONFIG`]'s pattern
@@ -2221,6 +2232,7 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
         args.layout = Some(layout);
         args.variant = variant;
     }
+    everything_venus(arch, &mut args);
     if args.chrome {
         // One data disk: the browser's, in the rustc volume's place --
         // Chrome for Testing's on x86-64, Debian's Chromium on AArch64.
@@ -2575,13 +2587,15 @@ fn desktop(
     } else {
         carried.ports.extend(crate::rustc::default_links(args));
     }
-    // The applications fuzzel lists, and their icons.
+    // The applications fuzzel lists, and their icons: vkgears among them
+    // where the port was built and the card will offer Venus.
     let chrome = args
         .chrome
         .then(|| crate::chrome::window_command(CHROME_WELCOME_PAGE));
+    let vkgears = args.venus && carried.ports.iter().any(|file| file.path == VKGEARS_PATH);
     carried
         .ports
-        .extend(crate::fuzzel::files(chrome.as_deref())?);
+        .extend(crate::fuzzel::files(chrome.as_deref(), vkgears)?);
     let config = crate::ssh::with_server(config, args, &mut carried.ports)?;
     let config = crate::badapple::on_the_desktop(arch, config, &mut carried.ports, args)?;
     // A wallpaper, from this machine's own and from nowhere else:
@@ -4596,7 +4610,7 @@ fn fuzzel_user_setup(arch: Arch) -> Result<Option<(String, Carried, String)>> {
         mode: 0o755,
         content: crate::ports::Content::Bytes(bytes),
     });
-    ports.extend(crate::fuzzel::files(None)?);
+    ports.extend(crate::fuzzel::files(None, false)?);
     let carried = Carried {
         busybox: crate::busybox::installed_program(arch),
         ports,
@@ -4739,7 +4753,7 @@ fn everything_desktop_setup(arch: Arch) -> Result<Option<(String, Carried, Strin
     let mut ports = crate::dotfiles::carried(Path::new(conf_path))?;
     ports.extend(desktop_programs(arch)?);
     ports.extend(edid.files);
-    ports.extend(crate::fuzzel::files(None)?);
+    ports.extend(crate::fuzzel::files(None, false)?);
     // zinc for the terminals to run, as run-compositor carries it.
     let carried = Carried {
         busybox: crate::busybox::installed_program(arch),

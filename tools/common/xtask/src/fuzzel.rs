@@ -4,8 +4,9 @@
 //! fuzzel lists `.desktop` files, and Ferrix's image has almost no programs
 //! that come with one. So the image carries entries of the tree's own for
 //! what the desktop does have -- [`APPLICATIONS`], one small list: the
-//! terminal running zinc, the test pattern, busybox's `top`, and Chrome when
-//! `--chrome` carries it -- each with an icon of the tree's own in a
+//! terminal running zinc, the test pattern, busybox's `top`, Chrome when
+//! `--chrome` carries it, and vkgears when the image has it and the card
+//! offers Venus -- each with an icon of the tree's own in a
 //! `hicolor` theme, so the icon lookup and the large picture of the selected
 //! entry have something to find. The files are in
 //! `src/user/linux/compositor/fuzzel/data/`, where fuzzel's host test reads the same ones.
@@ -24,12 +25,20 @@ use crate::{Result, paths};
 const APPLICATIONS: [&str; 3] = ["terminal", "pattern", "top"];
 
 /// The icons, by name.
-const ICONS: [&str; 4] = [
+const ICONS: [&str; 5] = [
     "ferrix-terminal",
     "ferrix-pattern",
     "ferrix-monitor",
     "ferrix-browser",
+    "ferrix-gears",
 ];
+
+/// The entry for vkgears, which only a desktop with Venus lists: on any other
+/// card it finds no Vulkan device and exits. Listed, never started -- it is
+/// there to be chosen. Its `Exec` sets `MESA_VK_WSI_DEBUG=sw` for the reason
+/// `test-vkgears` does (`docs/GPU.md` §6.1), for vkgears alone rather than as
+/// an `env =` line every client would inherit.
+const VKGEARS: &str = "vkgears";
 
 /// Where the tree keeps them.
 const DATA: &str = "src/user/linux/compositor/fuzzel/data";
@@ -46,10 +55,11 @@ fn read(relative: &str) -> Result<Vec<u8>> {
 
 /// Every file fuzzel's applications need in the image: the entries, the
 /// `hicolor` theme and its icons, and with `chrome` (the command that opens
-/// its window) an entry for Chrome.
-pub(crate) fn files(chrome: Option<&str>) -> Result<Vec<File>> {
+/// its window) an entry for Chrome, and with `vkgears` one for it.
+pub(crate) fn files(chrome: Option<&str>, vkgears: bool) -> Result<Vec<File>> {
     let mut out = Vec::new();
-    for name in APPLICATIONS {
+    let listed = vkgears.then_some(VKGEARS);
+    for name in APPLICATIONS.into_iter().chain(listed) {
         out.push(File {
             path: format!("{INSTALLED_APPLICATIONS}/{name}.desktop"),
             mode: 0o644,
@@ -162,7 +172,7 @@ pub(crate) fn boot_files(program: &std::path::Path) -> Result<Vec<File>> {
             content: Content::Bytes(read(&root.join(BOOT_FONT))?),
         },
     ];
-    out.extend(files(None)?);
+    out.extend(files(None, false)?);
     Ok(out)
 }
 
@@ -206,12 +216,12 @@ pub(crate) fn judge(arch: paths::Arch, pictures: usize, said: &[String]) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use super::{APPLICATIONS, files};
+    use super::{APPLICATIONS, VKGEARS, files};
 
     #[test]
     fn the_carried_entries_are_desktop_files() {
-        let carried = files(Some("/data/chrome --flag")).unwrap_or_default();
-        for name in APPLICATIONS {
+        let carried = files(Some("/data/chrome --flag"), true).unwrap_or_default();
+        for name in APPLICATIONS.into_iter().chain([VKGEARS]) {
             let file = carried
                 .iter()
                 .find(|file| file.path.ends_with(&format!("/{name}.desktop")));
@@ -230,5 +240,14 @@ mod tests {
                 .iter()
                 .any(|file| file.path.ends_with("hicolor/index.theme"))
         );
+    }
+
+    #[test]
+    fn vkgears_is_listed_only_when_asked() {
+        let entry = format!("/{VKGEARS}.desktop");
+        let without = files(None, false).unwrap_or_default();
+        assert!(!without.iter().any(|file| file.path.ends_with(&entry)));
+        let with = files(None, true).unwrap_or_default();
+        assert!(with.iter().any(|file| file.path.ends_with(&entry)));
     }
 }

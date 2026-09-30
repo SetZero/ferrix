@@ -650,6 +650,35 @@ fn devices(binary: &Path) -> Vec<String> {
     named(&text)
 }
 
+/// Whether a boot on this host can have Venus on its 3D card: the host is
+/// Linux, where Venus runs (under `whpx` the card is virgl alone,
+/// `docs/GPU.md` §3), and the QEMU a GL boot takes has the card with a
+/// `venus` property, which QEMU defines only against a virglrenderer new
+/// enough to have Venus.
+pub(crate) fn offers_venus(arch: crate::paths::Arch) -> bool {
+    if !cfg!(target_os = "linux") {
+        return false;
+    }
+    let Some((binary, _)) = find_qemu(arch.qemu_binary(), true) else {
+        return false;
+    };
+    let mut command = Command::new(binary);
+    let _ = command.args(["-device", &format!("{GL_CARD},help")]);
+    command
+        .output()
+        .is_ok_and(|output| has_property(&String::from_utf8_lossy(&output.stdout), "venus"))
+}
+
+/// Whether `-device <card>,help`'s `text` lists `property`: a line
+/// `  <property>=<type> ...`.
+fn has_property(text: &str, property: &str) -> bool {
+    text.lines().any(|line| {
+        line.trim()
+            .split_once('=')
+            .is_some_and(|(name, _)| name == property)
+    })
+}
+
 /// The audio backend a desktop that wants sound gets from this QEMU: the
 /// first of the host's own sound servers it was built with -- `pipewire`,
 /// `pa`, `coreaudio`, `dsound` -- as `-audiodev help` lists them, or
@@ -756,6 +785,21 @@ mod tests {
                 .any(|driver| driver == "pipewire")
         );
         assert!(audio_drivers("no such list\n").is_empty());
+    }
+
+    /// `-device virtio-gpu-gl-pci,help` as Ubuntu's QEMU 10.2.1 on the gate
+    /// host prints it, cut to the lines around Venus's.
+    #[test]
+    fn venus_is_read_from_the_cards_properties() {
+        let venus = "virtio-gpu-gl-pci options:\n  blob=<bool>            - on/off (default: off)\n  \
+                     hostmem=<size>         -  (default: 0)\n  \
+                     venus=<bool>           - on/off (default: off)\n";
+        assert!(has_property(venus, "venus"));
+        assert!(has_property(venus, "blob"));
+        let virgl =
+            "virtio-gpu-gl-pci options:\n  blob=<bool>            - on/off (default: off)\n";
+        assert!(!has_property(virgl, "venus"));
+        assert!(!has_property("", "venus"));
     }
 
     /// The listing this host's QEMU prints, which the parser is written for.

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Vulkan Gears
+GenericName=3D Demo
+Comment=mesa-demos' vkgears, drawn by the host's GPU through Venus
+Exec=/bin/env MESA_VK_WSI_DEBUG=sw /bin/vkgears
+Icon=ferrix-gears
+Terminal=false
+Keywords=vulkan;gears;3d;gpu;venus;demo;
+Categories=Graphics;3DGraphics;
