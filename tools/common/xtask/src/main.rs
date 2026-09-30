@@ -476,6 +476,15 @@ fn build(args: &Args) -> Result<()> {
     Ok(())
 }
 
+/// `builds-execute`: carry out the plan in `--plan DIR`.
+fn builds_execute(args: &Args) -> Result<()> {
+    let plan = args
+        .plan
+        .as_deref()
+        .ok_or_else(|| Error::new("builds-execute needs --plan DIR"))?;
+    builds::execute(std::path::Path::new(plan)).map(|_| ())
+}
+
 fn run() -> Result<()> {
     let args = Args::parse(std::env::args().skip(1))?;
     // Every kernel this run builds, whichever command builds it: set once,
@@ -548,13 +557,7 @@ fn run() -> Result<()> {
         "bench-chrome" => compositor::bench_chrome(&args),
         "bench-chrome-video" => compositor::bench_chrome_video(&args),
         "test-selfhost" => selfhost::test_selfhost(&args),
-        "builds-execute" => {
-            let plan = args
-                .plan
-                .as_deref()
-                .ok_or_else(|| Error::new("builds-execute needs --plan DIR"))?;
-            builds::execute(std::path::Path::new(plan)).map(|_| ())
-        }
+        "builds-execute" => builds_execute(&args),
         "check" | "miri" | "check-ferrousli" | "host-clippy" | "host-test" | "host-doctest"
         | "host-doc" | "check-apps" => check::command(command, &args),
         "native-clippy" => args
