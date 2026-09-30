@@ -1,0 +1,13 @@
+[package]
+name = "ferrix-seccomp"
+description = "Classic BPF as seccomp runs it: validation, the interpreter and the action encoding"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

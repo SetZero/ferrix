@@ -35,6 +35,7 @@ members = [
     "src/lib/fs/cpio",
     "src/lib/fs/partition",
     "src/lib/kernel/crng",
+    "src/lib/kernel/seccomp",
     "src/lib/crypto/argon2",
     "src/lib/proto/linux-abi",
     "src/lib/network/netwire",
@@ -149,6 +150,7 @@ ferrix-btrfs-write = { path = "src/lib/fs/btrfs-write" }
 ferrix-cpio = { path = "src/lib/fs/cpio" }
 ferrix-partition = { path = "src/lib/fs/partition" }
 ferrix-crng = { path = "src/lib/kernel/crng" }
+ferrix-seccomp = { path = "src/lib/kernel/seccomp" }
 ferrix-argon2 = { path = "src/lib/crypto/argon2" }
 ferrix-linux-abi = { path = "src/lib/proto/linux-abi" }
 ferrix-native-abi = { path = "src/lib/proto/native-abi" }

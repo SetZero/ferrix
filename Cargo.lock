@@ -490,6 +490,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-seccomp"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-snd"
 version = "0.1.0"
 dependencies = [

@@ -505,6 +505,8 @@ pub mod x86_64 {
     pub const FINIT_MODULE: usize = 313;
     /// Rename with flags, such as `RENAME_NOREPLACE`.
     pub const RENAMEAT2: usize = 316;
+    /// Restrict the calling process's system calls with a filter.
+    pub const SECCOMP: usize = 317;
     /// Fill a buffer with random bytes.
     pub const GETRANDOM: usize = 318;
     /// Create an anonymous file living in memory.
@@ -965,6 +967,8 @@ pub mod aarch64 {
     pub const SETNS: usize = 268;
     /// Load a kernel module from a file descriptor.
     pub const FINIT_MODULE: usize = 273;
+    /// Restrict the calling process's system calls with a filter.
+    pub const SECCOMP: usize = 277;
     /// Fill a buffer with random bytes.
     pub const GETRANDOM: usize = 278;
     /// Create an anonymous file living in memory.
@@ -1526,6 +1530,8 @@ pub mod arm {
     pub const FINIT_MODULE: usize = 379;
     /// Rename with flags, such as `RENAME_NOREPLACE`.
     pub const RENAMEAT2: usize = 382;
+    /// Restrict the calling process's system calls with a filter.
+    pub const SECCOMP: usize = 383;
     /// Fill a buffer with random bytes.
     pub const GETRANDOM: usize = 384;
     /// Create an anonymous file living in memory.
@@ -1997,6 +2003,8 @@ pub mod i386 {
     pub const SETNS: usize = 346;
     /// Rename with flags, such as `RENAME_NOREPLACE`.
     pub const RENAMEAT2: usize = 353;
+    /// Restrict the calling process's system calls with a filter.
+    pub const SECCOMP: usize = 354;
     /// Fill a buffer with random bytes.
     pub const GETRANDOM: usize = 355;
     /// Create an anonymous file living in memory.
@@ -2785,6 +2793,8 @@ pub enum Syscall {
     Membarrier,
     /// Register a restartable sequence area.
     Rseq,
+    /// Restrict the calling process's system calls with a filter.
+    Seccomp,
     /// Detach parts of the calling process's shared execution context.
     Unshare,
     /// Attach a file system.
@@ -3058,6 +3068,7 @@ fn x86_64_at_family(nr: usize) -> Option<Syscall> {
         x86_64::MEMBARRIER => Syscall::Membarrier,
         x86_64::STATX => Syscall::Statx,
         x86_64::RSEQ => Syscall::Rseq,
+        x86_64::SECCOMP => Syscall::Seccomp,
         _ => return None,
     };
     Some(call)
@@ -3376,6 +3387,7 @@ fn aarch64_memory_and_process(nr: usize) -> Option<Syscall> {
         aarch64::MEMBARRIER => Syscall::Membarrier,
         aarch64::STATX => Syscall::Statx,
         aarch64::RSEQ => Syscall::Rseq,
+        aarch64::SECCOMP => Syscall::Seccomp,
         aarch64::READAHEAD => Syscall::Readahead,
         _ => return None,
     };
@@ -3730,6 +3742,7 @@ fn arm_recent(nr: usize) -> Option<Syscall> {
         arm::MEMBARRIER => Syscall::Membarrier,
         arm::STATX => Syscall::Statx,
         arm::RSEQ => Syscall::Rseq,
+        arm::SECCOMP => Syscall::Seccomp,
         arm::CLOCK_GETTIME64 => Syscall::ClockGettime64,
         arm::CLOCK_NANOSLEEP_TIME64 => Syscall::ClockNanosleepTime64,
         arm::UTIMENSAT_TIME64 => Syscall::UtimensatTime64,
@@ -4188,6 +4201,7 @@ fn i386_recent(nr: usize) -> Option<Syscall> {
         i386::GET_ROBUST_LIST => Syscall::GetRobustList,
         i386::FSTATAT64 => Syscall::Fstatat64,
         i386::RSEQ => Syscall::Rseq,
+        i386::SECCOMP => Syscall::Seccomp,
         _ => return None,
     };
     Some(call)
