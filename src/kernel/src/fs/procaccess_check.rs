@@ -35,18 +35,28 @@ use crate::syscall::userns;
 /// `PR_SET_DUMPABLE`.
 const PR_SET_DUMPABLE: u64 = 4;
 
-/// A target made with ids `uid` and, if `undumpable`, `PR_SET_DUMPABLE` 0.
+/// A target made with ids `uid`, and `PR_SET_DUMPABLE` set as `undumpable`
+/// says: a change of ids makes a process undumpable, so it is set again, as
+/// bubblewrap does after it drops its ids.
 fn target(uid: u64, undumpable: bool) -> Result<alloc::sync::Arc<Process>, &'static str> {
+    let made = dropped(uid)?;
+    let _ = by_number(
+        &made,
+        Syscall::Prctl,
+        [PR_SET_DUMPABLE, u64::from(!undumpable), 0, 0, 0, 0],
+    )
+    .map_err(|_| "a /proc target could not set PR_SET_DUMPABLE")?;
+    Ok(made)
+}
+
+/// A target that changed its ids and did nothing more.
+fn dropped(uid: u64) -> Result<alloc::sync::Arc<Process>, &'static str> {
     let made = process::new_for_check().map_err(|_| "could not make a /proc target")?;
     if uid != 0 {
         for call in [Syscall::Setgid, Syscall::Setuid] {
             let _ = by_number(&made, call, [uid, 0, 0, 0, 0, 0])
                 .map_err(|_| "a /proc target could not take its ids")?;
         }
-    }
-    if undumpable {
-        let _ = by_number(&made, Syscall::Prctl, [PR_SET_DUMPABLE, 0, 0, 0, 0, 0])
-            .map_err(|_| "a /proc target could not clear PR_SET_DUMPABLE")?;
     }
     Ok(made)
 }
@@ -156,6 +166,14 @@ fn readers(
         user,
         dumpable,
         "a user was refused a dumpable process of its own",
+    )?;
+    // A process that changed its ids is not dumpable until it says so.
+    let changed = dropped(1000)?;
+    refused(
+        tally,
+        user,
+        &changed,
+        "a process that changed its ids stayed dumpable",
     )?;
     refused(
         tally,
