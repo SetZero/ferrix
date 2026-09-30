@@ -255,6 +255,7 @@
         "syscall/time.rs",
         "syscall/timerfd.rs",
         "syscall/tty.rs",
+        "syscall/userns.rs",
         "syscall/vdso.rs",
         "syscall/vdso_check.rs"
       ]
