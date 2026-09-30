@@ -1118,3 +1118,19 @@ How it differs from the design, and what is open:
   landing's final run, `test-shell`, `test-vfs` on both Arm targets and
   `test-init --arch all`. `carry-coverage` and `gen-coverage-justification
   --check` run on the final rebase.
+
+**Pid namespaces (2026-09-30, branch `stage13-pidns`, built on
+`stage13-n4-userns`, not landed; `docs/PIDNS.md` is the design).** This is
+the pid half that the first page of this document left out. `CLONE_NEWPID`
+through `clone`, `clone3` and `unshare`, alone or with `CLONE_NEWUSER`;
+a task in a namespace below the first holds its numbers in a `Numbers`
+record (`syscall/pidns.rs`), and the machine-wide number stays the key of
+the registry, the jobs, groups, sessions and the terminal. Every call that
+names or reports a pid speaks the caller's namespace (PIDNS §4 lists the
+sites, found by grep); the init of a namespace gets its orphans, takes the
+namespace with it when it ends, and ignores what it has no handler for;
+procfs is per namespace (`status` has `NStgid`/`NSpid`/`NSpgid`/`NSsid`;
+`ns/pid`, `ns/pid_for_children`). The exit criterion's pid-1 part is here.
+Evidence and differences are PIDNS §8 and §9. Two things in this document
+change with it: §1.5's row for `CLONE_NEWPID` is no longer `EINVAL`, and
+the N4 "gated so far" list above is unchanged by it.
