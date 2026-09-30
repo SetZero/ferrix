@@ -39,9 +39,10 @@ pub use verify::{Invalid, Program, verify};
 /// Most instructions in one filter: Linux's `BPF_MAXINSNS`.
 pub const MAX_INSNS: usize = 4096;
 
-/// Most instructions across all the filters of one process: Linux's
-/// `MAX_INSNS_PER_PATH`.
-pub const MAX_INSNS_PER_PATH: usize = 1 << 18;
+/// Most instructions across all the filters of one thread, each filter counted
+/// with four more: Linux's `MAX_INSNS_PER_PATH`, `(1 << 18)` bytes of
+/// `struct sock_filter`, which is 32768 of them.
+pub const MAX_INSNS_PER_PATH: usize = (1 << 18) / INSN_BYTES;
 
 /// Words of scratch memory: `BPF_MEMWORDS`.
 pub const MEMWORDS: usize = 16;
