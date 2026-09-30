@@ -1342,3 +1342,43 @@ Linux's `kernel/seccomp.c` and `net/core/filter.c` at 551c722f and
 Chromium's sandbox sources at `main`. Nothing is built. The
 consultant's review of the design, and os-98's answers to R1 to R5, come
 before S1.
+
+**The design's review (certification consultant, 2026-09-30): OK to
+build**, with these answers to §11 and conditions on the landings.
+
+* **Q1, the hook.** Accepted in the core, on F-09's terms. A `Verdict` can
+  produce only what the dispatcher already could: an errno, a value without
+  running the call, or the existing exit and fatal-signal paths. It gets a
+  requirement in `trap` and a vulnerability-analysis row ("a registered
+  filter makes the core do more than the call could"), with a check. The
+  time a filter chain may take per call is bounded by the verifier and the
+  chain (Linux: 4096 instructions a program, 32768 a path), and the bound
+  goes into `MEMORY-AND-TIMING.md`, since AoU-4 now includes a program a
+  user supplies on every call. The hook allocates nothing, takes no
+  sleeping lock and reads registers only. A process with no filter pays the
+  `Once` load and nothing else.
+* **Q2, native calls.** Native-range calls carry an `arch` value of their
+  own in `seccomp_data`, one Linux never uses, as an i386 call on x86-64
+  carries `AUDIT_ARCH_I386`. A filter that checks `arch`, as Chromium's and
+  systemd's do, then refuses them by its own rule, and a filter that wants
+  them allows that `arch` explicitly. It gets an SR row and a check both
+  ways. A hook in the personality's dispatcher would miss native calls and
+  the arch entries' early answers, so it cannot carry this design.
+* **Q3.** No objective of its own: seccomp is a program restricting
+  itself, and claiming it would pull the verifier and the interpreter into
+  the item. A "does not cover" paragraph goes in the vulnerability
+  analysis and the Security Target. Because the interpreter runs
+  user-supplied bytecode in ring 0, S1's `src/lib/kernel/seccomp` is
+  `forbid(unsafe_code)`, has a fuzz target (a verified program ends within
+  the bound and reads nothing outside `seccomp_data`), and has a host test
+  for every rejection the verifier makes.
+* **Q4.** A kill goes to the kernel log, rate-limited, not to `audit.rs`,
+  which records the TSF's own decisions (F-21b).
+* **Q5.** Done ahead of S1: `no_new_privs` and dumpability are inherited
+  by fork children and native children, and kept or reset at `execve` as
+  Linux keeps them (5df02c3b, reviewed).
+
+A seccomp implementation built on branch `stage13-seccomp` before this
+design landed puts its hook in the personality's dispatcher and its state
+per process. Its crate is §3.1's and may become S1 under S1's conditions.
+Its hook and state do not land.

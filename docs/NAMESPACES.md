@@ -993,7 +993,12 @@ it:
   f16ab27a moved the head per thread and kept the lookup as it was. NP's
   `ptrace_may_access` gates it along with M8's procfs links, with a check
   that another uid's thread is refused (the certification consultant's
-  review of f16ab27a, 2026-09-30).
+  review of f16ab27a, 2026-09-30). NP must also not see a new process as
+  dumpable before it inherits: between its publication (`publish_forked`,
+  or `register` for a native child) and `attributes::inherit`, a child is
+  findable with default attributes. Either create the attributes with the
+  entry, or show that no `ptrace_may_access` can run in that window
+  (the review of 5df02c3b; a BACKLOG row).
 * **Before N5.** A namespace's end writes out each filesystem whose last
   mount it drops, as a final unmount does on Linux. `Namespace`'s `Drop`
   disconnects its mounts and writes nothing, and btrfs commits on its own
