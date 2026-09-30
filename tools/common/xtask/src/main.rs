@@ -122,6 +122,7 @@ mod serial;
 mod sha256;
 mod shell;
 mod ssh;
+mod start_page;
 mod statd;
 mod steam;
 mod steamcmd;

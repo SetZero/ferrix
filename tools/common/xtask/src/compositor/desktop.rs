@@ -9,7 +9,7 @@ use std::path::Path;
 
 use super::apps::VKGEARS_PATH;
 use super::run::{with_layout, with_network};
-use super::{CLIENT_PATH, Carried, build, steam_window};
+use super::{CLIENT_PATH, CONFIG_PATH, Carried, build, steam_window};
 use crate::args::Args;
 use crate::paths::Arch;
 use crate::{Error, Result};
@@ -113,23 +113,7 @@ pub(super) fn desktop(
             .ports
             .extend(crate::dotfiles::carried(Path::new(path))?);
     }
-    // Chrome with a sound card gets the sound server beside it, which it
-    // takes over ALSA once libpulse loads (docs/AUDIO.md, U2d).
-    if args.chrome && (args.audio.is_some() || args.everything) {
-        if crate::chrome::has_pulse(&crate::chrome::volume_for(arch)?) {
-            let pulsed = crate::audio::build_media(arch, "media-pulsed", "pulsed")?;
-            println!("  {arch}: pulsed, the sound server, as a service beside the compositor");
-            carried.pulsed = Some(
-                std::fs::read(&pulsed)
-                    .map_err(|error| Error::new(format!("{}: {error}", pulsed.display())))?,
-            );
-        } else {
-            println!(
-                "  {arch}: Chrome's volume has no libpulse, so its sound goes through ALSA \
-                 with no pulsed (tools/common/fetch/fetch-chrome.sh again for it)"
-            );
-        }
-    }
+    carried.pulsed = pulsed(arch, args)?;
     if args.chrome {
         let mut links = chrome_links(arch, &carried.ports);
         if crate::chrome::on_ferrousli(args) {
@@ -172,13 +156,15 @@ pub(super) fn desktop(
     // where the port was built and the card will offer Venus.
     let chrome = args
         .chrome
-        .then(|| crate::chrome::window_command(CHROME_WELCOME_PAGE));
+        .then(|| crate::chrome::window_command(crate::start_page::URL));
     let vkgears = args.venus && carried.ports.iter().any(|file| file.path == VKGEARS_PATH);
     carried
         .ports
         .extend(crate::fuzzel::files(chrome.as_deref(), vkgears)?);
     let config = crate::ssh::with_server(config, args, &mut carried.ports)?;
     let config = crate::badapple::on_the_desktop(arch, config, &mut carried.ports, args)?;
+    // The page Chrome opens, with the keys this configuration binds.
+    crate::start_page::carry(arch, &config, CONFIG_PATH, &mut carried.ports, args)?;
     // A wallpaper, from this machine's own and from nowhere else:
     // `crate::wallpaper` says where they come from and why a run never goes
     // looking. It is started before anything the configuration starts, so
@@ -243,6 +229,27 @@ pub(super) fn desktop(
     Ok((config, carried))
 }
 
+/// The sound server for Chrome with a sound card, which Chrome takes over
+/// ALSA once libpulse loads (docs/AUDIO.md, U2d): `None` without `--chrome`
+/// and a card, or when the volume has no libpulse.
+fn pulsed(arch: Arch, args: &Args) -> Result<Option<Vec<u8>>> {
+    if !(args.chrome && (args.audio.is_some() || args.everything)) {
+        return Ok(None);
+    }
+    if !crate::chrome::has_pulse(&crate::chrome::volume_for(arch)?) {
+        println!(
+            "  {arch}: Chrome's volume has no libpulse, so its sound goes through ALSA \
+             with no pulsed (tools/common/fetch/fetch-chrome.sh again for it)"
+        );
+        return Ok(None);
+    }
+    let pulsed = crate::audio::build_media(arch, "media-pulsed", "pulsed")?;
+    println!("  {arch}: pulsed, the sound server, as a service beside the compositor");
+    std::fs::read(&pulsed)
+        .map(Some)
+        .map_err(|error| Error::new(format!("{}: {error}", pulsed.display())))
+}
+
 /// The volume's links for a desktop that already carries files of its own.
 ///
 /// A link cannot stand where the archive has made a directory with files in
@@ -300,13 +307,6 @@ fn rustc_links(carried: &[crate::ports::File]) -> Vec<crate::ports::File> {
     crate::rustc::files(&links)
 }
 
-/// The page `run-compositor --chrome` opens with.
-///
-/// Its button plays a tone through the page's `AudioContext` and stops it
-/// again: sound from Chrome, through `/dev/snd`, to the host's speakers under
-/// `--audio pipewire` (`docs/AUDIO.md` §4).
-const CHROME_WELCOME_PAGE: &str = "data:text/html,<body%20style=font-family:sans-serif;background:%23fc0><h1>Chrome%20on%20Ferrix</h1><p>Type%20an%20address%20above.</p><button%20style=font-size:2em%20onclick=tone()>Play%20a%20tone</button><script>var%20c,o;function%20tone(){if(o){o.stop();o=null;return}c=c||new%20AudioContext();o=c.createOscillator();g=c.createGain();g.gain.value=0.2;o.connect(g).connect(c.destination);o.start()}</script>";
-
 /// What `run-compositor --chrome` adds to the desktop's configuration:
 /// Chrome's environment, a window as the desktop starts, and SUPER+B for
 /// another.
@@ -317,7 +317,7 @@ pub(super) fn with_chrome(config: String, args: &Args, arch: Arch) -> String {
     let command = format!(
         "{} {}",
         crate::chrome::WINDOW_HOME,
-        crate::chrome::window_command_for(arch, CHROME_WELCOME_PAGE)
+        crate::chrome::window_command_for(arch, crate::start_page::URL)
     );
     format!(
         "{config}\n# Added by `cargo xtask run-compositor --chrome`.\n{}{}exec-once = {command}\n\

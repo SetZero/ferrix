@@ -1,0 +1,383 @@
+<!doctype html>
+<!--
+  The page Chrome opens on a Ferrix desktop: `run-compositor --chrome` and
+  `flash --compositor --chrome` carry it to /usr/share/ferrix/start/ and
+  start the browser on it (tools/common/xtask/src/start_page.rs).
+
+  xtask replaces the `{}` in the script element named `ferrix` with what it
+  knows of the boot: the architecture, the commit, the libc Chrome runs on,
+  and the keys the desktop's own hyprland.conf binds. Opened on its own the
+  page still works, and says it was given nothing.
+
+  Colours and type are docs/brand/BRAND.md's. Chrome draws here in software,
+  so nothing moves but the clock, and there is no blur or shadow to redraw.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ferrix</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Crect width='128' height='128' rx='28' fill='%230d0f12'/%3E%3Cpath d='M64 22 101 43v42l-37 21-37-21V43Z M27 43l37 21 37-21 M64 64v42' fill='none' stroke='%239aa4b2' stroke-width='6' stroke-linejoin='round'/%3E%3Ccircle cx='64' cy='64' r='12' fill='%23ff7a2b'/%3E%3C/svg%3E">
+<script id="ferrix" type="application/json">{}</script>
+<style>
+:root {
+  --ink: #0d0f12;
+  --surface: #161a20;
+  --raised: #1c2129;
+  --line: #262c35;
+  --text: #eef1f5;
+  --muted: #9aa4b2;
+  --rust: #ff7a2b;
+  --rust-soft: rgba(255, 122, 43, .12);
+  --vertex: #c9d1db;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --ink: #f7f5f2;
+    --surface: #ffffff;
+    --raised: #fbfaf8;
+    --line: #e1dbd2;
+    --text: #16181c;
+    --muted: #5b6470;
+    --rust: #c64a06;
+    --rust-soft: rgba(198, 74, 6, .08);
+    --vertex: #5b6470;
+    color-scheme: light;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  min-height: 100vh;
+  background: var(--ink);
+  background-image: radial-gradient(60rem 28rem at 50% -8rem, var(--rust-soft), transparent 70%);
+  background-repeat: no-repeat;
+  color: var(--text);
+  font: 15px/1.5 "Inter Variable", Inter, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; text-decoration: none; }
+code, kbd, .mono { font-family: "Liberation Mono", monospace; font-size: .86em; }
+main { max-width: 1180px; margin: 0 auto; padding: 24px 24px 32px; }
+
+/* The top: the mark and name, and the time. */
+header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; }
+.brand { display: flex; align-items: center; gap: 14px; }
+.brand svg { width: 44px; height: 44px; flex: none; }
+.brand b { display: block; font-size: 22px; font-weight: 650; letter-spacing: -.01em; }
+.brand span { color: var(--muted); font-size: 13px; }
+.time { text-align: right; }
+.time b { display: block; font-size: 34px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.time span { color: var(--muted); font-size: 13px; }
+
+/* The one box: a search, an address, or a path on this machine. */
+form { margin: 32px auto 10px; max-width: 720px; }
+.go {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+  padding: 0 8px 0 18px; height: 56px;
+}
+.go:focus-within { border-color: var(--rust); }
+.go svg { width: 20px; height: 20px; flex: none; stroke: var(--muted); }
+.go input {
+  flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent;
+  color: var(--text); font: inherit; font-size: 17px;
+}
+.go input::placeholder { color: var(--muted); }
+.go button {
+  border: 0; border-radius: 9px; height: 40px; padding: 0 16px; cursor: pointer;
+  background: var(--rust); color: #fff; font: inherit; font-weight: 600;
+}
+.hints { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 18px; color: var(--muted); font-size: 13px; }
+.hints code { color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; }
+
+/* The cards. */
+.grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); align-items: start; gap: 20px; margin-top: 30px; }
+.stack { display: grid; gap: 20px; min-width: 0; }
+.stack > * { min-width: 0; }
+section { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 20px 22px; }
+h2 { margin: 0 0 4px; font-size: 13px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.lede { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+
+/* This machine: its tree, one tile a place. */
+.places { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.place {
+  display: block; padding: 12px 14px; border-radius: 11px;
+  background: var(--raised); border: 1px solid var(--line);
+}
+.place:hover, .place:focus-visible { border-color: var(--rust); outline: 0; }
+.place b { display: block; font-weight: 600; }
+.place code { color: var(--rust); }
+.place span { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.fact { border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; font-size: 12.5px; color: var(--muted); }
+.fact b { color: var(--text); font-weight: 600; }
+
+/* The desktop's keys. */
+.filter {
+  width: 100%; height: 36px; margin-bottom: 10px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--raised);
+  color: var(--text); font: inherit; font-size: 13.5px; outline: 0;
+}
+.filter:focus { border-color: var(--rust); }
+.keys {
+  list-style: none; margin: 0; padding: 0; max-height: 420px; overflow-y: auto;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); column-gap: 28px; align-content: start;
+}
+.keys li { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.keys li.none { grid-column: 1 / -1; border: 0; }
+.keys .does { color: var(--text); font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.keys .combo { flex: none; display: flex; gap: 4px; }
+kbd {
+  display: inline-block; min-width: 24px; padding: 1px 7px; text-align: center;
+  background: var(--raised); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px;
+  color: var(--text); font-size: 12px;
+}
+.empty { color: var(--muted); font-size: 13.5px; margin: 0; }
+
+/* Out there, and the sound. */
+.links { list-style: none; margin: 0; padding: 0; }
+.links { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)); column-gap: 28px; }
+.links a { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.links a:hover b, .links a:focus-visible b { color: var(--rust); }
+.links a:focus-visible { outline: 0; }
+.links b { font-weight: 600; }
+.links span { color: var(--muted); font-size: 12.5px; text-align: right; }
+.sound { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.sound p { margin: 0; color: var(--muted); font-size: 13px; }
+.sound button {
+  flex: none; height: 38px; padding: 0 16px; border-radius: 9px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--raised); color: var(--text); font: inherit; font-weight: 600;
+}
+.sound button[aria-pressed="true"] { border-color: var(--rust); color: var(--rust); }
+
+footer { margin-top: 36px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 24px; color: var(--muted); font-size: 12.5px; }
+footer b { color: var(--text); font-weight: 600; }
+
+/* One column when Chrome shares the screen, and the keys second. */
+@media (max-width: 1000px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .stack { display: contents; }
+  #machine { order: 1; } #keys-card { order: 2; } #links { order: 3; } #sound { order: 4; }
+}
+@media (max-width: 560px) {
+  .time { text-align: left; }
+  .time b { font-size: 26px; }
+  .sound { flex-wrap: wrap; }
+  .places { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .place span { display: none; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="brand">
+      <svg viewBox="0 0 128 128" aria-hidden="true">
+        <path d="M64,14 L107.3,39 L64,64 L20.7,39 Z" fill="var(--muted)" fill-opacity=".10"/>
+        <path d="M64,14 L107.3,39 L107.3,89 L64,114 L20.7,89 L20.7,39 Z M20.7,39 L64,64 L107.3,39 M64,64 L64,114" fill="none" stroke="var(--muted)" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+        <g fill="var(--vertex)"><circle cx="64" cy="14" r="7"/><circle cx="107.3" cy="39" r="7"/><circle cx="107.3" cy="89" r="7"/><circle cx="64" cy="114" r="7"/><circle cx="20.7" cy="89" r="7"/><circle cx="20.7" cy="39" r="7"/></g>
+        <circle cx="64" cy="64" r="12.5" fill="var(--rust)"/>
+      </svg>
+      <div><b>Ferrix</b><span>an experimental Rust OS</span></div>
+    </div>
+    <div class="time"><b id="clock">--:--</b><span id="date"></span></div>
+  </header>
+
+  <form id="go" autocomplete="off">
+    <label class="go">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="q" name="q" autofocus spellcheck="false" aria-label="Search, address or path"
+             placeholder="Search the web, type an address, or a path like /etc">
+      <button type="submit">Go</button>
+    </label>
+  </form>
+  <div class="hints">
+    <span>Words search DuckDuckGo</span>
+    <span><code>w</code> first searches Wikipedia</span>
+    <span><code>/path</code> opens it on this machine</span>
+    <span><code>/</code> comes back here</span>
+  </div>
+
+  <div class="grid">
+    <div class="stack">
+      <section id="machine">
+        <h2>This machine</h2>
+        <p class="lede">Ferrix's own file tree, as Chrome lists a directory. Every tile is a real path in this guest.</p>
+        <nav class="places" id="places"></nav>
+        <div class="facts" id="facts"></div>
+      </section>
+
+      <section id="links">
+        <h2>Out there</h2>
+        <ul class="links">
+          <li><a href="https://setzero.github.io/ferrix/"><b>Ferrix's website</b><span>what runs, and how</span></a></li>
+          <li><a href="https://github.com/SetZero/ferrix"><b>The source</b><span>github.com/SetZero/ferrix</span></a></li>
+          <li><a href="https://github.com/SetZero/ferrix/tree/main/docs/roadmap"><b>The roadmap</b><span>done, and next</span></a></li>
+          <li><a href="https://github.com/SetZero/ferrix/blob/main/docs/CHROME.md"><b>How Chrome got here</b><span>docs/CHROME.md</span></a></li>
+          <li><a href="https://en.wikipedia.org/wiki/Rust_(programming_language)"><b>Wikipedia</b><span>a real page to try</span></a></li>
+          <li><a href="https://github.com/SetZero/ferrix/issues"><b>Something broke?</b><span>the issues</span></a></li>
+        </ul>
+      </section>
+    </div>
+
+    <div class="stack">
+      <section id="keys-card">
+        <h2>Desktop keys</h2>
+        <p class="lede" id="keys-lede">What this desktop's <code>hyprland.conf</code> binds.</p>
+        <input class="filter" id="filter" type="search" placeholder="Filter keys" aria-label="Filter keys" hidden>
+        <ul class="keys" id="keys"></ul>
+      </section>
+
+      <section class="sound" id="sound">
+        <div>
+          <h2>Sound check</h2>
+          <p>A 440 Hz tone from this page, through <code>/dev/snd</code> to the host.</p>
+        </div>
+        <button id="tone" type="button" aria-pressed="false">Play a tone</button>
+      </section>
+    </div>
+  </div>
+
+  <footer>
+    <span id="build">Ferrix</span>
+    <span>Experimental: tested Linux programs run unchanged here, and plenty of others do not yet.</span>
+  </footer>
+</main>
+
+<script>
+"use strict";
+var boot = {};
+try { boot = JSON.parse(document.getElementById("ferrix").textContent) || {}; } catch (e) {}
+
+function el(tag, attrs, children) {
+  var node = document.createElement(tag);
+  for (var key in attrs || {}) {
+    if (key === "text") node.textContent = attrs[key]; else node.setAttribute(key, attrs[key]);
+  }
+  (children || []).forEach(function (child) { node.appendChild(child); });
+  return node;
+}
+
+// The clock. Minutes are all it shows, so it redraws once a minute.
+function tick() {
+  var now = new Date();
+  document.getElementById("clock").textContent =
+    now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  document.getElementById("date").textContent =
+    now.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  setTimeout(tick, 60000 - now.getSeconds() * 1000 - now.getMilliseconds() + 50);
+}
+tick();
+
+// The box: a URL goes, `/path` opens the file tree there, `w words` asks
+// Wikipedia, anything with a dot and no space is an address, and the rest
+// is a search.
+document.getElementById("go").addEventListener("submit", function (event) {
+  event.preventDefault();
+  var text = document.getElementById("q").value.trim();
+  if (!text) return;
+  var to;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(text)) to = text;
+  else if (text[0] === "/") to = text === "/" ? location.href : "file://" + encodeURI(text);
+  else if (/^w\s+/i.test(text)) to = "https://en.wikipedia.org/w/index.php?search=" + encodeURIComponent(text.replace(/^w\s+/i, ""));
+  else if (/^[^\s]+\.[a-z]{2,}(:\d+)?(\/\S*)?$/i.test(text) || /^localhost(:\d+)?(\/|$)/.test(text)) to = "https://" + text;
+  else to = "https://html.duckduckgo.com/html/?q=" + encodeURIComponent(text);
+  location.href = to;
+});
+document.addEventListener("keydown", function (event) {
+  var typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
+  if (event.key === "/" && !typing) { event.preventDefault(); document.getElementById("q").focus(); }
+});
+
+// This machine: directories, and files with a size. Chrome shows a file
+// of procfs's, which says it is empty, as an empty page.
+var places = [
+  ["/", "Everything", "The whole tree, from the root"],
+  ["/bin", "Programs", "What the desktop can run"],
+  ["/etc/hyprland.conf", "This desktop", "The compositor's configuration"],
+  ["/proc", "Processes", "One directory each, and the kernel's tables"],
+  ["/sys", "Hardware", "The kernel's devices, as sysfs has them"],
+  ["/etc", "Settings", "Users, mounts, the host's name"],
+  ["/dev", "Devices", "Every node the drivers made"],
+  ["/data", "The data disk", "Chrome's btrfs volume"],
+  ["/usr/share/ferrix", "Ferrix's files", "Fonts, this page, and the rest"]
+];
+var nav = document.getElementById("places");
+places.forEach(function (place) {
+  nav.appendChild(el("a", { class: "place", href: "file://" + place[0] }, [
+    el("b", { text: place[1] }), el("code", { text: place[0] }), el("span", { text: place[2] })
+  ]));
+});
+
+var facts = [];
+if (boot.arch) facts.push(["Architecture", boot.arch]);
+if (navigator.hardwareConcurrency) facts.push(["Processors", String(navigator.hardwareConcurrency)]);
+if (boot.libc) facts.push(["Chrome's libc", boot.libc]);
+var system = /\(([^)]*)\)/.exec(navigator.userAgent);
+if (system) facts.push(["User agent", system[1]]);
+var factsNode = document.getElementById("facts");
+facts.forEach(function (fact) {
+  factsNode.appendChild(el("span", { class: "fact" }, [
+    document.createTextNode(fact[0] + " "), el("b", { text: fact[1] })
+  ]));
+});
+
+// The keys, as xtask read them from the desktop's configuration.
+var list = document.getElementById("keys");
+var binds = Array.isArray(boot.binds) ? boot.binds : [];
+function showKeys(filter) {
+  list.textContent = "";
+  var needle = (filter || "").toLowerCase();
+  var shown = binds.filter(function (bind) {
+    return !needle || (bind.keys.join(" ") + " " + bind.does).toLowerCase().indexOf(needle) >= 0;
+  });
+  shown.forEach(function (bind) {
+    var combo = el("span", { class: "combo" }, bind.keys.map(function (key) { return el("kbd", { text: key }); }));
+    list.appendChild(el("li", { title: bind.command || bind.does }, [el("span", { class: "does", text: bind.does }), combo]));
+  });
+  if (!shown.length) list.appendChild(el("li", { class: "none" }, [el("p", { class: "empty", text: binds.length ? "No key matches." : "This page was opened without a desktop configuration to read." })]));
+}
+showKeys("");
+if (binds.length > 10) {
+  var filter = document.getElementById("filter");
+  filter.hidden = false;
+  filter.addEventListener("input", function () { showKeys(filter.value); });
+}
+if (boot.config) {
+  var lede = document.getElementById("keys-lede");
+  lede.textContent = "What ";
+  lede.appendChild(el("a", { href: "file://" + boot.config }, [el("code", { text: boot.config })]));
+  lede.appendChild(document.createTextNode(" binds on this desktop."));
+}
+
+var build = [];
+if (boot.arch) build.push(boot.arch);
+if (boot.commit) build.push("built from " + boot.commit);
+document.getElementById("build").textContent = "Ferrix" + (build.length ? " · " + build.join(" · ") : "");
+
+// The tone, as the first page had it: sound from Chrome to the host's
+// speakers under `--audio` (docs/AUDIO.md §4). Again stops it.
+var context, oscillator;
+document.getElementById("tone").addEventListener("click", function () {
+  var button = this;
+  if (oscillator) {
+    oscillator.stop();
+    oscillator = null;
+    button.textContent = "Play a tone";
+    button.setAttribute("aria-pressed", "false");
+    return;
+  }
+  context = context || new AudioContext();
+  oscillator = context.createOscillator();
+  var gain = context.createGain();
+  gain.gain.value = 0.2;
+  oscillator.connect(gain).connect(context.destination);
+  oscillator.start();
+  button.textContent = "Stop";
+  button.setAttribute("aria-pressed", "true");
+});
+</script>
+</body>
+</html>
