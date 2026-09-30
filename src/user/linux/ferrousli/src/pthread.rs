@@ -818,10 +818,26 @@ pub extern "C" fn gettid() -> c_int {
 /// accepts any valid signal and ignores it, as POSIX asks for a thread that
 /// has not yet been joined.
 ///
+/// The calling thread is named by the kernel's id for it, not the one in its
+/// control block, as glibc does: the child of a `clone` made through
+/// `syscall`, as bubblewrap starts its sandbox, has a copy of its parent's
+/// block, which records the parent's id. The calling thread is not exiting,
+/// so it needs no lock.
+///
 /// # Safety
 ///
 /// `t` must be a thread that has not been joined or ended detached.
 pub unsafe fn kill_thread(t: *mut Thread, sig: c_int) -> c_int {
+    if t == thread::current() {
+        // SAFETY: `getpid` and `gettid` take no arguments.
+        let pid = unsafe { syscall::syscall0(nr::GETPID) };
+        // SAFETY: as above.
+        let tid = unsafe { syscall::syscall0(nr::GETTID) };
+        // SAFETY: `tgkill` reads no memory.
+        let ret =
+            unsafe { syscall::syscall3(nr::TGKILL, pid as usize, tid as usize, sig as usize) };
+        return errno::decode(ret).err().unwrap_or(0);
+    }
     let mask = block_all_signals();
     // SAFETY: the caller vouches for `t`.
     let state = unsafe { thread::state(t) };
