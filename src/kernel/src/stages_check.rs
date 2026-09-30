@@ -1016,6 +1016,11 @@ pub(super) fn check_ring_control() {
             "stage 10 block ring self-check failed: {problem}"
         ),
     };
+    println!(
+        "  reread   {} fields of a posted completion rewritten by its driver after the kernel \
+         read them, the kernel acting on its first read of each",
+        report.rewrites,
+    );
     if let Some(why) = report.skipped {
         println!("  ring     not checked: {why}");
     } else {
