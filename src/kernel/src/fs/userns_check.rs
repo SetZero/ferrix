@@ -34,9 +34,11 @@ use ferrix_vfs::Errno;
 use crate::fs::mount_check::{Page, Report as Counts, Tally, by_number, close, open, page_for};
 use crate::fs::namespace_check::{read_file, read_link, staged, unshare};
 use crate::syscall::credentials::Credentials;
+use crate::syscall::family;
 use crate::syscall::namespace::{CLONE_NEWNS, CLONE_NEWUSER};
 use crate::syscall::process::{self, Process};
 use crate::syscall::registry;
+use crate::syscall::signal::{self, Origin};
 use crate::syscall::userns::{self, CAP_SYS_ADMIN, Kind};
 
 /// A directory the chroot test works in.
@@ -65,6 +67,8 @@ pub(crate) fn run() -> Result<Counts, &'static str> {
     let outcome = user_namespace(&mut page, &mut tally)
         .and_then(|()| chrooted(&mut tally))
         .and_then(|()| root_made(&mut tally))
+        .and_then(|()| clone_flags(&mut tally))
+        .and_then(|()| sender_ids(&mut tally))
         .and_then(|()| credentials(&mut tally))
         .and_then(|()| read_only_sysctls(&mut tally));
     outcome.map(|()| counts)
@@ -79,7 +83,7 @@ fn call(process: &Process, call: Syscall, args: [u64; 6]) -> Result<usize, Errno
 /// boot check's own thread, with no process, cannot be.
 fn acting<R>(pid: u32, body: impl FnOnce() -> R) -> Result<R, &'static str> {
     let process = registry::find(pid).ok_or("the check's process was not registered")?;
-    Ok(userns::acting_as(&process, body))
+    userns::acting_as(&process, body)
 }
 
 /// A file of `/proc` written once from its start: the result of the write,
@@ -95,7 +99,7 @@ fn write_to(
     let process = registry::find(page.process.pid()).ok_or("the check's process is gone")?;
     let opened = userns::acting_as(&process, || {
         open(page, path, ferrix_linux_abi::types::O_WRONLY, 0)
-    })?;
+    })??;
     let fd = match opened {
         Ok(fd) => fd,
         Err(errno) => return Ok(Err(errno)),
@@ -107,7 +111,7 @@ fn write_to(
             Syscall::Write,
             [fd as u64, at, data.len() as u64, 0, 0, 0],
         )
-    });
+    })?;
     close(page.process, fd);
     Ok(written)
 }
@@ -226,6 +230,7 @@ fn user_namespace(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'st
         return Err("status did not show the namespace's own ids");
     }
 
+    unmapped_owner(page, tally)?;
     fake_root(page, tally)?;
     seen_from_outside(pid, &uid_map)
 }
@@ -258,6 +263,7 @@ fn fake_root(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'static 
         Errno::EPERM,
         "setgroups was allowed in a namespace that denied it",
     )?;
+    audited_as_the_kernel_knows_it(process)?;
     if status(page, b"CapEff:")? != EVERY_CAPABILITY {
         return Err("the creator of a user namespace did not hold every capability in it");
     }
@@ -534,4 +540,210 @@ fn read_only_sysctls(tally: &mut Tally<'_>) -> Result<(), &'static str> {
         [at, u64::from(MNT_DETACH), 0, 0, 0, 0],
     );
     outcome
+}
+
+/// A file of kernel uid 2000, which the namespace under test does not map.
+const FILE: &[u8] = b"/tmp/.userns-u8-file";
+/// A device node the namespace under test may not make.
+const DEVICE: &[u8] = b"/tmp/.userns-u8-device";
+
+/// `SIGUSR1`, on every architecture.
+const SIGUSR1: u32 = 10;
+
+/// U8: root inside a namespace holds no override over what it does not own.
+/// Against a file and a process of kernel uid 2000, which the namespace does
+/// not map, its kernel uid of 1000 is refused as any other user would be: the
+/// read of a 0600 file, `chmod`, `chown`, `mknod` and `kill`
+/// (CVE-2014-4014 was the first of these for a file whose owner was unmapped).
+fn unmapped_owner(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'static str> {
+    let owner = process::new_for_check().map_err(|_| "could not make the file's owner")?;
+    let mut owner_page = page_for(&owner)?;
+    let at = staged(&mut owner_page, FILE)?;
+    tally.ok(
+        call(
+            &owner,
+            Syscall::Mknodat,
+            [AT_FDCWD as u64, at, 0o100_600, 0, 0, 0],
+        ),
+        "the U8 file could not be made",
+    )?;
+    tally.ok(
+        call(
+            &owner,
+            Syscall::Fchownat,
+            [AT_FDCWD as u64, at, 2000, 2000, 0, 0],
+        ),
+        "the U8 file could not be given to uid 2000",
+    )?;
+    let victim = process::new_for_check().map_err(|_| "could not make the U8 process")?;
+    tally.ok(
+        call(&victim, Syscall::Setuid, [2000, 0, 0, 0, 0, 0]),
+        "the U8 process could not become uid 2000",
+    )?;
+    let result = refused_what_it_does_not_own(page, tally, victim.pid());
+    let at = staged(&mut owner_page, FILE)?;
+    let _ = call(&owner, Syscall::Unlinkat, [AT_FDCWD as u64, at, 0, 0, 0, 0]);
+    let at = staged(&mut owner_page, DEVICE)?;
+    let _ = call(&owner, Syscall::Unlinkat, [AT_FDCWD as u64, at, 0, 0, 0, 0]);
+    result
+}
+
+/// The refusals of [`unmapped_owner`], made by the namespace's root.
+fn refused_what_it_does_not_own(
+    page: &mut Page<'_>,
+    tally: &mut Tally<'_>,
+    victim: u32,
+) -> Result<(), &'static str> {
+    let process = page.process;
+    page.reset();
+    let file = page.put(FILE)?;
+    let device = page.put(DEVICE)?;
+    let cwd = AT_FDCWD as u64;
+    tally.refused(
+        call(process, Syscall::Openat, [cwd, file, 0, 0, 0, 0]),
+        Errno::EACCES,
+        "root inside a namespace read a 0600 file of an id it does not map (CAP_DAC_OVERRIDE)",
+    )?;
+    tally.refused(
+        call(process, Syscall::Fchmodat, [cwd, file, 0o644, 0, 0, 0]),
+        Errno::EPERM,
+        "root inside a namespace changed the mode of a file of an id it does not map (CAP_FOWNER)",
+    )?;
+    tally.refused(
+        call(process, Syscall::Fchownat, [cwd, file, 0, 0, 0, 0]),
+        Errno::EPERM,
+        "root inside a namespace changed the owner of a file of an id it does not map (CAP_CHOWN)",
+    )?;
+    tally.refused(
+        call(
+            process,
+            Syscall::Mknodat,
+            [cwd, device, 0o020_600, 0x103, 0, 0],
+        ),
+        Errno::EPERM,
+        "root inside a namespace made a device node (CAP_MKNOD)",
+    )?;
+    tally.refused(
+        call(process, Syscall::Kill, [u64::from(victim), 0, 0, 0, 0, 0]),
+        Errno::EPERM,
+        "root inside a namespace signalled a process of an id it does not map (CAP_KILL)",
+    )
+}
+
+/// U5's flag half, on the flags alone: `clone` and `clone3` both ask
+/// `namespaces_asked` first, and it refuses `CLONE_NEWUSER` with `CLONE_FS`
+/// (CVE-2013-1858) or `CLONE_THREAD`. `unshare` with a shared fs context stands
+/// on its code.
+fn clone_flags(tally: &mut Tally<'_>) -> Result<(), &'static str> {
+    use ferrix_linux_abi::types::{CLONE_FS, CLONE_THREAD};
+    let parent =
+        process::new_for_check().map_err(|_| "could not make the clone check's process")?;
+    let asked = |flags: u64| family::namespaces_asked(&parent, flags).map(|()| 0);
+    tally.refused(
+        asked(CLONE_NEWUSER | CLONE_FS),
+        Errno::EINVAL,
+        "CLONE_NEWUSER with CLONE_FS was not refused EINVAL (CVE-2013-1858)",
+    )?;
+    tally.refused(
+        asked(CLONE_NEWUSER | CLONE_THREAD),
+        Errno::EINVAL,
+        "CLONE_NEWUSER with CLONE_THREAD was not refused EINVAL",
+    )?;
+    tally.ok(
+        asked(CLONE_NEWUSER),
+        "CLONE_NEWUSER alone was refused to root",
+    )
+}
+
+/// `si_uid`: the sender's real uid, told as the receiver's namespace names it.
+/// A sender that is uid 1000 reads 1000 to a receiver in the first namespace
+/// and 65534 to one in a namespace that maps nothing; `SIGCHLD`'s child the
+/// same.
+fn sender_ids(tally: &mut Tally<'_>) -> Result<(), &'static str> {
+    let make = |what: &'static str| process::new_for_check().map_err(|_| what);
+    let (sender, same, apart) = (
+        make("could not make the signal's sender")?,
+        make("could not make a receiver in the first namespace")?,
+        make("could not make a receiver in a namespace of its own")?,
+    );
+    for process in [&sender, &same, &apart] {
+        tally.ok(
+            call(process, Syscall::Setuid, [u64::from(UID), 0, 0, 0, 0, 0]),
+            "a signal check's process could not become uid 1000",
+        )?;
+    }
+    tally.ok(
+        unshare(&apart, CLONE_NEWUSER),
+        "a receiver could not make a namespace",
+    )?;
+    // A handler, so that the signal is left pending for the check to read.
+    for receiver in [&same, &apart] {
+        receiver.with_signals(|signals| signals.install_action(SIGUSR1, 0x1000, 0));
+        tally.ok(
+            call(
+                &sender,
+                Syscall::Kill,
+                [u64::from(receiver.pid()), u64::from(SIGUSR1), 0, 0, 0, 0],
+            ),
+            "kill was refused between two processes of one uid",
+        )?;
+    }
+    for (receiver, wanted, what) in [
+        (
+            &same,
+            UID,
+            "si_uid did not read the sender's uid in the first namespace",
+        ),
+        (
+            &apart,
+            65_534,
+            "si_uid did not read 65534 in a namespace that does not map the sender",
+        ),
+    ] {
+        let taken = receiver
+            .with_signals(|signals| signal::take_shared(signals, 1 << (SIGUSR1 - 1)))
+            .ok_or("a signal sent to a check's process was not left pending")?;
+        if seen_uid(receiver.pid(), taken.origin)? != wanted {
+            return Err(what);
+        }
+    }
+    let child = Origin::Child {
+        code: 1,
+        pid: 7,
+        uid: UID,
+        status: 0,
+    };
+    if seen_uid(same.pid(), child)? != UID || seen_uid(apart.pid(), child)? != 65_534 {
+        return Err("a child's si_uid was not told as the receiver's namespace names it");
+    }
+    Ok(())
+}
+
+/// The `si_uid` `origin` reads as to the process `pid`.
+fn seen_uid(pid: u32, origin: Origin) -> Result<u32, &'static str> {
+    let info = acting(pid, || origin.encode(SIGUSR1))?;
+    let at = if size_of::<usize>() == 8 { 20 } else { 16 };
+    info.get(at..at + 4)
+        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+        .map(u32::from_le_bytes)
+        .ok_or("a siginfo was too short")
+}
+
+/// The audit record's subject (`docs/NAMESPACES.md` §2.5): a decision made
+/// by root inside a namespace -- kernel uid 1000 -- names the process and its
+/// job as the TSF attests them, and a uid that is the kernel's own or none,
+/// never the namespace's 0. No personality supplies a uid to the audit trail
+/// yet, so this is the contact point a supplier would have to get right; the
+/// day one does, this check is the one that stops it recording the inside id.
+fn audited_as_the_kernel_knows_it(process: &Process) -> Result<(), &'static str> {
+    let subject = crate::audit::Subject::of(process);
+    if subject.pid != process.pid() || subject.job != process.job().id() {
+        return Err("an audit subject did not name the caller's process and job");
+    }
+    if subject.uid != crate::audit::NO_UID && subject.uid != UID {
+        return Err(
+            "an audit record of root inside a namespace recorded an id that is not the kernel's",
+        );
+    }
+    Ok(())
 }

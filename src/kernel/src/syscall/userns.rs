@@ -252,14 +252,29 @@ pub(crate) fn acting() -> Option<Arc<crate::syscall::process::Process>> {
 
 /// Run `body` with `process` as [`acting`]'s answer when no task is running.
 /// For the boot checks alone.
+///
+/// [`acting`] consults the setting only when no task is current, which is a
+/// kernel thread; a program's own call never reaches it. It is set once, for
+/// one body: a setting already there is a nested or leaked one, which would
+/// have a check quietly impersonate another process, so it is refused.
+///
+/// # Errors
+///
+/// A setting was already there.
 pub(crate) fn acting_as<R>(
     process: &Arc<crate::syscall::process::Process>,
     body: impl FnOnce() -> R,
-) -> R {
-    *ACTING.lock() = Some(Arc::clone(process));
+) -> Result<R, &'static str> {
+    {
+        let mut slot = ACTING.lock();
+        if slot.is_some() {
+            return Err("acting_as was nested, or a check left it set");
+        }
+        *slot = Some(Arc::clone(process));
+    }
     let answer = body();
     *ACTING.lock() = None;
-    answer
+    Ok(answer)
 }
 
 /// The first namespace, made on first use.

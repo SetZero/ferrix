@@ -946,7 +946,7 @@ pub(super) fn check_kernel_memory() {
     println!(
         "  kmem     at a {} KiB memory limit a job made {} files, {} pipes, {} socket pairs, \
          {} descriptors in flight, {} epoll registrations, {} eventfds, {} regions of one \
-         mapping, {} record locks, {} semaphore sets and {} mount namespaces of {} mounts, and \
+         mapping, {} record locks, {} semaphore sets, {} mount namespaces of {} mounts and {} user namespaces, and \
          was refused one more of each -- \
          ENOMEM, ENOLCK for a lock -- while a sibling made one; every byte of heap charged \
          came back",
@@ -962,6 +962,7 @@ pub(super) fn check_kernel_memory() {
         report.sets,
         report.namespaces,
         fs::kmem_check::TREE,
+        report.user_namespaces,
     );
 }
 

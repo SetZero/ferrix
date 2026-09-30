@@ -63,6 +63,8 @@ pub(crate) struct Report {
     /// Mount namespaces, each a copy of one holding [`TREE`] mounts, as
     /// `unshare(CLONE_NEWNS)` copies them (`docs/NAMESPACES.md` §5).
     pub(crate) namespaces: usize,
+    /// User namespaces, each a level-1 child of the first.
+    pub(crate) user_namespaces: usize,
 }
 
 /// How many mounts the namespace the mount namespaces are copied from
@@ -97,6 +99,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
             crate::syscall::sem_check::private_set(1, 0o600)
         })?;
         report.namespaces = namespaces(&tree)?;
+        report.user_namespaces = user_namespaces(&tree)?;
         if Resource::ALL
             .iter()
             .any(|&resource| tree.usage(resource).is_none_or(|usage| usage.used != 0))
@@ -243,6 +246,16 @@ fn files(tree: &Arc<Job>) -> Result<usize, &'static str> {
         },
     )?;
     Ok(made)
+}
+
+/// User namespaces, made as `unshare(CLONE_NEWUSER)` makes them: each is
+/// charged to the job asking, refused `ENOMEM` at its limit, and gives its
+/// heap back when it ends (`docs/NAMESPACES.md` §5).
+fn user_namespaces(tree: &Arc<Job>) -> Result<usize, &'static str> {
+    let creator = crate::syscall::credentials::Credentials::root();
+    kind(tree, "user namespaces", |_| {
+        crate::syscall::userns::create(&creator)
+    })
 }
 
 /// Mount namespaces, each a copy of one of [`TREE`] mounts: the namespace
