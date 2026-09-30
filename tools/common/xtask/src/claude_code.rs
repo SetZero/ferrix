@@ -90,9 +90,18 @@ exec /data/claude-code/claude "$@"
 
 /// What an image carries for Claude Code: [`WRAPPER`] as `/bin/claude`,
 /// and [`LINKS`] less any path `carried` already has -- Chrome's links on
-/// the `--everything` desktop are the same ones.
+/// the `--everything` desktop are the same ones -- nor a path the archive
+/// already has files under, as `/lib64` when ferrousli's loader is in it.
 pub(crate) fn desktop_files(carried: &[crate::ports::File]) -> Vec<crate::ports::File> {
-    let taken = |path: &str| carried.iter().any(|file| file.path == path);
+    let taken = |path: &str| {
+        carried.iter().any(|file| {
+            file.path == path
+                || file
+                    .path
+                    .strip_prefix(path)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
+    };
     let links: Vec<(&str, &str)> = LINKS
         .iter()
         .copied()
@@ -766,6 +775,15 @@ mod tests {
         assert!(paths.contains(&"bin/claude") && paths.contains(&"lib64"));
         let beside = desktop_files(&rustc::files(&[("lib64", "/data/usr/lib64")]));
         assert!(!beside.iter().any(|file| file.path == "lib64"));
+        // ferrousli's loader in `/lib64` on the `--everything` desktop: a
+        // link over that directory stops the kernel unpacking the archive.
+        let loader = crate::ports::File {
+            path: "lib64/ld-linux-x86-64.so.2".to_owned(),
+            mode: 0o755,
+            content: crate::ports::Content::Bytes(Vec::new()),
+        };
+        let with_loader = desktop_files(&[loader]);
+        assert!(!with_loader.iter().any(|file| file.path == "lib64"));
         assert!(WRAPPER.contains("SHELL=/data/usr/bin/bash"));
         assert!(WRAPPER.contains("exec /data/claude-code/claude \"$@\""));
     }
