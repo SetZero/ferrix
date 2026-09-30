@@ -125,7 +125,7 @@ fn user_namespace(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'st
         call(process, Syscall::Setuid, [u64::from(UID), 0, 0, 0, 0, 0]),
         "the user namespace check's process could not become uid 1000",
     )?;
-    let first = read_link(page, b"/proc/self/ns/user")?;
+    let first = read_link(page, format!("/proc/{pid}/ns/user").as_bytes())?;
     if !first.starts_with(b"user:[") {
         return Err("/proc/<pid>/ns/user did not read user:[...]");
     }
@@ -133,7 +133,7 @@ fn user_namespace(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'st
         unshare(process, CLONE_NEWUSER),
         "unshare(CLONE_NEWUSER) was refused to uid 1000",
     )?;
-    let own = read_link(page, b"/proc/self/ns/user")?;
+    let own = read_link(page, format!("/proc/{pid}/ns/user").as_bytes())?;
     if own == first {
         return Err("a new user namespace was named as the first is");
     }
