@@ -177,8 +177,17 @@ test-bwrap` runs Debian's bubblewrap as root: Steam's requirements check's
 four argument lists and a pressure-vessel-shaped container. Every
 namespace now stands on an empty bottom mount, as a booted Linux machine's
 `/` does, so `pivot_root` works from `/` in memory too: Steam's
-requirements check exits 0 as root in `test-steam-bootstrap`. Next is N4,
-user namespaces.
+requirements check exits 0 as root in `test-steam-bootstrap`.
+
+**N4, user namespaces (2026-09-30, built on `stage13-n4-userns`, not
+landed):** `CLONE_NEWUSER` through `clone`, `clone3` and `unshare`, the
+map files, `setgroups`, `ns/user`, capability sets, `capget`/`capset`/
+`PR_CAPBSET_*`, `execve`'s recomputation, `privileged()` for the first
+namespace only, and ids told as the reader's namespace names them or 65534
+at every site that reports one, `si_uid` among them. The `userns` boot line
+(FX-0888) and five negative controls prove it on x86_64; the other gates
+and the consultant's review are owed (`docs/NAMESPACES.md` §12 has what is
+and is not built). Next is NP, then N5.
 
 **Still to do:** `memory.stat`'s other keys, and a charge past `memory.max`
 reclaiming inside the job before it OOM-kills (M2), then freezing,

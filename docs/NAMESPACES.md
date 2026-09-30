@@ -1013,3 +1013,83 @@ it:
   Linux's rule, removing a name detaching the other namespaces' mounts on
   it, or confines an unprivileged mount point to where pinning it harms no
   one else, with a check either way.
+
+**N4 built (2026-09-30, os-7c, branch `stage13-n4-userns`), for the
+consultant's review before it lands.** A `UserNamespace` (`syscall/userns.rs`)
+with a level, an owner, two maps written once and the `setgroups` switch;
+`Credentials` hold `user_ns` and four capability sets, all ids staying kernel
+ids. `privileged()` is an effective uid of 0 in the first namespace only
+(U1); `holds()` honours `CAP_SETUID`, `CAP_SETGID`, `CAP_SETPCAP`,
+`CAP_SYS_CHROOT` and `CAP_SYS_ADMIN` in a child and nothing else (U8);
+`capable_over` is `cap_capable`. `CLONE_NEWUSER` through `clone`, `clone3`
+and `unshare`, alone or with `CLONE_NEWNS`, refused with `CLONE_FS` or
+`CLONE_THREAD` (U5), from a process whose root is not its namespace's top
+(U6), past 32 levels (`EUSERS`), for a creator whose ids are unmapped, and
+for a thread of several. `/proc/<pid>/uid_map`, `gid_map`, `setgroups` and
+`ns/user`: a map is written once, at offset 0 (`EINVAL` otherwise), its
+opener's credentials captured at open and its writer's read at write, both
+judged; a run must lie inside one of the parent's extents; `setgroups`
+follows `setgroups_write`. `execve` in a child namespace ignores set-id bits
+(U7) and gives the bounding set to the namespace's root alone. `capget`,
+`capset` (Linux's subset rules), `PR_CAPBSET_READ` and `PR_CAPBSET_DROP`
+act on the real sets in a child; `status` has `CapInh` to `CapAmb`.
+
+Ids are told as the reader's namespace names them or 65534, and taken as
+the caller's namespace maps them or `EINVAL` (U9), at `getuid` and its
+kin, `getres*`, `getgroups`, `set*id`, `setgroups`, `stat` and `statx`,
+`chown`, `status`, `SO_PEERCRED`, `SCM_CREDENTIALS` (both ways), System V
+semaphores' `ipc_perm` (`IPC_STAT`, `IPC_SET`), `PRIO_USER`, and `si_uid`
+of `kill`, `tkill`, `tgkill` and `SIGCHLD` (signalfd's `ssi_uid` too). The
+last was never filled: every signal read `si_uid` 0, in the first
+namespace as well. `chroot` needs `CAP_SYS_CHROOT` in the caller's
+namespace. `mount`, `umount2`, `pivot_root` and the rest of `fsctl` still
+need the first namespace's root, so a child namespace cannot unmount an
+over-mount before N5's M3 and M4 locks exist.
+
+Evidence: the `userns` boot line (FX-0888, `fs/userns_check.rs`) on x86_64:
+36 calls, 14 refusals -- a namespace named apart, ids 65534 until mapped, a
+`gid_map` before `deny` (U4), kernel root, two ids and a malformed map
+(U2), a second write (U3), the owner's id mapped and read back as written
+from inside and from the parent, fake root refused `sethostname`, `mount`,
+`setuid` to an unmapped id and `setgroups`, every capability in its own
+namespace and a bounding-set drop, kernel root in a namespace it made
+refused the same (U1), a chrooted process refused (U6), a map opened by
+root and written by an unprivileged holder refused (U3), a run spanning
+two of the parent's extents and the gap between them refused, a set-id bit
+ignored and the sets given to the namespace's root alone (U7), and a write
+through a read-only bind of `/proc/sys` refused `EROFS` (the N3 review's
+condition). Negative controls, each stopping the boot with its own message:
+the range test narrowed to the first id ("a run spanning two of the
+parent's extents ... was accepted"), the writer's check dropped ("a map
+opened by root was written wider by an unprivileged holder"), the chroot
+test off ("a chrooted process made a user namespace"), set-id bits
+honoured ("execve of a set-id file changed an id in a child namespace"),
+and `privileged()` ignoring the namespace ("kernel root inside a child
+namespace was privileged ..."). The first version of that last control did
+not fire, because fake root is kernel uid 1000 and unprivileged either way;
+`root_made` is the case that matters.
+
+How it differs from the design, and what is open:
+
+* **U6 needs no recorded `Location`.** It compares the process's root with
+  `Namespace::root()`, the top, as the N3 review asked; the first
+  namespace's root is not stored anywhere.
+* **A boot check has no current process.** `userns::acting_as` names the
+  process a check drives, for the map files' opener and writer and the
+  reader of `status`; it is `None` outside the check. The consultant should
+  look at it: it is a static in a load file read by `userns::acting`.
+* **`CLONE_NEWNS` by a holder of `CAP_SYS_ADMIN` in a child namespace is
+  allowed.** It copies; nothing in the copy can be unmounted or remounted
+  before N5.
+* **Not built:** the audit record's check (§2.5: an audited call from
+  inside-root of a child namespace records kernel uid 1000, never 0); a
+  boot check of U5 (the harness has no process that shares its fs context,
+  so it stands on the code and the `clone` flag test); the
+  `max_user_namespaces` sysctl; F-37's fill in `kmem_check` (the namespace
+  is charged in `create`); ids at the sites nothing in Ferrix reports yet
+  (file leases and locks). `verify_root_map` needs file capabilities,
+  which Ferrix has none of; add it if it ever does.
+* **Gated so far:** `cargo check` of the kernel for all three
+  architectures and the x86_64 boot. Not yet: `cargo xtask check`, the
+  aarch64 and armv7a boots (`--smp 2`), `test-shell`, `test-vfs`,
+  `test-init --arch all`, `carry-coverage`.
