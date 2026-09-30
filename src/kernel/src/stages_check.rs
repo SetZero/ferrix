@@ -315,7 +315,7 @@ fn check_proc_access() {
         ),
     };
     println!(
-        "  procacc  {} calls answered as Linux answers them, {} of them refusals: root, cwd, fd,          and ns/* of another uid's or a non-dumpable process refused EACCES, read by the same          user, by root, and by root inside a user namespace as ptrace_may_access allows;          get_robust_list of another uid's thread refused",
+        "  procacc  {} calls answered as Linux answers them, {} of them refusals: root, cwd, fd, and ns/* of another uid's or a non-dumpable process refused EACCES, read by the same user, by root, and by root inside a user namespace as ptrace_may_access allows; get_robust_list of another uid's thread refused",
         checked.calls, checked.refusals,
     );
 }
