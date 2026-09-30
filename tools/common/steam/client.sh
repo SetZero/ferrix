@@ -73,10 +73,22 @@ while [ $n -lt 4 ]; do
     n=$((n + 1))
     unpack_runtime
     link_steamrt
-    # Scout's pinned libraries, as steam.sh has its setup.sh make them.
-    bash $RT/setup.sh > /tmp/setup.log 2>&1 || {
-        echo "steam-window: scout's setup.sh exited $?; its last lines:"
-        tail -n 5 /tmp/setup.log | sed 's/^/steam-window: setup: /'
+    # Scout's pinned libraries, as steam.sh has its setup.sh make them, and
+    # with the PATH steam.sh has then: without the runtime's directories.
+    # With them, setup.sh finds the runtime's own zenity and pipes its
+    # progress into it; that zenity does not load here (scout's gdk-pixbuf
+    # imports _IO_getc, which ferrousli lacks), and pipefail turns the
+    # loader's 127 into setup.sh's. setup.sh expects no runtime zenity at
+    # this point, and without one reports its progress on stderr.
+    PATH=$SYSTEM_PATH bash $RT/setup.sh > /tmp/setup.log 2>&1 || {
+        echo "steam-window: scout's setup.sh exited $?; what it said:"
+        # Less its progress, percentages between carriage returns, and the
+        # line each pinned library gets, neither of which says why it
+        # failed; each other line once.
+        tr '\r' '\n' < /tmp/setup.log \
+            | grep -v -E -e '^ *[0-9]+% *$' -e '^ *$' \
+                -e '^setup\.sh\[[0-9]+\]: (Found newer|Forced use|Updating Steam)' \
+            | awk '!seen[$0]++' | tail -n 20 | sed 's/^/steam-window: setup: /'
     }
     echo "steam-window: starting the client, try $n"
     # The updater's progress lines, several a second while it downloads,
