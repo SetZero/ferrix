@@ -55,6 +55,7 @@ pub(crate) struct Report {
 ///
 /// Verifies: L.user.101
 pub(crate) fn run() -> Result<Report, &'static str> {
+    crate::console::println!("NEGATIVE CONTROL nc1: switch_here unloads the space under a kernel thread");
     // Once before the window, for the reason `object::check::run` gives: the
     // heap keeps a page of each size class the first run touched, and the
     // held-page check is the first to touch some of them.

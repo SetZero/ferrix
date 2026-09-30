@@ -551,6 +551,7 @@ unsafe fn unload(cpu: usize, record: &AtomicPtr<Presence>) {
 /// task runs in it, and interrupts are masked.
 pub(crate) unsafe fn switch_here(next: Option<&AddressSpace>) {
     let Some(next) = next else {
+        let (cpu, record) = loaded_record(); unsafe { unload(cpu, record) }; // NEGATIVE CONTROL nc1: a kernel thread unloads
         return;
     };
     let (_, record) = loaded_record();
