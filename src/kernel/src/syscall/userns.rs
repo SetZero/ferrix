@@ -238,6 +238,30 @@ const FIRST_ID: u64 = 0xEFFF_FFFD;
 /// And for the ones made after it.
 static NEXT_ID: AtomicU64 = AtomicU64::new(0xF000_0000);
 
+/// The process a boot check is acting as, when no task is running: the
+/// kernel's own self-checks drive system calls on behalf of a process of their
+/// own, and a procfs file they open or write has to know whose ids to judge.
+/// Always `None` outside [`acting_as`].
+static ACTING: SpinLock<Option<Arc<crate::syscall::process::Process>>> = SpinLock::new(None);
+
+/// The process making the call: the running task's, or the one a boot check is
+/// acting as.
+pub(crate) fn acting() -> Option<Arc<crate::syscall::process::Process>> {
+    crate::syscall::process::current().or_else(|| ACTING.lock().clone())
+}
+
+/// Run `body` with `process` as [`acting`]'s answer when no task is running.
+/// For the boot checks alone.
+pub(crate) fn acting_as<R>(
+    process: &Arc<crate::syscall::process::Process>,
+    body: impl FnOnce() -> R,
+) -> R {
+    *ACTING.lock() = Some(Arc::clone(process));
+    let answer = body();
+    *ACTING.lock() = None;
+    answer
+}
+
 /// The first namespace, made on first use.
 pub(crate) fn first() -> &'static Arc<UserNamespace> {
     static FIRST: Once<Arc<UserNamespace>> = Once::new();

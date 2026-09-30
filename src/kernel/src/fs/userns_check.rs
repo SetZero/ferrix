@@ -36,6 +36,7 @@ use crate::fs::namespace_check::{read_file, read_link, staged, unshare};
 use crate::syscall::credentials::Credentials;
 use crate::syscall::namespace::{CLONE_NEWNS, CLONE_NEWUSER};
 use crate::syscall::process::{self, Process};
+use crate::syscall::registry;
 use crate::syscall::userns::{self, CAP_SYS_ADMIN, Kind};
 
 /// A directory the chroot test works in.
@@ -73,6 +74,13 @@ fn call(process: &Process, call: Syscall, args: [u64; 6]) -> Result<usize, Errno
     by_number(process, call, args)
 }
 
+/// `body` with the page's process as the one making the calls, which the
+/// boot check's own thread, with no process, cannot be.
+fn acting<R>(pid: u32, body: impl FnOnce() -> R) -> Result<R, &'static str> {
+    let process = registry::find(pid).ok_or("the check's process was not registered")?;
+    Ok(userns::acting_as(&process, body))
+}
+
 /// A file of `/proc` written once from its start: the result of the write,
 /// or why it would not open.
 fn write_to(
@@ -81,16 +89,24 @@ fn write_to(
     data: &[u8],
 ) -> Result<Result<usize, Errno>, &'static str> {
     page.reset();
-    let fd = match open(page, path, ferrix_linux_abi::types::O_WRONLY, 0)? {
+    // Opened and written as the same process: the map file judges who opened
+    // it beside who writes.
+    let process = registry::find(page.process.pid()).ok_or("the check's process is gone")?;
+    let opened = userns::acting_as(&process, || {
+        open(page, path, ferrix_linux_abi::types::O_WRONLY, 0)
+    })?;
+    let fd = match opened {
         Ok(fd) => fd,
         Err(errno) => return Ok(Err(errno)),
     };
     let at = page.put_bytes(data)?;
-    let written = call(
-        page.process,
-        Syscall::Write,
-        [fd as u64, at, data.len() as u64, 0, 0, 0],
-    );
+    let written = userns::acting_as(&process, || {
+        call(
+            page.process,
+            Syscall::Write,
+            [fd as u64, at, data.len() as u64, 0, 0, 0],
+        )
+    });
     close(page.process, fd);
     Ok(written)
 }
@@ -98,8 +114,10 @@ fn write_to(
 /// The value of `key` (up to its newline) in `/proc/self/status`.
 fn status(page: &mut Page<'_>, key: &[u8]) -> Result<Vec<u8>, &'static str> {
     let pid = page.process.pid();
-    let text = read_file(page, format!("/proc/{pid}/status").as_bytes())?
-        .map_err(|_| "a user namespace check's status could not be read")?;
+    let text = acting(pid, || {
+        read_file(page, format!("/proc/{pid}/status").as_bytes())
+    })??
+    .map_err(|_| "a user namespace check's status could not be read")?;
     text.split(|&byte| byte == b'\n')
         .find(|line| line.starts_with(key))
         .map(<[u8]>::to_vec)
@@ -197,7 +215,8 @@ fn user_namespace(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'st
     if who(process)? != (0, 0) {
         return Err("a mapped namespace did not read uid and gid 0");
     }
-    let map = read_file(page, uid_map.as_bytes())?.map_err(|_| "uid_map could not be read")?;
+    let map = acting(pid, || read_file(page, uid_map.as_bytes()))??
+        .map_err(|_| "uid_map could not be read")?;
     if map != b"         0       1000          1\n" {
         return Err("uid_map did not read back as written");
     }
@@ -262,12 +281,15 @@ fn user_namespace(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'st
     // What the first namespace sees of it: the kernel's ids.
     let watcher = process::new_for_check().map_err(|_| "could not make the watching process")?;
     let mut outside = page_for(&watcher)?;
-    let seen = read_file(&mut outside, format!("/proc/{pid}/status").as_bytes())?
-        .map_err(|_| "a namespace's status could not be read from outside")?;
+    let watching = watcher.pid();
+    let seen = acting(watching, || {
+        read_file(&mut outside, format!("/proc/{pid}/status").as_bytes())
+    })??
+    .map_err(|_| "a namespace's status could not be read from outside")?;
     if !seen.windows(13).any(|w| w == b"Uid:\t1000\t1000") {
         return Err("the first namespace did not see the kernel's ids in a child's status");
     }
-    let seen = read_file(&mut outside, uid_map.as_bytes())?
+    let seen = acting(watching, || read_file(&mut outside, uid_map.as_bytes()))??
         .map_err(|_| "a namespace's uid_map could not be read from outside")?;
     if seen != b"         0       1000          1\n" {
         return Err("a namespace's uid_map did not read the same from its parent");

@@ -110,7 +110,7 @@ use ferrix_vfs::{
 
 use crate::fs;
 use crate::panic::{catalog, fatal};
-use crate::syscall::process::{self, Process};
+use crate::syscall::process::Process;
 use crate::syscall::registry;
 
 /// What an entry's functions are handed at the top level: nothing, because a
@@ -847,7 +847,7 @@ impl Node {
                     let bytes = render::id_map(&process, *file);
                     // Who opened it is judged at each write, beside who
                     // writes (rule U3).
-                    let opener = process::current()
+                    let opener = crate::syscall::userns::acting()
                         .map(|opener| opener.with_credentials(|held| held.clone()));
                     let file = *file;
                     let writer: Writer = Box::new(move |data| {
