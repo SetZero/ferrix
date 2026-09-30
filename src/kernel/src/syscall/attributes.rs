@@ -583,7 +583,15 @@ pub(crate) fn sys_get_robust_list(
     len_ptr: u64,
     word: usize,
 ) -> Result<usize, Errno> {
-    let head = robust_list_subject(process, pid)?.robust_list();
+    let subject = robust_list_subject(process, pid)?;
+    // The head is an address in that process: Linux asks
+    // `PTRACE_MODE_READ_REALCREDS` of a thread that is not the caller's own.
+    if !core::ptr::eq(subject.process().as_ref(), process)
+        && !credentials::may_access(process, subject.process(), true)
+    {
+        return Err(Errno::EPERM);
+    }
+    let head = subject.robust_list();
     let put = |at: u64, value: u64| {
         let bytes = value.to_le_bytes();
         let used = bytes.get(..word).ok_or(Errno::EINVAL)?;
