@@ -1382,3 +1382,29 @@ A seccomp implementation built on branch `stage13-seccomp` before this
 design landed puts its hook in the personality's dispatcher and its state
 per process. Its crate is §3.1's and may become S1 under S1's conditions.
 Its hook and state do not land.
+
+**Owners (2026-09-30, the customer's instruction to os-7c).** os-7c takes
+stage 13 to done, S1 to S6 included; os-fd keeps S7 and S8. NP-pid and NP-net
+are os-7c's too (os-98 yielded them), built as `stage13-pidns` (`docs/PIDNS.md`)
+and `stage13-netns` (`docs/NETNS.md`).
+
+**S1 built (2026-09-30, os-7c, `stage13-s1`).** `src/lib/kernel/seccomp`:
+`verify` (Linux's `bpf_check_classic` and `seccomp_check_filter`, rule for
+rule, with the scratch-store pass of `check_load_and_stores`), `Program`,
+`run` (and `run_counted`), `run_all`, `SeccompData`, the actions and
+`more_restrictive`; `forbid(unsafe_code)`; no allocation in the run path.
+Evidence: 23 host tests, a `verify` refusal or acceptance per rule and per
+opcode, each of the eight rules; `tests/agree.rs`, which holds `verify` to a
+second checker (`tests/naive/`, written by a different method) over 300,000
+seeded programs; `tests/chrome.rs`, which runs three of Chrome 151's filters
+(`tests/data/chrome-<n>.bpf`, extracted by `tests/extract.py`) against the
+answer the real kernel gave each of the calls 0 to 449 (`chrome-<n>.verdicts`,
+made by `tests/oracle.c` on nazuna); and the fuzz target
+`seccomp_verify_run`, which holds the same two checkers to each other on any
+bytes, and a verified program's run to its length and to the data. The one difference from the real kernel: x86-64 `uretprobe` (335) and
+`uprobe` (336) pass through Linux's seccomp unfiltered, and Ferrix, with no
+probes, lets a filter judge them like any number it does not know (stricter).
+Nine of
+Chrome's processes installed three distinct programs, of 657, 661 and 662
+instructions.
+

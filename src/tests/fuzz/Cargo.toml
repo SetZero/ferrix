@@ -45,6 +45,7 @@ ferrix-nettcp = { path = "../../lib/network/nettcp" }
 ferrix-net = { path = "../../lib/network/net" }
 ferrix-netlink = { path = "../../lib/network/netlink" }
 ferrix-cgroupfs = { path = "../../lib/fs/cgroupfs" }
+ferrix-seccomp = { path = "../../lib/kernel/seccomp" }
 ferrix-sysfs = { path = "../../lib/fs/sysfs" }
 ferrix-svc = { path = "../../lib/init/svc" }
 ferrix-svc-proto = { path = "../../lib/init/svc-proto" }
@@ -310,6 +311,13 @@ bench = false
 [[bin]]
 name = "auth_proto"
 path = "fuzz_targets/auth_proto.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "seccomp_verify_run"
+path = "fuzz_targets/seccomp_verify_run.rs"
 test = false
 doc = false
 bench = false

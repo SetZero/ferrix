@@ -1,0 +1,450 @@
+0 allow
+1 allow
+2 errno 1
+3 allow
+4 errno 1
+5 allow
+6 errno 1
+7 allow
+8 allow
+9 allow
+10 allow
+11 allow
+12 allow
+13 allow
+14 allow
+15 allow
+16 trap 3
+17 allow
+18 allow
+19 allow
+20 allow
+21 errno 1
+22 allow
+23 allow
+24 allow
+25 allow
+26 trap 1
+27 allow
+28 allow
+29 errno 1
+30 errno 1
+31 errno 1
+32 allow
+33 allow
+34 allow
+35 allow
+36 trap 1
+37 trap 1
+38 allow
+39 allow
+40 errno 1
+41 errno 1
+42 errno 1
+43 errno 1
+44 allow
+45 allow
+46 allow
+47 allow
+48 allow
+49 errno 1
+50 errno 1
+51 trap 1
+52 trap 1
+53 trap 1
+54 trap 1
+55 trap 1
+56 errno 1
+57 errno 1
+58 errno 1
+59 errno 1
+60 allow
+61 allow
+62 trap 5
+63 allow
+64 errno 1
+65 errno 1
+66 errno 1
+67 errno 1
+68 errno 1
+69 errno 1
+70 errno 1
+71 errno 1
+72 allow
+73 trap 1
+74 allow
+75 allow
+76 errno 1
+77 allow
+78 errno 1
+79 errno 1
+80 errno 1
+81 errno 1
+82 errno 1
+83 errno 1
+84 errno 1
+85 errno 1
+86 errno 1
+87 errno 1
+88 errno 1
+89 errno 1
+90 errno 1
+91 allow
+92 errno 1
+93 allow
+94 errno 1
+95 errno 1
+96 allow
+97 allow
+98 trap 1
+99 allow
+100 allow
+101 trap 1
+102 allow
+103 trap 1
+104 allow
+105 allow
+106 allow
+107 allow
+108 allow
+109 trap 1
+110 allow
+111 trap 1
+112 trap 1
+113 allow
+114 allow
+115 allow
+116 allow
+117 allow
+118 allow
+119 allow
+120 allow
+121 trap 1
+122 errno 1
+123 errno 1
+124 allow
+125 allow
+126 errno 1
+127 trap 1
+128 allow
+129 trap 1
+130 trap 1
+131 allow
+132 errno 1
+133 errno 1
+134 errno 1
+135 trap 1
+136 errno 1
+137 errno 1
+138 trap 1
+139 trap 1
+140 allow
+141 allow
+142 trap 1
+143 allow
+144 allow
+145 allow
+146 allow
+147 allow
+148 trap 1
+149 allow
+150 allow
+151 trap 1
+152 trap 1
+153 trap 1
+154 trap 1
+155 trap 1
+156 trap 1
+157 trap 7
+158 trap 1
+159 trap 1
+160 allow
+161 trap 1
+162 trap 1
+163 trap 1
+164 trap 1
+165 trap 1
+166 trap 1
+167 trap 1
+168 trap 1
+169 trap 1
+170 trap 1
+171 trap 1
+172 errno 1
+173 errno 1
+174 trap 1
+175 trap 1
+176 trap 1
+177 trap 1
+178 trap 1
+179 trap 1
+180 trap 1
+181 trap 1
+182 trap 1
+183 trap 1
+184 trap 1
+185 trap 1
+186 allow
+187 trap 1
+188 trap 1
+189 trap 1
+190 trap 1
+191 trap 1
+192 trap 1
+193 trap 1
+194 trap 1
+195 trap 1
+196 trap 1
+197 trap 1
+198 trap 1
+199 trap 1
+200 trap 5
+201 allow
+202 allow
+203 trap 1
+204 allow
+205 trap 1
+206 trap 1
+207 trap 1
+208 trap 1
+209 trap 1
+210 trap 1
+211 trap 1
+212 errno 1
+213 allow
+214 trap 1
+215 trap 1
+216 trap 1
+217 errno 1
+218 trap 1
+219 allow
+220 errno 1
+221 trap 1
+222 trap 1
+223 trap 1
+224 trap 1
+225 trap 1
+226 trap 1
+227 trap 1
+228 allow
+229 allow
+230 allow
+231 allow
+232 allow
+233 allow
+234 trap 5
+235 errno 1
+236 trap 1
+237 trap 1
+238 trap 1
+239 trap 1
+240 trap 1
+241 trap 1
+242 trap 1
+243 trap 1
+244 trap 1
+245 trap 1
+246 trap 1
+247 allow
+248 trap 1
+249 trap 1
+250 trap 1
+251 trap 1
+252 trap 1
+253 trap 1
+254 trap 1
+255 trap 1
+256 trap 1
+257 errno 1
+258 errno 1
+259 errno 1
+260 errno 1
+261 errno 1
+262 trap 8
+263 errno 1
+264 errno 1
+265 errno 1
+266 errno 1
+267 errno 1
+268 errno 1
+269 errno 1
+270 allow
+271 allow
+272 trap 1
+273 allow
+274 trap 1
+275 trap 1
+276 trap 1
+277 trap 1
+278 trap 1
+279 trap 1
+280 errno 1
+281 allow
+282 trap 1
+283 trap 1
+284 allow
+285 errno 1
+286 trap 1
+287 trap 1
+288 errno 1
+289 trap 1
+290 allow
+291 allow
+292 allow
+293 allow
+294 trap 1
+295 trap 1
+296 trap 1
+297 errno 1
+298 trap 1
+299 allow
+300 trap 1
+301 trap 1
+302 allow
+303 trap 1
+304 trap 1
+305 trap 1
+306 trap 1
+307 trap 1
+308 trap 1
+309 trap 1
+310 trap 1
+311 trap 1
+312 trap 1
+313 trap 1
+314 trap 1
+315 trap 1
+316 errno 1
+317 errno 1
+318 allow
+319 allow
+320 trap 1
+321 trap 1
+322 trap 1
+323 trap 1
+324 trap 1
+325 trap 1
+326 trap 1
+327 trap 1
+328 trap 1
+329 allow
+330 allow
+331 allow
+332 errno 1
+333 trap 1
+334 allow
+335 allow
+336 allow
+337 trap 1
+338 trap 1
+339 trap 1
+340 trap 1
+341 trap 1
+342 trap 1
+343 trap 1
+344 trap 1
+345 trap 1
+346 trap 1
+347 trap 1
+348 trap 1
+349 trap 1
+350 trap 1
+351 trap 1
+352 trap 1
+353 trap 1
+354 trap 1
+355 trap 1
+356 trap 1
+357 trap 1
+358 trap 1
+359 trap 1
+360 trap 1
+361 trap 1
+362 trap 1
+363 trap 1
+364 trap 1
+365 trap 1
+366 trap 1
+367 trap 1
+368 trap 1
+369 trap 1
+370 trap 1
+371 trap 1
+372 trap 1
+373 trap 1
+374 trap 1
+375 trap 1
+376 trap 1
+377 trap 1
+378 trap 1
+379 trap 1
+380 trap 1
+381 trap 1
+382 trap 1
+383 trap 1
+384 trap 1
+385 trap 1
+386 trap 1
+387 trap 1
+388 trap 1
+389 trap 1
+390 trap 1
+391 trap 1
+392 trap 1
+393 trap 1
+394 trap 1
+395 trap 1
+396 trap 1
+397 trap 1
+398 trap 1
+399 trap 1
+400 trap 1
+401 trap 1
+402 trap 1
+403 trap 1
+404 trap 1
+405 trap 1
+406 trap 1
+407 trap 1
+408 trap 1
+409 trap 1
+410 trap 1
+411 trap 1
+412 trap 1
+413 trap 1
+414 trap 1
+415 trap 1
+416 trap 1
+417 trap 1
+418 trap 1
+419 trap 1
+420 trap 1
+421 trap 1
+422 trap 1
+423 trap 1
+424 trap 1
+425 trap 1
+426 trap 1
+427 trap 1
+428 trap 1
+429 trap 1
+430 trap 1
+431 trap 1
+432 trap 1
+433 trap 1
+434 errno 38
+435 errno 38
+436 trap 1
+437 trap 1
+438 trap 1
+439 errno 1
+440 trap 1
+441 trap 1
+442 trap 1
+443 trap 1
+444 trap 1
+445 trap 1
+446 trap 1
+447 trap 1
+448 trap 1
+449 trap 1
