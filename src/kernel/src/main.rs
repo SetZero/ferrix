@@ -812,6 +812,8 @@ fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>, reserved: &d
         report.refusals,
         device::devices().len(),
     );
+    let (published, order) = device::check::order(device::devices());
+    println!("  nodes    {published} published, digest of their order {order:#018x}");
     let (map, others, digest) = device::check::reserved(reserved);
     println!(
         "  reserved {map} memory-map ranges and {others} others no aperture may overlap, \

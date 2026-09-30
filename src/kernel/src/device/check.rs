@@ -10,6 +10,7 @@
 use alloc::collections::BTreeSet;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::fmt::{self, Write};
 use core::sync::atomic::Ordering;
 
 use ferrix_pci::header::{COMMAND, COMMAND_BUS_MASTER, COMMAND_MEMORY_SPACE};
@@ -297,4 +298,29 @@ pub(crate) fn reserved(reserved: &Reserved) -> (usize, usize, u64) {
             sum.wrapping_add(hash)
         });
     (last - first, others, digest)
+}
+
+/// How many nodes were published, and a digest of their locations in the
+/// order they were published: what the `nodes` boot line prints, so that a
+/// change to how nodes are found shows when it reorders them, which a count
+/// cannot.
+pub(crate) fn order(nodes: &[Arc<DeviceNode>]) -> (usize, u64) {
+    let mut hasher = Fnv(0xcbf2_9ce4_8422_2325);
+    for node in nodes {
+        // Writing to an FNV sum cannot fail.
+        let _ = write!(hasher, "{};", node.location);
+    }
+    (nodes.len(), hasher.0)
+}
+
+/// FNV-1a over everything written to it, in order.
+struct Fnv(u64);
+
+impl Write for Fnv {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        for byte in text.bytes() {
+            self.0 = (self.0 ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+        Ok(())
+    }
 }
