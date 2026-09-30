@@ -76,7 +76,7 @@ does not offer; it renders in software instead.
 | `logger-0.bash` stand-in | The Steam Runtime's logger failed on Ferrix under `steamwebhelper.sh`; this one logs nothing | whatever the logger meets: `/dev/fd` through process substitution, and the `/proc` gaps below | steam-proc-gaps |
 | (not worked around) `lsof` warns "unsupported format" for `/proc/net/tcp6` and `udp6`, and cannot identify Unix sockets | the IPv6 tables' columns differ from Linux's, and `/proc/net/unix` names no inodes | Linux's formats | steam-proc-gaps |
 | 16 GiB guest | At 8 GiB several processes died of `SIGBUS` on execute faults of mapped library pages while Chromium started | find and fix the refault | steam-sigbus |
-| the window fills its tile, black around the login | hyprix tiled a window of a fixed size, and yserver did not pass on its size hints (`WM_NORMAL_HINTS`) | a floating window of the size Steam asks for: hyprix ec4ce6b2 and the yserver pin c5b5935, which a volume made after them carries; not yet seen on Steam's window | done, to be confirmed |
+| the window fills its tile, black around the login | hyprix tiled a window of a fixed size, and yserver did not pass on its size hints (`WM_NORMAL_HINTS`) | a floating window of the size Steam asks for: hyprix ec4ce6b2 and the yserver pin c5b5935; and a floating window that follows the size its program gives it later (hyprix's `follow_own_size`), without which Steam's dialogs floated as 130x70 miniatures of themselves | done: the sign-in window floats at its own size on the `--everything` desktop (2026-09-30) |
 
 Five things the sprint needed are no longer workarounds. A shim that
 retried `pipe2` without `O_DIRECT`: the kernel makes packet pipes now, each
@@ -113,3 +113,38 @@ cgroupfs and sysfs have offsets past 2³¹ too; nothing 32-bit lists them yet.
    and its offsets (worked around, then fixed; `test-procfs` checks both).
 6. The client looks for `lsof` only at `/sbin`, `/bin`, `/usr/sbin` and
    `/usr/bin`, and says so nowhere visible when it finds none.
+
+## 5. On the `--everything` desktop, under ferrousli (2026-09-30)
+
+`cargo xtask run-compositor --everything` starts Steam beside Chrome and a
+terminal (`tools/common/steam/desktop.sh`). There, `/lib64`'s loader is
+ferrousli's, so the client's 64-bit side runs on ferrousli's C library, not
+glibc's; the 32-bit client itself still runs on the volume's i386 glibc. On
+2026-09-30 the sign-in window came up there, the customer signed in with the
+Steam app's QR code, and the client showed its store. What the 64-bit side
+needed of ferrousli, in the order it was met:
+
+1. `libGL.so.1` reads its TLS by initial-exec: a `dlopen`ed library's TLS
+   image is now copied into every running thread, as glibc does.
+2. No GLX visual: Mesa's software renderer needs LLVM, which needs
+   `libstdc++`, whose `STB_GNU_UNIQUE` symbols the loader did not take for
+   definitions; and `logf128`, `pthread_mutex_clocklock`, `iopl` and a few
+   `_chk` names.
+3. "steamwebhelper is not responding": `libc.so.6` was loaded where
+   `libdl.so.2` is named, ahead of `libcef.so`, so Chromium's
+   `dlsym(RTLD_NEXT, "localtime")` found nothing, and logging that
+   deadlocked in its own `localtime_r` wrapper. `libc.so.6` now loads where
+   its own name puts it.
+4. "futex robust_list not initialized by pthreads", then "…is corrupt":
+   the web helper links its robust mutexes into the thread's list the way
+   glibc does. Every thread now registers a list, laid out as glibc's (a
+   `robust_prev` word before the head), and the kernel keeps it per thread.
+5. Scout's `setup.sh` exited 127: `client.sh` ran it with the runtime's own
+   `zenity` on `PATH`, which does not load (`_IO_getc`).
+
+Each was found by running the program under ferrousli on nazuna first
+(`patchelf --set-interpreter` to ferrousli's loader, Xvfb), which is
+minutes where a desktop boot is ten. The workarounds of §3 are unchanged:
+the helper still runs without its sandbox and outside pressure-vessel, and
+its GPU process is disabled (`-cef-disable-gpu`), so the store draws in
+software.
