@@ -45,7 +45,7 @@ use crate::fs::cgroupfs;
 use crate::object::job::{self, Job};
 use crate::syscall::process::{self, Process};
 use crate::syscall::thread::{self, Thread};
-use crate::syscall::{fd, namespace, registry, thread_area, uaccess, userns};
+use crate::syscall::{attributes, fd, namespace, registry, thread_area, uaccess, userns};
 use crate::trap::Abi;
 
 /// The low byte of `clone`'s flags: the signal the parent is told with.
@@ -490,6 +490,11 @@ fn clone_with(
     // `EAGAIN` for both. The child charged nothing, and goes unstarted.
     if pid == 0 || child.over_quota() {
         return Err(Errno::EAGAIN);
+    }
+    // `no_new_privs` is inherited across `fork` and kept across `execve`
+    // (Linux's `PR_SET_NO_NEW_PRIVS`): a child cannot be the way round it.
+    if attributes::get(parent).no_new_privs {
+        attributes::update(&child, |held| held.no_new_privs = true);
     }
     // Its own copy of the namespace, before anything can see it: a refusal
     // goes with the child, unstarted.

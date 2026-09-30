@@ -31,8 +31,8 @@ use ferrix_linux_abi::types::{AT_FDCWD, O_CREAT, O_TRUNC, O_WRONLY};
 
 use super::{
     Personality, attributes, compat, credentials, epoll, eventfd, exec, family, fd, file, flock,
-    fsctl, futex, kill, limits, memfd, memory, namespace, path, poll, process, sem, signal,
-    signalfd, sockets, system, thread, thread_area, time, timerfd, unanswered,
+    fsctl, futex, kill, limits, memfd, memory, namespace, path, poll, process, seccomp, sem,
+    signal, signalfd, sockets, system, thread, thread_area, time, timerfd, unanswered,
 };
 use crate::arch;
 use crate::sched;
@@ -65,6 +65,19 @@ impl Personality for Linux {
 /// has to end in a value.
 fn dispatch(call: Syscall, args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Outcome {
     crate::fs::seam::syscall();
+    // Resolved once, here, rather than reached for inside each handler: the
+    // handlers take `&Process` so that the boot self-check can call them
+    // against a process it built itself, months before a program can.
+    let process = process::current();
+    // A process under seccomp has each call judged by its filters first,
+    // against the number and registers it made it with, before any rewriting
+    // of a 32-bit program's (`syscall::seccomp`).
+    if let Some(caller) = process.as_deref()
+        && let Some(outcome) =
+            seccomp::enforce(caller, call, args, seccomp::instruction_pointer(regs))
+    {
+        return outcome;
+    }
     // A 32-bit program's register pairs and 32-bit `off_t`s, rewritten into
     // the layout every handler below reads (`compat`).
     let normalized;
@@ -77,11 +90,6 @@ fn dispatch(call: Syscall, args: &SyscallArgs, regs: Option<&arch::UserRegs>) ->
     } else {
         args
     };
-    // Resolved once, here, rather than reached for inside each handler: the
-    // handlers take `&Process` so that the boot self-check can call them
-    // against a process it built itself, months before a program can.
-    let process = process::current();
-
     // What the entry registers held, which a restart puts back: for
     // `socketcall`, the sub-call and the block's address, not the call the
     // block names.
@@ -279,6 +287,11 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
     if let Some(answer) = at_width(call, &a, process, signal::word_of(args.abi)) {
         return answer;
     }
+    // `prctl`'s seccomp options carry a user pointer whose width depends on
+    // the program, so they are answered here, where the program's ABI is known.
+    if let Some(answer) = seccomp_prctl(call, &a, process, args.abi) {
+        return answer;
+    }
     let answer = attributes::dispatch(call, &a, process)
         .or_else(|| limits::dispatch(call, &a, process))
         .or_else(|| credentials::dispatch(call, &a, process))
@@ -292,6 +305,7 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
     }
     match call {
         // Still `ENOSYS`, each on purpose. There is no swap to turn on or off.
+        Syscall::Seccomp => seccomp::sys_seccomp(process, a[0] as u32, a[1], a[2], args.abi),
         Syscall::Swapon | Syscall::Swapoff => Err(Errno::ENOSYS),
         // There are no loadable modules: the kernel is one image.
         Syscall::InitModule | Syscall::FinitModule | Syscall::DeleteModule => Err(Errno::ENOSYS),
@@ -562,5 +576,27 @@ fn set_tid_address(process: &Process, address: u64) -> usize {
         (0, 0) => current_id(),
         (0, pid) => pid as usize,
         (tid, _) => tid as usize,
+    }
+}
+
+/// `prctl(PR_GET_SECCOMP)` and `prctl(PR_SET_SECCOMP)`, which are answered
+/// here because the second takes a pointer of the program's width.
+fn seccomp_prctl(
+    call: Syscall,
+    a: &[u64; 6],
+    process: &Process,
+    abi: Abi,
+) -> Option<Result<usize, Errno>> {
+    /// `PR_GET_SECCOMP`.
+    const PR_GET_SECCOMP: u64 = 21;
+    /// `PR_SET_SECCOMP`.
+    const PR_SET_SECCOMP: u64 = 22;
+    if call != Syscall::Prctl {
+        return None;
+    }
+    match a[0] as u32 as u64 {
+        PR_GET_SECCOMP => Some(Ok(usize::from(process.seccomp_mode()))),
+        PR_SET_SECCOMP => Some(seccomp::prctl_set(process, a[1], a[2], abi)),
+        _ => None,
     }
 }

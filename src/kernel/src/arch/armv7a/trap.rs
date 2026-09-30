@@ -341,6 +341,12 @@ impl UserRegs {
     pub(crate) fn stack_pointer(&self) -> u64 {
         u64::from(super::switch::user_banked().0)
     }
+
+    /// Where the program was when it made the call: the instruction after
+    /// it. What a seccomp filter sees as `instruction_pointer`.
+    pub(crate) fn instruction_pointer(&self) -> u64 {
+        self.0.instruction_pointer()
+    }
 }
 
 /// The signal Linux raises for a trap a program's own instruction took and

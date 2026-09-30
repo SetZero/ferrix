@@ -175,6 +175,17 @@ pub(crate) enum Origin {
         /// Its exit code, or the signal that ended, stopped or continued it.
         status: i32,
     },
+    /// A seccomp filter's `SECCOMP_RET_TRAP`: a `SIGSYS` carrying the call.
+    Seccomp {
+        /// The data half of the filter's result.
+        errno: i32,
+        /// The instruction pointer of the system call.
+        call_addr: u64,
+        /// The number the program called.
+        syscall: i32,
+        /// Its `AUDIT_ARCH_*`.
+        arch: u32,
+    },
     /// A fault in the program's own instruction.
     Fault {
         /// `SEGV_MAPERR`, `SEGV_ACCERR`, `ILL_ILLOPC` and their like.
@@ -232,6 +243,18 @@ impl Origin {
                 let _ = put_word(&mut info, union, address, WORD);
                 code
             }
+            Origin::Seccomp {
+                errno,
+                call_addr,
+                syscall,
+                arch,
+            } => {
+                put_int(&mut info, 4, errno);
+                let _ = put_word(&mut info, union, call_addr, WORD);
+                put_int(&mut info, union + WORD, syscall);
+                put_int(&mut info, union + WORD + 4, arch as i32);
+                crate::syscall::seccomp::SYS_SECCOMP
+            }
         };
         put_int(&mut info, 8, code);
         info
@@ -269,6 +292,7 @@ impl Origin {
                 put_int(&mut info, 40, status);
                 code
             }
+            Origin::Seccomp { .. } => crate::syscall::seccomp::SYS_SECCOMP,
             Origin::Fault { code, address } => {
                 if let Some(slot) = info.get_mut(72..80) {
                     slot.copy_from_slice(&address.to_le_bytes());

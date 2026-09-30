@@ -301,6 +301,23 @@ pub(super) fn check_namespaces(disk: bool) {
         },
     );
     check_user_namespaces();
+    check_seccomp();
+}
+
+/// `seccomp(2)`: filters checked at install, judging calls, inherited
+/// (`docs/ROADMAP.md` stage 13).
+fn check_seccomp() {
+    let checked = match fs::seccomp_check::run() {
+        Ok(checked) => checked,
+        Err(problem) => fatal!(
+            catalog::STAGE13_SECCOMP,
+            "seccomp self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  seccomp  {} calls answered as Linux answers them, {} of them refusals: a filter          refused without no_new_privs and for what Linux refuses, a call failed with the errno          it names, the most restrictive of two filters winning, a fork child judged as its          parent, a kill ending the process, strict mode",
+        checked.calls, checked.refusals,
+    );
 }
 
 /// User namespaces: the rules of `docs/NAMESPACES.md` §4 attempted and
@@ -946,7 +963,7 @@ pub(super) fn check_kernel_memory() {
     println!(
         "  kmem     at a {} KiB memory limit a job made {} files, {} pipes, {} socket pairs, \
          {} descriptors in flight, {} epoll registrations, {} eventfds, {} regions of one \
-         mapping, {} record locks, {} semaphore sets, {} mount namespaces of {} mounts and {} user namespaces, and \
+         mapping, {} record locks, {} semaphore sets, {} mount namespaces of {} mounts, {} user namespaces and {} seccomp filters, and \
          was refused one more of each -- \
          ENOMEM, ENOLCK for a lock -- while a sibling made one; every byte of heap charged \
          came back",
@@ -963,6 +980,7 @@ pub(super) fn check_kernel_memory() {
         report.namespaces,
         fs::kmem_check::TREE,
         report.user_namespaces,
+        report.filters,
     );
 }
 

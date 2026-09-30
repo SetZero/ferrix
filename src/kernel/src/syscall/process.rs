@@ -48,7 +48,7 @@
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::any::Any;
-use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU32, Ordering};
 
 use crate::fallible::{self, AllocError};
 use crate::sync::SpinLock;
@@ -215,6 +215,12 @@ pub(crate) struct Process {
     /// `getuid` has no business waiting on a `brk`, and a `set*id` call must
     /// see and change every id it names at once.
     credentials: SpinLock<Credentials>,
+    /// Its seccomp mode and filters (`syscall::seccomp`). A fork child takes
+    /// its parent's; `execve` keeps them.
+    seccomp: SpinLock<crate::syscall::seccomp::State>,
+    /// The mode in `seccomp`, for the check every system call makes without
+    /// taking its lock.
+    seccomp_mode: AtomicU8,
 }
 
 /// Where a program starts: the two numbers `exec::load` computes and the task
@@ -380,6 +386,8 @@ impl Process {
             // A process the kernel starts is root's. A fork child takes its
             // parent's instead, below.
             credentials: SpinLock::new(Credentials::root()),
+            seccomp: SpinLock::new(crate::syscall::seccomp::State::new()),
+            seccomp_mode: AtomicU8::new(crate::syscall::seccomp::MODE_DISABLED),
         })
     }
 
@@ -442,6 +450,8 @@ impl Process {
         child.umask = AtomicU32::new(parent.umask());
         child.oom_score_adj = AtomicI32::new(parent.oom_score_adj());
         child.credentials = SpinLock::new(parent.credentials.lock().clone());
+        child.seccomp = SpinLock::new(parent.seccomp.lock().clone());
+        child.seccomp_mode = AtomicU8::new(parent.seccomp_mode.load(Ordering::Acquire));
         child.identity = SpinLock::new(parent.identity.lock().clone());
         Ok(child)
     }
@@ -704,6 +714,28 @@ impl Process {
     /// Set `oom_score_adj`, which the caller has checked is in range.
     pub(crate) fn set_oom_score_adj(&self, value: i32) {
         self.oom_score_adj.store(value, Ordering::Relaxed);
+    }
+
+    /// The seccomp mode, read without a lock on every system call.
+    pub(crate) fn seccomp_mode(&self) -> u8 {
+        self.seccomp_mode.load(Ordering::Acquire)
+    }
+
+    /// Its seccomp state, under its lock. Nothing that waits may be done
+    /// inside it.
+    pub(crate) fn with_seccomp<R>(
+        &self,
+        change: impl FnOnce(&mut crate::syscall::seccomp::State) -> R,
+    ) -> R {
+        change(&mut self.seccomp.lock())
+    }
+
+    /// Make the mode in the seccomp state the one every system call reads.
+    /// Called after the state changes, before the call that changed it
+    /// returns: the next call the process makes is judged by it.
+    pub(crate) fn publish_seccomp(&self) {
+        let mode = self.seccomp.lock().mode();
+        self.seccomp_mode.store(mode, Ordering::Release);
     }
 
     /// Its user and group ids and supplementary groups, under their lock:

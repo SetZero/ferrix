@@ -2147,6 +2147,21 @@ pub(crate) static STAGE13_USER_NAMESPACES: Explanation = Explanation {
     see: "src/kernel/src/fs/userns_check.rs; src/kernel/src/syscall/userns.rs; src/kernel/src/syscall/credentials.rs; src/kernel/src/syscall/namespace.rs",
 };
 
+/// For `check_seccomp` in `stages_check.rs`, when `fs::seccomp_check::run`
+/// fails.
+pub(crate) static STAGE13_SECCOMP: Explanation = Explanation {
+    code: "FX-0889",
+    title: "seccomp failed its self-check",
+    meaning: "`fs::seccomp_check::run` installs filters through `seccomp(2)` and judges               calls through `seccomp::enforce`. A process with neither no_new_privs nor a               capability must be refused a filter (EACCES); an empty filter, a byte load, a               jump off the end, a filter with no final return and a flag Ferrix cannot honour               must be EINVAL. A filter must fail the call it names with its errno and let               every other through; of two filters the most restrictive answer wins and on a               tie the newer filter's data; a fork child is judged as its parent and a filter it               installs does not reach the parent. SECCOMP_RET_KILL_PROCESS must end the               process, and strict mode must allow read and write and kill at anything else.",
+    causes: &[
+        "`seccomp::enforce` is skipped, or reads the mode before `publish_seccomp` stores it.",
+        "`ferrix_seccomp::validate` accepts a program Linux's `seccomp_check_filter` refuses.",
+        "`Process::forked` does not copy the seccomp state.",
+        "`ferrix_seccomp::run_all` orders the actions differently from Linux.",
+    ],
+    see: "src/kernel/src/fs/seccomp_check.rs; src/kernel/src/syscall/seccomp.rs;           src/lib/kernel/seccomp/src/lib.rs",
+};
+
 /// For `check_semaphores` in `stages_check.rs`, when `syscall::sem_check::run`
 /// fails.
 pub(crate) static STAGE7_SEMAPHORES: Explanation = Explanation {
@@ -2674,6 +2689,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE8_BINDS,
     &STAGE13_MOUNT_NAMESPACES,
     &STAGE13_USER_NAMESPACES,
+    &STAGE13_SECCOMP,
     &SYSFS,
     &STAGE9_OBJECTS,
     &STAGE9_ALLOCATION,

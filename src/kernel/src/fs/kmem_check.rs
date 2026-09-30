@@ -65,6 +65,8 @@ pub(crate) struct Report {
     pub(crate) namespaces: usize,
     /// User namespaces, each a level-1 child of the first.
     pub(crate) user_namespaces: usize,
+    /// Installed seccomp filters of one instruction each.
+    pub(crate) filters: usize,
 }
 
 /// How many mounts the namespace the mount namespaces are copied from
@@ -100,6 +102,9 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         })?;
         report.namespaces = namespaces(&tree)?;
         report.user_namespaces = user_namespaces(&tree)?;
+        report.filters = kind(&tree, "seccomp filters", |_| {
+            crate::syscall::seccomp::charged(Vec::from([ferrix_seccomp::Insn::new(6, 0, 0, 0)]))
+        })?;
         if Resource::ALL
             .iter()
             .any(|&resource| tree.usage(resource).is_none_or(|usage| usage.used != 0))

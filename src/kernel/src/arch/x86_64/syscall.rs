@@ -445,6 +445,15 @@ impl UserRegs {
             UserRegs::Trap(frame) => frame.rsp,
         }
     }
+
+    /// Where the program was when it made the call: the instruction after
+    /// it. What a seccomp filter sees as `instruction_pointer`.
+    pub(crate) const fn instruction_pointer(&self) -> u64 {
+        match self {
+            UserRegs::Syscall(frame) => frame.rcx,
+            UserRegs::Trap(frame) => frame.rip,
+        }
+    }
 }
 
 /// Resume user mode from `regs`, on the running task's kernel stack. Does not
