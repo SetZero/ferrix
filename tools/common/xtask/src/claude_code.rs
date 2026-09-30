@@ -75,8 +75,29 @@ export ANTHROPIC_BASE_URL=http://10.0.2.2:@PORT@ ANTHROPIC_API_KEY=@KEY@
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 cd /tmp
 claude -p '@PROMPT@' --allowedTools Bash --max-turns 3 < /dev/null || exit 4
+printf '%s\n' '@CONFIG@' > /tmp/.claude.json
+echo claude-code-gate: interactive
+claude --allowedTools Bash
+echo claude-code-gate: interactive ended
 exit 18
 "#;
+
+/// What the script says just before it starts Claude Code's TUI on the
+/// console, which the host then types at ([`drive_the_tui`]).
+const INTERACTIVE: &str = "claude-code-gate: interactive";
+
+/// What it says once the TUI has exited and the shell has the console back.
+const INTERACTIVE_ENDED: &str = "claude-code-gate: interactive ended";
+
+/// What is typed at the TUI: [`PROMPT`], so [`Api`] answers it with the same
+/// tool call, and something of its own, so the typing shows in the log.
+const TUI_PROMPT: &str = "ferrix-gate: run the check, typed at the TUI";
+
+/// `~/.claude.json` before the TUI starts: onboarding done, the gate's key
+/// approved -- Claude Code asks about a key from the environment once, by
+/// its last 20 characters -- and `/tmp` trusted, so the TUI opens straight
+/// on its prompt. `@KEYTAIL@` is those 20 characters.
+const CONFIG: &str = r#"{"hasCompletedOnboarding":true,"theme":"dark","customApiKeyResponses":{"approved":["@KEYTAIL@"],"rejected":[]},"projects":{"/tmp":{"hasTrustDialogAccepted":true,"allowedTools":[]}}}"#;
 
 /// `/bin/claude`: Claude Code from the volume, with bash as the shell its
 /// Bash tool runs commands in whatever shell started it -- the desktop's
@@ -113,8 +134,21 @@ pub(crate) fn desktop_files(carried: &[crate::ports::File]) -> Vec<crate::ports:
         mode: 0o755,
         content: crate::ports::Content::Bytes(WRAPPER.as_bytes().to_vec()),
     });
+    // fuzzel's entry, so the launcher opens it in a terminal of its own.
+    files.push(crate::ports::File {
+        path: "usr/share/applications/claude.desktop".to_owned(),
+        mode: 0o644,
+        content: crate::ports::Content::Bytes(DESKTOP_ENTRY.as_bytes().to_vec()),
+    });
     files
 }
+
+/// The launcher's entry for Claude Code: `claude` in a terminal, with the
+/// terminal's icon.
+const DESKTOP_ENTRY: &str = "[Desktop Entry]\nType=Application\nName=Claude Code\n\
+     GenericName=Coding Agent\nComment=Anthropic's Claude Code, from the data disk\n\
+     Exec=claude\nIcon=ferrix-terminal\nTerminal=true\nKeywords=claude;ai;code;agent;\n\
+     Categories=Development;\n";
 
 /// What `--version` prints, which says Claude Code and its runtime started.
 const VERSION: &str = "2.1.280 (Claude Code)";
@@ -169,10 +203,135 @@ pub(crate) fn volume() -> Result<std::path::PathBuf> {
 
 /// The script, for [`Api`] listening on `port`.
 fn script(port: u16) -> String {
+    let tail = KEY.get(KEY.len().saturating_sub(20)..).unwrap_or(KEY);
     SCRIPT
+        .replace("@CONFIG@", &CONFIG.replace("@KEYTAIL@", tail))
         .replace("@PORT@", &port.to_string())
         .replace("@KEY@", KEY)
         .replace("@PROMPT@", PROMPT)
+}
+
+/// What typing at the TUI came to.
+#[derive(Debug, Default, Clone, Copy)]
+struct Tui {
+    /// The TUI drew its screen: the product's name and its shortcut hint.
+    drew: bool,
+    /// [`REPLY`] was drawn after the prompt was typed.
+    replied: bool,
+    /// The TUI exited and the shell went on.
+    exited: bool,
+}
+
+/// How long the TUI is given to start, to answer, and to exit.
+const TUI_PATIENCE: Duration = Duration::from_secs(120);
+
+/// How many requests [`Api`] has answered with `what`.
+fn answered(api: &Api, what: &str) -> usize {
+    let suffix = format!("-> {what}");
+    api.seen()
+        .requests
+        .iter()
+        .filter(|request| request.ends_with(&suffix))
+        .count()
+}
+
+/// Read the console until [`Api`] has answered `count` requests with `what`,
+/// or [`TUI_PATIENCE`] has passed. Whether it did.
+///
+/// The TUI's screen is no help here: it places each word with a cursor
+/// movement and ends no line, so the console reader sees none of it until
+/// the shell's next line after it exits. What it asks the API for is the
+/// sign of where it is.
+fn wait_for_api(
+    watching: &mut qemu::Watching<'_>,
+    api: &Api,
+    what: &str,
+    count: usize,
+) -> Result<bool> {
+    let deadline = std::time::Instant::now() + TUI_PATIENCE;
+    while std::time::Instant::now() < deadline {
+        if answered(api, what) >= count {
+            return Ok(true);
+        }
+        watching.read_what_was_said(Duration::from_millis(500))?;
+    }
+    Ok(answered(api, what) >= count)
+}
+
+/// Type at Claude Code's TUI once the script has started it: once it has
+/// made its startup check of the API, the prompt and Enter; once the API
+/// has sent its reply to the tool's run, `/exit` and Enter; then wait for
+/// the shell to say it has the console back. What the screen showed is
+/// judged afterwards, from all of it ([`screen_text`]).
+fn drive_the_tui(watching: &mut qemu::Watching<'_>, api: &Api) -> Result<Tui> {
+    // The `-p` turn made one reachability check and got one reply already.
+    let _ = wait_for_api(watching, api, "hello", 2)?;
+    // Past the check, the TUI still has its screen to draw and its input to
+    // put in raw mode; a key typed before that is the line discipline's. A
+    // plain pause, since the console reader sees the TUI as quiet the whole
+    // time and would not wait at all; the lines keep until it looks.
+    std::thread::sleep(Duration::from_secs(10));
+    watching.type_in(TUI_PROMPT.as_bytes())?;
+    watching.read_what_was_said(Duration::from_secs(1))?;
+    watching.type_in(b"\r")?;
+    let _ = wait_for_api(watching, api, "reply", 2)?;
+    // Time to draw the reply, which the console reader cannot see either.
+    std::thread::sleep(Duration::from_secs(3));
+    watching.type_in(b"/exit")?;
+    watching.read_what_was_said(Duration::from_secs(1))?;
+    watching.type_in(b"\r")?;
+    let exited = watching.read_more(std::time::Instant::now() + TUI_PATIENCE, |lines| {
+        lines.iter().any(|line| line.contains(INTERACTIVE_ENDED))
+    })?;
+    let _ = watching.read_more(std::time::Instant::now() + TUI_PATIENCE, |lines| {
+        lines.iter().any(|line| line.contains(shell::EXITED))
+    })?;
+    let screen = screen_text(watching.after());
+    Ok(Tui {
+        drew: screen.contains("ClaudeCode") && screen.contains("?forshortcuts"),
+        replied: screen.contains(&squeeze(REPLY)),
+        exited,
+    })
+}
+
+/// `text` without white space: the TUI moves the cursor between words
+/// rather than print the spaces.
+fn squeeze(text: &str) -> String {
+    text.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// What the console showed, as text: every line joined, each escape
+/// sequence -- `CSI` ones ending in a letter, `OSC` ones ending in `BEL` --
+/// and every other control character taken out, and [`squeeze`]d.
+fn screen_text(lines: &[String]) -> String {
+    let mut text = String::new();
+    let mut chars = lines.iter().flat_map(|line| line.chars()).peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            if !c.is_control() && !c.is_whitespace() {
+                text.push(c);
+            }
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                for c in chars.by_ref() {
+                    if c.is_ascii_alphabetic() || c == '~' {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                for c in chars.by_ref() {
+                    if c == '\u{7}' {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    text
 }
 
 /// Boot a shell whose script runs Claude Code against [`Api`].
@@ -237,9 +396,39 @@ pub(crate) fn test_claude_code(args: &Args) -> Result<()> {
         "  {arch}: running Claude Code on Ferrix with {} MiB (timeout {}s), its API on port {}",
         args.memory, args.timeout, api.port
     );
-    let lines = qemu::watch_then(arch, &image, &kernel, &args, shell::EXITED, |_| Ok(()))?;
+    let mut tui = Tui::default();
+    let lines = qemu::watch_then(arch, &image, &kernel, &args, INTERACTIVE, |watching| {
+        tui = drive_the_tui(watching, &api)?;
+        Ok(())
+    })?;
     let seen = api.stop();
-    judge(arch, &lines, &seen)
+    judge(arch, &lines, &seen)?;
+    judge_tui(arch, tui, &seen)
+}
+
+/// Whether typing at the TUI did what a person at the terminal would see
+/// it do.
+fn judge_tui(arch: Arch, tui: Tui, seen: &Seen) -> Result<()> {
+    let requests = seen.requests.join("\n    ");
+    match (tui.drew, tui.replied, tui.exited) {
+        (true, true, true) => {
+            println!(
+                "  {arch}: Claude Code's TUI took a prompt typed at the console, showed the \
+                 answer to its tool's run, and exited on /exit"
+            );
+            Ok(())
+        }
+        (false, ..) => Err(Error::new(format!(
+            "{arch}: Claude Code's TUI drew nothing on the console"
+        ))),
+        (true, false, _) => Err(Error::new(format!(
+            "{arch}: the prompt typed at Claude Code's TUI got no answer on the screen; the API \
+             saw:\n    {requests}"
+        ))),
+        (true, true, false) => Err(Error::new(format!(
+            "{arch}: Claude Code's TUI answered, and did not exit on /exit"
+        ))),
+    }
 }
 
 /// Whether the transcript is a Claude Code that started, and a turn whose
@@ -334,6 +523,14 @@ impl Api {
     }
 
     /// Stop answering, and say what was asked.
+    /// What has been asked so far.
+    fn seen(&self) -> Seen {
+        self.seen
+            .lock()
+            .map(|seen| seen.clone())
+            .unwrap_or_default()
+    }
+
     fn stop(mut self) -> Seen {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(thread) = self.thread.take() {
@@ -773,6 +970,10 @@ mod tests {
         let alone = desktop_files(&[]);
         let paths: Vec<&str> = alone.iter().map(|file| file.path.as_str()).collect();
         assert!(paths.contains(&"bin/claude") && paths.contains(&"lib64"));
+        assert!(paths.contains(&"usr/share/applications/claude.desktop"));
+        assert!(
+            DESKTOP_ENTRY.contains("\nExec=claude\n") && DESKTOP_ENTRY.contains("Terminal=true")
+        );
         let beside = desktop_files(&rustc::files(&[("lib64", "/data/usr/lib64")]));
         assert!(!beside.iter().any(|file| file.path == "lib64"));
         // ferrousli's loader in `/lib64` on the `--everything` desktop: a
@@ -786,6 +987,20 @@ mod tests {
         assert!(!with_loader.iter().any(|file| file.path == "lib64"));
         assert!(WRAPPER.contains("SHELL=/data/usr/bin/bash"));
         assert!(WRAPPER.contains("exec /data/claude-code/claude \"$@\""));
+    }
+
+    #[test]
+    fn the_screen_is_read_through_its_cursor_movements() {
+        // As the TUI drew it on 2026-09-30: each word placed by column.
+        let drawn = transcript(&[
+            "\u{1b}]0;\u{2733} Claude Code\u{7}\u{1b}[H\r\u{1b}[11C\u{1b}[1BClaude\u{1b}[19GCode",
+            "\u{1b}[1B\u{25cf}\u{1b}[3Gclaude-code-gate:\u{1b}[21Gbash\u{1b}[26Gon\u{1b}[29GFerrix\
+             \u{1b}[36Gsaid\u{1b}[41Gferrix-bash-42\r\u{1b}[5B? for shortcuts\u{1b}[K",
+        ]);
+        let screen = screen_text(&drawn);
+        assert!(screen.contains(&squeeze(REPLY)), "{screen}");
+        assert!(screen.contains("ClaudeCode") && screen.contains("?forshortcuts"));
+        assert!(!screen.contains("[11C") && !screen.contains("0;"));
     }
 
     #[test]

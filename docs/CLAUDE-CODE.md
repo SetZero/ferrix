@@ -19,7 +19,11 @@ an API xtask serves itself (§4), in about two seconds of the guest's time.
 | AVX for programs: `XSAVE` in the kernel, and x86-64-v3 on the QEMU model | **done** 2026-09-30, the one thing running it found missing (§3) |
 | `claude --version`, and a turn of `claude -p` that runs a tool on Ferrix | **done** 2026-09-30, `cargo xtask test-claude-code` (§4) |
 | `claude` in the terminals of `run-compositor --everything`, and so of `remote-desktop`'s desktop | **done** 2026-09-30, `cargo xtask test-claude-code --everything` (§5) |
-| The interactive TUI in a terminal, and a real account | not gated (§5) |
+| The interactive TUI, typed at on the console: a prompt, the tool's answer drawn, `/exit` | **done** 2026-09-30, the same gate's second half (§5) |
+| Claude Code in the `--everything` desktop's launcher, in a terminal of its own | **done** 2026-09-30, `claude.desktop` (§5) |
+| Zenbleed and Gather Data Sampling: AVX withheld where nothing covers them | **done** 2026-09-30, `speculation::vector_leak` (§3) |
+| A real account | not tried: it needs the customer's (§5) |
+| AVX state in a 32-bit program's signal frame | a first attempt backed out; what it takes is in §3 |
 | On ferrousli in glibc's place; on AArch64 with the linux-arm64 build | not started (§6) |
 | The Claude desktop app, which Anthropic builds for macOS and Windows only | assessment next (§7) |
 
@@ -44,6 +48,22 @@ unmitigated processor when the speculation switch is on. L.x86_64.121,
 enabling the state on every processor, is baselined: every SMP boot
 exercises it, since a processor without it faults on its first user
 switch. The i386 frame stays FXSAVE-only (BACKLOG).
+
+**Zenbleed and GDS (certification consultant, 2026-09-30): OK**, on 18873ab8.
+This met the condition the XSAVE review left. speculation::vector_leak
+decides before XCR0 is written, from CPUID, IA32_ARCH_CAPABILITIES, the AMD
+patch level and IA32_MCU_OPT_CTRL, with Linux's model lists. A bare-metal
+Zen 2 gets DE_CFG[9] on every processor unless its microcode is at the fixed
+revision. An affected Intel part gets the microcode mitigation turned back
+on where it is off and unlocked. Where nothing covers the leak (no
+microcode, the mitigation locked off, or a Zen 2 guest) programs do not get
+AVX, which is Linux's gds=force. Each MSR is read only where CPUID or
+ARCH_CAPABILITIES says it exists, each secondary re-applies and reads back
+its setting, and a mismatch stops the boot. The decision is checked for
+twelve processors (L.x86_64.123), with a negative control. The writes
+themselves run only on affected hardware, never under the gates' QEMU. In a
+guest the verdict rests on the CPU model the hypervisor presents, so there
+the host's mitigation is what protects (AoU-11).
 
 ## 1. What Claude Code is, to an operating system
 
@@ -166,6 +186,37 @@ The i386 signal frame (`signal/compat.rs`) still carries `FXSAVE` alone: a
 upper halves changed. Steam's 32-bit programs are the only ones, and none
 seen so far uses AVX in a handler; the row is in `docs/BACKLOG.md`.
 
+**A first attempt at it was backed out (2026-09-30).** It gave both ia32
+frames the 64-bit frame's `XSAVE` area, at the `_fpstate_32`'s `FXSAVE`
+image, grew the space `compat::place` reserves from 512 bytes to the 836 the
+area and `FP_XSTATE_MAGIC2` take, and put `UC_FP_XSTATE` in an
+`rt_sigframe_ia32`'s `uc_flags`; `rt_sigreturn` already restores through
+the shared `restore_fpu`, which reads such an area. The existing i386
+signal check still passed with it, but a 32-bit program whose `SA_SIGINFO`
+handler uses AVX took `SIGSEGV` on entering the handler, and the cause was
+not found. What doing it properly takes:
+
+1. **The layout, on paper first.** Compare `compat::place` and the frame
+   builders, line by line, with Linux's ia32 path -- `get_sigframe`,
+   `fpu__alloc_mathframe` with `XSAVE` in use, `copy_fpstate_to_sigframe`,
+   `ia32_setup_rt_frame` -- for where each part goes when the math frame
+   is no longer 624 bytes: the `fsave` environment below the image, the
+   64-byte alignment of the image, the frame below it with `sp + 4`
+   16-byte aligned, and the `fpstate` pointer the `sigcontext_32` carries.
+2. **Both frames**: `sigframe_ia32`, for a handler without `SA_SIGINFO`, as
+   well as `rt_sigframe_ia32`, and `UC_FP_XSTATE` only in the latter.
+3. **The check**, in `arch/x86_64/trap/check.rs` beside the i386 signal
+   check: an i386 program puts all ones in `YMM1` (`vxorps` then
+   `vcmpeqps`, AVX alone), signals itself, has its handler zero `YMM1`, and
+   after `rt_sigreturn` compares `YMM1` with all ones (`vptest`), exiting
+   79 when they match and 77 when they do not; run only where programs
+   have AVX. Negative control: the frame writing `FXSAVE` alone again must
+   make it exit 77. A requirement, `L.x86_64.124`, names the frame's units
+   and this check, and `test-boot` on xtask's own model requires the
+   check's line, as it requires the `xstate` line.
+4. **The certification consultant's review**, since `signal/compat.rs` is
+   core ring.
+
 ## 4. The gate: `cargo xtask test-claude-code`
 
 One boot, x86-64, with the network. The script takes a lease for `eth0`,
@@ -225,21 +276,29 @@ merged volume, through the same `/bin/claude`, so what it passes is what a
 terminal on the desktop runs. The plain gate goes through `/bin/claude`
 too.
 
+**The TUI, gated** (2026-09-30). After its `-p` turn, the gate's script
+writes `~/.claude.json` -- onboarding done, the gate's key approved by its
+last 20 characters, `/tmp` trusted -- and starts `claude` on the console,
+which is a terminal to it. xtask types a prompt and Enter once the TUI has
+made its startup check of the API, and `/exit` and Enter once the API has
+sent the reply to the tool's run, then requires the shell to go on. The
+TUI places every word with a cursor movement and ends no line, so the
+console reader sees its screen only after it exits; the verdict reads that
+screen with the escape sequences and spaces taken out, and requires Claude
+Code's name and its shortcut hint, and the reply. Bun passes descriptors to
+`ioctl` NaN-boxed (`0xfffe000000000001` for 1); `fd::arg` narrows every
+descriptor to 32 bits, as Linux's `unsigned int` does, and the TUI's raw
+mode on a real terminal is the proof.
+
+**In the launcher**: `claude.desktop`, carried with `/bin/claude` where the
+volume has been fetched, `Terminal=true`, so fuzzel opens it in a terminal.
+
 What is left:
 
-* **The interactive TUI.** `claude` without `-p`, in a terminal: raw mode,
-  the alternate screen, key input, resizes. Not gated yet. The console is
-  not a terminal to it; foot on the compositor is, and so is `sshdt`'s
-  pseudo-terminal, which is where a gate would drive it. One thing to
-  check there: Bun passes a file descriptor to `ioctl` as a NaN-boxed
-  JavaScript value (`0xfffe000000000001` for 1), whose upper half Linux
-  ignores because the argument is an `unsigned int`. Every call seen so far
-  was on a file that is not a terminal, where the answer is `ENOTTY` either
-  way.
 * **A real account.** `claude` logs in through a browser, or takes
   `ANTHROPIC_API_KEY`; both need the real internet through the gateway,
   which a watched desktop has. Unmeasured on Ferrix.
-* Both rows are in `docs/BACKLOG.md` (P2).
+* **Resizes** of the TUI's terminal, which the console gate cannot make.
 
 ## 6. Elsewhere
 

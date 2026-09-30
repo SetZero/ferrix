@@ -29,9 +29,9 @@ desktop's volume, whose terminals, and `remote-desktop`'s, have `claude`.
 
 **Still to do:**
 
-* The interactive TUI in a pseudo-terminal, gated; a real account over the
-  real network (§5, `docs/BACKLOG.md`).
-* An i386 signal frame with the `XSAVE` area (`docs/BACKLOG.md`).
+* A real account over the real network (§5).
+* An i386 signal frame with the `XSAVE` area: a first attempt backed out,
+  what it takes in §3 (`docs/BACKLOG.md`).
 * On ferrousli in glibc's place, and linux-arm64 on AArch64 (§6).
 * The Claude desktop app, an Electron application Anthropic builds for
   macOS and Windows only: the customer chose it on 2026-09-30, and an
