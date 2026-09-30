@@ -15,8 +15,9 @@ use super::boot::{
     Moving, Wanted, boot_and_dump, build_image, press, said_on_its_own, say_the_marker, undithered,
     with_the_transcript,
 };
+use super::desktop::MOVIE_PATH;
 use super::picture::{differences, expected, unexpected};
-use super::{CLIENT_PATH, Carried, EITHER, FAILED, MARKER, MOVIE_PATH, Programs, SETTLE};
+use super::{CLIENT_PATH, Carried, EITHER, FAILED, MARKER, Programs, SETTLE};
 use crate::args::Args;
 use crate::display::{DEVICE_ID, Qmp, free_port, parse_ppm};
 use crate::paths::{self, Arch};

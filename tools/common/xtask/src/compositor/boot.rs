@@ -408,7 +408,7 @@ pub(super) fn build_image(
 /// `FERRIX/DEFAULTS.TXT`, so that the kernel skips its self-checks as a
 /// board's desktop does.
 ///
-/// [`DESKTOP_DEFAULTS`]: super::DESKTOP_DEFAULTS
+/// [`DESKTOP_DEFAULTS`]: super::run::DESKTOP_DEFAULTS
 pub(super) fn build_desktop_image(
     arch: Arch,
     programs: &Programs,

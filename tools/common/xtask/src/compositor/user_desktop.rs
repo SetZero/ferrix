@@ -13,10 +13,9 @@ use super::boot::{
     Wanted, boot_and_dump_carrying, judge_still_running, judged_image, press, say_the_marker,
     with_the_transcript,
 };
-use super::{
-    Carried, EITHER, MARKER, Programs, SETTLE, build, desktop_programs, everything_config,
-    with_chrome,
-};
+use super::desktop::{desktop_programs, with_chrome};
+use super::run::everything_config;
+use super::{Carried, EITHER, MARKER, Programs, SETTLE, build};
 use crate::args::Args;
 use crate::display::{DEVICE_ID, Qmp, free_port};
 use crate::paths::{self, Arch};
