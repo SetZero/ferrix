@@ -879,9 +879,16 @@ fn wait_for(
 /// rather than rest on an argument about which of them could have concerned
 /// it, it answers all of them the one way that is always enough.
 ///
+/// First, whatever the generations say, a processor running a kernel thread
+/// on an address space that is being dropped takes it off:
+/// [`crate::user::space::answer_retiring`]. That is what
+/// [`wait_until_left`] waits for, and answering it here puts it on every path
+/// that answers a shootdown.
+///
 /// `me` must be the record of the processor running this, read with
 /// interrupts masked since: the interrupt handler, or [`as_this_cpu`].
 fn service_tlb(me: &PerCpu) {
+    crate::user::space::answer_retiring(me.logical);
     let wanted = TLB_GENERATION.load(Ordering::SeqCst);
     let seen = me.tlb_seen.load(Ordering::SeqCst);
     if seen < wanted {
@@ -961,6 +968,13 @@ impl CpuMask {
         if let Some(word) = self.words.get(cpu / 64) {
             let _ = word.fetch_and(!(1 << (cpu % 64)), Ordering::SeqCst);
         }
+    }
+
+    /// Whether processor `cpu` is in the set at the moment of reading.
+    pub(crate) fn contains(&self, cpu: usize) -> bool {
+        self.words
+            .get(cpu / 64)
+            .is_some_and(|word| word.load(Ordering::SeqCst) & (1 << (cpu % 64)) != 0)
     }
 
     /// The processors in the set at the moment of reading.
@@ -1288,6 +1302,84 @@ fn invalidate_pages(cpus: &CpuSet, pages: &TlbPages) {
     } else {
         let _ = SCOPED_SHOOTDOWNS.fetch_add(1, Ordering::Relaxed);
         let _ = SCOPED_TARGETS.fetch_add(targets, Ordering::Relaxed);
+    }
+}
+
+/// Interrupt every processor in `cpus` and return once `left` holds for each:
+/// what dropping an address space does to make every processor that has it
+/// loaded lazily take it off.
+///
+/// The interrupt is answered by [`service_tlb`], which asks
+/// `crate::user::space::answer_retiring` first; this processor answers for
+/// itself, as it is at each moment, while it waits. On every architecture the
+/// processors are interrupted, the Arm pair included: their broadcast
+/// invalidation empties a TLB but leaves the root register naming the tables,
+/// and a walk through it may start at any time.
+///
+/// Asked under [`flush_tlb_everywhere`]'s rules, and they are checked on
+/// every call, an empty `cpus` included, so that a caller breaking them is
+/// found by every boot rather than only by one where a processor happened to
+/// have the space loaded -- and in every build: see [`retire_may_wait`].
+pub(crate) fn wait_until_left(cpus: &CpuSet, left: impl Fn(usize) -> bool) {
+    retire_may_wait();
+    as_this_cpu(service_tlb);
+    if cpus.is_empty() {
+        return;
+    }
+    let Some(topology) = TOPOLOGY.get().filter(|_| this_cpu().is_some()) else {
+        return;
+    };
+    let member = |cpu: &PerCpu| cpu.is_online() && cpus.contains(cpu.logical);
+    let send = || {
+        for cpu in topology
+            .cpus
+            .iter()
+            .filter(|cpu| member(cpu) && !left(cpu.logical))
+        {
+            let _ = arch::send_ipi_to(cpu.hardware_id);
+        }
+    };
+    send();
+    wait_for(
+        topology,
+        SHOOTDOWN_TIMEOUT_NANOS,
+        "took an address space being dropped off",
+        &crate::panic::catalog::SHOOTDOWN_TIMEOUT,
+        service_tlb,
+        member,
+        |cpu| left(cpu.logical),
+        send,
+    );
+}
+
+/// [`shootdown_requested`]'s and [`shootdown_waits_for_others`]'s rules, for
+/// [`wait_until_left`], and in a release kernel as well as a debug one.
+///
+/// The shootdowns check theirs with `debug_assert!`, because each call site is
+/// one reviewed line. This one is reached from `Drop` of an address space,
+/// wherever the last reference happens to go, and a drop in the wrong place
+/// that waited for a processor which cannot answer would deadlock, or time
+/// out as a stuck processor, naming the wrong thing. So it stops the machine
+/// with the site instead (FX-0010), on every drop, whether or not a processor
+/// had the space loaded.
+fn retire_may_wait() {
+    if let Some((cpu, held, site)) = crate::sched::locks_here()
+        && held != 0
+    {
+        crate::panic::fatal!(
+            crate::panic::catalog::SPACE_DROPPED_WHERE_IT_CANNOT_WAIT,
+            "an address space was dropped on processor {cpu} holding {held} lock(s) that \
+             disable preemption, the outermost taken at {}:{}",
+            site.map_or("?", |site| site.file()),
+            site.map_or(0, core::panic::Location::line),
+        );
+    }
+    if crate::sched::started() && !arch::interrupts_enabled() {
+        crate::panic::fatal!(
+            crate::panic::catalog::SPACE_DROPPED_WHERE_IT_CANNOT_WAIT,
+            "an address space was dropped with interrupts masked, where no other processor \
+             could answer its request to leave"
+        );
     }
 }
 

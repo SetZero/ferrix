@@ -23,11 +23,20 @@ use aarch64::speculation as machine_speculation;
 #[cfg(target_arch = "arm")]
 use armv7a::speculation as machine_speculation;
 pub(crate) use speculation::{
-    HARDENED, nospec_below, nospec_index, report_exposure as report_speculation, switch_barriers,
+    HARDENED, nospec_below, nospec_index, report_exposure as report_speculation, space_changes_on,
+    switch_barriers,
 };
 pub(crate) use speculation_check::check as check_speculation;
+// Whether ring 0 is refused a user page, which decides whether a kernel
+// thread may run on the last program's address space (`user::space`).
+#[cfg(target_arch = "aarch64")]
+pub(crate) use aarch64::{USER_ACCESS_BACKSTOP, user_access_refused};
+#[cfg(target_arch = "arm")]
+pub(crate) use armv7a::{USER_ACCESS_BACKSTOP, user_access_refused};
 #[cfg(target_arch = "x86_64")]
 use x86_64::speculation as machine_speculation;
+#[cfg(target_arch = "x86_64")]
+pub(crate) use x86_64::{USER_ACCESS_BACKSTOP, user_access_refused};
 
 /// Which `struct stat` this architecture's stat calls fill in.
 ///
