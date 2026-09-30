@@ -1923,11 +1923,19 @@ no write through an end after it is marked closed, and there is none:
 on x86_64, aarch64, armv7a and armv7a `--smp 2`. That is evidence for the
 race only by repetition: it needs a preemption between two statements,
 which no check forces without a hook in core code, and like F-44 it closes
-on the ordering argument above. What a check can pin without a hook is not
-yet pinned: no boot check requires a closed peer's queued message to be
-read before `PeerClosed`. The review asked for one in `object/check.rs`,
-with a one-line negative control that answers `PeerClosed` over a
-non-empty queue.
+on the ordering argument above. The rule the argument rests on is checked
+on every boot since 7c9df826 (2026-09-30): stage 9's
+`check_messages_before_the_close_are_read_first` (`object/check.rs`,
+L.object.19) writes three messages, drops the writer, and requires all
+three back in order and `PeerClosed` only on the fourth read, printing
+`lastmsg`. It runs first of the channel checks, so a read that stops
+answering from its queue fails there. Negative control, run on x86_64 and
+not committed: `read` answering `PeerClosed` whenever its peer has closed,
+ignoring the queue, stopped the boot on the first read with "a read told
+the peer closed with its messages still queued" (FX-0901). The code before
+b3bf8fa2 passes this check; it holds the rule, not the interleaving.
+L.object.19 reads "not reached" until the next `cargo xtask coverage`,
+which must show it reached on all three architectures.
 
 ## F. Organisational
 
