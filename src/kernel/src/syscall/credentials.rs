@@ -210,7 +210,7 @@ impl Credentials {
     /// what makes `execve` give it the bounding set.
     fn is_namespace_root(&self) -> bool {
         self.user_ns
-            .from_kid(userns::Kind::User, self.user.effective)
+            .name_of(userns::Kind::User, self.user.effective)
             == Some(0)
     }
 

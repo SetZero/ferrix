@@ -166,7 +166,7 @@ impl IdMap {
     }
 
     /// The kernel id of `id` as the namespace names it.
-    fn to_kernel(&self, id: u32) -> Option<u32> {
+    fn to_kernel(self, id: u32) -> Option<u32> {
         self.extents().iter().find_map(|extent| {
             let offset = id.checked_sub(extent.inside)?;
             (offset < extent.count).then(|| extent.outside.wrapping_add(offset))
@@ -186,7 +186,7 @@ impl IdMap {
     }
 
     /// The namespace's name for kernel id `kernel`.
-    fn from_kernel(&self, kernel: u32) -> Option<u32> {
+    fn inside_id(&self, kernel: u32) -> Option<u32> {
         self.extents().iter().find_map(|extent| {
             let offset = kernel.checked_sub(extent.outside)?;
             (offset < extent.count).then(|| extent.inside.wrapping_add(offset))
@@ -332,15 +332,15 @@ impl UserNamespace {
 
     /// Linux's `from_kuid` and `from_kgid`: this namespace's name for a
     /// kernel id, or `None` when it has none.
-    pub(crate) fn from_kid(&self, kind: Kind, kernel: u32) -> Option<u32> {
-        self.map(kind).from_kernel(kernel)
+    pub(crate) fn name_of(&self, kind: Kind, kernel: u32) -> Option<u32> {
+        self.map(kind).inside_id(kernel)
     }
 }
 
 /// The name `ns` gives a kernel user or group id, [`OVERFLOW_ID`] when it
 /// gives none: what a program is told (Linux's `from_kuid_munged`).
 pub(crate) fn from_kid_munged(ns: &UserNamespace, kind: Kind, kernel: u32) -> u32 {
-    ns.from_kid(kind, kernel).unwrap_or(OVERFLOW_ID)
+    ns.name_of(kind, kernel).unwrap_or(OVERFLOW_ID)
 }
 
 /// Linux's `cap_capable`: whether a process with `credentials` holds `cap`
@@ -382,11 +382,9 @@ pub(crate) fn create(creator: &Credentials) -> Result<Arc<UserNamespace>, Errno>
     if parent.level >= MAX_LEVEL {
         return Err(Errno::EUSERS);
     }
-    if parent
-        .from_kid(Kind::User, creator.user.effective)
-        .is_none()
+    if parent.name_of(Kind::User, creator.user.effective).is_none()
         || parent
-            .from_kid(Kind::Group, creator.group.effective)
+            .name_of(Kind::Group, creator.group.effective)
             .is_none()
     {
         return Err(Errno::EPERM);
@@ -419,7 +417,7 @@ pub(crate) fn render_map(ns: &UserNamespace, kind: Kind, reader: &UserNamespace)
     };
     let mut out = Vec::new();
     for extent in ns.map(kind).extents() {
-        let Some(outside) = lower.from_kid(kind, extent.outside) else {
+        let Some(outside) = lower.name_of(kind, extent.outside) else {
             continue;
         };
         out.extend_from_slice(

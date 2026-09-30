@@ -226,8 +226,14 @@ fn user_namespace(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'st
         return Err("status did not show the namespace's own ids");
     }
 
-    // U1: root here is a kernel uid of 1000. Everything only root may do is
-    // still refused; everything the namespace owns is allowed.
+    fake_root(page, tally)?;
+    seen_from_outside(pid, &uid_map)
+}
+
+/// Fake root -- inside id 0, kernel uid 1000 -- is refused what only root
+/// may do, holds every capability in its own namespace, and can drop one.
+fn fake_root(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'static str> {
+    let process = page.process;
     let name = page.put(b"ferrix")?;
     tally.refused(
         call(process, Syscall::Sethostname, [name, 6, 0, 0, 0, 0]),
@@ -264,21 +270,18 @@ fn user_namespace(page: &mut Page<'_>, tally: &mut Tally<'_>) -> Result<(), &'st
         call(process, Syscall::Prctl, [PR_CAPBSET_DROP, 21, 0, 0, 0, 0]),
         "a capability could not be dropped from the bounding set",
     )?;
-    tally
-        .refused(
-            call(process, Syscall::Prctl, [PR_CAPBSET_READ, 21, 0, 0, 0, 0]),
-            Errno::EINVAL,
-            "PR_CAPBSET_READ did not report a dropped capability",
-        )
-        .or_else(|_| {
-            // `PR_CAPBSET_READ` answers 0, not an error, for a dropped one.
-            tally.ok(
-                call(process, Syscall::Prctl, [PR_CAPBSET_READ, 21, 0, 0, 0, 0])
-                    .and_then(|held| if held == 0 { Ok(0) } else { Err(Errno::EINVAL) }),
-                "PR_CAPBSET_READ did not report a dropped capability",
-            )
-        })?;
+    tally.ok(
+        call(process, Syscall::Prctl, [PR_CAPBSET_READ, 21, 0, 0, 0, 0])
+            .and_then(|held| if held == 0 { Ok(0) } else { Err(Errno::EINVAL) }),
+        "PR_CAPBSET_READ did not report a dropped capability",
+    )?;
 
+    Ok(())
+}
+
+/// What the first namespace sees of the namespace: the kernel's ids in its
+/// `status`, and the same map, read from its parent.
+fn seen_from_outside(pid: u32, uid_map: &str) -> Result<(), &'static str> {
     // What the first namespace sees of it: the kernel's ids.
     let watcher = process::new_for_check().map_err(|_| "could not make the watching process")?;
     let mut outside = page_for(&watcher)?;
@@ -376,9 +379,7 @@ fn credentials(tally: &mut Tally<'_>) -> Result<(), &'static str> {
     // unprivileged one. Linux's `f_cred` fix; the writer is judged as well.
     let namespace = userns::create(&caller).map_err(|_| "a user namespace could not be made")?;
     tally.refused(
-        userns::write_map(&namespace, Kind::User, &root, &caller, b"0 0 1\n")
-            .map(|_| 0)
-            .or_else(|errno| Err(errno)),
+        userns::write_map(&namespace, Kind::User, &root, &caller, b"0 0 1\n").map(|_| 0),
         Errno::EPERM,
         "a map opened by root was written wider by an unprivileged holder",
     )?;
@@ -390,58 +391,17 @@ fn credentials(tally: &mut Tally<'_>) -> Result<(), &'static str> {
         "root could not map kernel root into a namespace it made",
     )?;
 
-    // A child's run must lie wholly inside one of its parent's extents. The
-    // parent here maps `0 1000 10` and `20 1020 10`; a run of 21 ids from 5
-    // has both ends mapped at the same offset and ids between that the
-    // parent never had, which Linux's `map_id_range_down` refuses.
-    let mut parent = root.clone();
-    parent.user_ns = userns::create(&root).map_err(|_| "a parent namespace could not be made")?;
-    parent.caps = userns::CapSets::FRESH;
-    for kind in [Kind::User, Kind::Group] {
-        tally.ok(
-            userns::write_map(
-                &parent.user_ns,
-                kind,
-                &root,
-                &root,
-                b"0 1000 10
-20 1020 10
-",
-            )
-            .map(|_| 0),
-            "root could not give a namespace two extents",
-        )?;
-    }
-    parent.user.effective = 1005;
-    parent.group.effective = 1005;
-    let grandchild =
-        userns::create(&parent).map_err(|_| "a namespace inside a mapped one could not be made")?;
-    tally.refused(
-        userns::write_map(
-            &grandchild,
-            Kind::User,
-            &parent,
-            &parent,
-            b"0 5 21
-",
-        )
-        .map(|_| 0),
-        Errno::EPERM,
-        "a run spanning two of the parent's extents, and the gap between them, was accepted",
-    )?;
-    tally.ok(
-        userns::write_map(
-            &grandchild,
-            Kind::User,
-            &parent,
-            &parent,
-            b"0 5 5
-",
-        )
-        .map(|_| 0),
-        "a run inside one of the parent's extents was refused",
-    )?;
+    parent_extents(tally, &root)?;
 
+    inside_rules(tally, &caller, namespace)
+}
+
+/// A namespace's own owner, and `execve` in it (U1, U7).
+fn inside_rules(
+    tally: &mut Tally<'_>,
+    caller: &Credentials,
+    namespace: alloc::sync::Arc<userns::UserNamespace>,
+) -> Result<(), &'static str> {
     // A namespace mapped by its owner, and a process in it.
     let mut inside = caller.clone();
     inside.user_ns = namespace;
@@ -463,7 +423,7 @@ fn credentials(tally: &mut Tally<'_>) -> Result<(), &'static str> {
     if userns::capable_over(&inside, userns::first(), CAP_SYS_ADMIN) {
         return Err("a namespace's creator held a capability over the first namespace");
     }
-    if !userns::capable_over(&caller, &inside.user_ns, CAP_SYS_ADMIN) {
+    if !userns::capable_over(caller, &inside.user_ns, CAP_SYS_ADMIN) {
         return Err("the owner outside a namespace lacked CAP_SYS_ADMIN over it");
     }
 
@@ -478,12 +438,51 @@ fn credentials(tally: &mut Tally<'_>) -> Result<(), &'static str> {
     if runs.caps.effective != runs.caps.bounding {
         return Err("execve did not give a namespace's root its bounding set");
     }
-    let mut other = inside.clone();
+    let mut other = inside;
     other.user.effective = UID + 1;
     let _ = other.exec(None, None);
     if other.caps.effective != 0 || other.caps.permitted != 0 {
         return Err("execve gave capabilities to a process that is not its namespace's root");
     }
+    Ok(())
+}
+
+/// A child's map must lie wholly inside one of its parent's extents.
+fn parent_extents(tally: &mut Tally<'_>, root: &Credentials) -> Result<(), &'static str> {
+    // A child's run must lie wholly inside one of its parent's extents. The
+    // parent here maps `0 1000 10` and `20 1020 10`; a run of 21 ids from 5
+    // has both ends mapped at the same offset and ids between that the
+    // parent never had, which Linux's `map_id_range_down` refuses.
+    let mut parent = root.clone();
+    parent.user_ns = userns::create(root).map_err(|_| "a parent namespace could not be made")?;
+    parent.caps = userns::CapSets::FRESH;
+    for kind in [Kind::User, Kind::Group] {
+        tally.ok(
+            userns::write_map(
+                &parent.user_ns,
+                kind,
+                root,
+                root,
+                b"0 1000 10\n20 1020 10\n",
+            )
+            .map(|_| 0),
+            "root could not give a namespace two extents",
+        )?;
+    }
+    parent.user.effective = 1005;
+    parent.group.effective = 1005;
+    let grandchild =
+        userns::create(&parent).map_err(|_| "a namespace inside a mapped one could not be made")?;
+    tally.refused(
+        userns::write_map(&grandchild, Kind::User, &parent, &parent, b"0 5 21\n").map(|_| 0),
+        Errno::EPERM,
+        "a run spanning two of the parent's extents, and the gap between them, was accepted",
+    )?;
+    tally.ok(
+        userns::write_map(&grandchild, Kind::User, &parent, &parent, b"0 5 5\n").map(|_| 0),
+        "a run inside one of the parent's extents was refused",
+    )?;
+
     Ok(())
 }
 

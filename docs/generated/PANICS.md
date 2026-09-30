@@ -74,6 +74,7 @@ Causes are listed most likely first.
 | [FX-0885](#fx-0885) | A mount's flags failed their self-check |
 | [FX-0886](#fx-0886) | A bind mount failed its self-check |
 | [FX-0887](#fx-0887) | A mount namespace failed its self-check |
+| [FX-0888](#fx-0888) | A user namespace failed its self-check |
 | [FX-0890](#fx-0890) | sysfs did not show the machine's devices as Linux shows them |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-0902](#fx-0902) | an allocation failure was not survived |
@@ -1674,6 +1675,37 @@ A native child the second process makes must be in its namespace and root
 See: src/kernel/src/fs/namespace_check.rs; src/kernel/src/syscall/namespace.rs;
 src/kernel/src/syscall/fsctl.rs; src/kernel/src/syscall/launch.rs;
 src/lib/fs/vfs/src/namespace.rs.
+
+<a id="fx-0888"></a>
+
+## FX-0888 — A user namespace failed its self-check
+
+`fs::userns_check::run` makes a process that is uid 1000 make a user namespace.
+It must be named apart by /proc/<pid>/ns/user and read its ids as 65534 until
+mapped; be refused a gid_map before setgroups is denied, a uid_map naming kernel
+root or two ids, and a second write; be accepted its own id mapped to 0 and then
+read 0 from getuid and in status, while the first namespace reads 1000; and be
+refused sethostname, mount, setuid to an unmapped id (EINVAL) and setgroups,
+while holding every capability in its own namespace. A chrooted process must be
+refused a user namespace. On Credentials: a map opened by root and written by an
+unprivileged holder must be refused, a set-user-id bit must be ignored by execve
+in a child namespace, and the sets must go to the namespace's root alone. A
+read-only bind of /proc/sys must refuse a write with EROFS (docs/NAMESPACES.md
+§4, U1 to U9).
+
+1. `Credentials::privileged` answers true for a process in a child user
+   namespace.
+2. `userns::write_map` accepts a map the rules of Linux's `new_idmap_permitted`
+   refuse, or judges only the opener or only the writer.
+3. `credentials::kernel_id` or `Credentials::shown` is skipped at an id
+   boundary.
+4. `namespace::make_user_namespace` no longer compares the process's root with
+   the namespace's.
+5. `Credentials::exec` honours a set-id bit, or gives the sets to a process that
+   is not its namespace's root.
+
+See: src/kernel/src/fs/userns_check.rs; src/kernel/src/syscall/userns.rs;
+src/kernel/src/syscall/credentials.rs; src/kernel/src/syscall/namespace.rs.
 
 <a id="fx-0890"></a>
 
