@@ -73,7 +73,9 @@ fn looks(
     let process = registry::find(reader.pid()).ok_or("the /proc reader is gone")?;
     let answer = userns::acting_as(&process, || {
         if directory {
-            by_number(
+            // Opening the directory is the mode's business; listing it is
+            // what `ptrace_may_access` guards, so it is listed.
+            let opened = by_number(
                 reader,
                 Syscall::Openat,
                 [
@@ -84,9 +86,15 @@ fn looks(
                     0,
                     0,
                 ],
-            )
-            .inspect(|&fd| {
+            );
+            opened.and_then(|fd| {
+                let listed = by_number(
+                    reader,
+                    Syscall::Getdents64,
+                    [fd as u64, page_buffer(&page), 512, 0, 0, 0],
+                );
                 let _ = by_number(reader, Syscall::Close, [fd as u64, 0, 0, 0, 0, 0]);
+                listed
             })
         } else {
             by_number(
