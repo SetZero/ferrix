@@ -5,7 +5,9 @@
 //! imports: `__strdup` and `__strtok_r` (SDL, the Steam Runtime's tools),
 //! `_IO_putc` (lsof), `prlimit64` (the Runtime's tools; `rlim_t` is 64 bits
 //! here on every architecture, so it is `prlimit`), and Chromium's
-//! `__libc_malloc` family, which its allocator shim calls through.
+//! `__libc_malloc` family, which its allocator shim calls through. Python
+//! imports `__sysconf` and `preadv64v2` and `pwritev64v2`; `off_t` is 64
+//! bits here too, so the `64` names are the plain ones.
 //!
 //! Each takes the same arguments as the plain function and does the same
 //! thing, so each is a branch to it, as [`crate::arm_names`] does for
@@ -84,6 +86,7 @@ aliases! {
     "__strtof_l" => "strtof_l",
     "__strtok_r" => "strtok_r",
     "__strxfrm_l" => "strxfrm_l",
+    "__sysconf" => "sysconf",
     "__towlower_l" => "towlower_l",
     "__towupper_l" => "towupper_l",
     "__uselocale" => "uselocale",
@@ -91,7 +94,11 @@ aliases! {
     "__wcsftime_l" => "wcsftime_l",
     "__wcsxfrm_l" => "wcsxfrm_l",
     "__wctype_l" => "wctype_l",
+    "preadv64" => "preadv",
+    "preadv64v2" => "preadv2",
     "prlimit64" => "prlimit",
+    "pwritev64" => "pwritev",
+    "pwritev64v2" => "pwritev2",
 }
 
 pub(crate) use aliases;

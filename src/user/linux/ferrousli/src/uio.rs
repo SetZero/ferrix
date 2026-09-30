@@ -101,3 +101,127 @@ pub unsafe extern "C" fn pwritev(fd: c_int, iov: *const Iovec, count: c_int, off
     };
     errno::from_syscall(ret)
 }
+
+/// [`preadv`] with `flags`, `RWF_*` from `linux/fs.h`, which change how the
+/// read is done; an `offset` of -1 reads at the file offset and moves it,
+/// as [`readv`] does.
+///
+/// # Safety
+///
+/// As [`readv`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn preadv2(
+    fd: c_int,
+    iov: *const Iovec,
+    count: c_int,
+    offset: i64,
+    flags: c_int,
+) -> isize {
+    // SAFETY: as in `preadv`; the kernel reads `flags` as an int.
+    let ret = unsafe {
+        crate::cancel::syscall_cp(
+            nr::PREADV2,
+            fd as usize,
+            iov.addr(),
+            count as usize,
+            offset as usize,
+            (offset >> 32) as usize,
+            flags as usize,
+        )
+    };
+    errno::from_syscall(ret)
+}
+
+/// [`pwritev`] with `flags`, as [`preadv2`] takes them.
+///
+/// # Safety
+///
+/// As [`writev`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn pwritev2(
+    fd: c_int,
+    iov: *const Iovec,
+    count: c_int,
+    offset: i64,
+    flags: c_int,
+) -> isize {
+    // SAFETY: as in `pwritev` and `preadv2`.
+    let ret = unsafe {
+        crate::cancel::syscall_cp(
+            nr::PWRITEV2,
+            fd as usize,
+            iov.addr(),
+            count as usize,
+            offset as usize,
+            (offset >> 32) as usize,
+            flags as usize,
+        )
+    };
+    errno::from_syscall(ret)
+}
+
+/// Copies from process `pid`'s memory, the `remote_count` ranges at
+/// `remote`, into this process's `local_count` buffers at `local`, as far as
+/// both reach. `flags` must be 0. Returns the bytes copied.
+///
+/// # Safety
+///
+/// `local` and `remote` must be valid for reads of their counts of
+/// `struct iovec`, and each of `local`'s buffers valid for writes that
+/// nothing else refers to; the kernel checks `remote`'s against `pid`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn process_vm_readv(
+    pid: c_int,
+    local: *const Iovec,
+    local_count: usize,
+    remote: *const Iovec,
+    remote_count: usize,
+    flags: usize,
+) -> isize {
+    // SAFETY: the caller vouches for both vectors and the local buffers.
+    let ret = unsafe {
+        crate::syscall::syscall6(
+            nr::PROCESS_VM_READV,
+            pid as usize,
+            local.addr(),
+            local_count,
+            remote.addr(),
+            remote_count,
+            flags,
+        )
+    };
+    errno::from_syscall(ret)
+}
+
+/// Copies this process's `local_count` buffers at `local` into process
+/// `pid`'s memory, the `remote_count` ranges at `remote`, as far as both
+/// reach. `flags` must be 0. Returns the bytes copied.
+///
+/// # Safety
+///
+/// `local` and `remote` must be valid for reads of their counts of
+/// `struct iovec`, and each of `local`'s buffers valid for reads.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn process_vm_writev(
+    pid: c_int,
+    local: *const Iovec,
+    local_count: usize,
+    remote: *const Iovec,
+    remote_count: usize,
+    flags: usize,
+) -> isize {
+    // SAFETY: the caller vouches for both vectors, and the kernel only reads
+    // the local buffers.
+    let ret = unsafe {
+        crate::syscall::syscall6(
+            nr::PROCESS_VM_WRITEV,
+            pid as usize,
+            local.addr(),
+            local_count,
+            remote.addr(),
+            remote_count,
+            flags,
+        )
+    };
+    errno::from_syscall(ret)
+}
