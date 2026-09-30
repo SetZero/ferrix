@@ -23,7 +23,8 @@ use aarch64::speculation as machine_speculation;
 #[cfg(target_arch = "arm")]
 use armv7a::speculation as machine_speculation;
 pub(crate) use speculation::{
-    HARDENED, nospec_below, nospec_index, report_exposure as report_speculation, switch_barriers,
+    HARDENED, nospec_below, nospec_index, report_exposure as report_speculation, space_changes_on,
+    switch_barriers,
 };
 pub(crate) use speculation_check::check as check_speculation;
 #[cfg(target_arch = "x86_64")]

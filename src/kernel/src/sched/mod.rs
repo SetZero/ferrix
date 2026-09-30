@@ -1991,7 +1991,7 @@ fn choose_next(
     // two stack pointers and whose whole job is register operations -- and not
     // after the switch either, because the incoming context resumes on its own
     // stack and would have to be told to do this before touching anything.
-    swap_address_space(previous.address_space(), next.address_space());
+    swap_address_space(next.address_space());
     switch_user_state(&previous, &next);
 
     // SAFETY: (SHARED) both tasks belong to this queue and this processor holds its
@@ -2007,51 +2007,49 @@ fn choose_next(
 /// Called from [`choose_next`] with the run queue lock held, between deciding
 /// to switch and the switch itself.
 ///
-/// # Why the comparison is by pointer
+/// # Why the comparison is with what is loaded, and by pointer
 ///
-/// Because two threads of one process share a root, and an address space
-/// switch is the expensive operation this whole stage declined to optimise:
-/// stage 6 allocates no `ASID`s or `PCID`s, so installing a root invalidates
-/// every user translation this processor had. Switching between two threads of
-/// one process must therefore cost nothing, and `Arc::ptr_eq` is what says they
-/// are the same space rather than two equal ones.
+/// Because an address space switch is the expensive operation this kernel
+/// allocates no `ASID`s or `PCID`s to soften: installing a root invalidates
+/// every user translation this processor had, and it may also issue the
+/// switch barrier. Two threads of one process share a root, and so
+/// does a program and itself before and after a kernel thread ran here, so
+/// the comparison is with the space this processor has loaded, not with the
+/// outgoing task's -- which is what makes the ring's round trip, reader and
+/// ring task in the kernel and the driver in its process, write a root only
+/// where the space really changes. The pointer is what says two spaces are
+/// the same one rather than two equal ones.
 ///
-/// # What `None` means, and why it is not lazy
+/// # What `None` means: lazy TLB
 ///
-/// A kernel thread has no user half, and gets the user half switched *off*
-/// rather than left as it was. Leaving the outgoing process's root installed is
-/// Linux's lazy TLB and it is faster, and it obliges somebody to keep an
-/// address space alive underneath a thread that holds no reference to it. Stage
-/// 6 takes the plain version; the reference this relies on is the `Arc` the
-/// task itself holds.
+/// A kernel thread has no user half of its own and gets the one that was
+/// loaded, left as it was: Linux's lazy TLB. That obliges somebody to keep
+/// the space alive underneath a thread that holds no reference to it, and
+/// the address space does: the processor stays in the space's set, and
+/// dropping the space makes every processor in the set leave it before its
+/// tables go (`user::space`'s module documentation argues both).
 ///
 /// # What this trusts
 ///
-/// That `previous` is what is actually installed on this processor. That holds
-/// because `previous` is the queue's `current`, which is the task this
-/// processor was running, and the only thing that installs a root is this
-/// function. A task may change processor while it is *blocked* -- `balance`
-/// moves queued tasks from a third processor -- but a blocked task is not
-/// anybody's `current`, so it cannot be the `previous` of a switch it is not
-/// part of.
-fn swap_address_space(
-    previous: Option<&Arc<crate::user::space::AddressSpace>>,
-    next: Option<&Arc<crate::user::space::AddressSpace>>,
-) {
-    match (previous, next) {
-        // Two threads of one process, or two kernel threads: nothing to do,
-        // and doing it anyway would throw away every user translation.
-        (Some(before), Some(after)) if Arc::ptr_eq(before, after) => {}
-        (None, None) => {}
-        // SAFETY: (TRANSLATE) `next` is the task this processor is about to run, and the
-        // queue holds an `Arc` to it for as long as it is `current`, so the
-        // tables outlive the installation. Interrupts are off and the run
-        // queue lock is held, so nothing else can install a root here first.
-        (before, Some(after)) => unsafe { after.install(before.map(|space| &**space)) },
-        // SAFETY: (TRANSLATE) the incoming task is a kernel thread and wants no user
-        // address; the kernel is reachable without one on every architecture.
-        (Some(before), None) => unsafe { before.uninstall() },
-    }
+/// That the record `user::space::switch_here` reads says what is actually
+/// loaded on this processor. The record is written only where the root
+/// register is, by the address space code, with interrupts masked on the
+/// processor it belongs to. And what it asserts after: a task that runs in a
+/// space finds that space loaded, so the only task ever running on a space
+/// not its own is a kernel thread, which reaches user memory through
+/// `syscall::uaccess` and the task's own space, never through the root.
+fn swap_address_space(next: Option<&Arc<crate::user::space::AddressSpace>>) {
+    let next = next.map(|space| &**space);
+    // SAFETY: (TRANSLATE) `next` is the space of the task this processor is about to
+    // run, and the queue holds an `Arc` to that task for as long as it is
+    // `current`, so the tables outlive the installation; after that the space
+    // keeps itself alive while it stays loaded. Interrupts are off and the run
+    // queue lock is held, so nothing else can install a root here first.
+    unsafe { crate::user::space::switch_here(next) };
+    debug_assert!(
+        next.is_none_or(crate::user::space::is_loaded_here),
+        "a task that runs in an address space was switched to with another one loaded"
+    );
 }
 
 /// Move the user registers no trap saves from the outgoing task to the
