@@ -134,6 +134,52 @@ pub unsafe extern "C" fn time(t: *mut i64) -> i64 {
     ts.tv_sec
 }
 
+/// C's `struct timeb`, from `include/sys/timeb.h`: the time in seconds and
+/// milliseconds, and an obsolete time zone. glibc's is the same on the
+/// 64-bit targets; on ARMv7-A its `time_t` is 32 bits, which this is not.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Timeb {
+    /// Whole seconds since the Epoch.
+    pub time: i64,
+    /// Milliseconds.
+    pub millitm: u16,
+    /// Minutes west of Greenwich; always 0.
+    pub timezone: i16,
+    /// Whether daylight saving time applies; always 0.
+    pub dstflag: i16,
+}
+
+const _: () = assert!(size_of::<Timeb>() == 16);
+const _: () = assert!(offset_of!(Timeb, millitm) == 8);
+
+/// Reads the real-time clock into `*tp` to the millisecond: musl 1.2.5's
+/// `time/ftime.c` (MIT). The time zone fields are 0, as in musl. Returns 0.
+/// The scout runtime's libopusurl calls it.
+///
+/// On ARMv7-A, glibc's `ftime` takes a 32-bit `time_t`, so this is only
+/// `__ftime64`, the name musl's header gives it there.
+///
+/// # Safety
+///
+/// `tp` must be valid for a write of a `struct timeb`.
+#[cfg_attr(all(not(test), not(target_arch = "arm")), unsafe(no_mangle))]
+#[cfg_attr(all(not(test), target_arch = "arm"), unsafe(export_name = "__ftime64"))]
+pub unsafe extern "C" fn ftime(tp: *mut Timeb) -> c_int {
+    let mut ts = Timespec::default();
+    // SAFETY: `ts` is a live local.
+    let _ = unsafe { clock_gettime(CLOCK_REALTIME, &raw mut ts) };
+    let now = Timeb {
+        time: ts.tv_sec,
+        millitm: (ts.tv_nsec / 1_000_000) as u16,
+        timezone: 0,
+        dstflag: 0,
+    };
+    // SAFETY: the caller vouches for `tp`.
+    unsafe { tp.write(now) };
+    0
+}
+
 /// The microsecond form of `ts`, truncated.
 const fn timeval_of(ts: Timespec) -> Timeval {
     Timeval {

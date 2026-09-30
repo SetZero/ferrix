@@ -371,6 +371,92 @@ unsafe impl Sync for NameBuffer {}
 /// What `ttyname` returns.
 static NAME: NameBuffer = NameBuffer(UnsafeCell::new([0; TTY_NAME_MAX]));
 
+/// The longest password `getpass` reads, with its NUL, as musl's.
+const PASSWORD_MAX: usize = 128;
+
+/// The buffer `getpass` returns.
+#[derive(Debug)]
+struct PasswordBuffer(UnsafeCell<[u8; PASSWORD_MAX]>);
+
+// SAFETY: `getpass`'s result is static storage the next call overwrites, and
+// the function is not safe to call from two threads at once, as in musl and
+// glibc. Only `getpass` writes it.
+unsafe impl Sync for PasswordBuffer {}
+
+/// What `getpass` returns.
+static PASSWORD: PasswordBuffer = PasswordBuffer(UnsafeCell::new([0; PASSWORD_MAX]));
+
+/// `O_RDWR | O_NOCTTY | O_CLOEXEC`, from `asm-generic/fcntl.h`.
+const TTY_FLAGS: c_int = 0o2 | 0o400 | 0o2_000_000;
+/// `ECHO`, from `include/bits/termios.h`.
+const ECHO: c_uint = 0o10;
+/// `ISIG`, from `include/bits/termios.h`.
+const ISIG: c_uint = 0o1;
+/// `ICANON`, from `include/bits/termios.h`.
+const ICANON: c_uint = 0o2;
+/// `INLCR`, from `include/bits/termios.h`.
+const INLCR: c_uint = 0o100;
+/// `IGNCR`, from `include/bits/termios.h`.
+const IGNCR: c_uint = 0o200;
+/// `ICRNL`, from `include/bits/termios.h`.
+const ICRNL: c_uint = 0o400;
+/// `TCSAFLUSH`, from `include/termios.h`.
+const TCSAFLUSH: c_int = 2;
+
+/// Writes `prompt` to the controlling terminal, reads a line from it with
+/// echo off, and returns the line without its newline, in static storage
+/// the next call overwrites; null if there is no terminal or the read fails.
+/// A line is cut at 127 bytes. musl 1.2.5's `legacy/getpass.c` (MIT); CUPS
+/// in the scout runtime imports it.
+///
+/// # Safety
+///
+/// `prompt` must be a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn getpass(prompt: *const c_char) -> *mut c_char {
+    // SAFETY: the path is a C string literal.
+    let fd = unsafe { crate::fcntl::open(c"/dev/tty".as_ptr(), TTY_FLAGS, 0) };
+    if fd < 0 {
+        return null_mut();
+    }
+    let mut saved = Termios::default();
+    // SAFETY: `saved` is a live local.
+    let _ = unsafe { tcgetattr(fd, &raw mut saved) };
+    let mut quiet = saved;
+    quiet.c_lflag = (quiet.c_lflag & !(ECHO | ISIG)) | ICANON;
+    quiet.c_iflag = (quiet.c_iflag & !(INLCR | IGNCR)) | ICRNL;
+    // SAFETY: `quiet` is a live local.
+    let _ = unsafe { tcsetattr(fd, TCSAFLUSH, &raw const quiet) };
+    let _ = tcdrain(fd);
+
+    // SAFETY: the caller passes a NUL-terminated prompt.
+    let prompt = unsafe { CStr::from_ptr(prompt) }.to_bytes();
+    // SAFETY: the kernel reads the prompt's bytes.
+    let _ = unsafe { crate::unistd::write(fd, prompt.as_ptr().cast(), prompt.len()) };
+    let password = PASSWORD.0.get().cast::<u8>();
+    // SAFETY: see `PasswordBuffer`; the kernel writes at most its size.
+    let got = unsafe { crate::unistd::read(fd, password.cast(), PASSWORD_MAX) };
+    if let Ok(mut len) = usize::try_from(got) {
+        let last = len.checked_sub(1).map(|at| {
+            // SAFETY: the kernel wrote `len` bytes, so `at` is inside them.
+            unsafe { password.wrapping_add(at).read() }
+        });
+        // A full buffer loses its last byte to the NUL, as in musl.
+        if len == PASSWORD_MAX || last == Some(b'\n') {
+            len -= 1;
+        }
+        // SAFETY: `len` is below `PASSWORD_MAX`.
+        unsafe { password.wrapping_add(len).write(0) };
+    }
+
+    // SAFETY: `saved` is a live local.
+    let _ = unsafe { tcsetattr(fd, TCSAFLUSH, &raw const saved) };
+    // SAFETY: the kernel reads one byte of a literal.
+    let _ = unsafe { crate::unistd::write(fd, c"\n".as_ptr().cast(), 1) };
+    let _ = crate::unistd::close(fd);
+    if got < 0 { null_mut() } else { password.cast() }
+}
+
 /// The name of terminal `fd`, in static storage the next call overwrites, or
 /// null with `errno` set.
 #[cfg_attr(not(test), unsafe(no_mangle))]

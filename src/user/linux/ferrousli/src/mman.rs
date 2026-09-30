@@ -256,6 +256,149 @@ pub unsafe extern "C" fn memfd_create(name: *const c_char, flags: c_uint) -> c_i
     errno::from_syscall(ret) as c_int
 }
 
+/// Allocates a memory protection key whose initial rights are
+/// `access_rights` (`PKEY_DISABLE_ACCESS`, `PKEY_DISABLE_WRITE`). Returns the
+/// key, or -1 with `errno` set: `ENOSPC` when every key is taken, and
+/// `EINVAL` or `ENOSYS` where the processor or kernel has none, which is how
+/// Chromium, the caller here, learns to go without.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn pkey_alloc(flags: c_uint, access_rights: c_uint) -> c_int {
+    // SAFETY: allocating a key reads and writes no user memory.
+    let ret = unsafe { syscall::syscall2(nr::PKEY_ALLOC, flags as usize, access_rights as usize) };
+    errno::from_syscall(ret) as c_int
+}
+
+/// Frees a key [`pkey_alloc`] gave.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn pkey_free(key: c_int) -> c_int {
+    // SAFETY: freeing a key reads and writes no user memory.
+    let ret = unsafe { syscall::syscall2(nr::PKEY_FREE, key as usize, 0) };
+    errno::from_syscall(ret) as c_int
+}
+
+/// [`mprotect`], also tagging the pages with the protection key `key`. As
+/// in glibc, key -1 is plain `mprotect`, which a kernel without keys has too.
+///
+/// # Safety
+///
+/// As [`mprotect`]; the key's rights apply to the pages from now on.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn pkey_mprotect(
+    addr: *mut c_void,
+    len: usize,
+    prot: c_int,
+    key: c_int,
+) -> c_int {
+    if key == -1 {
+        // SAFETY: the caller's contract is `mprotect`'s.
+        return unsafe { mprotect(addr, len, prot) };
+    }
+    // SAFETY: the caller vouches for the change.
+    let ret = unsafe {
+        syscall::syscall4(
+            nr::PKEY_MPROTECT,
+            addr.addr(),
+            len,
+            prot as usize,
+            key as usize,
+        )
+    };
+    errno::from_syscall(ret) as c_int
+}
+
+/// The keys the protection key rights register has room for: two bits
+/// each, access-disable and write-disable, in 32 bits.
+#[cfg(target_arch = "x86_64")]
+const PKEYS: c_int = 16;
+
+/// The protection key rights register, `PKRU`, with `RDPKRU`.
+///
+/// Like glibc's, this does not ask the processor whether it has the
+/// register: one without it faults. A program asks after a successful
+/// [`pkey_alloc`], which there is none without it.
+#[cfg(target_arch = "x86_64")]
+fn read_pkru() -> u32 {
+    let pkru: u32;
+    // SAFETY: RDPKRU with ECX 0 reads the register into EAX, clears EDX,
+    // and touches no memory.
+    unsafe {
+        core::arch::asm!(
+            ".byte 0x0f, 0x01, 0xee",
+            in("ecx") 0u32,
+            out("eax") pkru,
+            out("edx") _,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+    pkru
+}
+
+/// Writes the protection key rights register with `WRPKRU`.
+#[cfg(target_arch = "x86_64")]
+fn write_pkru(pkru: u32) {
+    // SAFETY: WRPKRU with ECX and EDX 0 writes EAX to the register. It
+    // changes which pages this thread may touch, which is what the caller
+    // asked for, and nothing else.
+    unsafe {
+        core::arch::asm!(
+            ".byte 0x0f, 0x01, 0xef",
+            in("eax") pkru,
+            in("ecx") 0u32,
+            in("edx") 0u32,
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
+/// This thread's rights for `key`: `PKEY_DISABLE_ACCESS` and
+/// `PKEY_DISABLE_WRITE`, from its two bits of `PKRU`. -1 with `EINVAL` for
+/// a key outside 0 to 15.
+///
+/// On the other architectures -1 with `ENOSYS`, as glibc's generic
+/// function answers; Arm's permission overlay is not read.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn pkey_get(key: c_int) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if !(0..PKEYS).contains(&key) {
+            errno::set(errno::EINVAL);
+            return -1;
+        }
+        ((read_pkru() >> (2 * key)) & 3) as c_int
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let _ = key;
+        errno::set(errno::ENOSYS);
+        -1
+    }
+}
+
+/// Sets this thread's rights for `key` to `rights`, as [`pkey_get`] reads
+/// them. -1 with `EINVAL` for a key outside 0 to 15 or rights above 3.
+///
+/// On the other architectures -1 with `ENOSYS`, as [`pkey_get`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn pkey_set(key: c_int, rights: c_uint) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if !(0..PKEYS).contains(&key) || rights > 3 {
+            errno::set(errno::EINVAL);
+            return -1;
+        }
+        let shift = 2 * key;
+        let pkru = (read_pkru() & !(3 << shift)) | (rights << shift);
+        write_pkru(pkru);
+        0
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let _ = (key, rights);
+        errno::set(errno::ENOSYS);
+        -1
+    }
+}
+
 /// `O_CLOEXEC`, which every architecture here numbers alike.
 const O_CLOEXEC: c_int = 0o2_000_000;
 /// `O_NONBLOCK`, likewise.

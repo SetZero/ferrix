@@ -1,10 +1,11 @@
-//! glibc's checked `printf` entry points, which programs built with
-//! `_FORTIFY_SOURCE` call instead of the plain ones.
+//! glibc's checked `printf` and `wprintf` entry points, which programs built
+//! with `_FORTIFY_SOURCE` call instead of the plain ones.
 //!
 //! Each takes a flag before the format, and the string forms the size of the
-//! destination as the compiler knew it, `(size_t)-1` when it did not. Output
-//! that would pass that size, or an `snprintf` limit larger than it, stops the
-//! program with glibc's message and `SIGABRT`.
+//! destination as the compiler knew it, `(size_t)-1` when it did not; for
+//! `swprintf`, in wide characters. Output that would pass that size, or an
+//! `snprintf` or `swprintf` limit larger than it, stops the program with
+//! glibc's message and `SIGABRT`.
 //!
 //! glibc also refuses `%n` in a format that is not read-only memory when the
 //! flag asks for level 2. That check needs to know where the format lives, and
@@ -16,6 +17,8 @@ use core::ptr::null_mut;
 use super::file::{self, File, Inner};
 use super::io::{fread, read_line};
 use super::printf::{vasprintf, vdprintf, vfprintf, vprintf, vsnprintf};
+use super::wprintf::{vfwprintf, vswprintf, vwprintf};
+use crate::multibyte::WChar;
 use crate::string::strlen;
 use crate::va::{self, VaListArg};
 
@@ -136,6 +139,62 @@ va::variadic!(__dprintf_chk, 3, __vdprintf_chk);
 va::variadic!(__asprintf_chk, 3, __vasprintf_chk);
 va::variadic!(__sprintf_chk, 4, __vsprintf_chk);
 va::variadic!(__snprintf_chk, 5, __vsnprintf_chk);
+
+/// `vwprintf`, checked.
+///
+/// # Safety
+///
+/// As `vwprintf`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __vwprintf_chk(_flag: c_int, fmt: *const WChar, ap: VaListArg) -> c_int {
+    // SAFETY: the caller vouches for the format and arguments.
+    unsafe { vwprintf(fmt, ap) }
+}
+
+/// `vfwprintf`, checked.
+///
+/// # Safety
+///
+/// As `vfwprintf`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __vfwprintf_chk(
+    stream: *mut File,
+    _flag: c_int,
+    fmt: *const WChar,
+    ap: VaListArg,
+) -> c_int {
+    // SAFETY: the caller vouches for the stream, format and arguments.
+    unsafe { vfwprintf(stream, fmt, ap) }
+}
+
+/// `vswprintf` with a limit of `maxlen` wide characters into an array of
+/// `size`, aborting if the limit is larger than the array, as glibc's
+/// `__vswprintf_chk` does. `size` counts wide characters, not bytes: glibc's
+/// header divides the object's size by `sizeof (wchar_t)`.
+///
+/// # Safety
+///
+/// As `vswprintf`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __vswprintf_chk(
+    s: *mut WChar,
+    maxlen: usize,
+    _flag: c_int,
+    size: usize,
+    fmt: *const WChar,
+    ap: VaListArg,
+) -> c_int {
+    if maxlen > size {
+        overflow();
+    }
+    // SAFETY: the caller vouches for `maxlen` characters, the format and
+    // arguments.
+    unsafe { vswprintf(s, maxlen, fmt, ap) }
+}
+
+va::variadic!(__wprintf_chk, 2, __vwprintf_chk);
+va::variadic!(__fwprintf_chk, 3, __vfwprintf_chk);
+va::variadic!(__swprintf_chk, 5, __vswprintf_chk);
 
 /// `fread` into an object of `ptrlen` bytes, refusing a read that could pass
 /// its end or whose size overflows.

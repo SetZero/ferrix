@@ -470,38 +470,80 @@ pub extern "C" fn fchdir(fd: c_int) -> c_int {
 
 /// Copies the working directory's absolute path into the `size` bytes at
 /// `buf`, and returns `buf`, or null with `errno` set. `ERANGE` means the
-/// buffer is too small.
+/// buffer is too small, and a zero `size` is `EINVAL`.
 ///
-/// POSIX leaves a null `buf` unspecified, and glibc and musl allocate one.
-/// That needs `malloc`, which there is not yet, so it fails with `EINVAL`, as
-/// a zero `size` does.
+/// POSIX leaves a null `buf` unspecified. As glibc, and Debian's bash counts
+/// on it when `$PWD` is unset: the path is then returned in memory from
+/// `malloc`, which the caller frees, of `size` bytes, or with a zero `size`
+/// of as many as the path needs. musl allocates too, but takes no notice of
+/// `size`.
 ///
 /// # Safety
 ///
 /// `buf` must be null or valid for writes of `size` bytes.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn getcwd(buf: *mut c_char, size: usize) -> *mut c_char {
-    if buf.is_null() || size == 0 {
-        errno::set(errno::EINVAL);
-        return null_mut();
+    if !buf.is_null() {
+        if size == 0 {
+            errno::set(errno::EINVAL);
+            return null_mut();
+        }
+        // SAFETY: the caller vouches for `size` bytes at `buf`.
+        return match unsafe { cwd_into(buf, size) } {
+            Ok(()) => buf,
+            Err(error) => {
+                errno::set(error);
+                null_mut()
+            }
+        };
     }
-    // SAFETY: the kernel writes at most `size` bytes at `buf`, as the caller
-    // vouches.
-    let ret = unsafe { syscall::syscall2(nr::GETCWD, buf.addr(), size) };
-    match errno::decode(ret) {
+    if size != 0 {
+        let owned = crate::malloc::malloc(size).cast::<c_char>();
+        if owned.is_null() {
+            return null_mut();
+        }
+        // SAFETY: `owned` holds `size` bytes.
+        return match unsafe { cwd_into(owned, size) } {
+            Ok(()) => owned,
+            Err(error) => {
+                // SAFETY: `owned` came from `malloc` and is not returned.
+                unsafe { crate::malloc::free(owned.cast()) };
+                errno::set(error);
+                null_mut()
+            }
+        };
+    }
+    // The kernel answers with at most a page, `PATH_MAX` here.
+    let mut path = [0 as c_char; 4096];
+    // SAFETY: `path` holds its length.
+    match unsafe { cwd_into(path.as_mut_ptr(), path.len()) } {
+        // SAFETY: the kernel wrote a NUL-terminated path.
+        Ok(()) => unsafe { crate::string::strdup(path.as_ptr()) },
         Err(error) => {
             errno::set(error);
             null_mut()
         }
-        // A directory outside the process's root comes back as a path that
-        // does not start with `/`. musl reports it as `ENOENT`, as glibc does.
-        // SAFETY: the kernel wrote at least one byte, so `buf[0]` is set.
-        Ok(written) if written == 0 || unsafe { buf.read() } != b'/' as c_char => {
-            errno::set(errno::ENOENT);
-            null_mut()
-        }
-        Ok(_) => buf,
     }
+}
+
+/// The `getcwd` system call into the `size` bytes at `buf`, with musl's
+/// check: a directory outside the process's root comes back as a path that
+/// does not start with `/`, which musl reports as `ENOENT`, as glibc does.
+///
+/// # Safety
+///
+/// `buf` must be valid for writes of `size` bytes, and `size` nonzero.
+unsafe fn cwd_into(buf: *mut c_char, size: usize) -> Result<(), c_int> {
+    // SAFETY: the kernel writes at most `size` bytes at `buf`, as the caller
+    // vouches.
+    let ret = unsafe { syscall::syscall2(nr::GETCWD, buf.addr(), size) };
+    let written = errno::decode(ret)?;
+    // SAFETY: the kernel wrote at least one byte when `written` is nonzero,
+    // so `buf[0]` is set.
+    if written == 0 || unsafe { buf.read() } != b'/' as c_char {
+        return Err(errno::ENOENT);
+    }
+    Ok(())
 }
 
 /// The working directory in memory from `malloc`, which the caller frees:
@@ -931,13 +973,28 @@ mod tests {
     }
 
     #[test]
-    fn getcwd_refuses_a_buffer_it_would_have_to_allocate() {
-        // SAFETY: the call fails before writing.
-        assert!(unsafe { getcwd(null_mut(), 0) }.is_null());
-        assert_eq!(last_errno(), errno::EINVAL);
+    fn getcwd_allocates_for_a_null_buffer_and_refuses_one_too_small() {
         let mut one: c_char = 0;
         // SAFETY: the buffer is one live byte.
         assert!(unsafe { getcwd(&raw mut one, 1) }.is_null());
         assert_eq!(last_errno(), errno::ERANGE);
+        // SAFETY: the call fails before writing.
+        assert!(unsafe { getcwd(&raw mut one, 0) }.is_null());
+        assert_eq!(last_errno(), errno::EINVAL);
+        // SAFETY: a null buffer is allocated.
+        assert!(unsafe { getcwd(null_mut(), 1) }.is_null());
+        assert_eq!(last_errno(), errno::ERANGE);
+
+        let expected = std::env::current_dir().unwrap_or_default();
+        for size in [0, 4096] {
+            // SAFETY: a null buffer is allocated.
+            let path = unsafe { getcwd(null_mut(), size) };
+            assert!(!path.is_null());
+            // SAFETY: `getcwd` answered a NUL-terminated path.
+            let got = unsafe { core::ffi::CStr::from_ptr(path) };
+            assert_eq!(got.to_str().ok(), expected.to_str());
+            // SAFETY: the path came from ferrousli's `malloc`.
+            unsafe { crate::malloc::free(path.cast()) };
+        }
     }
 }

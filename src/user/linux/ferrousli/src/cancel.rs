@@ -199,6 +199,117 @@ pub fn run_cleanup_handlers() {
     }
 }
 
+/// The registers glibc's `__pthread_unwind_buf_t` has room for: its
+/// `__jmp_buf`, in words.
+#[cfg(target_arch = "x86_64")]
+const UNWIND_JMP_WORDS: usize = 8;
+/// As above, on AArch64.
+#[cfg(target_arch = "aarch64")]
+const UNWIND_JMP_WORDS: usize = 22;
+/// As above, on ARMv7-A: 64 `int`s.
+#[cfg(target_arch = "arm")]
+const UNWIND_JMP_WORDS: usize = 64;
+
+/// glibc's `__pthread_unwind_buf_t`, from its `pthread.h`: what its
+/// `pthread_cleanup_push` macro puts on the stack of the code that pushes a
+/// handler, in a program built against glibc's headers. The macro fills the
+/// jump buffer with `__sigsetjmp(buf, 0)`, which here is `setjmp.rs`'s: its
+/// registers fit glibc's `__jmp_buf`, and its word saying no mask was saved
+/// fits glibc's `__mask_was_saved` and the padding after it. `__pad` is
+/// glibc's private space, and holds this library's [`Cleanup`] link.
+#[repr(C)]
+#[derive(Debug)]
+pub struct UnwindBuf {
+    /// `__cancel_jmp_buf[0]`.
+    jump: CancelJmpBuf,
+    /// `__pad`: the link on the thread's list of handlers.
+    link: Cleanup,
+    /// The rest of `__pad`.
+    spare: *mut c_void,
+}
+
+/// `__cancel_jmp_buf[0]` of glibc's `__pthread_unwind_buf_t`. glibc aligns
+/// its `__jmp_buf` to 8 bytes on ARMv7-A, which pads this to 264 bytes there.
+#[repr(C, align(8))]
+#[derive(Debug)]
+struct CancelJmpBuf {
+    /// `__cancel_jmp_buf`: the registers.
+    registers: [usize; UNWIND_JMP_WORDS],
+    /// `__mask_was_saved`.
+    mask_was_saved: c_int,
+}
+
+#[cfg(target_arch = "x86_64")]
+const _: () = assert!(size_of::<UnwindBuf>() == 104 && offset_of!(UnwindBuf, link) == 72);
+#[cfg(target_arch = "aarch64")]
+const _: () = assert!(size_of::<UnwindBuf>() == 216 && offset_of!(UnwindBuf, link) == 184);
+#[cfg(target_arch = "arm")]
+const _: () = assert!(size_of::<UnwindBuf>() == 280 && offset_of!(UnwindBuf, link) == 264);
+
+unsafe extern "C" {
+    /// `setjmp.rs`'s `siglongjmp`: back into the frame whose registers
+    /// `__sigsetjmp` saved in `env`, where it returns `value`.
+    fn siglongjmp(env: *mut c_void, value: c_int) -> !;
+}
+
+/// The handler [`__pthread_register_cancel`] links in for a glibc frame:
+/// back into that frame, where glibc's macro runs the program's handler and
+/// then calls [`__pthread_unwind_next`]. The frames between are left as
+/// `longjmp` leaves them, with nothing to drop.
+///
+/// # Safety
+///
+/// `buf` must be a registered [`UnwindBuf`] whose frame is still live.
+unsafe extern "C" fn unwind_to_frame(buf: *mut c_void) {
+    // SAFETY: the frame that filled the buffer is live until it unregisters,
+    // which it has not.
+    unsafe { siglongjmp(buf, 1) }
+}
+
+/// Registers the glibc frame `buf` as the calling thread's innermost cleanup
+/// handler: glibc's `pthread_cleanup_push` macro expands to this. The scout
+/// runtime's PipeWire, built against glibc, pushes its handlers this way. It
+/// is one list with [`_pthread_cleanup_push`]'s, run innermost first.
+///
+/// # Safety
+///
+/// `buf` must be valid for writes of a `__pthread_unwind_buf_t`, filled by
+/// `__sigsetjmp(buf, 0)` in the frame that registers it, and stay so until
+/// the matching [`__pthread_unregister_cancel`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __pthread_register_cancel(buf: *mut UnwindBuf) {
+    // SAFETY: the caller vouches for `buf`.
+    let link = unsafe { &raw mut (*buf).link };
+    // SAFETY: the link is the frame's own, live until it unregisters.
+    unsafe { _pthread_cleanup_push(link, Some(unwind_to_frame), buf.cast()) };
+}
+
+/// Removes the glibc frame `buf`, the innermost handler, without running
+/// it: glibc's `pthread_cleanup_pop` macro calls this, then runs the
+/// program's handler itself if asked to.
+///
+/// # Safety
+///
+/// `buf` must be the frame the matching [`__pthread_register_cancel`]
+/// registered.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __pthread_unregister_cancel(buf: *mut UnwindBuf) {
+    // SAFETY: the caller vouches for `buf`.
+    let link = unsafe { &raw mut (*buf).link };
+    // SAFETY: register linked this link in.
+    unsafe { _pthread_cleanup_pop(link, 0) };
+}
+
+/// Goes on ending the thread after the handler of the glibc frame `buf`
+/// ran: the next handler out, then the rest of `pthread_exit`, with the
+/// result the thread is exiting with. glibc's macro calls it when
+/// [`unwind_to_frame`] jumped back into the frame.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn __pthread_unwind_next(_buf: *mut UnwindBuf) -> ! {
+    let result = crate::thread::me().result.load(Ordering::SeqCst);
+    crate::pthread::pthread_exit(result)
+}
+
 /// The signal `pthread_cancel` sends: musl's `SIGCANCEL`, the second of the
 /// three signals the library reserves.
 pub const SIGCANCEL: c_int = 33;

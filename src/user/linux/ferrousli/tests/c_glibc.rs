@@ -131,6 +131,36 @@ fn what_rustc_cargo_and_llvm_import_is_here_and_a_glibc_recursive_mutex_is_recur
 }
 
 #[test]
+fn what_the_steam_clients_64_bit_side_imports_does_its_work() {
+    check(&Case::named("glibc/steam"));
+}
+
+#[test]
+fn a_checked_swprintf_given_a_limit_past_its_array_aborts_before_writing() {
+    check(&Case {
+        args: &["swprintf"],
+        stderr: "*** buffer overflow detected ***: terminated\n",
+        ending: Ending::Signal(SIGABRT),
+        ..Case::named("glibc/steam")
+    });
+}
+
+#[test]
+fn what_the_scout_runtimes_64_bit_libraries_import_does_its_work() {
+    check(&Case::named("glibc/scout"));
+}
+
+#[test]
+fn a_checked_pread_given_too_small_a_buffer_aborts_before_reading() {
+    check(&Case {
+        args: &["pread"],
+        stderr: "*** buffer overflow detected ***: terminated\n",
+        ending: Ending::Signal(SIGABRT),
+        ..Case::named("glibc/scout")
+    });
+}
+
+#[test]
 fn a_programs_own_obstack_functions_win_and_random_r_is_declared() {
     check(&Case::named("glibc/overrides"));
 }

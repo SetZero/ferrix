@@ -700,6 +700,27 @@ pub unsafe extern "C" fn __xmknod(
     unsafe { mknod(path, mode, dev) }
 }
 
+/// glibc's versioned `mknodat`, as [`__xmknod`] is `mknod`'s. The scout
+/// runtime's libudev imports it.
+///
+/// # Safety
+///
+/// `path` must be a NUL-terminated string and `dev` valid for a read.
+#[cfg(not(target_arch = "arm"))]
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __xmknodat(
+    _version: c_int,
+    dirfd: c_int,
+    path: *const c_char,
+    mode: c_uint,
+    dev: *const u64,
+) -> c_int {
+    // SAFETY: the caller vouches for `dev`.
+    let dev = unsafe { dev.read() };
+    // SAFETY: the caller's contract is `mknodat`'s.
+    unsafe { mknodat(dirfd, path, mode, dev) }
+}
+
 /// glibc's pre-2.33 name for [`stat64`].
 ///
 /// # Safety

@@ -1,4 +1,5 @@
-//! `shadow.h`'s `getspnam_r`: a user's entry in the shadow password file.
+//! `shadow.h`'s `getspnam_r` and `getspnam`: a user's entry in the shadow
+//! password file, and `endspent`.
 //!
 //! This follows musl's `passwd/getspnam_r.c`. An Openwall-style
 //! `/etc/tcb/<name>/shadow` is read if it exists, opened without following a
@@ -8,15 +9,18 @@
 //! starting with `.` or holding `/` is refused, so it cannot reach another
 //! file, and so is a buffer too small for the name and a hundred bytes more.
 //!
-//! The numeric fields are decimal, and an empty one is -1. `getspnam`,
-//! `getspent` and the rest of `shadow.h` are not here yet.
+//! The numeric fields are decimal, and an empty one is -1. `getspnam` is
+//! musl's too: `getspnam_r` into a static line of 256 bytes. `getspent` and
+//! the rest of `shadow.h` are not here yet.
 
+use core::cell::UnsafeCell;
 use core::ffi::{c_char, c_int, c_long, c_uint, c_ulong};
 use core::mem::size_of;
 use core::ptr::null_mut;
 
 use crate::errno;
 use crate::fcntl::open;
+use crate::lock::SpinLock;
 use crate::pwd::{colon, cut, last_errno};
 use crate::stat::{Stat, fstat};
 use crate::stdio::file::File;
@@ -259,6 +263,84 @@ pub unsafe extern "C" fn getspnam_r(
     errno::set(if error != 0 { error } else { original_errno });
     error
 }
+
+/// The longest shadow line [`getspnam`] reads, as musl's `LINE_LIM`.
+const LINE: usize = 256;
+
+/// [`getspnam`]'s entry and the line its strings are in.
+#[derive(Debug)]
+struct Static {
+    /// The entry answered.
+    entry: Spwd,
+    /// The line the entry's strings point into.
+    line: [c_char; LINE],
+}
+
+/// The static storage and the lock that keeps two threads from filling it
+/// at once. As in glibc and musl, the entry answered is overwritten by the
+/// next call.
+#[derive(Debug)]
+struct Storage {
+    /// Held while the storage is filled and read.
+    lock: SpinLock,
+    /// The entry and its line.
+    state: UnsafeCell<Static>,
+}
+
+// SAFETY: the state is only reached in `getspnam`, with the lock held.
+unsafe impl Sync for Storage {}
+
+/// The one [`Storage`].
+static STORAGE: Storage = Storage {
+    lock: SpinLock::new(),
+    state: UnsafeCell::new(Static {
+        entry: Spwd {
+            sp_namp: null_mut(),
+            sp_pwdp: null_mut(),
+            sp_lstchg: 0,
+            sp_min: 0,
+            sp_max: 0,
+            sp_warn: 0,
+            sp_inact: 0,
+            sp_expire: 0,
+            sp_flag: 0,
+        },
+        line: [0; LINE],
+    }),
+};
+
+/// `name`'s shadow entry in static storage, or null with `errno` set if
+/// there is none or it cannot be read: musl's `getspnam`, [`getspnam_r`]
+/// into a line of 256 bytes. `errno` is left alone when there is no entry.
+///
+/// # Safety
+///
+/// `name` must be a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn getspnam(name: *const c_char) -> *mut Spwd {
+    let _guard = STORAGE.lock.lock();
+    // SAFETY: the lock is held, so nothing else reaches the storage.
+    let state = unsafe { &mut *STORAGE.state.get() };
+    let mut result = null_mut();
+    // SAFETY: the caller passes a string; the entry, line and result are
+    // the storage's and a local.
+    let _ = unsafe {
+        getspnam_r(
+            name,
+            &raw mut state.entry,
+            state.line.as_mut_ptr(),
+            LINE,
+            &raw mut result,
+        )
+    };
+    result
+}
+
+/// Ends a walk through the shadow file. As in musl, which has no such walk
+/// (`getspent` answers nothing), there is nothing open to close; Heimdal's
+/// libroken calls it after [`getspnam`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn endspent() {}
 
 #[cfg(test)]
 mod tests {

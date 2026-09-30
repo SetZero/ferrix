@@ -172,6 +172,51 @@ static ERROR_MESSAGES: [&CStr; ERROR_COUNT] = {
     table
 };
 
+/// How many messages glibc's `sys_errlist` at `GLIBC_2.12` holds on x86-64,
+/// and so what its `sys_nerr` says: 1080 bytes of pointers.
+#[cfg(target_arch = "x86_64")]
+const SYS_NERR: usize = 135;
+#[cfg(target_arch = "x86_64")]
+const _: () = assert!(ERROR_COUNT <= SYS_NERR);
+
+/// glibc's `sys_errlist`: the messages as an array of C strings.
+#[cfg(target_arch = "x86_64")]
+#[repr(transparent)]
+#[derive(Debug)]
+pub struct ErrorList([*const c_char; SYS_NERR]);
+
+// SAFETY: every pointer is to a string literal, which lives as long as the
+// program and is never written.
+#[cfg(target_arch = "x86_64")]
+unsafe impl Sync for ErrorList {}
+
+/// glibc's `sys_errlist`, which glibc 2.32 took out of its headers and keeps
+/// for programs built before, at the version whose array holds 135 messages.
+/// The scout runtime's OpenLDAP reads it. Each is the message `strerror`
+/// gives; the numbers past the kernel's highest have "No error information".
+/// Only the versioned name is exported, as glibc exports it.
+#[cfg(target_arch = "x86_64")]
+#[cfg_attr(not(test), unsafe(export_name = "sys_errlist@GLIBC_2.12"))]
+#[allow(
+    clippy::indexing_slicing,
+    reason = "evaluated at compile time, where an index out of range fails the build"
+)]
+pub static SYS_ERRLIST: ErrorList = {
+    let mut table = [UNKNOWN_ERROR.as_ptr(); SYS_NERR];
+    let mut i = 0;
+    while i < ERROR_TEXT.len() {
+        let (number, text) = ERROR_TEXT[i];
+        table[number as usize] = text.as_ptr();
+        i += 1;
+    }
+    ErrorList(table)
+};
+
+/// glibc's `sys_nerr`: how many messages [`SYS_ERRLIST`] holds.
+#[cfg(target_arch = "x86_64")]
+#[cfg_attr(not(test), unsafe(export_name = "sys_nerr@GLIBC_2.12"))]
+pub static SYS_NERR_COUNT: c_int = SYS_NERR as c_int;
+
 /// The message for error number `error`.
 fn error_message(error: c_int) -> &'static CStr {
     usize::try_from(error)

@@ -281,8 +281,8 @@ pub enum Routine {
 struct StartArgs {
     routine: Routine,
     arg: *mut c_void,
-    /// Zero, or the handshake for explicit scheduling: 1 until the thread
-    /// waits, 2 while it waits, then 0 to run or 3 to exit at once.
+    /// Zero, or the handshake for explicit scheduling or a CPU set: 1 until
+    /// the thread waits, 2 while it waits, then 0 to run or 3 to exit at once.
     control: AtomicI32,
     /// The signal mask to run with.
     mask: u64,
@@ -401,13 +401,14 @@ pub unsafe fn create(
     let sp = (stack_top & !7) - size_of::<StartArgs>();
     let args = with_exposed_provenance_mut::<StartArgs>(sp);
     let explicit = attr.inherit == pthread_attr::EXPLICIT_SCHED;
+    let bound = !attr.cpuset.is_null();
     let mask = block_app_signals();
     // SAFETY: `sp` is on the new thread's stack, which nothing uses yet.
     unsafe {
         args.write(StartArgs {
             routine,
             arg,
-            control: AtomicI32::new(c_int::from(explicit)),
+            control: AtomicI32::new(c_int::from(explicit || bound)),
             mask: mask & !(1 << (SIGCANCEL - 1)),
         });
     }
@@ -434,23 +435,40 @@ pub unsafe fn create(
         )
     };
     let mut result = if ret < 0 { Err(errno::EAGAIN) } else { Ok(()) };
-    if ret >= 0 && explicit {
-        let param = KernelSchedParam {
-            priority: attr.priority,
-        };
-        // SAFETY: the kernel reads `param`, a live local.
-        let set = unsafe {
-            syscall::syscall3(
-                nr::SCHED_SETSCHEDULER,
-                ret as usize,
-                attr.policy as usize,
-                (&raw const param).addr(),
-            )
-        };
+    if ret >= 0 && (explicit || bound) {
+        // The CPU set first, as glibc applies it, then the policy.
+        let mut failed = None;
+        if bound {
+            // SAFETY: the kernel reads the attribute's set, `cpusetsize`
+            // bytes from `malloc` that the caller's attribute still holds.
+            let set = unsafe {
+                syscall::syscall3(
+                    nr::SCHED_SETAFFINITY,
+                    ret as usize,
+                    attr.cpusetsize,
+                    attr.cpuset.addr(),
+                )
+            };
+            failed = errno::decode(set).err();
+        }
+        if failed.is_none() && explicit {
+            let param = KernelSchedParam {
+                priority: attr.priority,
+            };
+            // SAFETY: the kernel reads `param`, a live local.
+            let set = unsafe {
+                syscall::syscall3(
+                    nr::SCHED_SETSCHEDULER,
+                    ret as usize,
+                    attr.policy as usize,
+                    (&raw const param).addr(),
+                )
+            };
+            failed = errno::decode(set).err();
+        }
         // SAFETY: the arguments stay on the new thread's stack, which is not
         // freed while the thread list lock is held.
         let control = unsafe { &(*args).control };
-        let failed = errno::decode(set).err();
         if control.swap(if failed.is_some() { 3 } else { 0 }, Ordering::SeqCst) == 2 {
             futex::wake(control, 1, true);
         }

@@ -131,6 +131,14 @@ void *mremap (void *, size_t, size_t, int, ...);
 int remap_file_pages (void *, size_t, int, size_t, int);
 int memfd_create (const char *, unsigned);
 int mlock2 (const void *, size_t, unsigned);
+/* glibc's memory protection keys, as its <bits/mman-shared.h> declares them. */
+#define PKEY_DISABLE_ACCESS 0x1
+#define PKEY_DISABLE_WRITE 0x2
+int pkey_alloc (unsigned, unsigned);
+int pkey_free (int);
+int pkey_mprotect (void *, size_t, int, int);
+int pkey_get (int);
+int pkey_set (int, unsigned);
 #endif
 
 #if defined(_GNU_SOURCE) || defined(_BSD_SOURCE)

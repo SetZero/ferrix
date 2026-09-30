@@ -493,3 +493,64 @@ pub unsafe extern "C" fn __realpath_chk(
     // `PATH_MAX`.
     unsafe { realpath(path, resolved) }
 }
+
+/// `pread` into a buffer of `buflen` bytes.
+///
+/// # Safety
+///
+/// As `pread`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __pread_chk(
+    fd: c_int,
+    buf: *mut c_void,
+    count: usize,
+    offset: i64,
+    buflen: usize,
+) -> isize {
+    if count > buflen {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `pread`'s, and the read fits.
+    unsafe { crate::unistd::pread(fd, buf, count, offset) }
+}
+
+/// `stpncpy`, refusing a count larger than the destination: like
+/// `strncpy`, it writes all `n` bytes.
+///
+/// # Safety
+///
+/// As `stpncpy`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __stpncpy_chk(
+    dest: *mut c_char,
+    src: *const c_char,
+    n: usize,
+    destlen: usize,
+) -> *mut c_char {
+    if n > destlen {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `stpncpy`'s, and the copy fits.
+    unsafe { crate::string::stpncpy(dest, src, n) }
+}
+
+/// `wctomb` into a buffer of `buflen` bytes, which must hold `MB_CUR_MAX`,
+/// the most one character can take. As in glibc, `s` is not null: the
+/// header calls this only with a buffer.
+///
+/// # Safety
+///
+/// As `wctomb`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __wctomb_chk(
+    s: *mut c_char,
+    wc: crate::multibyte::WChar,
+    buflen: usize,
+) -> c_int {
+    if buflen < crate::locale::__ctype_get_mb_cur_max() {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `wctomb`'s, and the buffer holds the
+    // longest character.
+    unsafe { crate::multibyte::wctomb(s, wc) }
+}

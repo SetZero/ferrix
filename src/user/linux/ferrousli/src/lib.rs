@@ -104,6 +104,7 @@ pub mod mount;
 pub mod multibyte;
 pub mod mutex;
 pub mod netdb;
+pub mod netgroup;
 pub mod nl_types;
 pub mod obstack;
 pub mod poll;
@@ -174,6 +175,7 @@ pub mod wait;
 pub mod wchar;
 pub mod wcsto;
 pub mod wctype;
+pub mod wordexp;
 pub mod xattr;
 
 /// A panic inside the library has nothing to unwind into, because every frame

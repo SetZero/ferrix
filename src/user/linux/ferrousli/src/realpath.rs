@@ -270,3 +270,15 @@ pub unsafe extern "C" fn realpath(filename: *const c_char, resolved: *mut c_char
     }
     resolved
 }
+
+/// GNU's `canonicalize_file_name`: [`realpath`] into a string from `malloc`,
+/// which the caller frees. The scout runtime's libudev calls it.
+///
+/// # Safety
+///
+/// `filename` must be null or a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn canonicalize_file_name(filename: *const c_char) -> *mut c_char {
+    // SAFETY: the caller's contract, with a null `resolved` for `malloc`.
+    unsafe { realpath(filename, null_mut()) }
+}

@@ -30,7 +30,9 @@
 //! `globfree` frees. `glob_t` in musl's header is 72 bytes, the size of
 //! glibc's, whose `gl_flags` and five `GLOB_ALTDIRFUNC` function pointers sit
 //! where musl has padding; `GLOB_ALTDIRFUNC` is not supported. `glob64` and
-//! `globfree64`, glibc's names, are the same functions.
+//! `globfree64`, glibc's names, are the same functions. glibc's `glob` from
+//! before 2.27, which did not find a dangling link, is here too, under its
+//! older version ([`__ferrousli_glob_before_2_27`]).
 
 use core::ffi::{CStr, c_char, c_int, c_void};
 use core::mem::{offset_of, size_of};
@@ -42,6 +44,7 @@ use crate::dirent::{
 use crate::errno;
 use crate::fcntl::AT_FDCWD;
 use crate::fnmatch::{self, FNM_NOESCAPE, FNM_PERIOD};
+use crate::glibc_aliases::versioned;
 use crate::growable::{Growable, sort_by};
 use crate::malloc::{free, malloc, realloc};
 use crate::stat::{Stat, lstat, stat};
@@ -149,6 +152,10 @@ struct Search {
     flags: c_int,
     /// The program's error callback.
     errfunc: ErrFunc,
+    /// Whether a path with no wildcard left must name something through
+    /// its links, as glibc's `glob` before 2.27 asked with `stat`: a
+    /// dangling link is then not found.
+    follow: bool,
     /// Each path found, from `malloc`.
     found: Growable<*mut c_char>,
 }
@@ -327,8 +334,16 @@ fn found_path(buf: &mut PathBuf, pos: usize, mut kind: u8, search: &mut Search) 
             DT_REG
         };
     }
-    // SAFETY: as above.
-    if kind == 0 && unsafe { lstat(path, &raw mut st) } != 0 {
+    let exists = |st: &mut Stat| {
+        if search.follow {
+            // SAFETY: as above.
+            unsafe { stat(path, st) == 0 }
+        } else {
+            // SAFETY: as above.
+            unsafe { lstat(path, st) == 0 }
+        }
+    };
+    if kind == 0 && !exists(&mut st) {
         let error = get_errno();
         if error != errno::ENOENT && search.report(buf, error) {
             return GLOB_ABORTED;
@@ -613,6 +628,59 @@ pub unsafe extern "C" fn glob(
     errfunc: ErrFunc,
     pglob: *mut Glob,
 ) -> c_int {
+    // SAFETY: the same contract.
+    unsafe { glob_with(pattern, flags, errfunc, pglob, false) }
+}
+
+/// [`glob`] as glibc's before 2.27, which programs linked against an older
+/// glibc ask for as `glob@GLIBC_2.2.5` (x86-64) or `glob@GLIBC_2.17`
+/// (AArch64); the Steam client's `streaming_client` does. It differs in one
+/// thing: a path with no wildcard left, which the search has not read from
+/// its directory, is checked with `stat` rather than `lstat`, so a dangling
+/// link is not found. glibc 2.27 changed that, and kept the old function
+/// under the old version.
+///
+/// # Safety
+///
+/// As [`glob`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __ferrousli_glob_before_2_27(
+    pattern: *const c_char,
+    flags: c_int,
+    errfunc: ErrFunc,
+    pglob: *mut Glob,
+) -> c_int {
+    // SAFETY: the same contract.
+    unsafe { glob_with(pattern, flags, errfunc, pglob, true) }
+}
+
+// `glob64` is `glob` here, so its older version is the same function too.
+// ARMv7-A's glibc keeps `glob` for a 32-bit `off_t`, which is not exported
+// (`tools/glibc-versions/armv7a.txt`), so neither is its older version.
+versioned! {
+    x86_64:
+    "glob@GLIBC_2.2.5" => "__ferrousli_glob_before_2_27",
+    "glob64@GLIBC_2.2.5" => "__ferrousli_glob_before_2_27",
+}
+versioned! {
+    aarch64:
+    "glob@GLIBC_2.17" => "__ferrousli_glob_before_2_27",
+    "glob64@GLIBC_2.17" => "__ferrousli_glob_before_2_27",
+}
+
+/// [`glob`], checking a path with no wildcard left with `stat` if `follow`
+/// and `lstat` if not.
+///
+/// # Safety
+///
+/// As [`glob`].
+unsafe fn glob_with(
+    pattern: *const c_char,
+    flags: c_int,
+    errfunc: ErrFunc,
+    pglob: *mut Glob,
+    follow: bool,
+) -> c_int {
     // SAFETY: the caller passes a writable `glob_t`.
     let g = unsafe { &mut *pglob };
     let offs = if flags & GLOB_DOOFFS != 0 {
@@ -630,6 +698,7 @@ pub unsafe extern "C" fn glob(
     let mut search = Search {
         flags,
         errfunc,
+        follow,
         found: Growable::new(),
     };
     let mut error = 0;

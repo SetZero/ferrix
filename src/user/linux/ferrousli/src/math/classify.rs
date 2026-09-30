@@ -123,6 +123,33 @@ pub extern "C" fn __isinff(x: f32) -> c_int {
     isinff(x)
 }
 
+/// BSD's `finite`, the function `isfinite` replaced: 1 unless `x` is an
+/// infinity or a NaN.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn finite(x: f64) -> c_int {
+    c_int::from(x.is_finite())
+}
+
+/// glibc's internal name for [`finite`], which the `isfinite` of glibc's
+/// headers before 2.23 called, and FFmpeg's libraries in the Steam client
+/// still import.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn __finite(x: f64) -> c_int {
+    finite(x)
+}
+
+/// [`finite`] for `float`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn finitef(x: f32) -> c_int {
+    c_int::from(x.is_finite())
+}
+
+/// glibc's internal name for [`finitef`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn __finitef(x: f32) -> c_int {
+    finitef(x)
+}
+
 /// 1 if `x`'s sign bit is set, which it is for -0 and for some NaNs, and 0
 /// otherwise.
 #[cfg_attr(not(test), unsafe(no_mangle))]

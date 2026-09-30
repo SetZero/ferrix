@@ -3,7 +3,7 @@
 //! `close_range` and `closefrom`, the new mount API (`open_tree`,
 //! `move_mount`, `mount_setattr`, `fsopen`, `fsconfig`, `fsmount` and
 //! `fspick`), file handles (`name_to_handle_at`, `open_by_handle_at`),
-//! `mincore`, `ptrace`, `clone`, and the message
+//! `mincore`, `ptrace`, `clone`, `mq_unlink`, and the message
 //! queue attributes. systemd, GLib, libmount and Chrome call them.
 //!
 //! Each is its system call, the number read from the kernel's headers by
@@ -438,4 +438,34 @@ pub unsafe extern "C" fn mq_setattr(mqd: c_int, new: *const MqAttr, old: *mut Mq
         nr::MQ_GETSETATTR,
         [mqd as usize, new.addr(), old.addr(), 0, 0],
     ) as c_int
+}
+
+/// Removes the message queue `name`: musl 1.2.5's `mq/mq_unlink.c` (MIT).
+/// The kernel takes the name without its leading `/`, and its `EPERM` for a
+/// queue the caller may not remove is POSIX's `EACCES`. The scout runtime's
+/// libudev calls it.
+///
+/// # Safety
+///
+/// `name` must be a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn mq_unlink(name: *const c_char) -> c_int {
+    let mut name = name;
+    // SAFETY: the caller passes a string, whose first byte is readable.
+    if unsafe { name.read() } == b'/' as c_char {
+        name = name.wrapping_add(1);
+    }
+    // SAFETY: the kernel only reads the name.
+    let ret = unsafe { syscall::syscall2(nr::MQ_UNLINK, name.addr(), 0) };
+    match errno::decode(ret) {
+        Ok(_) => 0,
+        Err(error) => {
+            errno::set(if error == errno::EPERM {
+                errno::EACCES
+            } else {
+                error
+            });
+            -1
+        }
+    }
 }

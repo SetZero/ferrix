@@ -753,6 +753,29 @@ pub unsafe extern "C" fn fsetpos(stream: *mut File, pos: *const Fpos) -> c_int {
     unsafe { fseeko(stream, offset, SEEK_SET) }
 }
 
+/// glibc's large-file name for [`fgetpos`]; `fpos_t` already holds a 64-bit
+/// offset here, so `fpos64_t` is the same type.
+///
+/// # Safety
+///
+/// As [`fgetpos`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn fgetpos64(stream: *mut File, pos: *mut Fpos) -> c_int {
+    // SAFETY: the caller's contract is `fgetpos`'s.
+    unsafe { fgetpos(stream, pos) }
+}
+
+/// glibc's large-file name for [`fsetpos`].
+///
+/// # Safety
+///
+/// As [`fsetpos`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn fsetpos64(stream: *mut File, pos: *const Fpos) -> c_int {
+    // SAFETY: the caller's contract is `fsetpos`'s.
+    unsafe { fsetpos(stream, pos) }
+}
+
 /// Chooses the stream's buffering: `_IOFBF`, `_IOLBF` or `_IONBF`, with the
 /// `size` bytes at `buf`, or a buffer of `size` bytes allocated at the first
 /// I/O if `buf` is null. Meant to be the first operation on the stream;

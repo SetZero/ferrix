@@ -84,7 +84,7 @@ renameat2 getrandom memfd_create execveat statx clone3 faccessat2
 epoll_create1 epoll_ctl epoll_pwait epoll_pwait2 eventfd2
 timerfd_create timerfd_settime timerfd_gettime signalfd4
 fadvise64 fallocate mlock munlock mlockall munlockall getpriority setpriority
-iopl ioperm waitid preadv pwritev preadv2 pwritev2 process_vm_readv process_vm_writev mknodat setresuid setresgid setfsuid setfsgid fchmodat2 copy_file_range
+iopl ioperm pkey_mprotect pkey_alloc pkey_free waitid preadv pwritev preadv2 pwritev2 process_vm_readv process_vm_writev mknodat setresuid setresgid setfsuid setfsgid fchmodat2 copy_file_range
 sync_file_range
 set_robust_list get_robust_list sched_setparam sched_getparam
 sched_setscheduler sched_getscheduler sched_get_priority_max
@@ -98,7 +98,7 @@ reboot syslog clock_adjtime settimeofday inotify_init1 inotify_add_watch
 inotify_rm_watch getresuid getresgid splice vmsplice
 setxattr lsetxattr fsetxattr getxattr lgetxattr fgetxattr listxattr llistxattr
 flistxattr removexattr lremovexattr fremovexattr
-mincore ptrace mq_getsetattr recvmmsg sendmmsg pidfd_open pidfd_send_signal
+mincore ptrace mq_getsetattr mq_unlink recvmmsg sendmmsg pidfd_open pidfd_send_signal
 close_range open_tree move_mount mount_setattr fsopen fsconfig fsmount fspick name_to_handle_at open_by_handle_at
 """.split()
 

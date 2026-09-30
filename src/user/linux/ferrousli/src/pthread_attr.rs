@@ -1,5 +1,6 @@
 //! `pthread.h`'s thread attributes: `pthread_attr_t` and its functions, the
-//! process-wide defaults, and `pthread_getattr_np`.
+//! process-wide defaults, `pthread_getattr_np`, and glibc's CPU set
+//! attribute, `pthread_attr_setaffinity_np` and `pthread_attr_getaffinity_np`.
 //!
 //! # The default stack size
 //!
@@ -68,17 +69,14 @@ pub struct Attr {
     pub policy: c_int,
     /// `_a_prio`.
     pub priority: c_int,
-    /// The rest of the 56 bytes.
-    reserved: [c_int; ATTR_RESERVED],
+    /// `pthread_attr_setaffinity_np`'s CPU set, in the space musl leaves
+    /// unused: a copy in memory from `malloc`, which `pthread_attr_destroy`
+    /// frees, or null for none. glibc keeps its copy the same way, so an
+    /// attribute object copied by value shares it there too.
+    pub cpuset: *mut c_void,
+    /// The CPU set's size in bytes.
+    pub cpusetsize: usize,
 }
-
-/// The ints after the used fields: musl's attribute is 14 ints on a 64-bit
-/// target and 9 on a 32-bit one.
-const ATTR_RESERVED: usize = if cfg!(target_pointer_width = "64") {
-    4
-} else {
-    2
-};
 
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Attr>() == 56);
@@ -92,6 +90,10 @@ const _: () = assert!(size_of::<Attr>() == 36);
 const _: () = assert!(offset_of!(Attr, detach) == 24);
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Attr, priority) == 36);
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(offset_of!(Attr, cpuset) == 40);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Attr, cpuset) == 28);
 
 impl Attr {
     /// Every field zero.
@@ -103,7 +105,8 @@ impl Attr {
         inherit: 0,
         policy: 0,
         priority: 0,
-        reserved: [0; ATTR_RESERVED],
+        cpuset: core::ptr::null_mut(),
+        cpusetsize: 0,
     };
 }
 
@@ -198,9 +201,108 @@ pub unsafe extern "C" fn pthread_attr_init(attr: *mut Attr) -> c_int {
     0
 }
 
-/// Destroys `*attr`, which holds nothing to free.
+/// Destroys `*attr`, freeing the CPU set
+/// [`pthread_attr_setaffinity_np`] copied into it.
+///
+/// # Safety
+///
+/// `attr` must be an initialised attribute object, not used again until it
+/// is initialised again.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub extern "C" fn pthread_attr_destroy(_attr: *mut Attr) -> c_int {
+pub unsafe extern "C" fn pthread_attr_destroy(attr: *mut Attr) -> c_int {
+    // SAFETY: the caller passes an initialised attribute object.
+    let attr = unsafe { &mut *attr };
+    // SAFETY: the set is null or this module's copy from `malloc`.
+    unsafe { crate::malloc::free(attr.cpuset) };
+    attr.cpuset = core::ptr::null_mut();
+    attr.cpusetsize = 0;
+    0
+}
+
+/// Sets the CPUs a thread created with `*attr` may run on to the `size`
+/// bytes of the set at `set`, as `sched_setaffinity` takes it; a null set or
+/// a zero size clears it, and the thread runs where its creator may.
+/// Returns 0, or `ENOMEM`. The set is checked when the thread is created,
+/// as in glibc: one the kernel refuses fails `pthread_create`. The scout
+/// runtime's libgomp binds its threads with it.
+///
+/// # Safety
+///
+/// `attr` must be an initialised attribute object, and `set` null or valid
+/// for reads of `size` bytes.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn pthread_attr_setaffinity_np(
+    attr: *mut Attr,
+    size: usize,
+    set: *const c_void,
+) -> c_int {
+    // SAFETY: the caller passes an initialised attribute object.
+    let attr = unsafe { &mut *attr };
+    if set.is_null() || size == 0 {
+        // SAFETY: the set is null or this module's copy from `malloc`.
+        unsafe { crate::malloc::free(attr.cpuset) };
+        attr.cpuset = core::ptr::null_mut();
+        attr.cpusetsize = 0;
+        return 0;
+    }
+    // SAFETY: the set is null or this module's copy from `malloc`.
+    let copy = unsafe { crate::malloc::realloc(attr.cpuset, size) }.cast::<u8>();
+    if copy.is_null() {
+        return errno::ENOMEM;
+    }
+    let mut i = 0;
+    while i < size {
+        // SAFETY: `i` is inside the caller's set and the copy.
+        let byte = unsafe { set.cast::<u8>().wrapping_add(i).read() };
+        // SAFETY: as above.
+        unsafe { copy.wrapping_add(i).write(byte) };
+        i += 1;
+    }
+    attr.cpuset = copy.cast();
+    attr.cpusetsize = size;
+    0
+}
+
+/// Stores the CPU set of `*attr` in the `size` bytes at `set`, as glibc
+/// does: the set [`pthread_attr_setaffinity_np`] gave, cut or padded with
+/// zeros to `size`, or `EINVAL` if it names a CPU beyond `size` bytes; or,
+/// with no set given, every CPU.
+///
+/// # Safety
+///
+/// `attr` must be an initialised attribute object, and `set` valid for
+/// writes of `size` bytes.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn pthread_attr_getaffinity_np(
+    attr: *const Attr,
+    size: usize,
+    set: *mut c_void,
+) -> c_int {
+    // SAFETY: the caller passes an initialised attribute object.
+    let attr = unsafe { &*attr };
+    let have = attr.cpuset.cast::<u8>();
+    let mut i = size;
+    while !have.is_null() && i < attr.cpusetsize {
+        // SAFETY: `i` is inside the attribute's set.
+        if unsafe { have.wrapping_add(i).read() } != 0 {
+            return errno::EINVAL;
+        }
+        i += 1;
+    }
+    let mut i = 0;
+    while i < size {
+        let byte = if have.is_null() {
+            0xff
+        } else if i < attr.cpusetsize {
+            // SAFETY: `i` is inside the attribute's set.
+            unsafe { have.wrapping_add(i).read() }
+        } else {
+            0
+        };
+        // SAFETY: the caller vouches for `size` bytes at `set`.
+        unsafe { set.cast::<u8>().wrapping_add(i).write(byte) };
+        i += 1;
+    }
     0
 }
 
@@ -556,6 +658,7 @@ pub unsafe extern "C" fn pthread_setattr_default_np(attr: *const Attr) -> c_int 
         || attr.inherit != 0
         || attr.policy != 0
         || attr.priority != 0
+        || !attr.cpuset.is_null()
         || !stack_size_ok(attr.stacksize)
         || attr.guardsize > usize::MAX / 8
     {

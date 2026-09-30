@@ -304,6 +304,12 @@ pub const SETPRIORITY: usize = 141;
 pub const IOPL: usize = 172;
 /// `ioperm`.
 pub const IOPERM: usize = 173;
+/// `pkey_mprotect`.
+pub const PKEY_MPROTECT: usize = 329;
+/// `pkey_alloc`.
+pub const PKEY_ALLOC: usize = 330;
+/// `pkey_free`.
+pub const PKEY_FREE: usize = 331;
 /// `waitid`.
 pub const WAITID: usize = 247;
 /// `preadv`.
@@ -500,6 +506,8 @@ pub const MINCORE: usize = 27;
 pub const PTRACE: usize = 101;
 /// `mq_getsetattr`.
 pub const MQ_GETSETATTR: usize = 245;
+/// `mq_unlink`.
+pub const MQ_UNLINK: usize = 241;
 /// `recvmmsg`.
 pub const RECVMMSG: usize = 299;
 /// `sendmmsg`.
