@@ -173,9 +173,13 @@ installs to btrfs, launches and draws through the GPU path with sound; and
 a Windows game runs through Proton. The first two are a guest's exit on
 the Linux host; the third is the GPU's Vulkan, wherever that comes first.
 
-The first step is part met (2026-09-29): the client starts and its browser
-helper draws the sign-in window; signing in and the store are next, and the
-workarounds of `docs/STEAM.md` §3 are still in use.
+The first step is met by hand (2026-09-30), not yet by a gate: on the
+`--everything` desktop, with its 64-bit side on ferrousli rather than glibc,
+the client starts, its browser helper draws the sign-in window, the customer
+signed in with the Steam app's QR code, and the client showed its store
+(`docs/STEAM.md` §5 lists what ferrousli needed for it). Still to do for
+the step: a gate that boots to the store without a person signing in, and
+the workarounds of `docs/STEAM.md` §3, which are still in use.
 
 None of it is sized past a first guess, and the sum of the first guesses is
 already over 300 points, so the stage is written as a list of what has to be
