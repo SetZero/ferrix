@@ -53,6 +53,10 @@ pub(crate) struct Thread {
     /// The address `set_tid_address` or `CLONE_CHILD_CLEARTID` registered, to
     /// be zeroed and woken when the thread ends. Zero means none.
     clear_child_tid: AtomicU64,
+    /// The head of its robust futex list, as `set_robust_list` registered it;
+    /// zero for none. Every thread starts with none, a fork child's and a
+    /// `clone` sibling's too, as Linux's `copy_process` clears it.
+    robust_list: AtomicU64,
     /// Set while it waits in `vfork` for its child to let go of the address
     /// space, which `/proc` shows as `D`, as Linux does.
     in_vfork: AtomicBool,
@@ -113,6 +117,7 @@ impl Thread {
             gone: AtomicBool::new(false),
             process: Arc::clone(process),
             clear_child_tid: AtomicU64::new(0),
+            robust_list: AtomicU64::new(0),
             in_vfork: AtomicBool::new(false),
             signals: SpinLock::new(signals),
             resume: SpinLock::new(None),
@@ -188,6 +193,16 @@ impl Thread {
     /// the thread ends or its program is replaced.
     pub(crate) fn take_clear_child_tid(&self) -> u64 {
         self.clear_child_tid.swap(0, Ordering::AcqRel)
+    }
+
+    /// Record the head of its robust futex list; zero forgets it.
+    pub(crate) fn set_robust_list(&self, head: u64) {
+        self.robust_list.store(head, Ordering::Release);
+    }
+
+    /// The head of its robust futex list, or zero.
+    pub(crate) fn robust_list(&self) -> u64 {
+        self.robust_list.load(Ordering::Acquire)
     }
 
     /// Read or change its own signal state, under its lock.

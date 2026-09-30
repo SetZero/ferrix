@@ -128,6 +128,30 @@ const _: () = assert!(offset_of!(Mutex, prev) == 16 && offset_of!(Mutex, next) =
 /// kernel's robust list handling is told.
 const ROBUST_OFFSET: isize = offset_of!(Mutex, lock) as isize - offset_of!(Mutex, next) as isize;
 
+/// Registers the calling thread's robust mutex list, empty or not, with the
+/// kernel: `set_robust_list` with its head in the thread's control block.
+///
+/// Called for every thread as it starts, the first in [`thread::init_main`]
+/// and a child of `fork` again, since the kernel gives every new task an
+/// empty registration; as glibc does, rather than only when a thread first
+/// takes a robust mutex. Chromium's `ForkWithFlags` reads the registration
+/// with `get_robust_list` to copy it to its child, and stops with "futex
+/// robust_list not initialized by pthreads" when there is none -- the Steam
+/// client's browser helper did, on its first child.
+pub fn register_robust_list() {
+    let me = thread::me();
+    me.robust_off.store(ROBUST_OFFSET, Ordering::SeqCst);
+    // SAFETY: the head is in this thread's control block, which lives as
+    // long as the thread the kernel attaches it to.
+    let _ = unsafe {
+        syscall::syscall2(
+            nr::SET_ROBUST_LIST,
+            me.robust_head_address().addr(),
+            3 * size_of::<usize>(),
+        )
+    };
+}
+
 impl Mutex {
     /// An unlocked mutex of `kind`.
     pub const fn new(kind: c_int) -> Self {
@@ -233,16 +257,7 @@ fn trylock_owner(m: &Mutex) -> c_int {
         }
         if kind & SHARED != 0 {
             if me.robust_off.load(Ordering::SeqCst) == 0 {
-                me.robust_off.store(ROBUST_OFFSET, Ordering::SeqCst);
-                // SAFETY: the head is in this thread's control block, which
-                // lives as long as the thread the kernel attaches it to.
-                let _ = unsafe {
-                    syscall::syscall2(
-                        nr::SET_ROBUST_LIST,
-                        me.robust_head_address().addr(),
-                        3 * size_of::<usize>(),
-                    )
-                };
+                register_robust_list();
             }
             if m.waiters.load(Ordering::SeqCst) != 0 {
                 tid |= WAITERS;
@@ -276,10 +291,9 @@ fn trylock_owner(m: &Mutex) -> c_int {
     let next = me.robust_head.load(Ordering::SeqCst);
     m.next.store(next, Ordering::SeqCst);
     m.prev.store(head, Ordering::SeqCst);
-    if next != head {
-        // SAFETY: a list entry other than the head is a held mutex's `next`.
-        unsafe { prev_of(next) }.store(m.node(), Ordering::SeqCst);
-    }
+    // SAFETY: a list entry is a held mutex's `next` field or the head, and
+    // each has its `prev` in the word before it (`State::robust_prev`).
+    unsafe { prev_of(next) }.store(m.node(), Ordering::SeqCst);
     me.robust_head.store(m.node(), Ordering::SeqCst);
     me.robust_pending.store(null_mut(), Ordering::SeqCst);
 
@@ -452,10 +466,9 @@ pub fn unlock(m: &Mutex) -> c_int {
         let next = m.next.load(Ordering::SeqCst);
         // SAFETY: a held mutex's neighbours are live links in the owner's list.
         unsafe { link(prev) }.store(next, Ordering::SeqCst);
-        if next != me.robust_head_address() {
-            // SAFETY: as above; `next` is another held mutex's `next` field.
-            unsafe { prev_of(next) }.store(prev, Ordering::SeqCst);
-        }
+        // SAFETY: as above; `next` is another held mutex's `next` field or
+        // the head, whose `prev` is `State::robust_prev`.
+        unsafe { prev_of(next) }.store(prev, Ordering::SeqCst);
     }
     let (cont, waiters) = if kind & PRIO_INHERIT != 0 {
         if old < 0 || futex::cas(&m.lock, old, new) != old {

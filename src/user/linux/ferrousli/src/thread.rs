@@ -136,6 +136,13 @@ pub struct State {
     pub cancel_buf: AtomicPtr<Cleanup>,
     /// The thread's `PTHREAD_KEYS_MAX` thread-specific values.
     pub tsd: AtomicPtr<AtomicPtr<c_void>>,
+    /// The `prev` link of the list's head, as glibc's `robust_prev` is: the
+    /// word just before the head, where a mutex's `prev` sits just before its
+    /// `next`, so that every entry, the head too, has its `prev` one word
+    /// below it. It points at the head when the list is empty. Code that
+    /// links its own robust mutexes into the list glibc's way, as the Steam
+    /// client's browser helper does, checks exactly that.
+    pub robust_prev: AtomicPtr<c_void>,
     /// The kernel's `struct robust_list_head`, from `linux/futex.h`: the
     /// robust mutexes the thread holds, as a list through each mutex's `next`
     /// field. It points at itself when empty.
@@ -168,6 +175,10 @@ const _: () = assert!(offset_of!(Thread, state) == 0x98);
 const _: () = assert!(offset_of!(State, robust_off) - offset_of!(State, robust_head) == 8);
 #[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(State, robust_pending) - offset_of!(State, robust_head) == 16);
+// The head's `prev` is the word before it, as a mutex's `prev` is before its
+// `next`.
+const _: () =
+    assert!(offset_of!(State, robust_head) - offset_of!(State, robust_prev) == size_of::<usize>());
 
 impl State {
     /// The state of a thread that is joinable and has done nothing yet.
@@ -189,6 +200,7 @@ impl State {
             result: AtomicPtr::new(null_mut()),
             cancel_buf: AtomicPtr::new(null_mut()),
             tsd: AtomicPtr::new(null_mut()),
+            robust_prev: AtomicPtr::new(null_mut()),
             robust_head: AtomicPtr::new(null_mut()),
             robust_off: AtomicIsize::new(0),
             robust_pending: AtomicPtr::new(null_mut()),
@@ -552,6 +564,9 @@ unsafe fn build(
     state
         .robust_head
         .store(state.robust_head_address(), Ordering::Relaxed);
+    state
+        .robust_prev
+        .store(state.robust_head_address(), Ordering::Relaxed);
     state.prev.store(tp, Ordering::Relaxed);
     state.next.store(tp, Ordering::Relaxed);
     Some(tp)
@@ -631,6 +646,7 @@ pub unsafe fn init_main() {
     if unsafe { arch::set_thread_pointer(pointer_of(tp)) } != 0 {
         syscall::trap();
     }
+    crate::mutex::register_robust_list();
 
     // The loader copies a module `dlopen` brings into every thread from here
     // on, the first one caught up on those opened before, so that they may be
@@ -812,6 +828,8 @@ mod tests {
 
     #[test]
     fn a_control_block_leaves_the_main_threads_builtin_memory_room_for_tls() {
-        assert!(size_of::<Thread>() <= 272);
+        // 272, and a word for `State::robust_prev`, glibc's layout of the
+        // robust list head.
+        assert!(size_of::<Thread>() <= 280);
     }
 }

@@ -43,6 +43,8 @@ pub extern "C" fn fork() -> c_int {
     crate::pthread::run_atfork_prepare();
     let ret = fork_bare();
     if ret == 0 {
+        // The kernel gives the child no robust list.
+        crate::mutex::register_robust_list();
         crate::pthread::run_atfork_child();
     } else {
         crate::pthread::run_atfork_parent();
