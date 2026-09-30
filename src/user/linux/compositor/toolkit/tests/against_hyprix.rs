@@ -675,6 +675,83 @@ fn a_window_of_a_fixed_size_floats_at_it() {
     assert!(tiled.0 > 150, "and given the tile: {tiled:?}");
 }
 
+/// A floating window that goes on to draw at a size of its own floats at
+/// that size, where it was: an X program resizing its dialog after mapping
+/// it, which yserver shows as buffers of the new size (`draw_sized`), as
+/// Steam's "not responding" dialog does. hyprix used to keep the size of
+/// the first buffer and squeeze every later one into it, which drew that
+/// dialog at 130x70.
+#[test]
+fn a_floating_dialog_takes_a_size_its_program_gives_it_later() {
+    let (answer, frame) = with_compositor("dialog-grows", 3000, |socket| {
+        let mut client = Client::connect_to(socket).map_err(|error| error.to_string())?;
+        let window = client
+            .toplevel(&ToplevelOptions {
+                title: "toolkit parent".to_owned(),
+                app_id: "toolkit-test".to_owned(),
+                size: (200, 100),
+                ..ToplevelOptions::default()
+            })
+            .map_err(|error| error.to_string())?;
+        let dialog = client
+            .toplevel(&ToplevelOptions {
+                title: "toolkit dialog".to_owned(),
+                app_id: "toolkit-test".to_owned(),
+                size: (60, 40),
+                parent: Some(window),
+                ..ToplevelOptions::default()
+            })
+            .map_err(|error| error.to_string())?;
+        // The first configure of the dialog is the one it chooses its own
+        // size at; any after it, the program has resized its window.
+        let mut configures = 0;
+        let _ = until(&mut client, Duration::from_secs(2), |client, event| {
+            let Event::Configure { surface, .. } = event else {
+                return false;
+            };
+            if *surface == window {
+                fill(client, window, (0, 0, 200));
+            } else if *surface == dialog {
+                configures += 1;
+                let size = [(60, 40), (240, 160)][usize::from(configures > 1)];
+                fill_sized(client, dialog, size, (0, 200, 0));
+            }
+            false
+        });
+        let _ = until(&mut client, Duration::from_secs(5), |_, _| false);
+        Ok::<_, String>(configures)
+    });
+    let configures = answer.expect("the client worked");
+    assert!(
+        configures >= 2,
+        "the dialog was configured again: {configures}"
+    );
+    let (left, top) = first(&frame, (0, 200, 0)).expect("the dialog is drawn");
+    let wide = (left..WIDTH)
+        .take_while(|&x| pixel(&frame, x, top + 20) == (0, 200, 0))
+        .count();
+    let tall = (top..HEIGHT)
+        .take_while(|&y| pixel(&frame, left + 20, y) == (0, 200, 0))
+        .count();
+    assert_eq!(
+        (wide, tall),
+        (240, 160),
+        "the dialog floats at the size it drew last, not squeezed into its first"
+    );
+}
+
+/// `colour` at a size of the program's own, as yserver draws an X window.
+fn fill_sized(
+    client: &mut Client,
+    surface: compositor_toolkit::SurfaceId,
+    size: (u32, u32),
+    (r, g, b): (u8, u8, u8),
+) {
+    let _ = client.draw_sized(surface, size, |pixmap| {
+        pixmap.fill(tiny_skia::Color::from_rgba8(r, g, b, 255));
+    });
+}
+
 /// A program whose own loop polls the socket (`Client::as_raw_fd`) and then
 /// dispatches with a zero timeout must get what arrived, even with events
 /// still queued from before: `connect`'s round trips leave each screen's

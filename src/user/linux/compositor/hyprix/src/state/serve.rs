@@ -19,9 +19,9 @@ use crate::pool::Mapping;
 
 use super::{
     Arrangement, Compositor, Drag, ScreenAsks, Shot, activate, apply_rules, as_input, captured,
-    configure, configure_first, exported, fit_dialog, for_the_bar, input_method_turn, lock_changed,
-    named, painted, place_popup, rect_of, release_retired_pools, remember_size, showing_from,
-    whole_of,
+    configure, configure_first, exported, fit_dialog, follow_own_size, for_the_bar,
+    input_method_turn, lock_changed, named, painted, place_popup, rect_of, release_retired_pools,
+    remember_size, showing_from, whole_of,
 };
 
 /// What reading one client's messages asked for that reaches past its own
@@ -201,6 +201,7 @@ impl Compositor<'_> {
             } => {
                 if let Some(at) = slot.windows.iter().position(|(top, _)| *top == object) {
                     let (_, window) = slot.windows.remove(at);
+                    let _ = slot.answered.remove(&window);
                     effects.closed.push(window);
                 }
             }
@@ -595,7 +596,8 @@ impl Compositor<'_> {
     }
 
     /// A surface of the connection at `index` committed: a window's first
-    /// commit maps it, a dialog's first buffer sizes it, and what the client
+    /// commit maps it, a dialog's first buffer sizes it, a floating window
+    /// that draws a size of its own after that takes it, and what the client
     /// drew is owed to the next frame.
     fn surface_committed(
         &mut self,
@@ -677,6 +679,30 @@ impl Compositor<'_> {
                 &mut self.state,
             );
             configure(&mut slot.client, &self.state, toplevel, window);
+        }
+        // A floating window drawn at a size of its own: an X program that
+        // resized its window, which yserver shows as buffers of the new
+        // size. It floats at that size, not squeezed into the one it had.
+        if change.buffer.is_some()
+            && let Some((toplevel, window)) = slot
+                .windows
+                .iter()
+                .find(|(top, window)| {
+                    !slot.unsized_dialogs.contains(window)
+                        && slot
+                            .client
+                            .toplevel(*top)
+                            .is_some_and(|state| state.surface == surface)
+                })
+                .copied()
+        {
+            follow_own_size(
+                &slot.client,
+                &mut slot.answered,
+                toplevel,
+                window,
+                &mut self.state,
+            );
         }
         // What the client says it drew, which is the only thing
         // that can change the pixels inside a surface: where

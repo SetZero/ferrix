@@ -58,6 +58,10 @@ pub struct Slot {
     /// Dialogs floated when they mapped, still waiting for their first
     /// buffer: its size is the size they float at (`fit_dialog`).
     unsized_dialogs: std::collections::BTreeSet<WindowId>,
+    /// The size of the last configure each window has drawn a buffer at. A
+    /// floating window that draws another size after that chose the size
+    /// itself; one that has not drawn it yet is behind (`follow_own_size`).
+    answered: BTreeMap<WindowId, (i32, i32)>,
     /// The process that opened the connection, or 0 where the kernel would
     /// not say.
     pid: i32,
@@ -100,6 +104,7 @@ impl Slot {
             layer_rects: BTreeMap::new(),
             firsts: BTreeMap::new(),
             unsized_dialogs: std::collections::BTreeSet::new(),
+            answered: BTreeMap::new(),
             pid: 0,
             gone: false,
             serial: 1,
@@ -792,6 +797,7 @@ impl<'r> Compositor<'r> {
                         layer_rects: BTreeMap::new(),
                         firsts: BTreeMap::new(),
                         unsized_dialogs: std::collections::BTreeSet::new(),
+                        answered: BTreeMap::new(),
                         gone: false,
                     }),
                     Err(_) => continue,
@@ -1929,33 +1935,13 @@ fn fit_dialog(
     let Some(top) = client.toplevel(toplevel) else {
         return;
     };
-    let size = client
-        .window_geometry(top.surface)
-        .map(|(_, _, width, height)| (i64::from(width), i64::from(height)))
-        .or_else(|| {
-            let surface = client.surface(top.surface)?;
-            let buffer = client.buffer(surface.current.buffer?)?;
-            let scale = i64::from(surface.current.scale.max(1));
-            Some((
-                i64::from(buffer.width) / scale,
-                i64::from(buffer.height) / scale,
-            ))
-        });
-    let Some((width, height)) = size.filter(|&(width, height)| width > 0 && height > 0) else {
+    let Some((width, height)) = drawn_size(client, top.surface) else {
         return;
-    };
-    let placed = |wanted: WindowId| {
-        state
-            .layout()
-            .iter()
-            .flat_map(|output| output.windows.iter())
-            .find(|placed| placed.window == wanted)
-            .map(|placed| placed.rect)
     };
     let over = top
         .parent
         .and_then(|parent| windows.iter().find(|(object, _)| *object == parent))
-        .and_then(|(_, parent)| placed(*parent))
+        .and_then(|(_, parent)| placed_rect(state, *parent))
         .or_else(|| monitor_rect(state, window));
     let Some(over) = over else {
         return;
@@ -1968,6 +1954,102 @@ fn fit_dialog(
         height,
     );
     let _ = state.float_window(window, rect);
+}
+
+/// Let a floating window take a size its client chose itself after the
+/// compositor last told it one, as Hyprland honours an X window's own
+/// `ConfigureRequest` while it floats. yserver has no other way to say an X
+/// program resized its window than to draw buffers of the new size
+/// (`draw_sized`); keeping the old rectangle, a dialog's first size, drew
+/// them squeezed into it, which is how Steam's "not responding" dialog
+/// showed as a 130x70 miniature of itself.
+///
+/// A size is the client's own only once it has drawn the size of the last
+/// configure: until then, a buffer of another size is one it drew before
+/// that configure reached it (a window just put back from fullscreen, still
+/// drawing the screen's size), which is not followed. A fullscreen or tiled
+/// window keeps the rectangle the layout gives it. The window keeps its
+/// centre, as `fit_dialog` centred it.
+fn follow_own_size(
+    client: &Client,
+    answered: &mut BTreeMap<WindowId, (i32, i32)>,
+    toplevel: ObjectId,
+    window: WindowId,
+    state: &mut State,
+) {
+    let Some(top) = client.toplevel(toplevel) else {
+        return;
+    };
+    let Some((width, height)) = drawn_size(client, top.surface) else {
+        return;
+    };
+    let configured = top.configured;
+    let drawn = (
+        i32::try_from(width).unwrap_or(i32::MAX),
+        i32::try_from(height).unwrap_or(i32::MAX),
+    );
+    if drawn == configured {
+        let _ = answered.insert(window, configured);
+        return;
+    }
+    if configured == (0, 0) || answered.get(&window) != Some(&configured) {
+        return;
+    }
+    let fullscreen = state
+        .workspace_of(window)
+        .and_then(|workspace| state.fullscreen(workspace))
+        .is_some_and(|(id, _)| id == window);
+    if !state.is_floating(window) || fullscreen {
+        return;
+    }
+    let Some(rect) = placed_rect(state, window) else {
+        return;
+    };
+    if (rect.width, rect.height) == (width, height) {
+        return;
+    }
+    let centre = (
+        rect.x.saturating_add(rect.width / 2),
+        rect.y.saturating_add(rect.height / 2),
+    );
+    let _ = state.float_window(
+        window,
+        Rect::new(
+            centre.0.saturating_sub(width / 2),
+            centre.1.saturating_sub(height / 2),
+            width,
+            height,
+        ),
+    );
+}
+
+/// The size a window's surface last drew at, in logical pixels: its
+/// `xdg_surface` geometry where it set one, else its buffer at its scale.
+/// `None` for no buffer or an empty one.
+fn drawn_size(client: &Client, surface: ObjectId) -> Option<(i64, i64)> {
+    client
+        .window_geometry(surface)
+        .map(|(_, _, width, height)| (i64::from(width), i64::from(height)))
+        .or_else(|| {
+            let state = client.surface(surface)?;
+            let buffer = client.buffer(state.current.buffer?)?;
+            let scale = i64::from(state.current.scale.max(1));
+            Some((
+                i64::from(buffer.width) / scale,
+                i64::from(buffer.height) / scale,
+            ))
+        })
+        .filter(|&(width, height)| width > 0 && height > 0)
+}
+
+/// Where the layout has put a window on a monitor now, if it shows it.
+fn placed_rect(state: &State, window: WindowId) -> Option<Rect> {
+    state
+        .layout()
+        .iter()
+        .flat_map(|output| output.windows.iter())
+        .find(|placed| placed.window == window)
+        .map(|placed| placed.rect)
 }
 
 /// The rectangle of the monitor a window's workspace is on.
