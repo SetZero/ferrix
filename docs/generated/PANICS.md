@@ -1893,13 +1893,13 @@ src/kernel/src/object/quota.rs; docs/certification/IMPLEMENTATION.md W-15.
 
 ## FX-1001 — PCI enumeration failed its self-check
 
-`pci::check` reads where firmware put PCI Express configuration space — the MCFG
-table, or a `pci-host-ecam-generic` device tree node — maps it a bus at a time,
-and walks every function reachable from each root bus, sizing and restoring
-every BAR and walking every capability list to its end. Stage 10 hands user-mode
-drivers exactly the apertures this finds, so a walk that misses a device, sizes
-a BAR wrong or follows a broken list would give a driver the wrong memory or
-none.
+`pci::Enumeration` reads where firmware put PCI Express configuration space —
+the MCFG table, or a `pci-host-ecam-generic` device tree node — maps it a bus at
+a time, and walks every function reachable from each root bus, sizing and
+restoring every BAR and walking every capability list to its end. Stage 10 hands
+user-mode drivers exactly the apertures this finds, so a walk that misses a
+device, sizes a BAR wrong or follows a broken list would give a driver the wrong
+memory or none.
 
 1. A host was described but nothing answered on its root bus, so the window was
    mapped at the wrong address: an MCFG base taken as the first bus's rather

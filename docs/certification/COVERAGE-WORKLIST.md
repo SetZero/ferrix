@@ -16,7 +16,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | [`syscall`](#syscall) | 15 | 10 | 10 | 2 |
 | [`init`](#init) | 3 | 14 | 14 | 1 |
 | [`console`](#console) | 3 | 6 | 7 | 4 |
-| [`main`](#main) | 3 | 6 | 5 | 1 |
+| [`main`](#main) | 3 | 6 | 4 | 1 |
 | [`early`](#early) | - | - | 4 | 1 |
 | [`mm`](#mm) | 1 | 1 | 4 | 1 |
 | [`smp`](#smp) | - | 4 | 4 | 1 |
@@ -31,7 +31,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | [`signal_frame`](#signal_frame) | - | - | 1 | 1 |
 | [`timer`](#timer) | - | - | 1 | 1 |
 | [`user`](#user) | - | - | 1 | 1 |
-| **Total** | **134** | **176** | **211** | 38 |
+| **Total** | **134** | **176** | **210** | 38 |
 
 ---
 
@@ -102,7 +102,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 
 | File | Ring | x86_64 | aarch64 | armv7a | Everywhere | Lines unreached everywhere |
 |---|---|---:|---:|---:|---:|---|
-| `main.rs` | `item` | 3 | 6 | 5 | 3 | 293, 654, 1195 |
+| `main.rs` | `item` | 3 | 6 | 4 | 3 | 291, 652, 1151 |
 
 ---
 
